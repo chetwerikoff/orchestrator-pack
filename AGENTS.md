@@ -16,9 +16,9 @@ Do not patch or vendor-modify `ComposioHQ/agent-orchestrator` core packages. All
 behavior lives in the allowed surfaces below; treat any `vendor/` checkout as read-only reference.
 
 **Allowed:** `plugins/**`, `prompts/**`, `scripts/**`, `tests/external-output-references/**`,
-`docs/**`, `.claude/skills/**`, `.cursor/skills/**`, `.cursor/rules/**` (always-applied Cursor
-project rules; `.cursor/rules/flow-manager-browser-turn-monitoring.mdc` is the explicit
-canonical Browser-GPT carrier, while other Cursor rules remain thin pointers), `CLAUDE.md`, `AGENTS.md`, `README.md`,
+`docs/**`, `.claude/skills/**`, `.cursor/skills/**`, `.cursor/rules/**` (see
+`.cursor/rules/flow-manager-browser-turn-monitoring.mdc` and its runbook; sync in same PR),
+`CLAUDE.md`, `AGENTS.md`, `README.md`,
 `.github/workflows/**`, config examples such as `agent-orchestrator.yaml.example`, and reusable
 root-level tooling config (`.gitignore`, `.gitattributes`).
 
@@ -287,14 +287,6 @@ direct bash REST branches in `scripts/gh`, raw `curl api.github.com`, `gh api gr
 alternate recipes.
 
 ### Review / CI / Handoff worker contract
-
-For tracked Browser-GPT manager mechanics, follow the canonical carrier
-[`.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](.cursor/rules/flow-manager-browser-turn-monitoring.mdc)
-and portable [turn runbook](docs/browser-gpt-turn-runbook.md). Keep those
-surfaces, the owning skills, and the transport README synchronized in the same
-PR when launch, observation, attribution, retry/no-resend, publication,
-cleanup, probe, handoff, CLI/schema, role/receipt, local-configuration, or
-Issue-authority wording changes.
 
 Local Codex PR review **is active**. On AO 0.10 the loop is **workspace-visible prompts** plus
 **side-process scripts** supervised by `scripts/orchestrator-wake-supervisor.ps1` — not
