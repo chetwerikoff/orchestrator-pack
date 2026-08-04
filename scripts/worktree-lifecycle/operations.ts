@@ -83,7 +83,7 @@ export interface RecoveryGates {
 }
 
 export type LifecycleOutcome =
-  | 'ready_to_spawn'
+  | 'exact_dual_observed'
   | 'replacement_required'
   | 'cleanup_eligible'
   | 'cleanup_complete'
@@ -112,6 +112,15 @@ export interface LifecycleTerminalReport {
 
 interface OrcaAgentInventoryRow extends OrcaWorktreeRow {
   readonly agents?: readonly { state?: string; interrupted?: boolean }[];
+}
+
+interface RecoverySnapshot {
+  readonly census: ReturnType<typeof collectCensus>;
+  readonly pr?: PrIdentity;
+  readonly gates: Omit<RecoveryGates, 'freshRecheck'>;
+  readonly processes: readonly ProcessEvidence[];
+  readonly terminals: readonly TerminalEvidence[];
+  readonly errors: readonly string[];
 }
 
 const DEFAULT_LOCK_PATH = '/tmp/opk-worktree-teardown.lock';
@@ -196,23 +205,34 @@ function parseTerminalPayload(payload: unknown): TerminalEvidence[] {
   });
 }
 
+function isGone(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ENOENT'
+    || (error as NodeJS.ErrnoException).code === 'ESRCH';
+}
+
 function readProcessSnapshot(name: string): ProcessEvidence | null {
   const pid = Number.parseInt(name, 10);
   if (!Number.isInteger(pid) || pid <= 1) return null;
   let stat: string;
   try {
     stat = readFileSync(`/proc/${name}/stat`, 'utf8');
-  } catch {
-    return null;
+  } catch (error) {
+    if (isGone(error)) return null;
+    throw new TypeError(`process census could not read /proc/${name}/stat: ${error instanceof Error ? error.message : String(error)}`);
   }
   const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
   const ppid = Number.parseInt(fields[1] ?? '0', 10);
   const starttime = fields[19] ?? '';
+  if (!Number.isInteger(ppid) || !starttime) {
+    throw new TypeError(`process census received malformed /proc/${name}/stat`);
+  }
   let cwd: string | null = null;
   try {
     cwd = normalizeWorktreePath(readlinkSync(`/proc/${name}/cwd`).replace(/ \(deleted\)$/, ''));
-  } catch {
-    cwd = null;
+  } catch (error) {
+    if (!isGone(error)) {
+      throw new TypeError(`process census could not read /proc/${name}/cwd: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   return { pid, ppid, starttime, cwd };
 }
@@ -222,8 +242,8 @@ export function collectProcessEvidence(worktreePath: string): ProcessEvidence[] 
   let names: string[];
   try {
     names = readdirSync('/proc').filter((name) => /^\d+$/.test(name));
-  } catch {
-    return [];
+  } catch (error) {
+    throw new TypeError(`process census could not enumerate /proc: ${error instanceof Error ? error.message : String(error)}`);
   }
   const snapshots = names
     .map(readProcessSnapshot)
@@ -248,6 +268,16 @@ export function collectProcessEvidence(worktreePath: string): ProcessEvidence[] 
     .sort((left, right) => left.pid - right.pid);
 }
 
+function resolveRepositoryId(repositoryRoot: string, rows: readonly OrcaWorktreeRow[]): string | null {
+  const candidates = rows.filter((row) => row.path === repositoryRoot
+    && row.isMainWorktree
+    && !row.isArchived
+    && row.malformedFields.length === 0
+    && Boolean(row.repoId));
+  const ids = [...new Set(candidates.map((row) => row.repoId!))];
+  return ids.length === 1 ? ids[0]! : null;
+}
+
 export function collectCensus(
   expectedInput: ExpectedWorktreeIdentity,
   operations: LifecycleOperations = {},
@@ -257,7 +287,7 @@ export function collectCensus(
   terminals: readonly TerminalEvidence[];
   errors: readonly string[];
 } {
-  const expected = normalizeExpectedIdentity(expectedInput);
+  const baseExpected = normalizeExpectedIdentity(expectedInput);
   const runner = operations.runner ?? defaultRunner;
   const orcaExecutable = operations.orcaExecutable ?? resolveOrcaExecutable();
   const errors: string[] = [];
@@ -266,7 +296,7 @@ export function collectCensus(
   let gitStatus: CensusEvidence['git']['status'] = 'ok';
   const gitResult = runner({
     command: 'git',
-    args: ['-C', expected.repositoryRoot, 'worktree', 'list', '--porcelain'],
+    args: ['-C', baseExpected.repositoryRoot, 'worktree', 'list', '--porcelain'],
   });
   if (!gitResult.ok) {
     gitStatus = 'unavailable';
@@ -305,16 +335,27 @@ export function collectCensus(
     errors.push(error instanceof Error ? error.message : String(error));
   }
 
+  const repositoryId = orcaStatus === 'ok'
+    ? resolveRepositoryId(baseExpected.repositoryRoot, orcaRows)
+    : null;
+  if (!repositoryId) {
+    orcaStatus = orcaStatus === 'unavailable' ? 'unavailable' : 'malformed';
+    errors.push('Orca inventory did not prove one active main-worktree repository identity');
+  }
+  const expected: ExpectedWorktreeIdentity = {
+    ...baseExpected,
+    ...(repositoryId ? { repositoryId } : {}),
+  };
   const evidence: CensusEvidence = {
     git: {
       status: gitStatus,
       rows: gitRows,
-      ...(gitStatus === 'ok' ? {} : { error: errors.find((item) => item.includes('git')) ?? 'git census failed' }),
+      ...(gitStatus === 'ok' ? {} : { error: errors.find((item) => item.toLowerCase().includes('git')) ?? 'git census failed' }),
     },
     orca: {
       status: orcaStatus,
       rows: orcaRows,
-      ...(orcaStatus === 'ok' ? {} : { error: errors.find((item) => item.includes('orca')) ?? 'Orca census failed' }),
+      ...(orcaStatus === 'ok' ? {} : { error: errors.find((item) => item.toLowerCase().includes('orca')) ?? 'Orca census failed' }),
     },
   };
   return {
@@ -532,14 +573,77 @@ function deferred(
   };
 }
 
+function targetAgents(expected: ExpectedWorktreeIdentity, census: ReturnType<typeof collectCensus>): OrcaAgentInventoryRow[] {
+  return census.agentRows.filter(
+    (row) => row.path === expected.path
+      || row.branchName === expected.branchName
+      || (expected.bindingKind === 'pr' && row.linkedPR === expected.bindingNumber)
+      || (expected.bindingKind === 'issue' && row.linkedIssue === expected.bindingNumber),
+  );
+}
+
+function collectRecoverySnapshot(
+  expected: ExpectedWorktreeIdentity,
+  operations: LifecycleOperations,
+): RecoverySnapshot {
+  const runner = operations.runner ?? defaultRunner;
+  const census = collectCensus(expected, operations);
+  const errors = [...census.errors];
+  let pr: PrIdentity | undefined;
+  try {
+    pr = readPrIdentity(expected.repositoryRoot, expected.bindingNumber, operations);
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+  let processes: readonly ProcessEvidence[] = [];
+  let processCensusOk = true;
+  try {
+    processes = (operations.processCensus ?? collectProcessEvidence)(expected.path);
+  } catch (error) {
+    processCensusOk = false;
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+  const terminals = census.terminals.filter((row) => row.worktreePath === expected.path);
+  const agents = targetAgents(expected, census);
+  return {
+    census,
+    pr,
+    gates: {
+      identity: census.classification.classification === 'exact_git_only'
+        && census.classification.exactGitRows.length === 1,
+      gitLink: validateGitLink(expected, runner),
+      clean: checkClean(expected, runner),
+      ignoredData: checkIgnored(expected, runner),
+      merged: Boolean(pr && checkMerged(expected, pr, runner)),
+      branchOwnership: Boolean(pr && checkBranchOwnership(expected, pr, runner)),
+      runtimeAgentsAbsent: census.errors.length === 0 && agents.length === 0,
+      terminalsAbsent: census.errors.length === 0 && terminals.length === 0,
+      processesAbsent: processCensusOk && processes.length === 0,
+    },
+    processes,
+    terminals,
+    errors,
+  };
+}
+
+function recoverySnapshotFingerprint(expected: ExpectedWorktreeIdentity, snapshot: RecoverySnapshot): string {
+  return digest({
+    inventory: relevantInventoryFingerprint(expected, snapshot.census),
+    pr: snapshot.pr,
+    gates: snapshot.gates,
+    processes: snapshot.processes,
+    terminals: snapshot.terminals,
+  });
+}
+
 function recoverGitOnly(
   expectedInput: ExpectedWorktreeIdentity,
   apply: boolean,
   operations: LifecycleOperations,
 ): LifecycleTerminalReport {
   const expected = normalizeExpectedIdentity(expectedInput);
-  const initial = collectCensus(expected, operations);
   if (expected.bindingKind !== 'pr') {
+    const initial = collectCensus(expected, operations);
     return deferred(
       'explicit-recovery',
       initial.classification,
@@ -549,67 +653,37 @@ function recoverGitOnly(
   const runner = operations.runner ?? defaultRunner;
   const lockPath = operations.lockPath ?? DEFAULT_LOCK_PATH;
   const lockFd = acquireLock(lockPath);
-  const decision = decideContinuation(initial.classification.classification, 'explicit-recovery');
   if (lockFd === null) {
-    return {
-      ...deferred('explicit-recovery', initial.classification, `lifecycle exclusion lock is held at ${lockPath}`),
-      decision,
-    };
+    const initial = collectCensus(expected, operations);
+    return deferred('explicit-recovery', initial.classification, `lifecycle exclusion lock is held at ${lockPath}`);
   }
   try {
-    if (initial.classification.classification === 'absent') {
+    const first = collectRecoverySnapshot(expected, operations);
+    const decision = decideContinuation(first.census.classification.classification, 'explicit-recovery');
+    if (first.census.classification.classification === 'absent') {
       return {
         schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
         context: 'explicit-recovery',
         outcome: 'already_absent',
         pipelineContinues: true,
-        classification: initial.classification,
+        classification: first.census.classification,
         decision,
         effects: [],
       };
     }
-    if (initial.classification.classification !== 'exact_git_only') {
+    if (first.census.classification.classification !== 'exact_git_only') {
       return deferred(
         'explicit-recovery',
-        initial.classification,
-        `guarded Git-only recovery requires exact_git_only, got ${initial.classification.classification}`,
+        first.census.classification,
+        `guarded Git-only recovery requires exact_git_only, got ${first.census.classification.classification}`,
       );
     }
 
-    let pr: PrIdentity;
-    try {
-      pr = readPrIdentity(expected.repositoryRoot, expected.bindingNumber, operations);
-    } catch (error) {
-      return deferred(
-        'explicit-recovery',
-        initial.classification,
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-    const targetTerminals = initial.terminals.filter((row) => row.worktreePath === expected.path);
-    const targetAgents = initial.agentRows.filter(
-      (row) => row.path === expected.path
-        || row.headSha === expected.headSha
-        || row.branchName === expected.branchName
-        || row.linkedPR === expected.bindingNumber,
-    );
-    const processes = (operations.processCensus ?? collectProcessEvidence)(expected.path);
-    const initialFingerprint = relevantInventoryFingerprint(expected, initial);
-    const gatesWithoutFresh = {
-      identity: initial.classification.exactGitRows.length === 1,
-      gitLink: validateGitLink(expected, runner),
-      clean: checkClean(expected, runner),
-      ignoredData: checkIgnored(expected, runner),
-      merged: checkMerged(expected, pr, runner),
-      branchOwnership: checkBranchOwnership(expected, pr, runner),
-      runtimeAgentsAbsent: targetAgents.length === 0,
-      terminalsAbsent: targetTerminals.length === 0,
-      processesAbsent: processes.length === 0,
-    };
-    const fresh = collectCensus(expected, operations);
-    const freshRecheck = fresh.classification.classification === 'exact_git_only'
-      && relevantInventoryFingerprint(expected, fresh) === initialFingerprint;
-    const gates: RecoveryGates = { ...gatesWithoutFresh, freshRecheck };
+    const fresh = collectRecoverySnapshot(expected, operations);
+    const freshGatesPass = Object.values(fresh.gates).every(Boolean);
+    const freshRecheck = freshGatesPass
+      && recoverySnapshotFingerprint(expected, fresh) === recoverySnapshotFingerprint(expected, first);
+    const gates: RecoveryGates = { ...fresh.gates, freshRecheck };
     const allPass = Object.values(gates).every(Boolean);
     if (!allPass || !apply) {
       return {
@@ -617,50 +691,66 @@ function recoverGitOnly(
         context: 'explicit-recovery',
         outcome: allPass ? 'git_only_recovery_eligible' : 'cleanup_deferred',
         pipelineContinues: true,
-        classification: initial.classification,
+        classification: first.census.classification,
         decision,
         gates,
         effects: [],
-        processes,
-        terminals: targetTerminals,
-        ...(!allPass ? { error: 'one or more guarded Git-only recovery gates failed' } : {}),
+        processes: fresh.processes,
+        terminals: fresh.terminals,
+        ...(!allPass ? { error: fresh.errors.join('; ') || 'one or more guarded Git-only recovery gates failed' } : {}),
       };
     }
 
-    const beforeNonTarget = nonTargetFingerprint(expected, fresh);
+    const beforeNonTarget = nonTargetFingerprint(expected, fresh.census);
     const removalArgs = ['-C', expected.repositoryRoot, 'worktree', 'remove', expected.path];
     const removal = runner({ command: 'git', args: removalArgs });
+    const effects = [removal.ok ? 'git worktree remove (non-force)' : 'git worktree remove attempted'];
     if (!removal.ok) {
-      return {
-        schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
-        context: 'explicit-recovery',
-        outcome: 'cleanup_deferred',
-        pipelineContinues: true,
-        classification: initial.classification,
-        decision,
-        gates,
-        effects: ['git worktree remove attempted'],
-        processes,
-        terminals: targetTerminals,
-        error: commandError(removal, 'git', removalArgs),
-      };
+      const postFailure = collectCensus(expected, operations);
+      if (postFailure.classification.classification !== 'absent') {
+        return {
+          schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
+          context: 'explicit-recovery',
+          outcome: 'cleanup_deferred',
+          pipelineContinues: true,
+          classification: first.census.classification,
+          decision,
+          gates,
+          effects,
+          postClassification: postFailure.classification,
+          processes: fresh.processes,
+          terminals: fresh.terminals,
+          error: commandError(removal, 'git', removalArgs),
+        };
+      }
     }
-    const effects = ['git worktree remove (non-force)'];
+
     let branchDeletion: LifecycleTerminalReport['branchDeletion'] = 'not-applicable';
     if (expected.mode === 'branch-bound' && expected.branchName) {
-      const present = runner({
-        command: 'git',
-        args: ['-C', expected.repositoryRoot, 'branch', '--list', expected.branchName],
-      });
-      if (!present.ok || present.stdout.trim() === '') {
-        branchDeletion = 'not-present';
+      let branchOwnershipStillSafe = false;
+      try {
+        const currentPr = readPrIdentity(expected.repositoryRoot, expected.bindingNumber, operations);
+        branchOwnershipStillSafe = checkBranchOwnership(expected, currentPr, runner);
+      } catch {
+        branchOwnershipStillSafe = false;
+      }
+      if (!branchOwnershipStillSafe) {
+        branchDeletion = 'refused';
       } else {
-        const deleted = runner({
+        const present = runner({
           command: 'git',
-          args: ['-C', expected.repositoryRoot, 'branch', '-d', expected.branchName],
+          args: ['-C', expected.repositoryRoot, 'branch', '--list', expected.branchName],
         });
-        branchDeletion = deleted.ok ? 'deleted' : 'refused';
-        if (deleted.ok) effects.push('git branch -d');
+        if (!present.ok || present.stdout.trim() === '') {
+          branchDeletion = 'not-present';
+        } else {
+          const deleted = runner({
+            command: 'git',
+            args: ['-C', expected.repositoryRoot, 'branch', '-d', expected.branchName],
+          });
+          branchDeletion = deleted.ok ? 'deleted' : 'refused';
+          if (deleted.ok) effects.push('git branch -d');
+        }
       }
     }
     const post = collectCensus(expected, operations);
@@ -671,13 +761,13 @@ function recoverGitOnly(
       context: 'explicit-recovery',
       outcome: absent && unrelatedStable ? 'git_only_recovered' : 'task_degraded',
       pipelineContinues: true,
-      classification: initial.classification,
+      classification: first.census.classification,
       decision,
       gates,
       effects,
       postClassification: post.classification,
-      processes,
-      terminals: targetTerminals,
+      processes: fresh.processes,
+      terminals: fresh.terminals,
       branchDeletion,
       ...(!absent || !unrelatedStable
         ? { error: 'post-effect read-back did not prove exact absence with unrelated inventory unchanged' }
@@ -725,6 +815,7 @@ function standardTeardown(
     );
   }
   const runner = operations.runner ?? defaultRunner;
+  const beforeNonTarget = nonTargetFingerprint(expected, census);
   const args = [
     '--experimental-strip-types',
     join(expected.repositoryRoot, 'scripts', 'worktree-teardown.ts'),
@@ -742,16 +833,39 @@ function standardTeardown(
   } catch {
     child = { raw_stdout: result.stdout.trim(), raw_stderr: result.stderr.trim() };
   }
+  if (!apply) {
+    return {
+      schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
+      context: 'post-merge-cleanup',
+      outcome: result.ok ? 'cleanup_eligible' : 'cleanup_deferred',
+      pipelineContinues: true,
+      classification: census.classification,
+      decision,
+      effects: [],
+      standardTeardown: child,
+      ...(!result.ok ? { error: 'standard teardown dry-run blocked; completed merge/adoption remains successful' } : {}),
+    };
+  }
+
+  const post = collectCensus(expected, operations);
+  const absent = post.classification.classification === 'absent';
+  const unrelatedStable = nonTargetFingerprint(expected, post) === beforeNonTarget;
+  const complete = absent && unrelatedStable;
   return {
     schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
     context: 'post-merge-cleanup',
-    outcome: result.ok ? (apply ? 'cleanup_complete' : 'cleanup_eligible') : 'cleanup_deferred',
+    outcome: complete ? 'cleanup_complete' : 'task_degraded',
     pipelineContinues: true,
     classification: census.classification,
     decision,
-    effects: result.ok && apply ? ['standard guarded teardown'] : [],
+    effects: ['standard guarded teardown attempted'],
+    postClassification: post.classification,
     standardTeardown: child,
-    ...(!result.ok ? { error: 'standard teardown blocked or failed; completed merge/adoption remains successful' } : {}),
+    ...(!complete
+      ? { error: result.ok
+          ? 'standard teardown returned success but dual post-read-back did not prove absence with unrelated inventory unchanged'
+          : `standard teardown outcome was unknown or failed and read-back remained disputed: ${commandError(result, process.execPath, args)}` }
+      : {}),
   };
 }
 
@@ -770,7 +884,9 @@ export function runLifecycle(input: {
   return {
     schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
     context: 'post-create',
-    outcome: census.classification.classification === 'exact_dual' ? 'ready_to_spawn' : 'replacement_required',
+    outcome: census.classification.classification === 'exact_dual'
+      ? 'exact_dual_observed'
+      : 'replacement_required',
     pipelineContinues: true,
     classification: census.classification,
     decision,
