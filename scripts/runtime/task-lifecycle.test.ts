@@ -295,26 +295,23 @@ describe('direct runtime-neutral task caller', () => {
     const fixturePath = join(root, 'orca-hermetic.mjs');
     const statePath = join(root, 'state.json');
     const capturePath = join(root, 'capture.json');
-    const removedEnvironment = new Map<string, string>();
     const nativeCalls: Array<{
       readonly args: readonly string[];
       readonly response: OrcaJsonResponse;
     }> = [];
     try {
-      for (const key of Object.keys(process.env)) {
-        if (!key.startsWith('AO_') && !key.startsWith('AGENT_ORCHESTRATOR_')) continue;
-        const value = process.env[key];
-        if (value !== undefined) removedEnvironment.set(key, value);
-        delete process.env[key];
-      }
-
       writeFileSync(
         fixturePath,
         hermeticOrcaFixture(statePath, capturePath, root),
         'utf8',
       );
       chmodSync(fixturePath, 0o755);
-      const environment: NodeJS.ProcessEnv = { ...process.env, PATH: root };
+      const environment = Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([key]) => !key.startsWith('AO_') && !key.startsWith('AGENT_ORCHESTRATOR_'),
+        ),
+      ) as NodeJS.ProcessEnv;
+      environment.PATH = root;
       const observingRunJson: typeof runOrcaJson = <T>(args: readonly string[], options = {}) => {
         const response = runOrcaJson<T>(args, options);
         nativeCalls.push({ args: [...args], response: response as OrcaJsonResponse });
@@ -374,7 +371,6 @@ describe('direct runtime-neutral task caller', () => {
         expectedPath: root,
       });
     } finally {
-      for (const [key, value] of removedEnvironment) process.env[key] = value;
       rmSync(root, { recursive: true, force: true });
     }
   });
