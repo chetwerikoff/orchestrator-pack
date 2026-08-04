@@ -126,6 +126,63 @@ export interface PackReviewStoreOptions {
   now?: Date;
 }
 
+export function hasValidPackReviewJournalOutcome(record: PackReviewRunRecord): boolean {
+  const journal = record.journalOutcome;
+  return Boolean(
+    journal
+      && (journal.state === 'persisted' || journal.state === 'journal_write_failed')
+      && typeof journal.recordedAtUtc === 'string'
+      && journal.recordedAtUtc.length > 0
+      && typeof journal.reason === 'string'
+      && journal.reason.length > 0
+      && journal.idempotencyKey === `verdict:${record.id}:${record.targetSha}`
+      && Number.isInteger(journal.attempts)
+      && journal.attempts > 0,
+  );
+}
+
+export function hasValidPackReviewDeliveryOutcome(
+  outcome: unknown,
+  expectedIdempotencyKey?: string,
+): outcome is PackReviewDeliveryOutcome {
+  if (!outcome || typeof outcome !== 'object' || Array.isArray(outcome)) return false;
+  const candidate = outcome as Partial<PackReviewDeliveryOutcome>;
+  return (candidate.state === 'succeeded'
+      || candidate.state === 'delivered'
+      || candidate.state === 'failed'
+      || candidate.state === 'escalated')
+    && typeof candidate.recordedAtUtc === 'string'
+    && candidate.recordedAtUtc.length > 0
+    && typeof candidate.reason === 'string'
+    && candidate.reason.length > 0
+    && typeof candidate.idempotencyKey === 'string'
+    && candidate.idempotencyKey.length > 0
+    && (!expectedIdempotencyKey || candidate.idempotencyKey === expectedIdempotencyKey);
+}
+
+export function hasValidPackReviewGithubReconciliation(
+  value: unknown,
+  expectedPhase?: GithubCommentReviewReconciliationPhase,
+): value is GithubCommentReviewReconciliation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Partial<GithubCommentReviewReconciliation>;
+  return candidate.schemaVersion === 1
+    && candidate.event === 'COMMENT'
+    && (candidate.phase === 'prepared'
+      || candidate.phase === 'comment_posted'
+      || candidate.phase === 'dismissals_pending'
+      || candidate.phase === 'complete')
+    && (!expectedPhase || candidate.phase === expectedPhase)
+    && typeof candidate.actorLogin === 'string'
+    && typeof candidate.commentBody === 'string'
+    && Array.isArray(candidate.pendingDismissalReviewIds)
+    && Array.isArray(candidate.dismissedReviewIds)
+    && typeof candidate.preparedAtUtc === 'string'
+    && candidate.preparedAtUtc.length > 0
+    && typeof candidate.updatedAtUtc === 'string'
+    && candidate.updatedAtUtc.length > 0;
+}
+
 export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   prNumber: number;
   headSha: string;
@@ -650,7 +707,8 @@ export function hasNewerPackReviewRunForKey(
 }
 
 export function hasPersistedPackReviewVerdict(record: PackReviewRunRecord): boolean {
-  return record.journalOutcome?.state === 'persisted'
+  return hasValidPackReviewJournalOutcome(record)
+    && record.journalOutcome?.state === 'persisted'
     && (record.reviewVerdict === 'clean' || record.reviewVerdict === 'findings')
     && Number.isInteger(record.findingCount)
     && Number(record.findingCount) >= 0
@@ -823,6 +881,43 @@ export function updatePackReviewRun(
       heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(fields.status ?? existing.status))
         ? updatedAt
         : String(fields.heartbeatAtUtc ?? existing.heartbeatAtUtc),
+    }, path);
+    writeRecordUnlocked(storeRoot, next);
+    return next;
+  });
+}
+
+export function updatePackReviewRunIf(
+  runId: string,
+  predicate: (records: readonly PackReviewRunRecord[]) => boolean,
+  fields: Partial<PackReviewRunRecord> | ((existing: PackReviewRunRecord) => Partial<PackReviewRunRecord>),
+  options: PackReviewStoreOptions = {},
+): PackReviewRunRecord | null {
+  const storeRoot = resolvePackReviewRunStoreRoot(options);
+  return withStoreLock(storeRoot, () => {
+    const records = readRecordsUnlocked(storeRoot);
+    if (!predicate(records)) return null;
+    const path = recordPath(storeRoot, runId);
+    if (!existsSync(path)) throw new Error(`pack review run not found: ${runId}`);
+    const existing = parseRecord(JSON.parse(readFileSync(path, 'utf8')), path);
+    const updatedAt = (options.now ?? new Date()).toISOString();
+    const nextFields = typeof fields === 'function' ? fields(existing) : fields;
+    const next = parseRecord({
+      ...existing,
+      ...nextFields,
+      sameKeyOrder: existing.sameKeyOrder,
+      id: existing.id,
+      runId: existing.runId,
+      key: existing.key,
+      prNumber: existing.prNumber,
+      targetSha: existing.targetSha,
+      headSha: existing.headSha,
+      canonicalRepository: existing.canonicalRepository ?? nextFields.canonicalRepository,
+      schemaVersion: 1,
+      updatedAt,
+      heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(nextFields.status ?? existing.status))
+        ? updatedAt
+        : String(nextFields.heartbeatAtUtc ?? existing.heartbeatAtUtc),
     }, path);
     writeRecordUnlocked(storeRoot, next);
     return next;

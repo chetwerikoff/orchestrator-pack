@@ -167,6 +167,7 @@ export interface ReconcileStalePackReviewRunsInput {
   fixturePauseAfterStaleStatusWrite?: () => void | Promise<void>;
   fixturePauseAfterPendingRestoreWrite?: () => void | Promise<void>;
   fixturePauseAfterRestoreRead?: (run: PackReviewRunRecord) => void | Promise<void>;
+  fixturePauseBeforeAuthoritySettlement?: () => void | Promise<void>;
 }
 
 interface ListInput {
@@ -868,6 +869,8 @@ export async function reconcileStalePackReviewRuns(
       if (currentOrder.kind !== 'newer') {
         return {
           outcome: restored,
+          authorityId: undefined,
+          authorityProjection: undefined,
           reason: currentOrder.kind === 'ambiguous' ? currentOrder.reason : 'authority_not_newer',
         };
       }
@@ -891,6 +894,8 @@ export async function reconcileStalePackReviewRuns(
       }
       return {
         outcome: restored,
+        authorityId: selectedId,
+        authorityProjection: selectedProjection,
         reason: afterWrite.kind === 'ambiguous'
           ? afterWrite.reason
           : restored?.state === 'succeeded'
@@ -900,7 +905,12 @@ export async function reconcileStalePackReviewRuns(
               : 'newer_authority_malformed',
       };
     }
-    return { outcome: null, reason: 'newer_run_authority_race' };
+    return {
+      outcome: null,
+      authorityId: undefined,
+      authorityProjection: undefined,
+      reason: 'newer_run_authority_race',
+    };
   };
   const restoreAndSettleNewerAuthority = async (
     staleRun: PackReviewRunRecord,
@@ -913,15 +923,31 @@ export async function reconcileStalePackReviewRuns(
       || restoration.outcome?.state !== 'succeeded') {
       return restoration;
     }
+    if (input.fixturePauseBeforeAuthoritySettlement) {
+      await input.fixturePauseBeforeAuthoritySettlement();
+    }
     try {
       const marker = recordPackReviewNewerAuthorityReconciliation({
         projectId,
         storeRoot,
         run: staleRun,
+        authorityGuard: (boundRecords) => {
+          if (!restoration.authorityId || !restoration.authorityProjection) return false;
+          const currentOrder = resolvePackReviewRunOrder(boundRecords, staleRun);
+          return currentOrder.kind === 'newer'
+            && currentOrder.run.id === restoration.authorityId
+            && packReviewRequiredStatusProjectionKey(currentOrder.run)
+              === restoration.authorityProjection;
+        },
       });
       return { outcome: marker, reason: marker.reason };
-    } catch {
-      return { outcome: null, reason: 'newer_authority_settlement_persist_failed' };
+    } catch (error) {
+      return {
+        outcome: null,
+        reason: error instanceof Error && error.message === 'newer_run_authority_race'
+          ? 'newer_run_authority_race'
+          : 'newer_authority_settlement_persist_failed',
+      };
     }
   };
 

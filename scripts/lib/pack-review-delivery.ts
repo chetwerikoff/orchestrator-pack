@@ -4,9 +4,13 @@ import { runProcess } from '../kernel/subprocess.ts';
 import {
   describePackReviewError as describeError,
   getPackReviewRun,
+  hasValidPackReviewDeliveryOutcome,
+  hasValidPackReviewGithubReconciliation,
+  hasValidPackReviewJournalOutcome,
   hasPersistedPackReviewVerdict,
   setPackReviewRunTerminal,
   updatePackReviewRun,
+  updatePackReviewRunIf,
   trimPackReviewValue as trim,
   type PackReviewDeliveryChannel,
   type PackReviewDeliveryOutcome,
@@ -92,7 +96,8 @@ export function packReviewRequiredStatusStaleReconciliationComplete(run: PackRev
   const outcome = run.deliveryOutcomes?.requiredStatus;
   const failureReason = trim(run.failureReason) || 'runner_internal_failure';
   const unfinishedKey = unfinishedRequiredStatusKey(run, failureReason);
-  return outcome?.state === 'succeeded'
+  return hasValidPackReviewDeliveryOutcome(outcome)
+    && outcome.state === 'succeeded'
     && (outcome.idempotencyKey === packReviewStaleRequiredStatusIdempotencyKey(run)
       || outcome.idempotencyKey === unfinishedKey);
 }
@@ -106,7 +111,7 @@ export function packReviewRequiredStatusNeedsStaleReconciliation(run: PackReview
     run,
     trim(run.failureReason) || 'runner_internal_failure',
   );
-  if (!outcome) return true;
+  if (!hasValidPackReviewDeliveryOutcome(outcome)) return true;
   if (outcome.idempotencyKey === pendingKey && outcome.state === 'succeeded') return true;
   if (outcome.idempotencyKey === unfinishedKey && outcome.state === 'succeeded') return false;
   return outcome.state === 'failed' && outcome.idempotencyKey === unfinishedKey;
@@ -116,6 +121,7 @@ export function recordPackReviewNewerAuthorityReconciliation(
   options: PackReviewStoreOptions & {
     run: PackReviewRunRecord;
     clock?: () => Date;
+    authorityGuard?: (records: readonly PackReviewRunRecord[]) => boolean;
   },
 ): PackReviewDeliveryOutcome {
   const marker = outcome(
@@ -124,7 +130,22 @@ export function recordPackReviewNewerAuthorityReconciliation(
     packReviewStaleRequiredStatusIdempotencyKey(options.run),
     options.clock,
   );
-  persistRequiredStatusOutcome(options.run.id, marker, options);
+  if (options.authorityGuard) {
+    const persisted = updatePackReviewRunIf(
+      options.run.id,
+      options.authorityGuard,
+      (existing) => ({
+        deliveryOutcomes: {
+          ...existing.deliveryOutcomes,
+          requiredStatus: marker,
+        },
+      }),
+      options,
+    );
+    if (!persisted) throw new Error('newer_run_authority_race');
+  } else {
+    persistRequiredStatusOutcome(options.run.id, marker, options);
+  }
   return marker;
 }
 
@@ -304,7 +325,7 @@ function workerNotificationIdempotencyKey(run: PackReviewRunRecord): string {
 }
 
 export function packReviewJournaledPayload(run: PackReviewRunRecord): PackReviewTerminalPayload | null {
-  if (run.journalOutcome?.state !== 'persisted') return null;
+  if (!hasValidPackReviewJournalOutcome(run)) return null;
   if (run.reviewVerdict !== 'clean' && run.reviewVerdict !== 'findings') return null;
   if (!Number.isInteger(run.findingCount) || Number(run.findingCount) < 0) return null;
   const findings = Array.isArray(run.findings) ? [...run.findings] : [];
@@ -318,7 +339,7 @@ export function packReviewJournaledPayload(run: PackReviewRunRecord): PackReview
 
 function completedGithubCommentReview(run: PackReviewRunRecord): PackReviewGithubCommentResult | null {
   const reconciliation = run.githubReviewReconciliation;
-  if (reconciliation?.phase !== 'complete') return null;
+  if (!hasValidPackReviewGithubReconciliation(reconciliation, 'complete')) return null;
   const id = run.githubReviewId ?? reconciliation.commentReviewId;
   if (id === undefined) return null;
   return {
@@ -337,13 +358,15 @@ function completedResumeChannelOutcome(
     const reconciliation = run.githubReviewReconciliation as
       | (NonNullable<PackReviewRunRecord['githubReviewReconciliation']> & { postOutcome?: unknown })
       | undefined;
-    return completedGithubCommentReview(run) !== null
-      || (reconciliation?.phase === 'prepared'
+    return (hasValidPackReviewDeliveryOutcome(run.deliveryOutcomes?.githubComment, idempotencyKey)
+      && run.deliveryOutcomes?.githubComment?.state === 'succeeded')
+      || completedGithubCommentReview(run) !== null
+      || (hasValidPackReviewGithubReconciliation(reconciliation, 'prepared')
         && reconciliation.postOutcome === 'definitely_rejected');
   }
 
   const value = run.deliveryOutcomes?.[channel];
-  if (!value || value.idempotencyKey !== idempotencyKey) return false;
+  if (!hasValidPackReviewDeliveryOutcome(value, idempotencyKey)) return false;
   if (channel === 'requiredStatus') {
     return value.state === 'succeeded' || value.state === 'failed';
   }
@@ -689,8 +712,8 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
   if (!options.forceRepublish
     && expectedKey
     && expectedOutcomeReason
-    && existingOutcome?.state === 'succeeded'
-    && existingOutcome.idempotencyKey === expectedKey
+    && hasValidPackReviewDeliveryOutcome(existingOutcome, expectedKey)
+    && existingOutcome.state === 'succeeded'
     && existingOutcome.reason === expectedOutcomeReason) {
     return existingOutcome;
   }

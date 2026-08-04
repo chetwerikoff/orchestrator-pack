@@ -26,6 +26,7 @@ import {
   resolvePackReviewRunOrder,
   terminalizePackReviewStaleRun,
   updatePackReviewRun,
+  type PackReviewRunRecord,
 } from './lib/pack-review-run-store.js';
 import { resolveRepositorySlug } from './lib/pack-gpt-reviewer.js';
 import { reconcileStalePackReviewRuns, startPackReview } from './pack-review-runner.js';
@@ -415,6 +416,38 @@ describe('pack review journal-first delivery (Issue #894)', () => {
     expect(outcome).toMatchObject({ state: 'succeeded', reason: 'status_pending' });
     expect(requests).toHaveLength(1);
     expect(requests[0]?.state).toBe('pending');
+  });
+
+  it('does not treat malformed nested authority evidence as delivered', async () => {
+    const storeRoot = tempRoot('opk-review-malformed-authority-');
+    const run = createRun(storeRoot);
+    const statusKey = `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${HEAD_SHA}`;
+    updatePackReviewRun(run.id, {
+      status: 'commented',
+      latestRunStatus: 'commented',
+      reviewVerdict: 'clean',
+      findingCount: 0,
+      findings: [],
+      journalOutcome: { state: 'persisted' } as PackReviewRunRecord['journalOutcome'],
+      githubReviewReconciliation: { phase: 'complete' } as PackReviewRunRecord['githubReviewReconciliation'],
+      deliveryOutcomes: {
+        requiredStatus: {
+          state: 'succeeded',
+          idempotencyKey: statusKey,
+        } as PackReviewRunRecord['deliveryOutcomes']['requiredStatus'],
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const requests: PackReviewRequiredStatusRequest[] = [];
+
+    const restored = await restorePackReviewAuthoritativeRequiredStatus({
+      run: getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })!,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      writeRequiredStatus: async (request) => { requests.push(request); },
+    });
+
+    expect(restored).toBeNull();
+    expect(requests).toHaveLength(0);
   });
 
   it('publishes error for malformed stdout without creating a verdict journal', async () => {
@@ -1256,6 +1289,53 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
     expect(getPackReviewRun(newer.run.id, { projectId: 'orchestrator-pack', storeRoot })
       ?.deliveryOutcomes.requiredStatus?.reason)
       .toBe('status_failure_restored');
+  });
+
+  it('does not settle when authority changes before marker compare-and-set', async () => {
+    const storeRoot = tempRoot('opk-1307-settlement-cas-race-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+    const newer = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1067,
+      headSha: STALE_HEAD_A,
+      linkedSessionId: 'worker-settlement-cas-race',
+      startReason: 'settlement-cas-race',
+      surface: 'pack-review-stale-reconcile-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: STALE_REPO_A,
+    });
+    const writes: PackReviewRequiredStatusRequest[] = [];
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
+      fixturePauseBeforeAuthoritySettlement: async () => {
+        updatePackReviewRun(newer.run.id, {
+          status: 'timed_out',
+          latestRunStatus: 'timed_out',
+          failureReason: 'reviewer_process_timeout',
+        }, { projectId: 'orchestrator-pack', storeRoot });
+      },
+    });
+
+    expect(result.results[0]).toMatchObject({
+      runId: staleRunId,
+      statusReconciled: false,
+      reason: 'newer_run_authority_race',
+    });
+    expect(writes.map((request) => request.state)).toEqual(['pending']);
+    expect(getPackReviewRun(staleRunId, { projectId: 'orchestrator-pack', storeRoot })
+      ?.deliveryOutcomes.requiredStatus?.reason)
+      .not.toBe('newer_run_authoritative');
   });
 
   it('force-republishes newer authority after a superseding stale write', async () => {
