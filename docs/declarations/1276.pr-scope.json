@@ -1,0 +1,52 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1276,
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/reviewer-switch-runbook.md",
+    "scripts/lib/pack-gpt-reviewer.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-gpt-reviewer.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".claude/skills/create-issue-draft/",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    ".cursor/skills/create-issue-draft/",
+    "credentials/",
+    "packages/core/",
+    "scripts/create-issue-/",
+    "scripts/lib/create-issue-/",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/migration_notes.md",
+    "docs/reviewer-switch-runbook.md",
+    "package.json",
+    "scripts/cutover/issue-928.test.ts",
+    "scripts/invoke-pack-review.ps1",
+    "scripts/lib/pack-gpt-reviewer.ts",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/pack-gpt-reviewer.test.ts",
+    "scripts/pack-pr-review-contract.test.ts",
+    "scripts/pack-review-delivery.cases.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-severity.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/review-delivery.test.ts",
+    "scripts/run-pack-review-gpt.ts"
+  ],
+  "source_revision": "f79c7cf2e928c42a544d41acf3a488ea632d631f"
+}
