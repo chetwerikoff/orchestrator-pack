@@ -696,7 +696,7 @@ export function checkContractEvidence(markdown, options = {}) {
       const bindingProducer = canonicalBindingIdProducer(row);
       if (bindingProducer !== producer) {
         errors.push(
-          `${rowLabel}: producer ${producer} does not match binding-id producer ${bindingProducer}`,
+          `${rowLabel}: producer ${producer} does not match binding-id producer prefix ${bindingProducer}; the binding-id prefix before the first ":" must match producer. Canonical form: <producer>:<datum>:<expected>; the accepted two-component form is <producer>:<datum> with expected in a separate field. Decide which producer owns this binding and correct that side as a contract decision; do not mechanically substitute one producer for the other`,
         );
         continue;
       }
@@ -705,7 +705,9 @@ export function checkContractEvidence(markdown, options = {}) {
         continue;
       }
       if (!repoOwned.includes(bindingProducer)) {
-        errors.push(`${rowLabel}: producer ${bindingProducer} is not in the repo-owned registry`);
+        errors.push(
+          `${rowLabel}: producer ${bindingProducer} is not in the repo-owned registry; accepted values for a likely typo: ${repoOwned.join(', ')}. If this is a new legitimate producer, it requires an authorized registry change; do not substitute an existing value merely to pass validation`,
+        );
         continue;
       }
       const newIdentity = canonicalBindingIdentity(row, 'structured');
@@ -714,8 +716,9 @@ export function checkContractEvidence(markdown, options = {}) {
         continue;
       }
       if (!criterionHasMatchingProducerEmission(markdown, acNumber, row)) {
+        const expectation = extractRowProducerEmissionExpectation(row);
         errors.push(
-          `${rowLabel}: NEW(produced-by AC#${acNumber}) must name a matching producer-emission assertion for this binding`,
+          `${rowLabel}: NEW(produced-by AC#${acNumber}) must name a matching producer-emission assertion for this binding; add this minimal producer-emission block under AC#${acNumber}: producer: ${expectation.producer || '<missing>'}, datum: ${expectation.datum || '<missing>'}, expected: ${expectation.expected || '<missing>'}, proof-command: <command> OR proof-capture: <capture>. If datum or expected is <missing>, fix the binding-id first; adding a block cannot match it — mechanical fix: edit the Issue text and rerun this validator, no architectural adjudication required`,
         );
         continue;
       }
