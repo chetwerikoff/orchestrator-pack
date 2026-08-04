@@ -2671,6 +2671,12 @@ describe('worker-message-send adoption preflight', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('effective routing adopted');
     expect(readFileSync(prodJournal, 'utf8')).toBe(JSON.stringify({ existing: { deliveryId: 'existing', adoptionProbe: false } }));
+    const dryRunRoots = readdirSync(dir)
+      .filter((name: string) => /^worker-message-send-adoption-dryrun-[0-9a-f]{32}$/u.test(name));
+    expect(dryRunRoots).toHaveLength(1);
+    expect(readdirSync(path.join(dir, dryRunRoots[0]))).toEqual(
+      expect.arrayContaining(["dispatch-journal.json"]),
+    );
   });
 
   it('requires adoption probe hash to match supplied AO epoch and config path', () => {
