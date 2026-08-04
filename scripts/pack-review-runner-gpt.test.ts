@@ -851,7 +851,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       issueNumber: 1276,
       boundIssueSnapshotDigest: 'fixture-digest',
       sourceSlots: [
-        { slotId: 'source-01', ordinal: 1, lifecycle: 'terminal' as const, terminalClass: 'complete_clean' },
+        terminalStoredSlot({ slotId: 'source-01', ordinal: 1, lifecycle: 'planned' }),
         { slotId: 'source-02', ordinal: 2, lifecycle: 'invocation_started' as const, invocationId: 'inv-02' },
         { slotId: 'source-03', ordinal: 3, lifecycle: 'planned' as const },
       ],
@@ -879,6 +879,21 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
   });
 });
 
+function storedTerminalTurnResult(
+  invocationId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    schema: 'turn-result/v1',
+    state: 'ok',
+    scope: 'invocation',
+    cause: 'completed_page_only',
+    invocation_id: invocationId,
+    send_count: 1,
+    ...overrides,
+  };
+}
+
 function storedGptRound(): PackReviewGptRoundRecord {
   return {
     schema: 'pack-review-gpt-round/v1',
@@ -888,13 +903,10 @@ function storedGptRound(): PackReviewGptRoundRecord {
     cardinality: 3,
     issueNumber: 1276,
     boundIssueSnapshotDigest: 'fixture-digest',
-    sourceSlots: Array.from({ length: 3 }, (_, index) => ({
+    sourceSlots: Array.from({ length: 3 }, (_, index) => terminalStoredSlot({
       slotId: `source-${String(index + 1).padStart(2, '0')}`,
       ordinal: index + 1,
-      lifecycle: 'terminal' as const,
-      invocationId: `inv-${index + 1}`,
-      attemptOrdinal: 1,
-      terminalClass: 'complete_clean',
+      lifecycle: 'planned',
     })),
   };
 }
@@ -997,16 +1009,185 @@ function plannedStoredGptRound(): PackReviewGptRoundRecord {
 }
 
 function terminalStoredSlot(slot: PackReviewGptRoundRecord['sourceSlots'][number]) {
+  const invocationId = `inv-${slot.ordinal}`;
   return {
     ...slot,
     lifecycle: 'terminal' as const,
-    invocationId: `inv-${slot.ordinal}`,
+    invocationId,
     attemptOrdinal: 1,
     terminalClass: 'complete_clean',
-    terminalResult: { kind: 'completed', sendCount: 1 },
+    terminalResult: storedTerminalTurnResult(invocationId),
     payload: { verdict: 'clean', findingCount: 0, findings: [] },
   };
 }
+
+function terminalClassOnlyStoredGptRound(): PackReviewGptRoundRecord {
+  const round = plannedStoredGptRound();
+  round.sourceSlots = round.sourceSlots.map((slot) => ({
+    ...slot,
+    lifecycle: 'terminal',
+    invocationId: `inv-${slot.ordinal}`,
+    attemptOrdinal: 1,
+    terminalClass: 'complete_clean',
+  }));
+  return round;
+}
+
+describe('GPT run-store terminal evidence validation (Issue #1276 r08)', () => {
+  it('rejects terminal-class-only slots across create, update, settlement, journal, and read', () => {
+    const createRoot = tempRoot('opk-gpt-terminal-evidence-create-');
+    expect(() => createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot: createRoot,
+      prNumber: 1276,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      reviewRound: terminalClassOnlyStoredGptRound(),
+    })).toThrow(/lacks valid terminalResult/);
+
+    const storeRoot = tempRoot('opk-gpt-terminal-evidence-boundaries-');
+    const created = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1276,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      reviewRound: plannedStoredGptRound(),
+    });
+    const terminalClassOnly = terminalClassOnlyStoredGptRound();
+
+    expect(() => updatePackReviewRun(
+      created.run.id,
+      { reviewRound: terminalClassOnly },
+      { projectId: 'orchestrator-pack', storeRoot },
+    )).toThrow(/lacks valid terminalResult/);
+    expect(() => setPackReviewRunTerminal(
+      created.run.id,
+      'commented',
+      {
+        reviewRound: terminalClassOnly,
+        reviewVerdict: 'clean',
+        findingCount: 0,
+        findings: [],
+      },
+      { projectId: 'orchestrator-pack', storeRoot },
+    )).toThrow(/lacks valid terminalResult/);
+    expect(() => updatePackReviewRun(
+      created.run.id,
+      {
+        reviewRound: terminalClassOnly,
+        journalOutcome: {
+          state: 'persisted',
+          recordedAtUtc: new Date().toISOString(),
+          reason: 'fixture',
+          idempotencyKey: 'fixture-terminal-evidence',
+          attempts: 1,
+        },
+      },
+      { projectId: 'orchestrator-pack', storeRoot },
+    )).toThrow(/lacks valid terminalResult/);
+    expect(getPackReviewRun(created.run.id, { projectId: 'orchestrator-pack', storeRoot })?.status).toBe('queued');
+
+    const readRoot = tempRoot('opk-gpt-terminal-evidence-read-');
+    const readable = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot: readRoot,
+      prNumber: 1276,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      reviewRound: storedGptRound(),
+    });
+    const recordPath = path.join(readRoot, 'runs', `${readable.run.id}.json`);
+    const raw = JSON.parse(readFileSync(recordPath, 'utf8')) as { reviewRound: PackReviewGptRoundRecord };
+    delete raw.reviewRound.sourceSlots[0]!.terminalResult;
+    writeFileSync(recordPath, `${JSON.stringify(raw)}\n`, 'utf8');
+    expect(() => getPackReviewRun(readable.run.id, {
+      projectId: 'orchestrator-pack',
+      storeRoot: readRoot,
+    })).toThrow(/lacks valid terminalResult/);
+  });
+
+  it('rejects malformed and class-inconsistent terminal evidence', () => {
+    const malformedCases: Array<{
+      name: string;
+      mutate: (round: PackReviewGptRoundRecord) => void;
+    }> = [
+      {
+        name: 'malformed turn result',
+        mutate: (round) => {
+          round.sourceSlots[0]!.terminalResult = { schema: 'turn-result/v1', state: 'ok' };
+        },
+      },
+      {
+        name: 'complete clean without a successful send',
+        mutate: (round) => {
+          const slot = round.sourceSlots[0]!;
+          slot.terminalResult = storedTerminalTurnResult(slot.invocationId!, { send_count: 0 });
+        },
+      },
+      {
+        name: 'complete clean with findings payload',
+        mutate: (round) => {
+          round.sourceSlots[0]!.payload = {
+            verdict: 'findings',
+            findingCount: 1,
+            findings: [{ title: 'unexpected' }],
+          };
+        },
+      },
+      {
+        name: 'complete findings with clean payload',
+        mutate: (round) => {
+          round.sourceSlots[0]!.terminalClass = 'complete_findings';
+        },
+      },
+      {
+        name: 'non-complete class carrying complete payload',
+        mutate: (round) => {
+          round.sourceSlots[0]!.terminalClass = 'possible_delivery';
+        },
+      },
+      {
+        name: 'terminal class mismatched to turn result',
+        mutate: (round) => {
+          const slot = round.sourceSlots[0]!;
+          slot.terminalClass = 'driver_error:rate_limit_detected';
+          slot.payload = undefined;
+          slot.terminalResult = storedTerminalTurnResult(slot.invocationId!, {
+            state: 'profile_busy',
+            scope: 'profile',
+            cause: 'profile_busy',
+            send_count: 0,
+          });
+        },
+      },
+      {
+        name: 'unsupported synthetic evidence',
+        mutate: (round) => {
+          round.sourceSlots[0]!.terminalResult = { kind: 'completed', sendCount: 1 };
+        },
+      },
+    ];
+
+    for (const malformedCase of malformedCases) {
+      const storeRoot = tempRoot(`opk-gpt-terminal-evidence-${malformedCase.name.replaceAll(' ', '-')}-`);
+      const round = storedGptRound();
+      malformedCase.mutate(round);
+      expect(() => createPackReviewRun({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        prNumber: 1276,
+        headSha: HEAD_A,
+        trustedPackRoot: repoRoot,
+        sourceRepoRoot: repoRoot,
+        reviewRound: round,
+      }), malformedCase.name).toThrow(/terminalResult|payload|class-inconsistent|non-complete|terminal class/);
+    }
+  });
+});
 
 describe('GPT frozen census persistence and stale recovery (Issue #1276 r08)', () => {
   it('rejects a self-consistent replacement census while preserving intermediate updates', () => {
