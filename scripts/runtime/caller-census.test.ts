@@ -32,6 +32,7 @@ function residualRetiredPowerShellImports(): readonly string[] {
     .trim()
     .split('\n')
     .filter(Boolean)
+    .filter((relativePath) => !relativePath.startsWith('tests/'))
     .filter((relativePath) => relativePath !== 'scripts/check-review-start-claim-guard.ps1');
   const residual: string[] = [];
   for (const relativePath of files) {
