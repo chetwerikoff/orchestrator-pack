@@ -55,5 +55,5 @@
     "scripts/run-pack-review-gpt.ts",
     "tests/fixtures/pack-gpt-browser-turn-harness.mjs"
   ],
-  "source_revision": "364acdbe63531fb5da57cac8237e95c926a798b5"
+  "source_revision": "ca0eacad1a1a2fd725ec11452a6dc95a24f7b4a0"
 }
