@@ -161,6 +161,7 @@ interface RecordPendingReviewOptions extends PackReviewStoreOptions {
 
 interface RestoreAuthoritativeRequiredStatusOptions extends RecordPendingReviewOptions {
   pauseAfterPendingWrite?: () => void | Promise<void>;
+  forceRepublish?: boolean;
 }
 
 interface RecordStaleRequiredStatusOptions extends RecordPendingReviewOptions {
@@ -632,7 +633,8 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
         ? packReviewPendingRequiredStatusIdempotencyKey(run)
         : null;
   const existingOutcome = run.deliveryOutcomes?.requiredStatus;
-  if (expectedKey
+  if (!options.forceRepublish
+    && expectedKey
     && existingOutcome?.state === 'succeeded'
     && existingOutcome.idempotencyKey === expectedKey) {
     return existingOutcome;

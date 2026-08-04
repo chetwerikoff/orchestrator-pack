@@ -1008,6 +1008,38 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
     expect(writes[0]?.state).toBe('pending');
   });
 
+  it('force-republishes newer authority after a superseding stale write', async () => {
+    const storeRoot = tempRoot('opk-1307-force-republish-');
+    const run = createRun(storeRoot);
+    updatePackReviewRun(run.id, {
+      status: 'running',
+      latestRunStatus: 'running',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    const writeRequiredStatus = async (request: PackReviewRequiredStatusRequest) => {
+      writes.push(request);
+    };
+    const current = getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })!;
+    await recordPackReviewPendingStatus({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run: current,
+      writeRequiredStatus,
+    });
+
+    const restored = await restorePackReviewAuthoritativeRequiredStatus({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run: current,
+      writeRequiredStatus,
+      forceRepublish: true,
+    });
+
+    expect(restored).toMatchObject({ state: 'succeeded', reason: 'status_pending' });
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.state).toBe('pending');
+  });
+
   it('reports newer-authority restoration failure instead of claiming reconciliation', async () => {
     const storeRoot = tempRoot('opk-1307-newer-restore-failure-');
     const staleCapture = path.join(storeRoot, 'stale.json');

@@ -131,11 +131,15 @@ interface StartInput {
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
+  fixtureFallbackReviewStdout?: string;
+  fixtureFallbackReviewExitCode?: number;
+  fixtureFallbackReviewTimedOut?: boolean;
   fixtureReviewerLayerOverrides?: PackReviewerLayerOverrides;
   fixtureEmulateWin32Selector?: boolean;
   fixturePostReviewHeadSha?: string;
   fixtureGithubReviewId?: number;
   fixtureRepoSlug?: string;
+  fixtureResolveRepositorySlug?: (repoRoot: string) => Promise<string>;
   fixtureGithubReviewTransport?: GithubReviewTransport;
   fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
   fixtureWorkerNotifier?: PackReviewWorkerNotifier;
@@ -807,6 +811,31 @@ async function resolvePackReviewRunCanonicalRepository(
   }
 }
 
+async function findUnresolvedSameHeadRepositoryIdentity(options: {
+  projectId: string;
+  storeRoot: string;
+  prNumber: number;
+  headSha: string;
+  resolveSlug: (repoRoot: string) => Promise<string>;
+}): Promise<{ reason: 'repository_identity_unresolved' | 'repository_identity_ambiguous'; runId: string } | null> {
+  const records = listPackReviewRunRecordsRaw({
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
+  }).filter((record) => record.prNumber === options.prNumber && record.targetSha === options.headSha);
+  for (const record of records) {
+    const identity = await resolvePackReviewRunCanonicalRepository(record, options.resolveSlug);
+    if (!identity.ok) {
+      return {
+        reason: identity.reason === 'legacy_repository_ambiguous'
+          ? 'repository_identity_ambiguous'
+          : 'repository_identity_unresolved',
+        runId: record.id,
+      };
+    }
+  }
+  return null;
+}
+
 export async function reconcileStalePackReviewRuns(
   input: ReconcileStalePackReviewRunsInput,
 ): Promise<{ ok: true; results: Array<Record<string, unknown>> }> {
@@ -828,6 +857,7 @@ export async function reconcileStalePackReviewRuns(
   const restoreLatestAuthority = async (
     staleRun: PackReviewRunRecord,
     writeRequiredStatus: PackReviewRequiredStatusWriter,
+    forceRepublish = false,
   ) => {
     let restored: Awaited<ReturnType<typeof restorePackReviewAuthoritativeRequiredStatus>> = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -845,6 +875,7 @@ export async function reconcileStalePackReviewRuns(
         storeRoot,
         writeRequiredStatus,
         pauseAfterPendingWrite: input.fixturePauseAfterPendingRestoreWrite,
+        forceRepublish,
       });
       const afterWrite = resolvePackReviewRunOrder(await readBoundRecords(), staleRun);
       if (afterWrite.kind === 'newer' && afterWrite.run.id !== selectedId) continue;
@@ -970,7 +1001,7 @@ export async function reconcileStalePackReviewRuns(
       ));
     };
     const repairSupersededStaleWrite = async () => {
-      const restoration = await restoreLatestAuthority(run, statusWriter);
+      const restoration = await restoreLatestAuthority(run, statusWriter, true);
       return { reason: restoration.reason };
     };
 
@@ -1213,6 +1244,29 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   const baseRef = trim(input.baseRef) || DEFAULT_BASE_REF;
   const target = await resolveTarget(input, trusted.trustedPackRoot);
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
+  const resolveSlug = input.fixtureResolveRepositorySlug
+    ?? (process.env.OPK_VITEST_HARNESS === '1'
+    ? async () => target.repoSlug
+    : resolveRepositorySlug);
+  const unresolvedIdentity = await findUnresolvedSameHeadRepositoryIdentity({
+    projectId,
+    storeRoot,
+    prNumber: target.prNumber,
+    headSha: target.headSha,
+    resolveSlug,
+  });
+  if (unresolvedIdentity) {
+    return {
+      ok: false,
+      created: false,
+      reused: false,
+      reason: unresolvedIdentity.reason,
+      runId: unresolvedIdentity.runId,
+      prNumber: target.prNumber,
+      headSha: target.headSha,
+      httpStatus: 409,
+    };
+  }
   const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
   const retainedOpenCycle = readRetainedLegacyOpenCycle(projectId, target.prNumber);
   let authority = initializePackReviewAuthority({
@@ -1251,6 +1305,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     sourceRepoRoot: target.sourceRepoRoot,
     projectId,
     storeRoot,
+    resolveRepositorySlug: resolveSlug,
     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
   });
   const claimMode = input.claimMode ?? 'acquire';
@@ -1261,9 +1316,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     headSha: target.headSha,
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
-    resolveSlug: process.env.OPK_VITEST_HARNESS === '1'
-      ? async () => target.repoSlug
-      : undefined,
+    resolveSlug,
   });
   const githubReviewTransport = createGithubReviewTransport({
     repoRoot: target.sourceRepoRoot,
@@ -1285,6 +1338,59 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   ) => {
     terminalPersistenceAttempted = true;
     await recordPackReviewUnfinishedTerminalStatus(options);
+  };
+  const recordFallbackProcessFailure = async (fallbackResult: ProcessResult): Promise<never> => {
+    if (!run) throw new Error('fallback reviewer failure occurred before run creation');
+    const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+      repoRoot: target.sourceRepoRoot,
+      repoSlug: target.repoSlug,
+      headSha: target.headSha,
+      request,
+    }));
+    const timedOut = fallbackResult.timedOut;
+    await recordUnfinishedTerminal({
+      run,
+      status: timedOut ? 'timed_out' : 'failed',
+      failureReason: classifyPackReviewFailureReason(
+        timedOut ? 'reviewer_process_timeout' : 'reviewer_process_failed',
+      ),
+      exitCode: fallbackResult.exitCode,
+      projectId,
+      storeRoot,
+      writeRequiredStatus,
+    });
+    terminal = true;
+    throw new Error(timedOut
+      ? 'reviewer process timed out'
+      : `reviewer process failed (exit ${String(fallbackResult.exitCode)})`);
+  };
+  const returnFallbackMalformed = async (error: unknown): Promise<Record<string, unknown>> => {
+    if (!run) throw new Error('fallback reviewer malformed output occurred before run creation');
+    const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+      repoRoot: target.sourceRepoRoot,
+      repoSlug: target.repoSlug,
+      headSha: target.headSha,
+      request,
+    }));
+    const malformed = await recordMalformedPackReviewStatus({
+      run,
+      failureReason: describeError(error),
+      projectId,
+      storeRoot,
+      writeRequiredStatus,
+    });
+    terminal = true;
+    const runs = listPackReviewRuns({ projectId, storeRoot });
+    if (claimLease) await claimLease.release('run_started', runs);
+    return {
+      ok: false,
+      created: true,
+      reused: false,
+      reason: malformed.reason,
+      runId: run.id,
+      status: malformed.status,
+      httpStatus: 422,
+    };
   };
 
   if (claimMode === 'acquire') {
@@ -1447,7 +1553,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     const legacyRepositoryBySourceRoot: Record<string, string> = {};
     for (const record of listPackReviewRunRecordsRaw({ projectId, storeRoot })) {
       if (record.canonicalRepository || !record.sourceRepoRoot) continue;
-      const identity = await resolvePackReviewRunCanonicalRepository(record, resolveRepositorySlug);
+      const identity = await resolvePackReviewRunCanonicalRepository(record, resolveSlug);
       if (identity.ok) legacyRepositoryBySourceRoot[resolve(record.sourceRepoRoot)] = identity.slug;
     }
     const created = createPackReviewRun({
@@ -1672,9 +1778,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           runId: run.id,
           projectId,
           storeRoot,
-          fixtureReviewStdout: input.fixtureReviewStdout,
-          fixtureReviewExitCode: input.fixtureReviewExitCode,
-          fixtureReviewTimedOut: input.fixtureReviewTimedOut,
+          fixtureReviewStdout: input.fixtureFallbackReviewStdout ?? input.fixtureReviewStdout,
+          fixtureReviewExitCode: input.fixtureFallbackReviewExitCode ?? input.fixtureReviewExitCode,
+          fixtureReviewTimedOut: input.fixtureFallbackReviewTimedOut ?? input.fixtureReviewTimedOut,
           fixtureReviewerLayerOverrides: input.fixtureReviewerLayerOverrides,
           fixtureEmulateWin32Selector: input.fixtureEmulateWin32Selector,
           headSha: target.headSha,
@@ -1683,9 +1789,13 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         resolvedReviewer = fallback.resolvedReviewer;
         writeRunLogs(storeRoot, run.id, result.stdout, result.stderr);
         if (result.timedOut || !result.ok) {
-          throw new Error(`normal reviewer fallback failed (exit ${String(result.exitCode)})`);
+          await recordFallbackProcessFailure(result);
         }
-        payload = parseReviewPayload(result.stdout);
+        try {
+          payload = parseReviewPayload(result.stdout);
+        } catch (error) {
+          return returnFallbackMalformed(error);
+        }
       }
     }
 

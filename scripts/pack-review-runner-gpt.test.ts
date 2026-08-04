@@ -15,6 +15,7 @@ import {
   runPackGptReviewCommand,
 } from './pack-gpt-review.js';
 import { startPackReview } from './pack-review-runner.js';
+import type { CarryoverReplayResult } from './pack-review-carryover.js';
 import { createPackReviewRun, getPackReviewRun, listPackReviewRuns } from './lib/pack-review-run-store.js';
 import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
@@ -40,6 +41,38 @@ function harnessEnv(storeRoot: string, capture: string): void {
 
 function cleanTerminalPayload(): string {
   return JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] });
+}
+
+function mergeCompositeReplay(): CarryoverReplayResult {
+  const sourceHeadSha = 'c'.repeat(40);
+  const mainSha = 'd'.repeat(40);
+  const mergeBaseSha = 'e'.repeat(40);
+  const bundle = {
+    schema: 'merge-resolution-bundle/v2' as const,
+    helperVersion: 'pack-review-carryover/v2' as const,
+    sourceHeadSha,
+    mainSha,
+    targetHeadSha: HEAD_A,
+    mergeBaseSha,
+    orderedParentShas: [sourceHeadSha, mainSha] as [string, string],
+    gitVersion: 'fixture',
+    replayConfigDigest: 'fixture-config',
+    replayDigest: 'fixture-replay',
+    conflictCount: 1,
+    conflicts: [],
+    framedBytesBase64: '',
+    bundleDigest: 'fixture-bundle',
+  };
+  return {
+    kind: 'merge_composite',
+    sourceHeadSha,
+    mainSha,
+    targetHeadSha: HEAD_A,
+    mergeBaseSha,
+    replayTreeSha: 'f'.repeat(40),
+    replayDigest: 'fixture-replay',
+    bundle,
+  };
 }
 
 function canonicalCommandRunner(storeRoot: string, overrides: Record<string, unknown> = {}) {
@@ -230,6 +263,101 @@ describe('GPT failure matrix (Issue #1031 AC5)', () => {
 });
 
 describe('GPT terminal persistence claim handling (Issue #1307)', () => {
+  const fallbackFailureCases = [
+    {
+      name: 'timeout',
+      fixtureFallbackReviewTimedOut: true,
+      expectedFailure: 'reviewer_process_timeout',
+    },
+    {
+      name: 'process failure',
+      fixtureFallbackReviewExitCode: 7,
+      fixtureFallbackReviewStdout: '',
+      expectedFailure: 'reviewer_process_failed',
+    },
+    {
+      name: 'malformed output',
+      fixtureFallbackReviewStdout: 'not-json',
+      expectedFailure: 'reviewer_output_malformed',
+    },
+  ] as const;
+
+  for (const failureCase of fallbackFailureCases) {
+    it(`preserves the controlled cause for carryover fallback ${failureCase.name}`, async () => {
+      const storeRoot = tempRoot(`opk-1307-carryover-fallback-${failureCase.name}-`);
+      const capture = path.join(storeRoot, 'github-review.json');
+      const statusRequests: Array<{ state: string }> = [];
+      harnessEnv(storeRoot, capture);
+
+      const result = await startPackReview({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        sourceRepoRoot: repoRoot,
+        prNumber: 1031,
+        headSha: HEAD_A,
+        claimMode: 'preacquired',
+        fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+        fixtureCarryoverReplay: mergeCompositeReplay(),
+        fixtureCarryoverSourceCleanRunId: 'source-clean',
+        fixtureFocusedResolutionBundleDigest: 'wrong-bundle',
+        fixtureReviewStdout: cleanTerminalPayload(),
+        ...failureCase,
+        fixtureRequiredStatusWriter: async (request) => {
+          statusRequests.push(request);
+        },
+      });
+
+      const persisted = getPackReviewRun(result.runId, { projectId: 'orchestrator-pack', storeRoot });
+      expect(result.ok).toBe(false);
+      expect(persisted?.failureReason).toContain(failureCase.expectedFailure);
+      expect(statusRequests.map((request) => request.state)).toEqual(['pending', 'error']);
+    });
+  }
+
+  it('fails closed before reviewer invocation when a same-head legacy repository is unresolved', async () => {
+    const storeRoot = tempRoot('opk-1307-unresolved-legacy-repository-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    const invocationLog = path.join(storeRoot, 'invocations.jsonl');
+    const missingCheckout = path.join(storeRoot, 'deleted-checkout');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
+    const legacy = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1031,
+      headSha: HEAD_A,
+      linkedSessionId: 'legacy-unresolved',
+      startReason: 'fixture',
+      surface: 'pack-review-runner-gpt-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: missingCheckout,
+    }).run;
+
+    const result = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 1031,
+      headSha: HEAD_A,
+      claimMode: 'acquire',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureResolveRepositorySlug: async (sourceRoot) => {
+        if (sourceRoot === missingCheckout) throw new Error('legacy checkout unavailable');
+        return 'chetwerikoff/orchestrator-pack';
+      },
+      fixtureReviewStdout: cleanTerminalPayload(),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      created: false,
+      reason: 'repository_identity_unresolved',
+      runId: legacy.id,
+    });
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
+    expect(() => readFileSync(invocationLog, 'utf8')).toThrow();
+  });
+
   it('retains the acquired claim when required-status outcome persistence fails', async () => {
     const storeRoot = tempRoot('opk-1307-claim-persistence-');
     const capture = path.join(storeRoot, 'github-review.json');
