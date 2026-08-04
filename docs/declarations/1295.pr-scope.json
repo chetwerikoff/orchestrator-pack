@@ -53,5 +53,5 @@
     "scripts/show-pack-reviewer-status.ps1",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "381977699644e5c1e2d4e042f94e33507fa0632c"
+  "source_revision": "e0b81199d15567dbba779b285caa836e908b994c"
 }
