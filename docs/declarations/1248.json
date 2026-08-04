@@ -107,7 +107,8 @@
     "scripts/worker-message-submit-reconcile.ps1",
     "scripts/worker-message-submit-reconcile.test.ts",
     "scripts/worker-smoke-run.ts",
-    "scripts/worker-smoke.test.ts"
+    "scripts/worker-smoke.test.ts",
+    "tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1"
   ],
   "denylist": [
     ".ao/",
@@ -123,7 +124,8 @@
     "docs/",
     "package-lock.json",
     "package.json",
-    "scripts/"
+    "scripts/",
+    "tests/"
   ],
-  "source_revision": "#1248-hard-cut-r8"
+  "source_revision": "#1248-hard-cut-r9"
 }
