@@ -3,7 +3,7 @@
  * Runtime-history refresh producer: provenance-gated merge with smoothing (Issue #691).
  * heavyShardCount is topology-derived (Issue #695).
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -22,8 +22,14 @@ export const MAX_RECENT_SAMPLES = 5;
 export const MEASURED_SOURCE = 'ci-measured';
 export const SEEDED_SOURCE = 'ci-baseline-estimates';
 export const COVERAGE_SHORTFALL_THRESHOLD = 0.5;
+export const SUPPLEMENTAL_TARGET = 'scripts/pack-reviewer-preference.test.ts';
+export const SUPPLEMENTAL_META_SCHEMA =
+  'orchestrator-pack/vitest-runtime-history-supplemental/v1';
+export const TARGET_REPOSITORY = 'chetwerikoff/orchestrator-pack';
+export const MAX_SUPPLEMENTAL_REPORT_BYTES = 1024 * 1024;
 
 const PROVENANCE_VALUES = new Set(['measured', 'seeded', 'fallback']);
+const FULL_SHA_RE = /^[0-9a-f]{40}$/i;
 
 export function medianMs(samples) {
   if (!Array.isArray(samples) || samples.length === 0) {
@@ -224,6 +230,134 @@ export function validateReportSet(shardReports, expectedCommitSha, repoRoot = de
   return { ok: true, errors: [], durations, heavy };
 }
 
+export function validateSupplementalTargetMeta(meta, expectedSourceSha, target = SUPPLEMENTAL_TARGET) {
+  if (!meta || typeof meta !== 'object') {
+    return 'missing supplemental report metadata';
+  }
+  if (meta.schema !== SUPPLEMENTAL_META_SCHEMA) {
+    return 'supplemental report metadata schema is invalid';
+  }
+  if (meta.repository !== TARGET_REPOSITORY) {
+    return 'supplemental report repository is invalid';
+  }
+  if (meta.target !== target || target !== SUPPLEMENTAL_TARGET) {
+    return `supplemental report target mismatch: expected ${SUPPLEMENTAL_TARGET}`;
+  }
+  if (!FULL_SHA_RE.test(String(expectedSourceSha ?? ''))) {
+    return 'expected supplemental source sha must be a full 40-hex commit';
+  }
+  if (String(meta.commitSha ?? '').toLowerCase() !== String(expectedSourceSha).toLowerCase()) {
+    return `supplemental report commit mismatch: expected ${expectedSourceSha}, got ${meta.commitSha}`;
+  }
+  if (meta.success !== true || meta.conclusion !== 'success') {
+    return 'supplemental report metadata does not prove terminal success';
+  }
+  if (meta.lane !== 'light') {
+    return 'supplemental report lane must be light';
+  }
+  const discovery = meta.discovery;
+  if (
+    !discovery ||
+    typeof discovery !== 'object' ||
+    discovery.source !== 'scripts/vitest-ci-lanes.config.json' ||
+    discovery.target !== target ||
+    discovery.lane !== 'light'
+  ) {
+    return 'supplemental report discovery identity is invalid';
+  }
+  if (!/^\d+$/.test(String(meta.runId ?? '')) || !/^\d+$/.test(String(meta.runAttempt ?? ''))) {
+    return 'supplemental report run identity is invalid';
+  }
+  return null;
+}
+
+export function extractSupplementalReportDurations(reportPath, repoRoot, target = SUPPLEMENTAL_TARGET) {
+  let payload;
+  try {
+    const raw = readFileSync(reportPath, 'utf8');
+    if (Buffer.byteLength(raw, 'utf8') > MAX_SUPPLEMENTAL_REPORT_BYTES) {
+      return { error: 'supplemental report exceeds size limit', durations: new Map() };
+    }
+    payload = JSON.parse(raw);
+  } catch {
+    return { error: 'unparseable supplemental report', durations: new Map() };
+  }
+  if (payload?.success !== true || Number(payload?.numFailedTests ?? 1) !== 0) {
+    return { error: 'supplemental report did not complete successfully', durations: new Map() };
+  }
+  let parsed;
+  try {
+    parsed = parseVitestReportFile(reportPath, repoRoot);
+  } catch {
+    return { error: 'unparseable supplemental report', durations: new Map() };
+  }
+  if (!parsed || parsed.files.length !== 1) {
+    return { error: 'supplemental report must contain exactly one file', durations: new Map() };
+  }
+  const entry = parsed.files[0];
+  if (entry.file !== target) {
+    return { error: `supplemental report target mismatch: expected ${target}, got ${entry.file}`, durations: new Map() };
+  }
+  if (!Number.isFinite(entry.durationMs) || entry.durationMs <= 0) {
+    return { error: 'supplemental report duration must be finite and positive', durations: new Map() };
+  }
+  return { error: null, durations: new Map([[target, entry.durationMs]]) };
+}
+
+export function validateSupplementalReportSet(
+  supplementalReports,
+  expectedSourceSha,
+  repoRoot = defaultRepoRoot,
+  heavyFiles = [],
+) {
+  const errors = [];
+  const entries = supplementalReports instanceof Map ? [...supplementalReports.entries()] : [];
+  if (entries.length !== 1 || entries[0][0] !== SUPPLEMENTAL_TARGET) {
+    errors.push(`supplemental report set must contain exactly ${SUPPLEMENTAL_TARGET}`);
+    return { ok: false, errors, durations: new Map() };
+  }
+  const [target, entry] = entries[0];
+  if (entry?.duplicate) {
+    errors.push('duplicate supplemental report');
+  }
+  if (!entry?.reportPath || !existsSync(entry.reportPath)) {
+    errors.push(`missing supplemental report for ${target}`);
+  }
+  const metaError = validateSupplementalTargetMeta(entry?.meta ?? null, expectedSourceSha, target);
+  if (metaError) {
+    errors.push(metaError);
+  }
+  const extracted = entry?.reportPath && existsSync(entry.reportPath)
+    ? extractSupplementalReportDurations(entry.reportPath, repoRoot, target)
+    : { error: null, durations: new Map() };
+  if (extracted.error) {
+    errors.push(extracted.error);
+  }
+  if (new Set(heavyFiles).has(SUPPLEMENTAL_TARGET)) {
+    errors.push('supplemental target overlaps heavy report set');
+  }
+  return {
+    ok: errors.length === 0,
+    errors,
+    durations: errors.length === 0 ? extracted.durations : new Map(),
+  };
+}
+
+export function loadSupplementalReportsFromDir(reportsDir) {
+  const reportName = 'supplemental-pack-reviewer-preference.json';
+  const metaName = `${reportName}.meta.json`;
+  const allowed = new Set([reportName, metaName]);
+  const entries = readdirSync(reportsDir);
+  const unexpected = entries.filter((name) => !allowed.has(name));
+  if (unexpected.length > 0) {
+    throw new Error(`unexpected supplemental report artifact(s): ${unexpected.join(', ')}`);
+  }
+  const reportPath = join(reportsDir, reportName);
+  const metaPath = join(reportsDir, metaName);
+  const meta = existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, 'utf8')) : null;
+  return new Map([[SUPPLEMENTAL_TARGET, { reportPath, metaPath, meta }]]);
+}
+
 export function computeCoverageSignal(history, heavyFiles) {
   const counts = { measured: 0, seeded: 0, fallback: 0 };
   for (const file of heavyFiles) {
@@ -320,14 +454,25 @@ export function mergeValidatedDurations(baseHistory, durations, heavyFiles) {
 export function refreshRuntimeHistory({
   baseHistory,
   shardReports,
+  supplementalReports = null,
   expectedCommitSha,
+  expectedSupplementalSourceSha = '',
   repoRoot = defaultRepoRoot,
 }) {
   const normalizedBase = normalizeHistory(baseHistory);
   const baseBytes = historyBytes(normalizedBase);
   const validation = validateReportSet(shardReports, expectedCommitSha, repoRoot);
+  const supplementalValidation = supplementalReports
+    ? validateSupplementalReportSet(
+        supplementalReports,
+        expectedSupplementalSourceSha,
+        repoRoot,
+        validation.heavy,
+      )
+    : { ok: true, errors: [], durations: new Map() };
+  const errors = [...validation.errors, ...supplementalValidation.errors];
 
-  if (!validation.ok) {
+  if (!validation.ok || !supplementalValidation.ok) {
     return {
       ok: false,
       changed: false,
@@ -335,13 +480,17 @@ export function refreshRuntimeHistory({
       history: normalizedBase,
       baseBytes,
       outputBytes: baseBytes,
-      errors: validation.errors,
+      errors,
       coverage: computeCoverageSignal(normalizedBase, validation.heavy),
       rejected: true,
     };
   }
 
-  const merged = mergeValidatedDurations(normalizedBase, validation.durations, validation.heavy);
+  const durations = new Map(validation.durations);
+  for (const [file, durationMs] of supplementalValidation.durations) {
+    durations.set(file, durationMs);
+  }
+  const merged = mergeValidatedDurations(normalizedBase, durations, validation.heavy);
   return {
     ok: true,
     changed: merged.changed,
