@@ -7,11 +7,15 @@
     "package.json",
     "scripts/lib/pack-gpt-reviewer.ts",
     "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-gpt-browser-path.test.ts",
     "scripts/pack-gpt-reviewer.test.ts",
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.test.ts",
-    "scripts/pack-review-state.ts"
+    "scripts/pack-review-state.ts",
+    "scripts/pr-scope-declaration.ts",
+    "scripts/run-pack-review-gpt.ts",
+    "tests/fixtures/pack-gpt-browser-turn-harness.mjs"
   ],
   "denylist": [
     ".ao/",
@@ -43,9 +47,11 @@
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.test.ts",
     "scripts/pack-review-state.ts",
+    "scripts/pr-scope-declaration.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/review-delivery.test.ts",
-    "scripts/run-pack-review-gpt.ts"
+    "scripts/run-pack-review-gpt.ts",
+    "tests/fixtures/pack-gpt-browser-turn-harness.mjs"
   ],
-  "source_revision": "8eb85fa4dbbca5c6ec293f64445547829a9d3af7"
+  "source_revision": "521c08b40ad80efeec222527ffca4facea779311"
 }
