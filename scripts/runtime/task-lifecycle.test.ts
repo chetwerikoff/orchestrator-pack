@@ -1,3 +1,6 @@
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import { DeterministicRuntimeAdapter } from './test-adapter.ts';
@@ -76,6 +79,132 @@ function exercise(adapter: DeterministicRuntimeAdapter | OrcaTaskRuntimeAdapter)
   });
 }
 
+function hermeticOrcaFixture(statePath: string, expectedPath: string): string {
+  return `#!${process.execPath}
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { delimiter } from 'node:path';
+
+const statePath = ${JSON.stringify(statePath)};
+const expectedPath = ${JSON.stringify(expectedPath)};
+const args = process.argv.slice(2).filter((arg) => arg !== '--json');
+const operation = \`\${args[0] ?? ''} \${args[1] ?? ''}\`;
+const emptyState = {
+  exists: false,
+  handle: 'term-1248-hermetic',
+  generation: 'incarnation-1248-hermetic',
+  title: 'issue-1248-hermetic',
+  lines: ['started:cursor-agent'],
+  operations: [],
+};
+const state = existsSync(statePath)
+  ? JSON.parse(readFileSync(statePath, 'utf8'))
+  : emptyState;
+state.operations.push(operation);
+
+const forbiddenEnvironment = Object.keys(process.env).filter(
+  (key) => key.startsWith('AO_') || key.startsWith('AGENT_ORCHESTRATOR_'),
+);
+const pathEntries = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
+if (forbiddenEnvironment.length > 0 || pathEntries.length !== 1 || pathEntries[0] !== expectedPath) {
+  process.stdout.write(JSON.stringify({
+    ok: false,
+    error: {
+      code: 'fixture_environment_not_hermetic',
+      message: JSON.stringify({ forbiddenEnvironment, pathEntries, expectedPath }),
+    },
+  }));
+  process.exit(0);
+}
+
+const persist = () => writeFileSync(statePath, \`\${JSON.stringify(state)}\\n\`, 'utf8');
+const respond = (value) => {
+  persist();
+  process.stdout.write(\`\${JSON.stringify(value)}\\n\`);
+};
+
+switch (operation) {
+  case 'worktree current':
+    respond({
+      ok: true,
+      result: { worktree: { path: expectedPath, head: 'a'.repeat(40) } },
+    });
+    break;
+  case 'terminal create': {
+    const titleIndex = args.indexOf('--title');
+    state.exists = true;
+    state.title = titleIndex >= 0 ? String(args[titleIndex + 1] ?? state.title) : state.title;
+    respond({
+      ok: true,
+      result: {
+        terminal: {
+          handle: state.handle,
+          incarnationId: state.generation,
+          title: state.title,
+        },
+      },
+    });
+    break;
+  }
+  case 'terminal list':
+    respond({
+      ok: true,
+      result: {
+        terminals: state.exists ? [{
+          handle: state.handle,
+          incarnationId: state.generation,
+          title: state.title,
+          worktreePath: expectedPath,
+          status: 'running',
+        }] : [],
+      },
+    });
+    break;
+  case 'terminal send': {
+    const textIndex = args.indexOf('--text');
+    if (textIndex >= 0) state.lines.push(String(args[textIndex + 1] ?? ''));
+    respond({ ok: true, result: { send: { accepted: true } } });
+    break;
+  }
+  case 'terminal read':
+    respond({
+      ok: true,
+      result: {
+        terminal: {
+          handle: state.handle,
+          status: 'running',
+          tail: [...state.lines],
+          nextCursor: String(state.lines.length),
+          latestCursor: String(state.lines.length),
+        },
+      },
+    });
+    break;
+  case 'terminal wait':
+    respond({
+      ok: true,
+      result: {
+        wait: {
+          handle: state.handle,
+          condition: 'tui-idle',
+          satisfied: true,
+          status: 'running',
+        },
+      },
+    });
+    break;
+  case 'terminal close':
+    state.exists = false;
+    respond({ ok: true, result: { close: { handle: state.handle, closed: true } } });
+    break;
+  default:
+    respond({
+      ok: false,
+      error: { code: 'unexpected_operation', message: operation },
+    });
+}
+`;
+}
+
 describe('direct runtime-neutral task caller', () => {
   it('runs unchanged with the deterministic adapter', () => {
     const result = exercise(new DeterministicRuntimeAdapter());
@@ -148,5 +277,62 @@ describe('direct runtime-neutral task caller', () => {
       reason: 'worker_not_owned_by_runtime_instance',
     });
     expect(after).toBe(before);
+  });
+
+  it('runs complete Orca lifecycle with AO and pwsh unavailable', () => {
+    const root = mkdtempSync(join(tmpdir(), 'issue-1248-orca-hermetic-'));
+    const fixturePath = join(root, 'orca-hermetic.mjs');
+    const statePath = join(root, 'state.json');
+    const removedEnvironment = new Map<string, string>();
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (!key.startsWith('AO_') && !key.startsWith('AGENT_ORCHESTRATOR_')) continue;
+        const value = process.env[key];
+        if (value !== undefined) removedEnvironment.set(key, value);
+        delete process.env[key];
+      }
+
+      writeFileSync(fixturePath, hermeticOrcaFixture(statePath, root), 'utf8');
+      chmodSync(fixturePath, 0o755);
+      const environment: NodeJS.ProcessEnv = { ...process.env, PATH: root };
+      const adapter = new OrcaTaskRuntimeAdapter({
+        cwd: root,
+        executable: fixturePath,
+        env: environment,
+        timeoutMs: 5_000,
+      });
+
+      const result = executeRuntimeTaskLifecycle({
+        adapter,
+        title: 'issue-1248-hermetic',
+        command: 'cursor-agent',
+        prompt: 'implement the issue',
+        observationWindowMs: 1_000,
+        options: { cwd: root, timeoutMs: 5_000 },
+      });
+
+      expect(result.status).toBe('ok');
+      if (result.status !== 'ok') return;
+      expect(result.lines).toContain('implement the issue');
+      expect(result.liveness).toBe('idle');
+
+      const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
+        exists: boolean;
+        operations: string[];
+      };
+      expect(state.exists).toBe(false);
+      expect(state.operations).toEqual(expect.arrayContaining([
+        'terminal create',
+        'terminal send',
+        'terminal read',
+        'terminal wait',
+        'terminal close',
+      ]));
+      expect(state.operations.filter((operation) => operation === 'terminal send')).toHaveLength(1);
+      expect(state.operations.filter((operation) => operation === 'terminal close')).toHaveLength(1);
+    } finally {
+      for (const [key, value] of removedEnvironment) process.env[key] = value;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
