@@ -659,6 +659,76 @@ function assertCompleteGptRound(round: PackReviewGptRoundRecord, path: string): 
   }
 }
 
+interface PackReviewGptAggregate {
+  reviewVerdict: 'clean' | 'findings';
+  findingCount: number;
+  findings: unknown[];
+}
+
+function deriveCompleteGptRoundAggregate(
+  round: PackReviewGptRoundRecord,
+  path: string,
+): PackReviewGptAggregate {
+  assertCompleteGptRound(round, path);
+  const findings: unknown[] = [];
+  for (const slot of round.sourceSlots) {
+    if (COMPLETE_GPT_TERMINAL_CLASSES.has(slot.terminalClass ?? '')) {
+      const payload = slot.payload as { findings: Array<Record<string, unknown>> };
+      findings.push(...payload.findings.map((finding) => ({
+        ...finding,
+        sourceSlotId: slot.slotId,
+      })));
+      continue;
+    }
+    findings.push({
+      title: `GPT source ${slot.slotId} did not complete`,
+      body: `The frozen GPT source slot settled as ${slot.terminalClass ?? 'non-complete'}; the round cannot be clean.`,
+      severity: 'blocking',
+      sourceSlotId: slot.slotId,
+    });
+  }
+  return {
+    reviewVerdict: findings.length > 0 ? 'findings' : 'clean',
+    findingCount: findings.length,
+    findings,
+  };
+}
+
+function assertGptRoundAggregate(
+  round: PackReviewGptRoundRecord,
+  aggregate: {
+    reviewVerdict: unknown;
+    findingCount: unknown;
+    findings: unknown;
+  },
+  path: string,
+): void {
+  const expected = deriveCompleteGptRoundAggregate(round, path);
+  if (aggregate.reviewVerdict !== expected.reviewVerdict) {
+    throw new Error(
+      `corrupt pack review run record at ${path}: reviewVerdict does not match terminal source census`,
+    );
+  }
+  const findingCount = requiredJsonNonNegativeInteger(
+    aggregate.findingCount,
+    'findingCount',
+    path,
+  );
+  if (findingCount !== expected.findingCount) {
+    throw new Error(
+      `corrupt pack review run record at ${path}: findingCount does not match terminal source census`,
+    );
+  }
+  if (!Array.isArray(aggregate.findings)) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid findings`);
+  }
+  if (!isDeepStrictEqual(aggregate.findings, expected.findings)) {
+    throw new Error(
+      `corrupt pack review run record at ${path}: findings do not match terminal source census`,
+    );
+  }
+}
+
 function hasRecordedGptRoundLifecycleOrEvidence(record: PackReviewRunRecord): boolean {
   return record.reviewRound?.sourceSlots.some((slot) => slot.lifecycle !== 'planned'
     || slot.invocationId !== undefined
@@ -833,7 +903,11 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
   if (reviewRound && (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(status)
     || reviewVerdict !== undefined
     || journalOutcome?.state === 'persisted')) {
-    assertCompleteGptRound(reviewRound, path || '<record>');
+    assertGptRoundAggregate(reviewRound, {
+      reviewVerdict: raw.reviewVerdict,
+      findingCount: raw.findingCount,
+      findings: raw.findings,
+    }, path || '<record>');
   }
   return {
     ...(raw as unknown as PackReviewRunRecord),
