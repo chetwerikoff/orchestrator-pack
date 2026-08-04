@@ -12,9 +12,9 @@ roles and their contracts must not be mixed:
   explicit user request. It continues to use `driver.mjs`, PASS_ID/SHA validation,
   and standalone durable pass states.
 - **Tracked create/review transport** — `create-issue-draft` author/reviewer turns
-  use the repository package entrypoint `npm run chatgpt-browser-turn -- ...` and
-  the state-light Issue #1120 transport contract. It is not the standalone driver
-  and does not inherit its retry/validation state machine.
+  follow the canonical carrier, runbook, and workflow-owned stage contracts. They
+  are not the standalone driver and do not inherit its retry/validation state
+  machine.
 
 Issue-body floors, tiering, finding-ledger normalization, chat-role separation,
 and acceptance remain owned by `create-issue-draft`. Claude runs only the T3
@@ -52,21 +52,9 @@ retry/no-resend, tab lifecycle, probe, and handoff mechanics. This skill keeps
 only routing and the standalone `driver.mjs` contract here. The create-issue
 skill owns workflow, tier, stage, capture, receipt, and acceptance policy.
 
-## create-issue-draft chat topology
-
-- authoring/fixes: current author chat; when unavailable it may be reconstructed
-  from the live Issue in a fresh dedicated tab;
-- T3 competitive: fresh chat for each of 1–3 passes;
-- T3 `architectural-review`: exactly one fresh chat after competitive;
-- T3 Claude `architectural-lens`: independent Claude Code CLI, no browser review chat;
-- terminal GPT `architectural`: exactly one fresh chat, distinct from author,
-  competitive, and `architectural-review`; it remains the final M5 anchor.
-
-The canonical T3 business order is:
-
-```text
-competitive → architectural-review → Claude lens → GPT lens
-```
+Tracked stage cardinality, chat topology, and business order belong exclusively
+to [the canonical create-issue-draft skill](../create-issue-draft/SKILL.md);
+this routing skill does not restate them.
 
 ## Standalone adversarial driver
 

@@ -36,8 +36,8 @@ must be retained and reported, and must not gate siblings or the account.
 
 ## Stage and retry boundary
 
-T1/T2 remain singular; T3 stage cardinality and order belong to the canonical
-create-issue workflow and are not redefined here. Relay or adjudication starts
+Stage cardinality and order belong to the canonical create-issue workflow and
+are not redefined here. Relay or adjudication starts
 only after every launched invocation is terminal, no retry runs or remains
 eligible, and frozen revision checks match. Partial, blocked, and incident
 attempts remain ordered evidence.

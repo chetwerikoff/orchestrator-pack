@@ -54,7 +54,7 @@ adapter rather than spawning this transport directly from a flow-manager caller
 that may exit before the turn completes:
 
 ```bash
-npm run flow-manager-browser-gpt-long-run -- \
+npm run --silent flow-manager-browser-gpt-long-run -- \
   --run-identity <id> --attempt-identity <id> \
   --handoff-receipt ${HANDOFF_RECEIPT} \
   --terminal-envelope ${TERMINAL_ENVELOPE} \
@@ -123,10 +123,10 @@ continues to govern unrelated local DOM-read paths.
 
 The canonical path no longer requires service-terminal/network-witness evidence
 when the page already shows one attributable, final assistant reply. The helper
-requires its own exact user prompt to appear after the page baseline and requires
-page-level completion UI on the last assistant node while generation/tool/
-continuation activity is absent, then returns only that final eligible assistant
-node for the turn.
+requires exactly one current user message containing the transport-owned
+`OPKTURNV1...` marker after the page baseline and requires page-level completion
+UI on the last assistant node while generation/tool/continuation activity is
+absent, then returns only that final eligible assistant node for the turn.
 
 Intermediate/progress assistant nodes are not concatenated into the result and a
 stable non-empty intermediate node is not sufficient by itself. A continuation
@@ -134,12 +134,11 @@ button may be clicked because it continues the same assistant response; it is no
 a second user-prompt send.
 
 Reply capture uses a strict publication window: only assistant nodes strictly
-between the owned prompt user node and the next user node (of any origin) may be
-published. Prompt recognition is strict normalized-text equality (markdown syntax
-and whitespace collapsed); a truncated lazy-render miss stays in `waiting` until
-the page catches up. A foreign or interleaved user turn after the owned prompt
-without a capturable reply in that window, or a page that never shows the owned
-prompt before the hard observation deadline, ends the invocation as
+between the marker-owned user node and the next user node (of any origin) may be
+published. A truncated lazy-render marker miss stays in `waiting` until the
+page catches up. A foreign or interleaved user turn after the owned prompt
+without a capturable reply in that window, or a page that never shows the
+marker-owned prompt before the hard observation deadline, ends the invocation as
 `observation_uncertain` (**exit 11**, no resend). Sibling Browser-GPT tabs
 remain independent.
 
@@ -388,8 +387,8 @@ Focused Issue #1120 tests cover:
   later final node, with only the final node published;
 - generating/continuation intermediate state;
 - foreign/interleaved activity with stable-read promotion and render-tolerant
-  owned-prompt echo matching;
-- mandatory own-prompt attribution after baseline;
+  marker-owned prompt attribution;
+- mandatory marker-owned attribution after baseline;
 - dedicated-tab creation and one send mutation branch;
 - a reachable owned page continuing past the soft timeout without resend or
   timeout-triggered close, including fresh-conversation URL-wait expiry;

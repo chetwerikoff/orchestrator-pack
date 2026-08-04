@@ -16,8 +16,12 @@ Do not patch or vendor-modify `ComposioHQ/agent-orchestrator` core packages. All
 behavior lives in the allowed surfaces below; treat any `vendor/` checkout as read-only reference.
 
 **Allowed:** `plugins/**`, `prompts/**`, `scripts/**`, `tests/external-output-references/**`,
-`docs/**`, `.claude/skills/**`, `.cursor/skills/**`, `.cursor/rules/**` (see
-`.cursor/rules/flow-manager-browser-turn-monitoring.mdc` and its runbook; sync in same PR),
+`docs/**`, `.claude/skills/**`, `.cursor/skills/**`, `.cursor/rules/**` (see the
+[`flow-manager-browser-turn-monitoring.mdc`](.cursor/rules/flow-manager-browser-turn-monitoring.mdc)
+carrier and [`docs/browser-gpt-turn-runbook.md`](docs/browser-gpt-turn-runbook.md); the named
+carrier is the explicit exception to the thin-pointer convention, while other
+`.cursor/rules/**` files remain thin pointers unless separately authorized; keep
+the carrier, runbook, and their same-PR maintenance matrices synchronized),
 `CLAUDE.md`, `AGENTS.md`, `README.md`,
 `.github/workflows/**`, config examples such as `agent-orchestrator.yaml.example`, and reusable
 root-level tooling config (`.gitignore`, `.gitattributes`).

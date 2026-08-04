@@ -20,8 +20,11 @@ not a new runtime configuration contract.
 | Value | Existing local input or shell placeholder |
 | --- | --- |
 | repository, Issue, revision, stage, slot, invocation | `<REPOSITORY>`, `<ISSUE_NUMBER>`, `<EXPECTED_REVISION>`, `<STAGE>`, `<SLOT>`, `<INVOCATION_ID>` |
-| project and conversation | `${GPT_PROJECT_URL}`, `${CHAT_URL}` |
-| browser and CDP | `${BROWSER_PROFILE}`, `${CHROME_PATH}`, `${CDP_ENDPOINT}` |
+| project URL | `${GPT_PROJECT_URL}` shell placeholder; `DISCUSS_WITH_GPT_PROJECT_URL` environment variable or `projectUrl` in gitignored `local.config.json` |
+| conversation URL | `${CHAT_URL}` shell-only placeholder passed to `--chat-url` |
+| browser profile | `${BROWSER_PROFILE}` shell placeholder; `DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR` or `chromeUserDataDir` |
+| Chrome executable | `${CHROME_PATH}` shell placeholder; `DISCUSS_WITH_GPT_CHROME_PATH` or `chromePath` |
+| CDP endpoint | `${CDP_ENDPOINT}` shell-only placeholder passed to `--cdp` |
 | prompt and outputs | `${INPUT_FILE}`, `${OUTPUT_FILE}`, `${HANDOFF_RECEIPT}`, `${TERMINAL_ENVELOPE}` |
 | local config | existing `local.config.json` keys and supported environment variables |
 
@@ -37,8 +40,10 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
    role, stage, and frozen revision.
 3. Load the gitignored local configuration and confirm the configured headed
    automation Chrome is running and logged in. Never type credentials.
-4. Select the applicable canonical workflow. T1/T2 use one independent
-   `architectural` source; do not infer T3 topology from this runbook.
+4. Start or verify the configured browser through the existing launcher:
+   `.claude/skills/discuss-with-gpt/launch-chrome.sh`. Select the applicable
+   canonical workflow; stage cardinality and topology belong to that workflow,
+   not this runbook.
 
 ## Prepare one turn
 
@@ -53,7 +58,7 @@ fresh project using local values; tracked content must not contain either URL.
 For applicable long turns, use the tracked adapter:
 
 ```bash
-npm run flow-manager-browser-gpt-long-run -- \
+npm run --silent flow-manager-browser-gpt-long-run -- \
   --run-identity <RUN_ID> \
   --attempt-identity <ATTEMPT_ID> \
   --handoff-receipt "${HANDOFF_RECEIPT}" \
@@ -65,6 +70,9 @@ npm run flow-manager-browser-gpt-long-run -- \
   --chat-url "${CHAT_URL}"
 ```
 
+For a fresh project launch, use the same command with
+`--new-chat --project-url "${GPT_PROJECT_URL}"` instead of `--chat-url`.
+
 For an ordinary tracked turn, the underlying reference is
 `npm run chatgpt-browser-turn -- turn ...` with the current local CLI values.
 Use the existing launcher contract and bounded observation; do not invent a
@@ -72,10 +80,11 @@ shell-backgrounding workaround or a second monitor.
 
 ## Observe and settle
 
-The valid child `turn-result/v1`, and for long turns the launcher terminal
-envelope and handoff receipt, are authority. A stable final page reply is
-sufficient; PID, shell state, silence, log growth, and observation heartbeats
-are not completion authority. Follow the carrier's invocation-local
+The valid child `turn-result/v1` is the turn authority; for long turns the
+launcher terminal envelope represents that settled child result. The handoff
+receipt only acknowledges accepted detached launch and is not completion
+authority. A stable final page reply is sufficient; PID, shell state, silence,
+log growth, and observation heartbeats are not completion authority. Follow the carrier's invocation-local
 ownership, marker, stage, revision, and retry rules.
 
 If a result, page, or conversation binding is lost after a possible send, do
@@ -110,8 +119,7 @@ exact probe and its observed result.
 Use the sanctioned diagnostic utility once, with local values:
 
 ```bash
-npm run browser-gpt-page-probe -- list --cdp "${CDP_ENDPOINT}"
-npm run browser-gpt-page-probe -- inspect --cdp "${CDP_ENDPOINT}" --target-id "<EXACT_TARGET_ID>"
+npm run browser-gpt-page-probe -- inspect --cdp "${CDP_ENDPOINT}" --url "${CHAT_URL}"
 ```
 
 The probe is read-only and exits once. It cannot publish, retry, resend,
