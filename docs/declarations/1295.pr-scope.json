@@ -12,6 +12,7 @@
     "scripts/lib/pack-reviewer-preference.ts",
     "scripts/lib/resolve-pack-reviewer.ts",
     "scripts/lib/Resolve-PackReviewer.ps1",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/pack-gpt-reviewer.test.ts",
     "scripts/pack-reviewer-config.ts",
     "scripts/pack-reviewer-preference.test.ts",
@@ -26,7 +27,6 @@
     "packages/core/",
     "scripts/lib/pack-gpt-reviewer.ts",
     "scripts/lib/pack-review-delivery.ts",
-    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/pack-review-runner.ts",
     "scripts/run-pack-review-claude.ps1",
     "scripts/run-pack-review-gpt.ts",
@@ -45,6 +45,7 @@
     "scripts/lib/pack-reviewer-preference.ts",
     "scripts/lib/resolve-pack-reviewer.ts",
     "scripts/lib/Resolve-PackReviewer.ps1",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/pack-gpt-reviewer.test.ts",
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-reviewer-config.ts",
@@ -53,5 +54,5 @@
     "scripts/show-pack-reviewer-status.ps1",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "e0b81199d15567dbba779b285caa836e908b994c"
+  "source_revision": "a9a497b3f9eec4dcba87674e43f94ee574189bd4"
 }
