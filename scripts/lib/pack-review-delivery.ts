@@ -661,8 +661,6 @@ export async function resumePackReviewVerdictDelivery(
   });
 }
 
-
-
 async function publishPackReviewTerminalRequiredStatus(
   run: PackReviewRunRecord,
   options: RecordPendingReviewOptions,
@@ -954,4 +952,4 @@ export async function publishPackReviewRequiredStatus(options: {
   }
 }
 
-export { sendPackReviewWorkerNotification } from './pack-review-worker-notification.ts';
+export { dispatchPackReviewWorkerNotification as sendPackReviewWorkerNotification } from './pack-review-worker-notification.ts';
