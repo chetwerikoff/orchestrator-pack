@@ -88,6 +88,45 @@ describe('runtime-neutral worker smoke', () => {
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
+  it('does not turn a pasted-text output heuristic into a second dispatch', () => {
+    const adapter = new DeterministicRuntimeAdapter();
+    const spawned = adapter.spawnWorker({ title: 'smoke', command: 'cursor-agent' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    const dispatch = vi.spyOn(adapter, 'dispatchInput');
+    vi.spyOn(adapter, 'readBoundedOutput').mockReturnValue({
+      status: 'ok',
+      value: {
+        worker: spawned.value.identity,
+        lines: ['[Pasted text #1 +1 lines]'],
+        observationToken: { opaque: 'pasted-text-observation' },
+        changed: true,
+        terminalState: 'running',
+      },
+    });
+    let clock = 0;
+
+    const result = establishRuntimeSmokeDelivery({
+      adapter,
+      worker: spawned.value.identity,
+      prompt: 'verify',
+      binding: { runId: 'run-3', artifactDir: '/missing' },
+      cwd: process.cwd(),
+      deadlineMs: 2,
+      now: () => clock++,
+      sleepMs: () => undefined,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'prompt_delivery_unconfirmed',
+      submitCount: 0,
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ text: 'verify' });
+    expect(dispatch.mock.calls[0]?.[0].submitOnly).toBeUndefined();
+  });
+
   it('requires both current-head smoke and CI for ready handoff', () => {
     expect(evaluateReadyForReviewCombinations({ smokePass: true, ciGreen: true })).toBe(true);
     expect(evaluateReadyForReviewCombinations({ smokePass: true, ciGreen: false })).toBe(false);
