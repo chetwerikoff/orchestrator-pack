@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,6 +10,10 @@ import {
   runCreateContinuation,
   type WorktreeCreateContinuationReport,
 } from './create-continuation.ts';
+import {
+  acquireLifecycleExclusion,
+  releaseLifecycleExclusion,
+} from './exclusion.ts';
 import type { CommandRunner } from './operations.ts';
 
 const HEAD = 'a'.repeat(40);
@@ -31,6 +35,11 @@ interface GitRow {
   branch: string;
 }
 
+interface AgentRow {
+  state?: string;
+  interrupted?: boolean;
+}
+
 interface OrcaRow {
   path: string;
   head: string;
@@ -39,6 +48,7 @@ interface OrcaRow {
   repoId?: string;
   isMainWorktree?: boolean;
   isArchived?: boolean;
+  agents?: AgentRow[];
 }
 
 interface TerminalRow {
@@ -60,7 +70,7 @@ interface Fixture {
   terminalHandler?: (path: string) => ProcessResult;
   runner: CommandRunner;
   addGit(name: string, head?: string): string;
-  addDual(name: string): string;
+  addDual(name: string, head?: string, agents?: AgentRow[]): string;
   addTerminal(path: string): TerminalRow;
 }
 
@@ -79,25 +89,33 @@ function gitPayload(value: Fixture): string {
   ].join('\n');
 }
 
-function orcaPayload(value: Fixture): string {
+function orcaPayload(value: Fixture, includeAgents: boolean): string {
   return JSON.stringify({
     ok: true,
     result: {
       worktrees: [
         {
+          id: `${REPOSITORY_ID}::${value.repo}`,
           path: value.repo,
           head: OTHER_HEAD,
           branch: 'refs/heads/main',
-          repoId: REPOSITORY_ID,
           isMainWorktree: true,
           isArchived: false,
+          ...(includeAgents ? { agents: [] } : {}),
         },
-        ...value.orcaRows.map((row) => ({
-          ...row,
-          repoId: row.repoId ?? REPOSITORY_ID,
-          isMainWorktree: row.isMainWorktree ?? false,
-          isArchived: row.isArchived ?? false,
-        })),
+        ...value.orcaRows.map((row) => {
+          const repoId = row.repoId ?? REPOSITORY_ID;
+          return {
+            id: `${repoId}::${row.path}`,
+            path: row.path,
+            head: row.head,
+            branch: row.branch,
+            linkedIssue: row.linkedIssue,
+            isMainWorktree: row.isMainWorktree ?? false,
+            isArchived: row.isArchived ?? false,
+            ...(includeAgents ? { agents: row.agents ?? [] } : {}),
+          };
+        }),
       ],
     },
   });
@@ -124,9 +142,15 @@ function fixture(): Fixture {
       this.gitRows.push({ path, head, branch: name });
       return path;
     },
-    addDual(name: string): string {
-      const path = this.addGit(name);
-      this.orcaRows.push({ path, head: HEAD, branch: `refs/heads/${name}`, linkedIssue: ISSUE });
+    addDual(name: string, head = HEAD, agents: AgentRow[] = []): string {
+      const path = this.addGit(name, head);
+      this.orcaRows.push({
+        path,
+        head,
+        branch: `refs/heads/${name}`,
+        linkedIssue: ISSUE,
+        agents,
+      });
       return path;
     },
     addTerminal(path: string): TerminalRow {
@@ -144,8 +168,11 @@ function fixture(): Fixture {
     if (invocation.command === 'git' && args.includes('worktree') && args.includes('list')) {
       return processResult({ stdout: gitPayload(value) });
     }
-    if (args[0] === 'worktree' && (args[1] === 'list' || args[1] === 'ps')) {
-      return processResult({ stdout: orcaPayload(value) });
+    if (args[0] === 'worktree' && args[1] === 'list') {
+      return processResult({ stdout: orcaPayload(value, false) });
+    }
+    if (args[0] === 'worktree' && args[1] === 'ps') {
+      return processResult({ stdout: orcaPayload(value, true) });
     }
     if (args[0] === 'terminal' && args[1] === 'list') {
       return processResult({ stdout: JSON.stringify({ ok: true, result: { terminals: value.terminals } }) });
@@ -210,24 +237,23 @@ describe('bounded worktree creation and worker spawn', () => {
     expect(value.terminalCreates).toEqual([join(value.root, 'worktrees', PRIMARY)]);
   });
 
-  it('ignores the same Issue binding in a foreign Orca repository', () => {
+  it('ignores same-Issue active agents in a foreign Orca repository', () => {
     const value = fixture();
+    const foreignPath = join(value.root, 'foreign-repo', PRIMARY);
     value.orcaRows.push({
-      path: join(value.root, 'foreign-repo', PRIMARY),
+      path: foreignPath,
       head: HEAD,
       branch: `refs/heads/${PRIMARY}`,
       linkedIssue: ISSUE,
       repoId: 'foreign-repository',
+      agents: [{ state: 'working', interrupted: false }],
     });
     value.createHandlers.push((name) => {
       value.addDual(name);
       return processResult({ stdout: JSON.stringify({ ok: true }) });
     });
 
-    const report = execute(value);
-
-    expect(report.outcome).toBe('worker_spawned');
-    expect(report.attempts.map((attempt) => attempt.kind)).toEqual(['initial']);
+    expect(execute(value).outcome).toBe('worker_spawned');
     expect(value.creates).toEqual([PRIMARY]);
   });
 
@@ -267,13 +293,14 @@ describe('bounded worktree creation and worker spawn', () => {
     expect(value.creates).toEqual([REPLACEMENT]);
   });
 
-  it('creates one replacement beside a stale Orca-only row for the same Issue', () => {
+  it('creates one replacement beside a same-head Orca-only row', () => {
     const value = fixture();
     value.orcaRows.push({
       path: join(value.root, 'worktrees', 'stale-orca-only'),
-      head: OTHER_HEAD,
+      head: HEAD,
       branch: 'refs/heads/stale-issue-1298',
       linkedIssue: ISSUE,
+      agents: [],
     });
     value.createHandlers.push((name) => {
       value.addDual(name);
@@ -285,6 +312,55 @@ describe('bounded worktree creation and worker spawn', () => {
     expect(report.outcome).toBe('worker_spawned');
     expect(report.attempts.map((attempt) => attempt.kind)).toEqual(['replacement']);
     expect(value.creates).toEqual([REPLACEMENT]);
+  });
+
+  it('blocks old-head Git and Orca family rows from reopening the create budget', () => {
+    const gitOld = fixture();
+    gitOld.addGit(PRIMARY, OTHER_HEAD);
+    expect(execute(gitOld)).toMatchObject({ outcome: 'task_degraded', attempts: [], effects: [] });
+    expect(gitOld.creates).toEqual([]);
+
+    const orcaOld = fixture();
+    orcaOld.orcaRows.push({
+      path: join(orcaOld.root, 'worktrees', PRIMARY),
+      head: OTHER_HEAD,
+      branch: `refs/heads/${PRIMARY}`,
+      linkedIssue: ISSUE,
+      agents: [],
+    });
+    expect(execute(orcaOld)).toMatchObject({ outcome: 'task_degraded', attempts: [], effects: [] });
+    expect(orcaOld.creates).toEqual([]);
+  });
+
+  it('preserves create-owned fallback/default terminals without replacement or second spawn', () => {
+    for (const count of [1, 2]) {
+      const value = fixture();
+      value.createHandlers.push((name) => {
+        const path = value.addDual(name);
+        for (let index = 0; index < count; index += 1) value.addTerminal(path);
+        return processResult({ stdout: JSON.stringify({ ok: true }) });
+      });
+
+      const report = execute(value);
+
+      expect(report).toMatchObject({ outcome: 'task_degraded', terminalSpawnCompleted: false });
+      expect(report.error).toMatch(/startup terminals/);
+      expect(report.attempts[0]?.createOwnedTerminals).toHaveLength(count);
+      expect(value.creates).toEqual([PRIMARY]);
+      expect(value.terminalCreates).toEqual([]);
+    }
+  });
+
+  it('blocks active and malformed Issue-family agent evidence', () => {
+    const active = fixture();
+    active.addDual(PRIMARY, HEAD, [{ state: 'working', interrupted: false }]);
+    expect(execute(active)).toMatchObject({ outcome: 'task_degraded', attempts: [], effects: [] });
+    expect(active.terminalCreates).toEqual([]);
+
+    const malformed = fixture();
+    malformed.addDual(PRIMARY, HEAD, [{ state: 'done' }]);
+    expect(execute(malformed)).toMatchObject({ outcome: 'task_degraded', attempts: [], effects: [] });
+    expect(malformed.terminalCreates).toEqual([]);
   });
 
   it('recovers create and terminal effects whose receipts were lost', () => {
@@ -390,7 +466,7 @@ describe('bounded worktree creation and worker spawn', () => {
     expect(value.terminalCreates).toEqual([]);
   });
 
-  it('recovers a dead lock owner and blocks a live owner', () => {
+  it('recovers a dead owner, blocks a live owner, and preserves a replaced lock on release', () => {
     const stale = fixture();
     writeFileSync(stale.lockPath, '99999999\n\nold-token\n', 'utf8');
     stale.createHandlers.push((name) => {
@@ -403,5 +479,12 @@ describe('bounded worktree creation and worker spawn', () => {
     writeFileSync(live.lockPath, `${String(process.pid)}\n`, 'utf8');
     expect(execute(live)).toMatchObject({ outcome: 'task_degraded', attempts: [], effects: [] });
     expect(live.creates).toEqual([]);
+
+    const replaced = fixture();
+    const handle = acquireLifecycleExclusion(replaced.lockPath);
+    expect(handle).not.toBeNull();
+    writeFileSync(replaced.lockPath, `${String(process.pid)}\n\nreplacement-token\n`, 'utf8');
+    releaseLifecycleExclusion(replaced.lockPath, handle!);
+    expect(readFileSync(replaced.lockPath, 'utf8')).toContain('replacement-token');
   });
 });
