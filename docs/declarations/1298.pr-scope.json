@@ -9,7 +9,6 @@
     "docs/orca-runtime-boundary.md",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json",
-    "scripts/worktree-lifecycle/README.md",
     "scripts/worktree-lifecycle/cli.ts",
     "scripts/worktree-lifecycle/core.test.ts",
     "scripts/worktree-lifecycle/core.ts",
@@ -19,6 +18,7 @@
     "scripts/worktree-lifecycle/operations.test.ts",
     "scripts/worktree-lifecycle/operations.ts",
     "scripts/worktree-lifecycle/policy.ts",
+    "scripts/worktree-lifecycle/README.md",
     "scripts/worktree-lifecycle/recovery-regression.test.ts"
   ],
   "denylist": [
