@@ -44,6 +44,7 @@ export interface CreateContinuationOperations {
 
 export interface InventorySnapshot {
   readonly ok: boolean;
+  readonly repositoryId: string;
   readonly gitRows: readonly GitWorktreeRow[];
   readonly orcaRows: readonly OrcaWorktreeRow[];
   readonly terminals: readonly TerminalEvidence[];
@@ -242,6 +243,7 @@ function collectInventory(input: {
   };
   const census = collectCensus(probe, lifecycleOperations(input.operations));
   const evidence = census.classification.evidence;
+  const repositoryId = census.classification.expected.repositoryId ?? '';
   const errors = [...census.errors];
   if (evidence.git.status !== 'ok' && !errors.some((item) => item.toLowerCase().includes('git'))) {
     errors.push(evidence.git.error ?? 'git inventory unavailable');
@@ -250,7 +252,11 @@ function collectInventory(input: {
     errors.push(evidence.orca.error ?? 'Orca inventory unavailable');
   }
   return {
-    ok: evidence.git.status === 'ok' && evidence.orca.status === 'ok' && errors.length === 0,
+    ok: Boolean(repositoryId)
+      && evidence.git.status === 'ok'
+      && evidence.orca.status === 'ok'
+      && errors.length === 0,
+    repositoryId,
     gitRows: evidence.git.rows,
     orcaRows: evidence.orca.rows,
     terminals: census.terminals,
@@ -562,6 +568,15 @@ function issueMarker(value: string | undefined, issueNumber: number): boolean {
   return new RegExp(`(?:^|[^0-9])${String(issueNumber)}(?:[^0-9]|$)`).test(value);
 }
 
+function repositoryIssueRows(
+  snapshot: InventorySnapshot,
+  issueNumber: number,
+): OrcaWorktreeRow[] {
+  return snapshot.orcaRows.filter(
+    (row) => row.repoId === snapshot.repositoryId && row.linkedIssue === issueNumber,
+  );
+}
+
 function relatedExistingRows(input: {
   snapshot: InventorySnapshot;
   issueNumber: number;
@@ -569,9 +584,7 @@ function relatedExistingRows(input: {
   repositoryRoot: string;
 }): GitWorktreeRow[] {
   const issuePaths = new Set(
-    input.snapshot.orcaRows
-      .filter((row) => row.linkedIssue === input.issueNumber)
-      .map((row) => row.path),
+    repositoryIssueRows(input.snapshot, input.issueNumber).map((row) => row.path),
   );
   return input.snapshot.gitRows.filter((row) => row.path !== input.repositoryRoot
     && row.headSha === input.expectedHead
@@ -686,7 +699,7 @@ export function runCreateContinuation(input: {
       expectedHead,
       repositoryRoot,
     });
-    const issueOrcaRows = snapshot.orcaRows.filter((row) => row.linkedIssue === input.issueNumber);
+    const issueOrcaRows = repositoryIssueRows(snapshot, input.issueNumber);
     const relatedPaths = new Set([...relatedRows.map((row) => row.path), ...issueOrcaRows.map((row) => row.path)]);
     if (issueStateHasTerminal(snapshot, relatedPaths)) {
       return degraded({
