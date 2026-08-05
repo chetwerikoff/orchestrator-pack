@@ -2,6 +2,7 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1318,
   "declared_paths": [
+    "scripts/lib/worker-smoke-findings-regressions.ts",
     "scripts/lib/worker-smoke-lifecycle.ts",
     "scripts/lib/worker-smoke-receipt.ts",
     "scripts/worker-smoke-cleanup-proof.ts"
@@ -44,6 +45,7 @@
   "allowed_roots": [
     "docs/declarations/1318.worker-smoke-cleanup.json",
     "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/lib/worker-smoke-findings-regressions.ts",
     "scripts/lib/worker-smoke-lifecycle-base.ts",
     "scripts/lib/worker-smoke-lifecycle-regressions-base.ts",
     "scripts/lib/worker-smoke-lifecycle.ts",
@@ -52,5 +54,5 @@
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "r07"
+  "source_revision": "r08"
 }
