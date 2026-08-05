@@ -4,7 +4,7 @@ import {
   mkdirSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
-import { processAlive } from '../lib/cutover/activation-cordon.ts';
+import { processAlive, readProcessIdentity } from '../lib/cutover/activation-cordon.ts';
 import {
   clearLockedFileContents,
   readLockedFileContents,
@@ -16,6 +16,7 @@ import {
 export interface SideEffectFenceOwner {
   readonly schemaVersion: 1;
   readonly pid: number;
+  readonly startTicks: string;
   readonly nonce: string;
   readonly startedAtMs: number;
   readonly metadata: Readonly<Record<string, unknown>>;
@@ -41,6 +42,9 @@ function parseOwnerRaw(raw: string): SideEffectFenceOwner | null {
     if (!isRecord(parsed)
       || parsed.schemaVersion !== 1
       || !Number.isInteger(parsed.pid)
+      || Number(parsed.pid) <= 0
+      || typeof parsed.startTicks !== 'string'
+      || !parsed.startTicks
       || typeof parsed.nonce !== 'string'
       || !parsed.nonce
       || !Number.isFinite(parsed.startedAtMs)
@@ -48,6 +52,7 @@ function parseOwnerRaw(raw: string): SideEffectFenceOwner | null {
     return {
       schemaVersion: 1,
       pid: Number(parsed.pid),
+      startTicks: parsed.startTicks,
       nonce: parsed.nonce,
       startedAtMs: Number(parsed.startedAtMs),
       metadata: parsed.metadata,
@@ -55,6 +60,12 @@ function parseOwnerRaw(raw: string): SideEffectFenceOwner | null {
   } catch {
     return null;
   }
+}
+
+function exactOwnerProcessAlive(owner: SideEffectFenceOwner): boolean {
+  if (!processAlive(owner.pid)) return false;
+  const identity = readProcessIdentity(owner.pid);
+  return identity?.startTicks === owner.startTicks;
 }
 
 function existingFenceDisposition(input: {
@@ -65,7 +76,7 @@ function existingFenceDisposition(input: {
   const raw = readLockedFileContents(input.descriptor).trim();
   if (!raw) return 'empty';
   const owner = parseOwnerRaw(raw);
-  if (owner) return processAlive(owner.pid) ? 'live' : 'stale';
+  if (owner) return exactOwnerProcessAlive(owner) ? 'live' : 'stale';
   const ageMs = input.nowMs - fstatSync(input.descriptor).mtimeMs;
   return ageMs >= input.ownerlessMaxAgeMs ? 'stale' : 'untrusted';
 }
@@ -123,9 +134,15 @@ export function acquireSideEffectFence(input: {
     return { acquired: false, reason: 'side_effect_fence_untrusted' };
   }
 
+  const identity = readProcessIdentity(process.pid);
+  if (!identity) {
+    releaseHeldFileLock(held.descriptor);
+    return { acquired: false, reason: 'side_effect_fence_untrusted' };
+  }
   const owner: SideEffectFenceOwner = {
     schemaVersion: 1,
-    pid: process.pid,
+    pid: identity.pid,
+    startTicks: identity.startTicks,
     nonce: randomUUID().replace(/-/g, ''),
     startedAtMs: Date.now(),
     metadata: input.metadata ?? {},
@@ -141,7 +158,10 @@ export function releaseSideEffectFence(handle: SideEffectFenceHandle): boolean {
   let owner: SideEffectFenceOwner | null = null;
   try {
     owner = parseOwnerRaw(readLockedFileContents(handle.descriptor).trim());
-    if (!owner || owner.nonce !== handle.owner.nonce || owner.pid !== handle.owner.pid) {
+    if (!owner
+      || owner.nonce !== handle.owner.nonce
+      || owner.pid !== handle.owner.pid
+      || owner.startTicks !== handle.owner.startTicks) {
       return false;
     }
     clearLockedFileContents(handle.descriptor);
