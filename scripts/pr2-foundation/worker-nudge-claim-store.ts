@@ -16,6 +16,7 @@ import {
 import { homedir, hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  buildS2EpisodeKey,
   buildS2EpisodeTupleKey,
   buildS2SafeWorkerReference,
   canonicalStoreId,
@@ -77,6 +78,10 @@ export type WorkerNudgeClaimAcquireResult =
     phase?: string;
     escalate?: boolean;
   };
+
+export interface WorkerNudgeDeadlineOptions {
+  readonly deadlineMs: number;
+}
 
 const CLAIM_LEASE_DEFAULT_MS = 120_000;
 const CLAIM_LEASE_MAX_MS = 30 * 60 * 1_000;
@@ -503,23 +508,44 @@ export async function acquireWorkerNudgeClaim(input: {
   }
 }
 
+function handleDeadline(
+  handle: WorkerNudgeClaimHandle,
+  options?: WorkerNudgeDeadlineOptions,
+): number | null {
+  const s2 = (handle.claim as Partial<S2OneShotWorkerNudgeClaimRecord>).policyTag === S2_ONE_SHOT_CLAIM_POLICY;
+  if (!s2) return null;
+  const deadlineMs = options?.deadlineMs
+    ?? (handle as Partial<S2OneShotWorkerNudgeClaimHandle>).deadlineMs;
+  return typeof deadlineMs === 'number' && Number.isFinite(deadlineMs) ? deadlineMs : 0;
+}
+
 async function mutateOwnedClaim(
   handle: WorkerNudgeClaimHandle,
   mutation: (record: WorkerNudgeClaimRecord) => WorkerNudgeClaimRecord,
+  options?: WorkerNudgeDeadlineOptions,
 ): Promise<{ ok: true; record: WorkerNudgeClaimRecord } | { ok: false; reason: string }> {
   const mutex = lockDir(handle.namespace, handle.key);
-  try {
-    return await withClaimMutex(mutex, () => {
-      const current = asClaimRecord(readJsonRecord(handle.path));
-      if (!current) return { ok: false as const, reason: 'claim_missing' };
-      if (current.holder.processGuid !== handle.claim.holder.processGuid) {
-        return { ok: false as const, reason: 'lost_ownership' };
-      }
-      const next = mutation(current);
+  const deadlineMs = handleDeadline(handle, options);
+  const action = () => {
+    if (deadlineMs !== null) assertBeforeDeadline(deadlineMs);
+    const current = asClaimRecord(readJsonRecord(handle.path));
+    if (!current) return { ok: false as const, reason: 'claim_missing' };
+    if (current.holder.processGuid !== handle.claim.holder.processGuid) {
+      return { ok: false as const, reason: 'lost_ownership' };
+    }
+    const next = mutation(current);
+    if (deadlineMs !== null) {
+      writeJsonAtomicUntil(handle.path, next, deadlineMs, true);
+    } else {
       writeJsonAtomic(handle.path, next, true);
-      handle.claim = next;
-      return { ok: true as const, record: next };
-    });
+    }
+    handle.claim = next;
+    return { ok: true as const, record: next };
+  };
+  try {
+    return deadlineMs === null
+      ? await withClaimMutex(mutex, action)
+      : await withClaimMutexUntil(mutex, deadlineMs, action);
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : 'storage_failure' };
   }
@@ -528,12 +554,13 @@ async function mutateOwnedClaim(
 export async function persistWorkerNudgeMessageHash(
   handle: WorkerNudgeClaimHandle,
   message: string,
+  options?: WorkerNudgeDeadlineOptions,
 ): Promise<{ ok: boolean; reason?: string; messageContentHash?: string }> {
   const messageContentHash = hashNudgeMessageContent(message);
   const result = await mutateOwnedClaim(handle, (record) => {
     if (record.phase !== 'CLAIMED') throw new Error('token_phase_invalid');
     return { ...record, messageContentHash };
-  });
+  }, options);
   return result.ok
     ? { ok: true, messageContentHash }
     : { ok: false, reason: result.reason };
@@ -541,6 +568,7 @@ export async function persistWorkerNudgeMessageHash(
 
 export async function markWorkerNudgeSendAttempted(
   handle: WorkerNudgeClaimHandle,
+  options?: WorkerNudgeDeadlineOptions,
 ): Promise<{ ok: boolean; reason?: string }> {
   const result = await mutateOwnedClaim(handle, (record) => {
     if (record.phase !== 'CLAIMED') throw new Error(record.phase === 'SEND_ATTEMPTED' ? 'token_replayed' : 'token_phase_invalid');
@@ -551,7 +579,7 @@ export async function markWorkerNudgeSendAttempted(
       state: 'SEND_ATTEMPTED',
       sendAttemptedAtUtc: new Date().toISOString(),
     };
-  });
+  }, options);
   return result.ok ? { ok: true } : { ok: false, reason: result.reason };
 }
 
@@ -649,6 +677,7 @@ export interface S2OneShotWorkerNudgeClaimRecord extends WorkerNudgeClaimRecord 
 
 export interface S2OneShotWorkerNudgeClaimHandle extends WorkerNudgeClaimHandle {
   claim: S2OneShotWorkerNudgeClaimRecord;
+  deadlineMs: number;
 }
 
 export type S2OneShotWorkerNudgeClaimAcquireResult =
@@ -663,25 +692,74 @@ export type S2OneShotWorkerNudgeClaimAcquireResult =
     phase?: string;
   };
 
+function assertBeforeDeadline(deadlineMs: number): void {
+  if (!Number.isFinite(deadlineMs) || Date.now() >= deadlineMs) {
+    throw new Error('claim_deadline_expired');
+  }
+}
+
+function mkdirUntil(directory: string, deadlineMs: number): void {
+  assertBeforeDeadline(deadlineMs);
+  mkdirSync(directory, { recursive: true });
+}
+
+function unlinkUntil(file: string, deadlineMs: number): void {
+  assertBeforeDeadline(deadlineMs);
+  unlinkSync(file);
+}
+
+function removeUntil(file: string, deadlineMs: number): void {
+  assertBeforeDeadline(deadlineMs);
+  rmSync(file, { force: true });
+}
+
+function writeJsonAtomicUntil(
+  file: string,
+  value: unknown,
+  deadlineMs: number,
+  overwrite = true,
+): void {
+  mkdirUntil(path.dirname(file), deadlineMs);
+  if (!overwrite) {
+    assertBeforeDeadline(deadlineMs);
+    const descriptor = openSync(file, 'wx', 0o600);
+    try {
+      assertBeforeDeadline(deadlineMs);
+      writeFileSync(descriptor, `${JSON.stringify(value)}\n`, 'utf8');
+    } finally {
+      closeSync(descriptor);
+    }
+    return;
+  }
+  const temporary = path.join(path.dirname(file), `.${randomUUID().replace(/-/g, '')}.tmp`);
+  try {
+    assertBeforeDeadline(deadlineMs);
+    writeFileSync(temporary, `${JSON.stringify(value)}\n`, { encoding: 'utf8', mode: 0o600 });
+    assertBeforeDeadline(deadlineMs);
+    renameSync(temporary, file);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
 function s2TerminalDir(namespace: string): string {
   return path.join(terminalDir(namespace), S2_ONE_SHOT_CLAIM_POLICY);
 }
 
+function s2TerminalPath(namespace: string, key: string): string {
+  return path.join(s2TerminalDir(namespace), `${key}.json`);
+}
+
 function s2ClaimKey(input: {
+  projectId: string;
   issueNumber: number;
   schedulerGeneration: string;
   transitionIdentity: string;
   unitRef: string;
   eligibleClass: 'idle' | 'livelock';
 }): string {
-  return [
-    's2',
-    input.issueNumber,
-    safeSegment(input.schedulerGeneration),
-    safeSegment(input.transitionIdentity),
-    safeSegment(input.unitRef),
-    input.eligibleClass,
-  ].join('-');
+  return buildS2EpisodeKey(input);
 }
 
 function asS2ClaimRecord(value: Record<string, unknown> | null): S2OneShotWorkerNudgeClaimRecord | null {
@@ -701,15 +779,19 @@ async function withClaimMutexUntil<T>(
   deadlineMs: number,
   action: () => T | Promise<T>,
 ): Promise<T> {
+  assertBeforeDeadline(deadlineMs);
   for (let attempt = 0; Date.now() < deadlineMs; attempt += 1) {
     try {
       mkdirSync(directory);
-      writeJsonAtomic(path.join(directory, 'owner.json'), {
+      writeJsonAtomicUntil(path.join(directory, 'owner.json'), {
         pid: process.pid,
         acquiredAtUtc: new Date().toISOString(),
-      }, false);
+      }, deadlineMs, false);
       try {
-        return await action();
+        assertBeforeDeadline(deadlineMs);
+        const result = await action();
+        assertBeforeDeadline(deadlineMs);
+        return result;
       } finally {
         rmSync(directory, { recursive: true, force: true });
       }
@@ -719,6 +801,7 @@ async function withClaimMutexUntil<T>(
         : '';
       if (code !== 'EEXIST') throw error;
       if (mutexAbandoned(directory)) {
+        assertBeforeDeadline(deadlineMs);
         rmSync(directory, { recursive: true, force: true });
         continue;
       }
@@ -734,9 +817,11 @@ export function pruneS2OneShotWorkerNudgeClaims(input: {
   namespace: string;
   schedulerGeneration: string;
   tickSequence: number;
-}): { removed: number; retained: number } {
+  deadlineMs: number;
+}): { removed: number; retained: number; untrusted: number } {
+  assertBeforeDeadline(input.deadlineMs);
   const directory = s2TerminalDir(input.namespace);
-  if (!existsSync(directory)) return { removed: 0, retained: 0 };
+  if (!existsSync(directory)) return { removed: 0, retained: 0, untrusted: 0 };
   const files = readdirSync(directory)
     .filter((name) => name.endsWith('.json'))
     .map((name) => ({
@@ -746,45 +831,71 @@ export function pruneS2OneShotWorkerNudgeClaims(input: {
     }))
     .sort((left, right) => right.mtimeMs - left.mtimeMs);
   let removed = 0;
+  let untrusted = 0;
   const retained: typeof files = [];
   for (const file of files) {
-    const expired = file.record
-      && (file.record.schedulerGeneration !== input.schedulerGeneration
-        || input.tickSequence - file.record.tickSequence >= S2_RETENTION_TICKS);
+    if (!file.record) {
+      untrusted += 1;
+      retained.push(file);
+      continue;
+    }
+    const expired = file.record.schedulerGeneration !== input.schedulerGeneration
+      || input.tickSequence - file.record.tickSequence >= S2_RETENTION_TICKS;
     if (expired) {
-      rmSync(path.join(directory, file.name), { force: true });
+      removeUntil(path.join(directory, file.name), input.deadlineMs);
       removed += 1;
     } else {
       retained.push(file);
     }
   }
-  for (const overflow of retained.slice(S2_MAX_TERMINALS_PER_GENERATION)) {
-    rmSync(path.join(directory, overflow.name), { force: true });
+  const trustedRetained = retained.filter((file) => file.record !== null);
+  for (const overflow of trustedRetained.slice(S2_MAX_TERMINALS_PER_GENERATION)) {
+    removeUntil(path.join(directory, overflow.name), input.deadlineMs);
     removed += 1;
   }
   return {
     removed,
-    retained: Math.min(retained.length, S2_MAX_TERMINALS_PER_GENERATION),
+    retained: Math.min(trustedRetained.length, S2_MAX_TERMINALS_PER_GENERATION),
+    untrusted,
   };
 }
 
+type S2TerminalHit =
+  | { status: 'none' }
+  | { status: 'terminal'; record: S2OneShotWorkerNudgeClaimRecord }
+  | { status: 'untrusted' };
+
 function s2TerminalHit(
   namespace: string,
+  key: string,
   tupleKey: string,
-): S2OneShotWorkerNudgeClaimRecord | null {
+): S2TerminalHit {
   const directory = s2TerminalDir(namespace);
-  if (!existsSync(directory)) return null;
-  const files = readdirSync(directory)
-    .filter((name) => name.endsWith('.json'))
-    .map((name) => ({ name, mtimeMs: statSync(path.join(directory, name)).mtimeMs }))
-    .sort((left, right) => right.mtimeMs - left.mtimeMs);
-  for (const file of files) {
-    const record = asS2ClaimRecord(readJsonRecord(path.join(directory, file.name)));
-    if (record
-      && record.tupleKey === tupleKey
-      && ['SENT', 'FAILED_DEFINITIVE', 'UNCERTAIN'].includes(record.phase)) return record;
+  if (!existsSync(directory)) return { status: 'none' };
+  const candidates: S2OneShotWorkerNudgeClaimRecord[] = [];
+  let matchingUnreadable = false;
+  for (const name of readdirSync(directory).filter((entry) => entry.endsWith('.json'))) {
+    const file = path.join(directory, name);
+    const filenameMatches = name === `${key}.json` || name.startsWith(`${key}-`);
+    const raw = readJsonRecord(file);
+    const record = asS2ClaimRecord(raw);
+    if (!record) {
+      if (filenameMatches) matchingUnreadable = true;
+      continue;
+    }
+    if (record.key === key || record.tupleKey === tupleKey || filenameMatches) {
+      if (record.key !== key
+        || record.tupleKey !== tupleKey
+        || !['SENT', 'FAILED_DEFINITIVE', 'UNCERTAIN'].includes(record.phase)) {
+        return { status: 'untrusted' };
+      }
+      candidates.push(record);
+    }
   }
-  return null;
+  if (matchingUnreadable || candidates.length > 1) return { status: 'untrusted' };
+  return candidates.length === 1
+    ? { status: 'terminal', record: candidates[0]! }
+    : { status: 'none' };
 }
 
 function moveS2ToTerminal(
@@ -792,22 +903,19 @@ function moveS2ToTerminal(
   activePath: string,
   record: S2OneShotWorkerNudgeClaimRecord,
   outcome: Extract<WorkerNudgeClaimPhase, 'SENT' | 'FAILED_DEFINITIVE' | 'UNCERTAIN'>,
+  deadlineMs: number,
   extra: Record<string, unknown> = {},
 ): string {
-  const directory = s2TerminalDir(namespace);
-  mkdirSync(directory, { recursive: true });
-  const terminalPath = path.join(
-    directory,
-    `${record.key}-${outcome}-${randomUUID().replace(/-/g, '')}.json`,
-  );
-  writeJsonAtomic(terminalPath, {
+  const terminalPath = s2TerminalPath(namespace, record.key);
+  if (existsSync(terminalPath)) throw new Error('claim_untrusted');
+  writeJsonAtomicUntil(terminalPath, {
     ...record,
     ...extra,
     phase: outcome,
     state: outcome,
     finalizedAtUtc: new Date().toISOString(),
-  }, false);
-  rmSync(activePath, { force: true });
+  }, deadlineMs, false);
+  if (existsSync(activePath)) unlinkUntil(activePath, deadlineMs);
   return terminalPath;
 }
 
@@ -827,27 +935,32 @@ export async function acquireS2OneShotWorkerNudgeClaim(input: {
   const namespace = input.namespace || workerNudgeClaimNamespace(projectId);
   let tupleKey: string;
   let workerTarget: string;
+  let key: string;
   try {
     tupleKey = buildS2EpisodeTupleKey({ ...input, projectId });
     workerTarget = buildS2SafeWorkerReference(input);
+    key = s2ClaimKey({ ...input, projectId });
+    mkdirUntil(namespace, input.deadlineMs);
+    mkdirUntil(s2TerminalDir(namespace), input.deadlineMs);
+    pruneS2OneShotWorkerNudgeClaims({
+      namespace,
+      schedulerGeneration: input.schedulerGeneration,
+      tickSequence: input.tickSequence,
+      deadlineMs: input.deadlineMs,
+    });
   } catch {
     return { acquired: false, reason: 'claim_untrusted' };
   }
-  mkdirSync(namespace, { recursive: true });
-  mkdirSync(s2TerminalDir(namespace), { recursive: true });
-  pruneS2OneShotWorkerNudgeClaims({
-    namespace,
-    schedulerGeneration: input.schedulerGeneration,
-    tickSequence: input.tickSequence,
-  });
-  const key = s2ClaimKey(input);
   const activePath = claimPath(namespace, key);
   const mutex = lockDir(namespace, key);
 
   try {
     return await withClaimMutexUntil(mutex, input.deadlineMs, () => {
-      const served = s2TerminalHit(namespace, tupleKey);
-      if (served) {
+      const served = s2TerminalHit(namespace, key, tupleKey);
+      if (served.status === 'untrusted') {
+        return { acquired: false, reason: 'claim_untrusted', path: activePath, namespace, key };
+      }
+      if (served.status === 'terminal') {
         return {
           acquired: false,
           reason: 'claim_terminal',
@@ -855,7 +968,7 @@ export async function acquireS2OneShotWorkerNudgeClaim(input: {
           namespace,
           key,
           terminal: true,
-          phase: served.phase,
+          phase: served.record.phase,
         };
       }
 
@@ -865,6 +978,9 @@ export async function acquireS2OneShotWorkerNudgeClaim(input: {
       }
       const existing = asS2ClaimRecord(existingRaw);
       if (existingRaw && !existing) {
+        return { acquired: false, reason: 'claim_untrusted', path: activePath, namespace, key };
+      }
+      if (existing && (existing.key !== key || existing.tupleKey !== tupleKey)) {
         return { acquired: false, reason: 'claim_untrusted', path: activePath, namespace, key };
       }
       if (existing) {
@@ -883,10 +999,10 @@ export async function acquireS2OneShotWorkerNudgeClaim(input: {
               phase: existing.phase,
             };
           }
-          unlinkSync(activePath);
+          unlinkUntil(activePath, input.deadlineMs);
         } else if (existing.phase === 'SEND_ATTEMPTED') {
           if (leaseExpired || !holderAlive) {
-            moveS2ToTerminal(namespace, activePath, existing, 'UNCERTAIN', {
+            moveS2ToTerminal(namespace, activePath, existing, 'UNCERTAIN', input.deadlineMs, {
               recoveryFence: !holderAlive ? 'owner_dead' : 'lease_expired',
               retryAllowed: false,
             });
@@ -901,7 +1017,7 @@ export async function acquireS2OneShotWorkerNudgeClaim(input: {
             phase: leaseExpired || !holderAlive ? 'UNCERTAIN' : 'SEND_ATTEMPTED',
           };
         } else {
-          moveS2ToTerminal(namespace, activePath, existing, existing.phase);
+          moveS2ToTerminal(namespace, activePath, existing, existing.phase, input.deadlineMs);
           return {
             acquired: false,
             reason: 'claim_terminal',
@@ -937,9 +1053,11 @@ export async function acquireS2OneShotWorkerNudgeClaim(input: {
         unitRef: input.unitRef,
         eligibleClass: input.eligibleClass,
       };
-      writeJsonAtomic(activePath, replacement, false);
+      writeJsonAtomicUntil(activePath, replacement, input.deadlineMs, false);
       const reread = asS2ClaimRecord(readJsonRecord(activePath));
-      if (reread?.holder.processGuid !== replacement.holder.processGuid) {
+      if (reread?.holder.processGuid !== replacement.holder.processGuid
+        || reread.key !== key
+        || reread.tupleKey !== tupleKey) {
         return { acquired: false, reason: 'claim_untrusted', path: activePath, namespace, key };
       }
       return {
@@ -949,6 +1067,7 @@ export async function acquireS2OneShotWorkerNudgeClaim(input: {
         namespace,
         key,
         projectId,
+        deadlineMs: input.deadlineMs,
       };
     });
   } catch (error) {
@@ -964,17 +1083,20 @@ export async function acquireS2OneShotWorkerNudgeClaim(input: {
 
 export async function releaseS2OneShotWorkerNudgeClaim(
   handle: S2OneShotWorkerNudgeClaimHandle,
+  options?: WorkerNudgeDeadlineOptions,
 ): Promise<{ ok: boolean; reason: string }> {
   const mutex = lockDir(handle.namespace, handle.key);
+  const deadlineMs = options?.deadlineMs ?? handle.deadlineMs;
   try {
-    return await withClaimMutex(mutex, () => {
+    return await withClaimMutexUntil(mutex, deadlineMs, () => {
       const current = asS2ClaimRecord(readJsonRecord(handle.path));
       if (!current) return { ok: true, reason: 'already_released' };
-      if (current.holder.processGuid !== handle.claim.holder.processGuid) {
+      if (current.holder.processGuid !== handle.claim.holder.processGuid
+        || current.key !== handle.key) {
         return { ok: false, reason: 'lost_ownership' };
       }
       if (current.phase !== 'CLAIMED') return { ok: false, reason: 'send_attempted' };
-      unlinkSync(handle.path);
+      unlinkUntil(handle.path, deadlineMs);
       return { ok: true, reason: 'released' };
     });
   } catch (error) {
@@ -986,23 +1108,34 @@ export async function finalizeS2OneShotWorkerNudgeClaim(
   handle: S2OneShotWorkerNudgeClaimHandle,
   outcome: Extract<WorkerNudgeClaimPhase, 'SENT' | 'FAILED_DEFINITIVE' | 'UNCERTAIN'>,
   extra: Record<string, unknown> = {},
+  options?: WorkerNudgeDeadlineOptions,
 ): Promise<{ ok: boolean; reason?: string; terminalPath?: string }> {
   const mutex = lockDir(handle.namespace, handle.key);
+  const deadlineMs = options?.deadlineMs ?? handle.deadlineMs;
   try {
-    return await withClaimMutex(mutex, () => {
+    return await withClaimMutexUntil(mutex, deadlineMs, () => {
       const current = asS2ClaimRecord(readJsonRecord(handle.path));
       if (!current) return { ok: false, reason: 'claim_missing' };
-      if (current.holder.processGuid !== handle.claim.holder.processGuid) {
+      if (current.holder.processGuid !== handle.claim.holder.processGuid
+        || current.key !== handle.key) {
         return { ok: false, reason: 'lost_ownership' };
       }
       if (current.phase !== 'SEND_ATTEMPTED') {
         return { ok: false, reason: 'token_phase_invalid' };
       }
-      const terminalPath = moveS2ToTerminal(handle.namespace, handle.path, current, outcome, extra);
+      const terminalPath = moveS2ToTerminal(
+        handle.namespace,
+        handle.path,
+        current,
+        outcome,
+        deadlineMs,
+        extra,
+      );
       pruneS2OneShotWorkerNudgeClaims({
         namespace: handle.namespace,
         schedulerGeneration: current.schedulerGeneration,
         tickSequence: current.tickSequence,
+        deadlineMs,
       });
       return { ok: true, terminalPath };
     });
