@@ -23,11 +23,11 @@ import {
 /**
  * Production Orca adapter for task lifecycle callers.
  *
- * Orca closes by opaque handle. The adapter permits a bounded second attempt
- * only after an explicit runtime_error rejection, preserving the worker-smoke
- * contract adopted on main. Timeout, empty output, invalid JSON, and every other
- * ambiguous result consume the exact-generation authority before returning and
- * can never be retried or adopted by another caller.
+ * Orca closes by opaque handle. The adapter permits one close attempt only for
+ * an identity spawned by this adapter instance and revalidated by exact runtime
+ * + id + generation immediately before the destructive call. Authority is
+ * consumed before transport, so success, explicit rejection, timeout, empty
+ * output, invalid JSON, and every other ambiguous result can never be replayed.
  */
 export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   readonly #options: OrcaRuntimeAdapterOptions;
@@ -82,20 +82,13 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('stop_worker', 'worker_generation_not_found');
     }
 
-    let response = this.#run(
+    // Consume authority before the destructive transport. A later caller cannot
+    // infer from a failed or malformed response that the close did not happen.
+    this.#ownedForStop.delete(worker.id);
+    const response = this.#run(
       ['terminal', 'close', '--terminal', worker.id],
       options,
     );
-    if (!response.ok && response.error?.code === 'runtime_error') {
-      response = this.#run(
-        ['terminal', 'close', '--terminal', worker.id],
-        options,
-      );
-    }
-
-    // Authority is consumed after success, the bounded explicit-rejection retry,
-    // or the first ambiguous result. No later call may repeat this close.
-    this.#ownedForStop.delete(worker.id);
     if (!response.ok) {
       return runtimeFailure('stop_worker', neutralFailureReason(response));
     }
