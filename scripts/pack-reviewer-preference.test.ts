@@ -213,4 +213,24 @@ describe('persistent pack reviewer preference', () => {
       source: 'persistent-preference',
     });
   });
+
+  it('keeps the package JSON status stream free of node-major diagnostics', () => {
+    const { root } = preferenceFixture();
+    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const result = runProcessSync({
+      command: npm,
+      args: ['run', '--silent', 'pack-reviewer-config', '--', 'status', '--json'],
+      cwd: process.cwd(),
+      env: { ...process.env, XDG_CONFIG_HOME: root, HOME: '', PACK_REVIEWER: 'gpt' },
+      encoding: 'utf8',
+    });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stderr).not.toMatch(/Node\.js .*satisfies/);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      schema: 'pack-reviewer-status/v1',
+      effectiveReviewer: 'gpt',
+      source: 'legacy-env',
+    });
+  });
 });
