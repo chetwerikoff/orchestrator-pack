@@ -27,8 +27,10 @@ export function normalizeSmokeReport(
   partial: Partial<base.SmokeReport>,
   binding: { issueNumber: number; prNumber: number; headSha: string },
 ): ReturnType<typeof base.normalizeSmokeReport> {
+  const smokeSupervisorProcess = process.argv[1]?.endsWith('/worker-smoke-run.ts') === true;
   const supervisorPendingPass = partial.result === 'PASS'
-    && partial.terminalCleanup === 'pending'
+    && (partial.terminalCleanup === 'pending'
+      || (partial.terminalCleanup === '' && smokeSupervisorProcess))
     && partial.producer === base.SMOKE_REPORT_PRODUCER
     && Boolean(partial.terminalHandle?.trim())
     && Boolean(partial.orcaExecutable?.trim());
