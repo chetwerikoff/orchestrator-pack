@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1315,
+  "declared_paths": [
+    "scripts/lib/worker-smoke-cleanup-clock-regressions.ts",
+    "scripts/lib/worker-smoke-lifecycle-regressions.ts",
+    "scripts/lib/worker-smoke-lifecycle.ts"
+  ],
+  "denylist": [
+    "packages/core/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/worker-smoke-cleanup-clock-regressions.ts",
+    "scripts/lib/worker-smoke-lifecycle-regressions.ts",
+    "scripts/lib/worker-smoke-lifecycle.ts"
+  ],
+  "source_revision": "5e26065a98e380cbaa164c508841fa1fa47e94f1"
+}
