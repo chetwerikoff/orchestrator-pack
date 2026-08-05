@@ -104,6 +104,9 @@ export function validateDeclaredScope(
   }
 
   for (const [index, path] of normalizedPaths.paths.entries()) {
+    const parsed = parsePathPattern(path);
+    if (!parsed.ok || parsed.pattern.kind !== 'exact') continue;
+
     if (pathMatchesAnyPattern(path, denylist.patterns)) {
       errors.push(
         `declared_paths[${index}] "${path}" intersects issue denylist`,
@@ -123,6 +126,9 @@ export function validateDeclaredScope(
   }
 
   for (const [index, glob] of normalizedGlobs.paths.entries()) {
+    const parsed = parsePathPattern(glob);
+    if (!parsed.ok) continue;
+
     for (const denied of denylist.patterns) {
       if (globPatternsOverlap(glob, denied)) {
         errors.push(
