@@ -288,8 +288,9 @@ export function normalizeReviewLaneDeclaration(value: unknown): ReviewLaneInput 
   }
   entries.length = 0;
   entries.push(...uniqueEntries);
-  const blastRadius: ReviewLaneBlastRadius = entries.some((entry) => entry.kind === 'family')
-    ? 'high-or-uncertain' : entries.some((entry) => securityByPath(entry.path)) || entries.length >= 7 ? 'high' : 'low';
+  const blastRadius: ReviewLaneBlastRadius = entries.some((entry) => securityByPath(entry.path))
+    ? 'high' : entries.some((entry) => entry.kind === 'family')
+      ? 'high-or-uncertain' : entries.length >= 7 ? 'high' : 'low';
   return { status: 'usable', identity: digest(canonical(entries)), entries, blastRadius };
 }
 
@@ -337,7 +338,7 @@ function hasToken(actual: Set<string>, wanted: Set<string>): boolean {
   return false;
 }
 function classifyPath(entry: ReviewLaneAuthorEntry): ReviewLanePathClassification {
-  const path = entry.path.replaceAll('\\', '/');
+  const path = normalizedPath(entry.path).path;
   const lower = path.toLowerCase();
   const parts = lower.split('/');
   const file = parts.at(-1) ?? '';

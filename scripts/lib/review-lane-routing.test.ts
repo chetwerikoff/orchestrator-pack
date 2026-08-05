@@ -48,6 +48,11 @@ describe('review-lane declaration and blast-radius routing', () => {
     expect(family.status).toBe('usable');
     if (family.status === 'usable') expect(family.blastRadius).toBe('high-or-uncertain');
 
+    const browserFamily = normalizeReviewLaneDeclaration(declaration([
+      { kind: 'family', path: 'scripts/chatgpt-browser-turn/**', behaviors: ['pure-review-lane-selection'] },
+    ]));
+    expect(browserFamily).toMatchObject({ status: 'usable', blastRadius: 'high' });
+
     const seven = normalizeReviewLaneDeclaration(declaration(Array.from({ length: 7 }, (_, index) => ({
       kind: 'exact' as const,
       path: `scripts/lib/review-lane-${index}.ts`,
@@ -70,6 +75,21 @@ describe('review-lane declaration and blast-radius routing', () => {
     expect(buildReviewLaneRouting(input, classification, 'r1', 'attempt-browser-turn')).toMatchObject({
       lane: 'disputed',
       topology: 'fixed/v1',
+    });
+  });
+
+  it('classifies normalized browser-turn paths as security-sensitive', () => {
+    const value = declaration([
+      { kind: 'exact', path: '  ./scripts/chatgpt-browser-turn/x.ts  ', behaviors: ['pure-review-lane-selection'] },
+    ]);
+    const input = normalizeReviewLaneDeclaration(value);
+    const classification = classifyReviewLaneDeclaration(value);
+
+    expect(input).toMatchObject({ status: 'usable', blastRadius: 'high' });
+    expect(classification).toMatchObject({ policyStatus: 'available', scopeClass: 'security-sensitive' });
+    expect(classification.paths[0]).toMatchObject({
+      path: 'scripts/chatgpt-browser-turn/x.ts',
+      scopeClass: 'security-sensitive',
     });
   });
 
@@ -121,6 +141,9 @@ describe('review-lane declaration and blast-radius routing', () => {
       'scripts/lib/review-lane-safe/secret-policy.ts',
       'scripts/chatgpt-browser-turn/credential-helper.ts',
       'scripts/chatgpt-browser-turn/nested/.env.production.ts',
+      'scripts/chatgpt-browser-turn/secret/nested.ts',
+      'scripts/chatgpt-browser-turn/credentials/nested.ts',
+      'scripts/chatgpt-browser-turn/.env/nested.ts',
     ]) {
       expect(normalizeReviewLaneDeclaration(declaration([
         { kind: 'exact', path, behaviors: ['pure-review-lane-selection'] },
