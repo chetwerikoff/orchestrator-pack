@@ -532,3 +532,45 @@ describe('[AC4] TypeScript notification compatibility', () => {
     expect(source).toContain('worker-message-dispatch-observe');
   });
 });
+
+describe('[S2] legacy caller compatibility', () => {
+  it('keeps untagged task-continuation on the legacy retry policy', async () => {
+    const root = testRoots.create('opk-s2-legacy-task-continuation-');
+    process.env.AO_BASE_DIR = path.join(root, 'ao-base');
+    const request = {
+      prNumber: 923,
+      issueNumber: 1259,
+      cycleKey: 'legacy-task-continuation-cycle',
+      intentClass: 'task-continuation',
+      workerTarget: 'worker-923:legacy-generation',
+      sessionId: 'worker-923',
+      targetId: 'worker-923',
+      targetGeneration: 'legacy-generation',
+      surface: 'legacy-task-continuation-caller',
+      projectId: 'orchestrator-pack',
+      message: 'Continue the current task.',
+    };
+
+    const first = await acquireWorkerNudgeClaim(request);
+    if (!first.acquired) throw new Error(first.reason);
+    expect(first.claim.policyTag).toBeUndefined();
+    expect(await persistWorkerNudgeMessageHash(first, request.message)).toMatchObject({ ok: true });
+    expect(await markWorkerNudgeSendAttempted(first)).toEqual({ ok: true });
+    expect(await finalizeWorkerNudgeClaim(first, 'UNCERTAIN')).toMatchObject({ ok: true });
+
+    const retry = await acquireWorkerNudgeClaim(request);
+    expect(retry).toMatchObject({ acquired: true });
+    if (!retry.acquired) throw new Error(retry.reason);
+    expect(retry.claim.policyTag).toBeUndefined();
+    expect(await persistWorkerNudgeMessageHash(retry, request.message)).toMatchObject({ ok: true });
+    expect(await markWorkerNudgeSendAttempted(retry)).toEqual({ ok: true });
+    expect(await finalizeWorkerNudgeClaim(retry, 'SENT')).toMatchObject({ ok: true });
+
+    expect(await acquireWorkerNudgeClaim(request)).toMatchObject({
+      acquired: false,
+      reason: 'already_served',
+      terminal: true,
+      phase: 'SENT',
+    });
+  });
+});
