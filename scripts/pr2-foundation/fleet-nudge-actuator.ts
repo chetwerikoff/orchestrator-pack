@@ -514,7 +514,7 @@ export async function runFleetNudgeActuator(
       outcomes.push({ ...candidateResult(candidate), outcome: 'target_stale' });
       continue;
     }
-    if (!assertEpoch(effects) {
+    if (!assertEpoch(effects)) {
       outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'epoch_lost' });
       continue;
     }
@@ -558,4 +558,102 @@ export async function runFleetNudgeActuator(
       admissionDeadline,
       now,
     );
-    if (+h¢V(º¯{®9÷{h‘éì•çí
+    if (!hashResult.completed || !hashResult.value?.ok) {
+      if (now() >= admissionDeadline) await effects.releaseClaim(claim);
+      outcomes.push({
+        ...candidateResult(candidate),
+        issueNumber,
+        outcome: now() >= admissionDeadline ? 'budget_exhausted' : 'claim_untrusted',
+      });
+      continue;
+    }
+
+    const journalResult = await beforeDeadline(
+      () => effects.admitJournal(episode, message, { deadlineMs: admissionDeadline }),
+      admissionDeadline,
+      now,
+    );
+    if (!journalResult.completed || !journalResult.value) {
+      await effects.releaseClaim(claim);
+      outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'budget_exhausted' });
+      continue;
+    }
+    if (journalResult.value.status !== 'admitted') {
+      await effects.releaseClaim(claim);
+      outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'claim_untrusted' });
+      continue;
+    }
+    const journal = journalResult.value.handle;
+
+    if (now() >= admissionDeadline) {
+      await effects.releaseClaim(claim);
+      outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'budget_exhausted' });
+      continue;
+    }
+    if (!assertEpoch(effects)) {
+      await effects.releaseClaim(claim);
+      outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'epoch_lost' });
+      continue;
+    }
+
+    const attempted = await beforeDeadline(
+      () => effects.markSendAttempted(claim, { deadlineMs: admissionDeadline }),
+      admissionDeadline,
+      now,
+    );
+    if (!attempted.completed) {
+      sendAttempts += 1;
+      await finalizeAttempt(effects, claim, journal, 'dispatch_unknown', hardDeadline, now);
+      outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'dispatch_unknown' });
+      continue;
+    }
+    if (!attempted.value?.ok) {
+      outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'claim_untrusted' });
+      continue;
+    }
+    sendAttempts += 1;
+
+    const dispatch = await beforeDeadline(
+      () => effects.dispatch(binding, message, { deadlineMs: dispatchDeadline }),
+      dispatchDeadline,
+      now,
+    );
+    const dispatchOutcome: FleetNudgeDispatchOutcome = dispatch.completed && dispatch.value
+      ? dispatch.value.status
+      : 'dispatch_unknown';
+    await finalizeAttempt(effects, claim, journal, dispatchOutcome, hardDeadline, now);
+    if (dispatchOutcome === 'dispatched') dispatched += 1;
+    outcomes.push({
+      ...candidateResult(candidate),
+      issueNumber,
+      outcome: dispatchOutcome,
+    });
+  }
+
+  return {
+    ...base,
+    result: 'one-budgeted-gated-nudge-per-new-eligible-episode',
+    status: 'complete',
+    candidateOrder,
+    outcomes,
+    claimStarts,
+    sendAttempts,
+    dispatched,
+    returnedWithinBudget: now() <= hardDeadline,
+    targetBindingAvailable: true,
+  };
+}
+
+function candidateResult(candidate: EligibleCandidate): Omit<FleetNudgeCandidateResult, 'outcome'> {
+  return {
+    unitRef: candidate.row.unitRef,
+    class: candidate.row.class,
+    transitionIdentity: candidate.transitionIdentity,
+  };
+}
+
+export function createTargetUnresolvedFleetNudgeActuator(): {
+  readonly tick: (input: FleetNudgeTickInput) => Promise<FleetNudgeResult>;
+} {
+  return { tick: (input) => runFleetNudgeActuator(input) };
+}
