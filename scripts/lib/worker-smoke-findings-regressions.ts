@@ -262,7 +262,7 @@ export function registerWorkerSmokeFindingsRegressionTests(
       fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('keeps crash-before-close stale-handle recovery blocking without a receipt', () => {
+    it('keeps settled stale-handle recovery smoke-only blocking without an exact receipt', () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-before-close-crash-'));
       const runId = 'before-close-crash';
       const artifactDir = seedBound(root, runId, 9001);
@@ -282,38 +282,69 @@ export function registerWorkerSmokeFindingsRegressionTests(
         isProcessAlive: () => false,
         closeBoundHandle: close,
       });
-      expect(result.admitted).toBe(false);
-      expect(close).toHaveBeenCalledWith(`term_${runId}`, artifactDir);
+      expect(result).toMatchObject({
+        admitted: false,
+        allowed: false,
+        blockingScope: 'worker_smoke_only',
+        workerMayContinue: true,
+        reason: `cleanup_attempt_already_settled:${runId}`,
+      });
+      expect(close).not.toHaveBeenCalled();
       expect(lifecycle.readSmokeLifecycleRegistry(artifactDir)).toMatchObject({
-        spawnState: 'cleanup_failed',
-        cleanup: { closeOutcome: 'close_failed:unproven_channel_stale_handle' },
+        spawnState: 'cleanup_pending',
+        closeAttemptedAtMs: 2,
       });
       fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('uses a durable post-close receipt after crash-before-finalization', () => {
+    it('uses an exact v2 post-close receipt after crash-before-finalization', () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-after-close-crash-'));
       const runId = 'after-close-crash';
       const artifactDir = seedBound(root, runId, 9002);
-      rewriteRegistry(artifactDir, (bound) => ({
-        ...bound,
-        spawnState: 'cleanup_pending',
-        closeAttemptedAtMs: 2,
-        updatedAtMs: 2,
+      const firstClose = vi.fn(() => 'closed_owned_handle');
+      const freshCleanup = lifecycle.cleanupSmokeLifecycle({
+        artifactDir,
+        runId,
+        reason: 'child_completed',
+        requestCancellation: false,
+        cooperativeAcknowledgementObserved: true,
+        closeBoundHandle: firstClose,
+        nowMs: 2,
+      });
+      expect(freshCleanup.clean).toBe(true);
+      expect(firstClose).toHaveBeenCalledTimes(1);
+
+      const staleOutcome = 'close_failed:terminal_handle_stale';
+      const staleCompletedAtMs = 3;
+      rewriteRegistry(artifactDir, (clean) => ({
+        ...clean,
+        spawnState: 'cleanup_failed',
+        updatedAtMs: staleCompletedAtMs,
+        cleanup: {
+          reason: 'restart_recovery',
+          cooperativeAcknowledgementObserved: true,
+          closeOutcome: staleOutcome,
+          operatorFilesCleared: true,
+          completedAtMs: staleCompletedAtMs,
+        },
       }));
-      fs.writeFileSync(lifecycle.smokeCloseReceiptPath(artifactDir), JSON.stringify({
+      fs.writeFileSync(lifecycle.smokeTerminalRecordPath(artifactDir), JSON.stringify({
         version: 1,
         runId,
-        terminalHandle: `term_${runId}`,
-        closeOutcome: 'closed_owned_handle',
-        recordedAtMs: 2,
+        reason: 'restart_recovery',
+        cooperativeAcknowledgementObserved: true,
+        closeOutcome: staleOutcome,
+        operatorFilesCleared: true,
+        cleanupClean: false,
+        completedAtMs: staleCompletedAtMs,
       }), 'utf8');
+
       const close = vi.fn(() => 'close_failed:channel_stale_handle');
       const result = lifecycle.preflightSmokeLifecycle({
         repoRoot: root,
         runId: 'next',
         supervisorPid: 333,
-        nowMs: 3,
+        nowMs: 4,
         shutdownMs: 0,
         isProcessAlive: () => false,
         closeBoundHandle: close,
