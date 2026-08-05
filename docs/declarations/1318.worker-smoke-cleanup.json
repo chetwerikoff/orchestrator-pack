@@ -12,6 +12,7 @@
     ".claude/",
     ".cursor/",
     ".github/",
+    "credentials/",
     "package-lock.json",
     "package.json",
     "packages/core/",
@@ -38,6 +39,7 @@
     "scripts/runtime/",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json",
+    "secrets/",
     "tests/",
     "vendor/"
   ],
