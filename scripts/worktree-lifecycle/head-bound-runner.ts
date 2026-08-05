@@ -4,8 +4,13 @@ import {
   normalizeBranchName,
   normalizeHeadSha,
   type ExpectedWorktreeIdentity,
+  type LifecycleContext,
 } from './core.ts';
 import type { CommandInvocation, CommandRunner } from './operations.ts';
+
+export interface PostMergeExpectedWorktreeIdentity extends ExpectedWorktreeIdentity {
+  readonly finalPrHeadSha?: string;
+}
 
 export interface LivePrBinding {
   readonly headRefName: string;
@@ -32,6 +37,10 @@ function failedResult(message: string): ProcessResult {
     timedOut: false,
     cancelled: false,
   };
+}
+
+function normalizedFinalHead(expected: PostMergeExpectedWorktreeIdentity): string | undefined {
+  return expected.finalPrHeadSha ? normalizeHeadSha(expected.finalPrHeadSha) : undefined;
 }
 
 export function readLivePrBinding(
@@ -84,8 +93,9 @@ export function readLivePrBinding(
 }
 
 export function validateExpectedPrBinding(
-  expected: ExpectedWorktreeIdentity,
+  expected: PostMergeExpectedWorktreeIdentity,
   live: LivePrBinding,
+  context: LifecycleContext = 'explicit-recovery',
 ): string | null {
   if (expected.bindingKind !== 'pr') {
     return 'destructive lifecycle operations require PR-bound authority';
@@ -93,14 +103,22 @@ export function validateExpectedPrBinding(
   if (live.state !== 'MERGED') {
     return `PR #${String(expected.bindingNumber)} is ${live.state || 'UNKNOWN'}, not MERGED`;
   }
-  if (live.headRefOid !== expected.headSha) {
-    return `expected head ${expected.headSha} does not match PR #${String(expected.bindingNumber)} head ${live.headRefOid}`;
-  }
   if (expected.mode === 'branch-bound') {
     const expectedBranch = normalizeBranchName(expected.branchName);
     if (!expectedBranch || live.headRefName !== expectedBranch) {
       return `expected branch ${expectedBranch ?? '<missing>'} does not match PR #${String(expected.bindingNumber)} head branch ${live.headRefName || '<missing>'}`;
     }
+  }
+  if (context === 'post-merge-cleanup') {
+    const finalHead = normalizedFinalHead(expected);
+    if (!finalHead) return 'post-merge cleanup requires a bound finalPrHeadSha';
+    if (live.headRefOid !== finalHead) {
+      return `bound final PR head ${finalHead} does not match PR #${String(expected.bindingNumber)} head ${live.headRefOid}`;
+    }
+    return null;
+  }
+  if (live.headRefOid !== expected.headSha) {
+    return `expected head ${expected.headSha} does not match PR #${String(expected.bindingNumber)} head ${live.headRefOid}`;
   }
   return null;
 }
@@ -113,15 +131,18 @@ function isDestructiveLifecycleInvocation(
   if (invocation.command === 'git') {
     if (args.includes('worktree') && args.includes('remove')) return true;
     if (args.includes('branch') && (args.includes('-d') || args.includes('-D'))) return true;
+    if (args.includes('update-ref') && args.includes('-d')) return true;
   }
   return invocation.command === process.execPath
     && args.includes(join(expected.repositoryRoot, 'scripts', 'worktree-teardown.ts'))
+    && args.includes('--post-merge-destructive')
     && args.includes('--apply');
 }
 
 export function createPrHeadBoundRunner(
-  expected: ExpectedWorktreeIdentity,
+  expected: PostMergeExpectedWorktreeIdentity,
   runner: CommandRunner = defaultRunner,
+  context: LifecycleContext = 'explicit-recovery',
 ): CommandRunner {
   if (expected.bindingKind !== 'pr') return runner;
   return (invocation) => {
@@ -130,7 +151,7 @@ export function createPrHeadBoundRunner(
     }
     try {
       const live = readLivePrBinding(expected, runner);
-      const mismatch = validateExpectedPrBinding(expected, live);
+      const mismatch = validateExpectedPrBinding(expected, live, context);
       if (mismatch) {
         return failedResult(`destructive lifecycle effect blocked: ${mismatch}`);
       }
