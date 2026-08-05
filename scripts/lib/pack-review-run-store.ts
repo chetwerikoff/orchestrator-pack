@@ -12,6 +12,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { PACK_REVIEW_CAPS, selectPackReviewGptSourceCardinality } from '../pack-review-state.ts';
 
 export const PACK_REVIEW_RUN_STORE_SCHEMA_VERSION = 1;
 export const PACK_REVIEW_ACTIVE_STATUSES = new Set(['queued', 'preparing', 'running', 'reviewing']);
@@ -335,15 +336,20 @@ function validateGptTerminalEvidence(slot: PackReviewSourceSlotRecord, path: str
     if (slot.payload !== undefined) {
       throw new Error(`corrupt pack review run record at ${path}: non-complete terminal class cannot carry payload`);
     }
-    if (terminalClass === 'reviewer_output_malformed') return;
+    if (terminalClass === 'reviewer_output_malformed') {
+      if (state !== 'ok' || sendCount < 1) {
+        throw new Error(`corrupt pack review run record at ${path}: reviewer_output_malformed requires a successful sent terminalResult`);
+      }
+      return;
+    }
     if (terminalClass === 'possible_delivery') {
-      if (sendCount < 1) {
-        throw new Error(`corrupt pack review run record at ${path}: possible_delivery requires send_count >= 1`);
+      if (sendCount < 1 || state === 'ok') {
+        throw new Error(`corrupt pack review run record at ${path}: possible_delivery requires a non-ok sent terminalResult`);
       }
       return;
     }
     if (terminalClass === 'explicit_refusal:zero_send_collision_exhausted') {
-      const retryableCollision = sendCount === 0 && (
+      const retryableCollision = slot.attemptOrdinal === 2 && sendCount === 0 && (
         (state === 'profile_busy' && cause === 'profile_busy')
         || (state === 'ui_contract_mismatch' && cause === 'composer_unavailable')
         || (state === 'driver_error' && cause === 'state_light_new_chat_send_slot_timeout')
@@ -353,10 +359,13 @@ function validateGptTerminalEvidence(slot: PackReviewSourceSlotRecord, path: str
       }
       return;
     }
-    if (terminalClass !== `${state}:${cause}`) {
-      throw new Error(`corrupt pack review run record at ${path}: terminal class is inconsistent with turn-result/v1`);
+    if (terminalClass === 'driver_error:rate_limit_detected'
+      && state === 'driver_error'
+      && cause === 'rate_limit_detected'
+      && sendCount === 0) {
+      return;
     }
-    return;
+    throw new Error(`corrupt pack review run record at ${path}: unsupported terminal class for turn-result/v1`);
   }
 
   if (typeof result.kind === 'string' && result.kind.trim()) {
@@ -408,8 +417,20 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
   if (raw.tier !== 'T1' && raw.tier !== 'T2' && raw.tier !== 'T3') {
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound tier`);
   }
+  const tier = raw.tier;
   const roundOrdinal = requiredJsonPositiveInteger(raw.roundOrdinal, 'reviewRound roundOrdinal', path);
   const cardinality = requiredJsonPositiveInteger(raw.cardinality, 'reviewRound cardinality', path);
+  if (roundOrdinal > PACK_REVIEW_CAPS[tier]) {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: reviewRound ordinal exceeds tier cap`);
+  }
+  const expectedCardinality = selectPackReviewGptSourceCardinality({
+    reviewer: 'gpt',
+    tier,
+    roundOrdinal,
+  });
+  if (cardinality !== expectedCardinality) {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: reviewRound cardinality violates tier/round policy`);
+  }
   const issueNumber = requiredJsonPositiveInteger(raw.issueNumber, 'reviewRound issueNumber', path);
   const boundIssueSnapshotDigest = requiredJsonString(
     raw.boundIssueSnapshotDigest,
@@ -506,7 +527,7 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
     ...(raw as unknown as PackReviewGptRoundRecord),
     schema: 'pack-review-gpt-round/v1',
     reviewer: 'gpt',
-    tier: raw.tier,
+    tier,
     roundOrdinal,
     cardinality,
     issueNumber,
@@ -659,7 +680,7 @@ function assertCompleteGptRound(round: PackReviewGptRoundRecord, path: string): 
   }
 }
 
-interface PackReviewGptAggregate {
+export interface PackReviewGptAggregate {
   reviewVerdict: 'clean' | 'findings';
   findingCount: number;
   findings: unknown[];
@@ -1092,6 +1113,28 @@ export function getPackReviewRun(runId: string, options: PackReviewStoreOptions 
     const path = recordPath(storeRoot, runId);
     if (!existsSync(path)) return null;
     return parseRecord(JSON.parse(readFileSync(path, 'utf8')), path);
+  });
+}
+
+export function validatePersistedPackReviewGptAggregate(
+  runId: string,
+  aggregate: {
+    reviewVerdict: unknown;
+    findingCount: unknown;
+    findings: unknown;
+  },
+  options: PackReviewStoreOptions = {},
+): PackReviewGptAggregate {
+  const storeRoot = resolvePackReviewRunStoreRoot(options);
+  return withStoreLock(storeRoot, () => {
+    const path = recordPath(storeRoot, runId);
+    if (!existsSync(path)) throw new Error(`pack review run not found: ${runId}`);
+    const record = parseRecord(JSON.parse(readFileSync(path, 'utf8')), path);
+    if (!record.reviewRound) {
+      throw new Error(`pack review run ${runId} has no persisted GPT round`);
+    }
+    assertGptRoundAggregate(record.reviewRound, aggregate, path);
+    return deriveCompleteGptRoundAggregate(record.reviewRound, path);
   });
 }
 
