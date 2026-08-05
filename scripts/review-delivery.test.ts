@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildDeterministicDeliveryKey,
   canEvictLifecycleEntry,
@@ -14,10 +17,32 @@ import {
 import {
   classifyPackReviewPayload,
   isNonBlockingPackReviewFinding,
+  sendPackReviewWorkerNotification,
 } from './lib/pack-review-delivery.ts';
+import { createPackReviewRun } from './lib/pack-review-run-store.ts';
+import { runProcessSync } from './kernel/subprocess.ts';
+import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 
 const headSha = 'abc123def4567890abcdef1234567890abcdef12';
 const prNumber = 718;
+const tempRoots: string[] = [];
+
+function tempRoot(prefix: string): string {
+  const root = mkdtempSync(path.join(tmpdir(), prefix));
+  tempRoots.push(root);
+  return root;
+}
+
+function repositoryHead(repoRoot: string): string {
+  const result = runProcessSync({
+    command: 'git',
+    args: ['rev-parse', 'HEAD'],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) throw new Error(`git_head_unresolved:${result.stderr || result.error}`);
+  return result.stdout.trim().toLowerCase();
+}
 
 function deliveryKey(findings: unknown[]): string {
   const key = buildDeterministicDeliveryKey({
@@ -29,6 +54,10 @@ function deliveryKey(findings: unknown[]): string {
   if (!key) throw new Error('delivery key required for test fixture');
   return key;
 }
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 describe('runtime-neutral review delivery contract', () => {
   it('keeps actionable non-terminal lifecycle entries durable', () => {
@@ -122,5 +151,55 @@ describe('runtime-neutral review delivery contract', () => {
       findingCount: 1,
       findings: [{ severity: 'blocking' }],
     })).toMatchObject({ terminalStatus: 'changes_requested', requiredStatus: 'failure', blocking: true });
+  });
+
+  it('resolves persisted PR/head/generation for normal and resume-shaped runner notifications', async () => {
+    const repoRoot = process.cwd();
+    const storeRoot = tempRoot('opk-review-notification-binding-');
+    const stateRoot = tempRoot('opk-review-notification-state-');
+    const adapter = new DeterministicRuntimeAdapter();
+    const spawned = adapter.spawnWorker({
+      title: 'review-worker',
+      command: 'test-worker',
+      workspace: repoRoot,
+    });
+    if (spawned.status !== 'ok') throw new Error('fixture_worker_spawn_failed');
+    const run = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1281,
+      headSha: repositoryHead(repoRoot),
+      linkedSessionId: spawned.value.identity.id,
+      startReason: 'test',
+      surface: 'review-delivery-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+    }).run;
+    const request = {
+      message: 'Pack review findings are ready.',
+      idempotencyKey: `worker-notification:${run.id}:${run.targetSha}`,
+      reviewRunId: run.id,
+    };
+    const notify = () => sendPackReviewWorkerNotification({
+      trustedPackRoot: repoRoot,
+      sessionId: spawned.value.identity.id,
+      request,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      adapter,
+      journalPath: path.join(stateRoot, 'dispatch.json'),
+      claimNamespace: path.join(stateRoot, 'claims'),
+      sideEffectFencePath: path.join(stateRoot, 'side-effect.lock'),
+    });
+
+    expect(await notify()).toMatchObject({
+      state: 'delivered',
+      reason: 'runtime_dispatch_dispatched',
+    });
+    expect(await notify()).toMatchObject({
+      state: 'delivered',
+      reason: 'claim_duplicate_no_op',
+    });
   });
 });
