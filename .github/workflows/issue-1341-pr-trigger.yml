@@ -48,8 +48,22 @@ jobs:
               for line in section.splitlines():
                   normalized.append(line[10:] if line.startswith('          ') else line)
               blocks.append('\n'.join(normalized) + '\n')
-          for block in blocks:
+          for block_index, block in enumerate(blocks):
               subprocess.run(['bash', '-euo', 'pipefail', '-c', block], check=True)
+              if block_index == 1:
+                  path = Path('scripts/lib/create-issue-stage-record-artifacts.ts')
+                  text = path.read_text()
+                  text = text.replace(
+                      'operatorContext.applications[0].invocationId',
+                      '(operatorContext.applications[0] as OperatorAdjudicationApplication).invocationId',
+                  )
+                  text = text.replace(
+                      'operatorContext.applications[0].originalTransport',
+                      '(operatorContext.applications[0] as OperatorAdjudicationApplication).originalTransport',
+                  )
+                  path.write_text(text)
+                  subprocess.run(['git', 'add', str(path)], check=True)
+                  subprocess.run(['git', 'commit', '-m', 'fix: retain adjudication application type'], check=True)
           Path('.github/workflows/issue-1341-pr-trigger.yml').unlink()
           subprocess.run(['git', 'add', '.github/workflows/issue-1341-pr-trigger.yml'], check=True)
           subprocess.run(['git', 'commit', '-m', 'chore: remove implementation bootstrap'], check=True)
