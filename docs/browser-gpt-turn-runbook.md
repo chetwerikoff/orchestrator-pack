@@ -41,10 +41,14 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
 3. Before starting flow-manager in a fresh worktree, provision the gitignored
    browser configuration from the operator checkout:
    `cp "<OPERATOR_CHECKOUT>/.claude/skills/discuss-with-gpt/local.config.json" "<WORKTREE_PATH>/.claude/skills/discuss-with-gpt/local.config.json"`.
-   Alternatively, set both `DISCUSS_WITH_GPT_PROJECT_URL` and
-   `DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR`. If launch reports
-   `discuss-with-gpt: operator configuration missing`, this provisioning step
-   was skipped.
+   Alternatively, set both required values through the environment:
+   `export DISCUSS_WITH_GPT_PROJECT_URL="<PROJECT_URL>"` and
+   `export DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR="<CHROME_USER_DATA_DIR>"`.
+   If launch reports
+   `discuss-with-gpt: operator configuration missing`, the mandatory
+   configuration is not resolved; this can also happen with a copied but
+   incomplete config. Verify both `projectUrl` and `chromeUserDataDir`, or
+   both environment-variable equivalents.
 4. Load the gitignored local configuration and confirm the configured headed
    automation Chrome is running and logged in. Never type credentials.
 5. Start or verify the configured browser through the existing launcher:

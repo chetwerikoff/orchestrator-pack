@@ -25,11 +25,14 @@ opens one dedicated owned tab, sends one exact user payload, and observes that
 same tab. Page/DOM completion is sufficient once the final assistant reply is
 stable and no longer generating; PID, shell state, silence, log growth,
 service-terminal witnesses, and heartbeats are not completion authority.
-In a fresh worktree, `discuss-with-gpt: operator configuration missing` means
-the gitignored browser config was not provisioned; copy `local.config.json`
-from the operator checkout into the same worktree path, or set both
-`DISCUSS_WITH_GPT_PROJECT_URL` and
-`DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR`, before launch.
+In a fresh worktree, copy `local.config.json` from the operator checkout into
+the same worktree path, or set both required values before launch:
+`export DISCUSS_WITH_GPT_PROJECT_URL="<PROJECT_URL>"` and
+`export DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR="<CHROME_USER_DATA_DIR>"`.
+The `discuss-with-gpt: operator configuration missing` signature means the
+mandatory configuration is not resolved; it can also occur with a copied but
+incomplete config. Verify both `projectUrl` and `chromeUserDataDir`, or both
+environment-variable equivalents.
 
 The transport-owned `OPKTURNV1...` marker is inserted per payload. Exactly one
 current user node with that marker proves ownership and page-path delivery;
