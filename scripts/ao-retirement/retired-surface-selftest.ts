@@ -38,17 +38,21 @@ function fixtureRoot(): string {
   return root;
 }
 
+function defaultRows(cleanRow: Record<string, unknown> = { path: 'clean.md', kind: 'clean' }): unknown[] {
+  return [
+    cleanRow,
+    { path: 'deferred.md', kind: 'deferred-active', reason: 'active migration debt' },
+    { path: 'historical.md', kind: 'historical-exclusion', reason: 'quoted evidence' },
+    ...PRESERVES.map((path) => ({ path, kind: 'preserve', reason: 'exact preserve' })),
+  ];
+}
+
 function inventory(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     schemaVersion: 1,
     candidateBase: 'a'.repeat(40),
     patternSource: 'scripts/json-producers/retired-surfaces.json',
-    rows: [
-      { path: 'clean.md', kind: 'clean' },
-      { path: 'deferred.md', kind: 'deferred-active', reason: 'active migration debt' },
-      { path: 'historical.md', kind: 'historical-exclusion', reason: 'quoted evidence' },
-      ...PRESERVES.map((path) => ({ path, kind: 'preserve', reason: 'exact preserve' })),
-    ],
+    rows: defaultRows(),
     ...overrides,
   };
 }
@@ -63,12 +67,20 @@ function expectThrows(run: () => unknown, pattern: RegExp): void {
   assert.throws(run, pattern);
 }
 
+const PROHIBITION_EXCLUSION = {
+  surfaceId: 'report',
+  match: 'AO report ',
+  lineContains: 'workers MUST NOT use removed AO report surfaces',
+  reason: 'active prohibition, not an invocation',
+} as const;
+
 function runFixtureChecks(): void {
   {
     const root = fixtureRoot();
     try {
       const result = evaluateRetiredSurfaceInventory({ repoRoot: root, inventoryPath: writeInventory(root, inventory()) });
       assert.deepEqual(result.violations, []);
+      assert.deepEqual(result.excludedMatches, []);
       assert.deepEqual(result.scannedPaths, ['clean.md']);
       assert.deepEqual(result.preservedPaths, [...PRESERVES]);
     } finally {
@@ -97,6 +109,85 @@ function runFixtureChecks(): void {
   {
     const root = fixtureRoot();
     try {
+      const cleanRow = {
+        path: 'clean.md',
+        kind: 'clean',
+        matchExclusions: [PROHIBITION_EXCLUSION],
+      };
+      write(root, 'clean.md', 'workers MUST NOT use removed AO report surfaces\n');
+      const inventoryPath = writeInventory(root, inventory({ rows: defaultRows(cleanRow) }));
+      const accepted = evaluateRetiredSurfaceInventory({ repoRoot: root, inventoryPath });
+      assert.deepEqual(accepted.violations, []);
+      assert.deepEqual(accepted.excludedMatches, [{
+        path: 'clean.md',
+        ...PROHIBITION_EXCLUSION,
+      }]);
+
+      write(
+        root,
+        'clean.md',
+        'workers MUST NOT use removed AO report surfaces\nao report ready_for_review\n',
+      );
+      const withInvocation = evaluateRetiredSurfaceInventory({ repoRoot: root, inventoryPath });
+      assert.equal(withInvocation.excludedMatches.length, 1);
+      assert.deepEqual(withInvocation.violations, [{
+        path: 'clean.md',
+        surfaceId: 'report',
+        match: 'ao report ',
+      }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const root = fixtureRoot();
+    try {
+      write(root, 'clean.md', 'workers MUST NOT use removed AO report command\n');
+      const staleRow = {
+        path: 'clean.md',
+        kind: 'clean',
+        matchExclusions: [PROHIBITION_EXCLUSION],
+      };
+      const stalePath = writeInventory(root, inventory({ rows: defaultRows(staleRow) }));
+      expectThrows(
+        () => evaluateRetiredSurfaceInventory({ repoRoot: root, inventoryPath: stalePath }),
+        /match exclusion was not consumed exactly once/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const root = fixtureRoot();
+    try {
+      write(root, 'clean.md', 'workers MUST NOT use removed AO report surfaces\n');
+      const ambiguousRow = {
+        path: 'clean.md',
+        kind: 'clean',
+        matchExclusions: [
+          PROHIBITION_EXCLUSION,
+          {
+            ...PROHIBITION_EXCLUSION,
+            lineContains: 'removed AO report surfaces',
+            reason: 'second overlapping witness',
+          },
+        ],
+      };
+      const ambiguousPath = writeInventory(root, inventory({ rows: defaultRows(ambiguousRow) }));
+      expectThrows(
+        () => evaluateRetiredSurfaceInventory({ repoRoot: root, inventoryPath: ambiguousPath }),
+        /ambiguous match exclusions/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const root = fixtureRoot();
+    try {
       const duplicate = inventory({ rows: [
         { path: 'clean.md', kind: 'clean' },
         { path: 'clean.md', kind: 'clean' },
@@ -108,6 +199,19 @@ function runFixtureChecks(): void {
         ...PRESERVES.map((path) => ({ path, kind: 'preserve', reason: 'exact' })),
       ] });
       expectThrows(() => loadInventory(writeInventory(root, missingReason)), /requires a reason/);
+      const excludedNonClean = inventory({ rows: [
+        {
+          path: 'deferred.md',
+          kind: 'deferred-active',
+          reason: 'active debt',
+          matchExclusions: [PROHIBITION_EXCLUSION],
+        },
+        ...PRESERVES.map((path) => ({ path, kind: 'preserve', reason: 'exact' })),
+      ] });
+      expectThrows(
+        () => loadInventory(writeInventory(root, excludedNonClean)),
+        /allowed only for clean rows/,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -149,8 +253,15 @@ function main(): void {
     repoRoot,
     inventoryPath: join(repoRoot, 'scripts/ao-retirement/retired-surface-inventory.json'),
   });
-  assert.equal(result.candidateBase, 'afd99fb7bc5f4fcb210005d96b56db7d3064a45f');
+  assert.equal(result.candidateBase, 'd28fad6a646e4fd6c29dbfb54963f94991a7b864');
   assert.deepEqual(result.violations, []);
+  assert.deepEqual(result.excludedMatches, [{
+    path: 'AGENTS.md',
+    surfaceId: 'ao-report-removed',
+    match: 'AO report ',
+    lineContains: 'workers MUST NOT use removed AO report surfaces',
+    reason: 'The active worker policy prohibits the removed AO report surface; it does not instruct a caller to invoke it.',
+  }]);
   process.stdout.write(`${JSON.stringify({ status: 'pass', ...result })}\n`);
 }
 
