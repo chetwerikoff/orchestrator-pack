@@ -108,7 +108,6 @@ export interface PackReviewGptRoundRecord {
   sourceSlots: PackReviewSourceSlotRecord[];
 }
 
-
 export interface PackReviewRunRecord {
   schemaVersion: 1;
   id: string;
