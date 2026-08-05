@@ -1,5 +1,7 @@
 import {
+  copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -21,6 +23,7 @@ import {
   type FleetNudgeEffects,
   type FleetNudgeEpisode,
   type FleetNudgeResult,
+  type FleetNudgeUnitOutcome,
   type RuntimeFleetNudgeBinding,
 } from './fleet-nudge-actuator.ts';
 import type {
@@ -38,8 +41,18 @@ import {
   releaseS2OneShotWorkerNudgeClaim,
   type S2OneShotWorkerNudgeClaimHandle,
 } from './worker-nudge-claim-store.ts';
+import {
+  admitS2FleetNudgeJournal,
+  finalizeS2FleetNudgeJournal,
+  type S2FleetNudgeJournalHandle,
+} from './worker-dispatch-journal.ts';
+import { buildS2EpisodeKey } from './worker-nudge-gate.ts';
 import type { RuntimeDispatchResult } from '../runtime/contracts.ts';
-import { runSchedulerTick } from './scheduler.ts';
+import {
+  productionSchedulerBoundary,
+  runSchedulerTick,
+  type SchedulerBoundary,
+} from './scheduler.ts';
 
 const roots: string[] = [];
 const OPAQUE_ID = 'opaque-runtime-id-must-not-persist';
@@ -151,6 +164,19 @@ function observerResult(input: {
   };
 }
 
+function oneIdleObserver(
+  unitRef = 'u-000001',
+  tickSequence = 2,
+  schedulerGeneration = 'sg-s2-test',
+): FleetObserverResult {
+  return observerResult({
+    rows: [row(unitRef, 'idle')],
+    transitions: [changed(unitRef, 'idle', tickSequence)],
+    tickSequence,
+    schedulerGeneration,
+  });
+}
+
 function bindingFor(episode: Omit<FleetNudgeEpisode, 'issueNumber'>): RuntimeFleetNudgeBinding {
   return {
     ...episode,
@@ -171,19 +197,20 @@ function filesUnder(directory: string): string[] {
     .filter((name) => name.endsWith('.json'));
 }
 
-function claimBackedEffects(input: {
+function realEffects(input: {
   namespace: string;
+  journalPath?: string;
   dispatch?: RuntimeDispatchResult;
-  now?: () => number;
   mutate?: Partial<FleetNudgeEffects>;
 }): {
   effects: FleetNudgeEffects;
   sends: Array<{ binding: RuntimeFleetNudgeBinding; message: string }>;
-  journals: Array<Record<string, unknown>>;
+  journalPath: string;
 } {
   const sends: Array<{ binding: RuntimeFleetNudgeBinding; message: string }> = [];
-  const journals: Array<Record<string, unknown>> = [];
+  const journalPath = input.journalPath ?? path.join(input.namespace, 'dispatch-journal.json');
   const base: FleetNudgeEffects = {
+    assertEpoch: () => {},
     resolveTarget: async (episode) => ({ status: 'resolved', binding: bindingFor(episode) }),
     revalidate: async () => ({ status: 'valid' }),
     acquireClaim: async (episode, options) => {
@@ -196,56 +223,109 @@ function claimBackedEffects(input: {
         ? { status: 'acquired', handle: { opaque: acquired } }
         : { status: acquired.reason === 'claim_terminal' ? 'claim_terminal' : 'claim_untrusted' };
     },
-    persistMessageHash: async (handle, message) =>
-      persistWorkerNudgeMessageHash(handle.opaque as S2OneShotWorkerNudgeClaimHandle, message),
-    admitJournal: async (episode, message) => {
-      const record = {
-        policyTag: episode.policyTag,
-        projectId: episode.projectId,
-        issueNumber: episode.issueNumber,
-        schedulerGeneration: episode.schedulerGeneration,
-        tickSequence: episode.tickSequence,
-        transitionIdentity: episode.transitionIdentity,
-        unitRef: episode.unitRef,
-        eligibleClass: episode.eligibleClass,
-        intentClass: episode.intentClass,
+    persistMessageHash: async (handle, message, options) =>
+      persistWorkerNudgeMessageHash(
+        handle.opaque as S2OneShotWorkerNudgeClaimHandle,
         message,
-      };
-      journals.push(record);
-      return { status: 'admitted', handle: { opaque: record } };
+        options,
+      ),
+    admitJournal: async (episode, message, options) => {
+      const admitted = await admitS2FleetNudgeJournal({
+        journalPath,
+        episode,
+        message,
+        deadlineMs: options.deadlineMs,
+      });
+      return admitted.status === 'admitted'
+        ? { status: 'admitted', handle: { opaque: admitted.handle } }
+        : { status: 'claim_untrusted' };
     },
-    markSendAttempted: async (handle) =>
-      markWorkerNudgeSendAttempted(handle.opaque as S2OneShotWorkerNudgeClaimHandle),
-    releaseClaim: async (handle) =>
-      releaseS2OneShotWorkerNudgeClaim(handle.opaque as S2OneShotWorkerNudgeClaimHandle),
+    markSendAttempted: async (handle, options) =>
+      markWorkerNudgeSendAttempted(
+        handle.opaque as S2OneShotWorkerNudgeClaimHandle,
+        options,
+      ),
+    releaseClaim: async (handle, options) =>
+      releaseS2OneShotWorkerNudgeClaim(
+        handle.opaque as S2OneShotWorkerNudgeClaimHandle,
+        options,
+      ),
     dispatch: async (binding, message) => {
       sends.push({ binding, message });
       return input.dispatch ?? { status: 'dispatched' };
     },
-    finalizeClaim: async (handle, phase) =>
+    finalizeClaim: async (handle, phase, options) =>
       finalizeS2OneShotWorkerNudgeClaim(
         handle.opaque as S2OneShotWorkerNudgeClaimHandle,
         phase,
+        {},
+        options,
       ),
-    finalizeJournal: async () => ({ ok: true }),
-    pruneClaims: async ({ schedulerGeneration, tickSequence }) => {
+    finalizeJournal: async (handle, outcome, options) =>
+      finalizeS2FleetNudgeJournal(
+        handle.opaque as S2FleetNudgeJournalHandle,
+        outcome,
+        options,
+      ),
+    pruneClaims: async ({ schedulerGeneration, tickSequence, deadlineMs }) => {
       pruneS2OneShotWorkerNudgeClaims({
         namespace: input.namespace,
         schedulerGeneration,
         tickSequence,
+        deadlineMs,
       });
     },
-    ...(input.now ? { now: input.now } : {}),
   };
-  return { effects: { ...base, ...input.mutate }, sends, journals };
+  return { effects: { ...base, ...input.mutate }, sends, journalPath };
 }
 
-function oneIdleObserver(unitRef = 'u-000001'): FleetObserverResult {
-  return observerResult({ rows: [row(unitRef, 'idle')], transitions: [changed(unitRef, 'idle')] });
+function authorityEnv(directory: string): NodeJS.ProcessEnv {
+  const authorityPath = path.join(directory, 'epoch.json');
+  const epochId = 'epoch-1259';
+  const nonce = 'nonce-1259';
+  writeFileSync(authorityPath, JSON.stringify({
+    schemaVersion: 1,
+    currentEpochId: epochId,
+    records: [{
+      epochId,
+      nonce,
+      hostId: 'host-1259',
+      repoRoot: process.cwd(),
+      installedCommitSha: 'a'.repeat(40),
+      snapshotDigests: { reconcile: 'a', reevaluation: 'b', reportStateSeed: 'c' },
+      importDigests: { reconcile: 'd', reevaluation: 'e', reportStateSeed: 'f' },
+      registryHash: 'g',
+      preCommitLogDigest: 'h',
+      commitAt: '2026-08-06T00:00:00.000Z',
+    }],
+  }));
+  return {
+    ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
+    ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
+    ORCHESTRATOR_CUTOVER_NONCE: nonce,
+  };
+}
+
+function resultFor(outcome: FleetNudgeUnitOutcome): FleetNudgeResult {
+  return {
+    result: 'one-budgeted-gated-nudge-per-new-eligible-episode',
+    status: 'complete',
+    schedulerGeneration: 'sg-scheduler',
+    tickSequence: 1,
+    effectiveS2BudgetMs: 125,
+    settlementReserveMs: 25,
+    candidateOrder: ['episode'],
+    outcomes: [{ unitRef: 'u-000001', class: 'idle', outcome }],
+    claimStarts: outcome === 'target_unresolved' ? 0 : 1,
+    sendAttempts: outcome === 'dispatched' || outcome === 'dispatch_unknown' ? 1 : 0,
+    dispatched: outcome === 'dispatched' ? 1 : 0,
+    returnedWithinBudget: true,
+    targetBindingAvailable: outcome !== 'target_unresolved',
+  };
 }
 
 describe('S2 fleet nudge actuator', () => {
-  it('uses the exact total-budget formula and exact bounded messages', () => {
+  it('uses the exact budget formula and bounded messages', () => {
     expect(calculateFleetNudgeBudget(16_000)).toEqual({
       effectiveS2BudgetMs: 2_000,
       settlementReserveMs: 200,
@@ -254,24 +334,26 @@ describe('S2 fleet nudge actuator', () => {
       effectiveS2BudgetMs: 100,
       settlementReserveMs: 20,
     });
-    expect(Buffer.from(IDLE_NUDGE_MESSAGE, 'utf8').toString('utf8')).toBe(
+    expect(IDLE_NUDGE_MESSAGE).toBe(
       'Continue the current task. If you are blocked or finished, publish the required worker report.',
     );
-    expect(Buffer.from(LIVELOCK_NUDGE_MESSAGE, 'utf8').toString('utf8')).toBe(
+    expect(LIVELOCK_NUDGE_MESSAGE).toBe(
       'No progress was observed for the configured livelock window. Reassess the current task; continue, or publish a blocker/ready report.',
     );
   });
 
-  it('fails production closed at target_unresolved before claim, journal, hash, or send', async () => {
-    const result = await runFleetNudgeActuator({
-      observer: observerResult({
-        rows: [row('u-000001', 'idle'), row('u-000002', 'livelock')],
-        transitions: [changed('u-000001', 'idle'), changed('u-000002', 'livelock')],
-      }),
+  it('hard-wires the production boundary to target_unresolved and ignores caller override', async () => {
+    const injected = { tick: vi.fn(async () => resultFor('dispatched')) };
+    const boundary = productionSchedulerBoundary({
+      repoRoot: '/not-used',
+      fleetNudgeActuator: injected,
+    } as unknown as Parameters<typeof productionSchedulerBoundary>[0]);
+    const result = await boundary.fleetNudgeActuator!.tick({
+      observer: oneIdleObserver(),
       schedulerIntervalMs: 1_000,
       tickSequence: 2,
     });
-
+    expect(injected.tick).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       result: 'target-binding-unresolved-fail-closed',
       claimStarts: 0,
@@ -279,15 +361,12 @@ describe('S2 fleet nudge actuator', () => {
       dispatched: 0,
       targetBindingAvailable: false,
     });
-    expect(result.outcomes.map((entry) => entry.outcome)).toEqual([
-      'target_unresolved',
-      'target_unresolved',
-    ]);
+    expect(result.outcomes[0]?.outcome).toBe('target_unresolved');
   });
 
-  it('admits only current-generation internal idle/livelock class changes', async () => {
+  it('admits exactly current-generation internal idle/livelock class changes', async () => {
     const namespace = root('opk-s2-matrix-');
-    const { effects, sends } = claimBackedEffects({ namespace });
+    const { effects, sends } = realEffects({ namespace });
     const result = await runFleetNudgeActuator({
       observer: observerResult({
         rows: [
@@ -327,33 +406,33 @@ describe('S2 fleet nudge actuator', () => {
     });
   });
 
-  it('keeps opaque #1245 identity and observation values out of all durable bytes', async () => {
+  it('persists real claim and journal bytes without runtime-private identity', async () => {
     const namespace = root('opk-s2-persistence-');
-    const { effects, journals } = claimBackedEffects({ namespace });
+    const { effects, journalPath } = realEffects({ namespace });
     const result = await runFleetNudgeActuator({
       observer: oneIdleObserver(),
       schedulerIntervalMs: 16_000,
       tickSequence: 2,
     }, effects);
     expect(result.dispatched).toBe(1);
+    expect(existsSync(journalPath)).toBe(true);
 
-    const persisted = filesUnder(namespace)
-      .map((name) => readFileSync(path.join(namespace, name), 'utf8'))
-      .join('\n');
-    const journalBytes = JSON.stringify(journals);
+    const persisted = [
+      ...filesUnder(namespace).map((name) => readFileSync(path.join(namespace, name), 'utf8')),
+      readFileSync(journalPath, 'utf8'),
+    ].join('\n');
     for (const forbidden of [
       OPAQUE_ID,
       OPAQUE_GENERATION,
       OPAQUE_TOKEN,
       '/secret/worktree',
       'private terminal output',
-    ]) {
-      expect(persisted).not.toContain(forbidden);
-      expect(journalBytes).not.toContain(forbidden);
-    }
+    ]) expect(persisted).not.toContain(forbidden);
     expect(persisted).toContain(S2_ONE_SHOT_POLICY);
     expect(persisted).toContain('sg-s2-test');
     expect(persisted).toContain('u-000001');
+    expect(persisted).toContain('"state": "FINAL"');
+    expect(persisted).toContain('"outcome": "dispatched"');
   });
 
   it.each([
@@ -365,14 +444,13 @@ describe('S2 fleet nudge actuator', () => {
     const dispatch: RuntimeDispatchResult = dispatchStatus === 'dispatched'
       ? { status: 'dispatched' }
       : { status: dispatchStatus, reason: 'injected' };
-    const { effects } = claimBackedEffects({ namespace, dispatch });
+    const { effects } = realEffects({ namespace, dispatch });
     const first = await runFleetNudgeActuator({
       observer: oneIdleObserver(),
       schedulerIntervalMs: 16_000,
       tickSequence: 2,
     }, effects);
     expect(first.outcomes[0]?.outcome).toBe(dispatchStatus);
-
     const second = await runFleetNudgeActuator({
       observer: oneIdleObserver(),
       schedulerIntervalMs: 16_000,
@@ -385,7 +463,35 @@ describe('S2 fleet nudge actuator', () => {
     expect(terminalBytes).toContain(`\"phase\":\"${phase}\"`);
   });
 
-  it('has one concurrent acquisition winner and terminalizes stale SEND_ATTEMPTED as UNCERTAIN', async () => {
+  it('safely releases a pre-send claim and permits exact-episode reacquisition', async () => {
+    const namespace = root('opk-s2-release-');
+    let admissions = 0;
+    const real = realEffects({ namespace });
+    const originalAdmit = real.effects.admitJournal;
+    const effects: FleetNudgeEffects = {
+      ...real.effects,
+      admitJournal: async (...args) => {
+        admissions += 1;
+        return admissions === 1
+          ? { status: 'claim_untrusted' }
+          : originalAdmit(...args);
+      },
+    };
+    const first = await runFleetNudgeActuator({
+      observer: oneIdleObserver(),
+      schedulerIntervalMs: 16_000,
+      tickSequence: 2,
+    }, effects);
+    expect(first.outcomes[0]?.outcome).toBe('claim_untrusted');
+    const second = await runFleetNudgeActuator({
+      observer: oneIdleObserver(),
+      schedulerIntervalMs: 16_000,
+      tickSequence: 2,
+    }, effects);
+    expect(second.outcomes[0]?.outcome).toBe('dispatched');
+  });
+
+  it('has one claim winner and terminalizes stale SEND_ATTEMPTED as UNCERTAIN', async () => {
     const namespace = root('opk-s2-concurrent-');
     const base = {
       projectId: 'orchestrator-pack',
@@ -407,8 +513,9 @@ describe('S2 fleet nudge actuator', () => {
       expect.objectContaining({ reason: 'claim_terminal' }),
     ]);
     const winner = results.find((entry): entry is S2OneShotWorkerNudgeClaimHandle => entry.acquired)!;
-    expect(await persistWorkerNudgeMessageHash(winner, IDLE_NUDGE_MESSAGE)).toMatchObject({ ok: true });
-    expect(await markWorkerNudgeSendAttempted(winner)).toEqual({ ok: true });
+    const deadlineMs = Date.now() + 2_000;
+    expect(await persistWorkerNudgeMessageHash(winner, IDLE_NUDGE_MESSAGE, { deadlineMs })).toMatchObject({ ok: true });
+    expect(await markWorkerNudgeSendAttempted(winner, { deadlineMs })).toEqual({ ok: true });
 
     const active = JSON.parse(readFileSync(winner.path, 'utf8')) as Record<string, unknown>;
     active.claimLeaseExpiresAtMs = 0;
@@ -424,9 +531,184 @@ describe('S2 fleet nudge actuator', () => {
     });
   });
 
-  it('prunes at 128 completed ticks, drops old generations, and caps active-generation terminals at 1024', async () => {
+  it('binds deterministic tombstones and fails closed on malformed or ambiguous matches', async () => {
+    const namespace = root('opk-s2-corrupt-');
+    const base = {
+      projectId: 'orchestrator-pack',
+      issueNumber: 1259,
+      schedulerGeneration: 'sg-corrupt',
+      tickSequence: 11,
+      transitionIdentity: 'class-changed:11:u-000001:busy:idle:positive-idle',
+      unitRef: 'u-000001',
+      eligibleClass: 'idle' as const,
+      namespace,
+      deadlineMs: Date.now() + 2_000,
+    };
+    const acquired = await acquireS2OneShotWorkerNudgeClaim(base);
+    if (!acquired.acquired) throw new Error(acquired.reason);
+    const deadlineMs = Date.now() + 2_000;
+    await persistWorkerNudgeMessageHash(acquired, IDLE_NUDGE_MESSAGE, { deadlineMs });
+    await markWorkerNudgeSendAttempted(acquired, { deadlineMs });
+    const finalized = await finalizeS2OneShotWorkerNudgeClaim(
+      acquired,
+      'SENT',
+      {},
+      { deadlineMs },
+    );
+    expect(finalized.ok).toBe(true);
+    const terminalPath = finalized.terminalPath!;
+    expect(path.basename(terminalPath)).toBe(`${buildS2EpisodeKey(base)}.json`);
+    const validBytes = readFileSync(terminalPath, 'utf8');
+
+    writeFileSync(terminalPath, '{not-json', 'utf8');
+    expect(await acquireS2OneShotWorkerNudgeClaim({
+      ...base,
+      deadlineMs: Date.now() + 2_000,
+    })).toMatchObject({ acquired: false, reason: 'claim_untrusted' });
+
+    writeFileSync(terminalPath, validBytes, 'utf8');
+    copyFileSync(terminalPath, path.join(path.dirname(terminalPath), `${acquired.key}-duplicate.json`));
+    expect(await acquireS2OneShotWorkerNudgeClaim({
+      ...base,
+      deadlineMs: Date.now() + 2_000,
+    })).toMatchObject({ acquired: false, reason: 'claim_untrusted' });
+  });
+
+  it('bounds a contended release by its absolute deadline without a late unlink', async () => {
+    const namespace = root('opk-s2-release-contention-');
+    const acquired = await acquireS2OneShotWorkerNudgeClaim({
+      projectId: 'orchestrator-pack',
+      issueNumber: 1259,
+      schedulerGeneration: 'sg-release',
+      tickSequence: 12,
+      transitionIdentity: 'class-changed:12:u-000001:busy:idle:positive-idle',
+      unitRef: 'u-000001',
+      eligibleClass: 'idle',
+      namespace,
+      deadlineMs: Date.now() + 2_000,
+    });
+    if (!acquired.acquired) throw new Error(acquired.reason);
+    const lock = path.join(namespace, `.lock-${acquired.key}`);
+    mkdirSync(lock);
+    writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid }));
+    const startedAt = Date.now();
+    const released = await releaseS2OneShotWorkerNudgeClaim(acquired, {
+      deadlineMs: startedAt + 120,
+    });
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(released).toMatchObject({ ok: false, reason: 'claim_deadline_expired' });
+    expect(existsSync(acquired.path)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(existsSync(acquired.path)).toBe(true);
+  });
+
+  it('returns within the full 2s phase budget when a mutation never resolves', async () => {
+    const namespace = root('opk-s2-never-resolve-');
+    const { effects } = realEffects({ namespace, mutate: {
+      persistMessageHash: async () => new Promise<{ ok: boolean }>(() => {}),
+    } });
+    const startedAt = Date.now();
+    const result = await runFleetNudgeActuator({
+      observer: oneIdleObserver(),
+      schedulerIntervalMs: 16_000,
+      tickSequence: 2,
+      phaseStartMs: startedAt,
+    }, effects);
+    const elapsed = Date.now() - startedAt;
+    expect(elapsed).toBeGreaterThanOrEqual(1_700);
+    expect(elapsed).toBeLessThan(2_250);
+    expect(result.outcomes[0]?.outcome).toBe('budget_exhausted');
+    expect(result.returnedWithinBudget).toBe(true);
+  }, 5_000);
+
+  it('requires exact binding, revalidation, and both epoch assertions before claim', async () => {
+    const scenarios: Array<{
+      name: string;
+      mutate: (effects: FleetNudgeEffects) => FleetNudgeEffects;
+      outcome: FleetNudgeUnitOutcome;
+    }> = [
+      {
+        name: 'target unresolved',
+        mutate: (effects) => ({ ...effects, resolveTarget: async () => ({ status: 'target_unresolved' }) }),
+        outcome: 'target_unresolved',
+      },
+      {
+        name: 'stale binding',
+        mutate: (effects) => ({
+          ...effects,
+          resolveTarget: async (episode) => ({
+            status: 'resolved',
+            binding: { ...bindingFor(episode), unitRef: 'u-999999' },
+          }),
+        }),
+        outcome: 'target_stale',
+      },
+      {
+        name: 'first epoch lost',
+        mutate: (effects) => ({ ...effects, assertEpoch: () => { throw new Error('lost'); } }),
+        outcome: 'epoch_lost',
+      },
+      {
+        name: 'revalidation failed',
+        mutate: (effects) => ({ ...effects, revalidate: async () => ({ status: 'revalidation_failed' }) }),
+        outcome: 'revalidation_failed',
+      },
+      {
+        name: 'revalidation epoch lost',
+        mutate: (effects) => ({ ...effects, revalidate: async () => ({ status: 'epoch_lost' }) }),
+        outcome: 'epoch_lost',
+      },
+      {
+        name: 'second epoch lost',
+        mutate: (effects) => {
+          let assertions = 0;
+          return {
+            ...effects,
+            assertEpoch: () => {
+              assertions += 1;
+              if (assertions === 2) throw new Error('lost');
+            },
+          };
+        },
+        outcome: 'epoch_lost',
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const namespace = root(`opk-s2-revalidate-${scenario.name.replaceAll(' ', '-')}-`);
+      const real = realEffects({ namespace });
+      let claims = 0;
+      const effects = scenario.mutate({
+        ...real.effects,
+        acquireClaim: async (...args) => {
+          claims += 1;
+          return real.effects.acquireClaim(...args);
+        },
+      });
+      const result = await runFleetNudgeActuator({
+        observer: oneIdleObserver(),
+        schedulerIntervalMs: 16_000,
+        tickSequence: 2,
+      }, effects);
+      expect(result.outcomes[0]?.outcome, scenario.name).toBe(scenario.outcome);
+      expect(claims, scenario.name).toBe(0);
+    }
+
+    const namespace = root('opk-s2-missing-epoch-');
+    const missing = realEffects({ namespace }).effects as FleetNudgeEffects & { assertEpoch?: () => void };
+    delete missing.assertEpoch;
+    const result = await runFleetNudgeActuator({
+      observer: oneIdleObserver(),
+      schedulerIntervalMs: 16_000,
+      tickSequence: 2,
+    }, missing as FleetNudgeEffects);
+    expect(result.outcomes[0]?.outcome).toBe('epoch_lost');
+  });
+
+  it('prunes after 128 ticks or restart and caps trusted terminals at 1024', () => {
     const namespace = root('opk-s2-retention-');
     const terminalDirectory = path.join(namespace, 'terminal', S2_ONE_SHOT_POLICY);
+    mkdirSync(terminalDirectory, { recursive: true });
     const template = {
       schemaVersion: 1,
       key: 'key',
@@ -448,26 +730,11 @@ describe('S2 fleet nudge actuator', () => {
       tokenNonce: 'nonce',
       policyTag: S2_ONE_SHOT_POLICY,
       schedulerGeneration: 'sg-retain',
-      tickSequence: 1,
-      transitionIdentity: 'class-changed:1:u-000001:busy:idle:positive-idle',
+      tickSequence: 200,
+      transitionIdentity: 'class-changed:200:u-000001:busy:idle:positive-idle',
       unitRef: 'u-000001',
       eligibleClass: 'idle',
     };
-    await acquireS2OneShotWorkerNudgeClaim({
-      projectId: 'orchestrator-pack',
-      issueNumber: 1259,
-      schedulerGeneration: 'sg-retain',
-      tickSequence: 1,
-      transitionIdentity: 'class-changed:1:u-000001:busy:idle:positive-idle',
-      unitRef: 'u-000001',
-      eligibleClass: 'idle',
-      namespace,
-      deadlineMs: Date.now() + 1_000,
-    });
-    rmSync(namespace, { recursive: true, force: true });
-    // Recreate only terminal fixtures; acquisition above proves the live schema constructor.
-    const { mkdirSync } = await import('node:fs');
-    mkdirSync(terminalDirectory, { recursive: true });
     for (let index = 0; index < S2_MAX_TERMINALS_PER_GENERATION + 2; index += 1) {
       writeFileSync(path.join(terminalDirectory, `${index}.json`), `${JSON.stringify({
         ...template,
@@ -480,34 +747,38 @@ describe('S2 fleet nudge actuator', () => {
       ...template,
       key: 'expired',
       tupleKey: 'expired',
-      tickSequence: 1,
+      tickSequence: 72,
     })}\n`, 'utf8');
     writeFileSync(path.join(terminalDirectory, 'old-generation.json'), `${JSON.stringify({
       ...template,
       key: 'old-generation',
       tupleKey: 'old-generation',
       schedulerGeneration: 'sg-old',
-      tickSequence: 200,
     })}\n`, 'utf8');
 
     const pruned = pruneS2OneShotWorkerNudgeClaims({
       namespace,
       schedulerGeneration: 'sg-retain',
       tickSequence: 200,
+      deadlineMs: Date.now() + 2_000,
     });
-    expect(pruned.retained).toBe(S2_MAX_TERMINALS_PER_GENERATION);
+    expect(pruned).toMatchObject({
+      retained: S2_MAX_TERMINALS_PER_GENERATION,
+      untrusted: 0,
+    });
     expect(pruned.removed).toBeGreaterThanOrEqual(4);
     expect(readdirSync(terminalDirectory)).toHaveLength(S2_MAX_TERMINALS_PER_GENERATION);
     expect(S2_RETENTION_TICKS).toBe(128);
   });
 
-  it('orders deterministically, processes serially, and starts no more than eight candidates', async () => {
+  it('orders serially and starts no more than eight candidates', async () => {
     const rows = Array.from({ length: 12 }, (_, index) => row(`u-${String(index + 1).padStart(6, '0')}`, 'idle'));
     const transitions = [...rows].reverse().map((entry) => changed(entry.unitRef, 'idle'));
     const started: string[] = [];
     let active = 0;
     let peak = 0;
     const effects: FleetNudgeEffects = {
+      assertEpoch: () => {},
       resolveTarget: async (episode) => {
         active += 1;
         peak = Math.max(peak, active);
@@ -531,133 +802,109 @@ describe('S2 fleet nudge actuator', () => {
       schedulerIntervalMs: 16_000,
       tickSequence: 2,
     }, effects);
-
     expect(peak).toBe(1);
     expect(started).toHaveLength(S2_MAX_STARTS_PER_TICK);
     expect(started).toEqual([...result.candidateOrder].slice(0, S2_MAX_STARTS_PER_TICK));
     expect(result.outcomes.filter((entry) => entry.outcome === 'budget_exhausted')).toHaveLength(4);
-    expect(result.sendAttempts).toBe(S2_MAX_STARTS_PER_TICK);
   });
 
-  it('settles pre-attempt expiry as budget_exhausted and post-attempt expiry as dispatch_unknown', async () => {
-    let now = 0;
-    let releases = 0;
-    const pureEffects = (mutate: Partial<FleetNudgeEffects> = {}): FleetNudgeEffects => ({
-      resolveTarget: async (episode) => ({ status: 'resolved', binding: bindingFor(episode) }),
-      revalidate: async () => ({ status: 'valid' }),
-      acquireClaim: async () => ({ status: 'acquired', handle: { opaque: {} } }),
-      persistMessageHash: async () => ({ ok: true }),
-      admitJournal: async () => ({ status: 'admitted', handle: { opaque: {} } }),
-      markSendAttempted: async () => ({ ok: true }),
-      releaseClaim: async () => { releases += 1; return { ok: true }; },
-      dispatch: async () => ({ status: 'dispatched' }),
-      finalizeClaim: async () => ({ ok: true }),
-      finalizeJournal: async () => ({ ok: true }),
-      now: () => now,
-      ...mutate,
-    });
-
-    const beforeAttempt = await runFleetNudgeActuator({
-      observer: oneIdleObserver(),
-      schedulerIntervalMs: 800,
-      tickSequence: 2,
-      phaseStartMs: 0,
-    }, pureEffects({
-      persistMessageHash: async () => { now = 80; return { ok: true }; },
-    }));
-    expect(beforeAttempt.outcomes[0]?.outcome).toBe('budget_exhausted');
-    expect(beforeAttempt.sendAttempts).toBe(0);
-    expect(releases).toBe(1);
-
-    now = 0;
-    const afterAttempt = await runFleetNudgeActuator({
-      observer: oneIdleObserver(),
-      schedulerIntervalMs: 800,
-      tickSequence: 2,
-      phaseStartMs: 0,
-    }, pureEffects({
-      dispatch: async () => { now = 101; return { status: 'dispatched' }; },
-    }));
-    expect(afterAttempt.outcomes[0]?.outcome).toBe('dispatch_unknown');
-    expect(afterAttempt.sendAttempts).toBe(1);
-  });
-
-  it('keeps scheduler review-start accounting and call sets identical across S2 outcomes and failure', async () => {
-    const authorityRoot = root('opk-s2-epoch-');
-    const authorityPath = path.join(authorityRoot, 'epoch.json');
-    const epochId = 'epoch-1259';
-    const nonce = 'nonce-1259';
-    writeFileSync(authorityPath, JSON.stringify({
-      schemaVersion: 1,
-      currentEpochId: epochId,
-      records: [{
-        epochId,
-        nonce,
-        hostId: 'host-1259',
-        repoRoot: process.cwd(),
-        installedCommitSha: 'a'.repeat(40),
-        snapshotDigests: { reconcile: 'a', reevaluation: 'b', reportStateSeed: 'c' },
-        importDigests: { reconcile: 'd', reevaluation: 'e', reportStateSeed: 'f' },
-        registryHash: 'g',
-        preCommitLogDigest: 'h',
-        commitAt: '2026-08-06T00:00:00.000Z',
-      }],
-    }));
-    const env = {
-      ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
-      ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
-      ORCHESTRATOR_CUTOVER_NONCE: nonce,
-    };
-    const head = 'b'.repeat(40);
-    const checks = [
-      'verify orchestrator-pack structure',
-      'pr scope guard',
-      'run pack contract tests',
-      'self-architect lint',
-    ].map((name) => ({ name, state: 'SUCCESS' }));
-
-    const run = async (actuator: { tick: () => Promise<FleetNudgeResult> }): Promise<{
-      result: Awaited<ReturnType<typeof runSchedulerTick>>;
-      starts: number;
-      reads: number;
-    }> => {
-      let starts = 0;
-      let reads = 0;
-      const result = await runSchedulerTick({
-        listCandidates: () => [{
-          sessionId: 'worker-1259',
-          repoSlug: 'chetwerikoff/orchestrator-pack',
-          prNumber: 1259,
-          boundHeadSha: head,
-        }],
-        readCurrentPr: async () => {
-          reads += 1;
-          return { number: 1259, headRefOid: head, state: 'OPEN', isDraft: false };
-        },
-        readChecks: async () => checks,
-        listReviewRuns: () => [],
-        start: async () => {
-          starts += 1;
-          return { ok: true };
-        },
-        schedulerIntervalMs: 1_000,
-        fleetObserver: { tick: async () => oneIdleObserver() },
-        fleetNudgeActuator: actuator,
-      }, env);
-      return { result, starts, reads };
-    };
-
-    const baseline = await run({ tick: async () => runFleetNudgeActuator({
-      observer: oneIdleObserver(),
+  it('uses restored observer tickSequence after scheduler restart and on the next tick', async () => {
+    const directory = root('opk-s2-restart-');
+    const env = authorityEnv(directory);
+    const requested: number[] = [];
+    const actuated: number[] = [];
+    let invocation = 0;
+    const boundary: SchedulerBoundary = {
+      listCandidates: () => [],
+      readCurrentPr: async () => { throw new Error('not called'); },
+      readChecks: async () => [],
+      listReviewRuns: () => [],
+      start: async () => ({ ok: true }),
       schedulerIntervalMs: 1_000,
-      tickSequence: 1,
-    }) });
-    const failure = await run({ tick: async () => { throw new Error('global S2 failure'); } });
-    expect(baseline.result).toMatchObject({ attempted: 1, started: 1, skipped: 0 });
-    expect(failure.result).toMatchObject({ attempted: 1, started: 1, skipped: 0 });
-    expect({ starts: failure.starts, reads: failure.reads }).toEqual({
-      starts: baseline.starts,
-      reads: baseline.reads,
+      fleetObserver: {
+        tick: async (input) => {
+          requested.push(input.tickSequence ?? 0);
+          invocation += 1;
+          return invocation === 1
+            ? observerResult({
+              rows: [row('u-000001', 'idle')],
+              transitions: [appeared('u-000001', 41)],
+              tickSequence: 41,
+              schedulerGeneration: 'sg-restored',
+            })
+            : oneIdleObserver('u-000001', 42, 'sg-restored');
+        },
+      },
+      fleetNudgeActuator: {
+        tick: async (input) => {
+          actuated.push(input.tickSequence);
+          return runFleetNudgeActuator(input);
+        },
+      },
+    };
+
+    const first = await runSchedulerTick(boundary, env);
+    const second = await runSchedulerTick(boundary, env);
+    expect(requested).toEqual([1, 42]);
+    expect(actuated).toEqual([41, 42]);
+    expect(first.fleetNudge?.outcomes[0]?.outcome).toBe('fresh_baseline_ineligible');
+    expect(second.fleetNudge).toMatchObject({
+      result: 'target-binding-unresolved-fail-closed',
+      status: 'complete',
     });
+    expect(second.fleetNudge?.outcomes[0]?.outcome).toBe('target_unresolved');
+  });
+
+  it.each([
+    'target_unresolved',
+    'claim_terminal',
+    'budget_exhausted',
+    'dispatch_unknown',
+    'dispatched',
+    'throw',
+  ] as const)('keeps review-start accounting identical for S2 outcome %s', async (outcome) => {
+    const directory = root(`opk-s2-differential-${outcome}-`);
+    const env = authorityEnv(directory);
+    const head = 'b'.repeat(40);
+    let starts = 0;
+    let prReads = 0;
+    let checkReads = 0;
+    const boundary: SchedulerBoundary = {
+      listCandidates: () => [{
+        sessionId: 'worker-1259',
+        repoSlug: 'chetwerikoff/orchestrator-pack',
+        prNumber: 1259,
+        boundHeadSha: head,
+      }],
+      readCurrentPr: async () => {
+        prReads += 1;
+        return { number: 1259, headRefOid: head, state: 'OPEN', isDraft: false };
+      },
+      readChecks: async () => {
+        checkReads += 1;
+        return [
+          'verify orchestrator-pack structure',
+          'pr scope guard',
+          'run pack contract tests',
+          'self-architect lint',
+        ].map((name) => ({ name, state: 'SUCCESS' }));
+      },
+      listReviewRuns: () => [],
+      start: async () => {
+        starts += 1;
+        return { ok: true };
+      },
+      schedulerIntervalMs: 1_000,
+      fleetObserver: { tick: async () => oneIdleObserver('u-000001', 1, 'sg-scheduler') },
+      fleetNudgeActuator: {
+        tick: async () => {
+          if (outcome === 'throw') throw new Error('injected');
+          return resultFor(outcome);
+        },
+      },
+    };
+    const result = await runSchedulerTick(boundary, env);
+    expect(result).toMatchObject({ attempted: 1, started: 1, skipped: 0 });
+    expect({ starts, prReads, checkReads }).toEqual({ starts: 1, prReads: 1, checkReads: 1 });
   });
 });
