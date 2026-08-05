@@ -11,6 +11,8 @@ import {
   SMOOTHING_RULE,
   MEASURED_SOURCE,
   SEEDED_SOURCE,
+  SUPPLEMENTAL_META_SCHEMA,
+  SUPPLEMENTAL_TARGET,
   buildSyntheticVitestReport,
   historyBytes,
   medianMs,
@@ -104,7 +106,7 @@ function runMeasuredRefreshFixture() {
   const dir = join(tmpdir(), `vhr-fixture-${Date.now()}-measured`);
   mkdirSync(dir, { recursive: true });
   const commitSha = 'deadbeef';
-  const targetFile = 'scripts/check-ci-pipeline-split.test.ts';
+  const targetFile = classifyHeavyFiles(defaultRepoRoot).heavy[0];
   const shardReports = buildLanePlanShardReports(
     dir,
     commitSha,
@@ -258,13 +260,14 @@ function runCorruptInputFixtures() {
   const commitSha = 'deadbeef';
   const dir = join(tmpdir(), `vhr-fixture-${Date.now()}-corrupt`);
   mkdirSync(dir, { recursive: true });
+  const { heavyShardCount } = classifyHeavyFiles(defaultRepoRoot);
 
   const cases = [
     {
       name: 'missing report',
       build() {
         const shardReports = new Map();
-        for (let shard = 1; shard <= 7; shard += 1) {
+        for (let shard = 1; shard <= heavyShardCount; shard += 1) {
           if (shard === 3) {
             shardReports.set(shard, { reportPath: join(dir, 'missing.json') });
             continue;
@@ -282,7 +285,7 @@ function runCorruptInputFixtures() {
       name: 'truncated json',
       build() {
         const shardReports = buildLanePlanShardReports(dir, commitSha, defaultRepoRoot);
-        writeFileSync(join(dir, 'shard-2.json'), '{not-json', 'utf8');
+        writeFileSync(join(dir, 'shard-1.json'), '{not-json', 'utf8');
         return shardReports;
       },
     },
@@ -290,7 +293,7 @@ function runCorruptInputFixtures() {
       name: 'zero-file report',
       build() {
         const shardReports = buildLanePlanShardReports(dir, commitSha, defaultRepoRoot);
-        writeFileSync(join(dir, 'shard-4.json'), stableStringify({ testResults: [] }), 'utf8');
+        writeFileSync(join(dir, 'shard-1.json'), stableStringify({ testResults: [] }), 'utf8');
         return shardReports;
       },
     },
@@ -384,7 +387,8 @@ function runProvenanceGateFixtures() {
   assert(historyBytes(partial.history) === baseBytes, 'partial shard set must not mutate history');
 
   const mismatchReports = buildLanePlanShardReports(dir, commitSha, defaultRepoRoot);
-  mismatchReports.get(2).meta = { commitSha: 'badsha', shard: 2, success: true };
+  const mismatchShard = [...mismatchReports.keys()][0];
+  mismatchReports.get(mismatchShard).meta = { commitSha: 'badsha', shard: mismatchShard, success: true };
   const mismatch = refreshRuntimeHistory({
     baseHistory: base,
     shardReports: mismatchReports,
@@ -443,6 +447,157 @@ function runProvenanceGateFixtures() {
   rmSync(dir, { recursive: true, force: true });
 }
 
+function writeSupplementalReport(dir, sourceSha, durationMs, overrides = {}) {
+  const reportPath = join(dir, 'supplemental.json');
+  const metaPath = join(dir, 'supplemental.meta.json');
+  const target = overrides.target ?? SUPPLEMENTAL_TARGET;
+  const report = {
+    success: true,
+    numFailedTests: 0,
+    ...buildSyntheticVitestReport([{ file: target, durationMs }], join(defaultRepoRoot, 'supplemental-source')),
+  };
+  writeFileSync(reportPath, stableStringify(report), 'utf8');
+  writeFileSync(
+    metaPath,
+    stableStringify({
+      schema: SUPPLEMENTAL_META_SCHEMA,
+      repository: 'chetwerikoff/orchestrator-pack',
+      target,
+      commitSha: sourceSha,
+      success: true,
+      conclusion: 'success',
+      lane: 'light',
+      discovery: {
+        source: 'scripts/vitest-ci-lanes.config.json',
+        target,
+        lane: 'light',
+      },
+      runId: '9001',
+      runAttempt: '1',
+      ...overrides,
+    }),
+    'utf8',
+  );
+  return new Map([[SUPPLEMENTAL_TARGET, { reportPath, metaPath, meta: JSON.parse(readFileSync(metaPath, 'utf8')) }]]);
+}
+
+function runSupplementalTargetFixtures() {
+  const base = seededHistory();
+  const baseBytes = historyBytes(base);
+  const heavyCommit = 'deadbeef';
+  const sourceSha = 'aede47815ccadb54ac0ce405e8e359a343d196fe';
+  const dir = join(tmpdir(), `vhr-fixture-${Date.now()}-supplemental`);
+  mkdirSync(dir, { recursive: true });
+  const shardReports = buildLanePlanShardReports(dir, heavyCommit, defaultRepoRoot);
+  const supplementalReports = writeSupplementalReport(dir, sourceSha, 321);
+  const accepted = refreshRuntimeHistory({
+    baseHistory: base,
+    shardReports,
+    supplementalReports,
+    expectedCommitSha: heavyCommit,
+    expectedSupplementalSourceSha: sourceSha,
+    expectedSupplementalRunId: '9001',
+    expectedSupplementalRunAttempt: '1',
+    repoRoot: defaultRepoRoot,
+  });
+  assert(accepted.ok, 'valid fixed supplemental report must be accepted');
+  assert(accepted.history.files[SUPPLEMENTAL_TARGET] === 321, 'supplemental weight must be measured');
+  assert(accepted.history.provenance[SUPPLEMENTAL_TARGET] === 'measured', 'supplemental provenance must be measured');
+  assert(
+    JSON.stringify(accepted.history.recentSamples[SUPPLEMENTAL_TARGET]) === JSON.stringify([321]),
+    'supplemental recent sample must be recorded',
+  );
+  assert(!accepted.coverage.message.includes(SUPPLEMENTAL_TARGET), 'supplemental target must not alter heavy coverage');
+
+  const cases = [
+    {
+      name: 'wrong source',
+      sourceSha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      expectedSha: sourceSha,
+    },
+    {
+      name: 'failed metadata',
+      sourceSha,
+      overrides: { success: false },
+    },
+    {
+      name: 'wrong lane',
+      sourceSha,
+      overrides: { lane: 'heavy' },
+    },
+    {
+      name: 'duplicate rows',
+      sourceSha,
+      durationMs: [100, 200],
+    },
+    {
+      name: 'non-positive duration',
+      sourceSha,
+      durationMs: 0,
+    },
+    {
+      name: 'wrong target',
+      sourceSha,
+      overrides: { target: 'scripts/other.test.ts' },
+    },
+    {
+      name: 'wrong workflow run',
+      sourceSha,
+      overrides: { runId: '9002' },
+    },
+    {
+      name: 'oversized report',
+      sourceSha,
+      oversized: true,
+    },
+  ];
+  for (const testCase of cases) {
+    const caseDir = join(dir, testCase.name.replaceAll(' ', '-'));
+    mkdirSync(caseDir, { recursive: true });
+    const duration = Array.isArray(testCase.durationMs)
+      ? testCase.durationMs
+      : (testCase.durationMs ?? 321);
+    const reportPath = join(caseDir, 'supplemental.json');
+    const metaPath = join(caseDir, 'supplemental.meta.json');
+    const target = testCase.overrides?.target ?? SUPPLEMENTAL_TARGET;
+    const files = Array.isArray(duration)
+      ? duration.map((value) => ({ file: target, durationMs: value }))
+      : [{ file: target, durationMs: duration }];
+    writeFileSync(
+      reportPath,
+      testCase.oversized
+        ? `{"oversized":"${'x'.repeat(1024 * 1024)}"}`
+        : stableStringify({ success: true, numFailedTests: 0, ...buildSyntheticVitestReport(files, join(defaultRepoRoot, 'supplemental-source')) }),
+      'utf8',
+    );
+    writeFileSync(metaPath, stableStringify({
+      schema: SUPPLEMENTAL_META_SCHEMA,
+      repository: 'chetwerikoff/orchestrator-pack',
+      target,
+      commitSha: testCase.sourceSha,
+      success: true,
+      conclusion: 'success',
+      lane: 'light',
+      discovery: { source: 'scripts/vitest-ci-lanes.config.json', target, lane: 'light' },
+      runId: '9001',
+      runAttempt: '1',
+      ...testCase.overrides,
+    }), 'utf8');
+    const result = refreshRuntimeHistory({
+      baseHistory: base,
+      shardReports: buildLanePlanShardReports(caseDir, heavyCommit, defaultRepoRoot),
+      supplementalReports: new Map([[SUPPLEMENTAL_TARGET, { reportPath, metaPath, meta: JSON.parse(readFileSync(metaPath, 'utf8')) }]]),
+      expectedCommitSha: heavyCommit,
+      expectedSupplementalSourceSha: testCase.expectedSha ?? sourceSha,
+      expectedSupplementalRunId: '9001',
+      expectedSupplementalRunAttempt: '1',
+      repoRoot: defaultRepoRoot,
+    });
+    assert(result.rejected, `${testCase.name} supplemental evidence must be rejected`);
+    assert(result.outputBytes === baseBytes, `${testCase.name} rejection must preserve output bytes`);
+  }
+}
+
 function runCoverageAndDurableProvenanceFixture() {
   const base = seededHistory();
   const measuredFile = 'scripts/check-ci-pipeline-split.test.ts';
@@ -490,6 +645,7 @@ export function runRuntimeHistoryRefreshFixtures() {
   runCorruptInputFixtures();
   runRaceSafeFixture();
   runProvenanceGateFixtures();
+  runSupplementalTargetFixtures();
   runCoverageAndDurableProvenanceFixture();
   runCommitBackNoOpOrderingFixture();
   return failures;

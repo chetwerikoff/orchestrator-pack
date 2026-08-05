@@ -21,6 +21,49 @@ New action-producing tasks must declare a plan during authoring:
 node scripts/draft-discipline.mjs smoke-test-plan --draft path/to/issue-body.md
 ```
 
+## Pre-smoke prerequisite preparation (parent worker)
+
+Before invoking `worker-smoke-run run`, the parent worker MUST make the environment capable of
+executing the real Issue-declared scenarios. The smoke child is not responsible for discovering or
+creating missing external prerequisites after launch.
+
+The parent worker must:
+
+1. inspect the current Issue `smoke-test-plan`, every declared scenario, and any named
+   skill/runbook/tool contract;
+2. derive a concrete prerequisite inventory, including external services, fixtures, credentials or
+   account state, listeners, browser conversations, and other long-lived resources required by the
+   scenarios;
+3. provision each required prerequisite through the repository-approved skill or tool and retain
+   its ownership identity or handle so only that resource can be maintained and later cleaned;
+4. verify an observable readiness condition for every prerequisite before smoke admission;
+5. keep every prerequisite available from before the smoke command is invoked until that command
+   terminalizes and ownership-scoped smoke cleanup completes; and
+6. refuse to launch smoke and report the concrete blocker when any prerequisite is absent,
+   ambiguous, unhealthy, or expected to expire before the lifecycle can finish.
+
+For resources with a TTL, select a lifetime that covers at least the four-hour absolute lifecycle
+ceiling plus the two-minute cooperative shutdown bound and a practical setup/teardown margin. An
+approved non-disruptive retention mechanism may be used instead, but it must not execute a smoke
+scenario, change the behavior under test, or write child-owned progress/completion evidence.
+
+Example: when a scenario requires a separate active browser conversation, use the approved browser
+skill or tool before smoke launch, create or select a dedicated owned chat, verify that it is usable,
+and keep that chat active for the full prerequisite lifetime. Do not reuse the smoke child’s owned
+tab or an unrelated user chat. Clean only the dedicated prerequisite resource after the smoke
+command and owned lifecycle cleanup have finished.
+
+Preparation supplies capability, not the expected result: it must not perform the declared scenario,
+pre-satisfy the assertion being tested, fabricate smoke evidence, or mutate child-owned
+`progress.ndjson`, completion bodies, or seals.
+
+Responsibility remains split as follows:
+
+- the parent worker provisions, verifies, retains, and later releases external prerequisites;
+- `worker-smoke-run` owns child creation, prompt delivery, observation, lifecycle state, report
+  publication, cancellation, and owned-terminal cleanup; and
+- the smoke child executes the declared scenarios and produces progress/completion evidence.
+
 ## Supported worker path
 
 ```bash

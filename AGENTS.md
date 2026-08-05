@@ -16,8 +16,12 @@ Do not patch or vendor-modify `ComposioHQ/agent-orchestrator` core packages. All
 behavior lives in the allowed surfaces below; treat any `vendor/` checkout as read-only reference.
 
 **Allowed:** `plugins/**`, `prompts/**`, `scripts/**`, `tests/external-output-references/**`,
-`docs/**`, `.claude/skills/**`, `.cursor/skills/**`, `.cursor/rules/**` (always-applied Cursor
-project rules; thin pointers only), `CLAUDE.md`, `AGENTS.md`, `README.md`,
+`docs/**`, `.claude/skills/**`, `.cursor/skills/**`, `.cursor/rules/**` (see
+[carrier](.cursor/rules/flow-manager-browser-turn-monitoring.mdc) and
+[runbook](docs/browser-gpt-turn-runbook.md); the named carrier is the only
+non-thin rule; all other `.cursor/rules/**` remain thin pointers; keep the
+carrier/runbook maintenance matrices synchronized),
+`CLAUDE.md`, `AGENTS.md`, `README.md`,
 `.github/workflows/**`, config examples such as `agent-orchestrator.yaml.example`, and reusable
 root-level tooling config (`.gitignore`, `.gitattributes`).
 
@@ -104,7 +108,7 @@ excepted reasoning step, route the read through `coworker ask` on **Claude and C
 (mandatory). On **Cursor**, advisory corpus is **SHOULD**, not MUST — see carve-outs below.
 
 **Bounded fallback** only when `coworker` is missing/unavailable/rate-limited or corpus cannot
-be made fence-clean. Cost/size is **not** a fallback once a trigger fires. **Wait for exit, not patience** — coworker answers typically take 1–2 minutes; await process exit before judging the call, and on harnesses whose shell tool returns before the child finishes (e.g. Codex background exec) keep polling the same session until it exits rather than interrupting after tens of seconds. **"Unavailable" requires observed evidence**: a failed `command -v coworker` probe, or the coworker process itself exiting non-zero/erroring — the agent's own waiting patience running out is not unavailability and does not justify the fallback. Stderr `WARNING (override)` lines about the allowed-file list are advisories, not failures; the answer still lands on stdout once the process finishes.
+be made fence-clean. Cost/size is not a fallback once a trigger fires. Wait for exit, not patience: coworker answers take 1–2 minutes; await process exit. If shell returns early (e.g. Codex background exec), poll the same session until exit; do not interrupt after tens of seconds. “Unavailable” requires observed evidence: failed `command -v coworker` or coworker nonzero/error; patience timeout is not unavailability. Stderr `WARNING (override)` lines are advisory; the stdout answer still lands once the process finishes.
 
 Ask triggers (delegable out-of-index corpus):
 

@@ -1,0 +1,46 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1307,
+  "declared_paths": [
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-review-delivery.cases.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".claude/",
+    ".cursor/",
+    ".github/",
+    "credentials/",
+    "docs/",
+    "package-lock.json",
+    "package.json",
+    "packages/core/",
+    "plugins/",
+    "prompts/",
+    "scripts/lib/github-review-reconciliation.ts",
+    "scripts/lib/resolve-pack-reviewer.ts",
+    "scripts/lib/review-start-claim-store.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/pack-review-carryover.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-review-delivery.cases.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "ed7b4b6a2f54fa4afcec69f410364530c81c7298"
+}

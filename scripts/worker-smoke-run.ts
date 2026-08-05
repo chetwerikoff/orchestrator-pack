@@ -277,7 +277,21 @@ function finalizeSmokeReportMachineCause(report: SmokeReport): SmokeReport {
   return report;
 }
 
-function buildSmokeRunResult(
+export function projectSmokeOnlyDenial(source: unknown): Record<string, unknown> {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
+  const value = source as Record<string, unknown>;
+  return value.allowed === false
+    && value.blockingScope === 'worker_smoke_only'
+    && value.workerMayContinue === true
+    ? {
+      allowed: false,
+      blockingScope: 'worker_smoke_only',
+      workerMayContinue: true,
+    }
+    : {};
+}
+
+export function buildSmokeRunResult(
   report: SmokeReport,
   published: boolean,
   extra: Record<string, unknown> = {},
@@ -288,6 +302,7 @@ function buildSmokeRunResult(
     report,
     published,
     ...extra,
+    ...projectSmokeOnlyDenial(extra.lifecycle),
     ...(report.nonPassCause ? { nonPassCause: report.nonPassCause } : {}),
     ...(report.controlPlaneDiagnostic
       ? { controlPlaneDiagnostic: report.controlPlaneDiagnostic }
@@ -295,14 +310,24 @@ function buildSmokeRunResult(
   };
 }
 
-function closeOwnedSmokeTerminal(handle: string, cwd: string): {
+export function closeOwnedSmokeTerminal(
+  handle: string,
+  cwd: string,
+  closeTerminal: typeof closeOrcaTerminal = closeOrcaTerminal,
+): {
   terminalCleanup: string;
   diagnostic?: SmokeControlPlaneDiagnostic;
 } {
-  const closeResult = closeOrcaTerminal(handle, {
+  let closeResult = closeTerminal(handle, {
     cwd,
     timeoutMs: SMOKE_ORCA_OPERATION_TIMEOUT_MS,
   });
+  if (!closeResult.ok && closeResult.error?.code === 'runtime_error') {
+    closeResult = closeTerminal(handle, {
+      cwd,
+      timeoutMs: SMOKE_ORCA_OPERATION_TIMEOUT_MS,
+    });
+  }
   if (closeResult.ok) {
     return { terminalCleanup: 'closed_owned_handle' };
   }
@@ -954,6 +979,7 @@ function runGateCheck(options: CliOptions): number {
     const result = {
       ok: false,
       allowed: false,
+      ...projectSmokeOnlyDenial(lifecycle),
       reason: `smoke_lifecycle_unclean:${lifecycle.reasons[0]}`,
       smokeRequired: true,
       lifecycle,

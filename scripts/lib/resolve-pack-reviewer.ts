@@ -1,16 +1,28 @@
-import { runProcessSync } from '../kernel/subprocess.ts';
+import {
+  PACK_REVIEWER_VALUES,
+  getPackReviewerPreferencePath,
+  readPackReviewerPreference,
+  type PackReviewerPreferenceRead,
+  type PackReviewerPreferenceValue,
+} from './pack-reviewer-preference.ts';
 
 export const PACK_REVIEWER_ENV = 'PACK_REVIEWER';
 export const PACK_REVIEW_BOUND_REVIEWER_ENV = 'PACK_REVIEW_BOUND_REVIEWER';
 
-export const PACK_REVIEWER_VALUES = ['codex', 'claude', 'gpt'] as const;
-export type PackReviewer = (typeof PACK_REVIEWER_VALUES)[number];
+export { PACK_REVIEWER_VALUES };
+export type PackReviewer = PackReviewerPreferenceValue;
 
 export const PACK_REVIEWER_WRAPPER_BY_ID: Readonly<Record<PackReviewer, string>> = {
   codex: 'run-pack-review.ps1',
   claude: 'run-pack-review-claude.ps1',
   gpt: 'run-pack-review-gpt.ts',
 };
+
+export type PackReviewerResolutionSource =
+  | 'invocation-bound'
+  | 'persistent-preference'
+  | 'legacy-env'
+  | 'none';
 
 export type PackReviewerLayer = 'Process' | 'User' | 'Machine';
 
@@ -21,16 +33,22 @@ export interface PackReviewerLayerOverrides {
 }
 
 export interface ResolvePackReviewerOptions {
-  /** Test hook for layer overrides. */
+  /** Harness-only legacy-layer fixture; production callers must omit it. */
   layerOverrides?: PackReviewerLayerOverrides;
-  /** Harness-only: consult User/Machine layers on non-Win32 hosts. */
+  /** Harness-only ordering fixture; never probes host persistence. */
   emulateWin32?: boolean;
-  readLayer?: (target: PackReviewerLayer) => string | null;
+  /** Test hook for a controlled persistent preference file. */
+  preferenceFilePath?: string;
+  /** Test hook for controlled persistent preference reads. */
+  readPreference?: (filePath: string) => PackReviewerPreferenceRead;
 }
 
 export interface PackReviewerResolution {
   selectorValue: string | null;
   reviewer: PackReviewer | null;
+  source: PackReviewerResolutionSource;
+  preferencePath: string | null;
+  preference: PackReviewerPreferenceRead | null;
   errorMessage: string | null;
 }
 
@@ -38,70 +56,133 @@ function trim(value: unknown): string {
   return String(value ?? '').trim();
 }
 
-function isPersistentLayerHost(options: ResolvePackReviewerOptions = {}): boolean {
-  return options.emulateWin32 === true || process.platform === 'win32';
-}
-
-let cachedWindowsLayers: PackReviewerLayerOverrides | undefined;
-
-function readWindowsRegistryLayers(): PackReviewerLayerOverrides {
-  if (cachedWindowsLayers !== undefined) {
-    return cachedWindowsLayers;
-  }
-  if (process.platform !== 'win32') {
-    cachedWindowsLayers = {};
-    return cachedWindowsLayers;
-  }
-  try {
-    const result = runProcessSync({
-      command: 'pwsh',
-      args: [
-        '-NoProfile',
-        '-Command',
-        [
-          '$layers = @{',
-          "  Process = [Environment]::GetEnvironmentVariable('PACK_REVIEWER','Process');",
-          "  User = [Environment]::GetEnvironmentVariable('PACK_REVIEWER','User');",
-          "  Machine = [Environment]::GetEnvironmentVariable('PACK_REVIEWER','Machine')",
-          '}',
-          '$layers | ConvertTo-Json -Compress',
-        ].join(' '),
-      ],
-      inheritParentEnv: true,
-    });
-    if (!result.ok) {
-      cachedWindowsLayers = {};
-      return cachedWindowsLayers;
-    }
-    const parsed = JSON.parse(result.stdout.trim()) as PackReviewerLayerOverrides;
-    cachedWindowsLayers = {
-      Process: trim(parsed.Process) || null,
-      User: trim(parsed.User) || null,
-      Machine: trim(parsed.Machine) || null,
-    };
-  } catch {
-    cachedWindowsLayers = {};
-  }
-  return cachedWindowsLayers;
-}
-
-function defaultReadLayer(
+function readPreference(
   env: NodeJS.ProcessEnv,
-  target: PackReviewerLayer,
+  options: ResolvePackReviewerOptions,
+): PackReviewerPreferenceRead {
+  const filePath = options.preferenceFilePath ?? getPackReviewerPreferencePath(env);
+  if (options.readPreference) {
+    return options.readPreference(filePath);
+  }
+  return readPackReviewerPreference(filePath);
+}
+
+function preferencePath(
+  env: NodeJS.ProcessEnv,
   options: ResolvePackReviewerOptions,
 ): string | null {
-  if (options.layerOverrides && Object.prototype.hasOwnProperty.call(options.layerOverrides, target)) {
-    const override = options.layerOverrides[target];
-    return trim(override) || null;
-  }
-  if (target === 'Process') {
-    return trim(env[PACK_REVIEWER_ENV]) || null;
-  }
-  if (!isPersistentLayerHost(options)) {
+  if (options.preferenceFilePath) return options.preferenceFilePath;
+  try {
+    return getPackReviewerPreferencePath(env);
+  } catch {
     return null;
   }
-  const layers = readWindowsRegistryLayers();
-  return trim(layers[target]) || null;
+}
+
+function legacyReviewerValue(
+  env: NodeJS.ProcessEnv,
+  options: ResolvePackReviewerOptions,
+): string {
+  if (!options.layerOverrides) return trim(env[PACK_REVIEWER_ENV]);
+  const layers = options.layerOverrides;
+  const ordered = options.emulateWin32
+    ? [layers.User, layers.Machine, layers.Process]
+    : [layers.Process, layers.User, layers.Machine];
+  return ordered.map(trim).find(Boolean) ?? trim(env[PACK_REVIEWER_ENV]);
+}
+
+function noAuthority(
+  selectorValue: string | null,
+  errorMessage: string,
+  path: string | null,
+  preference: PackReviewerPreferenceRead | null,
+): PackReviewerResolution {
+  return {
+    selectorValue,
+    reviewer: null,
+    source: 'none',
+    preferencePath: path,
+    preference,
+    errorMessage,
+  };
+}
+
+function resolvePackReviewer(
+  env: NodeJS.ProcessEnv,
+  options: ResolvePackReviewerOptions,
+): PackReviewerResolution {
+  const path = preferencePath(env, options);
+  const boundRaw = trim(env[PACK_REVIEW_BOUND_REVIEWER_ENV]);
+  if (boundRaw) {
+    const bound = normalizePackReviewer(boundRaw);
+    if (!bound) {
+      return noAuthority(
+        boundRaw,
+        `PACK_REVIEW_BOUND_REVIEWER has unrecognized value '${boundRaw}'. Set it to gpt, claude, or codex.`,
+        path,
+        null,
+      );
+    }
+    return {
+      selectorValue: bound,
+      reviewer: bound,
+      source: 'invocation-bound',
+      preferencePath: path,
+      preference: null,
+      errorMessage: null,
+    };
+  }
+
+  if (!path) {
+    return noAuthority(
+      null,
+      'OPK_REVIEWER_CONFIG_ROOT_MISSING: set XDG_CONFIG_HOME or HOME before accessing the persistent reviewer preference.',
+      null,
+      null,
+    );
+  }
+
+  const preference = readPreference(env, options);
+  if (preference.status === 'valid') {
+    return {
+      selectorValue: preference.reviewer,
+      reviewer: preference.reviewer,
+      source: 'persistent-preference',
+      preferencePath: path,
+      preference,
+      errorMessage: null,
+    };
+  }
+  if (preference.status === 'invalid') {
+    return noAuthority(null, preference.errorMessage, path, preference);
+  }
+
+  const legacyRaw = legacyReviewerValue(env, options);
+  if (legacyRaw) {
+    const legacy = normalizePackReviewer(legacyRaw);
+    if (legacy) {
+      return {
+        selectorValue: legacy,
+        reviewer: legacy,
+        source: 'legacy-env',
+        preferencePath: path,
+        preference,
+        errorMessage: null,
+      };
+    }
+    return noAuthority(
+      legacyRaw,
+      `PACK_REVIEWER has unrecognized value '${legacyRaw}'. Set PACK_REVIEWER to gpt, claude, or codex.`,
+      path,
+      preference,
+    );
+  }
+  return noAuthority(
+    null,
+    'No reviewer authority is configured. Set a persistent reviewer or PACK_REVIEWER to gpt, claude, or codex.',
+    path,
+    preference,
+  );
 }
 
 /** Canonical selector authority for pack review (Issue #1031). */
@@ -109,29 +190,7 @@ export function resolvePackReviewerSelectorValue(
   env: NodeJS.ProcessEnv = process.env,
   options: ResolvePackReviewerOptions = {},
 ): string | null {
-  const bound = normalizePackReviewer(env[PACK_REVIEW_BOUND_REVIEWER_ENV]);
-  if (bound) {
-    return bound;
-  }
-
-  const readLayer = options.readLayer
-    ?? ((target: PackReviewerLayer) => defaultReadLayer(env, target, options));
-
-  const userValue = readLayer('User');
-  const machineValue = readLayer('Machine');
-  const processValue = readLayer('Process');
-  const effectiveProcess = isPersistentLayerHost(options) && userValue ? null : processValue;
-
-  if (effectiveProcess) {
-    return effectiveProcess;
-  }
-  if (userValue) {
-    return userValue;
-  }
-  if (machineValue) {
-    return machineValue;
-  }
-  return null;
+  return resolvePackReviewer(env, options).selectorValue;
 }
 
 export function normalizePackReviewer(value: unknown): PackReviewer | null {
@@ -146,12 +205,7 @@ export function resolvePackReviewerResolution(
   env: NodeJS.ProcessEnv = process.env,
   options: ResolvePackReviewerOptions = {},
 ): PackReviewerResolution {
-  const selectorValue = resolvePackReviewerSelectorValue(env, options);
-  const reviewer = normalizePackReviewer(selectorValue);
-  const errorMessage = reviewer
-    ? null
-    : packReviewerSelectorErrorMessage(selectorValue ?? undefined, options, env);
-  return { selectorValue, reviewer, errorMessage };
+  return resolvePackReviewer(env, options);
 }
 
 export function resolvePackReviewerFromEnv(
@@ -166,11 +220,15 @@ export function packReviewerSelectorErrorMessage(
   options: ResolvePackReviewerOptions = {},
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const raw = selectorValue ?? resolvePackReviewerSelectorValue(env, options) ?? env[PACK_REVIEWER_ENV] ?? '';
-  if (!String(raw).trim()) {
-    return 'PACK_REVIEWER is not set. Set PACK_REVIEWER to gpt, claude, or codex before running pack review (see docs/reviewer-switch-runbook.md).';
+  if (selectorValue !== undefined) {
+    const raw = String(selectorValue).trim();
+    if (!raw) {
+      return 'No reviewer authority is configured. Set a persistent reviewer or PACK_REVIEWER to gpt, claude, or codex.';
+    }
+    return `PACK_REVIEWER has unrecognized value '${raw}'. Set PACK_REVIEWER to gpt, claude, or codex.`;
   }
-  return `PACK_REVIEWER has unrecognized value '${String(raw).trim()}'. Set PACK_REVIEWER to gpt, claude, or codex.`;
+  return resolvePackReviewer(env, options).errorMessage
+    ?? 'No reviewer authority is configured.';
 }
 
 export function packReviewWrapperBasename(reviewer: PackReviewer): string {

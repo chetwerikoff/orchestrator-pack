@@ -30,6 +30,7 @@ import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt
 import {
   createMockGhState,
   createMockTransport,
+  cleanupTempDirs,
   installCommentPages,
   makeTempDir,
   sampleStageReceipt,
@@ -602,6 +603,9 @@ const cliTempDirs: string[] = [];
 
 afterEach(() => {
   for (const dir of cliTempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  cleanupTempDirs();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe('create-issue-stage-finalize integration', () => {

@@ -5,6 +5,8 @@ import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateHeadReadyForReview } from './review-head-ready.ts';
 import { listPackReviewRuns } from '../lib/pack-review-run-store.ts';
 import { startPackReview } from '../pack-review-runner.ts';
+import { createUnavailableFleetObserver, FleetObserver, type FleetObserverResult } from './fleet-observer.ts';
+import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import {
   isRowStale,
   readWorkerStatusStoreFile,
@@ -39,12 +41,25 @@ export interface ActivatedSchedulerCandidate {
   boundHeadSha: string;
 }
 
+type SchedulerFleetObserver = Pick<FleetObserver, 'tick'>
+  & Partial<Pick<FleetObserver, 'getEffectiveBudgetMs' | 'cancel'>>;
+
 export interface SchedulerBoundary {
   listCandidates(): ActivatedSchedulerCandidate[];
   readCurrentPr(candidate: ActivatedSchedulerCandidate): Promise<{ number: number; headRefOid: string; state: string; isDraft: boolean }>;
   readChecks(candidate: ActivatedSchedulerCandidate): Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>;
   listReviewRuns(): ReturnType<typeof listPackReviewRuns>;
   start(candidate: ActivatedSchedulerCandidate, freshHeadSha: string): Promise<{ ok: boolean; reason?: string }>;
+  schedulerIntervalMs?: number;
+  fleetObserver?: SchedulerFleetObserver;
+}
+
+const schedulerTickSequences = new WeakMap<object, number>();
+
+function nextSchedulerTickSequence(boundary: SchedulerBoundary): number {
+  const next = (schedulerTickSequences.get(boundary) ?? 0) + 1;
+  schedulerTickSequences.set(boundary, next);
+  return next;
 }
 
 function requiredEnv(name: string, env: NodeJS.ProcessEnv): string {
@@ -147,6 +162,8 @@ export function productionSchedulerBoundary(input: {
   repoRoot: string;
   projectId?: string;
   env?: NodeJS.ProcessEnv;
+  fleetObserver?: SchedulerFleetObserver;
+  schedulerIntervalMs?: number;
 }): SchedulerBoundary {
   const env = input.env ?? process.env;
   const projectId = input.projectId ?? 'orchestrator-pack';
@@ -161,6 +178,8 @@ export function productionSchedulerBoundary(input: {
       '--json', 'name,state,conclusion,status',
     ]) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
     listReviewRuns: () => listPackReviewRuns({ projectId }),
+    ...(input.fleetObserver ? { fleetObserver: input.fleetObserver } : {}),
+    ...(input.schedulerIntervalMs === undefined ? {} : { schedulerIntervalMs: input.schedulerIntervalMs }),
     start: async (candidate, freshHeadSha) => {
       const result = await startPackReview({
         projectId,
@@ -180,8 +199,40 @@ export function productionSchedulerBoundary(input: {
   };
 }
 
-export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.ProcessEnv = process.env): Promise<{ attempted: number; started: number; skipped: number }> {
+export async function runSchedulerTick(
+  boundary: SchedulerBoundary,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{
+  attempted: number;
+  started: number;
+  skipped: number;
+  observer?: FleetObserverResult;
+}> {
   assertSchedulerEpoch(env);
+  let observer: FleetObserverResult | undefined;
+  const observerBoundary: SchedulerFleetObserver = boundary.fleetObserver ?? {
+    tick: async () => undefined as unknown as FleetObserverResult,
+  };
+  const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000;
+  const observerStartMs = Date.now();
+  const observerBudgetMs = observerBoundary.getEffectiveBudgetMs?.(schedulerIntervalMs)
+    ?? Math.max(1, Math.floor(schedulerIntervalMs / 4));
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    deadlineTimer = setTimeout(() => resolve(null), Math.max(1, observerBudgetMs));
+  });
+  const attempt = Promise.resolve().then(() => observerBoundary.tick({
+    schedulerIntervalMs,
+    tickSequence: nextSchedulerTickSequence(boundary),
+    phaseStartMs: observerStartMs,
+  })).catch(() => undefined);
+  const completed = await Promise.race([attempt, timeout]);
+  if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+  if (completed === null) {
+    observerBoundary.cancel?.();
+  } else if (boundary.fleetObserver) {
+    observer = completed;
+  }
   let attempted = 0;
   let started = 0;
   let skipped = 0;
@@ -212,27 +263,41 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     const result = await boundary.start(candidate, freshHead);
     if (result.ok) started += 1; else skipped += 1;
   }
-  return { attempted, started, skipped };
+  return observer
+    ? { attempted, started, skipped, observer }
+    : { attempted, started, skipped };
 }
 
-function loadProductionBoundary(): { boundary: SchedulerBoundary; cadence: number } {
+async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
   const parsed = parseFoundationConfig({});
   if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
   const repoRoot = process.cwd();
+  const cadence = parsed.config.scheduler.pollIntervalMs;
+  let fleetObserver: FleetObserver;
+  try {
+    const runtime = await selectRuntimeAdapter();
+    fleetObserver = new FleetObserver({ source: runtime });
+  } catch {
+    fleetObserver = createUnavailableFleetObserver('runtime-adapter-unavailable');
+  }
   return {
-    boundary: productionSchedulerBoundary({ repoRoot }),
-    cadence: parsed.config.scheduler.pollIntervalMs,
+    boundary: productionSchedulerBoundary({
+      repoRoot,
+      fleetObserver,
+      schedulerIntervalMs: cadence,
+    }),
+    cadence,
   };
 }
 
 async function runSingleTick(): Promise<void> {
-  const { boundary } = loadProductionBoundary();
+  const { boundary } = await loadProductionBoundary();
   const result = await runSchedulerTick(boundary);
   process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
 }
 
 async function runLoop(): Promise<void> {
-  const { boundary, cadence } = loadProductionBoundary();
+  const { boundary, cadence } = await loadProductionBoundary();
   for (;;) {
     try {
       const result = await runSchedulerTick(boundary);

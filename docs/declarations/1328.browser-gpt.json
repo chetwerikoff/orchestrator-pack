@@ -1,0 +1,45 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1328,
+  "declared_paths": [
+    ".claude/skills/merge-with-local-adoption/SKILL.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/declarations/1328.browser-gpt.json",
+    "docs/orca-runtime-boundary.md",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worktree-lifecycle/cli.ts",
+    "scripts/worktree-lifecycle/head-bound-runner.ts",
+    "scripts/worktree-lifecycle/operations.test.ts",
+    "scripts/worktree-lifecycle/operations.ts",
+    "scripts/worktree-teardown-runtime-profile.ts",
+    "scripts/worktree-teardown.test.ts",
+    "scripts/worktree-teardown.ts"
+  ],
+  "denylist": [
+    ".github/",
+    ".orca/",
+    "credentials/",
+    "package-lock.json",
+    "package.json",
+    "packages/core/",
+    "scripts/runtime/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/merge-with-local-adoption/SKILL.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/declarations/1328.browser-gpt.json",
+    "docs/orca-runtime-boundary.md",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worktree-lifecycle/cli.ts",
+    "scripts/worktree-lifecycle/head-bound-runner.ts",
+    "scripts/worktree-lifecycle/operations.test.ts",
+    "scripts/worktree-lifecycle/operations.ts",
+    "scripts/worktree-teardown-runtime-profile.ts",
+    "scripts/worktree-teardown.test.ts",
+    "scripts/worktree-teardown.ts"
+  ]
+}

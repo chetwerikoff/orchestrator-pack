@@ -112,14 +112,22 @@ function provenanceStatus({
   runId = 9001,
   attempt = 2,
   sourceMainSha = SOURCE_MAIN,
+  supplementalSourceSha = null,
+  supplementalTarget = 'scripts/pack-reviewer-preference.test.ts',
+  compactWithoutSource = false,
 } = {}) {
+  const description = compactWithoutSource
+    ? `runtime-history-provenance/v1 r=${runId} a=${attempt} s=${sourceMainSha}`
+    : supplementalSourceSha
+      ? `runtime-history-provenance/v1 r=${runId} a=${attempt} s=${sourceMainSha} x=${supplementalSourceSha}`
+      : `runtime-history-provenance run=${runId} attempt=${attempt} source=${sourceMainSha}`;
   return status({
     id,
     context: PROVENANCE_CONTEXT,
     state,
     creator: 'github-actions[bot]',
     targetUrl: `https://github.com/${TARGET_REPOSITORY}/actions/runs/${runId}/attempts/${attempt}`,
-    description: `runtime-history-provenance run=${runId} attempt=${attempt} source=${sourceMainSha}`,
+    description,
   });
 }
 
@@ -328,6 +336,37 @@ function testProvenanceMatrix() {
   );
   equal(verifyRefreshRun(successfulRefreshRun({ id: 9002 }), good).outcome, 'provenance-invalid', 'wrong run must fail');
   equal(verifyRefreshRun(successfulRefreshRun({ attempt: 3 }), good).outcome, 'provenance-invalid', 'wrong attempt must fail');
+  const supplementalSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const bounded = parseRefreshProvenance(
+    [provenanceStatus({ supplementalSourceSha: supplementalSha })],
+    GENERATED,
+  );
+  assert(bounded.ok, 'bounded supplemental provenance should parse');
+  assert(bounded.row.description.length <= 140, 'bounded provenance description must fit GitHub status limit');
+  equal(bounded.supplementalSourceSha, supplementalSha, 'bounded provenance must retain source revision');
+  equal(bounded.supplementalTarget, 'scripts/pack-reviewer-preference.test.ts', 'bounded provenance must retain target');
+  equal(verifyRefreshRun(successfulRefreshRun(), bounded).state, 'success', 'bounded run must verify');
+  equal(
+    parseRefreshProvenance([provenanceStatus({ compactWithoutSource: true })], GENERATED).outcome,
+    'provenance-invalid',
+    'compact provenance without measured source must fail',
+  );
+  equal(
+    parseRefreshProvenance(
+      [
+        provenanceStatus({ id: 1, supplementalSourceSha: supplementalSha }),
+        provenanceStatus({ id: 2 }),
+      ],
+      GENERATED,
+    ).outcome,
+    'provenance-invalid',
+    'mixed ordinary and bounded provenance must fail',
+  );
+  equal(
+    verifyRefreshRun(successfulRefreshRun({ sourceMainSha: SOURCE_MAIN.replace(/^2/, '4') }), bounded).outcome,
+    'provenance-invalid',
+    'trusted workflow revision mismatch must fail',
+  );
   equal(
     verifyRefreshRun(successfulRefreshRun({ conclusion: 'failure' }), good).outcome,
     'provenance-invalid',

@@ -1,8 +1,10 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { runOrcaJson } from './orca-cli.ts';
 import * as lifecycle from './worker-smoke-lifecycle.ts';
+import * as receipt from './worker-smoke-receipt.ts';
 import * as core from './worker-smoke-core.ts';
 
 type FindingsRegressionInput = Pick<
@@ -53,6 +55,45 @@ export function registerWorkerSmokeFindingsRegressionTests(
       JSON.stringify(mutate(registry)),
       'utf8',
     );
+  }
+
+  function persistClosedReceiptWithoutFinalization(
+    artifactDir: string,
+    nowMs = 2,
+  ): void {
+    rewriteRegistry(artifactDir, (bound) => ({
+      ...bound,
+      spawnState: 'cleanup_pending',
+      closeAttemptedAtMs: nowMs,
+      updatedAtMs: nowMs,
+    }));
+    const registry = lifecycle.readSmokeLifecycleRegistry(artifactDir)!;
+    const settlement = receipt.buildSmokeCloseSettlementIdentity(registry.runId);
+    receipt.writeAtomicJson(receipt.smokeCloseReceiptPath(artifactDir), {
+      version: 2,
+      phase: 'settlement_recorded',
+      runId: registry.runId,
+      terminalHandle: registry.terminalHandle,
+      headSha: registry.headSha,
+      artifactDir: path.resolve(registry.artifactDir),
+      settlementId: settlement.settlementId,
+      settlementReason: settlement.settlementReason,
+      settlementAtMs: nowMs,
+      closeAttemptedAtMs: nowMs,
+      closeOutcome: '',
+      recordedAtMs: nowMs,
+    });
+    if (!receipt.recordCloseReceipt({
+      artifactDir,
+      registry,
+      settlementId: settlement.settlementId,
+      settlementReason: settlement.settlementReason,
+      settlementAtMs: nowMs,
+      closeOutcome: 'closed_owned_handle',
+      nowMs,
+    })) {
+      throw new Error('failed to persist exact closed receipt fixture');
+    }
   }
 
   function publishCompletion(artifactDir: string, runId: string, suffix = ''): void {
@@ -159,6 +200,9 @@ export function registerWorkerSmokeFindingsRegressionTests(
       fs.writeFileSync(runsRoot, 'not-a-directory', 'utf8');
       expect(lifecycle.evaluateSmokeLifecycleCleanliness(root)).toMatchObject({
         clean: false,
+        allowed: false,
+        blockingScope: 'worker_smoke_only',
+        workerMayContinue: true,
         reasons: ['lifecycle_root_unreadable'],
       });
       expect(lifecycle.preflightSmokeLifecycle({
@@ -262,7 +306,7 @@ export function registerWorkerSmokeFindingsRegressionTests(
       fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('keeps crash-before-close stale-handle recovery blocking without a receipt', () => {
+    it('keeps settled stale-handle recovery smoke-only blocking without an exact receipt', () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-before-close-crash-'));
       const runId = 'before-close-crash';
       const artifactDir = seedBound(root, runId, 9001);
@@ -282,33 +326,27 @@ export function registerWorkerSmokeFindingsRegressionTests(
         isProcessAlive: () => false,
         closeBoundHandle: close,
       });
-      expect(result.admitted).toBe(false);
-      expect(close).toHaveBeenCalledWith(`term_${runId}`, artifactDir);
+      expect(result).toMatchObject({
+        admitted: false,
+        allowed: false,
+        blockingScope: 'worker_smoke_only',
+        workerMayContinue: true,
+        reason: `pending_cleanup_receipt_missing:${runId}`,
+      });
+      expect(close).not.toHaveBeenCalled();
       expect(lifecycle.readSmokeLifecycleRegistry(artifactDir)).toMatchObject({
-        spawnState: 'cleanup_failed',
-        cleanup: { closeOutcome: 'close_failed:unproven_channel_stale_handle' },
+        spawnState: 'cleanup_pending',
+        closeAttemptedAtMs: 2,
       });
       fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('uses a durable post-close receipt after crash-before-finalization', () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-after-close-crash-'));
-      const runId = 'after-close-crash';
+    it('finishes cleanup_pending from an exact closed receipt without a second close', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-closed-before-finalize-'));
+      const runId = 'closed-before-finalize';
       const artifactDir = seedBound(root, runId, 9002);
-      rewriteRegistry(artifactDir, (bound) => ({
-        ...bound,
-        spawnState: 'cleanup_pending',
-        closeAttemptedAtMs: 2,
-        updatedAtMs: 2,
-      }));
-      fs.writeFileSync(lifecycle.smokeCloseReceiptPath(artifactDir), JSON.stringify({
-        version: 1,
-        runId,
-        terminalHandle: `term_${runId}`,
-        closeOutcome: 'closed_owned_handle',
-        recordedAtMs: 2,
-      }), 'utf8');
-      const close = vi.fn(() => 'close_failed:channel_stale_handle');
+      persistClosedReceiptWithoutFinalization(artifactDir, 2);
+      const close = vi.fn(() => 'closed_owned_handle');
       const result = lifecycle.preflightSmokeLifecycle({
         repoRoot: root,
         runId: 'next',
@@ -322,8 +360,181 @@ export function registerWorkerSmokeFindingsRegressionTests(
       expect(close).not.toHaveBeenCalled();
       expect(lifecycle.readSmokeLifecycleRegistry(artifactDir)).toMatchObject({
         spawnState: 'clean',
+        cleanup: {
+          reason: 'receipt_first_pending_cleanup:closed_receipt_before_finalization',
+          closeOutcome: 'closed_owned_handle',
+          operatorFilesCleared: true,
+        },
+      });
+      lifecycle.releaseSmokeAdmission(root, 'next');
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it.each([
+      ['wrong-id', { settlementId: 'foreign:settlement' }],
+      ['changed-reason', { settlementReason: 'restart_recovery' }],
+      ['unsupported-reason', { settlementReason: 'unsupported' }],
+    ] as const)(
+      'rejects %s mutation of the closed settlement identity',
+      (_caseName, mutation) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-settlement-mutation-'));
+        const runId = `settlement-${_caseName}`;
+        const artifactDir = seedBound(root, runId, 9003);
+        persistClosedReceiptWithoutFinalization(artifactDir, 2);
+        const receiptPath = lifecycle.smokeCloseReceiptPath(artifactDir);
+        const current = JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as Record<string, unknown>;
+        fs.writeFileSync(receiptPath, JSON.stringify({ ...current, ...mutation }), 'utf8');
+        const close = vi.fn(() => 'closed_owned_handle');
+        const result = lifecycle.preflightSmokeLifecycle({
+          repoRoot: root,
+          runId: 'next',
+          supervisorPid: 333,
+          nowMs: 3,
+          shutdownMs: 0,
+          isProcessAlive: () => false,
+          closeBoundHandle: close,
+        });
+        expect(result).toMatchObject({
+          admitted: false,
+          allowed: false,
+          blockingScope: 'worker_smoke_only',
+          workerMayContinue: true,
+          reason: `pending_cleanup_receipt_invalid:${runId}`,
+        });
+        expect(close).not.toHaveBeenCalled();
+        fs.rmSync(root, { recursive: true, force: true });
+      },
+    );
+
+    it('uses an exact v2 post-close receipt after historical stale projection', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-after-close-crash-'));
+      const runId = 'after-close-crash';
+      const artifactDir = seedBound(root, runId, 9004);
+      const firstClose = vi.fn(() => 'closed_owned_handle');
+      const freshCleanup = lifecycle.cleanupSmokeLifecycle({
+        artifactDir,
+        runId,
+        reason: 'child_completed',
+        requestCancellation: false,
+        cooperativeAcknowledgementObserved: true,
+        closeBoundHandle: firstClose,
+        nowMs: 2,
+      });
+      expect(freshCleanup.clean).toBe(true);
+      expect(firstClose).toHaveBeenCalledTimes(1);
+
+      const staleOutcome = 'close_failed:terminal_handle_stale';
+      const staleCompletedAtMs = 3;
+      rewriteRegistry(artifactDir, (clean) => ({
+        ...clean,
+        spawnState: 'cleanup_failed',
+        updatedAtMs: staleCompletedAtMs,
+        cleanup: {
+          reason: 'restart_recovery',
+          cooperativeAcknowledgementObserved: true,
+          closeOutcome: staleOutcome,
+          operatorFilesCleared: true,
+          completedAtMs: staleCompletedAtMs,
+        },
+      }));
+      fs.writeFileSync(lifecycle.smokeTerminalRecordPath(artifactDir), JSON.stringify({
+        version: 1,
+        runId,
+        reason: 'restart_recovery',
+        cooperativeAcknowledgementObserved: true,
+        closeOutcome: staleOutcome,
+        operatorFilesCleared: true,
+        cleanupClean: false,
+        completedAtMs: staleCompletedAtMs,
+      }), 'utf8');
+
+      const close = vi.fn(() => 'close_failed:channel_stale_handle');
+      const result = lifecycle.preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: 'next',
+        supervisorPid: 333,
+        nowMs: 4,
+        shutdownMs: 0,
+        isProcessAlive: () => false,
+        closeBoundHandle: close,
+      });
+      expect(result.admitted).toBe(true);
+      expect(close).not.toHaveBeenCalled();
+      expect(lifecycle.readSmokeLifecycleRegistry(artifactDir)).toMatchObject({
+        spawnState: 'clean',
         cleanup: { closeOutcome: 'closed_owned_handle' },
       });
+      lifecycle.releaseSmokeAdmission(root, 'next');
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it('resumes after terminal-first historical reconciliation write failure', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-reconcile-partial-'));
+      const runId = 'reconcile-partial';
+      const artifactDir = seedBound(root, runId, 9005);
+      const freshClose = vi.fn(() => 'closed_owned_handle');
+      expect(lifecycle.cleanupSmokeLifecycle({
+        artifactDir,
+        runId,
+        reason: 'child_completed',
+        requestCancellation: false,
+        cooperativeAcknowledgementObserved: true,
+        closeBoundHandle: freshClose,
+        nowMs: 2,
+      }).clean).toBe(true);
+      const staleOutcome = 'close_failed:terminal_handle_stale';
+      rewriteRegistry(artifactDir, (clean) => ({
+        ...clean,
+        spawnState: 'cleanup_failed',
+        updatedAtMs: 3,
+        cleanup: {
+          reason: 'restart_recovery',
+          cooperativeAcknowledgementObserved: true,
+          closeOutcome: staleOutcome,
+          operatorFilesCleared: true,
+          completedAtMs: 3,
+        },
+      }));
+      fs.writeFileSync(lifecycle.smokeTerminalRecordPath(artifactDir), JSON.stringify({
+        version: 1,
+        runId,
+        reason: 'restart_recovery',
+        cooperativeAcknowledgementObserved: true,
+        closeOutcome: staleOutcome,
+        operatorFilesCleared: true,
+        cleanupClean: false,
+        completedAtMs: 3,
+      }), 'utf8');
+
+      const partial = lifecycle.reconcileHistoricalSmokeLifecycle(artifactDir, 4, {
+        writeLifecycleRegistry: () => { throw new Error('injected lifecycle write failure'); },
+      });
+      expect(partial).toMatchObject({
+        state: 'blocked',
+        reason: `historical_cleanup_reconciliation_write_failed:${runId}`,
+      });
+      expect(lifecycle.readSmokeLifecycleRegistry(artifactDir)?.spawnState).toBe('cleanup_failed');
+      expect(JSON.parse(fs.readFileSync(
+        lifecycle.smokeTerminalRecordPath(artifactDir),
+        'utf8',
+      ))).toMatchObject({
+        cleanupClean: true,
+        reconciliation: { kind: 'receipt_first_historical_cleanup' },
+      });
+
+      const close = vi.fn(() => 'closed_owned_handle');
+      const resumed = lifecycle.preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: 'next',
+        supervisorPid: 333,
+        nowMs: 5,
+        shutdownMs: 0,
+        isProcessAlive: () => false,
+        closeBoundHandle: close,
+      });
+      expect(resumed.admitted).toBe(true);
+      expect(close).not.toHaveBeenCalled();
+      expect(lifecycle.readSmokeLifecycleRegistry(artifactDir)?.spawnState).toBe('clean');
       lifecycle.releaseSmokeAdmission(root, 'next');
       fs.rmSync(root, { recursive: true, force: true });
     });
@@ -429,6 +640,106 @@ export function registerWorkerSmokeFindingsRegressionTests(
         fs.rmSync(root, { recursive: true, force: true });
       },
     );
+  });
+
+  describe('worker smoke cleanup production denial mapping (#1318)', () => {
+    it('gate-check exposes smoke-only denial at the top-level machine boundary', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-gate-scope-'));
+      const artifactDir = seedBound(root, 'gate-scope', 9006);
+      rewriteRegistry(artifactDir, (bound) => ({
+        ...bound,
+        spawnState: 'cleanup_pending',
+        closeAttemptedAtMs: 2,
+        updatedAtMs: 2,
+      }));
+      const issueBody = path.join(root, 'issue.md');
+      fs.writeFileSync(issueBody, 'fixture', 'utf8');
+      const script = path.join(import.meta.dirname, '..', 'worker-smoke-run.ts');
+      const result = runProcessSync({
+        command: process.execPath,
+        args: [
+          '--experimental-strip-types',
+          script,
+          'gate-check',
+          '--issue-body-file',
+          issueBody,
+          '--cwd',
+          root,
+          '--json',
+        ],
+        cwd: path.join(import.meta.dirname, '..'),
+        inheritParentEnv: true,
+      });
+      expect(result.ok).toBe(false);
+      const envelope = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+      expect(envelope).toMatchObject({
+        ok: false,
+        allowed: false,
+        blockingScope: 'worker_smoke_only',
+        workerMayContinue: true,
+      });
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it('run refusal envelope hoists the same smoke-only classification', async () => {
+      const { buildSmokeRunResult } = await import('../worker-smoke-run.ts');
+      const report: core.SmokeReport = {
+        result: 'BLOCKED',
+        issueNumber: 1318,
+        prNumber: 1319,
+        headSha: head,
+        scenarios: [{
+          action: 'worker-smoke lifecycle preflight',
+          expected: 'safe admission',
+          observed: 'pending_cleanup_receipt_missing:prior',
+          outcome: 'blocked',
+        }],
+        limitations: [],
+        trackedFilesUnmodified: true,
+        terminalCleanup: 'not_started',
+        environmentNotes: [],
+      };
+      const envelope = buildSmokeRunResult(report, false, {
+        lifecycle: {
+          admitted: false,
+          allowed: false,
+          blockingScope: 'worker_smoke_only',
+          workerMayContinue: true,
+          reason: 'pending_cleanup_receipt_missing:prior',
+          diagnostics: [],
+        },
+      });
+      expect(envelope).toMatchObject({
+        ok: false,
+        allowed: false,
+        blockingScope: 'worker_smoke_only',
+        workerMayContinue: true,
+      });
+    });
+  });
+
+  describe('worker smoke cleanup structured proof (#1318)', () => {
+    it('executes the exact fixed-input producer and emits one proved record', () => {
+      const script = path.join(import.meta.dirname, '..', 'worker-smoke-cleanup-proof.ts');
+      const result = runProcessSync({
+        command: process.execPath,
+        args: ['--experimental-strip-types', script],
+        cwd: path.join(import.meta.dirname, '..'),
+        inheritParentEnv: true,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.stderr).toBe('');
+      const lines = result.stdout.trim().split(/\r?\n/u);
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] ?? '{}')).toMatchObject({
+        schema: 'worker-smoke-cleanup-proof/v1',
+        status: 'proved',
+        runtimeOperations: 0,
+        closeAttempts: 0,
+        freshReservationAdmitted: true,
+        smokeOnlyDenial: true,
+      });
+    });
   });
 
   describe('review findings: honest abandonment cleanup (#1138)', () => {
