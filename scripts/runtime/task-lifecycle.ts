@@ -29,10 +29,11 @@ export interface RuntimeTaskLifecycleResult {
  * Direct runtime-neutral task caller used by focused parity tests and production
  * callers that need one bounded spawn/send/read/liveness/stop lifecycle.
  *
- * The claim hook runs before adapter.spawnWorker, so a failed reservation cannot
- * produce a worktree or terminal side effect. Dispatch is attempted exactly once.
- * A non-dispatched result retains the exact spawned identity for explicit
- * recovery; this caller never retries or guesses whether transport succeeded.
+ * The mandatory claim hook runs before adapter.spawnWorker, so missing or failed
+ * reservation authority cannot produce a worktree or terminal side effect.
+ * Dispatch is attempted exactly once. A non-dispatched result retains the exact
+ * spawned identity for explicit recovery; this caller never retries or guesses
+ * whether transport succeeded.
  */
 export function executeRuntimeTaskLifecycle(input: {
   readonly adapter: RuntimeAdapter;
@@ -42,9 +43,12 @@ export function executeRuntimeTaskLifecycle(input: {
   readonly workspace?: 'active' | string;
   readonly observationWindowMs?: number;
   readonly options?: RuntimeCallOptions;
-  readonly acquireClaim?: () => { readonly ok: true } | { readonly ok: false; readonly reason: string };
+  readonly acquireClaim: () => { readonly ok: true } | { readonly ok: false; readonly reason: string };
 }): RuntimeTaskLifecycleResult | RuntimeTaskLifecycleFailure {
-  const claim = input.acquireClaim?.() ?? { ok: true as const };
+  if (typeof input.acquireClaim !== 'function') {
+    return { stage: 'claim', reason: 'claim_authority_missing' };
+  }
+  const claim = input.acquireClaim();
   if (!claim.ok) return { stage: 'claim', reason: claim.reason };
 
   const spawned = input.adapter.spawnWorker({
