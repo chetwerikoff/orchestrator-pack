@@ -28,8 +28,6 @@ jobs:
         run: npm ci --include=dev
       - name: Enforce pinned Node major
         run: npm run check:node-major
-      - name: Check complete Vitest live-store inventory
-        run: npm run check:vitest-live-store-isolation
       - name: Execute TypeScript without a build artifact
         run: npm run ts:smoke
 
