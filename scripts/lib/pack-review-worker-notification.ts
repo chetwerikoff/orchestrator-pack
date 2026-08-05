@@ -6,13 +6,11 @@ import {
   evaluateDeterministicJournalAdmission,
 } from '../../docs/review-delivery-lifecycle.mjs';
 import type {
+  PackReviewWorkerNotificationBinding,
   PackReviewWorkerNotificationRequest,
   PackReviewWorkerNotificationResult,
 } from './pack-review-delivery.ts';
-import {
-  getPackReviewRun,
-  type PackReviewWorkerNotificationBinding,
-} from './pack-review-run-store.ts';
+import { getPackReviewRun } from './pack-review-run-store.ts';
 import { runProcess } from '../kernel/subprocess.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
@@ -71,6 +69,36 @@ interface JournalAdmission {
 
 function trim(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function persistedWorkerNotificationBinding(
+  run: unknown,
+): PackReviewWorkerNotificationBinding | null {
+  const record = asRecord(run);
+  const raw = asRecord(record?.workerNotificationBinding);
+  const targetSha = trim(record?.targetSha).toLowerCase();
+  if (!raw || Number(raw.schemaVersion) !== 1) return null;
+  const binding: PackReviewWorkerNotificationBinding = {
+    schemaVersion: 1,
+    runtime: trim(raw.runtime),
+    id: trim(raw.id),
+    generation: trim(raw.generation),
+    workspacePath: trim(raw.workspacePath),
+    headSha: trim(raw.headSha).toLowerCase(),
+  };
+  if (!binding.runtime
+    || !binding.id
+    || !binding.generation
+    || !binding.workspacePath
+    || !/^[0-9a-f]{40}$/.test(binding.headSha)
+    || binding.headSha !== targetSha) return null;
+  return binding;
 }
 
 function readJournal(path: string): Record<string, unknown> {
@@ -301,11 +329,8 @@ function bindPersistedReviewRun(options: WorkerNotificationOptions):
     };
   }
 
-  const binding: PackReviewWorkerNotificationBinding | undefined = run.workerNotificationBinding;
+  const binding = persistedWorkerNotificationBinding(run);
   if (!binding) return { ok: false, reason: 'worker_runtime_binding_unresolved' };
-  if (binding.headSha !== run.targetSha) {
-    return { ok: false, reason: 'worker_runtime_binding_head_mismatch' };
-  }
   const explicitWorkerId = trim(options.workerId);
   if (explicitWorkerId && explicitWorkerId !== binding.id) {
     return { ok: false, reason: 'worker_runtime_binding_id_mismatch' };
