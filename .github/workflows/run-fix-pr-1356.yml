@@ -24,6 +24,7 @@ jobs:
       - name: Execute retained patch and verification steps
         shell: bash
         run: |
+          npm ci
           python3 <<'PY'
           from pathlib import Path
           import subprocess
@@ -48,9 +49,9 @@ jobs:
                   index += 1
               blocks.append('\n'.join(body).rstrip() + '\n')
 
-          if len(blocks) != 5:
-              raise SystemExit(f'expected five retained run blocks, found {len(blocks)}')
-          for ordinal, block in enumerate(blocks[:4], start=1):
+          if len(blocks) != 4:
+              raise SystemExit(f'expected four retained run blocks, found {len(blocks)}')
+          for ordinal, block in enumerate(blocks[:3], start=1):
               print(f'::group::retained run block {ordinal}', flush=True)
               subprocess.run(['bash', '-lc', block], check=True)
               print('::endgroup::', flush=True)
