@@ -3,6 +3,7 @@
   "issue_number": 1272,
   "declared_paths": [
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    "docs/browser-gpt-turn-runbook.md",
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts"
   ],
@@ -25,9 +26,10 @@
   ],
   "allowed_roots": [
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    "docs/browser-gpt-turn-runbook.md",
     "docs/declarations/",
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts"
   ],
-  "source_revision": "5fe7e0fd1d7c09654d3121e6dfab46dc330672cc"
+  "source_revision": "ef93d317787d0f2887122a0e6f9f287d7897d8a3"
 }
