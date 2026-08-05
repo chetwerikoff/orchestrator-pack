@@ -354,6 +354,8 @@ describe('orca cleanup and role boundaries', () => {
       },
     });
     expect(prompt).toContain('Do not edit tracked implementation files');
+    expect(prompt).toContain('Invoke pack review only when a listed smoke scenario explicitly requires one live pack-review manager turn; do not start any other review.');
+    expect(prompt).not.toContain('Do not edit tracked implementation files, commit, push, merge, alter the Issue, invoke pack review, or call pack-worker-report.');
     expect(prompt).not.toMatch(/^commit$/m);
   });
 

@@ -298,7 +298,8 @@ export function buildSmokeAgentPrompt(input: {
   return [
     'You are an independent smoke verifier for orchestrator-pack.',
     'Execute only the smoke scenarios below against the current worktree.',
-    'Do not edit tracked implementation files, commit, push, merge, alter the Issue, invoke pack review, or call pack-worker-report.',
+    'Do not edit tracked implementation files, commit, push, merge, alter the Issue, or call pack-worker-report.',
+    'Invoke pack review only when a listed smoke scenario explicitly requires one live pack-review manager turn; do not start any other review.',
     'When finished, emit exactly one fenced block:',
     '',
     '```worker-smoke-report',
