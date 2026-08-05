@@ -1,0 +1,38 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1306,
+  "declared_paths": [
+    "scripts/pr2-foundation/fleet-observer.test.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".github/",
+    ".orca/",
+    "credentials/",
+    "docs/fleet-observer.md",
+    "docs/issue_queue_index.md",
+    "docs/issues_drafts/",
+    "docs/migration_notes.md",
+    "package-lock.json",
+    "package.json",
+    "packages/core/",
+    "scripts/ao-legacy-runtime/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/orca-runtime/",
+    "scripts/pr2-foundation/fleet-observer.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/runtime/",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "scripts/worker-smoke-run",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/pr2-foundation/fleet-observer.test.ts"
+  ],
+  "source_revision": "f5143a9c04d7188403095f277300bdb374aa1c9a"
+}
