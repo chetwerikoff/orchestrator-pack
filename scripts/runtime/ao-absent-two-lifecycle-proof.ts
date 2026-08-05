@@ -21,18 +21,21 @@ function hermeticTwoLifecycleFixture(
   expectedPath: string,
 ): string {
   return `#!${process.execPath}
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { delimiter } from 'node:path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
-const statePath = ${JSON.stringify(statePath)};
-const capturePath = ${JSON.stringify(capturePath)};
-const expectedPath = ${JSON.stringify(expectedPath)};
-const rawArgs = process.argv.slice(2);
-const args = rawArgs.filter((value) => value !== '--json');
-const operation = [args[0] ?? '', args[1] ?? ''].join(' ');
+const fixturePaths = Object.freeze({
+  state: ${JSON.stringify(statePath)},
+  capture: ${JSON.stringify(capturePath)},
+  expected: ${JSON.stringify(expectedPath)},
+});
+const args = process.argv
+  .slice(2)
+  .filter((value) => value !== '--json');
+const operation = [args.at(0) ?? '', args.at(1) ?? ''].join(' ');
 const initialState = { sequence: 0, terminals: {}, operations: [], captures: [] };
-const state = existsSync(statePath)
-  ? JSON.parse(readFileSync(statePath, 'utf8'))
+const state = fs.existsSync(fixturePaths.state)
+  ? JSON.parse(fs.readFileSync(fixturePaths.state, 'utf8'))
   : initialState;
 const forbiddenEnvironment = [];
 for (const key of Object.keys(process.env)) {
@@ -41,14 +44,26 @@ for (const key of Object.keys(process.env)) {
   }
 }
 const pathText = process.env.PATH ?? '';
-const pathEntries = pathText === '' ? [] : pathText.split(delimiter).filter(Boolean);
+const pathEntries = pathText === '' ? [] : pathText.split(path.delimiter).filter(Boolean);
 const legacyAdapterLoaded = Object.keys(process.env)
   .filter((key) => key.includes('LEGACY'))
   .some((key) => key.includes('AO'));
-const capture = { operation, args, forbiddenEnvironment, pathEntries, expectedPath, legacyAdapterLoaded };
+const capture = {
+  operation,
+  args,
+  forbiddenEnvironment,
+  pathEntries,
+  expectedPath: fixturePaths.expected,
+  legacyAdapterLoaded,
+};
 state.captures.push(capture);
-writeFileSync(capturePath, \`\${JSON.stringify(state.captures)}\\n\`, 'utf8');
-if (forbiddenEnvironment.length > 0 || pathEntries.length !== 1 || pathEntries[0] !== expectedPath || legacyAdapterLoaded) {
+fs.writeFileSync(fixturePaths.capture, \`\${JSON.stringify(state.captures)}\\n\`, 'utf8');
+if (
+  forbiddenEnvironment.length > 0
+  || pathEntries.length !== 1
+  || pathEntries[0] !== fixturePaths.expected
+  || legacyAdapterLoaded
+) {
   process.stdout.write(JSON.stringify({
     ok: false,
     error: { code: 'fixture_environment_not_hermetic', message: JSON.stringify(capture) },
@@ -56,7 +71,11 @@ if (forbiddenEnvironment.length > 0 || pathEntries.length !== 1 || pathEntries[0
   process.exit(0);
 }
 state.operations.push(operation);
-const persist = () => writeFileSync(statePath, \`\${JSON.stringify(state)}\\n\`, 'utf8');
+const persist = () => fs.writeFileSync(
+  fixturePaths.state,
+  \`\${JSON.stringify(state)}\\n\`,
+  'utf8',
+);
 const respond = (value) => {
   persist();
   process.stdout.write(\`\${JSON.stringify(value)}\\n\`);
@@ -68,7 +87,15 @@ const option = (name) => {
 
 switch (operation) {
   case 'worktree current':
-    respond({ ok: true, result: { worktree: { path: expectedPath, head: 'a'.repeat(40) } } });
+    respond({
+      ok: true,
+      result: {
+        worktree: {
+          path: fixturePaths.expected,
+          head: 'a'.repeat(40),
+        },
+      },
+    });
     break;
   case 'terminal create': {
     state.sequence += 1;
@@ -79,7 +106,7 @@ switch (operation) {
       handle,
       incarnationId,
       title,
-      worktreePath: expectedPath,
+      worktreePath: fixturePaths.expected,
       status: 'running',
       lines: [\`started:\${option('--command')}\`],
       dispatches: 0,
@@ -139,7 +166,17 @@ switch (operation) {
       respond({ ok: false, error: { code: 'terminal_not_found', message: handle } });
       break;
     }
-    respond({ ok: true, result: { wait: { handle, condition: 'tui-idle', satisfied: true, status: 'running' } } });
+    respond({
+      ok: true,
+      result: {
+        wait: {
+          handle,
+          condition: 'tui-idle',
+          satisfied: true,
+          status: 'running',
+        },
+      },
+    });
     break;
   }
   case 'terminal close': {
