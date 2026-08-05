@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { checkScope } from '../lib/check.js';
 import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
+import { checkScope, classifyScopedPaths } from '../lib/check.js';
 
 const declaration: DeclarationSnapshot = {
   issue_number: 5,
@@ -98,5 +98,54 @@ describe('checkScope', () => {
       expect(result.reason).toBe('invalid_path');
       expect(result.invalid_paths[0]?.path).toBe('../outside.ts');
     }
+  });
+
+  it('uses marked directory entries passed through declared_paths by the live-Issue route', () => {
+    const classification = classifyScopedPaths(
+      ['scripts/tools/nested/tool.ts', 'scripts/other.ts'],
+      {
+        denylist: [],
+        declaredPaths: ['scripts/tools/'],
+        declaredGlobs: [],
+      },
+    );
+
+    expect(classification.outOfScope).toEqual(['scripts/other.ts']);
+  });
+
+  it('keeps nested file-pattern classification isolated from declaration admission', () => {
+    const classification = classifyScopedPaths(
+      [
+        'plugins/tests/check.test.ts',
+        'plugins/ao-scope-guard/tests/check.test.ts',
+        'plugins/ao-scope-guard/tests/secret-access.test.ts',
+        'plugins/ao-scope-guard/lib/check.test.ts',
+      ],
+      {
+        denylist: ['plugins/**/tests/secret*.test.ts'],
+        declaredPaths: [],
+        declaredGlobs: ['plugins/**/tests/*.test.ts'],
+      },
+    );
+
+    expect(classification.denied).toEqual([
+      'plugins/ao-scope-guard/tests/secret-access.test.ts',
+    ]);
+    expect(classification.outOfScope).toEqual([
+      'plugins/ao-scope-guard/lib/check.test.ts',
+    ]);
+  });
+
+  it('keeps exact literals exact in changed-path classification', () => {
+    const classification = classifyScopedPaths(
+      ['scripts/tool', 'scripts/tool/child.ts'],
+      {
+        denylist: [],
+        declaredPaths: ['scripts/tool'],
+        declaredGlobs: [],
+      },
+    );
+
+    expect(classification.outOfScope).toEqual(['scripts/tool/child.ts']);
   });
 });
