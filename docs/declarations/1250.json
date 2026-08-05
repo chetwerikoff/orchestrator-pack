@@ -9,6 +9,7 @@
     "scripts/ao-retirement/retired-surface-guard.ts",
     "scripts/ao-retirement/retired-surface-inventory.json",
     "scripts/ao-retirement/retired-surface-selftest.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/runtime/ao-absent-two-lifecycle-proof.test.ts",
     "scripts/runtime/ao-absent-two-lifecycle-proof.ts",
     "scripts/vitest-ci-lanes.config.json"
@@ -35,9 +36,10 @@
     "scripts/ao-retirement/retired-surface-guard.ts",
     "scripts/ao-retirement/retired-surface-inventory.json",
     "scripts/ao-retirement/retired-surface-selftest.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/runtime/ao-absent-two-lifecycle-proof.test.ts",
     "scripts/runtime/ao-absent-two-lifecycle-proof.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "r05"
+  "source_revision": "r06"
 }
