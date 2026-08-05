@@ -38,9 +38,20 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
    `docs/chat-executor-rules.md`.
 2. Verify the repository's Node 22 requirement and the current task's tier,
    role, stage, and frozen revision.
-3. Load the gitignored local configuration and confirm the configured headed
+3. Before starting flow-manager in a fresh worktree, provision the gitignored
+   browser configuration from the operator checkout:
+   `cp "<OPERATOR_CHECKOUT>/.claude/skills/discuss-with-gpt/local.config.json" "<WORKTREE_PATH>/.claude/skills/discuss-with-gpt/local.config.json"`.
+   Alternatively, set both required values through the environment:
+   `export DISCUSS_WITH_GPT_PROJECT_URL="<PROJECT_URL>"` and
+   `export DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR="<CHROME_USER_DATA_DIR>"`.
+   If launch reports
+   `discuss-with-gpt: operator configuration missing`, the mandatory
+   configuration is not resolved; this can also happen with a copied but
+   incomplete config. Verify both `projectUrl` and `chromeUserDataDir`, or
+   both environment-variable equivalents.
+4. Load the gitignored local configuration and confirm the configured headed
    automation Chrome is running and logged in. Never type credentials.
-4. Start or verify the configured browser through the existing launcher:
+5. Start or verify the configured browser through the existing launcher:
    `.claude/skills/discuss-with-gpt/launch-chrome.sh`. Select the applicable
    canonical workflow; stage cardinality and topology belong to that workflow,
    not this runbook.
@@ -122,11 +133,14 @@ Use the sanctioned diagnostic utility once, with local values:
 npm run browser-gpt-page-probe -- inspect --cdp "${CDP_ENDPOINT}" --url "${CHAT_URL}"
 ```
 
-The probe is read-only and exits once. It cannot publish, retry, resend,
-progress a stage, or close a tab. Resolve the current target from the
-conversation URL instead of trusting a saved target id. Probe mechanics remain
-owned by Issues #1272 and #1122; do not replace this utility with raw CDP,
-selectors, JavaScript, a watch loop, or a transcript dump.
+The non-acquisition probe is read-only and exits once. It cannot publish,
+retry, resend, progress a stage, create, or close a tab. The explicit
+`--open-if-missing true` acquisition path is the sole opt-in exception: it may
+create one owned page, wait for bounded readiness, and close exactly that
+owned page. Resolve the current target from the conversation URL instead of
+trusting a saved target id. Probe mechanics remain owned by Issues #1272 and
+#1122; do not replace this utility with raw CDP, selectors, JavaScript, a watch
+loop, or a transcript dump.
 
 ## Shift handoff/close
 
