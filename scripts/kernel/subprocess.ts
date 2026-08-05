@@ -48,6 +48,8 @@ export interface RunProcessSyncOptions {
   readonly encoding?: BufferEncoding;
   readonly input?: string | Uint8Array;
   readonly timeoutMs?: number;
+  /** Map child fd numbers (3+) to already-open parent descriptors. */
+  readonly inheritedFileDescriptors?: Readonly<Record<number, number>>;
 }
 
 interface TerminalIntent {
@@ -65,6 +67,30 @@ function minimalEnvironment(overrides: Readonly<NodeJS.ProcessEnv> | undefined):
     if (value !== undefined) base[key] = value;
   }
   return { ...base, ...overrides };
+}
+
+function inheritedSyncStdio(
+  inherited: Readonly<Record<number, number>> | undefined,
+): Array<'pipe' | 'ignore' | number> | undefined {
+  if (!inherited) return undefined;
+  const entries = Object.entries(inherited).map(([targetRaw, source]) => ({
+    target: Number(targetRaw),
+    source,
+  }));
+  if (entries.length === 0) return undefined;
+  for (const entry of entries) {
+    if (!Number.isInteger(entry.target) || entry.target < 3) {
+      throw new TypeError('inherited child descriptor must be an integer >= 3');
+    }
+    if (!Number.isInteger(entry.source) || entry.source < 0) {
+      throw new TypeError('inherited parent descriptor must be a non-negative integer');
+    }
+  }
+  const maxTarget = Math.max(...entries.map((entry) => entry.target));
+  const stdio: Array<'pipe' | 'ignore' | number> = ['pipe', 'pipe', 'pipe'];
+  while (stdio.length <= maxTarget) stdio.push('ignore');
+  for (const entry of entries) stdio[entry.target] = entry.source;
+  return stdio;
 }
 
 function errnoCode(error: unknown): string | undefined {
@@ -356,6 +382,7 @@ export function runProcessSync(options: RunProcessSyncOptions): ProcessResult {
       encoding,
       input: options.input,
       timeout: options.timeoutMs,
+      stdio: inheritedSyncStdio(options.inheritedFileDescriptors),
     });
   } catch (error) {
     const timedOut = error instanceof Error
