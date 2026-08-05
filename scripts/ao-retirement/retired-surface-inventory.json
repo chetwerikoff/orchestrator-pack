@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "candidateBase": "afd99fb7bc5f4fcb210005d96b56db7d3064a45f",
+  "patternSource": "scripts/json-producers/retired-surfaces.json",
+  "rows": [
+    { "path": "AGENTS.md", "kind": "clean" },
+    { "path": ".claude/skills/switch-pack-reviewer/SKILL.md", "kind": "clean" },
+    { "path": "docs/orca-runtime-caller-census.md", "kind": "clean" },
+    { "path": "prompts/investigate_root_cause.md", "kind": "deferred-active", "reason": "The RCA procedure still mixes retired review/report examples with active AO service instructions; rewriting that contract is deferred to the active-service cut." },
+    { "path": "docs/orchestrator-recovery-runbook.md", "kind": "deferred-active", "reason": "The runbook remains an AO operator recovery surface and requires a separate end-to-end replacement, not isolated vocabulary deletion." },
+    { "path": "agent-orchestrator.yaml.example", "kind": "deferred-active", "reason": "The example remains an active AO service/config migration surface and cannot be declared zero-consumer in this cut." },
+    { "path": "docs/investigations/ao-orca-consumer-census/census.md", "kind": "historical-exclusion", "reason": "Revision-bound PR0 evidence intentionally quotes retired commands." },
+    { "path": "docs/investigations/ao-orca-consumer-census/surface-identity-map.md", "kind": "historical-exclusion", "reason": "The canonical representation map intentionally records retired aliases." },
+    { "path": "docs/investigations/ao-orca-consumer-census/axis3-bindings.md", "kind": "historical-exclusion", "reason": "The axis inventory records remaining debt and historical classifications." },
+    { "path": "docs/investigations/ao-orca-consumer-census/axis5-bindings.md", "kind": "historical-exclusion", "reason": "The lifecycle inventory records remaining debt and historical classifications." },
+    { "path": "plugins/ao-task-declaration", "kind": "preserve", "reason": "Exact pack-owned task declaration plugin preserved by Issue #1250 r04." },
+    { "path": "plugins/ao-scope-guard", "kind": "preserve", "reason": "Exact pack-owned scope guard plugin preserved by Issue #1250 r04." },
+    { "path": "plugins/ao-token-chain-ledger", "kind": "preserve", "reason": "Exact pack-owned token ledger plugin preserved by Issue #1250 r04." },
+    { "path": "plugins/ao-codex-pr-reviewer", "kind": "preserve", "reason": "Exact pack-owned review command plugin preserved by Issue #1250 r04." }
+  ]
+}
