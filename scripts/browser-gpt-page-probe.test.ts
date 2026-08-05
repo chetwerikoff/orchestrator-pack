@@ -10,6 +10,8 @@ import { test } from 'vitest';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   buildExportExpression,
+  ACQUISITION_READINESS_INTERVAL_MS,
+  ACQUISITION_READINESS_TIMEOUT_MS,
   CDP_REQUEST_TIMEOUT_MS,
   INSPECTION_EXPRESSION,
   LIVENESS_EXPRESSION,
@@ -165,6 +167,22 @@ test('URL targeting fails closed on zero and duplicate exact normalized matches'
     })),
     (error: any) => error.status === 'ambiguous',
   );
+  let createCalls = 0;
+  let closeCalls = 0;
+  let evaluateCalls = 0;
+  await assert.rejects(
+    runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/test', openIfMissing: true }, deps({
+      listTargets: async () => [
+        { id: 'a', type: 'page', url: 'https://chatgpt.com/c/test', webSocketDebuggerUrl: 'ws://a' },
+        { id: 'b', type: 'page', url: 'https://chatgpt.com/c/test?x=1', webSocketDebuggerUrl: 'ws://b' },
+      ],
+      createPage: async () => { createCalls += 1; throw new Error('must_not_create'); },
+      closePage: async () => { closeCalls += 1; return 'closed'; },
+      evaluate: async () => { evaluateCalls += 1; throw new Error('must_not_evaluate'); },
+    })),
+    (error: any) => error.status === 'ambiguous',
+  );
+  assert.deepEqual({ createCalls, closeCalls, evaluateCalls }, { createCalls: 0, closeCalls: 0, evaluateCalls: 0 });
 });
 
 test('inspection keeps innerText and textContent distinct and emits bounded witnesses', async () => {
@@ -646,8 +664,13 @@ test('contract proof: owner isolation and deadline-isolated liveness', async () 
   const starts: string[] = [];
   const settled: string[] = [];
   const evaluateCalls: string[] = [];
-  let settledBeforeAllStarted = false;
   let mutations = 0;
+  const ledger = {
+    census: [] as string[],
+    started: [] as string[],
+    settled: [] as Array<{ target_id: string; liveness: 'responsive' | 'unresponsive' }>,
+  };
+  let pendingHungTarget: string | undefined;
   const livenessTargets: CdpTarget[] = Array.from({ length: LIVENESS_FAN_OUT }, (_, index) => ({
     id: `live-${index}`,
     type: 'page',
@@ -655,50 +678,75 @@ test('contract proof: owner isolation and deadline-isolated liveness', async () 
     title: `Live ${index}`,
     webSocketDebuggerUrl: `ws://example/live-${index}`,
   }));
+  ledger.census = livenessTargets.map((target) => target.id!);
+  const fakeTimers = new Set<{ cancelled: boolean }>();
   const liveness = await runProbe({ operation: 'liveness', cdp: 'http://127.0.0.1:9222' }, deps({
     listTargets: async () => livenessTargets,
+    now: () => fakeNow,
+    setTimeout: (callback, delay) => {
+      const timer = { cancelled: false };
+      fakeTimers.add(timer);
+      if (delay === LIVENESS_TARGET_TIMEOUT_MS && pendingHungTarget) {
+        const hungTarget = pendingHungTarget;
+        pendingHungTarget = undefined;
+        fakeNow += delay;
+        queueMicrotask(() => {
+          if (timer.cancelled) return;
+          ledger.settled.push({ target_id: hungTarget, liveness: 'unresponsive' });
+          callback();
+        });
+      }
+      return timer as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimeout: (handle) => {
+      (handle as unknown as { cancelled: boolean }).cancelled = true;
+    },
     evaluate: async (target, expression) => {
       assert.equal(expression, LIVENESS_EXPRESSION);
       starts.push(target.target_id);
       evaluateCalls.push(target.target_id);
-      if (target.target_id === 'live-0') return await new Promise<never>(() => {});
-      return Promise.resolve({ status: 'ok', ready_state: 'complete' }).then((value) => {
-        if (starts.length < LIVENESS_FAN_OUT) settledBeforeAllStarted = true;
-        settled.push(target.target_id);
-        return value;
-      });
+      ledger.started.push(target.target_id);
+      if (target.target_id === 'live-0') {
+        pendingHungTarget = target.target_id;
+        return await new Promise<never>(() => {});
+      }
+      settled.push(target.target_id);
+      ledger.settled.push({ target_id: target.target_id, liveness: 'responsive' });
+      return { status: 'ok', ready_state: 'complete' };
     },
     createPage: async () => { mutations += 1; return createdTarget; },
     closePage: async () => { mutations += 1; return 'closed'; },
   }));
   assert.equal(liveness.status, 'ok');
   assert.equal(CDP_REQUEST_TIMEOUT_MS + LIVENESS_TARGET_TIMEOUT_MS < LIVENESS_TOTAL_TIMEOUT_MS, true);
-  assert.equal((liveness.targets as unknown[]).length, LIVENESS_FAN_OUT);
-  assert.equal(starts.length, LIVENESS_FAN_OUT);
-  assert.deepEqual(liveness.unresponsive_target_ids, ['live-0']);
+  assert.equal((liveness.targets as unknown[]).length, ledger.census.slice(0, LIVENESS_FAN_OUT).length);
+  assert.deepEqual(starts, ledger.census.slice(0, LIVENESS_FAN_OUT));
+  assert.deepEqual(liveness.unresponsive_target_ids, ledger.settled.filter((row) => row.liveness === 'unresponsive').map((row) => row.target_id));
   assert.equal((liveness.targets as any[]).every((row) => row.liveness !== 'not_started'), true);
   assert.equal(mutations, 0);
   assert.equal(settled.length, LIVENESS_FAN_OUT - 1);
-  assert.equal(settledBeforeAllStarted, false);
   const observedRows = liveness.targets as Array<{ target_id: string; liveness: string }>;
-  const observedSettledTargetIds = observedRows.filter((row) => row.liveness !== 'unresponsive').map((row) => row.target_id);
-  const observedUnresponsiveTargetIds = starts.filter((targetId) => !settled.includes(targetId));
-  assert.deepEqual([...observedSettledTargetIds].sort(), [...settled].sort());
-  assert.deepEqual(liveness.unresponsive_target_ids, observedUnresponsiveTargetIds);
-  assert.equal(evaluateCalls.length - starts.length, 0);
+  const ledgerSettledIds = ledger.settled.map((row) => row.target_id);
+  assert.deepEqual([...ledgerSettledIds].sort(), [...observedRows.map((row) => row.target_id)].sort());
+  assert.deepEqual(
+    observedRows.map((row) => [row.target_id, row.liveness]).sort(),
+    ledger.settled.map((row) => [row.target_id, row.liveness]).sort(),
+  );
+  assert.equal(liveness.observed_compatible_targets, ledger.census.length);
+  assert.equal(evaluateCalls.length, ledger.started.length);
   const proof = {
     schema: 'browser-gpt-page-probe-contract-proof/v1',
     result: 'owner-isolation-and-liveness-deadline-isolation',
     created_target_id: ownedId,
     close_calls: closeCalls,
     reused_close_calls: reusedCloseCalls,
-    admitted_target_ids: starts,
-    started_target_ids: starts,
-    settled_target_ids: [...observedSettledTargetIds, ...observedUnresponsiveTargetIds],
-    admitted_target_count: starts.length,
-    settled_target_count: observedRows.length,
-    unresponsive_target_ids: observedUnresponsiveTargetIds,
-    retry_count: evaluateCalls.length - starts.length,
+    admitted_target_ids: ledger.census.slice(0, LIVENESS_FAN_OUT),
+    started_target_ids: ledger.started,
+    settled_target_ids: ledgerSettledIds,
+    admitted_target_count: ledger.census.slice(0, LIVENESS_FAN_OUT).length,
+    settled_target_count: ledger.settled.length,
+    unresponsive_target_ids: ledger.settled.filter((row) => row.liveness === 'unresponsive').map((row) => row.target_id),
+    retry_count: 0,
     diagnostic_only: true,
     workflow_authority: 'none',
   };
@@ -737,6 +785,29 @@ test('acquisition rejects redirect and malformed creation, while exposing cleanu
     (error: any) => error.status === 'unavailable' && error.reason === 'create_result_ambiguous',
   );
   assert.equal(malformedCloseCalls, 0);
+
+  let timedOutCreateCalls = 0;
+  let timedOutCloseCalls = 0;
+  let timedOutEvaluateCalls = 0;
+  let creatingTimedOut = false;
+  await assert.rejects(
+    runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/timed-out', openIfMissing: true }, deps({
+      listTargets: async () => [],
+      createPage: async () => { creatingTimedOut = true; timedOutCreateCalls += 1; return await new Promise<never>(() => {}); },
+      closePage: async () => { timedOutCloseCalls += 1; return 'closed'; },
+      evaluate: async () => { timedOutEvaluateCalls += 1; return {}; },
+      setTimeout: (callback, delay) => {
+        if (creatingTimedOut && delay === CDP_REQUEST_TIMEOUT_MS) queueMicrotask(callback);
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: () => {},
+    })),
+    (error: any) => error.status === 'unavailable' && error.reason === 'page_create_timeout',
+  );
+  assert.deepEqual(
+    { timedOutCreateCalls, timedOutCloseCalls, timedOutEvaluateCalls },
+    { timedOutCreateCalls: 1, timedOutCloseCalls: 0, timedOutEvaluateCalls: 0 },
+  );
 
   let samples = 0;
   await assert.rejects(
@@ -897,25 +968,34 @@ test('acquisition reports already_gone after successful inspection and exact own
 
 test('readiness rejects loading documents at the bounded deadline', async () => {
   let sample = 0;
+  let createCalls = 0;
+  let closeCalls: string[] = [];
+  let evaluateCalls = 0;
   await assert.rejects(
     runProbe({
       operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/loading', openIfMissing: true,
     }, deps({
       listTargets: async () => [],
-      createPage: async () => ({
-        id: 'loading', type: 'page', url: 'about:blank', title: 'Loading',
-        webSocketDebuggerUrl: 'ws://example/loading',
-      }),
-      closePage: async () => 'closed',
+      createPage: async () => {
+        createCalls += 1;
+        return { id: 'loading', type: 'page', url: 'about:blank', title: 'Loading', webSocketDebuggerUrl: 'ws://example/loading' };
+      },
+      closePage: async (_cdp, targetId) => { closeCalls.push(targetId); return 'closed'; },
       now: () => sample * 250,
       sleep: async () => { sample += 1; },
-      evaluate: async (_target, expression) => evaluateExpression(expression, [
+      evaluate: async (_target, expression) => {
+        evaluateCalls += 1;
+        return evaluateExpression(expression, [
         new FakeNode('user', 'Question', 'Question'),
         new FakeNode('assistant', 'Answer', 'Answer'),
-      ], false, 'https://chatgpt.com/c/loading', 'loading'),
+        ], false, 'https://chatgpt.com/c/loading', 'loading');
+      },
     })),
     (error: any) => error.status === 'surface_unknown' && error.reason === 'readiness_timeout',
   );
+  assert.equal(createCalls, 1);
+  assert.deepEqual(closeCalls, ['loading']);
+  assert.equal(evaluateCalls, Math.ceil(ACQUISITION_READINESS_TIMEOUT_MS / ACQUISITION_READINESS_INTERVAL_MS));
 });
 
 test('production-shaped liveness evaluation timeout is unresponsive', async () => {
@@ -933,18 +1013,39 @@ test('production-shaped liveness evaluation timeout is unresponsive', async () =
 
 test('liveness reports unavailable targets and truncation without mutation', async () => {
   let evaluateCalls = 0;
+  let createCalls = 0;
+  let closeCalls = 0;
+  const census: CdpTarget[] = [
+    { id: 'without-ws', type: 'page', url: 'https://chatgpt.com/c/without-ws', title: 'No WS' },
+    ...Array.from({ length: MAX_TARGETS + 1 }, (_, index) => ({
+      id: `with-ws-${index}`,
+      type: 'page' as const,
+      url: `https://chatgpt.com/c/with-ws-${index}`,
+      title: `With WS ${index}`,
+      webSocketDebuggerUrl: `ws://example/with-ws-${index}`,
+    })),
+  ];
   const result = await runProbe({ operation: 'liveness', cdp: 'http://127.0.0.1:9222' }, deps({
-    listTargets: async () => [
-      { id: 'without-ws', type: 'page', url: 'https://chatgpt.com/c/without-ws', title: 'No WS' },
-      { id: 'with-ws', type: 'page', url: 'https://chatgpt.com/c/with-ws', title: 'With WS', webSocketDebuggerUrl: 'ws://example/with-ws' },
-    ],
-    evaluate: async (_target, expression) => { evaluateCalls += 1; assert.equal(expression, LIVENESS_EXPRESSION); return { status: 'ok', ready_state: 'interactive' }; },
+    listTargets: async () => census,
+    createPage: async () => { createCalls += 1; throw new Error('must_not_create'); },
+    closePage: async () => { closeCalls += 1; return 'closed'; },
+    evaluate: async (_target, expression) => {
+      evaluateCalls += 1;
+      assert.equal(expression, LIVENESS_EXPRESSION);
+      return { status: 'ok', ready_state: 'interactive' };
+    },
   }));
   assert.equal(result.status, 'ok');
-  assert.deepEqual((result.targets as any[]).map((row) => row.liveness), ['unavailable', 'responsive']);
+  assert.equal((result.targets as any[]).length, MAX_TARGETS);
+  assert.deepEqual((result.targets as any[]).map((row) => row.liveness), [
+    'unavailable', ...Array(MAX_TARGETS - 1).fill('responsive'),
+  ]);
   assert.equal((result.targets as any[])[0].reason, 'target_websocket_unavailable');
-  assert.equal(result.targets_truncated, false);
-  assert.equal(evaluateCalls, 1);
+  assert.equal(result.targets_truncated, true);
+  assert.equal(result.observed_compatible_targets, MAX_TARGETS + 2);
+  assert.equal(evaluateCalls, MAX_TARGETS - 1);
+  assert.equal(createCalls, 0);
+  assert.equal(closeCalls, 0);
 });
 
 test('the canonical npm entrypoint emits exactly one JSON result line', async () => {

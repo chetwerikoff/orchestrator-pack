@@ -93,11 +93,14 @@ best-effort to the local recurrence journal and included in the current report;
 do not use that journal to authorize work.
 
 When direct diagnosis is genuinely needed, run the sanctioned one-shot,
-read-only page probe with local variables such as `${CDP_ENDPOINT}` and an
-exact target identity. It never navigates, sends, clicks, focuses, reloads,
-creates, closes, publishes, retries, or progresses a stage. Do not replace it
-with raw CDP, Playwright, salvage scripts, selectors, JavaScript, or a watch
-loop.
+read-only **non-acquisition** page probe with local variables such as
+`${CDP_ENDPOINT}` and an exact target identity. Non-acquisition operations
+never navigate, send, click, focus, reload, create, close, publish, retry, or
+progress a stage. The explicit `inspect --url ... --open-if-missing true`
+acquisition path is the sole opt-in exception: it may create one owned page,
+observe it until readiness, and close exactly that owned page before returning.
+Do not replace either path with raw CDP, Playwright, salvage scripts, selectors,
+JavaScript, or a watch loop.
 
 For contract-evidence authoring, `binding-id` uses
 `producer:datum:expected`, for example
@@ -119,13 +122,9 @@ synchronized in the same PR:
 | local configuration or setup prerequisite | update the runbook and owning reference |
 | link or Issue authority supersession | repair all in-scope pointers and current-authority wording |
 
-1. retain and report the invocation-local terminal result or explicit missing-terminal incident;
-2. append the compact event best-effort to `~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl`;
-3. include the same direct event in the current flow-manager report;
-4. leave sibling Browser-GPT work alone;
-5. do not restart unless the result proves an eligible zero-send failure under the rule above.
-
-Duplicate recoverable text is not a reason to reintroduce global recovery/clear machinery. Source-preserving receipts and relay verification govern what may progress.
+Duplicate recoverable text is not a reason to reintroduce global recovery/clear
+machinery. Source-preserving receipts and relay verification govern what may
+progress.
 
 ## Sanctioned one-shot page probe
 
@@ -138,7 +137,7 @@ npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --url <exa
 npm run browser-gpt-page-probe -- liveness --cdp http://127.0.0.1:9222
 ```
 
-The exact URL form remains existing-target-only unless `--open-if-missing true` is explicitly supplied. It reuses exactly one normalized match without closing it; with zero matches it may create one page, waits for exact normalized conversation identity and bounded readable SPA state, then closes only the valid target identity returned by that same invocation. A redirect or same-path cross-host result is `surface_unknown` with `conversation_identity_mismatch`. Duplicate matches, malformed creation, cleanup failure, and every reused-page path fail closed without guessed or delayed cleanup.
+The exact URL form remains existing-target-only unless `--open-if-missing true` is explicitly supplied. Without acquisition it reuses exactly one normalized match without creating or closing anything. With explicit acquisition it may create one page, waits for exact normalized conversation identity and bounded readable SPA state, then closes only the valid target identity returned by that same invocation. A redirect or same-path cross-host result is `surface_unknown` with `conversation_identity_mismatch`. Duplicate matches, malformed or timed-out creation, cleanup failure, and every reused-page path fail closed without guessed or delayed cleanup.
 
 `liveness` is a single passive census with immediate `MAX_TARGETS` fan-out and independent target deadlines. It reports responsive, unresponsive, or unavailable rows and exact unresponsive IDs; it never creates, closes, navigates, sends, reloads, or infers process death. Every operation runs once and exits with no watch loop, daemon, retry, background owner, or retained state.
 
