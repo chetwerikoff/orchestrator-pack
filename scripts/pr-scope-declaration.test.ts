@@ -527,6 +527,21 @@ describe('AO-free PR scope declaration contract', () => {
     expect(workflow).toContain(
       'scope guard bootstrap: PR changed paths do not match the authorized implementation set',
     );
+    expect(workflow).toContain('$bootstrapLabels = [regex]::Matches(');
+    expect(workflow).toContain(
+      'scope guard bootstrap: expected exactly one bootstrap declaration label',
+    );
+    expect(workflow).toContain('$revisionMatches = [regex]::Matches(');
+    expect(workflow).toContain(
+      'scope guard bootstrap: expected exactly one source revision',
+    );
+    expect(workflow).not.toContain('$revisionMatch = [regex]::Match(');
+    expect(workflow).toContain(
+      'scope guard bootstrap: bootstrap fields do not match the closed schema',
+    );
+    expect(workflow).toContain(
+      'scope guard bootstrap: bootstrap field types are invalid',
+    );
   });
 
   it('does not let malformed current-Issue candidates use the live-Issue path', () => {
