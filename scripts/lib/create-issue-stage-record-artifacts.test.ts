@@ -856,6 +856,37 @@ describe('Issue #1341 operator-adjudicated final-acceptance artifacts', () => {
     };
   }
 
+  function referenceTransport(
+    capture: string,
+    overrides: Record<string, unknown> = {},
+    exitCode = 0,
+  ) {
+    return {
+      runGh(argv: string[]) {
+        expect(argv).toEqual([
+'gh',
+'api',
+'repos/chetwerikoff/orchestrator-pack/issues/comments/5194504082',
+        ]);
+        return {
+exitCode,
+stderr: exitCode === 0 ? '' : 'not found',
+stdout: exitCode === 0 ? JSON.stringify({
+  id: 5194504082,
+  html_url: 'https://github.com/chetwerikoff/orchestrator-pack/issues/1192#issuecomment-5194504082',
+  issue_url: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/1192',
+  body: capture,
+  created_at: '2026-08-05T15:00:00Z',
+  updated_at: '2026-08-05T15:00:00Z',
+  user: { login: 'chetwerikoff' },
+  author_association: 'OWNER',
+  ...overrides,
+}) : '',
+        };
+      },
+    };
+  }
+
   for (const transportState of ['absent', 'driver_error'] as const) {
     it(`accepts exact governed bytes with ${transportState} transport and preserves that fact`, () => {
       const input = fixture();
@@ -892,6 +923,7 @@ configured_profile_key: 'fixture-profile',
         authorDispositionsPath: input.authorPath,
         phase: 'final-acceptance' as const,
         operatorAdjudication: adjudication(capture),
+        operatorReferenceTransport: referenceTransport(capture),
       };
       const result = produceAcceptanceArtifacts(options);
       expect(result.ok, result.errors.join('\n')).toBe(true);
@@ -933,6 +965,53 @@ terminalClassification: 'complete',
     expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
   });
 
+
+  for (const scenario of [
+    {
+      name: 'edited published reference',
+      transport: (capture: string) => referenceTransport(capture, { updated_at: '2026-08-05T15:01:00Z' }),
+      error: 'was edited',
+    },
+    {
+      name: 'unavailable published reference',
+      transport: (capture: string) => referenceTransport(capture, {}, 1),
+      error: 'is unavailable',
+    },
+    {
+      name: 'incompletely observed published reference',
+      transport: (capture: string) => referenceTransport(capture, { author_association: undefined }),
+      error: 'is incompletely observed',
+    },
+    {
+      name: 'published bytes that differ from the governed capture',
+      transport: (capture: string) => referenceTransport(`${capture}edited`),
+      error: 'SHA-256 is mismatched',
+    },
+  ]) {
+    it(`rejects ${scenario.name} before artifact publication`, () => {
+      const input = fixture();
+      const capture = governedCapture();
+      writeFileSync(input.capturePath, capture);
+      const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+      delete evidence.invocations[0].turnResultPath;
+      writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+      const outputDir = join(input.dir, `operator-reference-${scenario.name.replaceAll(' ', '-')}`);
+      const result = produceAcceptanceArtifacts({
+        reviewDir: input.dir,
+        outputDir,
+        tierIntakePath: input.intakePath,
+        stageEvidencePaths: [input.stageEvidencePath],
+        authorDispositionsPath: input.authorPath,
+        phase: 'final-acceptance',
+        operatorAdjudication: adjudication(capture),
+        operatorReferenceTransport: scenario.transport(capture),
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain(scenario.error);
+      expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
+    });
+  }
+
   it('rejects a byte/hash mismatch before artifact publication', () => {
     const input = fixture();
     const capture = governedCapture();
@@ -949,6 +1028,7 @@ terminalClassification: 'complete',
       authorDispositionsPath: input.authorPath,
       phase: 'final-acceptance',
       operatorAdjudication: { ...adjudication(capture), verdictSha256: '0'.repeat(64) },
+      operatorReferenceTransport: referenceTransport(capture),
     });
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('must match exactly one absent or non-ok terminal invocation');

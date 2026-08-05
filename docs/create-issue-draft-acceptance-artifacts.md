@@ -145,7 +145,10 @@ supply one exact Issue number and revision, a canonical already-published
 verdict comment URL, the governed verdict bytes' SHA-256, byte length and
 finding count, plus a non-empty reason. The producer accepts this only when
 those values exactly match one governed terminal capture and that invocation's
-`turn-result/v1` is absent or non-`ok`.
+`turn-result/v1` is absent or non-`ok`. Before accepting, the canonical GitHub
+transport reads the exact referenced comment and rejects an unavailable, edited,
+identity-mismatched, malformed, or incompletely observed reference. The observed
+comment bytes must exactly equal the governed capture bytes.
 
 The manifest records `operator_adjudicated` provenance, the exact
 target/reference/reason, and the original absent or non-`ok` transport fact

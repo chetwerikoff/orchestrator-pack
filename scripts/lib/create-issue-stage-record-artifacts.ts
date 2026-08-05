@@ -31,6 +31,8 @@ import {
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
+import { defaultGhTransport } from './create-issue-stage-record-gh.ts';
+import type { GhTransport } from './create-issue-stage-record-types.ts';
 
 export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
 export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
@@ -88,11 +90,17 @@ export interface ProduceAcceptanceArtifactsOptions {
   outputDir?: string;
   phase?: 'pre-lens' | 'final-acceptance';
   operatorAdjudication?: OperatorAcceptanceAdjudication;
+  operatorReferenceTransport?: GhTransport;
 }
 
 interface NormalizedOperatorAcceptanceAdjudication extends OperatorAcceptanceAdjudication {
   repositoryFullName: string;
   commentId: string;
+  authoritativeBody: string;
+  createdAt: string;
+  updatedAt: string;
+  authorLogin: string;
+  authorAssociation: string;
 }
 
 interface OperatorAdjudicationApplication {
@@ -359,9 +367,11 @@ function parseCanonicalCaptureRevision(text: string): { issueNumber: number; sou
 function normalizeOperatorAcceptanceAdjudication(
   value: OperatorAcceptanceAdjudication | undefined,
   phase: ProduceAcceptanceArtifactsOptions['phase'],
+  transport: GhTransport | undefined,
   errors: string[],
 ): NormalizedOperatorAcceptanceAdjudication | null {
   if (!value) return null;
+  const errorCountBefore = errors.length;
   if ((phase ?? 'final-acceptance') !== 'final-acceptance') {
     errors.push('operator adjudication is valid only for final-acceptance artifact production');
   }
@@ -381,7 +391,76 @@ function normalizeOperatorAcceptanceAdjudication(
   const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)$/.exec(verdictUrl);
   if (!match) errors.push('operator adjudication verdictUrl must be a canonical published Issue comment URL');
   else if (Number(match[2]) !== issueNumber) errors.push('operator adjudication verdictUrl Issue does not match issueNumber');
-  if (errors.length > 0 || !match) return null;
+  if (errors.length !== errorCountBefore || !match) return null;
+  if (!transport) {
+    errors.push('operator adjudication published verdict transport is unavailable');
+    return null;
+  }
+
+  const repositoryFullName = match[1]!;
+  const commentId = match[3]!;
+  const response = transport.runGh([
+    'gh',
+    'api',
+    `repos/${repositoryFullName}/issues/comments/${commentId}`,
+  ]);
+  if (response.exitCode !== 0) {
+    errors.push('operator adjudication published verdict reference is unavailable');
+    return null;
+  }
+  let observed: unknown;
+  try {
+    observed = JSON.parse(response.stdout) as unknown;
+  } catch {
+    errors.push('operator adjudication published verdict reference is malformed');
+    return null;
+  }
+  if (!isRecord(observed)) {
+    errors.push('operator adjudication published verdict reference is incompletely observed');
+    return null;
+  }
+  const observedId = Number(observed.id);
+  const observedUrl = typeof observed.html_url === 'string' ? observed.html_url : '';
+  const observedIssueUrl = typeof observed.issue_url === 'string' ? observed.issue_url : '';
+  const authoritativeBody = typeof observed.body === 'string' ? observed.body : '';
+  const createdAt = typeof observed.created_at === 'string' ? observed.created_at : '';
+  const updatedAt = typeof observed.updated_at === 'string' ? observed.updated_at : '';
+  const user = isRecord(observed.user) ? observed.user : null;
+  const authorLogin = typeof user?.login === 'string' ? user.login : '';
+  const authorAssociation = typeof observed.author_association === 'string' ? observed.author_association : '';
+  if (
+    !Number.isInteger(observedId)
+    || !observedUrl
+    || !observedIssueUrl
+    || !authoritativeBody
+    || !createdAt
+    || !updatedAt
+    || !authorLogin
+    || !authorAssociation
+  ) {
+    errors.push('operator adjudication published verdict reference is incompletely observed');
+    return null;
+  }
+  const expectedIssueUrl = `https://api.github.com/repos/${repositoryFullName}/issues/${issueNumber}`;
+  if (observedId !== Number(commentId) || observedUrl !== verdictUrl || observedIssueUrl !== expectedIssueUrl) {
+    errors.push('operator adjudication published verdict reference identity is mismatched');
+  }
+  if (updatedAt !== createdAt) {
+    errors.push('operator adjudication published verdict reference was edited');
+  }
+  const parsed = parseCanonicalCaptureRevision(authoritativeBody);
+  if (!parsed) {
+    errors.push('operator adjudication published verdict has no unique canonical revision declaration');
+  } else {
+    if (parsed.issueNumber !== issueNumber) errors.push('operator adjudication published verdict Issue is mismatched');
+    if (parsed.sourceRevision !== sourceRevision) errors.push('operator adjudication published verdict revision is mismatched');
+    if (parsed.findingCount !== verdictFindingCount) errors.push('operator adjudication published verdict finding count is mismatched');
+  }
+  const observedSha256 = createHash('sha256').update(authoritativeBody).digest('hex');
+  if (observedSha256 !== verdictSha256) errors.push('operator adjudication published verdict SHA-256 is mismatched');
+  if (Buffer.byteLength(authoritativeBody) !== verdictByteLength) errors.push('operator adjudication published verdict byte length is mismatched');
+  if (rawFindingCount(authoritativeBody) !== verdictFindingCount) errors.push('operator adjudication published verdict finding count is mismatched');
+  if (errors.length !== errorCountBefore) return null;
   return {
     issueNumber,
     sourceRevision,
@@ -390,8 +469,13 @@ function normalizeOperatorAcceptanceAdjudication(
     verdictByteLength,
     verdictFindingCount,
     reason,
-    repositoryFullName: match[1]!,
-    commentId: match[3]!,
+    repositoryFullName,
+    commentId,
+    authoritativeBody,
+    createdAt,
+    updatedAt,
+    authorLogin,
+    authorAssociation,
   };
 }
 
@@ -409,6 +493,7 @@ function applyOperatorAcceptanceAdjudication(
     capture.sha256 !== adjudication.verdictSha256
     || capture.byteLength !== adjudication.verdictByteLength
     || capture.rawFindingCount !== adjudication.verdictFindingCount
+    || captureText !== adjudication.authoritativeBody
   ) return null;
   const parsed = parseCanonicalCaptureRevision(captureText);
   if (!parsed) {
@@ -1042,6 +1127,7 @@ export function produceAcceptanceArtifacts(
   const operatorAdjudication = normalizeOperatorAcceptanceAdjudication(
     options.operatorAdjudication,
     options.phase,
+    options.operatorAdjudication ? options.operatorReferenceTransport ?? defaultGhTransport() : undefined,
     errors,
   );
   const operatorContext = operatorAdjudication
@@ -1191,6 +1277,10 @@ commentId: operatorContext.adjudication.commentId,
 sha256: operatorContext.adjudication.verdictSha256,
 byteLength: operatorContext.adjudication.verdictByteLength,
 findingCount: operatorContext.adjudication.verdictFindingCount,
+createdAt: operatorContext.adjudication.createdAt,
+updatedAt: operatorContext.adjudication.updatedAt,
+authorLogin: operatorContext.adjudication.authorLogin,
+authorAssociation: operatorContext.adjudication.authorAssociation,
         },
         reason: operatorContext.adjudication.reason,
         originalTransport: (operatorContext.applications[0] as OperatorAdjudicationApplication).originalTransport,
@@ -1231,6 +1321,7 @@ export function inspectAcceptanceArtifacts(
   const operatorAdjudication = normalizeOperatorAcceptanceAdjudication(
     options.operatorAdjudication,
     options.phase,
+    options.operatorAdjudication ? options.operatorReferenceTransport ?? defaultGhTransport() : undefined,
     operatorErrors,
   );
   for (const error of operatorErrors) missing.push({ artifact: 'operator adjudication', reason: error });
