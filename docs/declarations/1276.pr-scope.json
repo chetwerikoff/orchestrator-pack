@@ -59,5 +59,5 @@
     "scripts/worker-smoke.test.ts",
     "tests/fixtures/pack-gpt-browser-turn-harness.mjs"
   ],
-  "source_revision": "42d967eb0489a3f31c99b550a285d432043162ab"
+  "source_revision": "d7d0e861078486c446f773db9ce868b6829137e8"
 }
