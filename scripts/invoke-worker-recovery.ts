@@ -4,7 +4,10 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { selectRuntimeAdapter } from './runtime/registry.ts';
-import { recoverRuntimeWorker } from './runtime/worker-recovery.ts';
+import {
+  recoverRuntimeWorker,
+  type WorkerRecoveryCleanupAuthority,
+} from './runtime/worker-recovery.ts';
 import {
   acquireWorkerRecoveryClaim,
   finalizeWorkerRecoveryClaim,
@@ -118,11 +121,9 @@ export function parseWorkerRecoveryArgs(argv: readonly string[]): WorkerRecovery
 
   if (!options.cleanupWorkspacePath) throw new Error('--cleanup-workspace is required');
   if (!options.expectedHeadSha) throw new Error('--expected-head-sha is required');
-  if (options.workerId && !options.workerGeneration) {
-    throw new Error('--worker-generation is required with --worker-id');
-  }
-  if (!options.workerId && options.workerGeneration) {
-    throw new Error('--worker-id is required with --worker-generation');
+  if (!options.workerId) throw new Error('--worker-id is required for destructive recovery');
+  if (!options.workerGeneration) {
+    throw new Error('--worker-generation is required for destructive recovery');
   }
   if (options.spawnWorkspace !== 'active'
     && resolve(options.spawnWorkspace) === resolve(options.cleanupWorkspacePath)) {
@@ -133,10 +134,17 @@ export function parseWorkerRecoveryArgs(argv: readonly string[]): WorkerRecovery
   return options;
 }
 
+/**
+ * The CLI deliberately cannot mint cleanup authority from its flags or from the
+ * recovery-time serialization claim. A caller that already loaded and validated
+ * a durable pack reservation may pass that authority through this API; the
+ * direct command otherwise fails closed before removeWorkspace.
+ */
 export async function runWorkerRecovery(input: {
   readonly options: WorkerRecoveryCliOptions;
   readonly adapter?: RuntimeAdapter;
   readonly claimNamespace?: string;
+  readonly cleanupAuthority?: WorkerRecoveryCleanupAuthority;
 }): Promise<Record<string, unknown>> {
   const { options } = input;
   if (options.dryRun) {
@@ -146,8 +154,9 @@ export async function runWorkerRecovery(input: {
       cleanupWorkspacePath: options.cleanupWorkspacePath,
       expectedHeadSha: options.expectedHeadSha,
       spawnWorkspace: options.spawnWorkspace,
-      workerId: options.workerId || undefined,
-      workerGeneration: options.workerGeneration || undefined,
+      workerId: options.workerId,
+      workerGeneration: options.workerGeneration,
+      cleanupAuthorityPresent: Boolean(input.cleanupAuthority),
     };
   }
 
@@ -162,14 +171,22 @@ export async function runWorkerRecovery(input: {
     };
   }
 
+  if (!input.cleanupAuthority) {
+    return {
+      outcome: 'skipped_ambiguous',
+      reason: 'cleanup_ownership_authority_missing',
+      claimKey: options.claimKey,
+    };
+  }
+
   const claimNamespace = input.claimNamespace
     ?? join(resolveWakeSupervisorStateRoot(), 'worker-recovery', options.projectId);
   const claim = acquireWorkerRecoveryClaim({
     namespace: claimNamespace,
     claimKey: options.claimKey,
     workspacePath: options.cleanupWorkspacePath,
-    workerId: options.workerId || undefined,
-    workerGeneration: options.workerGeneration || undefined,
+    workerId: options.workerId,
+    workerGeneration: options.workerGeneration,
     surface: options.surface,
   });
   if (!claim.acquired) {
@@ -179,13 +196,14 @@ export async function runWorkerRecovery(input: {
   try {
     const result = recoverRuntimeWorker({
       adapter,
-      targetId: options.workerId || undefined,
-      targetGeneration: options.workerGeneration || undefined,
+      targetId: options.workerId,
+      targetGeneration: options.workerGeneration,
       workspace: options.spawnWorkspace,
       cleanupWorkspace: {
         workspacePath: options.cleanupWorkspacePath,
         expectedHeadSha: options.expectedHeadSha,
       },
+      cleanupAuthority: input.cleanupAuthority,
       title: options.title,
       command: options.command,
       acquireClaim: () => ({ ok: true }),
