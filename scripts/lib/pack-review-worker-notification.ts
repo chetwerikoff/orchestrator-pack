@@ -9,6 +9,7 @@ import type {
   PackReviewWorkerNotificationRequest,
   PackReviewWorkerNotificationResult,
 } from './pack-review-delivery.ts';
+import { getPackReviewRun } from './pack-review-run-store.ts';
 import { runProcess } from '../kernel/subprocess.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
@@ -45,6 +46,7 @@ export interface WorkerNotificationOptions {
   request: PackReviewWorkerNotificationRequest;
   repoRoot?: string;
   projectId?: string;
+  storeRoot?: string;
   prNumber?: number;
   issueNumber?: number;
   headSha?: string;
@@ -223,14 +225,66 @@ function fixture(options: WorkerNotificationOptions, workerId: string): PackRevi
   return { state: 'delivered', reason: 'fixture_dispatched' };
 }
 
+function bindPersistedReviewRun(options: WorkerNotificationOptions):
+  | { ok: true; options: WorkerNotificationOptions }
+  | { ok: false; reason: string } {
+  const reviewRunId = trim(options.request.reviewRunId);
+  if (!reviewRunId) return { ok: true, options };
+
+  let run;
+  try {
+    run = getPackReviewRun(reviewRunId, {
+      projectId: trim(options.projectId) || undefined,
+      storeRoot: trim(options.storeRoot) || undefined,
+    });
+  } catch {
+    return { ok: false, reason: 'review_run_binding_unresolved' };
+  }
+  if (!run) {
+    // Preserve the explicit low-level API for focused callers. The production
+    // runner supplies only reviewRunId/sessionId and therefore cannot cross this
+    // branch without the durable run binding.
+    return Number.isInteger(Number(options.prNumber)) && Number(options.prNumber) > 0
+      ? { ok: true, options }
+      : { ok: false, reason: 'review_run_binding_unresolved' };
+  }
+
+  const explicitPrNumber = Number(options.prNumber ?? 0);
+  if (explicitPrNumber > 0 && explicitPrNumber !== run.prNumber) {
+    return { ok: false, reason: 'review_run_pr_mismatch' };
+  }
+  const explicitHeadSha = trim(options.headSha).toLowerCase();
+  if (explicitHeadSha && explicitHeadSha !== run.targetSha) {
+    return { ok: false, reason: 'review_run_head_mismatch' };
+  }
+  const workerId = trim(options.workerId || options.sessionId || run.linkedSessionId);
+  if (!workerId) return { ok: false, reason: 'worker_id_unresolved' };
+
+  return {
+    ok: true,
+    options: {
+      ...options,
+      workerId,
+      sessionId: undefined,
+      repoRoot: trim(options.repoRoot) || run.sourceRepoRoot,
+      projectId: run.projectId,
+      prNumber: run.prNumber,
+      headSha: run.targetSha,
+    },
+  };
+}
+
 /**
  * Journal-first runtime notification. The adapter is selected once, target
  * generation is resolved before claim acquisition, and dispatch is attempted
  * exactly once. `dispatch_unknown` is persisted as UNCERTAIN and never retried.
  */
 export async function sendPackReviewWorkerNotification(
-  options: WorkerNotificationOptions,
+  originalOptions: WorkerNotificationOptions,
 ): Promise<PackReviewWorkerNotificationResult> {
+  const bound = bindPersistedReviewRun(originalOptions);
+  if (!bound.ok) return { state: 'escalated', reason: bound.reason };
+  const options = bound.options;
   const workerId = trim(options.workerId || options.sessionId);
   if (!workerId) return { state: 'escalated', reason: 'worker_id_unresolved' };
   const fixtureResult = fixture(options, workerId);
