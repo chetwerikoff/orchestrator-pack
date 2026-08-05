@@ -10,6 +10,11 @@ export const MAX_MESSAGE_SUMMARIES = 100;
 export const MAX_TEXT_CODE_POINTS = 160;
 export const MAX_NORMALIZED_URL_CODE_POINTS = 2_048;
 export const CDP_REQUEST_TIMEOUT_MS = 10_000;
+export const ACQUISITION_READINESS_TIMEOUT_MS = 10_000;
+export const ACQUISITION_READINESS_INTERVAL_MS = 250;
+export const LIVENESS_TARGET_TIMEOUT_MS = 2_000;
+export const LIVENESS_TOTAL_TIMEOUT_MS = 15_000;
+export const LIVENESS_FAN_OUT = MAX_TARGETS;
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
 const SHA256_RE = /^[0-9a-f]{64}$/;
@@ -26,7 +31,7 @@ const ALLOWLISTED_ATTRIBUTES = [
 ] as const;
 const ALLOWLISTED_ATTRIBUTE_SET = new Set<string>(ALLOWLISTED_ATTRIBUTES);
 
-export type ProbeOperation = 'list' | 'inspect' | 'export';
+export type ProbeOperation = 'list' | 'inspect' | 'export' | 'liveness';
 export type ProbeStatus =
   | 'ok'
   | 'not_found'
@@ -36,6 +41,7 @@ export type ProbeStatus =
   | 'surface_unknown'
   | 'unavailable'
   | 'export_failed'
+  | 'cleanup_failed'
   | 'input_invalid';
 export type MessageRole = 'user' | 'assistant';
 export type TextRepresentation = 'innerText' | 'textContent';
@@ -76,6 +82,7 @@ export interface NodeSummary {
 
 export interface InspectionSnapshot {
   readonly page_url: string;
+  readonly ready_state: 'loading' | 'interactive' | 'complete';
   readonly title: string;
   readonly generation_in_progress: boolean | 'unknown';
   readonly observed_user_nodes: number;
@@ -93,6 +100,7 @@ interface InspectionExpressionResult {
   readonly status: 'ok' | 'surface_unknown';
   readonly reason?: string;
   readonly page_url?: string;
+  readonly ready_state?: 'loading' | 'interactive' | 'complete';
   readonly title?: string;
   readonly generation_in_progress?: boolean | 'unknown';
   readonly observed_user_nodes?: number;
@@ -123,8 +131,14 @@ interface ExportExpressionResult {
 
 export interface ProbeDependencies {
   readonly listTargets: (cdp: string) => Promise<readonly CdpTarget[]>;
-  readonly evaluate: (target: CompatibleTarget, expression: string) => Promise<unknown>;
+  readonly evaluate: (target: CompatibleTarget, expression: string, timeoutMs?: number) => Promise<unknown>;
   readonly publish: (destination: string, bytes: Uint8Array) => Promise<void>;
+  readonly createPage?: (cdp: string, conversationUrl: string) => Promise<CdpTarget | readonly CdpTarget[]>;
+  readonly closePage?: (cdp: string, targetId: string) => Promise<'closed' | 'already_gone'>;
+  readonly setTimeout?: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
+  readonly clearTimeout?: (handle: ReturnType<typeof setTimeout>) => void;
+  readonly now?: () => number;
+  readonly sleep?: (delay: number) => Promise<void>;
 }
 
 export interface ParsedListArgs {
@@ -137,6 +151,7 @@ export interface ParsedInspectArgs {
   readonly cdp: string;
   readonly targetId?: string;
   readonly conversationUrl?: string;
+  readonly openIfMissing?: true;
 }
 
 export interface ParsedExportArgs {
@@ -152,7 +167,12 @@ export interface ParsedExportArgs {
   readonly output: string;
 }
 
-export type ParsedArgs = ParsedListArgs | ParsedInspectArgs | ParsedExportArgs;
+export interface ParsedLivenessArgs {
+  readonly operation: 'liveness';
+  readonly cdp: string;
+}
+
+export type ParsedArgs = ParsedListArgs | ParsedInspectArgs | ParsedExportArgs | ParsedLivenessArgs;
 
 interface ProbeEnvelope {
   readonly schema: typeof PROBE_SCHEMA;
@@ -166,12 +186,14 @@ interface ProbeEnvelope {
 class ProbeError extends Error {
   readonly status: ProbeStatus;
   readonly reason: string;
+  readonly details?: Readonly<Record<string, unknown>>;
 
-  constructor(status: ProbeStatus, reason: string, detail?: string) {
+  constructor(status: ProbeStatus, reason: string, detail?: string, details?: Readonly<Record<string, unknown>>) {
     super(detail ? `${reason}:${detail}` : reason);
     this.name = 'ProbeError';
     this.status = status;
     this.reason = reason;
+    this.details = details;
   }
 }
 
@@ -252,6 +274,16 @@ function isBoundedString(value: unknown, maxCodePoints: number): value is string
 
 function isSha256(value: unknown): value is string {
   return typeof value === 'string' && SHA256_RE.test(value);
+}
+
+function isDebuggerWebSocketUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || Array.from(value).length > MAX_NORMALIZED_URL_CODE_POINTS) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'ws:' || url.protocol === 'wss:') && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function malformedSurface(reason = 'malformed_snapshot'): never {
@@ -354,6 +386,9 @@ function validateInspectionSnapshot(
   }
   if (value.status !== 'ok'
     || !isBoundedString(value.page_url, MAX_NORMALIZED_URL_CODE_POINTS)
+    || (value.ready_state !== 'loading'
+      && value.ready_state !== 'interactive'
+      && value.ready_state !== 'complete')
     || !isBoundedString(value.title, MAX_TEXT_CODE_POINTS)
     || (typeof value.generation_in_progress !== 'boolean' && value.generation_in_progress !== 'unknown')
     || !isNonNegativeSafeInteger(value.observed_user_nodes)
@@ -413,6 +448,7 @@ function validateInspectionSnapshot(
   }
   return {
     page_url: requireActualTargetIdentity(target, value.page_url, requireResolvedUrlMatch),
+    ready_state: value.ready_state,
     title: boundedCodePoints(value.title),
     generation_in_progress: value.generation_in_progress,
     observed_user_nodes: value.observed_user_nodes,
@@ -430,10 +466,10 @@ function validateInspectionSnapshot(
 export function toCompatibleTargets(targets: readonly CdpTarget[]): CompatibleTarget[] {
   const compatible: CompatibleTarget[] = [];
   for (const target of targets) {
-    if (target.type !== 'page'
-      || !target.id
+    if (!isRecord(target) || target.type !== 'page'
+      || typeof target.id !== 'string'
       || !TARGET_ID_RE.test(target.id)
-      || !target.url
+      || typeof target.url !== 'string'
       || !isCompatibleChatGptUrl(target.url)) continue;
     let normalized: string;
     try {
@@ -446,7 +482,7 @@ export function toCompatibleTargets(targets: readonly CdpTarget[]): CompatibleTa
       target_id: target.id,
       normalized_url: normalized,
       title: safeTitle(target.title),
-      ...(target.webSocketDebuggerUrl ? { web_socket_debugger_url: target.webSocketDebuggerUrl } : {}),
+      ...(typeof target.webSocketDebuggerUrl === 'string' ? { web_socket_debugger_url: target.webSocketDebuggerUrl } : {}),
     });
   }
   return compatible;
@@ -511,22 +547,23 @@ function validateCdp(value: string): string {
 
 export function parseCliArgs(argv: readonly string[]): ParsedArgs {
   const operation = argv[0];
-  if (operation !== 'list' && operation !== 'inspect' && operation !== 'export') {
+  if (operation !== 'list' && operation !== 'inspect' && operation !== 'export' && operation !== 'liveness') {
     throw new ProbeError('input_invalid', 'unknown_operation');
   }
   if ((argv.length - 1) % 2 !== 0) throw new ProbeError('input_invalid', 'invalid_option_shape');
   const values = parseOptionPairs(argv.slice(1));
   const cdp = validateCdp(required(values, '--cdp'));
 
-  if (operation === 'list') {
+  if (operation === 'list' || operation === 'liveness') {
     requireOnly(values, ['--cdp']);
     return { operation, cdp };
   }
 
   if (operation === 'inspect') {
-    requireOnly(values, ['--cdp', '--target-id', '--url']);
+    requireOnly(values, ['--cdp', '--target-id', '--url', '--open-if-missing']);
     const targetId = values.get('--target-id');
     const conversationUrl = values.get('--url');
+    const openIfMissingValue = values.get('--open-if-missing');
     if ((targetId ? 1 : 0) + (conversationUrl ? 1 : 0) !== 1) {
       throw new ProbeError('input_invalid', 'exactly_one_page_selector_required');
     }
@@ -534,7 +571,19 @@ export function parseCliArgs(argv: readonly string[]): ParsedArgs {
     if (conversationUrl && !isConversationUrl(conversationUrl)) {
       throw new ProbeError('input_invalid', 'invalid_conversation_url');
     }
-    return { operation, cdp, ...(targetId ? { targetId } : {}), ...(conversationUrl ? { conversationUrl } : {}) };
+    if (openIfMissingValue !== undefined && openIfMissingValue !== 'true') {
+      throw new ProbeError('input_invalid', 'open_if_missing_must_be_true');
+    }
+    if (openIfMissingValue === 'true' && targetId) {
+      throw new ProbeError('input_invalid', 'open_if_missing_requires_url');
+    }
+    return {
+      operation,
+      cdp,
+      ...(targetId ? { targetId } : {}),
+      ...(conversationUrl ? { conversationUrl } : {}),
+      ...(openIfMissingValue === 'true' ? { openIfMissing: true as const } : {}),
+    };
   }
 
   requireOnly(values, [
@@ -586,6 +635,28 @@ async function defaultListTargets(cdp: string): Promise<readonly CdpTarget[]> {
   return value as readonly CdpTarget[];
 }
 
+async function defaultCreatePage(cdp: string, conversationUrl: string): Promise<CdpTarget> {
+  const response = await fetch(`${cdpBase(cdp)}/json/new?${encodeURIComponent(conversationUrl)}`, {
+    method: 'PUT',
+    signal: AbortSignal.timeout(CDP_REQUEST_TIMEOUT_MS),
+    headers: { accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`cdp_create_http_${response.status}`);
+  const value: unknown = await response.json();
+  if (!isRecord(value)) throw new Error('cdp_create_not_object');
+  return value as CdpTarget;
+}
+
+async function defaultClosePage(cdp: string, targetId: string): Promise<'closed' | 'already_gone'> {
+  const response = await fetch(`${cdpBase(cdp)}/json/close/${encodeURIComponent(targetId)}`, {
+    signal: AbortSignal.timeout(CDP_REQUEST_TIMEOUT_MS),
+    headers: { accept: 'text/plain' },
+  });
+  if (response.status === 404) return 'already_gone';
+  if (!response.ok) throw new Error(`cdp_close_http_${response.status}`);
+  return 'closed';
+}
+
 interface WebSocketLike {
   addEventListener(type: string, listener: (event: { readonly data?: unknown }) => void, options?: { readonly once?: boolean }): void;
   send(data: string): void;
@@ -596,7 +667,7 @@ interface WebSocketConstructorLike {
   new(url: string): WebSocketLike;
 }
 
-async function defaultEvaluate(target: CompatibleTarget, expression: string): Promise<unknown> {
+async function defaultEvaluate(target: CompatibleTarget, expression: string, timeoutMs = CDP_REQUEST_TIMEOUT_MS): Promise<unknown> {
   if (!target.web_socket_debugger_url) throw new Error('target_websocket_unavailable');
   const WebSocketCtor = (globalThis as unknown as { WebSocket?: WebSocketConstructorLike }).WebSocket;
   if (!WebSocketCtor) throw new Error('websocket_unavailable');
@@ -604,7 +675,7 @@ async function defaultEvaluate(target: CompatibleTarget, expression: string): Pr
   const commandId = 1;
   return await new Promise<unknown>((resolve, reject) => {
     let settled = false;
-    const timer = setTimeout(() => finishReject(new Error('cdp_evaluate_timeout')), CDP_REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => finishReject(new Error('cdp_evaluate_timeout')), timeoutMs);
     const finishResolve = (value: unknown) => {
       if (settled) return;
       settled = true;
@@ -733,6 +804,8 @@ export const defaultDependencies: ProbeDependencies = {
   listTargets: defaultListTargets,
   evaluate: defaultEvaluate,
   publish: publishExactBytes,
+  createPage: defaultCreatePage,
+  closePage: defaultClosePage,
 };
 
 function inspectionExpression(): string {
@@ -759,7 +832,7 @@ function inspectionExpression(): string {
       const ordinal = roleCounts[role]++;
       observed.push({ node, documentOrdinal, role, ordinal, rawMessageId: node.getAttribute('data-message-id') });
     }
-    if (observed.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing' };
+    if (observed.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing', page_url: location.href, ready_state: document.readyState };
     const messageIdCounts = new Map();
     for (const entry of observed) if (entry.rawMessageId) messageIdCounts.set(entry.rawMessageId, (messageIdCounts.get(entry.rawMessageId) || 0) + 1);
     const selected = observed.slice(Math.max(0, observed.length - MAX_NODES));
@@ -767,7 +840,7 @@ function inspectionExpression(): string {
     for (const entry of selected) {
       const innerText = typeof entry.node.innerText === 'string' ? entry.node.innerText : null;
       const textContent = typeof entry.node.textContent === 'string' ? entry.node.textContent : null;
-      if (innerText === null || textContent === null) return { status: 'surface_unknown', reason: 'text_representation_unavailable' };
+      if (innerText === null || textContent === null) return { status: 'surface_unknown', reason: 'text_representation_unavailable', page_url: location.href, ready_state: document.readyState };
       const attrs = {};
       for (const name of ATTRS) {
         const value = entry.node.getAttribute(name);
@@ -789,7 +862,7 @@ function inspectionExpression(): string {
     let lastDigest = null;
     if (lastAssistant) {
       const lastInnerText = typeof lastAssistant.node.innerText === 'string' ? lastAssistant.node.innerText : null;
-      if (lastInnerText === null) return { status: 'surface_unknown', reason: 'last_assistant_text_unavailable' };
+      if (lastInnerText === null) return { status: 'surface_unknown', reason: 'last_assistant_text_unavailable', page_url: location.href, ready_state: document.readyState };
       lastDigest = await digest(lastInnerText.replace(/\\s+/gu, ' ').trim());
     }
     let generating = 'unknown';
@@ -803,6 +876,7 @@ function inspectionExpression(): string {
     return {
       status: 'ok',
       page_url: location.href,
+      ready_state: document.readyState,
       title: head(document.title || ''),
       generation_in_progress: generating,
       observed_user_nodes: roleCounts.user,
@@ -819,6 +893,341 @@ function inspectionExpression(): string {
 }
 
 export const INSPECTION_EXPRESSION = inspectionExpression();
+
+export const LIVENESS_EXPRESSION = `(() => ({
+  status: 'ok',
+  ready_state: document.readyState,
+  page_url: location.href,
+}))()`;
+
+interface LivenessRow {
+  readonly target_id: string;
+  readonly normalized_url: string;
+  readonly title: string;
+  readonly liveness: 'responsive' | 'unresponsive' | 'unavailable';
+  readonly reason: string;
+}
+
+function clockNow(deps: ProbeDependencies): number {
+  return deps.now?.() ?? Date.now();
+}
+
+function delay(deps: ProbeDependencies, milliseconds: number): Promise<void> {
+  if (deps.sleep) return deps.sleep(milliseconds);
+  return new Promise((resolve) => {
+    const timer = deps.setTimeout ?? setTimeout;
+    timer(resolve, milliseconds);
+  });
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  milliseconds: number,
+  deps: ProbeDependencies,
+  reason: string,
+): Promise<T> {
+  const setTimer = deps.setTimeout ?? setTimeout;
+  const clearTimer = deps.clearTimeout ?? clearTimeout;
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimer(() => {
+      if (settled) return;
+      settled = true;
+      reject(new ProbeError('unavailable', reason));
+    }, milliseconds);
+    promise.then((value) => {
+      if (settled) return;
+      settled = true;
+      clearTimer(timer);
+      resolve(value);
+    }, (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimer(timer);
+      reject(error);
+    });
+  });
+}
+
+function readinessKey(snapshot: InspectionSnapshot): string {
+  return JSON.stringify({
+    observed_user_nodes: snapshot.observed_user_nodes,
+    user_nodes: snapshot.nodes
+      .filter((node) => node.role === 'user')
+      .map((node) => ({
+        ordinal: node.ordinal,
+        document_ordinal: node.document_ordinal,
+        message_id: node.message_id,
+        innerText_sha256: node.innerText.sha256,
+        textContent_sha256: node.textContent.sha256,
+      })),
+  });
+}
+
+function normalizedConversationIdentity(value: unknown): string | undefined {
+  if (!isRecord(value) || typeof value.page_url !== 'string' || !isConversationUrl(value.page_url)) return undefined;
+  try {
+    const normalized = normalizeConversationUrl(value.page_url);
+    return Array.from(normalized).length <= MAX_NORMALIZED_URL_CODE_POINTS ? normalized : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function inspectWithReadiness(
+  target: CompatibleTarget,
+  requestedIdentity: string,
+  deps: ProbeDependencies,
+): Promise<InspectionSnapshot> {
+  const deadline = clockNow(deps) + ACQUISITION_READINESS_TIMEOUT_MS;
+  let previousKey: string | undefined;
+  while (clockNow(deps) < deadline) {
+    const remaining = deadline - clockNow(deps);
+    if (remaining <= 0) break;
+    let value: unknown;
+    try {
+      value = await withTimeout(
+        deps.evaluate(target, INSPECTION_EXPRESSION, Math.min(CDP_REQUEST_TIMEOUT_MS, remaining)),
+        remaining,
+        deps,
+        'readiness_sample_timeout',
+      );
+      if (clockNow(deps) >= deadline) throw new ProbeError('unavailable', 'readiness_sample_timeout');
+    } catch (error) {
+      if ((error instanceof ProbeError && error.reason === 'readiness_sample_timeout')
+        || (error instanceof Error && error.message === 'cdp_evaluate_timeout')) {
+        throw new ProbeError('surface_unknown', 'readiness_timeout');
+      }
+      throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
+    }
+    const actualIdentity = normalizedConversationIdentity(value);
+    if (actualIdentity !== undefined && actualIdentity !== requestedIdentity) {
+      throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+    }
+    try {
+      const snapshot = validateInspectionSnapshot(value, target, false);
+      if (snapshot.page_url !== requestedIdentity) {
+        throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+      }
+      if (snapshot.ready_state !== 'loading') {
+        const key = readinessKey(snapshot);
+        if (key === previousKey) return snapshot;
+        previousKey = key;
+      } else {
+        previousKey = undefined;
+      }
+    } catch (error) {
+      if (!(error instanceof ProbeError) || error.status !== 'surface_unknown') throw error;
+    }
+    if (clockNow(deps) >= deadline) break;
+    await delay(deps, Math.min(ACQUISITION_READINESS_INTERVAL_MS, Math.max(0, deadline - clockNow(deps))));
+  }
+  throw new ProbeError('surface_unknown', 'readiness_timeout');
+}
+
+function validateCreatedTarget(
+  value: unknown,
+  requestedIdentity: string,
+  preExistingTargetIds: ReadonlySet<string>,
+): CompatibleTarget {
+  if (Array.isArray(value)) throw new ProbeError('unavailable', 'create_result_ambiguous');
+  if (!isRecord(value)) throw new ProbeError('unavailable', 'create_result_malformed');
+  const rawTarget = value as CdpTarget;
+  if (rawTarget.type !== 'page'
+    || typeof rawTarget.id !== 'string'
+    || !TARGET_ID_RE.test(rawTarget.id)
+    || preExistingTargetIds.has(rawTarget.id)) {
+    throw new ProbeError('unavailable', preExistingTargetIds.has(rawTarget.id ?? '') ? 'create_result_contradictory' : 'create_result_malformed');
+  }
+  if (!isDebuggerWebSocketUrl(rawTarget.webSocketDebuggerUrl)) {
+    throw new ProbeError('unavailable', 'create_target_websocket_unavailable');
+  }
+  let normalizedUrl = requestedIdentity;
+  if (typeof rawTarget.url === 'string' && isCompatibleChatGptUrl(rawTarget.url)) {
+    try {
+      normalizedUrl = normalizeConversationUrl(rawTarget.url);
+    } catch {
+      normalizedUrl = requestedIdentity;
+    }
+  }
+  return {
+    target_id: rawTarget.id,
+    normalized_url: normalizedUrl,
+    title: safeTitle(rawTarget.title),
+    web_socket_debugger_url: rawTarget.webSocketDebuggerUrl,
+  };
+}
+
+async function inspectAcquiredUrl(
+  args: ParsedInspectArgs,
+  deps: ProbeDependencies,
+): Promise<ProbeEnvelope> {
+  const requestedIdentity = normalizeConversationUrl(args.conversationUrl!);
+  const rawTargets = await listTargetCensus(args.cdp, deps);
+  const targets = toCompatibleTargets(rawTargets);
+  const preExistingTargetIds = new Set(
+    rawTargets
+      .filter((target) => typeof target.id === 'string' && TARGET_ID_RE.test(target.id))
+      .map((target) => target.id as string),
+  );
+  const matches = targets.filter((target) => target.normalized_url === requestedIdentity);
+  if (matches.length > 1) throw new ProbeError('ambiguous', 'target_url_ambiguous');
+  if (matches.length === 1) {
+    const target = matches[0]!;
+    if (!target.web_socket_debugger_url) throw new ProbeError('unavailable', 'target_attach_unavailable');
+    let value: unknown;
+    try {
+      value = await deps.evaluate(target, INSPECTION_EXPRESSION);
+    } catch (error) {
+      throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
+    }
+    const snapshot = validateInspectionSnapshot(value, target, true);
+    return { ...baseEnvelope('inspect', 'ok'), target_id: target.target_id, acquisition: 'reused', snapshot };
+  }
+  if (!args.openIfMissing) throw new ProbeError('not_found', 'target_not_found');
+  if (!deps.createPage) throw new ProbeError('unavailable', 'page_create_unavailable');
+
+  let ownedTarget: CompatibleTarget;
+  try {
+    const created = await withTimeout(
+      deps.createPage(args.cdp, requestedIdentity),
+      CDP_REQUEST_TIMEOUT_MS,
+      deps,
+      'page_create_timeout',
+    );
+    ownedTarget = validateCreatedTarget(created, requestedIdentity, preExistingTargetIds);
+  } catch (error) {
+    if (error instanceof ProbeError) throw error;
+    throw new ProbeError('unavailable', 'page_create_failed', boundedDetail(error));
+  }
+
+  let primaryError: ProbeError | undefined;
+  let snapshot: InspectionSnapshot | undefined;
+  try {
+    snapshot = await inspectWithReadiness(ownedTarget, requestedIdentity, deps);
+  } catch (error) {
+    primaryError = error instanceof ProbeError
+      ? error
+      : new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
+  }
+
+  let cleanup: 'closed' | 'already_gone' | 'cleanup_failed';
+  let cleanupDetail: string | undefined;
+  try {
+    if (!deps.closePage) throw new Error('page_close_unavailable');
+    const result = await withTimeout(
+      deps.closePage(args.cdp, ownedTarget.target_id),
+      CDP_REQUEST_TIMEOUT_MS,
+      deps,
+      'page_close_timeout',
+    );
+    if (result !== 'closed' && result !== 'already_gone') throw new Error('invalid_close_result');
+    cleanup = result;
+  } catch (error) {
+    cleanup = 'cleanup_failed';
+    cleanupDetail = boundedDetail(error);
+  }
+
+  const details = {
+    acquisition: 'created',
+    owned_target_id: ownedTarget.target_id,
+    readiness_timeout_ms: ACQUISITION_READINESS_TIMEOUT_MS,
+    readiness_interval_ms: ACQUISITION_READINESS_INTERVAL_MS,
+    cleanup,
+    ...(cleanupDetail ? { cleanup_detail: cleanupDetail } : {}),
+  };
+  if (primaryError) {
+    throw new ProbeError(primaryError.status, primaryError.reason, primaryError.message, details);
+  }
+  if (cleanup === 'cleanup_failed') {
+    throw new ProbeError('cleanup_failed', 'cleanup_failed', cleanupDetail, details);
+  }
+  return {
+    ...baseEnvelope('inspect', 'ok'),
+    target_id: ownedTarget.target_id,
+    acquisition: 'created',
+    owned_target_id: ownedTarget.target_id,
+    readiness_timeout_ms: ACQUISITION_READINESS_TIMEOUT_MS,
+    readiness_interval_ms: ACQUISITION_READINESS_INTERVAL_MS,
+    cleanup,
+    snapshot,
+  };
+}
+
+function livenessRow(
+  target: CompatibleTarget,
+  liveness: LivenessRow['liveness'],
+  reason: string,
+): LivenessRow {
+  return {
+    target_id: target.target_id,
+    normalized_url: target.normalized_url,
+    title: target.title,
+    liveness,
+    reason: boundedCodePoints(reason),
+  };
+}
+
+async function settleLivenessTarget(target: CompatibleTarget, deps: ProbeDependencies): Promise<LivenessRow> {
+  if (!target.web_socket_debugger_url) {
+    return livenessRow(target, 'unavailable', 'target_websocket_unavailable');
+  }
+  try {
+    const value = await withTimeout(
+      deps.evaluate(target, LIVENESS_EXPRESSION, LIVENESS_TARGET_TIMEOUT_MS),
+      LIVENESS_TARGET_TIMEOUT_MS,
+      deps,
+      'liveness_target_timeout',
+    );
+    if (!isRecord(value)
+      || value.status !== 'ok'
+      || (value.ready_state !== 'loading' && value.ready_state !== 'interactive' && value.ready_state !== 'complete')) {
+      return livenessRow(target, 'unavailable', 'invalid_liveness_response');
+    }
+    return livenessRow(target, 'responsive', 'target_probe_ok');
+  } catch (error) {
+    if ((error instanceof ProbeError && error.reason === 'liveness_target_timeout')
+      || (error instanceof Error && error.message === 'cdp_evaluate_timeout')) {
+      return livenessRow(target, 'unresponsive', 'liveness_target_timeout');
+    }
+    return livenessRow(target, 'unavailable', boundedDetail(error));
+  }
+}
+
+async function runLiveness(args: ParsedLivenessArgs, deps: ProbeDependencies): Promise<ProbeEnvelope> {
+  if (CDP_REQUEST_TIMEOUT_MS + LIVENESS_TARGET_TIMEOUT_MS >= LIVENESS_TOTAL_TIMEOUT_MS) {
+    throw new ProbeError('unavailable', 'invalid_liveness_deadline_constants');
+  }
+  const startedAt = clockNow(deps);
+  let targets: CompatibleTarget[];
+  try {
+    const rawTargets = await withTimeout(
+      deps.listTargets(args.cdp),
+      CDP_REQUEST_TIMEOUT_MS,
+      deps,
+      'liveness_census_timeout',
+    );
+    targets = toCompatibleTargets(rawTargets);
+  } catch (error) {
+    if (error instanceof ProbeError && error.reason === 'liveness_census_timeout') throw error;
+    throw new ProbeError('unavailable', 'cdp_unavailable', boundedDetail(error));
+  }
+  const admitted = targets.slice(0, LIVENESS_FAN_OUT);
+  const rows = await Promise.all(admitted.map((target) => settleLivenessTarget(target, deps)));
+  const elapsed = clockNow(deps) - startedAt;
+  return {
+    ...baseEnvelope('liveness', 'ok'),
+    targets: rows,
+    targets_truncated: targets.length > LIVENESS_FAN_OUT,
+    observed_compatible_targets: targets.length,
+    unresponsive_target_ids: rows.filter((row) => row.liveness === 'unresponsive').map((row) => row.target_id),
+    liveness_fan_out: LIVENESS_FAN_OUT,
+    liveness_target_timeout_ms: LIVENESS_TARGET_TIMEOUT_MS,
+    liveness_total_timeout_ms: LIVENESS_TOTAL_TIMEOUT_MS,
+    liveness_elapsed_ms: Math.max(0, elapsed),
+    liveness_total_deadline_exceeded: elapsed > LIVENESS_TOTAL_TIMEOUT_MS,
+  };
+}
 
 export interface ExportWitness {
   readonly role: MessageRole;
@@ -897,12 +1306,16 @@ function resolveTargetByUrl(targets: readonly CompatibleTarget[], conversationUr
   return matches[0]!;
 }
 
-async function availableTargets(cdp: string, deps: ProbeDependencies): Promise<CompatibleTarget[]> {
+async function listTargetCensus(cdp: string, deps: ProbeDependencies): Promise<readonly CdpTarget[]> {
   try {
-    return toCompatibleTargets(await deps.listTargets(cdp));
+    return await withTimeout(deps.listTargets(cdp), CDP_REQUEST_TIMEOUT_MS, deps, 'target_census_timeout');
   } catch (error) {
     throw new ProbeError('unavailable', 'cdp_unavailable', boundedDetail(error));
   }
+}
+
+async function availableTargets(cdp: string, deps: ProbeDependencies): Promise<CompatibleTarget[]> {
+  return toCompatibleTargets(await listTargetCensus(cdp, deps));
 }
 
 function requireActualTargetIdentity(
@@ -933,6 +1346,11 @@ export async function runProbe(args: ParsedArgs, deps: ProbeDependencies = defau
       targets_truncated: truncated,
       observed_compatible_targets: targets.length,
     };
+  }
+
+  if (args.operation === 'liveness') return runLiveness(args, deps);
+  if (args.operation === 'inspect' && args.conversationUrl && args.openIfMissing) {
+    return inspectAcquiredUrl(args, deps);
   }
 
   const targets = await availableTargets(args.cdp, deps);
@@ -1034,11 +1452,12 @@ function statusExitCode(status: ProbeStatus): number {
     unavailable: 7,
     export_failed: 8,
     input_invalid: 9,
+    cleanup_failed: 10,
   } satisfies Record<ProbeStatus, number>)[status];
 }
 
 export async function main(argv = process.argv.slice(2), deps: ProbeDependencies = defaultDependencies): Promise<number> {
-  let operation: ProbeOperation = argv[0] === 'list' || argv[0] === 'inspect' || argv[0] === 'export'
+  let operation: ProbeOperation = argv[0] === 'list' || argv[0] === 'inspect' || argv[0] === 'export' || argv[0] === 'liveness'
     ? argv[0]
     : 'list';
   try {
@@ -1055,6 +1474,7 @@ export async function main(argv = process.argv.slice(2), deps: ProbeDependencies
       ...baseEnvelope(operation, probeError.status),
       reason: probeError.reason,
       detail: boundedDetail(probeError.message),
+      ...(probeError.details ?? {}),
     };
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return statusExitCode(probeError.status);

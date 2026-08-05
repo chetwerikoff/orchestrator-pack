@@ -1,0 +1,35 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1272,
+  "declared_paths": [
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    "docs/browser-gpt-turn-runbook.md",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".github/",
+    "agent-orchestrator.yaml",
+    "agent-orchestrator.yaml.example",
+    "credentials/",
+    "package-lock.json",
+    "package.json",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/declarations/",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts"
+  ],
+  "source_revision": "ef93d317787d0f2887122a0e6f9f287d7897d8a3"
+}

@@ -133,11 +133,14 @@ Use the sanctioned diagnostic utility once, with local values:
 npm run browser-gpt-page-probe -- inspect --cdp "${CDP_ENDPOINT}" --url "${CHAT_URL}"
 ```
 
-The probe is read-only and exits once. It cannot publish, retry, resend,
-progress a stage, or close a tab. Resolve the current target from the
-conversation URL instead of trusting a saved target id. Probe mechanics remain
-owned by Issues #1272 and #1122; do not replace this utility with raw CDP,
-selectors, JavaScript, a watch loop, or a transcript dump.
+The non-acquisition probe is read-only and exits once. It cannot publish,
+retry, resend, progress a stage, create, or close a tab. The explicit
+`--open-if-missing true` acquisition path is the sole opt-in exception: it may
+create one owned page, wait for bounded readiness, and close exactly that
+owned page. Resolve the current target from the conversation URL instead of
+trusting a saved target id. Probe mechanics remain owned by Issues #1272 and
+#1122; do not replace this utility with raw CDP, selectors, JavaScript, a watch
+loop, or a transcript dump.
 
 ## Shift handoff/close
 
