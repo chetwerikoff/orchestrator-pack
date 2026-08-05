@@ -6,6 +6,11 @@ import { evaluateHeadReadyForReview } from './review-head-ready.ts';
 import { listPackReviewRuns } from '../lib/pack-review-run-store.ts';
 import { startPackReview } from '../pack-review-runner.ts';
 import { createUnavailableFleetObserver, FleetObserver, type FleetObserverResult } from './fleet-observer.ts';
+import {
+  createTargetUnresolvedFleetNudgeActuator,
+  type FleetNudgeResult,
+  type FleetNudgeTickInput,
+} from './fleet-nudge-actuator.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import {
   isRowStale,
@@ -44,6 +49,10 @@ export interface ActivatedSchedulerCandidate {
 type SchedulerFleetObserver = Pick<FleetObserver, 'tick'>
   & Partial<Pick<FleetObserver, 'getEffectiveBudgetMs' | 'cancel'>>;
 
+type SchedulerFleetNudgeActuator = {
+  tick(input: FleetNudgeTickInput): Promise<FleetNudgeResult>;
+};
+
 export interface SchedulerBoundary {
   listCandidates(): ActivatedSchedulerCandidate[];
   readCurrentPr(candidate: ActivatedSchedulerCandidate): Promise<{ number: number; headRefOid: string; state: string; isDraft: boolean }>;
@@ -52,6 +61,7 @@ export interface SchedulerBoundary {
   start(candidate: ActivatedSchedulerCandidate, freshHeadSha: string): Promise<{ ok: boolean; reason?: string }>;
   schedulerIntervalMs?: number;
   fleetObserver?: SchedulerFleetObserver;
+  fleetNudgeActuator?: SchedulerFleetNudgeActuator;
 }
 
 const schedulerTickSequences = new WeakMap<object, number>();
@@ -163,6 +173,7 @@ export function productionSchedulerBoundary(input: {
   projectId?: string;
   env?: NodeJS.ProcessEnv;
   fleetObserver?: SchedulerFleetObserver;
+  fleetNudgeActuator?: SchedulerFleetNudgeActuator;
   schedulerIntervalMs?: number;
 }): SchedulerBoundary {
   const env = input.env ?? process.env;
@@ -178,6 +189,7 @@ export function productionSchedulerBoundary(input: {
       '--json', 'name,state,conclusion,status',
     ]) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
     listReviewRuns: () => listPackReviewRuns({ projectId }),
+    fleetNudgeActuator: input.fleetNudgeActuator ?? createTargetUnresolvedFleetNudgeActuator(),
     ...(input.fleetObserver ? { fleetObserver: input.fleetObserver } : {}),
     ...(input.schedulerIntervalMs === undefined ? {} : { schedulerIntervalMs: input.schedulerIntervalMs }),
     start: async (candidate, freshHeadSha) => {
@@ -207,13 +219,16 @@ export async function runSchedulerTick(
   started: number;
   skipped: number;
   observer?: FleetObserverResult;
+  fleetNudge?: FleetNudgeResult;
 }> {
   assertSchedulerEpoch(env);
   let observer: FleetObserverResult | undefined;
+  let fleetNudge: FleetNudgeResult | undefined;
   const observerBoundary: SchedulerFleetObserver = boundary.fleetObserver ?? {
     tick: async () => undefined as unknown as FleetObserverResult,
   };
   const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000;
+  const tickSequence = nextSchedulerTickSequence(boundary);
   const observerStartMs = Date.now();
   const observerBudgetMs = observerBoundary.getEffectiveBudgetMs?.(schedulerIntervalMs)
     ?? Math.max(1, Math.floor(schedulerIntervalMs / 4));
@@ -223,7 +238,7 @@ export async function runSchedulerTick(
   });
   const attempt = Promise.resolve().then(() => observerBoundary.tick({
     schedulerIntervalMs,
-    tickSequence: nextSchedulerTickSequence(boundary),
+    tickSequence,
     phaseStartMs: observerStartMs,
   })).catch(() => undefined);
   const completed = await Promise.race([attempt, timeout]);
@@ -232,6 +247,19 @@ export async function runSchedulerTick(
     observerBoundary.cancel?.();
   } else if (boundary.fleetObserver) {
     observer = completed;
+  }
+  if (observer && boundary.fleetNudgeActuator) {
+    try {
+      assertSchedulerEpoch(env);
+      fleetNudge = await boundary.fleetNudgeActuator.tick({
+        observer,
+        schedulerIntervalMs,
+        tickSequence,
+        phaseStartMs: Date.now(),
+      });
+    } catch {
+      // S2 is isolated from the existing review-start action and accounting path.
+    }
   }
   let attempted = 0;
   let started = 0;
@@ -263,9 +291,13 @@ export async function runSchedulerTick(
     const result = await boundary.start(candidate, freshHead);
     if (result.ok) started += 1; else skipped += 1;
   }
-  return observer
-    ? { attempted, started, skipped, observer }
-    : { attempted, started, skipped };
+  return {
+    attempted,
+    started,
+    skipped,
+    ...(observer ? { observer } : {}),
+    ...(fleetNudge ? { fleetNudge } : {}),
+  };
 }
 
 async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
