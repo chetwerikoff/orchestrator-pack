@@ -1183,7 +1183,7 @@ export function produceAcceptanceArtifacts(
 repositoryFullName: operatorContext.adjudication.repositoryFullName,
 issueNumber: operatorContext.adjudication.issueNumber,
 sourceRevision: operatorContext.adjudication.sourceRevision,
-invocationId: operatorContext.applications[0].invocationId,
+invocationId: (operatorContext.applications[0] as OperatorAdjudicationApplication).invocationId,
         },
         reference: {
 url: operatorContext.adjudication.verdictUrl,
@@ -1193,7 +1193,7 @@ byteLength: operatorContext.adjudication.verdictByteLength,
 findingCount: operatorContext.adjudication.verdictFindingCount,
         },
         reason: operatorContext.adjudication.reason,
-        originalTransport: operatorContext.applications[0].originalTransport,
+        originalTransport: (operatorContext.applications[0] as OperatorAdjudicationApplication).originalTransport,
       },
     } : {}),
   };
