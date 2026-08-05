@@ -1,4 +1,4 @@
-import { normalizePath } from './normalize.js';
+import { normalizePath } from './normalize.ts';
 
 export type PathPatternKind = 'exact' | 'directory' | 'pattern';
 
