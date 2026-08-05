@@ -25,4 +25,5 @@ jobs:
         shell: bash
         run: |
           npm ci
+          sed -i "s#/bound snapshot does not match authoritative review context/#/authoritative bound Issue snapshot missing/#" .github/pr1356-fix.py
           python3 .github/pr1356-fix.py
