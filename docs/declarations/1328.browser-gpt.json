@@ -3,6 +3,7 @@
   "issue_number": 1328,
   "declared_paths": [
     "docs/declarations/1328.browser-gpt.json",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/lint-self-architect.config.json",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/worktree-lifecycle/cli.ts",
@@ -25,6 +26,7 @@
   ],
   "allowed_roots": [
     "docs/declarations/1328.browser-gpt.json",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/lint-self-architect.config.json",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/worktree-lifecycle/cli.ts",
