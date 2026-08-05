@@ -258,7 +258,12 @@ export async function runGptPackReview(
       config: browserConfig,
     });
     if (turn.timedOut) {
-      return { stdout: '', stderr: 'GPT browser turn timed out', exitCode: 124 };
+      const terminal = extractLastGptTurnResult(turn.stdout);
+      return {
+        stdout: terminal ? `${JSON.stringify(terminal)}\n` : '',
+        stderr: 'GPT browser turn timed out',
+        exitCode: 124,
+      };
     }
     if (!turn.ok) {
       const terminal = extractLastGptTurnResult(turn.stdout);
@@ -301,7 +306,7 @@ export async function runGptPackReview(
       return { stdout, stderr: '', exitCode: 0 };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return { stdout: '', stderr: message, exitCode: 1 };
+      return { stdout: `${JSON.stringify(terminal)}\n`, stderr: message, exitCode: 1 };
     }
   } finally {
     rmSync(workDir, { recursive: true, force: true });
