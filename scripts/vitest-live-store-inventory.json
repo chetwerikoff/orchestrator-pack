@@ -504,8 +504,8 @@
         "AO_SIDE_PROCESS_STATE_DIR",
         "AO_WORKER_MESSAGE_DISPATCH_JOURNAL"
       ],
-      "canonicalDefault": "/orchestrator-worker-message-submit-state.json",
-      "liveRoot": "",
+      "canonicalDefault": "${TMP}/orchestrator-worker-message-submit-state.json",
+      "liveRoot": "${TMP}",
       "sidecars": [
         "orchestrator-worker-message-submit-state.json.tmp",
         "orchestrator-worker-message-submit-state.json.bak",
