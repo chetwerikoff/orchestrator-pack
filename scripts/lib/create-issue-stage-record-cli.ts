@@ -45,6 +45,13 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   authorDispositionsPath?: string;
   claudeProducerEvidencePaths: string[];
   phase?: 'pre-lens' | 'final-acceptance';
+  operatorIssueNumber?: number;
+  operatorSourceRevision?: string;
+  operatorVerdictUrl?: string;
+  operatorVerdictSha256?: string;
+  operatorVerdictByteLength?: number;
+  operatorFindingCount?: number;
+  operatorReason?: string;
 }
 
 interface FinalAcceptanceCliOptions extends JournalTailCliOptions {
@@ -116,6 +123,40 @@ function requiredAcceptanceArtifactInput(
   return parseRequiredNonEmptyString(typeof value === 'string' ? value : undefined, descriptor.flag);
 }
 
+function operatorAcceptanceAdjudication(opts: StageFinalizeCliOptions) {
+  const values = [
+    opts.operatorIssueNumber,
+    opts.operatorSourceRevision,
+    opts.operatorVerdictUrl,
+    opts.operatorVerdictSha256,
+    opts.operatorVerdictByteLength,
+    opts.operatorFindingCount,
+    opts.operatorReason,
+  ];
+  if (values.every((value) => value === undefined)) return undefined;
+  if (opts.phase !== 'final-acceptance') {
+    throw new Error('operator adjudication requires --phase final-acceptance');
+  }
+  if (values.some((value) => value === undefined || String(value).trim() === '')) {
+    throw new Error('operator adjudication requires Issue, revision, verdict URL/hash/bytes/findings, and reason');
+  }
+  const issueNumber = Number(opts.operatorIssueNumber);
+  const verdictByteLength = Number(opts.operatorVerdictByteLength);
+  const verdictFindingCount = Number(opts.operatorFindingCount);
+  if (!Number.isInteger(issueNumber) || issueNumber < 1) throw new Error('--operator-issue-number must be positive');
+  if (!Number.isInteger(verdictByteLength) || verdictByteLength < 0) throw new Error('--operator-verdict-byte-length must be non-negative');
+  if (!Number.isInteger(verdictFindingCount) || verdictFindingCount < 0) throw new Error('--operator-finding-count must be non-negative');
+  return {
+    issueNumber,
+    sourceRevision: String(opts.operatorSourceRevision),
+    verdictUrl: String(opts.operatorVerdictUrl),
+    verdictSha256: String(opts.operatorVerdictSha256),
+    verdictByteLength,
+    verdictFindingCount,
+    reason: String(opts.operatorReason),
+  };
+}
+
 function runParsedCli<T>(
   argv: string[],
   toolName: string,
@@ -139,7 +180,7 @@ export function stageFinalizeUsage(): string {
     '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> [--stage-attempt-id <id>] --tier <T1|T2|T3> [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
-    `  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--json]`,
+    `  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]`,
     `  create-issue-stage-finalize.ts check-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--output-dir <path>] [--json]`,
   ].join('\n');
 }
@@ -226,6 +267,34 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
         opts.phase = phase;
         break;
       }
+      case '--operator-issue-number':
+        requireArtifactCommand(arg);
+        opts.operatorIssueNumber = Number(argv[++i]);
+        break;
+      case '--operator-source-revision':
+        requireArtifactCommand(arg);
+        opts.operatorSourceRevision = String(argv[++i] ?? '');
+        break;
+      case '--operator-verdict-url':
+        requireArtifactCommand(arg);
+        opts.operatorVerdictUrl = String(argv[++i] ?? '');
+        break;
+      case '--operator-verdict-sha256':
+        requireArtifactCommand(arg);
+        opts.operatorVerdictSha256 = String(argv[++i] ?? '');
+        break;
+      case '--operator-verdict-byte-length':
+        requireArtifactCommand(arg);
+        opts.operatorVerdictByteLength = Number(argv[++i]);
+        break;
+      case '--operator-finding-count':
+        requireArtifactCommand(arg);
+        opts.operatorFindingCount = Number(argv[++i]);
+        break;
+      case '--operator-reason':
+        requireArtifactCommand(arg);
+        opts.operatorReason = String(argv[++i] ?? '');
+        break;
       default:
         i = finalizeJournalArgvIndex(arg, argv, i, opts, stageFinalizeUsage());
         break;
@@ -318,6 +387,7 @@ export function runStageFinalizeCli(argv: string[]): number {
         claudeProducerEvidencePaths: opts.claudeProducerEvidencePaths,
         outputDir: opts.outputDir,
         phase: opts.phase,
+        operatorAdjudication: operatorAcceptanceAdjudication(opts),
       };
       const result = opts.command === 'produce-artifacts'
         ? produceAcceptanceArtifacts(artifactOptions)
