@@ -1,32 +1,37 @@
 {
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1328,
-  "iteration_id": "browser-gpt-1",
-  "iteration_id_source": "wrapper_generated",
-  "supersedes": null,
-  "created_at": "2026-08-05T08:31:00Z",
-  "baseline": {
-    "commit_sha": "9b84512f547475ebd4f956d1fba2ecef606c6c10",
-    "worktree_dirty": false,
-    "active_scope_hash": "sha256:168438ab365291a7d2f1f01d92434e2dccf29762dba7d75b614cc95642a33b06"
-  },
   "declared_paths": [
-    ".claude/skills/merge-with-local-adoption/SKILL.md",
-    ".cursor/skills/merge-with-local-adoption/SKILL.md",
     "docs/declarations/1328.browser-gpt.json",
-    "docs/migration_notes.md",
-    "docs/orca-runtime-boundary.md",
     "scripts/lint-self-architect.config.json",
     "scripts/vitest-ci-lanes.config.json",
-    "scripts/worktree-lifecycle/README.md",
     "scripts/worktree-lifecycle/cli.ts",
-    "scripts/worktree-lifecycle/core.ts",
     "scripts/worktree-lifecycle/head-bound-runner.ts",
-    "scripts/worktree-lifecycle/operations.test.ts",
     "scripts/worktree-lifecycle/operations.ts",
     "scripts/worktree-teardown-runtime-profile.ts",
     "scripts/worktree-teardown.test.ts",
     "scripts/worktree-teardown.ts"
   ],
-  "declared_globs": [],
-  "amendments": []
+  "denylist": [
+    ".github/",
+    ".orca/",
+    "credentials/",
+    "package-lock.json",
+    "package.json",
+    "packages/core/",
+    "scripts/runtime/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1328.browser-gpt.json",
+    "scripts/lint-self-architect.config.json",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worktree-lifecycle/cli.ts",
+    "scripts/worktree-lifecycle/head-bound-runner.ts",
+    "scripts/worktree-lifecycle/operations.ts",
+    "scripts/worktree-teardown-runtime-profile.ts",
+    "scripts/worktree-teardown.test.ts",
+    "scripts/worktree-teardown.ts"
+  ]
 }
