@@ -19,6 +19,7 @@
     ".orca/",
     "credentials/",
     "packages/core/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/orca-runtime/",
     "scripts/pr-scope-check.ps1",
     "scripts/runtime/",
