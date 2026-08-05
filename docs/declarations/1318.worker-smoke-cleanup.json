@@ -5,7 +5,8 @@
     "scripts/lib/worker-smoke-findings-regressions.ts",
     "scripts/lib/worker-smoke-lifecycle.ts",
     "scripts/lib/worker-smoke-receipt.ts",
-    "scripts/worker-smoke-cleanup-proof.ts"
+    "scripts/worker-smoke-cleanup-proof.ts",
+    "scripts/worker-smoke-run.ts"
   ],
   "denylist": [
     ".ao/",
