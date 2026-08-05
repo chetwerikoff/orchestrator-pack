@@ -27,6 +27,7 @@ import {
 } from './lib/pack-review-run-store.js';
 import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
+import { computeBoundIssueSnapshotHash } from './lib/reverify-bound-issue-snapshot.js';
 
 const repoRoot = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
 const HEAD_A = 'a'.repeat(40);
@@ -180,6 +181,97 @@ function writeClosedPrGhFixture(binRoot: string): void {
 afterEach(() => {
   process.env = { ...originalEnv };
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+
+describe('Issue #1341 operator-only pack-review start', () => {
+  function operatorInput(storeRoot: string, overrides: Record<string, unknown> = {}) {
+    const issueBody = [
+      '```complexity-tier',
+      'tier: T1',
+      'advisory-prior: T1',
+      '```',
+    ].join('\n');
+    return {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 1341,
+      headSha: HEAD_A,
+      operatorRepository: 'chetwerikoff/orchestrator-pack',
+      operatorIssueNumber: 1341,
+      operatorBoundSnapshot: computeBoundIssueSnapshotHash(issueBody),
+      operatorReason: 'direct operator recovery for the exact blocked review',
+      claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixturePrState: 'OPEN',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixturePostReviewHeadSha: HEAD_A,
+      fixtureIssueBody: issueBody,
+      fixtureReviewStdout: cleanTerminalPayload(),
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      ...overrides,
+    };
+  }
+
+  it('substitutes only the absent binding and records exact operator provenance', async () => {
+    const storeRoot = tempRoot('opk-1341-operator-start-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_REVIEWER = 'codex';
+
+    const result = await startPackReview(operatorInput(storeRoot));
+    expect(result.ok).toBe(true);
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(run).toMatchObject({
+      prNumber: 1341,
+      targetSha: HEAD_A,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      linkedSessionId: '',
+      startReason: 'direct operator recovery for the exact blocked review',
+    });
+    expect(run?.surface).toContain('operator_adjudicated');
+    expect(run?.surface).toContain('session-binding=absent');
+    expect(run?.surface).toContain('issue=1341');
+    expect(run?.surface).toContain(computeBoundIssueSnapshotHash(String(operatorInput(storeRoot).fixtureIssueBody)));
+  });
+
+  it('rejects incomplete or mismatched operator identity before run creation', async () => {
+    const storeRoot = tempRoot('opk-1341-operator-reject-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_REVIEWER = 'codex';
+    let started = false;
+
+    await expect(startPackReview(operatorInput(storeRoot, {
+      operatorReason: '',
+      onRunStarted: () => { started = true; },
+    }))).rejects.toThrow(/requires repository, Issue number, bound snapshot, and reason/);
+    await expect(startPackReview(operatorInput(storeRoot, {
+      operatorBoundSnapshot: `sha256:${'f'.repeat(64)}`,
+      onRunStarted: () => { started = true; },
+    }))).rejects.toThrow(/does not match authoritative review context/);
+    await expect(startPackReview(operatorInput(storeRoot, {
+      operatorRepository: 'other/repository',
+      onRunStarted: () => { started = true; },
+    }))).rejects.toThrow(/does not match operator target/);
+    expect(started).toBe(false);
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([]);
+  });
+
+  it('preserves the exact legacy missing-binding failure without operator input', async () => {
+    const storeRoot = tempRoot('opk-1341-no-input-');
+    delete process.env.OPK_VITEST_HARNESS;
+    await expect(startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 1341,
+      headSha: HEAD_A,
+    })).rejects.toThrow('pack review target requires an immutable session PR/Issue binding');
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([]);
+  });
 });
 
 describe('GPT zero-send collision retry tuples (Issue #1276 AC20)', () => {

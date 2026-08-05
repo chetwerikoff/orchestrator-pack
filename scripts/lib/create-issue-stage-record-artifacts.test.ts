@@ -831,3 +831,127 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
     for (const value of [...DEFECT_DISPOSITION_VALUES, ...REMEDY_DISPOSITION_VALUES]) expect(documentation).toContain(`\`${value}\``);
   });
 });
+
+
+describe('Issue #1341 operator-adjudicated final-acceptance artifacts', () => {
+  function governedCapture(): string {
+    return [
+      'Read revision: #1192 r01',
+      'review-economics-contract: v1',
+      'NO_FINDINGS',
+      'SIMPLIFICATION_CLEAN',
+      '',
+    ].join('\n');
+  }
+
+  function adjudication(capture: string) {
+    return {
+      issueNumber: 1192,
+      sourceRevision: 'r01',
+      verdictUrl: 'https://github.com/chetwerikoff/orchestrator-pack/issues/1192#issuecomment-5194504082',
+      verdictSha256: createHash('sha256').update(capture).digest('hex'),
+      verdictByteLength: Buffer.byteLength(capture),
+      verdictFindingCount: 0,
+      reason: 'operator confirmed the already-published exact terminal verdict',
+    };
+  }
+
+  for (const transportState of ['absent', 'driver_error'] as const) {
+    it(`accepts exact governed bytes with ${transportState} transport and preserves that fact`, () => {
+      const input = fixture();
+      const capture = governedCapture();
+      writeFileSync(input.capturePath, capture);
+      const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+      if (transportState === 'absent') {
+        delete evidence.invocations[0].turnResultPath;
+        evidence.invocations[0].terminalResultIdentity = 'recorded-missing-transport-artifact';
+        rmSync(input.turnResultPath, { force: true });
+      } else {
+        const failed = {
+schema: 'turn-result/v1',
+state: 'driver_error',
+scope: 'invocation',
+cause: 'browser_lost',
+invocation_id: 'invocation-001',
+send_count: 1,
+configured_profile_key: 'fixture-profile',
+        };
+        const failedText = JSON.stringify(failed);
+        writeFileSync(input.turnResultPath, failedText);
+        evidence.invocations[0].terminalResultIdentity = 'sha256:'
++ createHash('sha256').update(failedText).digest('hex')
++ ':' + basename(input.turnResultPath);
+      }
+      writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+      const outputDir = join(input.dir, `operator-${transportState}`);
+      const options = {
+        reviewDir: input.dir,
+        outputDir,
+        tierIntakePath: input.intakePath,
+        stageEvidencePaths: [input.stageEvidencePath],
+        authorDispositionsPath: input.authorPath,
+        phase: 'final-acceptance' as const,
+        operatorAdjudication: adjudication(capture),
+      };
+      const result = produceAcceptanceArtifacts(options);
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+      const manifest = JSON.parse(readFileSync(join(outputDir, 'acceptance-artifacts.json'), 'utf8'));
+      expect(manifest.operatorAdjudication).toMatchObject({
+        provenance: 'operator_adjudicated',
+        target: { issueNumber: 1192, sourceRevision: 'r01', invocationId: 'invocation-001' },
+        reference: {
+sha256: adjudication(capture).verdictSha256,
+byteLength: Buffer.byteLength(capture),
+findingCount: 0,
+        },
+        originalTransport: {
+state: transportState,
+terminalClassification: 'complete',
+        },
+      });
+      expect(JSON.stringify(manifest.operatorAdjudication)).not.toContain('"state":"ok"');
+      expect(inspectAcceptanceArtifacts(options).ok).toBe(true);
+    });
+  }
+
+  it('rejects absent transport without the direct operator input with legacy error bytes and no writes', () => {
+    const input = fixture();
+    const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+    delete evidence.invocations[0].turnResultPath;
+    writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+    const outputDir = join(input.dir, 'legacy-absent');
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'final-acceptance',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain('stage evidence invocation[0].turnResultPath is missing');
+    expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
+  });
+
+  it('rejects a byte/hash mismatch before artifact publication', () => {
+    const input = fixture();
+    const capture = governedCapture();
+    writeFileSync(input.capturePath, capture);
+    const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+    delete evidence.invocations[0].turnResultPath;
+    writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+    const outputDir = join(input.dir, 'operator-mismatch');
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'final-acceptance',
+      operatorAdjudication: { ...adjudication(capture), verdictSha256: '0'.repeat(64) },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('must match exactly one absent or non-ok terminal invocation');
+    expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
+  });
+});
