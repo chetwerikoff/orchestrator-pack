@@ -1,0 +1,53 @@
+name: issue-1341-pr-trigger
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-1341-operator-inputs
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Execute implementation recipe
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          lines = Path('.github/workflows/issue-1341-implementation.yml').read_text().splitlines()
+          blocks = []
+          index = 0
+          while index < len(lines):
+              if lines[index] == '        run: |':
+                  index += 1
+                  block = []
+                  while index < len(lines) and (lines[index].startswith('          ') or lines[index] == ''):
+                      line = lines[index]
+                      block.append(line[10:] if line.startswith('          ') else '')
+                      index += 1
+                  blocks.append('\n'.join(block) + '\n')
+                  continue
+              index += 1
+          if len(blocks) != 4:
+              raise SystemExit(f'expected 4 implementation blocks, found {len(blocks)}')
+          for ordinal, block in enumerate(blocks, 1):
+              subprocess.run(['bash', '-euo', 'pipefail', '-c', block], check=True)
+          Path('.github/workflows/issue-1341-pr-trigger.yml').unlink()
+          subprocess.run(['git', 'add', '.github/workflows/issue-1341-pr-trigger.yml'], check=True)
+          subprocess.run(['git', 'commit', '-m', 'chore: remove implementation bootstrap'], check=True)
+          subprocess.run(['git', 'push', 'origin', 'HEAD:agent/issue-1341-operator-inputs'], check=True)
+          PY
