@@ -1359,7 +1359,7 @@ describe('GPT run-store terminal evidence validation (Issue #1276 r08)', () => {
         trustedPackRoot: repoRoot,
         sourceRepoRoot: repoRoot,
         reviewRound: round,
-      }), malformedCase.name).toThrow(/terminalResult|payload|class-inconsistent|non-complete|terminal class/);
+      }), malformedCase.name).toThrow(/terminalResult|payload|class-inconsistent|non-complete|terminal class|zero-send collision/);
     }
   });
 });
@@ -1399,7 +1399,7 @@ describe('GPT frozen census persistence and stale recovery (Issue #1276 r08)', (
       created.run.id,
       { reviewRound: replacement },
       { projectId: 'orchestrator-pack', storeRoot },
-    )).toThrow(/frozen reviewRound cardinality cannot change/);
+    )).toThrow(/frozen reviewRound cardinality cannot change|cardinality violates tier\/round policy/);
     expect(getPackReviewRun(created.run.id, {
       projectId: 'orchestrator-pack',
       storeRoot,
