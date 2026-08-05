@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { serializeCommentBody } from './create-issue-stage-record-marker.ts';
@@ -9,6 +9,8 @@ import type {
   TrustedComment,
 } from './create-issue-stage-record-types.ts';
 import { STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
+
+const tempDirs: string[] = [];
 
 export interface MockGhState {
   ownerLogin: string;
@@ -178,7 +180,12 @@ export function createMockTransport(state: MockGhState): GhTransport {
 
 export function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'opk-1152-'));
+  tempDirs.push(dir);
   return dir;
+}
+
+export function cleanupTempDirs(): void {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 }
 
 export function sampleStageReceipt(cycleId: string) {

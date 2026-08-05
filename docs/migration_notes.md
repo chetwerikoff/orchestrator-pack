@@ -1,3 +1,32 @@
+## 2026-08-04 — GPT plural PR-review source rounds (Issue #1276)
+
+GPT PR review now freezes one logical round with its authoritative bound Issue
+tier, source cardinality, and slot identities in the existing pack-review run
+store. Round one uses three sources for T1/T2/T3; later T3 rounds use three and
+later T1/T2 rounds use one. The runner aggregates source-attributed outputs and
+non-complete outcomes before the existing single publication owner performs
+head, cap, delivery, and status effects.
+
+Plural rounds require `PACK_GPT_BROWSER_PROJECT_URL` and fail closed when only a
+fixed `PACK_GPT_BROWSER_CHAT_URL` is configured. Caller admission starts are
+spaced by 10 seconds; the existing profile send slot stays enabled. Each of the
+following exact zero-send tuples receives one same-slot retry: `state_light_new_chat_send_slot_timeout`,
+`profile_busy`, and `composer_unavailable`. Generic UI mismatch, missing/malformed
+terminal evidence, and possible delivery are non-retryable.
+
+### Operator adoption
+
+- Configure the dedicated GPT automation profile and
+  `PACK_GPT_BROWSER_PROJECT_URL`; do not configure a fixed chat URL for plural
+  rounds.
+- Keep the profile send slot enabled; do not set
+  `OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT`.
+- Verify a current-head plural round through the existing pack-review runner and
+  inspect the run-store source census. No daemon, queue, watcher, or second
+  store is introduced.
+
+Rollback is a plain revert to the prior single-source GPT runner and runbook.
+
 ## 2026-08-03 — Issue #898 live authority and review budget adoption
 
 The pack review runner now owns the Issue #898 authority lifecycle, including carry-over,
@@ -2760,3 +2789,11 @@ Until those live checks are recorded, treat AC5 as operator-pending; do not subs
 ## Issue #1200 remote review publication authority
 
 The create-issue-draft publication path now treats the source Issue as the authority for immutable review topology and exact raw reviewer records. Retry a completed turn by re-harvesting the durable result; do not resend a reviewer turn. The three parked migrations are fixed to Issues #1168, #1173, and #1188 and must be confirmed before strict consumer cutover.
+
+
+## Issue #1258 — S1 fleet observer adoption
+
+- The runtime-neutral prerequisite #1245 landed at exact commit `54cf33decf062a7f38fa5a8a02d02053f5089db1` (PR #1264).
+- After merge, operators may create the optional `~/.config/orchestrator-pack/fleet-observer.json` using exact `{schedulerGeneration,unitRef}` values from the current snapshot. Invalid configuration fails closed.
+- The observer writes only `~/.local/state/orchestrator-pack/fleet-observer/snapshot.json`; old local state may be removed during rollback.
+- No service, watcher, timer owner, supervisor child, or worker action is started. The existing scheduler remains the sole cadence owner and its action phase remains independent of observer evidence.

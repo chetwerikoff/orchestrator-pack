@@ -25,6 +25,76 @@ Operations required only by remaining supervisor/recovery callers are intentiona
 - The current public Orca CLI closes terminals only by handle and exposes no expected-generation binding. Therefore the shared Orca adapter does not issue a destructive close and returns `runtime_generation_bound_stop_unsupported` for an otherwise owned worker. The existing worker-smoke compatibility facade retains its current close behavior until #1248 can bind migration to a generation-safe native operation; the shared boundary does not claim atomicity that Orca cannot provide.
 - Current upstream Orca output (`result.terminal.tail`, string-or-null cursor plus optional `latestCursor`) and the captured legacy smoke shape (`result.lines`, numeric cursor) are normalized internally. Any unsupported consumed response or progress shape returns the named `unsupported` result.
 
+## Worktree lifecycle continuity (Issue #1298)
+
+Worktree creation and teardown are deliberately not added to `RuntimeAdapter` by this task. Issue
+#1248 still owns the broad caller migration and any future runtime-neutral lifecycle expansion.
+Issue #1298 adds one smaller pack-owned boundary at `scripts/worktree-lifecycle/**` because the
+current production problem is disagreement between two native authorities:
+
+- Git's common worktree registry and target `.git` link;
+- Orca's supported worktree, agent, and terminal inventories.
+
+The seam performs a bounded dual census and emits one exact classification:
+`exact_dual`, `exact_git_only`, `orca_only`, `conflict`, or `absent`. Runtime-specific commands and
+response validation stay at the edge; normalized identity and continuation decisions stay in the
+pure classifier. Multiple worktrees may legitimately share the same source commit, so equality of
+HEAD SHA alone is not a collision.
+
+Orca repository authority is derived from the capture-shaped composite worktree `id`
+(`<repository-id>::<canonical-worktree-path>`), not from a synthetic standalone `repoId` field. The
+embedded path must equal the separately returned canonical `path`. Exact identity additionally
+requires branch or the explicit capture-proven detached representation, Issue/PR binding, full
+HEAD SHA, active non-main/non-archived state, and a complete validated row. Missing, malformed, or
+inconsistent identity evidence is conflict evidence.
+
+The canonical create/handoff surface is
+`scripts/worktree-lifecycle/create-continuation.ts`. One invocation owns the shared owner-token
+exclusion across pre-create dual census, one stable primary create, authoritative read-back after
+known or unknown command outcome, at most one stable same-source replacement, terminal creation,
+and two fresh read-backs proving exactly one new terminal handle. A dead owner is recovered only
+through PID/start-time validation plus stable compare-before-unlink; a borrowed teardown child
+validates the parent token and never unlinks the parent's lock.
+
+The Issue-family budget is independent of the current expected HEAD. An old-head, malformed,
+active, interrupted, already terminal-bound, or otherwise disputed same-repository Issue-family
+row consumes or blocks the bounded create slots instead of reopening the primary/replacement
+sequence. `worktree ps` evidence is retained and validated; an Orca-managed candidate is usable
+only when its exact agent row is complete and every agent is done and not interrupted.
+
+A bare Orca `worktree create` may itself materialize fallback/default terminals. Any terminal that
+appears with the new candidate during create read-back is treated as create-owned activity: the
+candidate is preserved and the actuator returns bounded `task_degraded` without creating a
+replacement or a second terminal. The successful result is `worker_spawned`; it returns the
+verified worktree and terminal identities and deliberately exports no later terminal-spawn
+authorization. A repeated, concurrent, or exhausted caller receives a no-effect task-level
+degraded result and returns control to the scheduler.
+
+The lifecycle seam does not become a universal registry and stores no durable state. Discovery
+never grants mutation authority. The read-only post-create classifier can report
+`exact_dual_observed`, but it cannot authorize a terminal effect. Unsupported, malformed,
+wrong-repository, archived, main-worktree, present-invalid binding, or ambiguous detached output is
+a conflict.
+
+For cleanup, mutation safety and work continuity are separate decisions. Existing teardown gates
+remain fail-closed for the target. A blocked or ambiguous cleanup returns a structured
+`cleanup_deferred` result with `pipelineContinues: true`; it does not invalidate an already
+successful merge/adoption or stop unrelated scheduler work. Exact Git-only recovery is explicit,
+dry-run-first, and permits only Git's non-force worktree removal after the complete identity,
+cleanliness, ignored-data, merge, branch-ownership, terminal, process, exclusion, and live merged-PR
+checks are recollected immediately before the effect. Process-census failure is unavailable
+evidence, never proof of zero processes.
+
+Standard teardown holds the same owner-token exclusion across the decisive census, delegated child,
+and dual post-effect read-back. `cleanup_complete` requires exact target absence in Git and Orca
+with unrelated in-repository inventory unchanged; child exit zero alone is not completion evidence.
+Effect-before-receipt may settle complete only from that dual read-back.
+
+No watcher, daemon, lease service, second state store, bulk orphan sweep, private Orca persistence
+edit, force removal, or path-only delete is introduced. A future native Orca adopt/register branch
+requires installed-version production capture proving its exact command and identity-preserving
+read-back; until then it is treated as unsupported.
+
 ## Adding a future adapter
 
 A future adapter needs an implementation of `RuntimeAdapter`, a static composition-root factory, focused contract tests, and this document updated. Runtime-specific command lines, response fields, handles, cursors, and error text must remain inside that adapter. The deterministic adapter is test-only and is injected by tests; it is not registered as a production runtime.

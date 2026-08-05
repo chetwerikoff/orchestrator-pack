@@ -261,6 +261,7 @@ $input = @{
     issueBody    = if ($issueReadFailed) { $null } else { $issueBody }
     # TypeScript acquires the authoritative verified merge-base diff.
     prPaths      = $prPaths
+    prNumber     = $prNumber
     baseSha      = [string]($env:PR_BASE_SHA ?? '')
     headSha      = [string]($env:PR_HEAD_SHA ?? '')
     degradedMode = $degradedMode

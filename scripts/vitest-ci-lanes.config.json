@@ -80,6 +80,7 @@
     "scripts/pr-session-binding-cache.test.ts": "light",
     "scripts/pr2-foundation/binding-cache.test.ts": "light",
     "scripts/pr2-foundation/foundation.test.ts": "heavy",
+    "scripts/pr2-foundation/fleet-observer.test.ts": "postMergeWallclock",
     "scripts/pr2-foundation/migration-symlink.test.ts": "light",
     "scripts/pr2-foundation/mutation-catalog.test.ts": "light",
     "scripts/pr2-foundation/mutation-external-ci.test.ts": "heavy",
@@ -133,7 +134,11 @@
     "scripts/lib/create-issue-stage-topology.test.ts": "light",
     "scripts/launch-watch/launch-watch.test.ts": "light",
     "scripts/launch-watch/watch.test.ts": "light",
-    "scripts/merge-triage-evidence.test.ts": "light"
+    "scripts/merge-triage-evidence.test.ts": "light",
+    "scripts/worktree-lifecycle/create-continuation.test.ts": "light",
+    "scripts/worktree-lifecycle/core.test.ts": "light",
+    "scripts/worktree-lifecycle/operations.test.ts": "light",
+    "scripts/worktree-lifecycle/recovery-regression.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,

@@ -10,6 +10,9 @@ import {
   PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
   recordMalformedPackReviewStatus,
   recordPackReviewPendingStatus,
+  recordPackReviewUnfinishedTerminalStatus,
+  packReviewRequiredStatusNeedsStaleReconciliation,
+  restorePackReviewAuthoritativeRequiredStatus,
   resumePackReviewVerdictDelivery,
   type PackReviewRequiredStatusRequest,
   type PackReviewTerminalPayload,
@@ -19,8 +22,11 @@ import {
   getPackReviewRun,
   isPackReviewRunStale,
   listPackReviewRuns,
+  listPackReviewRunRecordsRaw,
+  resolvePackReviewRunOrder,
   terminalizePackReviewStaleRun,
   updatePackReviewRun,
+  type PackReviewRunRecord,
 } from './lib/pack-review-run-store.js';
 import { resolveRepositorySlug } from './lib/pack-gpt-reviewer.js';
 import { reconcileStalePackReviewRuns, startPackReview } from './pack-review-runner.js';
@@ -174,6 +180,35 @@ describe('pack review journal-first delivery (Issue #894)', () => {
         workerNotification: { state: 'delivered' },
       },
     });
+  });
+
+  it('preserves a verdict when the journal writer throws after durable persistence', async () => {
+    const storeRoot = tempRoot('opk-review-verdict-persist-then-throw-');
+    const run = createRun(storeRoot);
+    const result = await deliverPackReviewVerdict({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run,
+      payload: { verdict: 'clean', findingCount: 0, findings: [] },
+      journalWriter(runId, fields, options) {
+        updatePackReviewRun(runId, fields, options);
+        throw new Error('post-persist delivery fault');
+      },
+      async postGithubComment() {
+        return { id: 1307, url: 'fixture://review/1307', event: 'COMMENT' };
+      },
+      async writeRequiredStatus() {},
+      async notifyWorker() {
+        return { state: 'delivered', reason: 'fixture_dispatched' };
+      },
+    });
+    expect(result.status).toBe('up_to_date');
+    expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+      status: 'up_to_date',
+      reviewVerdict: 'clean',
+      journalOutcome: { state: 'persisted' },
+    });
+    expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })?.failureReason).toBeUndefined();
   });
 
   it('persists a recovered GitHub outcome when reconciliation completed before the channel write', async () => {
@@ -354,6 +389,67 @@ describe('pack review journal-first delivery (Issue #894)', () => {
     });
   });
 
+  it('does not reuse an unpublished pending marker as delivered evidence', async () => {
+    const storeRoot = tempRoot('opk-review-pending-recovery-');
+    const run = createRun(storeRoot);
+    updatePackReviewRun(run.id, {
+      status: 'running',
+      latestRunStatus: 'running',
+      deliveryOutcomes: {
+        requiredStatus: {
+          state: 'failed',
+          recordedAtUtc: '2026-08-04T04:00:00.000Z',
+          reason: 'status_pending_unpublished',
+          idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${HEAD_SHA}:pending`,
+        },
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const requests: PackReviewRequiredStatusRequest[] = [];
+
+    const outcome = await restorePackReviewAuthoritativeRequiredStatus({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run: getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })!,
+      writeRequiredStatus: async (request) => { requests.push(request); },
+    });
+
+    expect(outcome).toMatchObject({ state: 'succeeded', reason: 'status_pending' });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.state).toBe('pending');
+  });
+
+  it('does not treat malformed nested authority evidence as delivered', async () => {
+    const storeRoot = tempRoot('opk-review-malformed-authority-');
+    const run = createRun(storeRoot);
+    const statusKey = `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${HEAD_SHA}`;
+    updatePackReviewRun(run.id, {
+      status: 'commented',
+      latestRunStatus: 'commented',
+      reviewVerdict: 'clean',
+      findingCount: 0,
+      findings: [],
+      journalOutcome: { state: 'persisted' } as PackReviewRunRecord['journalOutcome'],
+      githubReviewReconciliation: { phase: 'complete' } as PackReviewRunRecord['githubReviewReconciliation'],
+      deliveryOutcomes: {
+        requiredStatus: {
+          state: 'succeeded',
+          idempotencyKey: statusKey,
+        } as PackReviewRunRecord['deliveryOutcomes']['requiredStatus'],
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const requests: PackReviewRequiredStatusRequest[] = [];
+
+    const restored = await restorePackReviewAuthoritativeRequiredStatus({
+      run: getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })!,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      writeRequiredStatus: async (request) => { requests.push(request); },
+    });
+
+    expect(restored).toBeNull();
+    expect(requests).toHaveLength(0);
+  });
+
   it('publishes error for malformed stdout without creating a verdict journal', async () => {
     const storeRoot = tempRoot('opk-review-malformed-');
     const run = createRun(storeRoot);
@@ -457,6 +553,324 @@ async function writePendingForStaleRun(storeRoot: string, runId: string, capture
     },
   });
 }
+
+describe('pack review corrective contracts (Issue #1307)', () => {
+  it('persists malformed terminal state before attempting its error status', async () => {
+    const storeRoot = tempRoot('opk-1307-malformed-order-');
+    const run = createRun(storeRoot);
+    const observed: string[] = [];
+    const result = await recordPackReviewUnfinishedTerminalStatus({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run,
+      status: 'failed',
+      failureReason: 'reviewer_output_malformed:invalid_terminal_payload',
+      writeRequiredStatus: async (request) => {
+        observed.push(request.state);
+        expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+          status: 'failed',
+          failureReason: 'reviewer_output_malformed:invalid_terminal_payload',
+        });
+      },
+    });
+    expect(result.status).toBe('failed');
+    expect(observed).toEqual(['error']);
+    expect(result.deliveryOutcome.state).toBe('succeeded');
+  });
+
+  it('allocates strict same-key order and rejects equal-time legacy ties', async () => {
+    const storeRoot = tempRoot('opk-1307-order-');
+    const first = createRun(storeRoot);
+    updatePackReviewRun(first.id, { status: 'failed', latestRunStatus: 'failed' }, { projectId: 'orchestrator-pack', storeRoot });
+    const second = createRun(storeRoot);
+    updatePackReviewRun(second.id, { status: 'failed', latestRunStatus: 'failed' }, { projectId: 'orchestrator-pack', storeRoot });
+    expect(second.sameKeyOrder).toBeGreaterThan(first.sameKeyOrder!);
+    expect(resolvePackReviewRunOrder(listPackReviewRunRecordsRaw({ projectId: 'orchestrator-pack', storeRoot }), first)).toMatchObject({
+      kind: 'newer',
+      run: { id: second.id },
+    });
+
+    const legacyTime = '2026-08-04T04:00:00.000Z';
+    for (const run of [first, second]) {
+      const recordPath = path.join(storeRoot, 'runs', `${run.id}.json`);
+      const record = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>;
+      delete record.sameKeyOrder;
+      record.createdAt = legacyTime;
+      record.failureReason = 'runner_disappeared_stale';
+      writeFileSync(recordPath, `${JSON.stringify(record)}\n`);
+    }
+    const records = listPackReviewRunRecordsRaw({ projectId: 'orchestrator-pack', storeRoot });
+    expect(resolvePackReviewRunOrder(records, first)).toEqual({ kind: 'ambiguous', reason: 'legacy_order_ambiguous' });
+  });
+
+  it('matches an unqualified same-repository start to a canonical run', () => {
+    const storeRoot = tempRoot('opk-1307-mixed-identity-');
+    const canonical = createRun(storeRoot);
+    updatePackReviewRun(canonical.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'reviewer_process_failed',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+
+    const recordPath = path.join(storeRoot, 'runs', `${canonical.id}.json`);
+    const legacy = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>;
+    delete legacy.canonicalRepository;
+    writeFileSync(recordPath, `${JSON.stringify(legacy)}\n`);
+
+    const unqualified = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: canonical.prNumber,
+      headSha: canonical.targetSha,
+      linkedSessionId: 'worker-1307-legacy',
+      startReason: 'mixed-identity',
+      surface: 'pack-review-delivery-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      legacyRepositoryBySourceRoot: { [repoRoot]: 'chetwerikoff/orchestrator-pack' },
+    });
+
+    expect(unqualified.created).toBe(true);
+    expect(unqualified.run.sameKeyOrder).toBeGreaterThan(canonical.sameKeyOrder!);
+  });
+
+  it('binds a canonical cross-checkout start to a legacy repository row', () => {
+    const storeRoot = tempRoot('opk-1307-cross-checkout-identity-');
+    const legacy = createRun(storeRoot);
+    updatePackReviewRun(legacy.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'reviewer_process_failed',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const recordPath = path.join(storeRoot, 'runs', `${legacy.id}.json`);
+    const record = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>;
+    delete record.canonicalRepository;
+    writeFileSync(recordPath, `${JSON.stringify(record)}\n`);
+
+    const next = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: legacy.prNumber,
+      headSha: legacy.targetSha,
+      linkedSessionId: 'worker-1307-cross-checkout',
+      startReason: 'mixed-identity-cross-checkout',
+      surface: 'pack-review-delivery-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: path.join(storeRoot, 'other-checkout'),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      legacyRepositoryBySourceRoot: { [repoRoot]: 'chetwerikoff/orchestrator-pack' },
+    });
+
+    expect(next.created).toBe(true);
+    expect(next.run.sameKeyOrder).toBeGreaterThan(legacy.sameKeyOrder!);
+  });
+
+  it('lets an ordered run outrank an equal-time legacy tie', () => {
+    const storeRoot = tempRoot('opk-1307-ordered-over-legacy-tie-');
+    const first = createRun(storeRoot);
+    updatePackReviewRun(first.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'runner_disappeared_stale',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const second = createRun(storeRoot);
+    updatePackReviewRun(second.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'runner_disappeared_stale',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const ordered = createRun(storeRoot);
+    const legacyTime = '2026-08-04T04:00:00.000Z';
+    for (const run of [first, second]) {
+      const recordPath = path.join(storeRoot, 'runs', `${run.id}.json`);
+      const record = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>;
+      delete record.sameKeyOrder;
+      record.createdAt = legacyTime;
+      writeFileSync(recordPath, `${JSON.stringify(record)}\n`);
+    }
+
+    expect(resolvePackReviewRunOrder(
+      listPackReviewRunRecordsRaw({ projectId: 'orchestrator-pack', storeRoot }),
+      first,
+    )).toEqual({ kind: 'newer', run: expect.objectContaining({ id: ordered.id }) });
+  });
+
+  it.each([
+    ['active', 'running', undefined, 'pending'],
+    ['verdict', 'up_to_date', undefined, 'success'],
+    ['unfinished', 'timed_out', 'reviewer_process_timeout', 'error'],
+  ] as const)('restores newer %s authority without guessing', async (_label, status, failureReason, expectedState) => {
+    const storeRoot = tempRoot(`opk-1307-restore-${_label}-`);
+    const older = createRun(storeRoot);
+    updatePackReviewRun(older.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'runner_disappeared_stale',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const newer = createRun(storeRoot);
+    updatePackReviewRun(newer.id, {
+      status,
+      latestRunStatus: status,
+      ...(failureReason ? { failureReason } : {}),
+      ...(status === 'up_to_date' ? {
+        reviewVerdict: 'clean',
+        findingCount: 0,
+        findings: [],
+        journalOutcome: {
+          state: 'persisted' as const,
+          recordedAtUtc: '2026-08-04T04:00:00.000Z',
+          reason: 'verdict_persisted',
+          idempotencyKey: `verdict:${newer.id}:${HEAD_SHA}`,
+          attempts: 1,
+        },
+      } : {}),
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const requests: PackReviewRequiredStatusRequest[] = [];
+    const outcome = await restorePackReviewAuthoritativeRequiredStatus({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run: newer,
+      writeRequiredStatus: async (request) => { requests.push(request); },
+    });
+    expect(outcome?.state).toBe('succeeded');
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.state).toBe(expectedState);
+    if (expectedState === 'error') {
+      expect(requests[0]?.description).toContain('no reviewer judgment');
+    }
+    expect(getPackReviewRun(newer.id, { projectId: 'orchestrator-pack', storeRoot })?.status).toBe(status);
+  });
+
+  it('restores a persisted verdict even when its run was terminalized as failed', async () => {
+    const storeRoot = tempRoot('opk-1307-failed-with-verdict-');
+    const run = createRun(storeRoot);
+    updatePackReviewRun(run.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'reviewer_process_failed',
+      reviewVerdict: 'clean',
+      findingCount: 0,
+      findings: [],
+      journalOutcome: {
+        state: 'persisted',
+        recordedAtUtc: '2026-08-04T04:00:00.000Z',
+        reason: 'verdict_persisted',
+        idempotencyKey: `verdict:${run.id}:${HEAD_SHA}`,
+        attempts: 1,
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const requests: PackReviewRequiredStatusRequest[] = [];
+
+    const outcome = await restorePackReviewAuthoritativeRequiredStatus({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run,
+      writeRequiredStatus: async (request) => { requests.push(request); },
+    });
+
+    expect(outcome).toMatchObject({ state: 'succeeded', reason: 'status_success_restored' });
+    expect(requests).toEqual([expect.objectContaining({ state: 'success' })]);
+  });
+
+  it('does not write any status when legacy same-key order is ambiguous', async () => {
+    const storeRoot = tempRoot('opk-1307-ambiguous-reconcile-');
+    const first = createRun(storeRoot);
+    updatePackReviewRun(first.id, { status: 'failed', latestRunStatus: 'failed', failureReason: 'runner_disappeared_stale' }, { projectId: 'orchestrator-pack', storeRoot });
+    const second = createRun(storeRoot);
+    updatePackReviewRun(second.id, { status: 'failed', latestRunStatus: 'failed', failureReason: 'runner_disappeared_stale' }, { projectId: 'orchestrator-pack', storeRoot });
+    for (const run of [first, second]) {
+      const recordPath = path.join(storeRoot, 'runs', `${run.id}.json`);
+      const record = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>;
+      delete record.sameKeyOrder;
+      record.createdAt = '2026-08-04T04:00:00.000Z';
+      writeFileSync(recordPath, `${JSON.stringify(record)}\n`);
+    }
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
+    });
+    expect(result.results).toEqual([
+      expect.objectContaining({ reason: 'legacy_order_ambiguous', statusReconciled: false }),
+      expect.objectContaining({ reason: 'legacy_order_ambiguous', statusReconciled: false }),
+    ]);
+    expect(writes).toHaveLength(0);
+  });
+
+  it('fails closed before reconciliation when a same-head legacy repository is unresolved', async () => {
+    const storeRoot = tempRoot('opk-1307-unresolved-reconcile-');
+    const canonical = createRun(storeRoot);
+    updatePackReviewRun(canonical.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'runner_disappeared_stale',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const legacy = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 894,
+      headSha: HEAD_SHA,
+      linkedSessionId: 'worker-894-legacy',
+      startReason: 'legacy',
+      surface: 'pack-review-delivery-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: path.join(storeRoot, 'deleted-checkout'),
+    }).run;
+    const legacyPath = path.join(storeRoot, 'runs', `${legacy.id}.json`);
+    const legacyRecord = JSON.parse(readFileSync(legacyPath, 'utf8')) as Record<string, unknown>;
+    delete legacyRecord.canonicalRepository;
+    writeFileSync(legacyPath, `${JSON.stringify(legacyRecord)}\n`);
+    updatePackReviewRun(legacy.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'runner_disappeared_stale',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const writes: PackReviewRequiredStatusRequest[] = [];
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      resolveRepositorySlug: async (sourceRoot) => {
+        if (sourceRoot === path.join(storeRoot, 'deleted-checkout')) {
+          throw new Error('legacy checkout unavailable');
+        }
+        return 'chetwerikoff/orchestrator-pack';
+      },
+      fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
+    });
+
+    expect(result.results).toHaveLength(2);
+    expect(result.results.every((entry) => entry.reason === 'repository_identity_unresolved')).toBe(true);
+    expect(writes).toHaveLength(0);
+  });
+
+  it('does not reconcile a failed pending outcome as unfinished evidence', () => {
+    const storeRoot = tempRoot('opk-1307-failed-pending-evidence-');
+    const run = createRun(storeRoot);
+    updatePackReviewRun(run.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'reviewer_process_timeout',
+      deliveryOutcomes: {
+        requiredStatus: {
+          state: 'failed',
+          recordedAtUtc: '2026-08-04T04:00:00.000Z',
+          reason: 'required status unavailable',
+          idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${HEAD_SHA}:pending`,
+        },
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+
+    expect(packReviewRequiredStatusNeedsStaleReconciliation(
+      getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })!,
+    )).toBe(false);
+  });
+});
 
 describe('pack review stale reconciliation (Issue #1067)', () => {
   afterEach(() => {
@@ -661,10 +1075,337 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
     });
     expect(result.results[0]).toMatchObject({
       runId: staleRunId,
-      statusReconciled: false,
+      statusReconciled: true,
       reason: 'newer_run_authoritative',
     });
     expect(JSON.parse(readFileSync(newerCapture, 'utf8')).state).toBe('pending');
+  });
+
+  it('does not rewrite a completed newer authority on repeated reconciliation', async () => {
+    const storeRoot = tempRoot('opk-1307-repeat-newer-reconcile-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+
+    createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1067,
+      headSha: STALE_HEAD_A,
+      linkedSessionId: 'worker-newer-repeat',
+      startReason: 'newer-repeat',
+      surface: 'pack-review-stale-reconcile-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: STALE_REPO_A,
+    });
+
+    const input = {
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request: PackReviewRequiredStatusRequest) => {
+        writes.push(request);
+      },
+    };
+    await reconcileStalePackReviewRuns(input);
+    await reconcileStalePackReviewRuns(input);
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.state).toBe('pending');
+  });
+
+  it('does not claim newer settlement after authority advances on every restore attempt', async () => {
+    const storeRoot = tempRoot('opk-1307-newer-authority-race-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+    let newerCount = 0;
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    const initialNewer = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1067,
+      headSha: STALE_HEAD_A,
+      linkedSessionId: 'worker-newer-race-0',
+      startReason: 'newer-race',
+      surface: 'pack-review-stale-reconcile-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: STALE_REPO_A,
+    });
+    let latestNewerId = initialNewer.run.id;
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
+      fixturePauseAfterPendingRestoreWrite: async () => {
+        newerCount += 1;
+        updatePackReviewRun(latestNewerId, {
+          status: 'timed_out',
+          latestRunStatus: 'timed_out',
+          failureReason: 'reviewer_process_timeout',
+        }, { projectId: 'orchestrator-pack', storeRoot });
+        const nextNewer = createPackReviewRun({
+          projectId: 'orchestrator-pack',
+          storeRoot,
+          prNumber: 1067,
+          headSha: STALE_HEAD_A,
+          linkedSessionId: `worker-newer-race-${newerCount}`,
+          startReason: 'newer-race',
+          surface: 'pack-review-stale-reconcile-test',
+          trustedPackRoot: repoRoot,
+          sourceRepoRoot: repoRoot,
+          canonicalRepository: STALE_REPO_A,
+        });
+        latestNewerId = nextNewer.run.id;
+      },
+    });
+
+    expect(result.results[0]).toMatchObject({
+      runId: staleRunId,
+      statusReconciled: false,
+      reason: 'newer_run_authority_race',
+    });
+    expect(writes).toHaveLength(6);
+  });
+
+  it('rechecks a same-id newer projection before settling', async () => {
+    const storeRoot = tempRoot('opk-1307-same-id-projection-race-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+    const newer = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1067,
+      headSha: STALE_HEAD_A,
+      linkedSessionId: 'worker-newer-same-id-race',
+      startReason: 'newer-same-id-race',
+      surface: 'pack-review-stale-reconcile-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: STALE_REPO_A,
+    });
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    let transitioned = false;
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
+      fixturePauseAfterRestoreRead: async (run) => {
+        if (transitioned) return;
+        transitioned = true;
+        updatePackReviewRun(run.id, {
+          status: 'timed_out',
+          latestRunStatus: 'timed_out',
+          failureReason: 'reviewer_process_timeout',
+        }, { projectId: 'orchestrator-pack', storeRoot });
+      },
+    });
+
+    expect(result.results[0]).toMatchObject({
+      runId: staleRunId,
+      statusReconciled: true,
+      reason: 'newer_run_authoritative',
+    });
+    expect(writes.map((request) => request.state)).toEqual(['pending', 'error']);
+    const restoredNewer = getPackReviewRun(newer.run.id, { projectId: 'orchestrator-pack', storeRoot });
+    expect(restoredNewer?.deliveryOutcomes.requiredStatus?.idempotencyKey)
+      .toContain(':unfinished:reviewer_process_timeout');
+  });
+
+  it('rechecks the effective terminal status when finding severity changes', async () => {
+    const storeRoot = tempRoot('opk-1307-terminal-projection-race-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+    const newer = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1067,
+      headSha: STALE_HEAD_A,
+      linkedSessionId: 'worker-terminal-projection-race',
+      startReason: 'terminal-projection-race',
+      surface: 'pack-review-stale-reconcile-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: STALE_REPO_A,
+    });
+    updatePackReviewRun(newer.run.id, {
+      status: 'commented',
+      latestRunStatus: 'commented',
+      reviewVerdict: 'findings',
+      findingCount: 1,
+      findings: [{ severity: 'warning' }],
+      journalOutcome: {
+        state: 'persisted',
+        recordedAtUtc: '2026-08-04T04:00:00.000Z',
+        reason: 'verdict_persisted',
+        idempotencyKey: `verdict:${newer.run.id}:${STALE_HEAD_A}`,
+        attempts: 1,
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    let transitioned = false;
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
+      fixturePauseAfterRestoreRead: async (run) => {
+        if (transitioned) return;
+        transitioned = true;
+        updatePackReviewRun(run.id, {
+          findings: [{ severity: 'blocking' }],
+        }, { projectId: 'orchestrator-pack', storeRoot });
+      },
+    });
+
+    expect(result.results[0]).toMatchObject({
+      runId: staleRunId,
+      statusReconciled: true,
+      reason: 'newer_run_authoritative',
+    });
+    expect(writes.map((request) => request.state)).toEqual(['success', 'failure']);
+    expect(getPackReviewRun(newer.run.id, { projectId: 'orchestrator-pack', storeRoot })
+      ?.deliveryOutcomes.requiredStatus?.reason)
+      .toBe('status_failure_restored');
+  });
+
+  it('does not settle when authority changes before marker compare-and-set', async () => {
+    const storeRoot = tempRoot('opk-1307-settlement-cas-race-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+    const newer = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1067,
+      headSha: STALE_HEAD_A,
+      linkedSessionId: 'worker-settlement-cas-race',
+      startReason: 'settlement-cas-race',
+      surface: 'pack-review-stale-reconcile-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: STALE_REPO_A,
+    });
+    const writes: PackReviewRequiredStatusRequest[] = [];
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
+      fixturePauseBeforeAuthoritySettlement: async () => {
+        updatePackReviewRun(newer.run.id, {
+          status: 'timed_out',
+          latestRunStatus: 'timed_out',
+          failureReason: 'reviewer_process_timeout',
+        }, { projectId: 'orchestrator-pack', storeRoot });
+      },
+    });
+
+    expect(result.results[0]).toMatchObject({
+      runId: staleRunId,
+      statusReconciled: false,
+      reason: 'newer_run_authority_race',
+    });
+    expect(writes.map((request) => request.state)).toEqual(['pending']);
+    expect(getPackReviewRun(staleRunId, { projectId: 'orchestrator-pack', storeRoot })
+      ?.deliveryOutcomes.requiredStatus?.reason)
+      .not.toBe('newer_run_authoritative');
+  });
+
+  it('force-republishes newer authority after a superseding stale write', async () => {
+    const storeRoot = tempRoot('opk-1307-force-republish-');
+    const run = createRun(storeRoot);
+    updatePackReviewRun(run.id, {
+      status: 'running',
+      latestRunStatus: 'running',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    const writeRequiredStatus = async (request: PackReviewRequiredStatusRequest) => {
+      writes.push(request);
+    };
+    const current = getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })!;
+    await recordPackReviewPendingStatus({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run: current,
+      writeRequiredStatus,
+    });
+
+    const restored = await restorePackReviewAuthoritativeRequiredStatus({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run: current,
+      writeRequiredStatus,
+      forceRepublish: true,
+    });
+
+    expect(restored).toMatchObject({ state: 'succeeded', reason: 'status_pending' });
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.state).toBe('pending');
+  });
+
+  it('reports newer-authority restoration failure instead of claiming reconciliation', async () => {
+    const storeRoot = tempRoot('opk-1307-newer-restore-failure-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+
+    createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1067,
+      headSha: STALE_HEAD_A,
+      linkedSessionId: 'worker-newer-failure',
+      startReason: 'newer-failure',
+      surface: 'pack-review-stale-reconcile-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: STALE_REPO_A,
+    });
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async () => {
+        throw new Error('required status unavailable');
+      },
+    });
+
+    expect(result.results[0]).toMatchObject({
+      runId: staleRunId,
+      statusReconciled: false,
+      reason: 'newer_run_restore_failed',
+    });
   });
 
   it('resumes required-status reconciliation after local terminalization only (AC8)', async () => {

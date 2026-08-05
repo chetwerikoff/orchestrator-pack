@@ -5,13 +5,15 @@ description: >-
   operator adoption, then tear down the merged PR's Orca worktree — stop its terminals,
   reap every process the agents left running inside it (including setsid-detached MCP
   servers that survive PTY teardown), remove the worktree, and delete the local branch
-  (Step 9). Use when the user asks to merge a finished task — «мерж», «мерж 385»,
-  «мерж и пул», «смерж», «merge», «merge and pull» — or clearly wants a ready PR merged
-  after review/CI. On a direct merge order, normalize what can be normalized instead of
-  stopping — draft → ready for review, BEHIND → update-branch — while required CI that is
-  not green (red, pending, or never reported) still stops, and `--admin` cannot force it
-  because `main` sets `enforce_admins` (Step 3a). If CI is red or the branch is behind
-  base, delegate the fix to the PR worker (Step 3b) and merge only after CI is green.
+  when every safety gate passes (Step 9). A disputed or unsafe cleanup is preserved and
+  reported as cleanup_deferred without turning an already successful merge/adoption into
+  a failed operator flow. Use when the user asks to merge a finished task — «мерж»,
+  «мерж 385», «мерж и пул», «смерж», «merge», «merge and pull» — or clearly wants a ready
+  PR merged after review/CI. On a direct merge order, normalize what can be normalized
+  instead of stopping — draft → ready for review, BEHIND → update-branch — while required
+  CI that is not green (red, pending, or never reported) still stops, and `--admin` cannot
+  force it because `main` sets `enforce_admins` (Step 3a). If CI is red or the branch is
+  behind base, delegate the fix to the PR worker (Step 3b) and merge only after CI is green.
   Operates on the operator's live working tree; never discards uncommitted local work and
   never reaps a worktree that still holds unmerged or uncommitted work (Step 9b).
   Skip when the user only discusses merge policy without a concrete PR.
@@ -61,12 +63,13 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
   process.stdout.write(JSON.stringify(w));})' > "$(mktemp -d)/rt-worktrees.json"
 ```
 
-**Why a profile table and not the pack adapter:** the repo's runtime-neutral contract
+**Why a bounded lifecycle seam and not the pack adapter:** the repo's runtime-neutral contract
 (`scripts/runtime/contracts.ts`, composition root `selectRuntimeAdapter` in
 `scripts/runtime/registry.ts`) covers workers/terminals only and has **no worktree lifecycle
-operations** — and it deliberately refuses destructive close. Extending it to cover teardown is the
-durable fix (follow-up 3); until then this table is the single swap point, and this skill must not
-grow a second, rival runtime abstraction beside the pack's.
+operations** — and it deliberately refuses destructive close. Issue #1298 therefore adds the
+bounded Git/Orca census and continuation decision under `scripts/worktree-lifecycle/**`; it reuses
+this profile and the existing guarded teardown instead of creating a universal runtime registry.
+Broad caller migration and a future runtime-neutral lifecycle expansion remain Issue #1248.
 
 ## Active-runtime facts (steps rely on these; stated once)
 
@@ -84,9 +87,10 @@ AO-era artifacts and are **not** part of this flow.
   operator's tree has no Orca analogue.
 - **Worktree selectors:** `path:<abs>`, `branch:<branch>`, `issue:<number>`,
   `name:<displayName>`, `id:<repoId>::<path>`, `active`, `current`.
-- **`linkedPR` and `linkedIssue` are `null` on every row** in practice — nothing sets them
-  today. The `issue:<n>` selector therefore cannot resolve a merged PR's worktree.
-  **Branch is the only trustworthy join key** (Step 9a).
+- **`linkedPR` and `linkedIssue` may be `null` on existing rows.** Post-merge lifecycle
+  identity therefore remains bound by exact repository/path/branch-or-detached-HEAD/full-SHA and
+  PR evidence; a non-null conflicting `linkedPR` fails closed. New issue-bound handoff read-back
+  requires the exact `linkedIssue` before terminal spawn.
 - `orca worktree list --json` → `result.worktrees[]`: `id`, `path`, `head`, `branch`
   (**full ref**, e.g. `refs/heads/x`; **empty string** when the worktree is detached),
   `isMainWorktree`, `isArchived`, `displayName`. `orca worktree ps --json` adds
@@ -136,7 +140,9 @@ signal PID 1, a negative PID, or process-group 0.
 every git step (no tracked file may vanish unexplained); if a git command refuses because
 of local changes — **stop and report**, never "fix" by discarding; prefer `git fetch` +
 explicit merge over exotic pull flags; every destructive Step 9 verb runs only after its
-gate passed, and a failed gate aborts teardown while leaving the merge itself intact.
+gate passed. A failed target gate preserves that target and returns a nonblocking
+`cleanup_deferred` result after the already successful merge/adoption; it never authorizes a
+weaker retry and never stops unrelated scheduler work.
 
 ## Step 1 — Pre-flight snapshot (mandatory)
 
@@ -166,11 +172,13 @@ number,title,body,headRefName`, prefer body containing `Closes/Fixes/Resolves #N
 (3) no number: PR for current branch (`gh pr view`), or the URL/branch the user named.
 Zero or multiple matches → **ask once**, don't guess.
 
-Record PR `P`, title, linked issue `I`, and **`HEAD_REF` = `headRefName`** — Step 9a's
-only join key. Bind the worktree now, while the branch is easy to read:
+Record PR `P`, title, linked issue `I`, **`HEAD_REF` = `headRefName`**, and full
+**`PR_HEAD_SHA` = `headRefOid`** before merge. Bind the worktree now, while the branch is easy to
+read:
 
 ```bash
-HEAD_REF="$(gh pr view P --repo chetwerikoff/orchestrator-pack --json headRefName -q .headRefName)"
+read HEAD_REF PR_HEAD_SHA < <(gh pr view P --repo chetwerikoff/orchestrator-pack \
+  --json headRefName,headRefOid -q '[.headRefName,.headRefOid] | @tsv')
 ```
 
 ## Step 3 — Confirm merge readiness
@@ -391,45 +399,85 @@ If the operator says yes, the sibling recycle uses the **same Step 9b gate and S
 ordering**, except `rm` is replaced by `git -C <wp> merge --ff-only origin/main` plus a
 fresh `orca terminal create`. If `--ff-only` fails, **stop** — never force a sibling's ref.
 
-## Step 9 — Orca worktree teardown (mandatory after a successful merge)
+## Step 9 — Nonblocking Orca worktree lifecycle (mandatory after a successful merge)
 
-From the operator terminal, after Step 7 (and Step 8 when it ran). This step exists
-because `orca worktree rm` alone leaks: it stops nothing and reaps nothing.
+From the operator terminal, after Step 7 (and Step 8 when it ran). This step exists because
+`orca worktree rm` alone leaks terminals/processes, while a Git-only worktree cannot be safely
+removed through Orca inventory lookup.
 
-**Rule zero:** do not touch a worktree path without branch or PR identity proof. Never guess on
-name heuristics or `active` status. Ask the operator once and require an explicit answer.
+**Rule zero:** do not touch a worktree path without exact PR/repository/path/branch-or-detached/full-
+SHA proof. Never guess on name heuristics, Issue substrings, or `active` status. A failure to prove
+one target blocks mutation of that target only; it does not reverse the merge, fail local adoption,
+or stop unrelated work.
 
-**How to invoke:**
+### 9a — Resolve exact target and saved identity
+
+Use exact branch equality against the pre-merge `HEAD_REF`; record the absolute path as `WT`. If
+no exact Orca row exists, use `git worktree list --porcelain` to find the unique Git row with the
+same branch and `PR_HEAD_SHA`. Duplicate, reused, detached-mismatch, or conflicting rows remain
+unresolved and must not be mutated. Never choose by display name or path substring.
+
+### 9b — Dry-run first
 
 ```bash
-node --experimental-strip-types scripts/worktree-teardown.ts \
-  --worktree "<resolved-abs-path>" --pr <number> [--apply] [--json]
+node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
+  --context post-merge-cleanup \
+  --repo-root /home/che/projects/orchestrator-pack \
+  --worktree "$WT" \
+  --pr "$P" \
+  --expected-head "$PR_HEAD_SHA" \
+  --expected-branch "$HEAD_REF" \
+  --json
 ```
 
-Default is **dry-run**: prints plan and results without executing. Pass `--apply` to execute.
-Pass `--json` to output one JSON object to stdout with all gate results, process counts, and
-terminal actions.
+For a Git-confirmed detached worktree, replace `--expected-branch "$HEAD_REF"` with `--detached`;
+do not infer detached mode from a missing Orca row.
 
-**Gate checks (each has its own failure code):**
+Review the structured classification and all gates. The dry-run may report:
 
-- **G1 identity:** Branch matches PR `headRefName` (branch-bound mode) or HEAD SHA matches PR `headRefOid` (detached mode). Saved on first check, used again on re-check.
-- **G2a clean:** `git status --porcelain --untracked-files=all` is empty (Rule zero).
-- **G2b ignored:** Ignored files checked against closed allowlist (`node_modules/`, `.venv/`, etc.). Anything else blocks teardown.
-- **G3 merged:** Proof (a) — HEAD is ancestor of `origin/main`, OR Proof (b) — PR `state==MERGED` AND `headRefOid==HEAD` AND `mergeCommit` is ancestor of `origin/main`. Both proofs checked; proof (b) handles squash-merge.
-- **G4 ownership:** No other open PR on same `headRefName` (checked from `gh pr list`).
-- **G5 agents:** Exactly one agent row in runtime inventory with `state=="done"` and `interrupted==false` (stub: cannot implement without runtime).
+- `exact_dual` → existing guarded teardown is selected;
+- `exact_git_only` + `git_only_recovery_eligible` → PR-bound non-force Git recovery is eligible;
+- `orca_only`, `conflict`, dirty, active, reused, residual-process, or malformed evidence →
+  `cleanup_deferred`; the disputed target is preserved;
+- `absent` → `already_absent`, an idempotent no-op.
 
-**Expected outcomes (closed vocabulary):**
+### 9c — Apply once
 
-- `reaped_clean` — all gates pass, processes reaped, worktree removed. Exit code 0.
-- `blocked_*` — gates failed (e.g. `blocked_dirty_worktree`, `blocked_unmerged_work`). Not an error; merge is valid. Exit code 1.
-- `partial_residual_processes` — gates pass but residual processes survived reap. Worktree kept. Exit code 1.
-- `terminal_stop_failed`, `worktree_remove_failed` — operational error during cleanup. Exit code 1.
+Run the same command with `--apply` only after reading the dry-run:
 
-**After teardown** (whether it succeeds, blocks, or partials):
+```bash
+node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
+  --context post-merge-cleanup \
+  --repo-root /home/che/projects/orchestrator-pack \
+  --worktree "$WT" \
+  --pr "$P" \
+  --expected-head "$PR_HEAD_SHA" \
+  --expected-branch "$HEAD_REF" \
+  --apply \
+  --json
+```
 
-Locked by file-based lock in `/tmp` that persists across shells and is released via `finally` block,
-including on all error paths. Atomic and safe under concurrent invocation.
+The exact-dual path delegates to `scripts/worktree-teardown.ts` and preserves every existing G1–G5,
+terminal/mixed-tab, CWD/ancestry process, fresh recheck, non-force runtime removal, and branch
+cleanup gate. The exact-Git-only path permits only Git's non-force `worktree remove`, then branch
+`-d`, after the same applicable identity, cleanliness, merge, ownership, terminal, process, lock,
+and fresh-recheck proofs. It never edits Orca persistence, runs `--force`, uses `rm -rf`, or deletes
+by path alone.
+
+### 9d — Terminal outcomes and caller behavior
+
+Closed lifecycle outcomes:
+
+- `cleanup_complete` / `git_only_recovered` — target removed and both authorities read back;
+- `already_absent` — repeated invocation is an explicit no-op;
+- `cleanup_deferred` — target preserved because a gate or authority is unsafe/ambiguous;
+- `task_degraded` — the target operation could not be proven complete after bounded apply/read-back.
+
+A valid lifecycle report exits zero for all four categories. This is intentional: unsafe target
+mutation stays fail-closed, while the already successful merge/adoption and the global scheduler
+continue. Do not loop, blindly retry, loosen gates, or describe `cleanup_deferred` as a failed merge.
+Retain the report and retry that exact target later through the same dry-run-first command.
+Invalid CLI arguments still exit 2 and must be corrected rather than ignored.
 
 ### What this teardown does *not* guarantee
 
@@ -439,9 +487,8 @@ including on all error paths. Atomic and safe under concurrent invocation.
 - **A clean `git status` does not prove no unsaved work** — external editor may hold unsaved buffer.
 - **Killing processes does not undo their side effects** — killed agent may have already mutated remote state.
 
-A blocked teardown after a successful merge is a correct, reportable outcome. **Never** describe
-the whole run as failed, and **never** retry by loosening a gate. Report the blocked gate and let
-the operator decide.
+A deferred cleanup after a successful merge is a correct terminal operator outcome. **Never**
+describe the whole run as failed, and **never** retry by weakening a gate.
 
 ## Step 10 — Final report (required, user's language)
 
@@ -458,20 +505,21 @@ the operator decide.
 - Выполнено: <список>  /  Не требовалось  /  Осталось оператору: <…>
 ### Соседние ворктри (8 — если RULES_TOUCHED)
 - <name>: behind N, агент <state>, rules stale да/нет; recycle: <спросил/не требовалось/выполнен>
-### Teardown воркдерева (9)
-- Итог: **reaped clean / blocked (гейт G<N>) / partial (residual <n>)**
-- Ворктри: <path> (branch <HEAD_REF>) / не найден — R3 спросил / пропущен: <причина>
-- Гейт 9b: <пройден / стоп на G<N>: …>; ABA-проверка: <чисто/совпадение пути>
+### Lifecycle воркдерева (9)
+- Итог: **cleanup complete / git-only recovered / already absent / cleanup deferred / task degraded**
+- Классификация: <exact_dual / exact_git_only / orca_only / conflict / absent>
+- Ворктри: <path> (branch <HEAD_REF>, head <PR_HEAD_SHA>) / не найден / сохранён: <причина>
+- Гейты: <пройдены / заблокированы: …>; fresh recheck: <чисто/дрейф>
 - Терминалы: stop <n>, close <n>; процессов снято: <n> (SIGKILL: <n>); residual: <0/…>
-- Повторный git-чек перед rm: <чисто/грязно — rm не выполнялся>
-- worktree rm: <ok/пропущен>; локальная ветка -d: <ok/пропущен>; residue: <нет/…>
-### Сироты (9g — только учёт, не трогаем)
+- Эффекты: <standard guarded teardown / non-force git worktree remove / нет>
+- Post-read-back: <absent in Git+Orca / deferred evidence>; pipeline continues: да
+### Сироты (только учёт, не трогаем)
 - <N> процессов в <M> удалённых воркдеревьях
 ### Проверка
 - `git status --short` / `git log -1 --oneline`: <…>
 ```
 
-Never claim CI/adoption/teardown succeeded without the commands actually run.
+Never claim CI/adoption/cleanup succeeded without the commands actually run.
 
 ## Do not
 
@@ -482,33 +530,32 @@ Never claim CI/adoption/teardown succeeded without the commands actually run.
   ready without then running the full adoption flow.
 - `git push --force` to main; fix red CI from the architect session when a PR worker
   exists (unless `direct-fix-checklist` authorized).
-- Reap or remove a worktree resolved by anything other than exact branch equality (9a R2)
-  or an explicit operator answer (9a R3). Never by `displayName`, issue-number substring,
-  `active`, or `current`.
+- Reap or remove a worktree resolved by anything other than exact PR/repository/path/branch-or-
+  detached/full-SHA identity. Never by `displayName`, issue-number substring, `active`, or `current`.
 - Kill any process by name or command line, or run the reaper against a path outside the
   Orca workspaces root. Never `orca worktree rm --force`, never `rm -rf` a worktree.
+- Convert `cleanup_deferred` into a global workflow failure, or loop/retry a disputed target
+  without a new read-back.
 - Auto-recycle a sibling manager worktree (Step 8), or sweep pre-existing orphans as part
-  of a merge (Step 9g).
+  of a merge.
 - Port AO procedures — `ao session kill/restore/cleanup`, ProjectConfig, the orchestrator
   runtime-worktree probe, `wait-orchestrator-launch.ps1`. The daemon is gone; these fail.
 
 ## Follow-ups this skill cannot fix (open issues for the queue)
 
-1. **Worktree creation does not set `linkedPR`/`linkedIssue`.** `orca worktree set
-   --worktree <sel> --issue <N>` exists but nothing calls it, which is why 9a must join on
-   branch and why detached worktrees resolve to nothing. Setting it at creation makes 9a R1
-   live and `issue:<n>` a real selector.
+1. **Existing worktrees may lack `linkedPR`/`linkedIssue`.** Issue #1298 does not rewrite
+   private Orca persistence. New issue-bound handoffs require exact `linkedIssue` read-back;
+   historical post-merge cleanup remains exact-identity PR-bound and fails closed on a conflicting
+   non-null linkage. A native adopt/register branch may be added only after installed-version
+   production capture proves the command, response shape, and identity-preserving read-back.
 2. **Agents are not launched in a dedicated cgroup.** A per-worktree
    `systemd-run --user --scope` at spawn time would make teardown exact by kernel-maintained
    ownership instead of CWD inference, and would catch a process that chdir'd away before
    teardown. Only Orca's spawn path can do this; the reaper is a best-effort cleanup for
    agents it did not launch.
-3. **The runtime-neutral contract has no worktree lifecycle.**
+3. **The broad runtime-neutral contract has no worktree lifecycle.**
    `scripts/runtime/contracts.ts` (`RuntimeAdapter`, composition root `selectRuntimeAdapter`
    in `scripts/runtime/registry.ts`) exposes only worker/terminal operations, and deliberately
-   refuses destructive close (`runtime_generation_bound_stop_unsupported`). Teardown therefore
-   cannot route through it yet, which is why this skill carries a Runtime profile table.
-   **Durable fix:** extend `RuntimeAdapter` with worktree list/inspect/remove plus a
-   generation-bound terminal stop, implement them in the Orca adapter, and collapse the profile
-   table to `selectRuntimeAdapter()`. Until then the profile table is the single swap point —
-   do not let a rival runtime abstraction grow inside this skill.
+   refuses destructive close (`runtime_generation_bound_stop_unsupported`). Issue #1298 adds only
+   a bounded Git/Orca census and continuation seam. Issue #1248 owns broad caller migration and any
+   future runtime-neutral lifecycle expansion.

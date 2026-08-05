@@ -9,11 +9,15 @@ import {
   readlinkSync,
   readdirSync,
   realpathSync,
-  unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
+import {
+  acquireLifecycleExclusion,
+  borrowLifecycleExclusion,
+  DEFAULT_WORKTREE_LIFECYCLE_EXCLUSION_PATH,
+  releaseLifecycleExclusion,
+} from './worktree-lifecycle/exclusion.ts';
 import {
   WORKTREE_TEARDOWN_RUNTIME_PROFILE as RUNTIME,
   type RuntimeCommand,
@@ -80,6 +84,8 @@ interface ParsedArgs {
   json: boolean;
   orphan: boolean;
   iKnowThisPath: boolean;
+  lifecycleLockPath: string;
+  lifecycleLockToken: string | null;
 }
 
 interface PRInfo {
@@ -151,7 +157,6 @@ interface RuntimeJsonResult<T> {
   error?: string;
 }
 
-const LOCK_PATH = '/tmp/opk-worktree-teardown.lock';
 const IGNORED_DIRECTORY_ALLOWLIST = [
   'node_modules/',
   '.venv/',
@@ -179,6 +184,8 @@ function parseArgs(): ParsedArgs {
     json: argv.includes('--json'),
     orphan: argv.includes('--orphan'),
     iKnowThisPath: argv.includes('--i-know-this-path'),
+    lifecycleLockPath: value('--lifecycle-lock-path') ?? DEFAULT_WORKTREE_LIFECYCLE_EXCLUSION_PATH,
+    lifecycleLockToken: value('--lifecycle-lock-token'),
   };
 }
 
@@ -196,23 +203,6 @@ function existingRealpath(pathValue: string): string | null {
     return normalizePath(realpathSync(pathValue));
   } catch {
     return null;
-  }
-}
-
-function acquireLock(): boolean {
-  try {
-    writeFileSync(LOCK_PATH, `${process.pid}\n`, { flag: 'wx', mode: 0o600 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function releaseLock(): void {
-  try {
-    unlinkSync(LOCK_PATH);
-  } catch {
-    // The owner removes only the lock it acquired; missing-at-release is harmless.
   }
 }
 
@@ -743,7 +733,6 @@ function stopAndCloseTerminals(worktreePath: string): {
   report: NonNullable<TeardownReport['terminals']>;
   error?: string;
 } {
-  // Tab membership must be captured globally before stop mutates terminal state.
   const globalCensus = runtimeTerminals(RUNTIME.terminals_all());
   if (!globalCensus.ok) {
     return {
@@ -777,9 +766,6 @@ function stopAndCloseTerminals(worktreePath: string): {
     };
   }
 
-  // Re-census AFTER the stop. On this runtime `stop_terminals` already removes the rows, so the
-  // pre-stop handles are stale and closing by them fails for every tab. Close only what actually
-  // survived; nothing left is success, not an error.
   const postStopCensus = runtimeTerminals(RUNTIME.terminals_all());
   if (!postStopCensus.ok) {
     return {
@@ -847,10 +833,6 @@ function stopAndCloseTerminals(worktreePath: string): {
     mixed_tab_found: mixedTabFound,
   };
   if (!finalGlobal.ok || residual.length > 0 || errors.length > 0) {
-    // A genuine mixed tab that could not be reduced is `blocked_mixed_tab`; anything else
-    // (census unavailable, close command failed, unexplained residual) is a stop/close failure.
-    // Collapsing both into `blocked_mixed_tab` mislabels the incident and sent operators looking
-    // for a tab conflict that does not exist.
     return {
       ok: false,
       outcome: mixedTabFound ? 'blocked_mixed_tab' : 'terminal_stop_failed',
@@ -1061,9 +1043,14 @@ async function main(): Promise<void> {
     gates: { g1: 'fail', g2a: 'fail', g2b: 'fail', g3: 'fail', g4: 'fail', g5: 'fail' },
     validation: { is_primary_checkout: false, is_in_inventory: false, path_exists: false },
   };
-  if (!acquireLock()) {
+  const lock = args.lifecycleLockToken
+    ? borrowLifecycleExclusion(args.lifecycleLockPath, args.lifecycleLockToken)
+    : acquireLifecycleExclusion(args.lifecycleLockPath);
+  if (!lock) {
     report.outcome = 'blocked_lock_held';
-    report.error = `teardown lock already exists at ${LOCK_PATH}; stale locks are not removed automatically`;
+    report.error = args.lifecycleLockToken
+      ? `borrowed lifecycle exclusion could not be verified at ${args.lifecycleLockPath}`
+      : `lifecycle exclusion is held or unreadable at ${args.lifecycleLockPath}`;
     emit(report, args.json);
     process.exitCode = 1;
     return;
@@ -1076,7 +1063,7 @@ async function main(): Promise<void> {
     report.error = error instanceof Error ? error.message : String(error);
     exitCode = 1;
   } finally {
-    releaseLock();
+    releaseLifecycleExclusion(args.lifecycleLockPath, lock);
   }
   emit(report, args.json);
   process.exitCode = exitCode;
