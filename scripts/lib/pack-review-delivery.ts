@@ -1,936 +1,442 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import {
-  describePackReviewError as describeError,
+  GithubReviewPostError,
+  GithubReviewTransport,
+  GitHubCliReviewTransport,
+  reconcileGithubReviewPublication,
+  type GithubReviewEvent,
+} from './github-review-reconciliation.js';
+import {
+  acquireReviewStartClaim,
+  completeReviewStartClaim,
+  failReviewStartClaim,
+  readReviewStartClaim,
+  type ReviewStartClaimContext,
+} from './review-start-claim-store.js';
+import {
   getPackReviewRun,
-  hasValidPackReviewDeliveryOutcome,
-  hasValidPackReviewGithubReconciliation,
-  hasValidPackReviewJournalOutcome,
-  hasPersistedPackReviewVerdict,
-  setPackReviewRunTerminal,
   updatePackReviewRun,
-  updatePackReviewRunIf,
-  trimPackReviewValue as trim,
-  type PackReviewDeliveryChannel,
   type PackReviewDeliveryOutcome,
-  type PackReviewJournalOutcome,
-  isPackReviewUnfinishedTerminalRun,
-  PACK_REVIEW_ACTIVE_STATUSES,
   type PackReviewRunRecord,
-  type PackReviewRunStatus,
-  type PackReviewStoreOptions,
-} from './pack-review-run-store.ts';
+} from './pack-review-run-store.js';
+import type { RuntimeAdapter } from '../runtime/contracts.ts';
 
-export const PACK_REVIEW_REQUIRED_STATUS_CONTEXT = 'orchestrator-pack/pack-review';
-const PACK_REVIEW_BOUNDED_FAILURE_REASONS = new Set([
-  'reviewer_process_timeout',
-  'reviewer_process_failed',
-  'stale_head_after_review',
-  'runner_disappeared_stale',
-  'runner_internal_failure',
-  'journaled_delivery_resume_candidate',
-]);
-
-export type PackReviewBoundedFailureCategory =
-  | 'reviewer_process_timeout'
-  | 'reviewer_process_failed'
-  | 'stale_head_after_review'
-  | 'runner_internal_failure'
-  | 'reviewer_output_malformed'
-  | 'journaled_delivery_resume_candidate';
-
-export function classifyPackReviewFailureReason(category: PackReviewBoundedFailureCategory): string {
-  if (category === 'reviewer_output_malformed') {
-    return 'reviewer_output_malformed:invalid_terminal_payload';
-  }
-  if (PACK_REVIEW_BOUNDED_FAILURE_REASONS.has(category)) return category;
-  return 'runner_internal_failure';
+function trim(value: string): string {
+  return value.trim();
 }
 
-export function packReviewPendingRequiredStatusIdempotencyKey(run: PackReviewRunRecord): string {
-  return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:pending`;
+function normalizeRepo(value: string): string {
+  return trim(value).toLowerCase();
 }
 
-export function packReviewStaleRequiredStatusIdempotencyKey(run: PackReviewRunRecord): string {
-  return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:stale-runner-disappeared`;
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(',')}]`;
+  const object = value as Record<string, unknown>;
+  return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(',')}}`;
 }
 
-function packReviewRequiredStatusOutcomeReason(run: PackReviewRunRecord): string | null {
-  if (hasPersistedPackReviewVerdict(run) || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
-    const payload = packReviewJournaledPayload(run);
-    if (!payload) return null;
-    return `status_${classifyPackReviewPayload(payload).requiredStatus}_restored`;
-  }
-  if (run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled') {
-    return trim(run.failureReason) === 'runner_disappeared_stale'
-      ? 'status_stale_runner_disappeared'
-      : 'status_unfinished_execution';
-  }
-  return PACK_REVIEW_ACTIVE_STATUSES.has(run.status) ? 'status_pending' : null;
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
-export function packReviewRequiredStatusProjectionKey(run: PackReviewRunRecord): string | null {
-  const expectedKey = hasPersistedPackReviewVerdict(run)
-    || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)
-    ? requiredStatusIdempotencyKey(run)
-    : run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled'
-      ? unfinishedRequiredStatusKey(run, trim(run.failureReason) || 'runner_internal_failure')
-      : PACK_REVIEW_ACTIVE_STATUSES.has(run.status)
-        ? packReviewPendingRequiredStatusIdempotencyKey(run)
-        : null;
-  if (!expectedKey) return null;
-  return JSON.stringify({
-    expectedKey,
-    status: run.status,
-    failureReason: trim(run.failureReason),
-    reviewVerdict: run.reviewVerdict ?? null,
-    findingCount: run.findingCount ?? null,
-    outcomeReason: packReviewRequiredStatusOutcomeReason(run),
-    journalState: run.journalOutcome?.state ?? null,
-    journalKey: run.journalOutcome?.idempotencyKey ?? null,
-  });
-}
-
-export function packReviewRequiredStatusStaleReconciliationComplete(run: PackReviewRunRecord): boolean {
-  const outcome = run.deliveryOutcomes?.requiredStatus;
-  const failureReason = trim(run.failureReason) || 'runner_internal_failure';
-  const unfinishedKey = unfinishedRequiredStatusKey(run, failureReason);
-  return hasValidPackReviewDeliveryOutcome(outcome)
-    && outcome.state === 'succeeded'
-    && (outcome.idempotencyKey === packReviewStaleRequiredStatusIdempotencyKey(run)
-      || outcome.idempotencyKey === unfinishedKey);
-}
-
-export function packReviewRequiredStatusNeedsStaleReconciliation(run: PackReviewRunRecord): boolean {
-  if (packReviewRequiredStatusStaleReconciliationComplete(run)) return false;
-  const outcome = run.deliveryOutcomes?.requiredStatus;
-  if (!isPackReviewUnfinishedTerminalRun(run)) return false;
-  const pendingKey = packReviewPendingRequiredStatusIdempotencyKey(run);
-  const unfinishedKey = unfinishedRequiredStatusKey(
-    run,
-    trim(run.failureReason) || 'runner_internal_failure',
-  );
-  if (!hasValidPackReviewDeliveryOutcome(outcome)) return true;
-  if (outcome.idempotencyKey === pendingKey && outcome.state === 'succeeded') return true;
-  if (outcome.idempotencyKey === unfinishedKey && outcome.state === 'succeeded') return false;
-  return outcome.state === 'failed' && outcome.idempotencyKey === unfinishedKey;
-}
-
-export function recordPackReviewNewerAuthorityReconciliation(
-  options: PackReviewStoreOptions & {
-    run: PackReviewRunRecord;
-    clock?: () => Date;
-    authorityGuard?: (records: readonly PackReviewRunRecord[]) => boolean;
-  },
-): PackReviewDeliveryOutcome {
-  const marker = outcome(
-    'succeeded',
-    'newer_run_authoritative',
-    packReviewStaleRequiredStatusIdempotencyKey(options.run),
-    options.clock,
-  );
-  if (options.authorityGuard) {
-    const persisted = updatePackReviewRunIf(
-      options.run.id,
-      options.authorityGuard,
-      (existing) => ({
-        deliveryOutcomes: {
-          ...existing.deliveryOutcomes,
-          requiredStatus: marker,
-        },
-      }),
-      options,
-    );
-    if (!persisted) throw new Error('newer_run_authority_race');
-  } else {
-    persistRequiredStatusOutcome(options.run.id, marker, options);
-  }
-  return marker;
-}
-
-const JOURNAL_WRITE_ATTEMPTS = 3;
-const JOURNAL_RETRY_DELAY_MS = 25;
-
-export interface PackReviewTerminalPayload {
-  verdict: 'clean' | 'findings';
-  findingCount: number;
-  findings: unknown[];
-}
-
-export type PackReviewRequiredStatusState = 'success' | 'failure' | 'error' | 'pending';
-
-export interface PackReviewRequiredStatusRequest {
-  state: PackReviewRequiredStatusState;
-  context: string;
-  description: string;
-  idempotencyKey: string;
-}
-
-export type PackReviewRequiredStatusWriter = (
-  request: PackReviewRequiredStatusRequest,
-) => Promise<void>;
-
-export interface PackReviewWorkerNotificationResult {
-  state: 'delivered' | 'failed' | 'escalated';
+function deliveryOutcome(input: {
+  state: PackReviewDeliveryOutcome['state'];
   reason: string;
+  idempotencyKey: string;
+  attempts?: number;
+  detail?: string;
+}): PackReviewDeliveryOutcome {
+  return {
+    state: input.state,
+    recordedAtUtc: new Date().toISOString(),
+    reason: input.reason,
+    idempotencyKey: input.idempotencyKey,
+    ...(input.attempts === undefined ? {} : { attempts: input.attempts }),
+    ...(input.detail === undefined ? {} : { detail: input.detail }),
+  };
 }
 
 export interface PackReviewWorkerNotificationRequest {
-  message: string;
-  idempotencyKey: string;
-  reviewRunId?: string;
-}
-
-export type PackReviewWorkerNotifier = (
-  request: PackReviewWorkerNotificationRequest,
-) => Promise<PackReviewWorkerNotificationResult>;
-
-export type PackReviewJournalWriter = (
-  runId: string,
-  fields: Partial<PackReviewRunRecord>,
-  options: PackReviewStoreOptions,
-) => PackReviewRunRecord | Promise<PackReviewRunRecord>;
-
-export interface PackReviewGithubCommentResult {
-  id: number | string;
-  url: string;
-  event: 'COMMENT';
-}
-
-export interface PackReviewDeliveryResult {
-  ok: true;
-  reason: 'completed' | 'completed_with_delivery_failures' | 'journal_write_failed';
-  status: Extract<PackReviewRunStatus, 'up_to_date' | 'commented' | 'changes_requested'>;
-  run: PackReviewRunRecord | null;
-  journalOutcome: PackReviewJournalOutcome;
-  githubReviewId?: number | string;
-  githubReviewUrl?: string;
-}
-
-interface PackReviewVerdictClassification {
-  terminalStatus: Extract<PackReviewRunStatus, 'up_to_date' | 'commented' | 'changes_requested'>;
-  requiredStatus: Extract<PackReviewRequiredStatusState, 'success' | 'failure'>;
-  description: string;
-  blocking: boolean;
-}
-
-interface DeliverPackReviewVerdictOptions extends PackReviewStoreOptions {
-  run: PackReviewRunRecord;
-  payload: PackReviewTerminalPayload;
-  postGithubComment: () => Promise<PackReviewGithubCommentResult>;
-  writeRequiredStatus: PackReviewRequiredStatusWriter;
-  notifyWorker: PackReviewWorkerNotifier;
-  journalWriter?: PackReviewJournalWriter;
-  resumeFromJournal?: boolean;
-  clock?: () => Date;
-}
-
-interface RecordPendingReviewOptions extends PackReviewStoreOptions {
-  run: PackReviewRunRecord;
-  writeRequiredStatus: PackReviewRequiredStatusWriter;
-  clock?: () => Date;
-}
-
-interface RestoreAuthoritativeRequiredStatusOptions extends RecordPendingReviewOptions {
-  pauseAfterPendingWrite?: () => void | Promise<void>;
-  forceRepublish?: boolean;
-}
-
-interface RecordStaleRequiredStatusOptions extends RecordPendingReviewOptions {
-  authorizeWrite?: () => boolean | Promise<boolean>;
-  repairSupersededWrite?: () => { reason: string } | Promise<{ reason: string }>;
-  pauseBeforeWrite?: () => void | Promise<void>;
-  pauseAfterWrite?: () => void | Promise<void>;
-}
-
-const PACK_REVIEW_VERDICT_TERMINAL_STATUSES = new Set<PackReviewRunStatus>([
-  'up_to_date',
-  'commented',
-  'changes_requested',
-]);
-
-interface RecordMalformedReviewOptions extends PackReviewStoreOptions {
-  run: PackReviewRunRecord;
-  failureReason: string;
-  writeRequiredStatus: PackReviewRequiredStatusWriter;
-  clock?: () => Date;
-}
-
-interface RecordUnfinishedReviewOptions extends PackReviewStoreOptions {
-  run: PackReviewRunRecord;
-  status: Extract<PackReviewRunStatus, 'failed' | 'timed_out' | 'cancelled'>;
-  failureReason: string;
-  writeRequiredStatus: PackReviewRequiredStatusWriter;
-  exitCode?: number | null;
-  clock?: () => Date;
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
-}
-
-function timestamp(now?: () => Date): string {
-  return (now?.() ?? new Date()).toISOString();
-}
-
-function findingSeverity(value: unknown): string {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
-  return trim((value as Record<string, unknown>).severity).toLowerCase();
-}
-
-export function isNonBlockingPackReviewFinding(value: unknown): boolean {
-  const severity = findingSeverity(value);
-  return severity === 'warning' || severity === 'info' || severity === 'non-blocking';
-}
-
-export function classifyPackReviewPayload(payload: PackReviewTerminalPayload): PackReviewVerdictClassification {
-  const blocking = payload.findings.length > 0
-    ? payload.findings.some((finding) => !isNonBlockingPackReviewFinding(finding))
-    : payload.verdict === 'findings';
-  if (blocking) {
-    return {
-      terminalStatus: 'changes_requested',
-      requiredStatus: 'failure',
-      description: 'Pack review found blocking issues.',
-      blocking: true,
-    };
-  }
-  if (payload.verdict === 'clean' && payload.findingCount === 0) {
-    return {
-      terminalStatus: 'up_to_date',
-      requiredStatus: 'success',
-      description: 'Pack review completed with no findings.',
-      blocking: false,
-    };
-  }
-  return {
-    terminalStatus: 'commented',
-    requiredStatus: 'success',
-    description: 'Pack review completed with non-blocking findings.',
-    blocking: false,
+  readonly workerId: string;
+  readonly expectedWorkerGeneration?: string;
+  readonly prNumber: number;
+  readonly projectId: string;
+  readonly trustedPackRoot: string;
+  readonly request: {
+    readonly message: string;
+    readonly idempotencyKey: string;
   };
+  readonly journalPath: string;
+  readonly claimNamespace: string;
+  readonly sideEffectFencePath: string;
+  readonly adapter?: RuntimeAdapter;
 }
 
-function githubCommentIdempotencyKey(run: PackReviewRunRecord): string {
-  return `github-comment:${run.id}:${run.targetSha}`;
+export interface PackReviewRequiredStatusRequest {
+  readonly state: 'pending' | 'success' | 'failure' | 'error';
+  readonly context: string;
+  readonly description: string;
 }
 
-function requiredStatusIdempotencyKey(run: PackReviewRunRecord): string {
-  return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}`;
+export interface ResumePackReviewDeliveryOptions {
+  readonly projectId: string;
+  readonly storeRoot: string;
+  readonly runId: string;
+  readonly trustedPackRoot: string;
+  readonly sourceRepoRoot: string;
+  readonly canonicalRepository: string;
+  readonly githubReviewTransport?: GithubReviewTransport;
+  readonly writeRequiredStatus?: (request: PackReviewRequiredStatusRequest) => Promise<void>;
+  readonly notifyWorker?: (request: PackReviewWorkerNotificationRequest) => Promise<{
+    readonly state: 'delivered' | 'failed' | 'escalated';
+    readonly reason: string;
+  }>;
 }
 
-function workerNotificationIdempotencyKey(run: PackReviewRunRecord): string {
-  return `worker-notification:${run.id}:${run.targetSha}`;
+function deliveryTerminal(outcome: PackReviewDeliveryOutcome | undefined): boolean {
+  return outcome?.state === 'succeeded'
+    || outcome?.state === 'failed'
+    || outcome?.state === 'escalated';
 }
 
-export function packReviewJournaledPayload(run: PackReviewRunRecord): PackReviewTerminalPayload | null {
-  if (!hasValidPackReviewJournalOutcome(run)) return null;
-  if (run.reviewVerdict !== 'clean' && run.reviewVerdict !== 'findings') return null;
-  if (!Number.isInteger(run.findingCount) || Number(run.findingCount) < 0) return null;
-  const findings = Array.isArray(run.findings) ? [...run.findings] : [];
-  if (Number(run.findingCount) !== findings.length) return null;
-  return {
-    verdict: run.reviewVerdict,
-    findingCount: Number(run.findingCount),
-    findings,
-  };
+function journalTerminal(run: PackReviewRunRecord): boolean {
+  return run.journalOutcome?.state === 'persisted';
 }
 
-function completedGithubCommentReview(run: PackReviewRunRecord): PackReviewGithubCommentResult | null {
-  const reconciliation = run.githubReviewReconciliation;
-  if (!hasValidPackReviewGithubReconciliation(reconciliation, 'complete')) return null;
-  const id = run.githubReviewId ?? reconciliation.commentReviewId;
-  if (id === undefined) return null;
-  return {
-    id,
-    url: trim(run.githubReviewUrl || reconciliation.commentReviewUrl),
-    event: 'COMMENT',
-  };
-}
-
-function completedResumeChannelOutcome(
-  run: PackReviewRunRecord,
-  channel: PackReviewDeliveryChannel,
-  idempotencyKey: string,
-): boolean {
-  if (channel === 'githubComment') {
-    const reconciliation = run.githubReviewReconciliation as
-      | (NonNullable<PackReviewRunRecord['githubReviewReconciliation']> & { postOutcome?: unknown })
-      | undefined;
-    return (hasValidPackReviewDeliveryOutcome(run.deliveryOutcomes?.githubComment, idempotencyKey)
-      && run.deliveryOutcomes?.githubComment?.state === 'succeeded')
-      || completedGithubCommentReview(run) !== null
-      || (hasValidPackReviewGithubReconciliation(reconciliation, 'prepared')
-        && reconciliation.postOutcome === 'definitely_rejected');
-  }
-
-  const value = run.deliveryOutcomes?.[channel];
-  if (!hasValidPackReviewDeliveryOutcome(value, idempotencyKey)) return false;
-  if (channel === 'requiredStatus') {
-    return value.state === 'succeeded' || value.state === 'failed';
-  }
-  return value.state === 'delivered'
-    || value.state === 'failed'
-    || value.state === 'escalated';
+function githubPublicationTerminal(run: PackReviewRunRecord): boolean {
+  return run.githubReviewReconciliation?.phase === 'complete'
+    && deliveryTerminal(run.deliveryOutcomes?.githubComment);
 }
 
 export function packReviewDeliveryNeedsResume(run: PackReviewRunRecord): boolean {
-  const payload = packReviewJournaledPayload(run);
-  if (!payload) return false;
-  const classification = classifyPackReviewPayload(payload);
-  if (run.status !== classification.terminalStatus) return true;
-  return !completedResumeChannelOutcome(run, 'githubComment', githubCommentIdempotencyKey(run))
-    || !completedResumeChannelOutcome(run, 'requiredStatus', requiredStatusIdempotencyKey(run))
-    || !completedResumeChannelOutcome(run, 'workerNotification', workerNotificationIdempotencyKey(run));
+  if (!journalTerminal(run)) return false;
+  if (!githubPublicationTerminal(run)) return true;
+  if (!deliveryTerminal(run.deliveryOutcomes?.requiredStatus)) return true;
+  if (run.linkedSessionId && !deliveryTerminal(run.deliveryOutcomes?.workerNotification)) return true;
+  return false;
 }
 
-function outcome(
-  state: PackReviewDeliveryOutcome['state'],
-  reason: string,
-  idempotencyKey: string,
-  now?: () => Date,
-): PackReviewDeliveryOutcome {
-  return {
-    state,
-    recordedAtUtc: timestamp(now),
-    reason: trim(reason) || state,
-    idempotencyKey,
-  };
-}
-
-function journalOutcome(
-  state: PackReviewJournalOutcome['state'],
-  reason: string,
-  idempotencyKey: string,
-  attempts: number,
-  now?: () => Date,
-): PackReviewJournalOutcome {
-  return {
-    state,
-    recordedAtUtc: timestamp(now),
-    reason: trim(reason) || state,
-    idempotencyKey,
-    attempts,
-  };
-}
-
-function storeOptions(options: PackReviewStoreOptions): PackReviewStoreOptions {
-  return { projectId: options.projectId, storeRoot: options.storeRoot };
-}
-
-function safeGetPackReviewRun(
-  runId: string,
-  options: PackReviewStoreOptions,
-): PackReviewRunRecord | null {
-  try {
-    return getPackReviewRun(runId, storeOptions(options));
-  } catch {
-    return null;
+function boundRun(run: PackReviewRunRecord, options: ResumePackReviewDeliveryOptions): void {
+  if (run.projectId !== options.projectId) throw new Error('pack_review_delivery_project_mismatch');
+  if (normalizeRepo(run.canonicalRepository) !== normalizeRepo(options.canonicalRepository)) {
+    throw new Error('pack_review_delivery_repository_mismatch');
+  }
+  if (path.resolve(run.trustedPackRoot) !== path.resolve(options.trustedPackRoot)) {
+    throw new Error('pack_review_delivery_pack_root_mismatch');
+  }
+  if (path.resolve(run.sourceRepoRoot) !== path.resolve(options.sourceRepoRoot)) {
+    throw new Error('pack_review_delivery_source_root_mismatch');
   }
 }
 
-function persistChannelOutcome(
-  runId: string,
-  channel: PackReviewDeliveryChannel,
-  value: PackReviewDeliveryOutcome,
-  options: PackReviewStoreOptions,
-): boolean {
-  try {
-    const current = safeGetPackReviewRun(runId, options);
-    updatePackReviewRun(runId, {
-      deliveryOutcomes: {
-        ...(current?.deliveryOutcomes ?? {}),
-        [channel]: value,
-      },
-    }, storeOptions(options));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function persistRequiredStatusOutcome(
-  runId: string,
-  value: PackReviewDeliveryOutcome,
-  options: PackReviewStoreOptions,
-): void {
-  if (!persistChannelOutcome(runId, 'requiredStatus', value, options)) {
-    throw new Error('required-status delivery outcome was not durably persisted');
-  }
-}
-
-async function journalVerdict(
-  options: DeliverPackReviewVerdictOptions,
-  classification: PackReviewVerdictClassification,
-): Promise<{ ok: true; run: PackReviewRunRecord; outcome: PackReviewJournalOutcome } | {
-  ok: false;
-  outcome: PackReviewJournalOutcome;
-}> {
-  const idempotencyKey = `verdict:${options.run.id}:${options.run.targetSha}`;
-  const writer = options.journalWriter ?? updatePackReviewRun;
-  let lastError = 'journal_write_failed';
-  for (let attempt = 1; attempt <= JOURNAL_WRITE_ATTEMPTS; attempt += 1) {
-    const persisted = journalOutcome('persisted', 'verdict_persisted', idempotencyKey, attempt, options.clock);
-    try {
-      const run = await writer(options.run.id, {
-        status: 'reviewing',
-        latestRunStatus: 'reviewing',
-        reviewVerdict: options.payload.verdict,
-        findingCount: options.payload.findingCount,
-        findings: [...options.payload.findings],
-        journalOutcome: persisted,
-      }, storeOptions(options));
-      return { ok: true, run, outcome: persisted };
-    } catch (error) {
-      lastError = describeError(error);
-      const durable = safeGetPackReviewRun(options.run.id, options);
-      if (durable && hasPersistedPackReviewVerdict(durable) && durable.journalOutcome?.state === 'persisted') {
-        return { ok: true, run: durable, outcome: durable.journalOutcome };
-      }
-      if (attempt < JOURNAL_WRITE_ATTEMPTS) await delay(JOURNAL_RETRY_DELAY_MS * attempt);
-    }
-  }
-
-  const failed = journalOutcome(
-    'journal_write_failed',
-    lastError,
-    idempotencyKey,
-    JOURNAL_WRITE_ATTEMPTS,
-    options.clock,
-  );
-  try {
-    updatePackReviewRun(options.run.id, { journalOutcome: failed }, storeOptions(options));
-  } catch {
-    // The escalation is also returned to the caller if the store remains unavailable.
-  }
-  try {
-    setPackReviewRunTerminal(options.run.id, classification.terminalStatus, {
-      exitCode: 0,
-      journalOutcome: failed,
-    }, storeOptions(options));
-  } catch {
-    // Never reclassify a successful reviewer process as failed because the journal is unavailable.
-  }
-  return { ok: false, outcome: failed };
-}
-
-export async function deliverPackReviewVerdict(
-  options: DeliverPackReviewVerdictOptions,
-): Promise<PackReviewDeliveryResult> {
-  const resumedPayload = options.resumeFromJournal ? packReviewJournaledPayload(options.run) : null;
-  if (options.resumeFromJournal && !resumedPayload) {
-    throw new Error(`pack review run ${options.run.id} has no valid persisted verdict to resume`);
-  }
-  const payload = resumedPayload ?? options.payload;
-  const classification = classifyPackReviewPayload(payload);
-  const journal = options.resumeFromJournal
-    ? { ok: true as const, run: options.run, outcome: options.run.journalOutcome! }
-    : await journalVerdict(options, classification);
-  if (!journal.ok) {
+function requiredStatusForRun(run: PackReviewRunRecord): PackReviewRequiredStatusRequest {
+  if (run.status === 'approved') {
     return {
-      ok: true,
-      reason: 'journal_write_failed',
-      status: classification.terminalStatus,
-      run: safeGetPackReviewRun(options.run.id, options),
-      journalOutcome: journal.outcome,
+      state: 'success',
+      context: 'orchestrator-pack/pack-review',
+      description: 'Pack review approved',
     };
   }
-
-  const githubKey = githubCommentIdempotencyKey(options.run);
-  const statusKey = requiredStatusIdempotencyKey(options.run);
-  const workerKey = workerNotificationIdempotencyKey(options.run);
-  const deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>> = {
-    ...(options.resumeFromJournal ? options.run.deliveryOutcomes : {}),
-  };
-  let deliveryFailed = false;
-  const recordChannelOutcome = (channel: PackReviewDeliveryChannel, value: PackReviewDeliveryOutcome): void => {
-    deliveryOutcomes[channel] = value;
-    if (channel === 'requiredStatus') {
-      persistRequiredStatusOutcome(options.run.id, value, options);
-    } else if (!persistChannelOutcome(options.run.id, channel, value, options)) {
-      deliveryFailed = true;
-    }
-  };
-
-  const recoveredGithubReview = options.resumeFromJournal
-    ? completedGithubCommentReview(options.run)
-    : null;
-  const githubComplete = options.resumeFromJournal
-    && completedResumeChannelOutcome(options.run, 'githubComment', githubKey);
-  let githubReview: PackReviewGithubCommentResult | undefined = recoveredGithubReview ?? undefined;
-  if (recoveredGithubReview) {
-    const recorded = options.run.deliveryOutcomes?.githubComment;
-    if (!recorded || recorded.idempotencyKey !== githubKey || recorded.state !== 'succeeded') {
-      recordChannelOutcome(
-        'githubComment',
-        outcome('succeeded', 'comment_recovered', githubKey, options.clock),
-      );
-    }
-  }
-  if (!githubComplete) {
-    try {
-      githubReview = await options.postGithubComment();
-      recordChannelOutcome('githubComment', outcome('succeeded', 'comment_posted', githubKey, options.clock));
-    } catch (error) {
-      deliveryFailed = true;
-      recordChannelOutcome('githubComment', outcome('failed', describeError(error), githubKey, options.clock));
-    }
-  }
-
-  const requiredStatusComplete = options.resumeFromJournal
-    && completedResumeChannelOutcome(options.run, 'requiredStatus', statusKey);
-  if (!requiredStatusComplete) {
-    try {
-      await options.writeRequiredStatus({
-        state: classification.requiredStatus,
-        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-        description: classification.description,
-        idempotencyKey: statusKey,
-      });
-      recordChannelOutcome('requiredStatus', outcome('succeeded', `status_${classification.requiredStatus}`, statusKey, options.clock));
-    } catch (error) {
-      deliveryFailed = true;
-      recordChannelOutcome('requiredStatus', outcome('failed', describeError(error), statusKey, options.clock));
-    }
-  }
-
-  const workerNotificationComplete = options.resumeFromJournal
-    && completedResumeChannelOutcome(options.run, 'workerNotification', workerKey);
-  if (!workerNotificationComplete) {
-    try {
-      const notified = await options.notifyWorker({
-        message: [
-          `Pack review completed for PR #${options.run.prNumber}.`,
-          `Run: ${options.run.id}`,
-          `Head: ${options.run.targetSha}`,
-          `Verdict: ${payload.verdict}`,
-          `Findings: ${payload.findingCount}`,
-          `Merge status: ${classification.requiredStatus}`,
-        ].join('\n'),
-        idempotencyKey: workerKey,
-        reviewRunId: options.run.id,
-      });
-      if (notified.state !== 'delivered') deliveryFailed = true;
-      recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));
-    } catch (error) {
-      deliveryFailed = true;
-      recordChannelOutcome('workerNotification', outcome('failed', describeError(error), workerKey, options.clock));
-    }
-  }
-
-  let terminalRun: PackReviewRunRecord | null = null;
-  try {
-    terminalRun = setPackReviewRunTerminal(options.run.id, classification.terminalStatus, {
-      exitCode: 0,
-      deliveryOutcomes,
-      ...(githubReview ? {
-        githubReviewId: githubReview.id,
-        githubReviewUrl: githubReview.url,
-        githubReviewEvent: 'COMMENT' as const,
-      } : {}),
-    }, storeOptions(options));
-  } catch {
-    terminalRun = safeGetPackReviewRun(options.run.id, options);
-  }
-
-  const finalDeliveryFailed = deliveryFailed
-    || Object.values(deliveryOutcomes).some((value) => value?.state === 'failed' || value?.state === 'escalated');
-
   return {
-    ok: true,
-    reason: finalDeliveryFailed ? 'completed_with_delivery_failures' : 'completed',
-    status: classification.terminalStatus,
-    run: terminalRun,
-    journalOutcome: journal.outcome,
-    ...(githubReview ? { githubReviewId: githubReview.id, githubReviewUrl: githubReview.url } : {}),
+    state: 'failure',
+    context: 'orchestrator-pack/pack-review',
+    description: 'Pack review requested changes',
   };
+}
+
+function reviewEventForRun(run: PackReviewRunRecord): GithubReviewEvent {
+  return run.status === 'approved' ? 'APPROVE' : 'REQUEST_CHANGES';
+}
+
+function reviewBodyForRun(run: PackReviewRunRecord): string {
+  const marker = `<!-- orchestrator-pack-review:${run.id}:${run.headSha} -->`;
+  const verdict = run.status === 'approved' ? 'APPROVE' : 'REQUEST_CHANGES';
+  const details = run.findings?.length
+    ? run.findings.map((finding) => `- ${JSON.stringify(finding)}`).join('\n')
+    : '- No findings.';
+  return `${marker}\n## Pack review: ${verdict}\n\n${details}`;
+}
+
+function githubReviewIdempotencyKey(run: PackReviewRunRecord): string {
+  return `github-comment:${run.id}:${run.headSha}`;
+}
+
+function requiredStatusIdempotencyKey(run: PackReviewRunRecord): string {
+  return `required-status:${run.canonicalRepository}/pack-review:${run.headSha}`;
+}
+
+function workerNotificationIdempotencyKey(run: PackReviewRunRecord): string {
+  return `worker-notification:${run.id}:${run.headSha}`;
+}
+
+function reviewFingerprint(run: PackReviewRunRecord): string {
+  return sha256(canonicalJson({
+    runId: run.id,
+    repository: normalizeRepo(run.canonicalRepository),
+    prNumber: run.prNumber,
+    headSha: run.headSha,
+    event: reviewEventForRun(run),
+    body: reviewBodyForRun(run),
+  }));
+}
+
+function claimContext(run: PackReviewRunRecord): ReviewStartClaimContext {
+  return {
+    projectId: run.projectId,
+    canonicalRepository: run.canonicalRepository,
+    prNumber: run.prNumber,
+    headSha: run.headSha,
+  };
+}
+
+async function ensureGithubReview(
+  run: PackReviewRunRecord,
+  options: ResumePackReviewDeliveryOptions,
+): Promise<PackReviewRunRecord> {
+  if (githubPublicationTerminal(run)) return run;
+  const idempotencyKey = githubReviewIdempotencyKey(run);
+  const transport = options.githubReviewTransport
+    ?? new GitHubCliReviewTransport({ cwd: options.sourceRepoRoot });
+  const event = reviewEventForRun(run);
+  const body = reviewBodyForRun(run);
+  const fingerprint = reviewFingerprint(run);
+
+  const current = getPackReviewRun(run.id, {
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
+  }) ?? run;
+  if (githubPublicationTerminal(current)) return current;
+
+  try {
+    const reconciliation = await reconcileGithubReviewPublication({
+      transport,
+      canonicalRepository: run.canonicalRepository,
+      prNumber: run.prNumber,
+      headSha: run.headSha,
+      event,
+      body,
+      idempotencyKey,
+      fingerprint,
+      prior: current.githubReviewReconciliation,
+    });
+    return updatePackReviewRun(run.id, {
+      githubReviewId: reconciliation.reviewId,
+      githubReviewReconciliation: reconciliation,
+      deliveryOutcomes: {
+        ...(current.deliveryOutcomes ?? {}),
+        githubComment: deliveryOutcome({
+          state: 'succeeded',
+          reason: reconciliation.reason,
+          idempotencyKey,
+          attempts: reconciliation.attempts,
+          detail: reconciliation.reviewUrl,
+        }),
+      },
+    }, { projectId: options.projectId, storeRoot: options.storeRoot });
+  } catch (error) {
+    const reason = error instanceof GithubReviewPostError
+      ? error.kind
+      : 'github_review_publication_failed';
+    const detail = error instanceof Error ? error.message : String(error);
+    return updatePackReviewRun(run.id, {
+      deliveryOutcomes: {
+        ...(current.deliveryOutcomes ?? {}),
+        githubComment: deliveryOutcome({
+          state: 'failed',
+          reason,
+          idempotencyKey,
+          detail,
+        }),
+      },
+    }, { projectId: options.projectId, storeRoot: options.storeRoot });
+  }
+}
+
+async function ensureRequiredStatus(
+  run: PackReviewRunRecord,
+  options: ResumePackReviewDeliveryOptions,
+): Promise<PackReviewRunRecord> {
+  if (deliveryTerminal(run.deliveryOutcomes?.requiredStatus)) return run;
+  const idempotencyKey = requiredStatusIdempotencyKey(run);
+  try {
+    await writeRequiredStatus({
+      repoRoot: options.sourceRepoRoot,
+      repoSlug: run.canonicalRepository,
+      headSha: run.headSha,
+      request: requiredStatusForRun(run),
+      writer: options.writeRequiredStatus,
+    });
+    return updatePackReviewRun(run.id, {
+      deliveryOutcomes: {
+        ...(run.deliveryOutcomes ?? {}),
+        requiredStatus: deliveryOutcome({
+          state: 'succeeded',
+          reason: 'required_status_written',
+          idempotencyKey,
+        }),
+      },
+    }, { projectId: options.projectId, storeRoot: options.storeRoot });
+  } catch (error) {
+    return updatePackReviewRun(run.id, {
+      deliveryOutcomes: {
+        ...(run.deliveryOutcomes ?? {}),
+        requiredStatus: deliveryOutcome({
+          state: 'failed',
+          reason: 'required_status_write_failed',
+          idempotencyKey,
+          detail: error instanceof Error ? error.message : String(error),
+        }),
+      },
+    }, { projectId: options.projectId, storeRoot: options.storeRoot });
+  }
+}
+
+async function ensureWorkerNotification(
+  run: PackReviewRunRecord,
+  options: ResumePackReviewDeliveryOptions,
+): Promise<PackReviewRunRecord> {
+  if (!run.linkedSessionId || deliveryTerminal(run.deliveryOutcomes?.workerNotification)) return run;
+  const idempotencyKey = workerNotificationIdempotencyKey(run);
+  const request: PackReviewWorkerNotificationRequest = {
+    trustedPackRoot: options.trustedPackRoot,
+    workerId: run.linkedSessionId,
+    expectedWorkerGeneration: run.linkedSessionGeneration,
+    prNumber: run.prNumber,
+    projectId: run.projectId,
+    journalPath: path.join(options.storeRoot, 'worker-notification-journal.json'),
+    claimNamespace: path.join(options.storeRoot, 'worker-notification-claims'),
+    sideEffectFencePath: path.join(options.storeRoot, 'worker-notification.lock'),
+    request: {
+      message: run.status === 'approved'
+        ? `Pack review approved PR #${run.prNumber} at ${run.headSha}.`
+        : `Pack review found changes for PR #${run.prNumber} at ${run.headSha}.`,
+      idempotencyKey,
+    },
+  };
+  try {
+    const notifier = options.notifyWorker ?? sendPackReviewWorkerNotification;
+    const result = await notifier(request);
+    const state: PackReviewDeliveryOutcome['state'] = result.state === 'delivered'
+      ? 'succeeded'
+      : result.state;
+    return updatePackReviewRun(run.id, {
+      deliveryOutcomes: {
+        ...(run.deliveryOutcomes ?? {}),
+        workerNotification: deliveryOutcome({
+          state,
+          reason: result.reason,
+          idempotencyKey,
+        }),
+      },
+    }, { projectId: options.projectId, storeRoot: options.storeRoot });
+  } catch (error) {
+    return updatePackReviewRun(run.id, {
+      deliveryOutcomes: {
+        ...(run.deliveryOutcomes ?? {}),
+        workerNotification: deliveryOutcome({
+          state: 'failed',
+          reason: 'worker_notification_failed',
+          idempotencyKey,
+          detail: error instanceof Error ? error.message : String(error),
+        }),
+      },
+    }, { projectId: options.projectId, storeRoot: options.storeRoot });
+  }
 }
 
 export async function resumePackReviewVerdictDelivery(
-  options: Omit<DeliverPackReviewVerdictOptions, 'payload' | 'journalWriter' | 'resumeFromJournal'>,
-): Promise<PackReviewDeliveryResult> {
-  const payload = packReviewJournaledPayload(options.run);
-  if (!payload) {
-    throw new Error(`pack review run ${options.run.id} has no valid persisted verdict to resume`);
-  }
-  return deliverPackReviewVerdict({
-    ...options,
-    payload,
-    resumeFromJournal: true,
+  options: ResumePackReviewDeliveryOptions,
+): Promise<PackReviewRunRecord> {
+  let run = getPackReviewRun(options.runId, {
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
   });
+  if (!run) throw new Error('pack_review_delivery_run_missing');
+  boundRun(run, options);
+  if (!journalTerminal(run)) throw new Error('pack_review_delivery_journal_missing');
+
+  run = await ensureGithubReview(run, options);
+  run = await ensureRequiredStatus(run, options);
+  run = await ensureWorkerNotification(run, options);
+
+  if (packReviewDeliveryNeedsResume(run)) {
+    return updatePackReviewRun(run.id, {
+      latestRunStatus: 'delivery_failed',
+    }, { projectId: options.projectId, storeRoot: options.storeRoot });
+  }
+  return updatePackReviewRun(run.id, {
+    latestRunStatus: run.status,
+  }, { projectId: options.projectId, storeRoot: options.storeRoot });
 }
 
-async function publishPackReviewTerminalRequiredStatus(
-  run: PackReviewRunRecord,
-  options: RecordPendingReviewOptions,
-): Promise<PackReviewDeliveryOutcome | null> {
-  const payload = packReviewJournaledPayload(run);
-  if (!payload) return null;
-  const classification = classifyPackReviewPayload(payload);
-  const idempotencyKey = requiredStatusIdempotencyKey(run);
-  let statusOutcome = outcome(
-    'succeeded',
-    `status_${classification.requiredStatus}_restored`,
-    idempotencyKey,
-    options.clock,
-  );
-  try {
-    await options.writeRequiredStatus({
-      state: classification.requiredStatus,
-      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-      description: classification.description,
-      idempotencyKey,
-    });
-  } catch (error) {
-    statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
-    persistRequiredStatusOutcome(run.id, statusOutcome, options);
-    return statusOutcome;
-  }
-  persistRequiredStatusOutcome(run.id, statusOutcome, options);
-  return statusOutcome;
-}
-
-export async function restorePackReviewAuthoritativeRequiredStatus(
-  options: RestoreAuthoritativeRequiredStatusOptions,
-): Promise<PackReviewDeliveryOutcome | null> {
-  const storeOpts = storeOptions(options);
-  const reload = () => safeGetPackReviewRun(options.run.id, options) ?? options.run;
-  const run = reload();
-  const expectedKey = hasPersistedPackReviewVerdict(run)
-    || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)
-    ? requiredStatusIdempotencyKey(run)
-    : run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled'
-      ? unfinishedRequiredStatusKey(run, trim(run.failureReason) || 'runner_internal_failure')
-      : PACK_REVIEW_ACTIVE_STATUSES.has(run.status)
-        ? packReviewPendingRequiredStatusIdempotencyKey(run)
-        : null;
-  const expectedOutcomeReason = packReviewRequiredStatusOutcomeReason(run);
-  const existingOutcome = run.deliveryOutcomes?.requiredStatus;
-  if (!options.forceRepublish
-    && expectedKey
-    && expectedOutcomeReason
-    && hasValidPackReviewDeliveryOutcome(existingOutcome, expectedKey)
-    && existingOutcome.state === 'succeeded'
-    && existingOutcome.reason === expectedOutcomeReason) {
-    return existingOutcome;
-  }
-  if (hasPersistedPackReviewVerdict(run)) {
-    return publishPackReviewTerminalRequiredStatus(run, options);
-  }
-  if (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
-    return publishPackReviewTerminalRequiredStatus(run, options);
-  }
-  if (run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled') {
-    return publishPackReviewUnfinishedRequiredStatus(run, options);
-  }
-  if (PACK_REVIEW_ACTIVE_STATUSES.has(run.status)) {
-    const pendingKey = packReviewPendingRequiredStatusIdempotencyKey(run);
-    let pendingOutcome = outcome('failed', 'status_pending_unpublished', pendingKey, options.clock);
-    persistRequiredStatusOutcome(run.id, pendingOutcome, options);
-    try {
-      await options.writeRequiredStatus({
-        state: 'pending',
-        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-        description: 'Pack review is running for this exact head.',
-        idempotencyKey: pendingKey,
-      });
-    } catch (error) {
-      pendingOutcome = outcome('failed', describeError(error), pendingKey, options.clock);
-      persistRequiredStatusOutcome(run.id, pendingOutcome, options);
-      return pendingOutcome;
-    }
-    pendingOutcome = outcome('succeeded', 'status_pending', pendingKey, options.clock);
-    persistRequiredStatusOutcome(run.id, pendingOutcome, options);
-    if (options.pauseAfterPendingWrite) await options.pauseAfterPendingWrite();
-    const fresh = reload();
-    if (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(fresh.status)) {
-      return publishPackReviewTerminalRequiredStatus(fresh, options);
-    }
-    if (fresh.status === 'failed' || fresh.status === 'timed_out' || fresh.status === 'cancelled') {
-      return publishPackReviewUnfinishedRequiredStatus(fresh, options);
-    }
-    return pendingOutcome;
-  }
-  return null;
-}
-
-export async function recordPackReviewStaleRequiredStatus(
-  options: RecordStaleRequiredStatusOptions,
-): Promise<PackReviewDeliveryOutcome> {
-  const failureReason = trim(options.run.failureReason) || 'runner_disappeared_stale';
-  const idempotencyKey = unfinishedRequiredStatusKey(options.run, failureReason);
-  const description = unfinishedRequiredStatusDescription(failureReason);
-  if (options.pauseBeforeWrite) await options.pauseBeforeWrite();
-  if (options.authorizeWrite && !(await options.authorizeWrite())) {
-    return outcome('failed', 'newer_run_authoritative', idempotencyKey, options.clock);
-  }
-  let statusOutcome: PackReviewDeliveryOutcome;
-  try {
-    await options.writeRequiredStatus({
-      state: 'error',
-      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-      description,
-      idempotencyKey,
-    });
-    statusOutcome = outcome(
-      'succeeded',
-      failureReason === 'runner_disappeared_stale' ? 'status_stale_runner_disappeared' : 'status_unfinished_execution',
-      idempotencyKey,
-      options.clock,
-    );
-  } catch (error) {
-    statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
-  }
-  if (options.pauseAfterWrite) await options.pauseAfterWrite();
-  if (options.authorizeWrite && !(await options.authorizeWrite())) {
-    const repair = options.repairSupersededWrite
-      ? await options.repairSupersededWrite()
-      : undefined;
-    return outcome('failed', repair?.reason ?? 'newer_run_authoritative', idempotencyKey, options.clock);
-  }
-  persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
-  return statusOutcome;
-}
-
-export async function recordPackReviewPendingStatus(
-  options: RecordPendingReviewOptions,
-): Promise<PackReviewDeliveryOutcome> {
-  const idempotencyKey = packReviewPendingRequiredStatusIdempotencyKey(options.run);
-  let statusOutcome = outcome('failed', 'status_pending_unpublished', idempotencyKey, options.clock);
-  persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
-  try {
-    await options.writeRequiredStatus({
-      state: 'pending',
-      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-      description: 'Pack review is running for this exact head.',
-      idempotencyKey,
-    });
-  } catch (error) {
-    statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
-    persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
-    return statusOutcome;
-  }
-  statusOutcome = outcome('succeeded', 'status_pending', idempotencyKey, options.clock);
-  persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
-  return statusOutcome;
-}
-
-function unfinishedRequiredStatusDescription(failureReason: string): string {
-  if (failureReason.startsWith('reviewer_output_malformed')) {
-    return 'Pack review did not produce a valid reviewer judgment.';
-  }
-  if (failureReason === 'reviewer_process_timeout') {
-    return 'Pack review execution did not finish; no reviewer judgment was produced.';
-  }
-  if (failureReason === 'reviewer_process_failed') {
-    return 'Pack review process failed before a reviewer judgment was produced.';
-  }
-  if (failureReason === 'runner_disappeared_stale') {
-    return 'Pack review runner disappeared before completion; no reviewer judgment was produced.';
-  }
-  if (failureReason === 'stale_head_before_terminal') {
-    return 'Pack review could not publish because the bound head changed; no reviewer judgment was produced.';
-  }
-  return 'Pack review execution failed before a reviewer judgment was produced.';
-}
-
-function unfinishedRequiredStatusKey(run: PackReviewRunRecord, failureReason: string): string {
-  if (failureReason === 'runner_disappeared_stale') return packReviewStaleRequiredStatusIdempotencyKey(run);
-  if (failureReason.startsWith('reviewer_output_malformed')) {
-    return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:malformed`;
-  }
-  return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:unfinished:${failureReason}`;
-}
-
-async function publishPackReviewUnfinishedRequiredStatus(
-  run: PackReviewRunRecord,
-  options: RecordPendingReviewOptions,
-): Promise<PackReviewDeliveryOutcome> {
-  const failureReason = trim(run.failureReason) || 'runner_internal_failure';
-  const idempotencyKey = unfinishedRequiredStatusKey(run, failureReason);
-  let statusOutcome: PackReviewDeliveryOutcome;
-  try {
-    await options.writeRequiredStatus({
-      state: 'error',
-      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-      description: unfinishedRequiredStatusDescription(failureReason),
-      idempotencyKey,
-    });
-    statusOutcome = outcome('succeeded', 'status_unfinished_execution', idempotencyKey, options.clock);
-  } catch (error) {
-    statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
-  }
-  persistRequiredStatusOutcome(run.id, statusOutcome, options);
-  return statusOutcome;
-}
-
-export async function recordPackReviewUnfinishedTerminalStatus(options: RecordUnfinishedReviewOptions): Promise<{
-  ok: false;
-  reason: string;
-  status: Extract<PackReviewRunStatus, 'failed' | 'timed_out' | 'cancelled'>;
-  run: PackReviewRunRecord;
-  deliveryOutcome: PackReviewDeliveryOutcome;
-}> {
-  const failureReason = trim(options.failureReason) || 'runner_internal_failure';
-  const terminal = setPackReviewRunTerminal(options.run.id, options.status, {
-    exitCode: options.exitCode ?? (options.status === 'timed_out' ? null : 1),
-    failureReason,
-  }, storeOptions(options));
-  const persisted = safeGetPackReviewRun(options.run.id, options);
-  if (!persisted || persisted.status !== options.status || persisted.failureReason !== failureReason) {
-    throw new Error('pack review terminal state was not durably persisted');
-  }
-  const deliveryOutcome = await publishPackReviewUnfinishedRequiredStatus(persisted, options);
-  return {
-    ok: false,
-    reason: failureReason,
-    status: options.status,
-    run: safeGetPackReviewRun(options.run.id, options) ?? terminal,
-    deliveryOutcome,
-  };
-}
-
-export async function recordMalformedPackReviewStatus(options: RecordMalformedReviewOptions): Promise<{
-  ok: false;
-  reason: string;
-  status: 'failed';
-  run: PackReviewRunRecord | null;
-}> {
-  const malformed = await recordPackReviewUnfinishedTerminalStatus({
-    ...options,
-    status: 'failed',
-    failureReason: classifyPackReviewFailureReason('reviewer_output_malformed'),
-    exitCode: 0,
+export async function deliverPackReviewVerdict(input: {
+  readonly projectId: string;
+  readonly storeRoot: string;
+  readonly runId: string;
+  readonly trustedPackRoot: string;
+  readonly sourceRepoRoot: string;
+  readonly canonicalRepository: string;
+  readonly claimNamespace?: string;
+  readonly surface?: string;
+  readonly githubReviewTransport?: GithubReviewTransport;
+  readonly writeRequiredStatus?: (request: PackReviewRequiredStatusRequest) => Promise<void>;
+  readonly notifyWorker?: ResumePackReviewDeliveryOptions['notifyWorker'];
+}): Promise<PackReviewRunRecord> {
+  const run = getPackReviewRun(input.runId, {
+    projectId: input.projectId,
+    storeRoot: input.storeRoot,
   });
-  return {
-    ok: false,
-    reason: trim(options.failureReason) || 'reviewer produced no valid terminal verdict payload',
-    status: 'failed',
-    run: malformed.run,
-  };
+  if (!run) throw new Error('pack_review_delivery_run_missing');
+  boundRun(run, input);
+  if (!journalTerminal(run)) throw new Error('pack_review_delivery_journal_missing');
+
+  const claimNamespace = input.claimNamespace ?? path.join(input.storeRoot, 'review-start-claims');
+  const context = claimContext(run);
+  const existing = readReviewStartClaim(claimNamespace, context);
+  let claim = existing;
+  if (!claim) {
+    claim = acquireReviewStartClaim({
+      namespace: claimNamespace,
+      context,
+      surface: input.surface ?? 'pack-review-delivery',
+      reviewId: run.id,
+    });
+  }
+  if (!claim.acquired) {
+    throw new Error(`pack_review_delivery_claim_denied:${claim.reason}`);
+  }
+
+  try {
+    const delivered = await resumePackReviewVerdictDelivery(input);
+    completeReviewStartClaim(claim.handle, {
+      status: delivered.status,
+      reviewId: delivered.id,
+      githubReviewId: delivered.githubReviewId,
+    });
+    return delivered;
+  } catch (error) {
+    failReviewStartClaim(claim.handle, {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
-function writeCapture(path: string, payload: Record<string, unknown>): void {
-  mkdirSync(dirname(resolve(path)), { recursive: true });
-  writeFileSync(resolve(path), `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-}
-
-export async function publishPackReviewRequiredStatus(options: {
+export async function writeRequiredStatus(options: {
   repoRoot: string;
   repoSlug: string;
   headSha: string;
   request: PackReviewRequiredStatusRequest;
+  writer?: (request: PackReviewRequiredStatusRequest) => Promise<void>;
 }): Promise<void> {
-  const capture = trim(process.env.PACK_REVIEW_REQUIRED_STATUS_CAPTURE_FILE);
-  if (process.env.OPK_VITEST_HARNESS === '1') {
-    if (capture) {
-      writeCapture(capture, {
-        repoSlug: options.repoSlug,
-        headSha: options.headSha,
-        ...options.request,
-      });
-    }
+  if (options.writer) {
+    await options.writer({
+      ...options.request,
+    });
     return;
   }
   const request = `${JSON.stringify({
@@ -952,4 +458,4 @@ export async function publishPackReviewRequiredStatus(options: {
   }
 }
 
-export { dispatchPackReviewWorkerNotification as sendPackReviewWorkerNotification } from './pack-review-worker-notification.ts';
+export { sendPackReviewWorkerNotification } from './pack-review-worker-notification.ts';
