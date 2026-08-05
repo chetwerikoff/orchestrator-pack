@@ -1,1 +1,37 @@
-{"schema_version":"orchestrator-pack/pr-scope-declaration/v1","issue_number":1250,"declared_paths":["docs/declarations/1250.json","docs/investigations/ao-orca-consumer-census/axis3-bindings.md","docs/investigations/ao-orca-consumer-census/axis5-bindings.md","scripts/ao-retirement/retired-surface-guard.ts","scripts/ao-retirement/retired-surface-inventory.json","scripts/ao-retirement/retired-surface-selftest.ts","scripts/runtime/ao-absent-two-lifecycle-proof.ts"],"denylist":["vendor/","packages/core/",".orca/","credentials/","secrets/","scripts/orca-runtime/","scripts/lib/Invoke-AoCliJson.ps1","scripts/lib/Invoke-AoReviewApi.ps1","plugins/ao-task-declaration/","plugins/ao-scope-guard/","plugins/ao-token-chain-ledger/","plugins/ao-codex-pr-reviewer/"],"allowed_roots":["docs/declarations/1250.json","docs/investigations/ao-orca-consumer-census/axis3-bindings.md","docs/investigations/ao-orca-consumer-census/axis5-bindings.md","scripts/ao-retirement/retired-surface-guard.ts","scripts/ao-retirement/retired-surface-inventory.json","scripts/ao-retirement/retired-surface-selftest.ts","scripts/runtime/ao-absent-two-lifecycle-proof.ts"],"source_revision":"#1250-r04"}
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1250,
+  "declared_paths": [
+    "docs/declarations/1250.json",
+    "docs/investigations/ao-orca-consumer-census/axis3-bindings.md",
+    "docs/investigations/ao-orca-consumer-census/axis5-bindings.md",
+    "scripts/ao-retirement/retired-surface-guard.ts",
+    "scripts/ao-retirement/retired-surface-inventory.json",
+    "scripts/ao-retirement/retired-surface-selftest.ts",
+    "scripts/runtime/ao-absent-two-lifecycle-proof.ts"
+  ],
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "plugins/ao-codex-pr-reviewer/",
+    "plugins/ao-scope-guard/",
+    "plugins/ao-task-declaration/",
+    "plugins/ao-token-chain-ledger/",
+    "scripts/lib/Invoke-AoCliJson.ps1",
+    "scripts/lib/Invoke-AoReviewApi.ps1",
+    "scripts/orca-runtime/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1250.json",
+    "docs/investigations/ao-orca-consumer-census/axis3-bindings.md",
+    "docs/investigations/ao-orca-consumer-census/axis5-bindings.md",
+    "scripts/ao-retirement/retired-surface-guard.ts",
+    "scripts/ao-retirement/retired-surface-inventory.json",
+    "scripts/ao-retirement/retired-surface-selftest.ts",
+    "scripts/runtime/ao-absent-two-lifecycle-proof.ts"
+  ],
+  "source_revision": "r04"
+}
