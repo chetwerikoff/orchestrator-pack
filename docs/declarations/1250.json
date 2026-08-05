@@ -41,5 +41,5 @@
     "scripts/runtime/ao-absent-two-lifecycle-proof.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "r06"
+  "source_revision": "r07"
 }
