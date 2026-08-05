@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import {
+  discoverRuntimeOwnerOperations,
   RUNTIME_ADAPTER_METHOD_OPERATIONS,
   RUNTIME_CALLER_CENSUS,
   validateRuntimeCallerCensus,
@@ -49,9 +50,7 @@ function residualRetiredPowerShellImports(): readonly string[] {
   for (const relativePath of files) {
     const source = readFileSync(path.join(repoRoot, relativePath), 'utf8');
     for (const retiredName of retiredPowerShellInvariants) {
-      if (source.includes(retiredName)) {
-        residual.push(`${relativePath}:${retiredName}`);
-      }
+      if (source.includes(retiredName)) residual.push(`${relativePath}:${retiredName}`);
     }
   }
   return residual.sort();
@@ -69,14 +68,38 @@ function discoveredRuntimeCalls(): ReadonlyMap<string, ReadonlySet<string>> {
       || relativePath.endsWith('.d.ts')
       || runtimeImplementationFiles.has(relativePath)) continue;
     const source = readFileSync(path.join(repoRoot, relativePath), 'utf8');
+    const operations = discovered.get(relativePath) ?? new Set<string>();
     for (const match of source.matchAll(methodPattern)) {
       const method = match[1] as keyof typeof RUNTIME_ADAPTER_METHOD_OPERATIONS;
-      const operations = discovered.get(relativePath) ?? new Set<string>();
       operations.add(RUNTIME_ADAPTER_METHOD_OPERATIONS[method]);
-      discovered.set(relativePath, operations);
     }
+    for (const operation of discoverRuntimeOwnerOperations(relativePath, source)) {
+      operations.add(operation);
+    }
+    if (operations.size > 0) discovered.set(relativePath, operations);
   }
   return discovered;
+}
+
+function unclassifiedRuntimeCalls(
+  discovered: ReadonlyMap<string, ReadonlySet<string>>,
+): readonly string[] {
+  const rows = new Map(RUNTIME_CALLER_CENSUS.map((row) => [row.surface, row]));
+  const unclassified: string[] = [];
+  for (const [surface, operations] of discovered) {
+    const row = rows.get(surface);
+    if (!row || row.kind !== 'runtime-port'
+      || row.disposition === 'delete-dead'
+      || row.disposition === 'defer-1250') {
+      unclassified.push(`${surface}:row_missing_or_inactive`);
+      continue;
+    }
+    const declaredOperations = row.operations as readonly string[];
+    for (const operation of operations) {
+      if (!declaredOperations.includes(operation)) unclassified.push(`${surface}:${operation}`);
+    }
+  }
+  return unclassified.sort();
 }
 
 describe('runtime caller census', () => {
@@ -84,28 +107,52 @@ describe('runtime caller census', () => {
     expect(validateRuntimeCallerCensus()).toEqual([]);
   });
 
-  it('classifies every repository-derived RuntimeAdapter invocation', () => {
-    const rows = new Map(RUNTIME_CALLER_CENSUS.map((row) => [row.surface, row]));
-    const unclassified: string[] = [];
-    for (const [surface, operations] of discoveredRuntimeCalls()) {
-      const row = rows.get(surface);
-      if (!row || row.kind !== 'runtime-port'
-        || row.disposition === 'delete-dead'
-        || row.disposition === 'defer-1250') {
-        unclassified.push(`${surface}:row_missing_or_inactive`);
-        continue;
-      }
-      const declaredOperations = row.operations as readonly string[];
-      for (const operation of operations) {
-        if (!declaredOperations.includes(operation)) {
-          unclassified.push(`${surface}:${operation}`);
-        }
-      }
-    }
-    expect(unclassified.sort()).toEqual([]);
+  it('classifies repository-derived adapter and lifecycle-owner invocations', () => {
+    expect(unclassifiedRuntimeCalls(discoveredRuntimeCalls())).toEqual([]);
   });
 
-  it('includes the current fleet observer caller', () => {
+  it('discovers composition, observer, supervisor, recovery, claim, lease, fence, and backoff owners', () => {
+    const source = `
+      selectRuntimeAdapter({}, {});
+      new FleetObserver(adapter);
+      runSupervisor({});
+      recoverRuntimeWorker({});
+      acquireWorkerRecoveryClaim({});
+      acquireReviewStartClaim({});
+      acquireSingleInstanceLease({});
+      withSideEffectFence({});
+      recordChildExit({});
+      rearmTerminalCrashState({});
+    `;
+    expect(discoverRuntimeOwnerOperations('scripts/fixture-owner.ts', source)).toEqual([
+      'claim-toctou',
+      'crash-backoff',
+      'degraded-rearm',
+      'fleet-observer',
+      'recovery',
+      'recovery-claim',
+      'runtime-composition',
+      'side-effect-fence',
+      'single-instance-lease',
+      'supervisor-startup',
+    ]);
+  });
+
+  it('rejects an otherwise-unlisted lifecycle owner fixture', () => {
+    const operations = new Set(discoverRuntimeOwnerOperations(
+      'scripts/unlisted-runtime-owner.ts',
+      'selectRuntimeAdapter({}, {}); recoverRuntimeWorker({});',
+    ));
+    expect(unclassifiedRuntimeCalls(new Map([
+      ['scripts/unlisted-runtime-owner.ts', operations],
+    ]))).toEqual(['scripts/unlisted-runtime-owner.ts:row_missing_or_inactive']);
+  });
+
+  it('includes scheduler composition and the current fleet observer caller', () => {
+    expect(RUNTIME_CALLER_CENSUS).toContainEqual(expect.objectContaining({
+      surface: 'scripts/pr2-foundation/scheduler.ts',
+      operations: expect.arrayContaining(['runtime-composition', 'fleet-observer']),
+    }));
     expect(RUNTIME_CALLER_CENSUS).toContainEqual(expect.objectContaining({
       surface: 'scripts/pr2-foundation/fleet-observer.ts',
       disposition: 'already-runtime-neutral',
@@ -116,7 +163,7 @@ describe('runtime caller census', () => {
     expect(residualRetiredPowerShellImports()).toEqual([]);
   });
 
-  it('keeps AO service operations outside RuntimeAdapter', () => {
+  it('keeps genuinely non-runtime AO service operations outside RuntimeAdapter', () => {
     const serviceRows = RUNTIME_CALLER_CENSUS.filter(
       (row) => row.kind === 'non-runtime-ao-service',
     );
