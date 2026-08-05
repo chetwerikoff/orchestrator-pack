@@ -480,7 +480,7 @@ describe('standard teardown post-effect settlement', () => {
     const paths = fixture();
     const value = state({ orcaPresent: true, standardTeardownEffect: 'both-absent' });
     const report = runLifecycle({
-      expected: paths.expected,
+      expected: { ...paths.expected, finalPrHeadSha: HEAD },
       context: 'post-merge-cleanup',
       apply: true,
       operations: operations(paths, value),
@@ -503,7 +503,7 @@ describe('standard teardown post-effect settlement', () => {
       standardTeardownEffect: 'both-absent',
     });
     const report = runLifecycle({
-      expected: paths.expected,
+      expected: { ...paths.expected, finalPrHeadSha: HEAD },
       context: 'post-merge-cleanup',
       apply: true,
       operations: operations(paths, value),
@@ -519,7 +519,7 @@ describe('standard teardown post-effect settlement', () => {
     const paths = fixture();
     const value = state({ orcaPresent: true, standardTeardownEffect: 'git-only-absent' });
     const report = runLifecycle({
-      expected: paths.expected,
+      expected: { ...paths.expected, finalPrHeadSha: HEAD },
       context: 'post-merge-cleanup',
       apply: true,
       operations: operations(paths, value),
@@ -546,7 +546,7 @@ describe('standard teardown post-effect settlement', () => {
       }),
     });
     const report = runLifecycle({
-      expected: paths.expected,
+      expected: { ...paths.expected, finalPrHeadSha: HEAD },
       context: 'post-merge-cleanup',
       apply: true,
       operations: operations(paths, value),
