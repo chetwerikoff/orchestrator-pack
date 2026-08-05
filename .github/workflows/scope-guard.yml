@@ -185,15 +185,138 @@ jobs:
           $issue1276Bootstrap = $env:PR_NUMBER -eq '1305' `
             -and $env:PR_HEAD_REF -eq 'chetwerikoff/issue-1276' `
             -and $env:PR_HEAD_REPO_SAME -eq 'true'
+          $trustedLiveIssueScope = (Test-Path -LiteralPath $trustedDeclarationContract) -and
+            (Select-String -LiteralPath $trustedDeclarationContract -Pattern 'selectLiveIssueScope' -Quiet)
           if ($issue1276Bootstrap) {
             Write-Warning 'scope guard bootstrap: PR 1305 uses the PR-head checker for the Issue 1276 producer-ceiling migration'
             $guardScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'
           }
-          elseif ((Test-Path -LiteralPath $trustedChecker) -and (Test-Path -LiteralPath $trustedDeclarationContract)) {
+          elseif ((Test-Path -LiteralPath $trustedChecker) -and $trustedLiveIssueScope) {
             $guardScript = $trustedChecker
           }
           else {
             Write-Warning 'scope guard bootstrap: AO-free declaration contract is not on base ref yet; using PR head scripts for this migration PR'
+            # A PR-head checker is allowed only for the one live, head-bound bootstrap.
+            # The base checkout must not silently trust arbitrary PR workflow code.
+            $expectedPaths = @(
+              'scripts/pr-scope-check.ts',
+              'scripts/pr-scope-check.ps1',
+              'scripts/pr-scope-declaration.ts',
+              'scripts/pr-scope-declaration.test.ts',
+              '.github/workflows/scope-guard.yml'
+            )
+            $changedOutput = & git -C $env:GITHUB_WORKSPACE diff --name-only --no-renames "$env:PR_BASE_SHA...$env:PR_HEAD_SHA"
+            if ($LASTEXITCODE -ne 0) { throw 'scope guard bootstrap: unable to read PR changed paths' }
+            $changedPaths = @(
+              $changedOutput |
+                ForEach-Object { [string]$_ } |
+                Where-Object { $_ -ne '' }
+            )
+            $changedPathDifference = @(
+              Compare-Object -ReferenceObject ($expectedPaths | Sort-Object) -DifferenceObject ($changedPaths | Sort-Object)
+            )
+            if (
+              $changedPaths.Count -ne $expectedPaths.Count -or
+              $changedPathDifference.Count -ne 0
+            ) {
+              throw 'scope guard bootstrap: PR changed paths do not match the authorized implementation set'
+            }
+
+            $packGh = Join-Path $trustedRoot 'scripts/gh'
+            $prPayload = & $packGh pr view $env:PR_NUMBER --repo $env:GITHUB_REPOSITORY --json body 2>$null
+            if ($LASTEXITCODE -ne 0) { throw 'scope guard bootstrap: unable to read PR body' }
+            $prBody = ([string]($prPayload | ConvertFrom-Json).body)
+            $issueMatches = [regex]::Matches($prBody, '(?im)^\s*(?:closes|fixes|resolves)\s+#(?<number>\d+)\s*$')
+            if ($issueMatches.Count -ne 1) { throw 'scope guard bootstrap: expected exactly one linked Issue' }
+            $issueNumber = [int]$issueMatches[0].Groups['number'].Value
+            $issuePayload = & $packGh issue view $issueNumber --repo $env:GITHUB_REPOSITORY --json body 2>$null
+            if ($LASTEXITCODE -ne 0) { throw 'scope guard bootstrap: unable to read linked Issue body' }
+            $issueBody = ([string]($issuePayload | ConvertFrom-Json).body)
+
+            $bootstrapLabels = [regex]::Matches(
+              $issueBody,
+              '(?m)^[ \t]*```scope-guard-bootstrap/v1[ \t]*$'
+            )
+            if ($bootstrapLabels.Count -ne 1) {
+              throw 'scope guard bootstrap: expected exactly one bootstrap declaration label'
+            }
+            $fences = [regex]::Matches(
+              $issueBody,
+              '(?ms)^[ \t]*```scope-guard-bootstrap/v1[ \t]*\r?\n(?<body>.*?)\r?\n[ \t]*```[ \t]*$'
+            )
+            if ($fences.Count -ne 1) {
+              throw 'scope guard bootstrap: expected exactly one complete bootstrap declaration'
+            }
+            try { $bootstrap = $fences[0].Groups['body'].Value | ConvertFrom-Json -ErrorAction Stop }
+            catch { throw 'scope guard bootstrap: malformed bootstrap declaration' }
+
+            $expectedBootstrapFields = @(
+              'schema',
+              'issueNumber',
+              'sourceRevision',
+              'prNumber',
+              'headSha',
+              'workflowPath',
+              'allowedImplementationPaths',
+              'declarationArtifactsAllowed',
+              'expiresOnMismatch'
+            )
+            $actualBootstrapFields = @($bootstrap.PSObject.Properties.Name)
+            $fieldDifference = @(
+              Compare-Object -ReferenceObject ($expectedBootstrapFields | Sort-Object) -DifferenceObject ($actualBootstrapFields | Sort-Object)
+            )
+            if (
+              $actualBootstrapFields.Count -ne $expectedBootstrapFields.Count -or
+              $fieldDifference.Count -ne 0
+            ) {
+              throw 'scope guard bootstrap: bootstrap fields do not match the closed schema'
+            }
+            $issueNumberTypeValid = ($bootstrap.issueNumber -is [int]) -or ($bootstrap.issueNumber -is [long])
+            $prNumberTypeValid = ($bootstrap.prNumber -is [int]) -or ($bootstrap.prNumber -is [long])
+            $pathArrayValid =
+              $bootstrap.allowedImplementationPaths -is [System.Array] -and
+              @($bootstrap.allowedImplementationPaths | Where-Object { $_ -isnot [string] }).Count -eq 0
+            $typesValid =
+              $bootstrap.schema -is [string] -and
+              $issueNumberTypeValid -and
+              $bootstrap.sourceRevision -is [string] -and
+              $prNumberTypeValid -and
+              $bootstrap.headSha -is [string] -and
+              $bootstrap.workflowPath -is [string] -and
+              $pathArrayValid -and
+              $bootstrap.declarationArtifactsAllowed -is [bool] -and
+              $bootstrap.expiresOnMismatch -is [bool]
+            if (-not $typesValid) {
+              throw 'scope guard bootstrap: bootstrap field types are invalid'
+            }
+
+            $revisionMatches = [regex]::Matches(
+              $issueBody,
+              '(?m)^<!--\s*source-revision:\s*(?<revision>r\d+)\s*-->$'
+            )
+            if ($revisionMatches.Count -ne 1) {
+              throw 'scope guard bootstrap: expected exactly one source revision'
+            }
+            $revision = $revisionMatches[0].Groups['revision'].Value
+            $declaredPaths = @($bootstrap.allowedImplementationPaths | ForEach-Object { [string]$_ })
+            $duplicateDeclaredPaths = @(
+              $declaredPaths |
+                Group-Object |
+                Where-Object { $_.Count -ne 1 }
+            )
+            $bindingValid =
+              $bootstrap.schema -eq 'scope-guard-bootstrap/v1' -and
+              $bootstrap.issueNumber -eq $issueNumber -and
+              $bootstrap.sourceRevision -eq $revision -and
+              $bootstrap.prNumber -eq [int]$env:PR_NUMBER -and
+              $bootstrap.headSha -eq $env:PR_HEAD_SHA -and
+              $bootstrap.workflowPath -eq '.github/workflows/scope-guard.yml' -and
+              $bootstrap.declarationArtifactsAllowed -eq $false -and
+              $bootstrap.expiresOnMismatch -eq $true -and
+              $duplicateDeclaredPaths.Count -eq 0 -and
+              $declaredPaths.Count -eq $expectedPaths.Count -and
+              -not (Compare-Object -ReferenceObject ($expectedPaths | Sort-Object) -DifferenceObject ($declaredPaths | Sort-Object))
+            if (-not $bindingValid) { throw 'scope guard bootstrap: live Issue binding does not authorize PR-head checker' }
             $guardScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'
           }
 

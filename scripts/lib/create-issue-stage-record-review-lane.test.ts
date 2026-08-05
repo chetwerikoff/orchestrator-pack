@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildReviewLaneRouting,
   classifyReviewLaneDeclaration,
@@ -8,7 +8,7 @@ import {
 } from './review-lane-routing.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
 import { validateReviewLaneRecord } from './review-lane-record.ts';
-import { createMockGhState, createMockTransport, makeTempDir } from './create-issue-stage-record-test-helpers.ts';
+import { cleanupTempDirs, createMockGhState, createMockTransport, makeTempDir } from './create-issue-stage-record-test-helpers.ts';
 import { publishSettledStageRecord, startReviewCycle } from './create-issue-stage-record-core.ts';
 import { prepareReviewLaneStageAttempt } from './create-issue-stage-record-review-lane.ts';
 import { deriveReviewEpisodeState, validateReviewEpisodeTopology } from './stage-completeness-core.ts';
@@ -73,6 +73,12 @@ function routedFixture() {
     settlement,
   };
 }
+
+afterEach(() => {
+  cleanupTempDirs();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe('review-lane production activation', () => {
   it('routes before cycle publication and returns the immutable evidence', () => {
