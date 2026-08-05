@@ -1,62 +1,28 @@
 {
   "schemaVersion": 1,
   "regressionAnchors": [
-    "review-ready-report-state-seed",
-    "review-trigger-reeval"
+    "pr2-scheduler"
   ],
   "sharedTransports": {
     "gh": "scripts/gh",
-    "ao": "scripts/lib/Orchestrator-SideProcessProgress.ps1",
-    "terminalOutcome": "scripts/lib/Orchestrator-SideProcessProgress.ps1",
-    "runtime": "scripts/kernel/side-process-liveness.ts"
+    "runtime": "scripts/kernel/subprocess.ts",
+    "terminalOutcome": "scripts/lib/orchestrator-side-process-supervisor.ts"
   },
   "children": [
     {
-      "id": "review-trigger-reconcile",
+      "id": "pr2-scheduler",
       "mode": "wired",
-      "maxExternalCallTimeoutMs": 120000,
-      "maxLocalComputeGapMs": 600000,
-      "localProgressMode": "bounded-local-step",
+      "maxExternalCallTimeoutMs": 30000,
+      "maxLocalComputeGapMs": 30000,
+      "localProgressMode": "bounded-typescript-tick",
       "evidence": [
-        "scripts/review-trigger-reconcile.ps1",
-        "scripts/orchestrator-wake-supervisor.test.ts"
-      ],
-      "externalCallKinds": [
-        "gh",
-        "ao"
-      ]
-    },
-    {
-      "id": "review-trigger-reeval",
-      "mode": "wired",
-      "maxExternalCallTimeoutMs": 8000,
-      "maxLocalComputeGapMs": 8000,
-      "localProgressMode": "external-call-checkpoints",
-      "evidence": [
-        "scripts/review-trigger-reeval.ps1",
+        "scripts/pr2-foundation/scheduler.ts",
+        "scripts/lib/orchestrator-side-process-supervisor.ts",
         "scripts/fleet-liveness.cases.ts",
         "scripts/fleet-liveness-census.cases.ts"
       ],
       "externalCallKinds": [
-        "gh",
-        "ao"
-      ]
-    },
-    {
-      "id": "review-ready-report-state-seed",
-      "mode": "wired",
-      "maxExternalCallTimeoutMs": 8000,
-      "maxLocalComputeGapMs": 8000,
-      "localProgressMode": "existing-work-evidence-plus-external-call-checkpoints",
-      "evidence": [
-        "scripts/review-ready-report-state-seed.ps1",
-        "scripts/lib/Review-ReadyReportStateSeedProgress.ps1",
-        "scripts/fleet-liveness.cases.ts",
-        "scripts/fleet-liveness-census.cases.ts"
-      ],
-      "externalCallKinds": [
-        "gh",
-        "ao"
+        "gh"
       ]
     }
   ]

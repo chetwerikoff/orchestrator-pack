@@ -39,7 +39,6 @@ import {
 import { stableJson } from './contracts.ts';
 import {
   scanForbiddenExecutableReferences,
-  validateBridgeSource,
   validateClaimStoreSource,
   validateClosureReceiptSource,
   validateRunnerSource,
@@ -53,7 +52,6 @@ import {
 } from './rollback-drain.ts';
 
 const repoRoot = path.resolve(import.meta.dirname, '../..');
-const bridgePath = path.join(repoRoot, 'scripts/lib/Review-StartClaimLifecycle.ps1');
 const storeUrl = new URL('../lib/review-start-claim-store.ts', import.meta.url).href;
 const claimRoots: string[] = [];
 const claimChildren: Array<{ controller: AbortController; result: Promise<ProcessResult> }> = [];
@@ -176,23 +174,6 @@ function spawnStaleRecoverer(namespace: string, barrier: string, resultPath: str
     signal: controller.signal,
     timeoutMs: 60_000,
     allowEmptyStdout: true,
-  });
-  claimChildren.push({ controller, result });
-}
-
-function spawnBridgeClaim(namespace: string, resultPath: string, startPath: string, releasePath: string): void {
-  const ps = `
-    $ErrorActionPreference='Stop'
-    . '${bridgePath.replaceAll("'", "''")}'
-    while (-not (Test-Path -LiteralPath '${startPath.replaceAll("'", "''")}')) { Start-Sleep -Milliseconds 10 }
-    $r = Acquire-ReviewStartClaim -PrNumber 948 -HeadSha $('a' * 40) -Surface 'bridge-overlap' -Namespace '${namespace.replaceAll("'", "''")}' -ReviewRuns @()
-    @{ acquired=[bool]$r.acquired; reason=[string]$r.reason } | ConvertTo-Json -Compress | Set-Content -LiteralPath '${resultPath.replaceAll("'", "''")}' -Encoding utf8
-    while (-not (Test-Path -LiteralPath '${releasePath.replaceAll("'", "''")}')) { Start-Sleep -Milliseconds 10 }
-  `;
-  const controller = new AbortController();
-  const result = runProcess({
-    command: 'pwsh', args: ['-NoProfile', '-Command', ps], cwd: repoRoot,
-    inheritParentEnv: true, signal: controller.signal, timeoutMs: 60_000, allowEmptyStdout: true,
   });
   claimChildren.push({ controller, result });
 }
@@ -514,9 +495,8 @@ describe('Issue #948 final conformance mutations', () => {
     expect(findings.map((row) => row.code)).toContain('d928_external_executable_reference');
   });
 
-  it('rejects policy/storage logic added to the passive bridge', () => {
-    const findings = validateBridgeSource("function Invoke-ReviewStartClaimTsOperation(){}\nSet-Content x y\nreview-start-claim-store.ts");
-    expect(findings.map((row) => row.code)).toContain('bridge_policy_or_storage_logic');
+  it('requires the retired PowerShell claim bridge to remain absent', () => {
+    expect(existsSync(path.join(repoRoot, 'scripts/lib/Review-StartClaimLifecycle.ps1'))).toBe(false);
   });
 
   it('rejects a runner that routes claims through PowerShell', () => {
@@ -697,22 +677,6 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
     writeFileSync(release, 'done');
   }, 60_000);
 
-  it('admits one winner under passive PowerShell bridge vs direct TS overlap', async () => {
-    const root = makeRoot('pr2a-mixed-overlap-');
-    const start = path.join(root, 'start');
-    const release = path.join(root, 'release');
-    const tsResult = path.join(root, 'ts.json');
-    const psResult = path.join(root, 'ps.json');
-    spawnTsClaim(root, tsResult, start, release);
-    spawnBridgeClaim(root, psResult, start, release);
-    writeFileSync(start, 'go');
-    await waitForFiles([tsResult, psResult]);
-    const resultRows = [tsResult, psResult].map((fileName) => JSON.parse(readFileSync(fileName, 'utf8')) as { acquired: boolean; reason: string });
-    expect(resultRows.filter((row) => row.acquired)).toHaveLength(1);
-    expect(resultRows.find((row) => !row.acquired)?.reason).toBe('claimed');
-    writeFileSync(release, 'done');
-  }, 60_000);
-
   it('owner-binds stale-lock takeover under two barrier-controlled recoverers', async () => {
     const root = makeRoot('pr2a-stale-takeover-');
     const sha = 'c'.repeat(40);
@@ -746,28 +710,6 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
     expect(resultRows.filter((row) => !row.acquired)).toHaveLength(1);
     expect(resultRows.find((row) => !row.acquired)?.reason).toBe('claimed');
     writeFileSync(release, 'done');
-  }, 60_000);
-
-  it('refreshes the run store on every bridge visibility poll', () => {
-    const root = makeRoot('pr2a-live-visibility-');
-    const sha = 'd'.repeat(40);
-    const script = `
-      $ErrorActionPreference='Stop'
-      . '${bridgePath.replaceAll("'", "''")}'
-      $claim = Acquire-ReviewStartClaim -PrNumber 948 -HeadSha '${sha}' -Surface 'visibility-test' -Namespace '${root.replaceAll("'", "''")}' -ReviewRuns @()
-      $script:calls = 0
-      $result = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns @() -ResolveReviewRuns {
-        $script:calls++
-        if ($script:calls -eq 1) { return @() }
-        return @(@{ id='opk-rev-visible'; prNumber=948; targetSha='${sha}'; status='running' })
-      }
-      @{ calls=$script:calls; ok=[bool]$result.ok; outcome=[string]$result.outcome; reason=[string]$result.reason } | ConvertTo-Json -Compress
-    `;
-    const result = runProcessSync({ command: 'pwsh', args: ['-NoProfile', '-Command', script], cwd: repoRoot, inheritParentEnv: true });
-    expect(result.ok, result.stderr || result.error).toBe(true);
-    const row = JSON.parse(result.stdout) as { calls: number; ok: boolean; outcome: string };
-    expect(row.calls).toBeGreaterThanOrEqual(2);
-    expect(row).toMatchObject({ ok: true, outcome: 'run_started' });
   }, 60_000);
 
   it('generation-fences completion from a superseded holder', () => {
@@ -813,26 +755,11 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
     }
 
     const legacy = vectorDocument.vectors.find((row) => row.id === 'legacy-active-v1')!;
-    const file = path.join(root, 'legacy-bridge.json');
+    const file = path.join(root, 'legacy-direct.json');
     atomicWriteJson(file, legacy.record);
-    const command = `. '${bridgePath.replaceAll("'", "''")}'; Read-ReviewStartClaimRecord -Path '${file.replaceAll("'", "''")}' | ConvertTo-Json -Compress -Depth 20`;
-    const result = runProcessSync({ command: 'pwsh', args: ['-NoProfile', '-Command', command], cwd: repoRoot, inheritParentEnv: true });
-    expect(result.ok, result.stderr || result.error).toBe(true);
-    const bridged = JSON.parse(result.stdout).record as Record<string, unknown>;
-    const legacyRecord = legacy.record ?? {};
-    expect(bridged).toMatchObject({
-      schemaVersion: legacyRecord.schemaVersion,
-      key: legacyRecord.key,
-      prNumber: legacyRecord.prNumber,
-      headSha: legacyRecord.headSha,
-      state: legacyRecord.state,
-      holder: legacyRecord.holder,
-      startReason: legacyRecord.startReason,
-      projectNamespace: legacyRecord.projectNamespace,
-      firstAttemptAtMonotonicMs: legacyRecord.firstAttemptAtMonotonicMs,
-      readinessStartMonotonicMs: legacyRecord.readinessStartMonotonicMs,
-    });
-    expect(Date.parse(String(bridged.acquiredAtUtc))).toBe(Date.parse(String(legacyRecord.acquiredAtUtc)));
+    const read = readClaimRecord(file);
+    expect(read.ok, `${read.reason}:${read.error}`).toBe(true);
+    expect(read.record).toMatchObject(legacy.record ?? {});
   });
 });
 

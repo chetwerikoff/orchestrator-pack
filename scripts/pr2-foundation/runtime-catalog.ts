@@ -10,17 +10,22 @@ export interface RuntimeSurface {
   classification: RuntimeSurfaceClass;
 }
 
-export const RUNTIME_CATALOG_VERSION = 1 as const;
+export const RUNTIME_CATALOG_VERSION = 2 as const;
 
+/**
+ * Canonical post-Orca-cut runtime surfaces. PowerShell supervisor/starters are
+ * intentionally absent: the only live scheduler graph is the epoch-gated Node
+ * supervisor -> pr2-scheduler path.
+ */
 export const FOUNDATION_RUNTIME_CATALOG: readonly RuntimeSurface[] = Object.freeze([
-  { id: 'scheduler-foundation', category: 'scheduler', path: 'scripts/pr2-foundation/scheduler.ts', classification: 'dormant' },
+  { id: 'scheduler-foundation', category: 'scheduler', path: 'scripts/pr2-foundation/scheduler.ts', classification: 'live-replaced' },
   { id: 'worker-notification', category: 'notification', path: 'scripts/lib/pack-review-worker-notification.ts', classification: 'live-replaced' },
   { id: 'typed-config', category: 'config', path: 'scripts/pr2-foundation/config.ts', classification: 'live-replaced' },
   { id: 'migration-journal', category: 'migration', path: 'scripts/pr2-foundation/migration-journal.ts', classification: 'dormant' },
   { id: 'claim-acquisition', category: 'claim', path: 'scripts/lib/review-start-claim-store.ts', classification: 'live-replaced' },
-  { id: 'side-process-registry', category: 'registry', path: 'scripts/orchestrator-side-process-registry.json', classification: 'live-unchanged' },
-  { id: 'wake-supervisor', category: 'supervisor', path: 'scripts/lib/Orchestrator-WakeSupervisor.ps1', classification: 'live-replaced' },
-  { id: 'legacy-starters', category: 'starter', path: 'scripts/review-trigger-reconcile.ps1', classification: 'live-unchanged' },
+  { id: 'side-process-registry', category: 'registry', path: 'scripts/orchestrator-side-process-registry.json', classification: 'live-replaced' },
+  { id: 'wake-supervisor', category: 'supervisor', path: 'scripts/orchestrator-wake-supervisor.ts', classification: 'live-replaced' },
+  { id: 'legacy-starters', category: 'starter', path: 'scripts/pr2-foundation/scheduler.ts', classification: 'live-replaced' },
 ]);
 
 const CLASS_RANK: Record<RuntimeSurfaceClass, number> = {
