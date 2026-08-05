@@ -295,14 +295,24 @@ function buildSmokeRunResult(
   };
 }
 
-function closeOwnedSmokeTerminal(handle: string, cwd: string): {
+export function closeOwnedSmokeTerminal(
+  handle: string,
+  cwd: string,
+  closeTerminal: typeof closeOrcaTerminal = closeOrcaTerminal,
+): {
   terminalCleanup: string;
   diagnostic?: SmokeControlPlaneDiagnostic;
 } {
-  const closeResult = closeOrcaTerminal(handle, {
+  let closeResult = closeTerminal(handle, {
     cwd,
     timeoutMs: SMOKE_ORCA_OPERATION_TIMEOUT_MS,
   });
+  if (!closeResult.ok && closeResult.error?.code === 'runtime_error') {
+    closeResult = closeTerminal(handle, {
+      cwd,
+      timeoutMs: SMOKE_ORCA_OPERATION_TIMEOUT_MS,
+    });
+  }
   if (closeResult.ok) {
     return { terminalCleanup: 'closed_owned_handle' };
   }
