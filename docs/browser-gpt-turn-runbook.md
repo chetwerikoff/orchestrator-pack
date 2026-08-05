@@ -38,9 +38,16 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
    `docs/chat-executor-rules.md`.
 2. Verify the repository's Node 22 requirement and the current task's tier,
    role, stage, and frozen revision.
-3. Load the gitignored local configuration and confirm the configured headed
+3. Before starting flow-manager in a fresh worktree, provision the gitignored
+   browser configuration from the operator checkout:
+   `cp "<OPERATOR_CHECKOUT>/.claude/skills/discuss-with-gpt/local.config.json" "<WORKTREE_PATH>/.claude/skills/discuss-with-gpt/local.config.json"`.
+   Alternatively, set both `DISCUSS_WITH_GPT_PROJECT_URL` and
+   `DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR`. If launch reports
+   `discuss-with-gpt: operator configuration missing`, this provisioning step
+   was skipped.
+4. Load the gitignored local configuration and confirm the configured headed
    automation Chrome is running and logged in. Never type credentials.
-4. Start or verify the configured browser through the existing launcher:
+5. Start or verify the configured browser through the existing launcher:
    `.claude/skills/discuss-with-gpt/launch-chrome.sh`. Select the applicable
    canonical workflow; stage cardinality and topology belong to that workflow,
    not this runbook.
