@@ -50,7 +50,8 @@ describe('runtime-neutral worker recovery', () => {
     });
     expect(owned.status).toBe('ok');
     if (owned.status !== 'ok') return;
-    adapter.setLiveness(owned.value.identity, 'gone');
+    const ownedIdentity = owned.value.identity;
+    expect(adapter.stopWorker(ownedIdentity).status).toBe('ok');
 
     const events: string[] = [];
     const remove = adapter.removeWorkspace.bind(adapter);
@@ -66,13 +67,13 @@ describe('runtime-neutral worker recovery', () => {
 
     const result = recoverRuntimeWorker({
       adapter,
-      targetId: owned.value.identity.id,
-      targetGeneration: owned.value.identity.generation,
+      targetId: ownedIdentity.id,
+      targetGeneration: ownedIdentity.generation,
       cleanupWorkspace: {
         workspacePath: '/tmp/recovery-workspace',
         expectedHeadSha: 'test-head',
       },
-      cleanupAuthority: cleanupAuthority({ worker: owned.value.identity }),
+      cleanupAuthority: cleanupAuthority({ worker: ownedIdentity }),
       title: 'recovered-worker',
       command: 'cursor-agent',
       acquireClaim: () => {
