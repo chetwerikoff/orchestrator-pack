@@ -17,6 +17,18 @@ export type WorkerRecoveryResult =
   | { readonly outcome: 'spawn_started'; readonly worker: RuntimeWorker; readonly workspaceRemoved: boolean }
   | { readonly outcome: 'runtime_failed'; readonly failure: RuntimeOperationFailure };
 
+/**
+ * Pre-existing pack-owned cleanup authority. Runtime observations may revalidate
+ * this binding, but cannot create it. Callers must load it from the durable claim
+ * or reservation that owned the worker before recovery began.
+ */
+export interface WorkerRecoveryCleanupAuthority {
+  readonly source: 'pack-reservation';
+  readonly worker: RuntimeWorkerIdentity;
+  readonly workspacePath: string;
+  readonly expectedHeadSha: string;
+}
+
 function workersForWorkspace(
   adapter: RuntimeAdapter,
   workspacePath: string,
@@ -68,13 +80,28 @@ function expectedIdentity(
   };
 }
 
+function cleanupAuthorityMatches(input: {
+  readonly authority: WorkerRecoveryCleanupAuthority;
+  readonly expected: RuntimeWorkerIdentity;
+  readonly cleanupPath: string;
+  readonly expectedHeadSha: string;
+}): boolean {
+  return input.authority.source === 'pack-reservation'
+    && sameRuntimeWorker(input.authority.worker, input.expected)
+    && resolve(input.authority.workspacePath) === resolve(input.cleanupPath)
+    && input.authority.expectedHeadSha.trim().toLowerCase() === input.expectedHeadSha.toLowerCase();
+}
+
 /**
  * Runtime-only worker recovery caller. It never derives authority from runtime
  * metadata such as linkedPR and never owns retry scheduling.
  *
- * Destructive cleanup requires a complete expected worker identity and expected
- * workspace head. Cleanup/spawn selectors are validated before any runtime call
- * or claim acquisition, and the exact identity is re-read after the claim.
+ * Destructive cleanup requires a complete expected worker identity, expected
+ * workspace head, and pre-existing pack-owned authority binding all three.
+ * Cleanup/spawn selectors are validated before any runtime call or claim
+ * acquisition, and the exact identity is re-read after the claim. A disappeared
+ * worker is removable only when that durable authority is present; absence,
+ * mismatch, unknown liveness, or a different live owner fails closed.
  */
 export function recoverRuntimeWorker(input: {
   readonly adapter: RuntimeAdapter;
@@ -86,6 +113,7 @@ export function recoverRuntimeWorker(input: {
     readonly workspacePath: string;
     readonly expectedHeadSha: string;
   };
+  readonly cleanupAuthority?: WorkerRecoveryCleanupAuthority;
   readonly title: string;
   readonly command: string;
   readonly observationWindowMs?: number;
@@ -102,12 +130,15 @@ export function recoverRuntimeWorker(input: {
   }
 
   const cleanupPath = input.cleanupWorkspace?.workspacePath.trim() ?? '';
-  const expectedHeadSha = input.cleanupWorkspace?.expectedHeadSha.trim() ?? '';
+  const expectedHeadSha = input.cleanupWorkspace?.expectedHeadSha.trim().toLowerCase() ?? '';
   if (input.cleanupWorkspace && !cleanupPath) {
     return { outcome: 'skipped_ambiguous', reason: 'cleanup_workspace_missing' };
   }
   if (input.cleanupWorkspace && !expectedHeadSha) {
     return { outcome: 'skipped_ambiguous', reason: 'cleanup_expected_head_missing' };
+  }
+  if (input.cleanupWorkspace && (!targetId || !targetGeneration)) {
+    return { outcome: 'skipped_ambiguous', reason: 'cleanup_target_identity_required' };
   }
 
   const spawnWorkspace = input.workspace ?? 'active';
@@ -121,14 +152,31 @@ export function recoverRuntimeWorker(input: {
   const expected = targetId
     ? expectedIdentity(input.adapter, targetId, targetGeneration)
     : null;
-  let selected: RuntimeWorker | null = null;
+  const cleanupAuthority = input.cleanupAuthority;
+  if (input.cleanupWorkspace) {
+    if (!expected || !cleanupAuthority) {
+      return { outcome: 'skipped_ambiguous', reason: 'cleanup_ownership_authority_missing' };
+    }
+    if (!cleanupAuthorityMatches({
+      authority: cleanupAuthority,
+      expected,
+      cleanupPath,
+      expectedHeadSha,
+    })) {
+      return { outcome: 'skipped_ambiguous', reason: 'cleanup_ownership_authority_mismatch' };
+    }
+  }
 
+  let selected: RuntimeWorker | null = null;
   if (expected) {
     const found = input.adapter.findWorkerById(expected.id, input.options);
     if (found.status !== 'ok') return { outcome: 'runtime_failed', failure: found };
     selected = found.value;
-    if (selected && (!sameRuntimeWorker(selected.identity, expected) || selected.provenance !== 'internal')) {
+    if (selected && !sameRuntimeWorker(selected.identity, expected)) {
       return { outcome: 'skipped_ambiguous', worker: selected, reason: 'worker_identity_mismatch' };
+    }
+    if (selected && !input.cleanupWorkspace && selected.provenance !== 'internal') {
+      return { outcome: 'skipped_ambiguous', worker: selected, reason: 'external_worker_not_authority' };
     }
   } else {
     const listed = input.adapter.listWorkers({ workspace: observationWorkspace }, input.options);
@@ -169,10 +217,10 @@ export function recoverRuntimeWorker(input: {
   if (expected) {
     const current = input.adapter.findWorkerById(expected.id, input.options);
     if (current.status !== 'ok') return { outcome: 'runtime_failed', failure: current };
-    if (current.value && (
-      !sameRuntimeWorker(current.value.identity, expected)
-      || current.value.provenance !== 'internal'
-    )) {
+    if (current.value && !sameRuntimeWorker(current.value.identity, expected)) {
+      return { outcome: 'claim_lost', reason: 'post_claim_worker_identity_mismatch' };
+    }
+    if (current.value && !input.cleanupWorkspace && current.value.provenance !== 'internal') {
       return { outcome: 'claim_lost', reason: 'post_claim_worker_identity_mismatch' };
     }
   }
