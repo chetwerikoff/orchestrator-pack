@@ -384,3 +384,5 @@ export async function sendPackReviewWorkerNotification(
   });
   return { state: 'failed', reason: completed.ok ? dispatch.reason : completed.reason };
 }
+
+export { sendPackReviewWorkerNotification as dispatchPackReviewWorkerNotification };
