@@ -354,6 +354,8 @@ describe('orca cleanup and role boundaries', () => {
       },
     });
     expect(prompt).toContain('Do not edit tracked implementation files');
+    expect(prompt).toContain('Invoke pack review only when a listed smoke scenario explicitly requires one live pack-review manager turn; do not start any other review.');
+    expect(prompt).not.toContain('Do not edit tracked implementation files, commit, push, merge, alter the Issue, invoke pack review, or call pack-worker-report.');
     expect(prompt).not.toMatch(/^commit$/m);
   });
 
@@ -2677,5 +2679,84 @@ describe('worker smoke run-level control-plane regression matrix (#1125)', () =>
         terminalProvenanceOk: false,
       }).reason).toBe('smoke_fail');
     });
+  });
+});
+
+describe('worker smoke verified already-absent cleanup (#1276)', () => {
+  it('accepts verified owned recovery and rejects every other PASS cleanup value', () => {
+    const receiptRoot = mkdtempSync(join(tmpdir(), 'worker-smoke-receipt-'));
+    vi.stubEnv('WORKER_SMOKE_RECEIPT_ROOT', receiptRoot);
+    const recovered = {
+      result: 'PASS' as const,
+      issueNumber: 1061,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: planPassScenarios,
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle_already_absent',
+      environmentNotes: [],
+      ...passReportFields(),
+    };
+
+    try {
+      const normalized = normalizeSmokeReport(recovered, {
+        issueNumber: recovered.issueNumber,
+        prNumber: recovered.prNumber,
+        headSha: recovered.headSha,
+      });
+      expect(normalized.ok).toBe(true);
+      if (!normalized.ok) {
+        throw new Error(normalized.reason);
+      }
+
+      expect(smokeReportHasPackProducer(normalized.report)).toBe(true);
+      writeWorkerSmokeReceipt(normalized.report);
+      expect(verifySmokeRunReceipt(normalized.report)).toBe(true);
+      expect(readWorkerSmokeReceipt(7, headA)).toEqual(expect.objectContaining({
+        issueNumber: 1061,
+        prNumber: 7,
+        headSha: headA,
+        terminalHandle: 'term_owned_smoke',
+        orcaExecutable: 'orca-ide',
+        producer: SMOKE_REPORT_PRODUCER,
+        result: 'PASS',
+      }));
+
+      const comment = formatSmokeReportComment(normalized.report);
+      expect(findCurrentHeadSmokePass([{ body: comment }], 7, headA, 1061)?.terminalCleanup)
+        .toBe('closed_owned_handle_already_absent');
+      expect(evaluateWorkerSmokeGate({
+        ...gateBase,
+        issueBody: readFixture('action-producing-with-plan.md'),
+        prNumber: 7,
+        headSha: headA,
+        prComments: [{ body: comment }],
+        ciGreen: true,
+        orcaWorktreeOk: true,
+        ownedTerminalClosed: false,
+      })).toEqual({
+        allowed: true,
+        reason: 'smoke_pass_and_ci_green',
+        smokeRequired: true,
+      });
+
+      for (const terminalCleanup of [
+        undefined,
+        '',
+        'not_recorded',
+        'close_failed:unowned_handle',
+        'closed_foreign_handle',
+      ]) {
+        expect(normalizeSmokeReport({ ...recovered, terminalCleanup }, {
+          issueNumber: recovered.issueNumber,
+          prNumber: recovered.prNumber,
+          headSha: recovered.headSha,
+        })).toEqual({ ok: false, reason: 'pass_requires_terminal_cleanup' });
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(receiptRoot, { recursive: true, force: true });
+    }
   });
 });

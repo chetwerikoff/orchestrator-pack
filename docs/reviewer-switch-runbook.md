@@ -61,6 +61,34 @@ Before merge or declaring review clean, run `.\scripts\orchestrator-diagnose.ps1
    `terminationReason` should reference `run-pack-review-gpt.ts`. GPT failure does
    **not** auto-failover to Codex.
 
+### GPT plural PR-review rounds (Issue #1276)
+
+The first GPT review round uses three frozen independent source slots for every
+tier. Later T3 rounds also use three; later T1/T2 rounds use one. Plural rounds
+must use `PACK_GPT_BROWSER_PROJECT_URL` with fresh project/new-chat conversations.
+A plural start with `PACK_GPT_BROWSER_CHAT_URL` fails closed; fixed-chat remains
+available for single-source rounds.
+
+Source admission starts are spaced by 10 seconds at the runner boundary. The
+mandatory profile send slot remains enabled for each fresh-conversation
+prepare+send section; post-send observation may overlap across sources. The
+runner retries only the exact zero-send `profile_busy`,
+`composer_unavailable`, or `state_light_new_chat_send_slot_timeout` collision
+once for the same frozen slot.
+Generic UI mismatch, malformed output, missing terminal result, and any
+possible/post-send delivery are never resent.
+
+The deterministic Issue #1276 acceptance lane is:
+
+```bash
+npm run --silent test:issue-1276
+```
+
+It uses the pack Vitest harness directly with the GPT runner, state, browser
+path, reviewer-adapter, and delivery test files. Do not substitute the
+foundation-only Vitest config; its include list intentionally excludes these
+review tests and can report no target files.
+
 Browser-GPT pack review now uses the Issue #1120 state-light `turn` path: one
 fresh owned tab per invocation, one user-prompt send, page/DOM completion, and
 invocation-local failure. Do not run `status/list`, `clear`, capability/Gate-B,

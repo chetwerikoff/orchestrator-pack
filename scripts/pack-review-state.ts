@@ -8,6 +8,7 @@ export const PACK_REVIEW_TERMINAL_CONTRACT_VERSION = 2;
 export const PACK_REVIEW_CAP_MAP_VERSION = 'issue-1063-1-2-4';
 export const PACK_REVIEW_LEGACY_CAP_MAP_VERSION = 'legacy-frozen';
 export const PACK_REVIEW_CAPS = Object.freeze({ T1: 1, T2: 2, T3: 4 });
+export const PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS = 10_000;
 export const PACK_REVIEW_AUTHORITY_PHASES = Object.freeze([
   'head_observed',
   'claim_acquired',
@@ -20,6 +21,18 @@ export const PACK_REVIEW_AUTHORITY_PHASES = Object.freeze([
 
 export type PackReviewTier = keyof typeof PACK_REVIEW_CAPS;
 export type PackReviewAuthorityPhase = (typeof PACK_REVIEW_AUTHORITY_PHASES)[number];
+
+export function selectPackReviewGptSourceCardinality(input: {
+  reviewer: string;
+  tier: PackReviewTier;
+  roundOrdinal: number;
+}): number {
+  if (input.reviewer.trim().toLowerCase() !== 'gpt') return 1;
+  if (!Number.isInteger(input.roundOrdinal) || input.roundOrdinal <= 0) {
+    throw new PackReviewAuthorityError('cap_state_invalid', 'roundOrdinal must be a positive integer');
+  }
+  return input.roundOrdinal === 1 || input.tier === 'T3' ? 3 : 1;
+}
 export type PackReviewCycleState =
   | 'open'
   | 'at_cap_open_findings'
