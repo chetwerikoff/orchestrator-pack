@@ -72,6 +72,17 @@ function nextSchedulerTickSequence(boundary: SchedulerBoundary): number {
   return next;
 }
 
+function acceptObserverTickSequence(
+  boundary: SchedulerBoundary,
+  requestedTickSequence: number,
+  observer: FleetObserverResult,
+): number {
+  const accepted = Number(observer.tickSequence);
+  if (!Number.isInteger(accepted) || accepted <= 0) return requestedTickSequence;
+  schedulerTickSequences.set(boundary, Math.max(requestedTickSequence, accepted));
+  return accepted;
+}
+
 function requiredEnv(name: string, env: NodeJS.ProcessEnv): string {
   const value = String(env[name] ?? '').trim();
   if (!value) throw new Error(`scheduler_missing_${name.toLowerCase()}`);
@@ -173,7 +184,6 @@ export function productionSchedulerBoundary(input: {
   projectId?: string;
   env?: NodeJS.ProcessEnv;
   fleetObserver?: SchedulerFleetObserver;
-  fleetNudgeActuator?: SchedulerFleetNudgeActuator;
   schedulerIntervalMs?: number;
 }): SchedulerBoundary {
   const env = input.env ?? process.env;
@@ -189,7 +199,7 @@ export function productionSchedulerBoundary(input: {
       '--json', 'name,state,conclusion,status',
     ]) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
     listReviewRuns: () => listPackReviewRuns({ projectId }),
-    fleetNudgeActuator: input.fleetNudgeActuator ?? createTargetUnresolvedFleetNudgeActuator(),
+    fleetNudgeActuator: createTargetUnresolvedFleetNudgeActuator(),
     ...(input.fleetObserver ? { fleetObserver: input.fleetObserver } : {}),
     ...(input.schedulerIntervalMs === undefined ? {} : { schedulerIntervalMs: input.schedulerIntervalMs }),
     start: async (candidate, freshHeadSha) => {
@@ -228,7 +238,7 @@ export async function runSchedulerTick(
     tick: async () => undefined as unknown as FleetObserverResult,
   };
   const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000;
-  const tickSequence = nextSchedulerTickSequence(boundary);
+  const requestedTickSequence = nextSchedulerTickSequence(boundary);
   const observerStartMs = Date.now();
   const observerBudgetMs = observerBoundary.getEffectiveBudgetMs?.(schedulerIntervalMs)
     ?? Math.max(1, Math.floor(schedulerIntervalMs / 4));
@@ -238,7 +248,7 @@ export async function runSchedulerTick(
   });
   const attempt = Promise.resolve().then(() => observerBoundary.tick({
     schedulerIntervalMs,
-    tickSequence,
+    tickSequence: requestedTickSequence,
     phaseStartMs: observerStartMs,
   })).catch(() => undefined);
   const completed = await Promise.race([attempt, timeout]);
@@ -249,12 +259,13 @@ export async function runSchedulerTick(
     observer = completed;
   }
   if (observer && boundary.fleetNudgeActuator) {
+    const acceptedTickSequence = acceptObserverTickSequence(boundary, requestedTickSequence, observer);
     try {
       assertSchedulerEpoch(env);
       fleetNudge = await boundary.fleetNudgeActuator.tick({
         observer,
         schedulerIntervalMs,
-        tickSequence,
+        tickSequence: acceptedTickSequence,
         phaseStartMs: Date.now(),
       });
     } catch {
