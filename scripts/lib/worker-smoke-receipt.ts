@@ -11,6 +11,7 @@ import { SMOKE_REPORT_PRODUCER, type SmokeReport } from './worker-smoke-core.ts'
 import type { SmokeLifecycleRegistry } from './worker-smoke-lifecycle-base.ts';
 
 export const WORKER_SMOKE_RECEIPT_SCHEMA = 'worker-smoke-receipt/v1';
+export const SMOKE_CLOSE_SETTLEMENT_REASON = 'owned_terminal_cleanup' as const;
 
 export interface WorkerSmokeReceipt {
   schema: typeof WORKER_SMOKE_RECEIPT_SCHEMA;
@@ -22,6 +23,11 @@ export interface WorkerSmokeReceipt {
   producer: string;
   result: SmokeReport['result'];
   publishedAt: string;
+}
+
+export interface SmokeCloseSettlementIdentity {
+  settlementId: string;
+  settlementReason: typeof SMOKE_CLOSE_SETTLEMENT_REASON;
 }
 
 interface CloseReceipt {
@@ -43,6 +49,14 @@ type JsonRecord = Record<string, unknown>;
 
 const isRecord = (value: unknown): value is JsonRecord =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+export function buildSmokeCloseSettlementIdentity(runId: string): SmokeCloseSettlementIdentity {
+  const normalizedRunId = runId.trim();
+  return {
+    settlementId: `${normalizedRunId}:owned-terminal-cleanup`,
+    settlementReason: SMOKE_CLOSE_SETTLEMENT_REASON,
+  };
+}
 
 export function writeAtomicJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -95,6 +109,7 @@ export function readCloseReceipt(
     closeOutcome: String(value.closeOutcome ?? '').trim(),
     recordedAtMs: Number(value.recordedAtMs),
   };
+  const expectedSettlement = buildSmokeCloseSettlementIdentity(registry.runId);
   if (
     Number(value.version) !== 2
     || (value.phase !== 'settlement_recorded' && value.phase !== 'closed')
@@ -102,8 +117,8 @@ export function readCloseReceipt(
     || receipt.terminalHandle !== registry.terminalHandle
     || receipt.headSha !== registry.headSha
     || resolve(receipt.artifactDir) !== resolve(registry.artifactDir)
-    || !receipt.settlementId
-    || !receipt.settlementReason
+    || receipt.settlementId !== expectedSettlement.settlementId
+    || receipt.settlementReason !== expectedSettlement.settlementReason
     || !Number.isFinite(receipt.settlementAtMs)
     || !Number.isFinite(receipt.closeAttemptedAtMs)
     || receipt.closeAttemptedAtMs !== registry.closeAttemptedAtMs
@@ -134,6 +149,11 @@ export function recordCloseReceipt(input: {
   if (!isCleanCloseOutcome(input.closeOutcome)) return false;
   const terminalHandle = input.registry.terminalHandle;
   if (!terminalHandle) return false;
+  const expectedSettlement = buildSmokeCloseSettlementIdentity(input.registry.runId);
+  if (
+    input.settlementId !== expectedSettlement.settlementId
+    || input.settlementReason !== expectedSettlement.settlementReason
+  ) return false;
   try {
     const current = readCloseReceipt(input.artifactDir, input.registry);
     if (
