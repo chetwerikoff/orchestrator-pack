@@ -140,6 +140,16 @@ inventory, relay manifest, and ledger are then checked by the existing guards.
 
 ## Direct operator adjudication for missing/non-ok turn transport
 
-For `final-acceptance` artifact production only, the direct operator CLI may supply one exact Issue number and revision, a canonical already-published verdict comment URL, the governed verdict bytes' SHA-256, byte length and finding count, plus a non-empty reason. The producer accepts this only when those values exactly match one governed terminal capture and that invocation's `turn-result/v1` is absent or non-`ok`.
+For `final-acceptance` artifact production only, the direct operator CLI may
+supply one exact Issue number and revision, a canonical already-published
+verdict comment URL, the governed verdict bytes' SHA-256, byte length and
+finding count, plus a non-empty reason. The producer accepts this only when
+those values exactly match one governed terminal capture and that invocation's
+`turn-result/v1` is absent or non-`ok`.
 
-The manifest records `operator_adjudicated` provenance, the exact target/reference/reason, and the original absent or non-`ok` transport fact (including `send_count` when present). It never creates or rewrites `turn-result/v1 state: ok`. Without all direct operator flags, the legacy fail-closed behavior and artifact bytes are unchanged. Workers, reviewers and flow-manager evidence must not synthesize these flags.
+The manifest records `operator_adjudicated` provenance, the exact
+target/reference/reason, and the original absent or non-`ok` transport fact
+(including `send_count` when present). It never creates or rewrites
+`turn-result/v1 state: ok`. Without all direct operator flags, the legacy
+fail-closed behavior and artifact bytes are unchanged. Workers, reviewers and
+flow-manager evidence must not synthesize these flags.
