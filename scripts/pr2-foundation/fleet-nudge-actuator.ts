@@ -5,13 +5,8 @@ import type {
   ObserverClass,
 } from './fleet-observer.ts';
 import type {
-  RuntimeAdapter,
-  RuntimeBoundedOutput,
   RuntimeDispatchResult,
-  RuntimeLivenessResult,
   RuntimeObservationToken,
-  RuntimeResult,
-  RuntimeWorker,
   RuntimeWorkerIdentity,
 } from '../runtime/contracts.ts';
 
@@ -189,43 +184,6 @@ interface DeadlineResult<T> {
 
 function positiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
-}
-
-function sameIdentity(left: RuntimeWorkerIdentity, right: RuntimeWorkerIdentity): boolean {
-  return left.runtime === right.runtime
-    && left.id === right.id
-    && left.generation === right.generation;
-}
-
-function isRuntimeWorker(value: unknown): value is RuntimeWorker {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const row = value as Partial<RuntimeWorker>;
-  return Boolean(row.identity)
-    && typeof row.identity?.runtime === 'string'
-    && typeof row.identity?.id === 'string'
-    && typeof row.identity?.generation === 'string'
-    && (row.provenance === 'internal' || row.provenance === 'external');
-}
-
-function validOutput(
-  result: RuntimeResult<RuntimeBoundedOutput>,
-  worker: RuntimeWorkerIdentity,
-): result is { readonly status: 'ok'; readonly value: RuntimeBoundedOutput } {
-  return result.status === 'ok'
-    && sameIdentity(result.value.worker, worker)
-    && Array.isArray(result.value.lines)
-    && result.value.lines.length <= 256
-    && result.value.lines.every((line) => typeof line === 'string')
-    && typeof result.value.changed === 'boolean';
-}
-
-function validLiveness(
-  result: RuntimeLivenessResult,
-  worker: RuntimeWorkerIdentity,
-  eligibleClass: EligibleFleetNudgeClass,
-): boolean {
-  return sameIdentity(result.worker, worker)
-    && result.status === (eligibleClass === 'idle' ? 'idle' : 'busy');
 }
 
 export function calculateFleetNudgeBudget(schedulerIntervalMs: number): {
@@ -543,7 +501,8 @@ export async function runFleetNudgeActuator(
       continue;
     }
 
-    const issueNumber = resolution.value.binding.issueNumber;
+    const binding = resolution.value.binding;
+    const issueNumber = binding.issueNumber;
     const episode = safeEpisode(
       projectId,
       candidate,
@@ -551,17 +510,17 @@ export async function runFleetNudgeActuator(
       input.tickSequence,
       issueNumber,
     );
-    if (!exactBinding(resolution.value.binding, episode)) {
+    if (!exactBinding(binding, episode)) {
       outcomes.push({ ...candidateResult(candidate), outcome: 'target_stale' });
       continue;
     }
-    if (!assertEpoch(effects)) {
+    if (!assertEpoch(effects) {
       outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'epoch_lost' });
       continue;
     }
 
     const revalidation = await beforeDeadline(
-      () => effects.revalidate(resolution.value.binding, { deadlineMs: admissionDeadline }),
+      () => effects.revalidate(binding, { deadlineMs: admissionDeadline }),
       admissionDeadline,
       now,
     );
@@ -599,175 +558,4 @@ export async function runFleetNudgeActuator(
       admissionDeadline,
       now,
     );
-    if (!hashResult.completed || !hashResult.value?.ok) {
-      if (now() >= admissionDeadline) await effects.releaseClaim(claim);
-      outcomes.push({
-        ...candidateResult(candidate),
-        issueNumber,
-        outcome: now() >= admissionDeadline ? 'budget_exhausted' : 'claim_untrusted',
-      });
-      continue;
-    }
-
-    const journalResult = await beforeDeadline(
-      () => effects.admitJournal(episode, message, { deadlineMs: admissionDeadline }),
-      admissionDeadline,
-      now,
-    );
-    if (!journalResult.completed || !journalResult.value) {
-      await effects.releaseClaim(claim);
-      outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'budget_exhausted' });
-      continue;
-    }
-    if (journalResult.value.status !== 'admitted') {
-      await effects.releaseClaim(claim);
-      outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'claim_untrusted' });
-      continue;
-    }
-    const journal = journalResult.value.handle;
-
-    if (now() >= admissionDeadline) {
-      await effects.releaseClaim(claim);
-      outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'budget_exhausted' });
-      continue;
-    }
-    if (!assertEpoch(effects)) {
-      await effects.releaseClaim(claim);
-      outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'epoch_lost' });
-      continue;
-    }
-
-    const attempted = await beforeDeadline(
-      () => effects.markSendAttempted(claim, { deadlineMs: admissionDeadline }),
-      admissionDeadline,
-      now,
-    );
-    if (!attempted.completed) {
-      sendAttempts += 1;
-      await finalizeAttempt(effects, claim, journal, 'dispatch_unknown', hardDeadline, now);
-      outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'dispatch_unknown' });
-      continue;
-    }
-    if (!attempted.value?.ok) {
-      outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'claim_untrusted' });
-      continue;
-    }
-    sendAttempts += 1;
-
-    const dispatch = await beforeDeadline(
-      () => effects.dispatch(resolution.value.binding, message, { deadlineMs: dispatchDeadline }),
-      dispatchDeadline,
-      now,
-    );
-    const dispatchOutcome: FleetNudgeDispatchOutcome = dispatch.completed && dispatch.value
-      ? dispatch.value.status
-      : 'dispatch_unknown';
-    await finalizeAttempt(effects, claim, journal, dispatchOutcome, hardDeadline, now);
-    if (dispatchOutcome === 'dispatched') dispatched += 1;
-    outcomes.push({
-      ...candidateResult(candidate),
-      issueNumber,
-      outcome: dispatchOutcome,
-    });
-  }
-
-  return {
-    ...base,
-    result: 'one-budgeted-gated-nudge-per-new-eligible-episode',
-    status: 'complete',
-    candidateOrder,
-    outcomes,
-    claimStarts,
-    sendAttempts,
-    dispatched,
-    returnedWithinBudget: now() <= hardDeadline,
-    targetBindingAvailable: true,
-  };
-}
-
-function candidateResult(candidate: EligibleCandidate): Omit<FleetNudgeCandidateResult, 'outcome'> {
-  return {
-    unitRef: candidate.row.unitRef,
-    class: candidate.row.class,
-    transitionIdentity: candidate.transitionIdentity,
-  };
-}
-
-export function createTargetUnresolvedFleetNudgeActuator(): {
-  readonly tick: (input: FleetNudgeTickInput) => Promise<FleetNudgeResult>;
-} {
-  return { tick: (input) => runFleetNudgeActuator(input) };
-}
-
-export async function revalidateRuntimeFleetNudgeTarget(input: {
-  readonly runtime: Pick<RuntimeAdapter, 'findWorker' | 'readBoundedOutput' | 'liveness'>;
-  readonly binding: RuntimeFleetNudgeBinding;
-  readonly deadlineMs: number;
-  readonly now?: () => number;
-  readonly assertEpoch?: () => void;
-}): Promise<FleetNudgeRevalidationResult> {
-  const now = input.now ?? Date.now;
-  const remaining = (): number => Math.max(1, Math.floor(input.deadlineMs - now()));
-  try {
-    input.assertEpoch?.();
-  } catch {
-    return { status: 'epoch_lost' };
-  }
-  if (now() >= input.deadlineMs) return { status: 'revalidation_failed' };
-
-  const found = await Promise.resolve(input.runtime.findWorker(
-    input.binding.worker,
-    { timeoutMs: remaining() },
-  ));
-  if (found.status !== 'ok'
-    || !found.value
-    || !isRuntimeWorker(found.value)
-    || !sameIdentity(found.value.identity, input.binding.worker)
-    || found.value.provenance !== 'internal') return { status: 'revalidation_failed' };
-
-  const output = await Promise.resolve(input.runtime.readBoundedOutput({
-    worker: input.binding.worker,
-    ...(input.binding.previousOutputToken
-      ? { previousToken: input.binding.previousOutputToken }
-      : {}),
-    limit: 256,
-  }, { timeoutMs: remaining() }));
-  if (!validOutput(output, input.binding.worker) || output.value.changed) {
-    return { status: 'revalidation_failed' };
-  }
-
-  const liveness = await Promise.resolve(input.runtime.liveness({
-    worker: input.binding.worker,
-    observationWindowMs: remaining(),
-  }, { timeoutMs: remaining() }));
-  if (!validLiveness(liveness, input.binding.worker, input.binding.eligibleClass)) {
-    return { status: 'revalidation_failed' };
-  }
-  try {
-    input.assertEpoch?.();
-  } catch {
-    return { status: 'epoch_lost' };
-  }
-  return now() < input.deadlineMs ? { status: 'valid' } : { status: 'revalidation_failed' };
-}
-
-export async function dispatchRuntimeFleetNudge(input: {
-  readonly runtime: Pick<RuntimeAdapter, 'dispatchInput'>;
-  readonly binding: RuntimeFleetNudgeBinding;
-  readonly message: string;
-  readonly deadlineMs: number;
-  readonly now?: () => number;
-  readonly sideEffectFence: <T>(action: () => T | PromiseLike<T>) =>
-    PromiseLike<{ readonly ok: true; readonly value: T } | { readonly ok: false }>;
-}): Promise<RuntimeDispatchResult> {
-  const now = input.now ?? Date.now;
-  if (now() >= input.deadlineMs) {
-    return { status: 'dispatch_unknown', reason: 's2_budget_expired' };
-  }
-  const fenced = await input.sideEffectFence(() => input.runtime.dispatchInput({
-    worker: input.binding.worker,
-    text: input.message,
-  }, { timeoutMs: Math.max(1, Math.floor(input.deadlineMs - now())) }));
-  if (!fenced.ok) return { status: 'dispatch_unknown', reason: 'side_effect_busy' };
-  return fenced.value;
-}
+    if (+h¢V(º¯{®9÷{h‘éì•çí
