@@ -39,14 +39,26 @@ async function probeRecoveryClaim(namespace: string, workspacePath: string): Pro
 }
 
 describe('TypeScript worker recovery entrypoint', () => {
-  it('holds one claim across exact cleanup and spawn', async () => {
+  it('holds one claim across exact authorized cleanup and spawn', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-recovery-cli-'));
     try {
       const adapter = new DeterministicRuntimeAdapter();
+      const cleanupWorkspace = join(root, 'stale-worktree');
+      const owned = adapter.spawnWorker({
+        title: 'stale-worker',
+        command: 'cursor-agent',
+        workspace: cleanupWorkspace,
+      });
+      expect(owned.status).toBe('ok');
+      if (owned.status !== 'ok') return;
+      adapter.setLiveness(owned.value.identity, 'gone');
+
       const remove = vi.spyOn(adapter, 'removeWorkspace');
       const spawnWorker = vi.spyOn(adapter, 'spawnWorker');
       const options = parseWorkerRecoveryArgs([
-        '--cleanup-workspace', join(root, 'stale-worktree'),
+        '--worker-id', owned.value.identity.id,
+        '--worker-generation', owned.value.identity.generation,
+        '--cleanup-workspace', cleanupWorkspace,
         '--expected-head-sha', 'test-head',
         '--spawn-workspace', 'active',
         '--claim-key', 'issue-1248-worker',
@@ -56,6 +68,12 @@ describe('TypeScript worker recovery entrypoint', () => {
         options,
         adapter,
         claimNamespace: join(root, 'claims'),
+        cleanupAuthority: {
+          source: 'pack-reservation',
+          worker: owned.value.identity,
+          workspacePath: cleanupWorkspace,
+          expectedHeadSha: 'test-head',
+        },
       });
 
       expect(result.outcome).toBe('spawn_started');
@@ -69,12 +87,62 @@ describe('TypeScript worker recovery entrypoint', () => {
     }
   });
 
+  it('fails closed before claim, cleanup, or spawn without durable ownership authority', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-recovery-cli-'));
+    try {
+      const adapter = new DeterministicRuntimeAdapter();
+      const cleanupWorkspace = join(root, 'stale-worktree');
+      const owned = adapter.spawnWorker({
+        title: 'stale-worker',
+        command: 'cursor-agent',
+        workspace: cleanupWorkspace,
+      });
+      expect(owned.status).toBe('ok');
+      if (owned.status !== 'ok') return;
+      adapter.setLiveness(owned.value.identity, 'gone');
+      const remove = vi.spyOn(adapter, 'removeWorkspace');
+      const spawnWorker = vi.spyOn(adapter, 'spawnWorker');
+      const options = parseWorkerRecoveryArgs([
+        '--worker-id', owned.value.identity.id,
+        '--worker-generation', owned.value.identity.generation,
+        '--cleanup-workspace', cleanupWorkspace,
+        '--expected-head-sha', 'test-head',
+        '--repo-root', root,
+      ]);
+
+      const result = await runWorkerRecovery({
+        options,
+        adapter,
+        claimNamespace: join(root, 'claims'),
+      });
+
+      expect(result).toMatchObject({
+        outcome: 'skipped_ambiguous',
+        reason: 'cleanup_ownership_authority_missing',
+      });
+      expect(remove).not.toHaveBeenCalled();
+      expect(spawnWorker).not.toHaveBeenCalled();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed while another live recovery claim exists', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-recovery-cli-'));
     try {
       const adapter = new DeterministicRuntimeAdapter();
       const cleanupWorkspace = join(root, 'stale-worktree');
+      const owned = adapter.spawnWorker({
+        title: 'stale-worker',
+        command: 'cursor-agent',
+        workspace: cleanupWorkspace,
+      });
+      expect(owned.status).toBe('ok');
+      if (owned.status !== 'ok') return;
+      adapter.setLiveness(owned.value.identity, 'gone');
       const options = parseWorkerRecoveryArgs([
+        '--worker-id', owned.value.identity.id,
+        '--worker-generation', owned.value.identity.generation,
         '--cleanup-workspace', cleanupWorkspace,
         '--expected-head-sha', 'test-head',
         '--claim-key', 'shared-claim',
@@ -85,12 +153,24 @@ describe('TypeScript worker recovery entrypoint', () => {
         namespace,
         claimKey: options.claimKey,
         workspacePath: cleanupWorkspace,
+        workerId: owned.value.identity.id,
+        workerGeneration: owned.value.identity.generation,
         surface: 'test-holder',
       });
       expect(held.acquired).toBe(true);
       if (!held.acquired) return;
       try {
-        const result = await runWorkerRecovery({ options, adapter, claimNamespace: namespace });
+        const result = await runWorkerRecovery({
+          options,
+          adapter,
+          claimNamespace: namespace,
+          cleanupAuthority: {
+            source: 'pack-reservation',
+            worker: owned.value.identity,
+            workspacePath: cleanupWorkspace,
+            expectedHeadSha: 'test-head',
+          },
+        });
         expect(result).toMatchObject({ outcome: 'spawn_denied', reason: 'claim_held' });
       } finally {
         releaseWorkerRecoveryClaim(held.handle);
@@ -111,19 +191,30 @@ describe('TypeScript worker recovery entrypoint', () => {
     ])).toThrow('--cleanup-workspace requires a non-empty value');
   });
 
-  it('requires expected head and exact generation bindings', () => {
+  it('requires expected head and complete exact worker identity bindings', () => {
     expect(() => parseWorkerRecoveryArgs([
       '--cleanup-workspace', '/tmp/stale-worktree',
     ])).toThrow('--expected-head-sha is required');
     expect(() => parseWorkerRecoveryArgs([
       '--cleanup-workspace', '/tmp/stale-worktree',
       '--expected-head-sha', 'test-head',
+    ])).toThrow('--worker-id is required for destructive recovery');
+    expect(() => parseWorkerRecoveryArgs([
+      '--cleanup-workspace', '/tmp/stale-worktree',
+      '--expected-head-sha', 'test-head',
       '--worker-id', 'worker-1',
-    ])).toThrow('--worker-generation is required with --worker-id');
+    ])).toThrow('--worker-generation is required for destructive recovery');
+    expect(() => parseWorkerRecoveryArgs([
+      '--cleanup-workspace', '/tmp/stale-worktree',
+      '--expected-head-sha', 'test-head',
+      '--worker-generation', 'generation-1',
+    ])).toThrow('--worker-id is required for destructive recovery');
   });
 
   it('rejects cleanup and spawn selector equality during parsing', () => {
     expect(() => parseWorkerRecoveryArgs([
+      '--worker-id', 'worker-1',
+      '--worker-generation', 'generation-1',
       '--cleanup-workspace', '/tmp/stale-worktree',
       '--expected-head-sha', 'test-head',
       '--spawn-workspace', '/tmp/stale-worktree',
@@ -135,6 +226,8 @@ describe('TypeScript worker recovery entrypoint', () => {
     const spawnWorker = vi.spyOn(adapter, 'spawnWorker');
     const remove = vi.spyOn(adapter, 'removeWorkspace');
     const options = parseWorkerRecoveryArgs([
+      '--worker-id', 'worker-1',
+      '--worker-generation', 'generation-1',
       '--cleanup-workspace', '/tmp/stale-worktree',
       '--expected-head-sha', 'test-head',
       '--dry-run',
