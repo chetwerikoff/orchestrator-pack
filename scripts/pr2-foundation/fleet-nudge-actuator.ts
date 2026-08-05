@@ -79,55 +79,61 @@ export type FleetNudgeJournalAdmissionResult =
   | { readonly status: 'admitted'; readonly handle: FleetNudgeJournalHandle }
   | { readonly status: 'claim_untrusted' };
 
+interface DeadlineOptions {
+  readonly deadlineMs: number;
+}
+
 export interface FleetNudgeEffects {
   readonly resolveTarget: (
     episode: Omit<FleetNudgeEpisode, 'issueNumber'>,
-    options: { readonly deadlineMs: number },
+    options: DeadlineOptions,
   ) => FleetNudgeBindingResult | PromiseLike<FleetNudgeBindingResult>;
   readonly revalidate: (
     binding: RuntimeFleetNudgeBinding,
-    options: { readonly deadlineMs: number },
+    options: DeadlineOptions,
   ) => FleetNudgeRevalidationResult | PromiseLike<FleetNudgeRevalidationResult>;
   readonly acquireClaim: (
     episode: FleetNudgeEpisode,
-    options: { readonly deadlineMs: number },
+    options: DeadlineOptions,
   ) => FleetNudgeClaimResult | PromiseLike<FleetNudgeClaimResult>;
   readonly persistMessageHash: (
     handle: FleetNudgeClaimHandle,
     message: string,
-    options: { readonly deadlineMs: number },
+    options: DeadlineOptions,
   ) => { readonly ok: boolean } | PromiseLike<{ readonly ok: boolean }>;
   readonly admitJournal: (
     episode: FleetNudgeEpisode,
     message: string,
-    options: { readonly deadlineMs: number },
+    options: DeadlineOptions,
   ) => FleetNudgeJournalAdmissionResult | PromiseLike<FleetNudgeJournalAdmissionResult>;
   readonly markSendAttempted: (
     handle: FleetNudgeClaimHandle,
-    options: { readonly deadlineMs: number },
+    options: DeadlineOptions,
   ) => { readonly ok: boolean } | PromiseLike<{ readonly ok: boolean }>;
   readonly releaseClaim: (
     handle: FleetNudgeClaimHandle,
+    options: DeadlineOptions,
   ) => { readonly ok: boolean } | PromiseLike<{ readonly ok: boolean }>;
   readonly dispatch: (
     binding: RuntimeFleetNudgeBinding,
     message: string,
-    options: { readonly deadlineMs: number },
+    options: DeadlineOptions,
   ) => RuntimeDispatchResult | PromiseLike<RuntimeDispatchResult>;
   readonly finalizeClaim: (
     handle: FleetNudgeClaimHandle,
     phase: 'SENT' | 'FAILED_DEFINITIVE' | 'UNCERTAIN',
-    options: { readonly deadlineMs: number },
+    options: DeadlineOptions,
   ) => { readonly ok: boolean } | PromiseLike<{ readonly ok: boolean }>;
   readonly finalizeJournal: (
     handle: FleetNudgeJournalHandle,
     outcome: FleetNudgeDispatchOutcome,
-    options: { readonly deadlineMs: number },
+    options: DeadlineOptions,
   ) => { readonly ok: boolean } | PromiseLike<{ readonly ok: boolean }>;
-  readonly assertEpoch?: () => void;
+  readonly assertEpoch: () => void;
   readonly pruneClaims?: (input: {
     readonly schedulerGeneration: string;
     readonly tickSequence: number;
+    readonly deadlineMs: number;
   }) => void | PromiseLike<void>;
   readonly now?: () => number;
 }
@@ -318,8 +324,9 @@ async function beforeDeadline<T>(
 }
 
 function assertEpoch(effects: FleetNudgeEffects): boolean {
+  if (typeof effects.assertEpoch !== 'function') return false;
   try {
-    effects.assertEpoch?.();
+    effects.assertEpoch();
     return true;
   } catch {
     return false;
@@ -365,6 +372,19 @@ function exactBinding(
     && typeof binding.worker?.generation === 'string';
 }
 
+async function releasePreAttempt(
+  effects: FleetNudgeEffects,
+  claim: FleetNudgeClaimHandle,
+  hardDeadline: number,
+  now: () => number,
+): Promise<void> {
+  await beforeDeadline(
+    () => effects.releaseClaim(claim, { deadlineMs: hardDeadline }),
+    hardDeadline,
+    now,
+  );
+}
+
 async function finalizeAttempt(
   effects: FleetNudgeEffects,
   claim: FleetNudgeClaimHandle,
@@ -378,16 +398,18 @@ async function finalizeAttempt(
     : outcome === 'send_failed'
       ? 'FAILED_DEFINITIVE'
       : 'UNCERTAIN';
-  await beforeDeadline(
-    () => effects.finalizeClaim(claim, phase, { deadlineMs: hardDeadline }),
-    hardDeadline,
-    now,
-  );
-  await beforeDeadline(
-    () => effects.finalizeJournal(journal, outcome, { deadlineMs: hardDeadline }),
-    hardDeadline,
-    now,
-  );
+  await Promise.all([
+    beforeDeadline(
+      () => effects.finalizeClaim(claim, phase, { deadlineMs: hardDeadline }),
+      hardDeadline,
+      now,
+    ),
+    beforeDeadline(
+      () => effects.finalizeJournal(journal, outcome, { deadlineMs: hardDeadline }),
+      hardDeadline,
+      now,
+    ),
+  ]);
 }
 
 export async function runFleetNudgeActuator(
@@ -454,7 +476,11 @@ export async function runFleetNudgeActuator(
   }
 
   await beforeDeadline(
-    () => effects.pruneClaims?.({ schedulerGeneration, tickSequence: input.tickSequence }),
+    () => effects.pruneClaims?.({
+      schedulerGeneration,
+      tickSequence: input.tickSequence,
+      deadlineMs: admissionDeadline,
+    }),
     admissionDeadline,
     now,
   );
@@ -559,11 +585,13 @@ export async function runFleetNudgeActuator(
       now,
     );
     if (!hashResult.completed || !hashResult.value?.ok) {
-      if (now() >= admissionDeadline) await effects.releaseClaim(claim);
+      await releasePreAttempt(effects, claim, hardDeadline, now);
       outcomes.push({
         ...candidateResult(candidate),
         issueNumber,
-        outcome: now() >= admissionDeadline ? 'budget_exhausted' : 'claim_untrusted',
+        outcome: !hashResult.completed || now() >= admissionDeadline
+          ? 'budget_exhausted'
+          : 'claim_untrusted',
       });
       continue;
     }
@@ -574,24 +602,24 @@ export async function runFleetNudgeActuator(
       now,
     );
     if (!journalResult.completed || !journalResult.value) {
-      await effects.releaseClaim(claim);
+      await releasePreAttempt(effects, claim, hardDeadline, now);
       outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'budget_exhausted' });
       continue;
     }
     if (journalResult.value.status !== 'admitted') {
-      await effects.releaseClaim(claim);
+      await releasePreAttempt(effects, claim, hardDeadline, now);
       outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'claim_untrusted' });
       continue;
     }
     const journal = journalResult.value.handle;
 
     if (now() >= admissionDeadline) {
-      await effects.releaseClaim(claim);
+      await releasePreAttempt(effects, claim, hardDeadline, now);
       outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'budget_exhausted' });
       continue;
     }
     if (!assertEpoch(effects)) {
-      await effects.releaseClaim(claim);
+      await releasePreAttempt(effects, claim, hardDeadline, now);
       outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: 'epoch_lost' });
       continue;
     }
