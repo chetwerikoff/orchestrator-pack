@@ -180,6 +180,54 @@ describe('GPT pack reviewer adapter', () => {
     });
   });
 
+  it('preserves confirmed turn-result evidence when reply mapping fails', async () => {
+    const terminal = {
+      schema: 'turn-result/v1' as const,
+      state: 'ok',
+      scope: 'invocation',
+      cause: 'completed_page_only',
+      invocation_id: 'inv-confirmed-malformed',
+      send_count: 1,
+    };
+    const runBrowserTurn = vi.fn(async (options: { outputPath: string }) => {
+      writeFileSync(options.outputPath, 'Thanks, looks good!', 'utf8');
+      return {
+        outcome: 'exit' as const,
+        ok: true,
+        exitCode: 0,
+        signal: null,
+        stdout: `${JSON.stringify(terminal)}\n`,
+        stderr: '',
+        timedOut: false,
+        cancelled: false,
+      };
+    });
+    const deps: GptReviewDependencies = {
+      resolveBrowserConfig: () => ({
+        profile: '/tmp/profile',
+        cdpUrl: 'http://127.0.0.1:9222',
+        chatUrl: 'https://chatgpt.com/c/test',
+      }),
+      runBrowserTurn,
+      resolvePrUrl: () => 'https://github.com/example/repo/pull/42',
+    };
+
+    const result = await runGptPackReview({
+      repoRoot: process.cwd(),
+      repoSlug: 'example/repo',
+      prNumber: 42,
+      headSha: 'b'.repeat(40),
+    }, deps, {
+      PACK_GPT_BROWSER_PROFILE: '/tmp/profile',
+      PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
+      PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/test',
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/refusing|malformed|prose/i);
+    expect(extractLastGptTurnResult(result.stdout)).toEqual(terminal);
+  });
+
   it('does not silently succeed on malformed GPT output', async () => {
     process.env.OPK_VITEST_HARNESS = '1';
     process.env.PACK_GPT_REVIEWER_FIXTURE_REPLY = 'Thanks, looks good!';
