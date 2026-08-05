@@ -101,6 +101,7 @@ export interface PackReviewRunRecord {
   createdAt: string;
   updatedAt: string;
   heartbeatAtUtc: string;
+  sameKeyOrder?: number;
   completedAtUtc?: string;
   exitCode?: number | null;
   failureReason?: string;
@@ -125,6 +126,63 @@ export interface PackReviewStoreOptions {
   now?: Date;
 }
 
+export function hasValidPackReviewJournalOutcome(record: PackReviewRunRecord): boolean {
+  const journal = record.journalOutcome;
+  return Boolean(
+    journal
+      && (journal.state === 'persisted' || journal.state === 'journal_write_failed')
+      && typeof journal.recordedAtUtc === 'string'
+      && journal.recordedAtUtc.length > 0
+      && typeof journal.reason === 'string'
+      && journal.reason.length > 0
+      && journal.idempotencyKey === `verdict:${record.id}:${record.targetSha}`
+      && Number.isInteger(journal.attempts)
+      && journal.attempts > 0,
+  );
+}
+
+export function hasValidPackReviewDeliveryOutcome(
+  outcome: unknown,
+  expectedIdempotencyKey?: string,
+): outcome is PackReviewDeliveryOutcome {
+  if (!outcome || typeof outcome !== 'object' || Array.isArray(outcome)) return false;
+  const candidate = outcome as Partial<PackReviewDeliveryOutcome>;
+  return (candidate.state === 'succeeded'
+      || candidate.state === 'delivered'
+      || candidate.state === 'failed'
+      || candidate.state === 'escalated')
+    && typeof candidate.recordedAtUtc === 'string'
+    && candidate.recordedAtUtc.length > 0
+    && typeof candidate.reason === 'string'
+    && candidate.reason.length > 0
+    && typeof candidate.idempotencyKey === 'string'
+    && candidate.idempotencyKey.length > 0
+    && (!expectedIdempotencyKey || candidate.idempotencyKey === expectedIdempotencyKey);
+}
+
+export function hasValidPackReviewGithubReconciliation(
+  value: unknown,
+  expectedPhase?: GithubCommentReviewReconciliationPhase,
+): value is GithubCommentReviewReconciliation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Partial<GithubCommentReviewReconciliation>;
+  return candidate.schemaVersion === 1
+    && candidate.event === 'COMMENT'
+    && (candidate.phase === 'prepared'
+      || candidate.phase === 'comment_posted'
+      || candidate.phase === 'dismissals_pending'
+      || candidate.phase === 'complete')
+    && (!expectedPhase || candidate.phase === expectedPhase)
+    && typeof candidate.actorLogin === 'string'
+    && typeof candidate.commentBody === 'string'
+    && Array.isArray(candidate.pendingDismissalReviewIds)
+    && Array.isArray(candidate.dismissedReviewIds)
+    && typeof candidate.preparedAtUtc === 'string'
+    && candidate.preparedAtUtc.length > 0
+    && typeof candidate.updatedAtUtc === 'string'
+    && candidate.updatedAtUtc.length > 0;
+}
+
 export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   prNumber: number;
   headSha: string;
@@ -134,6 +192,7 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   trustedPackRoot: string;
   sourceRepoRoot: string;
   canonicalRepository?: string;
+  legacyRepositoryBySourceRoot?: Record<string, string>;
 }
 
 interface LockHandle {
@@ -218,6 +277,64 @@ export function normalizePackReviewCanonicalRepository(value: string): string {
     throw new Error(`invalid pack review canonical repository '${value}'`);
   }
   return slug;
+}
+
+function packReviewRunKey(
+  prNumber: number,
+  headSha: string,
+  canonicalRepository?: string,
+): string {
+  void canonicalRepository;
+  return `pr-${prNumber}-${headSha}`;
+}
+
+function canonicalRepositoryFromRunKey(
+  key: string,
+  prNumber: number,
+  headSha: string,
+): string | undefined {
+  const match = key.match(new RegExp(`^pr-([^/\\s]+/[^/\\s]+)-${prNumber}-${headSha}$`));
+  return match?.[1] ? normalizePackReviewCanonicalRepository(match[1]) : undefined;
+}
+
+function samePackReviewRunIdentity(left: PackReviewRunRecord, right: PackReviewRunRecord): boolean {
+  if (left.projectId !== right.projectId
+    || left.prNumber !== right.prNumber
+    || left.targetSha !== right.targetSha) {
+    return false;
+  }
+  const leftRepository = left.canonicalRepository
+    ?? canonicalRepositoryFromRunKey(left.key, left.prNumber, left.targetSha);
+  const rightRepository = right.canonicalRepository
+    ?? canonicalRepositoryFromRunKey(right.key, right.prNumber, right.targetSha);
+  if (leftRepository && rightRepository) {
+    return leftRepository === rightRepository;
+  }
+  if (left.sourceRepoRoot && right.sourceRepoRoot) {
+    return resolve(left.sourceRepoRoot) === resolve(right.sourceRepoRoot);
+  }
+  return false;
+}
+
+function matchesPackReviewRunInput(
+  record: PackReviewRunRecord,
+  projectId: string,
+  prNumber: number,
+  headSha: string,
+  canonicalRepository?: string,
+  sourceRepoRoot?: string,
+): boolean {
+  if (record.projectId !== projectId || record.prNumber !== prNumber || record.targetSha !== headSha) {
+    return false;
+  }
+  const recordRepository = record.canonicalRepository
+    ?? canonicalRepositoryFromRunKey(record.key, record.prNumber, record.targetSha);
+  if (canonicalRepository && recordRepository) return canonicalRepository === recordRepository;
+  return Boolean(
+    sourceRepoRoot
+    && record.sourceRepoRoot
+    && resolve(sourceRepoRoot) === resolve(record.sourceRepoRoot),
+  );
 }
 
 export function normalizePackReviewHeadSha(value: string): string {
@@ -352,7 +469,15 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
   const prNumber = requiredPositiveInteger(raw.prNumber, 'prNumber', path);
   const targetSha = normalizePackReviewHeadSha(requiredString(raw.targetSha, 'targetSha', path));
   const key = requiredString(raw.key, 'key', path);
-  if (key !== `pr-${prNumber}-${targetSha}`) throw new Error(`corrupt pack review run record at ${path}: key does not match PR/head`);
+  const canonicalRepository = raw.canonicalRepository === undefined
+    ? undefined
+    : normalizePackReviewCanonicalRepository(String(raw.canonicalRepository));
+  const canonicalKeyRepository = canonicalRepositoryFromRunKey(key, prNumber, targetSha);
+  if (key !== packReviewRunKey(prNumber, targetSha)
+    && !(canonicalKeyRepository
+      && (!canonicalRepository || canonicalRepository === canonicalKeyRepository))) {
+    throw new Error(`corrupt pack review run record at ${path}: key does not match PR/head/repository`);
+  }
   const status = requiredString(raw.status, 'status', path) as PackReviewRunStatus;
   if (!PACK_REVIEW_ACTIVE_STATUSES.has(status) && !PACK_REVIEW_TERMINAL_STATUSES.has(status)) {
     throw new Error(`corrupt pack review run record at ${path}: unknown status '${status}'`);
@@ -380,6 +505,9 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
     createdAt,
     updatedAt,
     heartbeatAtUtc: String(raw.heartbeatAtUtc ?? updatedAt),
+    sameKeyOrder: raw.sameKeyOrder === undefined
+      ? undefined
+      : requiredPositiveInteger(raw.sameKeyOrder, 'sameKeyOrder', path),
     reviewVerdict: raw.reviewVerdict === 'clean' || raw.reviewVerdict === 'findings'
       ? raw.reviewVerdict
       : undefined,
@@ -391,6 +519,7 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
     deliveryOutcomes: raw.deliveryOutcomes && typeof raw.deliveryOutcomes === 'object' && !Array.isArray(raw.deliveryOutcomes)
       ? raw.deliveryOutcomes as Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>
       : {},
+    canonicalRepository,
   };
 }
 
@@ -413,12 +542,12 @@ function readRecordsUnlocked(storeRoot: string): PackReviewRunRecord[] {
     records.push(record);
   }
 
-  const activeByKey = new Map<string, string>();
+  const activeRecords: PackReviewRunRecord[] = [];
   for (const record of records) {
     if (!PACK_REVIEW_ACTIVE_STATUSES.has(record.status) || isPackReviewRunStale(record)) continue;
-    const existing = activeByKey.get(record.key);
+    const existing = activeRecords.find((candidate) => samePackReviewRunIdentity(candidate, record));
     if (existing) throw new Error(`ambiguous pack review run store: multiple active records for ${record.key}`);
-    activeByKey.set(record.key, record.id);
+    activeRecords.push(record);
   }
   return records;
 }
@@ -445,6 +574,11 @@ function consumerRow(record: PackReviewRunRecord, now = new Date()): PackReviewR
 
 export function isPackReviewStaleTerminalRun(record: PackReviewRunRecord): boolean {
   return record.status === 'failed' && record.failureReason === PACK_REVIEW_STALE_FAILURE_REASON;
+}
+
+export function isPackReviewUnfinishedTerminalRun(record: PackReviewRunRecord): boolean {
+  return (record.status === 'failed' || record.status === 'timed_out' || record.status === 'cancelled')
+    && !hasPersistedPackReviewVerdict(record);
 }
 
 export function listPackReviewRunRecordsRaw(options: PackReviewStoreOptions = {}): PackReviewRunRecord[] {
@@ -475,18 +609,106 @@ export function terminalizePackReviewStaleRun(
   return { changed: true, run };
 }
 
+export type PackReviewRunOrderResolution =
+  | { kind: 'newer'; run: PackReviewRunRecord }
+  | { kind: 'none' }
+  | { kind: 'ambiguous'; reason: 'legacy_order_ambiguous' };
+
+function compareSameKeyRuns(left: PackReviewRunRecord, right: PackReviewRunRecord): number | null {
+  if (left.sameKeyOrder !== undefined && right.sameKeyOrder !== undefined) {
+    if (left.sameKeyOrder === right.sameKeyOrder) return null;
+    return left.sameKeyOrder > right.sameKeyOrder ? 1 : -1;
+  }
+  if (left.sameKeyOrder !== undefined) return 1;
+  if (right.sameKeyOrder !== undefined) return -1;
+  const leftCreatedAt = Date.parse(left.createdAt);
+  const rightCreatedAt = Date.parse(right.createdAt);
+  if (!Number.isFinite(leftCreatedAt) || !Number.isFinite(rightCreatedAt)) return null;
+  if (leftCreatedAt === rightCreatedAt) return null;
+  return leftCreatedAt > rightCreatedAt ? 1 : -1;
+}
+
+function hasLegacyOrderAmbiguity(
+  records: readonly PackReviewRunRecord[],
+  run: PackReviewRunRecord,
+): boolean {
+  const sameKeyRecords = records.filter((record) => samePackReviewRunIdentity(record, run));
+  if (sameKeyRecords.some((record) => record.sameKeyOrder !== undefined)) return false;
+  const legacy = sameKeyRecords.filter((record) => record.sameKeyOrder === undefined);
+  for (let index = 0; index < legacy.length; index += 1) {
+    for (let next = index + 1; next < legacy.length; next += 1) {
+      if (Date.parse(legacy[index]!.createdAt) === Date.parse(legacy[next]!.createdAt)) return true;
+    }
+  }
+  return false;
+}
+
+export function resolvePackReviewRunOrder(
+  records: readonly PackReviewRunRecord[],
+  run: PackReviewRunRecord,
+): PackReviewRunOrderResolution {
+  if (hasLegacyOrderAmbiguity(records, run)) {
+    return { kind: 'ambiguous', reason: 'legacy_order_ambiguous' };
+  }
+  let newer: PackReviewRunRecord | undefined;
+  for (const candidate of records) {
+    if (!samePackReviewRunIdentity(candidate, run) || candidate.id === run.id) continue;
+    const comparison = compareSameKeyRuns(candidate, run);
+    if (comparison === null) return { kind: 'ambiguous', reason: 'legacy_order_ambiguous' };
+    if (comparison <= 0) continue;
+    if (!newer) {
+      newer = candidate;
+      continue;
+    }
+    const latestComparison = compareSameKeyRuns(candidate, newer);
+    if (latestComparison === null) return { kind: 'ambiguous', reason: 'legacy_order_ambiguous' };
+    if (latestComparison > 0) newer = candidate;
+  }
+  return newer ? { kind: 'newer', run: newer } : { kind: 'none' };
+}
+
+function selectLatestSameKeyRun(
+  records: readonly PackReviewRunRecord[],
+  candidates: readonly PackReviewRunRecord[],
+): PackReviewRunRecord | null {
+  if (candidates.length === 0) return null;
+  const orderedCandidates = candidates.filter((candidate) => candidate.sameKeyOrder !== undefined);
+  if (orderedCandidates.length > 0) {
+    let latest = orderedCandidates[0]!;
+    for (const candidate of orderedCandidates.slice(1)) {
+      const comparison = compareSameKeyRuns(candidate, latest);
+      if (comparison === null) {
+        throw new Error(`ambiguous pack review run order for ${latest.key}: legacy_order_ambiguous`);
+      }
+      if (comparison > 0) latest = candidate;
+    }
+    return latest;
+  }
+  const reference = candidates[0]!;
+  if (hasLegacyOrderAmbiguity(records, reference)) {
+    throw new Error(`ambiguous pack review run order for ${reference.key}: legacy_order_ambiguous`);
+  }
+  let latest = candidates[0]!;
+  for (const candidate of candidates.slice(1)) {
+    const comparison = compareSameKeyRuns(candidate, latest);
+    if (comparison === null) {
+      throw new Error(`ambiguous pack review run order for ${reference.key}: legacy_order_ambiguous`);
+    }
+    if (comparison > 0) latest = candidate;
+  }
+  return latest;
+}
+
 export function hasNewerPackReviewRunForKey(
   records: readonly PackReviewRunRecord[],
   run: PackReviewRunRecord,
 ): boolean {
-  const createdAt = Date.parse(run.createdAt);
-  return records.some((candidate) => candidate.key === run.key
-    && candidate.id !== run.id
-    && Date.parse(candidate.createdAt) > createdAt);
+  return resolvePackReviewRunOrder(records, run).kind === 'newer';
 }
 
-function hasPersistedPackReviewVerdict(record: PackReviewRunRecord): boolean {
-  return record.journalOutcome?.state === 'persisted'
+export function hasPersistedPackReviewVerdict(record: PackReviewRunRecord): boolean {
+  return hasValidPackReviewJournalOutcome(record)
+    && record.journalOutcome?.state === 'persisted'
     && (record.reviewVerdict === 'clean' || record.reviewVerdict === 'findings')
     && Number.isInteger(record.findingCount)
     && Number(record.findingCount) >= 0
@@ -511,7 +733,12 @@ export function listPackReviewRuns(options: PackReviewStoreOptions = {}): PackRe
   const now = options.now ?? new Date();
   return withStoreLock(storeRoot, () => readRecordsUnlocked(storeRoot)
     .filter((record) => !options.projectId || record.projectId === options.projectId)
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+    .sort((left, right) => {
+      if (!samePackReviewRunIdentity(left, right)) return Date.parse(right.createdAt) - Date.parse(left.createdAt);
+      const comparison = compareSameKeyRuns(right, left);
+      if (comparison === null) return left.id.localeCompare(right.id);
+      return comparison;
+    })
     .map((record) => consumerRow(record, now)));
 }
 
@@ -537,8 +764,30 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
   const storeRoot = resolvePackReviewRunStoreRoot(input);
   return withStoreLock(storeRoot, () => {
     const records = readRecordsUnlocked(storeRoot);
-    const key = `pr-${input.prNumber}-${headSha}`;
-    const active = records.filter((record) => record.key === key
+    const legacyRepositoryBindings = new Map(
+      Object.entries(input.legacyRepositoryBySourceRoot ?? {}).map(([sourceRoot, repository]) => [
+        resolve(sourceRoot),
+        normalizePackReviewCanonicalRepository(repository),
+      ]),
+    );
+    const boundRecords = records.map((record) => {
+      if (record.canonicalRepository) return record;
+      const repository = canonicalRepositoryFromRunKey(record.key, record.prNumber, record.targetSha)
+        ?? legacyRepositoryBindings.get(resolve(record.sourceRepoRoot));
+      return repository ? { ...record, canonicalRepository: repository } : record;
+    });
+    const canonicalRepository = input.canonicalRepository
+      ? normalizePackReviewCanonicalRepository(input.canonicalRepository)
+      : undefined;
+    const key = packReviewRunKey(input.prNumber, headSha, canonicalRepository);
+    const active = boundRecords.filter((record) => matchesPackReviewRunInput(
+      record,
+      projectId,
+      input.prNumber,
+      headSha,
+      canonicalRepository,
+      input.sourceRepoRoot,
+    )
       && PACK_REVIEW_ACTIVE_STATUSES.has(record.status)
       && !isPackReviewRunStale(record));
     if (active.length > 1) throw new Error(`ambiguous pack review run store: multiple active records for ${key}`);
@@ -546,19 +795,34 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       return { created: false, reused: true, reason: 'active_run_exists', run: consumerRow(active[0]!), storeRoot };
     }
 
-    const completed = records
-      .filter((record) => record.key === key
+    const completed = boundRecords
+      .filter((record) => matchesPackReviewRunInput(
+        record,
+        projectId,
+        input.prNumber,
+        headSha,
+        canonicalRepository,
+        input.sourceRepoRoot,
+      )
         && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
-        && hasPersistedPackReviewVerdict(record))
-      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-    if (completed.length > 0) {
-      return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(completed[0]!), storeRoot };
+        && hasPersistedPackReviewVerdict(record));
+    const latestCompleted = selectLatestSameKeyRun(boundRecords, completed);
+    if (latestCompleted) {
+      return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(latestCompleted), storeRoot };
     }
 
-    const canonicalRepository = input.canonicalRepository
-      ? normalizePackReviewCanonicalRepository(input.canonicalRepository)
-      : undefined;
     const now = (input.now ?? new Date()).toISOString();
+    const sameKeyOrders = boundRecords
+      .filter((record) => matchesPackReviewRunInput(
+        record,
+        projectId,
+        input.prNumber,
+        headSha,
+        canonicalRepository,
+        input.sourceRepoRoot,
+      ) && record.sameKeyOrder !== undefined)
+      .map((record) => record.sameKeyOrder!);
+    const sameKeyOrder = (sameKeyOrders.length > 0 ? Math.max(...sameKeyOrders) : 0) + 1;
     const runId = `prr-${randomUUID().replaceAll('-', '')}`;
     const record: PackReviewRunRecord = {
       schemaVersion: 1,
@@ -581,6 +845,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       createdAt: now,
       updatedAt: now,
       heartbeatAtUtc: now,
+      sameKeyOrder,
       findings: [],
       deliveryOutcomes: {},
     };
@@ -603,18 +868,56 @@ export function updatePackReviewRun(
     const next = parseRecord({
       ...existing,
       ...fields,
+      sameKeyOrder: existing.sameKeyOrder,
       id: existing.id,
       runId: existing.runId,
       key: existing.key,
       prNumber: existing.prNumber,
       targetSha: existing.targetSha,
       headSha: existing.headSha,
-      canonicalRepository: existing.canonicalRepository,
+      canonicalRepository: existing.canonicalRepository ?? fields.canonicalRepository,
       schemaVersion: 1,
       updatedAt,
       heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(fields.status ?? existing.status))
         ? updatedAt
         : String(fields.heartbeatAtUtc ?? existing.heartbeatAtUtc),
+    }, path);
+    writeRecordUnlocked(storeRoot, next);
+    return next;
+  });
+}
+
+export function updatePackReviewRunIf(
+  runId: string,
+  predicate: (records: readonly PackReviewRunRecord[]) => boolean,
+  fields: Partial<PackReviewRunRecord> | ((existing: PackReviewRunRecord) => Partial<PackReviewRunRecord>),
+  options: PackReviewStoreOptions = {},
+): PackReviewRunRecord | null {
+  const storeRoot = resolvePackReviewRunStoreRoot(options);
+  return withStoreLock(storeRoot, () => {
+    const records = readRecordsUnlocked(storeRoot);
+    if (!predicate(records)) return null;
+    const path = recordPath(storeRoot, runId);
+    if (!existsSync(path)) throw new Error(`pack review run not found: ${runId}`);
+    const existing = parseRecord(JSON.parse(readFileSync(path, 'utf8')), path);
+    const updatedAt = (options.now ?? new Date()).toISOString();
+    const nextFields = typeof fields === 'function' ? fields(existing) : fields;
+    const next = parseRecord({
+      ...existing,
+      ...nextFields,
+      sameKeyOrder: existing.sameKeyOrder,
+      id: existing.id,
+      runId: existing.runId,
+      key: existing.key,
+      prNumber: existing.prNumber,
+      targetSha: existing.targetSha,
+      headSha: existing.headSha,
+      canonicalRepository: existing.canonicalRepository ?? nextFields.canonicalRepository,
+      schemaVersion: 1,
+      updatedAt,
+      heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(nextFields.status ?? existing.status))
+        ? updatedAt
+        : String(nextFields.heartbeatAtUtc ?? existing.heartbeatAtUtc),
     }, path);
     writeRecordUnlocked(storeRoot, next);
     return next;
