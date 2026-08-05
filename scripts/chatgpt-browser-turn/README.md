@@ -5,6 +5,14 @@ cuts the canonical create/review `turn` path over to a state-light, send-once
 helper while retaining the pre-cutover implementation files and control commands
 only for diagnostics/rollback compatibility.
 
+Manager-facing launch, observation, attribution, retry/no-resend,
+publication, cleanup, diagnostic-probe, and handoff policy is canonical in
+[`../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc).
+The portable operator procedure and prompt templates are in
+[`../../docs/browser-gpt-turn-runbook.md`](../../docs/browser-gpt-turn-runbook.md).
+This README is only the implementation-local CLI, result-schema, and component
+reference.
+
 The helper connects to the operator's already-running headed automation Chrome.
 It does not launch Chrome, edit prompts, choose workflow stages, or replace the
 standalone `.claude/skills/discuss-with-gpt/driver.mjs` adversarial driver.
@@ -16,21 +24,21 @@ Existing conversation:
 
 ```bash
 npm run chatgpt-browser-turn -- turn \
-  --profile /absolute/path/to/automation-profile \
-  --cdp http://127.0.0.1:9222 \
-  --input /absolute/path/to/message.txt \
-  --output /absolute/path/to/reply.txt \
-  --chat-url https://chatgpt.com/c/<conversation-id>
+  --profile ${BROWSER_PROFILE} \
+  --cdp ${CDP_ENDPOINT} \
+  --input ${INPUT_FILE} \
+  --output ${OUTPUT_FILE} \
+  --chat-url ${CHAT_URL}
 ```
 
 Fresh conversation:
 
 ```bash
 npm run chatgpt-browser-turn -- turn \
-  --profile /absolute/path/to/automation-profile \
-  --cdp http://127.0.0.1:9222 \
-  --input /absolute/path/to/message.txt \
-  --output /absolute/path/to/reply.txt \
+  --profile ${BROWSER_PROFILE} \
+  --cdp ${CDP_ENDPOINT} \
+  --input ${INPUT_FILE} \
+  --output ${OUTPUT_FILE} \
   --new-chat \
   --project-url <configured-project-url>
 ```
@@ -46,11 +54,11 @@ adapter rather than spawning this transport directly from a flow-manager caller
 that may exit before the turn completes:
 
 ```bash
-npm run flow-manager-browser-gpt-long-run -- \
+npm run --silent flow-manager-browser-gpt-long-run -- \
   --run-identity <id> --attempt-identity <id> \
-  --handoff-receipt /path/receipt.json \
-  --terminal-envelope /path/envelope.json \
-  --output /path/reply.txt \
+  --handoff-receipt ${HANDOFF_RECEIPT} \
+  --terminal-envelope ${TERMINAL_ENVELOPE} \
+  --output ${OUTPUT_FILE} \
   --profile ... --cdp ... --input ... --chat-url ...
 ```
 
@@ -115,10 +123,10 @@ continues to govern unrelated local DOM-read paths.
 
 The canonical path no longer requires service-terminal/network-witness evidence
 when the page already shows one attributable, final assistant reply. The helper
-requires its own exact user prompt to appear after the page baseline and requires
-page-level completion UI on the last assistant node while generation/tool/
-continuation activity is absent, then returns only that final eligible assistant
-node for the turn.
+requires exactly one current user message containing the transport-owned
+`OPKTURNV1...` marker after the page baseline and requires page-level completion
+UI on the last assistant node while generation/tool/continuation activity is
+absent, then returns only that final eligible assistant node for the turn.
 
 Intermediate/progress assistant nodes are not concatenated into the result and a
 stable non-empty intermediate node is not sufficient by itself. A continuation
@@ -126,12 +134,11 @@ button may be clicked because it continues the same assistant response; it is no
 a second user-prompt send.
 
 Reply capture uses a strict publication window: only assistant nodes strictly
-between the owned prompt user node and the next user node (of any origin) may be
-published. Prompt recognition is strict normalized-text equality (markdown syntax
-and whitespace collapsed); a truncated lazy-render miss stays in `waiting` until
-the page catches up. A foreign or interleaved user turn after the owned prompt
-without a capturable reply in that window, or a page that never shows the owned
-prompt before the hard observation deadline, ends the invocation as
+between the marker-owned user node and the next user node (of any origin) may be
+published. A truncated lazy-render marker miss stays in `waiting` until the
+page catches up. A foreign or interleaved user turn after the owned prompt
+without a capturable reply in that window, or a page that never shows the
+marker-owned prompt before the hard observation deadline, ends the invocation as
 `observation_uncertain` (**exit 11**, no resend). Sibling Browser-GPT tabs
 remain independent.
 
@@ -141,31 +148,11 @@ Unrecognized owned prompts on a readable page never produce journal incidents.
 
 ## Send-once and retry boundary
 
-Inside one live invocation there is exactly one user-message send attempt. After
-the send boundary the helper only observes the same page. Fresh-conversation
-collision recovery follows the same discipline: a second send is allowed only on
-positive page-state evidence that the prior send did not land (no user message
-with the sent text, no conversation URL materialized, composer still holding the
-text). Ambiguous evidence or a landed send on a contended surface terminates the
-invocation locally; the caller decides whether to open a fresh chat.
-
-Slow generation,
-missing historical witness state, an elapsed observation threshold, or process-
-liveness uncertainty never authorizes a second send inside that invocation.
-Once `send_count >= 1`, observation-window expiry alone never yields `send_failed`
-or any other resend-licensing terminal while the owned page stays reachable.
-
-`--timeout-ms` is a **soft post-send observation threshold**. If the helper still
-owns a reachable page after it elapses, the same invocation keeps polling that
-page at the configured low-frequency cadence; elapsed time alone neither closes
-the tab nor returns fresh-resend authorization. A fresh replacement is legal only
-when the process/page/chat is genuinely lost or another real local failure makes
-the owned turn unavailable.
-
-A genuinely lost/crashed process, tab, or chat may be replaced by a fresh
-invocation in a fresh chat. A rare duplicate recoverable GPT text request is an
-explicitly accepted Issue #1120 risk; preventing it is not worth a cross-agent
-admission/recovery protocol.
+Inside one live invocation there is exactly one user-message send attempt. The
+manager-facing possible-delivery, observation-loss, and no-resend decisions
+are owned by the canonical carrier and runbook. This component only reports
+its local send count and terminal result; slow generation, missing witnesses,
+time thresholds, or process liveness do not create a second send.
 
 ## No create/review admission control plane
 
@@ -347,7 +334,7 @@ policy is a separate follow-up.
 Unexpected directly observed Browser-GPT events append best-effort JSONL rows to:
 
 ```text
-~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl
+${LOCAL_STATE_DIR}/create-issue-draft/browser-turn-recurrence.jsonl
 ```
 
 Compact rows may include timestamp, Issue/PR when known, surface, event class,
@@ -400,8 +387,8 @@ Focused Issue #1120 tests cover:
   later final node, with only the final node published;
 - generating/continuation intermediate state;
 - foreign/interleaved activity with stable-read promotion and render-tolerant
-  owned-prompt echo matching;
-- mandatory own-prompt attribution after baseline;
+  marker-owned prompt attribution;
+- mandatory marker-owned attribution after baseline;
 - dedicated-tab creation and one send mutation branch;
 - a reachable owned page continuing past the soft timeout without resend or
   timeout-triggered close, including fresh-conversation URL-wait expiry;
