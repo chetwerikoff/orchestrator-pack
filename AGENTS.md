@@ -1,10 +1,10 @@
 # AGENTS.md
 ## Project Purpose
-This repository is an upgrade-safe extension pack for ComposioHQ/agent-orchestrator.
+This is an upgrade-safe extension pack for ComposioHQ/agent-orchestrator.
 It ports selected safety/accounting contracts from `ai-orchestrator` into Composio AO —
-via plugins, prompt fragments, config examples, scripts, and CI checks — without modifying
+via plugins, prompts, configs, scripts, and CI — without modifying
 Composio core. For new tasks, the Issue is the sole live spec/source/queue; no tracked draft/index is created.
-Artifacts are audit-only Legacy drafts/index use `publish-issue-draft`.
+Legacy drafts/index are audit-only; use `publish-issue-draft`.
 Contract: [tiers](docs/tiering.md); [procedure](.claude/skills/create-issue-draft/SKILL.md).
 ## Edit boundaries
 Do not patch or vendor-modify `ComposioHQ/agent-orchestrator` core packages. All custom
@@ -109,7 +109,7 @@ Cursor's semantic index owe **no** coworker delegation regardless of size. Does 
 CI/job logs, diffs, external URLs, vendored dumps, or **tracked non-code bulk**
 (markdown/JSON/data).
 
-**Cursor advisory floor.** Cursor advisory delegation is recommended, not mandatory; diffs stay direct (#337).
+Cursor advisory delegation is recommended, not mandatory; diffs stay direct (#337)
 
 ### Write delegation (`coworker write`)
 
@@ -383,7 +383,8 @@ implementation.
 
 1. Blockers are warnings: check, fix or complete, continue — stop only on an explicit blocker.
 2. Plan first, execute the plan without stopping, and record deviations in the report.
-3. A blocker exists only by explicit operator/task directive; explicit operator authorization lifts it unconditionally — continue without re-litigating.
+3. A blocker exists only by explicit operator/task directive; operator lift is absolute only via gate's documented input, bound to exact target.
+No gate input = terminal by design; fix-and-continue never fabricates gate evidence.
 Full text: docs/blocker-philosophy.md
 
 ### Operator adoption handoff
