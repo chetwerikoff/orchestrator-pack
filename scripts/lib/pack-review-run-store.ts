@@ -108,14 +108,6 @@ export interface PackReviewGptRoundRecord {
   sourceSlots: PackReviewSourceSlotRecord[];
 }
 
-export interface PackReviewWorkerNotificationBinding {
-  schemaVersion: 1;
-  runtime: string;
-  id: string;
-  generation: string;
-  workspacePath: string;
-  headSha: string;
-}
 
 export interface PackReviewRunRecord {
   schemaVersion: 1;
@@ -129,7 +121,6 @@ export interface PackReviewRunRecord {
   status: PackReviewRunStatus;
   latestRunStatus: PackReviewRunStatus;
   linkedSessionId: string;
-  workerNotificationBinding?: PackReviewWorkerNotificationBinding;
   startReason: string;
   surface: string;
   trustedPackRoot: string;
@@ -226,7 +217,6 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   prNumber: number;
   headSha: string;
   linkedSessionId?: string;
-  workerNotificationBinding?: PackReviewWorkerNotificationBinding;
   startReason?: string;
   surface?: string;
   trustedPackRoot: string;
@@ -303,20 +293,6 @@ function asObject(value: unknown): Record<string, unknown> {
     throw new Error('pack review run record must be a JSON object');
   }
   return value as Record<string, unknown>;
-}
-
-function optionalObject(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function firstText(...values: unknown[]): string {
-  for (const value of values) {
-    const text = String(value ?? '').trim();
-    if (text) return text;
-  }
-  return '';
 }
 
 function requiredString(value: unknown, name: string, path = ''): string {
@@ -929,90 +905,6 @@ export function normalizePackReviewHeadSha(value: string): string {
   return sha;
 }
 
-function parseWorkerNotificationBinding(
-  value: unknown,
-  expectedHeadSha: string,
-  path = '',
-): PackReviewWorkerNotificationBinding {
-  const raw = asObject(value);
-  if (Number(raw.schemaVersion) !== 1) {
-    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid workerNotificationBinding schema`);
-  }
-  const binding: PackReviewWorkerNotificationBinding = {
-    schemaVersion: 1,
-    runtime: requiredString(raw.runtime, 'workerNotificationBinding.runtime', path),
-    id: requiredString(raw.id, 'workerNotificationBinding.id', path),
-    generation: requiredString(raw.generation, 'workerNotificationBinding.generation', path),
-    workspacePath: resolve(requiredString(raw.workspacePath, 'workerNotificationBinding.workspacePath', path)),
-    headSha: normalizePackReviewHeadSha(requiredString(raw.headSha, 'workerNotificationBinding.headSha', path)),
-  };
-  if (binding.headSha !== expectedHeadSha) {
-    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: workerNotificationBinding head mismatch`);
-  }
-  return binding;
-}
-
-function sessionMetadataRoot(projectId: string): string {
-  const explicit = process.env.PACK_REVIEW_SESSION_METADATA_ROOT?.trim();
-  if (explicit) return resolve(explicit);
-  const base = process.env.AO_BASE_DIR?.trim() || join(homedir(), '.agent-orchestrator');
-  return join(base, 'projects', projectId, 'sessions');
-}
-
-function resolveWorkerNotificationBinding(
-  input: CreatePackReviewRunInput,
-  projectId: string,
-  headSha: string,
-): PackReviewWorkerNotificationBinding | undefined {
-  if (input.workerNotificationBinding) {
-    return parseWorkerNotificationBinding(input.workerNotificationBinding, headSha);
-  }
-  const linkedSessionId = String(input.linkedSessionId ?? '').trim();
-  if (!linkedSessionId) return undefined;
-  const metadataPath = join(sessionMetadataRoot(projectId), `${linkedSessionId}.json`);
-  if (!existsSync(metadataPath)) return undefined;
-
-  let metadata: Record<string, unknown>;
-  try {
-    metadata = asObject(JSON.parse(readFileSync(metadataPath, 'utf8')));
-  } catch {
-    throw new Error('worker_notification_binding_untrusted');
-  }
-  const runtimeHandle = optionalObject(metadata.runtimeHandle);
-  const data = optionalObject(runtimeHandle?.data);
-  if (!runtimeHandle || !data) throw new Error('worker_notification_binding_untrusted');
-
-  const runtime = firstText(runtimeHandle.runtime, data.runtime);
-  const id = firstText(runtimeHandle.id, data.id, data.handle, data.terminalHandle);
-  const generation = firstText(
-    runtimeHandle.generation,
-    data.generation,
-    data.incarnationId,
-    data.ptyId,
-  );
-  const workspacePath = firstText(data.workspacePath, runtimeHandle.workspacePath, metadata.worktree);
-  const metadataHeadSha = firstText(
-    data.headSha,
-    runtimeHandle.headSha,
-    metadata.ownedHeadSha,
-    metadata.headSha,
-  ).toLowerCase();
-  if (!runtime || !id || !generation || !workspacePath) {
-    throw new Error('worker_notification_binding_untrusted');
-  }
-  if (metadataHeadSha && metadataHeadSha !== headSha) {
-    throw new Error('worker_notification_binding_head_mismatch');
-  }
-  return {
-    schemaVersion: 1,
-    runtime,
-    id,
-    generation,
-    workspacePath: resolve(workspacePath),
-    headSha,
-  };
-}
-
 export function normalizePackReviewProjectId(value = DEFAULT_PROJECT_ID): string {
   const project = String(value ?? '').trim() || DEFAULT_PROJECT_ID;
   const slug = project.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
@@ -1175,9 +1067,6 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
       findings: raw.findings,
     }, path || '<record>');
   }
-  const workerNotificationBinding = raw.workerNotificationBinding === undefined
-    ? undefined
-    : parseWorkerNotificationBinding(raw.workerNotificationBinding, targetSha, path);
   return {
     ...(raw as unknown as PackReviewRunRecord),
     schemaVersion: 1,
@@ -1191,7 +1080,6 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
     status,
     latestRunStatus: String(raw.latestRunStatus ?? status) as PackReviewRunStatus,
     linkedSessionId: String(raw.linkedSessionId ?? ''),
-    workerNotificationBinding,
     startReason: String(raw.startReason ?? ''),
     surface: String(raw.surface ?? ''),
     trustedPackRoot: String(raw.trustedPackRoot ?? ''),
@@ -1499,7 +1387,6 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
   const projectId = input.projectId?.trim() || DEFAULT_PROJECT_ID;
   if (!Number.isInteger(input.prNumber) || input.prNumber <= 0) throw new Error('pack review runner requires a positive PR number');
   const headSha = normalizePackReviewHeadSha(input.headSha);
-  const workerNotificationBinding = resolveWorkerNotificationBinding(input, projectId, headSha);
   const storeRoot = resolvePackReviewRunStoreRoot(input);
   return withStoreLock(storeRoot, () => {
     const records = readRecordsUnlocked(storeRoot);
@@ -1588,7 +1475,6 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       status: 'queued',
       latestRunStatus: 'queued',
       linkedSessionId: input.linkedSessionId?.trim() || '',
-      workerNotificationBinding,
       startReason: input.startReason?.trim() || '',
       surface: input.surface?.trim() || 'pack-review-runner',
       trustedPackRoot: resolve(input.trustedPackRoot),
@@ -1624,7 +1510,6 @@ function buildUpdatedPackReviewRun(
     prNumber: existing.prNumber,
     targetSha: existing.targetSha,
     headSha: existing.headSha,
-    workerNotificationBinding: existing.workerNotificationBinding,
     canonicalRepository: existing.canonicalRepository ?? fields.canonicalRepository,
     schemaVersion: 1,
     updatedAt,
