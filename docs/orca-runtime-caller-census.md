@@ -6,14 +6,14 @@ Source revision: `#1248-r14`, 2026-08-05. Machine-readable authority: `scripts/r
 
 A call belongs on `RuntimeAdapter` or the runtime-owner census when it controls, composes, or observes worker/runtime lifecycle: runtime selection, fleet observation, readiness, workspace selection, spawn, input dispatch, bounded output, liveness, stop, workspace removal, recovery, recovery claims, review-start claims, supervisor ownership, singleton leases, side-effect fences, or crash backoff. AO review transport, review reports, config/plugin reads, and operator daemon lifecycle remain #1250 service work.
 
-Compatibility with AO-era callers, PowerShell bridges, old result envelopes, and fixture-only identities is not preserved. Active runtime rows finish as `use-runtime-interface` or `already-runtime-neutral`; replaced files finish as `delete-dead`. The focused test derives both direct adapter-method calls and lifecycle-owner calls from tracked production TypeScript files and rejects missing rows or operations.
+Compatibility with AO-era callers, PowerShell bridges, old result envelopes, and fixture-only identities is not preserved. Active runtime rows finish as `use-runtime-interface` or `already-runtime-neutral`; replaced files finish as `delete-dead`. The focused test derives both direct adapter-method calls and lifecycle-owner calls from tracked production TypeScript files and rejects missing rows or operations; test-support modules and static conformance scanners that only mention owner symbols as fixture text are excluded.
 
 ## Active runtime surfaces
 
 | Surface | Operations | Disposition | Result |
 |---|---|---|---|
-| `scripts/launch-watch/watch.ts` | readiness, list/find, read, liveness | `already-runtime-neutral` | Reference observation caller from #1245. |
-| `scripts/worker-smoke-run.ts` | readiness, spawn, send, read, liveness, stop | `use-runtime-interface` | Selected adapter, composite identity, exactly one dispatch attempt, exact-generation stop. |
+| `scripts/launch-watch/watch.ts` | runtime composition, readiness, list/find, read, liveness | `already-runtime-neutral` | Reference observation caller from #1245. |
+| `scripts/worker-smoke-run.ts` | runtime composition, readiness, spawn, send, read, liveness, stop | `use-runtime-interface` | Selected adapter, composite identity, exactly one dispatch attempt, exact-generation stop. |
 | `scripts/runtime/task-lifecycle.ts` | spawn, send, read, liveness, stop | `already-runtime-neutral` | Direct lifecycle caller retains exact spawned identity after ambiguous dispatch and never resends. |
 | `scripts/pr2-foundation/fleet-observer.ts` | list/find, read, liveness | `already-runtime-neutral` | Observer-only fleet census through `RuntimeAdapter`; no actuation or compatibility bridge. |
 | `scripts/pr2-foundation/scheduler.ts` | runtime composition, fleet observer | `use-runtime-interface` | Production scheduler composes the selected runtime and observer and is included in the repository-derived owner census. |

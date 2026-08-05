@@ -19,12 +19,16 @@ const retiredPowerShellInvariants = [
   'Review-StartClaimLifecycle.ps1',
 ] as const;
 
-const runtimeImplementationFiles = new Set([
+const runtimeDiscoveryExcludedFiles = new Set([
   'scripts/runtime/contracts.ts',
   'scripts/runtime/test-adapter.ts',
   'scripts/runtime/caller-census.ts',
   'scripts/orca-runtime/adapter.ts',
   'scripts/orca-runtime/task-adapter.ts',
+  'scripts/estate-cut/task-311-tests/task-311-claim.test-support.ts',
+  'scripts/pr2a/final-conformance-precutover.ts',
+  'scripts/supervisor-fault-boundary.shared.ts',
+  'scripts/supervisor-recovery.test-helpers.ts',
 ]);
 
 function trackedFilesUnderScripts(): readonly string[] {
@@ -66,7 +70,7 @@ function discoveredRuntimeCalls(): ReadonlyMap<string, ReadonlySet<string>> {
       || relativePath.endsWith('.test.ts')
       || relativePath.endsWith('.spec.ts')
       || relativePath.endsWith('.d.ts')
-      || runtimeImplementationFiles.has(relativePath)) continue;
+      || runtimeDiscoveryExcludedFiles.has(relativePath)) continue;
     const source = readFileSync(path.join(repoRoot, relativePath), 'utf8');
     const operations = discovered.get(relativePath) ?? new Set<string>();
     for (const match of source.matchAll(methodPattern)) {

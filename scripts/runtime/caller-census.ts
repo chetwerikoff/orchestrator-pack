@@ -78,14 +78,14 @@ export interface RuntimeCallerCensusRow {
 export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   {
     surface: 'scripts/launch-watch/watch.ts',
-    operations: ['readiness', 'list', 'find', 'read', 'liveness'],
+    operations: ['runtime-composition', 'readiness', 'list', 'find', 'read', 'liveness'],
     kind: 'runtime-port',
     disposition: 'already-runtime-neutral',
     note: 'Migrated by #1245 and remains a reference observation caller.',
   },
   {
     surface: 'scripts/worker-smoke-run.ts',
-    operations: ['readiness', 'spawn', 'send', 'read', 'liveness', 'stop'],
+    operations: ['runtime-composition', 'readiness', 'spawn', 'send', 'read', 'liveness', 'stop'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
     note: 'Uses the selected RuntimeAdapter with composite identity and one dispatch attempt.',
