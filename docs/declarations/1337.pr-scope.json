@@ -2,7 +2,8 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1337,
   "declared_paths": [
-    "AGENTS.md"
+    "AGENTS.md",
+    "docs/blocker-philosophy.md"
   ],
   "denylist": [
     "credentials/",
@@ -11,7 +12,8 @@
     "vendor/"
   ],
   "allowed_roots": [
-    "AGENTS.md"
+    "AGENTS.md",
+    "docs/blocker-philosophy.md"
   ],
-  "source_revision": "870ec6a54f8c9e48820405ac21c89a11e853c1cc"
+  "source_revision": "e5d3cd090e9e2b2c4ecdc3ff415df790e1dcca55"
 }
