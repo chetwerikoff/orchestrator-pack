@@ -3,7 +3,8 @@
   "issue_number": 1318,
   "declared_paths": [
     "scripts/lib/worker-smoke-lifecycle.ts",
-    "scripts/lib/worker-smoke-receipt.ts"
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/worker-smoke-cleanup-proof.ts"
   ],
   "denylist": [
     ".ao/",
@@ -47,8 +48,9 @@
     "scripts/lib/worker-smoke-lifecycle-regressions-base.ts",
     "scripts/lib/worker-smoke-lifecycle.ts",
     "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/worker-smoke-cleanup-proof.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "73db76506eeb9b2d6f70fa153eb3b900554e213d"
+  "source_revision": "r07"
 }
