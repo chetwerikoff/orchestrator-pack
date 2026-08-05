@@ -49,6 +49,14 @@ export interface LifecycleOperations {
   readonly processCensus?: (worktreePath: string) => readonly ProcessEvidence[];
 }
 
+export interface LifecycleExpectedWorktreeIdentity extends ExpectedWorktreeIdentity {
+  readonly finalPrHeadSha?: string;
+}
+
+interface NormalizedLifecycleExpected extends ExpectedWorktreeIdentity {
+  readonly finalPrHeadSha?: string;
+}
+
 export interface ProcessEvidence {
   readonly pid: number;
   readonly ppid: number;
@@ -90,6 +98,8 @@ export type LifecycleOutcome =
   | 'cleanup_eligible'
   | 'cleanup_complete'
   | 'cleanup_deferred'
+  | 'quiesced_cleanup_deferred'
+  | 'unsupported_runtime_preflight'
   | 'git_only_recovery_eligible'
   | 'git_only_recovered'
   | 'already_absent'
@@ -123,6 +133,24 @@ interface RecoverySnapshot {
   readonly processes: readonly ProcessEvidence[];
   readonly terminals: readonly TerminalEvidence[];
   readonly errors: readonly string[];
+}
+
+function normalizeLifecycleExpected(input: LifecycleExpectedWorktreeIdentity): NormalizedLifecycleExpected {
+  const base = normalizeExpectedIdentity(input);
+  const finalPrHeadSha = input.finalPrHeadSha
+    ? normalizeHeadSha(input.finalPrHeadSha)
+    : undefined;
+  return {
+    ...base,
+    ...(finalPrHeadSha ? { finalPrHeadSha } : {}),
+  };
+}
+
+function authorizedHeads(expected: LifecycleExpectedWorktreeIdentity): readonly string[] {
+  return [...new Set([
+    normalizeHeadSha(expected.headSha),
+    ...(expected.finalPrHeadSha ? [normalizeHeadSha(expected.finalPrHeadSha)] : []),
+  ])];
 }
 
 function defaultRunner(invocation: CommandInvocation): ProcessResult {
@@ -288,8 +316,22 @@ function resolveRepositoryId(repositoryRoot: string, rows: readonly OrcaWorktree
   return ids.length === 1 ? ids[0]! : null;
 }
 
+function selectAuthorizedClassification(
+  expected: NormalizedLifecycleExpected,
+  evidence: CensusEvidence,
+): WorktreeClassificationReport {
+  const reports = authorizedHeads(expected).map((headSha) => classifyWorktree({
+    expected: { ...expected, headSha },
+    evidence,
+  }));
+  return reports.find((report) => report.classification === 'exact_dual')
+    ?? reports.find((report) => report.classification === 'exact_git_only')
+    ?? reports.find((report) => report.classification === 'absent')
+    ?? reports[0]!;
+}
+
 export function collectCensus(
-  expectedInput: ExpectedWorktreeIdentity,
+  expectedInput: LifecycleExpectedWorktreeIdentity,
   operations: LifecycleOperations = {},
 ): {
   classification: WorktreeClassificationReport;
@@ -297,23 +339,23 @@ export function collectCensus(
   terminals: readonly TerminalEvidence[];
   errors: readonly string[];
 } {
-  const baseExpected = normalizeExpectedIdentity(expectedInput);
+  const baseExpected = normalizeLifecycleExpected(expectedInput);
   const runner = operations.runner ?? defaultRunner;
   const orcaExecutable = operations.orcaExecutable ?? resolveOrcaExecutable();
   const errors: string[] = [];
 
   let gitRows: GitWorktreeRow[] = [];
   let gitStatus: CensusEvidence['git']['status'] = 'ok';
-  const gitResult = runner({
+  const gitInventory = runner({
     command: 'git',
     args: ['-C', baseExpected.repositoryRoot, 'worktree', 'list', '--porcelain'],
   });
-  if (!gitResult.ok) {
+  if (!gitInventory.ok) {
     gitStatus = 'unavailable';
-    errors.push(commandError(gitResult, 'git', ['worktree', 'list', '--porcelain']));
+    errors.push(commandError(gitInventory, 'git', ['worktree', 'list', '--porcelain']));
   } else {
     try {
-      gitRows = parseGitWorktreePorcelain(gitResult.stdout);
+      gitRows = parseGitWorktreePorcelain(gitInventory.stdout);
     } catch (error) {
       gitStatus = 'malformed';
       errors.push(error instanceof Error ? error.message : String(error));
@@ -352,7 +394,7 @@ export function collectCensus(
     orcaStatus = orcaStatus === 'unavailable' ? 'unavailable' : 'malformed';
     errors.push('Orca inventory did not prove one active main-worktree repository identity');
   }
-  const expected: ExpectedWorktreeIdentity = {
+  const expected: NormalizedLifecycleExpected = {
     ...baseExpected,
     ...(repositoryId ? { repositoryId } : {}),
   };
@@ -369,7 +411,7 @@ export function collectCensus(
     },
   };
   return {
-    classification: classifyWorktree({ expected, evidence }),
+    classification: selectAuthorizedClassification(expected, evidence),
     agentRows: mergeAgentRows(orcaRows, agentRows),
     terminals,
     errors,
@@ -408,7 +450,7 @@ export function readPrIdentity(
     : undefined;
   return {
     headRefName: normalizeBranchName(row.headRefName)!,
-    state: row.state,
+    state: row.state.trim().toUpperCase(),
     headRefOid: normalizeHeadSha(row.headRefOid),
     ...(typeof mergeCommit?.oid === 'string' ? { mergeCommitOid: normalizeHeadSha(mergeCommit.oid) } : {}),
     ...(typeof headRepository?.nameWithOwner === 'string' ? { headRepository: headRepository.nameWithOwner } : {}),
@@ -461,24 +503,45 @@ function checkIgnored(expected: ExpectedWorktreeIdentity, runner: CommandRunner)
 }
 
 function checkMerged(
-  expected: ExpectedWorktreeIdentity,
+  expected: NormalizedLifecycleExpected,
   pr: PrIdentity,
   runner: CommandRunner,
 ): boolean {
-  const ordinary = gitResult(runner, ['-C', expected.path, 'merge-base', '--is-ancestor', 'HEAD', 'origin/main']);
-  if (ordinary.ok && ordinary.exitCode === 0) return true;
-  if (pr.state !== 'MERGED' || pr.headRefOid !== expected.headSha || !pr.mergeCommitOid) return false;
-  const fetched = gitResult(runner, ['-C', expected.path, 'fetch', 'origin', 'main']);
+  // Explicit recovery retains the original conservative ordinary-merge proof.
+  // Post-merge H0/H1 cleanup must not require H0 to be an ancestor of current main.
+  if (!expected.finalPrHeadSha) {
+    const ordinary = gitResult(runner, [
+      '-C',
+      expected.path,
+      'merge-base',
+      '--is-ancestor',
+      'HEAD',
+      'origin/main',
+    ]);
+    if (ordinary.ok && ordinary.exitCode === 0) return true;
+  }
+
+  const finalHead = expected.finalPrHeadSha ?? expected.headSha;
+  if (
+    pr.state !== 'MERGED'
+    || pr.headRefOid !== finalHead
+    || !pr.mergeCommitOid
+    || (expected.mode === 'branch-bound' && pr.headRefName !== expected.branchName)
+    || (pr.baseRefName !== undefined && pr.baseRefName !== 'main')
+  ) {
+    return false;
+  }
+  const fetched = gitResult(runner, ['-C', expected.repositoryRoot, 'fetch', 'origin', 'main']);
   if (!fetched.ok) return false;
-  const squash = gitResult(runner, [
+  const adopted = gitResult(runner, [
     '-C',
-    expected.path,
+    expected.repositoryRoot,
     'merge-base',
     '--is-ancestor',
     pr.mergeCommitOid,
     'origin/main',
   ]);
-  return squash.ok && squash.exitCode === 0;
+  return adopted.ok && adopted.exitCode === 0;
 }
 
 function checkBranchOwnership(
@@ -513,10 +576,11 @@ function checkBranchOwnership(
 }
 
 function relevantInventoryFingerprint(
-  expected: ExpectedWorktreeIdentity,
+  expected: NormalizedLifecycleExpected,
   census: ReturnType<typeof collectCensus>,
 ): string {
   const repositoryId = census.classification.expected.repositoryId ?? expected.repositoryId;
+  const heads = new Set(authorizedHeads(expected));
   const matches = (row: {
     path: string;
     headSha?: string;
@@ -524,12 +588,14 @@ function relevantInventoryFingerprint(
     linkedIssue?: number | null;
     linkedPR?: number | null;
   }) => row.path === expected.path
-    || row.headSha === expected.headSha
+    || Boolean(row.headSha && heads.has(row.headSha))
     || row.branchName === expected.branchName
     || (expected.bindingKind === 'issue' && row.linkedIssue === expected.bindingNumber)
     || (expected.bindingKind === 'pr' && row.linkedPR === expected.bindingNumber);
   const git = census.classification.evidence.git.rows.filter(
-    (row) => row.path === expected.path || row.headSha === expected.headSha || row.branchName === expected.branchName,
+    (row) => row.path === expected.path
+      || heads.has(row.headSha)
+      || row.branchName === expected.branchName,
   );
   const orca = census.classification.evidence.orca.rows.filter(
     (row) => row.repoId === repositoryId && matches(row),
@@ -580,7 +646,7 @@ function targetAgents(expected: ExpectedWorktreeIdentity, census: ReturnType<typ
 }
 
 function collectRecoverySnapshot(
-  expected: ExpectedWorktreeIdentity,
+  expected: NormalizedLifecycleExpected,
   operations: LifecycleOperations,
 ): RecoverySnapshot {
   const runner = operations.runner ?? defaultRunner;
@@ -623,7 +689,7 @@ function collectRecoverySnapshot(
   };
 }
 
-function recoverySnapshotFingerprint(_expected: ExpectedWorktreeIdentity, snapshot: RecoverySnapshot): string {
+function recoverySnapshotFingerprint(snapshot: RecoverySnapshot): string {
   const authoritativeExpected = snapshot.census.classification.expected;
   return digest({
     inventory: relevantInventoryFingerprint(authoritativeExpected, snapshot.census),
@@ -635,12 +701,20 @@ function recoverySnapshotFingerprint(_expected: ExpectedWorktreeIdentity, snapsh
 }
 
 function recoverGitOnly(
-  expectedInput: ExpectedWorktreeIdentity,
+  expectedInput: LifecycleExpectedWorktreeIdentity,
   apply: boolean,
   operations: LifecycleOperations,
   heldExclusion?: LifecycleExclusionHandle,
 ): LifecycleTerminalReport {
-  const expected = normalizeExpectedIdentity(expectedInput);
+  const expected = normalizeLifecycleExpected(expectedInput);
+  if (expected.finalPrHeadSha && expected.finalPrHeadSha !== expected.headSha) {
+    const initial = collectCensus(expected, operations);
+    return deferred(
+      'explicit-recovery',
+      initial.classification,
+      'explicit recovery accepts one exact expected head and cannot consume post-merge H0/H1 authority',
+    );
+  }
   if (expected.bindingKind !== 'pr') {
     const initial = collectCensus(expected, operations);
     return deferred(
@@ -681,7 +755,7 @@ function recoverGitOnly(
     const fresh = collectRecoverySnapshot(expected, operations);
     const freshGatesPass = Object.values(fresh.gates).every(Boolean);
     const freshRecheck = freshGatesPass
-      && recoverySnapshotFingerprint(expected, fresh) === recoverySnapshotFingerprint(expected, first);
+      && recoverySnapshotFingerprint(fresh) === recoverySnapshotFingerprint(first);
     const gates: RecoveryGates = { ...fresh.gates, freshRecheck };
     const allPass = Object.values(gates).every(Boolean);
     if (!allPass || !apply) {
@@ -777,17 +851,31 @@ function recoverGitOnly(
   }
 }
 
+function childOutcome(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const outcome = (value as Record<string, unknown>).outcome;
+  return typeof outcome === 'string' ? outcome : null;
+}
+
 function standardTeardown(
-  expected: ExpectedWorktreeIdentity,
+  expectedInput: LifecycleExpectedWorktreeIdentity,
   apply: boolean,
   operations: LifecycleOperations,
 ): LifecycleTerminalReport {
+  const expected = normalizeLifecycleExpected(expectedInput);
   const initial = collectCensus(expected, operations);
   if (expected.bindingKind !== 'pr') {
     return deferred(
       'post-merge-cleanup',
       initial.classification,
       'post-merge cleanup requires --pr authority, not an issue-only binding',
+    );
+  }
+  if (!expected.finalPrHeadSha) {
+    return deferred(
+      'post-merge-cleanup',
+      initial.classification,
+      'post-merge cleanup requires a live-bound final PR head',
     );
   }
   const lockPath = operations.lockPath ?? DEFAULT_WORKTREE_LIFECYCLE_EXCLUSION_PATH;
@@ -809,26 +897,38 @@ function standardTeardown(
         effects: [],
       };
     }
-    if (census.classification.classification === 'exact_git_only') {
-      const recovered = recoverGitOnly(expected, apply, operations, lock);
-      return { ...recovered, context: 'post-merge-cleanup' };
-    }
-    if (census.classification.classification !== 'exact_dual') {
+    if (
+      census.classification.classification !== 'exact_dual'
+      && census.classification.classification !== 'exact_git_only'
+    ) {
       return deferred(
         'post-merge-cleanup',
         census.classification,
         census.errors.join('; ') || 'disputed worktree identity was preserved',
       );
     }
+
     const runner = operations.runner ?? defaultRunner;
     const beforeNonTarget = nonTargetFingerprint(expected, census);
     const args = [
       '--experimental-strip-types',
       join(expected.repositoryRoot, 'scripts', 'worktree-teardown.ts'),
+      '--post-merge-destructive',
+      '--repo-root',
+      expected.repositoryRoot,
       '--worktree',
       expected.path,
       '--pr',
       String(expected.bindingNumber),
+      '--expected-head',
+      expected.headSha,
+      '--final-pr-head',
+      expected.finalPrHeadSha,
+      '--classification',
+      census.classification.classification,
+      ...(expected.mode === 'branch-bound'
+        ? ['--expected-branch', expected.branchName!]
+        : ['--detached']),
       '--json',
       '--lifecycle-lock-path',
       lockPath,
@@ -843,39 +943,68 @@ function standardTeardown(
     } catch {
       child = { raw_stdout: result.stdout.trim(), raw_stderr: result.stderr.trim() };
     }
+    const childStatus = childOutcome(child);
+
     if (!apply) {
+      const outcome: LifecycleOutcome = childStatus === 'cleanup_eligible'
+        ? 'cleanup_eligible'
+        : childStatus === 'unsupported_runtime_preflight'
+          ? 'unsupported_runtime_preflight'
+          : childStatus === 'task_degraded'
+            ? 'task_degraded'
+            : 'cleanup_deferred';
       return {
         schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
         context: 'post-merge-cleanup',
-        outcome: result.ok ? 'cleanup_eligible' : 'cleanup_deferred',
+        outcome,
         pipelineContinues: true,
         classification: census.classification,
         decision,
         effects: [],
         standardTeardown: child,
-        ...(!result.ok ? { error: 'standard teardown dry-run blocked; completed merge/adoption remains successful' } : {}),
+        ...(outcome !== 'cleanup_eligible'
+          ? { error: `post-merge teardown dry-run returned ${childStatus ?? 'an unreadable outcome'}` }
+          : {}),
       };
     }
 
     const post = collectCensus(expected, operations);
     const absent = post.classification.classification === 'absent';
     const unrelatedStable = nonTargetFingerprint(expected, post) === beforeNonTarget;
-    const complete = absent && unrelatedStable;
+    if (absent && unrelatedStable) {
+      return {
+        schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
+        context: 'post-merge-cleanup',
+        outcome: 'cleanup_complete',
+        pipelineContinues: true,
+        classification: census.classification,
+        decision,
+        effects: ['exact post-merge destructive teardown attempted'],
+        postClassification: post.classification,
+        standardTeardown: child,
+      };
+    }
+
+    const boundedOutcome: LifecycleOutcome = childStatus === 'quiesced_cleanup_deferred'
+      ? 'quiesced_cleanup_deferred'
+      : childStatus === 'unsupported_runtime_preflight'
+        ? 'unsupported_runtime_preflight'
+        : 'task_degraded';
     return {
       schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
       context: 'post-merge-cleanup',
-      outcome: complete ? 'cleanup_complete' : 'task_degraded',
+      outcome: boundedOutcome,
       pipelineContinues: true,
       classification: census.classification,
       decision,
-      effects: ['standard guarded teardown attempted'],
+      effects: childStatus === 'unsupported_runtime_preflight'
+        ? []
+        : ['exact post-merge destructive teardown attempted'],
       postClassification: post.classification,
       standardTeardown: child,
-      ...(!complete
-        ? { error: result.ok
-            ? 'standard teardown returned success but dual post-read-back did not prove absence with unrelated inventory unchanged'
-            : `standard teardown outcome was unknown or failed and read-back remained disputed: ${commandError(result, process.execPath, args)}` }
-        : {}),
+      error: result.ok
+        ? `post-merge teardown ended ${childStatus ?? 'without a readable outcome'} and dual read-back did not prove exact absence`
+        : `post-merge teardown outcome was unknown or failed and read-back remained disputed: ${commandError(result, process.execPath, args)}`,
     };
   } finally {
     releaseLifecycleExclusion(lockPath, lock);
@@ -883,12 +1012,12 @@ function standardTeardown(
 }
 
 export function runLifecycle(input: {
-  readonly expected: ExpectedWorktreeIdentity;
+  readonly expected: LifecycleExpectedWorktreeIdentity;
   readonly context: LifecycleContext;
   readonly apply: boolean;
   readonly operations?: LifecycleOperations;
 }): LifecycleTerminalReport {
-  const expected = normalizeExpectedIdentity(input.expected);
+  const expected = normalizeLifecycleExpected(input.expected);
   const operations = input.operations ?? {};
   if (input.context === 'post-merge-cleanup') return standardTeardown(expected, input.apply, operations);
   if (input.context === 'explicit-recovery') return recoverGitOnly(expected, input.apply, operations);

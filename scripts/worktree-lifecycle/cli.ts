@@ -14,6 +14,7 @@ import {
   createPrHeadBoundRunner,
   readLivePrBinding,
   validateExpectedPrBinding,
+  type PostMergeExpectedWorktreeIdentity,
 } from './head-bound-runner.ts';
 
 interface ParsedArgs {
@@ -117,7 +118,7 @@ function main(): void {
   try {
     const bindingKind: WorktreeBindingKind = args.issueNumber ? 'issue' : 'pr';
     const bindingNumber = args.issueNumber ?? args.prNumber!;
-    const expected: ExpectedWorktreeIdentity = {
+    const baseExpected: ExpectedWorktreeIdentity = {
       repositoryRoot: normalizeWorktreePath(args.repositoryRoot!),
       path: normalizeWorktreePath(args.worktree!),
       headSha: normalizeHeadSha(args.expectedHead!),
@@ -129,13 +130,18 @@ function main(): void {
       bindingNumber,
     };
 
-    const operations = bindingKind === 'pr'
-      ? { runner: createPrHeadBoundRunner(expected) }
-      : undefined;
+    let expected: PostMergeExpectedWorktreeIdentity = baseExpected;
+    let operations: Parameters<typeof runLifecycle>[0]['operations'];
     if (bindingKind === 'pr') {
-      const live = readLivePrBinding(expected, operations!.runner);
-      const mismatch = validateExpectedPrBinding(expected, live);
+      const live = readLivePrBinding(baseExpected);
+      if (args.context === 'post-merge-cleanup') {
+        expected = { ...baseExpected, finalPrHeadSha: live.headRefOid };
+      }
+      const mismatch = validateExpectedPrBinding(expected, live, args.context!);
       if (mismatch) throw new TypeError(mismatch);
+      operations = {
+        runner: createPrHeadBoundRunner(expected, undefined, args.context!),
+      };
     }
 
     const report = runLifecycle({
@@ -146,8 +152,6 @@ function main(): void {
     });
     if (args.json) console.log(JSON.stringify(report, null, 2));
     else emitHuman(report);
-    // Valid lifecycle results do not block the global scheduler. Unsafe target mutation is
-    // represented by cleanup_deferred/replacement_required/task_degraded in the report.
     process.exitCode = 0;
   } catch (caught) {
     const payload = {

@@ -55,6 +55,9 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/worktree-lifecycle/core.test.ts': 120,
   'scripts/worktree-lifecycle/operations.test.ts': 120,
   'scripts/worktree-lifecycle/recovery-regression.test.ts': 120,
+  // Issue #1328 exact merged-worktree teardown is deterministic fixture coverage.
+  // Keep the pre-topology plan bounded until runtime-history harvest records it.
+  'scripts/worktree-teardown.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains

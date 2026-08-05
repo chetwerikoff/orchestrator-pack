@@ -25,9 +25,9 @@ Operations required only by remaining supervisor/recovery callers are intentiona
 - The current public Orca CLI closes terminals only by handle and exposes no expected-generation binding. Therefore the shared Orca adapter does not issue a destructive close and returns `runtime_generation_bound_stop_unsupported` for an otherwise owned worker. The existing worker-smoke compatibility facade retains its current close behavior until #1248 can bind migration to a generation-safe native operation; the shared boundary does not claim atomicity that Orca cannot provide.
 - Current upstream Orca output (`result.terminal.tail`, string-or-null cursor plus optional `latestCursor`) and the captured legacy smoke shape (`result.lines`, numeric cursor) are normalized internally. Any unsupported consumed response or progress shape returns the named `unsupported` result.
 
-## Worktree lifecycle continuity (Issue #1298)
+## Worktree lifecycle continuity (Issues #1298 and #1328)
 
-Worktree creation and teardown are deliberately not added to `RuntimeAdapter` by this task. Issue
+Worktree creation and teardown are deliberately not added to `RuntimeAdapter` by these tasks. Issue
 #1248 still owns the broad caller migration and any future runtime-neutral lifecycle expansion.
 Issue #1298 adds one smaller pack-owned boundary at `scripts/worktree-lifecycle/**` because the
 current production problem is disagreement between two native authorities:
@@ -76,24 +76,57 @@ never grants mutation authority. The read-only post-create classifier can report
 wrong-repository, archived, main-worktree, present-invalid binding, or ambiguous detached output is
 a conflict.
 
-For cleanup, mutation safety and work continuity are separate decisions. Existing teardown gates
-remain fail-closed for the target. A blocked or ambiguous cleanup returns a structured
-`cleanup_deferred` result with `pipelineContinues: true`; it does not invalidate an already
-successful merge/adoption or stop unrelated scheduler work. Exact Git-only recovery is explicit,
-dry-run-first, and permits only Git's non-force worktree removal after the complete identity,
-cleanliness, ignored-data, merge, branch-ownership, terminal, process, exclusion, and live merged-PR
-checks are recollected immediately before the effect. Process-census failure is unavailable
-evidence, never proof of zero processes.
+For cleanup, mutation safety and work continuity remain separate decisions. A blocked or
+ambiguous target returns a structured bounded result with `pipelineContinues: true`; it does not
+invalidate an already successful merge/adoption or stop unrelated scheduler work.
 
-Standard teardown holds the same owner-token exclusion across the decisive census, delegated child,
+Explicit Git-only recovery remains conservative, dry-run-first, and non-force. It requires one
+exact expected head plus complete identity, cleanliness, ignored-data, merge, branch-ownership,
+terminal, process, exclusion, and live merged-PR checks immediately before the effect. Process
+census failure is unavailable evidence, never proof of zero processes.
+
+Issue #1328 adds one narrower authority used only by exact merged-PR `post-merge-cleanup`. The
+operator merge flow binds both the original target head `H0` and the exact live merged PR head
+`H1`; the target may be at either value. A feature branch behind `main`, `H0 != H1` after rebase,
+or later advancement of `origin/main` is not target drift. The merge result must remain adopted by
+current `origin/main`, but the target need not equal or be ancestral to the current main tip.
+
+Before any target effect, exact-dual cleanup capture-proves installed support for
+`orca worktree rm --worktree <selector> --force --json`. Missing or malformed capability returns
+`unsupported_runtime_preflight`. Active/interrupted agent state and tracked, untracked, or
+non-allowlisted ignored data are report facts rather than blockers only in this exact post-merge
+mode.
+
+The post-merge actuator has two phases. First it stops/closes only exact target panes, preserves
+unrelated mixed-tab panes, and reaps only processes observable through repeated target CWD plus
+ancestry census using bounded TERM then SIGKILL. Second it repeats exact target/PR/ownership
+proof, captures two equal bounded NUL-safe path-only discard manifests, repeats full proof
+immediately before removal, and performs one exact removal:
+
+- `exact_dual`: validated Orca force removal, requiring `ok=true` and `result.removed=true`;
+- `exact_git_only`: Git `worktree remove --force`, followed by dual read-back.
+
+The still-owned branch is deleted separately by expected-old-OID compare-and-delete. A moved,
+reused, ambiguous, or concurrently changed branch is preserved and does not retroactively fail a
+proven worktree removal. There is no fallback to `git branch -d`, `git branch -D`, or name-only
+deletion.
+
+Standard teardown holds the same owner-token exclusion across decisive census, delegated child,
 and dual post-effect read-back. `cleanup_complete` requires exact target absence in Git and Orca
-with unrelated in-repository inventory unchanged; child exit zero alone is not completion evidence.
-Effect-before-receipt may settle complete only from that dual read-back.
+with unrelated in-repository inventory unchanged; child exit zero or an Orca receipt alone is not
+completion evidence. Late target-local drift after quiescence yields
+`quiesced_cleanup_deferred` and preserves worktree/ref; ordinary movement of `main` alone never
+does.
 
-No watcher, daemon, lease service, second state store, bulk orphan sweep, private Orca persistence
-edit, force removal, or path-only delete is introduced. A future native Orca adopt/register branch
-requires installed-version production capture proving its exact command and identity-preserving
-read-back; until then it is treated as unsupported.
+CWD-plus-ancestry is an evidence-bounded selection rule, not proof of every process historically
+owned by a worker. Processes that changed CWD, double-forked, or reparented before census may be
+unobservable. Launch-time cgroup containment remains a separate task.
+
+No generic force-clean command, watcher, daemon, lease service, second state store, bulk orphan
+sweep, private Orca persistence edit, manual `.git/worktrees` mutation, `rm -rf`, path-only delete,
+process-name kill, or global cleanup is introduced. Force removal exists only inside the exact
+merged-PR authority above. A future native Orca adopt/register branch still requires
+installed-version production capture proving its exact command and identity-preserving read-back.
 
 ## Adding a future adapter
 
