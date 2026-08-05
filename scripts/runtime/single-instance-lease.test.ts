@@ -1,47 +1,67 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import {
   acquireSingleInstanceLease,
   readLiveSingleInstanceLease,
   releaseSingleInstanceLease,
 } from './single-instance-lease.ts';
 
-function firstJsonLine(child: ChildProcess): Promise<{ acquired: boolean; reason?: string }> {
-  return new Promise((resolve, reject) => {
-    let buffer = '';
-    const timeout = setTimeout(() => reject(new Error('lease contender timed out')), 5_000);
-    child.stdout?.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
-      const newline = buffer.indexOf('\n');
-      if (newline < 0) return;
-      clearTimeout(timeout);
-      try {
-        resolve(JSON.parse(buffer.slice(0, newline)) as { acquired: boolean; reason?: string });
-      } catch (error) {
-        reject(error);
-      }
-    });
-    child.once('error', (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
+interface LeaseHolderProcess {
+  readonly completion: Promise<ProcessResult>;
+  readonly stop: () => void;
 }
 
-function spawnLeaseContender(lockDir: string, releaseGate: string): ChildProcess {
+async function waitForLeaseMarker(path: string): Promise<Record<string, unknown>> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (existsSync(path)) {
+      return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('lease contender timed out');
+}
+
+function startLeaseHolder(lockDir: string, releaseGate: string, markerPath: string): LeaseHolderProcess {
   const moduleUrl = new URL('./single-instance-lease.ts', import.meta.url).href;
   const source = `
-    import { existsSync } from 'node:fs';
+    import { existsSync, writeFileSync } from 'node:fs';
+    import { acquireSingleInstanceLease, releaseSingleInstanceLease } from ${JSON.stringify(moduleUrl)};
+    try {
+      const handle = acquireSingleInstanceLease({ lockDir: ${JSON.stringify(lockDir)} });
+      writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({ acquired: true }), 'utf8');
+      while (!existsSync(${JSON.stringify(releaseGate)})) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+      releaseSingleInstanceLease(handle);
+    } catch (error) {
+      writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
+        acquired: false,
+        reason: error instanceof Error ? error.message : String(error),
+      }), 'utf8');
+      process.exitCode = 1;
+    }
+  `;
+  const controller = new AbortController();
+  const completion = runProcess({
+    command: process.execPath,
+    args: ['--experimental-strip-types', '--input-type=module', '--eval', source],
+    inheritParentEnv: true,
+    signal: controller.signal,
+    allowEmptyStdout: true,
+  });
+  return { completion, stop: () => controller.abort() };
+}
+
+async function probeLease(lockDir: string): Promise<{ acquired: boolean; reason?: string }> {
+  const moduleUrl = new URL('./single-instance-lease.ts', import.meta.url).href;
+  const source = `
     import { acquireSingleInstanceLease, releaseSingleInstanceLease } from ${JSON.stringify(moduleUrl)};
     try {
       const handle = acquireSingleInstanceLease({ lockDir: ${JSON.stringify(lockDir)} });
       process.stdout.write(JSON.stringify({ acquired: true }) + '\\n');
-      while (!existsSync(${JSON.stringify(releaseGate)})) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-      }
       releaseSingleInstanceLease(handle);
     } catch (error) {
       process.stdout.write(JSON.stringify({
@@ -50,12 +70,13 @@ function spawnLeaseContender(lockDir: string, releaseGate: string): ChildProcess
       }) + '\\n');
     }
   `;
-  return spawn(process.execPath, [
-    '--experimental-strip-types',
-    '--input-type=module',
-    '--eval',
-    source,
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const result = await runProcess({
+    command: process.execPath,
+    args: ['--experimental-strip-types', '--input-type=module', '--eval', source],
+    inheritParentEnv: true,
+  });
+  if (!result.ok) throw new Error(`lease probe failed: ${result.error ?? result.stderr ?? result.outcome}`);
+  return JSON.parse(result.stdout.trim()) as { acquired: boolean; reason?: string };
 }
 
 describe('single-instance process-generation lease', () => {
@@ -92,6 +113,7 @@ describe('single-instance process-generation lease', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-lease-race-'));
     const lockDir = join(root, 'supervisor.lock');
     const releaseGate = join(root, 'release');
+    const markerPath = join(root, 'holder.json');
     mkdirSync(lockDir, { recursive: true });
     writeFileSync(join(lockDir, 'owner.json'), `${JSON.stringify({
       schemaVersion: 1,
@@ -101,22 +123,18 @@ describe('single-instance process-generation lease', () => {
       acquiredAt: new Date(0).toISOString(),
       metadata: {},
     })}\n`, 'utf8');
-    const first = spawnLeaseContender(lockDir, releaseGate);
-    let second: ChildProcess | null = null;
+    const first = startLeaseHolder(lockDir, releaseGate, markerPath);
     try {
-      expect(await firstJsonLine(first)).toEqual({ acquired: true });
-      second = spawnLeaseContender(lockDir, releaseGate);
-      const competing = await firstJsonLine(second);
+      expect(await waitForLeaseMarker(markerPath)).toEqual({ acquired: true });
+      const competing = await probeLease(lockDir);
       expect(competing.acquired).toBe(false);
       expect(competing.reason).toMatch(/single_instance_busy/);
       writeFileSync(releaseGate, 'release', 'utf8');
-      await new Promise<void>((resolve, reject) => {
-        first.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`first exit ${code}`)));
-      });
+      expect((await first.completion).ok).toBe(true);
     } finally {
       writeFileSync(releaseGate, 'release', 'utf8');
-      first.kill('SIGKILL');
-      second?.kill('SIGKILL');
+      first.stop();
+      await first.completion;
       rmSync(root, { recursive: true, force: true });
     }
   }, 10_000);
