@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import {
   closeSync,
   constants,
@@ -14,6 +13,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { processAlive, readProcessIdentity } from '../lib/cutover/activation-cordon.ts';
 
 export interface SingleInstanceLeaseOwner {
@@ -69,8 +69,9 @@ export function clearLockedFileContents(descriptor: number): void {
 
 /**
  * Acquire a kernel-held exclusive lock on one stable file inode. The helper
- * delegates only the flock syscall to the system utility; the descriptor stays
- * open in this Node process, so the lock remains held until closeSync().
+ * delegates only the flock syscall to the centralized subprocess boundary; the
+ * descriptor stays open in this Node process, so the lock remains held until
+ * closeSync().
  */
 export function tryAcquireHeldFileLock(path: string): HeldFileLockResult {
   mkdirSync(dirname(path), { recursive: true });
@@ -80,14 +81,16 @@ export function tryAcquireHeldFileLock(path: string): HeldFileLockResult {
   } catch {
     return { acquired: false, reason: 'unavailable' };
   }
-  const locked = spawnSync('flock', ['-n', '3'], {
-    stdio: ['ignore', 'ignore', 'ignore', descriptor],
+  const locked = runProcessSync({
+    command: 'flock',
+    args: ['-n', '3'],
+    inheritedFileDescriptors: { 3: descriptor },
   });
-  if (locked.error) {
+  if (locked.outcome === 'spawn-failure' || locked.timedOut) {
     closeSync(descriptor);
     return { acquired: false, reason: 'unavailable' };
   }
-  if (locked.status !== 0) {
+  if (!locked.ok) {
     closeSync(descriptor);
     return { acquired: false, reason: 'busy' };
   }
