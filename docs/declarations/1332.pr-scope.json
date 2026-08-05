@@ -6,10 +6,10 @@
     "docs/worker-smoke-testing.md"
   ],
   "denylist": [
-    "credentials/**",
-    "packages/core/**",
-    "secrets/**",
-    "vendor/**"
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     "docs/declarations/1332.pr-scope.json",
