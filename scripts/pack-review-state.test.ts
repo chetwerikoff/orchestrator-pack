@@ -1,8 +1,9 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   PACK_REVIEW_CAP_MAP_VERSION,
@@ -14,13 +15,23 @@ import {
   observePackReviewHead,
   readPackReviewAuthority,
   retainPersistedOpenCycle,
+  selectPackReviewGptSourceCardinality,
   selectPackReviewEvidence,
   stagePackReviewImmutableRecord,
   terminalConsumesCapSlot,
   validateTerminalV2,
 } from './pack-review-state.ts';
+import {
+  createPackReviewRun,
+  getPackReviewRun,
+  setPackReviewRunTerminal,
+  updatePackReviewRun,
+  validatePersistedPackReviewGptAggregate,
+  type PackReviewGptRoundRecord,
+} from './lib/pack-review-run-store.ts';
 
 const roots: string[] = [];
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const sha = (char: string) => char.repeat(40);
 const options = () => {
   const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-state-test-'));
@@ -319,6 +330,349 @@ describe('Issue #898 authority and cap state', () => {
     );
     expect(() => validateTerminalV2({ ...row, terminalContractVersion: 3 })).toThrow(
       /terminal_contract_invalid/,
+    );
+  });
+});
+
+describe('Issue #1276 GPT source cardinality', () => {
+  it.each([
+    ['T1', 1, 3],
+    ['T2', 1, 3],
+    ['T3', 1, 3],
+    ['T1', 2, 1],
+    ['T2', 2, 1],
+    ['T3', 2, 3],
+  ] as const)('selects %s round %s as %s source(s)', (tier, roundOrdinal, expected) => {
+    expect(selectPackReviewGptSourceCardinality({ reviewer: 'gpt', tier, roundOrdinal })).toBe(expected);
+  });
+
+  it('keeps non-GPT reviewers single-source', () => {
+    expect(selectPackReviewGptSourceCardinality({ reviewer: 'codex', tier: 'T3', roundOrdinal: 1 })).toBe(1);
+  });
+
+  it('rejects persisted cardinality and ordinal outside the frozen tier policy', () => {
+    const cases: Array<{ name: string; round: PackReviewGptRoundRecord; pattern: RegExp }> = [];
+
+    const t2Round2Wrong = plannedAggregateTestRound();
+    t2Round2Wrong.tier = 'T2';
+    t2Round2Wrong.roundOrdinal = 2;
+    cases.push({ name: 'T2 round 2 with three sources', round: t2Round2Wrong, pattern: /cardinality violates tier\/round policy/ });
+
+    const t3Round2Wrong = plannedAggregateTestRound();
+    t3Round2Wrong.tier = 'T3';
+    t3Round2Wrong.roundOrdinal = 2;
+    t3Round2Wrong.cardinality = 1;
+    t3Round2Wrong.sourceSlots = [t3Round2Wrong.sourceSlots[0]!];
+    cases.push({ name: 'T3 round 2 with one source', round: t3Round2Wrong, pattern: /cardinality violates tier\/round policy/ });
+
+    const t1Round2 = plannedAggregateTestRound();
+    t1Round2.tier = 'T1';
+    t1Round2.roundOrdinal = 2;
+    t1Round2.cardinality = 1;
+    t1Round2.sourceSlots = [t1Round2.sourceSlots[0]!];
+    cases.push({ name: 'T1 round 2 beyond cap', round: t1Round2, pattern: /ordinal exceeds tier cap/ });
+
+    for (const item of cases) {
+      const storeRoot = aggregateTestStoreRoot();
+      expect(() => createPackReviewRun({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        prNumber: 1276,
+        headSha: sha('a'),
+        trustedPackRoot: repoRoot,
+        sourceRepoRoot: repoRoot,
+        reviewRound: item.round,
+      }), item.name).toThrow(item.pattern);
+    }
+  });
+
+  it('accepts persisted later-round cardinality only for valid T2 and T3 policy rows', () => {
+    const validT2 = plannedAggregateTestRound();
+    validT2.tier = 'T2';
+    validT2.roundOrdinal = 2;
+    validT2.cardinality = 1;
+    validT2.sourceSlots = [validT2.sourceSlots[0]!];
+    expect(createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot: aggregateTestStoreRoot(),
+      prNumber: 1276,
+      headSha: sha('b'),
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      reviewRound: validT2,
+    }).created).toBe(true);
+
+    const validT3 = plannedAggregateTestRound();
+    validT3.tier = 'T3';
+    validT3.roundOrdinal = 2;
+    expect(createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot: aggregateTestStoreRoot(),
+      prNumber: 1276,
+      headSha: sha('c'),
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      reviewRound: validT3,
+    }).created).toBe(true);
+  });
+});
+
+function aggregateTestRound(terminalClass: 'complete_findings' | 'reviewer_output_malformed'): PackReviewGptRoundRecord {
+  const sourceSlots = Array.from({ length: 3 }, (_, index) => {
+    const ordinal = index + 1;
+    const slotId = `source-${String(ordinal).padStart(2, '0')}`;
+    const invocationId = `aggregate-inv-${ordinal}`;
+    return {
+      slotId,
+      ordinal,
+      lifecycle: 'terminal' as const,
+      invocationId,
+      attemptOrdinal: 1,
+      terminalClass: 'complete_clean',
+      terminalResult: {
+        schema: 'turn-result/v1',
+        state: 'ok',
+        scope: 'invocation',
+        cause: 'completed_page_only',
+        invocation_id: invocationId,
+        send_count: 1,
+      },
+      payload: { verdict: 'clean', findingCount: 0, findings: [] },
+    };
+  });
+  if (terminalClass === 'complete_findings') {
+    sourceSlots[0] = {
+      ...sourceSlots[0]!,
+      terminalClass,
+      payload: {
+        verdict: 'findings',
+        findingCount: 2,
+        findings: [
+          { title: 'same occurrence', severity: 'blocking' },
+          { title: 'same occurrence', severity: 'blocking' },
+        ],
+      },
+    };
+  } else {
+    sourceSlots[1] = {
+      ...sourceSlots[1]!,
+      terminalClass,
+      terminalResult: { exitCode: 1, stderr: 'invalid reviewer output' },
+      payload: undefined,
+    };
+  }
+  return {
+    schema: 'pack-review-gpt-round/v1',
+    reviewer: 'gpt',
+    tier: 'T1',
+    roundOrdinal: 1,
+    cardinality: 3,
+    issueNumber: 1276,
+    boundIssueSnapshotDigest: 'aggregate-fixture',
+    sourceSlots,
+  };
+}
+
+function plannedAggregateTestRound(): PackReviewGptRoundRecord {
+  const round = aggregateTestRound('complete_findings');
+  return {
+    ...round,
+    sourceSlots: round.sourceSlots.map((slot) => ({
+      slotId: slot.slotId,
+      ordinal: slot.ordinal,
+      lifecycle: 'planned' as const,
+    })),
+  };
+}
+
+function aggregateTestStoreRoot(): string {
+  const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-gpt-aggregate-test-'));
+  roots.push(storeRoot);
+  return storeRoot;
+}
+
+function createAggregateTestRun(storeRoot: string) {
+  return createPackReviewRun({
+    projectId: 'orchestrator-pack',
+    storeRoot,
+    prNumber: 1276,
+    headSha: sha('a'),
+    trustedPackRoot: repoRoot,
+    sourceRepoRoot: repoRoot,
+    reviewRound: plannedAggregateTestRound(),
+  }).run;
+}
+
+const attributedAggregateFindings = [
+  { title: 'same occurrence', severity: 'blocking', sourceSlotId: 'source-01' },
+  { title: 'same occurrence', severity: 'blocking', sourceSlotId: 'source-01' },
+];
+
+describe('Issue #1276 GPT aggregate/source census settlement', () => {
+  it('rejects update, terminal, journal, and resume divergence while preserving every occurrence', () => {
+    const storeRoot = aggregateTestStoreRoot();
+    const run = createAggregateTestRun(storeRoot);
+    const reviewRound = aggregateTestRound('complete_findings');
+    const storeOptions = { projectId: 'orchestrator-pack', storeRoot };
+
+    expect(() => updatePackReviewRun(run.id, {
+      reviewRound,
+      reviewVerdict: 'clean',
+      findingCount: 0,
+      findings: [],
+    }, storeOptions)).toThrow(/reviewVerdict does not match terminal source census/);
+
+    expect(() => setPackReviewRunTerminal(run.id, 'commented', {
+      reviewRound,
+      reviewVerdict: 'findings',
+      findingCount: 1,
+      findings: [attributedAggregateFindings[0]],
+    }, storeOptions)).toThrow(/findingCount does not match terminal source census/);
+
+    expect(() => updatePackReviewRun(run.id, {
+      reviewRound,
+      reviewVerdict: 'findings',
+      findingCount: 2,
+      findings: attributedAggregateFindings.map(({ sourceSlotId: _sourceSlotId, ...finding }) => finding),
+      journalOutcome: {
+        state: 'persisted',
+        recordedAtUtc: '2026-08-05T00:00:00.000Z',
+        reason: 'fixture',
+        idempotencyKey: 'aggregate-fixture',
+        attempts: 1,
+      },
+    }, storeOptions)).toThrow(/findings do not match terminal source census/);
+
+    const persisted = updatePackReviewRun(run.id, {
+      reviewRound,
+      reviewVerdict: 'findings',
+      findingCount: 2,
+      findings: attributedAggregateFindings,
+      journalOutcome: {
+        state: 'persisted',
+        recordedAtUtc: '2026-08-05T00:00:00.000Z',
+        reason: 'fixture',
+        idempotencyKey: 'aggregate-fixture',
+        attempts: 1,
+      },
+    }, storeOptions);
+    expect(persisted.findings).toEqual(attributedAggregateFindings);
+    expect(persisted.findings).toHaveLength(2);
+
+    const recordPath = join(storeRoot, 'runs', `${run.id}.json`);
+    const raw = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>;
+    raw.reviewVerdict = 'clean';
+    raw.findingCount = 0;
+    raw.findings = [];
+    writeFileSync(recordPath, `${JSON.stringify(raw)}\n`, 'utf8');
+    expect(() => getPackReviewRun(run.id, storeOptions)).toThrow(
+      /reviewVerdict does not match terminal source census/,
+    );
+  });
+
+  it('reloads and validates the persisted aggregate before settlement authority can consume it', () => {
+    const storeRoot = aggregateTestStoreRoot();
+    const run = createAggregateTestRun(storeRoot);
+    const storeOptions = { projectId: 'orchestrator-pack', storeRoot };
+    updatePackReviewRun(run.id, { reviewRound: aggregateTestRound('complete_findings') }, storeOptions);
+
+    const validated = validatePersistedPackReviewGptAggregate(run.id, {
+      reviewVerdict: 'findings',
+      findingCount: 2,
+      findings: attributedAggregateFindings,
+    }, storeOptions);
+    expect(validated).toEqual({
+      reviewVerdict: 'findings',
+      findingCount: 2,
+      findings: attributedAggregateFindings,
+    });
+
+    expect(() => validatePersistedPackReviewGptAggregate(run.id, {
+      reviewVerdict: 'clean',
+      findingCount: 0,
+      findings: [],
+    }, storeOptions)).toThrow(/reviewVerdict does not match terminal source census/);
+  });
+
+  it('closes the successful-sent terminal class matrix and preserves the malformed-output class', () => {
+    const invalidCases: Array<{ name: string; mutate: (round: PackReviewGptRoundRecord) => void; pattern: RegExp }> = [
+      {
+        name: 'generic ok class',
+        mutate: (round) => {
+          const slot = round.sourceSlots[0]!;
+          slot.terminalClass = 'ok:completed_page_only';
+          slot.payload = undefined;
+        },
+        pattern: /unsupported terminal class/,
+      },
+      {
+        name: 'possible delivery with ok result',
+        mutate: (round) => {
+          const slot = round.sourceSlots[0]!;
+          slot.terminalClass = 'possible_delivery';
+          slot.payload = undefined;
+        },
+        pattern: /possible_delivery requires a non-ok sent terminalResult/,
+      },
+      {
+        name: 'collision exhausted on first attempt',
+        mutate: (round) => {
+          const slot = round.sourceSlots[0]!;
+          slot.terminalClass = 'explicit_refusal:zero_send_collision_exhausted';
+          slot.payload = undefined;
+          slot.attemptOrdinal = 1;
+          slot.terminalResult = {
+            schema: 'turn-result/v1',
+            state: 'profile_busy',
+            scope: 'profile',
+            cause: 'profile_busy',
+            invocation_id: slot.invocationId,
+            send_count: 0,
+          };
+        },
+        pattern: /exhausted collision class is terminalResult-inconsistent/,
+      },
+    ];
+
+    for (const item of invalidCases) {
+      const round = aggregateTestRound('complete_findings');
+      item.mutate(round);
+      expect(() => createPackReviewRun({
+        projectId: 'orchestrator-pack',
+        storeRoot: aggregateTestStoreRoot(),
+        prNumber: 1276,
+        headSha: sha('d'),
+        trustedPackRoot: repoRoot,
+        sourceRepoRoot: repoRoot,
+        reviewRound: round,
+      }), item.name).toThrow(item.pattern);
+    }
+
+    const malformed = aggregateTestRound('complete_findings');
+    const malformedSlot = malformed.sourceSlots[0]!;
+    malformedSlot.terminalClass = 'reviewer_output_malformed';
+    malformedSlot.payload = undefined;
+    expect(createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot: aggregateTestStoreRoot(),
+      prNumber: 1276,
+      headSha: sha('e'),
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      reviewRound: malformed,
+    }).created).toBe(true);
+  });
+
+  it('forbids a clean aggregate when any frozen source is non-complete', () => {
+    const storeRoot = aggregateTestStoreRoot();
+    const run = createAggregateTestRun(storeRoot);
+    expect(() => updatePackReviewRun(run.id, {
+      reviewRound: aggregateTestRound('reviewer_output_malformed'),
+      reviewVerdict: 'clean',
+      findingCount: 0,
+      findings: [],
+    }, { projectId: 'orchestrator-pack', storeRoot })).toThrow(
+      /reviewVerdict does not match terminal source census/,
     );
   });
 });

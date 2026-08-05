@@ -45,6 +45,7 @@ export const REPOSITORY_ALLOWED_ROOTS = [
   '.cursor/skills/**',
   'scripts/**',
   'tests/external-output-references/**',
+  'tests/fixtures/pack-gpt-browser-turn-harness.mjs',
   'plugins/**',
   'prompts/**',
   'docs/declarations/**',

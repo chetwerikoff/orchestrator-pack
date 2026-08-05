@@ -34,6 +34,24 @@ const runnerSmokeRecord = JSON.parse(readFileSync(
   harnessIntegrationOnly: string;
 };
 
+function successfulTurnResult(): string {
+  return JSON.stringify({
+    schema: 'turn-result/v1',
+    state: 'ok',
+    scope: 'none',
+    cause: 'completed_page_only',
+    invocation_id: '00000000-0000-4000-8000-000000000001',
+    configured_profile_key: 'fixture-profile',
+    send_count: 1,
+    poll_count: 1,
+    goto_count: 1,
+    new_chat_click_count: 0,
+    navigation_count: 1,
+    incidents: [],
+    cleanup: 'confirmed',
+  });
+}
+
 const originalEnv = { ...process.env };
 
 function sha256File(relativePath: string): string {
@@ -208,7 +226,9 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
 
     process.env.PATH = priorPath;
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ verdict: 'clean', findingCount: 0, findings: [] });
+    const output = result.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    expect(output[0]).toMatchObject({ schema: 'turn-result/v1', send_count: 1 });
+    expect(output.at(-1)).toEqual({ verdict: 'clean', findingCount: 0, findings: [] });
   });
 
   it('writes adapter prompt, terminal reply, and mapped stdout when evidence dir is set', async () => {
@@ -226,7 +246,7 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
           ok: true,
           exitCode: 0,
           signal: null,
-          stdout: '',
+          stdout: successfulTurnResult(),
           stderr: '',
           timedOut: false,
           cancelled: false,
@@ -264,7 +284,7 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
           ok: true,
           exitCode: 0,
           signal: null,
-          stdout: '',
+          stdout: successfulTurnResult(),
           stderr: '',
           timedOut: false,
           cancelled: false,
@@ -286,7 +306,9 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual({ verdict: 'clean', findingCount: 0, findings: [] });
+      const output = result.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+      expect(output[0]).toMatchObject({ schema: 'turn-result/v1', send_count: 1 });
+      expect(output.at(-1)).toEqual({ verdict: 'clean', findingCount: 0, findings: [] });
       expect(runProcess).toHaveBeenCalled();
       const npmCall = runProcess.mock.calls.find(([options]) => options.command === 'npm');
       expect(npmCall?.[0].args).toEqual(expect.arrayContaining(['run', 'chatgpt-browser-turn', '--', 'turn']));

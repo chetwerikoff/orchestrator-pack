@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   assertGptHarnessFixtureAllowed,
+  extractLastGptTurnResult,
   mapGptReplyToTerminalStdout,
   runGptPackReview,
   type GptReviewDependencies,
@@ -165,6 +166,66 @@ describe('GPT pack reviewer adapter', () => {
     expect(capturedPrompt).toContain('https://github.com/example/repo/pull/42');
     expect(capturedPrompt).toContain('b'.repeat(40));
     expect(capturedPrompt).not.toContain('git diff origin/main...HEAD');
+  });
+
+  it('extracts the final structured Browser-GPT result while ignoring heartbeats', () => {
+    expect(extractLastGptTurnResult([
+      JSON.stringify({ schema: 'observation-heartbeat/v1', poll_count: 1 }),
+      JSON.stringify({
+        schema: 'turn-result/v1', state: 'driver_error', scope: 'profile',
+        cause: 'state_light_new_chat_send_slot_timeout', invocation_id: 'inv-1', send_count: 0,
+      }),
+    ].join('\n'))).toMatchObject({
+      schema: 'turn-result/v1', cause: 'state_light_new_chat_send_slot_timeout', send_count: 0,
+    });
+  });
+
+  it('preserves confirmed turn-result evidence when reply mapping fails', async () => {
+    const terminal = {
+      schema: 'turn-result/v1' as const,
+      state: 'ok',
+      scope: 'invocation',
+      cause: 'completed_page_only',
+      invocation_id: 'inv-confirmed-malformed',
+      send_count: 1,
+    };
+    const runBrowserTurn = vi.fn(async (options: { outputPath: string }) => {
+      writeFileSync(options.outputPath, 'Thanks, looks good!', 'utf8');
+      return {
+        outcome: 'exit' as const,
+        ok: true,
+        exitCode: 0,
+        signal: null,
+        stdout: `${JSON.stringify(terminal)}\n`,
+        stderr: '',
+        timedOut: false,
+        cancelled: false,
+      };
+    });
+    const deps: GptReviewDependencies = {
+      resolveBrowserConfig: () => ({
+        profile: '/tmp/profile',
+        cdpUrl: 'http://127.0.0.1:9222',
+        chatUrl: 'https://chatgpt.com/c/test',
+      }),
+      runBrowserTurn,
+      resolvePrUrl: () => 'https://github.com/example/repo/pull/42',
+    };
+
+    const result = await runGptPackReview({
+      repoRoot: process.cwd(),
+      repoSlug: 'example/repo',
+      prNumber: 42,
+      headSha: 'b'.repeat(40),
+    }, deps, {
+      PACK_GPT_BROWSER_PROFILE: '/tmp/profile',
+      PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
+      PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/test',
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/refusing|malformed|prose/i);
+    expect(extractLastGptTurnResult(result.stdout)).toEqual(terminal);
   });
 
   it('does not silently succeed on malformed GPT output', async () => {
