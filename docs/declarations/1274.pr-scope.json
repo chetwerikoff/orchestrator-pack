@@ -2,14 +2,8 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1274,
   "declared_paths": [
-    ".claude/skills/create-issue-draft/SKILL.md",
-    ".claude/skills/discuss-with-gpt/SKILL.md",
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
-    ".cursor/skills/create-issue-draft/SKILL.md",
-    ".cursor/skills/discuss-with-gpt/SKILL.md",
-    "AGENTS.md",
-    "docs/browser-gpt-turn-runbook.md",
-    "scripts/chatgpt-browser-turn/README.md"
+    "docs/browser-gpt-turn-runbook.md"
   ],
   "denylist": [
     ".ao/",
@@ -35,5 +29,5 @@
     "docs/declarations/1274.pr-scope.json",
     "scripts/chatgpt-browser-turn/README.md"
   ],
-  "source_revision": "2896a9a4e4ef76dbdbc9dcb79ee13d56d17c3bb0"
+  "source_revision": "5e26065a98e380cbaa164c508841fa1fa47e94f1"
 }
