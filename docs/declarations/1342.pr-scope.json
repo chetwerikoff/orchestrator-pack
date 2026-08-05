@@ -1,0 +1,45 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1342,
+  "declared_paths": [
+    "plugins/_shared/lib/path_pattern.ts",
+    "plugins/_shared/package.json",
+    "plugins/ao-scope-guard/lib/check.ts",
+    "plugins/ao-scope-guard/lib/glob_match.ts",
+    "plugins/ao-scope-guard/tests/check.test.ts",
+    "plugins/ao-scope-guard/tests/normalize_edge.test.ts",
+    "plugins/ao-task-declaration/lib/glob_match.ts",
+    "plugins/ao-task-declaration/lib/validate.ts",
+    "plugins/ao-task-declaration/tests/validate.test.ts",
+    "scripts/pr-scope-declaration.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".github/workflows/",
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "scripts/orca-runtime/",
+    "scripts/pr-scope-check.ps1",
+    "scripts/runtime/",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "plugins/_shared/lib/",
+    "plugins/_shared/package.json",
+    "plugins/ao-scope-guard/lib/check.ts",
+    "plugins/ao-scope-guard/lib/control_artifacts.ts",
+    "plugins/ao-scope-guard/lib/glob_match.ts",
+    "plugins/ao-scope-guard/tests/check.test.ts",
+    "plugins/ao-scope-guard/tests/normalize_edge.test.ts",
+    "plugins/ao-task-declaration/lib/glob_match.ts",
+    "plugins/ao-task-declaration/lib/validate.ts",
+    "plugins/ao-task-declaration/tests/validate.test.ts",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-contract.ts",
+    "scripts/pr-scope-declaration.test.ts",
+    "scripts/pr-scope-declaration.ts"
+  ]
+}
