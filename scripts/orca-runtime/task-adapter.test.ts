@@ -193,7 +193,7 @@ describe('Orca task adapter destructive operations', () => {
     expect(adapter.stopWorker(spawned.value.identity)).toEqual({
       status: 'failed',
       operation: 'stop_worker',
-      reason: 'runtime_error',
+      reason: 'runtime_operation_failed',
     });
     expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'close')).toHaveLength(1);
     expect(adapter.stopWorker(spawned.value.identity)).toEqual({
