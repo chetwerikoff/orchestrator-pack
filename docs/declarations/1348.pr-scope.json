@@ -2,7 +2,6 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1348,
   "declared_paths": [
-    ".github/workflows",
     "package.json",
     "scripts/vitest-live-store-inventory.json"
   ],
@@ -22,5 +21,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-live-store-inventory.json"
   ],
-  "source_revision": "a903cf10525030571b97a21efebda8bd39247483"
+  "source_revision": "e35d5b62f3460d95bfc6c429b6e0a8892d4a07ea"
 }
