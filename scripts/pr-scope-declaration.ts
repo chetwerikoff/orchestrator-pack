@@ -18,7 +18,11 @@ import {
 } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
+import {
+  parseIssueBody,
+  type IssueConstraints,
+} from '@orchestrator-pack/shared/lib/issue_parser.js';
+import { validateDeclaredScope } from '../plugins/ao-task-declaration/lib/validate.ts';
 
 export const PR_SCOPE_DECLARATION_SCHEMA =
   'orchestrator-pack/pr-scope-declaration/v1';
@@ -41,6 +45,7 @@ export const REPOSITORY_ALLOWED_ROOTS = [
   '.cursor/skills/**',
   'scripts/**',
   'tests/external-output-references/**',
+  'tests/fixtures/pack-gpt-browser-turn-harness.mjs',
   'plugins/**',
   'prompts/**',
   'docs/declarations/**',
@@ -493,6 +498,209 @@ export type DeclarationSelectionResult =
       message: string;
       candidates: DeclarationCandidate[];
     };
+
+export type LiveIssueScopeSelectionResult =
+  | {
+      ok: true;
+      allowed_roots: string[];
+      denylist: string[];
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
+export interface LiveIssueScopeBinding {
+  issueNumber?: number;
+  prNumber?: number;
+  headSha?: string;
+}
+
+const LIVE_ISSUE_BOOTSTRAP_SCHEMA = 'scope-guard-bootstrap/v1';
+const LIVE_ISSUE_BOOTSTRAP_WORKFLOW = '.github/workflows/scope-guard.yml';
+const LIVE_ISSUE_BOOTSTRAP_FENCE_PATTERN =
+  /```scope-guard-bootstrap\/v1\s*\r?\n([\s\S]*?)```/gi;
+const SOURCE_REVISION_MARKER_PATTERN =
+  /^<!--[ \t]*source-revision:[ \t]*(r\d+)[ \t]*-->[ \t]*\r?$/gm;
+const FULL_GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
+
+const ISSUE_SCOPE_FENCE_PATTERN =
+  /```(denylist|allowed-roots)\s*\r?\n([\s\S]*?)```/gi;
+
+function hasDuplicateEntries(entries: readonly string[]): boolean {
+  return new Set(entries).size !== entries.length;
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort((a, b) => a.localeCompare(b));
+  const sortedRight = [...right].sort((a, b) => a.localeCompare(b));
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
+}
+
+function validateLiveIssueBootstrap(
+  issueBody: string,
+  allowedRoots: readonly string[],
+  binding?: LiveIssueScopeBinding,
+): string | null {
+  const bootstrapMatches = [
+    ...issueBody.matchAll(
+      new RegExp(
+        LIVE_ISSUE_BOOTSTRAP_FENCE_PATTERN.source,
+        LIVE_ISSUE_BOOTSTRAP_FENCE_PATTERN.flags,
+      ),
+    ),
+  ];
+  if (bootstrapMatches.length === 0) return null;
+  if (bootstrapMatches.length !== 1) {
+    return 'live-Issue scope selection failed: exactly one scope-guard-bootstrap/v1 fence is required; FAIL/no-selection/fresh-declaration';
+  }
+
+  const revisionMatches = [
+    ...issueBody.matchAll(
+      new RegExp(
+        SOURCE_REVISION_MARKER_PATTERN.source,
+        SOURCE_REVISION_MARKER_PATTERN.flags,
+      ),
+    ),
+  ];
+  if (revisionMatches.length !== 1) {
+    return 'live-Issue scope selection failed: exactly one source-revision marker is required for bootstrap-bound scope; FAIL/no-selection/fresh-declaration';
+  }
+
+  if (
+    !binding ||
+    !Number.isInteger(binding.issueNumber) ||
+    binding.issueNumber! <= 0 ||
+    !Number.isInteger(binding.prNumber) ||
+    binding.prNumber! <= 0 ||
+    typeof binding.headSha !== 'string' ||
+    !FULL_GIT_SHA_PATTERN.test(binding.headSha)
+  ) {
+    return 'live-Issue scope selection failed: current Issue, PR, and 40-hex head binding context is required; FAIL/no-selection/fresh-declaration';
+  }
+
+  let bootstrap: unknown;
+  try {
+    bootstrap = JSON.parse(bootstrapMatches[0]?.[1] ?? '') as unknown;
+  } catch {
+    return 'live-Issue scope selection failed: malformed scope-guard-bootstrap/v1 fence; FAIL/no-selection/fresh-declaration';
+  }
+  if (!isRecord(bootstrap)) {
+    return 'live-Issue scope selection failed: scope-guard-bootstrap/v1 must contain an object; FAIL/no-selection/fresh-declaration';
+  }
+
+  const implementationPaths = bootstrap.allowedImplementationPaths;
+  if (
+    !Array.isArray(implementationPaths) ||
+    !implementationPaths.every((value): value is string => typeof value === 'string')
+  ) {
+    return 'live-Issue scope selection failed: bootstrap allowedImplementationPaths must be a string array; FAIL/no-selection/fresh-declaration';
+  }
+
+  const sourceRevision = revisionMatches[0]?.[1];
+  const bindingValid =
+    bootstrap.schema === LIVE_ISSUE_BOOTSTRAP_SCHEMA &&
+    bootstrap.issueNumber === binding.issueNumber &&
+    bootstrap.prNumber === binding.prNumber &&
+    bootstrap.headSha === binding.headSha &&
+    bootstrap.sourceRevision === sourceRevision &&
+    bootstrap.workflowPath === LIVE_ISSUE_BOOTSTRAP_WORKFLOW &&
+    bootstrap.declarationArtifactsAllowed === false &&
+    bootstrap.expiresOnMismatch === true &&
+    sameStringSet(implementationPaths, allowedRoots);
+  if (!bindingValid) {
+    return 'live-Issue scope selection failed: bootstrap binding is stale, substituted, or path-mismatched; FAIL/no-selection/fresh-declaration';
+  }
+
+  return null;
+}
+
+/**
+ * Select the current Issue's explicit scope when no declaration candidate exists.
+ *
+ * This is intentionally stricter than parseIssueBody: a declaration-free
+ * selection needs one unambiguous scope contract, not a merged interpretation
+ * of repeated fences or a repository-wide fallback.
+ */
+export function selectLiveIssueScope(
+  issueBody: string,
+  issueConstraints: IssueConstraints,
+  binding?: LiveIssueScopeBinding,
+): LiveIssueScopeSelectionResult {
+  const fenceCounts = { denylist: 0, 'allowed-roots': 0 };
+  let match: RegExpExecArray | null;
+  const pattern = new RegExp(
+    ISSUE_SCOPE_FENCE_PATTERN.source,
+    ISSUE_SCOPE_FENCE_PATTERN.flags,
+  );
+  while ((match = pattern.exec(issueBody)) !== null) {
+    const label = match[1] as keyof typeof fenceCounts;
+    fenceCounts[label] += 1;
+  }
+
+  if (fenceCounts.denylist !== 1 || fenceCounts['allowed-roots'] !== 1) {
+    return {
+      ok: false,
+      message:
+        'live-Issue scope selection failed: exactly one denylist and one allowed-roots fence are required; FAIL/no-selection/fresh-declaration',
+    };
+  }
+
+  const allowed_roots = issueConstraints.allowed_roots;
+  if (!allowed_roots || allowed_roots.length === 0) {
+    return {
+      ok: false,
+      message:
+        'live-Issue scope selection failed: explicit allowed-roots are required; repository-wide fallback is forbidden; FAIL/no-selection/fresh-declaration',
+    };
+  }
+
+  const bootstrapError = validateLiveIssueBootstrap(
+    issueBody,
+    allowed_roots,
+    binding,
+  );
+  if (bootstrapError) {
+    return { ok: false, message: bootstrapError };
+  }
+
+  if (
+    hasDuplicateEntries(issueConstraints.denylist) ||
+    hasDuplicateEntries(allowed_roots)
+  ) {
+    return {
+      ok: false,
+      message:
+        'live-Issue scope selection failed: scope entries contain duplicates; FAIL/no-selection/fresh-declaration',
+    };
+  }
+
+  if (!policySubset(allowed_roots, REPOSITORY_ALLOWED_ROOTS)) {
+    return {
+      ok: false,
+      message:
+        'live-Issue scope selection failed: allowed-roots widen the repository ceiling; FAIL/no-selection/fresh-declaration',
+    };
+  }
+
+  const valid = validateDeclaredScope(
+    { declared_paths: [], declared_globs: allowed_roots },
+    { denylist: issueConstraints.denylist, allowed_roots },
+  );
+  if (!valid.ok) {
+    return {
+      ok: false,
+      message: `live-Issue scope selection failed: ${valid.errors.join('; ')}; FAIL/no-selection/fresh-declaration`,
+    };
+  }
+
+  return {
+    ok: true,
+    allowed_roots,
+    denylist: issueConstraints.denylist,
+  };
+}
 
 function issueFromFilename(filename: string): number | null {
   const match = /^(\d+)\.[^/]+$/.exec(filename);

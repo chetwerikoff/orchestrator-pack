@@ -1,15 +1,18 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
+import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import {
   PR_SCOPE_DECLARATION_SCHEMA,
   producePrScopeDeclaration,
   selectDeclarationArtifact,
+  selectLiveIssueScope,
   validatePrScopeDeclaration,
 } from './pr-scope-declaration.ts';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { checkPrScope } from './pr-scope-check.ts';
+import { normalizeIssueConstraints } from '../plugins/ao-task-declaration/lib/validate.ts';
 
 const issueBody = [
   '```denylist',
@@ -21,6 +24,19 @@ const issueBody = [
   '```allowed-roots',
   'scripts/**',
   'docs/declarations/**',
+  '```',
+].join('\n');
+
+const declarationFreeIssueBody = [
+  '```denylist',
+  'vendor/**',
+  'packages/core/**',
+  'secrets/**',
+  'credentials/**',
+  'docs/declarations/**',
+  '```',
+  '```allowed-roots',
+  'scripts/**',
   '```',
 ].join('\n');
 
@@ -37,6 +53,80 @@ const firstPartySurfaceIssueBody = [
   'prompts/**',
   '```',
 ].join('\n');
+
+const bootstrapAllowedPaths = [
+  'scripts/pr-scope-check.ts',
+  'scripts/pr-scope-check.ps1',
+  'scripts/pr-scope-declaration.ts',
+  'scripts/pr-scope-declaration.test.ts',
+  '.github/workflows/scope-guard.yml',
+];
+const bootstrapHeadSha = '0123456789abcdef0123456789abcdef01234567';
+
+type BootstrapIssueOptions = {
+  markerRevision?: string;
+  bootstrapRevision?: string;
+  bootstrapHeadSha?: string;
+  allowedImplementationPaths?: string[];
+  allowedRoots?: string[];
+  duplicateBootstrap?: boolean;
+  duplicateMarker?: boolean;
+  malformedBootstrap?: boolean;
+};
+
+function bootstrapIssueBody(options: BootstrapIssueOptions = {}): string {
+  const markerRevision = options.markerRevision ?? 'r05';
+  const bootstrap = {
+    schema: 'scope-guard-bootstrap/v1',
+    issueNumber: 1314,
+    sourceRevision: options.bootstrapRevision ?? markerRevision,
+    prNumber: 1316,
+    headSha: options.bootstrapHeadSha ?? bootstrapHeadSha,
+    workflowPath: '.github/workflows/scope-guard.yml',
+    allowedImplementationPaths:
+      options.allowedImplementationPaths ?? bootstrapAllowedPaths,
+    declarationArtifactsAllowed: false,
+    expiresOnMismatch: true,
+  };
+  const bootstrapFence = options.malformedBootstrap
+    ? ['```scope-guard-bootstrap/v1', '{not-json', '```'].join('\n')
+    : [
+        '```scope-guard-bootstrap/v1',
+        JSON.stringify(bootstrap, null, 2),
+        '```',
+      ].join('\n');
+  return [
+    `<!-- source-revision: ${markerRevision} -->`,
+    ...(options.duplicateMarker
+      ? [`<!-- source-revision: ${markerRevision} -->`]
+      : []),
+    bootstrapFence,
+    ...(options.duplicateBootstrap ? [bootstrapFence] : []),
+    '```denylist',
+    'vendor/**',
+    'packages/core/**',
+    '```',
+    '```allowed-roots',
+    ...(options.allowedRoots ?? bootstrapAllowedPaths),
+    '```',
+  ].join('\n');
+}
+
+function selectBootstrapScope(
+  body: string,
+  binding: { issueNumber?: number; prNumber?: number; headSha?: string } = {},
+) {
+  return selectLiveIssueScope(
+    body,
+    normalizeIssueConstraints(parseIssueBody(body)),
+    {
+      issueNumber: 1314,
+      prNumber: 1316,
+      headSha: bootstrapHeadSha,
+      ...binding,
+    },
+  );
+}
 
 function declaration(issueNumber = 42): Record<string, unknown> {
   return {
@@ -268,12 +358,250 @@ describe('AO-free PR scope declaration contract', () => {
     });
   });
 
+  it('uses one explicit live-Issue scope only when no declaration candidate exists', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+    const inScopePaths = Array.from(
+      { length: 8 },
+      (_, index) => `scripts/allowed-${index}.ts`,
+    );
+
+    const base = {
+      repoRoot: root,
+      prBody: 'Closes #42',
+      issueBody: declarationFreeIssueBody,
+      prPaths: inScopePaths,
+      degradedMode: false,
+      forkPr: false,
+    };
+
+    expect(checkPrScope(base)).toMatchObject({
+      ok: true,
+      mode: 'implementation',
+      scopeSource: 'live-issue',
+      issueNumber: 42,
+      checkedPaths: inScopePaths,
+    });
+
+    const ninthPath = checkPrScope({
+      ...base,
+      prPaths: [...inScopePaths, 'README.md'],
+    });
+    expect(ninthPath).toMatchObject({
+      ok: false,
+      reason: 'scope_violation',
+    });
+    if (ninthPath.ok) throw new Error('expected the ninth path to fail closed');
+    expect(ninthPath.violations?.outOfScope).toEqual([
+      expect.stringContaining('README.md'),
+    ]);
+
+    expect(
+      checkPrScope({
+        ...base,
+        issueBody: `${declarationFreeIssueBody}\n\`\`\`allowed-roots\nscripts/**\n\`\`\`\n`,
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: 'declaration-selection-failed',
+    });
+  });
+
+  it('keeps a missing declaration fail-closed when the Issue permits declaration artifacts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+
+    expect(
+      checkPrScope({
+        repoRoot: root,
+        prBody: 'Closes #42',
+        issueBody,
+        prPaths: ['scripts/allowed.ts'],
+        degradedMode: false,
+        forkPr: false,
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: 'declaration-selection-failed',
+      message: expect.stringContaining('fresh-declaration'),
+    });
+  });
+
+  it('rejects multiple and duplicate closing links on the declaration-free path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+    const base = {
+      repoRoot: root,
+      issueBody: declarationFreeIssueBody,
+      prPaths: ['scripts/allowed.ts'],
+      degradedMode: false,
+      forkPr: false,
+    };
+
+    for (const prBody of [
+      'Closes #41\nCloses #42',
+      'Closes #42\nFixes #42',
+    ]) {
+      expect(checkPrScope({ ...base, prBody })).toMatchObject({
+        ok: false,
+        reason: 'declaration-selection-failed',
+        message: expect.stringContaining('exactly one closing Issue reference'),
+      });
+    }
+  });
+
+  it('accepts a valid bootstrap-bound live scope', () => {
+    expect(selectBootstrapScope(bootstrapIssueBody())).toEqual({
+      ok: true,
+      allowed_roots: bootstrapAllowedPaths,
+      denylist: ['vendor/**', 'packages/core/**'],
+    });
+  });
+
+  it('fails closed on stale bootstrap head or source revision', () => {
+    expect(
+      selectBootstrapScope(bootstrapIssueBody(), {
+        headSha: 'fedcba9876543210fedcba9876543210fedcba98',
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      selectBootstrapScope(
+        bootstrapIssueBody({ bootstrapRevision: 'r04' }),
+      ),
+    ).toMatchObject({ ok: false });
+  });
+
+  it('fails closed on substituted or mismatched bootstrap paths', () => {
+    expect(
+      selectBootstrapScope(
+        bootstrapIssueBody({
+          allowedImplementationPaths: [
+            ...bootstrapAllowedPaths.slice(0, -1),
+            'scripts/substituted.ts',
+          ],
+        }),
+      ),
+    ).toMatchObject({ ok: false });
+    expect(
+      selectBootstrapScope(
+        bootstrapIssueBody({
+          allowedRoots: [
+            ...bootstrapAllowedPaths.slice(0, -1),
+            'scripts/substituted.ts',
+          ],
+        }),
+      ),
+    ).toMatchObject({ ok: false });
+  });
+
+  it('fails closed on missing context and malformed or duplicate bindings', () => {
+    expect(
+      selectBootstrapScope(bootstrapIssueBody(), {
+        issueNumber: undefined,
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      selectBootstrapScope(bootstrapIssueBody({ malformedBootstrap: true })),
+    ).toMatchObject({ ok: false });
+    expect(
+      selectBootstrapScope(bootstrapIssueBody({ duplicateBootstrap: true })),
+    ).toMatchObject({ ok: false });
+    expect(
+      selectBootstrapScope(bootstrapIssueBody({ duplicateMarker: true })),
+    ).toMatchObject({ ok: false });
+  });
+
+  it('does not execute a substituted PR-head GitHub wrapper before bootstrap admission', () => {
+    const workflow = readFileSync(
+      join(process.cwd(), '.github', 'workflows', 'scope-guard.yml'),
+      'utf8',
+    );
+
+    expect(workflow).toContain("$packGh = Join-Path $trustedRoot 'scripts/gh'");
+    expect(workflow).not.toContain(
+      "$packGh = Join-Path $env:GITHUB_WORKSPACE 'scripts/gh'",
+    );
+    expect(workflow).toContain(
+      'git -C $env:GITHUB_WORKSPACE diff --name-only --no-renames',
+    );
+    expect(workflow).toContain(
+      'scope guard bootstrap: PR changed paths do not match the authorized implementation set',
+    );
+    expect(workflow).toContain('$bootstrapLabels = [regex]::Matches(');
+    expect(workflow).toContain(
+      'scope guard bootstrap: expected exactly one bootstrap declaration label',
+    );
+    expect(workflow).toContain('$revisionMatches = [regex]::Matches(');
+    expect(workflow).toContain(
+      'scope guard bootstrap: expected exactly one source revision',
+    );
+    expect(workflow).not.toContain('$revisionMatch = [regex]::Match(');
+    expect(workflow).toContain(
+      'scope guard bootstrap: bootstrap fields do not match the closed schema',
+    );
+    expect(workflow).toContain(
+      'scope guard bootstrap: bootstrap field types are invalid',
+    );
+  });
+
+  it('does not let malformed current-Issue candidates use the live-Issue path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+    mkdirSync(join(root, 'docs', 'declarations'), { recursive: true });
+    writeFileSync(
+      join(root, 'docs', 'declarations', '42.bad.json'),
+      '{not-json',
+      'utf8',
+    );
+
+    expect(
+      checkPrScope({
+        repoRoot: root,
+        prBody: 'Closes #42',
+        issueBody: declarationFreeIssueBody,
+        prPaths: ['scripts/allowed.ts'],
+        degradedMode: false,
+        forkPr: false,
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: 'declaration-selection-failed',
+    });
+  });
+
+  it('does not let duplicate current-Issue candidates use the live-Issue path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+    mkdirSync(join(root, 'docs', 'declarations'), { recursive: true });
+    for (const suffix of ['a', 'b']) {
+      writeFileSync(
+        join(root, 'docs', 'declarations', `42.${suffix}.json`),
+        `${JSON.stringify(declaration())}\n`,
+        'utf8',
+      );
+    }
+
+    expect(
+      checkPrScope({
+        repoRoot: root,
+        prBody: 'Closes #42',
+        issueBody: declarationFreeIssueBody,
+        prPaths: ['scripts/allowed.ts'],
+        degradedMode: false,
+        forkPr: false,
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: 'declaration-selection-failed',
+    });
+  });
+
   it('does not treat an unavailable diff as an empty successful diff', () => {
     expect(
       checkPrScope({
         repoRoot: process.cwd(),
         prBody: 'Closes #42',
-        issueBody,
+        issueBody: declarationFreeIssueBody,
         prPaths: [],
         degradedMode: false,
         forkPr: false,

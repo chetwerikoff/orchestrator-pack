@@ -16,6 +16,8 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1031 light-lane GPT reviewer tests: fast unit coverage without runtime-history
   // harvest yet; fixed estimates keep pre-topology measurement within the 32-file bound.
   'scripts/pack-gpt-reviewer.test.ts': 120,
+  // Issue #1295 r03: one exact fixed estimate for the required new light test.
+  'scripts/pack-reviewer-preference.test.ts': 120,
   'scripts/pack-gpt-browser-path.test.ts': 120,
   'scripts/pack-pr-review-contract.test.ts': 120,
   'scripts/pack-review-runner-gpt.test.ts': 120,
@@ -47,6 +49,12 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1198 launch/watch contract tests are fast deterministic coverage.
   'scripts/launch-watch/launch-watch.test.ts': 120,
   'scripts/launch-watch/watch.test.ts': 120,
+  // Issue #1298 worktree lifecycle tests are deterministic fixture coverage.
+  // Keep the pre-topology plan bounded until runtime-history harvest records them.
+  'scripts/worktree-lifecycle/create-continuation.test.ts': 120,
+  'scripts/worktree-lifecycle/core.test.ts': 120,
+  'scripts/worktree-lifecycle/operations.test.ts': 120,
+  'scripts/worktree-lifecycle/recovery-regression.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains

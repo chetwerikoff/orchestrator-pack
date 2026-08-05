@@ -6,11 +6,56 @@ import {
   resolveRepositorySlug,
   runGptPackReview,
   assertGptHarnessFixtureAllowed,
+  type GptReviewRequest,
 } from './lib/pack-gpt-reviewer.ts';
+import type { ResolvedScopeContext } from '../plugins/ao-codex-pr-reviewer/lib/scope_context.ts';
 import { runProcess } from './kernel/subprocess.ts';
 
 function trim(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function resolveFrozenScope(env: NodeJS.ProcessEnv): ResolvedScopeContext | undefined {
+  const raw = trim(env.PACK_REVIEW_FROZEN_SCOPE_JSON);
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Partial<ResolvedScopeContext>;
+    const issueNumber = parsed.issueNumber;
+    const issueConstraints = parsed.issueConstraints;
+    const validIssueConstraints = issueConstraints !== null
+      && typeof issueConstraints === 'object'
+      && !Array.isArray(issueConstraints)
+      && isStringArray((issueConstraints as { denylist?: unknown }).denylist)
+      && (
+        (issueConstraints as { allowed_roots?: unknown }).allowed_roots === undefined
+        || isStringArray((issueConstraints as { allowed_roots?: unknown }).allowed_roots)
+      );
+    const hasConcreteScope = issueConstraints !== null
+      || (Array.isArray(parsed.declaredPaths) && parsed.declaredPaths.length > 0)
+      || (Array.isArray(parsed.declaredGlobs) && parsed.declaredGlobs.length > 0);
+    if (!parsed || typeof parsed !== 'object'
+      || !(
+        issueNumber === null
+        || (typeof issueNumber === 'number'
+          && Number.isSafeInteger(issueNumber)
+          && issueNumber > 0)
+      )
+      || typeof parsed.hasScope !== 'boolean'
+      || !isStringArray(parsed.declaredPaths)
+      || !isStringArray(parsed.declaredGlobs)
+      || typeof parsed.unverifiedIssueConstraints !== 'boolean'
+      || (parsed.issueConstraints !== null && !validIssueConstraints)
+      || parsed.hasScope !== hasConcreteScope) {
+      throw new Error('invalid frozen scope shape');
+    }
+    return parsed as ResolvedScopeContext;
+  } catch (error) {
+    throw new Error(`invalid PACK_REVIEW_FROZEN_SCOPE_JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function usage(): string {
@@ -104,14 +149,16 @@ async function main(): Promise<void> {
     headSha = fixtureHead || await resolveHeadSha(options.repoRoot, prNumber, resolvedRepoSlug);
   }
 
-  const result = await runGptPackReview({
+  const request: GptReviewRequest = {
     repoRoot: options.repoRoot,
     repoSlug: resolvedRepoSlug,
     prNumber,
     headSha,
     issueNumber: options.issueNumber,
     baseRef: options.baseRef,
-  });
+    frozenScope: resolveFrozenScope(process.env),
+  };
+  const result = await runGptPackReview(request);
 
   if (result.stderr) {
     process.stderr.write(`${result.stderr}\n`);
