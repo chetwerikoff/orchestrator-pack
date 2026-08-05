@@ -3,6 +3,7 @@
   "issue_number": 1337,
   "declared_paths": [
     ".claude/skills/merge-with-local-adoption/SKILL.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
     "AGENTS.md",
     "docs/blocker-philosophy.md"
   ],
@@ -14,8 +15,9 @@
   ],
   "allowed_roots": [
     ".claude/skills/merge-with-local-adoption/SKILL.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
     "AGENTS.md",
     "docs/blocker-philosophy.md"
   ],
-  "source_revision": "e5d3cd090e9e2b2c4ecdc3ff415df790e1dcca55"
+  "source_revision": "r03"
 }
