@@ -187,30 +187,6 @@
         "scripts/orchestrator-message-catalog.json",
         "scripts/orchestrator-message-owner-mechanisms.manifest.json"
       ]
-    },
-    {
-      "rule": "duplicate-literal",
-      "reason": "Issue #1328 keeps the destructive actuator independent from the lifecycle coordinator; sharing command-runner, JSON, and canonical-digest helpers would introduce a reverse runtime dependency across the effect boundary for generic adapter code.",
-      "files": [
-        "scripts/worktree-lifecycle/operations.ts",
-        "scripts/worktree-teardown.ts"
-      ]
-    },
-    {
-      "rule": "duplicate-literal",
-      "reason": "Issue #1328 keeps standalone post-create and post-merge executables independently runnable; the small subprocess adapter is intentionally duplicated rather than adding a new abstraction solely for lint.",
-      "files": [
-        "scripts/worktree-lifecycle/create-continuation.ts",
-        "scripts/worktree-teardown.ts"
-      ]
-    },
-    {
-      "rule": "duplicate-literal",
-      "reason": "Issue #1328 focused actuator tests use a local ProcessResult fixture to keep destructive-effect state isolated from coordinator tests.",
-      "files": [
-        "scripts/worktree-lifecycle/operations.test.ts",
-        "scripts/worktree-teardown.test.ts"
-      ]
     }
   ]
 }
