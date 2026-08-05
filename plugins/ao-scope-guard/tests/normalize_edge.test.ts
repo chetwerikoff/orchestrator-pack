@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { normalizePath } from '@orchestrator-pack/shared/lib/normalize.js';
 import { isControlArtifact } from '../lib/control_artifacts.js';
-import { matchesGlob } from '../lib/glob_match.js';
+import {
+  globIsWithinAllowedRoot,
+  globPatternsOverlap,
+  matchesGlob,
+  parsePathPattern,
+} from '../lib/glob_match.js';
 
 describe('scope-guard normalization edge cases', () => {
   it('rejects parent traversal, drive letters, and absolute paths', () => {
@@ -33,5 +38,36 @@ describe('scope-guard normalization edge cases', () => {
     expect(
       matchesGlob('plugins/ao-scope-guard/tests/**', 'plugins/other/x.ts'),
     ).toBe(false);
+  });
+
+  it('keeps literal, directory, and direct-child kinds distinct', () => {
+    expect(matchesGlob('plugins/ao-scope-guard', 'plugins/ao-scope-guard')).toBe(true);
+    expect(matchesGlob('plugins/ao-scope-guard', 'plugins/ao-scope-guard/lib/check.ts')).toBe(false);
+    expect(matchesGlob('plugins/ao-scope-guard/', 'plugins/ao-scope-guard/lib/check.ts')).toBe(true);
+    expect(matchesGlob('plugins/ao-scope-guard/**', 'plugins/ao-scope-guard')).toBe(true);
+    expect(matchesGlob('plugins/ao-scope-guard/*', 'plugins/ao-scope-guard/lib')).toBe(true);
+    expect(matchesGlob('plugins/ao-scope-guard/*', 'plugins/ao-scope-guard/lib/check.ts')).toBe(false);
+  });
+
+  it('decides repeated-double-star inclusion and intersection exactly', () => {
+    expect(globIsWithinAllowedRoot('a/**/b/**/c', 'a/**/c')).toBe(true);
+    expect(globIsWithinAllowedRoot('a/**/b/**/c', 'a/**/d/**/c')).toBe(false);
+    expect(globPatternsOverlap('a/**/b/**/c', 'a/**/d/**/c')).toBe(true);
+    expect(globPatternsOverlap('a/**/b/**/c', 'a/**/d/**/e')).toBe(false);
+  });
+
+  it.each([
+    '',
+    '../outside.ts',
+    '/absolute.ts',
+    'C:/drive.ts',
+    'plugins\\mixed.ts',
+    'plugins//duplicate.ts',
+    'plugins/foo**/bar.ts',
+    'plugins/foo*/bar.ts',
+    'plugins/?/bar.ts',
+    'plugins/[ab]/bar.ts',
+  ])('rejects malformed pattern %s', (pattern) => {
+    expect(parsePathPattern(pattern)).toMatchObject({ ok: false });
   });
 });
