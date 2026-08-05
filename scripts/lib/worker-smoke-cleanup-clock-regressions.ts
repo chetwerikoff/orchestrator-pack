@@ -48,7 +48,8 @@ export function registerWorkerSmokeCleanupClockRegressionTests(input: {
       });
 
       expect(advancingClock).toHaveBeenCalledTimes(1);
-      expect(close).toHaveBeenCalledExactlyOnceWith('term_advancing_clock');
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledWith('term_advancing_clock');
       expect(result).toMatchObject({
         clean: true,
         closeOutcome: 'closed_owned_handle',
