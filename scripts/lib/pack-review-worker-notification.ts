@@ -241,10 +241,14 @@ function bindPersistedReviewRun(options: WorkerNotificationOptions):
     return { ok: false, reason: 'review_run_binding_unresolved' };
   }
   if (!run) {
-    // Preserve the explicit low-level API for focused callers. The production
-    // runner supplies only reviewRunId/sessionId and therefore cannot cross this
-    // branch without the durable run binding.
-    return Number.isInteger(Number(options.prNumber)) && Number(options.prNumber) > 0
+    // Preserve explicitly bound low-level callers. Review delivery remains
+    // fail-closed unless it supplies a PR, while task continuation remains
+    // issue-keyed and must not depend on a review-run store entry.
+    const intentClass = trim(options.intentClass) || 'review-findings';
+    const explicitBinding = intentClass === 'task-continuation'
+      ? Number.isInteger(Number(options.issueNumber)) && Number(options.issueNumber) > 0
+      : Number.isInteger(Number(options.prNumber)) && Number(options.prNumber) > 0;
+    return explicitBinding
       ? { ok: true, options }
       : { ok: false, reason: 'review_run_binding_unresolved' };
   }
