@@ -3,6 +3,7 @@
   "issue_number": 1348,
   "declared_paths": [
     "package.json",
+    "scripts/check-vitest-live-store-isolation.mjs",
     "scripts/vitest-live-store-inventory.json"
   ],
   "denylist": [
@@ -21,5 +22,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-live-store-inventory.json"
   ],
-  "source_revision": "e35d5b62f3460d95bfc6c429b6e0a8892d4a07ea"
+  "source_revision": "00b4bdf961269d62fd4efe9557b34c9d869e1726"
 }
