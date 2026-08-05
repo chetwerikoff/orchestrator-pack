@@ -15,17 +15,16 @@ import {
   runPackGptReviewCommand,
 } from './pack-gpt-review.js';
 import { isRetryablePackReviewZeroSendCollision, startPackReview } from './pack-review-runner.js';
+import type { CarryoverReplayResult } from './pack-review-carryover.js';
 import {
   createPackReviewRun,
   getPackReviewRun,
+  listPackReviewRuns,
   setPackReviewRunTerminal,
   terminalizePackReviewStaleRun,
   updatePackReviewRun,
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.js';
-import { startPackReview } from './pack-review-runner.js';
-import type { CarryoverReplayResult } from './pack-review-carryover.js';
-import { createPackReviewRun, getPackReviewRun, listPackReviewRuns } from './lib/pack-review-run-store.js';
 import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
 
@@ -88,6 +87,8 @@ function findingsPayload(title: string): string {
     findingCount: 1,
     findings: [{ title, body: 'body-' + title, severity: 'blocking' }],
   });
+}
+
 function mergeCompositeReplay(): CarryoverReplayResult {
   const sourceHeadSha = 'c'.repeat(40);
   const mainSha = 'd'.repeat(40);
