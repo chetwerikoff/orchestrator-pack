@@ -529,7 +529,7 @@ describe('standard teardown post-effect settlement', () => {
       outcome: 'task_degraded',
       postClassification: { classification: 'orca_only' },
     });
-    expect(report.error).toMatch(/did not prove absence/);
+    expect(report.error).toMatch(/did not prove exact absence/);
   });
 
   it('accepts effect-before-receipt only when dual read-back proves completion', () => {
