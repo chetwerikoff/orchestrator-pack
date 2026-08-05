@@ -2,6 +2,8 @@
 
 import './toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { selectRuntimeAdapter } from './runtime/registry.ts';
 import {
@@ -19,6 +21,7 @@ import type { RuntimeAdapter } from './runtime/contracts.ts';
 export interface WorkerRecoveryCliOptions {
   workerId: string;
   workerGeneration: string;
+  sessionId: string;
   cleanupWorkspacePath: string;
   expectedHeadSha: string;
   spawnWorkspace: 'active' | string;
@@ -46,10 +49,88 @@ function requiredOptionValue(args: readonly string[], index: number, option: str
   return value;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function text(...values: unknown[]): string {
+  for (const value of values) {
+    const normalized = String(value ?? '').trim();
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function sessionMetadataPath(options: WorkerRecoveryCliOptions): string {
+  const base = process.env.AO_BASE_DIR?.trim() || join(homedir(), '.agent-orchestrator');
+  return join(base, 'projects', options.projectId, 'sessions', `${options.sessionId || options.workerId}.json`);
+}
+
+/**
+ * Resolve cleanup authority only from a pre-existing pack-owned session record.
+ * CLI flags are comparison inputs, never authority: every destructive field must
+ * already be present in the durable runtimeHandle and match exactly.
+ */
+export function loadWorkerRecoveryCleanupAuthority(
+  options: WorkerRecoveryCliOptions,
+): { ok: true; authority: WorkerRecoveryCleanupAuthority } | { ok: false; reason: string } {
+  const path = sessionMetadataPath(options);
+  if (!existsSync(path)) return { ok: false, reason: 'cleanup_ownership_authority_missing' };
+  let metadata: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    const record = asRecord(parsed);
+    if (!record) return { ok: false, reason: 'cleanup_ownership_authority_untrusted' };
+    metadata = record;
+  } catch {
+    return { ok: false, reason: 'cleanup_ownership_authority_untrusted' };
+  }
+  const runtimeHandle = asRecord(metadata.runtimeHandle);
+  const data = asRecord(runtimeHandle?.data);
+  if (!runtimeHandle || !data) return { ok: false, reason: 'cleanup_ownership_authority_untrusted' };
+
+  const runtime = text(runtimeHandle.runtime, data.runtime);
+  const id = text(runtimeHandle.id, data.id, data.handle, data.terminalHandle);
+  const generation = text(
+    runtimeHandle.generation,
+    data.generation,
+    data.incarnationId,
+    data.ptyId,
+  );
+  const workspacePath = text(data.workspacePath, runtimeHandle.workspacePath, metadata.worktree);
+  const expectedHeadSha = text(
+    data.headSha,
+    runtimeHandle.headSha,
+    metadata.ownedHeadSha,
+    metadata.headSha,
+  ).toLowerCase();
+  if (!runtime || !id || !generation || !workspacePath || !expectedHeadSha) {
+    return { ok: false, reason: 'cleanup_ownership_authority_untrusted' };
+  }
+  if (id !== options.workerId
+    || generation !== options.workerGeneration
+    || resolve(workspacePath) !== resolve(options.cleanupWorkspacePath)
+    || expectedHeadSha !== options.expectedHeadSha.toLowerCase()) {
+    return { ok: false, reason: 'cleanup_ownership_authority_mismatch' };
+  }
+  return {
+    ok: true,
+    authority: {
+      source: 'pack-reservation',
+      worker: { runtime, id, generation },
+      workspacePath: resolve(workspacePath),
+      expectedHeadSha,
+    },
+  };
+}
+
 export function parseWorkerRecoveryArgs(argv: readonly string[]): WorkerRecoveryCliOptions {
   const options: WorkerRecoveryCliOptions = {
     workerId: '',
     workerGeneration: '',
+    sessionId: '',
     cleanupWorkspacePath: '',
     expectedHeadSha: '',
     spawnWorkspace: 'active',
@@ -71,6 +152,10 @@ export function parseWorkerRecoveryArgs(argv: readonly string[]): WorkerRecovery
         break;
       case '--worker-generation':
         options.workerGeneration = requiredOptionValue(args, index, option);
+        index += 1;
+        break;
+      case '--session-id':
+        options.sessionId = requiredOptionValue(args, index, option);
         index += 1;
         break;
       case '--cleanup-workspace':
@@ -130,6 +215,7 @@ export function parseWorkerRecoveryArgs(argv: readonly string[]): WorkerRecovery
     throw new Error('--spawn-workspace must differ from --cleanup-workspace');
   }
 
+  options.sessionId ||= options.workerId;
   options.claimKey ||= claimKeyFor(options);
   return options;
 }
@@ -138,7 +224,7 @@ export function parseWorkerRecoveryArgs(argv: readonly string[]): WorkerRecovery
  * The CLI deliberately cannot mint cleanup authority from its flags or from the
  * recovery-time serialization claim. A caller that already loaded and validated
  * a durable pack reservation may pass that authority through this API; the
- * direct command otherwise fails closed before removeWorkspace.
+ * public entrypoint loads the same authority from pack-owned session metadata.
  */
 export async function runWorkerRecovery(input: {
   readonly options: WorkerRecoveryCliOptions;
@@ -231,11 +317,23 @@ export async function runWorkerRecovery(input: {
   }
 }
 
-export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
+export async function main(
+  argv: readonly string[] = process.argv.slice(2),
+  dependencies: { readonly adapter?: RuntimeAdapter; readonly claimNamespace?: string } = {},
+): Promise<number> {
   const options = parseWorkerRecoveryArgs(argv);
-  const result = await runWorkerRecovery({ options });
-  process.stdout.write(`${JSON.stringify(result)}\n`);
-  return result.outcome === 'spawn_started' || result.outcome === 'dry_run' ? 0 : 1;
+  const authority = loadWorkerRecoveryCleanupAuthority(options);
+  const result = await runWorkerRecovery({
+    options,
+    adapter: dependencies.adapter,
+    claimNamespace: dependencies.claimNamespace,
+    cleanupAuthority: authority.ok ? authority.authority : undefined,
+  });
+  const publicResult = authority.ok || result.outcome !== 'skipped_ambiguous'
+    ? result
+    : { ...result, reason: authority.reason };
+  process.stdout.write(`${JSON.stringify(publicResult)}\n`);
+  return publicResult.outcome === 'spawn_started' || publicResult.outcome === 'dry_run' ? 0 : 1;
 }
 
 const direct = import.meta.url === new URL(process.argv[1] ?? '', 'file:').href;
