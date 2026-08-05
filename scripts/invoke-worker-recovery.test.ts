@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { runProcess } from './kernel/subprocess.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import {
+  loadWorkerRecoveryCleanupAuthority,
+  main,
   parseWorkerRecoveryArgs,
   runWorkerRecovery,
 } from './invoke-worker-recovery.ts';
@@ -84,6 +86,94 @@ describe('TypeScript worker recovery entrypoint', () => {
       expect(remove.mock.invocationCallOrder[0]).toBeLessThan(spawnWorker.mock.invocationCallOrder[0] ?? 0);
       expect(spawnWorker.mock.calls[0]?.[0].workspace).toBe('active');
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('loads durable runtimeHandle authority in the public main path', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-recovery-main-'));
+    const previousAoBase = process.env.AO_BASE_DIR;
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const adapter = new DeterministicRuntimeAdapter();
+      const cleanupWorkspace = join(root, 'stale-worktree');
+      const owned = adapter.spawnWorker({
+        title: 'stale-worker',
+        command: 'cursor-agent',
+        workspace: cleanupWorkspace,
+      });
+      expect(owned.status).toBe('ok');
+      if (owned.status !== 'ok') return;
+      expect(adapter.stopWorker(owned.value.identity).status).toBe('ok');
+      process.env.AO_BASE_DIR = join(root, 'ao');
+      const sessionDir = join(process.env.AO_BASE_DIR, 'projects', 'orchestrator-pack', 'sessions');
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(join(sessionDir, `${owned.value.identity.id}.json`), `${JSON.stringify({
+        runtimeHandle: {
+          runtime: owned.value.identity.runtime,
+          id: owned.value.identity.id,
+          generation: owned.value.identity.generation,
+          data: {
+            workspacePath: cleanupWorkspace,
+            headSha: 'test-head',
+          },
+        },
+      })}\n`, 'utf8');
+      const remove = vi.spyOn(adapter, 'removeWorkspace');
+      const spawnWorker = vi.spyOn(adapter, 'spawnWorker');
+
+      const code = await main([
+        '--worker-id', owned.value.identity.id,
+        '--worker-generation', owned.value.identity.generation,
+        '--cleanup-workspace', cleanupWorkspace,
+        '--expected-head-sha', 'test-head',
+        '--claim-key', 'public-main-authority',
+        '--repo-root', root,
+      ], {
+        adapter,
+        claimNamespace: join(root, 'claims'),
+      });
+
+      expect(code).toBe(0);
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(spawnWorker).toHaveBeenCalledTimes(1);
+      expect(stdout).toHaveBeenCalledWith(expect.stringContaining('"outcome":"spawn_started"'));
+    } finally {
+      if (previousAoBase === undefined) delete process.env.AO_BASE_DIR;
+      else process.env.AO_BASE_DIR = previousAoBase;
+      stdout.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a durable runtimeHandle generation mismatch', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-recovery-authority-'));
+    const previousAoBase = process.env.AO_BASE_DIR;
+    try {
+      process.env.AO_BASE_DIR = join(root, 'ao');
+      const sessionDir = join(process.env.AO_BASE_DIR, 'projects', 'orchestrator-pack', 'sessions');
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(join(sessionDir, 'worker-1.json'), `${JSON.stringify({
+        runtimeHandle: {
+          runtime: 'test',
+          id: 'worker-1',
+          generation: 'old-generation',
+          data: { workspacePath: '/tmp/stale-worktree', headSha: 'test-head' },
+        },
+      })}\n`, 'utf8');
+      const options = parseWorkerRecoveryArgs([
+        '--worker-id', 'worker-1',
+        '--worker-generation', 'new-generation',
+        '--cleanup-workspace', '/tmp/stale-worktree',
+        '--expected-head-sha', 'test-head',
+      ]);
+      expect(loadWorkerRecoveryCleanupAuthority(options)).toEqual({
+        ok: false,
+        reason: 'cleanup_ownership_authority_mismatch',
+      });
+    } finally {
+      if (previousAoBase === undefined) delete process.env.AO_BASE_DIR;
+      else process.env.AO_BASE_DIR = previousAoBase;
       rmSync(root, { recursive: true, force: true });
     }
   });
