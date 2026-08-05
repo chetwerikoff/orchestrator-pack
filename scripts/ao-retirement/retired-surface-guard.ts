@@ -11,10 +11,18 @@ export interface RetiredSurfaceDefinition {
   readonly owningReference: string;
 }
 
+export interface MatchExclusion {
+  readonly surfaceId: string;
+  readonly match: string;
+  readonly lineContains: string;
+  readonly reason: string;
+}
+
 export interface InventoryRow {
   readonly path: string;
   readonly kind: InventoryKind;
   readonly reason?: string;
+  readonly matchExclusions?: readonly MatchExclusion[];
 }
 
 export interface RetiredSurfaceInventory {
@@ -30,12 +38,21 @@ export interface GuardViolation {
   readonly match: string;
 }
 
+export interface ExcludedMatch {
+  readonly path: string;
+  readonly surfaceId: string;
+  readonly match: string;
+  readonly lineContains: string;
+  readonly reason: string;
+}
+
 export interface GuardResult {
   readonly candidateBase: string;
   readonly scannedPaths: readonly string[];
   readonly deferredPaths: readonly string[];
   readonly historicalPaths: readonly string[];
   readonly preservedPaths: readonly string[];
+  readonly excludedMatches: readonly ExcludedMatch[];
   readonly violations: readonly GuardViolation[];
 }
 
@@ -76,6 +93,51 @@ function normalizeRepoPath(input: string): string {
   return normalize(trimmed).replaceAll('\\', '/').replace(/^\.\//, '');
 }
 
+function requireNonEmptyString(
+  value: unknown,
+  label: string,
+  options: { readonly trim?: boolean } = {},
+): string {
+  if (typeof value !== 'string') throw new Error(`${label} must be a string`);
+  const normalized = options.trim === false ? value : value.trim();
+  if (normalized.length === 0) throw new Error(`${label} must be non-empty`);
+  return normalized;
+}
+
+function parseMatchExclusions(
+  candidate: Record<string, unknown>,
+  rowLabel: string,
+  kind: InventoryKind,
+): readonly MatchExclusion[] {
+  if (candidate.matchExclusions === undefined) return [];
+  if (kind !== 'clean') {
+    throw new Error(`${rowLabel} matchExclusions are allowed only for clean rows`);
+  }
+  if (!Array.isArray(candidate.matchExclusions) || candidate.matchExclusions.length === 0) {
+    throw new Error(`${rowLabel} matchExclusions must be a non-empty array`);
+  }
+
+  const seen = new Set<string>();
+  return candidate.matchExclusions.map((value, index) => {
+    const label = `${rowLabel} match exclusion ${index}`;
+    assertObject(value, label);
+    const exclusion = {
+      surfaceId: requireNonEmptyString(value.surfaceId, `${label} surfaceId`),
+      match: requireNonEmptyString(value.match, `${label} match`, { trim: false }),
+      lineContains: requireNonEmptyString(value.lineContains, `${label} lineContains`),
+      reason: requireNonEmptyString(value.reason, `${label} reason`),
+    };
+    const key = JSON.stringify([
+      exclusion.surfaceId,
+      exclusion.match,
+      exclusion.lineContains,
+    ]);
+    if (seen.has(key)) throw new Error(`${rowLabel} has duplicate match exclusion`);
+    seen.add(key);
+    return exclusion;
+  });
+}
+
 export function loadInventory(path: string): RetiredSurfaceInventory {
   const raw = parseJson(path);
   assertObject(raw, 'inventory');
@@ -105,7 +167,17 @@ export function loadInventory(path: string): RetiredSurfaceInventory {
     if (kind !== 'clean' && reason === '') {
       throw new Error(`inventory row ${normalizedPath} requires a reason`);
     }
-    return { path: normalizedPath, kind, ...(reason ? { reason } : {}) };
+    const matchExclusions = parseMatchExclusions(
+      candidate,
+      `inventory row ${normalizedPath}`,
+      kind,
+    );
+    return {
+      path: normalizedPath,
+      kind,
+      ...(reason ? { reason } : {}),
+      ...(matchExclusions.length > 0 ? { matchExclusions } : {}),
+    };
   });
 
   const actualPreserves = rows.filter((row) => row.kind === 'preserve').map((row) => row.path).sort();
@@ -164,6 +236,13 @@ function assertExpectedKind(path: string, kind: InventoryKind): void {
   }
 }
 
+function lineContaining(content: string, index: number): string {
+  const start = content.lastIndexOf('\n', Math.max(0, index - 1)) + 1;
+  const nextBreak = content.indexOf('\n', index);
+  const end = nextBreak === -1 ? content.length : nextBreak;
+  return content.slice(start, end);
+}
+
 export function evaluateRetiredSurfaceInventory(input: {
   readonly repoRoot: string;
   readonly inventoryPath: string;
@@ -176,7 +255,9 @@ export function evaluateRetiredSurfaceInventory(input: {
     throw new Error('patternSource resolves outside repository root');
   }
   const surfaces = loadRetiredSurfaces(patternPath);
+  const surfaceIds = new Set(surfaces.map((surface) => surface.id));
   const violations: GuardViolation[] = [];
+  const excludedMatches: ExcludedMatch[] = [];
   const scannedPaths: string[] = [];
   const deferredPaths: string[] = [];
   const historicalPaths: string[] = [];
@@ -203,16 +284,59 @@ export function evaluateRetiredSurfaceInventory(input: {
 
     scannedPaths.push(row.path);
     const content = readFileSync(absolutePath, 'utf8');
+    const exclusions = row.matchExclusions ?? [];
+    const exclusionUseCounts = exclusions.map(() => 0);
+    for (const exclusion of exclusions) {
+      if (!surfaceIds.has(exclusion.surfaceId)) {
+        throw new Error(`unknown match exclusion surface ${exclusion.surfaceId} for ${row.path}`);
+      }
+    }
+
     for (const surface of surfaces) {
       const regex = new RegExp(surface.sourceCommandPattern, 'gmi');
       for (const match of content.matchAll(regex)) {
+        const matchText = match[0];
+        const line = lineContaining(content, match.index ?? 0);
+        const matchingExclusions = exclusions
+          .map((exclusion, index) => ({ exclusion, index }))
+          .filter(({ exclusion }) => (
+            exclusion.surfaceId === surface.id
+            && exclusion.match === matchText
+            && line.includes(exclusion.lineContains)
+          ));
+        if (matchingExclusions.length > 1) {
+          throw new Error(`ambiguous match exclusions for ${row.path}:${surface.id}:${matchText}`);
+        }
+        const selected = matchingExclusions[0];
+        if (selected) {
+          exclusionUseCounts[selected.index] += 1;
+          if (exclusionUseCounts[selected.index] > 1) {
+            throw new Error(`match exclusion consumed more than once for ${row.path}:${surface.id}`);
+          }
+          excludedMatches.push({
+            path: row.path,
+            surfaceId: surface.id,
+            match: matchText,
+            lineContains: selected.exclusion.lineContains,
+            reason: selected.exclusion.reason,
+          });
+          continue;
+        }
         violations.push({
           path: row.path,
           surfaceId: surface.id,
-          match: match[0].slice(0, 160),
+          match: matchText.slice(0, 160),
         });
       }
     }
+
+    exclusions.forEach((exclusion, index) => {
+      if (exclusionUseCounts[index] !== 1) {
+        throw new Error(
+          `match exclusion was not consumed exactly once for ${row.path}:${exclusion.surfaceId}`,
+        );
+      }
+    });
   }
 
   return {
@@ -221,6 +345,7 @@ export function evaluateRetiredSurfaceInventory(input: {
     deferredPaths,
     historicalPaths,
     preservedPaths,
+    excludedMatches,
     violations,
   };
 }
