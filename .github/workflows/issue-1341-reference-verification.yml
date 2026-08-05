@@ -1,3 +1,4 @@
+# Temporary implementation bootstrap for Issue #1341.
 name: issue-1341-reference-verification
 
 on:
