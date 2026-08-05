@@ -1,9 +1,10 @@
+// Scope-guard compatibility surface; every matching decision lives in shared.
 export {
-  matchesPathPattern as matchesGlob,
   parsePathPattern,
+  matchesPathPattern as matchesGlob,
   pathMatchesAnyPattern,
-  pathPatternsOverlap as globPatternsOverlap,
   pathPatternWithin as globIsWithinAllowedRoot,
+  pathPatternsOverlap as globPatternsOverlap,
   type ParsedPathPattern,
   type PathPatternKind,
   type PathPatternParseResult,
