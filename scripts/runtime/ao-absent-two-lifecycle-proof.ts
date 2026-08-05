@@ -27,16 +27,24 @@ import { delimiter } from 'node:path';
 const statePath = ${JSON.stringify(statePath)};
 const capturePath = ${JSON.stringify(capturePath)};
 const expectedPath = ${JSON.stringify(expectedPath)};
-const args = process.argv.slice(2).filter((arg) => arg !== '--json');
-const operation = \`\${args[0] ?? ''} \${args[1] ?? ''}\`;
+const rawArgs = process.argv.slice(2);
+const args = rawArgs.filter((value) => value !== '--json');
+const operation = [args[0] ?? '', args[1] ?? ''].join(' ');
+const initialState = { sequence: 0, terminals: {}, operations: [], captures: [] };
 const state = existsSync(statePath)
   ? JSON.parse(readFileSync(statePath, 'utf8'))
-  : { sequence: 0, terminals: {}, operations: [], captures: [] };
-const forbiddenEnvironment = Object.keys(process.env).filter(
-  (key) => key.startsWith('AO_') || key.startsWith('AGENT_ORCHESTRATOR_'),
-);
-const pathEntries = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
-const legacyAdapterLoaded = Object.keys(process.env).some((key) => key.includes('AO_LEGACY'));
+  : initialState;
+const forbiddenEnvironment = [];
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith('AO_') || key.startsWith('AGENT_ORCHESTRATOR_')) {
+    forbiddenEnvironment.push(key);
+  }
+}
+const pathText = process.env.PATH ?? '';
+const pathEntries = pathText === '' ? [] : pathText.split(delimiter).filter(Boolean);
+const legacyAdapterLoaded = Object.keys(process.env)
+  .filter((key) => key.includes('LEGACY'))
+  .some((key) => key.includes('AO'));
 const capture = { operation, args, forbiddenEnvironment, pathEntries, expectedPath, legacyAdapterLoaded };
 state.captures.push(capture);
 writeFileSync(capturePath, \`\${JSON.stringify(state.captures)}\\n\`, 'utf8');
