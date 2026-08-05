@@ -91,6 +91,7 @@ export interface ProduceAcceptanceArtifactsOptions {
   phase?: 'pre-lens' | 'final-acceptance';
   operatorAdjudication?: OperatorAcceptanceAdjudication;
   operatorReferenceTransport?: GhTransport;
+  repositoryFullName?: string;
 }
 
 interface NormalizedOperatorAcceptanceAdjudication extends OperatorAcceptanceAdjudication {
@@ -364,10 +365,45 @@ function parseCanonicalCaptureRevision(text: string): { issueNumber: number; sou
   };
 }
 
+function parseCanonicalTerminalVerdict(
+  text: string,
+): { issueNumber: number; sourceRevision: string; findingCount: number } | null {
+  const revision = parseCanonicalCaptureRevision(text);
+  if (!revision) return null;
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  const exactCount = (token: string): number => lines.filter((line) => line === token).length;
+  const verdicts = lines.flatMap((line) => {
+    const match = /^VERDICT: (CLEAN|FINDINGS)$/.exec(line);
+    return match ? [match[1]!] : [];
+  });
+  const declaredFindingCounts = lines.flatMap((line) => {
+    const match = /^FINDING_COUNT: ([0-9]+)$/.exec(line);
+    return match ? [Number(match[1])] : [];
+  });
+  const invocationIds = lines.filter((line) => /^INVOCATION_ID: \S+$/.test(line));
+  if (
+    exactCount('review-economics-contract: v1') !== 1
+    || exactCount('SIMPLIFICATION_CLEAN') !== 1
+    || verdicts.length !== 1
+    || declaredFindingCounts.length !== 1
+    || declaredFindingCounts[0] !== revision.findingCount
+    || invocationIds.length !== 1
+  ) return null;
+  if (revision.findingCount === 0) {
+    if (verdicts[0] !== 'CLEAN' || exactCount('NO_FINDINGS') !== 1) return null;
+  } else if (verdicts[0] !== 'FINDINGS' || exactCount('NO_FINDINGS') !== 0) {
+    return null;
+  }
+  return revision;
+}
+
 function normalizeOperatorAcceptanceAdjudication(
   value: OperatorAcceptanceAdjudication | undefined,
   phase: ProduceAcceptanceArtifactsOptions['phase'],
   transport: GhTransport | undefined,
+  authoritativeRepositoryFullName: string,
+  authoritativeIssueNumber: number,
+  authoritativeSourceRevision: string,
   errors: string[],
 ): NormalizedOperatorAcceptanceAdjudication | null {
   if (!value) return null;
@@ -382,22 +418,40 @@ function normalizeOperatorAcceptanceAdjudication(
   const verdictByteLength = Number(value.verdictByteLength);
   const verdictFindingCount = Number(value.verdictFindingCount);
   const reason = String(value.reason ?? '').trim();
+  const canonicalRepository = authoritativeRepositoryFullName.trim();
+  if (!/^[^/\s]+\/[^/\s]+$/.test(canonicalRepository)) {
+    errors.push('operator adjudication authoritative repository must be owner/name');
+  }
   if (!Number.isInteger(issueNumber) || issueNumber < 1) errors.push('operator adjudication issueNumber must be positive');
+  if (issueNumber !== authoritativeIssueNumber) {
+    errors.push('operator adjudication Issue does not match authoritative tier-intake Issue');
+  }
+  if (sourceRevision !== authoritativeSourceRevision) {
+    errors.push('operator adjudication revision does not match authoritative review episode');
+  }
   if (!/^r[0-9]+$/.test(sourceRevision)) errors.push('operator adjudication sourceRevision must be rNN');
   if (!/^[0-9a-f]{64}$/.test(verdictSha256)) errors.push('operator adjudication verdictSha256 must be 64 lowercase hex characters');
   if (!Number.isInteger(verdictByteLength) || verdictByteLength < 0) errors.push('operator adjudication verdictByteLength must be non-negative');
   if (!Number.isInteger(verdictFindingCount) || verdictFindingCount < 0) errors.push('operator adjudication verdictFindingCount must be non-negative');
   if (!reason) errors.push('operator adjudication reason must be non-empty');
   const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)$/.exec(verdictUrl);
-  if (!match) errors.push('operator adjudication verdictUrl must be a canonical published Issue comment URL');
-  else if (Number(match[2]) !== issueNumber) errors.push('operator adjudication verdictUrl Issue does not match issueNumber');
+  if (!match) {
+    errors.push('operator adjudication verdictUrl must be a canonical published Issue comment URL');
+  } else {
+    if (match[1]!.toLowerCase() !== canonicalRepository.toLowerCase()) {
+      errors.push('operator adjudication verdictUrl repository does not match authoritative repository');
+    }
+    if (Number(match[2]) !== issueNumber) {
+      errors.push('operator adjudication verdictUrl Issue does not match issueNumber');
+    }
+  }
   if (errors.length !== errorCountBefore || !match) return null;
   if (!transport) {
     errors.push('operator adjudication published verdict transport is unavailable');
     return null;
   }
 
-  const repositoryFullName = match[1]!;
+  const repositoryFullName = canonicalRepository;
   const commentId = match[3]!;
   const response = transport.runGh([
     'gh',
@@ -448,9 +502,9 @@ function normalizeOperatorAcceptanceAdjudication(
   if (updatedAt !== createdAt) {
     errors.push('operator adjudication published verdict reference was edited');
   }
-  const parsed = parseCanonicalCaptureRevision(authoritativeBody);
+  const parsed = parseCanonicalTerminalVerdict(authoritativeBody);
   if (!parsed) {
-    errors.push('operator adjudication published verdict has no unique canonical revision declaration');
+    errors.push('operator adjudication published verdict is not a canonical terminal verdict');
   } else {
     if (parsed.issueNumber !== issueNumber) errors.push('operator adjudication published verdict Issue is mismatched');
     if (parsed.sourceRevision !== sourceRevision) errors.push('operator adjudication published verdict revision is mismatched');
@@ -488,6 +542,7 @@ function applyOperatorAcceptanceAdjudication(
   errors: string[],
 ): string | null {
   if (!context || !capture || captureText === null) return null;
+  const errorCountBefore = errors.length;
   const adjudication = context.adjudication;
   if (
     capture.sha256 !== adjudication.verdictSha256
@@ -495,16 +550,16 @@ function applyOperatorAcceptanceAdjudication(
     || capture.rawFindingCount !== adjudication.verdictFindingCount
     || captureText !== adjudication.authoritativeBody
   ) return null;
-  const parsed = parseCanonicalCaptureRevision(captureText);
+  const parsed = parseCanonicalTerminalVerdict(captureText);
   if (!parsed) {
-    errors.push('operator adjudication governed capture has no unique canonical revision declaration');
+    errors.push('operator adjudication governed capture is not a canonical terminal verdict');
     return null;
   }
   if (parsed.issueNumber !== adjudication.issueNumber) errors.push('operator adjudication Issue does not match governed capture');
   if (parsed.sourceRevision !== adjudication.sourceRevision) errors.push('operator adjudication revision does not match governed capture');
   if (parsed.sourceRevision !== invocation.sourceRevision) errors.push('operator adjudication revision does not match stage invocation');
   if (parsed.findingCount !== adjudication.verdictFindingCount) errors.push('operator adjudication finding count does not match governed capture');
-  if (errors.length > 0) return null;
+  if (errors.length !== errorCountBefore) return null;
   const invocationId = typeof invocation.invocationId === 'string' ? invocation.invocationId : '';
   context.applications.push({ invocationId, originalTransport });
   return `operator-adjudicated:sha256:${adjudication.verdictSha256}:issuecomment-${adjudication.commentId}`;
@@ -634,29 +689,45 @@ function readTurnResultForInvocation(
   }
   const identity = turnResultIdentity(basename(resolved), sha256(text));
   if (stateValid && value.state !== 'ok' && terminalFieldsValid && invocationMatches) {
-    const adjudicated = applyOperatorAcceptanceAdjudication(
-      operatorContext,
-      invocation,
-      capture,
-      captureText,
-      {
-        state: String(value.state),
-        scope: String(value.scope),
-        cause: String(value.cause),
-        terminalClassification: String(invocation.terminalClassification ?? ''),
-        turnResultPath: resolved,
-        ...(Number.isInteger(value.send_count) ? { sendCount: Number(value.send_count) } : {}),
-        terminalResultIdentity: identity,
-      },
-      errors,
-    );
+    const invocationSendCount = Number(invocation.sendCount);
+    let originalSendCount = invocationSendCount;
+    let sendCountMatches = true;
+    if (value.send_count !== undefined) {
+      if (value.send_count !== 0 && value.send_count !== 1) {
+        errors.push(`turn-result/v1 artifact for ${label}.send_count must be 0 or 1: ${resolved}`);
+        sendCountMatches = false;
+      } else if (Number(value.send_count) !== invocationSendCount) {
+        errors.push(`turn-result/v1 artifact for ${label}.send_count does not match stage evidence: ${resolved}`);
+        sendCountMatches = false;
+      } else {
+        originalSendCount = Number(value.send_count);
+      }
+    }
+    const adjudicated = sendCountMatches
+      ? applyOperatorAcceptanceAdjudication(
+          operatorContext,
+          invocation,
+          capture,
+          captureText,
+          {
+            state: String(value.state),
+            scope: String(value.scope),
+            cause: String(value.cause),
+            terminalClassification: String(invocation.terminalClassification ?? ''),
+            turnResultPath: resolved,
+            sendCount: originalSendCount,
+            terminalResultIdentity: identity,
+          },
+          errors,
+        )
+      : null;
     if (adjudicated) {
       if (invocation.terminalResultIdentity !== identity) {
         errors.push(`stage evidence ${label}.terminalResultIdentity is not derived from the referenced turn-result: ${resolved}`);
       }
-      return identity;
+    } else {
+      errors.push(`turn-result/v1 artifact for ${label} is not a successful terminal result: ${resolved}`);
     }
-    errors.push(`turn-result/v1 artifact for ${label} is not a successful terminal result: ${resolved}`);
   }
   const output = isRecord(value.output) ? value.output : null;
   if (
@@ -1122,23 +1193,38 @@ export function produceAcceptanceArtifacts(
   options: ProduceAcceptanceArtifactsOptions,
 ): AcceptanceArtifactResult {
   const outputDir = options.outputDir ?? options.reviewDir;
-  invalidateOutputArtifacts(outputDir);
+  if (!options.operatorAdjudication) invalidateOutputArtifacts(outputDir);
   const errors: string[] = [];
-  const operatorAdjudication = normalizeOperatorAcceptanceAdjudication(
-    options.operatorAdjudication,
-    options.phase,
-    options.operatorAdjudication ? options.operatorReferenceTransport ?? defaultGhTransport() : undefined,
-    errors,
-  );
-  const operatorContext = operatorAdjudication
-    ? { adjudication: operatorAdjudication, applications: [] } satisfies OperatorAdjudicationContext
-    : undefined;
   const intake = loadTierIntake(options.tierIntakePath, errors);
   const taskIdentity = intake && requiredString(intake.taskIdentity, 'tier-intake.taskIdentity', errors);
   const episodeFirstRevision = intake && requiredString(intake.firstRevision, 'tier-intake.firstRevision', errors);
   if (!intake || !taskIdentity || !episodeFirstRevision) {
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)] };
   }
+  let operatorAdjudication: NormalizedOperatorAcceptanceAdjudication | null = null;
+  if (options.operatorAdjudication) {
+    const taskIssueMatch = /^issue:([1-9][0-9]*)$/.exec(taskIdentity);
+    if (!taskIssueMatch) {
+      errors.push('operator adjudication requires an authoritative tier-intake Issue identity');
+    } else {
+      operatorAdjudication = normalizeOperatorAcceptanceAdjudication(
+        options.operatorAdjudication,
+        options.phase,
+        options.operatorReferenceTransport ?? defaultGhTransport(),
+        options.repositoryFullName ?? 'chetwerikoff/orchestrator-pack',
+        Number(taskIssueMatch[1]),
+        episodeFirstRevision,
+        errors,
+      );
+    }
+    if (!operatorAdjudication) {
+      return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)] };
+    }
+    invalidateOutputArtifacts(outputDir);
+  }
+  const operatorContext = operatorAdjudication
+    ? { adjudication: operatorAdjudication, applications: [] } satisfies OperatorAdjudicationContext
+    : undefined;
   const episodeId = deriveReviewEpisodeId(taskIdentity, episodeFirstRevision);
   const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(
     options.reviewDir,
@@ -1317,17 +1403,7 @@ export function inspectAcceptanceArtifacts(
 ): AcceptanceArtifactStatus {
   const present: string[] = [];
   const missing: AcceptanceArtifactMissingInput[] = [];
-  const operatorErrors: string[] = [];
-  const operatorAdjudication = normalizeOperatorAcceptanceAdjudication(
-    options.operatorAdjudication,
-    options.phase,
-    options.operatorAdjudication ? options.operatorReferenceTransport ?? defaultGhTransport() : undefined,
-    operatorErrors,
-  );
-  for (const error of operatorErrors) missing.push({ artifact: 'operator adjudication', reason: error });
-  const operatorContext = operatorAdjudication
-    ? { adjudication: operatorAdjudication, applications: [] } satisfies OperatorAdjudicationContext
-    : undefined;
+  let operatorContext: OperatorAdjudicationContext | undefined;
   const outputDir = options.outputDir ?? options.reviewDir;
   const requireRegularFile = (path: string, artifact: string, reason: string): boolean => {
     let stat;
@@ -1360,6 +1436,28 @@ export function inspectAcceptanceArtifacts(
   const intake = readArtifactJson(options.tierIntakePath, 'tier-intake/v1', 'tier intake evidence is missing');
   if (!isRecord(intake) || intake.schema !== 'tier-intake/v1') {
     addInvalid('tier-intake/v1', options.tierIntakePath, 'tier intake evidence is malformed');
+  } else if (options.operatorAdjudication) {
+    const taskIdentity = typeof intake.taskIdentity === 'string' ? intake.taskIdentity.trim() : '';
+    const firstRevision = typeof intake.firstRevision === 'string' ? intake.firstRevision.trim() : '';
+    const taskIssueMatch = /^issue:([1-9][0-9]*)$/.exec(taskIdentity);
+    const operatorErrors: string[] = [];
+    if (!taskIssueMatch || !firstRevision) {
+      operatorErrors.push('operator adjudication requires an authoritative tier-intake Issue identity');
+    } else {
+      const operatorAdjudication = normalizeOperatorAcceptanceAdjudication(
+        options.operatorAdjudication,
+        options.phase,
+        options.operatorReferenceTransport ?? defaultGhTransport(),
+        options.repositoryFullName ?? 'chetwerikoff/orchestrator-pack',
+        Number(taskIssueMatch[1]),
+        firstRevision,
+        operatorErrors,
+      );
+      if (operatorAdjudication) {
+        operatorContext = { adjudication: operatorAdjudication, applications: [] };
+      }
+    }
+    for (const error of operatorErrors) missing.push({ artifact: 'operator adjudication', reason: error });
   }
   const dispositions = readArtifactJson(options.authorDispositionsPath, 'author dispositions', 'author disposition evidence is missing');
   if (!isRecord(dispositions) || dispositions.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(dispositions.findings)) {

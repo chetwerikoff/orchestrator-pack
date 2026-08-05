@@ -1785,6 +1785,15 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       httpStatus: 409,
     };
   }
+  if (target.operatorStart) {
+    const existingSameHead = listPackReviewRunRecordsRaw({ projectId, storeRoot }).find((record) => (
+      record.prNumber === target.prNumber
+      && record.headSha.toLowerCase() === target.headSha.toLowerCase()
+    ));
+    if (existingSameHead) {
+      throw new Error(`operator pack-review start cannot reuse or resume existing same-head run ${existingSameHead.id}`);
+    }
+  }
 
   const reviewer = resolvePackReviewerFromEnv(process.env, {
     layerOverrides: input.fixtureReviewerLayerOverrides,

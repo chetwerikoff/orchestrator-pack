@@ -45,12 +45,12 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   authorDispositionsPath?: string;
   claudeProducerEvidencePaths: string[];
   phase?: 'pre-lens' | 'final-acceptance';
-  operatorIssueNumber?: number;
+  operatorIssueNumber?: string;
   operatorSourceRevision?: string;
   operatorVerdictUrl?: string;
   operatorVerdictSha256?: string;
-  operatorVerdictByteLength?: number;
-  operatorFindingCount?: number;
+  operatorVerdictByteLength?: string;
+  operatorFindingCount?: string;
   operatorReason?: string;
 }
 
@@ -269,7 +269,7 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
       }
       case '--operator-issue-number':
         requireArtifactCommand(arg);
-        opts.operatorIssueNumber = Number(argv[++i]);
+        opts.operatorIssueNumber = String(argv[++i] ?? '');
         break;
       case '--operator-source-revision':
         requireArtifactCommand(arg);
@@ -285,11 +285,11 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
         break;
       case '--operator-verdict-byte-length':
         requireArtifactCommand(arg);
-        opts.operatorVerdictByteLength = Number(argv[++i]);
+        opts.operatorVerdictByteLength = String(argv[++i] ?? '');
         break;
       case '--operator-finding-count':
         requireArtifactCommand(arg);
-        opts.operatorFindingCount = Number(argv[++i]);
+        opts.operatorFindingCount = String(argv[++i] ?? '');
         break;
       case '--operator-reason':
         requireArtifactCommand(arg);
@@ -388,6 +388,7 @@ export function runStageFinalizeCli(argv: string[]): number {
         outputDir: opts.outputDir,
         phase: opts.phase,
         operatorAdjudication: operatorAcceptanceAdjudication(opts),
+        repositoryFullName: opts.repo,
       };
       const result = opts.command === 'produce-artifacts'
         ? produceAcceptanceArtifacts(artifactOptions)
