@@ -122,8 +122,8 @@ function proveRecoveryAndContinuation(): {
     const reconciled = readSmokeLifecycleRegistry(oldArtifactDir);
     assert(reconciled?.spawnState === 'clean', 'historical lifecycle was not reconciled clean');
     assert(
-      reconciled.cleanup?.reason.includes('restart_recovery_receipt_reconciled'),
-      'reconciliation provenance was not recorded',
+      reconciled.cleanup?.reason.startsWith('receipt_first_historical_cleanup:'),
+      'receipt-first reconciliation provenance was not recorded',
     );
     assert(
       readFileSync(smokeCloseReceiptPath(oldArtifactDir), 'utf8').includes('"phase": "closed"'),
