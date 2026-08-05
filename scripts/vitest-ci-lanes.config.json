@@ -87,6 +87,7 @@
     "scripts/orchestrator-wake-supervisor.test.ts": "parked",
     "scripts/pack-gpt-browser-path.test.ts": "light",
     "scripts/pack-gpt-reviewer.test.ts": "light",
+    "scripts/pack-reviewer-preference.test.ts": "light",
     "scripts/pack-pr-review-contract.test.ts": "light",
     "scripts/pack-review-carryover.test.ts": "light",
     "scripts/pack-review-runner-gpt.test.ts": "light",
@@ -97,6 +98,7 @@
     "scripts/pr-session-binding-cache.test.ts": "light",
     "scripts/pr2-foundation/binding-cache.test.ts": "light",
     "scripts/pr2-foundation/foundation.test.ts": "heavy",
+    "scripts/pr2-foundation/fleet-observer.test.ts": "postMergeWallclock",
     "scripts/pr2-foundation/migration-symlink.test.ts": "light",
     "scripts/pr2-foundation/mutation-catalog.test.ts": "light",
     "scripts/pr2-foundation/mutation-external-ci.test.ts": "heavy",
@@ -141,7 +143,12 @@
     "scripts/toolchain/create-issue-authoring-contract.test.ts": "light",
     "scripts/toolchain/create-issue-final-acceptance.test.ts": "heavy",
     "scripts/worker-message-submit-reconcile.test.ts": "heavy",
-    "scripts/worker-smoke.test.ts": "light"
+    "scripts/worker-smoke.test.ts": "light",
+    "scripts/worktree-lifecycle/core.test.ts": "light",
+    "scripts/worktree-lifecycle/create-continuation.test.ts": "light",
+    "scripts/worktree-lifecycle/operations.test.ts": "light",
+    "scripts/worktree-lifecycle/recovery-regression.test.ts": "light",
+    "scripts/worktree-teardown.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,

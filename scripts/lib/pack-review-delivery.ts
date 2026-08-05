@@ -22,6 +22,7 @@ import {
   type PackReviewRunStatus,
   type PackReviewStoreOptions,
 } from './pack-review-run-store.ts';
+import { parsePersistedWorkerNotificationBinding } from './pack-review-worker-notification.ts';
 
 export const PACK_REVIEW_REQUIRED_STATUS_CONTEXT = 'orchestrator-pack/pack-review';
 const PACK_REVIEW_BOUNDED_FAILURE_REASONS = new Set([
@@ -445,28 +446,6 @@ function firstNotificationText(...values: unknown[]): string {
     if (normalized) return normalized;
   }
   return '';
-}
-
-function persistedWorkerNotificationBinding(
-  run: PackReviewRunRecord,
-): PackReviewWorkerNotificationBinding | null {
-  const raw = asNotificationRecord((run as PackReviewRunWithNotificationBinding).workerNotificationBinding);
-  if (!raw || Number(raw.schemaVersion) !== 1) return null;
-  const binding: PackReviewWorkerNotificationBinding = {
-    schemaVersion: 1,
-    runtime: trim(raw.runtime),
-    id: trim(raw.id),
-    generation: trim(raw.generation),
-    workspacePath: trim(raw.workspacePath),
-    headSha: trim(raw.headSha).toLowerCase(),
-  };
-  if (!binding.runtime
-    || !binding.id
-    || !binding.generation
-    || !binding.workspacePath
-    || !/^[0-9a-f]{40}$/.test(binding.headSha)
-    || binding.headSha !== run.targetSha) return null;
-  return binding;
 }
 
 function sessionMetadataRoot(projectId: string): string {

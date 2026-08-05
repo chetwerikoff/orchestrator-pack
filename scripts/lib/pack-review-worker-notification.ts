@@ -77,7 +77,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function persistedWorkerNotificationBinding(
+export function parsePersistedWorkerNotificationBinding(
   run: unknown,
 ): PackReviewWorkerNotificationBinding | null {
   const record = asRecord(run);
@@ -329,7 +329,7 @@ function bindPersistedReviewRun(options: WorkerNotificationOptions):
     };
   }
 
-  const binding = persistedWorkerNotificationBinding(run);
+  const binding = parsePersistedWorkerNotificationBinding(run);
   if (!binding) return { ok: false, reason: 'worker_runtime_binding_unresolved' };
   const explicitWorkerId = trim(options.workerId);
   if (explicitWorkerId && explicitWorkerId !== binding.id) {
