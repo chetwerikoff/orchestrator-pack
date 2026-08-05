@@ -37,8 +37,16 @@ export const WORKTREE_TEARDOWN_RUNTIME_PROFILE = Object.freeze({
     command: executable,
     args: ['terminal', 'close', '--terminal', terminalHandle, '--json'],
   }),
+  remove_worktree_help: (): RuntimeCommand => ({
+    command: executable,
+    args: ['worktree', 'rm', '--help'],
+  }),
   remove_worktree: (worktreePath: string): RuntimeCommand => ({
     command: executable,
     args: ['worktree', 'rm', '--worktree', `path:${worktreePath}`, '--json'],
+  }),
+  remove_worktree_force: (worktreePath: string): RuntimeCommand => ({
+    command: executable,
+    args: ['worktree', 'rm', '--worktree', `path:${worktreePath}`, '--force', '--json'],
   }),
 });

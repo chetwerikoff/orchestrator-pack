@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Unified worktree teardown: validation, gates, terminal stop/close, process reap, re-check, removal.
-// Default is DRY-RUN. --apply executes. Exit 0 only for reaped_clean.
+// Exact merged-PR post-merge teardown. Default is dry-run; --apply performs effects.
 
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   lstatSync,
@@ -10,7 +10,8 @@ import {
   readdirSync,
   realpathSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, posix, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
 import {
   acquireLifecycleExclusion,
@@ -23,140 +24,206 @@ import {
   type RuntimeCommand,
 } from './worktree-teardown-runtime-profile.ts';
 
-type TeardownOutcome =
-  | 'reaped_clean'
-  | 'blocked_lock_held'
-  | 'blocked_invalid_target'
-  | 'blocked_unprovable_orphan'
-  | 'blocked_identity_drift'
-  | 'blocked_dirty_worktree'
-  | 'blocked_ignored_operator_data'
-  | 'blocked_unmerged_work'
-  | 'blocked_shared_head_ref'
-  | 'blocked_state_desync'
-  | 'blocked_state_drift'
-  | 'blocked_mixed_tab'
-  | 'partial_residual_processes'
-  | 'terminal_stop_failed'
-  | 'worktree_remove_failed';
+export type PostMergeTeardownOutcome =
+  | 'cleanup_eligible'
+  | 'cleanup_complete'
+  | 'already_absent'
+  | 'quiesced_cleanup_deferred'
+  | 'unsupported_runtime_preflight'
+  | 'task_degraded'
+  | 'cleanup_deferred';
 
-type GateVerdict = 'pass' | 'fail';
+type TargetClassification = 'exact_dual' | 'exact_git_only';
+type TargetMode = 'branch-bound' | 'detached-confirmed';
+type ManifestCategory = 'tracked' | 'untracked' | 'ignored';
 
-interface TeardownReport {
-  worktree: string;
-  pr: number;
-  outcome: TeardownOutcome;
-  apply_mode: boolean;
-  gates: Record<'g1' | 'g2a' | 'g2b' | 'g3' | 'g4' | 'g5', GateVerdict>;
-  validation: {
-    is_primary_checkout: boolean;
-    is_in_inventory: boolean;
-    path_exists: boolean;
-  };
-  terminals?: {
-    stopped: number;
-    closed_panes: number;
-    closed_tabs: number;
-    mixed_tab_found: boolean;
-  };
-  processes?: {
-    selected: number;
-    termed: number;
-    sigkilled: number;
-    residual: number;
-  };
-  recheck?: Record<'g1' | 'g2a' | 'g2b' | 'g5', GateVerdict>;
-  worktree_removal?: {
-    attempted: boolean;
-    removed: boolean;
-  };
-  branch_deletion?: {
-    method: 'd' | 'skipped';
-    reason: string;
-  };
-  error?: string;
+export interface CommandInvocation {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly cwd?: string;
+  readonly timeoutMs?: number;
 }
 
-interface ParsedArgs {
-  worktree: string | null;
-  pr: number | null;
-  apply: boolean;
-  json: boolean;
-  orphan: boolean;
-  iKnowThisPath: boolean;
-  lifecycleLockPath: string;
-  lifecycleLockToken: string | null;
+export type CommandRunner = (invocation: CommandInvocation) => ProcessResult;
+
+export interface PostMergeTeardownArgs {
+  readonly destructive: boolean;
+  readonly repositoryRoot: string | null;
+  readonly worktree: string | null;
+  readonly pr: number | null;
+  readonly initialHead: string | null;
+  readonly finalPrHead: string | null;
+  readonly expectedBranch: string | null;
+  readonly detached: boolean;
+  readonly classification: TargetClassification | null;
+  readonly apply: boolean;
+  readonly json: boolean;
+  readonly lifecycleLockPath: string;
+  readonly lifecycleLockToken: string | null;
 }
 
-interface PRInfo {
-  headRefName: string;
-  state: string;
-  headRefOid: string;
-  mergeCommit?: { oid: string };
-  headRepository?: { nameWithOwner: string };
-  baseRefName?: string;
+interface PrInfo {
+  readonly headRefName: string;
+  readonly state: string;
+  readonly headRefOid: string;
+  readonly mergeCommit?: { readonly oid?: string };
+  readonly headRepository?: { readonly nameWithOwner?: string };
+  readonly baseRefName?: string;
 }
 
 interface RuntimeAgent {
-  state?: string;
-  interrupted?: boolean;
+  readonly state?: string;
+  readonly interrupted?: boolean;
 }
 
 interface RuntimeWorktree {
-  path?: string;
-  head?: string;
-  branch?: string;
-  isMainWorktree?: boolean;
-  agents?: RuntimeAgent[];
+  readonly id?: string;
+  readonly path?: string;
+  readonly head?: string;
+  readonly branch?: string;
+  readonly linkedPR?: number | null;
+  readonly isMainWorktree?: boolean;
+  readonly isArchived?: boolean;
+  readonly agents?: readonly RuntimeAgent[];
 }
 
 interface RuntimeTerminal {
-  handle?: string;
-  worktreePath?: string;
-  tabId?: string;
-}
-
-interface IdentitySnapshot {
-  mode: 'branch-bound' | 'detached-confirmed';
-  headSha: string;
-  branchName?: string;
-}
-
-interface GateResults {
-  g1: boolean;
-  g2a: boolean;
-  g2b: boolean;
-  g3: boolean;
-  g4: boolean;
-  g5: boolean;
-  failedOutcome?: TeardownOutcome;
-  prBranchName?: string;
-  identity?: IdentitySnapshot;
-  detail?: string;
+  readonly handle?: string;
+  readonly worktreePath?: string;
+  readonly tabId?: string;
 }
 
 interface ProcessSnapshot {
-  pid: number;
-  ppid: number;
-  starttime: string;
-  cwd: string | null;
-  cmd: string;
-  exe: string | null;
+  readonly pid: number;
+  readonly ppid: number;
+  readonly starttime: string;
+  readonly cwd: string | null;
 }
 
-interface ReapResult {
-  selected: number;
-  termed: number;
-  sigkilled: number;
-  residual: number;
+export interface DiscardManifestEntry {
+  readonly category: ManifestCategory;
+  readonly path: string;
 }
 
-interface RuntimeJsonResult<T> {
-  ok: boolean;
-  value?: T;
-  error?: string;
+export interface DiscardManifest {
+  readonly schema: 'orchestrator-pack/worktree-discard-manifest/v1';
+  readonly repositoryRoot: string;
+  readonly worktree: string;
+  readonly pr: number;
+  readonly targetHead: string;
+  readonly branch: string | null;
+  readonly capturedAt: string;
+  readonly entries: readonly DiscardManifestEntry[];
+  readonly digest: string;
+  readonly encodedBytes: number;
 }
 
+interface InventorySnapshot {
+  readonly runtimeWorktrees: readonly RuntimeWorktree[];
+  readonly runtimeAgents: readonly RuntimeWorktree[];
+  readonly runtimeTerminals: readonly RuntimeTerminal[];
+  readonly gitWorktreesRaw: string;
+  readonly targetRuntimeRows: readonly RuntimeWorktree[];
+  readonly targetAgentRows: readonly RuntimeWorktree[];
+  readonly targetTerminals: readonly RuntimeTerminal[];
+  readonly unrelatedDigest: string;
+}
+
+interface TargetIdentity {
+  readonly path: string;
+  readonly repositoryRoot: string;
+  readonly mode: TargetMode;
+  readonly branch: string | null;
+  readonly head: string;
+  readonly commonDir: string;
+  readonly primaryCheckout: string;
+}
+
+interface ProofSnapshot {
+  readonly identity: TargetIdentity;
+  readonly pr: PrInfo;
+  readonly inventory: InventorySnapshot;
+  readonly branchOwnership: boolean;
+  readonly capability: 'supported' | 'not-required';
+  readonly dirty: boolean;
+  readonly activeOrInterrupted: boolean;
+}
+
+interface TerminalEffects {
+  readonly stopped: number;
+  readonly closedPanes: number;
+  readonly closedTabs: number;
+  readonly mixedTabPreserved: boolean;
+  readonly residual: number;
+}
+
+interface ProcessEffects {
+  readonly selected: number;
+  readonly termed: number;
+  readonly sigkilled: number;
+  readonly residual: number;
+}
+
+interface BranchDecision {
+  readonly decision: 'deleted' | 'not-present' | 'not-applicable' | 'refused';
+  readonly expectedOid?: string;
+  readonly observedOid?: string;
+  readonly reason: string;
+}
+
+export interface PostMergeTeardownReport {
+  readonly schema: 'orchestrator-pack/post-merge-worktree-teardown/v1';
+  readonly outcome: PostMergeTeardownOutcome;
+  readonly pipelineContinues: true;
+  readonly apply: boolean;
+  readonly repositoryRoot: string;
+  readonly worktree: string;
+  readonly pr: number;
+  readonly classification: TargetClassification | null;
+  readonly authority: {
+    readonly targetInitialHead: string;
+    readonly finalPrHead: string;
+    readonly authorizedHeads: readonly string[];
+    readonly expectedBranch: string | null;
+    readonly detached: boolean;
+  };
+  readonly preflight?: {
+    readonly exactIdentity: boolean;
+    readonly mergedPr: boolean;
+    readonly branchOwnership: boolean;
+    readonly runtimeCapability: 'supported' | 'not-required' | 'unsupported';
+    readonly dirty: boolean;
+    readonly activeOrInterrupted: boolean;
+  };
+  readonly terminals?: TerminalEffects;
+  readonly processes?: ProcessEffects;
+  readonly manifest?: DiscardManifest;
+  readonly removal?: {
+    readonly method: 'orca-force' | 'git-force';
+    readonly attempted: boolean;
+    readonly receipt: 'confirmed' | 'unknown' | 'failed';
+  };
+  readonly branchDeletion?: BranchDecision;
+  readonly readback?: {
+    readonly gitAbsent: boolean;
+    readonly orcaAbsent: boolean;
+    readonly unrelatedInventoryStable: boolean;
+  };
+  readonly effects: readonly string[];
+  readonly error?: string;
+}
+
+export interface TeardownDependencies {
+  readonly runner?: CommandRunner;
+  readonly processCensus?: () => readonly ProcessSnapshot[];
+  readonly signalProcess?: (pid: number, starttime: string, signal: NodeJS.Signals) => boolean;
+  readonly sleep?: (milliseconds: number) => Promise<void>;
+  readonly now?: () => Date;
+}
+
+const SHA_PATTERN = /^[0-9a-f]{40}$/i;
+const MANIFEST_MAX_ENTRIES = 2_048;
+const MANIFEST_MAX_BYTES = 256 * 1024;
 const IGNORED_DIRECTORY_ALLOWLIST = [
   'node_modules/',
   '.venv/',
@@ -169,467 +236,666 @@ const IGNORED_DIRECTORY_ALLOWLIST = [
   '__pycache__/',
 ] as const;
 
-function parseArgs(): ParsedArgs {
-  const argv = process.argv.slice(2);
-  const value = (name: string): string | null => {
-    const index = argv.indexOf(name);
-    return index >= 0 ? argv[index + 1] ?? null : null;
-  };
-  const prValue = value('--pr');
-  const parsedPr = prValue === null ? null : Number.parseInt(prValue, 10);
-  return {
-    worktree: value('--worktree'),
-    pr: parsedPr !== null && Number.isInteger(parsedPr) && parsedPr > 0 ? parsedPr : null,
-    apply: argv.includes('--apply'),
-    json: argv.includes('--json'),
-    orphan: argv.includes('--orphan'),
-    iKnowThisPath: argv.includes('--i-know-this-path'),
-    lifecycleLockPath: value('--lifecycle-lock-path') ?? DEFAULT_WORKTREE_LIFECYCLE_EXCLUSION_PATH,
-    lifecycleLockToken: value('--lifecycle-lock-token'),
-  };
+function defaultRunner(invocation: CommandInvocation): ProcessResult {
+  return runProcessSync({
+    command: invocation.command,
+    args: invocation.args,
+    cwd: invocation.cwd,
+    timeoutMs: invocation.timeoutMs,
+    inheritParentEnv: true,
+  });
 }
 
-function gitRunSync(args: readonly string[], cwd?: string): ProcessResult {
-  return runProcessSync({ command: 'git', args, cwd, inheritParentEnv: true });
+function defaultSleep(milliseconds: number): Promise<void> {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
 }
 
-function normalizePath(pathValue: string): string {
-  const normalized = pathValue.replace(/\/+$/, '');
+function normalizePath(value: string): string {
+  const normalized = resolve(value).replace(/\/+$/, '');
   return normalized || '/';
 }
 
-function existingRealpath(pathValue: string): string | null {
+function existingRealpath(value: string): string | null {
   try {
-    return normalizePath(realpathSync(pathValue));
+    return realpathSync(value).replace(/\/+$/, '') || '/';
   } catch {
     return null;
   }
 }
 
-function runtimeJson<T>(command: RuntimeCommand): RuntimeJsonResult<T> {
-  const result = runProcessSync({
-    command: command.command,
-    args: command.args,
-    inheritParentEnv: true,
+function normalizeSha(value: string, label: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (!SHA_PATTERN.test(normalized)) throw new TypeError(`${label} must be a full 40-hex SHA`);
+  return normalized;
+}
+
+function normalizeBranch(value: string): string {
+  const normalized = value.trim().replace(/^refs\/heads\//, '');
+  if (!normalized || normalized.startsWith('-') || normalized.includes('..')) {
+    throw new TypeError('expected branch is malformed');
+  }
+  return normalized;
+}
+
+function valueAfter(argv: readonly string[], name: string): string | null {
+  const index = argv.indexOf(name);
+  return index === -1 ? null : argv[index + 1] ?? null;
+}
+
+function parseArgs(argv = process.argv.slice(2)): PostMergeTeardownArgs {
+  const prText = valueAfter(argv, '--pr');
+  const parsedPr = prText === null ? null : Number.parseInt(prText, 10);
+  const classification = valueAfter(argv, '--classification');
+  return {
+    destructive: argv.includes('--post-merge-destructive'),
+    repositoryRoot: valueAfter(argv, '--repo-root'),
+    worktree: valueAfter(argv, '--worktree'),
+    pr: parsedPr !== null && Number.isInteger(parsedPr) && parsedPr > 0 ? parsedPr : null,
+    initialHead: valueAfter(argv, '--expected-head'),
+    finalPrHead: valueAfter(argv, '--final-pr-head'),
+    expectedBranch: valueAfter(argv, '--expected-branch'),
+    detached: argv.includes('--detached'),
+    classification: classification === 'exact_dual' || classification === 'exact_git_only'
+      ? classification
+      : null,
+    apply: argv.includes('--apply'),
+    json: argv.includes('--json'),
+    lifecycleLockPath: valueAfter(argv, '--lifecycle-lock-path')
+      ?? DEFAULT_WORKTREE_LIFECYCLE_EXCLUSION_PATH,
+    lifecycleLockToken: valueAfter(argv, '--lifecycle-lock-token'),
+  };
+}
+
+function commandError(result: ProcessResult, invocation: CommandInvocation): string {
+  return result.stderr.trim()
+    || result.error
+    || `${invocation.command} ${invocation.args.join(' ')} exited ${String(result.exitCode)}`;
+}
+
+function runChecked(runner: CommandRunner, invocation: CommandInvocation, label: string): string {
+  const result = runner(invocation);
+  if (!result.ok) throw new TypeError(`${label}: ${commandError(result, invocation)}`);
+  return result.stdout;
+}
+
+function parseJson(text: string, label: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new TypeError(`${label} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function runtimeJson<T>(runner: CommandRunner, command: RuntimeCommand, label: string): T {
+  const stdout = runChecked(runner, command, label);
+  const parsed = parseJson(stdout, label);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new TypeError(`${label} returned a non-object`);
+  }
+  const root = parsed as Record<string, unknown>;
+  if (root.ok !== true) throw new TypeError(`${label} did not return ok=true`);
+  if (root.result === undefined) throw new TypeError(`${label} omitted result`);
+  return root.result as T;
+}
+
+function parseRuntimeWorktrees(value: unknown, label: string): RuntimeWorktree[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`${label} result must be an object`);
+  }
+  const rows = (value as Record<string, unknown>).worktrees;
+  if (!Array.isArray(rows)) throw new TypeError(`${label} omitted worktrees[]`);
+  return rows.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new TypeError(`${label} row ${index} is not an object`);
+    }
+    return item as RuntimeWorktree;
   });
-  if (!result.ok) {
+}
+
+function parseRuntimeTerminals(value: unknown, label: string): RuntimeTerminal[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`${label} result must be an object`);
+  }
+  const rows = (value as Record<string, unknown>).terminals;
+  if (!Array.isArray(rows)) throw new TypeError(`${label} omitted terminals[]`);
+  return rows.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new TypeError(`${label} row ${index} is not an object`);
+    }
+    const terminal = item as RuntimeTerminal;
+    if (typeof terminal.worktreePath !== 'string' || typeof terminal.handle !== 'string') {
+      throw new TypeError(`${label} row ${index} omitted worktreePath/handle`);
+    }
+    return terminal;
+  });
+}
+
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function digest(value: unknown): string {
+  return createHash('sha256').update(stable(value)).digest('hex');
+}
+
+function gitWorktreeRows(raw: string): Array<{ path: string; head: string | null; branch: string | null; detached: boolean }> {
+  const rows: Array<{ path: string; head: string | null; branch: string | null; detached: boolean }> = [];
+  for (const block of raw.split(/\r?\n\r?\n/)) {
+    if (!block.trim()) continue;
+    let path: string | null = null;
+    let head: string | null = null;
+    let branch: string | null = null;
+    let detached = false;
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith('worktree ')) path = normalizePath(line.slice('worktree '.length));
+      else if (line.startsWith('HEAD ')) head = line.slice('HEAD '.length).trim().toLowerCase();
+      else if (line.startsWith('branch ')) branch = line.slice('branch '.length).trim().replace(/^refs\/heads\//, '');
+      else if (line === 'detached') detached = true;
+    }
+    if (path) rows.push({ path, head, branch, detached });
+  }
+  return rows;
+}
+
+function targetRuntimeRows(rows: readonly RuntimeWorktree[], target: string): RuntimeWorktree[] {
+  return rows.filter((row) => typeof row.path === 'string' && normalizePath(row.path) === target);
+}
+
+function targetTerminals(rows: readonly RuntimeTerminal[], target: string): RuntimeTerminal[] {
+  return rows.filter((row) => typeof row.worktreePath === 'string' && normalizePath(row.worktreePath) === target);
+}
+
+function inventorySnapshot(
+  runner: CommandRunner,
+  repositoryRoot: string,
+  target: string,
+): InventorySnapshot {
+  const gitRaw = runChecked(runner, {
+    command: 'git',
+    args: ['-C', repositoryRoot, 'worktree', 'list', '--porcelain'],
+  }, 'git worktree inventory');
+  const runtimeWorktrees = parseRuntimeWorktrees(
+    runtimeJson<unknown>(runner, RUNTIME.worktrees(), 'orca worktree list'),
+    'orca worktree list',
+  );
+  const runtimeAgents = parseRuntimeWorktrees(
+    runtimeJson<unknown>(runner, RUNTIME.agents(), 'orca worktree ps'),
+    'orca worktree ps',
+  );
+  const runtimeTerminals = parseRuntimeTerminals(
+    runtimeJson<unknown>(runner, RUNTIME.terminals_all(), 'orca terminal list'),
+    'orca terminal list',
+  );
+  const gitUnrelated = gitWorktreeRows(gitRaw).filter((row) => row.path !== target);
+  const orcaUnrelated = runtimeWorktrees.filter(
+    (row) => typeof row.path !== 'string' || normalizePath(row.path) !== target,
+  );
+  return {
+    runtimeWorktrees,
+    runtimeAgents,
+    runtimeTerminals,
+    gitWorktreesRaw: gitRaw,
+    targetRuntimeRows: targetRuntimeRows(runtimeWorktrees, target),
+    targetAgentRows: targetRuntimeRows(runtimeAgents, target),
+    targetTerminals: targetTerminals(runtimeTerminals, target),
+    unrelatedDigest: digest({ git: gitUnrelated, orca: orcaUnrelated }),
+  };
+}
+
+function validateGitLink(
+  runner: CommandRunner,
+  repositoryRoot: string,
+  target: string,
+): { commonDir: string; primaryCheckout: string } {
+  if (!existsSync(target)) throw new TypeError('target worktree path does not exist');
+  const gitPath = join(target, '.git');
+  const stat = lstatSync(gitPath);
+  if (stat.isDirectory()) throw new TypeError('target is the primary checkout');
+  if (!stat.isFile()) throw new TypeError('target .git is not a regular gitdir link file');
+  const content = readFileSync(gitPath, 'utf8').trim();
+  if (!content.startsWith('gitdir: ')) throw new TypeError('target .git file omitted gitdir');
+  const rawGitdir = content.slice('gitdir: '.length).trim();
+  const gitdir = normalizePath(isAbsolute(rawGitdir) ? rawGitdir : resolve(target, rawGitdir));
+  if (!existsSync(gitdir)) throw new TypeError(`target gitdir does not exist: ${gitdir}`);
+  const targetCommon = normalizePath(runChecked(runner, {
+    command: 'git',
+    args: ['-C', target, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+  }, 'target git common-dir').trim());
+  const repoCommon = normalizePath(runChecked(runner, {
+    command: 'git',
+    args: ['-C', repositoryRoot, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+  }, 'repository git common-dir').trim());
+  if (targetCommon !== repoCommon) throw new TypeError('target and repository have different git common directories');
+  if (gitdir !== repoCommon && !gitdir.startsWith(`${repoCommon}/worktrees/`)) {
+    throw new TypeError('target gitdir is outside the repository common directory');
+  }
+  const primaryCheckout = dirname(repoCommon);
+  if (target === primaryCheckout || repositoryRoot === target) throw new TypeError('target is the primary checkout');
+  return { commonDir: repoCommon, primaryCheckout };
+}
+
+function readTargetIdentity(
+  runner: CommandRunner,
+  repositoryRoot: string,
+  target: string,
+  expectedBranch: string | null,
+  detached: boolean,
+  authorizedHeads: ReadonlySet<string>,
+): TargetIdentity {
+  const link = validateGitLink(runner, repositoryRoot, target);
+  const head = normalizeSha(runChecked(runner, {
+    command: 'git', args: ['-C', target, 'rev-parse', 'HEAD'],
+  }, 'target HEAD').trim(), 'target HEAD');
+  if (!authorizedHeads.has(head)) {
+    throw new TypeError(`target head ${head} is outside the authorized H0/H1 set`);
+  }
+  const branchResult = runner({
+    command: 'git', args: ['-C', target, 'symbolic-ref', '--short', 'HEAD'],
+  });
+  if (detached) {
+    if (branchResult.ok) throw new TypeError('target is branch-bound but detached mode was authorized');
     return {
-      ok: false,
-      error: result.stderr.trim() || result.error || `${command.args.join(' ')} failed`,
+      path: target,
+      repositoryRoot,
+      mode: 'detached-confirmed',
+      branch: null,
+      head,
+      commonDir: link.commonDir,
+      primaryCheckout: link.primaryCheckout,
     };
   }
-  try {
-    const parsed = JSON.parse(result.stdout) as { ok?: boolean; result?: T; error?: { message?: string; code?: string } };
-    if (parsed.ok === false) {
-      return {
-        ok: false,
-        error: parsed.error?.message ?? parsed.error?.code ?? `${command.args.join(' ')} returned ok=false`,
-      };
-    }
-    if (parsed.result === undefined) {
-      return { ok: false, error: `${command.args.join(' ')} omitted result` };
-    }
-    return { ok: true, value: parsed.result };
-  } catch (error) {
-    return {
-      ok: false,
-      error: `invalid runtime JSON for ${command.args.join(' ')}: ${error instanceof Error ? error.message : String(error)}`,
-    };
+  if (!branchResult.ok) throw new TypeError('target is detached but branch-bound mode was authorized');
+  const branch = normalizeBranch(branchResult.stdout);
+  if (!expectedBranch || branch !== expectedBranch) {
+    throw new TypeError(`target branch ${branch} does not match ${expectedBranch ?? '<missing>'}`);
   }
+  return {
+    path: target,
+    repositoryRoot,
+    mode: 'branch-bound',
+    branch,
+    head,
+    commonDir: link.commonDir,
+    primaryCheckout: link.primaryCheckout,
+  };
 }
 
-function runtimeWorktrees(): RuntimeJsonResult<RuntimeWorktree[]> {
-  const response = runtimeJson<{ worktrees?: RuntimeWorktree[] }>(RUNTIME.worktrees());
-  if (!response.ok) return { ok: false, error: response.error };
-  if (!Array.isArray(response.value?.worktrees)) {
-    return { ok: false, error: 'runtime worktree inventory omitted result.worktrees[]' };
-  }
-  return { ok: true, value: response.value.worktrees };
-}
-
-function runtimeAgentRows(): RuntimeJsonResult<RuntimeWorktree[]> {
-  const response = runtimeJson<{ worktrees?: RuntimeWorktree[] }>(RUNTIME.agents());
-  if (!response.ok) return { ok: false, error: response.error };
-  if (!Array.isArray(response.value?.worktrees)) {
-    return { ok: false, error: 'runtime agent inventory omitted result.worktrees[]' };
-  }
-  return { ok: true, value: response.value.worktrees };
-}
-
-function runtimeTerminals(command: RuntimeCommand): RuntimeJsonResult<RuntimeTerminal[]> {
-  const response = runtimeJson<{ terminals?: RuntimeTerminal[] }>(command);
-  if (!response.ok) return { ok: false, error: response.error };
-  if (!Array.isArray(response.value?.terminals)) {
-    return { ok: false, error: 'runtime terminal inventory omitted result.terminals[]' };
-  }
-  return { ok: true, value: response.value.terminals };
-}
-
-function validateTarget(worktreePath: string): {
-  pathExists: boolean;
-  isPrimaryCheckout: boolean;
-  gitFileStatus: 'directory' | 'file' | 'missing';
-  gitFileError?: string;
-} {
-  if (!existsSync(worktreePath)) {
-    return { pathExists: false, isPrimaryCheckout: false, gitFileStatus: 'missing' };
-  }
-  const gitPath = join(worktreePath, '.git');
-  try {
-    const stat = lstatSync(gitPath);
-    if (stat.isDirectory()) {
-      return { pathExists: true, isPrimaryCheckout: true, gitFileStatus: 'directory' };
-    }
-    if (!stat.isFile()) {
-      return {
-        pathExists: true,
-        isPrimaryCheckout: false,
-        gitFileStatus: 'missing',
-        gitFileError: '.git is neither a directory nor a regular file',
-      };
-    }
-    const content = readFileSync(gitPath, 'utf8').trim();
-    if (!content.startsWith('gitdir: ')) {
-      return {
-        pathExists: true,
-        isPrimaryCheckout: false,
-        gitFileStatus: 'missing',
-        gitFileError: '.git file does not start with "gitdir: "',
-      };
-    }
-    const rawGitdir = content.slice('gitdir: '.length).trim();
-    const gitdir = isAbsolute(rawGitdir) ? rawGitdir : resolve(worktreePath, rawGitdir);
-    if (!existsSync(gitdir)) {
-      return {
-        pathExists: true,
-        isPrimaryCheckout: false,
-        gitFileStatus: 'missing',
-        gitFileError: `gitdir path does not exist: ${gitdir}`,
-      };
-    }
-    return { pathExists: true, isPrimaryCheckout: false, gitFileStatus: 'file' };
-  } catch (error) {
-    return {
-      pathExists: true,
-      isPrimaryCheckout: false,
-      gitFileStatus: 'missing',
-      gitFileError: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-function getPrimaryCheckout(worktreePath: string): string | null {
-  const result = gitRunSync(['rev-parse', '--path-format=absolute', '--git-common-dir'], worktreePath);
-  if (!result.ok) return null;
-  const commonDir = normalizePath(result.stdout.trim());
-  return dirname(commonDir);
-}
-
-function getPRInfo(prNumber: number): PRInfo | null {
-  const result = runProcessSync({
-    command: 'gh',
+function readPr(
+  runner: CommandRunner,
+  repositoryRoot: string,
+  pr: number,
+): PrInfo {
+  const gh = join(repositoryRoot, 'scripts', 'gh');
+  const stdout = runChecked(runner, {
+    command: gh,
     args: [
-      'pr',
-      'view',
-      String(prNumber),
-      '--json',
+      'pr', 'view', String(pr), '--json',
       'headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName',
     ],
-    inheritParentEnv: true,
-  });
-  if (!result.ok) return null;
-  try {
-    const parsed = JSON.parse(result.stdout) as PRInfo;
-    return typeof parsed.headRefName === 'string'
-      && typeof parsed.headRefOid === 'string'
-      && typeof parsed.state === 'string'
-      ? parsed
-      : null;
-  } catch {
-    return null;
+    cwd: repositoryRoot,
+  }, 'gh pr view');
+  const parsed = parseJson(stdout, 'gh pr view');
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new TypeError('gh pr view returned a non-object');
   }
-}
-
-function captureG1Identity(worktreePath: string, prInfo: PRInfo): { pass: boolean; snapshot?: IdentitySnapshot } {
-  const headResult = gitRunSync(['rev-parse', 'HEAD'], worktreePath);
-  if (!headResult.ok) return { pass: false };
-  const headSha = headResult.stdout.trim();
-  const branchResult = gitRunSync(['symbolic-ref', '--short', 'HEAD'], worktreePath);
-  if (branchResult.ok) {
-    const branchName = branchResult.stdout.trim();
-    return {
-      pass: branchName === prInfo.headRefName,
-      snapshot: { mode: 'branch-bound', headSha, branchName },
-    };
+  const row = parsed as Record<string, unknown>;
+  if (
+    typeof row.headRefName !== 'string'
+    || typeof row.state !== 'string'
+    || typeof row.headRefOid !== 'string'
+  ) {
+    throw new TypeError('gh pr view omitted headRefName/state/headRefOid');
   }
+  const mergeCommit = row.mergeCommit && typeof row.mergeCommit === 'object' && !Array.isArray(row.mergeCommit)
+    ? row.mergeCommit as { oid?: string }
+    : undefined;
+  const headRepository = row.headRepository && typeof row.headRepository === 'object' && !Array.isArray(row.headRepository)
+    ? row.headRepository as { nameWithOwner?: string }
+    : undefined;
   return {
-    pass: headSha === prInfo.headRefOid,
-    snapshot: { mode: 'detached-confirmed', headSha },
+    headRefName: normalizeBranch(row.headRefName),
+    state: row.state.trim().toUpperCase(),
+    headRefOid: normalizeSha(row.headRefOid, 'live PR head'),
+    ...(mergeCommit ? { mergeCommit } : {}),
+    ...(headRepository ? { headRepository } : {}),
+    ...(typeof row.baseRefName === 'string' ? { baseRefName: row.baseRefName.trim() } : {}),
   };
 }
 
-function recheckG1Identity(worktreePath: string, snapshot: IdentitySnapshot): boolean {
-  const headResult = gitRunSync(['rev-parse', 'HEAD'], worktreePath);
-  if (!headResult.ok || headResult.stdout.trim() !== snapshot.headSha) return false;
-  const branchResult = gitRunSync(['symbolic-ref', '--short', 'HEAD'], worktreePath);
-  if (snapshot.mode === 'detached-confirmed') return !branchResult.ok;
-  return branchResult.ok && branchResult.stdout.trim() === snapshot.branchName;
-}
-
-function checkG2aClean(worktreePath: string): boolean {
-  const result = gitRunSync(['status', '--porcelain', '--untracked-files=all'], worktreePath);
-  return result.ok && result.stdout.trim() === '';
-}
-
-function checkG2bIgnored(worktreePath: string): boolean {
-  const result = gitRunSync(['status', '--porcelain', '--ignored=matching'], worktreePath);
-  if (!result.ok) return false;
-  const ignored = result.stdout.split('\n').filter((line) => line.startsWith('!! '));
-  return ignored.every((line) => {
-    const relativePath = line.slice(3).trim();
-    return IGNORED_DIRECTORY_ALLOWLIST.some((allowed) => relativePath.startsWith(allowed));
+function proveMergedPr(
+  runner: CommandRunner,
+  repositoryRoot: string,
+  pr: number,
+  expectedBranch: string | null,
+  detached: boolean,
+  finalPrHead: string,
+): PrInfo {
+  const info = readPr(runner, repositoryRoot, pr);
+  if (info.state !== 'MERGED') throw new TypeError(`PR #${String(pr)} is ${info.state}, not MERGED`);
+  if (info.headRefOid !== finalPrHead) throw new TypeError('live merged PR head differs from bound H1');
+  if (!detached && info.headRefName !== expectedBranch) throw new TypeError('live merged PR branch differs from bound branch');
+  if (info.baseRefName !== undefined && info.baseRefName !== 'main') throw new TypeError('merged PR base is not main');
+  const mergeOid = info.mergeCommit?.oid;
+  if (typeof mergeOid !== 'string') throw new TypeError('merged PR omitted mergeCommit.oid');
+  const normalizedMerge = normalizeSha(mergeOid, 'merge commit');
+  runChecked(runner, {
+    command: 'git', args: ['-C', repositoryRoot, 'fetch', 'origin', 'main'],
+  }, 'fetch current main');
+  const adopted = runner({
+    command: 'git',
+    args: ['-C', repositoryRoot, 'merge-base', '--is-ancestor', normalizedMerge, 'origin/main'],
   });
+  if (!adopted.ok || adopted.exitCode !== 0) {
+    throw new TypeError('PR merge result is not adopted by current origin/main');
+  }
+  return info;
 }
 
-function checkG3Merged(worktreePath: string, prInfo: PRInfo): boolean {
-  const proofA = gitRunSync(['merge-base', '--is-ancestor', 'HEAD', 'origin/main'], worktreePath);
-  if (proofA.ok && proofA.exitCode === 0) return true;
-  if (prInfo.state !== 'MERGED') return false;
-  const headResult = gitRunSync(['rev-parse', 'HEAD'], worktreePath);
-  if (!headResult.ok || headResult.stdout.trim() !== prInfo.headRefOid) return false;
-  if (!prInfo.mergeCommit?.oid) return false;
-  gitRunSync(['fetch', 'origin', 'main'], worktreePath);
-  const proofB = gitRunSync(
-    ['merge-base', '--is-ancestor', prInfo.mergeCommit.oid, 'origin/main'],
-    worktreePath,
-  );
-  return proofB.ok && proofB.exitCode === 0;
-}
-
-function checkG4Ownership(prNumber: number, prInfo: PRInfo): boolean {
-  if (!prInfo.headRepository?.nameWithOwner) return false;
-  const result = runProcessSync({
-    command: 'gh',
+function proveBranchOwnership(
+  runner: CommandRunner,
+  repositoryRoot: string,
+  pr: number,
+  info: PrInfo,
+  branch: string | null,
+): boolean {
+  if (!branch) return true;
+  const repo = info.headRepository?.nameWithOwner;
+  if (!repo) return false;
+  const gh = join(repositoryRoot, 'scripts', 'gh');
+  const stdout = runChecked(runner, {
+    command: gh,
     args: [
-      'pr',
-      'list',
-      '--state',
-      'open',
-      '--json',
-      'number,headRefName,headRepository',
-      '--repo',
-      prInfo.headRepository.nameWithOwner,
+      'pr', 'list', '--state', 'open', '--json',
+      'number,headRefName,headRepository', '--repo', repo,
     ],
-    inheritParentEnv: true,
+    cwd: repositoryRoot,
+  }, 'gh pr list');
+  const rows = parseJson(stdout, 'gh pr list');
+  if (!Array.isArray(rows)) throw new TypeError('gh pr list returned a non-array');
+  return rows.every((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const row = value as Record<string, unknown>;
+    return !(row.number !== pr && row.headRefName === branch);
   });
-  if (!result.ok) return false;
-  try {
-    const rows = JSON.parse(result.stdout) as Array<{
-      number: number;
-      headRefName: string;
-      headRepository?: { nameWithOwner: string };
-    }>;
-    return rows.filter((row) => row.headRefName === prInfo.headRefName && row.number !== prNumber).length === 0;
-  } catch {
-    return false;
+}
+
+export function validateForceRemovalHelp(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').toLowerCase();
+  return normalized.includes('worktree rm')
+    && normalized.includes('--worktree')
+    && normalized.includes('--force')
+    && normalized.includes('--json');
+}
+
+function proveRuntimeCapability(
+  runner: CommandRunner,
+  classification: TargetClassification,
+): 'supported' | 'not-required' {
+  if (classification === 'exact_git_only') return 'not-required';
+  const command = RUNTIME.remove_worktree_help();
+  const result = runner(command);
+  if (!result.ok || !validateForceRemovalHelp(`${result.stdout}\n${result.stderr}`)) {
+    throw new TypeError('installed Orca does not capture-prove worktree rm --worktree --force --json');
+  }
+  return 'supported';
+}
+
+function validateRuntimeIdentity(
+  classification: TargetClassification,
+  inventory: InventorySnapshot,
+  identity: TargetIdentity,
+  pr: number,
+  authorizedHeads: ReadonlySet<string>,
+): void {
+  const rows = inventory.targetRuntimeRows;
+  if (classification === 'exact_git_only') {
+    if (rows.length !== 0) throw new TypeError('exact_git_only target unexpectedly exists in Orca inventory');
+    const mainRows = inventory.runtimeWorktrees.filter(
+      (row) => row.isMainWorktree === true
+        && row.isArchived !== true
+        && typeof row.path === 'string'
+        && normalizePath(row.path) === identity.repositoryRoot,
+    );
+    if (mainRows.length !== 1) throw new TypeError('Orca did not prove one main repository row for exact_git_only cleanup');
+    return;
+  }
+  if (rows.length !== 1) throw new TypeError(`exact_dual target matched ${String(rows.length)} Orca rows`);
+  const row = rows[0]!;
+  if (row.isMainWorktree === true || row.isArchived === true) throw new TypeError('target Orca row is main or archived');
+  if (typeof row.head !== 'string' || !authorizedHeads.has(normalizeSha(row.head, 'Orca target head'))) {
+    throw new TypeError('Orca target head is outside the authorized H0/H1 set');
+  }
+  const runtimeBranch = typeof row.branch === 'string' ? row.branch.replace(/^refs\/heads\//, '') : null;
+  if (identity.mode === 'branch-bound' && runtimeBranch !== identity.branch) {
+    throw new TypeError('Orca target branch differs from Git target branch');
+  }
+  if (identity.mode === 'detached-confirmed' && row.branch !== '') {
+    throw new TypeError('Orca detached target does not use the explicit empty-string branch representation');
+  }
+  if (row.linkedPR !== undefined && row.linkedPR !== null && row.linkedPR !== pr) {
+    throw new TypeError('Orca target is linked to another PR');
   }
 }
 
-function checkG5Agents(worktreePath: string): { pass: boolean; desync: boolean; detail?: string } {
-  const inventory = runtimeAgentRows();
-  if (!inventory.ok) return { pass: false, desync: true, detail: inventory.error };
-  const target = normalizePath(worktreePath);
-  const rows = inventory.value!.filter(
-    (row) => typeof row.path === 'string' && normalizePath(row.path) === target,
+function activeOrInterrupted(rows: readonly RuntimeWorktree[]): boolean {
+  return rows.some((row) => Array.isArray(row.agents) && row.agents.some(
+    (agent) => agent.state !== 'done' || agent.interrupted === true,
+  ));
+}
+
+function dirtyStatus(runner: CommandRunner, target: string): boolean {
+  const result = runner({
+    command: 'git', args: ['-C', target, 'status', '--porcelain', '--untracked-files=all'],
+  });
+  return result.ok && result.stdout.length > 0;
+}
+
+function proveTarget(
+  runner: CommandRunner,
+  input: {
+    readonly repositoryRoot: string;
+    readonly target: string;
+    readonly pr: number;
+    readonly initialHead: string;
+    readonly finalPrHead: string;
+    readonly expectedBranch: string | null;
+    readonly detached: boolean;
+    readonly classification: TargetClassification;
+  },
+): ProofSnapshot {
+  const heads = new Set([input.initialHead, input.finalPrHead]);
+  const identity = readTargetIdentity(
+    runner,
+    input.repositoryRoot,
+    input.target,
+    input.expectedBranch,
+    input.detached,
+    heads,
   );
-  if (rows.length !== 1) {
-    return {
-      pass: false,
-      desync: true,
-      detail: `runtime agent inventory matched ${rows.length} rows for ${target}`,
-    };
-  }
-  const row = rows[0];
-  if (!row || !Array.isArray(row.agents)) {
-    return { pass: false, desync: true, detail: 'target runtime row omitted agents[]' };
-  }
-  const pass = row.agents.every(
-    (agent) => agent.state === 'done' && agent.interrupted === false,
+  const prInfo = proveMergedPr(
+    runner,
+    input.repositoryRoot,
+    input.pr,
+    input.expectedBranch,
+    input.detached,
+    input.finalPrHead,
   );
+  const inventory = inventorySnapshot(runner, input.repositoryRoot, input.target);
+  validateRuntimeIdentity(input.classification, inventory, identity, input.pr, heads);
+  const ownership = proveBranchOwnership(
+    runner,
+    input.repositoryRoot,
+    input.pr,
+    prInfo,
+    identity.branch,
+  );
+  if (!ownership) throw new TypeError('target branch is reused or owned by another open PR');
+  const capability = proveRuntimeCapability(runner, input.classification);
   return {
-    pass,
-    desync: false,
-    ...(pass ? {} : { detail: 'one or more target agents are not done or were interrupted' }),
+    identity,
+    pr: prInfo,
+    inventory,
+    branchOwnership: ownership,
+    capability,
+    dirty: dirtyStatus(runner, input.target),
+    activeOrInterrupted: activeOrInterrupted(inventory.targetAgentRows),
   };
 }
 
-function runInitialGates(worktreePath: string, prNumber: number): GateResults {
-  const prInfo = getPRInfo(prNumber);
-  if (!prInfo) {
-    return {
-      g1: false,
-      g2a: false,
-      g2b: false,
-      g3: false,
-      g4: false,
-      g5: false,
-      failedOutcome: 'blocked_state_desync',
-      detail: 'unable to read PR identity',
-    };
-  }
-  const g1Result = captureG1Identity(worktreePath, prInfo);
-  const g2a = checkG2aClean(worktreePath);
-  const g2b = checkG2bIgnored(worktreePath);
-  const g3 = checkG3Merged(worktreePath, prInfo);
-  const g4 = checkG4Ownership(prNumber, prInfo);
-  const g5Result = checkG5Agents(worktreePath);
-  let failedOutcome: TeardownOutcome | undefined;
-  if (!g1Result.pass) failedOutcome = 'blocked_identity_drift';
-  else if (!g2a) failedOutcome = 'blocked_dirty_worktree';
-  else if (!g2b) failedOutcome = 'blocked_ignored_operator_data';
-  else if (!g3) failedOutcome = 'blocked_unmerged_work';
-  else if (!g4) failedOutcome = 'blocked_shared_head_ref';
-  else if (!g5Result.pass) failedOutcome = 'blocked_state_desync';
-  return {
-    g1: g1Result.pass,
-    g2a,
-    g2b,
-    g3,
-    g4,
-    g5: g5Result.pass,
-    failedOutcome,
-    prBranchName: prInfo.headRefName,
-    identity: g1Result.snapshot,
-    detail: g5Result.detail,
-  };
+function manifestPath(raw: string): string {
+  if (!raw || raw.includes('\0') || posix.isAbsolute(raw)) throw new TypeError('manifest path is empty, NUL-bearing, or absolute');
+  const normalized = posix.normalize(raw);
+  if (normalized === '..' || normalized.startsWith('../')) throw new TypeError(`manifest path escapes repository: ${JSON.stringify(raw)}`);
+  return normalized;
 }
 
-function snapshotProcs(): Map<number, ProcessSnapshot> {
-  const result = new Map<number, ProcessSnapshot>();
-  try {
-    for (const pidText of readdirSync('/proc').filter((name) => /^\d+$/.test(name))) {
-      const pid = Number.parseInt(pidText, 10);
-      let stat: string;
-      try {
-        stat = readFileSync(join('/proc', pidText, 'stat'), 'utf8');
-      } catch {
-        continue;
-      }
-      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-      let cwd: string | null = null;
-      let cmd = '';
-      let exe: string | null = null;
-      try {
-        cwd = readlinkSync(join('/proc', pidText, 'cwd'));
-      } catch {
-        // Process may exit or deny access between reads.
-      }
-      try {
-        cmd = readFileSync(join('/proc', pidText, 'cmdline'), 'utf8').replace(/\0/g, ' ').trim();
-      } catch {
-        // Diagnostic only.
-      }
-      try {
-        exe = readlinkSync(join('/proc', pidText, 'exe'));
-      } catch {
-        // Diagnostic only.
-      }
-      result.set(pid, {
-        pid,
-        ppid: Number.parseInt(fields[1] ?? '0', 10),
-        starttime: fields[19] ?? '',
-        cwd,
-        cmd,
-        exe,
-      });
+export function parseDiscardEntries(
+  porcelainZ: string,
+  ignoredZ: string,
+): DiscardManifestEntry[] {
+  const entries: DiscardManifestEntry[] = [];
+  const statusParts = porcelainZ.split('\0');
+  for (let index = 0; index < statusParts.length; index += 1) {
+    const item = statusParts[index]!;
+    if (!item) continue;
+    if (item.length < 4 || item[2] !== ' ') throw new TypeError(`malformed porcelain-v1 -z entry at index ${String(index)}`);
+    const code = item.slice(0, 2);
+    const category: ManifestCategory = code === '??' ? 'untracked' : 'tracked';
+    entries.push({ category, path: manifestPath(item.slice(3)) });
+    if (code.includes('R') || code.includes('C')) {
+      const paired = statusParts[index + 1];
+      if (!paired) throw new TypeError('rename/copy porcelain entry omitted paired path');
+      entries.push({ category: 'tracked', path: manifestPath(paired) });
+      index += 1;
     }
-  } catch {
-    // An unreadable /proc produces an empty, therefore non-destructive, selection.
+  }
+  for (const item of ignoredZ.split('\0')) {
+    if (!item) continue;
+    const path = manifestPath(item);
+    if (IGNORED_DIRECTORY_ALLOWLIST.some((allowed) => path === allowed.slice(0, -1) || path.startsWith(allowed))) {
+      continue;
+    }
+    entries.push({ category: 'ignored', path });
+  }
+  const deduped = [...new Map(entries.map((entry) => [`${entry.category}\0${entry.path}`, entry])).values()]
+    .sort((left, right) => left.category.localeCompare(right.category) || left.path.localeCompare(right.path));
+  if (deduped.length > MANIFEST_MAX_ENTRIES) {
+    throw new TypeError(`discard manifest exceeds ${String(MANIFEST_MAX_ENTRIES)} entries`);
+  }
+  return deduped;
+}
+
+function captureManifest(
+  runner: CommandRunner,
+  now: () => Date,
+  input: {
+    readonly repositoryRoot: string;
+    readonly target: string;
+    readonly pr: number;
+    readonly identity: TargetIdentity;
+  },
+): DiscardManifest {
+  const porcelain = runChecked(runner, {
+    command: 'git',
+    args: ['-C', input.target, 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+  }, 'final git status');
+  const ignored = runChecked(runner, {
+    command: 'git',
+    args: ['-C', input.target, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z'],
+  }, 'final ignored-path census');
+  const entries = parseDiscardEntries(porcelain, ignored);
+  const payload = {
+    schema: 'orchestrator-pack/worktree-discard-manifest/v1' as const,
+    repositoryRoot: input.repositoryRoot,
+    worktree: input.target,
+    pr: input.pr,
+    targetHead: input.identity.head,
+    branch: input.identity.branch,
+    capturedAt: now().toISOString(),
+    entries,
+  };
+  const encodedBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+  if (encodedBytes > MANIFEST_MAX_BYTES) {
+    throw new TypeError(`discard manifest exceeds ${String(MANIFEST_MAX_BYTES)} encoded bytes`);
+  }
+  return {
+    ...payload,
+    digest: digest({ ...payload, capturedAt: '<excluded>' }),
+    encodedBytes,
+  };
+}
+
+function sameManifest(left: DiscardManifest, right: DiscardManifest): boolean {
+  return left.digest === right.digest
+    && left.targetHead === right.targetHead
+    && left.branch === right.branch
+    && left.entries.length === right.entries.length;
+}
+
+function defaultProcessCensus(): ProcessSnapshot[] {
+  const result: ProcessSnapshot[] = [];
+  for (const name of readdirSync('/proc').filter((value) => /^\d+$/.test(value))) {
+    const pid = Number.parseInt(name, 10);
+    if (!Number.isInteger(pid) || pid <= 1) continue;
+    let stat: string;
+    try {
+      stat = readFileSync(`/proc/${name}/stat`, 'utf8');
+    } catch {
+      continue;
+    }
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    let cwd: string | null = null;
+    try {
+      cwd = normalizePath(readlinkSync(`/proc/${name}/cwd`).replace(/ \(deleted\)$/, ''));
+    } catch {
+      // Process may disappear or deny access between reads.
+    }
+    result.push({
+      pid,
+      ppid: Number.parseInt(fields[1] ?? '0', 10),
+      starttime: fields[19] ?? '',
+      cwd,
+    });
   }
   return result;
 }
 
-function normalizedCwd(cwd: string | null): string | null {
-  return cwd ? cwd.replace(/ \(deleted\)$/, '') : null;
-}
-
-function cwdUnder(cwd: string | null, root: string): boolean {
-  const normalized = normalizedCwd(cwd);
-  return normalized !== null && (normalized === root || normalized.startsWith(`${root}/`));
-}
-
-function selfChain(processes: Map<number, ProcessSnapshot>): Set<number> {
-  const result = new Set<number>();
-  let current = process.pid;
-  while (current !== 0 && processes.has(current) && !result.has(current)) {
-    result.add(current);
-    current = processes.get(current)!.ppid;
-  }
-  result.add(1);
-  return result;
-}
-
-function computeKillSet(
-  processes: Map<number, ProcessSnapshot>,
-  worktreePath: string,
-  protectedPaths: Set<string>,
-  knownWorktrees: Set<string>,
-): ProcessSnapshot[] {
-  const children = new Map<number, number[]>();
-  for (const row of processes.values()) {
-    const current = children.get(row.ppid) ?? [];
-    current.push(row.pid);
-    children.set(row.ppid, current);
-  }
-  const seeds = [...processes.values()]
-    .filter((row) => cwdUnder(row.cwd, worktreePath))
-    .map((row) => row.pid);
-  const killSet = new Set(seeds);
-  const stack = [...seeds];
-  while (stack.length > 0) {
-    const parent = stack.pop()!;
-    for (const child of children.get(parent) ?? []) {
-      if (!killSet.has(child)) {
-        killSet.add(child);
-        stack.push(child);
+function selectedProcesses(rows: readonly ProcessSnapshot[], target: string): ProcessSnapshot[] {
+  const selected = new Set(
+    rows.filter((row) => row.cwd === target || row.cwd?.startsWith(`${target}/`)).map((row) => row.pid),
+  );
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const row of rows) {
+      if (!selected.has(row.pid) && selected.has(row.ppid)) {
+        selected.add(row.pid);
+        changed = true;
       }
     }
   }
-  const immune = selfChain(processes);
-  const selected: ProcessSnapshot[] = [];
-  for (const pid of killSet) {
-    const row = processes.get(pid);
-    if (!row || pid <= 1 || immune.has(pid)) continue;
-    const cwd = normalizedCwd(row.cwd);
-    if (cwd && [...protectedPaths].some((pathValue) => cwd === pathValue || cwd.startsWith(`${pathValue}/`))) {
-      continue;
-    }
-    if (
-      cwd
-      && !cwdUnder(row.cwd, worktreePath)
-      && [...knownWorktrees].some(
-        (pathValue) => pathValue !== worktreePath && (cwd === pathValue || cwd.startsWith(`${pathValue}/`)),
-      )
-    ) {
-      continue;
-    }
-    selected.push(row);
+  const self = new Set<number>([1, process.pid]);
+  let parent = rows.find((row) => row.pid === process.pid)?.ppid ?? 0;
+  while (parent > 1 && !self.has(parent)) {
+    self.add(parent);
+    parent = rows.find((row) => row.pid === parent)?.ppid ?? 0;
   }
-  return selected.sort((left, right) => right.pid - left.pid);
+  return rows
+    .filter((row) => selected.has(row.pid) && row.pid > 1 && !self.has(row.pid))
+    .sort((left, right) => right.pid - left.pid);
 }
 
-function stillSame(pid: number, starttime: string): boolean {
+function defaultSignal(pid: number, starttime: string, signal: NodeJS.Signals): boolean {
   try {
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] === starttime;
-  } catch {
-    return false;
-  }
-}
-
-function signalProc(pid: number, starttime: string, signal: NodeJS.Signals): boolean {
-  if (pid <= 1 || !stillSame(pid, starttime)) return false;
-  try {
+    const stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
+    if (stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] !== starttime) return false;
     process.kill(pid, signal);
     return true;
   } catch {
@@ -637,436 +903,560 @@ function signalProc(pid: number, starttime: string, signal: NodeJS.Signals): boo
   }
 }
 
-function processExists(row: ProcessSnapshot): boolean {
-  try {
-    process.kill(row.pid, 0);
-    return stillSame(row.pid, row.starttime);
-  } catch {
-    return false;
-  }
-}
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
-}
-
-async function reapProcesses(
-  worktreePath: string,
-  protectedPaths: Set<string>,
-  knownWorktrees: Set<string>,
+async function reapTargetProcesses(
+  target: string,
   apply: boolean,
-): Promise<ReapResult> {
-  const victims = computeKillSet(snapshotProcs(), worktreePath, protectedPaths, knownWorktrees);
-  if (!apply) return { selected: victims.length, termed: 0, sigkilled: 0, residual: 0 };
-  for (const victim of victims) signalProc(victim.pid, victim.starttime, 'SIGTERM');
-  let waited = 0;
-  while (waited < 10_000 && victims.some(processExists)) {
-    await sleep(500);
-    waited += 500;
+  dependencies: Required<Pick<TeardownDependencies, 'processCensus' | 'signalProcess' | 'sleep'>>,
+): Promise<ProcessEffects> {
+  const initial = selectedProcesses(dependencies.processCensus(), target);
+  if (!apply) return { selected: initial.length, termed: 0, sigkilled: 0, residual: initial.length };
+  let termed = 0;
+  for (const row of initial) if (dependencies.signalProcess(row.pid, row.starttime, 'SIGTERM')) termed += 1;
+  for (let iteration = 0; iteration < 20; iteration += 1) {
+    if (selectedProcesses(dependencies.processCensus(), target).length === 0) break;
+    await dependencies.sleep(500);
   }
-  const stubborn = victims.filter(processExists);
-  for (const victim of stubborn) signalProc(victim.pid, victim.starttime, 'SIGKILL');
-  await sleep(1_000);
-  const residual = computeKillSet(snapshotProcs(), worktreePath, protectedPaths, knownWorktrees);
+  const stubborn = selectedProcesses(dependencies.processCensus(), target);
+  let sigkilled = 0;
+  for (const row of stubborn) if (dependencies.signalProcess(row.pid, row.starttime, 'SIGKILL')) sigkilled += 1;
+  let firstZero = false;
+  let residual: ProcessSnapshot[] = [];
+  for (let iteration = 0; iteration < 8; iteration += 1) {
+    residual = selectedProcesses(dependencies.processCensus(), target);
+    if (residual.length === 0) {
+      if (firstZero) break;
+      firstZero = true;
+    } else {
+      firstZero = false;
+    }
+    await dependencies.sleep(250);
+  }
   return {
-    selected: victims.length,
-    termed: victims.length - stubborn.length,
-    sigkilled: stubborn.length,
+    selected: initial.length,
+    termed,
+    sigkilled,
     residual: residual.length,
   };
 }
 
-function terminalBelongsTo(terminal: RuntimeTerminal, worktreePath: string): boolean {
-  return typeof terminal.worktreePath === 'string'
-    && normalizePath(terminal.worktreePath) === worktreePath;
-}
-
-function applyRuntimeCommand(command: RuntimeCommand): { ok: boolean; error?: string } {
-  const result = runtimeJson<unknown>(command);
-  return result.ok ? { ok: true } : { ok: false, error: result.error };
-}
-
-function planTerminalActions(worktreePath: string): RuntimeJsonResult<NonNullable<TeardownReport['terminals']>> {
-  const census = runtimeTerminals(RUNTIME.terminals_all());
-  if (!census.ok) return { ok: false, error: census.error };
-  const targetRows = census.value!.filter((terminal) => terminalBelongsTo(terminal, worktreePath));
-  const targetByTab = new Map<string, RuntimeTerminal[]>();
-  for (const terminal of targetRows) {
-    const key = terminal.tabId?.trim() || `pane:${terminal.handle ?? ''}`;
-    const rows = targetByTab.get(key) ?? [];
-    rows.push(terminal);
-    targetByTab.set(key, rows);
-  }
-  let closedTabs = 0;
+function terminalPlan(rows: readonly RuntimeTerminal[], target: string): TerminalEffects {
+  const targetRows = targetTerminals(rows, target);
   let closedPanes = 0;
-  let mixedTabFound = false;
-  for (const rowsForTarget of targetByTab.values()) {
+  let closedTabs = 0;
+  let mixed = false;
+  const byTab = new Map<string, RuntimeTerminal[]>();
+  for (const row of targetRows) {
+    const key = row.tabId?.trim() || `pane:${row.handle ?? ''}`;
+    const bucket = byTab.get(key) ?? [];
+    bucket.push(row);
+    byTab.set(key, bucket);
+  }
+  for (const rowsForTarget of byTab.values()) {
     const tabId = rowsForTarget[0]?.tabId?.trim();
-    const allRowsForTab = tabId
-      ? census.value!.filter((terminal) => terminal.tabId?.trim() === tabId)
-      : rowsForTarget;
-    const targetOnly = tabId !== undefined
-      && allRowsForTab.length > 0
-      && allRowsForTab.every((terminal) => terminalBelongsTo(terminal, worktreePath));
+    const allRows = tabId ? rows.filter((row) => row.tabId?.trim() === tabId) : rowsForTarget;
+    const targetOnly = Boolean(tabId) && allRows.every((row) => targetTerminals([row], target).length === 1);
+    if (targetOnly) closedTabs += 1;
+    else {
+      closedPanes += rowsForTarget.length;
+      mixed = mixed || Boolean(tabId && allRows.some((row) => targetTerminals([row], target).length === 0));
+    }
+  }
+  return {
+    stopped: targetRows.length,
+    closedPanes,
+    closedTabs,
+    mixedTabPreserved: mixed,
+    residual: targetRows.length,
+  };
+}
+
+function runRuntimeEffect(runner: CommandRunner, command: RuntimeCommand, label: string): void {
+  runtimeJson<unknown>(runner, command, label);
+}
+
+function quiesceTerminals(
+  runner: CommandRunner,
+  target: string,
+  initialRows: readonly RuntimeTerminal[],
+): TerminalEffects {
+  const plan = terminalPlan(initialRows, target);
+  if (plan.stopped > 0) runRuntimeEffect(runner, RUNTIME.stop_terminals(target), 'orca terminal stop');
+  let rows = parseRuntimeTerminals(
+    runtimeJson<unknown>(runner, RUNTIME.terminals_all(), 'orca terminal list after stop'),
+    'orca terminal list after stop',
+  );
+  const survivors = targetTerminals(rows, target);
+  const byTab = new Map<string, RuntimeTerminal[]>();
+  for (const row of survivors) {
+    const key = row.tabId?.trim() || `pane:${row.handle ?? ''}`;
+    const bucket = byTab.get(key) ?? [];
+    bucket.push(row);
+    byTab.set(key, bucket);
+  }
+  let closedPanes = 0;
+  let closedTabs = 0;
+  let mixed = false;
+  for (const rowsForTarget of byTab.values()) {
+    const tabId = rowsForTarget[0]?.tabId?.trim();
+    const allRows = tabId ? rows.filter((row) => row.tabId?.trim() === tabId) : rowsForTarget;
+    const targetOnly = Boolean(tabId) && allRows.every((row) => targetTerminals([row], target).length === 1);
     if (targetOnly) {
+      const handle = rowsForTarget[0]?.handle;
+      if (!handle) throw new TypeError('target-only tab has no exact terminal handle');
+      runRuntimeEffect(runner, RUNTIME.close_tab(handle), 'orca terminal close --tab');
       closedTabs += 1;
     } else {
-      closedPanes += rowsForTarget.length;
-      mixedTabFound = mixedTabFound
-        || Boolean(tabId && allRowsForTab.some((terminal) => !terminalBelongsTo(terminal, worktreePath)));
-    }
-  }
-  return {
-    ok: true,
-    value: {
-      stopped: targetRows.length,
-      closed_panes: closedPanes,
-      closed_tabs: closedTabs,
-      mixed_tab_found: mixedTabFound,
-    },
-  };
-}
-
-function stopAndCloseTerminals(worktreePath: string): {
-  ok: boolean;
-  outcome?: TeardownOutcome;
-  report: NonNullable<TeardownReport['terminals']>;
-  error?: string;
-} {
-  const globalCensus = runtimeTerminals(RUNTIME.terminals_all());
-  if (!globalCensus.ok) {
-    return {
-      ok: false,
-      outcome: 'terminal_stop_failed',
-      report: { stopped: 0, closed_panes: 0, closed_tabs: 0, mixed_tab_found: false },
-      error: globalCensus.error,
-    };
-  }
-  const targetRows = globalCensus.value!.filter((terminal) => terminalBelongsTo(terminal, worktreePath));
-  const targetByTab = new Map<string, RuntimeTerminal[]>();
-  for (const terminal of targetRows) {
-    const key = terminal.tabId?.trim() || `pane:${terminal.handle ?? ''}`;
-    const rows = targetByTab.get(key) ?? [];
-    rows.push(terminal);
-    targetByTab.set(key, rows);
-  }
-
-  const stop = applyRuntimeCommand(RUNTIME.stop_terminals(worktreePath));
-  if (!stop.ok) {
-    return {
-      ok: false,
-      outcome: 'terminal_stop_failed',
-      report: {
-        stopped: targetRows.length,
-        closed_panes: 0,
-        closed_tabs: 0,
-        mixed_tab_found: false,
-      },
-      error: stop.error,
-    };
-  }
-
-  const postStopCensus = runtimeTerminals(RUNTIME.terminals_all());
-  if (!postStopCensus.ok) {
-    return {
-      ok: false,
-      outcome: 'terminal_stop_failed',
-      report: { stopped: targetRows.length, closed_panes: 0, closed_tabs: 0, mixed_tab_found: false },
-      error: postStopCensus.error ?? 'terminal census unavailable after stop',
-    };
-  }
-  const survivingRows = postStopCensus.value!.filter((terminal) => terminalBelongsTo(terminal, worktreePath));
-  const survivingByTab = new Map<string, RuntimeTerminal[]>();
-  for (const terminal of survivingRows) {
-    const key = terminal.tabId?.trim() || `pane:${terminal.handle ?? ''}`;
-    const rows = survivingByTab.get(key) ?? [];
-    rows.push(terminal);
-    survivingByTab.set(key, rows);
-  }
-
-  let closedPanes = 0;
-  let closedTabs = 0;
-  let mixedTabFound = false;
-  const errors: string[] = [];
-  for (const [tabKey, rowsForTarget] of survivingByTab) {
-    const tabId = rowsForTarget[0]?.tabId?.trim();
-    const allRowsForTab = tabId
-      ? postStopCensus.value!.filter((terminal) => terminal.tabId?.trim() === tabId)
-      : rowsForTarget;
-    const tabIsTargetOnly = tabId !== undefined
-      && allRowsForTab.length > 0
-      && allRowsForTab.every((terminal) => terminalBelongsTo(terminal, worktreePath));
-    if (tabIsTargetOnly) {
-      const handle = rowsForTarget.find((terminal) => terminal.handle?.trim())?.handle?.trim();
-      if (!handle) {
-        errors.push(`tab ${tabKey} has no closable terminal handle`);
-        continue;
+      mixed = mixed || Boolean(tabId && allRows.some((row) => targetTerminals([row], target).length === 0));
+      for (const row of rowsForTarget) {
+        if (!row.handle) throw new TypeError('target pane has no exact terminal handle');
+        runRuntimeEffect(runner, RUNTIME.close_pane(row.handle), 'orca terminal close pane');
+        closedPanes += 1;
       }
-      const close = applyRuntimeCommand(RUNTIME.close_tab(handle));
-      if (close.ok) closedTabs += 1;
-      else errors.push(close.error ?? `failed to close tab ${tabKey}`);
-      continue;
-    }
-
-    mixedTabFound = mixedTabFound
-      || Boolean(tabId && allRowsForTab.some((terminal) => !terminalBelongsTo(terminal, worktreePath)));
-    for (const terminal of rowsForTarget) {
-      const handle = terminal.handle?.trim();
-      if (!handle) {
-        errors.push(`target pane in ${tabKey} has no handle`);
-        continue;
-      }
-      const close = applyRuntimeCommand(RUNTIME.close_pane(handle));
-      if (close.ok) closedPanes += 1;
-      else errors.push(close.error ?? `failed to close pane ${handle}`);
     }
   }
-
-  const finalGlobal = runtimeTerminals(RUNTIME.terminals_all());
-  const residual = finalGlobal.ok
-    ? finalGlobal.value!.filter((terminal) => terminalBelongsTo(terminal, worktreePath))
-    : targetRows;
-  const report = {
-    stopped: targetRows.length,
-    closed_panes: closedPanes,
-    closed_tabs: closedTabs,
-    mixed_tab_found: mixedTabFound,
-  };
-  if (!finalGlobal.ok || residual.length > 0 || errors.length > 0) {
-    return {
-      ok: false,
-      outcome: mixedTabFound ? 'blocked_mixed_tab' : 'terminal_stop_failed',
-      report,
-      error: [finalGlobal.error, ...errors, residual.length > 0 ? `${residual.length} target terminals remain` : undefined]
-        .filter((value): value is string => Boolean(value))
-        .join('; '),
-    };
-  }
-  return { ok: true, report };
-}
-
-function recheckState(worktreePath: string, identity: IdentitySnapshot): {
-  g1: boolean;
-  g2a: boolean;
-  g2b: boolean;
-  g5: boolean;
-  detail?: string;
-} {
-  const g5 = checkG5Agents(worktreePath);
+  rows = parseRuntimeTerminals(
+    runtimeJson<unknown>(runner, RUNTIME.terminals_all(), 'final orca terminal list'),
+    'final orca terminal list',
+  );
   return {
-    g1: recheckG1Identity(worktreePath, identity),
-    g2a: checkG2aClean(worktreePath),
-    g2b: checkG2bIgnored(worktreePath),
-    g5: g5.pass,
-    detail: g5.detail,
+    stopped: plan.stopped,
+    closedPanes,
+    closedTabs,
+    mixedTabPreserved: mixed,
+    residual: targetTerminals(rows, target).length,
   };
 }
 
-function deleteBranch(primaryCheckout: string | null, branchName: string, apply: boolean): NonNullable<TeardownReport['branch_deletion']> {
-  if (!apply) return { method: 'skipped', reason: 'dry-run' };
-  if (!primaryCheckout) return { method: 'skipped', reason: 'primary checkout could not be resolved' };
-  const present = gitRunSync(['branch', '--list', branchName], primaryCheckout);
-  if (!present.ok || present.stdout.trim() === '') {
-    return { method: 'skipped', reason: 'branch not found' };
+function branchDecision(
+  runner: CommandRunner,
+  proof: ProofSnapshot,
+  authorizedHeads: ReadonlySet<string>,
+  pr: number,
+): BranchDecision {
+  const branch = proof.identity.branch;
+  if (!branch) return { decision: 'not-applicable', reason: 'target is detached' };
+  const ref = `refs/heads/${branch}`;
+  const current = runner({
+    command: 'git', args: ['-C', proof.identity.repositoryRoot, 'rev-parse', '--verify', ref],
+  });
+  if (!current.ok) return { decision: 'not-present', reason: 'local branch ref is already absent' };
+  const oid = normalizeSha(current.stdout.trim(), 'branch ref');
+  if (!authorizedHeads.has(oid)) {
+    return { decision: 'refused', observedOid: oid, reason: 'branch moved outside the authorized H0/H1 set' };
   }
-  const deleted = gitRunSync(['branch', '-d', branchName], primaryCheckout);
+  const prInfo = proveMergedPr(
+    runner,
+    proof.identity.repositoryRoot,
+    pr,
+    branch,
+    false,
+    normalizeSha(proof.pr.headRefOid, 'final PR head'),
+  );
+  if (!proveBranchOwnership(runner, proof.identity.repositoryRoot, pr, prInfo, branch)) {
+    return { decision: 'refused', observedOid: oid, reason: 'branch ownership is no longer exclusive' };
+  }
+  const deleted = runner({
+    command: 'git',
+    args: ['-C', proof.identity.repositoryRoot, 'update-ref', '-d', ref, oid],
+  });
   return deleted.ok
-    ? { method: 'd', reason: 'deleted after runtime worktree removal' }
-    : { method: 'skipped', reason: 'branch -d refused; no force deletion attempted' };
+    ? { decision: 'deleted', expectedOid: oid, observedOid: oid, reason: 'expected-OID compare-and-delete succeeded' }
+    : { decision: 'refused', expectedOid: oid, observedOid: oid, reason: 'expected-OID compare-and-delete refused' };
 }
 
-function markGates(report: TeardownReport, gates: GateResults): void {
-  report.gates = {
-    g1: gates.g1 ? 'pass' : 'fail',
-    g2a: gates.g2a ? 'pass' : 'fail',
-    g2b: gates.g2b ? 'pass' : 'fail',
-    g3: gates.g3 ? 'pass' : 'fail',
-    g4: gates.g4 ? 'pass' : 'fail',
-    g5: gates.g5 ? 'pass' : 'fail',
+function removeTarget(
+  runner: CommandRunner,
+  proof: ProofSnapshot,
+  classification: TargetClassification,
+): NonNullable<PostMergeTeardownReport['removal']> {
+  if (classification === 'exact_dual') {
+    const command = RUNTIME.remove_worktree_force(proof.identity.path);
+    const result = runner(command);
+    if (!result.ok) return { method: 'orca-force', attempted: true, receipt: 'unknown' };
+    try {
+      const parsed = parseJson(result.stdout, 'orca worktree rm --force');
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { method: 'orca-force', attempted: true, receipt: 'failed' };
+      }
+      const root = parsed as Record<string, unknown>;
+      const payload = root.result && typeof root.result === 'object' && !Array.isArray(root.result)
+        ? root.result as Record<string, unknown>
+        : null;
+      return root.ok === true && payload?.removed === true
+        ? { method: 'orca-force', attempted: true, receipt: 'confirmed' }
+        : { method: 'orca-force', attempted: true, receipt: 'failed' };
+    } catch {
+      return { method: 'orca-force', attempted: true, receipt: 'unknown' };
+    }
+  }
+  const result = runner({
+    command: 'git',
+    args: ['-C', proof.identity.repositoryRoot, 'worktree', 'remove', '--force', proof.identity.path],
+  });
+  return {
+    method: 'git-force',
+    attempted: true,
+    receipt: result.ok ? 'confirmed' : 'unknown',
   };
 }
 
-function emit(report: TeardownReport, json: boolean): void {
-  if (json) {
-    console.log(JSON.stringify(report, null, 2));
-    return;
-  }
-  console.log(`Outcome: ${report.outcome}`);
-  console.log(`Gates: G1=${report.gates.g1} G2a=${report.gates.g2a} G2b=${report.gates.g2b} G3=${report.gates.g3} G4=${report.gates.g4} G5=${report.gates.g5}`);
-  if (report.terminals) {
-    console.log(`Terminals: stop=${report.terminals.stopped} tabs=${report.terminals.closed_tabs} panes=${report.terminals.closed_panes}`);
-  }
-  if (report.processes) {
-    console.log(`Processes: selected=${report.processes.selected} SIGTERM=${report.processes.termed} SIGKILL=${report.processes.sigkilled} residual=${report.processes.residual}`);
-  }
-  if (report.error) console.log(`Detail: ${report.error}`);
+function readback(
+  runner: CommandRunner,
+  repositoryRoot: string,
+  target: string,
+  unrelatedBefore: string,
+): NonNullable<PostMergeTeardownReport['readback']> {
+  const snapshot = inventorySnapshot(runner, repositoryRoot, target);
+  const gitAbsent = gitWorktreeRows(snapshot.gitWorktreesRaw).every((row) => row.path !== target);
+  const orcaAbsent = snapshot.targetRuntimeRows.length === 0;
+  return {
+    gitAbsent,
+    orcaAbsent,
+    unrelatedInventoryStable: snapshot.unrelatedDigest === unrelatedBefore,
+  };
 }
 
-async function execute(args: ParsedArgs, report: TeardownReport): Promise<number> {
-  if (!args.worktree || !args.pr) {
-    report.outcome = 'blocked_invalid_target';
-    report.error = 'both --worktree and --pr are required';
-    return 1;
+function reportBase(args: PostMergeTeardownArgs): PostMergeTeardownReport {
+  const initialHead = args.initialHead && SHA_PATTERN.test(args.initialHead.trim())
+    ? args.initialHead.trim().toLowerCase()
+    : '';
+  const finalPrHead = args.finalPrHead && SHA_PATTERN.test(args.finalPrHead.trim())
+    ? args.finalPrHead.trim().toLowerCase()
+    : '';
+  return {
+    schema: 'orchestrator-pack/post-merge-worktree-teardown/v1',
+    outcome: 'cleanup_deferred',
+    pipelineContinues: true,
+    apply: args.apply,
+    repositoryRoot: args.repositoryRoot ? normalizePath(args.repositoryRoot) : '',
+    worktree: args.worktree ? normalizePath(args.worktree) : '',
+    pr: args.pr ?? 0,
+    classification: args.classification,
+    authority: {
+      targetInitialHead: initialHead,
+      finalPrHead,
+      authorizedHeads: [...new Set([initialHead, finalPrHead].filter(Boolean))],
+      expectedBranch: args.expectedBranch,
+      detached: args.detached,
+    },
+    effects: [],
+  };
+}
+
+function validateArguments(args: PostMergeTeardownArgs): void {
+  if (!args.destructive) throw new TypeError('--post-merge-destructive is required');
+  if (!args.repositoryRoot || !args.worktree || !args.pr) {
+    throw new TypeError('--repo-root, --worktree, and --pr are required');
   }
-  const target = existingRealpath(args.worktree) ?? normalizePath(resolve(args.worktree));
-  report.worktree = target;
-  const validation = validateTarget(target);
-  report.validation.path_exists = validation.pathExists;
-  report.validation.is_primary_checkout = validation.isPrimaryCheckout;
-  if (validation.isPrimaryCheckout) {
-    report.outcome = 'blocked_invalid_target';
-    report.error = 'target is the primary checkout';
-    return 1;
+  if (!args.initialHead || !args.finalPrHead) {
+    throw new TypeError('--expected-head H0 and --final-pr-head H1 are required');
   }
-  if (!validation.pathExists) {
-    report.outcome = args.orphan && args.iKnowThisPath
-      ? 'blocked_unprovable_orphan'
-      : 'blocked_invalid_target';
-    report.error = 'target path does not exist; identity and git-state gates cannot be proven';
-    return 1;
+  normalizeSha(args.initialHead, 'target initial head');
+  normalizeSha(args.finalPrHead, 'final PR head');
+  if (args.detached === Boolean(args.expectedBranch)) {
+    throw new TypeError('choose exactly one of --expected-branch or --detached');
   }
-  if (validation.gitFileStatus !== 'file') {
-    report.outcome = 'blocked_invalid_target';
-    report.error = validation.gitFileError ?? 'target .git file is invalid';
-    return 1;
+  if (args.expectedBranch) normalizeBranch(args.expectedBranch);
+  if (!args.classification) throw new TypeError('--classification must be exact_dual or exact_git_only');
+}
+
+export async function runPostMergeTeardown(
+  args: PostMergeTeardownArgs,
+  dependencies: TeardownDependencies = {},
+): Promise<PostMergeTeardownReport> {
+  const report = reportBase(args);
+  try {
+    validateArguments(args);
+  } catch (error) {
+    return { ...report, error: error instanceof Error ? error.message : String(error) };
   }
-  const worktreeInventory = runtimeWorktrees();
-  if (!worktreeInventory.ok) {
-    report.outcome = 'blocked_state_desync';
-    report.error = worktreeInventory.error;
-    return 1;
-  }
-  const inventoryMatches = worktreeInventory.value!.filter(
-    (row) => typeof row.path === 'string' && normalizePath(row.path) === target,
-  );
-  report.validation.is_in_inventory = inventoryMatches.length === 1;
-  if (inventoryMatches.length !== 1) {
-    report.outcome = 'blocked_state_desync';
-    report.error = `runtime worktree inventory matched ${inventoryMatches.length} rows for target`;
-    return 1;
-  }
-  const gates = runInitialGates(target, args.pr);
-  markGates(report, gates);
-  if (gates.failedOutcome) {
-    report.outcome = gates.failedOutcome;
-    report.error = gates.detail;
-    return 1;
-  }
-  if (!gates.identity || !gates.prBranchName) {
-    report.outcome = 'blocked_state_desync';
-    report.error = 'initial identity snapshot is incomplete';
-    return 1;
-  }
-  const knownWorktrees = new Set(
-    worktreeInventory.value!
-      .map((row) => typeof row.path === 'string' ? existingRealpath(row.path) ?? normalizePath(row.path) : null)
-      .filter((value): value is string => value !== null),
-  );
-  const protectedPaths = new Set(
-    worktreeInventory.value!
-      .filter((row) => row.isMainWorktree === true && typeof row.path === 'string')
-      .map((row) => existingRealpath(row.path!) ?? normalizePath(row.path!)),
-  );
-  const primaryCheckout = getPrimaryCheckout(target);
-  if (!args.apply) {
-    const terminalPlan = planTerminalActions(target);
-    if (!terminalPlan.ok) {
-      report.outcome = 'blocked_state_desync';
-      report.error = terminalPlan.error;
-      return 1;
+  const runner = dependencies.runner ?? defaultRunner;
+  const processDependencies = {
+    processCensus: dependencies.processCensus ?? defaultProcessCensus,
+    signalProcess: dependencies.signalProcess ?? defaultSignal,
+    sleep: dependencies.sleep ?? defaultSleep,
+  };
+  const now = dependencies.now ?? (() => new Date());
+  const repositoryRoot = existingRealpath(args.repositoryRoot!) ?? normalizePath(args.repositoryRoot!);
+  const target = existingRealpath(args.worktree!) ?? normalizePath(args.worktree!);
+  const initialHead = normalizeSha(args.initialHead!, 'target initial head');
+  const finalPrHead = normalizeSha(args.finalPrHead!, 'final PR head');
+  const expectedBranch = args.expectedBranch ? normalizeBranch(args.expectedBranch) : null;
+  const authorizedHeads = new Set([initialHead, finalPrHead]);
+  const binding = {
+    repositoryRoot,
+    target,
+    pr: args.pr!,
+    initialHead,
+    finalPrHead,
+    expectedBranch,
+    detached: args.detached,
+    classification: args.classification!,
+  };
+
+  if (!existsSync(target)) {
+    try {
+      const rb = readback(runner, repositoryRoot, target, inventorySnapshot(runner, repositoryRoot, target).unrelatedDigest);
+      if (rb.gitAbsent && rb.orcaAbsent) {
+        return { ...report, repositoryRoot, worktree: target, outcome: 'already_absent', readback: rb };
+      }
+    } catch {
+      // Fall through to truthful deferred result.
     }
-    report.terminals = terminalPlan.value;
-    report.processes = await reapProcesses(target, protectedPaths, knownWorktrees, false);
-    const dryRunRecheck = recheckState(target, gates.identity);
-    report.recheck = {
-      g1: dryRunRecheck.g1 ? 'pass' : 'fail',
-      g2a: dryRunRecheck.g2a ? 'pass' : 'fail',
-      g2b: dryRunRecheck.g2b ? 'pass' : 'fail',
-      g5: dryRunRecheck.g5 ? 'pass' : 'fail',
+    return { ...report, repositoryRoot, worktree: target, error: 'target is absent but dual absence could not be proven' };
+  }
+
+  let first: ProofSnapshot;
+  try {
+    first = proveTarget(runner, binding);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const unsupported = message.includes('capture-prove worktree rm');
+    return {
+      ...report,
+      repositoryRoot,
+      worktree: target,
+      outcome: unsupported ? 'unsupported_runtime_preflight' : 'cleanup_deferred',
+      preflight: {
+        exactIdentity: !message.includes('target') || !message.includes('outside'),
+        mergedPr: !message.includes('PR') && !message.includes('merge result') ? false : false,
+        branchOwnership: false,
+        runtimeCapability: unsupported ? 'unsupported' : 'not-required',
+        dirty: false,
+        activeOrInterrupted: false,
+      },
+      error: message,
     };
-    if (!dryRunRecheck.g1 || !dryRunRecheck.g2a || !dryRunRecheck.g2b || !dryRunRecheck.g5) {
-      report.outcome = 'blocked_state_drift';
-      report.error = dryRunRecheck.detail ?? 'state changed during dry-run evaluation';
-      return 1;
+  }
+
+  const preflight = {
+    exactIdentity: true,
+    mergedPr: true,
+    branchOwnership: first.branchOwnership,
+    runtimeCapability: first.capability,
+    dirty: first.dirty,
+    activeOrInterrupted: first.activeOrInterrupted,
+  } as const;
+  if (!args.apply) {
+    try {
+      const dryManifest = captureManifest(runner, now, {
+        repositoryRoot,
+        target,
+        pr: args.pr!,
+        identity: first.identity,
+      });
+      return {
+        ...report,
+        repositoryRoot,
+        worktree: target,
+        outcome: 'cleanup_eligible',
+        preflight,
+        terminals: terminalPlan(first.inventory.runtimeTerminals, target),
+        processes: await reapTargetProcesses(target, false, processDependencies),
+        manifest: dryManifest,
+      };
+    } catch (error) {
+      return {
+        ...report,
+        repositoryRoot,
+        worktree: target,
+        outcome: 'cleanup_deferred',
+        preflight,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
-    report.worktree_removal = { attempted: false, removed: false };
-    report.branch_deletion = deleteBranch(primaryCheckout, gates.prBranchName, false);
-    report.outcome = 'reaped_clean';
-    return 0;
   }
-  const terminalResult = stopAndCloseTerminals(target);
-  report.terminals = terminalResult.report;
-  if (!terminalResult.ok) {
-    report.outcome = terminalResult.outcome ?? 'terminal_stop_failed';
-    report.error = terminalResult.error;
-    return 1;
+
+  const effects: string[] = [];
+  let terminals: TerminalEffects;
+  try {
+    terminals = quiesceTerminals(runner, target, first.inventory.runtimeTerminals);
+    effects.push('target terminals stopped/closed');
+  } catch (error) {
+    return {
+      ...report,
+      repositoryRoot,
+      worktree: target,
+      outcome: 'task_degraded',
+      preflight,
+      effects,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
-  const reapResult = await reapProcesses(target, protectedPaths, knownWorktrees, true);
-  report.processes = reapResult;
-  if (reapResult.residual > 0) {
-    report.outcome = 'partial_residual_processes';
-    report.error = `${reapResult.residual} selected processes remain`;
-    return 1;
+  if (terminals.residual > 0) {
+    return {
+      ...report,
+      repositoryRoot,
+      worktree: target,
+      outcome: 'task_degraded',
+      preflight,
+      terminals,
+      effects,
+      error: `${String(terminals.residual)} exact target terminals remain`,
+    };
   }
-  const recheck = recheckState(target, gates.identity);
-  report.recheck = {
-    g1: recheck.g1 ? 'pass' : 'fail',
-    g2a: recheck.g2a ? 'pass' : 'fail',
-    g2b: recheck.g2b ? 'pass' : 'fail',
-    g5: recheck.g5 ? 'pass' : 'fail',
+
+  const processes = await reapTargetProcesses(target, true, processDependencies);
+  effects.push('observable target CWD-and-ancestry processes reaped');
+  if (processes.residual > 0) {
+    return {
+      ...report,
+      repositoryRoot,
+      worktree: target,
+      outcome: 'task_degraded',
+      preflight,
+      terminals,
+      processes,
+      effects,
+      error: `${String(processes.residual)} observable target processes remain`,
+    };
+  }
+
+  let fresh: ProofSnapshot;
+  try {
+    fresh = proveTarget(runner, binding);
+  } catch (error) {
+    return {
+      ...report,
+      repositoryRoot,
+      worktree: target,
+      outcome: 'quiesced_cleanup_deferred',
+      preflight,
+      terminals,
+      processes,
+      effects,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  let manifest: DiscardManifest;
+  try {
+    const firstManifest = captureManifest(runner, now, {
+      repositoryRoot,
+      target,
+      pr: args.pr!,
+      identity: fresh.identity,
+    });
+    const secondIdentity = readTargetIdentity(
+      runner,
+      repositoryRoot,
+      target,
+      expectedBranch,
+      args.detached,
+      authorizedHeads,
+    );
+    const secondManifest = captureManifest(runner, now, {
+      repositoryRoot,
+      target,
+      pr: args.pr!,
+      identity: secondIdentity,
+    });
+    if (!sameManifest(firstManifest, secondManifest)) {
+      throw new TypeError('final discard manifest changed between consecutive post-quiescence captures');
+    }
+    manifest = secondManifest;
+  } catch (error) {
+    return {
+      ...report,
+      repositoryRoot,
+      worktree: target,
+      outcome: 'quiesced_cleanup_deferred',
+      preflight,
+      terminals,
+      processes,
+      effects,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  try {
+    const finalProof = proveTarget(runner, binding);
+    if (
+      finalProof.identity.head !== manifest.targetHead
+      || finalProof.identity.branch !== manifest.branch
+    ) {
+      throw new TypeError('target identity changed after final discard manifest capture');
+    }
+    fresh = finalProof;
+  } catch (error) {
+    return {
+      ...report,
+      repositoryRoot,
+      worktree: target,
+      outcome: 'quiesced_cleanup_deferred',
+      preflight,
+      terminals,
+      processes,
+      manifest,
+      effects,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  const removal = removeTarget(runner, fresh, args.classification!);
+  effects.push(`${removal.method} worktree removal attempted`);
+  const branchDeletion = branchDecision(runner, fresh, authorizedHeads, args.pr!);
+  if (branchDeletion.decision === 'deleted') effects.push('local branch deleted by expected-OID CAS');
+  const rb = readback(runner, repositoryRoot, target, first.inventory.unrelatedDigest);
+  const complete = rb.gitAbsent && rb.orcaAbsent && rb.unrelatedInventoryStable;
+  return {
+    ...report,
+    repositoryRoot,
+    worktree: target,
+    outcome: complete ? 'cleanup_complete' : 'task_degraded',
+    preflight,
+    terminals,
+    processes,
+    manifest,
+    removal,
+    branchDeletion,
+    readback: rb,
+    effects,
+    ...(!complete ? { error: 'dual post-effect read-back did not prove exact absence with unrelated inventory unchanged' } : {}),
   };
-  if (!recheck.g1 || !recheck.g2a || !recheck.g2b || !recheck.g5) {
-    report.outcome = 'blocked_state_drift';
-    report.error = recheck.detail ?? 'pre-removal state differs from the saved identity/git/runtime snapshot';
-    return 1;
+}
+
+function emit(report: PostMergeTeardownReport, json: boolean): void {
+  if (json) console.log(JSON.stringify(report, null, 2));
+  else {
+    console.log(`Outcome: ${report.outcome}`);
+    console.log(`Target: ${report.worktree}`);
+    console.log(`Authorized heads: ${report.authority.authorizedHeads.join(', ')}`);
+    if (report.error) console.log(`Detail: ${report.error}`);
   }
-  report.worktree_removal = { attempted: true, removed: false };
-  const removal = applyRuntimeCommand(RUNTIME.remove_worktree(target));
-  if (!removal.ok) {
-    report.outcome = 'worktree_remove_failed';
-    report.error = removal.error;
-    return 1;
-  }
-  report.worktree_removal.removed = true;
-  report.branch_deletion = deleteBranch(primaryCheckout, gates.prBranchName, true);
-  report.outcome = 'reaped_clean';
-  return 0;
 }
 
 async function main(): Promise<void> {
   const args = parseArgs();
-  const report: TeardownReport = {
-    worktree: args.worktree ?? '',
-    pr: args.pr ?? 0,
-    outcome: 'blocked_invalid_target',
-    apply_mode: args.apply,
-    gates: { g1: 'fail', g2a: 'fail', g2b: 'fail', g3: 'fail', g4: 'fail', g5: 'fail' },
-    validation: { is_primary_checkout: false, is_in_inventory: false, path_exists: false },
-  };
   const lock = args.lifecycleLockToken
     ? borrowLifecycleExclusion(args.lifecycleLockPath, args.lifecycleLockToken)
     : acquireLifecycleExclusion(args.lifecycleLockPath);
   if (!lock) {
-    report.outcome = 'blocked_lock_held';
-    report.error = args.lifecycleLockToken
-      ? `borrowed lifecycle exclusion could not be verified at ${args.lifecycleLockPath}`
-      : `lifecycle exclusion is held or unreadable at ${args.lifecycleLockPath}`;
+    const report = {
+      ...reportBase(args),
+      outcome: 'cleanup_deferred' as const,
+      error: args.lifecycleLockToken
+        ? `borrowed lifecycle exclusion could not be verified at ${args.lifecycleLockPath}`
+        : `lifecycle exclusion is held or unreadable at ${args.lifecycleLockPath}`,
+    };
     emit(report, args.json);
-    process.exitCode = 1;
+    process.exitCode = 0;
     return;
   }
-  let exitCode = 1;
   try {
-    exitCode = await execute(args, report);
+    emit(await runPostMergeTeardown(args), args.json);
+    process.exitCode = 0;
   } catch (error) {
-    report.outcome = 'blocked_state_desync';
-    report.error = error instanceof Error ? error.message : String(error);
-    exitCode = 1;
+    emit({
+      ...reportBase(args),
+      outcome: 'task_degraded',
+      error: error instanceof Error ? error.message : String(error),
+    }, args.json);
+    process.exitCode = 0;
   } finally {
     releaseLifecycleExclusion(args.lifecycleLockPath, lock);
   }
-  emit(report, args.json);
-  process.exitCode = exitCode;
 }
 
-void main();
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : '';
+if (import.meta.url === invokedPath) void main();
