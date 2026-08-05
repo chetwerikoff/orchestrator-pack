@@ -254,3 +254,16 @@ export function buildS2EpisodeTupleKey(input: {
     'task-continuation',
   ]);
 }
+
+/** Deterministic durable identity for one persistence-safe S2 episode. */
+export function buildS2EpisodeKey(input: {
+  projectId: string;
+  issueNumber: number;
+  schedulerGeneration: string;
+  transitionIdentity: string;
+  unitRef: string;
+  eligibleClass: 'idle' | 'livelock';
+}): string {
+  const tupleKey = buildS2EpisodeTupleKey(input);
+  return `s2-${createHash('sha256').update(tupleKey, 'utf8').digest('hex')}`;
+}
