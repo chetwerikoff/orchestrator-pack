@@ -68,6 +68,7 @@ import {
   setPackReviewRunTerminal,
   terminalizePackReviewStaleRun,
   updatePackReviewRun,
+  validatePersistedPackReviewGptAggregate,
   type PackReviewGptRoundRecord,
   type PackReviewRunRecord,
   type PackReviewRunStatus,
@@ -152,6 +153,10 @@ interface StartInput {
   fixtureAfterGptSourceSlotTerminal?: (event: {
     slotId: string;
     round: PackReviewGptRoundRecord;
+  }) => void | Promise<void>;
+  fixtureBeforeGptAggregateSettlement?: (event: {
+    runId: string;
+    payload: ReviewPayload;
   }) => void | Promise<void>;
   fixtureReviewerLayerOverrides?: PackReviewerLayerOverrides;
   fixtureEmulateWin32Selector?: boolean;
@@ -466,7 +471,6 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
   };
 }
 
-
 interface AuthoritativeReviewContext {
   tier: PackReviewTier;
   issueNumber: number;
@@ -591,6 +595,23 @@ function parseReviewPayload(stdout: string): ReviewPayload {
     }
   }
   throw new Error('reviewer produced no valid terminal verdict payload');
+}
+
+function validatePersistedGptReviewPayload(
+  runId: string,
+  payload: ReviewPayload,
+  options: { projectId: string; storeRoot: string },
+): ReviewPayload {
+  const aggregate = validatePersistedPackReviewGptAggregate(runId, {
+    reviewVerdict: payload.verdict,
+    findingCount: payload.findingCount,
+    findings: payload.findings,
+  }, options);
+  return {
+    verdict: aggregate.reviewVerdict,
+    findingCount: aggregate.findingCount,
+    findings: aggregate.findings as ReviewPayloadFinding[],
+  };
 }
 
 export async function assertBoundHeadStillCurrent(options: {
@@ -922,7 +943,6 @@ async function invokeReviewer(options: {
   return { result, resolvedReviewer };
 }
 
-
 interface GptTerminalTurnResult {
   schema: 'turn-result/v1';
   state: string;
@@ -982,7 +1002,9 @@ function updateGptRoundSlot(
 }
 
 function terminalClassForGptResult(result: ProcessResult, terminal: GptTerminalTurnResult | null): string {
-  if (terminal?.send_count !== undefined && terminal.send_count >= 1) return 'possible_delivery';
+  if (terminal?.send_count !== undefined && terminal.send_count >= 1) {
+    return terminal.state === 'ok' ? 'reviewer_output_malformed' : 'possible_delivery';
+  }
   if (terminal) return `${terminal.state}:${terminal.cause}`;
   return 'possible_delivery/missing_result';
 }
@@ -1521,8 +1543,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     retainedOpenCycle,
     options: authorityOptions,
   });
-  // Preserve the H0 authority record before observing H1; carry-over may use only
-  // this exact authoritative terminal, never an older clean run selected by history.
   const priorAuthority = authority.currentHeadSha === target.headSha ? undefined : authority;
   if (authority.currentHeadSha !== target.headSha) {
     authority = observePackReviewHead({
@@ -1641,7 +1661,14 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       if (!resumePayload) {
         throw new Error(`pack review run ${resumeCandidate.id} lost its persisted verdict before recovery`);
       }
-      const typedResumePayload = resumePayload as ReviewPayload;
+      let typedResumePayload = resumePayload as ReviewPayload;
+      if (resumeCandidate.reviewRound) {
+        typedResumePayload = validatePersistedGptReviewPayload(
+          resumeCandidate.id,
+          typedResumePayload,
+          { projectId, storeRoot },
+        );
+      }
       if (!authority.terminal) {
         if (!(process.env.OPK_VITEST_HARNESS === '1' && input.fixturePostReviewHeadSha === undefined)) {
           await assertBoundHeadStillCurrent({
@@ -1703,7 +1730,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
             prNumber: target.prNumber,
             headSha: target.headSha,
             run: resumeCandidate,
-            payload: resumePayload as ReviewPayload,
+            payload: typedResumePayload,
             projectId,
             storeRoot,
             transport: githubReviewTransport,
@@ -1968,13 +1995,10 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
               ? input.fixtureFocusedResolutionBundleDigest
               : undefined)
             || '',
-
           verdict: payload.verdict,
           findingCount: payload.findingCount,
         });
       } catch {
-        // A rejected focused replay must fall back to the normal full-head reviewer.
-        // Do not turn a carry-over-specific rejection into a failed review run.
         carryover = null;
         carryoverBundlePath = '';
         const fallback = await invokeReviewer({
@@ -2006,8 +2030,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       }
     }
 
-    // The reviewer result is untrusted until the live head is checked immediately
-    // before any terminal/cap authority write.
     try {
       if (!(process.env.OPK_VITEST_HARNESS === '1' && input.fixturePostReviewHeadSha === undefined)) {
         await assertBoundHeadStillCurrent({
@@ -2035,6 +2057,16 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         status: 'failed',
         httpStatus: 409,
       };
+    }
+
+    if (gptRound) {
+      if (input.fixtureBeforeGptAggregateSettlement) {
+        await input.fixtureBeforeGptAggregateSettlement({ runId: run.id, payload });
+      }
+      payload = validatePersistedGptReviewPayload(run.id, payload, { projectId, storeRoot });
+      const persistedRun = getPackReviewRun(run.id, { projectId, storeRoot });
+      if (!persistedRun) throw new Error(`pack review run ${run.id} disappeared before GPT settlement`);
+      run = persistedRun;
     }
 
     authority = commitPackReviewTerminal({
