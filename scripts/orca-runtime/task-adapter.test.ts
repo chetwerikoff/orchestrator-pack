@@ -144,10 +144,9 @@ describe('Orca task adapter destructive operations', () => {
     expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'close')).toHaveLength(1);
   });
 
-  it('retries close once only after an explicit runtime_error rejection', () => {
-    const handle = 'retry-terminal';
-    const generation = 'retry-generation';
-    let closeAttempts = 0;
+  it('does not retry an explicit runtime_error rejection', () => {
+    const handle = 'rejected-terminal';
+    const generation = 'rejected-generation';
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
       switch (operation) {
@@ -175,13 +174,10 @@ describe('Orca task adapter destructive operations', () => {
             },
           };
         case 'terminal close':
-          closeAttempts += 1;
-          return closeAttempts === 1
-            ? {
-                ok: false,
-                error: { code: 'runtime_error', message: 'transient explicit rejection' },
-              }
-            : { ok: true, result: { closed: true } };
+          return {
+            ok: false,
+            error: { code: 'runtime_error', message: 'explicit rejection' },
+          };
         default:
           return {
             ok: false,
@@ -195,15 +191,17 @@ describe('Orca task adapter destructive operations', () => {
     if (spawned.status !== 'ok') return;
 
     expect(adapter.stopWorker(spawned.value.identity)).toEqual({
-      status: 'ok',
-      value: { stopped: true },
+      status: 'failed',
+      operation: 'stop_worker',
+      reason: 'runtime_error',
     });
-    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'close')).toHaveLength(2);
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'close')).toHaveLength(1);
     expect(adapter.stopWorker(spawned.value.identity)).toEqual({
       status: 'failed',
       operation: 'stop_worker',
       reason: 'worker_not_owned_by_runtime_instance',
     });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'close')).toHaveLength(1);
   });
 
   it('retains deterministic worker identity after one ambiguous dispatch', () => {
