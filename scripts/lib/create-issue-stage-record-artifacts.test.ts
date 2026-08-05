@@ -838,8 +838,11 @@ describe('Issue #1341 operator-adjudicated final-acceptance artifacts', () => {
     return [
       'Read revision: #1192 r01',
       'review-economics-contract: v1',
+      'VERDICT: CLEAN',
       'NO_FINDINGS',
       'SIMPLIFICATION_CLEAN',
+      'FINDING_COUNT: 0',
+      'INVOCATION_ID: fixture-terminal-1192',
       '',
     ].join('\n');
   }
@@ -904,8 +907,11 @@ state: 'driver_error',
 scope: 'invocation',
 cause: 'browser_lost',
 invocation_id: 'invocation-001',
-send_count: 1,
 configured_profile_key: 'fixture-profile',
+output: {
+  byte_length: Buffer.byteLength(capture),
+  sha256: createHash('sha256').update(capture).digest('hex'),
+},
         };
         const failedText = JSON.stringify(failed);
         writeFileSync(input.turnResultPath, failedText);
@@ -939,6 +945,7 @@ findingCount: 0,
         originalTransport: {
 state: transportState,
 terminalClassification: 'complete',
+sendCount: 1,
         },
       });
       expect(JSON.stringify(manifest.operatorAdjudication)).not.toContain('"state":"ok"');
@@ -1034,4 +1041,223 @@ terminalClassification: 'complete',
     expect(result.errors.join('\n')).toContain('published verdict SHA-256 is mismatched');
     expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
   });
+
+  it.each([
+    {
+      name: 'tier-intake Issue mismatch',
+      prepare: (input: ReturnType<typeof fixture>, capture: string) => {
+        writeFileSync(input.intakePath, JSON.stringify({
+          schema: 'tier-intake/v1', producer: 'flow-manager', taskIdentity: 'issue:1193',
+          kind: 'fresh', priorTier: 'T2', firstRevision: 'r01',
+        }));
+        return { adjudication: adjudication(capture), repositoryFullName: 'chetwerikoff/orchestrator-pack' };
+      },
+      expected: 'operator adjudication Issue does not match authoritative tier-intake Issue',
+    },
+    {
+      name: 'review-episode revision mismatch',
+      prepare: (_input: ReturnType<typeof fixture>, capture: string) => ({
+        adjudication: { ...adjudication(capture), sourceRevision: 'r02' },
+        repositoryFullName: 'chetwerikoff/orchestrator-pack',
+      }),
+      expected: 'operator adjudication revision does not match authoritative review episode',
+    },
+    {
+      name: 'cross-repository same-number comment',
+      prepare: (_input: ReturnType<typeof fixture>, capture: string) => ({
+        adjudication: {
+          ...adjudication(capture),
+          verdictUrl: 'https://github.com/other/repository/issues/1192#issuecomment-5194504082',
+        },
+        repositoryFullName: 'chetwerikoff/orchestrator-pack',
+      }),
+      expected: 'operator adjudication verdictUrl repository does not match authoritative repository',
+    },
+  ])('rejects $name before transport or artifact mutation', ({ prepare, expected }) => {
+    const input = fixture();
+    const capture = governedCapture();
+    writeFileSync(input.capturePath, capture);
+    const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+    delete evidence.invocations[0].turnResultPath;
+    writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+    const outputDir = join(input.dir, 'pre-side-effect-rejection');
+    mkdirSync(outputDir, { recursive: true });
+    const sentinel = join(outputDir, 'acceptance-artifacts.json');
+    writeFileSync(sentinel, 'sentinel');
+    const runGh = vi.fn(() => ({ exitCode: 0, stdout: '', stderr: '' }));
+    const prepared = prepare(input, capture);
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'final-acceptance',
+      operatorAdjudication: prepared.adjudication,
+      repositoryFullName: prepared.repositoryFullName,
+      operatorReferenceTransport: { runGh },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain(expected);
+    expect(runGh).not.toHaveBeenCalled();
+    expect(readFileSync(sentinel, 'utf8')).toBe('sentinel');
+  });
+
+  it('rejects a matching non-terminal progress comment', () => {
+    const input = fixture();
+    const capture = [
+      'Read revision: #1192 r01',
+      'review-economics-contract: v1',
+      'progress: still reviewing',
+      'SIMPLIFICATION_CLEAN',
+      '',
+    ].join('\n');
+    writeFileSync(input.capturePath, capture);
+    const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+    delete evidence.invocations[0].turnResultPath;
+    writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+    const outputDir = join(input.dir, 'operator-non-terminal');
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'final-acceptance',
+      operatorAdjudication: adjudication(capture),
+      operatorReferenceTransport: referenceTransport(capture),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain('operator adjudication published verdict is not a canonical terminal verdict');
+    expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
+  });
+
+  it.each([
+    {
+      name: 'output metadata mismatch',
+      mutateResult: (failed: Record<string, unknown>) => {
+        failed.output = { byte_length: 1, sha256: '0'.repeat(64) };
+      },
+      mutateEvidence: (_evidence: Record<string, any>) => {},
+      expected: 'output does not match capture bytes',
+    },
+    {
+      name: 'terminal-result identity mismatch',
+      mutateResult: (_failed: Record<string, unknown>) => {},
+      mutateEvidence: (evidence: Record<string, any>) => {
+        evidence.invocations[0].terminalResultIdentity = 'sha256:' + '0'.repeat(64) + ':turn-result.json';
+      },
+      expected: 'terminalResultIdentity is not derived from the referenced turn-result',
+    },
+  ])('continues through the existing $name guard after suppressing only non-ok state', ({ mutateResult, mutateEvidence, expected }) => {
+    const input = fixture();
+    const capture = governedCapture();
+    writeFileSync(input.capturePath, capture);
+    const failed: Record<string, unknown> = {
+      schema: 'turn-result/v1',
+      state: 'driver_error',
+      scope: 'invocation',
+      cause: 'browser_lost',
+      invocation_id: 'invocation-001',
+      configured_profile_key: 'fixture-profile',
+      output: {
+        byte_length: Buffer.byteLength(capture),
+        sha256: createHash('sha256').update(capture).digest('hex'),
+      },
+    };
+    mutateResult(failed);
+    const failedText = JSON.stringify(failed);
+    writeFileSync(input.turnResultPath, failedText);
+    const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+    evidence.invocations[0].terminalResultIdentity = 'sha256:'
+      + createHash('sha256').update(failedText).digest('hex') + ':' + basename(input.turnResultPath);
+    mutateEvidence(evidence);
+    writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+    const outputDir = join(input.dir, `operator-downstream-${expected.replaceAll(' ', '-')}`);
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'final-acceptance',
+      operatorAdjudication: adjudication(capture),
+      operatorReferenceTransport: referenceTransport(capture),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain(expected);
+    expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
+  });
+
+  it.each([
+    { sendCount: 0, expected: 'send_count does not match stage evidence' },
+    { sendCount: 2, expected: 'send_count must be 0 or 1' },
+  ])('rejects adjudicated turn-result send_count $sendCount consistently', ({ sendCount, expected }) => {
+    const input = fixture();
+    const capture = governedCapture();
+    writeFileSync(input.capturePath, capture);
+    const failed = {
+      schema: 'turn-result/v1',
+      state: 'driver_error',
+      scope: 'invocation',
+      cause: 'browser_lost',
+      invocation_id: 'invocation-001',
+      configured_profile_key: 'fixture-profile',
+      send_count: sendCount,
+      output: {
+        byte_length: Buffer.byteLength(capture),
+        sha256: createHash('sha256').update(capture).digest('hex'),
+      },
+    };
+    const failedText = JSON.stringify(failed);
+    writeFileSync(input.turnResultPath, failedText);
+    const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+    evidence.invocations[0].terminalResultIdentity = 'sha256:'
+      + createHash('sha256').update(failedText).digest('hex') + ':' + basename(input.turnResultPath);
+    writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+    const outputDir = join(input.dir, `operator-send-count-${sendCount}`);
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'final-acceptance',
+      operatorAdjudication: adjudication(capture),
+      operatorReferenceTransport: referenceTransport(capture),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain(expected);
+    expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
+  });
+
+  it.each([
+    ['operator Issue', '--operator-issue-number'],
+    ['verdict byte length', '--operator-verdict-byte-length'],
+    ['finding count', '--operator-finding-count'],
+  ])('rejects a blank numeric CLI value for %s before artifact production', (_name, blankFlag) => {
+    const input = fixture();
+    const capture = governedCapture();
+    const args = [
+      'node', 'create-issue-stage-finalize.ts', 'produce-artifacts',
+      '--review-dir', input.dir,
+      '--tier-intake', input.intakePath,
+      '--stage-evidence', input.stageEvidencePath,
+      '--author-dispositions', input.authorPath,
+      '--phase', 'final-acceptance',
+      '--operator-issue-number', '1192',
+      '--operator-source-revision', 'r01',
+      '--operator-verdict-url', adjudication(capture).verdictUrl,
+      '--operator-verdict-sha256', adjudication(capture).verdictSha256,
+      '--operator-verdict-byte-length', String(Buffer.byteLength(capture)),
+      '--operator-finding-count', '0',
+      '--operator-reason', 'direct operator reason',
+    ];
+    const index = args.indexOf(blankFlag);
+    args[index + 1] = '';
+    expect(() => runStageFinalizeCli(args)).toThrow(
+      /operator adjudication requires Issue, revision, verdict URL\/hash\/bytes\/findings, and reason/,
+    );
+  });
+
 });
