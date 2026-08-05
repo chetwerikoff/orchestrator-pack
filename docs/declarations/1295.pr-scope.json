@@ -14,6 +14,7 @@
     "scripts/lib/Resolve-PackReviewer.ps1",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/pack-gpt-reviewer.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-reviewer-config.ts",
     "scripts/pack-reviewer-preference.test.ts",
     "scripts/set-pack-reviewer.ps1",
@@ -37,6 +38,7 @@
   "allowed_roots": [
     ".claude/skills/switch-pack-reviewer/SKILL.md",
     ".cursor/skills/switch-pack-reviewer/SKILL.md",
+    "docs/declarations/1295.pr-scope.json",
     "docs/reviewer-switch-runbook.md",
     "docs/switch-pack-reviewer-checklist.md",
     "package.json",
@@ -54,5 +56,5 @@
     "scripts/show-pack-reviewer-status.ps1",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "a9a497b3f9eec4dcba87674e43f94ee574189bd4"
+  "source_revision": "5ad7b903ff9b79e3cd77aa787d08a4a5a7f01830"
 }
