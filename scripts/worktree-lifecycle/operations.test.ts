@@ -22,7 +22,7 @@ const REPOSITORY_ID = 'repo-1298';
 const roots: string[] = [];
 
 function result(input: Partial<ProcessResult> & { stdout?: string } = {}): ProcessResult {
-  return {
+  const base: ProcessResult = {
     outcome: input.outcome ?? 'exit',
     ok: input.ok ?? true,
     exitCode: input.exitCode ?? 0,
@@ -31,8 +31,8 @@ function result(input: Partial<ProcessResult> & { stdout?: string } = {}): Proce
     stderr: input.stderr ?? '',
     timedOut: input.timedOut ?? false,
     cancelled: input.cancelled ?? false,
-    ...(input.error ? { error: input.error } : {}),
   };
+  return input.error ? { ...base, error: input.error } : base;
 }
 
 interface Paths {
