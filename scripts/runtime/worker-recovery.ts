@@ -137,14 +137,14 @@ export function recoverRuntimeWorker(input: {
   if (input.cleanupWorkspace && !expectedHeadSha) {
     return { outcome: 'skipped_ambiguous', reason: 'cleanup_expected_head_missing' };
   }
-  if (input.cleanupWorkspace && (!targetId || !targetGeneration)) {
-    return { outcome: 'skipped_ambiguous', reason: 'cleanup_target_identity_required' };
-  }
 
   const spawnWorkspace = input.workspace ?? 'active';
   if (input.cleanupWorkspace && spawnWorkspace !== 'active'
     && resolve(spawnWorkspace) === resolve(cleanupPath)) {
     return { outcome: 'skipped_ambiguous', reason: 'cleanup_spawn_workspace_reuse' };
+  }
+  if (input.cleanupWorkspace && (!targetId || !targetGeneration)) {
+    return { outcome: 'skipped_ambiguous', reason: 'cleanup_target_identity_required' };
   }
 
   const observationWorkspace = cleanupPath || spawnWorkspace;
