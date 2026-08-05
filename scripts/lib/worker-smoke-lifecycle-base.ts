@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
   existsSync,
@@ -127,7 +127,7 @@ const isRecord = (value: unknown): value is JsonRecord =>
 
 function atomicJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
-  const temp = `${path}.tmp-${process.pid}-${Date.now()}`;
+  const temp = `${path}.tmp-${process.pid}-${randomUUID()}`;
   writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
   renameSync(temp, path);
 }
