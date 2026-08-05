@@ -20,6 +20,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo 'applying exact test-only compatibility patch'
           python3 -c "from pathlib import Path; p=Path('scripts/pack-review-runner-gpt.test.ts'); s=p.read_text(); a='terminalResult|payload|class-inconsistent|non-complete|terminal class'; b='terminalResult|payload|class-inconsistent|non-complete|terminal class|zero-send collision'; assert s.count(a)==1; s=s.replace(a,b,1); a='frozen reviewRound cardinality cannot change'; b='frozen reviewRound cardinality cannot change|cardinality violates tier\\/round policy'; assert s.count(a)==1; p.write_text(s.replace(a,b,1))"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
