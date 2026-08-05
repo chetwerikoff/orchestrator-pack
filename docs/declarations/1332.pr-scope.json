@@ -6,8 +6,11 @@
     "docs/worker-smoke-testing.md"
   ],
   "denylist": [
+    ".github/",
     "credentials/",
     "packages/core/",
+    "plugins/",
+    "scripts/",
     "secrets/",
     "vendor/"
   ],
