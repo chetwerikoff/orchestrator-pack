@@ -10,6 +10,7 @@ import {
   emitCoverageSignal,
   loadHistoryFromFile,
   loadShardReportsFromDir,
+  loadSupplementalReportsFromDir,
   reconcileProposedHistoryAgainstRemote,
   refreshRuntimeHistory,
   runtimeHistoryPath,
@@ -65,6 +66,10 @@ function parseArgs(argv) {
     commitSha: '',
     historyPath: '',
     baseHistoryFile: '',
+    supplementalReportsDir: '',
+    supplementalSourceSha: '',
+    supplementalRunId: '',
+    supplementalRunAttempt: '',
     repoRoot: defaultRepoRoot,
     dryRun: false,
   };
@@ -75,6 +80,14 @@ function parseArgs(argv) {
       options.reportsDir = argv[++index] ?? '';
     } else if (arg === '--commit-sha') {
       options.commitSha = argv[++index] ?? '';
+    } else if (arg === '--supplemental-reports-dir') {
+      options.supplementalReportsDir = argv[++index] ?? '';
+    } else if (arg === '--supplemental-source-sha') {
+      options.supplementalSourceSha = argv[++index] ?? '';
+    } else if (arg === '--supplemental-run-id') {
+      options.supplementalRunId = argv[++index] ?? '';
+    } else if (arg === '--supplemental-run-attempt') {
+      options.supplementalRunAttempt = argv[++index] ?? '';
     } else if (arg === '--history-path') {
       options.historyPath = argv[++index] ?? '';
     } else if (arg === '--base-history-file') {
@@ -117,6 +130,14 @@ function main() {
     printUsage();
     process.exit(1);
   }
+  if (Boolean(options.supplementalReportsDir) !== Boolean(options.supplementalSourceSha)) {
+    printUsage();
+    process.exit(1);
+  }
+  if (options.supplementalReportsDir && (!options.supplementalRunId || !options.supplementalRunAttempt)) {
+    printUsage();
+    process.exit(1);
+  }
 
   const historyPath =
     options.historyPath || join(options.repoRoot, 'scripts/vitest-runtime-history.json');
@@ -129,6 +150,9 @@ function main() {
     options.reportsDir,
     topologyResult.topology.heavyShardCount,
   );
+  const supplementalReports = options.supplementalReportsDir
+    ? loadSupplementalReportsFromDir(options.supplementalReportsDir)
+    : null;
   const baseHistory = options.baseHistoryFile
     ? loadHistoryFromFile(options.baseHistoryFile)
     : loadHistoryFromFile(historyPath);
@@ -136,7 +160,11 @@ function main() {
   const result = refreshRuntimeHistory({
     baseHistory,
     shardReports,
+    supplementalReports,
     expectedCommitSha: options.commitSha,
+    expectedSupplementalSourceSha: options.supplementalSourceSha,
+    expectedSupplementalRunId: options.supplementalRunId,
+    expectedSupplementalRunAttempt: options.supplementalRunAttempt,
     repoRoot: options.repoRoot,
   });
 

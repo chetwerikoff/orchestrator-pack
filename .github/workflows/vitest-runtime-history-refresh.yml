@@ -9,6 +9,11 @@ on:
   schedule:
     - cron: '0 8 * * 1'
   workflow_dispatch:
+    inputs:
+      supplemental_source_sha:
+        description: 'Full same-repository source commit for the fixed light target'
+        required: false
+        type: string
 
 concurrency:
   group: vitest-runtime-history-refresh
@@ -79,6 +84,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -112,12 +118,145 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
+      - name: Validate exact supplemental source revision
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != '' && matrix.shard == 1
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "${SOURCE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo 'supplemental_source_sha must be one full 40-hex commit' >&2
+            exit 1
+          }
+
+      - name: Validate trusted supplemental source ancestry
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != '' && matrix.shard == 1
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+          parent_count="$(git rev-list --parents -n 1 "${SOURCE_SHA}" | awk '{print NF - 1}')"
+          test "${parent_count}" -eq 1 || {
+            echo 'supplemental_source_sha must identify a non-merge commit' >&2
+            exit 1
+          }
+          trusted_branch=false
+          while read -r branch_sha branch_ref; do
+            if git merge-base --is-ancestor "${SOURCE_SHA}" "${branch_sha}"; then
+              trusted_branch=true
+              break
+            fi
+          done < <(git for-each-ref --format='%(objectname) %(refname)' refs/remotes/origin/)
+          test "${trusted_branch}" = true || {
+            echo 'supplemental_source_sha must be reachable from a trusted base-repository branch' >&2
+            exit 1
+          }
+
+      - name: Checkout exact supplemental source revision
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != '' && matrix.shard == 1
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.supplemental_source_sha }}
+          path: supplemental-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify supplemental source and fixed light discovery
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != '' && matrix.shard == 1
+        shell: bash
+        working-directory: supplemental-source
+        env:
+          SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const target = 'scripts/pack-reviewer-preference.test.ts';
+          const config = JSON.parse(readFileSync('scripts/vitest-ci-lanes.config.json', 'utf8'));
+          if (config.classification?.[target] !== 'light') {
+            throw new Error(`source-tree discovery does not classify ${target} as light`);
+          }
+          NODE
+
+      - name: Install supplemental source dependencies
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != '' && matrix.shard == 1
+        working-directory: supplemental-source
+        run: npm ci --include=dev
+
+      - name: Run only fixed supplemental target
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != '' && matrix.shard == 1
+        working-directory: supplemental-source
+        shell: bash
+        env:
+          TARGET: scripts/pack-reviewer-preference.test.ts
+          REPORT: .vitest-runtime-report-supplemental-pack-reviewer-preference.json
+          VITEST_CI_LIGHT_LANE: '1'
+        run: |
+          set -euo pipefail
+          npm run check:node-major
+          npm test -- --maxWorkers=1 "${TARGET}" --reporter=json --outputFile="${REPORT}"
+
+      - name: Write source-bound supplemental metadata
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != '' && matrix.shard == 1
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          REPORT: supplemental-source/.vitest-runtime-report-supplemental-pack-reviewer-preference.json
+          META: .vitest-runtime-report-supplemental-pack-reviewer-preference.json.meta.json
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="${SOURCE_SHA}" RUN_ID="${RUN_ID}" RUN_ATTEMPT="${RUN_ATTEMPT}" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const target = 'scripts/pack-reviewer-preference.test.ts';
+          const report = JSON.parse(readFileSync(process.env.REPORT, 'utf8'));
+          if (report.success !== true || Number(report.numFailedTests ?? 1) !== 0) {
+            throw new Error('supplemental report is not a successful terminal report');
+          }
+          const meta = {
+            schema: 'orchestrator-pack/vitest-runtime-history-supplemental/v1',
+            repository: 'chetwerikoff/orchestrator-pack',
+            target,
+            commitSha: process.env.SOURCE_SHA,
+            success: true,
+            conclusion: 'success',
+            lane: 'light',
+            discovery: {
+              source: 'scripts/vitest-ci-lanes.config.json',
+              target,
+              lane: 'light',
+            },
+            runId: process.env.RUN_ID,
+            runAttempt: process.env.RUN_ATTEMPT,
+          };
+          writeFileSync(process.env.META, `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
+          NODE
+
+      - name: Upload fixed supplemental report
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != '' && matrix.shard == 1 && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-supplemental-report-pack-reviewer-preference
+          path: |
+            supplemental-source/.vitest-runtime-report-supplemental-pack-reviewer-preference.json
+            .vitest-runtime-report-supplemental-pack-reviewer-preference.json.meta.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
 
   refresh-runtime-history:
     name: Refresh vitest runtime-history
     needs: [plan-vitest-ci-topology, test-vitest-heavy]
     if: >-
-      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+      always()
+      && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
       && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -151,6 +290,13 @@ jobs:
           path: vitest-heavy-reports
           merge-multiple: true
 
+      - name: Download fixed supplemental report
+        if: inputs.supplemental_source_sha != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: vitest-supplemental-report-pack-reviewer-preference
+          path: vitest-supplemental-reports
+
       - name: Stage heavy shard reports for refresh
         shell: pwsh
         run: |
@@ -172,15 +318,43 @@ jobs:
             }
           }
 
+      - name: Stage fixed supplemental report for refresh
+        if: inputs.supplemental_source_sha != ''
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports'
+          $dest = Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports-staged'
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          $report = Join-Path $source 'supplemental-source/.vitest-runtime-report-supplemental-pack-reviewer-preference.json'
+          $meta = Join-Path $source '.vitest-runtime-report-supplemental-pack-reviewer-preference.json.meta.json'
+          if (-not (Test-Path -LiteralPath $report) -or -not (Test-Path -LiteralPath $meta)) {
+            throw 'missing fixed supplemental report or companion metadata'
+          }
+          Copy-Item -LiteralPath $report -Destination (Join-Path $dest 'supplemental-pack-reviewer-preference.json')
+          Copy-Item -LiteralPath $meta -Destination (Join-Path $dest 'supplemental-pack-reviewer-preference.json.meta.json')
+
       - name: Refresh committed runtime-history
         shell: pwsh
         env:
           COMMIT_SHA: ${{ github.sha }}
+          SUPPLEMENTAL_SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
+          SUPPLEMENTAL_RUN_ID: ${{ github.run_id }}
+          SUPPLEMENTAL_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          ./scripts/refresh-vitest-runtime-history.ps1 `
-            -ReportsDir (Join-Path $env:GITHUB_WORKSPACE 'vitest-heavy-reports-staged') `
-            -CommitSha $env:COMMIT_SHA `
-            -CommitBack
+          $args = @(
+            '-ReportsDir', (Join-Path $env:GITHUB_WORKSPACE 'vitest-heavy-reports-staged'),
+            '-CommitSha', $env:COMMIT_SHA,
+            '-CommitBack'
+          )
+          if ($env:SUPPLEMENTAL_SOURCE_SHA) {
+            $args += @(
+              '-SupplementalReportsDir', (Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports-staged'),
+              '-SupplementalSourceSha', $env:SUPPLEMENTAL_SOURCE_SHA,
+              '-SupplementalRunId', $env:SUPPLEMENTAL_RUN_ID,
+              '-SupplementalRunAttempt', $env:SUPPLEMENTAL_RUN_ATTEMPT
+            )
+          }
+          ./scripts/refresh-vitest-runtime-history.ps1 @args
 
       - name: Require delivery credential
         shell: bash
@@ -303,12 +477,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DELIVERY_HEAD: ${{ steps.push_delivery.outputs.head_sha }}
+          SUPPLEMENTAL_SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
         run: |
           set -euo pipefail
+          if [ -n "${SUPPLEMENTAL_SOURCE_SHA:-}" ]; then
+            description="runtime-history-provenance/v1 r=${GITHUB_RUN_ID} a=${GITHUB_RUN_ATTEMPT} s=${GITHUB_SHA} x=${SUPPLEMENTAL_SOURCE_SHA}"
+          else
+            description="runtime-history-provenance run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} source=${GITHUB_SHA}"
+          fi
           ./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${DELIVERY_HEAD}" \
             -f state=pending \
             -f context=orchestrator-pack/runtime-history-provenance \
-            -f "description=runtime-history-provenance run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} source=${GITHUB_SHA}" \
+            -f "description=${description}" \
             -f "target_url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
 
       - name: Write delivery PR body
@@ -345,10 +525,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DELIVERY_HEAD: ${{ steps.push_delivery.outputs.head_sha }}
+          SUPPLEMENTAL_SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
         run: |
           set -euo pipefail
+          if [ -n "${SUPPLEMENTAL_SOURCE_SHA:-}" ]; then
+            description="runtime-history-provenance/v1 r=${GITHUB_RUN_ID} a=${GITHUB_RUN_ATTEMPT} s=${GITHUB_SHA} x=${SUPPLEMENTAL_SOURCE_SHA}"
+          else
+            description="runtime-history-provenance run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} source=${GITHUB_SHA}"
+          fi
           ./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${DELIVERY_HEAD}" \
             -f state=success \
             -f context=orchestrator-pack/runtime-history-provenance \
-            -f "description=runtime-history-provenance run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} source=${GITHUB_SHA}" \
+            -f "description=${description}" \
             -f "target_url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"

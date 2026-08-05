@@ -36,6 +36,39 @@ workflow path, repository, run id/attempt, source `main` SHA, and successful
 terminal conclusion. The source `main` SHA is provenance/audit data only; it is
 not an ancestor/equality merge gate.
 
+## Bounded supplemental light-target refresh
+
+The refresh workflow has one explicit, closed supplemental mode for
+`scripts/pack-reviewer-preference.test.ts`. It is enabled only by a
+`workflow_dispatch` input containing the full 40-hex SHA of a same-repository
+source commit. The measurement job checks out that exact commit, verifies that
+the source tree classifies the fixed target as `light`, runs only that target,
+and uploads the standard Vitest report plus source-bound companion metadata.
+
+That job has `contents: read` permission and no delivery or status authority.
+The privileged refresh job runs the checked-in `main` producer and consumes the
+downloaded report as data. It never runs code, package hooks, or commands from
+the measured checkout. The producer rejects missing, duplicate, malformed,
+failed, wrong-lane, wrong-target, wrong-source, non-finite, zero, or negative
+evidence before changing history.
+
+Bounded provenance uses a compact versioned status description so the full
+identities remain below GitHub’s 140-character commit-status limit:
+
+```text
+runtime-history-provenance/v1 r=<run-id> a=<attempt> s=<trusted-workflow-sha> x=<measured-source-sha>
+```
+
+The `x` field implies the fixed supplemental target and the trusted workflow
+revision is the `s` field; the parser rejects any incomplete or mismatched
+binding. Ordinary refreshes retain the legacy-compatible provenance form.
+
+The delivery monitor requires every status row in one episode to bind the same
+run, attempt, trusted workflow revision, measured source revision, and fixed
+target. The status is published on the exact generated delivery head, so the
+existing exact-head and one-file delivery gates remain authoritative. Ordinary
+heavy-shard refreshes retain the legacy-compatible provenance form.
+
 A same-payload retry preserves the existing stable delivery head only when that
 remote head already has exact provenance whose bound refresh run/attempt is
 terminally successful. The refresh checks the existing exact-head status history
