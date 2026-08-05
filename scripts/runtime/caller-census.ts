@@ -1,15 +1,7 @@
-export const RUNTIME_CALLER_KINDS = [
-  'runtime-port',
-  'non-runtime-ao-service',
-] as const;
+export const RUNTIME_CALLER_KINDS = ['runtime-port', 'non-runtime-ao-service'] as const;
 export type RuntimeCallerKind = (typeof RUNTIME_CALLER_KINDS)[number];
 
-export const RUNTIME_CALLER_DISPOSITIONS = [
-  'use-runtime-interface',
-  'already-runtime-neutral',
-  'delete-dead',
-  'defer-1250',
-] as const;
+export const RUNTIME_CALLER_DISPOSITIONS = ['use-runtime-interface', 'already-runtime-neutral', 'delete-dead', 'defer-1250'] as const;
 export type RuntimeCallerDisposition = (typeof RUNTIME_CALLER_DISPOSITIONS)[number];
 
 export const RUNTIME_ADAPTER_METHOD_OPERATIONS = {
@@ -24,6 +16,54 @@ export const RUNTIME_ADAPTER_METHOD_OPERATIONS = {
   stopWorker: 'stop',
   removeWorkspace: 'workspace-remove',
 } as const;
+
+export interface RuntimeOwnerCallPattern {
+  readonly operation: string;
+  readonly symbol: string;
+  readonly form: 'call' | 'new';
+  readonly implementationSurfaces: readonly string[];
+}
+
+export const RUNTIME_OWNER_CALL_PATTERNS: readonly RuntimeOwnerCallPattern[] = [
+  { operation: 'runtime-composition', symbol: 'selectRuntimeAdapter', form: 'call', implementationSurfaces: ['scripts/runtime/registry.ts'] },
+  { operation: 'fleet-observer', symbol: 'FleetObserver', form: 'new', implementationSurfaces: ['scripts/pr2-foundation/fleet-observer.ts'] },
+  { operation: 'fleet-observer', symbol: 'createUnavailableFleetObserver', form: 'call', implementationSurfaces: ['scripts/pr2-foundation/fleet-observer.ts'] },
+  { operation: 'supervisor-startup', symbol: 'runSupervisor', form: 'call', implementationSurfaces: ['scripts/lib/orchestrator-side-process-supervisor.ts'] },
+  { operation: 'recovery', symbol: 'recoverRuntimeWorker', form: 'call', implementationSurfaces: ['scripts/runtime/worker-recovery.ts'] },
+  { operation: 'recovery-claim', symbol: 'acquireWorkerRecoveryClaim', form: 'call', implementationSurfaces: ['scripts/runtime/worker-recovery-claim.ts'] },
+  { operation: 'recovery-claim', symbol: 'finalizeWorkerRecoveryClaim', form: 'call', implementationSurfaces: ['scripts/runtime/worker-recovery-claim.ts'] },
+  { operation: 'recovery-claim', symbol: 'releaseWorkerRecoveryClaim', form: 'call', implementationSurfaces: ['scripts/runtime/worker-recovery-claim.ts'] },
+  { operation: 'single-instance-lease', symbol: 'acquireSingleInstanceLease', form: 'call', implementationSurfaces: ['scripts/runtime/single-instance-lease.ts'] },
+  { operation: 'single-instance-lease', symbol: 'releaseSingleInstanceLease', form: 'call', implementationSurfaces: ['scripts/runtime/single-instance-lease.ts'] },
+  { operation: 'side-effect-fence', symbol: 'acquireSideEffectFence', form: 'call', implementationSurfaces: ['scripts/runtime/side-effect-fence.ts'] },
+  { operation: 'side-effect-fence', symbol: 'reclaimStaleSideEffectFence', form: 'call', implementationSurfaces: ['scripts/runtime/side-effect-fence.ts'] },
+  { operation: 'side-effect-fence', symbol: 'releaseSideEffectFence', form: 'call', implementationSurfaces: ['scripts/runtime/side-effect-fence.ts'] },
+  { operation: 'side-effect-fence', symbol: 'withSideEffectFence', form: 'call', implementationSurfaces: ['scripts/runtime/side-effect-fence.ts'] },
+  { operation: 'crash-backoff', symbol: 'crashBackoffPolicyFromEnv', form: 'call', implementationSurfaces: ['scripts/runtime/crash-backoff.ts'] },
+  { operation: 'crash-backoff', symbol: 'recordChildExit', form: 'call', implementationSurfaces: ['scripts/runtime/crash-backoff.ts'] },
+  { operation: 'crash-backoff', symbol: 'restartDecisionAt', form: 'call', implementationSurfaces: ['scripts/runtime/crash-backoff.ts'] },
+  { operation: 'degraded-rearm', symbol: 'rearmTerminalCrashState', form: 'call', implementationSurfaces: ['scripts/runtime/crash-backoff.ts'] },
+  { operation: 'claim-toctou', symbol: 'acquireReviewStartClaim', form: 'call', implementationSurfaces: ['scripts/lib/review-start-claim-store.ts', 'scripts/lib/review-start-claim-cli.ts'] },
+  { operation: 'claim-toctou', symbol: 'completeAfterRunInvoke', form: 'call', implementationSurfaces: ['scripts/lib/review-start-claim-store.ts', 'scripts/lib/review-start-claim-cli.ts'] },
+  { operation: 'claim-toctou', symbol: 'releaseAfterRunFailure', form: 'call', implementationSurfaces: ['scripts/lib/review-start-claim-store.ts', 'scripts/lib/review-start-claim-cli.ts'] },
+] as const;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function discoverRuntimeOwnerOperations(surface: string, source: string): readonly string[] {
+  const operations = new Set<string>();
+  for (const pattern of RUNTIME_OWNER_CALL_PATTERNS) {
+    if (pattern.implementationSurfaces.includes(surface)) continue;
+    const symbol = escapeRegExp(pattern.symbol);
+    const expression = pattern.form === 'new'
+      ? new RegExp(`\\bnew\\s+${symbol}\\s*\\(`)
+      : new RegExp(`\\b${symbol}\\s*\\(`);
+    if (expression.test(source)) operations.add(pattern.operation);
+  }
+  return [...operations].sort();
+}
 
 export interface RuntimeCallerCensusRow {
   readonly surface: string;
@@ -65,6 +105,13 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Observer-only runtime-neutral fleet census; no actuation or compatibility bridge.',
   },
   {
+    surface: 'scripts/pr2-foundation/scheduler.ts',
+    operations: ['runtime-composition', 'fleet-observer'],
+    kind: 'runtime-port',
+    disposition: 'use-runtime-interface',
+    note: 'Production scheduler composes the selected runtime and FleetObserver and is census-checked as an owner surface.',
+  },
+  {
     surface: 'scripts/invoke-gated-worker-nudge.ts',
     operations: ['find', 'send'],
     kind: 'runtime-port',
@@ -73,10 +120,10 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   },
   {
     surface: 'scripts/lib/pack-review-worker-notification.ts',
-    operations: ['find', 'send'],
+    operations: ['runtime-composition', 'find', 'send', 'side-effect-fence'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
-    note: 'Resolves exact runtime generation and preserves dispatched | send_failed | dispatch_unknown.',
+    note: 'Loads persisted exact runtime identity and preserves dispatched | send_failed | dispatch_unknown.',
   },
   {
     surface: 'scripts/pack-review-worker-notification.cases.ts',
@@ -87,10 +134,10 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   },
   {
     surface: 'scripts/invoke-worker-recovery.ts',
-    operations: ['list', 'find', 'liveness', 'workspace-remove', 'spawn'],
+    operations: ['runtime-composition', 'recovery', 'recovery-claim', 'workspace-remove', 'spawn'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
-    note: 'One pack claim spans head-bound cleanup and a distinct spawn selector.',
+    note: 'Loads durable runtimeHandle authority before one claim spans cleanup and a distinct spawn selector.',
   },
   {
     surface: 'scripts/runtime/worker-recovery.ts',
@@ -118,7 +165,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     operations: ['side-effect-fence'],
     kind: 'runtime-port',
     disposition: 'already-runtime-neutral',
-    note: 'Stable kernel-held lock serializes stale replacement and exact owner release.',
+    note: 'Stable kernel-held lock serializes stale replacement and exact process-generation owner release.',
   },
   {
     surface: 'scripts/runtime/crash-backoff.ts',
@@ -245,10 +292,10 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   },
   {
     surface: 'scripts/pack-review-runner.ts',
-    operations: ['review-trigger', 'review-list'],
-    kind: 'non-runtime-ao-service',
-    disposition: 'defer-1250',
-    note: 'Scripted review service transport remains #1250 work.',
+    operations: ['review-trigger', 'review-list', 'claim-toctou'],
+    kind: 'runtime-port',
+    disposition: 'use-runtime-interface',
+    note: 'Owns the review-start claim lifecycle through the TypeScript authority; non-runtime review transport remains #1250 work.',
   },
   {
     surface: 'scripts/lib/Invoke-AoCliJson.ps1 (config/status/plugin/daemon operations)',
