@@ -384,9 +384,7 @@ implementation.
 
 ### Operator decree: blocker philosophy and plan-first execution
 
-The full additive decree is maintained in
-[`docs/blocker-philosophy.md`](docs/blocker-philosophy.md). Workers must follow
-that canonical text; this stable heading remains the delivery entry point.
+docs/blocker-philosophy.md
 
 ### Operator adoption handoff
 
