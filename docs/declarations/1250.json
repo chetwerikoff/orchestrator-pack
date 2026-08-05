@@ -5,10 +5,13 @@
     "docs/declarations/1250.json",
     "docs/investigations/ao-orca-consumer-census/axis3-bindings.md",
     "docs/investigations/ao-orca-consumer-census/axis5-bindings.md",
+    "scripts/ao-retirement/retired-surface-guard.test.ts",
     "scripts/ao-retirement/retired-surface-guard.ts",
     "scripts/ao-retirement/retired-surface-inventory.json",
     "scripts/ao-retirement/retired-surface-selftest.ts",
-    "scripts/runtime/ao-absent-two-lifecycle-proof.ts"
+    "scripts/runtime/ao-absent-two-lifecycle-proof.test.ts",
+    "scripts/runtime/ao-absent-two-lifecycle-proof.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     ".orca/",
@@ -28,10 +31,13 @@
     "docs/declarations/1250.json",
     "docs/investigations/ao-orca-consumer-census/axis3-bindings.md",
     "docs/investigations/ao-orca-consumer-census/axis5-bindings.md",
+    "scripts/ao-retirement/retired-surface-guard.test.ts",
     "scripts/ao-retirement/retired-surface-guard.ts",
     "scripts/ao-retirement/retired-surface-inventory.json",
     "scripts/ao-retirement/retired-surface-selftest.ts",
-    "scripts/runtime/ao-absent-two-lifecycle-proof.ts"
+    "scripts/runtime/ao-absent-two-lifecycle-proof.test.ts",
+    "scripts/runtime/ao-absent-two-lifecycle-proof.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "r04"
+  "source_revision": "r05"
 }
