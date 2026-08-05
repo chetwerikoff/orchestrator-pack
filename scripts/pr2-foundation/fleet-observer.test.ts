@@ -5,6 +5,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   fsyncSync: vi.fn(),
+  readFileSync: vi.fn(),
+  renameSync: vi.fn(),
   rmSync: vi.fn(),
   writeFileSync: vi.fn(),
 }));
@@ -12,9 +14,18 @@ const mocks = vi.hoisted(() => ({
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   mocks.fsyncSync.mockImplementation(actual.fsyncSync);
+  mocks.readFileSync.mockImplementation(actual.readFileSync);
+  mocks.renameSync.mockImplementation(actual.renameSync);
   mocks.rmSync.mockImplementation(actual.rmSync);
   mocks.writeFileSync.mockImplementation(actual.writeFileSync);
-  return { ...actual, fsyncSync: mocks.fsyncSync, rmSync: mocks.rmSync, writeFileSync: mocks.writeFileSync };
+  return {
+    ...actual,
+    fsyncSync: mocks.fsyncSync,
+    readFileSync: mocks.readFileSync,
+    renameSync: mocks.renameSync,
+    rmSync: mocks.rmSync,
+    writeFileSync: mocks.writeFileSync,
+  };
 });
 import { runSchedulerTick } from './scheduler.ts';
 import {
@@ -180,6 +191,34 @@ class SupersedingFleetSource extends FakeFleetSource {
   }): Promise<RuntimeResult<RuntimeBoundedOutput>> {
     await this.gate;
     return super.readBoundedOutput(input);
+  }
+}
+
+class AdmissionControlledFleetSource extends FakeFleetSource {
+  active = 0;
+  peak = 0;
+  admitted = 0;
+  completed = 0;
+  private readonly pending: Array<() => void> = [];
+
+  override readBoundedOutput(input: {
+    worker: RuntimeWorkerIdentity;
+    previousToken?: RuntimeObservationToken | null;
+  }): Promise<RuntimeResult<RuntimeBoundedOutput>> {
+    this.admitted += 1;
+    this.active += 1;
+    this.peak = Math.max(this.peak, this.active);
+    return new Promise((resolve) => {
+      this.pending.push(() => {
+        this.active -= 1;
+        this.completed += 1;
+        resolve(super.readBoundedOutput(input));
+      });
+    });
+  }
+
+  releaseAll(): void {
+    while (this.pending.length > 0) this.pending.shift()!();
   }
 }
 
@@ -484,46 +523,113 @@ describe('S1 fleet observer', () => {
     expect(phaseStartedAt.value - startedAt).toBeLessThan(80);
   });
 
-  it('covers smoke scenario 3 at the exact UTF-8 snapshot byte boundary', async () => {
+  it('covers smoke scenario 3 through production serialization and commit boundaries', async () => {
     const source = new FakeFleetSource();
     source.add('byte-boundary');
     const observer = observerFor(source);
-    const result = await observer.tick({ schedulerIntervalMs: 1_000 });
-    const base = serializeFleetSnapshot(result.snapshot!);
-    const exact = `${base}${' '.repeat(MAX_SNAPSHOT_BYTES - snapshotByteLength(result.snapshot!))}`;
-    const over = `${exact} `;
+    const accepted = await observer.tick({ schedulerIntervalMs: 1_000 });
+    const originalStringify = JSON.stringify;
+    let boundary: 'exact' | 'over' = 'exact';
+    const stringify = vi.spyOn(JSON, 'stringify').mockImplementation((value, replacer, space) => {
+      const serialized = originalStringify(value, replacer, space);
+      if (typeof value === 'object' && value !== null && 'commitStatus' in value
+        && 'tickSequence' in value && [2, 3].includes((value as { tickSequence?: number }).tickSequence ?? 0)) {
+        return (value as { tickSequence?: number }).tickSequence === 2
+          ? `${serialized}${' '.repeat(MAX_SNAPSHOT_BYTES - Buffer.byteLength(serialized, 'utf8'))}`
+          : `${serialized}${' '.repeat(MAX_SNAPSHOT_BYTES - Buffer.byteLength(serialized, 'utf8') + 1)}`;
+      }
+      return serialized;
+    });
+    try {
+      const exact = await observer.tick({ schedulerIntervalMs: 1_000 });
+      const exactBytes = readFileSync(observer.snapshotPath, 'utf8');
+      expect(Buffer.byteLength(exactBytes, 'utf8')).toBe(MAX_SNAPSHOT_BYTES);
+      expect(isAcceptedFleetSnapshot(exactBytes)).toBe(true);
+      expect(exact.snapshotCommitted).toBe(true);
+      expect(exact.snapshot?.tickSequence).toBe(2);
 
-    expect(Buffer.byteLength(exact, 'utf8')).toBe(1_048_576);
-    expect(Buffer.byteLength(over, 'utf8')).toBe(1_048_577);
-    expect(isAcceptedFleetSnapshot(exact)).toBe(true);
-    expect(isAcceptedFleetSnapshot(over)).toBe(false);
-    expect(readFileSync(observer.snapshotPath, 'utf8')).toBe(base);
+      boundary = 'over';
+      const writes = vi.mocked(fs.writeFileSync);
+      writes.mockClear();
+      const over = await observer.tick({ schedulerIntervalMs: 1_000 });
+      expect(over.snapshotCommitted).toBe(false);
+      expect(over.status).toBe('failed');
+      expect(over.snapshot?.census).toEqual(exact.snapshot?.census);
+      expect(writes.mock.calls
+        .filter(([target]) => String(target).includes('.tmp-'))
+        .every(([, data]) => Buffer.byteLength(String(data), 'utf8') <= MAX_SNAPSHOT_BYTES)).toBe(true);
+      expect(stringify).toHaveBeenCalled();
+      expect(accepted.snapshotCommitted).toBe(true);
+    } finally {
+      stringify.mockRestore();
+    }
   });
 
-  it('covers smoke scenario 4 by invalidating a near-deadline publication', async () => {
-    let expired = false;
-    const source = new FakeFleetSource();
-    source.add('near-deadline');
-    const configRoot = mkdtempSync(path.join(os.tmpdir(), 'fleet-observer-deadline-'));
-    const stateRoot = mkdtempSync(path.join(os.tmpdir(), 'fleet-observer-deadline-state-'));
-    roots.push(configRoot, stateRoot);
-    const observer = new FleetObserver({
-      source,
-      configPath: path.join(configRoot, 'config.json'),
-      snapshotPath: path.join(stateRoot, 'snapshot.json'),
-      generationFactory: () => 'sg-deadline',
-      now: () => (expired ? 26 : 0),
-    });
-    const original = source.readBoundedOutput.bind(source);
-    source.readBoundedOutput = (input) => {
-      const output = original(input);
-      expired = true;
-      return output;
-    };
-
-    const result = await observer.tick({ schedulerIntervalMs: 100, phaseStartMs: 0 });
-    expect(result.snapshotCommitted).toBe(false);
-    expect(result.schedulerReturnedWithinBudget).toBe(false);
+  it('covers smoke scenario 4 through scheduler deadline return and rollback', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const root = mkdtempSync(path.join(os.tmpdir(), 'fleet-observer-deadline-scheduler-'));
+      roots.push(root);
+      const authorityPath = path.join(root, 'epoch.json');
+      writeFileSync(authorityPath, JSON.stringify({
+        schemaVersion: 1,
+        currentEpochId: 'epoch-1306',
+        records: [{
+          epochId: 'epoch-1306', nonce: 'nonce-1306', hostId: 'host-1306', repoRoot: process.cwd(),
+          installedCommitSha: 'a'.repeat(40), snapshotDigests: {}, importDigests: {}, registryHash: 'a',
+          preCommitLogDigest: 'b', commitAt: '2026-08-05T00:00:00.000Z',
+        }],
+      }));
+      let expired = false;
+      let injectExpired = false;
+      const source = new FakeFleetSource();
+      source.add('near-deadline');
+      let clock = 0;
+      const observer = new FleetObserver({
+        source,
+        configPath: path.join(root, 'config.json'),
+        snapshotPath: path.join(root, 'snapshot.json'),
+        generationFactory: () => 'sg-deadline',
+        now: () => clock,
+      });
+      const accepted = await observer.tick({ schedulerIntervalMs: 100, phaseStartMs: 0 });
+      const prior = readFileSync(observer.snapshotPath, 'utf8');
+      const originalOutput = source.readBoundedOutput.bind(source);
+      source.readBoundedOutput = (input) => {
+        const output = originalOutput(input);
+        if (injectExpired) {
+          expired = true;
+          clock = 26;
+        }
+        return output;
+      };
+      injectExpired = true;
+      const boundary = {
+        listCandidates: vi.fn(() => []),
+        readCurrentPr: vi.fn(),
+        readChecks: vi.fn(),
+        listReviewRuns: () => [],
+        start: vi.fn(async () => ({ ok: true })),
+        schedulerIntervalMs: 100,
+        fleetObserver: observer,
+      };
+      const result = await runSchedulerTick(boundary, {
+        ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
+        ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-1306',
+        ORCHESTRATOR_CUTOVER_NONCE: 'nonce-1306',
+      });
+      expect(accepted.snapshotCommitted).toBe(true);
+      expect(expired).toBe(true);
+      expect(boundary.listCandidates).toHaveBeenCalled();
+      expect(boundary.start).not.toHaveBeenCalled();
+      expect(result.observer?.snapshotCommitted).toBe(false);
+      expect(result.observer?.schedulerReturnedWithinBudget).toBe(false);
+      expect(result.observer?.snapshot?.progress.at(-1)?.type).not.toBe('tick-complete');
+      expect(readFileSync(observer.snapshotPath, 'utf8')).toBe(prior);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('covers smoke scenario 6 without emitting disappearance for contradictory generation evidence', async () => {
@@ -580,138 +686,162 @@ describe('S1 fleet observer', () => {
     expect(result.snapshot?.transitions.some((transition) => transition.reason === 'positive-gone')).toBe(false);
   });
 
-  it('covers smoke scenario 7 with bounded deterministic fleet concurrency', async () => {
-    const source = new ConcurrentFleetSource();
-    for (let index = 0; index < 12; index += 1) source.add(`delayed-${index}`);
-    const observer = observerFor(source, { schemaVersion: 1, maxConcurrency: 3 });
-    const result = await observer.tick({ schedulerIntervalMs: 1_000 });
+  it('covers smoke scenario 7 with bounded admission and hard-deadline settlement', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const source = new AdmissionControlledFleetSource();
+      for (let index = 0; index < 12; index += 1) source.add(`delayed-${index}`);
+      const observer = observerFor(source, { schemaVersion: 1, maxConcurrency: 3 });
+      const tick = observer.tick({ schedulerIntervalMs: 1_000, phaseStartMs: 0 });
+      for (let index = 0; index < 12; index += 1) await Promise.resolve();
+      expect(source.peak).toBe(3);
+      vi.advanceTimersByTime(4_000);
+      source.releaseAll();
+      const result = await tick;
+      await Promise.resolve();
 
-    expect(source.peak).toBeLessThanOrEqual(3);
-    expect(result.snapshotCommitted).toBe(true);
-    expect(result.snapshot?.census).toHaveLength(12);
-    expect(result.schedulerReturnedWithinBudget).toBe(true);
+      expect(source.peak).toBeLessThanOrEqual(3);
+      expect(source.admitted).toBe(3);
+      expect(source.completed).toBe(3);
+      expect(result.snapshotCommitted).toBe(false);
+      expect(result.status).toBe('failed');
+      expect(result.snapshot?.census ?? []).toHaveLength(0);
+      expect(result.schedulerReturnedWithinBudget).toBe(false);
+
+      const authorityPath = path.join(path.dirname(observer.snapshotPath), 'epoch.json');
+      mkdirSync(path.dirname(authorityPath), { recursive: true });
+      writeFileSync(authorityPath, JSON.stringify({
+        schemaVersion: 1,
+        currentEpochId: 'epoch-1306-s7',
+        records: [{
+          epochId: 'epoch-1306-s7', nonce: 'nonce-1306-s7', hostId: 'host-1306', repoRoot: process.cwd(),
+          installedCommitSha: 'a'.repeat(40), snapshotDigests: {}, importDigests: {}, registryHash: 'a',
+          preCommitLogDigest: 'b', commitAt: '2026-08-05T00:00:00.000Z',
+        }],
+      }));
+      const boundary = {
+        listCandidates: vi.fn(() => []),
+        readCurrentPr: vi.fn(),
+        readChecks: vi.fn(),
+        listReviewRuns: () => [],
+        start: vi.fn(async () => ({ ok: true })),
+        schedulerIntervalMs: 1_000,
+        fleetObserver: { tick: vi.fn(async () => result), getEffectiveBudgetMs: () => 1 },
+      };
+      await runSchedulerTick(boundary, {
+        ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
+        ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-1306-s7',
+        ORCHESTRATOR_CUTOVER_NONCE: 'nonce-1306-s7',
+      });
+      expect(boundary.listCandidates).toHaveBeenCalled();
+      expect(boundary.start).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('covers smoke scenario 9 with a restart-safe unit reference collision', async () => {
+  it('covers smoke scenario 9 with restart-discarded continuity and unit-ref collision', async () => {
     const source = new FakeFleetSource();
-    source.add('restart-worker');
+    source.add('restart-worker', 'gen-1', 'busy');
     const root = mkdtempSync(path.join(os.tmpdir(), 'fleet-observer-restart-'));
     roots.push(root);
     const configPath = path.join(root, 'config.json');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
     const snapshotPath = path.join(root, 'snapshot.json');
-    const first = new FleetObserver({
-      source,
-      configPath,
-      snapshotPath,
-      generationFactory: () => 'sg-before-restart',
-    });
+    const first = new FleetObserver({ source, configPath, snapshotPath, generationFactory: () => 'sg-before-restart' });
     const firstResult = await first.tick({ schedulerIntervalMs: 1_000 });
-    writeFileSync(configPath, JSON.stringify({
-      schemaVersion: 1,
-      exceptions: [{ kind: 'HELD', schedulerGeneration: 'sg-before-restart', unitRef: 'u-000001' }],
-    }));
-    const restarted = new FleetObserver({
-      source,
-      configPath,
-      snapshotPath,
-      generationFactory: () => 'sg-after-restart',
-    });
+    source.setChanged('restart-worker', false);
+    const secondResult = await first.tick({ schedulerIntervalMs: 1_000 });
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 2, exceptions: [{ kind: 'HELD', schedulerGeneration: 'sg-before-restart', unitRef: 'u-000001' }] }));
+    const restarted = new FleetObserver({ source, configPath, snapshotPath, generationFactory: () => 'sg-after-restart' });
     const restartedResult = await restarted.tick({ schedulerIntervalMs: 1_000 });
-
     expect(firstResult.snapshot?.census[0]?.unitRef).toBe('u-000001');
+    expect(secondResult.snapshot?.census[0]?.class).toBe('livelock');
     expect(restarted.schedulerGeneration).toBe('sg-after-restart');
     expect(restartedResult.snapshot?.census[0]?.unitRef).toBe('u-000001');
-    expect(restartedResult.snapshot?.census[0]?.class).toBe('idle');
+    expect(restartedResult.snapshot?.census[0]?.class).toBe('unknown');
+    expect(restartedResult.snapshot?.census[0]?.reason).toBe('missing-output-baseline');
     expect(restartedResult.exceptionCollisionRejected).toBe(true);
   });
 
-  it('covers smoke scenario 11 by retaining the prior result on publication failure', async () => {
-    const source = new FakeFleetSource();
-    source.add('publication-fault');
-    const observer = observerFor(source);
-    const accepted = await observer.tick({ schedulerIntervalMs: 1_000 });
-    rmSync(observer.snapshotPath);
-    mkdirSync(observer.snapshotPath);
-    const failed = await observer.tick({ schedulerIntervalMs: 1_000 });
-
-    expect(accepted.snapshotCommitted).toBe(true);
-    expect(failed.snapshotCommitted).toBe(false);
-    expect(failed.status).toBe('failed');
-    expect(failed.reason).toBe('snapshot-publication-failed');
-    expect(failed.snapshot?.census).toEqual(accepted.snapshot?.census);
-  });
-
-  it('keeps result, memory, and disk authority aligned across rollback invalidation faults', async () => {
-    const exercise = async (truncateFails: boolean): Promise<void> => {
+  it('covers smoke scenario 11 with separate replacement and read-back faults', async () => {
+    const exercise = async (fault: 'replacement' | 'read-back'): Promise<void> => {
       const source = new FakeFleetSource();
-      source.add('rollback-fault');
+      source.add(`publication-fault-${fault}`);
       const observer = observerFor(source);
       const accepted = await observer.tick({ schedulerIntervalMs: 1_000 });
-
-      let fsyncCalls = 0;
-      const fsync = vi.mocked(fs.fsyncSync);
-      const rm = vi.mocked(fs.rmSync);
-      const write = vi.mocked(fs.writeFileSync);
-      const originalFsync = fsync.getMockImplementation();
-      const originalRm = rm.getMockImplementation();
-      const originalWrite = write.getMockImplementation();
-      fsync.mockImplementation((fd) => {
-        fsyncCalls += 1;
-        if (fsyncCalls >= 2) throw new Error('injected restoration and directory sync failure');
-        return originalFsync!(fd);
-      });
-      rm.mockImplementation((target, options) => {
-        if (target === observer.snapshotPath) throw new Error('injected deletion failure');
-        return originalRm!(target, options);
-      });
-      write.mockImplementation((target, data, options) => {
-        if (truncateFails && target === observer.snapshotPath && data === '') {
-          throw new Error('injected truncation failure');
-        }
-        return originalWrite!(target, data, options);
-      });
-
-      let failed: Awaited<ReturnType<FleetObserver['tick']>> | undefined;
+      const priorBytes = readFileSync(observer.snapshotPath, 'utf8');
+      const rename = vi.mocked(fs.renameSync);
+      const read = vi.mocked(fs.readFileSync);
+      const originalRename = rename.getMockImplementation()!;
+      const originalRead = read.getMockImplementation()!;
+      let faulted = false;
       try {
-        failed = await observer.tick({ schedulerIntervalMs: 1_000 });
+        rename.mockImplementation((from, to) => {
+          if (fault === 'replacement' && String(from).includes('.tmp-')) { faulted = true; throw new Error('replacement'); }
+          return originalRename(from, to);
+        });
+        read.mockImplementation((target, ...args) => {
+          if (fault === 'read-back' && !faulted && String(target) === observer.snapshotPath) { faulted = true; throw new Error('read-back'); }
+          return originalRead(target, ...args);
+        });
+        const failed = await observer.tick({ schedulerIntervalMs: 1_000 });
+        expect(faulted).toBe(true);
+        expect(accepted.snapshotCommitted).toBe(true);
+        expect(failed.status).toBe('failed');
+        expect(failed.result).toBe('observer-failed');
+        expect(failed.snapshot?.census).toEqual(accepted.snapshot?.census);
+        const disk = JSON.parse(readFileSync(observer.snapshotPath, 'utf8')) as { result: string; census: unknown[]; progress: Array<{ type: string }> };
+        expect(isAcceptedFleetSnapshot(priorBytes)).toBe(true);
+        expect(['complete', 'failed']).toContain(disk.result);
+        expect(disk.census).toEqual(accepted.snapshot?.census);
       } finally {
-        fsync.mockImplementation(originalFsync!);
-        rm.mockImplementation(originalRm!);
-        write.mockImplementation(originalWrite!);
+        rename.mockImplementation(originalRename);
+        read.mockImplementation(originalRead);
       }
-
-      expect(fsyncCalls).toBeGreaterThanOrEqual(3);
-      expect(failed?.snapshotCommitted).toBe(false);
-      expect(failed?.status).toBe('failed');
-      expect(failed?.snapshot?.census).toEqual(accepted.snapshot?.census);
-      const snapshotBytes = existsSync(observer.snapshotPath)
-        ? readFileSync(observer.snapshotPath, 'utf8')
-        : null;
-      expect(snapshotBytes === null || !isAcceptedFleetSnapshot(snapshotBytes)).toBe(true);
-
-      source.remove('rollback-fault');
-      const next = await observer.tick({ schedulerIntervalMs: 1_000 });
-      expect(next.snapshot?.census).toEqual([]);
-      expect(next.snapshot?.progress.filter((entry) => entry.type === 'tick-complete')).toHaveLength(1);
     };
-
-    await exercise(false);
-    await exercise(true);
+    await exercise('replacement');
+    await exercise('read-back');
   });
 
-  it('covers smoke scenario 12 by rejecting stale completion after supersession', async () => {
-    const source = new SupersedingFleetSource();
-    source.add('stale-completion');
-    const observer = observerFor(source, undefined, 'sg-stale');
-    const firstPromise = observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 1 });
-    await Promise.resolve();
-    const secondPromise = observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 2 });
-    source.release();
-    const [first, second] = await Promise.all([firstPromise, secondPromise]);
-
-    expect(first.staleCompletionRejected).toBe(true);
-    expect(first.snapshotCommitted).toBe(false);
-    expect(second.snapshotCommitted).toBe(true);
-    expect(second.snapshot?.tickSequence).toBe(2);
+  it('covers smoke scenario 12 at synchronous serializer and temp-write supersession boundaries', async () => {
+    const exercise = async (boundary: 'serializer' | 'temp-write'): Promise<void> => {
+      const source = new FakeFleetSource();
+      source.add(`superseded-${boundary}`);
+      const observer = observerFor(source, undefined, `sg-${boundary}`);
+      let newer: Promise<Awaited<ReturnType<FleetObserver['tick']>>> | undefined;
+      const originalStringify = JSON.stringify;
+      const stringifySpy = boundary === 'serializer' ? vi.spyOn(JSON, 'stringify') : undefined;
+      const write = vi.mocked(fs.writeFileSync);
+      const originalWrite = write.getMockImplementation()!;
+      if (stringifySpy) {
+        stringifySpy.mockImplementation((value, replacer, space) => {
+          const serialized = originalStringify(value, replacer, space);
+          if (!newer && typeof value === 'object' && value !== null && 'tickSequence' in value && (value as { tickSequence?: number }).tickSequence === 1) { observer.cancel(); newer = observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 2 }); }
+          return serialized;
+        });
+      } else {
+        write.mockImplementation((target, data, options) => {
+          if (!newer && String(target).includes('.tmp-')) { observer.cancel(); newer = observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 2 }); }
+          return originalWrite(target, data, options);
+        });
+      }
+      try {
+        const first = await observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 1 });
+        const second = await newer;
+        expect(second).toBeDefined();
+        expect(first.staleCompletionRejected).toBe(false);
+        expect(first.snapshotCommitted).toBe(false);
+        expect(second?.snapshotCommitted).toBe(true);
+        expect(second?.snapshot?.tickSequence).toBe(2);
+        expect(readFileSync(observer.snapshotPath, 'utf8')).toContain('"tickSequence":2');
+      } finally {
+        stringifySpy?.mockRestore();
+        write.mockImplementation(originalWrite);
+      }
+    };
+    await exercise('serializer');
+    await exercise('temp-write');
   });
 });
