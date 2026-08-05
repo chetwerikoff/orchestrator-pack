@@ -96,12 +96,33 @@ describe('TypeScript side-effect fence', () => {
       writeFileSync(path, JSON.stringify({
         schemaVersion: 1,
         pid: process.pid,
+        startTicks: acquired.handle.owner.startTicks,
         nonce: 'replacement',
         startedAtMs: Date.now(),
         metadata: {},
       }), 'utf8');
       expect(releaseSideEffectFence(acquired.handle)).toBe(false);
       expect(readFileSync(path, 'utf8')).toContain('replacement');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reclaims a same-PID record from a different process generation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-fence-pid-reuse-'));
+    try {
+      const path = join(root, 'effect.lock');
+      writeFileSync(path, `${JSON.stringify({
+        schemaVersion: 1,
+        pid: process.pid,
+        startTicks: 'different-process-generation',
+        nonce: 'stale-pid-reuse',
+        startedAtMs: 0,
+        metadata: {},
+      })}\n`, 'utf8');
+      const acquired = acquireSideEffectFence({ path, ownerlessMaxAgeMs: 0 });
+      expect(acquired.acquired).toBe(true);
+      if (acquired.acquired) expect(releaseSideEffectFence(acquired.handle)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -129,6 +150,7 @@ describe('TypeScript side-effect fence', () => {
     writeFileSync(path, `${JSON.stringify({
       schemaVersion: 1,
       pid: 999_999_999,
+      startTicks: 'dead',
       nonce: 'stale',
       startedAtMs: 0,
       metadata: {},
