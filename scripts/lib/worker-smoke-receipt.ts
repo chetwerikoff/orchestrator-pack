@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -60,7 +61,7 @@ export function buildSmokeCloseSettlementIdentity(runId: string): SmokeCloseSett
 
 export function writeAtomicJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp-${process.pid}-${Date.now()}`;
+  const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
     encoding: 'utf8',
     flag: 'wx',
