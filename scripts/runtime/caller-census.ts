@@ -80,7 +80,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   },
   {
     surface: 'scripts/pack-review-worker-notification.cases.ts',
-    operations: ['find', 'send'],
+    operations: ['spawn', 'find', 'send'],
     kind: 'runtime-port',
     disposition: 'already-runtime-neutral',
     note: 'Focused review-delivery coverage exercises exact runtime lookup and one closed dispatch attempt.',
