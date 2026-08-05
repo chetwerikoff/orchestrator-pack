@@ -743,9 +743,11 @@ export function preflightSmokeLifecycle(
 ): SmokeAdmissionDecision {
   const refusal = preflightSafetyRefusal(input);
   if (refusal) return refusal;
-  const nowMs = input.nowMs ?? Date.now();
+  const now = input.now ?? (() => Date.now());
+  const nowMs = input.nowMs ?? now();
   const admission = base.preflightSmokeLifecycle({
     ...input,
+    nowMs,
     closeBoundHandle: (handle, artifactDir) => {
       const registry = base.readSmokeLifecycleRegistry(artifactDir);
       if (!registry || registry.terminalHandle !== handle) {
@@ -785,10 +787,15 @@ function cleanupResultFromRegistry(
   };
 }
 
+type SmokeCleanupInvocationInput = Parameters<typeof base.cleanupSmokeLifecycle>[0] & {
+  now?: () => number;
+};
+
 export function cleanupSmokeLifecycle(
-  input: Parameters<typeof base.cleanupSmokeLifecycle>[0],
+  input: SmokeCleanupInvocationInput,
 ): base.SmokeCleanupResult {
-  const nowMs = input.nowMs ?? Date.now();
+  const { now, ...baseInput } = input;
+  const nowMs = input.nowMs ?? now?.() ?? Date.now();
   const current = base.readSmokeLifecycleRegistry(input.artifactDir);
   if (current?.spawnState === 'cleanup_pending') {
     const reconciliation = reconcilePendingSmokeLifecycle(input.artifactDir, nowMs);
@@ -813,7 +820,8 @@ export function cleanupSmokeLifecycle(
     return cleanupResultFromRegistry(current, input.reason);
   }
   const result = base.cleanupSmokeLifecycle({
-    ...input,
+    ...baseInput,
+    nowMs,
     closeBoundHandle: (handle) => closeWithReceipt({
       artifactDir: input.artifactDir,
       runId: input.runId,
