@@ -1,20 +1,14 @@
 # AGENTS.md
-
 ## Project Purpose
-
 This repository is an upgrade-safe extension pack for ComposioHQ/agent-orchestrator.
-
 It ports selected safety/accounting contracts from `ai-orchestrator` into Composio AO —
 via plugins, prompt fragments, config examples, scripts, and CI checks — without modifying
 Composio core. For new tasks, the Issue is the sole live spec/source/queue; no tracked draft/index is created.
 Artifacts are audit-only Legacy drafts/index use `publish-issue-draft`.
 Contract: [tiers](docs/tiering.md); [procedure](.claude/skills/create-issue-draft/SKILL.md).
-
 ## Edit boundaries
-
 Do not patch or vendor-modify `ComposioHQ/agent-orchestrator` core packages. All custom
 behavior lives in the allowed surfaces below; treat any `vendor/` checkout as read-only reference.
-
 **Allowed:** `plugins/**`, `prompts/**`, `scripts/**`, `tests/external-output-references/**`,
 `docs/**`, `.claude/skills/**`, `.cursor/skills/**`, `.cursor/rules/**` (see
 [carrier](.cursor/rules/flow-manager-browser-turn-monitoring.mdc) and
@@ -24,31 +18,23 @@ carrier/runbook maintenance matrices synchronized),
 `CLAUDE.md`, `AGENTS.md`, `README.md`,
 `.github/workflows/**`, config examples such as `agent-orchestrator.yaml.example`, and reusable
 root-level tooling config (`.gitignore`, `.gitattributes`).
-
 **Never edit:** `packages/core/**` and `vendor/agent-orchestrator/**` (the latter unless
 explicitly asked to refresh upstream), generated runtime state, secrets or local credential files.
-
 ## What This Pack Ports
-
 Portable contracts only: task declaration / denylist validation; one-amendment declaration
 throttle; scope-safe runtime git guard; PR-level scope CI check; self-architect prompt checks;
 chain-level token/cost accounting. Do **not** port Windows PowerShell wrapper internals, the
 `.ai-loop/` layout as a required protocol, or Composio UI replacements.
-
 ## Coworker CLI delegation
-
 Operating principle: **delegate I/O, keep reasoning**. Bulk reading goes to the external
 `coworker` CLI; analysis and conclusions stay on the reasoning model. In an AO worker, run
 `ao session get "$env:AO_SESSION_ID" --json` before the first `coworker` invocation.
-
 **Mandatory profiles.** Every `coworker ask` MUST pass `--profile code`. Every
 `coworker write` MUST pass `--profile write` unless the task issue names another.
-
 **Ask invocation shape.** Pass corpus via `--paths`; do **not** append files as positional
 arguments after `--question`. Canonical form:
 `coworker ask --profile code [--allow-code] --paths <files>... --question "..."`.
 Use `--allow-code` only under the upstream file gate below.
-
 **Invalid forms:** `--file`, `--stdin`, pipes, heredocs, or bare questions without `--question`.
 
 Examples and delegation rationale:
@@ -398,23 +384,9 @@ implementation.
 
 ### Operator decree: blocker philosophy and plan-first execution
 
-The following additive rules govern how workers handle execution blockers. They
-do not authorize prohibited actions or weaken the repository's existing scope,
-safety, review, or merge requirements.
-
-1. **Blockers are warnings.** A condition that appears to block progress is
-treated as a warning: the worker checks it, fixes it or completes the
-missing prerequisite when possible, and continues with the task. A worker
-stops without continuing only when an explicit blocker applies under rule 3.
-2. **Plan-first execution.** Before executing a task, the worker writes an
-implementation plan and proceeds through that plan without stopping for
-intermediate uncertainty. Any deviation from the plan is recorded in the
-worker report.
-3. **Only explicit blockers; operator lift is absolute.** A blocker exists only
-when the operator or the task directive says that it is a blocker. An explicit operator
-authorization lifts that blocker unconditionally for the authorized
-action; after the authorization, the worker continues without re-litigating
-the same blocker.
+The full additive decree is maintained in
+[`docs/blocker-philosophy.md`](docs/blocker-philosophy.md). Workers must follow
+that canonical text; this stable heading remains the delivery entry point.
 
 ### Operator adoption handoff
 
