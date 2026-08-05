@@ -1,6 +1,6 @@
 # Orca runtime caller census (#1248)
 
-Source revision: `#1248-hard-cut-r3`, 2026-08-05. Machine-readable authority: `scripts/runtime/caller-census.ts`.
+Source revision: `#1248-r14`, 2026-08-05. Machine-readable authority: `scripts/runtime/caller-census.ts`.
 
 ## Classification rule
 
@@ -18,6 +18,7 @@ Compatibility with AO-era callers, PowerShell bridges, old result envelopes, and
 | `scripts/pr2-foundation/fleet-observer.ts` | list/find, read, liveness | `already-runtime-neutral` | Observer-only fleet census through `RuntimeAdapter`; no actuation or compatibility bridge. |
 | `scripts/invoke-gated-worker-nudge.ts` | find, send | `use-runtime-interface` | Issue/PR keyed claim and journal admission before one dispatch. |
 | `scripts/lib/pack-review-worker-notification.ts` | find, send | `use-runtime-interface` | Preserves `dispatched | send_failed | dispatch_unknown`; unknown is terminal and never resent. |
+| `scripts/pack-review-worker-notification.cases.ts` | find, send | `already-runtime-neutral` | Focused review-delivery coverage exercises exact lookup and one closed dispatch attempt. |
 | `scripts/invoke-worker-recovery.ts` | list/find, liveness, workspace remove, spawn | `use-runtime-interface` | One claim spans generation/head-bound cleanup and a distinct spawn selector. |
 | `scripts/runtime/worker-recovery.ts` | list/find, liveness, workspace remove, spawn | `use-runtime-interface` | Revalidates exact id + generation + provenance after claim; live, unknown, or mismatched ownership blocks cleanup. |
 | `scripts/orchestrator-wake-supervisor.ts` | supervisor startup | `already-runtime-neutral` | Node-only supervisor entrypoint. |
