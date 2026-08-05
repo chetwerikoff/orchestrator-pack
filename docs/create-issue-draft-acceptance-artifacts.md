@@ -151,8 +151,9 @@ identity-mismatched, malformed, or incompletely observed reference. The observed
 comment bytes must exactly equal the governed capture bytes.
 
 The manifest records `operator_adjudicated` provenance, the exact
-target/reference/reason, and the original absent or non-`ok` transport fact
-(including `send_count` when present). It never creates or rewrites
-`turn-result/v1 state: ok`. Without all direct operator flags, the legacy
-fail-closed behavior and artifact bytes are unchanged. Workers, reviewers and
-flow-manager evidence must not synthesize these flags.
+target/reference/reason, the immutable observed comment metadata, and the
+original absent or non-`ok` transport fact (including `send_count` when
+present). It never creates or rewrites `turn-result/v1 state: ok`. Without all
+direct operator flags, the legacy fail-closed behavior and artifact bytes are
+unchanged. Workers, reviewers and flow-manager evidence must not synthesize
+these flags.
