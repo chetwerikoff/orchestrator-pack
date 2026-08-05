@@ -1,58 +1,74 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import {
   acquireSideEffectFence,
   releaseSideEffectFence,
   withSideEffectFence,
 } from './side-effect-fence.ts';
 
-function firstJsonLine(child: ChildProcess): Promise<{ acquired: boolean; reason?: string }> {
-  return new Promise((resolve, reject) => {
-    let buffer = '';
-    const timeout = setTimeout(() => reject(new Error('fence contender timed out')), 5_000);
-    child.stdout?.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
-      const newline = buffer.indexOf('\n');
-      if (newline < 0) return;
-      clearTimeout(timeout);
-      try {
-        resolve(JSON.parse(buffer.slice(0, newline)) as { acquired: boolean; reason?: string });
-      } catch (error) {
-        reject(error);
-      }
-    });
-    child.once('error', (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
+interface FenceOwnerProcess {
+  readonly result: Promise<ProcessResult>;
+  readonly cancel: () => void;
 }
 
-function spawnFenceContender(path: string, releaseGate: string): ChildProcess {
+async function readFenceOwnerMarker(path: string): Promise<Record<string, unknown>> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (existsSync(path)) {
+      return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('fence contender timed out');
+}
+
+function launchFenceOwner(path: string, releaseGate: string, markerPath: string): FenceOwnerProcess {
   const moduleUrl = new URL('./side-effect-fence.ts', import.meta.url).href;
   const source = `
-    import { existsSync } from 'node:fs';
+    import { existsSync, writeFileSync } from 'node:fs';
     import { acquireSideEffectFence, releaseSideEffectFence } from ${JSON.stringify(moduleUrl)};
-    const result = acquireSideEffectFence({ path: ${JSON.stringify(path)}, ownerlessMaxAgeMs: 0 });
-    if (!result.acquired) {
-      process.stdout.write(JSON.stringify({ acquired: false, reason: result.reason }) + '\\n');
+    const acquired = acquireSideEffectFence({ path: ${JSON.stringify(path)}, ownerlessMaxAgeMs: 0 });
+    if (!acquired.acquired) {
+      writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({ acquired: false, reason: acquired.reason }), 'utf8');
+      process.exitCode = 1;
     } else {
-      process.stdout.write(JSON.stringify({ acquired: true }) + '\\n');
+      writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({ acquired: true }), 'utf8');
       while (!existsSync(${JSON.stringify(releaseGate)})) {
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
       }
-      releaseSideEffectFence(result.handle);
+      releaseSideEffectFence(acquired.handle);
     }
   `;
-  return spawn(process.execPath, [
-    '--experimental-strip-types',
-    '--input-type=module',
-    '--eval',
-    source,
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const controller = new AbortController();
+  const result = runProcess({
+    command: process.execPath,
+    args: ['--experimental-strip-types', '--input-type=module', '--eval', source],
+    inheritParentEnv: true,
+    signal: controller.signal,
+    allowEmptyStdout: true,
+  });
+  return { result, cancel: () => controller.abort() };
+}
+
+async function attemptFence(path: string): Promise<{ acquired: boolean; reason?: string }> {
+  const moduleUrl = new URL('./side-effect-fence.ts', import.meta.url).href;
+  const source = `
+    import { acquireSideEffectFence, releaseSideEffectFence } from ${JSON.stringify(moduleUrl)};
+    const acquired = acquireSideEffectFence({ path: ${JSON.stringify(path)}, ownerlessMaxAgeMs: 0 });
+    process.stdout.write(JSON.stringify(acquired.acquired
+      ? { acquired: true }
+      : { acquired: false, reason: acquired.reason }) + '\\n');
+    if (acquired.acquired) releaseSideEffectFence(acquired.handle);
+  `;
+  const result = await runProcess({
+    command: process.execPath,
+    args: ['--experimental-strip-types', '--input-type=module', '--eval', source],
+    inheritParentEnv: true,
+  });
+  if (!result.ok) throw new Error(`fence probe failed: ${result.error ?? result.stderr ?? result.outcome}`);
+  return JSON.parse(result.stdout.trim()) as { acquired: boolean; reason?: string };
 }
 
 describe('TypeScript side-effect fence', () => {
@@ -109,6 +125,7 @@ describe('TypeScript side-effect fence', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-fence-race-'));
     const path = join(root, 'effect.lock');
     const releaseGate = join(root, 'release');
+    const markerPath = join(root, 'owner.json');
     writeFileSync(path, `${JSON.stringify({
       schemaVersion: 1,
       pid: 999_999_999,
@@ -116,23 +133,19 @@ describe('TypeScript side-effect fence', () => {
       startedAtMs: 0,
       metadata: {},
     })}\n`, 'utf8');
-    const first = spawnFenceContender(path, releaseGate);
-    let second: ChildProcess | null = null;
+    const first = launchFenceOwner(path, releaseGate, markerPath);
     try {
-      expect(await firstJsonLine(first)).toEqual({ acquired: true });
-      second = spawnFenceContender(path, releaseGate);
-      expect(await firstJsonLine(second)).toEqual({
+      expect(await readFenceOwnerMarker(markerPath)).toEqual({ acquired: true });
+      expect(await attemptFence(path)).toEqual({
         acquired: false,
         reason: 'side_effect_busy',
       });
       writeFileSync(releaseGate, 'release', 'utf8');
-      await new Promise<void>((resolve, reject) => {
-        first.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`first exit ${code}`)));
-      });
+      expect((await first.result).ok).toBe(true);
     } finally {
       writeFileSync(releaseGate, 'release', 'utf8');
-      first.kill('SIGKILL');
-      second?.kill('SIGKILL');
+      first.cancel();
+      await first.result;
       rmSync(root, { recursive: true, force: true });
     }
   }, 10_000);
