@@ -37,12 +37,12 @@ type TargetClassification = 'exact_dual' | 'exact_git_only';
 type TargetMode = 'branch-bound' | 'detached-confirmed';
 type ManifestCategory = 'tracked' | 'untracked' | 'ignored';
 
-export interface CommandInvocation {
+export type CommandInvocation = {
   readonly command: string;
   readonly args: readonly string[];
   readonly cwd?: string;
   readonly timeoutMs?: number;
-}
+};
 
 export type CommandRunner = (invocation: CommandInvocation) => ProcessResult;
 
@@ -237,11 +237,12 @@ const IGNORED_DIRECTORY_ALLOWLIST = [
 ] as const;
 
 function defaultRunner(invocation: CommandInvocation): ProcessResult {
+  const { command, args, cwd, timeoutMs } = invocation;
   return runProcessSync({
-    command: invocation.command,
-    args: invocation.args,
-    cwd: invocation.cwd,
-    timeoutMs: invocation.timeoutMs,
+    command,
+    args,
+    cwd,
+    timeoutMs,
     inheritParentEnv: true,
   });
 }
@@ -321,8 +322,9 @@ function runChecked(runner: CommandRunner, invocation: CommandInvocation, label:
 function parseJson(text: string, label: string): unknown {
   try {
     return JSON.parse(text) as unknown;
-  } catch (error) {
-    throw new TypeError(`${label} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  } catch (caught) {
+    const detail = caught instanceof Error ? caught.message : String(caught);
+    throw new TypeError(`${label} returned invalid JSON: ${detail}`);
   }
 }
 
@@ -370,19 +372,24 @@ function parseRuntimeTerminals(value: unknown, label: string): RuntimeTerminal[]
   });
 }
 
+function stableObject(value: Record<string, unknown>): string {
+  const entries = Object.entries(value)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`);
+  return `{${entries.join(',')}}`;
+}
+
 function stable(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`)
-      .join(',')}}`;
+  if (Array.isArray(value)) return `[${value.map((item) => stable(item)).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return stableObject(value as Record<string, unknown>);
   }
   return JSON.stringify(value);
 }
 
 function digest(value: unknown): string {
-  return createHash('sha256').update(stable(value)).digest('hex');
+  const canonical = stable(value);
+  return createHash('sha256').update(canonical).digest('hex');
 }
 
 function gitWorktreeRows(raw: string): Array<{ path: string; head: string | null; branch: string | null; detached: boolean }> {
