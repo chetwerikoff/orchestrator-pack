@@ -74,23 +74,6 @@ export type CloseReceiptRead =
   | { state: 'missing' | 'invalid' }
   | { state: 'settlement_recorded' | 'closed'; receipt: CloseReceipt };
 
-export function readHistoricalCloseReceipt(
-  artifactDir: string,
-  registry: SmokeLifecycleRegistry,
-): { closeOutcome: string } | undefined {
-  if (!existsSync(smokeCloseReceiptPath(artifactDir))) return undefined;
-  const value = readJson(smokeCloseReceiptPath(artifactDir));
-  if (
-    !isRecord(value)
-    || Number(value.version) !== 1
-    || String(value.runId ?? '').trim() !== registry.runId
-    || String(value.terminalHandle ?? '').trim() !== registry.terminalHandle
-    || !isCleanCloseOutcome(String(value.closeOutcome ?? '').trim())
-    || !Number.isFinite(Number(value.recordedAtMs))
-  ) return undefined;
-  return { closeOutcome: String(value.closeOutcome).trim() };
-}
-
 export function readCloseReceipt(
   artifactDir: string,
   registry: SmokeLifecycleRegistry,
@@ -126,6 +109,11 @@ export function readCloseReceipt(
     || receipt.closeAttemptedAtMs !== registry.closeAttemptedAtMs
     || receipt.settlementAtMs > receipt.closeAttemptedAtMs
     || !Number.isFinite(receipt.recordedAtMs)
+    || (receipt.phase === 'settlement_recorded' && (
+      receipt.closeOutcome !== ''
+      || receipt.recordedAtMs !== receipt.settlementAtMs
+      || receipt.recordedAtMs > receipt.closeAttemptedAtMs
+    ))
     || (receipt.phase === 'closed' && (
       !isCleanCloseOutcome(receipt.closeOutcome)
       || receipt.recordedAtMs < receipt.closeAttemptedAtMs
@@ -148,18 +136,16 @@ export function recordCloseReceipt(input: {
   if (!terminalHandle) return false;
   try {
     const current = readCloseReceipt(input.artifactDir, input.registry);
-    if (current.state !== 'settlement_recorded') return false;
+    if (
+      current.state !== 'settlement_recorded'
+      || current.receipt.settlementId !== input.settlementId
+      || current.receipt.settlementReason !== input.settlementReason
+      || current.receipt.settlementAtMs !== input.settlementAtMs
+      || input.nowMs < current.receipt.closeAttemptedAtMs
+    ) return false;
     writeAtomicJson(smokeCloseReceiptPath(input.artifactDir), {
-      version: 2,
+      ...current.receipt,
       phase: 'closed',
-      runId: input.registry.runId,
-      terminalHandle,
-      headSha: input.registry.headSha,
-      artifactDir: resolve(input.registry.artifactDir),
-      settlementId: input.settlementId,
-      settlementReason: input.settlementReason,
-      settlementAtMs: input.settlementAtMs,
-      closeAttemptedAtMs: input.registry.closeAttemptedAtMs as number,
       closeOutcome: input.closeOutcome,
       recordedAtMs: input.nowMs,
     } satisfies CloseReceipt);
