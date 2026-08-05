@@ -1,20 +1,14 @@
 # AGENTS.md
-
 ## Project Purpose
-
-This repository is an upgrade-safe extension pack for ComposioHQ/agent-orchestrator.
-
+This is an upgrade-safe extension pack for ComposioHQ/agent-orchestrator.
 It ports selected safety/accounting contracts from `ai-orchestrator` into Composio AO —
-via plugins, prompt fragments, config examples, scripts, and CI checks — without modifying
+via plugins, prompts, configs, scripts, and CI — without modifying
 Composio core. For new tasks, the Issue is the sole live spec/source/queue; no tracked draft/index is created.
-Artifacts are audit-only Legacy drafts/index use `publish-issue-draft`.
+External work artifacts are audit-only; legacy drafts/index use `publish-issue-draft`.
 Contract: [tiers](docs/tiering.md); [procedure](.claude/skills/create-issue-draft/SKILL.md).
-
 ## Edit boundaries
-
 Do not patch or vendor-modify `ComposioHQ/agent-orchestrator` core packages. All custom
 behavior lives in the allowed surfaces below; treat any `vendor/` checkout as read-only reference.
-
 **Allowed:** `plugins/**`, `prompts/**`, `scripts/**`, `tests/external-output-references/**`,
 `docs/**`, `.claude/skills/**`, `.cursor/skills/**`, `.cursor/rules/**` (see
 [carrier](.cursor/rules/flow-manager-browser-turn-monitoring.mdc) and
@@ -24,31 +18,23 @@ carrier/runbook maintenance matrices synchronized),
 `CLAUDE.md`, `AGENTS.md`, `README.md`,
 `.github/workflows/**`, config examples such as `agent-orchestrator.yaml.example`, and reusable
 root-level tooling config (`.gitignore`, `.gitattributes`).
-
 **Never edit:** `packages/core/**` and `vendor/agent-orchestrator/**` (the latter unless
 explicitly asked to refresh upstream), generated runtime state, secrets or local credential files.
-
 ## What This Pack Ports
-
 Portable contracts only: task declaration / denylist validation; one-amendment declaration
 throttle; scope-safe runtime git guard; PR-level scope CI check; self-architect prompt checks;
 chain-level token/cost accounting. Do **not** port Windows PowerShell wrapper internals, the
 `.ai-loop/` layout as a required protocol, or Composio UI replacements.
-
 ## Coworker CLI delegation
-
 Operating principle: **delegate I/O, keep reasoning**. Bulk reading goes to the external
 `coworker` CLI; analysis and conclusions stay on the reasoning model. In an AO worker, run
 `ao session get "$env:AO_SESSION_ID" --json` before the first `coworker` invocation.
-
 **Mandatory profiles.** Every `coworker ask` MUST pass `--profile code`. Every
 `coworker write` MUST pass `--profile write` unless the task issue names another.
-
 **Ask invocation shape.** Pass corpus via `--paths`; do **not** append files as positional
 arguments after `--question`. Canonical form:
 `coworker ask --profile code [--allow-code] --paths <files>... --question "..."`.
 Use `--allow-code` only under the upstream file gate below.
-
 **Invalid forms:** `--file`, `--stdin`, pipes, heredocs, or bare questions without `--question`.
 
 Examples and delegation rationale:
@@ -105,10 +91,10 @@ dumps; send minimal excerpts. `--target` for `coworker write` MUST stay inside d
 
 When **at least one** ask trigger holds **and** corpus is fence-clean **and** work is not an
 excepted reasoning step, route the read through `coworker ask` on **Claude and Codex**
-(mandatory). On **Cursor**, advisory corpus is **SHOULD**, not MUST — see carve-outs below.
+(mandatory). On **Cursor**, see the carve-outs below.
 
 **Bounded fallback** only when `coworker` is missing/unavailable/rate-limited or corpus cannot
-be made fence-clean. Cost/size is not a fallback once a trigger fires. Wait for exit, not patience: coworker answers take 1–2 minutes; await process exit. If shell returns early (e.g. Codex background exec), poll the same session until exit; do not interrupt after tens of seconds. “Unavailable” requires observed evidence: failed `command -v coworker` or coworker nonzero/error; patience timeout is not unavailability. Stderr `WARNING (override)` lines are advisory; the stdout answer still lands once the process finishes.
+be made fence-clean. Cost/size is not a fallback after a trigger fires. Await exit; if shell returns early, poll the same session. “Unavailable” requires failed `command -v coworker` or coworker error; patience timeout is insufficient. Stderr `WARNING` lines are advisory; stdout arrives after completion.
 
 Ask triggers (delegable out-of-index corpus):
 
@@ -123,8 +109,7 @@ Cursor's semantic index owe **no** coworker delegation regardless of size. Does 
 CI/job logs, diffs, external URLs, vendored dumps, or **tracked non-code bulk**
 (markdown/JSON/data).
 
-**Cursor-seat advisory floor (Issue #359).** For out-of-index advisory corpus on Cursor,
-delegation is recommended, not mandatory. Diffs stay direct per Issue #337.
+Cursor advisory delegation is recommended, not mandatory; diffs stay direct (#337)
 
 ### Write delegation (`coworker write`)
 
@@ -226,7 +211,6 @@ PR work. Missing session verification marks the session `stuck`. See
 
 ### Tracker and role policy
 
-- Each new task's Issue is its sole live spec/source/queue; no tracked draft/index. External work artifacts are audit-only.
 - Link every branch and PR to its source issue; PR bodies must include `Closes #N`, `Fixes #N`, or
   `Resolves #N` in the **first few lines** under `## Summary`.
 - If **PR scope guard** fails with `missing_issue_link` but GitHub shows `Closes #N`, re-check
@@ -256,7 +240,7 @@ PR work. Missing session verification marks the session `stuck`. See
 ### Upgrade-safe AO usage
 
 - Prefer plugin, config, prompt, wrapper, hook, or CI extensions over AO core patches.
-- Do not edit upstream `packages/core/`. Write a contract or wrapper first.
+- Write a contract or wrapper first.
 
 ### Build the minimum (no unrequested abstraction)
 
@@ -273,7 +257,7 @@ On Linux-hosted surfaces with pack `scripts/` on PATH, **every GitHub read** MUS
 `scripts/gh` using **inventory-listed canonical forms** (auto-REST). **Forbidden transports:**
 agents MUST NOT improvise raw `curl` to `api.github.com`, `gh api graphql`, throwaway temporary
 `gh` shims (including `/tmp/gh-rest-bin/gh`), or `unset GH_WRAPPER_ACTIVE` to bypass the wrapper.
-Uncovered argv: report for inventory extension via `scripts/check-gh-inventory-static.ps1`.
+Uncovered gh reads fail closed; report for inventory extension via `scripts/check-gh-inventory-static.ps1`. Do not use direct bash REST branches in `scripts/gh`.
 
 Before recommending new pack-owned `gh` read argv shapes, verify classification via
 `scripts/check-gh-inventory-static.ps1`. Uncovered executable reads are an **inventory-extension
@@ -284,10 +268,9 @@ report**, not permission to bypass the wrapper.
 Before autonomous orchestrator command turns run side-effecting workflows, pass
 `scripts/orchestrator-command-runtime-preflight.ps1`. Missing `pwsh`/`node`/pack `scripts/gh` on
 PATH must **fail closed** — no dotfile edits or temp wrappers. Structured wrappers parse **stdout
-JSON only**. Uncovered `gh` reads: report and fail closed. Do not author `/tmp/gh-rest-bin/gh`,
-direct bash REST branches in `scripts/gh`, raw `curl api.github.com`, `gh api graphql`, or
-`unset GH_WRAPPER_ACTIVE` workarounds. Recovery belongs to Issues **#522/#527** — do not improvise
-alternate recipes.
+JSON only**. See [gh wrapper transport](#gh-wrapper-transport) for GitHub transport and
+uncovered-read rules; do not bypass them. Recovery belongs to Issues **#522/#527** — do not
+improvise alternate recipes.
 
 ### Review / CI / Handoff worker contract
 
@@ -395,6 +378,15 @@ PACK_REVIEWER and AO restarts are operator-only.
 Architect/draft-author tier rubric and per-tier draft-review flow live in
 [`docs/tiering.md`](docs/tiering.md). Workers use **Worker pre-flight (blocking)** above before
 implementation.
+
+### Operator decree: blocker philosophy and plan-first execution
+
+1. Blockers are warnings: check, fix or complete, continue — stop only on an explicit blocker.
+2. Plan first, execute the plan without stopping, and record deviations in the report.
+3. A blocker exists only by explicit operator/task directive; operator lift is absolute only via gate's documented input, bound to exact target.
+No gate input = terminal by design; fix-and-continue never fabricates gate evidence.
+Existing repository MUST/fail-closed gates remain mandatory; lift only via the specific gate's documented operator input.
+Full text: docs/blocker-philosophy.md
 
 ### Operator adoption handoff
 
