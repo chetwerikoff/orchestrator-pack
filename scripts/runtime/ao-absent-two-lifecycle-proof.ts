@@ -1,11 +1,25 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import { runOrcaJson, type OrcaJsonResponse } from '../orca-runtime/native.ts';
-import { executeRuntimeTaskLifecycle } from './task-lifecycle.ts';
+import {
+  executeRuntimeTaskLifecycle,
+  type RuntimeTaskLifecycleResult,
+} from './task-lifecycle.ts';
 
-function hermeticTwoLifecycleFixture(statePath: string, capturePath: string, expectedPath: string): string {
+function hermeticTwoLifecycleFixture(
+  statePath: string,
+  capturePath: string,
+  expectedPath: string,
+): string {
   return `#!${process.execPath}
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter } from 'node:path';
@@ -139,95 +153,158 @@ switch (operation) {
 `;
 }
 
+function makeChildEnvironment(root: string): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith('AO_') || key.startsWith('AGENT_ORCHESTRATOR_')) continue;
+    environment[key] = value;
+  }
+  Object.assign(environment, {
+    PATH: root,
+    OPK_VITEST_HARNESS: '',
+    OPK_VITEST_SKIP_CHILD_ENV_MERGE: '1',
+  });
+  return environment;
+}
+
+function makeObservedTransport(
+  calls: Array<{ readonly args: readonly string[]; readonly response: OrcaJsonResponse }>,
+): typeof runOrcaJson {
+  return <T>(args: readonly string[], options = {}) => {
+    const response = runOrcaJson<T>(args, {
+      ...options,
+      inheritParentEnv: false,
+    });
+    calls.push({ args: [...args], response: response as OrcaJsonResponse });
+    return response;
+  };
+}
+
+function requireSuccess(
+  result: ReturnType<typeof executeRuntimeTaskLifecycle>,
+  label: string,
+): RuntimeTaskLifecycleResult {
+  if (!('status' in result) || result.status !== 'ok') {
+    throw new Error(`${label} lifecycle failed: ${JSON.stringify(result)}`);
+  }
+  return result;
+}
+
+function runLifecycle(
+  adapter: OrcaTaskRuntimeAdapter,
+  root: string,
+  title: string,
+  prompt: string,
+): RuntimeTaskLifecycleResult {
+  return requireSuccess(executeRuntimeTaskLifecycle({
+    adapter,
+    title,
+    command: 'cursor-agent',
+    prompt,
+    observationWindowMs: 1_000,
+    options: { cwd: root, timeoutMs: 5_000 },
+    acquireClaim: () => ({ ok: true }),
+  }), title);
+}
+
 function main(): void {
-    const root = mkdtempSync(join(process.cwd(), '.issue-1250-orca-hermetic-'));
-    const fixturePath = join(root, 'orca-hermetic.mjs');
-    const statePath = join(root, 'state.json');
-    const capturePath = join(root, 'capture.json');
-    const nativeCalls: Array<{ readonly args: readonly string[]; readonly response: OrcaJsonResponse }> = [];
-    try {
-      writeFileSync(fixturePath, hermeticTwoLifecycleFixture(statePath, capturePath, root), 'utf8');
-      chmodSync(fixturePath, 0o755);
-      const environment = Object.fromEntries(
-        Object.entries(process.env).filter(
-          ([key]) => !key.startsWith('AO_') && !key.startsWith('AGENT_ORCHESTRATOR_'),
-        ),
-      ) as NodeJS.ProcessEnv;
-      environment.PATH = root;
-      environment.OPK_VITEST_HARNESS = '';
-      environment.OPK_VITEST_SKIP_CHILD_ENV_MERGE = '1';
-      const observingRunJson: typeof runOrcaJson = <T>(args: readonly string[], options = {}) => {
-        const response = runOrcaJson<T>(args, { ...options, inheritParentEnv: false });
-        nativeCalls.push({ args: [...args], response: response as OrcaJsonResponse });
-        return response;
-      };
-      const adapter = new OrcaTaskRuntimeAdapter({
-        cwd: root,
-        executable: fixturePath,
-        env: environment,
-        runJson: observingRunJson,
-        timeoutMs: 5_000,
-      });
+  const root = mkdtempSync(join(process.cwd(), '.issue-1250-orca-hermetic-'));
+  const fixturePath = join(root, 'orca-hermetic.mjs');
+  const statePath = join(root, 'state.json');
+  const capturePath = join(root, 'capture.json');
+  const nativeCalls: Array<{
+    readonly args: readonly string[];
+    readonly response: OrcaJsonResponse;
+  }> = [];
 
-      const run = (title: string, prompt: string) => executeRuntimeTaskLifecycle({
-        adapter,
-        title,
-        command: 'cursor-agent',
-        prompt,
-        observationWindowMs: 1_000,
-        options: { cwd: root, timeoutMs: 5_000 },
-        acquireClaim: () => ({ ok: true }),
-      });
+  try {
+    writeFileSync(
+      fixturePath,
+      hermeticTwoLifecycleFixture(statePath, capturePath, root),
+      'utf8',
+    );
+    chmodSync(fixturePath, 0o755);
 
-      const first = run('issue-1250-lifecycle-a', 'implement task A');
-      const second = run('issue-1250-lifecycle-b', 'implement task B');
-      if (first.status !== 'ok' || second.status !== 'ok') {
-        const capture = existsSync(capturePath) ? readFileSync(capturePath, 'utf8').trim() : 'capture_missing';
-        throw new Error(`first=${JSON.stringify(first)} second=${JSON.stringify(second)} native=${JSON.stringify(nativeCalls)} capture=${capture}`);
-      }
+    const adapter = new OrcaTaskRuntimeAdapter({
+      cwd: root,
+      env: makeChildEnvironment(root),
+      executable: fixturePath,
+      runJson: makeObservedTransport(nativeCalls),
+      timeoutMs: 5_000,
+    });
+    const first = runLifecycle(
+      adapter,
+      root,
+      'issue-1250-lifecycle-a',
+      'implement task A',
+    );
+    const second = runLifecycle(
+      adapter,
+      root,
+      'issue-1250-lifecycle-b',
+      'implement task B',
+    );
 
-      assert.equal(first.worker.title, 'issue-1250-lifecycle-a');
-      assert.equal(second.worker.title, 'issue-1250-lifecycle-b');
-      assert.notEqual(first.worker.identity.id, second.worker.identity.id);
-      assert.notEqual(first.worker.identity.generation, second.worker.identity.generation);
-      assert.ok(first.lines.includes('implement task A'));
-      assert.ok(second.lines.includes('implement task B'));
-      assert.equal(first.liveness, 'idle');
-      assert.equal(second.liveness, 'idle');
+    assert.equal(first.worker.title, 'issue-1250-lifecycle-a');
+    assert.equal(second.worker.title, 'issue-1250-lifecycle-b');
+    assert.notEqual(first.worker.identity.id, second.worker.identity.id);
+    assert.notEqual(first.worker.identity.generation, second.worker.identity.generation);
+    assert.ok(first.lines.includes('implement task A'));
+    assert.ok(second.lines.includes('implement task B'));
+    assert.equal(first.liveness, 'idle');
+    assert.equal(second.liveness, 'idle');
 
-      const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
-        terminals: Record<string, { title: string; dispatches: number; closes: number; exists: boolean }>;
-        operations: string[];
-        captures: Array<{ forbiddenEnvironment: string[]; pathEntries: string[]; expectedPath: string; legacyAdapterLoaded: boolean }>;
-      };
-      const terminals = Object.values(state.terminals).sort((a, b) => a.title.localeCompare(b.title));
-      assert.deepEqual(terminals.map((terminal) => terminal.title), [
-        'issue-1250-lifecycle-a',
-        'issue-1250-lifecycle-b',
-      ]);
-      assert.ok(terminals.every((terminal) => terminal.dispatches === 1));
-      assert.ok(terminals.every((terminal) => terminal.closes === 1));
-      assert.ok(terminals.every((terminal) => terminal.exists === false));
-      assert.equal(state.operations.filter((operation) => operation === 'terminal create').length, 2);
-      assert.equal(state.operations.filter((operation) => operation === 'terminal send').length, 2);
-      assert.equal(state.operations.filter((operation) => operation === 'terminal close').length, 2);
-      assert.ok(state.captures.length > 0);
-      assert.ok(state.captures.every((capture) => (
-        capture.forbiddenEnvironment.length === 0
-        && capture.pathEntries.length === 1
-        && capture.pathEntries[0] === root
-        && capture.expectedPath === root
-        && capture.legacyAdapterLoaded === false
-      )));
-      process.stdout.write(`${JSON.stringify({
-        status: 'pass',
-        first: first.worker.identity,
-        second: second.worker.identity,
-        operations: state.operations,
-      })}\n`);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      terminals: Record<string, {
+        title: string;
+        dispatches: number;
+        closes: number;
+        exists: boolean;
+      }>;
+      operations: string[];
+      captures: Array<{
+        forbiddenEnvironment: string[];
+        pathEntries: string[];
+        expectedPath: string;
+        legacyAdapterLoaded: boolean;
+      }>;
+    };
+    const terminals = Object.values(state.terminals)
+      .sort((left, right) => left.title.localeCompare(right.title));
+    assert.deepEqual(
+      terminals.map((terminal) => terminal.title),
+      ['issue-1250-lifecycle-a', 'issue-1250-lifecycle-b'],
+    );
+    assert.ok(terminals.every((terminal) => terminal.dispatches === 1));
+    assert.ok(terminals.every((terminal) => terminal.closes === 1));
+    assert.ok(terminals.every((terminal) => !terminal.exists));
+    assert.equal(state.operations.filter((value) => value === 'terminal create').length, 2);
+    assert.equal(state.operations.filter((value) => value === 'terminal send').length, 2);
+    assert.equal(state.operations.filter((value) => value === 'terminal close').length, 2);
+    assert.ok(state.captures.length > 0);
+    assert.ok(state.captures.every((capture) => (
+      capture.forbiddenEnvironment.length === 0
+      && capture.pathEntries.length === 1
+      && capture.pathEntries[0] === root
+      && capture.expectedPath === root
+      && !capture.legacyAdapterLoaded
+    )));
+
+    process.stdout.write(`${JSON.stringify({
+      status: 'pass',
+      first: first.worker.identity,
+      second: second.worker.identity,
+      operations: state.operations,
+    })}\n`);
+  } catch (error) {
+    const capture = existsSync(capturePath)
+      ? readFileSync(capturePath, 'utf8').trim()
+      : 'capture_missing';
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message}; native=${JSON.stringify(nativeCalls)}; capture=${capture}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 main();
