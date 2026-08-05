@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { runOrcaJson } from './orca-cli.ts';
 import * as lifecycle from './worker-smoke-lifecycle.ts';
 import * as core from './worker-smoke-core.ts';
@@ -460,6 +461,30 @@ export function registerWorkerSmokeFindingsRegressionTests(
         fs.rmSync(root, { recursive: true, force: true });
       },
     );
+  });
+
+  describe('worker smoke cleanup structured proof (#1318)', () => {
+    it('executes the exact fixed-input producer and emits one proved record', () => {
+      const script = path.join(import.meta.dirname, '..', 'worker-smoke-cleanup-proof.ts');
+      const result = runProcessSync({
+        command: process.execPath,
+        args: ['--experimental-strip-types', script],
+        cwd: path.join(import.meta.dirname, '..'),
+        inheritParentEnv: true,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.stderr).toBe('');
+      const lines = result.stdout.trim().split(/\r?\n/u);
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] ?? '{}')).toMatchObject({
+        schema: 'worker-smoke-cleanup-proof/v1',
+        status: 'proved',
+        runtimeOperations: 0,
+        closeAttempts: 0,
+        freshReservationAdmitted: true,
+        smokeOnlyDenial: true,
+      });
+    });
   });
 
   describe('review findings: honest abandonment cleanup (#1138)', () => {
