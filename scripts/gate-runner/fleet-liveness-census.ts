@@ -9,6 +9,7 @@ import {
 
 export interface SideProcessRegistryChild {
   readonly id: string;
+  readonly runtime?: string;
   readonly script: string;
   readonly cadenceSeconds: number;
   readonly stallGraceMultiplier?: number;
@@ -81,13 +82,11 @@ function childContractMap(
 }
 
 function validateSharedTransports(
-  options: FleetLivenessCensusOptions,
   contract: FleetLivenessContractDocument,
   findings: FleetLivenessCensusFinding[],
   loadSource: (repoRelativePath: string) => string | null,
 ): void {
-  const required = ['gh', 'ao', 'terminalOutcome', 'runtime'];
-  for (const key of required) {
+  for (const key of ['gh', 'runtime', 'terminalOutcome']) {
     const path = contract.sharedTransports?.[key];
     if (!path) {
       addFinding(findings, '<fleet>', 'shared_transport_missing', `shared transport ${key} is not declared`);
@@ -98,26 +97,11 @@ function validateSharedTransports(
       addFinding(findings, '<fleet>', 'shared_transport_path_missing', `shared transport ${key} path missing: ${path}`);
       continue;
     }
-    if (key !== 'runtime' && !source.includes('side-process-liveness.ts')) {
-      addFinding(
-        findings,
-        '<fleet>',
-        'shared_transport_not_wired',
-        `shared transport ${key} does not dispatch to side-process-liveness.ts: ${path}`,
-      );
+    if (key === 'runtime' && !source.includes('runProcess')) {
+      addFinding(findings, '<fleet>', 'shared_transport_not_wired', `runtime transport is not the bounded subprocess authority: ${path}`);
     }
-  }
-
-  const terminalPath = contract.sharedTransports?.terminalOutcome;
-  if (terminalPath) {
-    const terminalSource = loadSource(terminalPath) ?? '';
-    if (!terminalSource.includes('consume-timeout')) {
-      addFinding(
-        findings,
-        '<fleet>',
-        'timeout_terminal_route_missing',
-        `terminal outcome transport does not consume bounded timeouts: ${terminalPath}`,
-      );
+    if (key === 'terminalOutcome' && !source.includes('recordChildExit')) {
+      addFinding(findings, '<fleet>', 'shared_transport_not_wired', `terminal outcome transport does not enter crash/backoff accounting: ${path}`);
     }
   }
 }
@@ -125,47 +109,37 @@ function validateSharedTransports(
 function validateWiredChild(
   child: SideProcessRegistryChild,
   declaration: FleetLivenessChildContract,
+  contract: FleetLivenessContractDocument,
   findings: FleetLivenessCensusFinding[],
   loadSource: (repoRelativePath: string) => string | null,
 ): void {
   const thresholdMs = effectiveStallThresholdMs(child);
   const maxBudgetMs = Math.floor(thresholdMs / 2);
   const callKinds = new Set(declaration.externalCallKinds ?? []);
-  for (const requiredCallKind of ['gh', 'ao']) {
-    if (!callKinds.has(requiredCallKind)) {
-      addFinding(
-        findings,
-        child.id,
-        'external_call_kind_missing',
-        `${child.id} is not wired for external call kind ${requiredCallKind}`,
-      );
+  if (callKinds.size === 0) {
+    addFinding(findings, child.id, 'external_call_kind_missing', `${child.id} has no declared external call kind`);
+  }
+  for (const callKind of callKinds) {
+    if (!contract.sharedTransports?.[callKind]) {
+      addFinding(findings, child.id, 'external_call_transport_missing', `${child.id} call kind ${callKind} has no shared transport`);
     }
   }
+
   const timeoutMs = positiveInteger(declaration.maxExternalCallTimeoutMs);
   if (timeoutMs <= 0) {
-    addFinding(
-      findings,
-      child.id,
-      'external_timeout_missing',
-      `${child.id} has no positive maxExternalCallTimeoutMs (stallThresholdMs=${thresholdMs})`,
-    );
+    addFinding(findings, child.id, 'external_timeout_missing', `${child.id} has no positive maxExternalCallTimeoutMs`);
   } else if (timeoutMs > maxBudgetMs) {
     addFinding(
       findings,
       child.id,
       'external_timeout_exceeds_half_stall',
-      `${child.id} call=gh/ao timeout ${timeoutMs}ms exceeds 50% stall budget ${maxBudgetMs}ms (marginMs=${maxBudgetMs - timeoutMs})`,
+      `${child.id} timeout ${timeoutMs}ms exceeds 50% stall budget ${maxBudgetMs}ms (marginMs=${maxBudgetMs - timeoutMs})`,
     );
   }
 
   const localGapMs = positiveInteger(declaration.maxLocalComputeGapMs);
   if (localGapMs <= 0) {
-    addFinding(
-      findings,
-      child.id,
-      'local_progress_bound_missing',
-      `${child.id} has no positive maxLocalComputeGapMs`,
-    );
+    addFinding(findings, child.id, 'local_progress_bound_missing', `${child.id} has no positive maxLocalComputeGapMs`);
   } else if (localGapMs > maxBudgetMs) {
     addFinding(
       findings,
@@ -183,12 +157,7 @@ function validateWiredChild(
   } else {
     for (const evidencePath of declaration.evidence) {
       if (loadSource(evidencePath) === null) {
-        addFinding(
-          findings,
-          child.id,
-          'coverage_evidence_path_missing',
-          `${child.id} liveness evidence path missing: ${evidencePath}`,
-        );
+        addFinding(findings, child.id, 'coverage_evidence_path_missing', `${child.id} liveness evidence path missing: ${evidencePath}`);
       }
     }
   }
@@ -199,17 +168,12 @@ function validateWiredChild(
     addFinding(findings, child.id, 'child_script_missing', `${child.id} script missing: ${childSourcePath}`);
     return;
   }
-  for (const terminalHelper of [
-    'Write-OrchestratorSideProcessTickSuccess',
-    'Write-OrchestratorSideProcessTickError',
-  ]) {
-    if (!childSource.includes(terminalHelper)) {
-      addFinding(
-        findings,
-        child.id,
-        'terminal_helper_missing',
-        `${child.id} does not use ${terminalHelper}; bounded timeout cannot enter existing degraded/backoff accounting`,
-      );
+  if (child.runtime === 'node') {
+    if (!childSource.includes('runProcess')) {
+      addFinding(findings, child.id, 'bounded_runtime_missing', `${child.id} does not use the shared subprocess runtime`);
+    }
+    if (!childSource.includes('timeoutMs:')) {
+      addFinding(findings, child.id, 'external_timeout_not_wired', `${child.id} does not pass an explicit timeout to external calls`);
     }
   }
 }
@@ -225,32 +189,16 @@ function validateExemptChild(
     addFinding(findings, child.id, 'regression_anchor_exempt', `${child.id} is a mandatory wired regression anchor`);
   }
   if (!declaration.exemptionReason || declaration.exemptionReason.trim().length < 20) {
-    addFinding(
-      findings,
-      child.id,
-      'exemption_reason_insufficient',
-      `${child.id} exemption requires a concrete, reviewable reason`,
-    );
+    addFinding(findings, child.id, 'exemption_reason_insufficient', `${child.id} exemption requires a concrete, reviewable reason`);
   }
-  if (!declaration.evidence || declaration.evidence.length === 0) {
-    addFinding(findings, child.id, 'exemption_evidence_missing', `${child.id} exemption has no evidence`);
-    return;
-  }
-  for (const evidencePath of declaration.evidence) {
+  for (const evidencePath of declaration.evidence ?? []) {
     if (loadSource(evidencePath) === null) {
-      addFinding(
-        findings,
-        child.id,
-        'exemption_evidence_path_missing',
-        `${child.id} exemption evidence path missing: ${evidencePath}`,
-      );
+      addFinding(findings, child.id, 'exemption_evidence_path_missing', `${child.id} exemption evidence path missing: ${evidencePath}`);
     }
   }
 }
 
-export function validateFleetLivenessCensus(
-  options: FleetLivenessCensusOptions,
-): FleetLivenessCensusFinding[] {
+export function validateFleetLivenessCensus(options: FleetLivenessCensusOptions): FleetLivenessCensusFinding[] {
   const findings: FleetLivenessCensusFinding[] = [];
   const registry = options.registry ?? JSON.parse(
     readFileSync(resolve(options.repoRoot, 'scripts/orchestrator-side-process-registry.json'), 'utf8'),
@@ -263,15 +211,9 @@ export function validateFleetLivenessCensus(
   if (contract.schemaVersion !== 1) {
     addFinding(findings, '<contract>', 'unsupported_contract_schema', `unsupported liveness contract schema ${contract.schemaVersion}`);
   }
-  validateSharedTransports(options, contract, findings, loadSource);
+  validateSharedTransports(contract, findings, loadSource);
 
   const anchors = new Set(contract.regressionAnchors);
-  for (const requiredAnchor of ['review-ready-report-state-seed', 'review-trigger-reeval']) {
-    if (!anchors.has(requiredAnchor)) {
-      addFinding(findings, requiredAnchor, 'regression_anchor_missing', `mandatory regression anchor is not declared: ${requiredAnchor}`);
-    }
-  }
-
   const declarations = childContractMap(contract, findings);
   const registryIds = new Set<string>();
   const requiredIds = new Set(registry.requiredChildIds ?? []);
@@ -290,16 +232,11 @@ export function validateFleetLivenessCensus(
     }
     const declaration = declarations.get(child.id);
     if (!declaration) {
-      addFinding(
-        findings,
-        child.id,
-        'unaccounted_registry_child',
-        `${child.id} has no wired contract or reviewed exemption`,
-      );
+      addFinding(findings, child.id, 'unaccounted_registry_child', `${child.id} has no wired contract or reviewed exemption`);
       continue;
     }
     if (declaration.mode === 'wired') {
-      validateWiredChild(child, declaration, findings, loadSource);
+      validateWiredChild(child, declaration, contract, findings, loadSource);
     } else if (declaration.mode === 'exempt') {
       validateExemptChild(child, declaration, anchors, findings, loadSource);
     } else {
@@ -308,31 +245,18 @@ export function validateFleetLivenessCensus(
   }
 
   for (const requiredId of requiredIds) {
-    if (!registryIds.has(requiredId)) {
-      addFinding(findings, requiredId, 'required_registry_child_missing', `required child missing from registry: ${requiredId}`);
-    }
+    if (!registryIds.has(requiredId)) addFinding(findings, requiredId, 'required_registry_child_missing', `required child missing from registry: ${requiredId}`);
   }
   for (const declaration of contract.children) {
-    if (!registryIds.has(declaration.id)) {
-      addFinding(
-        findings,
-        declaration.id,
-        'stale_contract_child',
-        `liveness contract entry has no registry child: ${declaration.id}`,
-      );
-    }
+    if (!registryIds.has(declaration.id)) addFinding(findings, declaration.id, 'stale_contract_child', `liveness contract entry has no registry child: ${declaration.id}`);
   }
-
   for (const anchor of anchors) {
     const declaration = declarations.get(anchor);
-    if (!declaration || declaration.mode !== 'wired') {
-      addFinding(findings, anchor, 'regression_anchor_not_wired', `${anchor} must remain wired`);
-    }
+    if (!registryIds.has(anchor)) addFinding(findings, anchor, 'regression_anchor_not_registered', `${anchor} must be a live registry child`);
+    if (!declaration || declaration.mode !== 'wired') addFinding(findings, anchor, 'regression_anchor_not_wired', `${anchor} must remain wired`);
   }
 
-  return findings.sort(
-    (left, right) => left.childId.localeCompare(right.childId) || left.code.localeCompare(right.code),
-  );
+  return findings.sort((left, right) => left.childId.localeCompare(right.childId) || left.code.localeCompare(right.code));
 }
 
 export function runFleetLivenessCensus(repoRoot: string): FleetLivenessCensusFinding[] {
@@ -346,9 +270,7 @@ if (invokedPath === fileURLToPath(import.meta.url)) {
   if (findings.length === 0) {
     process.stdout.write('Fleet liveness census passed.\n');
   } else {
-    for (const finding of findings) {
-      process.stderr.write(`${finding.childId} ${finding.code}: ${finding.message}\n`);
-    }
+    for (const finding of findings) process.stderr.write(`${finding.childId} ${finding.code}: ${finding.message}\n`);
     process.exitCode = 1;
   }
 }

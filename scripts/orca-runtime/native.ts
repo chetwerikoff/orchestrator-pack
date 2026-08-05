@@ -16,6 +16,8 @@ export type OrcaSmokeControlPlaneCode = (typeof ORCA_SMOKE_CONTROL_PLANE_CODES)[
 
 export type OrcaOperationName =
   | 'worktree_current'
+  | 'worktree_show'
+  | 'worktree_remove'
   | 'terminal_create'
   | 'terminal_list'
   | 'terminal_show'
@@ -40,14 +42,25 @@ export interface OrcaJsonResponse<T = unknown> {
   outcomeCategory?: OrcaLocalOutcomeCategory;
 }
 
+export interface OrcaWorktreeSummary {
+  path?: string;
+  head?: string;
+  branch?: string;
+  linkedIssue?: number | null;
+  id?: string;
+}
+
 export interface OrcaWorktreeCurrent {
-  worktree?: {
-    path?: string;
-    head?: string;
-    branch?: string;
-    linkedIssue?: number | null;
-    id?: string;
-  };
+  worktree?: OrcaWorktreeSummary;
+}
+
+export interface OrcaWorktreeShow {
+  worktree?: OrcaWorktreeSummary;
+}
+
+export interface OrcaWorktreeRemoveResult {
+  removed?: boolean;
+  worktree?: OrcaWorktreeSummary;
 }
 
 export interface OrcaTerminalHandle {
@@ -99,6 +112,7 @@ export interface OrcaRunOptions {
   readonly runner?: typeof spawnSync;
   readonly timeoutMs?: number;
   readonly killSignal?: NodeJS.Signals;
+  readonly inheritParentEnv?: boolean;
 }
 
 const ORCA_CANDIDATES = ['orca-dev', 'orca-ide', 'orca'] as const;
@@ -117,6 +131,8 @@ export function isOrcaSmokeControlPlaneCode(
 
 export function resolveOrcaOperation(args: readonly string[]): OrcaOperationName | undefined {
   if (args[0] === 'worktree' && args[1] === 'current') return 'worktree_current';
+  if (args[0] === 'worktree' && args[1] === 'show') return 'worktree_show';
+  if (args[0] === 'worktree' && args[1] === 'rm') return 'worktree_remove';
   if (args[0] !== 'terminal') return undefined;
   if (args[1] === 'create') return 'terminal_create';
   if (args[1] === 'list') return 'terminal_list';
@@ -162,7 +178,9 @@ export function runOrcaJson<T>(
   try {
     result = runner(executable, [...args, '--json'], {
       cwd: options.cwd ?? process.cwd(),
-      env: { ...process.env, ...options.env },
+      env: options.inheritParentEnv === false
+        ? { ...options.env }
+        : { ...process.env, ...options.env },
       encoding: 'utf8',
       maxBuffer: 16 * 1024 * 1024,
       ...(options.timeoutMs === undefined ? {} : {

@@ -129,8 +129,8 @@ const TEXT_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     replacement: "  try {\n    await runProcess({ command: config.aoPath, args: [], allowEmptyStdout: true, timeoutMs: 1 });\n    const inspected = await inspectNotification({\n      deliveryKey,\n      findingsHash,\n      maxAttempts: config.maxJournalAttempts,\n    });\n    if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\n  } catch (error) {",
   },
   'AC4:inline-powershell': {
-    anchor: '// Pure Node 22 adapter. Journal mutation lives in the typed',
-    replacement: "// Pure Node 22 adapter. Journal mutation lives in the typed\nvoid 'pwsh -NoProfile -File inline-notification.ps1';",
+    anchor: 'export interface WorkerNotificationOptions {',
+    replacement: "void 'pwsh -NoProfile -File inline-notification.ps1';\nexport interface WorkerNotificationOptions {",
   },
   'AC4:powershell-child': {
     anchor: '      const result = await runProcess({\n        command: config.aoPath,\n        args,',

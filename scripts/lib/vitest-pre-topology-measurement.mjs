@@ -49,6 +49,17 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1198 launch/watch contract tests are fast deterministic coverage.
   'scripts/launch-watch/launch-watch.test.ts': 120,
   'scripts/launch-watch/watch.test.ts': 120,
+  // Issue #1248 adds fast runtime-boundary contract suites. Fixed estimates keep
+  // the bounded topology producer stable until runtime history is refreshed.
+  'scripts/invoke-gated-worker-nudge.test.ts': 120,
+  'scripts/invoke-worker-recovery.test.ts': 120,
+  'scripts/orca-runtime/task-adapter.test.ts': 120,
+  'scripts/runtime/caller-census.test.ts': 120,
+  'scripts/runtime/crash-backoff.test.ts': 120,
+  'scripts/runtime/side-effect-fence.test.ts': 120,
+  'scripts/runtime/single-instance-lease.test.ts': 120,
+  'scripts/runtime/task-lifecycle.test.ts': 120,
+  'scripts/runtime/worker-recovery.test.ts': 120,
   // Issue #1298 worktree lifecycle tests are deterministic fixture coverage.
   // Keep the pre-topology plan bounded until runtime-history harvest records them.
   'scripts/worktree-lifecycle/create-continuation.test.ts': 120,
@@ -58,6 +69,17 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1328 exact merged-worktree teardown is deterministic fixture coverage.
   // Keep the pre-topology plan bounded until runtime-history harvest records it.
   'scripts/worktree-teardown.test.ts': 120,
+  // Issue #1248 adds fast runtime-boundary contract suites. Fixed estimates keep
+  // the bounded topology producer stable until runtime history is refreshed.
+  'scripts/invoke-gated-worker-nudge.test.ts': 120,
+  'scripts/invoke-worker-recovery.test.ts': 120,
+  'scripts/orca-runtime/task-adapter.test.ts': 120,
+  'scripts/runtime/caller-census.test.ts': 120,
+  'scripts/runtime/crash-backoff.test.ts': 120,
+  'scripts/runtime/side-effect-fence.test.ts': 120,
+  'scripts/runtime/single-instance-lease.test.ts': 120,
+  'scripts/runtime/task-lifecycle.test.ts': 120,
+  'scripts/runtime/worker-recovery.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains

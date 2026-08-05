@@ -37,6 +37,7 @@ export class DeterministicRuntimeAdapter implements RuntimeAdapter {
   readonly id = 'test' as const;
   readonly #workers = new Map<string, TestWorkerState>();
   readonly #observations = new Map<string, TestObservationBinding>();
+  readonly #removedWorkspaces = new Set<string>();
   #generation = 0;
   #observationSequence = 0;
 
@@ -85,6 +86,7 @@ export class DeterministicRuntimeAdapter implements RuntimeAdapter {
       title: input.title,
       provenance: 'internal',
     };
+    this.#removedWorkspaces.delete(worker.workspacePath);
     this.#workers.set(identity.id, {
       worker,
       lines: [`started:${input.command}`],
@@ -185,6 +187,26 @@ export class DeterministicRuntimeAdapter implements RuntimeAdapter {
     return { status: 'ok', value: { stopped: true } };
   }
 
+  removeWorkspace(input: {
+    readonly workspacePath: string;
+    readonly expectedHeadSha: string;
+  }): RuntimeResult<{ readonly removed: true }> {
+    if (!input.workspacePath.trim()) {
+      return runtimeFailure('remove_workspace', 'runtime_workspace_path_missing');
+    }
+    if (!input.expectedHeadSha.trim()) {
+      return runtimeFailure('remove_workspace', 'runtime_workspace_expected_head_missing');
+    }
+    if (input.expectedHeadSha !== 'test-head') {
+      return runtimeFailure('remove_workspace', 'runtime_workspace_head_mismatch');
+    }
+    if ([...this.#workers.values()].some(({ worker }) => worker.workspacePath === input.workspacePath)) {
+      return runtimeFailure('remove_workspace', 'runtime_workspace_has_live_worker');
+    }
+    this.#removedWorkspaces.add(input.workspacePath);
+    return { status: 'ok', value: { removed: true } };
+  }
+
   setLiveness(worker: RuntimeWorkerIdentity, liveness: RuntimeLiveness): void {
     const state = this.#workers.get(worker.id);
     if (!state || !sameRuntimeWorker(state.worker.identity, worker)) {
@@ -214,5 +236,9 @@ export class DeterministicRuntimeAdapter implements RuntimeAdapter {
       liveness: 'busy',
     });
     return recreated;
+  }
+
+  workspaceWasRemoved(workspacePath: string): boolean {
+    return this.#removedWorkspaces.has(workspacePath);
   }
 }

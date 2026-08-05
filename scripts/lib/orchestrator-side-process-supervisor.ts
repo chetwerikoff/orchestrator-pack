@@ -1,11 +1,20 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { FileEpochAuthority } from './cutover/activation-epoch-authority.ts';
-import { processAlive, readProcessIdentity } from './cutover/activation-cordon.ts';
+import { readProcessIdentity } from './cutover/activation-cordon.ts';
 import { writeDurableJson } from './cutover/activation-evidence.ts';
 import { projectRegistry, validateSchedulerRegistry } from './cutover/activation-registry-projection.ts';
+import {
+  EMPTY_CRASH_BACKOFF_STATE,
+  recordChildExit,
+  restartDecisionAt,
+  type CrashBackoffState,
+} from '../runtime/crash-backoff.ts';
+import {
+  acquireSingleInstanceLease,
+  releaseSingleInstanceLease,
+} from '../runtime/single-instance-lease.ts';
 
 export interface SupervisorOptions {
   stateDir: string;
@@ -35,15 +44,7 @@ export interface SupervisorStatus {
   lastChildStartAt: string | null;
   cordonReason: 'post-cas-epoch-owner';
   refusalReason: string | null;
-}
-
-interface SupervisorLockOwner {
-  schemaVersion: 1;
-  pid: number;
-  startTicks: string;
-  epochId: string;
-  nonce: string;
-  acquiredAt: string;
+  crashBackoff: CrashBackoffState;
 }
 
 function statusPath(options: Pick<SupervisorOptions, 'stateDir'>): string {
@@ -52,78 +53,6 @@ function statusPath(options: Pick<SupervisorOptions, 'stateDir'>): string {
 
 function supervisorLockPath(options: Pick<SupervisorOptions, 'stateDir'>): string {
   return path.join(options.stateDir, 'typescript-supervisor.lock');
-}
-
-function supervisorLockOwnerPath(options: Pick<SupervisorOptions, 'stateDir'>): string {
-  return path.join(supervisorLockPath(options), 'owner.json');
-}
-
-function liveLockOwner(options: Pick<SupervisorOptions, 'stateDir'>): SupervisorLockOwner | null {
-  const lock = supervisorLockPath(options);
-  if (!existsSync(lock)) return null;
-  const ownerPath = supervisorLockOwnerPath(options);
-  if (!existsSync(ownerPath)) throw new Error('typescript_supervisor_lock_unreadable');
-  let owner: SupervisorLockOwner;
-  try {
-    owner = JSON.parse(readFileSync(ownerPath, 'utf8')) as SupervisorLockOwner;
-  } catch {
-    throw new Error('typescript_supervisor_lock_unreadable');
-  }
-  if (owner.schemaVersion !== 1 || !Number.isInteger(owner.pid) || owner.pid <= 1 || !owner.startTicks) {
-    throw new Error('typescript_supervisor_lock_invalid');
-  }
-  if (!processAlive(owner.pid)) return null;
-  try {
-    const identity = readProcessIdentity(owner.pid);
-    return identity.startTicks === owner.startTicks ? owner : null;
-  } catch {
-    return null;
-  }
-}
-
-function acquireSupervisorLock(options: SupervisorOptions, self: ReturnType<typeof readProcessIdentity>): void {
-  mkdirSync(options.stateDir, { recursive: true });
-  const lock = supervisorLockPath(options);
-  const candidate = path.join(options.stateDir, `.typescript-supervisor.lock.${self.pid}.${randomUUID()}`);
-  mkdirSync(candidate);
-  writeDurableJson(path.join(candidate, 'owner.json'), {
-    schemaVersion: 1,
-    pid: self.pid,
-    startTicks: self.startTicks,
-    epochId: options.epochId,
-    nonce: options.nonce,
-    acquiredAt: new Date().toISOString(),
-  } satisfies SupervisorLockOwner);
-  try {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        renameSync(candidate, lock);
-        return;
-      } catch (error) {
-        const code = error instanceof Error && 'code' in error ? String((error as NodeJS.ErrnoException).code ?? '') : '';
-        if (code !== 'EEXIST' && code !== 'ENOTEMPTY') throw error;
-        const owner = liveLockOwner(options);
-        if (owner) throw new Error(`typescript_supervisor_already_running:${owner.pid}`);
-        rmSync(lock, { recursive: true, force: true });
-      }
-    }
-    throw new Error('typescript_supervisor_lock_acquire_failed');
-  } finally {
-    if (existsSync(candidate)) rmSync(candidate, { recursive: true, force: true });
-  }
-}
-
-function releaseSupervisorLock(options: SupervisorOptions, self: ReturnType<typeof readProcessIdentity>): void {
-  const lock = supervisorLockPath(options);
-  if (!existsSync(lock)) return;
-  const ownerPath = supervisorLockOwnerPath(options);
-  try {
-    const owner = JSON.parse(readFileSync(ownerPath, 'utf8')) as SupervisorLockOwner;
-    if (owner.pid !== self.pid || owner.startTicks !== self.startTicks) return;
-  } catch {
-    return;
-  }
-  rmSync(lock, { recursive: true, force: true });
 }
 
 function verifyEpochAndProjection(options: SupervisorOptions): { registryHash: string; cadenceSeconds: number } {
@@ -144,10 +73,22 @@ export function readSupervisorStatus(options: Pick<SupervisorOptions, 'stateDir'
   return JSON.parse(readFileSync(file, 'utf8')) as SupervisorStatus;
 }
 
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
+
+/**
+ * Runtime-neutral side-process supervisor. The singleton lease binds to the
+ * exact supervisor process generation. Child restart backoff is a pure
+ * TypeScript transition and never derives health from AO or another daemon.
+ */
 export async function runSupervisor(options: SupervisorOptions): Promise<never> {
   const self = readProcessIdentity(process.pid);
   if (!self) throw new Error('supervisor_process_identity_unreadable');
-  acquireSupervisorLock(options, self);
+  const lease = acquireSingleInstanceLease({
+    lockDir: supervisorLockPath(options),
+    metadata: { epochId: options.epochId, nonce: options.nonce },
+  });
   const state: SupervisorStatus = {
     schemaVersion: 1,
     epochId: options.epochId,
@@ -165,6 +106,7 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
     lastChildStartAt: null,
     cordonReason: 'post-cas-epoch-owner',
     refusalReason: null,
+    crashBackoff: EMPTY_CRASH_BACKOFF_STATE,
   };
   const verify = (): { registryHash: string; cadenceSeconds: number } => {
     try {
@@ -197,6 +139,20 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
 
     while (!stopping) {
       const verified = verify();
+      const beforeRestart = restartDecisionAt(state.crashBackoff, Date.now());
+      if (!beforeRestart.restartAllowed) {
+        if (beforeRestart.reason === 'terminal') {
+          state.restartState = 'refused';
+          state.refusalReason = beforeRestart.terminalReason ?? 'supervisor_child_terminal_crash_loop';
+          writeStatus(options, state);
+          throw new Error(state.refusalReason);
+        }
+        state.restartState = 'waiting-restart';
+        writeStatus(options, state);
+        await delay(beforeRestart.waitMs);
+        if (stopping) break;
+      }
+
       const registry = validateSchedulerRegistry(readFileSync(options.projectedRegistryPath));
       const child = registry.children[0];
       const schedulerPath = path.join(options.repoRoot, 'scripts', child.script);
@@ -204,6 +160,7 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
       state.childGeneration += 1;
       state.restartState = 'starting';
       writeStatus(options, state);
+      let childStartedAtMs = 0;
       const result = await runProcess({
         command: process.execPath,
         args: ['--experimental-strip-types', schedulerPath, 'tick'],
@@ -218,8 +175,9 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
         signal: currentAbort.signal,
         allowEmptyStdout: true,
         onSpawn: (pid) => {
+          childStartedAtMs = Date.now();
           state.childPid = pid;
-          state.lastChildStartAt = new Date().toISOString();
+          state.lastChildStartAt = new Date(childStartedAtMs).toISOString();
           state.restartState = 'running';
           writeStatus(options, state);
         },
@@ -228,16 +186,36 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
       state.childPid = null;
       if (stopping) break;
       state.childRestarts += 1;
-      state.restartState = 'waiting-restart';
-      state.refusalReason = result.ok ? null : `scheduler_child_${result.outcome}:${result.error ?? result.stderr ?? result.exitCode ?? 'unknown'}`;
+      const exitedAtMs = Date.now();
+      const crash = recordChildExit({
+        previous: state.crashBackoff,
+        startedAtMs: childStartedAtMs,
+        exitedAtMs,
+        progressObserved: result.ok,
+      });
+      state.crashBackoff = {
+        rapidExits: crash.rapidExits,
+        backoffUntilMs: crash.backoffUntilMs,
+        lastExitMs: crash.lastExitMs,
+        terminal: crash.terminal,
+        terminalReason: crash.terminalReason,
+      };
+      state.restartState = crash.terminal ? 'refused' : 'waiting-restart';
+      state.refusalReason = crash.terminal
+        ? crash.terminalReason
+        : result.ok
+          ? null
+          : `scheduler_child_${result.outcome}:${result.error ?? result.stderr ?? result.exitCode ?? 'unknown'}`;
       writeStatus(options, state);
-      await new Promise((resolve) => setTimeout(resolve, options.restartDelayMs ?? verified.cadenceSeconds * 1_000));
+      if (crash.terminal) throw new Error(crash.terminalReason ?? 'supervisor_child_terminal_crash_loop');
+      const cadenceDelay = options.restartDelayMs ?? verified.cadenceSeconds * 1_000;
+      await delay(Math.max(cadenceDelay, crash.waitMs));
     }
     state.childPid = null;
     state.restartState = 'stopping';
     writeStatus(options, state);
   } finally {
-    releaseSupervisorLock(options, self);
+    releaseSingleInstanceLease(lease);
   }
   process.exit(0);
   throw new Error('unreachable');

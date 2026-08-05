@@ -45,13 +45,8 @@ describe('fleet-liveness-census', () => {
   it('expected: regression-anchors-wired', () => {
     expect(validateFleetLivenessCensus({ repoRoot })).toEqual([]);
     const contract = loadContract();
-    for (const childId of [
-      'review-ready-report-state-seed',
-      'review-trigger-reeval',
-    ]) {
-      expect(contract.regressionAnchors).toContain(childId);
-      expect(contract.children.find((entry) => entry.id === childId)?.mode).toBe('wired');
-    }
+    expect(contract.regressionAnchors).toEqual(['pr2-scheduler']);
+    expect(contract.children.find((entry) => entry.id === 'pr2-scheduler')?.mode).toBe('wired');
     emitProof('regression-anchors-wired');
   });
 
@@ -64,7 +59,8 @@ describe('fleet-liveness-census', () => {
         ...registry.children,
         {
           id: 'new-blocking-child',
-          script: 'new-blocking-child.ps1',
+          runtime: 'node',
+          script: 'new-blocking-child.ts',
           cadenceSeconds: 5,
           stallGraceMultiplier: 4,
         },
@@ -77,10 +73,7 @@ describe('fleet-liveness-census', () => {
       sourceLoader,
     });
     expect(findings).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        childId: 'new-blocking-child',
-        code: 'unaccounted_registry_child',
-      }),
+      expect.objectContaining({ childId: 'new-blocking-child', code: 'unaccounted_registry_child' }),
     ]));
     emitProof('class-coverage-drift');
   });
@@ -93,9 +86,9 @@ describe('fleet-liveness-census', () => {
       sharedTransports: Record<string, string>;
       children: Array<Record<string, unknown>>;
     };
-    const anchor = contract.children.find((entry) => entry.id === 'review-trigger-reeval');
+    const anchor = contract.children.find((entry) => entry.id === 'pr2-scheduler');
     expect(anchor).toBeDefined();
-    if (anchor) anchor.maxExternalCallTimeoutMs = 10_001;
+    if (anchor) anchor.maxExternalCallTimeoutMs = 35_001;
 
     const findings = validateFleetLivenessCensus({
       repoRoot,
@@ -104,24 +97,24 @@ describe('fleet-liveness-census', () => {
       sourceLoader,
     });
     const finding = findings.find((entry) => entry.code === 'external_timeout_exceeds_half_stall');
-    expect(finding?.childId).toBe('review-trigger-reeval');
-    expect(finding?.message).toContain('10000ms');
+    expect(finding?.childId).toBe('pr2-scheduler');
+    expect(finding?.message).toContain('35000ms');
     expect(finding?.message).toContain('marginMs=-1');
     emitProof('heartbeat-interval-bounded');
   });
 
-  it('fails if either mandatory regression anchor becomes exempt', () => {
+  it('fails if the mandatory scheduler anchor becomes exempt', () => {
     const contract = clone(loadContract()) as unknown as {
       schemaVersion: number;
       regressionAnchors: string[];
       sharedTransports: Record<string, string>;
       children: Array<Record<string, unknown>>;
     };
-    const seed = contract.children.find((entry) => entry.id === 'review-ready-report-state-seed');
-    expect(seed).toBeDefined();
-    if (seed) {
-      seed.mode = 'exempt';
-      seed.exemptionReason = 'This intentionally long reason still cannot exempt a mandatory anchor.';
+    const scheduler = contract.children.find((entry) => entry.id === 'pr2-scheduler');
+    expect(scheduler).toBeDefined();
+    if (scheduler) {
+      scheduler.mode = 'exempt';
+      scheduler.exemptionReason = 'This intentionally long reason still cannot exempt the mandatory scheduler.';
     }
 
     const findings = validateFleetLivenessCensus({
@@ -131,40 +124,37 @@ describe('fleet-liveness-census', () => {
       sourceLoader,
     });
     expect(findings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ childId: 'review-ready-report-state-seed', code: 'regression_anchor_exempt' }),
-      expect.objectContaining({ childId: 'review-ready-report-state-seed', code: 'regression_anchor_not_wired' }),
+      expect.objectContaining({ childId: 'pr2-scheduler', code: 'regression_anchor_exempt' }),
+      expect.objectContaining({ childId: 'pr2-scheduler', code: 'regression_anchor_not_wired' }),
     ]));
   });
 
-  it('fails when a wired child stops reporting terminal outcomes through the shared helper', () => {
+  it('fails when the scheduler loses its explicit external-call timeout', () => {
     const findings = validateFleetLivenessCensus({
       repoRoot,
       registry: loadRegistry(),
       contract: loadContract(),
       sourceLoader: (repoRelativePath) => {
-        if (repoRelativePath === 'scripts/review-trigger-reeval.ps1') {
-          return '# no terminal helpers';
+        if (repoRelativePath === 'scripts/pr2-foundation/scheduler.ts') {
+          return 'const runProcess = true;';
         }
         return sourceLoader(repoRelativePath);
       },
     });
     expect(findings).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        childId: 'review-trigger-reeval',
-        code: 'terminal_helper_missing',
-      }),
+      expect.objectContaining({ childId: 'pr2-scheduler', code: 'external_timeout_not_wired' }),
     ]));
   });
 
-  it('fails when a shared gh/ao transport bypasses the TS runtime', () => {
+  it('fails when terminal outcomes bypass crash/backoff accounting', () => {
     const contract = loadContract();
-    const ghPath = contract.sharedTransports.gh;
+    const terminalPath = contract.sharedTransports.terminalOutcome;
     const findings = validateFleetLivenessCensus({
       repoRoot,
       registry: loadRegistry(),
       contract,
       sourceLoader: (repoRelativePath) => {
-        if (repoRelativePath === ghPath) return '#!/usr/bin/env bash\nexec gh "$@"\n';
+        if (repoRelativePath === terminalPath) return 'export const unbounded = true;';
         return sourceLoader(repoRelativePath);
       },
     });

@@ -1,4 +1,5 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import {
@@ -21,6 +22,7 @@ import {
   type PackReviewRunStatus,
   type PackReviewStoreOptions,
 } from './pack-review-run-store.ts';
+import { parsePersistedWorkerNotificationBinding } from './pack-review-worker-notification.ts';
 
 export const PACK_REVIEW_REQUIRED_STATUS_CONTEXT = 'orchestrator-pack/pack-review';
 const PACK_REVIEW_BOUNDED_FAILURE_REASONS = new Set([
@@ -180,6 +182,15 @@ export interface PackReviewWorkerNotificationRequest {
   message: string;
   idempotencyKey: string;
   reviewRunId?: string;
+}
+
+export interface PackReviewWorkerNotificationBinding {
+  schemaVersion: 1;
+  runtime: string;
+  id: string;
+  generation: string;
+  workspacePath: string;
+  headSha: string;
 }
 
 export type PackReviewWorkerNotifier = (
@@ -417,6 +428,103 @@ function journalOutcome(
 
 function storeOptions(options: PackReviewStoreOptions): PackReviewStoreOptions {
   return { projectId: options.projectId, storeRoot: options.storeRoot };
+}
+
+type PackReviewRunWithNotificationBinding = PackReviewRunRecord & {
+  workerNotificationBinding?: unknown;
+};
+
+function asNotificationRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function firstNotificationText(...values: unknown[]): string {
+  for (const value of values) {
+    const normalized = trim(value);
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function sessionMetadataRoot(projectId: string): string {
+  const explicit = process.env.PACK_REVIEW_SESSION_METADATA_ROOT?.trim();
+  if (explicit) return resolve(explicit);
+  const base = process.env.AO_BASE_DIR?.trim() || join(homedir(), '.agent-orchestrator');
+  return join(base, 'projects', projectId, 'sessions');
+}
+
+function candidateWorkerNotificationBinding(
+  run: PackReviewRunRecord,
+): PackReviewWorkerNotificationBinding | null {
+  const sessionId = trim(run.linkedSessionId);
+  if (!sessionId) return null;
+  const metadataPath = join(sessionMetadataRoot(run.projectId), `${sessionId}.json`);
+  if (!existsSync(metadataPath)) return null;
+  let metadata: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(readFileSync(metadataPath, 'utf8')) as unknown;
+    const record = asNotificationRecord(parsed);
+    if (!record) return null;
+    metadata = record;
+  } catch {
+    return null;
+  }
+  const runtimeHandle = asNotificationRecord(metadata.runtimeHandle);
+  const data = asNotificationRecord(runtimeHandle?.data);
+  if (!runtimeHandle || !data) return null;
+  const runtime = firstNotificationText(runtimeHandle.runtime, data.runtime);
+  const id = firstNotificationText(runtimeHandle.id, data.id, data.handle, data.terminalHandle);
+  const generation = firstNotificationText(
+    runtimeHandle.generation,
+    data.generation,
+    data.incarnationId,
+    data.ptyId,
+  );
+  const workspacePath = firstNotificationText(data.workspacePath, runtimeHandle.workspacePath, metadata.worktree);
+  const metadataHeadSha = firstNotificationText(
+    data.headSha,
+    runtimeHandle.headSha,
+    metadata.ownedHeadSha,
+    metadata.headSha,
+  ).toLowerCase();
+  if (!runtime || !id || !generation || !workspacePath) return null;
+  if (metadataHeadSha && metadataHeadSha !== run.targetSha) return null;
+  return {
+    schemaVersion: 1,
+    runtime,
+    id,
+    generation,
+    workspacePath: resolve(workspacePath),
+    headSha: run.targetSha,
+  };
+}
+
+function persistWorkerNotificationBinding(
+  run: PackReviewRunRecord,
+  options: PackReviewStoreOptions,
+): void {
+  const current = getPackReviewRun(run.id, storeOptions(options)) ?? run;
+  const rawExisting = asNotificationRecord(
+    (current as PackReviewRunWithNotificationBinding).workerNotificationBinding,
+  );
+  if (rawExisting) return;
+  const binding = candidateWorkerNotificationBinding(current);
+  if (!binding) return;
+  const fields = { workerNotificationBinding: binding } as unknown as Partial<PackReviewRunRecord>;
+  updatePackReviewRunIf(
+    run.id,
+    (records) => {
+      const observed = records.find((record) => record.id === run.id);
+      return Boolean(observed)
+        && !asNotificationRecord(
+          (observed as PackReviewRunWithNotificationBinding).workerNotificationBinding,
+        );
+    },
+    fields,
+    storeOptions(options),
+  );
 }
 
 function safeGetPackReviewRun(
@@ -661,8 +769,6 @@ export async function resumePackReviewVerdictDelivery(
   });
 }
 
-
-
 async function publishPackReviewTerminalRequiredStatus(
   run: PackReviewRunRecord,
   options: RecordPendingReviewOptions,
@@ -798,6 +904,7 @@ export async function recordPackReviewStaleRequiredStatus(
 export async function recordPackReviewPendingStatus(
   options: RecordPendingReviewOptions,
 ): Promise<PackReviewDeliveryOutcome> {
+  persistWorkerNotificationBinding(options.run, options);
   const idempotencyKey = packReviewPendingRequiredStatusIdempotencyKey(options.run);
   let statusOutcome = outcome('failed', 'status_pending_unpublished', idempotencyKey, options.clock);
   persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
@@ -954,47 +1061,4 @@ export async function publishPackReviewRequiredStatus(options: {
   }
 }
 
-export async function sendPackReviewWorkerNotification(options: {
-  trustedPackRoot: string;
-  sessionId: string;
-  request: PackReviewWorkerNotificationRequest;
-}): Promise<PackReviewWorkerNotificationResult> {
-  const sessionId = trim(options.sessionId);
-  if (!sessionId) return { state: 'escalated', reason: 'worker_session_unresolved' };
-  const capture = trim(process.env.PACK_REVIEW_WORKER_NOTIFICATION_CAPTURE_FILE);
-  if (process.env.OPK_VITEST_HARNESS === '1') {
-    if (capture) {
-      writeCapture(capture, {
-        sessionId,
-        message: options.request.message,
-        idempotencyKey: options.request.idempotencyKey,
-        reviewRunId: options.request.reviewRunId,
-      });
-    }
-    return { state: 'delivered', reason: 'fixture_dispatched' };
-  }
-
-  const adapter = join(options.trustedPackRoot, 'scripts', 'journaled-worker-send.ps1');
-  const result = await runProcess({
-    command: 'pwsh',
-    args: [
-      '-NoProfile',
-      '-File', adapter,
-      sessionId,
-      '-Source', 'pack-review-runner',
-      '-SourceKey', options.request.idempotencyKey,
-      '-NoWait',
-    ],
-    input: options.request.message,
-    cwd: options.trustedPackRoot,
-    inheritParentEnv: true,
-    allowEmptyStdout: true,
-    timeoutMs: 30_000,
-  });
-  if (result.ok) return { state: 'delivered', reason: 'adapter_dispatched' };
-  const reason = trim(result.stderr || result.error || result.stdout) || result.outcome;
-  return {
-    state: result.timedOut || result.cancelled ? 'escalated' : 'failed',
-    reason,
-  };
-}
+export { dispatchPackReviewWorkerNotification as sendPackReviewWorkerNotification } from './pack-review-worker-notification.ts';
