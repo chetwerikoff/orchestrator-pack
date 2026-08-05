@@ -1,5 +1,7 @@
-import { readFileSync, writeFileSync } from 'node:fs';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import {
   assertGptHarnessFixtureAllowed,
   extractLastGptTurnResult,
@@ -11,13 +13,18 @@ import {
   normalizePackReviewer,
   packReviewerSelectorErrorMessage,
   resolvePackReviewerFromEnv,
-  resolvePackReviewerSelectorValue,
 } from './lib/resolve-pack-reviewer.ts';
 
 const originalEnv = { ...process.env };
+const selectorTestRoot = mkdtempSync(join(tmpdir(), 'opk-reviewer-selector-'));
+const missingPreferenceFile = join(selectorTestRoot, 'missing-reviewer.json');
 
 afterEach(() => {
   process.env = { ...originalEnv };
+});
+
+afterAll(() => {
+  rmSync(selectorTestRoot, { recursive: true, force: true });
 });
 
 describe('PACK_REVIEWER selector (Issue #1031)', () => {
@@ -31,8 +38,11 @@ describe('PACK_REVIEWER selector (Issue #1031)', () => {
   });
 
   it('reads PACK_REVIEWER from env', () => {
-    expect(resolvePackReviewerFromEnv({ PACK_REVIEWER: 'gpt' })).toBe('gpt');
-    expect(resolvePackReviewerFromEnv({})).toBeNull();
+    expect(resolvePackReviewerFromEnv({
+      HOME: '/tmp/opk-reviewer-home',
+      PACK_REVIEWER: 'gpt',
+    })).toBe('gpt');
+    expect(resolvePackReviewerFromEnv({}, { preferenceFilePath: missingPreferenceFile })).toBeNull();
   });
 
   it('honors PACK_REVIEW_BOUND_REVIEWER over stale process layer', () => {
@@ -42,22 +52,6 @@ describe('PACK_REVIEWER selector (Issue #1031)', () => {
     })).toBe('gpt');
   });
 
-  it('matches persistent-layer stale-process clearing when User layer is configured', () => {
-    expect(resolvePackReviewerSelectorValue(
-      { PACK_REVIEWER: 'codex' },
-      {
-        emulateWin32: true,
-        layerOverrides: { Process: 'codex', User: 'gpt', Machine: null },
-      },
-    )).toBe('gpt');
-    expect(resolvePackReviewerFromEnv(
-      { PACK_REVIEWER: 'codex' },
-      {
-        emulateWin32: true,
-        layerOverrides: { Process: 'codex', User: 'gpt', Machine: null },
-      },
-    )).toBe('gpt');
-  });
 });
 
 describe('GPT pack reviewer adapter', () => {

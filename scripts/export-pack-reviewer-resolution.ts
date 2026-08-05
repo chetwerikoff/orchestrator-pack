@@ -1,39 +1,16 @@
 import { resolvePackReviewerResolution } from './lib/resolve-pack-reviewer.ts';
 
-function parseOverrideLayersJson(raw: string | undefined): Record<string, string | null> | undefined {
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  const parsed = JSON.parse(raw) as Record<string, string | null>;
-  return parsed;
+const unexpected = process.argv.slice(2);
+if (unexpected.length > 0) {
+  throw new Error(`Unknown reviewer resolution export arguments: ${unexpected.join(' ')}`);
 }
 
-function parseArgs(argv: string[]): {
-  overrideLayers?: Record<string, string | null>;
-  emulateWin32: boolean;
-} {
-  let overrideLayers: Record<string, string | null> | undefined;
-  let emulateWin32 = false;
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]!;
-    if (arg === '--override-layers-json') {
-      overrideLayers = parseOverrideLayersJson(argv[index + 1]);
-      index += 1;
-      continue;
-    }
-    if (arg === '--harness-emulate-persistent-layers') {
-      emulateWin32 = true;
-    }
-  }
-  return { overrideLayers, emulateWin32 };
-}
-
-const { overrideLayers, emulateWin32 } = parseArgs(process.argv.slice(2));
-const resolution = resolvePackReviewerResolution(process.env, {
-  layerOverrides: overrideLayers,
-  emulateWin32,
-});
+const resolution = resolvePackReviewerResolution(process.env);
 process.stdout.write(`${JSON.stringify({
   schema: 'pack-reviewer-resolution/v1',
-  ...resolution,
+  selectorValue: resolution.selectorValue,
+  reviewer: resolution.reviewer,
+  source: resolution.source,
+  preferencePath: resolution.preferencePath,
+  errorMessage: resolution.errorMessage,
 })}\n`);

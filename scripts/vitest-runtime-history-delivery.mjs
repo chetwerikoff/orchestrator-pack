@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { SUPPLEMENTAL_TARGET } from './lib/vitest-runtime-history-merge.mjs';
 
 export const TARGET_REPOSITORY = 'chetwerikoff/orchestrator-pack';
 export const DELIVERY_BRANCH = 'ci/vitest-runtime-history-refresh';
@@ -16,7 +17,8 @@ export const DEFAULT_WAIT_SECONDS = 900;
 export const DEFAULT_POLL_SECONDS = 15;
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
-const PROVENANCE_RE = /^runtime-history-provenance run=(\d+) attempt=(\d+) source=([0-9a-f]{40})$/i;
+const LEGACY_PROVENANCE_RE = /^runtime-history-provenance run=(\d+) attempt=(\d+) source=([0-9a-f]{40})(?: supplemental=([0-9a-f]{40}) target=(scripts\/pack-reviewer-preference\.test\.ts) trusted=([0-9a-f]{40}))?$/i;
+const COMPACT_PROVENANCE_RE = /^runtime-history-provenance\/v1 r=(\d+) a=(\d+) s=([0-9a-f]{40}) x=([0-9a-f]{40})$/i;
 const FAIL = new Set(['failure', 'failed', 'error', 'cancelled', 'timed_out', 'action_required']);
 const PASS = new Set(['success', 'successful', 'neutral', 'skipped', 'skipping']);
 const WAIT = new Set(['pending', 'queued', 'requested', 'waiting', 'in_progress']);
@@ -85,23 +87,44 @@ export function parseRefreshProvenance(history, expectedHeadSha) {
   for (const row of source) {
     const key = orderKey(row);
     const state = String(row?.state ?? '').toLowerCase();
-    const match = String(row?.description ?? '').match(PROVENANCE_RE);
+    const description = String(row?.description ?? '');
+    const legacyMatch = description.match(LEGACY_PROVENANCE_RE);
+    const compactMatch = description.match(COMPACT_PROVENANCE_RE);
+    const match = legacyMatch ?? compactMatch;
     if (!key || ids.has(key.id) || !match || !['pending', 'success', 'failure', 'error'].includes(state)) {
       return fail('provenance-invalid', 'refresh provenance status is malformed or ambiguous');
     }
     const runId = Number(match[1]);
     const runAttempt = Number(match[2]);
+    const sourceMainSha = match[3].toLowerCase();
+    const supplementalSourceSha = match[4]?.toLowerCase() ?? null;
+    const supplementalTarget = legacyMatch ? match[5] ?? null : supplementalSourceSha ? SUPPLEMENTAL_TARGET : null;
+    const trustedWorkflowSha = legacyMatch ? match[6]?.toLowerCase() ?? null : supplementalSourceSha ? sourceMainSha : null;
+    if (
+      (supplementalSourceSha || supplementalTarget || trustedWorkflowSha) &&
+      (!supplementalSourceSha || supplementalTarget !== SUPPLEMENTAL_TARGET || trustedWorkflowSha !== sourceMainSha)
+    ) {
+      return fail('provenance-invalid', 'bounded refresh provenance is incomplete or mismatched');
+    }
     if (row?.creator?.login !== 'github-actions[bot]' || row?.target_url !== `https://github.com/${TARGET_REPOSITORY}/actions/runs/${runId}/attempts/${runAttempt}`) {
       return fail('provenance-invalid', 'refresh provenance status is not a trusted repository-owned run output');
     }
     ids.add(key.id);
-    rows.push({ ...key, state, runId, runAttempt, sourceMainSha: match[3].toLowerCase(), row });
+    rows.push({ ...key, state, runId, runAttempt, sourceMainSha, supplementalSourceSha, supplementalTarget, trustedWorkflowSha, row });
   }
   rows.sort((a, b) => a.id - b.id);
   for (let i = 1; i < rows.length; i += 1) {
     const a = rows[i - 1];
     const b = rows[i];
-    if (b.createdAt < a.createdAt || b.runId !== a.runId || b.runAttempt !== a.runAttempt || b.sourceMainSha !== a.sourceMainSha) {
+    if (
+      b.createdAt < a.createdAt ||
+      b.runId !== a.runId ||
+      b.runAttempt !== a.runAttempt ||
+      b.sourceMainSha !== a.sourceMainSha ||
+      b.supplementalSourceSha !== a.supplementalSourceSha ||
+      b.supplementalTarget !== a.supplementalTarget ||
+      b.trustedWorkflowSha !== a.trustedWorkflowSha
+    ) {
       return fail('provenance-invalid', 'refresh provenance records do not bind one episode');
     }
   }
@@ -112,6 +135,9 @@ export function verifyRefreshRun(run, provenance) {
   if (!run || typeof run !== 'object') return fail('provenance-invalid', 'refresh workflow run is unavailable');
   if (Number(run.id) !== provenance.runId || Number(run.run_attempt) !== provenance.runAttempt || run.repository?.full_name !== TARGET_REPOSITORY || run.path !== REFRESH_WORKFLOW_PATH || String(run.head_sha ?? '').toLowerCase() !== provenance.sourceMainSha) {
     return fail('provenance-invalid', 'refresh workflow run does not match provenance binding');
+  }
+  if (provenance.trustedWorkflowSha && provenance.trustedWorkflowSha !== provenance.sourceMainSha) {
+    return fail('provenance-invalid', 'trusted workflow revision does not match the refresh run');
   }
   if (String(run.status ?? '').toLowerCase() !== 'completed') return { ok: true, state: 'pending', reason: 'refresh workflow episode has not completed' };
   const conclusion = String(run.conclusion ?? '').toLowerCase();
