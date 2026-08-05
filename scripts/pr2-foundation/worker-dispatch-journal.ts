@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import {
   closeSync,
   existsSync,
   mkdirSync,
   openSync,
-  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -306,12 +306,7 @@ function writeS2JournalAtomic(
 
 function processAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
 async function delayUntil(deadlineMs: number, milliseconds: number): Promise<void> {
