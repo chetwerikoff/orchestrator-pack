@@ -2,6 +2,7 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1346,
   "declared_paths": [
+    "docs/declarations/1346.pr-scope.json",
     "scripts/lib/review-lane-routing.test.ts",
     "scripts/lib/review-lane-routing.ts"
   ],
@@ -12,10 +13,9 @@
     "vendor/"
   ],
   "allowed_roots": [
-    "scripts/lib/create-issue-stage-record-review-lane.test.ts",
+    "docs/declarations/1346.pr-scope.json",
     "scripts/lib/review-lane-routing.test.ts",
-    "scripts/lib/review-lane-routing.ts",
-    "scripts/review-lane-routing.ts"
+    "scripts/lib/review-lane-routing.ts"
   ],
-  "source_revision": "4c0b677ab59bf64ba0772f150f8fec31a33143db"
+  "source_revision": "fc344be3782074c5cf9076a8f17c0def815721ba"
 }
