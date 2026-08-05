@@ -10,16 +10,15 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Review-RunLiveness.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-FailureEvidence.ps1')
 
-$boundReviewer = [Environment]::GetEnvironmentVariable('PACK_REVIEW_BOUND_REVIEWER', 'Process')
-if (-not [string]::IsNullOrWhiteSpace($boundReviewer)) {
-    $reviewer = Get-PackReviewerFromSelector -SelectorValue $boundReviewer.Trim()
-}
-else {
-    Clear-StalePackReviewerProcessScope
-    $reviewer = Get-PackReviewerFromSelector
-}
+$resolution = Invoke-PackReviewerResolutionExport
+$reviewer = $resolution.reviewer
 if (-not $reviewer) {
-    $message = Get-PackReviewerSelectorErrorMessage
+    $message = if ($resolution.errorMessage) {
+        $resolution.errorMessage
+    }
+    else {
+        'No reviewer authority is configured. Set a persistent reviewer or PACK_REVIEWER to gpt, claude, or codex.'
+    }
     Write-Error $message -ErrorAction Continue
     exit 1
 }
