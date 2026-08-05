@@ -51,13 +51,14 @@ describe('TypeScript worker recovery entrypoint', () => {
       });
       expect(owned.status).toBe('ok');
       if (owned.status !== 'ok') return;
-      adapter.setLiveness(owned.value.identity, 'gone');
+      const ownedIdentity = owned.value.identity;
+      expect(adapter.stopWorker(ownedIdentity).status).toBe('ok');
 
       const remove = vi.spyOn(adapter, 'removeWorkspace');
       const spawnWorker = vi.spyOn(adapter, 'spawnWorker');
       const options = parseWorkerRecoveryArgs([
-        '--worker-id', owned.value.identity.id,
-        '--worker-generation', owned.value.identity.generation,
+        '--worker-id', ownedIdentity.id,
+        '--worker-generation', ownedIdentity.generation,
         '--cleanup-workspace', cleanupWorkspace,
         '--expected-head-sha', 'test-head',
         '--spawn-workspace', 'active',
@@ -70,7 +71,7 @@ describe('TypeScript worker recovery entrypoint', () => {
         claimNamespace: join(root, 'claims'),
         cleanupAuthority: {
           source: 'pack-reservation',
-          worker: owned.value.identity,
+          worker: ownedIdentity,
           workspacePath: cleanupWorkspace,
           expectedHeadSha: 'test-head',
         },
