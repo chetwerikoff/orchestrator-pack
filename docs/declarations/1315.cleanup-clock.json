@@ -3,8 +3,10 @@
   "issue_number": 1315,
   "declared_paths": [
     "scripts/lib/worker-smoke-cleanup-clock-regressions.ts",
+    "scripts/lib/worker-smoke-lifecycle-base.ts",
     "scripts/lib/worker-smoke-lifecycle-regressions.ts",
-    "scripts/lib/worker-smoke-lifecycle.ts"
+    "scripts/lib/worker-smoke-lifecycle.ts",
+    "scripts/lib/worker-smoke-receipt.ts"
   ],
   "denylist": [
     "credentials/",
@@ -14,8 +16,10 @@
   ],
   "allowed_roots": [
     "scripts/lib/worker-smoke-cleanup-clock-regressions.ts",
+    "scripts/lib/worker-smoke-lifecycle-base.ts",
     "scripts/lib/worker-smoke-lifecycle-regressions.ts",
-    "scripts/lib/worker-smoke-lifecycle.ts"
+    "scripts/lib/worker-smoke-lifecycle.ts",
+    "scripts/lib/worker-smoke-receipt.ts"
   ],
   "source_revision": "5e26065a98e380cbaa164c508841fa1fa47e94f1"
 }
