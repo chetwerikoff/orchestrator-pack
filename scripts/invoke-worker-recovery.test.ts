@@ -1,8 +1,8 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runProcess } from './kernel/subprocess.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import {
   parseWorkerRecoveryArgs,
@@ -14,29 +14,7 @@ import {
   releaseWorkerRecoveryClaim,
 } from './runtime/worker-recovery-claim.ts';
 
-function firstJsonLine(child: ChildProcess): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    let buffer = '';
-    const timeout = setTimeout(() => reject(new Error('claim contender timed out')), 5_000);
-    child.stdout?.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
-      const newline = buffer.indexOf('\n');
-      if (newline < 0) return;
-      clearTimeout(timeout);
-      try {
-        resolve(JSON.parse(buffer.slice(0, newline)) as Record<string, unknown>);
-      } catch (error) {
-        reject(error);
-      }
-    });
-    child.once('error', (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
-}
-
-function spawnClaimContender(namespace: string, workspacePath: string): ChildProcess {
+async function probeRecoveryClaim(namespace: string, workspacePath: string): Promise<Record<string, unknown>> {
   const moduleUrl = new URL('./runtime/worker-recovery-claim.ts', import.meta.url).href;
   const source = `
     import { acquireWorkerRecoveryClaim, releaseWorkerRecoveryClaim } from ${JSON.stringify(moduleUrl)};
@@ -51,12 +29,13 @@ function spawnClaimContender(namespace: string, workspacePath: string): ChildPro
       : { acquired: false, reason: result.reason }) + '\\n');
     if (result.acquired) releaseWorkerRecoveryClaim(result.handle);
   `;
-  return spawn(process.execPath, [
-    '--experimental-strip-types',
-    '--input-type=module',
-    '--eval',
-    source,
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const result = await runProcess({
+    command: process.execPath,
+    args: ['--experimental-strip-types', '--input-type=module', '--eval', source],
+    inheritParentEnv: true,
+  });
+  if (!result.ok) throw new Error(`claim contender failed: ${result.error ?? result.stderr ?? result.outcome}`);
+  return JSON.parse(result.stdout.trim()) as Record<string, unknown>;
 }
 
 describe('TypeScript worker recovery entrypoint', () => {
@@ -198,8 +177,7 @@ describe('TypeScript worker recovery entrypoint', () => {
       expect(reclaimed.acquired).toBe(true);
       if (!reclaimed.acquired) return;
 
-      const contender = spawnClaimContender(namespace, workspacePath);
-      expect(await firstJsonLine(contender)).toEqual({
+      expect(await probeRecoveryClaim(namespace, workspacePath)).toEqual({
         acquired: false,
         reason: 'claim_held',
       });
