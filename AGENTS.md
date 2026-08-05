@@ -384,7 +384,10 @@ implementation.
 
 ### Operator decree: blocker philosophy and plan-first execution
 
-docs/blocker-philosophy.md
+1. Blockers are warnings: check, fix or complete, continue — stop only on an explicit blocker.
+2. Plan first, execute the plan without stopping, and record deviations in the report.
+3. A blocker exists only by explicit operator/task directive; explicit operator authorization lifts it unconditionally — continue without re-litigating.
+Full text: docs/blocker-philosophy.md
 
 ### Operator adoption handoff
 

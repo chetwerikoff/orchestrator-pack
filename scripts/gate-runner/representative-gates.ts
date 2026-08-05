@@ -43,7 +43,8 @@ export const agentRulesBudgetGate: DeclarativeGateDefinition = {
   gateId: 'agent-rules-size-budget',
   legacyScript: 'scripts/check-agent-rules-line-budget.ps1',
   summary: 'AGENTS.md stays within the worker-rule delivery budget.',
-  rules: [{ kind: 'line-byte-budget', path: 'AGENTS.md', maxLines: 450, maxBytes: 28_672 }],
+  // Rule delivery cost is linear in lines, not bytes; issue 1188 measured the byte headroom need.
+  rules: [{ kind: 'line-byte-budget', path: 'AGENTS.md', maxLines: 450, maxBytes: 30_720 }],
   passStdout: '',
   failHeading: '[FAIL] AGENTS.md size budget:',
 };
