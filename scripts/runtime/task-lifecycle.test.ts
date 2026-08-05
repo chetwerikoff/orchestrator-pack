@@ -75,6 +75,7 @@ function exercise(adapter: DeterministicRuntimeAdapter | OrcaTaskRuntimeAdapter)
     title: 'issue-1248',
     command: 'cursor-agent',
     prompt: 'implement the issue',
+    acquireClaim: () => ({ ok: true }),
   });
 }
 
@@ -267,6 +268,19 @@ describe('direct runtime-neutral task caller', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it('fails closed before runtime work when claim authority is missing', () => {
+    const adapter = new DeterministicRuntimeAdapter();
+    const spawn = vi.spyOn(adapter, 'spawnWorker');
+    const result = executeRuntimeTaskLifecycle({
+      adapter,
+      title: 'issue-1248',
+      command: 'cursor-agent',
+      prompt: 'implement the issue',
+    } as unknown as Parameters<typeof executeRuntimeTaskLifecycle>[0]);
+    expect(result).toEqual({ stage: 'claim', reason: 'claim_authority_missing' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it('refuses stale-generation destructive cleanup before close transport', () => {
     const runJson = fakeOrcaTransport();
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
@@ -334,6 +348,7 @@ describe('direct runtime-neutral task caller', () => {
         prompt: 'implement the issue',
         observationWindowMs: 1_000,
         options: { cwd: root, timeoutMs: 5_000 },
+        acquireClaim: () => ({ ok: true }),
       });
 
       if (result.status !== 'ok') {
