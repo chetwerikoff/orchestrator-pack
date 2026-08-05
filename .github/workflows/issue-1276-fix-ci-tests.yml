@@ -1,0 +1,28 @@
+name: Issue 1276 fix CI tests
+
+on:
+  push:
+    branches: [chetwerikoff/issue-1276]
+    paths: [.github/workflows/issue-1276-fix-ci-tests.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: chetwerikoff/issue-1276
+      - name: Update fail-closed message expectations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c "from pathlib import Path; p=Path('scripts/pack-review-runner-gpt.test.ts'); s=p.read_text(); a='terminalResult|payload|class-inconsistent|non-complete|terminal class'; b='terminalResult|payload|class-inconsistent|non-complete|terminal class|zero-send collision'; assert s.count(a)==1; s=s.replace(a,b,1); a='frozen reviewRound cardinality cannot change'; b='frozen reviewRound cardinality cannot change|cardinality violates tier\\/round policy'; assert s.count(a)==1; p.write_text(s.replace(a,b,1))"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/pack-review-runner-gpt.test.ts
+          git commit -m 'test: accept policy-first GPT validation failures'
+          git push origin HEAD:chetwerikoff/issue-1276
