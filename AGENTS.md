@@ -91,7 +91,7 @@ dumps; send minimal excerpts. `--target` for `coworker write` MUST stay inside d
 
 When **at least one** ask trigger holds **and** corpus is fence-clean **and** work is not an
 excepted reasoning step, route the read through `coworker ask` on **Claude and Codex**
-(mandatory). On **Cursor**, advisory corpus is **SHOULD**, not MUST — see carve-outs below.
+(mandatory). On **Cursor**, see the carve-outs below.
 
 **Bounded fallback** only when `coworker` is missing/unavailable/rate-limited or corpus cannot
 be made fence-clean. Cost/size is not a fallback once a trigger fires. Wait for exit, not patience: coworker answers take 1–2 minutes; await process exit. If shell returns early (e.g. Codex background exec), poll the same session until exit; do not interrupt after tens of seconds. “Unavailable” requires observed evidence: failed `command -v coworker` or coworker nonzero/error; patience timeout is not unavailability. Stderr `WARNING (override)` lines are advisory; the stdout answer still lands once the process finishes.
@@ -109,8 +109,7 @@ Cursor's semantic index owe **no** coworker delegation regardless of size. Does 
 CI/job logs, diffs, external URLs, vendored dumps, or **tracked non-code bulk**
 (markdown/JSON/data).
 
-**Cursor-seat advisory floor (Issue #359).** For out-of-index advisory corpus on Cursor,
-delegation is recommended, not mandatory. Diffs stay direct per Issue #337.
+**Cursor advisory floor.** Cursor advisory delegation is recommended, not mandatory; diffs stay direct (#337).
 
 ### Write delegation (`coworker write`)
 
@@ -212,7 +211,6 @@ PR work. Missing session verification marks the session `stuck`. See
 
 ### Tracker and role policy
 
-- Each new task's Issue is its sole live spec/source/queue; no tracked draft/index. External work artifacts are audit-only.
 - Link every branch and PR to its source issue; PR bodies must include `Closes #N`, `Fixes #N`, or
   `Resolves #N` in the **first few lines** under `## Summary`.
 - If **PR scope guard** fails with `missing_issue_link` but GitHub shows `Closes #N`, re-check
@@ -242,7 +240,7 @@ PR work. Missing session verification marks the session `stuck`. See
 ### Upgrade-safe AO usage
 
 - Prefer plugin, config, prompt, wrapper, hook, or CI extensions over AO core patches.
-- Do not edit upstream `packages/core/`. Write a contract or wrapper first.
+- Write a contract or wrapper first.
 
 ### Build the minimum (no unrequested abstraction)
 
@@ -270,10 +268,9 @@ report**, not permission to bypass the wrapper.
 Before autonomous orchestrator command turns run side-effecting workflows, pass
 `scripts/orchestrator-command-runtime-preflight.ps1`. Missing `pwsh`/`node`/pack `scripts/gh` on
 PATH must **fail closed** — no dotfile edits or temp wrappers. Structured wrappers parse **stdout
-JSON only**. Uncovered `gh` reads: report and fail closed. Do not author `/tmp/gh-rest-bin/gh`,
-direct bash REST branches in `scripts/gh`, raw `curl api.github.com`, `gh api graphql`, or
-`unset GH_WRAPPER_ACTIVE` workarounds. Recovery belongs to Issues **#522/#527** — do not improvise
-alternate recipes.
+JSON only**. See [gh wrapper transport](#gh-wrapper-transport) for GitHub transport and
+uncovered-read rules; do not bypass them. Recovery belongs to Issues **#522/#527** — do not
+improvise alternate recipes.
 
 ### Review / CI / Handoff worker contract
 
