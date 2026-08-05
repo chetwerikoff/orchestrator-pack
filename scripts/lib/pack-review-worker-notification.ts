@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import {
   buildDeterministicDeliveryId,
@@ -40,9 +41,10 @@ import {
 export interface WorkerNotificationOptions {
   trustedPackRoot: string;
   workerId?: string;
-  /** Transitional parameter name at old call sites; interpreted only as a runtime worker id. */
+  /** Transitional parameter name at old call sites; bound to the persisted review session. */
   sessionId?: string;
   expectedWorkerGeneration?: string;
+  expectedRuntime?: string;
   request: PackReviewWorkerNotificationRequest;
   repoRoot?: string;
   projectId?: string;
@@ -57,6 +59,7 @@ export interface WorkerNotificationOptions {
   journalPath?: string;
   claimNamespace?: string;
   sideEffectFencePath?: string;
+  sessionMetadataRoot?: string;
 }
 
 interface JournalAdmission {
@@ -65,8 +68,30 @@ interface JournalAdmission {
   journalPath: string;
 }
 
+interface PersistedRuntimeBinding {
+  runtime: string;
+  id: string;
+  generation: string;
+  workspacePath: string;
+  headSha: string;
+}
+
 function trim(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const normalized = trim(value);
+    if (normalized) return normalized;
+  }
+  return '';
 }
 
 function readJournal(path: string): Record<string, unknown> {
@@ -87,6 +112,51 @@ function hashed(value: string): string {
   return `sha256:${createHash('sha256').update(value, 'utf8').digest('hex')}`;
 }
 
+function persistedSessionRoot(options: WorkerNotificationOptions, projectId: string): string {
+  if (trim(options.sessionMetadataRoot)) return resolve(options.sessionMetadataRoot!);
+  const base = trim(process.env.AO_BASE_DIR) || join(homedir(), '.agent-orchestrator');
+  return join(base, 'projects', projectId, 'sessions');
+}
+
+function readPersistedRuntimeBinding(
+  options: WorkerNotificationOptions,
+  projectId: string,
+  linkedSessionId: string,
+): PersistedRuntimeBinding | null {
+  const path = join(persistedSessionRoot(options, projectId), `${linkedSessionId}.json`);
+  if (!existsSync(path)) return null;
+  let metadata: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    const record = asRecord(parsed);
+    if (!record) return null;
+    metadata = record;
+  } catch {
+    return null;
+  }
+  const runtimeHandle = asRecord(metadata.runtimeHandle);
+  const data = asRecord(runtimeHandle?.data);
+  if (!runtimeHandle || !data) return null;
+  const runtime = firstText(runtimeHandle.runtime, data.runtime);
+  const id = firstText(runtimeHandle.id, data.id, data.handle, data.terminalHandle);
+  const generation = firstText(
+    runtimeHandle.generation,
+    data.generation,
+    data.incarnationId,
+    data.ptyId,
+  );
+  const workspacePath = firstText(data.workspacePath, runtimeHandle.workspacePath, metadata.worktree);
+  const headSha = firstText(
+    data.headSha,
+    runtimeHandle.headSha,
+    metadata.ownedHeadSha,
+    metadata.headSha,
+  ).toLowerCase();
+  return runtime && id && generation && workspacePath
+    ? { runtime, id, generation, workspacePath: resolve(workspacePath), headSha }
+    : null;
+}
+
 async function currentHead(workspacePath: string): Promise<string> {
   const result = await runProcess({
     command: 'git',
@@ -103,14 +173,23 @@ async function currentHead(workspacePath: string): Promise<string> {
 async function resolveWorker(input: {
   adapter: RuntimeAdapter;
   workerId: string;
+  expectedRuntime: string;
   expectedGeneration: string;
+  expectedWorkspacePath: string;
   expectedHeadSha: string;
 }): Promise<RuntimeWorker> {
   const found = input.adapter.findWorkerById(input.workerId);
   if (found.status !== 'ok') throw new Error(`${found.operation}:${found.reason}`);
   if (!found.value) throw new Error('worker_not_found');
-  if (input.expectedGeneration && found.value.identity.generation !== input.expectedGeneration) {
+  if (!input.expectedRuntime || found.value.identity.runtime !== input.expectedRuntime) {
+    throw new Error('worker_runtime_mismatch');
+  }
+  if (!input.expectedGeneration || found.value.identity.generation !== input.expectedGeneration) {
     throw new Error('worker_generation_mismatch');
+  }
+  if (input.expectedWorkspacePath
+    && resolve(found.value.workspacePath) !== resolve(input.expectedWorkspacePath)) {
+    throw new Error('worker_workspace_mismatch');
   }
   if (input.expectedHeadSha) {
     const observed = await currentHead(found.value.workspacePath);
@@ -226,7 +305,7 @@ function fixture(options: WorkerNotificationOptions, workerId: string): PackRevi
 }
 
 function bindPersistedReviewRun(options: WorkerNotificationOptions):
-  | { ok: true; options: WorkerNotificationOptions }
+  | { ok: true; options: WorkerNotificationOptions & { expectedWorkspacePath?: string } }
   | { ok: false; reason: string } {
   const reviewRunId = trim(options.request.reviewRunId);
   if (!reviewRunId) return { ok: true, options };
@@ -261,15 +340,60 @@ function bindPersistedReviewRun(options: WorkerNotificationOptions):
   if (explicitHeadSha && explicitHeadSha !== run.targetSha) {
     return { ok: false, reason: 'review_run_head_mismatch' };
   }
-  const workerId = trim(options.workerId || options.sessionId || run.linkedSessionId);
-  if (!workerId) return { ok: false, reason: 'worker_id_unresolved' };
+  const linkedSessionId = trim(run.linkedSessionId);
+  if (!linkedSessionId) return { ok: false, reason: 'worker_session_binding_unresolved' };
+  const explicitSessionId = trim(options.sessionId);
+  if (explicitSessionId && explicitSessionId !== linkedSessionId) {
+    return { ok: false, reason: 'review_run_session_mismatch' };
+  }
+
+  // Ordinary fixture delivery intentionally does not inspect host session state.
+  // Focused real-adapter tests opt in and exercise the production binding path.
+  const bypassFixtureBinding = process.env.OPK_VITEST_HARNESS === '1'
+    && !options.adapter
+    && process.env.PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER !== '1';
+  if (bypassFixtureBinding) {
+    return {
+      ok: true,
+      options: {
+        ...options,
+        workerId: linkedSessionId,
+        sessionId: undefined,
+        repoRoot: trim(options.repoRoot) || run.sourceRepoRoot,
+        projectId: run.projectId,
+        prNumber: run.prNumber,
+        headSha: run.targetSha,
+      },
+    };
+  }
+
+  const binding = readPersistedRuntimeBinding(options, run.projectId, linkedSessionId);
+  if (!binding) return { ok: false, reason: 'worker_runtime_binding_unresolved' };
+  if (binding.headSha && binding.headSha !== run.targetSha) {
+    return { ok: false, reason: 'worker_runtime_binding_head_mismatch' };
+  }
+  const explicitWorkerId = trim(options.workerId);
+  if (explicitWorkerId && explicitWorkerId !== binding.id) {
+    return { ok: false, reason: 'worker_runtime_binding_id_mismatch' };
+  }
+  const explicitGeneration = trim(options.expectedWorkerGeneration);
+  if (explicitGeneration && explicitGeneration !== binding.generation) {
+    return { ok: false, reason: 'worker_runtime_binding_generation_mismatch' };
+  }
+  const explicitRuntime = trim(options.expectedRuntime);
+  if (explicitRuntime && explicitRuntime !== binding.runtime) {
+    return { ok: false, reason: 'worker_runtime_binding_runtime_mismatch' };
+  }
 
   return {
     ok: true,
     options: {
       ...options,
-      workerId,
+      workerId: binding.id,
       sessionId: undefined,
+      expectedWorkerGeneration: binding.generation,
+      expectedRuntime: binding.runtime,
+      expectedWorkspacePath: binding.workspacePath,
       repoRoot: trim(options.repoRoot) || run.sourceRepoRoot,
       projectId: run.projectId,
       prNumber: run.prNumber,
@@ -279,9 +403,10 @@ function bindPersistedReviewRun(options: WorkerNotificationOptions):
 }
 
 /**
- * Journal-first runtime notification. The adapter is selected once, target
- * generation is resolved before claim acquisition, and dispatch is attempted
- * exactly once. `dispatch_unknown` is persisted as UNCERTAIN and never retried.
+ * Journal-first runtime notification. The exact runtime + id + generation is
+ * loaded from the persisted review session binding before claim acquisition,
+ * then revalidated against the selected adapter immediately before one dispatch.
+ * `dispatch_unknown` is persisted as UNCERTAIN and never retried.
  */
 export async function sendPackReviewWorkerNotification(
   originalOptions: WorkerNotificationOptions,
@@ -306,7 +431,9 @@ export async function sendPackReviewWorkerNotification(
     worker = await resolveWorker({
       adapter,
       workerId,
+      expectedRuntime: trim(options.expectedRuntime) || adapter.id,
       expectedGeneration: trim(options.expectedWorkerGeneration),
+      expectedWorkspacePath: trim(options.expectedWorkspacePath),
       expectedHeadSha: trim(options.headSha).toLowerCase(),
     });
   } catch (error) {
