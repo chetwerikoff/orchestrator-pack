@@ -77,7 +77,6 @@ describe('TypeScript gated worker nudge', () => {
         '--worker-generation', worker.value.identity.generation,
         '--pr', '1281',
         '--intent-class', 'review-findings',
-        '--review-run-id', 'run-1281',
         '--repo-root', root,
       ]);
       const result = await runGatedWorkerNudge({
