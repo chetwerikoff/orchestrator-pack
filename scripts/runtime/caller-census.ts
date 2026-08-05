@@ -79,6 +79,13 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Resolves exact runtime generation and preserves dispatched | send_failed | dispatch_unknown.',
   },
   {
+    surface: 'scripts/pack-review-worker-notification.cases.ts',
+    operations: ['find', 'send'],
+    kind: 'runtime-port',
+    disposition: 'already-runtime-neutral',
+    note: 'Focused review-delivery coverage exercises exact runtime lookup and one closed dispatch attempt.',
+  },
+  {
     surface: 'scripts/invoke-worker-recovery.ts',
     operations: ['list', 'find', 'liveness', 'workspace-remove', 'spawn'],
     kind: 'runtime-port',
