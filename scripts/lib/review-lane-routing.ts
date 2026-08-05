@@ -29,11 +29,11 @@ const ALLOWED_ROOTS = [
   'scripts/lib/review-lane-*.ts', 'scripts/review-lane-*.ts',
   'scripts/vitest-ci-lanes.config.json', 'scripts/lib/vitest-pre-topology-measurement.mjs',
   'scripts/vitest-runtime-history.json', 'agent-orchestrator.yaml.example', 'docs/migration_notes.md',
-  'scripts/lib/**',
+  'scripts/lib/**', 'scripts/chatgpt-browser-turn/**',
 ] as const;
 const DENYLIST = [
   'vendor/**', 'packages/core/**', '.ao/**', '.github/workflows/**', 'prompts/**',
-  'scripts/chatgpt-browser-turn/**', 'agent-orchestrator.yaml', 'agent-orchestrator.*.yaml',
+  'agent-orchestrator.yaml', 'agent-orchestrator.*.yaml',
   '**/.env*', '**/*credential*', '**/*secret*',
 ] as const;
 const SECURITY_TOKENS = new Set([
@@ -193,6 +193,11 @@ function matches(path: string, pattern: string): boolean {
   }
   return glob(pattern).test(path);
 }
+function securityByPath(path: string): boolean {
+  const lower = path.toLowerCase();
+  return lower.startsWith('scripts/chatgpt-browser-turn/')
+    || lower === 'agent-orchestrator.yaml' || /^agent-orchestrator\..+\.yaml$/i.test(path);
+}
 function normalizedPath(value: string): { path: string; relative: boolean } {
   const path = value.trim().replaceAll('\\', '/').replace(/^\.\/+/, '');
   return {
@@ -284,7 +289,7 @@ export function normalizeReviewLaneDeclaration(value: unknown): ReviewLaneInput 
   entries.length = 0;
   entries.push(...uniqueEntries);
   const blastRadius: ReviewLaneBlastRadius = entries.some((entry) => entry.kind === 'family')
-    ? 'high-or-uncertain' : entries.length >= 7 ? 'high' : 'low';
+    ? 'high-or-uncertain' : entries.some((entry) => securityByPath(entry.path)) || entries.length >= 7 ? 'high' : 'low';
   return { status: 'usable', identity: digest(canonical(entries)), entries, blastRadius };
 }
 
@@ -341,15 +346,13 @@ function classifyPath(entry: ReviewLaneAuthorEntry): ReviewLanePathClassificatio
   const securityByCompound = parts.some((part) => part.toLowerCase() === 'access-control')
     || stem.toLowerCase() === 'access-control'
     || stemTokens.some((token, index) => token === 'access' && stemTokens[index + 1] === 'control');
-  const securityByPath = lower.startsWith('scripts/chatgpt-browser-turn/')
-    || lower === 'agent-orchestrator.yaml' || /^agent-orchestrator\..+\.yaml$/i.test(path);
   const securityByTag = entry.behaviors.some((tag) => SECURITY_BEHAVIOR_TAGS.includes(tag as typeof SECURITY_BEHAVIOR_TAGS[number]));
   const destructiveByTag = entry.behaviors.some((tag) => DESTRUCTIVE_BEHAVIOR_TAGS.includes(tag as typeof DESTRUCTIVE_BEHAVIOR_TAGS[number]));
   const pathTokens = tokens(path);
   if (lower.startsWith('.github/workflows/') || hasToken(pathTokens, DESTRUCTIVE_TOKENS) || destructiveByTag) {
     return { path, scopeClass: 'destructive', conservativeReasons: [], matchedRule: lower.startsWith('.github/workflows/') ? '.github/workflows/**' : null };
   }
-  if (securityByCompound || securityByPath || hasToken(pathTokens, SECURITY_TOKENS) || securityByTag) {
+  if (securityByCompound || securityByPath(path) || hasToken(pathTokens, SECURITY_TOKENS) || securityByTag) {
     return { path, scopeClass: 'security-sensitive', conservativeReasons: [], matchedRule: securityByCompound ? 'access-control' : null };
   }
   const unknown = entry.behaviors.filter((tag) => !SAFE_BEHAVIOR_TAGS.includes(tag as typeof SAFE_BEHAVIOR_TAGS[number]));
