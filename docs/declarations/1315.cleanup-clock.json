@@ -7,7 +7,9 @@
     "scripts/lib/worker-smoke-lifecycle.ts"
   ],
   "denylist": [
+    "credentials/",
     "packages/core/",
+    "secrets/",
     "vendor/"
   ],
   "allowed_roots": [
