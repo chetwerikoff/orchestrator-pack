@@ -1,0 +1,58 @@
+name: Run PR 1356 fix workflow
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/issue-1341-operator-inputs'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-1341-operator-inputs
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Execute retained patch and verification steps
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          workflow = Path('.github/workflows/fix-pr-1356.yml').read_text().splitlines()
+          blocks = []
+          index = 0
+          while index < len(workflow):
+              line = workflow[index]
+              if line.strip() != 'run: |':
+                  index += 1
+                  continue
+              indent = len(line) - len(line.lstrip())
+              index += 1
+              body = []
+              while index < len(workflow):
+                  candidate = workflow[index]
+                  candidate_indent = len(candidate) - len(candidate.lstrip())
+                  if candidate.strip() and candidate_indent <= indent:
+                      break
+                  body.append(candidate[indent + 2:] if len(candidate) >= indent + 2 else '')
+                  index += 1
+              blocks.append('\n'.join(body).rstrip() + '\n')
+
+          if len(blocks) != 5:
+              raise SystemExit(f'expected five retained run blocks, found {len(blocks)}')
+          for ordinal, block in enumerate(blocks[:4], start=1):
+              print(f'::group::retained run block {ordinal}', flush=True)
+              subprocess.run(['bash', '-lc', block], check=True)
+              print('::endgroup::', flush=True)
+          subprocess.run(['git', 'push', 'origin', 'HEAD:agent/issue-1341-operator-inputs'], check=True)
+          PY
