@@ -1031,7 +1031,7 @@ terminalClassification: 'complete',
       operatorReferenceTransport: referenceTransport(capture),
     });
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('must match exactly one absent or non-ok terminal invocation');
+    expect(result.errors.join('\n')).toContain('published verdict SHA-256 is mismatched');
     expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
   });
 });
