@@ -217,6 +217,7 @@ describe('Orca task adapter destructive operations', () => {
       title: 'owned',
       command: 'cursor-agent',
       prompt: 'verify',
+      acquireClaim: () => ({ ok: true }),
     });
 
     expect(result).toMatchObject({
@@ -283,6 +284,7 @@ describe('Orca task adapter destructive operations', () => {
       title: 'owned',
       command: 'cursor-agent',
       prompt: 'verify',
+      acquireClaim: () => ({ ok: true }),
     });
 
     expect(result).toMatchObject({
