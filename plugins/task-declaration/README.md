@@ -1,36 +1,28 @@
 # task-declaration contract
 
-DD-026/DD-027 equivalent for Composio AO without patching AO core.
+Runtime-neutral DD-026 / DD-027 task declaration and amendment contract.
 
 ## Purpose
 
-Create auditable task declarations before an AO worker edits files. The
-declaration defines the active scope that later guards can enforce.
+Create auditable active scope before a worker edits files. The published GitHub
+Issue is the live specification; the declaration is generated evidence consumed by
+local guards and PR-level CI.
 
 ## Extension boundary
 
-Allowed implementation surfaces:
-
-- tracker metadata adapter;
-- agent wrapper prompt/context injection;
-- workspace hook;
-- AO session metadata when available;
-- workspace-local `.orchestrator-pack/` state that is gitignored.
-
-Disallowed:
-
-- patches to upstream `packages/core/`;
-- mandatory migration of the old `.ai-loop/` layout;
-- hidden scope broadening after work starts.
+Supported surfaces are tracker metadata, prompt or wrapper context, workspace hooks,
+and pack-owned `.orchestrator-pack/` mirror state. The plugin does not patch
+`packages/core/**`, infer authority from a concrete runtime session, migrate old
+private layouts, or broaden scope after work starts.
 
 ## Required metadata
 
-A task declaration must record at least:
+A declaration records at least:
 
 ```json
 {
-  "task_id": "tracker-or-ao-task-id",
-  "session_id": "ao-session-id-when-known",
+  "task_id": "issue-1352",
+  "session_id": "optional-explicit-runtime-identity",
   "chain_id": "optional-planner-reviewer-worker-chain-id",
   "baseline_ref": "git-ref-or-commit-at-declaration-time",
   "baseline_tree_hash": "hash-of-declared-baseline-state",
@@ -42,100 +34,54 @@ A task declaration must record at least:
 }
 ```
 
-`declared_files` / `declared_globs` are the allow side of active scope.
-`denylist` is always enforced, even when an allowlist exists.
+`declared_files` and declared globs form the allow side. The denylist always wins.
+Every path is normalized relative to repository root and must not escape through
+absolute paths, drive prefixes, `..`, symlinks, or mixed separators.
 
-## Validation rules
-
-- Every task must contain either explicit scope (`declared_files` or
-  `declared_globs`) or a denylist.
-- Denylist entries must be normalized relative to repository root.
-- Denylist entries must not escape the repository root through `..`, absolute
-  paths, drive prefixes, symlink tricks, or mixed slash forms.
-- Declared files metadata must be stable enough for the runtime guard and PR CI
-  check to consume.
-- Baseline hash/state must be recorded before the first worker edit.
+The baseline is captured before the first worker edit and includes the immutable
+commit and tree identity used by downstream checks.
 
 ## Amendment rule
 
-Only one amendment is allowed per iteration.
+Only one amendment is allowed per iteration. It records the prior and new active
+scope hashes, changed paths or globs, denylist changes, reason, actor, and timestamp.
+A second scope change requires a new iteration or explicit human escalation.
 
-An amendment must record:
+## CLI usage
 
-- previous active scope hash;
-- new active scope hash;
-- changed files/globs/denylist entries;
-- reason;
-- actor/session;
-- timestamp.
-
-If more scope changes are needed, start a new iteration or escalate for human
-review.
-
-## Outputs for other contracts
-
-This contract produces active scope for:
-
-- `scope-guard` runtime enforcement;
-- `scope-guard` PR-level CI validation;
-- audit/reporting tools;
-- optional `token-chain-ledger` chain attribution.
-
-## CLI usage (`pack-declare`)
-
-The implementer-facing CLI reads authoritative constraints from the linked GitHub
-Issue body and writes the committed snapshot plus a gitignored runtime mirror.
-
-### Example issue body
-
-Issue bodies must include a mandatory `denylist` fence and may include
-`allowed-roots`. See `plugins/_shared/tests/fixtures/issue-bodies/with-allowed-roots.md`
-for a parseable example used by unit tests.
-
-### Example invocation
+`pack-declare` reads constraints from the linked GitHub Issue and writes the
+committed snapshot plus a gitignored runtime mirror:
 
 ```powershell
-pack-declare --issue 4 `
+pack-declare --issue 1352 `
   --declared-paths plugins/task-declaration/lib/validate.ts `
   --declared-globs plugins/task-declaration/tests/**
 ```
 
-The CLI:
+The command:
 
-1. reads the issue body via `gh issue view <n> --json body`;
-2. parses mandatory `denylist` and optional `allowed-roots` fences;
-3. rejects dirty worktrees before recording baseline state;
+1. reads the Issue body through the tracked GitHub transport;
+2. parses the mandatory `denylist` and optional `allowed-roots` fences;
+3. rejects a dirty baseline;
 4. writes `docs/declarations/{issue_number}.{iteration_id}.json`;
-5. mirrors the snapshot under `.orchestrator-pack/declarations/` for runtime guards.
+5. mirrors it under `.orchestrator-pack/declarations/` for runtime guard reads.
 
-Use `--amend --reason "<text>"` once per iteration to rewrite declared scope.
-A second amendment within the same `iteration_id` is rejected without modifying
-the snapshot.
+Use `--amend --reason "<text>"` for the one amendment. A second amendment fails
+without modifying either copy.
 
-### Example snapshot
+## Consumers
 
-```json
-{
-  "issue_number": 4,
-  "iteration_id": "sess-abc123",
-  "iteration_id_source": "explicit",
-  "supersedes": null,
-  "created_at": "2026-05-26T12:00:00.000Z",
-  "baseline": {
-    "commit_sha": "abc123def456",
-    "worktree_dirty": false,
-    "active_scope_hash": "sha256:deadbeef"
-  },
-  "declared_paths": [
-    "plugins/task-declaration/lib/validate.ts"
-  ],
-  "declared_globs": [
-    "plugins/task-declaration/tests/**"
-  ],
-  "amendments": []
-}
-```
+- `scope-guard` runtime enforcement;
+- scope-guard PR-level CI;
+- audit and reporting;
+- optional `token-chain-ledger` attribution.
 
-`declared_paths` / `declared_globs` are the allow side of active scope.
-`denylist` constraints come from the issue body and are enforced at declaration
-time together with optional `allowed_roots`.
+## Contract markers
+
+- DD-026
+- DD-027
+- `declared_files`
+- `denylist`
+- one amendment
+- baseline captured before edits
+- no core patch
