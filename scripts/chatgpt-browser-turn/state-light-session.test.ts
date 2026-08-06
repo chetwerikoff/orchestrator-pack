@@ -331,6 +331,46 @@ describe('state-light explicit session mode', () => {
     expect(aggregate(stream)).toMatchObject({ terminal_stop_ordinal: 2, decisive_payload_ordinal: 2, attempted_payload_count: 1 });
   });
 
+  it('does not continue from a keyless predecessor after its marker disappears', async () => {
+    let hideMarker = false;
+    const stream = new CaptureStream(
+      () => false,
+      (value) => {
+        if (value.schema === 'session-payload/v1' && value.ordinal === 1 && value.phase === 'terminal') {
+          hideMarker = true;
+        }
+      },
+    );
+    const harness = makeHarness(['one', 'two'], { stream });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async () => ({
+        messages: hideMarker
+          ? harness.messages.map((message) => (
+            message.role === 'user'
+              ? { role: 'user' as const, text: 'keyless predecessor' }
+              : message
+          ))
+          : [...harness.messages],
+        ownedWindowCompletionReady: harness.metrics.sends > 0,
+        transcriptIncomplete: false,
+      }),
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(11);
+    expect(harness.metrics.sends).toBe(1);
+    const terminal = records(stream).filter((record) => record.phase === 'terminal');
+    expect(terminal.find((record) => record.ordinal === 2 && record.state)).toMatchObject({
+      ordinal: 2,
+      delivery_state: 'not_attempted',
+      send_count: 0,
+      state: 'observation_uncertain',
+      cause: 'predecessor_continuity_unproven',
+    });
+  });
+
   it('does not dispatch when the dispatch-latched stdout barrier fails', async () => {
     const stream = new CaptureStream((value) => value.phase === 'dispatch-latched');
     const harness = makeHarness(['one', 'two'], { stream });

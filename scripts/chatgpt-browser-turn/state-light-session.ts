@@ -697,13 +697,19 @@ function predecessorContinuity(
   }
   const matches = countExpectedMarker(observation.messages, marker);
   if (matches > 1) return tuple('observation_uncertain', 'invocation', 'predecessor_continuity_unproven');
+  const snapshot = sessionObservationSnapshot(observation);
   const ownedIndex = matches === 1
     ? observation.messages.findIndex(
       (message) => message.role === 'user' && ownedPromptMatches(message.text, marker),
     )
-    : sessionObservationSnapshot(observation).carriers.findIndex((carrier) => (
-      carrier.role === 'user' && carrier.key === predecessor.ownedCarrierKey
-    ));
+    : (() => {
+      const key = predecessor.ownedCarrierKey;
+      if (!key || key.length < 8) return -1;
+      const keyedMatches = snapshot.carriers.filter((carrier) => carrier.role === 'user' && carrier.key === key);
+      return keyedMatches.length === 1
+        ? snapshot.carriers.findIndex((carrier) => carrier.role === 'user' && carrier.key === key)
+        : -1;
+    })();
   if (ownedIndex < 0) return tuple('observation_uncertain', 'invocation', 'predecessor_continuity_unproven');
   const laterUser = observation.messages.slice(ownedIndex + 1).some((message) => message.role === 'user');
   if (laterUser) return tuple('observation_uncertain', 'invocation', 'predecessor_continuity_unproven');
