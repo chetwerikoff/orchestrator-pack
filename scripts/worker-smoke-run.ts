@@ -792,28 +792,28 @@ export async function runGateCheck(
     });
 
     if (decision.allowed) {
-      const finalComments = dependencies.fetchComments(
+      const finalHeadSha = dependencies.fetchHead(
         options.prNumber,
         target.repositorySlug,
         options.repoRoot,
       );
-      if (!finalSmokeCommentSnapshotMatches(comments, finalComments)) {
+      if (finalHeadSha !== target.headSha) {
         decision = {
           allowed: false,
-          reason: 'comment_snapshot_changed_before_allow',
+          reason: 'live_pr_head_changed_during_evaluation',
           smokeRequired: true,
           diagnostics: decision.diagnostics,
         };
       } else {
-        const finalHeadSha = dependencies.fetchHead(
+        const finalComments = dependencies.fetchComments(
           options.prNumber,
           target.repositorySlug,
           options.repoRoot,
         );
-        if (finalHeadSha !== target.headSha) {
+        if (!finalSmokeCommentSnapshotMatches(comments, finalComments)) {
           decision = {
             allowed: false,
-            reason: 'live_pr_head_changed_during_evaluation',
+            reason: 'comment_snapshot_changed_before_allow',
             smokeRequired: true,
             diagnostics: decision.diagnostics,
           };
