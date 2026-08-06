@@ -50,13 +50,18 @@ T3 (with the other existing phase requirements). It reports every missing
 completed stage even when stale output markers are already present.
 
 The Issue #1364 operator policy is separate from that gate: T1 has one GPT
-lens; T2 has three concurrent GPT `architectural-review` sources followed by
-one GPT lens; T3 has three concurrent GPT `competitive` sources only when the
-flow-manager/architect records genuine necessity, then three concurrent GPT
-`architectural-review` sources, one Claude lens, and one GPT lens. Browser
-starts are staggered by 10–15 seconds, and a journaled T3 competitive-stage
-skip is legal. Updating `expectedStages` to enforce this policy is separate
-future work and is not part of Issue #1364.
+lens followed by an author fix-round when findings exist; T2 has three
+concurrent GPT `architectural-review` sources, an author fix-round, and one GPT
+lens; T3 has three concurrent GPT `competitive` sources when any one of direct
+operator instruction, architect decision, or complexity reaching external R4
+is present, then an author fix-round, three concurrent GPT
+`architectural-review` sources, an author fix-round, one Claude lens, an author
+fix-round when findings exist, and one GPT lens. Browser starts are staggered
+by 10–15 seconds. If no T3 competitive trigger is met, the journal records the
+checks of all three triggers before skipping. No stage starts on a stale Issue
+revision; reviewers read the latest revision. This repository defines no R4
+scale and must not invent one. Updating `expectedStages` to enforce this
+policy is separate future work and is not part of Issue #1364.
 
 ## Evidence inputs
 

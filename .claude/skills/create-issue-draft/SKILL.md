@@ -91,33 +91,44 @@ Tier rubric is binding in `docs/tiering.md`.
    `architectural` lens.
 5. For concurrent slots, launch the batch with 10–15 second spacing before
    harvesting or adjudicating siblings.
-6. Author dispositions/fixes, guards, final acceptance.
+6. After each review stage, the author runs a fix-round: every finding is
+   closed or substantively rejected, the Issue body is updated, and its
+   revision is incremented before the next stage starts. A stage never starts
+   on a stale revision; reviewers read the latest revision.
+7. Author dispositions/fixes, guards, final acceptance.
 
 ### T3
 
 Canonical order:
 
 ```text
-competitive[01..03] (when explicitly needed) → architectural-review[01..03] → Claude architectural-lens → GPT architectural
+competitive[01..03] (when triggered) → author fix-round → architectural-review[01..03] → author fix-round → Claude architectural-lens → author fix-round (when findings exist) → GPT architectural
 ```
 
 1. Intake and optional adjacent correction before first capture.
-2. The flow-manager/architect explicitly decides whether the competitive stage
-   is genuinely necessary, records that decision in the journal, and may
-   legally skip it.
+2. The competitive stage runs when any one trigger is satisfied: direct
+   operator instruction, architect decision, or task complexity reaching R4
+   under the applicable external complexity criterion. This repository does
+   not define an R4 scale and must not invent one.
 3. When selected, run one exact `competitive` stage attempt with three
    independent GPT sources.
-4. Run one exact `architectural-review` stage attempt with three independent GPT
+4. After competitive review, run the author fix-round before proceeding.
+5. Run one exact `architectural-review` stage attempt with three independent GPT
    sources.
-5. Launch each three-slot batch concurrently with 10–15 second spacing before
+6. Launch each three-slot batch concurrently with 10–15 second spacing before
    harvesting or adjudicating siblings.
-6. Author harvest/dispositions for the full governed stage union and M4 update.
-7. Run T3 `pre-lens` guard after settlement, relay equality, and occurrence
+7. Author harvest/dispositions for the full governed stage union and M4 update.
+8. Run T3 `pre-lens` guard after settlement, relay equality, and occurrence
    accounting are green.
-8. Run exactly one Claude `architectural-lens`, or a valid unavailable waiver.
-9. Apply author dispositions/fixes.
-10. Run exactly one terminal GPT `architectural` source.
-11. Apply author dispositions/fixes and run final acceptance.
+9. Run exactly one Claude `architectural-lens`, or a valid unavailable waiver.
+10. Apply the author fix-round when Claude has findings.
+11. Run exactly one terminal GPT `architectural` source.
+12. Apply author dispositions/fixes and run final acceptance.
+
+If no competitive trigger is satisfied, the flow-manager records the checks of
+the operator, architect, and external R4 criteria in the journal before
+skipping that stage. Before every stage launch, verify that the Issue revision
+is current; reviewers must read that revision.
 
 No `architectural-final`, post-capture tier transition, narrow demotion
 revalidation, engine substitution, or sibling consolidation exists.

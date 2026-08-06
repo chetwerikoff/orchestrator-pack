@@ -54,15 +54,22 @@ The create-flow topology is fixed by tier:
 - **T1:** one GPT `architectural` lens.
 - **T2:** three GPT `architectural-review` sources launched concurrently, then
   one GPT `architectural` lens.
-- **T3:** three GPT `competitive` sources only when the flow-manager/architect
-  records that they are genuinely necessary, then three GPT
+- **T3:** three GPT `competitive` sources when the operator, architect, or
+  external R4 complexity trigger is satisfied, then three GPT
   `architectural-review` sources concurrently, one Claude
   `architectural-lens`, and one GPT `architectural` lens.
 
 “Concurrently” means the slots are launched as one parallel batch, with browser
 starts staggered by 10–15 seconds. The T3 competitive decision is recorded in
-the journal; skipping that stage is legal. The stage order is
-competitive (when needed) → architectural-review → Claude lens → GPT lens.
+the journal; skipping that stage is legal only after all three triggers have
+been checked: direct operator instruction, architect decision, and task
+complexity reaching R4 under the applicable external complexity criterion.
+Because this repository does not define an R4 scale, it must not invent one.
+When no trigger is met, the journal records the check and the reason for
+skipping competitive review. Between stages, the author must run a fix-round:
+close or substantively reject every finding, update the Issue body, and
+increment its revision before the next stage starts. No stage may start from a
+stale revision; reviewers read the latest revision.
 These fixed counts replace older single-source and configurable-cardinality
 wording.
 
@@ -116,19 +123,26 @@ Therefore:
 
 | Tier | Review sequence | Pre-lens #975 | Terminal lens |
 |------|-----------------|---------------|---------------|
-| **T1** | One GPT `architectural` lens → acceptance | **No** | GPT lens owns aggregate cut + M5 |
-| **T2** | Three concurrent GPT `architectural-review` sources → one GPT `architectural` lens → acceptance | **No** | GPT lens owns aggregate cut + M5 |
-| **T3** | Three concurrent GPT `competitive` sources when journaled as necessary → three concurrent GPT `architectural-review` sources → one Claude `architectural-lens` (or valid waiver) → one GPT `architectural` lens → acceptance after #1171 checks | **Yes** | GPT lens owns final aggregate cut + M5 |
+| **T1** | One GPT `architectural` lens → author fix-round when findings exist → acceptance | **No** | GPT lens owns aggregate cut + M5 |
+| **T2** | Three concurrent GPT `architectural-review` sources → author fix-round → one GPT `architectural` lens → acceptance | **No** | GPT lens owns aggregate cut + M5 |
+| **T3** | Three concurrent GPT `competitive` sources when triggered → author fix-round → three concurrent GPT `architectural-review` sources → author fix-round → one Claude `architectural-lens` (or valid waiver) → author fix-round when findings exist → one GPT `architectural` lens → acceptance after #1171 checks | **Yes** | GPT lens owns final aggregate cut + M5 |
 
 The canonical T3 order is:
 
 ```text
-competitive[01..03] (when needed) → architectural-review[01..03] → Claude architectural-lens → GPT architectural
+competitive[01..03] (when triggered) → author fix-round → architectural-review[01..03] → author fix-round → Claude architectural-lens → author fix-round (when findings exist) → GPT architectural
 ```
+
+The competitive trigger is satisfied by any one of: direct operator
+instruction, an architect decision, or task complexity reaching R4 under the
+applicable external complexity criterion. If none is satisfied, the
+flow-manager records all three checks in the journal before skipping the stage.
+The repository's `T1/T2/T3` rubric and `L4` graduation classes do not define
+R4.
 
 The stage receipts freeze the required cardinality: T1 has one GPT lens; T2 has
 three architectural-review sources followed by one GPT lens; T3 has three
-competitive sources only when journaled as necessary, three
+competitive sources when a trigger is journaled, three
 architectural-review sources, one Claude lens, and one GPT lens. There is no
 configurable cardinality override.
 
@@ -167,10 +181,17 @@ cannot prove a later episode root by passing only a self-consistent subset.
 T2 `architectural-review` and T3 `architectural-review` use policy
 `triple-source/v1` and exact independent reviewer slots `01..03` in one
 staggered concurrent batch. T3 `competitive` uses the same three-slot policy
-only when its necessity is recorded in the journal.
+only when at least one of the direct operator, architect, or external R4
+complexity triggers is satisfied and that decision is recorded in the journal.
+If none is satisfied, the journal records the check of all three triggers
+before the stage is skipped.
 
 - All three launches begin before harvesting/adjudicating siblings.
 - Preserve 10–15 second spacing and bounded prior-slot observation.
+- After each logical review round, the author closes or substantively rejects
+  every finding, updates the Issue body, and increments its revision before
+  the next stage. No later stage starts on a stale revision; every reviewer
+  reads the latest revision.
 - There is no account-wide hard cap or synthetic pre-attempt capacity outcome.
 - Every invocation emits immutable `reviewer-invocation-envelope/v1` evidence,
   including episode/attempt/policy/stage/revision identities, cardinality and
