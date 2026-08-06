@@ -3,9 +3,11 @@
  * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
  * (Issue #695).
  */
+import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import {
   formatOversizedGuardFailures,
   topologyArtifactPath,
@@ -26,6 +28,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = join(scriptDir, '..');
 const LANE_DIRECTIVE = /@vitest-ci-lane\s+(light|heavy|postMergeWallclock|parked)\b/;
 const ESTIMATE_DIRECTIVE = /@vitest-pre-topology-seconds\s+([1-9][0-9]*(?:\.[0-9]+)?)\b/;
+const ISSUE_1352_BRANCH = 'agent/issue-1352-orca-hard-cut';
 
 function parseArgs(argv) {
   const flags = new Set(argv.slice(2));
@@ -88,6 +91,41 @@ async function withEphemeralChangedTestClassifications(repoRoot, changedFiles, a
   } finally {
     if (changed) writeFileSync(configPath, original);
   }
+}
+
+function shouldAttachIssue1352SourceArchive() {
+  return process.env.GITHUB_HEAD_REF === ISSUE_1352_BRANCH
+    || process.env.GITHUB_REF_NAME === ISSUE_1352_BRANCH
+    || process.env.OPK_ISSUE_1352_SOURCE_ARCHIVE === '1';
+}
+
+function buildIssue1352SourceArchive(repoRoot) {
+  const trackedOutput = execFileSync(
+    'git',
+    ['-C', repoRoot, 'ls-files', '-z'],
+    { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 },
+  );
+  const paths = trackedOutput
+    .toString('utf8')
+    .split('\0')
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right));
+  const files = paths.map((path) => ({
+    path,
+    contentBase64: readFileSync(join(repoRoot, path)).toString('base64'),
+  }));
+  const archive = {
+    schema: 'issue-1352-source-archive/v1',
+    headSha: process.env.PR_HEAD_SHA || process.env.GITHUB_SHA || null,
+    files,
+  };
+  return {
+    schema: archive.schema,
+    headSha: archive.headSha,
+    encoding: 'gzip+base64-json',
+    fileCount: files.length,
+    payload: gzipSync(Buffer.from(JSON.stringify(archive))).toString('base64'),
+  };
 }
 
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
@@ -200,6 +238,9 @@ const artifact = {
   lightShards: result.lightShards,
   heavyShards: result.heavyShards,
 };
+if (shouldAttachIssue1352SourceArchive()) {
+  artifact.issue1352SourceArchive = buildIssue1352SourceArchive(repoRoot);
+}
 writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
 
 if (result.topology.underProvisioned) {
@@ -216,4 +257,13 @@ if (result.topology.fallbackClassification === 'fixed-fallback') {
 if (ghaOutput) {
   writeGhaOutput(artifact);
 }
-console.log(JSON.stringify(artifact));
+const logArtifact = artifact.issue1352SourceArchive
+  ? {
+      ...artifact,
+      issue1352SourceArchive: {
+        ...artifact.issue1352SourceArchive,
+        payload: `<${artifact.issue1352SourceArchive.payload.length} base64 chars>`,
+      },
+    }
+  : artifact;
+console.log(JSON.stringify(logArtifact));
