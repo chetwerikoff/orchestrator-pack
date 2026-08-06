@@ -411,11 +411,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
 
       const dispatched = adapter.dispatchInput({
         worker: spawned.value.identity,
-        text: [
-          'Durable smoke-run binding (authoritative for delivery and completion):',
-          'run-id: run-unconfirmed',
-          `artifact-dir: ${join(root, 'run-unconfirmed')}`,
-        ].join('\n'),
+        text: `Durable smoke-run binding (authoritative for delivery and completion):\nrun-id: run-unconfirmed\nartifact-dir: ${join(root, 'run-unconfirmed')}`,
       }, { cwd: root });
 
       expect(dispatched.status).toBe('send_failed');
