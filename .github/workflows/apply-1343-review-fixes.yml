@@ -3,7 +3,7 @@ name: Apply Issue 1343 review fixes
 on:
   push:
     branches:
-      - impl-1343
+      - chetwerikoff/impl-1343
 
 permissions:
   contents: write
@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: impl-1343
+          ref: chetwerikoff/impl-1343
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
@@ -25,89 +25,100 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Apply reviewed patch
-        run: |
-          git apply --check --recount docs/declarations/1343-fix.patch
-          git apply --recount docs/declarations/1343-fix.patch
-
-      - name: Amend live Issue scope and proof command
+      - name: Apply, verify, and publish
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          node <<'NODE'
-          const { execFileSync } = require('node:child_process');
-          const { writeFileSync } = require('node:fs');
-          const repo = 'chetwerikoff/orchestrator-pack';
-          const issue = '1343';
-          const current = JSON.parse(execFileSync(
-            'gh', ['issue', 'view', issue, '--repo', repo, '--json', 'body'], { encoding: 'utf8' },
-          )).body;
-          let body = current.replace(
-            /<!-- source-revision: r\d+ -->/,
-            '<!-- source-revision: r06 -->',
-          );
-          const additions = [
-            'scripts/gh-wrapper.test.ts',
-            'scripts/lib/gh-inventory-match.mjs',
-            'scripts/lib/gh-rest-routes.mjs',
-            'scripts/pack-worker-report.ps1',
-            'scripts/worker-smoke-gate-regression.test.ts',
-          ];
-          body = body.replace(/```allowed-roots\n([\s\S]*?)```/, (_match, raw) => {
-            const entries = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-            for (const entry of additions) if (!entries.includes(entry)) entries.push(entry);
-            entries.sort((left, right) => left.localeCompare(right));
-            return `\`\`\`allowed-roots\n${entries.join('\n')}\n\`\`\``;
-          });
-          body = body.replace(
-            '- New test files, package/dependency changes, Vitest lane reclassification, pre-topology measurement changes, workflows, core, vendor, secrets, generated runtime state, or operator workspaces.',
-            '- Package/dependency changes, Vitest lane reclassification, pre-topology measurement changes, workflows, core, vendor, secrets, generated runtime state, or operator workspaces.',
-          );
-          const scopeAnchor = 'Not every listed path must change. Use the smallest coherent subset and preserve implementation freedom inside the observable contract.';
-          const extraScope = [
-            '- `scripts/pack-worker-report.ps1` — byte-exact Issue-body handoff and explicit trusted repository propagation into the existing gate command.',
-            '- `scripts/lib/gh-inventory-match.mjs` and `scripts/lib/gh-rest-routes.mjs` — inventory-approved authenticated-principal and complete issue-comment census routes.',
-            '- `scripts/gh-wrapper.test.ts` — focused inventory classification regressions for the new canonical read shapes.',
-            '- `scripts/worker-smoke-gate-regression.test.ts` — production-shaped caller/target, receipt-order, final-census, overflow, BLOCKED, and fresh-lifecycle regressions.',
-            '',
-          ].join('\n');
-          if (!body.includes('`scripts/worker-smoke-gate-regression.test.ts` — production-shaped')) {
-            body = body.replace(scopeAnchor, `${extraScope}${scopeAnchor}`);
-          }
-          body = body.replaceAll(
-            'node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/worker-smoke.test.ts',
-            'node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/worker-smoke.test.ts scripts/worker-smoke-gate-regression.test.ts',
-          );
-          writeFileSync('/tmp/issue-1343.md', body, 'utf8');
-          execFileSync('gh', ['issue', 'edit', issue, '--repo', repo, '--body-file', '/tmp/issue-1343.md'], {
-            stdio: 'inherit',
-          });
-          NODE
+          set +e
+          (
+            set -euo pipefail
 
-      - name: Install dependencies
-        run: npm ci
+            git apply --check --recount docs/declarations/1343-fix.patch
+            git apply --recount docs/declarations/1343-fix.patch
 
-      - name: Regenerate current-Issue declaration
-        run: |
-          node --experimental-strip-types scripts/pr-scope-declaration.ts \
-            --issue 1343 \
-            --issue-body-file /tmp/issue-1343.md \
-            --declared-paths docs/worker-smoke-testing.md,scripts/gh-wrapper.test.ts,scripts/lib/gh-inventory-match.mjs,scripts/lib/gh-rest-routes.mjs,scripts/lib/worker-smoke-core.ts,scripts/pack-worker-report.ps1,scripts/worker-smoke-gate-regression.test.ts,scripts/worker-smoke-run.ts,scripts/worker-smoke.test.ts \
-            --output docs/declarations/1343.pr-scope.json
+            node <<'NODE'
+            const { execFileSync } = require('node:child_process');
+            const { writeFileSync } = require('node:fs');
+            const repo = 'chetwerikoff/orchestrator-pack';
+            const issue = '1343';
+            const current = JSON.parse(execFileSync(
+              'gh', ['issue', 'view', issue, '--repo', repo, '--json', 'body'], { encoding: 'utf8' },
+            )).body;
+            let body = current.replace(
+              /<!-- source-revision: r\d+ -->/,
+              '<!-- source-revision: r06 -->',
+            );
+            const additions = [
+              'scripts/gh-wrapper.test.ts',
+              'scripts/lib/gh-inventory-match.mjs',
+              'scripts/lib/gh-rest-routes.mjs',
+              'scripts/pack-worker-report.ps1',
+              'scripts/worker-smoke-gate-regression.test.ts',
+            ];
+            body = body.replace(/```allowed-roots\n([\s\S]*?)```/, (_match, raw) => {
+              const entries = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+              for (const entry of additions) if (!entries.includes(entry)) entries.push(entry);
+              entries.sort((left, right) => left.localeCompare(right));
+              return `\`\`\`allowed-roots\n${entries.join('\n')}\n\`\`\``;
+            });
+            body = body.replace(
+              '- New test files, package/dependency changes, Vitest lane reclassification, pre-topology measurement changes, workflows, core, vendor, secrets, generated runtime state, or operator workspaces.',
+              '- Package/dependency changes, Vitest lane reclassification, pre-topology measurement changes, workflows, core, vendor, secrets, generated runtime state, or operator workspaces.',
+            );
+            const scopeAnchor = 'Not every listed path must change. Use the smallest coherent subset and preserve implementation freedom inside the observable contract.';
+            const extraScope = [
+              '- `scripts/pack-worker-report.ps1` — byte-exact Issue-body handoff and explicit trusted repository propagation into the existing gate command.',
+              '- `scripts/lib/gh-inventory-match.mjs` and `scripts/lib/gh-rest-routes.mjs` — inventory-approved authenticated-principal and complete issue-comment census routes.',
+              '- `scripts/gh-wrapper.test.ts` — focused inventory classification regressions for the new canonical read shapes.',
+              '- `scripts/worker-smoke-gate-regression.test.ts` — production-shaped caller/target, receipt-order, final-census, overflow, BLOCKED, and fresh-lifecycle regressions.',
+              '',
+            ].join('\n');
+            if (!body.includes('`scripts/worker-smoke-gate-regression.test.ts` — production-shaped')) {
+              body = body.replace(scopeAnchor, `${extraScope}${scopeAnchor}`);
+            }
+            body = body.replace(
+              /node scripts\/run-vitest-with-harness\.mjs run --maxWorkers=1 scripts\/worker-smoke\.test\.ts(?: scripts\/worker-smoke-gate-regression\.test\.ts)*/g,
+              'node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/worker-smoke.test.ts scripts/worker-smoke-gate-regression.test.ts',
+            );
+            writeFileSync('/tmp/issue-1343.md', body, 'utf8');
+            execFileSync('gh', ['issue', 'edit', issue, '--repo', repo, '--body-file', '/tmp/issue-1343.md'], {
+              stdio: 'inherit',
+            });
+            NODE
 
-      - name: Run focused regressions
-        run: |
-          node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 \
-            scripts/worker-smoke.test.ts \
-            scripts/worker-smoke-gate-regression.test.ts \
-            scripts/gh-wrapper.test.ts
-          npm run typecheck:foundation
-          npm run lint:foundation
+            npm ci
 
-      - name: Commit and push fixes
-        run: |
+            node --experimental-strip-types scripts/pr-scope-declaration.ts \
+              --issue 1343 \
+              --issue-body-file /tmp/issue-1343.md \
+              --declared-paths docs/worker-smoke-testing.md,scripts/gh-wrapper.test.ts,scripts/lib/gh-inventory-match.mjs,scripts/lib/gh-rest-routes.mjs,scripts/lib/worker-smoke-core.ts,scripts/pack-worker-report.ps1,scripts/worker-smoke-gate-regression.test.ts,scripts/worker-smoke-run.ts,scripts/worker-smoke.test.ts \
+              --output docs/declarations/1343.pr-scope.json
+
+            npm run check:node-major --silent
+            node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 \
+              scripts/worker-smoke.test.ts \
+              scripts/worker-smoke-gate-regression.test.ts \
+              scripts/gh-wrapper.test.ts
+            npm run typecheck:foundation
+            npm run lint:foundation
+          ) > >(tee /tmp/apply-1343.log) 2>&1
+          status=$?
+
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+          if [ "$status" -ne 0 ]; then
+            git reset --hard HEAD
+            git clean -fd
+            tail -c 60000 /tmp/apply-1343.log > docs/declarations/1343-workflow.log
+            git add docs/declarations/1343-workflow.log
+            git commit -m 'Record issue 1343 apply failure [diagnostic]'
+            git push origin HEAD:chetwerikoff/impl-1343
+            exit "$status"
+          fi
+
+          rm -f docs/declarations/1343-workflow.log
           git add scripts docs/declarations/1343.pr-scope.json docs/worker-smoke-testing.md
           git commit -m 'Fix worker-smoke aggregate review findings [applied]'
-          git push origin HEAD:impl-1343
+          git push origin HEAD:chetwerikoff/impl-1343
