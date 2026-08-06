@@ -2,10 +2,12 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1359,
   "declared_paths": [
+    "docs/orca-runtime-caller-census.md",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/lib/worker-smoke-bounded-create.ts",
     "scripts/lib/worker-smoke-receipt.ts",
     "scripts/orca-runtime/task-adapter.ts",
+    "scripts/runtime/caller-census.ts",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-1359.test.ts",
     "scripts/worker-smoke-entrypoint-1359.test.ts",
@@ -20,6 +22,7 @@
   ],
   "allowed_roots": [
     "docs/declarations",
+    "docs/orca-runtime-caller-census.md",
     "docs/worker-smoke-testing.md",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/lib/worker-smoke-bounded-create.ts",
@@ -30,6 +33,7 @@
     "scripts/lib/worker-smoke-lifecycle.ts",
     "scripts/lib/worker-smoke-receipt.ts",
     "scripts/orca-runtime/task-adapter.ts",
+    "scripts/runtime/caller-census.ts",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-1359.test.ts",
     "scripts/worker-smoke-entrypoint-1359.test.ts",
@@ -37,5 +41,5 @@
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "a986ac0d945805fbfcb2124149d98da94a49835e"
+  "source_revision": "a12b47e8113002eda537120a3429d5daf7825ccb"
 }
