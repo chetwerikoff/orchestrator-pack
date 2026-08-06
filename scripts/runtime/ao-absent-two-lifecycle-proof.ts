@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
+import type { OrcaRunOptions } from '../orca-runtime/native.ts';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,8 +65,28 @@ async function main(): Promise<void> {
     writeFileSync(executable, fixture(statePath, root), 'utf8');
     chmodSync(executable, 0o755);
     const env = childEnv(root);
-    const runner = ((command: Parameters<typeof spawnSync>[0], args: Parameters<typeof spawnSync>[1], options: Parameters<typeof spawnSync>[2]) =>
-      spawnSync(command, args, { ...options, env })) as typeof spawnSync;
+    type OrcaRunner = NonNullable<OrcaRunOptions['runner']>;
+    const runner = ((command: string, args: readonly string[] = [], options: { cwd?: string; timeout?: number } = {}) => {
+      const result = runProcessSync({
+        command,
+        args,
+        cwd: options.cwd,
+        env,
+        inheritParentEnv: false,
+        timeoutMs: options.timeout,
+      });
+      return {
+        pid: 0,
+        output: [null, result.stdout, result.stderr],
+        stdout: result.stdout,
+        stderr: result.stderr,
+        status: result.exitCode,
+        signal: result.signal,
+        ...(result.outcome === 'spawn-failure'
+          ? { error: new Error(result.error ?? 'fixture process launch failed') }
+          : {}),
+      };
+    }) as unknown as OrcaRunner;
     const selected = await selectRuntimeAdapter({ adapter: 'orca', env: {} }, {
       cwd: root, timeoutMs: 5_000, transport: { executable, env, runner },
     });
