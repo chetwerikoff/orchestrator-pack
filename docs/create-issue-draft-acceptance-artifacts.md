@@ -53,17 +53,19 @@ The Issue #1364 operator policy is separate from that gate: T1 has one GPT
 lens followed by a mandatory author fix-round; T2 has three concurrent GPT
 `architectural-review` sources, an author fix-round, one GPT lens, and a
 mandatory author fix-round; T3 has three concurrent GPT `competitive` sources
-when any one of direct operator instruction, architect decision, or complexity
-reaching external R4 is present, then an author fix-round, three concurrent GPT
+when directly required by the operator, selected by the architect, or judged
+necessary by the flow-manager because the task has fundamentally different
+plausible solution designs, then an author fix-round, three concurrent GPT
 `architectural-review` sources, an author fix-round, one Claude lens, an author
-fix-round when findings exist, one GPT lens, and a mandatory author fix-round. The final fix-round
-is required even for `NO_FINDINGS`; it records “no findings, no changes
-required” in the journal before acceptance. Browser starts are staggered by
-10–15 seconds. If no T3 competitive trigger is met, the journal records the
-checks of all three triggers before skipping. No stage starts on a stale Issue
-revision; reviewers read the latest revision. This repository defines no R4
-scale and must not invent one. Updating `expectedStages` to enforce this
-policy is separate future work and is not part of Issue #1364.
+fix-round when findings exist, one GPT lens, and a mandatory author fix-round.
+The final fix-round is required even for `NO_FINDINGS`; it records “no
+findings, no changes required” in the journal before acceptance. Competitive
+selection and skipping are substantive judgments, not checklist, threshold,
+score, or scale decisions. A skip requires an explicit journal rationale for
+why the solution space is narrow; missing rationale is a process defect.
+Browser starts are staggered by 10–15 seconds. No stage starts on a stale Issue
+revision; reviewers read the latest revision. Updating `expectedStages` to
+enforce this policy is separate future work and is not part of Issue #1364.
 
 ## Evidence inputs
 

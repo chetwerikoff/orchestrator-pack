@@ -106,10 +106,11 @@ competitive[01..03] (when triggered) → author fix-round → architectural-revi
 ```
 
 1. Intake and optional adjacent correction before first capture.
-2. The competitive stage runs when any one trigger is satisfied: direct
-   operator instruction, architect decision, or task complexity reaching R4
-   under the applicable external complexity criterion. This repository does
-   not define an R4 scale and must not invent one.
+2. The competitive stage runs when directly required by the operator,
+   selected by the architect, or substantively judged necessary by the
+   flow-manager because the task has fundamentally different plausible solution
+   designs. Record that judgment and its rationale in the journal. Do not use
+   a checklist, threshold, score, or formal scale for this decision.
 3. When selected, run one exact `competitive` stage attempt with three
    independent GPT sources.
 4. After competitive review, run the author fix-round before proceeding.
@@ -127,9 +128,9 @@ competitive[01..03] (when triggered) → author fix-round → architectural-revi
     final acceptance. If the lens returns `NO_FINDINGS`, journal “no findings,
     no changes required” and still record the terminal stage.
 
-If no competitive trigger is satisfied, the flow-manager records the checks of
-the operator, architect, and external R4 criteria in the journal before
-skipping that stage. Before every stage launch, verify that the Issue revision
+If the competitive stage is skipped, the flow-manager records an explicit
+journal rationale explaining why the solution space is narrow; missing rationale
+is a process defect. Before every stage launch, verify that the Issue revision
 is current; reviewers must read that revision.
 
 For every tier, the terminal sequence ends with `GPT lens → author fix-round →

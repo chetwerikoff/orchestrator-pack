@@ -54,19 +54,20 @@ The create-flow topology is fixed by tier:
 - **T1:** one GPT `architectural` lens.
 - **T2:** three GPT `architectural-review` sources launched concurrently, then
   one GPT `architectural` lens.
-- **T3:** three GPT `competitive` sources when the operator, architect, or
-  external R4 complexity trigger is satisfied, then three GPT
+- **T3:** three GPT `competitive` sources when directly required by the
+  operator, selected by the architect, or judged necessary by the
+  flow-manager because the task has fundamentally different plausible
+  solution designs, then three GPT
   `architectural-review` sources concurrently, one Claude
   `architectural-lens`, and one GPT `architectural` lens.
 
 “Concurrently” means the slots are launched as one parallel batch, with browser
 starts staggered by 10–15 seconds. The T3 competitive decision is recorded in
-the journal; skipping that stage is legal only after all three triggers have
-been checked: direct operator instruction, architect decision, and task
-complexity reaching R4 under the applicable external complexity criterion.
-Because this repository does not define an R4 scale, it must not invent one.
-When no trigger is met, the journal records the check and the reason for
-skipping competitive review. Between stages, the author must run a fix-round:
+the journal. The flow-manager makes this decision from the substance of the
+task, without checklists, thresholds, scores, or formal scales. Skipping is
+legal only with an explicit journal rationale explaining why the solution
+space is narrow; missing rationale is a process defect. Between stages, the
+author must run a fix-round:
 close or substantively reject every finding, update the Issue body, and
 increment its revision before the next stage starts. No stage may start from a
 stale revision; reviewers read the latest revision.
@@ -125,7 +126,7 @@ Therefore:
 |------|-----------------|---------------|---------------|
 | **T1** | One GPT `architectural` lens → mandatory author fix-round → acceptance | **No** | GPT lens owns aggregate cut + M5 |
 | **T2** | Three concurrent GPT `architectural-review` sources → author fix-round → one GPT `architectural` lens → mandatory author fix-round → acceptance | **No** | GPT lens owns aggregate cut + M5 |
-| **T3** | Three concurrent GPT `competitive` sources when triggered → author fix-round → three concurrent GPT `architectural-review` sources → author fix-round → one Claude `architectural-lens` (or valid waiver) → author fix-round when findings exist → one GPT `architectural` lens → mandatory author fix-round → acceptance after #1171 checks | **Yes** | GPT lens owns final aggregate cut + M5 |
+| **T3** | Three concurrent GPT `competitive` sources when operator/architect/flow-manager judgment requires them → author fix-round → three concurrent GPT `architectural-review` sources → author fix-round → one Claude `architectural-lens` (or valid waiver) → author fix-round when findings exist → one GPT `architectural` lens → mandatory author fix-round → acceptance after #1171 checks | **Yes** | GPT lens owns final aggregate cut + M5 |
 
 The canonical T3 order is:
 
@@ -138,12 +139,12 @@ even when that lens returns `NO_FINDINGS`. In that case it is a journaled
 disposition stating “no findings, no changes required”; the terminal stage is
 still recorded before acceptance.
 
-The competitive trigger is satisfied by any one of: direct operator
-instruction, an architect decision, or task complexity reaching R4 under the
-applicable external complexity criterion. If none is satisfied, the
-flow-manager records all three checks in the journal before skipping the stage.
-The repository's `T1/T2/T3` rubric and `L4` graduation classes do not define
-R4.
+Competitive review runs when the operator requires it, the architect selects
+it, or the flow-manager judges that the task has fundamentally different
+plausible solution designs and records that substantive rationale. A skipped
+competitive stage requires an equally explicit journal rationale explaining
+why the solution space is narrow. No checklist, threshold, score, or formal
+scale may decide this; missing rationale is a process defect.
 
 The stage receipts freeze the required cardinality: T1 has one GPT lens; T2 has
 three architectural-review sources followed by one GPT lens; T3 has three
@@ -186,10 +187,9 @@ cannot prove a later episode root by passing only a self-consistent subset.
 T2 `architectural-review` and T3 `architectural-review` use policy
 `triple-source/v1` and exact independent reviewer slots `01..03` in one
 staggered concurrent batch. T3 `competitive` uses the same three-slot policy
-only when at least one of the direct operator, architect, or external R4
-complexity triggers is satisfied and that decision is recorded in the journal.
-If none is satisfied, the journal records the check of all three triggers
-before the stage is skipped.
+when the operator, architect, or flow-manager's substantive judgment selects
+it, with the decision and rationale recorded in the journal. A skip likewise
+requires an explicit rationale for why the solution space is narrow.
 
 - All three launches begin before harvesting/adjudicating siblings.
 - Preserve 10–15 second spacing and bounded prior-slot observation.
