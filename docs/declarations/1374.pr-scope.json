@@ -12,7 +12,7 @@
     "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/",
+    "docs/declarations",
     "scripts/lib/worker-smoke-core.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
