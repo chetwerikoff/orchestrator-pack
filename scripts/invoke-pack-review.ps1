@@ -1,5 +1,5 @@
-# Reviewer-agnostic AO review entrypoint (Issue #86).
-# REVIEW_COMMAND names this script only; PACK_REVIEWER selects gpt | claude | codex.
+# Reviewer-neutral pack review entrypoint (Issue #86).
+# PACK_REVIEWER selects gpt | claude | codex.
 #Requires -Version 5.1
 param()
 
@@ -7,7 +7,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Resolve-PackReviewer.ps1')
 . (Join-Path $PSScriptRoot 'lib/Parse-PackReviewCliArgs.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-AutoReviewPrContext.ps1')
-. (Join-Path $PSScriptRoot 'lib/Review-RunLiveness.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-FailureEvidence.ps1')
 
 $resolution = Invoke-PackReviewerResolutionExport
@@ -49,11 +48,6 @@ if (-not $evidenceHandle.ok -and $env:OPK_REVIEW_FAILURE_EVIDENCE_DEBUG) {
 if ($evidenceHandle.ok) {
     Update-ReviewFailureEvidencePhase -Handle $evidenceHandle -Phase 'selector_resolved' | Out-Null
     Update-ReviewFailureEvidencePhase -Handle $evidenceHandle -Phase 'wrapper_resolved' | Out-Null
-}
-
-$liveness = Register-ReviewRunLivenessIdentity -RepoRoot $resolvedRoot
-if (-not $liveness.ok -and $env:OPK_REVIEW_LIVENESS_DEBUG) {
-    [Console]::Error.WriteLine("review liveness identity not captured: $($liveness.reason)")
 }
 
 $forwardArgs = [System.Collections.Generic.List[string]]::new()
