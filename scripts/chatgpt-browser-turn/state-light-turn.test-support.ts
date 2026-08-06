@@ -107,7 +107,7 @@ import {
   SEND_BUTTON_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
-import { __testBrowserOrPageDefinitelyLost, __testFinalizeTurn, POST_SEND_OBSERVATION_POLL_MS, runStateLightTurn } from './state-light-turn.ts';
+import { __testBrowserOrPageDefinitelyLost, __testFinalizeTurn, POST_SEND_OBSERVATION_POLL_MS, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
 import { normalizeConversationUrl, type ProfileVerification } from './ui-adapter.ts';
 
 import journalSymptoms from './fixtures/browser-turn-recurrence-journal-symptoms.json' with { type: 'json' };
@@ -1919,5 +1919,26 @@ describe('Issue #1283 recovery refusal and stop ordering', () => {
     expect(order).toEqual(['stop', 'close']);
     expect(result.incidents).toContain('owned_generation_stop_confirmed');
     expect(result.cleanup).toBe('confirmed');
+  });
+});
+
+
+describe('Issue #1283 strict recovery transcript census', () => {
+  it('marks message-count read failure incomplete instead of fabricating an empty transcript', async () => {
+    const page = {
+      locator: vi.fn(() => scalarLocator({
+        count: vi.fn(async () => {
+          throw new Error('page disappeared during transcript census');
+        }),
+      })),
+    };
+
+    const observed = await readPageObservation(page, undefined, undefined, true);
+
+    expect(observed).toEqual({
+      messages: [],
+      ownedWindowCompletionReady: false,
+      transcriptIncomplete: true,
+    });
   });
 });

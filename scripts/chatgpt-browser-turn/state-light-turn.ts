@@ -1078,9 +1078,30 @@ export async function readPageObservation(
   page: any,
   expectedMarker?: string,
   baselineCount?: number,
+  strictTranscriptCount = false,
 ): Promise<PageObservationResult> {
   const nodes = page.locator(MESSAGE_NODE_SELECTOR);
-  const count = await locatorCount(nodes);
+  let count: number;
+  if (strictTranscriptCount) {
+    try {
+      count = Number(await nodes.count());
+      if (!Number.isSafeInteger(count) || count < 0) {
+        return {
+          messages: [],
+          ownedWindowCompletionReady: false,
+          transcriptIncomplete: true,
+        };
+      }
+    } catch {
+      return {
+        messages: [],
+        ownedWindowCompletionReady: false,
+        transcriptIncomplete: true,
+      };
+    }
+  } else {
+    count = await locatorCount(nodes);
+  }
   const messages: PageMessage[] = [];
   const domIndices: number[] = [];
   let transcriptIncomplete = false;
@@ -2184,7 +2205,7 @@ async function runTurn(
           normalizeConversationUrl,
           isSupportedConversationUrl: (value) => value.includes('/c/'),
           readAuthoritativeMessages: async (candidate) => {
-            const observed = await readPageObservation(candidate);
+            const observed = await readPageObservation(candidate, undefined, undefined, true);
             return {
               messages: observed.messages,
               incomplete: observed.transcriptIncomplete,
