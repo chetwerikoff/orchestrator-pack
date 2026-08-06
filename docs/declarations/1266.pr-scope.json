@@ -46,5 +46,5 @@
     "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "ceab28b8db16e61dc779c33e248c8cd90d9ae9d0"
+  "source_revision": "54daf6cb5e3ef3853f17448884b6cd5db6a1dc9c"
 }
