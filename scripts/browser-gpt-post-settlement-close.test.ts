@@ -412,8 +412,12 @@ test('enhanced production probe entrypoint is read-only and enriches two observa
       'export',
       '--cdp', cdp,
       '--target-id', String(target.id),
-      '--assistant-index', '0',
+      '--role', 'assistant',
+      '--ordinal', '0',
+      '--message-id', 'assistant-1',
       '--representation', 'innerText',
+      '--expected-byte-length', String(replyBytes.byteLength),
+      '--expected-sha256', replySha,
       '--output', '/tmp/reply-1266.txt',
       '--profile', profile,
     ], {
