@@ -13,6 +13,16 @@ import {
 import { releaseCdpBrowser } from './browser-session.ts';
 import { runStateLightEntry } from './state-light-entry.ts';
 import { loadChromium } from './ui-adapter.ts';
+import {
+  buildBrowserTurnCancellationReceipt,
+  cancelOwnedGenerationFromReceipt,
+  isSupportedChatGptConversationUrl,
+  stopOwnedGeneration,
+} from './state-light-cancellation.ts';
+import {
+  runPostSendRecovery,
+  type PostSendRecoveryState,
+} from './state-light-turn-recovery.ts';
 
 type CleanupCase = {
   readonly id: string;
@@ -387,7 +397,7 @@ describe('Issue #1238 mechanically derived production graph', () => {
       );
       const classifySink = (kind: string, receiver: string): string => {
         if (kind === 'newContext') return 'forbidden-context-create';
-        if (kind === 'contexts' && /(?:^|\.)browser$|state\.browser$|browser as/.test(receiver)) return 'browser-contexts';
+        if (kind === 'contexts' && (receiver === '(activeBrowser as any)' || /(?:^|\.)browser$|state\.browser$|browser as/.test(receiver))) return 'browser-contexts';
         if (kind === 'pages' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-pages';
         if (kind === 'newPage' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-new-page';
         if (kind === 'close' && /browser as/.test(receiver)) return 'browser-release';
@@ -423,7 +433,13 @@ describe('Issue #1238 mechanically derived production graph', () => {
       visit(source);
     }
 
-    const reachableOwners = new Set(['runStateLightEntry', 'runStateLightTurn', 'runStateLightSession', 'runCli']);
+    const reachableOwners = new Set([
+      'runStateLightEntry',
+      'runStateLightTurn',
+      'runStateLightSession',
+      'runCli',
+      'cancelOwnedGenerationFromReceipt',
+    ]);
     let expanded = true;
     while (expanded) {
       expanded = false;
@@ -453,6 +469,8 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'close:owned-page-close:page:adoptNewPageWithBudget',
       'close:owned-page-close:secondaryPage:runGateBCharacterization',
       'close:owned-page-close:state.page:cleanupSession',
+      'contexts:browser-contexts:(activeBrowser as any):recoverCurrentObservation',
+      'contexts:browser-contexts:browser:defaultEnumeratePages',
       'contexts:browser-contexts:browser:openGateBCharacterizationPage',
       'contexts:browser-contexts:browser:createDedicatedTurnPage',
       'contexts:browser-contexts:browser:openTurnPage',
@@ -465,10 +483,429 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'newPage:context-new-page:ctx:openGateBCharacterizationPage',
       'pages:context-pages:(contexts[0] as { pages: () => unknown[] }):probeProfileReady',
       'pages:context-pages:context:attachGateBWebSocketObservers',
+      'pages:context-pages:contexts[0]:defaultEnumeratePages',
       'pages:context-pages:context:attachPlaywrightContextCdpObservers',
+      'pages:context-pages:contexts[0]:recoverCurrentObservation',
       'pages:context-pages:context:runGateBCharacterization',
       'pages:context-pages:ctx:openGateBCharacterizationPage',
       'pages:context-pages:ctx:openTurnPage',
     ].sort());
+  });
+});
+
+
+describe('Issue #1283 explicit Stop authority', () => {
+  function nonOkResult() {
+    return makeTurnResult({
+      state: 'no_reply',
+      scope: 'invocation',
+      cause: 'observation_exhausted_no_resend',
+      send_count: 1,
+    });
+  }
+
+  it('does not Stop or close an unproven reachable page through runStateLightTurn', async () => {
+    const stopClick = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const page = {
+      isClosed: () => false,
+      close,
+      locator: () => ({
+        count: vi.fn(async () => 1),
+        first: () => ({ click: stopClick, waitFor: vi.fn(async () => undefined) }),
+      }),
+    };
+    const browser = { isConnected: () => true, close: vi.fn(async () => undefined) };
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await runStateLightTurn(['--profile', 'fixture'], {
+        runTurn: async () => ({ page, browser, result: nonOkResult() }),
+      });
+    } finally {
+      write.mockRestore();
+    }
+    expect(stopClick).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('Stops the explicit proven target once and never closes it on non-ok', async () => {
+    const stopClick = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const control = {
+      click: stopClick,
+      waitFor: vi.fn(async () => undefined),
+    };
+    const page = {
+      isClosed: () => false,
+      close,
+      locator: () => ({
+        count: vi.fn(async () => 1),
+        first: () => control,
+      }),
+    };
+    const browser = { isConnected: () => true, close: vi.fn(async () => undefined) };
+    const result = await __testFinalizeTurn({
+      page,
+      stopAuthorityPage: page,
+      browser,
+      result: nonOkResult(),
+    });
+    expect(stopClick).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+    expect(result.cleanup).toBe('skipped');
+    expect(result.incidents).toContain('owned_generation_stop_confirmed');
+  });
+
+  it('forfeiture suppresses even an otherwise explicit Stop target', async () => {
+    const stopClick = vi.fn(async () => undefined);
+    const page = {
+      isClosed: () => false,
+      close: vi.fn(async () => undefined),
+      locator: () => ({
+        count: vi.fn(async () => 1),
+        first: () => ({ click: stopClick, waitFor: vi.fn(async () => undefined) }),
+      }),
+    };
+    const result = await __testFinalizeTurn({
+      page,
+      stopAuthorityPage: page,
+      ownershipForfeited: true,
+      browser: { isConnected: () => true, close: vi.fn(async () => undefined) },
+      result: nonOkResult(),
+    });
+    expect(stopClick).not.toHaveBeenCalled();
+    expect(result.incidents).toContain('owned_generation_stop_unavailable');
+  });
+});
+
+
+describe('Issue #1283 receipt-bound cancellation primitive', () => {
+  const marker = `OPKTURNV1${'12'.repeat(16)}`;
+  const ownedUrl = 'https://chatgpt.com/c/11111111-1111-4111-8111-111111111111';
+  const foreignUrl = 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222';
+
+  it('accepts only closed ChatGPT conversation origins and UUID paths', () => {
+    expect(isSupportedChatGptConversationUrl(ownedUrl)).toBe(true);
+    expect(isSupportedChatGptConversationUrl(`${ownedUrl}?model=auto#x`)).toBe(true);
+    expect(isSupportedChatGptConversationUrl('https://evil.example/c/11111111-1111-4111-8111-111111111111')).toBe(false);
+    expect(isSupportedChatGptConversationUrl('https://chatgpt.com/not-c/11111111-1111-4111-8111-111111111111')).toBe(false);
+    expect(isSupportedChatGptConversationUrl('https://chatgpt.com/c/not-a-uuid')).toBe(false);
+  });
+
+  it('treats a missing Stop control as unconfirmed rather than completed', async () => {
+    const page = {
+      isClosed: () => false,
+      locator: () => ({ count: vi.fn(async () => 0) }),
+    };
+    await expect(stopOwnedGeneration(page)).resolves.toBe('unconfirmed');
+  });
+
+  it('Stops exactly one receipt-proven owned page and never closes a sibling', async () => {
+    const owned = { url: () => ownedUrl, close: vi.fn() };
+    const sibling = { url: () => foreignUrl, close: vi.fn() };
+    const stop = vi.fn(async () => 'confirmed' as const);
+    const receipt = buildBrowserTurnCancellationReceipt({
+      invocationId: 'inv-1283',
+      profileKey: 'profile-1283',
+      conversationUrl: ownedUrl,
+      marker,
+      sendCount: 1,
+    });
+    expect(receipt).not.toBeNull();
+    const result = await cancelOwnedGenerationFromReceipt(receipt!, 'http://127.0.0.1:9222', {
+      connect: vi.fn(async () => ({})),
+      releaseBrowser: vi.fn(async () => undefined),
+      enumeratePages: vi.fn(async () => [sibling, owned]),
+      readUserMessages: vi.fn(async (page) => ({
+        messages: page === owned
+          ? [{ role: 'user' as const, text: `${marker}\n\nprompt` }]
+          : [{ role: 'user' as const, text: 'foreign prompt' }],
+        incomplete: false,
+      })),
+      stop,
+    });
+    expect(result).toMatchObject({
+      state: 'no_reply',
+      cause: 'child_stdout_eof_timeout_generation_stopped',
+      sendCount: 1,
+      stopOutcome: 'confirmed',
+      identityProven: true,
+      conversationUrl: ownedUrl,
+    });
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledWith(owned);
+    expect(owned.close).not.toHaveBeenCalled();
+    expect(sibling.close).not.toHaveBeenCalled();
+  });
+});
+
+
+
+describe('Issue #1283 production runStateLightTurn recovery integration', () => {
+  const marker = `OPKTURNV1${'78'.repeat(16)}`;
+  const ownedUrl = 'https://chatgpt.com/c/77777777-7777-4777-8777-777777777777';
+  const foreignUrl = 'https://chatgpt.com/c/88888888-8888-4888-8888-888888888888';
+
+  function trackedPage(url: string, stopVisible = false) {
+    let visible = stopVisible;
+    const stopClick = vi.fn(async () => { visible = false; });
+    const close = vi.fn(async () => undefined);
+    const page = {
+      url: () => url,
+      isClosed: () => false,
+      close,
+      locator: () => ({
+        count: vi.fn(async () => visible ? 1 : 0),
+        first: () => ({
+          click: stopClick,
+          waitFor: vi.fn(async () => undefined),
+        }),
+      }),
+    };
+    return { page, stopClick, close };
+  }
+
+  async function runEntry(runTurn: () => Promise<any>) {
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const code = await runStateLightTurn(['--profile', 'fixture'], { runTurn });
+      const result = writes
+        .flatMap((chunk) => chunk.split(/\r?\n/))
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .find((row) => row.schema === 'turn-result/v1');
+      expect(result).toBeDefined();
+      return { code, result };
+    } finally {
+      stdout.mockRestore();
+    }
+  }
+
+  it('recovers an exact owned page after page loss without resend, foreign Stop, or close', async () => {
+    const lost = { url: () => ownedUrl, isClosed: () => true };
+    const recovered = trackedPage(ownedUrl);
+    const foreign = trackedPage(foreignUrl, true);
+    const browser = { isConnected: () => true, close: vi.fn(async () => undefined) };
+    let sends = 0;
+    const state: PostSendRecoveryState = {
+      lossEpoch: 0,
+      successorCreated: false,
+      immutableConversationUrl: ownedUrl,
+      cleanupAuthorityPage: lost,
+      stopAuthorityPage: lost,
+    };
+
+    const outcome = await runEntry(async () => {
+      sends += 1;
+      const recovery = await runPostSendRecovery({
+        browser,
+        currentPage: lost,
+        marker,
+        hardDeadlineMs: 100,
+        pollMs: 1,
+        state,
+        adapter: {
+          enumeratePages: vi.fn(async () => [foreign.page, recovered.page]),
+          pageUrl: (page) => String((page as any).url()),
+          normalizeConversationUrl: (value) => value,
+          isSupportedConversationUrl: () => true,
+          readAuthoritativeMessages: vi.fn(async (page) => ({
+            messages: page === recovered.page
+              ? [{ role: 'user' as const, text: `${marker}\n\nprompt` }]
+              : [{ role: 'user' as const, text: 'foreign prompt' }],
+            incomplete: false,
+          })),
+          browserDefinitelyDisconnected: () => false,
+          pageDefinitelyLost: (page) => page === lost,
+          reconnect: vi.fn(async () => { throw new Error('unexpected reconnect'); }),
+          createSuccessor: vi.fn(async () => { throw new Error('unexpected successor'); }),
+          sleep: vi.fn(async () => undefined),
+          now: () => 1,
+        },
+      });
+      expect(recovery).toMatchObject({
+        kind: 'recovered',
+        page: recovered.page,
+        conversationUrl: ownedUrl,
+        cleanupOwned: false,
+      });
+      if (recovery.kind !== 'recovered') throw new Error(recovery.cause);
+      return {
+        page: recovery.page,
+        browser: recovery.browser,
+        cleanupAction: 'preserve' as const,
+        result: makeTurnResult({
+          state: 'ok',
+          scope: 'none',
+          cause: 'completed_page_only',
+          send_count: sends,
+        }),
+      };
+    });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(sends).toBe(1);
+    expect(recovered.stopClick).not.toHaveBeenCalled();
+    expect(recovered.close).not.toHaveBeenCalled();
+    expect(foreign.stopClick).not.toHaveBeenCalled();
+    expect(foreign.close).not.toHaveBeenCalled();
+  });
+
+  it('reconnects after browser loss and binds only the exact owned conversation without resend', async () => {
+    const lost = { url: () => ownedUrl, isClosed: () => true };
+    const recovered = trackedPage(ownedUrl);
+    const foreign = trackedPage(foreignUrl, true);
+    const deadBrowser = { isConnected: () => false, close: vi.fn(async () => undefined) };
+    const liveBrowser = { isConnected: () => true, close: vi.fn(async () => undefined) };
+    const reconnect = vi.fn(async () => liveBrowser);
+    let sends = 0;
+    const state: PostSendRecoveryState = {
+      lossEpoch: 0,
+      successorCreated: false,
+      immutableConversationUrl: ownedUrl,
+      cleanupAuthorityPage: lost,
+      stopAuthorityPage: lost,
+    };
+
+    const outcome = await runEntry(async () => {
+      sends += 1;
+      const recovery = await runPostSendRecovery({
+        browser: deadBrowser,
+        currentPage: lost,
+        marker,
+        hardDeadlineMs: 100,
+        pollMs: 1,
+        state,
+        adapter: {
+          enumeratePages: vi.fn(async (browser) => {
+            expect(browser).toBe(liveBrowser);
+            return [foreign.page, recovered.page];
+          }),
+          pageUrl: (page) => String((page as any).url()),
+          normalizeConversationUrl: (value) => value,
+          isSupportedConversationUrl: () => true,
+          readAuthoritativeMessages: vi.fn(async (page) => ({
+            messages: page === recovered.page
+              ? [{ role: 'user' as const, text: `${marker}\n\nprompt` }]
+              : [{ role: 'user' as const, text: 'foreign prompt' }],
+            incomplete: false,
+          })),
+          browserDefinitelyDisconnected: (browser) => browser === deadBrowser,
+          pageDefinitelyLost: (page) => page === lost,
+          reconnect,
+          createSuccessor: vi.fn(async () => { throw new Error('unexpected successor'); }),
+          sleep: vi.fn(async () => undefined),
+          now: () => 1,
+        },
+      });
+      expect(recovery).toMatchObject({
+        kind: 'recovered',
+        browser: liveBrowser,
+        page: recovered.page,
+        conversationUrl: ownedUrl,
+      });
+      if (recovery.kind !== 'recovered') throw new Error(recovery.cause);
+      return {
+        page: recovery.page,
+        browser: recovery.browser,
+        cleanupAction: 'preserve' as const,
+        result: makeTurnResult({
+          state: 'ok',
+          scope: 'none',
+          cause: 'completed_page_only',
+          send_count: sends,
+        }),
+      };
+    });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(sends).toBe(1);
+    expect(recovered.stopClick).not.toHaveBeenCalled();
+    expect(recovered.close).not.toHaveBeenCalled();
+    expect(foreign.stopClick).not.toHaveBeenCalled();
+    expect(foreign.close).not.toHaveBeenCalled();
+  });
+
+  it('emits truthful exhaustion, Stops the exact successor once, and preserves every tab', async () => {
+    const owned = trackedPage(ownedUrl, true);
+    const foreign = trackedPage(foreignUrl, true);
+    const browser = { isConnected: () => true, close: vi.fn(async () => undefined) };
+    let sends = 0;
+    const state: PostSendRecoveryState = {
+      lossEpoch: 1,
+      successorCreated: true,
+      immutableConversationUrl: ownedUrl,
+      cleanupAuthorityPage: owned.page,
+      stopAuthorityPage: owned.page,
+      successorPage: owned.page,
+    };
+
+    const outcome = await runEntry(async () => {
+      sends += 1;
+      const recovery = await runPostSendRecovery({
+        browser,
+        marker,
+        hardDeadlineMs: 0,
+        pollMs: 1,
+        state,
+        adapter: {
+          enumeratePages: vi.fn(async () => [foreign.page]),
+          pageUrl: (page) => String((page as any).url()),
+          normalizeConversationUrl: (value) => value,
+          isSupportedConversationUrl: () => true,
+          readAuthoritativeMessages: vi.fn(async () => ({
+            messages: [{ role: 'user' as const, text: 'foreign prompt' }],
+            incomplete: false,
+          })),
+          browserDefinitelyDisconnected: () => false,
+          pageDefinitelyLost: () => false,
+          reconnect: vi.fn(async () => { throw new Error('unexpected reconnect'); }),
+          createSuccessor: vi.fn(async () => { throw new Error('unexpected successor'); }),
+          sleep: vi.fn(async () => undefined),
+          now: () => 1,
+        },
+      });
+      expect(recovery).toMatchObject({
+        kind: 'failure',
+        state: 'no_reply',
+        cause: 'observation_exhausted_no_resend',
+        stopAuthorityPage: owned.page,
+      });
+      if (recovery.kind !== 'failure') throw new Error('expected exhaustion');
+      return {
+        page: recovery.stopAuthorityPage,
+        stopAuthorityPage: recovery.stopAuthorityPage,
+        browser: recovery.browser,
+        cleanupAction: 'preserve' as const,
+        result: makeTurnResult({
+          state: recovery.state,
+          scope: 'invocation',
+          cause: recovery.cause,
+          send_count: sends,
+        }),
+      };
+    });
+
+    expect(outcome.code).not.toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
+      send_count: 1,
+      cleanup: 'skipped',
+    });
+    expect(outcome.result.incidents).toContain('owned_generation_stop_confirmed');
+    expect(sends).toBe(1);
+    expect(owned.stopClick).toHaveBeenCalledTimes(1);
+    expect(owned.close).not.toHaveBeenCalled();
+    expect(foreign.stopClick).not.toHaveBeenCalled();
+    expect(foreign.close).not.toHaveBeenCalled();
   });
 });
