@@ -105,6 +105,8 @@ const guard = {
   ordinal: 0,
   last_assistant: true,
   last_message: true,
+  completion_ready: true,
+  continuation_available: false,
 };
 
 const channel: ExactTargetChannel = {
@@ -161,6 +163,7 @@ const proof = {
     namespace_bound: result.configured_profile_key === profileKey,
     terminal_reply_bound: result.target_id === targetId && result.normalized_url === normalizedUrl,
     freshness_bound: evaluateCalls === 2,
+    completion_bound: guard.completion_ready && !guard.continuation_available,
     final_guard_before_close: finalGuardSeen && closeCalls === 1,
     foreign_target_present: foreignTargetPresent,
     external_side_effect_count: 0,
