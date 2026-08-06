@@ -42,12 +42,24 @@ export type SmokeGenerationProbe = (
   timeoutMs: number,
 ) => OrcaJsonResponse<{ terminal?: OrcaTerminalSummary }>;
 
+export interface SmokeDeliveryBinding {
+  runId: string;
+  artifactDir: string;
+  sealPath: string;
+}
+
+export type SmokeDeliveryProbe = (binding: SmokeDeliveryBinding) => boolean;
+
 export type StableSpawnIdentityResult =
   | { ok: true; worker: RuntimeWorker; diagnostic?: string }
   | { ok: false; reason: string };
 
 export interface StableWorkerSmokeSpawnPatchOptions {
   probe?: SmokeGenerationProbe;
+  deliveryProbe?: SmokeDeliveryProbe;
+  now?: () => number;
+  sleepMs?: (milliseconds: number) => void;
+  deliveryConfirmationTimeoutMs?: number;
 }
 
 export interface HistoricalSmokeQuarantine {
@@ -92,6 +104,76 @@ function defaultGenerationProbe(
     ['terminal', 'show', '--terminal', terminalHandle],
     { cwd, timeoutMs },
   );
+}
+
+function defaultSleep(milliseconds: number): void {
+  if (milliseconds <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function defaultDeliveryProbe(binding: SmokeDeliveryBinding): boolean {
+  try {
+    if (!existsSync(binding.sealPath)) return false;
+    const parsed = JSON.parse(readFileSync(binding.sealPath, 'utf8')) as { runId?: unknown };
+    return String(parsed.runId ?? '').trim() === binding.runId;
+  } catch {
+    return false;
+  }
+}
+
+export function smokeDeliveryBindingFromPrompt(prompt: string): SmokeDeliveryBinding | undefined {
+  const runId = prompt.match(/^run-id:\s*(\S+)\s*$/mu)?.[1]?.trim() ?? '';
+  const artifactDir = prompt.match(/^artifact-dir:\s*(.+?)\s*$/mu)?.[1]?.trim() ?? '';
+  if (!runId || !artifactDir) return undefined;
+  return {
+    runId,
+    artifactDir,
+    sealPath: join(artifactDir, 'delivery.sealed.json'),
+  };
+}
+
+function waitForDeliveryConfirmation(input: {
+  binding: SmokeDeliveryBinding;
+  deadline: number;
+  deliveryProbe: SmokeDeliveryProbe;
+  now: () => number;
+  sleepMs: (milliseconds: number) => void;
+}): boolean {
+  while (true) {
+    if (input.deliveryProbe(input.binding)) return true;
+    const remaining = input.deadline - input.now();
+    if (remaining <= 0) return false;
+    input.sleepMs(Math.min(250, Math.max(1, remaining)));
+  }
+}
+
+function dispatchDiagnostic(result: RuntimeDispatchResult): string {
+  return result.status === 'dispatched'
+    ? 'dispatched'
+    : `${result.status}:${safeToken(result.reason)}`;
+}
+
+function absenceProven(response: OrcaJsonResponse<{ terminal?: OrcaTerminalSummary }>): boolean {
+  if (response.ok) return !response.result?.terminal;
+  const code = String(response.error?.code ?? '').trim().toLowerCase();
+  const message = String(response.error?.message ?? '').trim().toLowerCase();
+  return code === 'terminal_not_found'
+    || code === 'not_found'
+    || code === 'terminal_absent'
+    || message.includes('terminal not found')
+    || message.includes('terminal is no longer alive');
+}
+
+function absenceProbeFailure(
+  response: OrcaJsonResponse<{ terminal?: OrcaTerminalSummary }>,
+): string {
+  return [
+    'owned_handle_absence_unproven',
+    `operation=${safeToken(response.operation ?? 'terminal_show')}`,
+    `outcome=${safeToken(response.outcomeCategory ?? 'unknown')}`,
+    `code=${safeToken(response.error?.code ?? 'unknown')}`,
+    'resolution=inspect_the_owned_terminal_handle_then_retry_cleanup',
+  ].join(';');
 }
 
 export function workerGenerationNotFoundReason(input: {
@@ -222,9 +304,9 @@ export function stabilizeSpawnedSmokeWorkerIdentity(input: {
 
 /**
  * Install the narrow worker-smoke compatibility repair on the production task
- * adapter. The exact created handle is re-resolved immediately before dispatch,
- * so a legitimate generation change becomes current while an absent/dead handle
- * still refuses before the original dispatcher can send.
+ * adapter. The created identity is re-resolved before dispatch, delivery is
+ * accepted only after the child-owned seal appears, and one submit-only retry
+ * is allowed without ever sending the payload a second time.
  */
 export function installStableWorkerSmokeSpawnPatch(
   options: StableWorkerSmokeSpawnPatchOptions = {},
@@ -235,7 +317,11 @@ export function installStableWorkerSmokeSpawnPatch(
 
   const originalSpawn = prototype.spawnWorker;
   const originalDispatch = prototype.dispatchInput;
+  const originalStop = prototype.stopWorker;
   const probe = options.probe ?? defaultGenerationProbe;
+  const deliveryProbe = options.deliveryProbe ?? defaultDeliveryProbe;
+  const now = options.now ?? Date.now;
+  const sleepMs = options.sleepMs ?? defaultSleep;
 
   Object.defineProperty(prototype, 'spawnWorker', {
     configurable: true,
@@ -292,19 +378,101 @@ export function installStableWorkerSmokeSpawnPatch(
       }
 
       const result = originalDispatch.call(this, input, callOptions);
-      if (result.status !== 'send_failed' || result.reason !== 'worker_generation_not_found') {
-        return result;
+      if (result.status === 'send_failed' && result.reason === 'worker_generation_not_found') {
+        return {
+          status: 'send_failed',
+          reason: workerGenerationNotFoundReason({
+            worker: {
+              identity: input.worker,
+              workspacePath: callOptions.cwd ?? process.cwd(),
+              title: null,
+              provenance: 'internal',
+            },
+          }),
+        };
       }
+      if (input.submitOnly || result.status === 'send_failed') return result;
+
+      const binding = smokeDeliveryBindingFromPrompt(input.text ?? '');
+      if (!binding) return result;
+      const envTimeoutMs = Number.parseInt(
+        process.env.WORKER_SMOKE_SUBMIT_CONFIRMATION_TIMEOUT_MS ?? '',
+        10,
+      );
+      const configuredTimeoutMs = options.deliveryConfirmationTimeoutMs
+        ?? (Number.isSafeInteger(envTimeoutMs) && envTimeoutMs > 0 ? envTimeoutMs : 30_000);
+      const timeoutMs = Math.max(
+        2,
+        Math.min(callOptions.timeoutMs ?? 30_000, configuredTimeoutMs),
+      );
+      const startedAt = now();
+      const firstDeadline = startedAt + Math.max(1, Math.floor(timeoutMs / 2));
+      const finalDeadline = startedAt + timeoutMs;
+      if (waitForDeliveryConfirmation({
+        binding,
+        deadline: firstDeadline,
+        deliveryProbe,
+        now,
+        sleepMs,
+      })) return { status: 'dispatched' };
+
+      const retried = originalDispatch.call(this, {
+        worker: input.worker,
+        submitOnly: true,
+      }, callOptions);
+      if (waitForDeliveryConfirmation({
+        binding,
+        deadline: finalDeadline,
+        deliveryProbe,
+        now,
+        sleepMs,
+      })) return { status: 'dispatched' };
+
       return {
         status: 'send_failed',
-        reason: workerGenerationNotFoundReason({
-          worker: {
-            identity: input.worker,
-            workspacePath: callOptions.cwd ?? process.cwd(),
-            title: null,
-            provenance: 'internal',
-          },
-        }),
+        reason: [
+          'prompt_submission_unconfirmed',
+          'submit_attempts=2',
+          `initial_submit=${safeToken(dispatchDiagnostic(result))}`,
+          `retry_submit=${safeToken(dispatchDiagnostic(retried))}`,
+          `delivery_evidence=${safeToken(binding.sealPath)}:missing`,
+          'resolution=inspect_the_child_delivery_seal_and_terminal_submit_transport_then_retry_from_the_exact_pr_head',
+        ].join(';'),
+      };
+    },
+  });
+
+  Object.defineProperty(prototype, 'stopWorker', {
+    configurable: true,
+    writable: true,
+    value: function patchedStopWorker(
+      this: OrcaTaskRuntimeAdapter,
+      worker: Parameters<OrcaTaskRuntimeAdapter['stopWorker']>[0],
+      callOptions: RuntimeCallOptions = {},
+    ): ReturnType<OrcaTaskRuntimeAdapter['stopWorker']> {
+      const result = originalStop.call(this, worker, callOptions);
+      if (result.status === 'ok' || result.reason !== 'worker_generation_not_found') return result;
+      const response = probe(
+        worker.id,
+        callOptions.cwd ?? process.cwd(),
+        callOptions.timeoutMs ?? 30_000,
+      );
+      const observed = response.result?.terminal;
+      if (absenceProven(response)
+        || (observed && generationFromTerminal(observed) !== worker.generation)) {
+        return { status: 'ok', value: { stopped: true } };
+      }
+      if (observed && generationFromTerminal(observed) === worker.generation) {
+        return {
+          status: 'failed',
+          operation: 'stop_worker',
+          reason: 'owned_handle_still_present_after_close;resolution=inspect_terminal_close_transport_then_retry_cleanup',
+        };
+      }
+      return {
+        status: 'failed',
+        operation: 'stop_worker',
+        reason: absenceProbeFailure(response),
       };
     },
   });
@@ -319,6 +487,11 @@ export function installStableWorkerSmokeSpawnPatch(
       configurable: true,
       writable: true,
       value: originalDispatch,
+    });
+    Object.defineProperty(prototype, 'stopWorker', {
+      configurable: true,
+      writable: true,
+      value: originalStop,
     });
     patchedTaskAdapterPrototypes.delete(prototype);
   };
