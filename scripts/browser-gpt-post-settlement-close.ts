@@ -8,6 +8,13 @@ import {
   type ParsedArgs as ParsedProbeArgs,
   type ProbeDependencies,
 } from './browser-gpt-page-probe.ts';
+import { BEFORE_CDP_BROWSER_RELEASE } from './chatgpt-browser-turn/browser-session.ts';
+import {
+  ASSISTANT_TURN_ACTION_SELECTOR,
+  ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+  CONTINUE_GENERATING_TESTID_SELECTOR,
+  STOP_BUTTON_SELECTOR,
+} from './chatgpt-browser-turn/product-page-selectors.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
   createDirectPublicationObservationState,
@@ -416,6 +423,10 @@ function validateDirectResult(value: Record<string, unknown>): {
   if (value.schema === 'flow-manager-long-running-child-terminal/v1') {
     throw new CloseError('settlement_untrusted', 'launcher_envelope_forbidden');
   }
+  if (value.cleanup !== 'skipped'
+    || Object.prototype.hasOwnProperty.call(value, 'post_settlement_target_capture')) {
+    throw new CloseError('settlement_untrusted', 'prior_close_or_capture_failure');
+  }
   if (!isEligibleDirectResult(value)
     || !isBoundedString(value.configured_profile_key)
     || !isRecord(value.witness)
@@ -476,9 +487,27 @@ function validateProbeExport(
   return { nodeOrdinal: node.ordinal };
 }
 
+interface BrowserGuardSelectors {
+  readonly stop: string;
+  readonly inProgress: string;
+  readonly actions: string;
+  readonly continueTestId: string;
+}
+
+const BROWSER_GUARD_SELECTORS: BrowserGuardSelectors = {
+  stop: STOP_BUTTON_SELECTOR,
+  inProgress: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+  actions: ASSISTANT_TURN_ACTION_SELECTOR,
+  continueTestId: CONTINUE_GENERATING_TESTID_SELECTOR,
+};
+
 function finalGuardExpression(witness: PostSettlementTargetWitness, ordinal: number): string {
-  const encoded = Buffer.from(JSON.stringify({ ...witness, ordinal }), 'utf8').toString('base64');
-  return `(async()=>{const e=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'),c=>c.charCodeAt(0))));const n=r=>{const u=new URL(r);u.hash='';u.search='';u.hostname=u.hostname.toLowerCase();u.pathname=u.pathname.replace(/\\/+$/u,'')||'/';return u.toString().replace(/\\/$/u,'')};const raw=Array.from(document.querySelectorAll('[data-message-author-role]'));const counts={user:0,assistant:0};const nodes=[];for(let d=0;d<raw.length;d++){const node=raw[d],role=node.getAttribute('data-message-author-role');if(role!=='user'&&role!=='assistant')continue;nodes.push({node,role,ordinal:counts[role]++,documentOrdinal:d,messageId:node.getAttribute('data-message-id')})}const matches=nodes.filter(x=>x.messageId===e.assistant_message_id);if(matches.length!==1)return{ok:false,reason:'assistant_message_identity_changed'};const c=matches[0],last=[...nodes].reverse().find(x=>x.role==='assistant');if(c.role!=='assistant'||c.ordinal!==e.ordinal||c.documentOrdinal!==e.document_ordinal||c!==last||c!==nodes[nodes.length-1])return{ok:false,reason:'assistant_tail_changed'};let generating='unknown';try{generating=Boolean(document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]'))}catch{}if(generating!==false)return{ok:false,reason:'generation_state_changed'};const text=e.representation==='innerText'?c.node.innerText:c.node.textContent;if(typeof text!=='string')return{ok:false,reason:'representation_unavailable'};const bytes=new TextEncoder().encode(text),digest=await crypto.subtle.digest('SHA-256',bytes),hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join(''),url=n(location.href);return{ok:url===e.normalized_url&&bytes.byteLength===e.byte_length&&hash===e.sha256&&counts.user===e.observed_user_nodes&&counts.assistant===e.observed_assistant_nodes&&nodes.length===e.observed_message_nodes,normalized_url:url,byte_length:bytes.byteLength,sha256:hash,observed_user_nodes:counts.user,observed_assistant_nodes:counts.assistant,observed_message_nodes:nodes.length,generation_in_progress:generating,nodes_truncated:false,assistant_message_id:c.messageId,representation:e.representation,document_ordinal:c.documentOrdinal,ordinal:c.ordinal,last_assistant:c===last,last_message:c===nodes[nodes.length-1]}})()`;
+  const encoded = Buffer.from(JSON.stringify({
+    ...witness,
+    ordinal,
+    selectors: BROWSER_GUARD_SELECTORS,
+  }), 'utf8').toString('base64');
+  return `(async()=>{const e=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'),c=>c.charCodeAt(0))));const n=r=>{const u=new URL(r);u.hash='';u.search='';u.hostname=u.hostname.toLowerCase();u.pathname=u.pathname.replace(/\\/+$/u,'')||'/';return u.toString().replace(/\\/$/u,'')};const raw=Array.from(document.querySelectorAll('[data-message-author-role]'));const counts={user:0,assistant:0};const nodes=[];for(let d=0;d<raw.length;d++){const node=raw[d],role=node.getAttribute('data-message-author-role');if(role!=='user'&&role!=='assistant')continue;nodes.push({node,role,ordinal:counts[role]++,documentOrdinal:d,messageId:node.getAttribute('data-message-id')})}const matches=nodes.filter(x=>x.messageId===e.assistant_message_id);if(matches.length!==1)return{ok:false,reason:'assistant_message_identity_changed'};const c=matches[0],last=[...nodes].reverse().find(x=>x.role==='assistant');if(c.role!=='assistant'||c.ordinal!==e.ordinal||c.documentOrdinal!==e.document_ordinal||c!==last||c!==nodes[nodes.length-1])return{ok:false,reason:'assistant_tail_changed'};const turn=c.node.closest('section[data-testid^="conversation-turn-"]')||c.node;let continuation=true,completion=false;try{const byTestId=Boolean(document.querySelector(e.selectors.continueTestId));const byName=Array.from(document.querySelectorAll('button')).some(b=>/continue generating/i.test(String(b.getAttribute('aria-label')||b.textContent||'')));continuation=byTestId||byName;const generating=Boolean(document.querySelector(e.selectors.stop)||turn.querySelector(e.selectors.inProgress));completion=Boolean(turn.querySelector(e.selectors.actions));if(generating||continuation||!completion)return{ok:false,reason:generating?'generation_state_changed':continuation?'continuation_available':'assistant_completion_unproven',generation_in_progress:generating,continuation_available:continuation,completion_ready:completion}}catch{return{ok:false,reason:'completion_surface_unavailable'}}const text=e.representation==='innerText'?c.node.innerText:c.node.textContent;if(typeof text!=='string')return{ok:false,reason:'representation_unavailable'};const bytes=new TextEncoder().encode(text),digest=await crypto.subtle.digest('SHA-256',bytes),hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join(''),url=n(location.href);return{ok:url===e.normalized_url&&bytes.byteLength===e.byte_length&&hash===e.sha256&&counts.user===e.observed_user_nodes&&counts.assistant===e.observed_assistant_nodes&&nodes.length===e.observed_message_nodes,normalized_url:url,byte_length:bytes.byteLength,sha256:hash,observed_user_nodes:counts.user,observed_assistant_nodes:counts.assistant,observed_message_nodes:nodes.length,generation_in_progress:false,nodes_truncated:false,assistant_message_id:c.messageId,representation:e.representation,document_ordinal:c.documentOrdinal,ordinal:c.ordinal,last_assistant:c===last,last_message:c===nodes[nodes.length-1],completion_ready:completion,continuation_available:continuation}})()`;
 }
 
 function finalGuardMatches(
@@ -501,7 +530,9 @@ function finalGuardMatches(
     && value.document_ordinal === witness.document_ordinal
     && value.ordinal === ordinal
     && value.last_assistant === true
-    && value.last_message === true;
+    && value.last_message === true
+    && value.completion_ready === true
+    && value.continuation_available === false;
 }
 
 function resolveExactTarget(
@@ -527,6 +558,7 @@ export async function runPostSettlementClose(
   let profileKey = 'profile-unresolved';
   let evidenceSchema = 'unresolved';
   let witness: PostSettlementTargetWitness | undefined;
+  let closeAttempted = false;
   try {
     profileKey = configuredProfileKey(args.profile, args.cdp);
     const direct = parseJsonRecord(
@@ -556,7 +588,6 @@ export async function runPostSettlementClose(
     const target = resolveExactTarget(await dependencies.listTargets(args.cdp), witness);
     if (!target) return resultEnvelope('already_absent', profileKey, evidenceSchema, witness);
     const channel = await dependencies.openExactTargetChannel(target);
-    let closeAttempted = false;
     try {
       const expression = finalGuardExpression(witness, probe.nodeOrdinal);
       const initial = await channel.evaluate(expression);
@@ -587,10 +618,20 @@ export async function runPostSettlementClose(
       profileKey,
       evidenceSchema,
       witness,
-      closeAttempted ? 1 : 0,
+      1,
       absent ? undefined : 'target_still_present',
     );
   } catch (error) {
+    if (closeAttempted) {
+      return resultEnvelope(
+        'close_unconfirmed',
+        profileKey,
+        evidenceSchema,
+        witness,
+        1,
+        boundedReason(error),
+      );
+    }
     const status = error instanceof CloseError ? error.status : 'unavailable';
     return resultEnvelope(status, profileKey, evidenceSchema, witness, 0, boundedReason(error));
   }
@@ -627,8 +668,6 @@ export async function runPostSettlementCloseCli(
   return closeExitCode(result.status);
 }
 
-// The diagnostic probe remains read-only. Export is followed by a second
-// inspect of the same exact target so the exported bytes carry complete close evidence.
 export interface EnhancedProbeDependencies {
   readonly runProbe: (args: ParsedProbeArgs, dependencies?: ProbeDependencies) => Promise<unknown>;
   readonly probeDependencies?: ProbeDependencies;
@@ -807,8 +846,6 @@ export async function runEnhancedPageProbeCli(
   return probeExitCode(String(result.status ?? 'unavailable'));
 }
 
-// State-light preload: observe service identities, capture an actionable
-// witness only for a page the helper preserved, then enrich its direct result.
 interface DirectCaptureConfig {
   readonly profile: string;
   readonly cdp: string;
@@ -829,6 +866,7 @@ interface CaptureState {
   causalWitness?: CausalWitness;
   targetWitness?: PostSettlementTargetWitness;
   captureCause?: PostSettlementCaptureCause;
+  capturePromise?: Promise<void>;
 }
 
 function parseTurnOptions(argv: readonly string[]): Map<string, string | true> {
@@ -917,7 +955,7 @@ function classifyCaptureFailure(error: unknown): PostSettlementCaptureCause {
   if (/closed|detached/iu.test(reason)) return 'page_detached';
   if (/target/iu.test(reason)) return 'target_identity_unavailable';
   if (/assistant|reply|witness/iu.test(reason)) return 'reply_identity_unavailable';
-  if (/surface|generation|tail|truncated|count/iu.test(reason)) return 'surface_incomplete';
+  if (/surface|generation|tail|truncated|count|completion|continuation/iu.test(reason)) return 'surface_incomplete';
   return 'malformed';
 }
 
@@ -931,9 +969,16 @@ async function withCaptureTimeout<T>(operation: Promise<T>): Promise<T> {
   ]);
 }
 
+interface BrowserGuardSelectors {
+  readonly stop: string;
+  readonly inProgress: string;
+  readonly actions: string;
+  readonly continueTestId: string;
+}
+
 async function capturePreservedPage(state: CaptureState, tracked: TrackedPage): Promise<void> {
   const page = tracked.page;
-  if (tracked.closeAttempted || page.isClosed?.() === true) return;
+  if (tracked.closeAttempted || page.isClosed?.() === true) throw new Error('page_detached');
   const causal = resolveCausalWitness(state);
   if (!causal) throw new Error('reply_witness_unavailable');
   const session = await page.context().newCDPSession(page);
@@ -953,9 +998,14 @@ async function capturePreservedPage(state: CaptureState, tracked: TrackedPage): 
     || normalizeUrl(targetInfo.url) !== pageUrl) {
     throw new Error('target_identity_unavailable');
   }
-  const surface: unknown = await page.evaluate(async ({ assistantMessageId, maximumNodes }: {
+  const surface: unknown = await page.evaluate(async ({
+    assistantMessageId,
+    maximumNodes,
+    selectors,
+  }: {
     readonly assistantMessageId: string;
     readonly maximumNodes: number;
+    readonly selectors: BrowserGuardSelectors;
   }) => {
     const raw = Array.from(document.querySelectorAll('[data-message-author-role]'));
     const counts = { user: 0, assistant: 0 };
@@ -990,13 +1040,33 @@ async function capturePreservedPage(state: CaptureState, tracked: TrackedPage): 
       || candidate !== nodes[nodes.length - 1]) {
       return { ok: false, reason: 'assistant_tail_invalid' };
     }
-    let generating: boolean | 'unknown' = 'unknown';
+    const turn = candidate.node.closest('section[data-testid^="conversation-turn-"]') ?? candidate.node;
+    let generationInProgress: boolean | 'unknown' = 'unknown';
+    let continuationAvailable: boolean | 'unknown' = 'unknown';
+    let completionReady: boolean | 'unknown' = 'unknown';
     try {
-      generating = Boolean(document.querySelector(
-        '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]',
+      const continueByTestId = Boolean(document.querySelector(selectors.continueTestId));
+      const continueByName = Array.from(document.querySelectorAll('button')).some((button) => (
+        /continue generating/i.test(String(button.getAttribute('aria-label') ?? button.textContent ?? ''))
       ));
-    } catch { generating = 'unknown'; }
-    if (generating !== false) return { ok: false, reason: 'generation_state_unknown_or_active' };
+      continuationAvailable = continueByTestId || continueByName;
+      generationInProgress = Boolean(
+        document.querySelector(selectors.stop)
+        || turn.querySelector(selectors.inProgress),
+      );
+      completionReady = Boolean(turn.querySelector(selectors.actions));
+    } catch {
+      return { ok: false, reason: 'completion_surface_unavailable' };
+    }
+    if (generationInProgress !== false) {
+      return { ok: false, reason: 'generation_state_unknown_or_active' };
+    }
+    if (continuationAvailable !== false) {
+      return { ok: false, reason: 'continuation_available' };
+    }
+    if (completionReady !== true) {
+      return { ok: false, reason: 'assistant_completion_unproven' };
+    }
     const element = candidate.node as HTMLElement;
     const text = typeof element.innerText === 'string' ? element.innerText : undefined;
     if (text === undefined) return { ok: false, reason: 'assistant_representation_unavailable' };
@@ -1019,8 +1089,14 @@ async function capturePreservedPage(state: CaptureState, tracked: TrackedPage): 
       observed_message_nodes: nodes.length,
       generation_in_progress: false,
       nodes_truncated: false,
+      completion_ready: true,
+      continuation_available: false,
     };
-  }, { assistantMessageId: causal.assistant_message_id, maximumNodes: MAX_CAPTURE_MESSAGE_NODES });
+  }, {
+    assistantMessageId: causal.assistant_message_id,
+    maximumNodes: MAX_CAPTURE_MESSAGE_NODES,
+    selectors: BROWSER_GUARD_SELECTORS,
+  });
   if (!isRecord(surface)
     || surface.ok !== true
     || surface.assistant_message_id !== causal.assistant_message_id
@@ -1036,12 +1112,15 @@ async function capturePreservedPage(state: CaptureState, tracked: TrackedPage): 
     || surface.document_ordinal !== surface.observed_message_nodes - 1
     || surface.generation_in_progress !== false
     || surface.nodes_truncated !== false
+    || surface.completion_ready !== true
+    || surface.continuation_available !== false
     || !isBoundedString(surface.normalized_url, MAX_URL_LENGTH)
     || normalizeUrl(surface.normalized_url) !== pageUrl) {
     throw new Error(isRecord(surface) && typeof surface.reason === 'string'
       ? surface.reason
       : 'surface_incomplete');
   }
+  state.captureCause = undefined;
   state.causalWitness = causal;
   state.targetWitness = {
     disposition: 'preserved_after_settlement',
@@ -1061,19 +1140,26 @@ async function capturePreservedPage(state: CaptureState, tracked: TrackedPage): 
   };
 }
 
-async function captureBeforeDisconnect(state: CaptureState): Promise<void> {
+async function captureBeforeDisconnectOnce(state: CaptureState): Promise<void> {
   const candidates = state.pages.filter((entry) => (
     !entry.closeAttempted && entry.page.isClosed?.() !== true
   ));
   if (candidates.length !== 1) {
-    if (candidates.length > 1) state.captureCause = 'target_identity_unavailable';
+    state.captureCause = candidates.length === 0 ? 'page_detached' : 'target_identity_unavailable';
     return;
   }
   try {
     await withCaptureTimeout(capturePreservedPage(state, candidates[0]!));
   } catch (error) {
+    state.causalWitness = undefined;
+    state.targetWitness = undefined;
     state.captureCause = classifyCaptureFailure(error);
   }
+}
+
+async function ensureCaptureBeforeDisconnect(state: CaptureState): Promise<void> {
+  state.capturePromise ??= captureBeforeDisconnectOnce(state);
+  await state.capturePromise;
 }
 
 function instrumentPage(state: CaptureState, page: any): void {
@@ -1100,10 +1186,19 @@ function instrumentBrowser(state: CaptureState, browser: any): void {
       };
     }
   }
+  const beforeRelease = async (): Promise<void> => await ensureCaptureBeforeDisconnect(state);
+  try {
+    Object.defineProperty(browser, BEFORE_CDP_BROWSER_RELEASE, {
+      configurable: true,
+      value: beforeRelease,
+    });
+  } catch {
+    // The close wrapper below remains the same bounded production path.
+  }
   const originalClose = browser.close?.bind(browser);
   if (typeof originalClose === 'function') {
     browser.close = async (...args: unknown[]) => {
-      await captureBeforeDisconnect(state);
+      await beforeRelease();
       return await originalClose(...args);
     };
   }
@@ -1113,7 +1208,10 @@ export function rewritePreservedTurnResult(
   value: Record<string, unknown>,
   state: Pick<CaptureState, 'config' | 'causalWitness' | 'targetWitness' | 'captureCause'>,
 ): Record<string, unknown> {
-  if (!isEligibleDirectResult(value) || value.configured_profile_key !== state.config.profileKey) {
+  if (!isEligibleDirectResult(value)
+    || value.cleanup !== 'skipped'
+    || Object.prototype.hasOwnProperty.call(value, 'post_settlement_target_capture')
+    || value.configured_profile_key !== state.config.profileKey) {
     return value;
   }
   if (state.causalWitness && state.targetWitness) {
