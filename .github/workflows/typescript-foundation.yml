@@ -7,46 +7,13 @@ on:
       - main
 
 permissions:
-  contents: write
-  issues: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  amend-issue-1283-and-scope:
-    name: Amend Issue 1283 and regenerate scope
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/issue-1283-browser-turn-recovery'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-      - name: Apply review-driven amendments
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: |
-          set -euo pipefail
-          python scripts/chatgpt-browser-turn/apply-1283-review-scope.py
-          node --experimental-strip-types scripts/pr-scope-declaration.ts \
-            --issue 1283 \
-            --issue-body-file /tmp/issue-1283-r07.md \
-            --declared-paths '.claude/skills/create-issue-draft/SKILL.md,docs/declarations/1283.pr-scope.json,scripts/chatgpt-browser-turn/state-light-cancellation.ts,scripts/chatgpt-browser-turn/state-light-turn-recovery.ts,scripts/chatgpt-browser-turn/state-light-turn.test-support.ts,scripts/chatgpt-browser-turn/state-light-turn.ts,scripts/chatgpt-browser-turn/tab-lifecycle.test.ts,scripts/flow-manager-long-running-child.test.ts,scripts/flow-manager-long-running-child.ts,scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts' \
-            --output docs/declarations/1283.pr-scope.json
-          rm scripts/chatgpt-browser-turn/apply-1283-review-scope.py
-          git checkout "$PR_BASE_SHA" -- .github/workflows/typescript-foundation.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m 'fix(browser-turn): align review scope and classified coverage'
-          git push origin "HEAD:$PR_HEAD_REF"
-
   runtime:
     name: TypeScript runtime (Node 22)
     runs-on: ubuntu-latest
