@@ -107,7 +107,7 @@ import {
   SEND_BUTTON_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
-import { POST_SEND_OBSERVATION_POLL_MS, runStateLightTurn } from './state-light-turn.ts';
+import { __testFinalizeTurn, POST_SEND_OBSERVATION_POLL_MS, runStateLightTurn } from './state-light-turn.ts';
 import { normalizeConversationUrl, type ProfileVerification } from './ui-adapter.ts';
 
 import journalSymptoms from './fixtures/browser-turn-recurrence-journal-symptoms.json' with { type: 'json' };
@@ -1770,5 +1770,53 @@ describe('browser-turn recurrence journal fixture coverage', () => {
         .map((entry) => entry.id),
     );
     expect(legacyKinds.size).toBeGreaterThan(0);
+  });
+});
+
+
+describe('Issue #1283 owned-generation abandonment seam', () => {
+  it('presses Stop for an owned abandoned turn and leaves exact-target close to Issue #1266', async () => {
+    const order: string[] = [];
+    let stopVisible = true;
+    const stopControl = scalarLocator({
+      count: vi.fn(async () => stopVisible ? 1 : 0),
+      click: vi.fn(async () => {
+        order.push('stop');
+        stopVisible = false;
+      }),
+    });
+    const page = {
+      isClosed: vi.fn(() => false),
+      locator: vi.fn((selector: string) => (
+        matchesStopButtonSelector(selector) ? stopControl : scalarLocator()
+      )),
+      close: vi.fn(async () => {
+        order.push('close');
+      }),
+    };
+    const result = await __testFinalizeTurn({
+      page,
+      browser: { isConnected: vi.fn(() => true) },
+      cleanupAction: 'preserve',
+      result: {
+        schema: 'turn-result/v1',
+        state: 'no_reply',
+        scope: 'invocation',
+        cause: 'observation_exhausted_no_resend',
+        invocation_id: 'issue-1283-test',
+        configured_profile_key: 'profile-key',
+        send_count: 1,
+        poll_count: 3,
+        goto_count: 1,
+        new_chat_click_count: 0,
+        navigation_count: 1,
+        incidents: ['observation_exhausted'],
+      },
+    });
+
+    expect(order).toEqual(['stop']);
+    expect(page.close).not.toHaveBeenCalled();
+    expect(result.incidents).toContain('owned_generation_stop_confirmed');
+    expect(result.cleanup).toBe('skipped');
   });
 });

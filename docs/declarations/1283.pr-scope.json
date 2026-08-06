@@ -1,0 +1,31 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1283,
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "docs/declarations/1283.pr-scope.json",
+    "scripts/chatgpt-browser-turn/state-light-turn-recovery.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts"
+  ],
+  "denylist": [
+    "package.json",
+    "packages/core/",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    "docs/declarations/",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+  ],
+  "source_revision": "6cce14b7379a80e5999179476432e6c6e0bcadd8"
+}

@@ -73,10 +73,18 @@ import {
   readAssistantNodeCompletionReady,
   readAssistantTurnCompletionReady,
   SEND_BUTTON_SELECTOR,
+  STOP_BUTTON_SELECTOR,
   stripUiCollapseAffixes,
   verifyProfile,
   type BrowserConfig,
 } from './ui-adapter.ts';
+import {
+  recoveryMarkerCardinality,
+  runPostSendRecovery,
+  type PostSendRecoveryFailure,
+  type PostSendRecoveryState,
+  type RecoveryObserverEvent,
+} from './state-light-turn-recovery.ts';
 
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 /** Local CDP DOM reads after dispatch; not send/navigation pacing. */
@@ -207,6 +215,49 @@ interface StateLightPublicationHooks {
 }
 
 export type PageCleanupAction = 'close' | 'preserve' | 'skip';
+
+const cleanupAuthorityUnprovenPages = new WeakSet<object>();
+
+export interface StateLightRecoveryHooks {
+  readonly observer?: (event: RecoveryObserverEvent) => void;
+  readonly faultActuator?: (input: {
+    readonly page: unknown;
+    readonly browser: unknown;
+    readonly sendCount: number;
+    readonly conversationUrlSha256: string;
+    readonly markerSha256: string;
+    readonly matchingUserCarrierCount: number;
+    readonly exactMarkerTokenCount: number;
+  }) => Promise<void> | void;
+  readonly sleep?: (milliseconds: number) => Promise<void>;
+}
+
+export type StopOwnedGenerationOutcome =
+  | 'confirmed'
+  | 'not_present'
+  | 'unconfirmed'
+  | 'unavailable';
+
+export async function stopOwnedGeneration(
+  page: any,
+): Promise<StopOwnedGenerationOutcome> {
+  if (!page) return 'unavailable';
+  try {
+    if (typeof page.isClosed === 'function' && page.isClosed() === true) return 'unavailable';
+  } catch {
+    return 'unavailable';
+  }
+  try {
+    const controls = page.locator(STOP_BUTTON_SELECTOR);
+    const count = Number(await controls.count());
+    if (count < 1) return 'not_present';
+    await controls.first().click({ timeout: MAX_LOCAL_READ_WAIT_MS });
+    const remaining = Number(await controls.count());
+    return remaining < 1 ? 'confirmed' : 'unconfirmed';
+  } catch {
+    return 'unconfirmed';
+  }
+}
 
 export function decidePageCleanupAction(input: {
   readonly sendCount: number;
@@ -693,7 +744,11 @@ export function resolveOwnedReplyWindow(
   if (ownedUsers.length === 0) {
     return { replyWindow: [], lastOwnedAssistantMessageIndex: null };
   }
-  if (ownedUsers.length > 1) {
+  const cardinality = recoveryMarkerCardinality(messages, expectedMarker);
+  if (
+    cardinality.matchingUserCarrierCount !== 1
+    || cardinality.exactMarkerTokenCount !== 1
+  ) {
     return { replyWindow: [], uncertainCause: 'owned_prompt_marker_ambiguous', lastOwnedAssistantMessageIndex: null };
   }
 
@@ -1448,7 +1503,10 @@ function browserOrPageDefinitelyLost(page: any, browser: any): boolean {
   return false;
 }
 
-async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
+async function runTurn(
+  args: ParsedTurnArgs,
+  recoveryHooks: StateLightRecoveryHooks = {},
+): Promise<TurnRunOutcome> {
   rejectUnknownOptions(args, [
     'profile',
     'cdp',
@@ -1782,13 +1840,25 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           }
 
           const urlDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
-          const conversationUrl = await waitForConversationUrlAfterSend(
-            page,
-            config.projectUrl!,
-            urlDeadline,
-            sleep,
-            INITIAL_POLL_MS,
-          );
+          let conversationUrl: string | undefined;
+          try {
+            conversationUrl = await waitForConversationUrlAfterSend(
+              page,
+              config.projectUrl!,
+              urlDeadline,
+              sleep,
+              INITIAL_POLL_MS,
+            );
+          } catch (error) {
+            if (!browserOrPageDefinitelyLost(page, browser)) throw error;
+            incident(
+              'send_observation_deferred',
+              'fresh_conversation_page_lost_after_send',
+              'recover_same_conversation_no_resend',
+            );
+            claimed = true;
+            break;
+          }
           if (!conversationUrl) {
             if (sendCount >= 1) {
               incident(
@@ -1989,7 +2059,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     const targetChatUrl = config.newChat
       ? undefined
       : normalizeConversationUrl(config.chatUrl ?? '');
-    if (targetChatUrl) {
+    if (targetChatUrl && !browserOrPageDefinitelyLost(page, browser)) {
       const landingIdentity = readOwnedConversationIdentity(page, targetChatUrl);
       if (!landingIdentity.matched) {
         return returnOwnedConversationIdentityMismatch(
@@ -2009,7 +2079,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
     }
 
-    if (config.newChat && ownedConversationUrl) {
+    if (config.newChat && ownedConversationUrl && !browserOrPageDefinitelyLost(page, browser)) {
       await navigateToProjectConversationIfNeeded(
         page,
         ownedConversationUrl,
@@ -2047,15 +2117,142 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       );
     };
 
+    const recoveryState: PostSendRecoveryState = {
+      lossEpoch: 0,
+      successorCreated: false,
+      cleanupAuthorityPage: page,
+      ...(targetChatUrl ?? ownedConversationUrl
+        ? { immutableConversationUrl: targetChatUrl ?? ownedConversationUrl }
+        : {}),
+    };
+    let faultActuatorUsed = false;
+
+    const recoveryFailureOutcome = (
+      failure: PostSendRecoveryFailure,
+    ): TurnRunOutcome => {
+      incident(failure.eventClass, failure.cause, failure.action);
+      return {
+        browser: failure.browser,
+        cleanupAction: 'preserve',
+        result: compactResult(
+          failure.state,
+          'invocation',
+          failure.cause,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount,
+          navigation,
+          incidents,
+          {},
+          journalWriteFailed,
+        ),
+      };
+    };
+
+    const recoverCurrentObservation = async (): Promise<TurnRunOutcome | null> => {
+      const recovered = await runPostSendRecovery({
+        browser,
+        currentPage: page,
+        marker,
+        hardDeadlineMs: hardExhaustionDeadline,
+        pollMs: config.pollMs,
+        state: recoveryState,
+        observer: recoveryHooks.observer,
+        adapter: {
+          enumeratePages: async (activeBrowser) => {
+            const contexts = (activeBrowser as any).contexts();
+            if (!Array.isArray(contexts)) throw new Error('recovery_context_enumeration_failed');
+            const pages: unknown[] = [];
+            for (const context of contexts) {
+              const currentPages = context.pages();
+              if (!Array.isArray(currentPages)) throw new Error('recovery_page_enumeration_failed');
+              pages.push(...currentPages);
+            }
+            return pages;
+          },
+          pageUrl: (candidate) => String((candidate as any).url()),
+          normalizeConversationUrl,
+          isSupportedConversationUrl: (value) => value.includes('/c/'),
+          readAuthoritativeMessages: async (candidate) => {
+            const observed = await readPageObservation(candidate);
+            return {
+              messages: observed.messages,
+              incomplete: observed.transcriptIncomplete,
+            };
+          },
+          browserDefinitelyDisconnected: (candidateBrowser) => {
+            try {
+              return typeof (candidateBrowser as any)?.isConnected === 'function'
+                && (candidateBrowser as any).isConnected() === false;
+            } catch {
+              return false;
+            }
+          },
+          pageDefinitelyLost: (candidatePage) => {
+            try {
+              return typeof (candidatePage as any)?.isClosed === 'function'
+                && (candidatePage as any).isClosed() === true;
+            } catch {
+              return false;
+            }
+          },
+          reconnect: async () => {
+            const remainingMs = Math.max(1, hardExhaustionDeadline - Date.now());
+            return await chromium.connectOverCDP(config.cdp, {
+              timeout: Math.min(30_000, remainingMs),
+            });
+          },
+          createSuccessor: async (activeBrowser, immutableConversationUrl) => {
+            const successor = await createDedicatedTurnPage(activeBrowser);
+            navigation.recordGoto();
+            await successor.goto(immutableConversationUrl, {
+              waitUntil: 'domcontentloaded',
+              timeout: Math.min(
+                MAX_LOCAL_READ_WAIT_MS * 6,
+                Math.max(1, hardExhaustionDeadline - Date.now()),
+              ),
+            });
+            return successor;
+          },
+          sleep: recoveryHooks.sleep ?? (async (milliseconds) => {
+            await sleep(page, milliseconds);
+          }),
+          now: () => Date.now(),
+        },
+      });
+
+      browser = recovered.browser;
+      if (recovered.kind === 'failure') return recoveryFailureOutcome(recovered);
+
+      page = recovered.page;
+      if (!recovered.cleanupOwned && page && typeof page === 'object') {
+        cleanupAuthorityUnprovenPages.add(page);
+      }
+      recoveryState.immutableConversationUrl = recovered.conversationUrl;
+      if (config.newChat && !ownedConversationUrl) {
+        ownedConversationUrl = recovered.conversationUrl;
+      }
+      if (config.directPublication) installDirectPublicationObserver(page, directObservation);
+      baselineCount = 0;
+      return null;
+    };
+
     // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
     // landed and this invocation still owns a reachable page, #1120 requires us
     // to keep that page rather than manufacture lost-chat/resend eligibility.
     while (true) {
+      if (sendCount >= 1 && browserOrPageDefinitelyLost(page, browser)) {
+        const terminal = await recoverCurrentObservation();
+        if (terminal) return terminal;
+        continue;
+      }
       pollCount++;
       if (config.newChat && sendCount >= 1) {
         const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
         if (observedConversationUrl) {
           if (!ownedConversationUrl) ownedConversationUrl = observedConversationUrl;
+          recoveryState.immutableConversationUrl = observedConversationUrl;
           await navigateToProjectConversationIfNeeded(
             page,
             observedConversationUrl,
@@ -2094,7 +2291,11 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       try {
         observation = await readPostSendObservation(page, marker, baselineCount);
       } catch (error) {
-        if (browserOrPageDefinitelyLost(page, browser)) throw error;
+        if (browserOrPageDefinitelyLost(page, browser)) {
+          const terminal = await recoverCurrentObservation();
+          if (terminal) return terminal;
+          continue;
+        }
         const symptom = error instanceof Error ? error.message : String(error);
         incident('post_send_observation_error', symptom, 'continue_polling_owned_page');
         if (!(completionReadySeen && bestReadyReply.length > 0)) {
@@ -2201,6 +2402,47 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         continue;
       }
 
+      const markerCardinality = recoveryMarkerCardinality(messages, marker);
+      const durableConversationUrl = targetChatUrl
+        ?? ownedConversationUrl
+        ?? pageConversationUrl(page);
+      if (
+        !faultActuatorUsed
+        && recoveryHooks.faultActuator
+        && durableConversationUrl
+        && markerCardinality.matchingUserCarrierCount === 1
+        && markerCardinality.exactMarkerTokenCount === 1
+      ) {
+        faultActuatorUsed = true;
+        recoveryState.immutableConversationUrl = durableConversationUrl;
+        const conversationUrlSha256 = createHash('sha256')
+          .update(durableConversationUrl, 'utf8')
+          .digest('hex');
+        const markerSha256 = createHash('sha256').update(marker, 'utf8').digest('hex');
+        recoveryHooks.observer?.({
+          event: 'census',
+          lossEpoch: recoveryState.lossEpoch,
+          eligiblePageCount: 1,
+          supportedPageCount: 1,
+          censusComplete: true,
+          conversationUrlSha256,
+        });
+        await recoveryHooks.faultActuator({
+          page,
+          browser,
+          sendCount,
+          conversationUrlSha256,
+          markerSha256,
+          matchingUserCarrierCount: markerCardinality.matchingUserCarrierCount,
+          exactMarkerTokenCount: markerCardinality.exactMarkerTokenCount,
+        });
+        if (browserOrPageDefinitelyLost(page, browser)) {
+          const terminal = await recoverCurrentObservation();
+          if (terminal) return terminal;
+          continue;
+        }
+      }
+
       const inProgress = !ownedWindowCompletionReady && !completionReadySeen;
       const decision = classifyPageObservation(messages, baselineCount, marker, inProgress);
 
@@ -2209,8 +2451,25 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
 
       if (decision.state === 'uncertain' && decision.cause === 'owned_prompt_marker_ambiguous') {
-        incident('post_send_observation_error', 'owned_prompt_marker_ambiguous', 'return_local_degraded');
-        return { page, browser, result: compactResult('ui_contract_mismatch', 'invocation', 'owned_prompt_marker_ambiguous', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed) };
+        incident('post_send_observation_error', 'owned_prompt_marker_ambiguous', 'retain_owned_page_no_resend');
+        return {
+          page,
+          browser,
+          cleanupAction: 'preserve',
+          result: compactResult(
+            'observation_uncertain',
+            'invocation',
+            'owned_prompt_marker_ambiguous',
+            invocationId,
+            profileKey,
+            sendCount,
+            pollCount,
+            navigation,
+            incidents,
+            {},
+            journalWriteFailed,
+          ),
+        };
       }
 
       if (decision.state === 'uncertain') {
@@ -2592,9 +2851,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         afterSend ? 'helper_failure_after_send' : 'helper_failure_before_send',
         cause,
         afterSend
-          ? lostAfterSend
-            ? 'caller_may_open_fresh_chat'
-            : 'retain_owned_page_no_resend'
+          ? 'retain_owned_page_no_resend'
           : 'return_local_error',
       );
     }
@@ -2627,11 +2884,32 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let cleanup: ResourceCleanupOutcome = 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
   const incidents = [...outcome.result.incidents];
+  const pageLost = browserOrPageDefinitelyLost(outcome.page, outcome.browser);
+  if (
+    outcome.result.send_count >= 1
+    && outcome.result.state !== 'ok'
+    && outcome.page
+    && !pageLost
+  ) {
+    const stopOutcome = await stopOwnedGeneration(outcome.page);
+    const stopIncident: BrowserIncident = {
+      eventClass: `owned_generation_stop_${stopOutcome}`,
+      symptom: `${outcome.result.state}:${outcome.result.cause}`,
+      action: 'defer_exact_target_close_to_issue_1266',
+    };
+    incidents.push(stopIncident.eventClass);
+    if (!appendIncident(stopIncident, outcome.result.invocation_id)) journalWriteFailed = true;
+  }
+  const cleanupAuthorityProven = Boolean(
+    outcome.page
+    && typeof outcome.page === 'object'
+    && !cleanupAuthorityUnprovenPages.has(outcome.page),
+  );
   const pageAction = outcome.cleanupAction ?? decidePageCleanupAction({
     sendCount: outcome.result.send_count,
     publicationState: outcome.publicationState,
-    pagePresent: Boolean(outcome.page),
-    pageLost: browserOrPageDefinitelyLost(outcome.page, outcome.browser),
+    pagePresent: cleanupAuthorityProven,
+    pageLost,
   });
   if (pageAction === 'close') {
     cleanup = await boundedResourceCleanup(
@@ -2669,6 +2947,7 @@ export const __testComposerMutation = {
 
 export type StateLightTurnDependencies = {
   readonly runTurn?: (args: ParsedTurnArgs) => Promise<TurnRunOutcome>;
+  readonly recoveryHooks?: StateLightRecoveryHooks;
 };
 
 export async function runStateLightTurn(
@@ -2697,7 +2976,10 @@ export async function runStateLightTurn(
     return 22;
   }
 
-  const result = await finalizeTurn(await (dependencies.runTurn ?? runTurn)(args));
+  const outcome = dependencies.runTurn
+    ? await dependencies.runTurn(args)
+    : await runTurn(args, dependencies.recoveryHooks);
+  const result = await finalizeTurn(outcome);
   emit(result);
   return turnExitCode(result.state);
 }

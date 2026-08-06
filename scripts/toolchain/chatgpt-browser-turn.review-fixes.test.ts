@@ -31,6 +31,13 @@ import { classifyProductWall, productStatusText, witnessSurfaceProbeRequiresDown
 import { turnExitCode } from '../chatgpt-browser-turn/contracts.ts';
 import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
 import { liveTurnStreamSequence } from '../chatgpt-browser-turn/fixtures/live-turn-stream-contract.ts';
+import {
+  recoveryMarkerCardinality,
+  runPostSendRecovery,
+  type PostSendRecoveryAdapter,
+  type PostSendRecoveryState,
+  type RecoveryAuthoritativeMessage,
+} from '../chatgpt-browser-turn/state-light-turn-recovery.ts';
 
 import { mkdirSync, symlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -1475,4 +1482,280 @@ describe('issue 1068 fresh canonical identity retention', () => {
 
 });
 
+});
+
+
+describe('Issue #1283 post-send observation recovery', () => {
+  const marker = 'OPKTURNV1' + 'ab'.repeat(16);
+  const knownUrl = 'https://chatgpt.com/c/11111111-1111-4111-8111-111111111111';
+
+  function messages(...items: RecoveryAuthoritativeMessage[]): readonly RecoveryAuthoritativeMessage[] {
+    return items;
+  }
+
+  function adapterFor(input: {
+    pages: unknown[];
+    pageData: Map<unknown, {
+      url: string;
+      messages: readonly RecoveryAuthoritativeMessage[];
+      incomplete?: boolean;
+    }>;
+    disconnected?: boolean;
+    reconnectBrowser?: unknown;
+    successor?: unknown;
+    onSleep?: () => void;
+  }): PostSendRecoveryAdapter & {
+    reconnect: ReturnType<typeof vi.fn>;
+    createSuccessor: ReturnType<typeof vi.fn>;
+  } {
+    let browserDisconnected = input.disconnected === true;
+    return {
+      enumeratePages: vi.fn(async () => input.pages),
+      pageUrl: (page) => input.pageData.get(page)!.url,
+      normalizeConversationUrl: (value) => value,
+      isSupportedConversationUrl: (value) => value.includes('/c/'),
+      readAuthoritativeMessages: vi.fn(async (page) => {
+        const data = input.pageData.get(page);
+        if (!data) throw new Error('page unreadable');
+        return { messages: data.messages, incomplete: data.incomplete === true };
+      }),
+      browserDefinitelyDisconnected: vi.fn(() => browserDisconnected),
+      pageDefinitelyLost: vi.fn((page) => Boolean((page as { lost?: boolean }).lost)),
+      reconnect: vi.fn(async () => {
+        if (!input.reconnectBrowser) throw new Error('reconnect failed');
+        browserDisconnected = false;
+        return input.reconnectBrowser;
+      }),
+      createSuccessor: vi.fn(async () => {
+        if (!input.successor) throw new Error('successor failed');
+        input.pages.splice(0, input.pages.length, input.successor);
+        return input.successor;
+      }),
+      sleep: vi.fn(async () => input.onSleep?.()),
+      now: vi.fn(() => 100),
+    };
+  }
+
+  it('counts exact marker tokens only in authoritative user carriers', () => {
+    expect(recoveryMarkerCardinality(messages(
+      { role: 'assistant', text: marker },
+      { role: 'user', text: `${marker}\n\nprompt ${marker}` },
+    ), marker)).toEqual({
+      matchingUserCarrierCount: 1,
+      exactMarkerTokenCount: 2,
+    });
+    expect(recoveryMarkerCardinality(messages(
+      { role: 'user', text: `${marker.slice(0, -1)}x` },
+      { role: 'assistant', text: marker },
+    ), marker)).toEqual({
+      matchingUserCarrierCount: 0,
+      exactMarkerTokenCount: 0,
+    });
+  });
+
+  it('waits for a complete global census before accepting one eligible page', async () => {
+    const lostPage = { lost: true };
+    const eligiblePage = {};
+    const sibling = {};
+    let siblingIncomplete = true;
+    const pageData = new Map<unknown, {
+      url: string;
+      messages: readonly RecoveryAuthoritativeMessage[];
+      incomplete?: boolean;
+    }>([
+      [eligiblePage, {
+        url: knownUrl,
+        messages: messages({ role: 'user', text: `${marker}\n\nprompt` }),
+      }],
+      [sibling, {
+        url: 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222',
+        messages: messages(),
+        incomplete: true,
+      }],
+    ]);
+    const adapter = adapterFor({
+      pages: [eligiblePage, sibling],
+      pageData,
+      onSleep: () => {
+        if (!siblingIncomplete) return;
+        siblingIncomplete = false;
+        pageData.set(sibling, {
+          url: 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222',
+          messages: messages(),
+          incomplete: false,
+        });
+      },
+    });
+    const state: PostSendRecoveryState = {
+      lossEpoch: 0,
+      successorCreated: false,
+      immutableConversationUrl: knownUrl,
+      cleanupAuthorityPage: lostPage,
+    };
+
+    const result = await runPostSendRecovery({
+      browser: {},
+      currentPage: lostPage,
+      marker,
+      hardDeadlineMs: 1_000,
+      pollMs: 1,
+      state,
+      adapter,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'recovered',
+      page: eligiblePage,
+      conversationUrl: knownUrl,
+      cleanupOwned: false,
+      lossEpoch: 1,
+    });
+    expect(adapter.createSuccessor).not.toHaveBeenCalled();
+    expect(adapter.sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses one real reconnect boundary and never creates a successor when a recovered page is eligible', async () => {
+    const lostPage = { lost: true };
+    const recoveredPage = {};
+    const recoveredBrowser = {};
+    const pageData = new Map<unknown, {
+      url: string;
+      messages: readonly RecoveryAuthoritativeMessage[];
+    }>([
+      [recoveredPage, {
+        url: knownUrl,
+        messages: messages({ role: 'user', text: `${marker}\n\nprompt` }),
+      }],
+    ]);
+    const adapter = adapterFor({
+      pages: [recoveredPage],
+      pageData,
+      disconnected: true,
+      reconnectBrowser: recoveredBrowser,
+    });
+    const state: PostSendRecoveryState = {
+      lossEpoch: 0,
+      successorCreated: false,
+      immutableConversationUrl: knownUrl,
+      cleanupAuthorityPage: lostPage,
+    };
+
+    const result = await runPostSendRecovery({
+      browser: { disconnected: true },
+      currentPage: lostPage,
+      marker,
+      hardDeadlineMs: 1_000,
+      pollMs: 1,
+      state,
+      adapter,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'recovered',
+      browser: recoveredBrowser,
+      page: recoveredPage,
+      lossEpoch: 1,
+    });
+    expect(adapter.reconnect).toHaveBeenCalledTimes(1);
+    expect(adapter.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it('creates at most one non-sending successor after a complete no-page census', async () => {
+    const lostPage = { lost: true };
+    const successor = {};
+    const pageData = new Map<unknown, {
+      url: string;
+      messages: readonly RecoveryAuthoritativeMessage[];
+    }>([
+      [successor, {
+        url: knownUrl,
+        messages: messages({ role: 'user', text: `${marker}\n\nprompt` }),
+      }],
+    ]);
+    const adapter = adapterFor({
+      pages: [],
+      pageData,
+      successor,
+    });
+    const state: PostSendRecoveryState = {
+      lossEpoch: 0,
+      successorCreated: false,
+      immutableConversationUrl: knownUrl,
+      cleanupAuthorityPage: lostPage,
+    };
+
+    const result = await runPostSendRecovery({
+      browser: {},
+      currentPage: lostPage,
+      marker,
+      hardDeadlineMs: 1_000,
+      pollMs: 1,
+      state,
+      adapter,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'recovered',
+      page: successor,
+      cleanupOwned: true,
+    });
+    expect(adapter.createSuccessor).toHaveBeenCalledTimes(1);
+    expect(state.successorCreated).toBe(true);
+  });
+
+  it('fails closed on repeated marker evidence and maps a third loss to no-resend exhaustion', async () => {
+    const repeatedPage = {};
+    const pageData = new Map<unknown, {
+      url: string;
+      messages: readonly RecoveryAuthoritativeMessage[];
+    }>([
+      [repeatedPage, {
+        url: knownUrl,
+        messages: messages({ role: 'user', text: `${marker} ${marker}` }),
+      }],
+    ]);
+    const ambiguityAdapter = adapterFor({ pages: [repeatedPage], pageData });
+    const ambiguity = await runPostSendRecovery({
+      browser: {},
+      currentPage: { lost: true },
+      marker,
+      hardDeadlineMs: 1_000,
+      pollMs: 1,
+      state: {
+        lossEpoch: 0,
+        successorCreated: false,
+        immutableConversationUrl: knownUrl,
+      },
+      adapter: ambiguityAdapter,
+    });
+    expect(ambiguity).toMatchObject({
+      kind: 'failure',
+      state: 'observation_uncertain',
+      cause: 'owned_prompt_marker_ambiguous',
+      eventClass: 'post_send_observation_error',
+      action: 'retain_owned_page_no_resend',
+    });
+    expect(ambiguity).not.toHaveProperty('caller_may_open_fresh_chat');
+
+    const thirdLoss = await runPostSendRecovery({
+      browser: {},
+      currentPage: { lost: true },
+      marker,
+      hardDeadlineMs: 1_000,
+      pollMs: 1,
+      state: {
+        lossEpoch: 2,
+        successorCreated: true,
+        immutableConversationUrl: knownUrl,
+      },
+      adapter: adapterFor({ pages: [], pageData: new Map() }),
+    });
+    expect(thirdLoss).toMatchObject({
+      kind: 'failure',
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
+      eventClass: 'observation_exhausted',
+      action: 'retain_owned_page_no_resend',
+    });
+  });
 });
