@@ -1,57 +1,29 @@
-name: Issue 1352 CI repair
+name: Issue 1352 worktree export
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/issue-1352-hard-cut
+      - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair-generated-contracts:
+  export-worktree:
+    if: github.event.pull_request.head.ref == 'agent/issue-1352-hard-cut'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-1352-hard-cut
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - name: Archive exact branch worktree
+        shell: bash
+        run: tar --exclude=.git --exclude=node_modules -czf /tmp/issue-1352-worktree.tar.gz .
+      - uses: actions/upload-artifact@v4
         with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Regenerate fenced registries
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --experimental-strip-types scripts/gate-runner/census-generator.ts \
-            --base-ref origin/main \
-            --output scripts/gate-runner/census/pre-change-baseline.json
-          node --experimental-strip-types scripts/toolchain/check-ts-policy.ts --write-baseline
-          node <<'NODE'
-          const fs = require('node:fs');
-          const path = 'scripts/vitest-ci-lanes.config.json';
-          const data = JSON.parse(fs.readFileSync(path, 'utf8'));
-          data.classification['scripts/lib/operator-publication.test.ts'] = 'light';
-          data.classification['scripts/lib/worker-degraded-ci-handoff.test.ts'] = 'light';
-          data.classification['scripts/lib/worker-report-store.test.ts'] = 'light';
-          data.classification = Object.fromEntries(Object.entries(data.classification).sort(([a], [b]) => a.localeCompare(b)));
-          fs.writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`);
-          NODE
-          rm .github/workflows/issue-1352-ci-repair.yml
-      - name: Commit generated repairs
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'orchestrator-pack repair'
-          git config user.email 'actions@users.noreply.github.com'
-          git add scripts/gate-runner/census/pre-change-baseline.json \
-            scripts/toolchain/raw-child-process-baseline.json \
-            scripts/vitest-ci-lanes.config.json \
-            .github/workflows/issue-1352-ci-repair.yml
-          git diff --cached --check
-          git commit -m 'fix: refresh hard-cut CI registries'
-          git push origin HEAD:agent/issue-1352-hard-cut
-# second connector push intentionally triggers the newly installed workflow
+          name: issue-1352-worktree
+          path: /tmp/issue-1352-worktree.tar.gz
+          if-no-files-found: error
+          retention-days: 1
