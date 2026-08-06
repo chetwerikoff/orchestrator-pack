@@ -1,33 +1,13 @@
 name: issue-1352-bootstrap
 
 on:
-  push:
-    branches:
-      - agent/issue-1352-orca-hard-cut
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  export-dependencies:
-    if: github.repository == 'chetwerikoff/orchestrator-pack'
+  dormant:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Archive dependencies
-        run: tar -czf issue-1352-node-modules.tar.gz node_modules
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue-1352-node-modules
-          path: issue-1352-node-modules.tar.gz
-          if-no-files-found: error
-          retention-days: 1
+      - run: echo "transport staging only"
