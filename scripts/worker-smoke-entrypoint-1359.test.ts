@@ -530,6 +530,30 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     });
     let clock = 0;
     let published = false;
+    const publishCompletion = (): void => {
+      const progressEvents = [
+        { runId, scenarioOrdinal: 1, phase: 'started' },
+        { runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'pass' },
+      ];
+      writeFileSync(
+        smokeProgressPath(artifactDir),
+        `${progressEvents.map((event) => JSON.stringify(event)).join('\n')}\n`,
+        'utf8',
+      );
+      const body = [
+        '```worker-smoke-report',
+        'result: PASS',
+        'tracked-files-unmodified: true',
+        'scenarios:',
+        '  - action: read sealed report | expected: plan completes | observed: report read | outcome: pass',
+        '```',
+      ].join('\n');
+      const bodySha256 = computeSmokeCompletionBodyDigest(body);
+      const bodyPath = smokeCompletionBodyPath(artifactDir, bodySha256);
+      const sealPath = smokeCompletionSealPath(artifactDir, bodySha256);
+      writeFileSync(bodyPath, body, { flag: 'wx' });
+      writeFileSync(sealPath, JSON.stringify({ runId, bodySha256 }), { flag: 'wx' });
+    };
 
     try {
       const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
@@ -550,50 +574,34 @@ if (args[0] === 'worktree' && args[1] === 'current') {
 
       ensureSmokeRunArtifactDir(artifactDir);
       const completion = waitForRuntimeSmokeCompletion({
-        adapter,
-        worker: spawned.value.identity,
-        binding: { runId, artifactDir },
-        scenarioCount: 1,
+        binding: { artifactDir, runId },
+        startedAtMs: clock,
         cwd: root,
-        startedAtMs: 0,
-        abortReason: () => undefined,
+        scenarioCount: 1,
+        worker: spawned.value.identity,
+        adapter,
         now: () => clock,
+        abortReason: () => undefined,
+        progressStallMs: 1_000,
+        absoluteCeilingMs: 1_000,
         sleepMs: (milliseconds) => {
           clock += milliseconds;
-          if (published) return;
-          published = true;
-          writeFileSync(smokeProgressPath(artifactDir), [
-            JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'started' }),
-            JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'pass' }),
-            '',
-          ].join('\n'), 'utf8');
-          const body = [
-            '```worker-smoke-report',
-            'result: PASS',
-            'tracked-files-unmodified: true',
-            'scenarios:',
-            '  - action: read sealed report | expected: plan completes | observed: report read | outcome: pass',
-            '```',
-          ].join('\n');
-          const digest = computeSmokeCompletionBodyDigest(body);
-          writeFileSync(smokeCompletionBodyPath(artifactDir, digest), body, { flag: 'wx' });
-          writeFileSync(
-            smokeCompletionSealPath(artifactDir, digest),
-            JSON.stringify({ runId, bodySha256: digest }),
-            { flag: 'wx' },
-          );
+          if (!published) {
+            published = true;
+            publishCompletion();
+          }
         },
-        absoluteCeilingMs: 1_000,
-        progressStallMs: 1_000,
       });
 
-      expect(completion.ok).toBe(true);
-      expect(completion.partial?.result).toBe('PASS');
-      expect(completion.progress?.planComplete).toBe(true);
-      expect(spawned.value.identity.generation).toBe('read-generation');
       expect(readCalls).toBeGreaterThan(0);
       expect(waitCalls).toBeGreaterThan(0);
       expect(probeCalls).toBeGreaterThanOrEqual(4);
+      expect(spawned.value.identity.generation).toBe('read-generation');
+      expect(completion).toMatchObject({
+        ok: true,
+        partial: { result: 'PASS' },
+        progress: { planComplete: true },
+      });
     } finally {
       restore();
       rmSync(root, { recursive: true, force: true });
