@@ -1,4 +1,5 @@
 name: issue-1283-finalize
+# trigger: existing workflow push
 
 on:
   push:
