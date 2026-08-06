@@ -3,6 +3,8 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcessSync } from './kernel/subprocess.ts';
+import { ghApiJson } from './lib/gh-repo-resolve.mjs';
+import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -36,6 +38,7 @@ import {
   type SmokeReport,
   type SmokeRunBinding,
   type WorkerSmokeCommentRecord,
+  type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
 import {
   bindSmokeTerminalHandle,
@@ -65,7 +68,7 @@ import type {
   RuntimeWorkerIdentity,
 } from './runtime/contracts.ts';
 
-interface CliOptions {
+export interface CliOptions {
   command: string;
   issueNumber: number;
   prNumber: number;
@@ -77,11 +80,12 @@ interface CliOptions {
   json: boolean;
 }
 
-interface ResolvedSmokeTarget {
+export interface ResolvedSmokeTarget {
   repositorySlug: string;
   issueNumber: number;
   prNumber: number;
   headSha: string;
+  issueBody: string;
   issueBodyMatchesTarget: boolean;
   trustedPublisherLogin: string;
 }
@@ -184,14 +188,6 @@ function hashTrackedPaths(cwd: string, paths: readonly string[]): Record<string,
   return hashes;
 }
 
-function parseJsonObject(label: string, text: string): Record<string, unknown> {
-  const parsed = JSON.parse(text) as unknown;
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`${label}: expected one JSON object`);
-  }
-  return parsed as Record<string, unknown>;
-}
-
 function positiveInteger(value: unknown): number {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
@@ -205,49 +201,64 @@ function canonicalRepositorySlug(value: unknown): string {
   return slug;
 }
 
+const TRUSTED_REPOSITORY_SLUG = 'chetwerikoff/orchestrator-pack';
+
 function repositoryFromGithubUrl(value: unknown): string {
   const match = String(value ?? '').trim().match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\/\d+(?:$|[?#])/iu);
   return match ? `${match[1]}/${match[2]}` : '';
 }
 
-function exactClosingIssue(body: string): number | undefined {
-  const numbers = [...body.matchAll(/\b(?:closes|closed|fixes|fixed|resolves|resolved)\s+#(\d+)\b/giu)]
-    .map((match) => Number(match[1]));
-  const unique = [...new Set(numbers.filter((value) => Number.isInteger(value) && value > 0))];
-  return unique.length === 1 ? unique[0] : undefined;
+function githubApiObject(label: string, endpoint: string, cwd: string): Record<string, unknown> {
+  const value = ghApiJson('gh', endpoint, { cwd }) as unknown;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label}: expected one JSON object`);
+  }
+  return value as Record<string, unknown>;
 }
 
-function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: string): ResolvedSmokeTarget {
-  const repoView = parseJsonObject('repo-view', requireProcessOutput('repo-view', runSmokeGhSync(
-    ['repo', 'view', '--json', 'nameWithOwner'], options.repoRoot,
-  )));
-  const repositorySlug = canonicalRepositorySlug(repoView.nameWithOwner);
+export function exactClosingIssue(body: string): number | undefined {
+  const scannable = prBodyScannableForIssueLinks(body);
+  const pattern = new RegExp(ISSUE_LINK_PATTERN.source, ISSUE_LINK_PATTERN.flags);
+  const matches = [...scannable.matchAll(pattern)];
+  if (matches.length !== 1) return undefined;
+  const issueNumber = Number(matches[0]?.[1]);
+  return Number.isSafeInteger(issueNumber) && issueNumber > 0 ? issueNumber : undefined;
+}
+
+function suppliedIssueBodyMatches(fetched: string, supplied: string): boolean {
+  return supplied === fetched || supplied === `${fetched}\n` || supplied === `${fetched}\r\n`;
+}
+
+export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: string): ResolvedSmokeTarget {
+  const repositorySlug = canonicalRepositorySlug(TRUSTED_REPOSITORY_SLUG);
   const originSlug = gitOriginRepositorySlug(options.repoRoot);
-  if (repositorySlug.toLowerCase() !== originSlug.toLowerCase()) {
-    throw new Error('trusted_target: repository view and origin mismatch');
+  if (originSlug.toLowerCase() !== repositorySlug.toLowerCase()) {
+    throw new Error('trusted_target: trusted repository and origin mismatch');
   }
 
-  const principal = parseJsonObject('authenticated-principal', requireProcessOutput(
-    'authenticated-principal',
-    runSmokeGhSync(['api', 'user'], options.repoRoot),
-  ));
+  const principal = githubApiObject('authenticated-principal', 'user', options.repoRoot);
   const trustedPublisherLogin = String(principal.login ?? '').trim();
   if (!trustedPublisherLogin) throw new Error('trusted_target: authenticated publication principal unresolved');
 
-  const issue = parseJsonObject('issue-view', requireProcessOutput('issue-view', runSmokeGhSync(
-    ['issue', 'view', String(options.issueNumber), '--repo', repositorySlug, '--json', 'number,body,url'],
+  const issue = githubApiObject(
+    'issue-view',
+    `repos/${repositorySlug}/issues/${options.issueNumber}`,
     options.repoRoot,
-  )));
-  const pr = parseJsonObject('pr-view-binding', requireProcessOutput('pr-view-binding', runSmokeGhSync(
-    ['pr', 'view', String(options.prNumber), '--repo', repositorySlug, '--json', 'number,headRefOid,body,url'],
+  );
+  const pr = githubApiObject(
+    'pr-view-binding',
+    `repos/${repositorySlug}/pulls/${options.prNumber}`,
     options.repoRoot,
-  )));
+  );
 
   const issueNumber = positiveInteger(issue.number);
   const prNumber = positiveInteger(pr.number);
-  const headSha = String(pr.headRefOid ?? '').trim().toLowerCase();
-  const issueRepository = repositoryFromGithubUrl(issue.url);
-  const prRepository = repositoryFromGithubUrl(pr.url);
+  const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head)
+    ? pr.head as Record<string, unknown>
+    : {};
+  const headSha = String(head.sha ?? '').trim().toLowerCase();
+  const issueRepository = repositoryFromGithubUrl(issue.html_url);
+  const prRepository = repositoryFromGithubUrl(pr.html_url);
   if (issueNumber !== options.issueNumber || prNumber !== options.prNumber) {
     throw new Error('trusted_target: resolved Issue or PR number mismatch');
   }
@@ -255,12 +266,17 @@ function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: string): Res
     || prRepository.toLowerCase() !== repositorySlug.toLowerCase()) {
     throw new Error('trusted_target: resolved repository mismatch');
   }
+  if (String(issue.state ?? '').toLowerCase() !== 'open'
+    || String(pr.state ?? '').toLowerCase() !== 'open') {
+    throw new Error('trusted_target: Issue or PR is not open');
+  }
   if (!/^[0-9a-f]{40}$/u.test(options.headSha.trim().toLowerCase())
     || headSha !== options.headSha.trim().toLowerCase()) {
     throw new Error('trusted_target: exact PR head mismatch');
   }
-  if (String(issue.body ?? '') !== suppliedIssueBody) {
-    throw new Error('trusted_target: Issue body file is not the fetched exact Issue body');
+  const issueBody = String(issue.body ?? '');
+  if (!suppliedIssueBodyMatches(issueBody, suppliedIssueBody)) {
+    throw new Error('trusted_target: Issue body file does not match the fetched Issue body');
   }
   if (exactClosingIssue(String(pr.body ?? '')) !== issueNumber) {
     throw new Error('trusted_target: PR-to-Issue resolution is missing, multiple, or mismatched');
@@ -271,6 +287,7 @@ function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: string): Res
     issueNumber,
     prNumber,
     headSha,
+    issueBody,
     issueBodyMatchesTarget: true,
     trustedPublisherLogin,
   };
@@ -303,11 +320,26 @@ export function parsePaginatedSmokeComments(text: string): WorkerSmokeCommentRec
   return normalized;
 }
 
-function fetchPrComments(prNumber: number, repositorySlug: string, repoRoot: string): WorkerSmokeCommentRecord[] {
-  const output = requireProcessOutput('pr-issue-comments', runSmokeGhSync(
-    ['api', `repos/${repositorySlug}/issues/${prNumber}/comments`, '--paginate', '--slurp'], repoRoot,
-  ));
-  return parsePaginatedSmokeComments(output);
+export function fetchPrComments(
+  prNumber: number,
+  repositorySlug: string,
+  repoRoot: string,
+): WorkerSmokeCommentRecord[] {
+  const pages: unknown[][] = [];
+  const perPage = 100;
+  for (let page = 1; page <= 100; page += 1) {
+    const batch = ghApiJson(
+      'gh',
+      `repos/${repositorySlug}/issues/${prNumber}/comments?per_page=${perPage}&page=${page}`,
+      { cwd: repoRoot },
+    ) as unknown;
+    if (!Array.isArray(batch)) {
+      throw new Error('comment_census: comment page was not an array');
+    }
+    pages.push(batch);
+    if (batch.length < perPage) return parsePaginatedSmokeComments(JSON.stringify(pages));
+  }
+  throw new Error('comment_census: pagination completeness unprovable');
 }
 
 export function smokeCommentSnapshotDigest(comments: readonly WorkerSmokeCommentRecord[]): string {
@@ -339,11 +371,23 @@ export function stabilizeSmokeCommentCensus(
   throw new Error('comment_snapshot: failed to stabilize within bounded attempts');
 }
 
-function fetchLivePrHead(prNumber: number, repositorySlug: string, repoRoot: string): string {
-  const pr = parseJsonObject('pr-view-head', requireProcessOutput('pr-view-head', runSmokeGhSync(
-    ['pr', 'view', String(prNumber), '--repo', repositorySlug, '--json', 'headRefOid'], repoRoot,
-  )));
-  return String(pr.headRefOid ?? '').trim().toLowerCase();
+export function fetchLivePrHead(
+  prNumber: number,
+  repositorySlug: string,
+  repoRoot: string,
+): string {
+  const pr = githubApiObject(
+    'pr-view-head',
+    `repos/${repositorySlug}/pulls/${prNumber}`,
+    repoRoot,
+  );
+  const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head)
+    ? pr.head as Record<string, unknown>
+    : {};
+  if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open') {
+    throw new Error('trusted_target: live PR binding changed');
+  }
+  return String(head.sha ?? '').trim().toLowerCase();
 }
 
 function publishPrComment(prNumber: number, body: string, repoRoot: string): void {
@@ -359,27 +403,43 @@ function publishPrComment(prNumber: number, body: string, repoRoot: string): voi
   }
 }
 
-function resolveCiGreen(prNumber: number, headSha: string, repositorySlug: string, repoRoot: string): boolean {
-  const prMeta = JSON.parse(requireProcessOutput('pr-view-head-base', runSmokeGhSync(
-    ['pr', 'view', String(prNumber), '--repo', repositorySlug, '--json', 'headRefOid,baseRefName'], repoRoot,
-  ))) as { headRefOid?: string; baseRefName?: string };
-  if ((prMeta.headRefOid ?? '').trim().toLowerCase() !== headSha.trim().toLowerCase()) return false;
+export function resolveCiGreen(
+  prNumber: number,
+  headSha: string,
+  repositorySlug: string,
+  repoRoot: string,
+): boolean {
+  const pr = githubApiObject(
+    'pr-view-head-base',
+    `repos/${repositorySlug}/pulls/${prNumber}`,
+    repoRoot,
+  );
+  const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head)
+    ? pr.head as Record<string, unknown>
+    : {};
+  const base = pr.base && typeof pr.base === 'object' && !Array.isArray(pr.base)
+    ? pr.base as Record<string, unknown>
+    : {};
+  if (positiveInteger(pr.number) !== prNumber
+    || String(pr.state ?? '').toLowerCase() !== 'open'
+    || String(head.sha ?? '').trim().toLowerCase() !== headSha.trim().toLowerCase()) return false;
   const checks = JSON.parse(requireProcessOutput('required-ci-checks', runSmokeGhSync(
     ['pr', 'checks', String(prNumber), '--repo', repositorySlug, '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
   ))) as { name?: string; state?: string; bucket?: string }[];
-  const baseRef = String(prMeta.baseRefName ?? 'main').trim() || 'main';
-  const protection = runSmokeGhSync(
-    ['api', `repos/${repositorySlug}/branches/${baseRef}/protection/required_status_checks`], repoRoot,
-  );
+  const baseRef = String(base.ref ?? 'main').trim() || 'main';
   let requiredCheckNames: string[] = [];
   let requiredCheckLookupFailed = false;
-  if (protection.ok) {
-    try {
-      const parsed = JSON.parse(protection.stdout) as { contexts?: string[] };
-      requiredCheckNames = Array.isArray(parsed.contexts) ? parsed.contexts : [];
-    } catch {
-      requiredCheckLookupFailed = true;
-    }
+  try {
+    const protection = githubApiObject(
+      'required-status-checks',
+      `repos/${repositorySlug}/branches/${baseRef}/protection/required_status_checks`,
+      repoRoot,
+    );
+    requiredCheckNames = Array.isArray(protection.contexts)
+      ? protection.contexts.map((value) => String(value))
+      : [];
+  } catch {
+    requiredCheckLookupFailed = true;
   }
   return classifyRequiredCiLevel(checks, { requiredCheckNames, requiredCheckLookupFailed }) === 'green';
 }
@@ -596,6 +656,49 @@ function verifyPublishedSmokeProvenance(report: SmokeReport): boolean {
   return smokeReportHasPackProducer(report) && verifySmokeRunReceipt(report);
 }
 
+function coverageTarget(
+  target: ResolvedSmokeTarget,
+  liveHeadSha: string,
+): WorkerSmokeTrustedTarget {
+  return {
+    repositorySlug: target.repositorySlug,
+    issueNumber: target.issueNumber,
+    prNumber: target.prNumber,
+    headSha: target.headSha,
+    resolvedIssueNumber: target.issueNumber,
+    resolvedPrNumber: target.prNumber,
+    liveHeadSha,
+    issueBodyMatchesTarget: target.issueBodyMatchesTarget,
+    trustedPublisherLogin: target.trustedPublisherLogin,
+    commentCensusComplete: true,
+    commentSnapshotStable: true,
+  };
+}
+
+export function findVerifiedSmokeReceiptWitness(input: {
+  issueBody: string;
+  comments: readonly WorkerSmokeCommentRecord[];
+  target: WorkerSmokeTrustedTarget;
+}): SmokeReport | undefined {
+  for (const comment of input.comments) {
+    const contribution = evaluateWorkerSmokeCoverage({
+      issueBody: input.issueBody,
+      comments: [comment],
+      target: input.target,
+    });
+    const candidate = contribution.latestClearingPass;
+    if (candidate && verifyPublishedSmokeProvenance(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+export function finalSmokeCommentSnapshotMatches(
+  stabilized: readonly WorkerSmokeCommentRecord[],
+  finalCensus: readonly WorkerSmokeCommentRecord[],
+): boolean {
+  return smokeCommentSnapshotDigest(stabilized) === smokeCommentSnapshotDigest(finalCensus);
+}
+
 function runValidatePlan(options: CliOptions): number {
   const result = checkSmokeTestPlan(readIssueBody(options.issueBodyFile));
   if (!result.ok) {
@@ -606,50 +709,78 @@ function runValidatePlan(options: CliOptions): number {
   return 0;
 }
 
-async function runGateCheck(options: CliOptions): Promise<number> {
-  const lifecycle = evaluateSmokeLifecycleCleanliness(options.cwd);
+export interface GateCheckDependencies {
+  evaluateLifecycle: (cwd: string) => ReturnType<typeof evaluateSmokeLifecycleCleanliness>;
+  resolveTarget: (options: CliOptions, suppliedIssueBody: string) => ResolvedSmokeTarget;
+  fetchComments: (
+    prNumber: number,
+    repositorySlug: string,
+    repoRoot: string,
+  ) => WorkerSmokeCommentRecord[];
+  fetchHead: (prNumber: number, repositorySlug: string, repoRoot: string) => string;
+  selectAdapter: (cwd: string) => Promise<RuntimeAdapter>;
+  ciGreen: (
+    prNumber: number,
+    headSha: string,
+    repositorySlug: string,
+    repoRoot: string,
+  ) => boolean;
+}
+
+const DEFAULT_GATE_DEPENDENCIES: GateCheckDependencies = {
+  evaluateLifecycle: evaluateSmokeLifecycleCleanliness,
+  resolveTarget: resolveSmokeTarget,
+  fetchComments: fetchPrComments,
+  fetchHead: fetchLivePrHead,
+  selectAdapter: async (cwd) => selectRuntimeAdapter({}, { cwd }),
+  ciGreen: resolveCiGreen,
+};
+
+export async function runGateCheck(
+  options: CliOptions,
+  dependencies: GateCheckDependencies = DEFAULT_GATE_DEPENDENCIES,
+): Promise<number> {
+  const lifecycle = dependencies.evaluateLifecycle(options.cwd);
   if (!lifecycle.clean) {
     emit({ ok: false, allowed: false, reason: `smoke_lifecycle_unclean:${lifecycle.reasons[0]}`, lifecycle }, options.json);
     return 1;
   }
 
   try {
-    const issueBody = readIssueBody(options.issueBodyFile);
-    const target = resolveSmokeTarget(options, issueBody);
+    const suppliedIssueBody = readIssueBody(options.issueBodyFile);
+    const target = dependencies.resolveTarget(options, suppliedIssueBody);
+    const issueBody = target.issueBody;
     const comments = stabilizeSmokeCommentCensus(
-      () => fetchPrComments(options.prNumber, target.repositorySlug, options.repoRoot),
+      () => dependencies.fetchComments(options.prNumber, target.repositorySlug, options.repoRoot),
     );
-    const liveHeadSha = fetchLivePrHead(options.prNumber, target.repositorySlug, options.repoRoot);
-    const adapter = await selectRuntimeAdapter({}, { cwd: options.cwd });
-    const readiness = adapter.readiness({ cwd: options.cwd });
-    const coverage = evaluateWorkerSmokeCoverage({
+    const liveHeadSha = dependencies.fetchHead(
+      options.prNumber,
+      target.repositorySlug,
+      options.repoRoot,
+    );
+    const trustedTarget = coverageTarget(target, liveHeadSha);
+    const receiptWitness = findVerifiedSmokeReceiptWitness({
       issueBody,
       comments,
-      target: {
-        repositorySlug: target.repositorySlug,
-        issueNumber: target.issueNumber,
-        prNumber: target.prNumber,
-        headSha: target.headSha,
-        resolvedIssueNumber: target.issueNumber,
-        resolvedPrNumber: target.prNumber,
-        liveHeadSha,
-        issueBodyMatchesTarget: target.issueBodyMatchesTarget,
-        trustedPublisherLogin: target.trustedPublisherLogin,
-        commentCensusComplete: true,
-        commentSnapshotStable: true,
-      },
+      target: trustedTarget,
     });
-    const clearingPass = coverage.latestClearingPass;
+    const adapter = await dependencies.selectAdapter(options.cwd);
+    const readiness = adapter.readiness({ cwd: options.cwd });
     let decision = evaluateWorkerSmokeGate({
       issueBody,
       issueNumber: target.issueNumber,
       prNumber: target.prNumber,
       headSha: target.headSha,
       prComments: comments,
-      ciGreen: resolveCiGreen(options.prNumber, options.headSha, target.repositorySlug, options.repoRoot),
+      ciGreen: dependencies.ciGreen(
+        options.prNumber,
+        options.headSha,
+        target.repositorySlug,
+        options.repoRoot,
+      ),
       orcaWorktreeOk: readiness.status === 'ok',
-      ownedTerminalClosed: Boolean(clearingPass),
-      terminalProvenanceOk: clearingPass ? verifyPublishedSmokeProvenance(clearingPass) : false,
+      ownedTerminalClosed: Boolean(receiptWitness),
+      terminalProvenanceOk: Boolean(receiptWitness),
       repositorySlug: target.repositorySlug,
       resolvedIssueNumber: target.issueNumber,
       resolvedPrNumber: target.prNumber,
@@ -661,14 +792,32 @@ async function runGateCheck(options: CliOptions): Promise<number> {
     });
 
     if (decision.allowed) {
-      const finalHeadSha = fetchLivePrHead(options.prNumber, target.repositorySlug, options.repoRoot);
-      if (finalHeadSha !== target.headSha) {
+      const finalComments = dependencies.fetchComments(
+        options.prNumber,
+        target.repositorySlug,
+        options.repoRoot,
+      );
+      if (!finalSmokeCommentSnapshotMatches(comments, finalComments)) {
         decision = {
           allowed: false,
-          reason: 'live_pr_head_changed_during_evaluation',
+          reason: 'comment_snapshot_changed_before_allow',
           smokeRequired: true,
           diagnostics: decision.diagnostics,
         };
+      } else {
+        const finalHeadSha = dependencies.fetchHead(
+          options.prNumber,
+          target.repositorySlug,
+          options.repoRoot,
+        );
+        if (finalHeadSha !== target.headSha) {
+          decision = {
+            allowed: false,
+            reason: 'live_pr_head_changed_during_evaluation',
+            smokeRequired: true,
+            diagnostics: decision.diagnostics,
+          };
+        }
       }
     }
     emit({ ok: decision.allowed, ...decision, lifecycle }, options.json);
