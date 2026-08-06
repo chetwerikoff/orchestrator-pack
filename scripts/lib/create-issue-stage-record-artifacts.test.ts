@@ -1261,3 +1261,813 @@ sendCount: 1,
   });
 
 });
+
+
+
+
+
+
+describe('Issue #1341 accepted operator-input smoke matrix completion', () => {
+  const HEAD_A_1341 = 'a'.repeat(40);
+  const HEAD_B_1341 = 'b'.repeat(40);
+  const REPOSITORY_1341 = 'chetwerikoff/orchestrator-pack';
+
+  function gateAIssueBody(): string {
+    return [
+      '```complexity-tier',
+      'tier: T1',
+      'advisory-prior: T1',
+      '```',
+    ].join('\n');
+  }
+
+  function gateAInput(
+    storeRoot: string,
+    boundSnapshot: string,
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber: 1341,
+      headSha: HEAD_A_1341,
+      operatorRepository: REPOSITORY_1341,
+      operatorIssueNumber: 1341,
+      operatorBoundSnapshot: boundSnapshot,
+      operatorReason: 'direct operator recovery for the exact blocked review',
+      claimMode: 'preacquired',
+      fixtureCurrentPrHeadSha: HEAD_A_1341,
+      fixturePrState: 'OPEN',
+      fixtureRepoSlug: REPOSITORY_1341,
+      fixturePostReviewHeadSha: HEAD_A_1341,
+      fixtureIssueBody: gateAIssueBody(),
+      fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      ...overrides,
+    };
+  }
+
+  async function withGateAEnvironment<T>(run: () => Promise<T>): Promise<T> {
+    const saved = { ...process.env };
+    try {
+      process.env.OPK_VITEST_HARNESS = '1';
+      process.env.PACK_REVIEWER = 'codex';
+      return await run();
+    } finally {
+      process.env = saved;
+    }
+  }
+
+  it('admits a complete Gate A operator target through the actual direct CLI', async () => {
+    const { captureBoundIssueSnapshot, computeBoundIssueSnapshotHash } = await import('./reverify-bound-issue-snapshot.js');
+    const { listPackReviewRuns } = await import('./pack-review-run-store.js');
+    const { runProcessSync } = await import('../kernel/subprocess.js');
+    const { chmodSync } = await import('node:fs');
+    const root = mkdtempSync(join(tmpdir(), 'opk-1341-gate-a-cli-'));
+    tempDirs.push(root);
+    const storeRoot = join(root, 'store');
+    const capture = join(root, 'github-review.json');
+    const binRoot = join(root, 'bin');
+    mkdirSync(binRoot, { recursive: true });
+    if (process.platform === 'win32') {
+      writeFileSync(join(binRoot, 'gh.cmd'), '@echo off\r\necho {}\r\nexit /b 0\r\n');
+    } else {
+      const gh = join(binRoot, 'gh');
+      writeFileSync(gh, '#!/usr/bin/env node\nprocess.stdout.write("{}\\n");\n');
+      chmodSync(gh, 0o755);
+    }
+    const issueBody = gateAIssueBody();
+    const snapshotStore = join(root, 'bound-snapshots');
+    const captured = captureBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 1341,
+      prHeadSha: HEAD_A_1341,
+      issueNumber: 1341,
+      issueBody,
+      storeDirOverride: snapshotStore,
+    });
+    const digest = computeBoundIssueSnapshotHash(issueBody);
+    expect(captured.snapshotHash).toBe(digest);
+    const result = runProcessSync({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types',
+        join(process.cwd(), 'scripts', 'pack-review-runner.ts'),
+        'start',
+        '--pr-number', '1341',
+        '--head-sha', HEAD_A_1341,
+        '--operator-repository', REPOSITORY_1341,
+        '--operator-issue-number', '1341',
+        '--operator-bound-snapshot', digest,
+        '--operator-reason', 'direct operator CLI recovery',
+      ],
+      cwd: process.cwd(),
+      input: JSON.stringify({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        sourceRepoRoot: process.cwd(),
+        claimMode: 'preacquired',
+        fixtureCurrentPrHeadSha: HEAD_A_1341,
+        fixturePrState: 'OPEN',
+        fixtureRepoSlug: REPOSITORY_1341,
+        fixturePostReviewHeadSha: HEAD_A_1341,
+        fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
+        fixtureGithubReviewId: 1341,
+      }),
+      env: {
+        ...process.env,
+        OPK_VITEST_HARNESS: '1',
+        PACK_REVIEWER: 'codex',
+        PACK_REVIEW_GITHUB_REVIEW_CAPTURE_FILE: capture,
+        AO_BASE_DIR: join(root, 'ao-base'),
+        OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR: snapshotStore,
+        PATH: `${binRoot}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`,
+      },
+      encoding: 'utf8',
+      timeoutMs: 30_000,
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
+    const payload = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(payload).toMatchObject({ ok: true, created: true });
+    const runs = listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      prNumber: 1341,
+      targetSha: HEAD_A_1341,
+      canonicalRepository: REPOSITORY_1341,
+      linkedSessionId: '',
+      startReason: 'direct operator CLI recovery',
+    });
+    expect(runs[0]?.surface).toContain('operator_adjudicated');
+    expect(runs[0]?.surface).toContain('session-binding=absent');
+    expect(existsSync(capture)).toBe(true);
+  }, 30_000);
+
+  it.each([
+    ['repository omitted', 'operatorRepository', undefined],
+    ['repository blank', 'operatorRepository', '   '],
+    ['Issue omitted', 'operatorIssueNumber', undefined],
+    ['Issue blank', 'operatorIssueNumber', '   '],
+    ['snapshot omitted', 'operatorBoundSnapshot', undefined],
+    ['snapshot blank', 'operatorBoundSnapshot', '   '],
+    ['reason omitted', 'operatorReason', undefined],
+    ['reason blank', 'operatorReason', '   '],
+    ['short head', 'headSha', 'a'.repeat(39)],
+    ['stale head', 'headSha', HEAD_B_1341],
+    ['closed PR', 'fixturePrState', 'CLOSED'],
+  ])('rejects Gate A %s before any run, status, notification, or reviewer side effect', async (
+    _name,
+    field,
+    value,
+  ) => {
+    await withGateAEnvironment(async () => {
+      const { startPackReview } = await import('../pack-review-runner.js');
+      const { listPackReviewRuns } = await import('./pack-review-run-store.js');
+      const { computeBoundIssueSnapshotHash } = await import('./reverify-bound-issue-snapshot.js');
+      const root = mkdtempSync(join(tmpdir(), 'opk-1341-gate-a-fields-'));
+      tempDirs.push(root);
+      const storeRoot = join(root, 'store');
+      const invocationLog = join(root, 'reviewer-invocations.jsonl');
+      process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
+      let started = false;
+      let statusWrites = 0;
+      let notifications = 0;
+      const input = gateAInput(
+        storeRoot,
+        computeBoundIssueSnapshotHash(gateAIssueBody()),
+        {
+          [field]: value,
+          onRunStarted: () => { started = true; },
+          fixtureRequiredStatusWriter: async () => { statusWrites += 1; },
+          fixtureWorkerNotifier: async () => {
+            notifications += 1;
+            return { state: 'delivered' as const, reason: 'fixture' };
+          },
+        },
+      );
+      await expect(startPackReview(input as Parameters<typeof startPackReview>[0])).rejects.toThrow();
+      expect(started).toBe(false);
+      expect(statusWrites).toBe(0);
+      expect(notifications).toBe(0);
+      expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([]);
+      expect(existsSync(invocationLog)).toBe(false);
+    });
+  });
+
+  it.each([
+    ['missing snapshot evidence', 'missing'],
+    ['stale head-bound snapshot evidence', 'stale'],
+    ['multiple competing snapshot paths', 'multiple'],
+    ['mismatched snapshot identity', 'mismatched'],
+  ])('rejects Gate A %s before run/subprocess creation', async (_name, scenario) => {
+    await withGateAEnvironment(async () => {
+      const { startPackReview } = await import('../pack-review-runner.js');
+      const { listPackReviewRuns } = await import('./pack-review-run-store.js');
+      const {
+        boundIssueSnapshotArtifactPaths,
+        captureBoundIssueSnapshot,
+        computeBoundIssueSnapshotHash,
+      } = await import('./reverify-bound-issue-snapshot.js');
+      const root = mkdtempSync(join(tmpdir(), 'opk-1341-gate-a-snapshot-'));
+      tempDirs.push(root);
+      const storeRoot = join(root, 'store');
+      const snapshotStore = join(root, 'snapshots');
+      const body = gateAIssueBody();
+      const digest = computeBoundIssueSnapshotHash(body);
+      process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = snapshotStore;
+      delete process.env.OPK_BOUND_ISSUE_SNAPSHOT_PATH;
+      if (scenario === 'stale') {
+        const paths = boundIssueSnapshotArtifactPaths({
+          projectId: 'orchestrator-pack',
+          prNumber: 1341,
+          prHeadSha: HEAD_A_1341,
+          issueNumber: 1341,
+          storeDirOverride: snapshotStore,
+        });
+        mkdirSync(join(snapshotStore, 'pr-1341', HEAD_A_1341.slice(0, 12)), { recursive: true });
+        writeFileSync(paths.snapshotPath, body);
+        writeFileSync(paths.metadataPath, JSON.stringify({
+          schemaVersion: 1,
+          projectId: 'orchestrator-pack',
+          prNumber: 1341,
+          prHeadSha: HEAD_B_1341,
+          issueNumber: 1341,
+          snapshotHash: digest,
+          capturedAt: '2026-08-05T00:00:00.000Z',
+          capturePhase: 'review-preflight',
+        }));
+      } else if (scenario !== 'missing') {
+        const captured = captureBoundIssueSnapshot({
+          projectId: 'orchestrator-pack',
+          prNumber: 1341,
+          prHeadSha: HEAD_A_1341,
+          issueNumber: 1341,
+          issueBody: body,
+          storeDirOverride: snapshotStore,
+        });
+        if (scenario === 'multiple') {
+          const duplicate = join(root, 'duplicate-bound-issue.md');
+          writeFileSync(duplicate, body);
+          process.env.OPK_BOUND_ISSUE_SNAPSHOT_PATH = duplicate;
+          expect(captured.snapshotPath).not.toBe(duplicate);
+        }
+      }
+      const invocationLog = join(root, 'reviewer-invocations.jsonl');
+      process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
+      let started = false;
+      const input = gateAInput(storeRoot, scenario === 'mismatched'
+        ? computeBoundIssueSnapshotHash(`${body}\nchanged`)
+        : digest, {
+        fixtureIssueBody: undefined,
+        onRunStarted: () => { started = true; },
+      });
+      await expect(startPackReview(input as Parameters<typeof startPackReview>[0])).rejects.toThrow(
+        /snapshot (missing|corrupted)|snapshot file path does not match|does not match authoritative review context/,
+      );
+      expect(started).toBe(false);
+      expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([]);
+      expect(existsSync(invocationLog)).toBe(false);
+    });
+  });
+
+  it('rejects Gate A active/reuse and journaled/resume candidates before delivery or reviewer side effects', async () => {
+    await withGateAEnvironment(async () => {
+      const { startPackReview } = await import('../pack-review-runner.js');
+      const {
+        createPackReviewRun,
+        getPackReviewRun,
+        listPackReviewRuns,
+        setPackReviewRunTerminal,
+        updatePackReviewRun,
+      } = await import('./pack-review-run-store.js');
+      const { computeBoundIssueSnapshotHash } = await import('./reverify-bound-issue-snapshot.js');
+      for (const kind of ['active', 'journaled-resume'] as const) {
+        const root = mkdtempSync(join(tmpdir(), `opk-1341-gate-a-${kind}-`));
+        tempDirs.push(root);
+        const storeRoot = join(root, 'store');
+        const invocationLog = join(root, 'reviewer-invocations.jsonl');
+        process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
+        const created = createPackReviewRun({
+          projectId: 'orchestrator-pack',
+          storeRoot,
+          prNumber: 1341,
+          headSha: HEAD_A_1341,
+          linkedSessionId: 'original-session',
+          startReason: 'original reason',
+          surface: 'original surface',
+          trustedPackRoot: process.cwd(),
+          sourceRepoRoot: process.cwd(),
+          canonicalRepository: REPOSITORY_1341,
+        });
+        if (kind === 'journaled-resume') {
+          setPackReviewRunTerminal(created.run.id, 'commented', {
+            reviewVerdict: 'clean',
+            findingCount: 0,
+            findings: [],
+          }, { projectId: 'orchestrator-pack', storeRoot });
+          updatePackReviewRun(created.run.id, {
+            journalOutcome: {
+              state: 'persisted',
+              recordedAtUtc: '2026-08-05T00:00:00.000Z',
+              reason: 'fixture persisted verdict',
+              idempotencyKey: `verdict:${created.run.id}:${HEAD_A_1341}`,
+              attempts: 1,
+            },
+          }, { projectId: 'orchestrator-pack', storeRoot });
+        }
+        let statusWrites = 0;
+        let notifications = 0;
+        await expect(startPackReview(gateAInput(
+          storeRoot,
+          computeBoundIssueSnapshotHash(gateAIssueBody()),
+          {
+            fixtureRequiredStatusWriter: async () => { statusWrites += 1; },
+            fixtureWorkerNotifier: async () => {
+              notifications += 1;
+              return { state: 'delivered' as const, reason: 'fixture' };
+            },
+          },
+        ) as Parameters<typeof startPackReview>[0])).rejects.toThrow(/cannot reuse or resume existing same-head run/);
+        expect(statusWrites).toBe(0);
+        expect(notifications).toBe(0);
+        expect(existsSync(invocationLog)).toBe(false);
+        expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
+        expect(getPackReviewRun(created.run.id, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+          linkedSessionId: 'original-session',
+          startReason: 'original reason',
+          surface: 'original surface',
+        });
+      }
+    });
+  });
+
+  it.each(['worker', 'reviewer', 'flow-manager'])(
+    'prevents the %s autonomous stdin surface from minting Gate A operator authority',
+    async (surface) => {
+      const { runProcessSync } = await import('../kernel/subprocess.js');
+      const { computeBoundIssueSnapshotHash } = await import('./reverify-bound-issue-snapshot.js');
+      const root = mkdtempSync(join(tmpdir(), `opk-1341-gate-a-mint-${surface}-`));
+      tempDirs.push(root);
+      const storeRoot = join(root, 'store');
+      const result = runProcessSync({
+        command: process.execPath,
+        args: [
+          '--experimental-strip-types',
+          join(process.cwd(), 'scripts', 'pack-review-runner.ts'),
+          'start',
+          '--pr-number', '1341',
+          '--head-sha', HEAD_A_1341,
+        ],
+        cwd: process.cwd(),
+        input: JSON.stringify({
+          projectId: 'orchestrator-pack',
+          storeRoot,
+          sourceRepoRoot: process.cwd(),
+          surface,
+          actor: 'operator',
+          operatorRepository: REPOSITORY_1341,
+          operatorIssueNumber: 1341,
+          operatorBoundSnapshot: computeBoundIssueSnapshotHash(gateAIssueBody()),
+          operatorReason: 'autonomous caller supplied prose',
+        }),
+        env: {
+          ...process.env,
+          OPK_VITEST_HARNESS: '1',
+          PACK_REVIEWER: 'codex',
+        },
+        encoding: 'utf8',
+        timeoutMs: 15_000,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        'operator pack-review start inputs are accepted only from direct CLI arguments',
+      );
+      expect(existsSync(storeRoot)).toBe(false);
+    },
+  );
+
+  it('keeps Gate A no-input failure bytes and side effects bit-for-bit identical', async () => {
+    const saved = { ...process.env };
+    try {
+      delete process.env.OPK_VITEST_HARNESS;
+      const { startPackReview } = await import('../pack-review-runner.js');
+      const { listPackReviewRuns } = await import('./pack-review-run-store.js');
+      const roots = [
+        mkdtempSync(join(tmpdir(), 'opk-1341-gate-a-parity-a-')),
+        mkdtempSync(join(tmpdir(), 'opk-1341-gate-a-parity-b-')),
+      ];
+      tempDirs.push(...roots);
+      const base = {
+        projectId: 'orchestrator-pack',
+        sourceRepoRoot: process.cwd(),
+        prNumber: 1341,
+        headSha: HEAD_A_1341,
+      };
+      const messages: string[] = [];
+      for (const [index, root] of roots.entries()) {
+        try {
+          await startPackReview(index === 0
+            ? { ...base, storeRoot: root }
+            : {
+                ...base,
+                storeRoot: root,
+                operatorRepository: undefined,
+                operatorIssueNumber: undefined,
+                operatorBoundSnapshot: undefined,
+                operatorReason: undefined,
+              });
+        } catch (error) {
+          messages.push(error instanceof Error ? error.message : String(error));
+        }
+      }
+      expect(Buffer.from(messages[0] ?? '')).toEqual(Buffer.from(messages[1] ?? ''));
+      expect(messages[0]).toBe('pack review target requires an immutable session PR/Issue binding');
+      for (const root of roots) {
+        expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot: root })).toEqual([]);
+      }
+    } finally {
+      process.env = saved;
+    }
+  });
+
+  function governedCapture1341(overrides: string[] = []): string {
+    return [
+      'Read revision: #1192 r01',
+      'review-economics-contract: v1',
+      'VERDICT: CLEAN',
+      'NO_FINDINGS',
+      'SIMPLIFICATION_CLEAN',
+      'FINDING_COUNT: 0',
+      'INVOCATION_ID: fixture-terminal-1192',
+      ...overrides,
+      '',
+    ].join('\n');
+  }
+
+  function adjudication1341(capture: string) {
+    return {
+      issueNumber: 1192,
+      sourceRevision: 'r01',
+      verdictUrl: 'https://github.com/chetwerikoff/orchestrator-pack/issues/1192#issuecomment-5194504082',
+      verdictSha256: createHash('sha256').update(capture).digest('hex'),
+      verdictByteLength: Buffer.byteLength(capture),
+      verdictFindingCount: 0,
+      reason: 'operator confirmed the already-published exact terminal verdict',
+    };
+  }
+
+  function referenceTransport1341(
+    capture: string,
+    overrides: Record<string, unknown> = {},
+    exitCode = 0,
+  ) {
+    return {
+      runGh: vi.fn(() => ({
+        exitCode,
+        stderr: exitCode === 0 ? '' : 'not found',
+        stdout: exitCode === 0 ? JSON.stringify({
+          id: 5194504082,
+          html_url: adjudication1341(capture).verdictUrl,
+          issue_url: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/1192',
+          body: capture,
+          created_at: '2026-08-05T15:00:00Z',
+          updated_at: '2026-08-05T15:00:00Z',
+          user: { login: 'chetwerikoff' },
+          author_association: 'OWNER',
+          ...overrides,
+        }) : '',
+      })),
+    };
+  }
+
+  function absentGateBFixture() {
+    const input = fixture();
+    const capture = governedCapture1341();
+    writeFileSync(input.capturePath, capture);
+    const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+    delete evidence.invocations[0].turnResultPath;
+    evidence.invocations[0].terminalResultIdentity = 'recorded-missing-transport-artifact';
+    writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+    rmSync(input.turnResultPath, { force: true });
+    return { input, capture, evidence };
+  }
+
+  function baseGateBArgs(input: ReturnType<typeof fixture>, capture: string): string[] {
+    return [
+      'node', 'create-issue-stage-finalize.ts', 'produce-artifacts',
+      '--review-dir', input.dir,
+      '--tier-intake', input.intakePath,
+      '--stage-evidence', input.stageEvidencePath,
+      '--author-dispositions', input.authorPath,
+      '--output-dir', join(input.dir, 'cli-output'),
+      '--phase', 'final-acceptance',
+      '--operator-issue-number', '1192',
+      '--operator-source-revision', 'r01',
+      '--operator-verdict-url', adjudication1341(capture).verdictUrl,
+      '--operator-verdict-sha256', adjudication1341(capture).verdictSha256,
+      '--operator-verdict-byte-length', String(Buffer.byteLength(capture)),
+      '--operator-finding-count', '0',
+      '--operator-reason', 'direct operator reason',
+    ];
+  }
+
+  it.each([
+    ['Issue', '--operator-issue-number'],
+    ['revision', '--operator-source-revision'],
+    ['verdict URL', '--operator-verdict-url'],
+    ['verdict SHA-256', '--operator-verdict-sha256'],
+    ['verdict byte length', '--operator-verdict-byte-length'],
+    ['finding count', '--operator-finding-count'],
+    ['reason', '--operator-reason'],
+  ])('rejects Gate B when %s is omitted or blank before artifact production', (_name, flag) => {
+    for (const mode of ['omitted', 'blank'] as const) {
+      const { input, capture } = absentGateBFixture();
+      const args = baseGateBArgs(input, capture);
+      const index = args.indexOf(flag);
+      if (mode === 'omitted') args.splice(index, 2);
+      else args[index + 1] = '   ';
+      expect(() => runStageFinalizeCli(args)).toThrow(
+        /operator adjudication requires Issue, revision, verdict URL\/hash\/bytes\/findings, and reason/,
+      );
+      expect(existsSync(join(input.dir, 'cli-output'))).toBe(false);
+    }
+  });
+
+  it.each([
+    {
+      name: 'wrong authoritative Issue',
+      adjudication: (capture: string) => ({ ...adjudication1341(capture), issueNumber: 1193 }),
+      transport: (capture: string) => referenceTransport1341(capture),
+      expected: 'Issue does not match authoritative tier-intake Issue',
+      transportCalled: false,
+    },
+    {
+      name: 'wrong authoritative revision',
+      adjudication: (capture: string) => ({ ...adjudication1341(capture), sourceRevision: 'r02' }),
+      transport: (capture: string) => referenceTransport1341(capture),
+      expected: 'revision does not match authoritative review episode',
+      transportCalled: false,
+    },
+    {
+      name: 'wrong byte length',
+      adjudication: (capture: string) => ({ ...adjudication1341(capture), verdictByteLength: Buffer.byteLength(capture) + 1 }),
+      transport: (capture: string) => referenceTransport1341(capture),
+      expected: 'published verdict byte length is mismatched',
+      transportCalled: true,
+    },
+    {
+      name: 'wrong finding count',
+      adjudication: (capture: string) => ({ ...adjudication1341(capture), verdictFindingCount: 1 }),
+      transport: (capture: string) => referenceTransport1341(capture),
+      expected: 'published verdict finding count is mismatched',
+      transportCalled: true,
+    },
+    {
+      name: 'wrong comment identity',
+      adjudication: (capture: string) => adjudication1341(capture),
+      transport: (capture: string) => referenceTransport1341(capture, { id: 5194504083 }),
+      expected: 'published verdict reference identity is mismatched',
+      transportCalled: true,
+    },
+    {
+      name: 'unbound Issue reference',
+      adjudication: (capture: string) => adjudication1341(capture),
+      transport: (capture: string) => referenceTransport1341(capture, {
+        issue_url: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/1193',
+      }),
+      expected: 'published verdict reference identity is mismatched',
+      transportCalled: true,
+    },
+  ])('rejects Gate B $name before artifact publication', (scenario) => {
+    const { input, capture } = absentGateBFixture();
+    const outputDir = join(input.dir, `gate-b-${scenario.name.replaceAll(' ', '-')}`);
+    mkdirSync(outputDir, { recursive: true });
+    const sentinel = join(outputDir, 'acceptance-artifacts.json');
+    writeFileSync(sentinel, 'sentinel');
+    const transport = scenario.transport(capture);
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'final-acceptance',
+      operatorAdjudication: scenario.adjudication(capture),
+      operatorReferenceTransport: transport,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain(scenario.expected);
+    expect(transport.runGh).toHaveBeenCalledTimes(scenario.transportCalled ? 1 : 0);
+    expect(readFileSync(sentinel, 'utf8')).toBe('sentinel');
+  });
+
+  it('rejects a matching non-terminal Gate B reference before artifact publication', () => {
+    const { input } = absentGateBFixture();
+    const progress = [
+      'Read revision: #1192 r01',
+      'review-economics-contract: v1',
+      'progress: still reviewing',
+      'SIMPLIFICATION_CLEAN',
+      '',
+    ].join('\n');
+    writeFileSync(input.capturePath, progress);
+    const outputDir = join(input.dir, 'gate-b-non-terminal');
+    mkdirSync(outputDir, { recursive: true });
+    const sentinel = join(outputDir, 'acceptance-artifacts.json');
+    writeFileSync(sentinel, 'sentinel');
+    const transport = referenceTransport1341(progress);
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'final-acceptance',
+      operatorAdjudication: adjudication1341(progress),
+      operatorReferenceTransport: transport,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain('operator adjudication published verdict is not a canonical terminal verdict');
+    expect(transport.runGh).toHaveBeenCalledTimes(1);
+    expect(readFileSync(sentinel, 'utf8')).toBe('sentinel');
+  });
+
+  it('rejects an ambiguous operator match across multiple governed invocations', () => {
+    const { input, capture, evidence } = absentGateBFixture();
+    evidence.invocations.push({
+      ...evidence.invocations[0],
+      reviewerSlot: '02',
+      reviewerOrdinal: 2,
+      invocationId: 'invocation-002',
+      terminalResultIdentity: 'recorded-missing-transport-artifact-2',
+    });
+    writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+    const outputDir = join(input.dir, 'gate-b-ambiguous');
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'final-acceptance',
+      operatorAdjudication: adjudication1341(capture),
+      operatorReferenceTransport: referenceTransport1341(capture),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain(
+      'operator adjudication must match exactly one absent or non-ok terminal invocation; matched 2',
+    );
+    expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
+  });
+
+  it.each([
+    {
+      name: 'terminal settlement remains red',
+      mutate: (input: ReturnType<typeof fixture>) => {
+        const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+        evidence.settlement.allLaunchedTerminal = false;
+        writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+      },
+      expected: 'terminal settlement',
+    },
+    {
+      name: 'invocation revision check remains red',
+      mutate: (input: ReturnType<typeof fixture>) => {
+        const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+        evidence.invocations[0].revisionCheck = 'stale';
+        writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+      },
+      expected: 'revisionCheck must be matched',
+    },
+    {
+      name: 'author disposition evidence remains red',
+      mutate: (input: ReturnType<typeof fixture>) => {
+        writeFileSync(input.authorPath, JSON.stringify({ schema: AUTHOR_DISPOSITIONS_SCHEMA, findings: [null] }));
+      },
+      expected: 'author dispositions findings[0] must be an object',
+    },
+  ])('keeps the downstream $name guard red after only transport substitution', (scenario) => {
+    const { input, capture } = absentGateBFixture();
+    scenario.mutate(input);
+    const outputDir = join(input.dir, `gate-b-downstream-${scenario.name.replaceAll(' ', '-')}`);
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'final-acceptance',
+      operatorAdjudication: adjudication1341(capture),
+      operatorReferenceTransport: referenceTransport1341(capture),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain(scenario.expected);
+    expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
+  });
+
+  it.each(['worker', 'reviewer', 'flow-manager'])(
+    'does not let %s prose or actor fields mint Gate B authority',
+    (surface) => {
+      const { input } = absentGateBFixture();
+      const outputDir = join(input.dir, `gate-b-mint-${surface}`);
+      const result = produceAcceptanceArtifacts({
+        reviewDir: input.dir,
+        outputDir,
+        tierIntakePath: input.intakePath,
+        stageEvidencePaths: [input.stageEvidencePath],
+        authorDispositionsPath: input.authorPath,
+        phase: 'final-acceptance',
+        actor: 'operator',
+        publicActor: surface,
+        operatorReason: 'autonomous prose is not structured authority',
+      } as Parameters<typeof produceAcceptanceArtifacts>[0] & Record<string, unknown>);
+      expect(result.ok).toBe(false);
+      expect(result.errors).toContain('stage evidence invocation[0].turnResultPath is missing');
+      expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
+    },
+  );
+
+  it('keeps Gate B ordinary state=ok artifact bytes bit-for-bit unchanged without operator input', () => {
+    const input = fixture();
+    const outputA = join(input.dir, 'parity-a');
+    const outputB = join(input.dir, 'parity-b');
+    const common = {
+      reviewDir: input.dir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'final-acceptance' as const,
+    };
+    const first = produceAcceptanceArtifacts({ ...common, outputDir: outputA });
+    const second = produceAcceptanceArtifacts({
+      ...common,
+      outputDir: outputB,
+      operatorAdjudication: undefined,
+      operatorReferenceTransport: undefined,
+      repositoryFullName: undefined,
+    } as Parameters<typeof produceAcceptanceArtifacts>[0]);
+    expect(first.ok, first.errors.join('\n')).toBe(true);
+    expect(second.ok, second.errors.join('\n')).toBe(true);
+    expect(first.files).toEqual(second.files);
+    for (const file of first.files) {
+      expect(readFileSync(join(outputA, file))).toEqual(readFileSync(join(outputB, file)));
+    }
+  });
+
+  it.each(['absent', 'non-ok'])(
+    'keeps Gate B ordinary %s failure bytes and no-write behavior bit-for-bit unchanged',
+    (transportState) => {
+      const input = fixture();
+      if (transportState === 'absent') {
+        const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+        delete evidence.invocations[0].turnResultPath;
+        writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+        rmSync(input.turnResultPath, { force: true });
+      } else {
+        const failed = {
+          schema: 'turn-result/v1',
+          state: 'driver_error',
+          scope: 'invocation',
+          cause: 'browser_lost',
+          invocation_id: 'invocation-001',
+          configured_profile_key: 'fixture-profile',
+          output: {
+            byte_length: Buffer.byteLength(CLEAN_CAPTURE),
+            sha256: createHash('sha256').update(CLEAN_CAPTURE).digest('hex'),
+          },
+        };
+        const failedText = JSON.stringify(failed);
+        writeFileSync(input.turnResultPath, failedText);
+        const evidence = JSON.parse(readFileSync(input.stageEvidencePath, 'utf8'));
+        evidence.invocations[0].terminalResultIdentity = 'sha256:'
+          + createHash('sha256').update(failedText).digest('hex') + ':' + basename(input.turnResultPath);
+        writeFileSync(input.stageEvidencePath, JSON.stringify(evidence));
+      }
+      const outputs = [join(input.dir, 'failure-a'), join(input.dir, 'failure-b')];
+      const common = {
+        reviewDir: input.dir,
+        tierIntakePath: input.intakePath,
+        stageEvidencePaths: [input.stageEvidencePath],
+        authorDispositionsPath: input.authorPath,
+        phase: 'final-acceptance' as const,
+      };
+      const first = produceAcceptanceArtifacts({ ...common, outputDir: outputs[0] });
+      const second = produceAcceptanceArtifacts({
+        ...common,
+        outputDir: outputs[1],
+        operatorAdjudication: undefined,
+        operatorReferenceTransport: undefined,
+        repositoryFullName: undefined,
+      } as Parameters<typeof produceAcceptanceArtifacts>[0]);
+      expect(first.ok).toBe(false);
+      expect(second.ok).toBe(false);
+      expect(Buffer.from(first.errors.join('\n'))).toEqual(Buffer.from(second.errors.join('\n')));
+      expect(first.files).toEqual([]);
+      expect(second.files).toEqual([]);
+      expect(existsSync(join(outputs[0], 'acceptance-artifacts.json'))).toBe(false);
+      expect(existsSync(join(outputs[1], 'acceptance-artifacts.json'))).toBe(false);
+    },
+  );
+});
