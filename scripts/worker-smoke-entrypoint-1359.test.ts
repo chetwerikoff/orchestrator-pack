@@ -261,7 +261,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-submit-unconfirmed-'));
     const terminal: OrcaTerminalSummary = {
       handle: 'terminal-unconfirmed',
-      title: 'smoke-1359',
+      title: 'smoke-submit-unconfirmed-1359',
       incarnationId: 'generation-unconfirmed',
       worktreePath: root,
       status: 'running',
@@ -297,11 +297,10 @@ if (args[0] === 'worktree' && args[1] === 'current') {
 
     try {
       const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
-      const spawned = adapter.spawnWorker({
-        title: 'smoke-1359',
-        command: 'cursor-agent',
-        workspace: 'active',
-      }, { cwd: root });
+      const spawned = adapter.spawnWorker(
+        { title: 'smoke-submit-unconfirmed-1359', command: 'cursor-agent', workspace: 'active' },
+        { cwd: root },
+      );
       expect(spawned.status).toBe('ok');
       if (spawned.status !== 'ok') return;
 
