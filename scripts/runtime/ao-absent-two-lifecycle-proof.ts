@@ -5,7 +5,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
-import { selectRuntimeAdapter } from './registry.ts';
+import { selectRuntimeAdapterFactory } from './registry.ts';
 import { executeRuntimeTaskLifecycle, type RuntimeTaskLifecycleResult } from './task-lifecycle.ts';
 
 const LOADERS = ['orca'] as const;
@@ -87,7 +87,8 @@ async function main(): Promise<void> {
           : {}),
       };
     }) as unknown as OrcaRunner;
-    const selected = await selectRuntimeAdapter({ adapter: 'orca', env: {} }, {
+    const productionFactory = await selectRuntimeAdapterFactory({ adapter: 'orca', env: {} });
+    const selected = productionFactory({
       cwd: root, timeoutMs: 5_000, transport: { executable, env, runner },
     });
     assert.ok(selected instanceof OrcaTaskRuntimeAdapter);
