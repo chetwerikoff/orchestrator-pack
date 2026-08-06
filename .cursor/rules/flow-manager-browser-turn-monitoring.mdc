@@ -75,6 +75,23 @@ preserve the reachable page; release only this browser client. A lost page
 receives no later close authority. Never close or commandeer a foreign,
 sibling, or orphan tab by URL, target id, age, focus, metadata, or liveness.
 
+For an eligible direct `turn-result/v1` carrying
+`post_settlement_target.disposition: preserved_after_settlement`, the operator
+**MUST** perform this sequence exactly once:
+
+1. retain the complete direct final result;
+2. preserve the byte-verified probe export result and harvested file;
+3. verify `preserved_after_settlement` and that the helper made no close attempt;
+4. prevent reuse, navigation, or send on the target during harvest and close;
+5. invoke `npm run browser-gpt-post-settlement-close --` with the same configured profile/CDP namespace and those exact artifacts; and
+6. record the structured `browser-gpt-post-settlement-close/v1` result before advancing.
+
+The explicit command is the only later close authority. `closed` and
+`already_absent` are terminal cleanup outcomes; launcher envelopes and every
+ineligible, uncertain, or other non-`closed` path remain manual browser-UI
+cleanup. They cannot authorize resend, close retry, target substitution,
+compatibility inference, or harvest deletion.
+
 ## Observation loss and incident attribution
 
 Missing `turn-result/v1`, `page_or_browser_lost_after_send`,
@@ -151,6 +168,7 @@ npm run browser-gpt-page-probe -- list --cdp http://127.0.0.1:9222
 npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --target-id <exact-target-id>
 npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --url <exact-conversation-url> --open-if-missing true
 npm run browser-gpt-page-probe -- liveness --cdp http://127.0.0.1:9222
+npm run browser-gpt-page-probe -- export --cdp http://127.0.0.1:9222 --profile <configured-profile> --target-id <exact-target-id> --role assistant --ordinal <n> --message-id <id> --representation innerText --expected-byte-length <bytes> --expected-sha256 <sha256> --output <new-file>
 ```
 
 The exact URL form remains existing-target-only unless `--open-if-missing true` is explicitly supplied. Without acquisition it reuses exactly one normalized match without creating or closing anything. With explicit acquisition it may create one page, waits for exact normalized conversation identity and bounded readable SPA state, then closes only the valid target identity returned by that same invocation. A redirect or same-path cross-host result is `surface_unknown` with `conversation_identity_mismatch`. Duplicate matches, malformed or timed-out creation, cleanup failure, and every reused-page path fail closed without guessed or delayed cleanup.
