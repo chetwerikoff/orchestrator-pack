@@ -1,4 +1,4 @@
-[CmdletBinding()]
+[CmdletBinding()
 param()
 
 $ErrorActionPreference = 'Stop'
@@ -247,7 +247,7 @@ if (Test-Path -LiteralPath $operatorAdoptionCheck -PathType Leaf) {
         $adoptionFailure = [pscustomobject]@{
             ok      = $false
             reason  = 'operator_adoption_handoff'
-            message = 'agent-orchestrator.yaml.example changed without docs/migration_notes.md or PR-body waiver (No operator adoption required)'
+            message = 'operator-facing runtime or supervisor change lacks docs/migration_notes.md or the exact PR-body waiver (No operator adoption required)'
         }
         Write-ScopeGuardComment -Body (Format-ScopeGuardComment -Result $adoptionFailure) -PrNumber $prNumber
         Write-Host $adoptionFailure.message
