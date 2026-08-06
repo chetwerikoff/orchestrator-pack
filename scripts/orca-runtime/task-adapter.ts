@@ -28,6 +28,15 @@ type RuntimeFailureWithNativeError = RuntimeOperationFailure & {
   }>;
 };
 
+type UnprovenOwnedPresence = Readonly<{
+  identity: RuntimeWorkerIdentity;
+  reason: string;
+}>;
+
+function failureDetail(failure: RuntimeOperationFailure): string {
+  return `${failure.operation}:${failure.status}:${failure.reason}`;
+}
+
 function attachNativeRuntimeError(
   failure: RuntimeOperationFailure,
   response: OrcaJsonResponse,
@@ -56,6 +65,7 @@ function attachNativeRuntimeError(
 export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   readonly #options: OrcaRuntimeAdapterOptions;
   readonly #ownedForStop = new Map<string, RuntimeWorkerIdentity>();
+  readonly #unprovenOwnedPresence = new Map<string, UnprovenOwnedPresence>();
   readonly #runJson: typeof runOrcaJson;
 
   constructor(options: OrcaRuntimeAdapterOptions = {}) {
@@ -75,6 +85,26 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     });
   }
 
+  #recordUnprovenOwnedPresence(
+    worker: RuntimeWorkerIdentity,
+    reason: string,
+  ): RuntimeOperationFailure {
+    this.#ownedForStop.delete(worker.id);
+    this.#unprovenOwnedPresence.set(worker.id, { identity: worker, reason });
+    return runtimeFailure('stop_worker', reason);
+  }
+
+  override findWorker(
+    worker: RuntimeWorkerIdentity,
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<RuntimeWorker | null> {
+    const unproven = this.#unprovenOwnedPresence.get(worker.id);
+    if (unproven && sameRuntimeWorker(unproven.identity, worker)) {
+      return runtimeFailure('find_worker', unproven.reason);
+    }
+    return super.findWorker(worker, options);
+  }
+
   override spawnWorker(
     input: {
       readonly title: string;
@@ -85,6 +115,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   ): RuntimeResult<RuntimeWorker> {
     const result = super.spawnWorker(input, options);
     if (result.status === 'ok') {
+      this.#unprovenOwnedPresence.delete(result.value.identity.id);
       this.#ownedForStop.set(result.value.identity.id, result.value.identity);
     }
     return result;
@@ -100,10 +131,15 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     }
 
     const current = super.findWorker(worker, options);
-    if (current.status !== 'ok') return current;
+    if (current.status !== 'ok') {
+      return this.#recordUnprovenOwnedPresence(
+        worker,
+        `unproven_already_absent;inventory_error=${failureDetail(current)}`,
+      );
+    }
     if (current.value === null) {
       this.#ownedForStop.delete(worker.id);
-      return runtimeFailure('stop_worker', 'worker_generation_not_found');
+      return { status: 'ok', value: { stopped: true } };
     }
 
     // Consume authority before the destructive transport. A later caller cannot
@@ -114,6 +150,17 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       options,
     );
     if (!response.ok) {
+      const presence = super.findWorker(worker, options);
+      if (presence.status === 'ok' && presence.value === null) {
+        return { status: 'ok', value: { stopped: true } };
+      }
+      if (presence.status !== 'ok') {
+        const failure = this.#recordUnprovenOwnedPresence(
+          worker,
+          `unproven_already_absent;close_error=${neutralFailureReason(response)};inventory_error=${failureDetail(presence)}`,
+        );
+        return attachNativeRuntimeError(failure, response);
+      }
       return attachNativeRuntimeError(
         runtimeFailure('stop_worker', neutralFailureReason(response)),
         response,
