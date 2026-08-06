@@ -1,24 +1,19 @@
 name: issue-1283-finalize
 
 on:
-  push:
-    branches:
-      - agent/issue-1283-browser-turn-recovery
   pull_request:
     branches:
       - main
+      - agent/issue-1283-finalize-base
     types:
       - opened
-      - edited
-      - reopened
-      - synchronize
 
 permissions:
   contents: write
 
 jobs:
   finalize:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
