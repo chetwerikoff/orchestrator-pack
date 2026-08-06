@@ -681,9 +681,11 @@ Before invoking final acceptance, follow [`docs/create-issue-draft-acceptance-ar
 When activation is available, acceptance requires:
 
 1. the singular terminal GPT lens is the sole M5 anchor;
-2. exact three-source T2/T3 architectural-review sets, the conditional
-   three-source T3 competitive set when journaled, singular Claude/waiver, and
-   singular terminal topology;
+2. T1 has one GPT lens; T2 has the complete set of three
+   `architectural-review` GPT sources, then one GPT lens; T3 has the
+   conditional three-source `competitive` set when journaled, three
+   `architectural-review` GPT sources, one Claude lens/waiver, and one GPT
+   lens;
 3. every launched invocation terminal and revisions matched;
 4. exact governed/relayed union equality;
 5. exact immutable bytes/hash plus raw/distinct/processed occurrence accounting;
