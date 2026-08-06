@@ -3084,6 +3084,26 @@ async function runTurn(
               incident,
             );
           }
+          const finalConversationTarget = targetChatUrl ?? ownedConversationUrl;
+          if (finalConversationTarget) {
+            const finalIdentity = readOwnedConversationIdentity(page, finalConversationTarget);
+            if (!finalIdentity.matched) {
+              return returnOwnedConversationIdentityMismatch(
+                finalIdentity,
+                page,
+                browser,
+                invocationId,
+                profileKey,
+                sendCount,
+                pollCount,
+                navigation,
+                incidents,
+                journalWriteFailed,
+                incident,
+                true,
+              );
+            }
+          }
           const captureReply = bestReadyReply.length >= decision.reply.length ? bestReadyReply : decision.reply;
           const ownedParentIds = new Set(
             directObservation.invocations

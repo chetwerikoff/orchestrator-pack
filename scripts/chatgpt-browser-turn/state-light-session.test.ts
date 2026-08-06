@@ -74,6 +74,7 @@ function makeHarness(
     readonly cleanup?: 'confirmed' | 'unconfirmed';
     readonly profileState?: 'verified' | 'unavailable' | 'mismatch';
     readonly atomicRows?: () => readonly { role: 'user' | 'assistant'; text: string; key?: string }[];
+    readonly pageUrl?: () => string;
   } = {},
 ): Harness {
   const metrics = { sends: 0, pages: 0, gotos: 0, closes: 0, releases: 0 };
@@ -96,7 +97,7 @@ function makeHarness(
   let markerIndex = 0;
   const page = {
     __fakeBrowserGptPage: true,
-    url: () => 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111',
+    url: () => options.pageUrl?.() ?? 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111',
     goto: async () => { metrics.gotos += 1; },
     close: async () => { metrics.closes += 1; },
     waitForTimeout: async (ms: number) => { nowMs += ms; },
@@ -469,6 +470,38 @@ describe('state-light explicit session mode', () => {
     expect(harness.metrics.sends).toBe(1);
     expect(publishedReply).toBeUndefined();
     expect(aggregate(stream)).toMatchObject({ state: 'observation_uncertain', cause: 'owned_carrier_unproven' });
+  });
+
+  it('revalidates conversation identity after final readiness and before publication', async () => {
+    const targetUrl = 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111';
+    const foreignUrl = 'https://chatgpt.com/c/22222222-2222-2222-2222-222222222222';
+    let foreign = false;
+    let publishedReply: string | undefined;
+    const harness = makeHarness(['one'], { pageUrl: () => foreign ? foreignUrl : targetUrl });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      replyStable: (left, right) => {
+        const stable = left.length > 0 && left === right;
+        if (stable) foreign = true;
+        return stable;
+      },
+      publishReply: (_path, _invocation, reply) => {
+        publishedReply = reply;
+        return { state: 'committed_ok', output: { byte_length: Buffer.byteLength(reply), sha256: `hash-${reply}` } };
+      },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(10);
+    expect(harness.metrics.sends).toBe(1);
+    expect(publishedReply).toBeUndefined();
+    expect(aggregate(harness.stream)).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'conversation_identity_changed',
+      cleanup: 'skipped',
+      owned_tab_count: 1,
+    });
   });
 
   it('does not dispatch when the dispatch-latched stdout barrier fails', async () => {

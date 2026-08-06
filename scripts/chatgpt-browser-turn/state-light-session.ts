@@ -993,6 +993,8 @@ async function observeAndPublish(
           if (!deadlineOpen(state, deps) && !harvestedDecision) {
             return { terminal: tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted'), markerCount };
           }
+          const finalIdentityFailure = conversationIdentityContinuity(state);
+          if (finalIdentityFailure) return { terminal: finalIdentityFailure, markerCount };
           const reply = bestReply.length >= decision.reply.length ? bestReply : decision.reply;
           const publication = deps.publishReply(payload.item.outputPath, state.invocationId, reply);
           if (publication.state !== 'committed_ok') {
