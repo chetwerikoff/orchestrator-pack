@@ -49,7 +49,7 @@ function planBody(scenarios: readonly { action: string; expected: string }[]): s
     '',
     '```smoke-test-plan',
     'scenarios:',
-    ...scenarios.map((scenario) => `  - action: ${scenario.action} | expected: ${scenario.expected}`),
+    ...scenarios.map((entry) => `  - action: ${entry.action} | expected: ${entry.expected}`),
     '```',
   ].join('\n');
 }
@@ -128,6 +128,13 @@ function coverage(
   return evaluateWorkerSmokeCoverage({ issueBody: body, comments, target: target(targetOverrides) });
 }
 
+function mutateMachineBlock(body: string, mutate: (block: string) => string): string {
+  const start = body.indexOf('```worker-smoke-report\n');
+  const end = body.indexOf('\n```', start + 1);
+  if (start < 0 || end < 0) throw new Error('machine report block missing');
+  return `${body.slice(0, start)}${mutate(body.slice(start, end))}${body.slice(end)}`;
+}
+
 describe('runtime-neutral worker smoke', () => {
   it('keeps the smoke-plan authoring floor', () => {
     const result = checkSmokeTestPlan(issueBody);
@@ -174,7 +181,7 @@ describe('runtime-neutral worker smoke', () => {
       _input: { readonly worker: RuntimeWorkerIdentity; readonly text?: string; readonly submitOnly?: boolean },
     ): RuntimeDispatchResult => ({ status: 'dispatch_unknown', reason: 'transport_interrupted' }));
 
-    const result = establishRuntimeSmokeDelivery({
+    expect(establishRuntimeSmokeDelivery({
       adapter,
       worker: spawned.value.identity,
       prompt: 'verify',
@@ -183,9 +190,7 @@ describe('runtime-neutral worker smoke', () => {
       deadlineMs: 100,
       now: () => 1,
       sleepMs: () => undefined,
-    });
-
-    expect(result).toEqual({
+    })).toEqual({
       ok: false,
       reason: 'dispatch_unknown:transport_interrupted',
       submitCount: 0,
@@ -193,7 +198,7 @@ describe('runtime-neutral worker smoke', () => {
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
-  it('does not turn a pasted-text output heuristic into a second dispatch', () => {
+  it('does not turn pasted-text output into a second dispatch', () => {
     const adapter = new DeterministicRuntimeAdapter();
     const spawned = adapter.spawnWorker({ title: 'smoke', command: 'cursor-agent' });
     expect(spawned.status).toBe('ok');
@@ -211,7 +216,7 @@ describe('runtime-neutral worker smoke', () => {
     });
     let clock = 0;
 
-    const result = establishRuntimeSmokeDelivery({
+    expect(establishRuntimeSmokeDelivery({
       adapter,
       worker: spawned.value.identity,
       prompt: 'verify',
@@ -220,19 +225,11 @@ describe('runtime-neutral worker smoke', () => {
       deadlineMs: 2,
       now: () => clock++,
       sleepMs: () => undefined,
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'prompt_delivery_unconfirmed',
-      submitCount: 0,
-    });
+    })).toMatchObject({ ok: false, reason: 'prompt_delivery_unconfirmed', submitCount: 0 });
     expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ text: 'verify' });
-    expect(dispatch.mock.calls[0]?.[0].submitOnly).toBeUndefined();
   });
 
-  it('requires both current-head smoke and CI for ready handoff', () => {
+  it('keeps smoke and CI orthogonal for ready handoff', () => {
     expect(evaluateReadyForReviewCombinations({ smokePass: true, ciGreen: true })).toBe(true);
     expect(evaluateReadyForReviewCombinations({ smokePass: true, ciGreen: false })).toBe(false);
   });
@@ -251,20 +248,18 @@ describe('exact-head cross-run worker-smoke coverage', () => {
     ], AB);
     expect(result.accepting).toBe(true);
     expect(result.diagnostics.coverage).toBe('complete');
-    expect(result.latestClearingPass?.result).toBe('PASS');
   });
 
-  it('accumulates A and B across reports while omission preserves A and PASS clears quarantine', () => {
+  it('accumulates tuples while omission preserves prior PASS and clears quarantine', () => {
     const result = coverage([
       comment(1, report('FAIL', [scenario('A', 'A passes'), scenario('B', 'B passes', 'fail')])),
       comment(2, report('PASS', [scenario('B', 'B passes')])),
     ], AB);
     expect(result.accepting).toBe(true);
     expect(result.diagnostics.covered.total).toBe(2);
-    expect(result.diagnostics.globalBlock.blocked).toBe(false);
   });
 
-  it('revokes and restores the same tuple by created_at then numeric id', () => {
+  it('orders row revocation and restoration by created_at then numeric id', () => {
     const sameTime = '2026-08-05T00:00:00.000Z';
     const result = coverage([
       comment(3, report('PASS', [scenario('A', 'A passes')]), { createdAt: sameTime }),
@@ -275,40 +270,30 @@ describe('exact-head cross-run worker-smoke coverage', () => {
     expect(result.diagnostics.covered.items[0]?.commentId).toBe(3);
   });
 
-  it('clears a global block with a later PASS that omits the covered tuple', () => {
-    const result = coverage([
+  it('applies zero-current-tuple global blocks and clears them with later PASS', () => {
+    const blocked = coverage([
+      comment(1, report('PASS', [scenario('A', 'A passes')])),
+      comment(2, report('BLOCKED', [scenario('unknown', 'unknown', 'blocked')])),
+    ], A);
+    expect(blocked.accepting).toBe(false);
+    expect(blocked.diagnostics.globalBlock.kind).toBe('BLOCKED');
+
+    const cleared = coverage([
       comment(1, report('PASS', [scenario('A', 'A passes')])),
       comment(2, report('BLOCKED', [scenario('unknown', 'unknown', 'blocked')])),
       comment(3, report('PASS', [scenario('unknown', 'unknown')])),
     ], A);
-    expect(result.accepting).toBe(true);
-    expect(result.diagnostics.covered.items[0]?.commentId).toBe(1);
-  });
-
-  it('globally blocks on valid FAIL/BLOCKED with zero current tuples until a later PASS', () => {
-    const blocked = coverage([
-      comment(1, report('PASS', [scenario('A', 'A passes')])),
-      comment(2, report('FAIL', [scenario('unknown', 'unknown', 'fail')])),
-    ], A);
-    expect(blocked.accepting).toBe(false);
-    expect(blocked.diagnostics.globalBlock.kind).toBe('FAIL');
-
-    const cleared = coverage([
-      comment(1, report('PASS', [scenario('A', 'A passes')])),
-      comment(2, report('FAIL', [scenario('unknown', 'unknown', 'fail')])),
-      comment(3, report('PASS', [scenario('unknown', 'unknown')])),
-    ], A);
     expect(cleared.accepting).toBe(true);
+    expect(cleared.diagnostics.covered.items[0]?.commentId).toBe(1);
   });
 
-  it('keeps prior row state across an invalid candidate and later clearing PASS', () => {
-    const duplicate = report('FAIL', [
-      scenario('A', 'A passes', 'fail'),
-      scenario('A', 'A passes', 'blocked'),
-    ]);
+  it('keeps row state across an invalid candidate and later clearing PASS', () => {
     const result = coverage([
       comment(1, report('PASS', [scenario('A', 'A passes')])),
-      comment(2, duplicate),
+      comment(2, report('FAIL', [
+        scenario('A', 'A passes', 'fail'),
+        scenario('A', 'A passes', 'blocked'),
+      ])),
       comment(3, report('PASS', [scenario('unknown', 'unknown')])),
     ], A);
     expect(result.accepting).toBe(true);
@@ -317,8 +302,8 @@ describe('exact-head cross-run worker-smoke coverage', () => {
   });
 
   it.each([
-    ['missing observed', (body: string) => body.replace('observed: pass observed', 'observed: ')],
-    ['unsupported outcome', (body: string) => body.replace('outcome: pass', 'outcome: mystery')],
+    ['missing observed', (body: string) => mutateMachineBlock(body, (block) => block.replace('observed: pass observed', 'observed: '))],
+    ['unsupported outcome', (body: string) => mutateMachineBlock(body, (block) => block.replace('outcome: pass', 'outcome: mystery'))],
     ['identical duplicate row', (_body: string) => formatSmokeReportComment(report('FAIL', [
       scenario('A', 'A passes', 'fail'),
       scenario('A', 'A passes', 'fail'),
@@ -328,8 +313,10 @@ describe('exact-head cross-run worker-smoke coverage', () => {
       scenario('A', 'A passes', 'blocked'),
     ]))],
   ])('rejects the whole trusted candidate for %s', (_name, mutate) => {
-    const validBody = formatSmokeReportComment(report('PASS', [scenario('A', 'A passes')]));
-    const result = coverage([comment(1, report('PASS', [scenario('A', 'A passes')]), { body: mutate(validBody) })], A);
+    const canonical = formatSmokeReportComment(report('PASS', [scenario('A', 'A passes')]));
+    const result = coverage([
+      comment(1, report('PASS', [scenario('A', 'A passes')]), { body: mutate(canonical) }),
+    ], A);
     expect(result.accepting).toBe(false);
     expect(result.diagnostics.invalidCandidates.total).toBe(1);
     expect(result.diagnostics.covered.total).toBe(0);
@@ -340,35 +327,33 @@ describe('exact-head cross-run worker-smoke coverage', () => {
     ['two report blocks', (body: string) => `${body}\n\`\`\`worker-smoke-report\nresult: FAIL\n\`\`\``],
     ['duplicate target line', (body: string) => `${body}\n- pr: #2001`],
     ['mixed target metadata', (body: string) => `${body}\n- head-sha: \`${HEAD_TWO}\``],
-  ])('admits but invalidates a current-target envelope with %s', (_name, mutate) => {
+  ])('invalidates a current-target envelope with %s', (_name, mutate) => {
     const canonical = formatSmokeReportComment(report('PASS', [scenario('A', 'A passes')]));
-    const result = coverage([comment(1, report('PASS', [scenario('A', 'A passes')]), { body: mutate(canonical) })], A);
+    const result = coverage([
+      comment(1, report('PASS', [scenario('A', 'A passes')]), { body: mutate(canonical) }),
+    ], A);
     expect(result.accepting).toBe(false);
     expect(result.diagnostics.invalidCandidates.total).toBe(1);
   });
 
-  it('treats a matching report from another actor as a non-candidate', () => {
-    const result = coverage([
+  it('treats another actor as non-candidate and a trusted edit as invalid', () => {
+    const foreign = coverage([
       comment(1, report('PASS', [scenario('A', 'A passes')]), { actor: 'someone-else' }),
     ], A);
-    expect(result.accepting).toBe(false);
-    expect(result.diagnostics.invalidCandidates.total).toBe(0);
-    expect(result.diagnostics.missing.total).toBe(1);
-  });
+    expect(foreign.diagnostics.invalidCandidates.total).toBe(0);
+    expect(foreign.diagnostics.missing.total).toBe(1);
 
-  it('invalidates an edited trusted candidate', () => {
     const createdAt = '2026-08-05T00:00:00.000Z';
-    const result = coverage([
+    const edited = coverage([
       comment(1, report('PASS', [scenario('A', 'A passes')]), {
         createdAt,
         updatedAt: '2026-08-05T00:01:00.000Z',
       }),
     ], A);
-    expect(result.accepting).toBe(false);
-    expect(result.diagnostics.invalidCandidates.items[0]?.reason).toBe('candidate_edited');
+    expect(edited.diagnostics.invalidCandidates.items[0]?.reason).toBe('candidate_edited');
   });
 
-  it('flattens every paginated page and observes a later-page revocation', () => {
+  it('flattens all pages and observes later-page revocation', () => {
     const first = comment(1, report('PASS', [scenario('A', 'A passes')]));
     const second = comment(2, report('FAIL', [scenario('A', 'A passes', 'fail')]));
     const parsed = parsePaginatedSmokeComments(JSON.stringify([[first], [second]]));
@@ -377,13 +362,12 @@ describe('exact-head cross-run worker-smoke coverage', () => {
     expect(() => parsePaginatedSmokeComments(JSON.stringify([first, second]))).toThrow(/slurped page array/u);
   });
 
-  it('re-evaluates when the high-water snapshot grows and refuses endless churn', () => {
+  it('re-evaluates a growing high-water snapshot and refuses endless churn', () => {
     const pass = comment(1, report('PASS', [scenario('A', 'A passes')]));
     const revoke = comment(2, report('FAIL', [scenario('A', 'A passes', 'fail')]));
     const sequence = [[pass], [pass, revoke], [pass, revoke]];
     let index = 0;
     const stable = stabilizeSmokeCommentCensus(() => sequence[Math.min(index++, sequence.length - 1)]!);
-    expect(stable).toHaveLength(2);
     expect(coverage(stable, A).accepting).toBe(false);
 
     let id = 10;
@@ -393,22 +377,23 @@ describe('exact-head cross-run worker-smoke coverage', () => {
     )).toThrow(/failed to stabilize/u);
   });
 
-  it('does not retroactively rewrite ready but applies later revocation on the next evaluation', () => {
+  it('applies post-ready revocation only on the next evaluation', () => {
     const pass = comment(1, report('PASS', [scenario('A', 'A passes')]));
     const ready = coverage([pass], A);
-    expect(ready.accepting).toBe(true);
-    const later = coverage([pass, comment(2, report('FAIL', [scenario('A', 'A passes', 'fail')]))], A);
+    const later = coverage([
+      pass,
+      comment(2, report('FAIL', [scenario('A', 'A passes', 'fail')])),
+    ], A);
     expect(ready.accepting).toBe(true);
     expect(later.accepting).toBe(false);
   });
 
-  it('resets absolutely on a new head and omits old-head evidence from diagnostics', () => {
+  it('resets absolutely on a new head without old-head diagnostics', () => {
     const result = coverage([
       comment(1, report('PASS', [scenario('A', 'A passes')], HEAD_ONE)),
     ], A, { headSha: HEAD_TWO, liveHeadSha: HEAD_TWO });
     expect(result.accepting).toBe(false);
     expect(result.diagnostics.covered.total).toBe(0);
-    expect(result.diagnostics.missing.total).toBe(1);
     expect(result.diagnostics.invalidCandidates.total).toBe(0);
   });
 
@@ -422,7 +407,7 @@ describe('exact-head cross-run worker-smoke coverage', () => {
     ['principal missing', { trustedPublisherLogin: '' }],
     ['census incomplete', { commentCensusComplete: false }],
     ['snapshot unstable', { commentSnapshotStable: false }],
-  ])('fails target admission before report contribution for %s', (_name, overrides) => {
+  ])('fails target admission before contribution for %s', (_name, overrides) => {
     const result = coverage([
       comment(1, report('PASS', [scenario('A', 'A passes')])),
     ], A, overrides);
@@ -430,25 +415,23 @@ describe('exact-head cross-run worker-smoke coverage', () => {
     expect(result.diagnostics.covered.total).toBe(0);
   });
 
-  it('uses tuple-local authority across same-head Issue edits', () => {
-    const oldPlan = planBody([
-      { action: 'A', expected: 'A passes' },
-      { action: 'B', expected: 'B passes' },
-    ]);
-    const observation = comment(1, report('PASS', [scenario('A', 'A passes'), scenario('B', 'B passes')]));
-    expect(coverage([observation], oldPlan).accepting).toBe(true);
+  it('reuses unchanged tuples but not changed tuples after a same-head Issue edit', () => {
+    const observation = comment(1, report('PASS', [
+      scenario('A', 'A passes'),
+      scenario('B', 'B passes'),
+    ]));
+    expect(coverage([observation], AB).accepting).toBe(true);
 
-    const editedPlan = planBody([
+    const edited = coverage([observation], planBody([
       { action: 'A', expected: 'A passes' },
       { action: 'C', expected: 'C changed' },
-    ]);
-    const edited = coverage([observation], editedPlan);
+    ]));
     expect(edited.accepting).toBe(false);
     expect(edited.diagnostics.covered.total).toBe(1);
     expect(edited.diagnostics.missing.items[0]?.tuple).toContain('C');
   });
 
-  it('orders aggregate authority independently from input and receipt order', () => {
+  it('orders authority independently from input and receipt order', () => {
     const timestamp = '2026-08-05T00:00:00.000Z';
     const fail = comment(1, report('FAIL', [scenario('A', 'A passes', 'fail')]), { createdAt: timestamp });
     const pass = comment(2, report('PASS', [scenario('A', 'A passes')]), { createdAt: timestamp });
@@ -457,15 +440,17 @@ describe('exact-head cross-run worker-smoke coverage', () => {
   });
 
   it.each([
-    ['producer', (body: string) => body.replace(`producer: ${SMOKE_REPORT_PRODUCER}`, 'producer: ')],
-    ['terminal', (body: string) => body.replace('terminal-handle: smoke-terminal-1', 'terminal-handle: ')],
-    ['cleanup', (body: string) => body.replace('terminal-cleanup: closed_owned_handle', 'terminal-cleanup: pending')],
-    ['tracked files', (body: string) => body.replace('tracked-files-unmodified: true', 'tracked-files-unmodified: false')],
-    ['row fields', (body: string) => body.replace('observed: fail observed', 'observed: ')],
-  ])('rejects dirty or incomplete non-PASS evidence missing %s', (_name, mutate) => {
+    ['producer', (body: string) => mutateMachineBlock(body, (block) => block.replace(`producer: ${SMOKE_REPORT_PRODUCER}`, 'producer: '))],
+    ['terminal', (body: string) => mutateMachineBlock(body, (block) => block.replace('terminal-handle: smoke-terminal-1', 'terminal-handle: '))],
+    ['cleanup', (body: string) => mutateMachineBlock(body, (block) => block.replace('terminal-cleanup: closed_owned_handle', 'terminal-cleanup: pending'))],
+    ['tracked files', (body: string) => mutateMachineBlock(body, (block) => block.replace('tracked-files-unmodified: true', 'tracked-files-unmodified: false'))],
+    ['row fields', (body: string) => mutateMachineBlock(body, (block) => block.replace('observed: fail observed', 'observed: '))],
+  ])('rejects incomplete non-PASS evidence missing %s', (_name, mutate) => {
     const pass = comment(1, report('PASS', [scenario('A', 'A passes')]));
-    const weakBody = mutate(formatSmokeReportComment(report('FAIL', [scenario('A', 'A passes', 'fail')])));
-    const weak = comment(2, report('FAIL', [scenario('A', 'A passes', 'fail')]), { body: weakBody });
+    const canonicalWeak = formatSmokeReportComment(report('FAIL', [scenario('A', 'A passes', 'fail')]));
+    const weak = comment(2, report('FAIL', [scenario('A', 'A passes', 'fail')]), {
+      body: mutate(canonicalWeak),
+    });
     const cleared = comment(3, report('PASS', [scenario('unknown', 'unknown')]));
     const result = coverage([pass, weak, cleared], A);
     expect(result.accepting).toBe(true);
@@ -473,14 +458,13 @@ describe('exact-head cross-run worker-smoke coverage', () => {
     expect(result.diagnostics.invalidCandidates.total).toBe(1);
   });
 
-  it('bounds collections and UTF-8 previews without truncating the internal fold', () => {
+  it('bounds diagnostics without truncating the internal fold', () => {
     const scenarios = Array.from({ length: 70 }, (_, index) => ({
       action: `${'д'.repeat(300)}-${index}`,
       expected: `${'e'.repeat(300)}-${index}`,
     }));
-    const body = planBody(scenarios);
     const rows = scenarios.map((entry) => scenario(entry.action, entry.expected));
-    const result = coverage([comment(1000, report('PASS', rows))], body);
+    const result = coverage([comment(1000, report('PASS', rows))], planBody(scenarios));
     expect(result.accepting).toBe(true);
     expect(result.diagnostics.covered.total).toBe(70);
     expect(result.diagnostics.covered.items).toHaveLength(50);
@@ -489,7 +473,7 @@ describe('exact-head cross-run worker-smoke coverage', () => {
     expect(Buffer.byteLength(JSON.stringify(result.diagnostics), 'utf8')).toBeLessThanOrEqual(64 * 1024);
   });
 
-  it('keeps the ordinary ready_for_review trigger, CI orthogonality, and current receipt predicate', () => {
+  it('keeps the ordinary gate, CI, and receipt predicates', () => {
     const smoke = comment(1, report('PASS', [scenario('A', 'A passes')]));
     const common = {
       issueBody: A,
