@@ -1,243 +1,144 @@
 # Target repository setup
 
-End-to-end checklist for adopting `orchestrator-pack` in a repository that
-Orca will plan and code against. This documents the user-facing flow for
-issue-body constraints, AO-free declarations, runtime scope guard, and PR-level
-CI.
+End-to-end checklist for adopting `orchestrator-pack` in a repository operated
+through the registered runtime adapter.
 
-## Before you start
+## Required pack surfaces
 
-Copy or vendor the pack layout into your target repository so these paths exist
-at the repo root:
+The target repository or trusted pack checkout must provide:
 
-- `plugins/` (including `_shared`, `task-declaration`, `scope-guard`)
-- `scripts/` (including `install-git-hooks.ps1`, `pr-scope-check.ps1`)
-- `prompts/`
-- `.github/workflows/scope-guard.yml`
-- `agent-orchestrator.yaml.example`
-- root `package.json` with npm workspaces for `plugins/*`
+- `plugins/task-declaration/**`;
+- `plugins/scope-guard/**`;
+- `plugins/token-chain-ledger/**` when accounting is enabled;
+- `plugins/codex-pr-reviewer/**` when local Codex review is enabled;
+- `scripts/pr-scope-check.ps1` and its TypeScript authority;
+- `.github/workflows/scope-guard.yml`;
+- `AGENTS.md` and the relevant prompts;
+- Node 22 workspace configuration.
 
-The pack itself lives at [chetwerikoff/orchestrator-pack](https://github.com/chetwerikoff/orchestrator-pack).
-Treat upstream AO as an npm install only — never clone or patch AO core.
+Do not copy a removed runtime configuration, state directory, daemon launcher, or
+compatibility wrapper into the target repository.
 
-Scope model (Issue body vs committed declaration) is defined in architecture
-decision **#3.A** (`docs/issues_drafts/00-architecture-decisions.md`):
+## Prerequisites
 
-- **Issue body** — authoritative task constraints (`denylist`, optional
-  `allowed-roots`).
-- **Committed declaration** — `docs/declarations/{issue_number}.pr-scope.json`
-  produced by `scripts/pr-scope-declaration.ts`.
+- Node.js 22.x;
+- npm 10.x;
+- Git 2.25+;
+- PowerShell 7+ for retained PowerShell entrypoints;
+- authenticated GitHub transport;
+- the selected agent and reviewer CLIs.
 
----
-
-## Checklist
-
-Work through these steps in order.
-
-### 1. Prerequisites
-
-Install and verify:
-
-- **Node.js 22.x**
-- **Git 2.25+**
-- **GitHub CLI (`gh`)** authenticated for the target repository
-
-```powershell
+```bash
 node --version
+npm --version
 git --version
 gh auth status
 ```
 
-Optional: run the pack verifier from the repo root:
+Install from the frozen lockfile and verify the pack:
 
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1 -StrictPrereqs
-```
-
-### 2. Install AO CLI
-
-Install upstream AO from npm (upgrade-safe; do not vendor AO core):
-
-```powershell
-npm install -g @aoagents/ao
-ao --version
-```
-
-On Windows with AO 0.9.2, apply the Codex review compatibility patch once after
-install (see `README.md`). Re-run after every global AO upgrade.
-
-### 3. Copy local AO config
-
-Create a local-only config from the example (never commit this file):
-
-```powershell
-Copy-Item agent-orchestrator.yaml.example agent-orchestrator.yaml
-notepad agent-orchestrator.yaml
-```
-
-Edit the `projects:` block for your repository: set `repo`, `path`, and
-`defaultBranch`. Worker rules live in tracked `AGENTS.md` — AO 0.10.2+ workers
-pick it up natively from the worktree (recycle worker sessions after merge; no
-`agentRulesFile` key):
-
-```yaml
-# Worker rules: AGENTS.md (native pickup — no agentRulesFile on AO 0.10.2+)
-```
-
-Do not add unsupported YAML fields (for example a top-level `reviewer:` role).
-Codex review is wired through AO's built-in path or the GitHub Actions workflow
-in step 6.
-
-### 4. Generate and set `CODEX_AUTH_JSON`
-
-Only required when you use the GitHub Actions Codex review path (step 6).
-
-On your local machine, authenticate Codex CLI (`codex login`), then base64-encode
-the OAuth credential file:
-
-```powershell
-[Convert]::ToBase64String(
-  [IO.File]::ReadAllBytes("$env:USERPROFILE\.codex\auth.json")
-) | clip
-```
-
-In the **target repository** on GitHub: **Settings → Secrets and variables →
-Actions → New repository secret**. Name it `CODEX_AUTH_JSON` and paste the
-clipboard value.
-
-See `plugins/codex-pr-reviewer/README.md` for details.
-
-### 5. Install scope-guard pre-commit hook and agent wrapper
-
-From the target repository root, install npm dependencies and the managed
-pre-commit hook:
-
-```powershell
+```bash
 npm ci --include=dev
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-git-hooks.ps1 -InstallScopeGuard
+pwsh -NoProfile -File scripts/verify.ps1 -StrictPrereqs
+pwsh -NoProfile -File scripts/check-reusable.ps1
 ```
 
-The hook calls `plugins/scope-guard/bin/scope-check.ts` on staged paths.
-Set `AO_ISSUE_NUMBER` to the active GitHub Issue number before committing.
+## Scope authority
 
-Wrap agent invocations so the working tree is checked after each turn (layer 1
-guard):
+The published GitHub Issue is the live task specification. It contains a mandatory
+`denylist` block and may contain `allowed-roots`. The committed declaration is
+`docs/declarations/<issue-number>.pr-scope.json`, generated by the tracked
+declaration producer.
+
+Generate the declaration with an explicit Issue number and immutable source inputs.
+Do not derive authority from a runtime session environment variable.
+
+## Install local scope enforcement
+
+From the target repository root:
 
 ```powershell
-$env:AO_ISSUE_NUMBER = '<issue-number>'
+pwsh -NoProfile -File scripts/install-git-hooks.ps1 -InstallScopeGuard
+```
+
+The managed hook derives the Issue number from the linked branch when possible and
+passes it explicitly. Direct callers must pass `--issue`:
+
+```powershell
+node --experimental-strip-types plugins/scope-guard/bin/scope-check.ts `
+  --issue 1352 `
+  --mode index
+```
+
+Wrap an agent turn when worktree enforcement is required:
+
+```powershell
 node --experimental-strip-types plugins/scope-guard/bin/agent-wrap.ts `
-  --issue <issue-number> `
+  --issue 1352 `
   -- cursor agent ...
 ```
 
-See `plugins/scope-guard/README.md` for bypass, direct `scope-check`, and
-uninstall options.
+The wrapper checks the worktree after the command and fails on out-of-scope or
+denylisted paths. It never silently broadens scope.
 
-### 6. Add Codex PR review workflow
+## Runtime registration
 
-Create `.github/workflows/pr-review.yml` in the target repository by copying
-`docs/templates/codex-pr-review-caller.yml` (caller permissions include
-`issues: read` so linked-issue scope fences resolve in CI). Set `pack_ref` to
-the same ref as the `uses: ...@ref` pin (e.g. both `main` or both `v1.0.0`).
+Runtime effects use `RuntimeAdapter` from `scripts/runtime/contracts.ts`; the
+concrete implementation is selected by `scripts/runtime/registry.ts`. Before an
+effect, resolve an adapter-produced exact identity:
 
-Ensure `.github/workflows/scope-guard.yml` from the pack is present (copied in
-the preamble). It runs PR diff validation against the linked issue and committed
-declaration snapshot.
-
-### 7. Open a first GitHub Issue
-
-Create an issue in the target repository using
-`docs/issue_template_example.md` as the body. That file is the complete,
-parseable issue template — it includes:
-
-- a mandatory ` ```denylist ` fenced block;
-- an optional ` ```allowed-roots ` fenced block;
-- **no** `declared-files` / declared path lists in the issue body.
-
-Example:
-
-```powershell
-gh issue create --title "First AO scoped task" --body-file docs/issue_template_example.md
+```text
+{ runtime, id, generation }
 ```
 
-Note the issue number (`<n>`) for the next steps.
+Do not authorize effects from a title, branch, path, process ID, short identifier,
+stale store row, or accounting value. Operator-owned concrete configuration stays
+outside the repository unless the task explicitly adds a reusable example.
 
-### 8. Produce the AO-free declaration
+## Review setup
 
-With a clean worktree, produce the declaration snapshot from the issue constraints
-and your planned paths:
+The pack-owned review runner is the start/list/status authority:
 
-```powershell
-npm run check:node-major --silent && node --experimental-strip-types scripts/pr-scope-declaration.ts --issue <n> --declared-paths src/example.ts --declared-prefixes 'src/tests/**'
+```bash
+node --experimental-strip-types scripts/pack-review-runner.ts list --pr-number 1378
 ```
 
-The command writes:
+Use the configured `PACK_REVIEWER` value and the normal review runner entrypoint.
+Do not invoke a reviewer plugin directly, bypass start claims, or add a concrete
+runtime transport as a fallback.
 
-- committed artifact: `docs/declarations/<n>.pr-scope.json`
+For GitHub Actions Codex review, store required credentials only in the target
+repository's encrypted Actions secrets and use the tracked reusable workflow.
+Never place credentials in pack files, Issue text, PR text, or logs.
 
-### 9. Commit the declaration artifact
+## First task
 
-Stage and commit only the snapshot (and any in-scope work):
+1. Create a GitHub Issue from `docs/issue_template_example.md`.
+2. Add exact `denylist` and, when helpful, `allowed-roots` fences.
+3. Create a branch linked to the Issue.
+4. Generate the declaration artifact; do not hand-edit it.
+5. Implement the minimum scoped change.
+6. Run scope checks, focused tests, typecheck, lint, retirement scan, and verify.
+7. Open a PR whose first lines contain `Closes #N`, `Fixes #N`, or `Resolves #N`.
+8. Address review findings and required CI on the same current head.
+9. Merge only under direct operator authority.
 
-```powershell
-git add docs/declarations/<n>.pr-scope.json
-git commit -m "chore: add declaration artifact for issue #<n>"
-```
+## Required CI
 
-Do not commit AO runtime files or `agent-orchestrator.yaml`.
+Protect the default branch and require the pack merge-contract checks, including:
 
-### 10. Smoke test — scope-guard blocks out-of-scope edits
+- PR scope guard;
+- reusable repository policy;
+- TypeScript typecheck and policy lint;
+- affected tests;
+- runtime-retirement scan;
+- any task-specific required check.
 
-Confirm the wrapper or pre-commit hook rejects paths outside the snapshot.
+A success from an earlier SHA does not satisfy the current head.
 
-**Wrapper / worktree check** — modify a path not in the declaration, then run:
+## Operator adoption
 
-```powershell
-$env:AO_ISSUE_NUMBER = '<n>'
-# Edit a file outside declared scope, e.g. README.md, without amending the snapshot.
-node --experimental-strip-types plugins/scope-guard/bin/scope-check.ts `
-  --issue <n> `
-  --mode worktree
-```
-
-Expect exit code **1** and a JSON violation report on stderr.
-
-**Pre-commit check** — stage an out-of-scope file and attempt a commit:
-
-```powershell
-$env:AO_ISSUE_NUMBER = '<n>'
-git add README.md
-git commit -m "should be blocked"
-```
-
-Expect the pre-commit hook to block the commit. To proceed after a legitimate
-scope change, produce a fresh declaration and open a new PR. The guard has no
-legacy amendment or bypass path.
-
-### 11. Push a PR and verify CI scope-guard
-
-Open a feature branch, push, and open a PR that links the issue:
-
-```powershell
-git checkout -b feat/<n>-smoke-test
-git push -u origin HEAD
-gh pr create --title "Smoke test scope guard for #<n>" --body "Closes #<n>"
-```
-
-Confirm the **`scope-guard`** workflow passes for in-scope changes.
-
-Then add an out-of-scope file to the same PR (for example `vendor/out-of-scope.txt`
-or any path outside the snapshot and inside the issue denylist). Push again and
-confirm the **`PR scope guard`** job fails. Remove the out-of-scope change before
-merging.
-
----
-
-## Related docs
-
-- `docs/issue_template_example.md` — minimal parseable issue body
-- `docs/github_issues_cursor_codex_setup.md` — Cursor planner/worker + Codex review
-- `docs/repository_policy.md` — what not to commit
-- `docs/pr-scope-declaration.md` — AO-free declaration contract
-- `plugins/scope-guard/README.md` — runtime guard and hook
-- `plugins/codex-pr-reviewer/README.md` — `CODEX_AUTH_JSON` and CI review
+When a change modifies concrete runtime registration, supervised processes,
+operator-owned inputs, or tracked policy delivery, document the exact post-merge
+steps in `docs/migration_notes.md` and the PR body. Do not mutate the operator's
+machine from a managed worker unless the direct user orders that exact action.
