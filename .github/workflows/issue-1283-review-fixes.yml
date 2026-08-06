@@ -5,7 +5,7 @@ on:
     branches:
       - agent/issue-1283-browser-turn-recovery
     paths:
-      - scripts/apply-1283-review-fixes.py
+      - scripts/apply-1283-review-fixes.ready
 
 permissions:
   contents: write
@@ -24,7 +24,10 @@ jobs:
           node-version: 22
           cache: npm
       - name: Apply reviewer fixes
-        run: python scripts/apply-1283-review-fixes.py
+        shell: bash
+        run: |
+          cat scripts/apply-1283-review-fixes.part*.py > /tmp/apply-1283-review-fixes.py
+          python /tmp/apply-1283-review-fixes.py
       - name: Install dependencies
         run: npm ci
       - name: Typecheck
@@ -43,7 +46,7 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git rm scripts/apply-1283-review-fixes.py .github/workflows/issue-1283-review-fixes.yml
+          git rm scripts/apply-1283-review-fixes.part*.py scripts/apply-1283-review-fixes.ready .github/workflows/issue-1283-review-fixes.yml
           git add -A
           git commit -m "fix(browser-turn): enforce owned cancellation handshakes"
           git push origin HEAD:agent/issue-1283-browser-turn-recovery
