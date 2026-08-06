@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -62,6 +62,8 @@ const INVENTORY_KINDS = new Set<InventoryKind>([
   'historical-exclusion',
   'preserve',
 ]);
+
+const CANONICAL_PATTERN_SOURCE = 'scripts/json-producers/retired-surfaces.json';
 
 const REQUIRED_PRESERVE_PATHS = [
   'plugins/ao-task-declaration',
@@ -145,8 +147,8 @@ export function loadInventory(path: string): RetiredSurfaceInventory {
   if (typeof raw.candidateBase !== 'string' || !/^[0-9a-f]{40}$/.test(raw.candidateBase)) {
     throw new Error('inventory candidateBase must be a lowercase 40-hex commit');
   }
-  if (typeof raw.patternSource !== 'string' || raw.patternSource.trim() === '') {
-    throw new Error('inventory patternSource must be non-empty');
+  if (raw.patternSource !== CANONICAL_PATTERN_SOURCE) {
+    throw new Error(`inventory patternSource must equal ${CANONICAL_PATTERN_SOURCE}`);
   }
   if (!Array.isArray(raw.rows) || raw.rows.length === 0) {
     throw new Error('inventory rows must be a non-empty array');
@@ -189,7 +191,7 @@ export function loadInventory(path: string): RetiredSurfaceInventory {
   return {
     schemaVersion: 1,
     candidateBase: raw.candidateBase,
-    patternSource: normalizeRepoPath(raw.patternSource),
+    patternSource: CANONICAL_PATTERN_SOURCE,
     rows,
   };
 }
@@ -236,6 +238,21 @@ function assertExpectedKind(path: string, kind: InventoryKind): void {
   }
 }
 
+function assertExactAoPluginRoots(repoRoot: string): void {
+  const pluginsRoot = join(repoRoot, 'plugins');
+  if (!existsSync(pluginsRoot) || !statSync(pluginsRoot).isDirectory()) {
+    throw new Error(`plugins root missing: ${pluginsRoot}`);
+  }
+  const actual = readdirSync(pluginsRoot)
+    .filter((name) => name.startsWith('ao-'))
+    .map((name) => `plugins/${name}`)
+    .sort();
+  const expected = [...REQUIRED_PRESERVE_PATHS].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`actual plugins/ao-* roots must equal the exact four approved plugin roots: ${expected.join(', ')}`);
+  }
+}
+
 function lineContaining(content: string, index: number): string {
   const start = content.lastIndexOf('\n', Math.max(0, index - 1)) + 1;
   const nextBreak = content.indexOf('\n', index);
@@ -250,6 +267,7 @@ export function evaluateRetiredSurfaceInventory(input: {
   const repoRoot = resolve(input.repoRoot);
   const inventoryPath = resolve(input.inventoryPath);
   const inventory = loadInventory(inventoryPath);
+  assertExactAoPluginRoots(repoRoot);
   const patternPath = resolve(repoRoot, inventory.patternSource);
   if (relative(repoRoot, patternPath).startsWith('..')) {
     throw new Error('patternSource resolves outside repository root');

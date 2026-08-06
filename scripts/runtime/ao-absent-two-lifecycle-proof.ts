@@ -8,348 +8,71 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
-import { runOrcaJson, type OrcaJsonResponse } from '../orca-runtime/native.ts';
+import { selectRuntimeAdapter } from './registry.ts';
 import {
   executeRuntimeTaskLifecycle,
   type RuntimeTaskLifecycleResult,
 } from './task-lifecycle.ts';
 
-function hermeticTwoLifecycleFixture(
-  statePath: string,
-  capturePath: string,
-  expectedPath: string,
-): string {
-  return `#!${process.execPath}
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-
-const fixturePaths = Object.freeze({
-  state: ${JSON.stringify(statePath)},
-  capture: ${JSON.stringify(capturePath)},
-  expected: ${JSON.stringify(expectedPath)},
-});
-const args = process.argv
-  .slice(2)
-  .filter((value) => value !== '--json');
-const operation = [args.at(0) ?? '', args.at(1) ?? ''].join(' ');
-const initialState = { sequence: 0, terminals: {}, operations: [], captures: [] };
-const state = fs.existsSync(fixturePaths.state)
-  ? JSON.parse(fs.readFileSync(fixturePaths.state, 'utf8'))
-  : initialState;
-const forbiddenEnvironment = [];
-for (const key of Object.keys(process.env)) {
-  if (key.startsWith('AO_') || key.startsWith('AGENT_ORCHESTRATOR_')) {
-    forbiddenEnvironment.push(key);
-  }
-}
-const pathText = process.env.PATH ?? '';
-const pathEntries = pathText === '' ? [] : pathText.split(path.delimiter).filter(Boolean);
-const legacyAdapterLoaded = Object.keys(process.env)
-  .filter((key) => key.includes('LEGACY'))
-  .some((key) => key.includes('AO'));
-const capture = {
-  operation,
-  args,
-  forbiddenEnvironment,
-  pathEntries,
-  expectedPath: fixturePaths.expected,
-  legacyAdapterLoaded,
-};
-state.captures.push(capture);
-fs.writeFileSync(fixturePaths.capture, \`\${JSON.stringify(state.captures)}\\n\`, 'utf8');
-if (
-  forbiddenEnvironment.length > 0
-  || pathEntries.length !== 1
-  || pathEntries[0] !== fixturePaths.expected
-  || legacyAdapterLoaded
-) {
-  process.stdout.write(JSON.stringify({
-    ok: false,
-    error: { code: 'fixture_environment_not_hermetic', message: JSON.stringify(capture) },
-  }));
-  process.exit(0);
-}
-state.operations.push(operation);
-const persist = () => fs.writeFileSync(
-  fixturePaths.state,
-  \`\${JSON.stringify(state)}\\n\`,
-  'utf8',
-);
-const respond = (value) => {
-  persist();
-  process.stdout.write(\`\${JSON.stringify(value)}\\n\`);
-};
-const option = (name) => {
-  const index = args.indexOf(name);
-  return index >= 0 ? String(args[index + 1] ?? '') : '';
-};
-
-switch (operation) {
-  case 'worktree current':
-    respond({
-      ok: true,
-      result: {
-        worktree: {
-          path: fixturePaths.expected,
-          head: 'a'.repeat(40),
-        },
-      },
-    });
-    break;
-  case 'terminal create': {
-    state.sequence += 1;
-    const handle = \`term-1250-\${state.sequence}\`;
-    const incarnationId = \`generation-1250-\${state.sequence}\`;
-    const title = option('--title');
-    state.terminals[handle] = {
-      handle,
-      incarnationId,
-      title,
-      worktreePath: fixturePaths.expected,
-      status: 'running',
-      lines: [\`started:\${option('--command')}\`],
-      dispatches: 0,
-      closes: 0,
-      exists: true,
-    };
-    respond({ ok: true, result: { terminal: { handle, incarnationId, title } } });
-    break;
-  }
-  case 'terminal list':
-    respond({
-      ok: true,
-      result: {
-        terminals: Object.values(state.terminals)
-          .filter((terminal) => terminal.exists)
-          .map(({ lines, dispatches, closes, exists, ...terminal }) => terminal),
-      },
-    });
-    break;
-  case 'terminal send': {
-    const handle = option('--terminal');
-    const terminal = state.terminals[handle];
-    if (!terminal || !terminal.exists) {
-      respond({ ok: false, error: { code: 'terminal_not_found', message: handle } });
-      break;
-    }
-    terminal.dispatches += 1;
-    terminal.lines.push(option('--text'));
-    respond({ ok: true, result: { send: { accepted: true } } });
-    break;
-  }
-  case 'terminal read': {
-    const handle = option('--terminal');
-    const terminal = state.terminals[handle];
-    if (!terminal || !terminal.exists) {
-      respond({ ok: false, error: { code: 'terminal_not_found', message: handle } });
-      break;
-    }
-    respond({
-      ok: true,
-      result: {
-        terminal: {
-          handle,
-          status: terminal.status,
-          tail: [...terminal.lines],
-          nextCursor: String(terminal.lines.length),
-          latestCursor: String(terminal.lines.length),
-        },
-      },
-    });
-    break;
-  }
-  case 'terminal wait': {
-    const handle = option('--terminal');
-    const terminal = state.terminals[handle];
-    if (!terminal || !terminal.exists) {
-      respond({ ok: false, error: { code: 'terminal_not_found', message: handle } });
-      break;
-    }
-    respond({
-      ok: true,
-      result: {
-        wait: {
-          handle,
-          condition: 'tui-idle',
-          satisfied: true,
-          status: 'running',
-        },
-      },
-    });
-    break;
-  }
-  case 'terminal close': {
-    const handle = option('--terminal');
-    const terminal = state.terminals[handle];
-    if (!terminal || !terminal.exists) {
-      respond({ ok: false, error: { code: 'terminal_not_found', message: handle } });
-      break;
-    }
-    terminal.closes += 1;
-    terminal.exists = false;
-    terminal.status = 'exited';
-    respond({ ok: true, result: { close: { handle, closed: true } } });
-    break;
-  }
-  default:
-    respond({ ok: false, error: { code: 'unexpected_operation', message: operation } });
-}
-`;
+interface CompositionRootWitness {
+  readonly loaders: readonly string[];
+  readonly imports: readonly string[];
 }
 
-function makeChildEnvironment(root: string): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key.startsWith('AO_') || key.startsWith('AGENT_ORCHESTRATOR_')) continue;
-    environment[key] = value;
+const EXPECTED_RUNTIME_LOADERS = ['orca'] as const;
+const EXPECTED_REGISTRY_IMPORTS = [
+  '../orca-runtime/native.ts',
+  '../orca-runtime/task-adapter.ts',
+  './contracts.ts',
+] as const;
+
+function registryImportSpecifiers(source: string): readonly string[] {
+  const imports = new Set<string>();
+  for (const match of source.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)) {
+    if (match[1]) imports.add(match[1]);
   }
-  Object.assign(environment, {
-    PATH: root,
-    OPK_VITEST_HARNESS: '',
-    OPK_VITEST_SKIP_CHILD_ENV_MERGE: '1',
-  });
-  return environment;
-}
-
-function makeObservedTransport(
-  calls: Array<{ readonly args: readonly string[]; readonly response: OrcaJsonResponse }>,
-): typeof runOrcaJson {
-  return <T>(args: readonly string[], options = {}) => {
-    const response = runOrcaJson<T>(args, {
-      ...options,
-      inheritParentEnv: false,
-    });
-    calls.push({ args: [...args], response: response as OrcaJsonResponse });
-    return response;
-  };
-}
-
-function requireSuccess(
-  result: ReturnType<typeof executeRuntimeTaskLifecycle>,
-  label: string,
-): RuntimeTaskLifecycleResult {
-  if (!('status' in result) || result.status !== 'ok') {
-    throw new Error(`${label} lifecycle failed: ${JSON.stringify(result)}`);
+  for (const match of source.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+    if (match[1]) imports.add(match[1]);
   }
-  return result;
-}
-
-function runLifecycle(
-  adapter: OrcaTaskRuntimeAdapter,
-  root: string,
-  title: string,
-  prompt: string,
-): RuntimeTaskLifecycleResult {
-  return requireSuccess(executeRuntimeTaskLifecycle({
-    adapter,
-    title,
-    command: 'cursor-agent',
-    prompt,
-    observationWindowMs: 1_000,
-    options: { cwd: root, timeoutMs: 5_000 },
-    acquireClaim: () => ({ ok: true }),
-  }), title);
-}
-
-function main(): void {
-  const root = mkdtempSync(join(process.cwd(), '.issue-1250-orca-hermetic-'));
-  const fixturePath = join(root, 'orca-hermetic.mjs');
-  const statePath = join(root, 'state.json');
-  const capturePath = join(root, 'capture.json');
-  const nativeCalls: Array<{
-    readonly args: readonly string[];
-    readonly response: OrcaJsonResponse;
-  }> = [];
-
-  try {
-    writeFileSync(
-      fixturePath,
-      hermeticTwoLifecycleFixture(statePath, capturePath, root),
-      'utf8',
-    );
-    chmodSync(fixturePath, 0o755);
-
-    const adapter = new OrcaTaskRuntimeAdapter({
-      cwd: root,
-      env: makeChildEnvironment(root),
-      executable: fixturePath,
-      runJson: makeObservedTransport(nativeCalls),
-      timeoutMs: 5_000,
-    });
-    const first = runLifecycle(
-      adapter,
-      root,
-      'issue-1250-lifecycle-a',
-      'implement task A',
-    );
-    const second = runLifecycle(
-      adapter,
-      root,
-      'issue-1250-lifecycle-b',
-      'implement task B',
-    );
-
-    assert.equal(first.worker.title, 'issue-1250-lifecycle-a');
-    assert.equal(second.worker.title, 'issue-1250-lifecycle-b');
-    assert.notEqual(first.worker.identity.id, second.worker.identity.id);
-    assert.notEqual(first.worker.identity.generation, second.worker.identity.generation);
-    assert.ok(first.lines.includes('implement task A'));
-    assert.ok(second.lines.includes('implement task B'));
-    assert.equal(first.liveness, 'idle');
-    assert.equal(second.liveness, 'idle');
-
-    const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
-      terminals: Record<string, {
-        title: string;
-        dispatches: number;
-        closes: number;
-        exists: boolean;
-      }>;
-      operations: string[];
-      captures: Array<{
-        forbiddenEnvironment: string[];
-        pathEntries: string[];
-        expectedPath: string;
-        legacyAdapterLoaded: boolean;
-      }>;
-    };
-    const terminals = Object.values(state.terminals)
-      .sort((left, right) => left.title.localeCompare(right.title));
-    assert.deepEqual(
-      terminals.map((terminal) => terminal.title),
-      ['issue-1250-lifecycle-a', 'issue-1250-lifecycle-b'],
-    );
-    assert.ok(terminals.every((terminal) => terminal.dispatches === 1));
-    assert.ok(terminals.every((terminal) => terminal.closes === 1));
-    assert.ok(terminals.every((terminal) => !terminal.exists));
-    assert.equal(state.operations.filter((value) => value === 'terminal create').length, 2);
-    assert.equal(state.operations.filter((value) => value === 'terminal send').length, 2);
-    assert.equal(state.operations.filter((value) => value === 'terminal close').length, 2);
-    assert.ok(state.captures.length > 0);
-    assert.ok(state.captures.every((capture) => (
-      capture.forbiddenEnvironment.length === 0
-      && capture.pathEntries.length === 1
-      && capture.pathEntries[0] === root
-      && capture.expectedPath === root
-      && !capture.legacyAdapterLoaded
-    )));
-
-    process.stdout.write(`${JSON.stringify({
-      status: 'pass',
-      first: first.worker.identity,
-      second: second.worker.identity,
-      operations: state.operations,
-    })}\n`);
-  } catch (error) {
-    const capture = existsSync(capturePath)
-      ? readFileSync(capturePath, 'utf8').trim()
-      : 'capture_missing';
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${message}; native=${JSON.stringify(nativeCalls)}; capture=${capture}`);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+  for (const match of source.matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)) {
+    if (match[1]) imports.add(match[1]);
   }
+  return [...imports].sort();
 }
 
-main();
+function registryLoaderKeys(source: string): readonly string[] {
+  const marker = 'const DEFAULT_LOADERS:';
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error('runtime registry DEFAULT_LOADERS missing');
+  const end = source.indexOf('\n};', start);
+  if (end < 0) throw new Error('runtime registry DEFAULT_LOADERS terminator missing');
+  const body = source.slice(start, end);
+  return [...body.matchAll(/^\s{2}(?:'([^']+)'|"([^"]+)"|([A-Za-z0-9_-]+)):\s*async\s*\(\)\s*=>/gm)]
+    .map((match) => match[1] ?? match[2] ?? match[3] ?? '')
+    .filter(Boolean)
+    .sort();
+}
+
+function assertProductionCompositionRoot(source: string): CompositionRootWitness {
+  const loaders = registryLoaderKeys(source);
+  const imports = registryImportSpecifiers(source);
+  assert.deepEqual(
+    loaders,
+    [...EXPECTED_RUNTIME_LOADERS],
+    'runtime adapter loaders must equal the sole production Orca loader',
+  );
+  assert.deepEqual(
+    imports,
+    [...EXPECTED_REGISTRY_IMPORTS].sort(),
+    'runtime registry imports must equal the exact Orca composition-root graph',
+  );
+  return { loaders, imports };
+}
+
+function mutationMustRejectLegacyAdapter(registrySource: string): void {
+  const marker = 'const DEFAULT_LOADERS:';
+  const start = registrySource.indexOf(marker);
+  const end = registrySource.indexOf('\n};', start);
+  if (start€ð€Àñð•¹€ð€À¤Ñ¡É½Ü¹•ÜÉÉ½È ÉÕ¹Ñ¥µ”É•¥ÍÑÉäµÕÑ…Ñ¥½¸Ñ…É•Ðµ¥ÍÍ¥¹œœ¤ì(€½¹ÍÐµÕÑ…Ñ•€ô€‘íÉ•¥ÍÑÉåM½ÕÉ”¹Í±¥” À°•¹¥õq¸€€…¼µ±•…äœè…Íå¹Œ€ ¤€ôøíq¸€€€½¹ÍÐì½1•…åIÕ¹Ñ¥µ•‘…ÁÑ•Èô€ô…Ý…¥Ð¥µÁ½ÉÐ œ¸½…¼µ±•…äµ…‘…ÁÑ•È¹ÑÌœ¤íq¸€€€É•ÑÕÉ¸€ ¤€ôø¹•Ü½1•…åIÕ¹Ñ¥µ•‘…ÁÑ•È ¤íq¸€ô°‘íÉ•¥ÍÑÉåM½ÕÉ”¹Í±¥”¡•¹¥õ€ì(€…ÍÍ•ÉÐ¹Ñ¡É½ÝÌ (€€€€ ¤€ôø…ÍÍ•ÉÑAÉ½‘ÕÑ¥½¹½µÁ½Í¥Ñ¥½¹I½½Ð¡µÕÑ…Ñ•¤°(€€€€½Í½±”ÁÉ½‘ÕÑ¥½¸=É„±½…‘•Éñ•á…Ð=É„½µÁ½Í¥Ñ¥½¸µÉ½½ÐÉ…Á ¼°(€€€¤ì)ô()™Õ¹Ñ¥½¸¡•Éµ•Ñ¥QÝ½1¥™•å±•¥áÑÕÉ” (€ÍÑ…Ñ•A…Ñ èÍÑÉ¥¹œ°(€…ÁÑÕÉ•A…Ñ èÍÑÉ¥¹œ°(€•áÁ•Ñ•‘A…Ñ èÍÑÉ¥¹œ°(¤èÍÑÉ¥¹œì(€É•ÑÕÉ¸€Œ„‘íÁÉ½•ÍÌ¹•á•A…Ñ¡ô)¥µÁ½ÉÐ€¨…Ì™Ì™É½´€¹½‘”é™Ìœì)¥µÁ½ÉÐ€¨…ÌÁ…Ñ ™É½´€¹½‘”éÁ…Ñ œì()½¹ÍÐ™¥áÑÕÉ•A…Ñ¡Ì€ô=‰©•Ð¹™É••é”¡ì(€ÍÑ…Ñ”è€‘í)M=8¹ÍÑÉ¥¹¥™ä¡ÍÑ…Ñ•A…Ñ ¥ô°(€…ÁÑÕÉ”è€‘í)M=8¹ÍÑÉ¥¹¥™ä¡…ÁÑÕÉ•A…Ñ ¥ô°(€•áÁ•Ñ•è€‘í)M=8¹ÍÑÉ¥¹¥™ä¡•áÁ•Ñ•‘A…Ñ ¥ô°)ô¤ì)½¹ÍÐ…ÉÌ€ôÁÉ½•ÍÌ¹…ÉØ(€€¹Í±¥” È¤(€€¹™¥±Ñ•È ¡Ù…±Õ”¤€ôøÙ…±Õ”€„ôô€œ´µ©Í½¸œ¤ì)½¹ÍÐ½Á•É…Ñ¥½¸€ôm…ÉÌ¹…Ð À¤€üü€œœ°…ÉÌ¹…Ð Ä¤€üü€œt¹©½¥¸ œ€œ¤ì)½¹ÍÐ¥¹¥Ñ¥…±MÑ…Ñ”€ôìÍ•ÅÕ•¹”è€À°Ñ•Éµ¥¹…±Ìèíô°½Á•É…Ñ¥½¹Ìèmt°…ÁÑÕÉ•Ìèmtôì)½¹ÍÐÍÑ…Ñ”€ô™Ì¹•á¥ÍÑÍMå¹Œ¡™¥áÑÕÉ•A…Ñ¡Ì¹ÍÑ…Ñ”¤(€€ü)M=8¹Á…ÉÍ”¡™Ì¹É•…‘¥±•Må¹Œ¡™¥áÑÕÉ•A…Ñ¡Ì¹ÍÑ…Ñ”°€ÕÑ˜àœ¤¤(€€è¥¹¥Ñ¥…±MÑ…Ñ”ì)½¹ÍÐ™½É‰¥‘‘•¹¹Ù¥É½¹µ•¹Ð€ômtì)™½È€¡½¹ÍÐ­•ä½˜=‰©•Ð¹­•åÌ¡ÁÉ½•ÍÌ¹•¹Ø¤¤ì(€¥˜€¡­•ä¹ÍÑ…ÉÑÍ]¥Ñ  =|œ¤ñð­•ä¹ÍÑ…ÉÑÍ]¥Ñ  9Q}=I!MQIQ=I|œ¤¤ì(€€€™½É‰¥‘‘•¹¹Ù¥É½¹µ•¹Ð¹ÁÕÍ ¡­•ä¤ì(€ô)ô)½¹ÍÐÁ…Ñ¡Q•áÐ€ôÁÉ½•ÍÌ¹•¹Ø¹AQ €üü€œœì)½¹ÍÐÁ…Ñ¡¹ÑÉ¥•Ì€ôÁ…Ñ¡Q•áÐ€ôôô€œœ€ümt€èÁ…Ñ¡Q•áÐ¹ÍÁ±¥Ð¡Á…Ñ ¹‘•±¥µ¥Ñ•È¤¹™¥±Ñ•È¡	½½±•…¸¤ì)½¹ÍÐ…ÁÑÕÉ”€ôì(€½Á•É…Ñ¥½¸°(€…ÉÌ°(€™½É‰¥‘‘•¹¹Ù¥É½¹µ•¹Ð°(€Á…Ñ¡¹ÑÉ¥•Ì°(€•áÁ•Ñ•‘A…Ñ è™¥áÑÕÉ•A…Ñ¡Ì¹•áÁ•Ñ•°)ôì)ÍÑ…Ñ”¹…ÁÑÕÉ•Ì¹ÁÕÍ ¡…ÁÑÕÉ”¤ì)™Ì¹ÝÉ¥Ñ•¥±•Må¹Œ¡™¥áÑÕÉ•A…Ñ¡Ì¹…ÁÑÕÉ”°qp‘í)M=8¹ÍÑÉ¥¹¥™ä¡ÍÑ…Ñ”¹…ÁÑÕÉ•Ì¥õqq¹q€°€ÕÑ˜àœ¤ì)¥˜€ (€™½É‰¥‘‘•¹¹Ù¥É½¹µ•¹Ð¹±•¹Ñ €ø€À(€ñðÁ…Ñ¡¹ÑÉ¥•Ì¹±•¹Ñ €„ôô€Ä(€ñðÁ…Ñ¡¹ÑÉ¥•ÍlÁt€„ôô™¥áÑÕÉ•A…Ñ¡Ì¹•áÁ•Ñ•(¤ì(€ÁÉ½•ÍÌ¹ÍÑ‘½ÕÐ¹ÝÉ¥Ñ”¡)M=8¹ÍÑÉ¥¹¥™ä¡ì(€€€½¬è™…±Í”°(€€€•ÉÉ½Èèì½‘”è€™¥áÑÕÉ•}•¹Ù¥É½¹µ•¹Ñ}¹½Ñ}¡•Éµ•Ñ¥Œœ°µ•ÍÍ…”è)M=8¹ÍÑÉ¥¹¥™ä¡…ÁÑÕÉ”¤ô°(€ô¤¤ì(€ÁÉ½•ÍÌ¹•á¥Ð À¤ì)ô)ÍÑ…Ñ”¹½Á•É…Ñ¥½¹Ì¹ÁÕÍ ¡½Á•É…Ñ¥½¸¤ì)½¹ÍÐÁ•ÉÍ¥ÍÐ€ô€ ¤€ôø™Ì¹ÝÉ¥Ñ•¥±•Må¹Œ (€™¥áÑÕÉ•A…Ñ¡Ì¹ÍÑ…Ñ”°(€qp‘í)M=8¹ÍÑÉ¥¹¥™ä¡ÍÑ…Ñ”¥õqq¹q€°(€€ÕÑ˜àœ°(¤ì)½¹ÍÐÉ•ÍÁ½¹€ô€¡Ù…±Õ”¤€ôøì(€Á•ÉÍ¥ÍÐ ¤ì(€ÁÉ½•ÍÌ¹ÍÑ‘½ÕÐ¹ÝÉ¥Ñ”¡qp‘í)M=8¹ÍÑÉ¥¹¥™ä¡Ù…±Õ”¥õqq¹q€¤ì)ôì)½¹ÍÐ½ÁÑ¥½¸€ô€¡¹…µ”¤€ôøì(€½¹ÍÐ¥¹‘•à€ô…ÉÌ¹¥¹‘•á=˜¡¹…µ”¤ì(€É•ÑÕÉ¸¥¹‘•à€øô€À€üMÑÉ¥¹œ¡…ÉÍm¥¹‘•à€¬€Åt€üü€œœ¤€è€œœì)ôì()ÍÝ¥Ñ €¡½Á•É…Ñ¥½¸¤ì(€…Í”€Ý½É­ÑÉ•”ÕÉÉ•¹Ðœè(€€€É•ÍÁ½¹¡ì(€€€€€½¬èÑÉÕ”°(€€€€€É•ÍÕ±Ðèì(€€€€€€€Ý½É­ÑÉ•”èì(€€€€€€€€€Á…Ñ è™¥áÑÕÉ•A…Ñ¡Ì¹•áÁ•Ñ•°(€€€€€€€€€¡•…è€„œ¹É•Á•…Ð ÐÀ¤°(€€€€€€€ô°(€€€€€ô°(€€€ô¤ì(€€€‰É•…¬ì(€…Í”€Ñ•Éµ¥¹…°É•…Ñ”œèì(€€€ÍÑ…Ñ”¹Í•ÅÕ•¹”€¬ô€Äì(€€€½¹ÍÐ¡…¹‘±”€ôqÑ•É´´ÄÈÔÀµp‘íÍÑ…Ñ”¹Í•ÅÕ•¹•õq€ì(€€€½¹ÍÐ¥¹…É¹…Ñ¥½¹%€ôq•¹•É…Ñ¥½¸´ÄÈÔÀµp‘íÍÑ…Ñ”¹Í•ÅÕ•¹•õq€ì(€€€½¹ÍÐÑ¥Ñ±”€ô½ÁÑ¥½¸ œ´µÑ¥Ñ±”œ¤ì(€€€ÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ím¡…¹‘±•t€ôì(€€€€€¡…¹‘±”°(€€€€€¥¹…É¹…Ñ¥½¹%°(€€€€€Ñ¥Ñ±”°(€€€€€Ý½É­ÑÉ••A…Ñ è™¥áÑÕÉ•A…Ñ¡Ì¹•áÁ•Ñ•°(€€€€€ÍÑ…ÑÕÌè€ÉÕ¹¹¥¹œœ°(€€€€€±¥¹•ÌèmqÍÑ…ÉÑ•ép‘í½ÁÑ¥½¸ œ´µ½µµ…¹œ¥õqt°(€€€€€‘¥ÍÁ…Ñ¡•Ìè€À°(€€€€€±½Í•Ìè€À°(€€€€€•á¥ÍÑÌèÑÉÕ”°(€€€ôì(€€€É•ÍÁ½¹¡ì½¬èÑÉÕ”°É•ÍÕ±ÐèìÑ•Éµ¥¹…°èì¡…¹‘±”°¥¹…É¹…Ñ¥½¹%°Ñ¥Ñ±”ôôô¤ì(€€€‰É•…¬ì(€ô(€…Í”€Ñ•Éµ¥¹…°±¥ÍÐœè(€€€É•ÍÁ½¹¡ì(€€€€€½¬èÑÉÕ”°(€€€€€É•ÍÕ±Ðèì(€€€€€€€Ñ•Éµ¥¹…±Ìè=‰©•Ð¹Ù…±Õ•Ì¡ÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ì¤(€€€€€€€€€€¹™¥±Ñ•È ¡Ñ•Éµ¥¹…°¤€ôøÑ•Éµ¥¹…°¹•á¥ÍÑÌ¤(€€€€€€€€€€¹µ…À ¡ì±¥¹•Ì°‘¥ÍÁ…Ñ¡•Ì°±½Í•Ì°•á¥ÍÑÌ°€¸¸¹Ñ•Éµ¥¹…°ô¤€ôøÑ•Éµ¥¹…°¤°(€€€€€ô°(€€€ô¤ì(€€€‰É•…¬ì(€…Í”€Ñ•Éµ¥¹…°Í•¹œèì(€€€½¹ÍÐ¡…¹‘±”€ô½ÁÑ¥½¸ œ´µÑ•Éµ¥¹…°œ¤ì(€€€½¹ÍÐÑ•Éµ¥¹…°€ôÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ím¡…¹‘±•tì(€€€¥˜€ …Ñ•Éµ¥¹…°ñð€…Ñ•Éµ¥¹…°¹•á¥ÍÑÌ¤ì(€€€€€É•ÍÁ½¹¡ì½¬è™…±Í”°•ÉÉ½Èèì½‘”è€Ñ•Éµ¥¹…±}¹½Ñ}™½Õ¹œ°µ•ÍÍ…”è¡…¹‘±”ôô¤ì(€€€€€‰É•…¬ì(€€€ô(€€€Ñ•Éµ¥¹…°¹‘¥ÍÁ…Ñ¡•Ì€¬ô€Äì(€€€Ñ•Éµ¥¹…°¹±¥¹•Ì¹ÁÕÍ ¡½ÁÑ¥½¸ œ´µÑ•áÐœ¤¤ì(€€€É•ÍÁ½¹¡ì½¬èÑÉÕ”°É•ÍÕ±ÐèìÍ•¹èì…•ÁÑ•èÑÉÕ”ôôô¤ì(€€€‰É•…¬ì(€ô(€…Í”€Ñ•Éµ¥¹…°É•…œèì(€€€½¹ÍÐ¡…¹‘±”€ô½ÁÑ¥½¸ œ´µÑ•Éµ¥¹…°œ¤ì(€€€½¹ÍÐÑ•Éµ¥¹…°€ôÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ím¡…¹‘±•tì(€€€¥˜€ …Ñ•Éµ¥¹…°ñð€…Ñ•Éµ¥¹…°¹•á¥ÍÑÌ¤ì(€€€€€É•ÍÁ½¹¡ì½¬è™…±Í”°•ÉÉ½Èèì½‘”è€Ñ•Éµ¥¹…±}¹½Ñ}™½Õ¹œ°µ•ÍÍ…”è¡…¹‘±”ôô¤ì(€€€€€‰É•…¬ì(€€€ô(€€€É•ÍÁ½¹¡ì(€€€€€½¬èÑÉÕ”°(€€€€€É•ÍÕ±Ðèì(€€€€€€€Ñ•Éµ¥¹…°èì(€€€€€€€€€¡…¹‘±”°(€€€€€€€€€ÍÑ…ÑÕÌèÑ•Éµ¥¹…°¹ÍÑ…ÑÕÌ°(€€€€€€€€€Ñ…¥°èl¸¸¹Ñ•Éµ¥¹…°¹±¥¹•Ít°(€€€€€€€€€¹•áÑÕÉÍ½ÈèMÑÉ¥¹œ¡Ñ•Éµ¥¹…°¹±¥¹•Ì¹±•¹Ñ ¤°(€€€€€€€€€±…Ñ•ÍÑÕÉÍ½ÈèMÑÉ¥¹œ¡Ñ•Éµ¥¹…°¹±¥¹•Ì¹±•¹Ñ ¤°(€€€€€€€ô°(€€€€€ô°(€€€ô¤ì(€€€‰É•…¬ì(€ô(€…Í”€Ñ•Éµ¥¹…°Ý…¥Ðœèì(€€€½¹ÍÐ¡…¹‘±”€ô½ÁÑ¥½¸ œ´µÑ•Éµ¥¹…°œ¤ì(€€€½¹ÍÐÑ•Éµ¥¹…°€ôÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ím¡…¹‘±•tì(€€€¥˜€ …Ñ•Éµ¥¹…°ñð€…Ñ•Éµ¥¹…°¹•á¥ÍÑÌ¤ì(€€€€€É•ÍÁ½¹¡ì½¬è™…±Í”°•ÉÉ½Èèì½‘”è€Ñ•Éµ¥¹…±}¹½Ñ}™½Õ¹œ°µ•ÍÍ…”è¡…¹‘±”ôô¤ì(€€€€€‰É•…¬ì(€€€ô(€€€É•ÍÁ½¹¡ì(€€€€€½¬èÑÉÕ”°(€€€€€É•ÍÕ±Ðèì(€€€€€€€Ý…¥Ðèì(€€€€€€€€€¡…¹‘±”°(€€€€€€€€€½¹‘¥Ñ¥½¸è€ÑÕ¤µ¥‘±”œ°(€€€€€€€€€Í…Ñ¥Í™¥•èÑÉÕ”°(€€€€€€€€€ÍÑ…ÑÕÌè€ÉÕ¹¹¥¹œœ°(€€€€€€€ô°(€€€€€ô°(€€€ô¤ì(€€€‰É•…¬ì(€ô(€…Í”€Ñ•Éµ¥¹…°±½Í”œèì(€€€½¹ÍÐ¡…¹‘±”€ô½ÁÑ¥½¸ œ´µÑ•Éµ¥¹…°œ¤ì(€€€½¹ÍÐÑ•Éµ¥¹…°€ôÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ím¡…¹‘±•tì(€€€¥˜€ …Ñ•Éµ¥¹…°ñð€…Ñ•Éµ¥¹…°¹•á¥ÍÑÌ¤ì(€€€€€É•ÍÁ½¹¡ì½¬è™…±Í”°•ÉÉ½Èèì½‘”è€Ñ•Éµ¥¹…±}¹½Ñ}™½Õ¹œ°µ•ÍÍ…”è¡…¹‘±”ôô¤ì(€€€€€‰É•…¬ì(€€€ô(€€€Ñ•Éµ¥¹…°¹±½Í•Ì€¬ô€Äì(€€€Ñ•Éµ¥¹…°¹•á¥ÍÑÌ€ô™…±Í”ì(€€€Ñ•Éµ¥¹…°¹ÍÑ…ÑÕÌ€ô€•á¥Ñ•œì(€€€É•ÍÁ½¹¡ì½¬èÑÉÕ”°É•ÍÕ±Ðèì±½Í”èì¡…¹‘±”°±½Í•èÑÉÕ”ôôô¤ì(€€€‰É•…¬ì(€ô(€‘•™…Õ±Ðè(€€€É•ÍÁ½¹¡ì½¬è™…±Í”°•ÉÉ½Èèì½‘”è€Õ¹•áÁ•Ñ•‘}½Á•É…Ñ¥½¸œ°µ•ÍÍ…”è½Á•É…Ñ¥½¸ôô¤ì)ô)€ì)ô()™Õ¹Ñ¥½¸µ…­•¡¥±‘¹Ù¥É½¹µ•¹Ð¡É½½ÐèÍÑÉ¥¹œ¤è9½‘•)L¹AÉ½•ÍÍ¹Øì(€½¹ÍÐ•¹Ù¥É½¹µ•¹Ðè9½‘•)L¹AÉ½•ÍÍ¹Ø€ôíôì(€™½È€¡½¹ÍÐm­•ä°Ù…±Õ•t½˜=‰©•Ð¹•¹ÑÉ¥•Ì¡ÁÉ½•ÍÌ¹•¹Ø¤¤ì(€€€¥˜€¡­•ä¹ÍÑ…ÉÑÍ]¥Ñ  =|œ¤ñð­•ä¹ÍÑ…ÉÑÍ]¥Ñ  9Q}=I!MQIQ=I|œ¤¤½¹Ñ¥¹Õ”ì(€€€•¹Ù¥É½¹µ•¹Ñm­•åt€ôÙ…±Õ”ì(€ô(€=‰©•Ð¹…ÍÍ¥¸¡•¹Ù¥É½¹µ•¹Ð°ì(€€€AQ èÉ½½Ð°(€€€=A-}Y%QMQ}!I9MLè€œœ°(€€€=A-}Y%QMQ}M-%A}!%1}9Y}5Iè€œÄœ°(€ô¤ì(€É•ÑÕÉ¸•¹Ù¥É½¹µ•¹Ðì)ô()™Õ¹Ñ¥½¸É•ÅÕ¥É•MÕ•ÍÌ (€É•ÍÕ±ÐèI•ÑÕÉ¹QåÁ”ñÑåÁ•½˜•á•ÕÑ•IÕ¹Ñ¥µ•Q…Í­1¥™•å±”ø°(€±…‰•°èÍÑÉ¥¹œ°(¤èIÕ¹Ñ¥µ•Q…Í­1¥™•å±•I•ÍÕ±Ðì(€¥˜€ „ ÍÑ…ÑÕÌœ¥¸É•ÍÕ±Ð¤ñðÉ•ÍÕ±Ð¹ÍÑ…ÑÕÌ€„ôô€½¬œ¤ì(€€€Ñ¡É½Ü¹•ÜÉÉ½È¡€‘í±…‰•±ô±¥™•å±”™…¥±•è€‘í)M=8¹ÍÑÉ¥¹¥™ä¡É•ÍÕ±Ð¥õ€¤ì(€ô(€É•ÑÕÉ¸É•ÍÕ±Ðì)ô()™Õ¹Ñ¥½¸ÉÕ¹1¥™•å±” (€…‘…ÁÑ•Èè=É…Q…Í­IÕ¹Ñ¥µ•‘…ÁÑ•È°(€É½½ÐèÍÑÉ¥¹œ°(€Ñ¥Ñ±”èÍÑÉ¥¹œ°(€ÁÉ½µÁÐèÍÑÉ¥¹œ°(¤èIÕ¹Ñ¥µ•Q…Í­1¥™•å±•I•ÍÕ±Ðì(€É•ÑÕÉ¸É•ÅÕ¥É•MÕ•ÍÌ¡•á•ÕÑ•IÕ¹Ñ¥µ•Q…Í­1¥™•å±”¡ì(€€€…‘…ÁÑ•È°(€€€Ñ¥Ñ±”°(€€€½µµ…¹è€ÕÉÍ½Èµ…•¹Ðœ°(€€€ÁÉ½µÁÐ°(€€€½‰Í•ÉÙ…Ñ¥½¹]¥¹‘½Ý5Ìè€Å|ÀÀÀ°(€€€½ÁÑ¥½¹ÌèìÝèÉ½½Ð°Ñ¥µ•½ÕÑ5Ìè€Õ|ÀÀÀô°(€€€…ÅÕ¥É•±…¥´è€ ¤€ôø€¡ì½¬èÑÉÕ”ô¤°(€ô¤°Ñ¥Ñ±”¤ì)ô()…Íå¹Œ™Õ¹Ñ¥½¸µ…¥¸ ¤èAÉ½µ¥Í”ñÙ½¥øì(€½¹ÍÐÉ½½Ð€ôµ­‘Ñ•µÁMå¹Œ¡©½¥¸¡ÁÉ½•ÍÌ¹Ý ¤°€œ¹¥ÍÍÕ”´ÄÈÔÀµ½É„µ¡•Éµ•Ñ¥Œ´œ¤¤ì(€½¹ÍÐ™¥áÑÕÉ•A…Ñ €ô©½¥¸¡É½½Ð°€½É„µ¡•Éµ•Ñ¥Œ¹µ©Ìœ¤ì(€½¹ÍÐÍÑ…Ñ•A…Ñ €ô©½¥¸¡É½½Ð°€ÍÑ…Ñ”¹©Í½¸œ¤ì(€½¹ÍÐ…ÁÑÕÉ•A…Ñ €ô©½¥¸¡É½½Ð°€…ÁÑÕÉ”¹©Í½¸œ¤ì((€ÑÉäì(€€€½¹ÍÐÉ•¥ÍÑÉåA…Ñ €ô™¥±•UI1Q½A…Ñ ¡¹•ÜUI0 œ¸½É•¥ÍÑÉä¹ÑÌœ°¥µÁ½ÉÐ¹µ•Ñ„¹ÕÉ°¤¤ì(€€€½¹ÍÐÉ•¥ÍÑÉåM½ÕÉ”€ôÉ•…‘¥±•Må¹Œ¡É•¥ÍÑÉåA…Ñ °€ÕÑ˜àœ¤ì(€€€½¹ÍÐ½µÁ½Í¥Ñ¥½¹I½½Ð€ô…ÍÍ•ÉÑAÉ½‘ÕÑ¥½¹½µÁ½Í¥Ñ¥½¹I½½Ð¡É•¥ÍÑÉåM½ÕÉ”¤ì(€€€µÕÑ…Ñ¥½¹5ÕÍÑI•©•Ñ1•…å‘…ÁÑ•È¡É•¥ÍÑÉåM½ÕÉ”¤ì((€€€ÝÉ¥Ñ•¥±•Må¹Œ (€€€€€™¥áÑÕÉ•A…Ñ °(€€€€€¡•Éµ•Ñ¥QÝ½1¥™•å±•¥áÑÕÉ”¡ÍÑ…Ñ•A…Ñ °…ÁÑÕÉ•A…Ñ °É½½Ð¤°(€€€€€€ÕÑ˜àœ°(€€€€¤ì(€€€¡µ½‘Må¹Œ¡™¥áÑÕÉ•A…Ñ °€Á¼ÜÔÔ¤ì((€€€½¹ÍÐÍ•±•Ñ•‘‘…ÁÑ•È€ô…Ý…¥ÐÍ•±•ÑIÕ¹Ñ¥µ•‘…ÁÑ•È (€€€€€ì…‘…ÁÑ•Èè€½É„œ°•¹Øèíôô°(€€€€€ì(€€€€€€€ÝèÉ½½Ð°(€€€€€€€Ñ¥µ•½ÕÑ5Ìè€Õ|ÀÀÀ°(€€€€€€€ÑÉ…¹ÍÁ½ÉÐèì(€€€€€€€€€•á•ÕÑ…‰±”è™¥áÑÕÉ•A…Ñ °(€€€€€€€€€•¹Øèµ…­•¡¥±‘¹Ù¥É½¹µ•¹Ð¡É½½Ð¤°(€€€€€€€ô°(€€€€€ô°(€€€€¤ì(€€€…ÍÍ•ÉÐ¹½¬ (€€€€€Í•±•Ñ•‘‘…ÁÑ•È¥¹ÍÑ…¹•½˜=É…Q…Í­IÕ¹Ñ¥µ•‘…ÁÑ•È°(€€€€€€ÁÉ½‘ÕÑ¥½¸ÉÕ¹Ñ¥µ”É•¥ÍÑÉäµÕÍÐÍ•±•Ð=É…Q…Í­IÕ¹Ñ¥µ•‘…ÁÑ•Èœ°(€€€€¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡Í•±•Ñ•‘‘…ÁÑ•È¹¥°€½É„œ¤ì((€€€½¹ÍÐ™¥ÉÍÐ€ôÉÕ¹1¥™•å±” (€€€€€Í•±•Ñ•‘‘…ÁÑ•È°(€€€€€É½½Ð°(€€€€€€¥ÍÍÕ”´ÄÈÔÀµ±¥™•å±”µ„œ°(€€€€€€¥µÁ±•µ•¹ÐÑ…Í¬œ°(€€€€¤ì(€€€½¹ÍÐÍ•½¹€ôÉÕ¹1¥™•å±” (€€€€€Í•±•Ñ•‘‘…ÁÑ•È°(€€€€€É½½Ð°(€€€€€€¥ÍÍÕ”´ÄÈÔÀµ±¥™•å±”µˆœ°(€€€€€€¥µÁ±•µ•¹ÐÑ…Í¬œ°(€€€€¤ì((€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡™¥ÉÍÐ¹Ý½É­•È¹Ñ¥Ñ±”°€¥ÍÍÕ”´ÄÈÔÀµ±¥™•å±”µ„œ¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡Í•½¹¹Ý½É­•È¹Ñ¥Ñ±”°€¥ÍÍÕ”´ÄÈÔÀµ±¥™•å±”µˆœ¤ì(€€€…ÍÍ•ÉÐ¹¹½ÑÅÕ…°¡™¥ÉÍÐ¹Ý½É­•È¹¥‘•¹Ñ¥Ñä¹¥°Í•½¹¹Ý½É­•È¹¥‘•¹Ñ¥Ñä¹¥¤ì(€€€…ÍÍ•ÉÐ¹¹½ÑÅÕ…°¡™¥ÉÍÐ¹Ý½É­•È¹¥‘•¹Ñ¥Ñä¹•¹•É…Ñ¥½¸°Í•½¹¹Ý½É­•È¹¥‘•¹Ñ¥Ñä¹•¹•É…Ñ¥½¸¤ì(€€€…ÍÍ•ÉÐ¹½¬¡™¥ÉÍÐ¹±¥¹•Ì¹¥¹±Õ‘•Ì ¥µÁ±•µ•¹ÐÑ…Í¬œ¤¤ì(€€€…ÍÍ•ÉÐ¹½¬¡Í•½¹¹±¥¹•Ì¹¥¹±Õ‘•Ì ¥µÁ±•µ•¹ÐÑ…Í¬œ¤¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡™¥ÉÍÐ¹±¥Ù•¹•ÍÌ°€¥‘±”œ¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡Í•½¹¹±¥Ù•¹•ÍÌ°€¥‘±”œ¤ì((€€€½¹ÍÐÍÑ…Ñ”€ô)M=8¹Á…ÉÍ”¡É•…‘¥±•Må¹Œ¡ÍÑ…Ñ•A…Ñ °€ÕÑ˜àœ¤¤…Ìì(€€€€€Ñ•Éµ¥¹…±ÌèI•½ÉñÍÑÉ¥¹œ°ì(€€€€€€€Ñ¥Ñ±”èÍÑÉ¥¹œì(€€€€€€€‘¥ÍÁ…Ñ¡•Ìè¹Õµ‰•Èì(€€€€€€€±½Í•Ìè¹Õµ‰•Èì(€€€€€€€•á¥ÍÑÌè‰½½±•…¸ì(€€€€€ôøì(€€€€€½Á•É…Ñ¥½¹ÌèÍÑÉ¥¹mtì(€€€€€…ÁÑÕÉ•ÌèÉÉ…äñì(€€€€€€€™½É‰¥‘‘•¹¹Ù¥É½¹µ•¹ÐèÍÑÉ¥¹mtì(€€€€€€€Á…Ñ¡¹ÑÉ¥•ÌèÍÑÉ¥¹mtì(€€€€€€€•áÁ•Ñ•‘A…Ñ èÍÑÉ¥¹œì(€€€€€ôøì(€€€ôì(€€€½¹ÍÐÑ•Éµ¥¹…±Ì€ô=‰©•Ð¹Ù…±Õ•Ì¡ÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ì¤(€€€€€€¹Í½ÉÐ ¡±•™Ð°É¥¡Ð¤€ôø±•™Ð¹Ñ¥Ñ±”¹±½…±•½µÁ…É”¡É¥¡Ð¹Ñ¥Ñ±”¤¤ì(€€€…ÍÍ•ÉÐ¹‘••ÁÅÕ…° (€€€€€Ñ•Éµ¥¹…±Ì¹µ…À ¡Ñ•Éµ¥¹…°¤€ôøÑ•Éµ¥¹…°¹Ñ¥Ñ±”¤°(€€€€€l¥ÍÍÕ”´ÄÈÔÀµ±¥™•å±”µ„œ°€¥ÍÍÕ”´ÄÈÔÀµ±¥™•å±”µˆt°(€€€€¤ì(€€€…ÍÍ•ÉÐ¹½¬¡Ñ•Éµ¥¹…±Ì¹•Ù•Éä ¡Ñ•Éµ¥¹…°¤€ôøÑ•Éµ¥¹…°¹‘¥ÍÁ…Ñ¡•Ì€ôôô€Ä¤¤ì(€€€…ÍÍ•ÉÐ¹½¬¡Ñ•Éµ¥¹…±Ì¹•Ù•Éä ¡Ñ•Éµ¥¹…°¤€ôøÑ•Éµ¥¹…°¹±½Í•Ì€ôôô€Ä¤¤ì(€€€…ÍÍ•ÉÐ¹½¬¡Ñ•Éµ¥¹…±Ì¹•Ù•Éä ¡Ñ•Éµ¥¹…°¤€ôø€…Ñ•Éµ¥¹…°¹•á¥ÍÑÌ¤¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡ÍÑ…Ñ”¹½Á•É…Ñ¥½¹Ì¹™¥±Ñ•È ¡Ù…±Õ”¤€ôøÙ…±Õ”€ôôô€Ñ•Éµ¥¹…°É•…Ñ”œ¤¹±•¹Ñ °€È¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡ÍÑ…Ñ”¹½Á•É…Ñ¥½¹Ì¹™¥±Ñ•È ¡Ù…±Õ”¤€ôøÙ…±Õ”€ôôô€Ñ•Éµ¥¹…°Í•¹œ¤¹±•¹Ñ °€È¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡ÍÑ…Ñ”¹½Á•É…Ñ¥½¹Ì¹™¥±Ñ•È ¡Ù…±Õ”¤€ôøÙ…±Õ”€ôôô€Ñ•Éµ¥¹…°±½Í”œ¤¹±•¹Ñ °€È¤ì(€€€…ÍÍ•ÉÐ¹½¬¡ÍÑ…Ñ”¹…ÁÑÕÉ•Ì¹±•¹Ñ €ø€À¤ì(€€€…ÍÍ•ÉÐ¹½¬¡ÍÑ…Ñ”¹…ÁÑÕÉ•Ì¹•Ù•Éä ¡…ÁÑÕÉ”¤€ôø€ (€€€€€…ÁÑÕÉ”¹™½É‰¥‘‘•¹¹Ù¥É½¹µ•¹Ð¹±•¹Ñ €ôôô€À(€€€€€€˜˜…ÁÑÕÉ”¹Á…Ñ¡¹ÑÉ¥•Ì¹±•¹Ñ €ôôô€Ä(€€€€€€˜˜…ÁÑÕÉ”¹Á…Ñ¡¹ÑÉ¥•ÍlÁt€ôôôÉ½½Ð(€€€€€€˜˜…ÁÑÕÉ”¹•áÁ•Ñ•‘A…Ñ €ôôôÉ½½Ð(€€€€¤¤¤ì((€€€ÁÉ½•ÍÌ¹ÍÑ‘½ÕÐ¹ÝÉ¥Ñ”¡€‘í)M=8¹ÍÑÉ¥¹¥™ä¡ì(€€€€€ÍÑ…ÑÕÌè€Á…ÍÌœ°(€€€€€™¥ÉÍÐè™¥ÉÍÐ¹Ý½É­•È¹¥‘•¹Ñ¥Ñä°(€€€€€Í•½¹èÍ•½¹¹Ý½É­•È¹¥‘•¹Ñ¥Ñä°(€€€€€½Á•É…Ñ¥½¹ÌèÍÑ…Ñ”¹½Á•É…Ñ¥½¹Ì°(€€€€€Í•±•Ñ•‘‘…ÁÑ•ÈèÍ•±•Ñ•‘‘…ÁÑ•È¹½¹ÍÑÉÕÑ½È¹¹…µ”°(€€€€€½µÁ½Í¥Ñ¥½¹I½½Ð°(€€€ô¥õq¹€¤ì(€ô…Ñ €¡•ÉÉ½È¤ì(€€€½¹ÍÐ…ÁÑÕÉ”€ô•á¥ÍÑÍMå¹Œ¡…ÁÑÕÉ•A…Ñ ¤(€€€€€€üÉ•…‘¥±•Må¹Œ¡…ÁÑÕÉ•A…Ñ °€ÕÑ˜àœ¤¹ÑÉ¥´ ¤(€€€€€€è€…ÁÑÕÉ•}µ¥ÍÍ¥¹œœì(€€€½¹ÍÐµ•ÍÍ…”€ô•ÉÉ½È¥¹ÍÑ…¹•½˜ÉÉ½È€ü•ÉÉ½È¹µ•ÍÍ…”€èMÑÉ¥¹œ¡•ÉÉ½È¤ì(€€€Ñ¡É½Ü¹•ÜÉÉ½È¡€‘íµ•ÍÍ…•ôì…ÁÑÕÉ”ô‘í…ÁÑÕÉ•õ€¤ì(€ô™¥¹…±±äì(€€€ÉµMå¹Œ¡É½½Ð°ìÉ•ÕÉÍ¥Ù”èÑÉÕ”°™½É”èÑÉÕ”ô¤ì(€ô)ô()…Ý…¥Ðµ…¥¸ ¤ì

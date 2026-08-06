@@ -220,13 +220,30 @@ function runFixtureChecks(): void {
   {
     const root = fixtureRoot();
     try {
+      write(root, 'scripts/ao-retirement/permissive-patterns.json', JSON.stringify({
+        surfaces: [{ id: 'permissive', sourceCommandPattern: 'never-match', reason: 'wrong source', owningReference: '#1' }],
+      }));
+      const redirected = inventory({
+        patternSource: 'scripts/ao-retirement/permissive-patterns.json',
+      });
+      expectThrows(
+        () => loadInventory(writeInventory(root, redirected)),
+        /patternSource must equal scripts\/json-producers\/retired-surfaces\.json/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const root = fixtureRoot();
+    try {
       mkdirSync(join(root, 'plugins/ao-neighbor'), { recursive: true });
-      const withNeighbor = inventory({ rows: [
-        { path: 'clean.md', kind: 'clean' },
-        ...PRESERVES.map((path) => ({ path, kind: 'preserve', reason: 'exact' })),
-        { path: 'plugins/ao-neighbor', kind: 'preserve', reason: 'prefix is not authority' },
-      ] });
-      expectThrows(() => loadInventory(writeInventory(root, withNeighbor)), /exact four approved plugin roots/);
+      const inventoryPath = writeInventory(root, inventory());
+      expectThrows(
+        () => evaluateRetiredSurfaceInventory({ repoRoot: root, inventoryPath }),
+        /actual plugins\/ao-\* roots must equal the exact four approved plugin roots/,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
