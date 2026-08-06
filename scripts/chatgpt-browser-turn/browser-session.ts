@@ -5,6 +5,10 @@ export interface TurnPageHandle {
 }
 
 export const RESOURCE_CLEANUP_BOUND_MS = 5_000;
+export const CDP_BROWSER_RELEASE_BOUND_MS = 15_000;
+export const BEFORE_CDP_BROWSER_RELEASE = Symbol.for(
+  'orchestrator-pack.before-cdp-browser-release',
+);
 
 export type ResourceCleanupOutcome = 'confirmed' | 'unconfirmed' | 'skipped';
 
@@ -45,14 +49,32 @@ export async function closeOwnedTurnPage(
   );
 }
 
+interface ReleasableCdpBrowser {
+  close: () => Promise<void>;
+  [BEFORE_CDP_BROWSER_RELEASE]?: () => Promise<void>;
+}
+
 export async function releaseCdpBrowser(
   browser: unknown | null | undefined,
-  cleanupBudgetMs = RESOURCE_CLEANUP_BOUND_MS,
+  cleanupBudgetMs = CDP_BROWSER_RELEASE_BOUND_MS,
 ): Promise<void> {
   if (!browser) return;
+  const releasable = browser as ReleasableCdpBrowser;
+  const startedAt = Date.now();
+  const beforeRelease = releasable[BEFORE_CDP_BROWSER_RELEASE];
+  if (typeof beforeRelease === 'function') {
+    try {
+      // The hook is itself bounded by the producer. Await it before starting
+      // browser disconnect so terminal capture state is fixed before stdout.
+      await beforeRelease.call(releasable);
+    } catch {
+      // The producer records a bounded capture-failure diagnostic.
+    }
+  }
+  const remainingBudgetMs = Math.max(0, cleanupBudgetMs - (Date.now() - startedAt));
   await boundedResourceCleanup(
     () => (browser as { close: () => Promise<void> }).close(),
-    cleanupBudgetMs,
+    remainingBudgetMs,
   );
 }
 
@@ -90,4 +112,3 @@ export async function trimExcessCdpPageTargets(
   }
   return closed;
 }
-
