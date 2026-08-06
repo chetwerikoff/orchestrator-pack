@@ -10,19 +10,28 @@ exec(compile(base, 'apply-1283-production-tests-base.py', 'exec'))
 
 cancellation = Path('scripts/chatgpt-browser-turn/state-light-cancellation.ts')
 cancellation_text = cancellation.read_text()
-old_import = "import { normalizeConversationUrl, STOP_BUTTON_SELECTOR, USER_MESSAGE_SELECTOR } from './ui-adapter.ts';"
+old_import = (
+    "import {\n"
+    "  loadChromium,\n"
+    "  normalizeConversationUrl,\n"
+    "  STOP_BUTTON_SELECTOR,\n"
+    "  USER_MESSAGE_SELECTOR,\n"
+    "} from './ui-adapter.ts';"
+)
 new_import = (
     "import { STOP_BUTTON_SELECTOR, USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';\n"
-    "import { normalizeConversationUrl } from './ui-adapter.ts';"
+    "import { loadChromium, normalizeConversationUrl } from './ui-adapter.ts';"
 )
-if cancellation_text.count(old_import) != 1:
-    raise SystemExit(f'expected one cancellation selector import, found {cancellation_text.count(old_import)}')
-cancellation.write_text(cancellation_text.replace(old_import, new_import, 1))
+if old_import in cancellation_text:
+    cancellation.write_text(cancellation_text.replace(old_import, new_import, 1))
+elif new_import not in cancellation_text:
+    raise SystemExit('cancellation selector import is neither old nor expected new form')
 
 path = Path('scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts')
 text = path.read_text()
 old = "  const mock = buildUiAdapterTestMock(actual, mocks);\n  return {\n    ...mock,\n    productStatusText: mocks.productStatusText,\n  };"
 new = "  const mock = buildUiAdapterTestMock(actual, mocks);\n  const selectors = await import('./product-page-selectors.ts');\n  return {\n    ...mock,\n    ...selectors,\n    productStatusText: mocks.productStatusText,\n  };"
-if text.count(old) != 1:
-    raise SystemExit(f'expected one ui-adapter mock anchor, found {text.count(old)}')
-path.write_text(text.replace(old, new, 1))
+if old in text:
+    path.write_text(text.replace(old, new, 1))
+elif new not in text:
+    raise SystemExit('ui-adapter mock is neither old nor expected new form')
