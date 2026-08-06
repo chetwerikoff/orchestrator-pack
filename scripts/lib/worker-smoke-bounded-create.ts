@@ -59,6 +59,7 @@ export interface HistoricalSmokeQuarantine {
 
 const patchedTaskAdapterPrototypes = new WeakSet<object>();
 const spawnIdentityFailures = new WeakMap<object, string>();
+const spawnedSmokeWorkers = new WeakMap<object, RuntimeWorker>();
 
 const acceptedHistoricalStaleOutcomes = new Set([
   'close_failed:terminal_handle_stale',
@@ -221,8 +222,9 @@ export function stabilizeSpawnedSmokeWorkerIdentity(input: {
 
 /**
  * Install the narrow worker-smoke compatibility repair on the production task
- * adapter. A failed stabilization is checked before the original dispatcher,
- * so no send can happen for an identity that was not proved current.
+ * adapter. The exact created handle is re-resolved immediately before dispatch,
+ * so a legitimate generation change becomes current while an absent/dead handle
+ * still refuses before the original dispatcher can send.
  */
 export function installStableWorkerSmokeSpawnPatch(
   options: StableWorkerSmokeSpawnPatchOptions = {},
@@ -245,6 +247,7 @@ export function installStableWorkerSmokeSpawnPatch(
     ): ReturnType<OrcaTaskRuntimeAdapter['spawnWorker']> {
       const result = originalSpawn.call(this, input, callOptions);
       if (result.status !== 'ok') return result;
+      spawnedSmokeWorkers.set(result.value.identity, result.value);
       const stabilized = stabilizeSpawnedSmokeWorkerIdentity({
         worker: result.value,
         cwd: callOptions.cwd ?? process.cwd(),
@@ -268,10 +271,26 @@ export function installStableWorkerSmokeSpawnPatch(
       input: Parameters<OrcaTaskRuntimeAdapter['dispatchInput']>[0],
       callOptions: RuntimeCallOptions = {},
     ): RuntimeDispatchResult {
-      const stabilizationFailure = spawnIdentityFailures.get(input.worker);
-      if (stabilizationFailure) {
-        return { status: 'send_failed', reason: stabilizationFailure };
+      const spawnedWorker = spawnedSmokeWorkers.get(input.worker);
+      if (spawnedWorker) {
+        const refreshed = stabilizeSpawnedSmokeWorkerIdentity({
+          worker: spawnedWorker,
+          cwd: callOptions.cwd ?? process.cwd(),
+          timeoutMs: callOptions.timeoutMs ?? 30_000,
+          probe,
+        });
+        if (!refreshed.ok) {
+          spawnIdentityFailures.set(input.worker, refreshed.reason);
+          return { status: 'send_failed', reason: refreshed.reason };
+        }
+        spawnIdentityFailures.delete(input.worker);
+      } else {
+        const stabilizationFailure = spawnIdentityFailures.get(input.worker);
+        if (stabilizationFailure) {
+          return { status: 'send_failed', reason: stabilizationFailure };
+        }
       }
+
       const result = originalDispatch.call(this, input, callOptions);
       if (result.status !== 'send_failed' || result.reason !== 'worker_generation_not_found') {
         return result;
