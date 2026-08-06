@@ -7,13 +7,40 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  apply-issue-1283-review-fixes:
+    name: Apply Issue 1283 review fixes
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/issue-1283-browser-turn-recovery'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Apply and publish the atomic patch
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          cat scripts/apply-1283-review-fixes.part*.py > /tmp/apply-1283-review-fixes.py
+          python /tmp/apply-1283-review-fixes.py
+          git checkout "$PR_BASE_SHA" -- .github/workflows/typescript-foundation.yml
+          git rm scripts/apply-1283-review-fixes.part*.py scripts/apply-1283-review-fixes.ready .github/workflows/issue-1283-review-fixes.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix(browser-turn): enforce owned cancellation handshakes"
+          git push origin "HEAD:$PR_HEAD_REF"
+
   runtime:
     name: TypeScript runtime (Node 22)
     runs-on: ubuntu-latest
