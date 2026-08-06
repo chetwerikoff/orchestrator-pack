@@ -1,78 +1,90 @@
 import assert from 'node:assert/strict';
-import {
-  chmodSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import { selectRuntimeAdapter } from './registry.ts';
-import {
-  executeRuntimeTaskLifecycle,
-  type RuntimeTaskLifecycleResult,
-} from './task-lifecycle.ts';
+import { executeRuntimeTaskLifecycle, type RuntimeTaskLifecycleResult } from './task-lifecycle.ts';
 
-interface CompositionRootWitness {
-  readonly loaders: readonly string[];
-  readonly imports: readonly string[];
-}
+const LOADERS = ['orca'] as const;
+const IMPORTS = ['../orca-runtime/native.ts', '../orca-runtime/task-adapter.ts', './contracts.ts'] as const;
 
-const EXPECTED_RUNTIME_LOADERS = ['orca'] as const;
-const EXPECTED_REGISTRY_IMPORTS = [
-  '../orca-runtime/native.ts',
-  '../orca-runtime/task-adapter.ts',
-  './contracts.ts',
-] as const;
-
-function registryImportSpecifiers(source: string): readonly string[] {
-  const imports = new Set<string>();
-  for (const match of source.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)) {
-    if (match[1]) imports.add(match[1]);
-  }
-  for (const match of source.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
-    if (match[1]) imports.add(match[1]);
-  }
-  for (const match of source.matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)) {
-    if (match[1]) imports.add(match[1]);
-  }
-  return [...imports].sort();
-}
-
-function registryLoaderKeys(source: string): readonly string[] {
-  const marker = 'const DEFAULT_LOADERS:';
-  const start = source.indexOf(marker);
-  if (start < 0) throw new Error('runtime registry DEFAULT_LOADERS missing');
+function composition(source: string): { loaders: string[]; imports: string[] } {
+  const start = source.indexOf('const DEFAULT_LOADERS:');
   const end = source.indexOf('\n};', start);
-  if (end < 0) throw new Error('runtime registry DEFAULT_LOADERS terminator missing');
-  const body = source.slice(start, end);
-  return [...body.matchAll(/^\s{2}(?:'([^']+)'|"([^"]+)"|([A-Za-z0-9_-]+)):\s*async\s*\(\)\s*=>/gm)]
-    .map((match) => match[1] ?? match[2] ?? match[3] ?? '')
-    .filter(Boolean)
-    .sort();
-}
-
-function assertProductionCompositionRoot(source: string): CompositionRootWitness {
-  const loaders = registryLoaderKeys(source);
-  const imports = registryImportSpecifiers(source);
-  assert.deepEqual(
-    loaders,
-    [...EXPECTED_RUNTIME_LOADERS],
-    'runtime adapter loaders must equal the sole production Orca loader',
-  );
-  assert.deepEqual(
-    imports,
-    [...EXPECTED_REGISTRY_IMPORTS].sort(),
-    'runtime registry imports must equal the exact Orca composition-root graph',
-  );
+  if (start < 0 || end < 0) throw new Error('runtime registry DEFAULT_LOADERS missing');
+  const loaders = [...source.slice(start, end).matchAll(/^\s{2}(?:'([^']+)'|"([^"]+)"|([\w-]+)):\s*async\s*\(\)\s*=>/gm)]
+    .map((match) => match[1] ?? match[2] ?? match[3] ?? '').filter(Boolean).sort();
+  const imports = [...new Set([
+    ...[...source.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].map((match) => match[1]!),
+    ...[...source.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g)].map((match) => match[1]!),
+  ])].sort();
+  assert.deepEqual(loaders, [...LOADERS], 'sole production Orca loader');
+  assert.deepEqual(imports, [...IMPORTS].sort(), 'exact Orca composition-root graph');
   return { loaders, imports };
 }
 
-function mutationMustRejectLegacyAdapter(registrySource: string): void {
-  const marker = 'const DEFAULT_LOADERS:';
-  const start = registrySource.indexOf(marker);
-  const end = registrySource.indexOf('\n};', start);
-  if (start€ð€Àñð•¹€ð€À¤Ñ¡É½Ü¹•ÜÉÉ½È ÉÕ¹Ñ¥µ”É•¥ÍÑÉäµÕÑ…Ñ¥½¸Ñ…É•Ðµ¥ÍÍ¥¹œœ¤ì(€½¹ÍÐµÕÑ…Ñ•€ô€‘íÉ•¥ÍÑÉåM½ÕÉ”¹Í±¥” À°•¹¥õq¸€€…¼µ±•…äœè…Íå¹Œ€ ¤€ôøíq¸€€€½¹ÍÐì½1•…åIÕ¹Ñ¥µ•‘…ÁÑ•Èô€ô…Ý…¥Ð¥µÁ½ÉÐ œ¸½…¼µ±•…äµ…‘…ÁÑ•È¹ÑÌœ¤íq¸€€€É•ÑÕÉ¸€ ¤€ôø¹•Ü½1•…åIÕ¹Ñ¥µ•‘…ÁÑ•È ¤íq¸€ô°‘íÉ•¥ÍÑÉåM½ÕÉ”¹Í±¥”¡•¹¥õ€ì(€…ÍÍ•ÉÐ¹Ñ¡É½ÝÌ (€€€€ ¤€ôø…ÍÍ•ÉÑAÉ½‘ÕÑ¥½¹½µÁ½Í¥Ñ¥½¹I½½Ð¡µÕÑ…Ñ•¤°(€€€€½Í½±”ÁÉ½‘ÕÑ¥½¸=É„±½…‘•Éñ•á…Ð=É„½µÁ½Í¥Ñ¥½¸µÉ½½ÐÉ…Á ¼°(€€€¤ì)ô()™Õ¹Ñ¥½¸¡•Éµ•Ñ¥QÝ½1¥™•å±•¥áÑÕÉ” (€ÍÑ…Ñ•A…Ñ èÍÑÉ¥¹œ°(€…ÁÑÕÉ•A…Ñ èÍÑÉ¥¹œ°(€•áÁ•Ñ•‘A…Ñ èÍÑÉ¥¹œ°(¤èÍÑÉ¥¹œì(€É•ÑÕÉ¸€Œ„‘íÁÉ½•ÍÌ¹•á•A…Ñ¡ô)¥µÁ½ÉÐ€¨…Ì™Ì™É½´€¹½‘”é™Ìœì)¥µÁ½ÉÐ€¨…ÌÁ…Ñ ™É½´€¹½‘”éÁ…Ñ œì()½¹ÍÐ™¥áÑÕÉ•A…Ñ¡Ì€ô=‰©•Ð¹™É••é”¡ì(€ÍÑ…Ñ”è€‘í)M=8¹ÍÑÉ¥¹¥™ä¡ÍÑ…Ñ•A…Ñ ¥ô°(€…ÁÑÕÉ”è€‘í)M=8¹ÍÑÉ¥¹¥™ä¡…ÁÑÕÉ•A…Ñ ¥ô°(€•áÁ•Ñ•è€‘í)M=8¹ÍÑÉ¥¹¥™ä¡•áÁ•Ñ•‘A…Ñ ¥ô°)ô¤ì)½¹ÍÐ…ÉÌ€ôÁÉ½•ÍÌ¹…ÉØ(€€¹Í±¥” È¤(€€¹™¥±Ñ•È ¡Ù…±Õ”¤€ôøÙ…±Õ”€„ôô€œ´µ©Í½¸œ¤ì)½¹ÍÐ½Á•É…Ñ¥½¸€ôm…ÉÌ¹…Ð À¤€üü€œœ°…ÉÌ¹…Ð Ä¤€üü€œt¹©½¥¸ œ€œ¤ì)½¹ÍÐ¥¹¥Ñ¥…±MÑ…Ñ”€ôìÍ•ÅÕ•¹”è€À°Ñ•Éµ¥¹…±Ìèíô°½Á•É…Ñ¥½¹Ìèmt°…ÁÑÕÉ•Ìèmtôì)½¹ÍÐÍÑ…Ñ”€ô™Ì¹•á¥ÍÑÍMå¹Œ¡™¥áÑÕÉ•A…Ñ¡Ì¹ÍÑ…Ñ”¤(€€ü)M=8¹Á…ÉÍ”¡™Ì¹É•…‘¥±•Må¹Œ¡™¥áÑÕÉ•A…Ñ¡Ì¹ÍÑ…Ñ”°€ÕÑ˜àœ¤¤(€€è¥¹¥Ñ¥…±MÑ…Ñ”ì)½¹ÍÐ™½É‰¥‘‘•¹¹Ù¥É½¹µ•¹Ð€ômtì)™½È€¡½¹ÍÐ­•ä½˜=‰©•Ð¹­•åÌ¡ÁÉ½•ÍÌ¹•¹Ø¤¤ì(€¥˜€¡­•ä¹ÍÑ…ÉÑÍ]¥Ñ  =|œ¤ñð­•ä¹ÍÑ…ÉÑÍ]¥Ñ  9Q}=I!MQIQ=I|œ¤¤ì(€€€™½É‰¥‘‘•¹¹Ù¥É½¹µ•¹Ð¹ÁÕÍ ¡­•ä¤ì(€ô)ô)½¹ÍÐÁ…Ñ¡Q•áÐ€ôÁÉ½•ÍÌ¹•¹Ø¹AQ €üü€œœì)½¹ÍÐÁ…Ñ¡¹ÑÉ¥•Ì€ôÁ…Ñ¡Q•áÐ€ôôô€œœ€ümt€èÁ…Ñ¡Q•áÐ¹ÍÁ±¥Ð¡Á…Ñ ¹‘•±¥µ¥Ñ•È¤¹™¥±Ñ•È¡	½½±•…¸¤ì)½¹ÍÐ…ÁÑÕÉ”€ôì(€½Á•É…Ñ¥½¸°(€…ÉÌ°(€™½É‰¥‘‘•¹¹Ù¥É½¹µ•¹Ð°(€Á…Ñ¡¹ÑÉ¥•Ì°(€•áÁ•Ñ•‘A…Ñ è™¥áÑÕÉ•A…Ñ¡Ì¹•áÁ•Ñ•°)ôì)ÍÑ…Ñ”¹…ÁÑÕÉ•Ì¹ÁÕÍ ¡…ÁÑÕÉ”¤ì)™Ì¹ÝÉ¥Ñ•¥±•Må¹Œ¡™¥áÑÕÉ•A…Ñ¡Ì¹…ÁÑÕÉ”°qp‘í)M=8¹ÍÑÉ¥¹¥™ä¡ÍÑ…Ñ”¹…ÁÑÕÉ•Ì¥õqq¹q€°€ÕÑ˜àœ¤ì)¥˜€ (€™½É‰¥‘‘•¹¹Ù¥É½¹µ•¹Ð¹±•¹Ñ €ø€À(€ñðÁ…Ñ¡¹ÑÉ¥•Ì¹±•¹Ñ €„ôô€Ä(€ñðÁ…Ñ¡¹ÑÉ¥•ÍlÁt€„ôô™¥áÑÕÉ•A…Ñ¡Ì¹•áÁ•Ñ•(¤ì(€ÁÉ½•ÍÌ¹ÍÑ‘½ÕÐ¹ÝÉ¥Ñ”¡)M=8¹ÍÑÉ¥¹¥™ä¡ì(€€€½¬è™…±Í”°(€€€•ÉÉ½Èèì½‘”è€™¥áÑÕÉ•}•¹Ù¥É½¹µ•¹Ñ}¹½Ñ}¡•Éµ•Ñ¥Œœ°µ•ÍÍ…”è)M=8¹ÍÑÉ¥¹¥™ä¡…ÁÑÕÉ”¤ô°(€ô¤¤ì(€ÁÉ½•ÍÌ¹•á¥Ð À¤ì)ô)ÍÑ…Ñ”¹½Á•É…Ñ¥½¹Ì¹ÁÕÍ ¡½Á•É…Ñ¥½¸¤ì)½¹ÍÐÁ•ÉÍ¥ÍÐ€ô€ ¤€ôø™Ì¹ÝÉ¥Ñ•¥±•Må¹Œ (€™¥áÑÕÉ•A…Ñ¡Ì¹ÍÑ…Ñ”°(€qp‘í)M=8¹ÍÑÉ¥¹¥™ä¡ÍÑ…Ñ”¥õqq¹q€°(€€ÕÑ˜àœ°(¤ì)½¹ÍÐÉ•ÍÁ½¹€ô€¡Ù…±Õ”¤€ôøì(€Á•ÉÍ¥ÍÐ ¤ì(€ÁÉ½•ÍÌ¹ÍÑ‘½ÕÐ¹ÝÉ¥Ñ”¡qp‘í)M=8¹ÍÑÉ¥¹¥™ä¡Ù…±Õ”¥õqq¹q€¤ì)ôì)½¹ÍÐ½ÁÑ¥½¸€ô€¡¹…µ”¤€ôøì(€½¹ÍÐ¥¹‘•à€ô…ÉÌ¹¥¹‘•á=˜¡¹…µ”¤ì(€É•ÑÕÉ¸¥¹‘•à€øô€À€üMÑÉ¥¹œ¡…ÉÍm¥¹‘•à€¬€Åt€üü€œœ¤€è€œœì)ôì()ÍÝ¥Ñ €¡½Á•É…Ñ¥½¸¤ì(€…Í”€Ý½É­ÑÉ•”ÕÉÉ•¹Ðœè(€€€É•ÍÁ½¹¡ì(€€€€€½¬èÑÉÕ”°(€€€€€É•ÍÕ±Ðèì(€€€€€€€Ý½É­ÑÉ•”èì(€€€€€€€€€Á…Ñ è™¥áÑÕÉ•A…Ñ¡Ì¹•áÁ•Ñ•°(€€€€€€€€€¡•…è€„œ¹É•Á•…Ð ÐÀ¤°(€€€€€€€ô°(€€€€€ô°(€€€ô¤ì(€€€‰É•…¬ì(€…Í”€Ñ•Éµ¥¹…°É•…Ñ”œèì(€€€ÍÑ…Ñ”¹Í•ÅÕ•¹”€¬ô€Äì(€€€½¹ÍÐ¡…¹‘±”€ôqÑ•É´´ÄÈÔÀµp‘íÍÑ…Ñ”¹Í•ÅÕ•¹•õq€ì(€€€½¹ÍÐ¥¹…É¹…Ñ¥½¹%€ôq•¹•É…Ñ¥½¸´ÄÈÔÀµp‘íÍÑ…Ñ”¹Í•ÅÕ•¹•õq€ì(€€€½¹ÍÐÑ¥Ñ±”€ô½ÁÑ¥½¸ œ´µÑ¥Ñ±”œ¤ì(€€€ÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ím¡…¹‘±•t€ôì(€€€€€¡…¹‘±”°(€€€€€¥¹…É¹…Ñ¥½¹%°(€€€€€Ñ¥Ñ±”°(€€€€€Ý½É­ÑÉ••A…Ñ è™¥áÑÕÉ•A…Ñ¡Ì¹•áÁ•Ñ•°(€€€€€ÍÑ…ÑÕÌè€ÉÕ¹¹¥¹œœ°(€€€€€±¥¹•ÌèmqÍÑ…ÉÑ•ép‘í½ÁÑ¥½¸ œ´µ½µµ…¹œ¥õqt°(€€€€€‘¥ÍÁ…Ñ¡•Ìè€À°(€€€€€±½Í•Ìè€À°(€€€€€•á¥ÍÑÌèÑÉÕ”°(€€€ôì(€€€É•ÍÁ½¹¡ì½¬èÑÉÕ”°É•ÍÕ±ÐèìÑ•Éµ¥¹…°èì¡…¹‘±”°¥¹…É¹…Ñ¥½¹%°Ñ¥Ñ±”ôôô¤ì(€€€‰É•…¬ì(€ô(€…Í”€Ñ•Éµ¥¹…°±¥ÍÐœè(€€€É•ÍÁ½¹¡ì(€€€€€½¬èÑÉÕ”°(€€€€€É•ÍÕ±Ðèì(€€€€€€€Ñ•Éµ¥¹…±Ìè=‰©•Ð¹Ù…±Õ•Ì¡ÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ì¤(€€€€€€€€€€¹™¥±Ñ•È ¡Ñ•Éµ¥¹…°¤€ôøÑ•Éµ¥¹…°¹•á¥ÍÑÌ¤(€€€€€€€€€€¹µ…À ¡ì±¥¹•Ì°‘¥ÍÁ…Ñ¡•Ì°±½Í•Ì°•á¥ÍÑÌ°€¸¸¹Ñ•Éµ¥¹…°ô¤€ôøÑ•Éµ¥¹…°¤°(€€€€€ô°(€€€ô¤ì(€€€‰É•…¬ì(€…Í”€Ñ•Éµ¥¹…°Í•¹œèì(€€€½¹ÍÐ¡…¹‘±”€ô½ÁÑ¥½¸ œ´µÑ•Éµ¥¹…°œ¤ì(€€€½¹ÍÐÑ•Éµ¥¹…°€ôÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ím¡…¹‘±•tì(€€€¥˜€ …Ñ•Éµ¥¹…°ñð€…Ñ•Éµ¥¹…°¹•á¥ÍÑÌ¤ì(€€€€€É•ÍÁ½¹¡ì½¬è™…±Í”°•ÉÉ½Èèì½‘”è€Ñ•Éµ¥¹…±}¹½Ñ}™½Õ¹œ°µ•ÍÍ…”è¡…¹‘±”ôô¤ì(€€€€€‰É•…¬ì(€€€ô(€€€Ñ•Éµ¥¹…°¹‘¥ÍÁ…Ñ¡•Ì€¬ô€Äì(€€€Ñ•Éµ¥¹…°¹±¥¹•Ì¹ÁÕÍ ¡½ÁÑ¥½¸ œ´µÑ•áÐœ¤¤ì(€€€É•ÍÁ½¹¡ì½¬èÑÉÕ”°É•ÍÕ±ÐèìÍ•¹èì…•ÁÑ•èÑÉÕ”ôôô¤ì(€€€‰É•…¬ì(€ô(€…Í”€Ñ•Éµ¥¹…°É•…œèì(€€€½¹ÍÐ¡…¹‘±”€ô½ÁÑ¥½¸ œ´µÑ•Éµ¥¹…°œ¤ì(€€€½¹ÍÐÑ•Éµ¥¹…°€ôÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ím¡…¹‘±•tì(€€€¥˜€ …Ñ•Éµ¥¹…°ñð€…Ñ•Éµ¥¹…°¹•á¥ÍÑÌ¤ì(€€€€€É•ÍÁ½¹¡ì½¬è™…±Í”°•ÉÉ½Èèì½‘”è€Ñ•Éµ¥¹…±}¹½Ñ}™½Õ¹œ°µ•ÍÍ…”è¡…¹‘±”ôô¤ì(€€€€€‰É•…¬ì(€€€ô(€€€É•ÍÁ½¹¡ì(€€€€€½¬èÑÉÕ”°(€€€€€É•ÍÕ±Ðèì(€€€€€€€Ñ•Éµ¥¹…°èì(€€€€€€€€€¡…¹‘±”°(€€€€€€€€€ÍÑ…ÑÕÌèÑ•Éµ¥¹…°¹ÍÑ…ÑÕÌ°(€€€€€€€€€Ñ…¥°èl¸¸¹Ñ•Éµ¥¹…°¹±¥¹•Ít°(€€€€€€€€€¹•áÑÕÉÍ½ÈèMÑÉ¥¹œ¡Ñ•Éµ¥¹…°¹±¥¹•Ì¹±•¹Ñ ¤°(€€€€€€€€€±…Ñ•ÍÑÕÉÍ½ÈèMÑÉ¥¹œ¡Ñ•Éµ¥¹…°¹±¥¹•Ì¹±•¹Ñ ¤°(€€€€€€€ô°(€€€€€ô°(€€€ô¤ì(€€€‰É•…¬ì(€ô(€…Í”€Ñ•Éµ¥¹…°Ý…¥Ðœèì(€€€½¹ÍÐ¡…¹‘±”€ô½ÁÑ¥½¸ œ´µÑ•Éµ¥¹…°œ¤ì(€€€½¹ÍÐÑ•Éµ¥¹…°€ôÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ím¡…¹‘±•tì(€€€¥˜€ …Ñ•Éµ¥¹…°ñð€…Ñ•Éµ¥¹…°¹•á¥ÍÑÌ¤ì(€€€€€É•ÍÁ½¹¡ì½¬è™…±Í”°•ÉÉ½Èèì½‘”è€Ñ•Éµ¥¹…±}¹½Ñ}™½Õ¹œ°µ•ÍÍ…”è¡…¹‘±”ôô¤ì(€€€€€‰É•…¬ì(€€€ô(€€€É•ÍÁ½¹¡ì(€€€€€½¬èÑÉÕ”°(€€€€€É•ÍÕ±Ðèì(€€€€€€€Ý…¥Ðèì(€€€€€€€€€¡…¹‘±”°(€€€€€€€€€½¹‘¥Ñ¥½¸è€ÑÕ¤µ¥‘±”œ°(€€€€€€€€€Í…Ñ¥Í™¥•èÑÉÕ”°(€€€€€€€€€ÍÑ…ÑÕÌè€ÉÕ¹¹¥¹œœ°(€€€€€€€ô°(€€€€€ô°(€€€ô¤ì(€€€‰É•…¬ì(€ô(€…Í”€Ñ•Éµ¥¹…°±½Í”œèì(€€€½¹ÍÐ¡…¹‘±”€ô½ÁÑ¥½¸ œ´µÑ•Éµ¥¹…°œ¤ì(€€€½¹ÍÐÑ•Éµ¥¹…°€ôÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ím¡…¹‘±•tì(€€€¥˜€ …Ñ•Éµ¥¹…°ñð€…Ñ•Éµ¥¹…°¹•á¥ÍÑÌ¤ì(€€€€€É•ÍÁ½¹¡ì½¬è™…±Í”°•ÉÉ½Èèì½‘”è€Ñ•Éµ¥¹…±}¹½Ñ}™½Õ¹œ°µ•ÍÍ…”è¡…¹‘±”ôô¤ì(€€€€€‰É•…¬ì(€€€ô(€€€Ñ•Éµ¥¹…°¹±½Í•Ì€¬ô€Äì(€€€Ñ•Éµ¥¹…°¹•á¥ÍÑÌ€ô™…±Í”ì(€€€Ñ•Éµ¥¹…°¹ÍÑ…ÑÕÌ€ô€•á¥Ñ•œì(€€€É•ÍÁ½¹¡ì½¬èÑÉÕ”°É•ÍÕ±Ðèì±½Í”èì¡…¹‘±”°±½Í•èÑÉÕ”ôôô¤ì(€€€‰É•…¬ì(€ô(€‘•™…Õ±Ðè(€€€É•ÍÁ½¹¡ì½¬è™…±Í”°•ÉÉ½Èèì½‘”è€Õ¹•áÁ•Ñ•‘}½Á•É…Ñ¥½¸œ°µ•ÍÍ…”è½Á•É…Ñ¥½¸ôô¤ì)ô)€ì)ô()™Õ¹Ñ¥½¸µ…­•¡¥±‘¹Ù¥É½¹µ•¹Ð¡É½½ÐèÍÑÉ¥¹œ¤è9½‘•)L¹AÉ½•ÍÍ¹Øì(€½¹ÍÐ•¹Ù¥É½¹µ•¹Ðè9½‘•)L¹AÉ½•ÍÍ¹Ø€ôíôì(€™½È€¡½¹ÍÐm­•ä°Ù…±Õ•t½˜=‰©•Ð¹•¹ÑÉ¥•Ì¡ÁÉ½•ÍÌ¹•¹Ø¤¤ì(€€€¥˜€¡­•ä¹ÍÑ…ÉÑÍ]¥Ñ  =|œ¤ñð­•ä¹ÍÑ…ÉÑÍ]¥Ñ  9Q}=I!MQIQ=I|œ¤¤½¹Ñ¥¹Õ”ì(€€€•¹Ù¥É½¹µ•¹Ñm­•åt€ôÙ…±Õ”ì(€ô(€=‰©•Ð¹…ÍÍ¥¸¡•¹Ù¥É½¹µ•¹Ð°ì(€€€AQ èÉ½½Ð°(€€€=A-}Y%QMQ}!I9MLè€œœ°(€€€=A-}Y%QMQ}M-%A}!%1}9Y}5Iè€œÄœ°(€ô¤ì(€É•ÑÕÉ¸•¹Ù¥É½¹µ•¹Ðì)ô()™Õ¹Ñ¥½¸É•ÅÕ¥É•MÕ•ÍÌ (€É•ÍÕ±ÐèI•ÑÕÉ¹QåÁ”ñÑåÁ•½˜•á•ÕÑ•IÕ¹Ñ¥µ•Q…Í­1¥™•å±”ø°(€±…‰•°èÍÑÉ¥¹œ°(¤èIÕ¹Ñ¥µ•Q…Í­1¥™•å±•I•ÍÕ±Ðì(€¥˜€ „ ÍÑ…ÑÕÌœ¥¸É•ÍÕ±Ð¤ñðÉ•ÍÕ±Ð¹ÍÑ…ÑÕÌ€„ôô€½¬œ¤ì(€€€Ñ¡É½Ü¹•ÜÉÉ½È¡€‘í±…‰•±ô±¥™•å±”™…¥±•è€‘í)M=8¹ÍÑÉ¥¹¥™ä¡É•ÍÕ±Ð¥õ€¤ì(€ô(€É•ÑÕÉ¸É•ÍÕ±Ðì)ô()™Õ¹Ñ¥½¸ÉÕ¹1¥™•å±” (€…‘…ÁÑ•Èè=É…Q…Í­IÕ¹Ñ¥µ•‘…ÁÑ•È°(€É½½ÐèÍÑÉ¥¹œ°(€Ñ¥Ñ±”èÍÑÉ¥¹œ°(€ÁÉ½µÁÐèÍÑÉ¥¹œ°(¤èIÕ¹Ñ¥µ•Q…Í­1¥™•å±•I•ÍÕ±Ðì(€É•ÑÕÉ¸É•ÅÕ¥É•MÕ•ÍÌ¡•á•ÕÑ•IÕ¹Ñ¥µ•Q…Í­1¥™•å±”¡ì(€€€…‘…ÁÑ•È°(€€€Ñ¥Ñ±”°(€€€½µµ…¹è€ÕÉÍ½Èµ…•¹Ðœ°(€€€ÁÉ½µÁÐ°(€€€½‰Í•ÉÙ…Ñ¥½¹]¥¹‘½Ý5Ìè€Å|ÀÀÀ°(€€€½ÁÑ¥½¹ÌèìÝèÉ½½Ð°Ñ¥µ•½ÕÑ5Ìè€Õ|ÀÀÀô°(€€€…ÅÕ¥É•±…¥´è€ ¤€ôø€¡ì½¬èÑÉÕ”ô¤°(€ô¤°Ñ¥Ñ±”¤ì)ô()…Íå¹Œ™Õ¹Ñ¥½¸µ…¥¸ ¤èAÉ½µ¥Í”ñÙ½¥øì(€½¹ÍÐÉ½½Ð€ôµ­‘Ñ•µÁMå¹Œ¡©½¥¸¡ÁÉ½•ÍÌ¹Ý ¤°€œ¹¥ÍÍÕ”´ÄÈÔÀµ½É„µ¡•Éµ•Ñ¥Œ´œ¤¤ì(€½¹ÍÐ™¥áÑÕÉ•A…Ñ €ô©½¥¸¡É½½Ð°€½É„µ¡•Éµ•Ñ¥Œ¹µ©Ìœ¤ì(€½¹ÍÐÍÑ…Ñ•A…Ñ €ô©½¥¸¡É½½Ð°€ÍÑ…Ñ”¹©Í½¸œ¤ì(€½¹ÍÐ…ÁÑÕÉ•A…Ñ €ô©½¥¸¡É½½Ð°€…ÁÑÕÉ”¹©Í½¸œ¤ì((€ÑÉäì(€€€½¹ÍÐÉ•¥ÍÑÉåA…Ñ €ô™¥±•UI1Q½A…Ñ ¡¹•ÜUI0 œ¸½É•¥ÍÑÉä¹ÑÌœ°¥µÁ½ÉÐ¹µ•Ñ„¹ÕÉ°¤¤ì(€€€½¹ÍÐÉ•¥ÍÑÉåM½ÕÉ”€ôÉ•…‘¥±•Må¹Œ¡É•¥ÍÑÉåA…Ñ °€ÕÑ˜àœ¤ì(€€€½¹ÍÐ½µÁ½Í¥Ñ¥½¹I½½Ð€ô…ÍÍ•ÉÑAÉ½‘ÕÑ¥½¹½µÁ½Í¥Ñ¥½¹I½½Ð¡É•¥ÍÑÉåM½ÕÉ”¤ì(€€€µÕÑ…Ñ¥½¹5ÕÍÑI•©•Ñ1•…å‘…ÁÑ•È¡É•¥ÍÑÉåM½ÕÉ”¤ì((€€€ÝÉ¥Ñ•¥±•Må¹Œ (€€€€€™¥áÑÕÉ•A…Ñ °(€€€€€¡•Éµ•Ñ¥QÝ½1¥™•å±•¥áÑÕÉ”¡ÍÑ…Ñ•A…Ñ °…ÁÑÕÉ•A…Ñ °É½½Ð¤°(€€€€€€ÕÑ˜àœ°(€€€€¤ì(€€€¡µ½‘Må¹Œ¡™¥áÑÕÉ•A…Ñ °€Á¼ÜÔÔ¤ì((€€€½¹ÍÐÍ•±•Ñ•‘‘…ÁÑ•È€ô…Ý…¥ÐÍ•±•ÑIÕ¹Ñ¥µ•‘…ÁÑ•È (€€€€€ì…‘…ÁÑ•Èè€½É„œ°•¹Øèíôô°(€€€€€ì(€€€€€€€ÝèÉ½½Ð°(€€€€€€€Ñ¥µ•½ÕÑ5Ìè€Õ|ÀÀÀ°(€€€€€€€ÑÉ…¹ÍÁ½ÉÐèì(€€€€€€€€€•á•ÕÑ…‰±”è™¥áÑÕÉ•A…Ñ °(€€€€€€€€€•¹Øèµ…­•¡¥±‘¹Ù¥É½¹µ•¹Ð¡É½½Ð¤°(€€€€€€€ô°(€€€€€ô°(€€€€¤ì(€€€…ÍÍ•ÉÐ¹½¬ (€€€€€Í•±•Ñ•‘‘…ÁÑ•È¥¹ÍÑ…¹•½˜=É…Q…Í­IÕ¹Ñ¥µ•‘…ÁÑ•È°(€€€€€€ÁÉ½‘ÕÑ¥½¸ÉÕ¹Ñ¥µ”É•¥ÍÑÉäµÕÍÐÍ•±•Ð=É…Q…Í­IÕ¹Ñ¥µ•‘…ÁÑ•Èœ°(€€€€¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡Í•±•Ñ•‘‘…ÁÑ•È¹¥°€½É„œ¤ì((€€€½¹ÍÐ™¥ÉÍÐ€ôÉÕ¹1¥™•å±” (€€€€€Í•±•Ñ•‘‘…ÁÑ•È°(€€€€€É½½Ð°(€€€€€€¥ÍÍÕ”´ÄÈÔÀµ±¥™•å±”µ„œ°(€€€€€€¥µÁ±•µ•¹ÐÑ…Í¬œ°(€€€€¤ì(€€€½¹ÍÐÍ•½¹€ôÉÕ¹1¥™•å±” (€€€€€Í•±•Ñ•‘‘…ÁÑ•È°(€€€€€É½½Ð°(€€€€€€¥ÍÍÕ”´ÄÈÔÀµ±¥™•å±”µˆœ°(€€€€€€¥µÁ±•µ•¹ÐÑ…Í¬œ°(€€€€¤ì((€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡™¥ÉÍÐ¹Ý½É­•È¹Ñ¥Ñ±”°€¥ÍÍÕ”´ÄÈÔÀµ±¥™•å±”µ„œ¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡Í•½¹¹Ý½É­•È¹Ñ¥Ñ±”°€¥ÍÍÕ”´ÄÈÔÀµ±¥™•å±”µˆœ¤ì(€€€…ÍÍ•ÉÐ¹¹½ÑÅÕ…°¡™¥ÉÍÐ¹Ý½É­•È¹¥‘•¹Ñ¥Ñä¹¥°Í•½¹¹Ý½É­•È¹¥‘•¹Ñ¥Ñä¹¥¤ì(€€€…ÍÍ•ÉÐ¹¹½ÑÅÕ…°¡™¥ÉÍÐ¹Ý½É­•È¹¥‘•¹Ñ¥Ñä¹•¹•É…Ñ¥½¸°Í•½¹¹Ý½É­•È¹¥‘•¹Ñ¥Ñä¹•¹•É…Ñ¥½¸¤ì(€€€…ÍÍ•ÉÐ¹½¬¡™¥ÉÍÐ¹±¥¹•Ì¹¥¹±Õ‘•Ì ¥µÁ±•µ•¹ÐÑ…Í¬œ¤¤ì(€€€…ÍÍ•ÉÐ¹½¬¡Í•½¹¹±¥¹•Ì¹¥¹±Õ‘•Ì ¥µÁ±•µ•¹ÐÑ…Í¬œ¤¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡™¥ÉÍÐ¹±¥Ù•¹•ÍÌ°€¥‘±”œ¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡Í•½¹¹±¥Ù•¹•ÍÌ°€¥‘±”œ¤ì((€€€½¹ÍÐÍÑ…Ñ”€ô)M=8¹Á…ÉÍ”¡É•…‘¥±•Må¹Œ¡ÍÑ…Ñ•A…Ñ °€ÕÑ˜àœ¤¤…Ìì(€€€€€Ñ•Éµ¥¹…±ÌèI•½ÉñÍÑÉ¥¹œ°ì(€€€€€€€Ñ¥Ñ±”èÍÑÉ¥¹œì(€€€€€€€‘¥ÍÁ…Ñ¡•Ìè¹Õµ‰•Èì(€€€€€€€±½Í•Ìè¹Õµ‰•Èì(€€€€€€€•á¥ÍÑÌè‰½½±•…¸ì(€€€€€ôøì(€€€€€½Á•É…Ñ¥½¹ÌèÍÑÉ¥¹mtì(€€€€€…ÁÑÕÉ•ÌèÉÉ…äñì(€€€€€€€™½É‰¥‘‘•¹¹Ù¥É½¹µ•¹ÐèÍÑÉ¥¹mtì(€€€€€€€Á…Ñ¡¹ÑÉ¥•ÌèÍÑÉ¥¹mtì(€€€€€€€•áÁ•Ñ•‘A…Ñ èÍÑÉ¥¹œì(€€€€€ôøì(€€€ôì(€€€½¹ÍÐÑ•Éµ¥¹…±Ì€ô=‰©•Ð¹Ù…±Õ•Ì¡ÍÑ…Ñ”¹Ñ•Éµ¥¹…±Ì¤(€€€€€€¹Í½ÉÐ ¡±•™Ð°É¥¡Ð¤€ôø±•™Ð¹Ñ¥Ñ±”¹±½…±•½µÁ…É”¡É¥¡Ð¹Ñ¥Ñ±”¤¤ì(€€€…ÍÍ•ÉÐ¹‘••ÁÅÕ…° (€€€€€Ñ•Éµ¥¹…±Ì¹µ…À ¡Ñ•Éµ¥¹…°¤€ôøÑ•Éµ¥¹…°¹Ñ¥Ñ±”¤°(€€€€€l¥ÍÍÕ”´ÄÈÔÀµ±¥™•å±”µ„œ°€¥ÍÍÕ”´ÄÈÔÀµ±¥™•å±”µˆt°(€€€€¤ì(€€€…ÍÍ•ÉÐ¹½¬¡Ñ•Éµ¥¹…±Ì¹•Ù•Éä ¡Ñ•Éµ¥¹…°¤€ôøÑ•Éµ¥¹…°¹‘¥ÍÁ…Ñ¡•Ì€ôôô€Ä¤¤ì(€€€…ÍÍ•ÉÐ¹½¬¡Ñ•Éµ¥¹…±Ì¹•Ù•Éä ¡Ñ•Éµ¥¹…°¤€ôøÑ•Éµ¥¹…°¹±½Í•Ì€ôôô€Ä¤¤ì(€€€…ÍÍ•ÉÐ¹½¬¡Ñ•Éµ¥¹…±Ì¹•Ù•Éä ¡Ñ•Éµ¥¹…°¤€ôø€…Ñ•Éµ¥¹…°¹•á¥ÍÑÌ¤¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡ÍÑ…Ñ”¹½Á•É…Ñ¥½¹Ì¹™¥±Ñ•È ¡Ù…±Õ”¤€ôøÙ…±Õ”€ôôô€Ñ•Éµ¥¹…°É•…Ñ”œ¤¹±•¹Ñ °€È¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡ÍÑ…Ñ”¹½Á•É…Ñ¥½¹Ì¹™¥±Ñ•È ¡Ù…±Õ”¤€ôøÙ…±Õ”€ôôô€Ñ•Éµ¥¹…°Í•¹œ¤¹±•¹Ñ °€È¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡ÍÑ…Ñ”¹½Á•É…Ñ¥½¹Ì¹™¥±Ñ•È ¡Ù…±Õ”¤€ôøÙ…±Õ”€ôôô€Ñ•Éµ¥¹…°±½Í”œ¤¹±•¹Ñ °€È¤ì(€€€…ÍÍ•ÉÐ¹½¬¡ÍÑ…Ñ”¹…ÁÑÕÉ•Ì¹±•¹Ñ €ø€À¤ì(€€€…ÍÍ•ÉÐ¹½¬¡ÍÑ…Ñ”¹…ÁÑÕÉ•Ì¹•Ù•Éä ¡…ÁÑÕÉ”¤€ôø€ (€€€€€…ÁÑÕÉ”¹™½É‰¥‘‘•¹¹Ù¥É½¹µ•¹Ð¹±•¹Ñ €ôôô€À(€€€€€€˜˜…ÁÑÕÉ”¹Á…Ñ¡¹ÑÉ¥•Ì¹±•¹Ñ €ôôô€Ä(€€€€€€˜˜…ÁÑÕÉ”¹Á…Ñ¡¹ÑÉ¥•ÍlÁt€ôôôÉ½½Ð(€€€€€€˜˜…ÁÑÕÉ”¹•áÁ•Ñ•‘A…Ñ €ôôôÉ½½Ð(€€€€¤¤¤ì((€€€ÁÉ½•ÍÌ¹ÍÑ‘½ÕÐ¹ÝÉ¥Ñ”¡€‘í)M=8¹ÍÑÉ¥¹¥™ä¡ì(€€€€€ÍÑ…ÑÕÌè€Á…ÍÌœ°(€€€€€™¥ÉÍÐè™¥ÉÍÐ¹Ý½É­•È¹¥‘•¹Ñ¥Ñä°(€€€€€Í•½¹èÍ•½¹¹Ý½É­•È¹¥‘•¹Ñ¥Ñä°(€€€€€½Á•É…Ñ¥½¹ÌèÍÑ…Ñ”¹½Á•É…Ñ¥½¹Ì°(€€€€€Í•±•Ñ•‘‘…ÁÑ•ÈèÍ•±•Ñ•‘‘…ÁÑ•È¹½¹ÍÑÉÕÑ½È¹¹…µ”°(€€€€€½µÁ½Í¥Ñ¥½¹I½½Ð°(€€€ô¥õq¹€¤ì(€ô…Ñ €¡•ÉÉ½È¤ì(€€€½¹ÍÐ…ÁÑÕÉ”€ô•á¥ÍÑÍMå¹Œ¡…ÁÑÕÉ•A…Ñ ¤(€€€€€€üÉ•…‘¥±•Må¹Œ¡…ÁÑÕÉ•A…Ñ °€ÕÑ˜àœ¤¹ÑÉ¥´ ¤(€€€€€€è€…ÁÑÕÉ•}µ¥ÍÍ¥¹œœì(€€€½¹ÍÐµ•ÍÍ…”€ô•ÉÉ½È¥¹ÍÑ…¹•½˜ÉÉ½È€ü•ÉÉ½È¹µ•ÍÍ…”€èMÑÉ¥¹œ¡•ÉÉ½È¤ì(€€€Ñ¡É½Ü¹•ÜÉÉ½È¡€‘íµ•ÍÍ…•ôì…ÁÑÕÉ”ô‘í…ÁÑÕÉ•õ€¤ì(€ô™¥¹…±±äì(€€€ÉµMå¹Œ¡É½½Ð°ìÉ•ÕÉÍ¥Ù”èÑÉÕ”°™½É”èÑÉÕ”ô¤ì(€ô)ô()…Ý…¥Ðµ…¥¸ ¤ì
+function rejectLegacyMutation(source: string): void {
+  const end = source.indexOf('\n};', source.indexOf('const DEFAULT_LOADERS:'));
+  const mutated = `${source.slice(0, end)}\n  'ao-legacy': async () => import('./ao-legacy-adapter.ts'),${source.slice(end)}`;
+  assert.throws(() => composition(mutated), /sole production Orca loader|exact Orca composition-root graph/);
+}
+
+function fixture(statePath: string, root: string): string {
+  return `#!${process.execPath}\nimport fs from'node:fs';import path from'node:path';
+const P=${JSON.stringify({ statePath, root })},a=process.argv.slice(2).filter(x=>x!=='--json'),op=a.slice(0,2).join(' '),get=n=>{const i=a.indexOf(n);return i<0?'':String(a[i+1]??'')},S=fs.existsSync(P.statePath)?JSON.parse(fs.readFileSync(P.statePath,'utf8')):{n:0,t:{},ops:[],captures:[]},bad=Object.keys(process.env).filter(k=>k.startsWith('AO_')||k.startsWith('AGENT_ORCHESTRATOR_')),paths=(process.env.PATH??'').split(path.delimiter).filter(Boolean);S.captures.push({op,bad,paths});const save=()=>fs.writeFileSync(P.statePath,JSON.stringify(S)),out=x=>{save();process.stdout.write(JSON.stringify(x)+'\\n')};if(bad.length||paths.length!==1||paths[0]!==P.root){out({ok:false,error:{code:'fixture_environment_not_hermetic'}});process.exit(0)}S.ops.push(op);
+switch(op){case'worktree current':out({ok:true,result:{worktree:{path:P.root,head:'a'.repeat(40)}}});break;case'terminal create':{const h='term-'+(++S.n),g='generation-'+S.n,q={handle:h,incarnationId:g,title:get('--title'),worktreePath:P.root,status:'running',lines:['started:'+get('--command')],dispatches:0,closes:0,exists:true};S.t[h]=q;out({ok:true,result:{terminal:{handle:h,incarnationId:g,title:q.title}}});break}case'terminal list':out({ok:true,result:{terminals:Object.values(S.t).filter(x=>x.exists).map(({lines,dispatches,closes,exists,...x})=>x)}});break;case'terminal send':{const q=S.t[get('--terminal')];if(!q||!q.exists)out({ok:false,error:{code:'terminal_not_found'}});else{q.dispatches++;q.lines.push(get('--text'));out({ok:true,result:{send:{accepted:true}}})}break}case'terminal read':{const h=get('--terminal'),q=S.t[h];if(!q||!q.exists)out({ok:false,error:{code:'terminal_not_found'}});else out({ok:true,result:{terminal:{handle:h,status:q.status,tail:q.lines,nextCursor:String(q.lines.length),latestCursor:String(q.lines.length)}}});break}case'terminal wait':{const h=get('--terminal'),q=S.t[h];out(q&&q.exists?{ok:true,result:{wait:{handle:h,condition:'tui-idle',satisfied:true,status:'running'}}}:{ok:false,error:{code:'terminal_not_found'}});break}case'terminal close':{const h=get('--terminal'),q=S.t[h];if(!q||!q.exists)out({ok:false,error:{code:'terminal_not_found'}});else{q.closes++;q.exists=false;q.status='exited';out({ok:true,result:{close:{handle:h,closed:true}}})}break}default:out({ok:false,error:{code:'unexpected_operation',message:op}})}\n`;
+}
+
+function childEnv(root: string): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AO_') && !key.startsWith('AGENT_ORCHESTRATOR_')).concat([
+    ['PATH', root], ['OPK_VITEST_HARNESS', ''], ['OPK_VITEST_SKIP_CHILD_ENV_MERGE', '1'],
+  ]));
+}
+
+function ok(result: ReturnType<typeof executeRuntimeTaskLifecycle>, label: string): RuntimeTaskLifecycleResult {
+  if (!('status' in result) || result.status !== 'ok') throw new Error(`${label}:${JSON.stringify(result)}`);
+  return result;
+}
+
+function lifecycle(adapter: OrcaTaskRuntimeAdapter, root: string, title: string, prompt: string): RuntimeTaskLifecycleResult {
+  return ok(executeRuntimeTaskLifecycle({ adapter, title, command: 'cursor-agent', prompt, observationWindowMs: 1_000,
+    options: { cwd: root, timeoutMs: 5_000 }, acquireClaim: () => ({ ok: true }) }), title);
+}
+
+async function main(): Promise<void> {
+  const root = mkdtempSync(join(process.cwd(), '.issue-1250-orca-hermetic-'));
+  const executable = join(root, 'orca.mjs');
+  const statePath = join(root, 'state.json');
+  try {
+    const registrySource = readFileSync(fileURLToPath(new URL('./registry.ts', import.meta.url)), 'utf8');
+    const witness = composition(registrySource);
+    rejectLegacyMutation(registrySource);
+    writeFileSync(executable, fixture(statePath, root), 'utf8');
+    chmodSync(executable, 0o755);
+    const env = childEnv(root);
+    const runner = ((command: Parameters<typeof spawnSync>[0], args: Parameters<typeof spawnSync>[1], options: Parameters<typeof spawnSync>[2]) =>
+      spawnSync(command, args, { ...options, env })) as typeof spawnSync;
+    const selected = await selectRuntimeAdapter({ adapter: 'orca', env: {} }, {
+      cwd: root, timeoutMs: 5_000, transport: { executable, env, runner },
+    });
+    assert.ok(selected instanceof OrcaTaskRuntimeAdapter);
+    const first = lifecycle(selected, root, 'issue-1250-lifecycle-a', 'implement task A');
+    const second = lifecycle(selected, root, 'issue-1250-lifecycle-b', 'implement task B');
+    assert.notDeepEqual(first.worker.identity, second.worker.identity);
+    assert.ok(first.lines.includes('implement task A') && second.lines.includes('implement task B'));
+    assert.equal(first.liveness, 'idle'); assert.equal(second.liveness, 'idle');
+    const state = JSON.parse(readFileSync(statePath, 'utf8')) as { t: Record<string, { dispatches: number; closes: number; exists: boolean }>; ops: string[]; captures: Array<{ bad: string[]; paths: string[] }> };
+    const terminals = Object.values(state.t);
+    assert.equal(terminals.length, 2);
+    assert.ok(terminals.every((value) => value.dispatches === 1 && value.closes === 1 && !value.exists));
+    assert.equal(state.ops.filter((value) => value === 'terminal create').length, 2);
+    assert.equal(state.ops.filter((value) => value === 'terminal send').length, 2);
+    assert.equal(state.ops.filter((value) => value === 'terminal close').length, 2);
+    assert.ok(state.captures.every((value) => value.bad.length === 0 && value.paths.length === 1 && value.paths[0] === root));
+    process.stdout.write(`${JSON.stringify({ status: 'pass', selectedAdapter: selected.constructor.name, witness, operations: state.ops })}\n`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+await main();
