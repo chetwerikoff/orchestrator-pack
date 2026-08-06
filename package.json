@@ -32,7 +32,7 @@
     "chatgpt-browser-turn": "npm run check:node-major --silent && node --experimental-strip-types --import ./scripts/browser-gpt-post-settlement-close.ts scripts/chatgpt-browser-turn/state-light-entry.ts",
     "flow-manager-long-running-child": "npm run check:node-major --silent && node --experimental-strip-types scripts/flow-manager-long-running-child.ts",
     "flow-manager-browser-gpt-long-run": "npm run check:node-major --silent && node --experimental-strip-types scripts/flow-manager-browser-gpt-long-run.ts",
-    "browser-gpt-page-probe": "node --experimental-strip-types scripts/browser-gpt-post-settlement-close.ts probe",
+    "browser-gpt-page-probe": "npm run check:node-major --silent && node --experimental-strip-types scripts/browser-gpt-post-settlement-close.ts probe",
     "browser-gpt-post-settlement-close": "npm run check:node-major --silent && node --experimental-strip-types scripts/browser-gpt-post-settlement-close.ts close",
     "gate-runner-selftest": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/gate-runner",
     "gate-census-generate": "npm run check:node-major --silent && node --experimental-strip-types scripts/gate-runner/census-generator.ts",
