@@ -10,6 +10,7 @@ import type {
   RuntimeCallOptions,
   RuntimeDispatchResult,
   RuntimeWorker,
+  RuntimeWorkerIdentity,
 } from '../runtime/contracts.ts';
 
 export const WORKER_SMOKE_RUN_RECEIPT_SCHEMA = 'worker-smoke-run/v1' as const;
@@ -68,6 +69,11 @@ export interface HistoricalSmokeQuarantine {
   quarantinePath: string;
   cause: string;
 }
+
+type TrackedSmokeWorkerRefresh =
+  | { status: 'not_tracked' }
+  | { status: 'ok'; generationChanged: boolean }
+  | { status: 'failed'; reason: string };
 
 const patchedTaskAdapterPrototypes = new WeakSet<object>();
 const spawnIdentityFailures = new WeakMap<object, string>();
@@ -302,11 +308,41 @@ export function stabilizeSpawnedSmokeWorkerIdentity(input: {
   };
 }
 
+function refreshTrackedSmokeWorker(input: {
+  identity: RuntimeWorkerIdentity;
+  cwd: string;
+  timeoutMs: number;
+  probe: SmokeGenerationProbe;
+}): TrackedSmokeWorkerRefresh {
+  const spawnedWorker = spawnedSmokeWorkers.get(input.identity);
+  if (!spawnedWorker) {
+    const failure = spawnIdentityFailures.get(input.identity);
+    return failure ? { status: 'failed', reason: failure } : { status: 'not_tracked' };
+  }
+
+  const previousGeneration = spawnedWorker.identity.generation;
+  const refreshed = stabilizeSpawnedSmokeWorkerIdentity({
+    worker: spawnedWorker,
+    cwd: input.cwd,
+    timeoutMs: input.timeoutMs,
+    probe: input.probe,
+  });
+  if (!refreshed.ok) {
+    spawnIdentityFailures.set(input.identity, refreshed.reason);
+    return { status: 'failed', reason: refreshed.reason };
+  }
+  spawnIdentityFailures.delete(input.identity);
+  return {
+    status: 'ok',
+    generationChanged: previousGeneration !== spawnedWorker.identity.generation,
+  };
+}
+
 /**
  * Install the narrow worker-smoke compatibility repair on the production task
- * adapter. The created identity is re-resolved before dispatch, delivery is
- * accepted only after the child-owned seal appears, and one submit-only retry
- * is allowed without ever sending the payload a second time.
+ * adapter. Every generation-bound query re-resolves the exact created handle,
+ * delivery is accepted only after the child-owned seal appears, and one
+ * submit-only retry is allowed without ever sending the payload a second time.
  */
 export function installStableWorkerSmokeSpawnPatch(
   options: StableWorkerSmokeSpawnPatchOptions = {},
@@ -317,6 +353,8 @@ export function installStableWorkerSmokeSpawnPatch(
 
   const originalSpawn = prototype.spawnWorker;
   const originalDispatch = prototype.dispatchInput;
+  const originalReadBoundedOutput = prototype.readBoundedOutput;
+  const originalLiveness = prototype.liveness;
   const originalStop = prototype.stopWorker;
   const probe = options.probe ?? defaultGenerationProbe;
   const deliveryProbe = options.deliveryProbe ?? defaultDeliveryProbe;
@@ -334,13 +372,13 @@ export function installStableWorkerSmokeSpawnPatch(
       const result = originalSpawn.call(this, input, callOptions);
       if (result.status !== 'ok') return result;
       spawnedSmokeWorkers.set(result.value.identity, result.value);
-      const stabilized = stabilizeSpawnedSmokeWorkerIdentity({
-        worker: result.value,
+      const stabilized = refreshTrackedSmokeWorker({
+        identity: result.value.identity,
         cwd: callOptions.cwd ?? process.cwd(),
         timeoutMs: callOptions.timeoutMs ?? 30_000,
         probe,
       });
-      if (!stabilized.ok) {
+      if (stabilized.status === 'failed') {
         spawnIdentityFailures.set(result.value.identity, stabilized.reason);
       } else {
         spawnIdentityFailures.delete(result.value.identity);
@@ -357,24 +395,14 @@ export function installStableWorkerSmokeSpawnPatch(
       input: Parameters<OrcaTaskRuntimeAdapter['dispatchInput']>[0],
       callOptions: RuntimeCallOptions = {},
     ): RuntimeDispatchResult {
-      const spawnedWorker = spawnedSmokeWorkers.get(input.worker);
-      if (spawnedWorker) {
-        const refreshed = stabilizeSpawnedSmokeWorkerIdentity({
-          worker: spawnedWorker,
-          cwd: callOptions.cwd ?? process.cwd(),
-          timeoutMs: callOptions.timeoutMs ?? 30_000,
-          probe,
-        });
-        if (!refreshed.ok) {
-          spawnIdentityFailures.set(input.worker, refreshed.reason);
-          return { status: 'send_failed', reason: refreshed.reason };
-        }
-        spawnIdentityFailures.delete(input.worker);
-      } else {
-        const stabilizationFailure = spawnIdentityFailures.get(input.worker);
-        if (stabilizationFailure) {
-          return { status: 'send_failed', reason: stabilizationFailure };
-        }
+      const refreshed = refreshTrackedSmokeWorker({
+        identity: input.worker,
+        cwd: callOptions.cwd ?? process.cwd(),
+        timeoutMs: callOptions.timeoutMs ?? 30_000,
+        probe,
+      });
+      if (refreshed.status === 'failed') {
+        return { status: 'send_failed', reason: refreshed.reason };
       }
 
       const result = originalDispatch.call(this, input, callOptions);
@@ -442,6 +470,57 @@ export function installStableWorkerSmokeSpawnPatch(
     },
   });
 
+  Object.defineProperty(prototype, 'readBoundedOutput', {
+    configurable: true,
+    writable: true,
+    value: function patchedReadBoundedOutput(
+      this: OrcaTaskRuntimeAdapter,
+      input: Parameters<OrcaTaskRuntimeAdapter['readBoundedOutput']>[0],
+      callOptions: RuntimeCallOptions = {},
+    ): ReturnType<OrcaTaskRuntimeAdapter['readBoundedOutput']> {
+      const refreshed = refreshTrackedSmokeWorker({
+        identity: input.worker,
+        cwd: callOptions.cwd ?? process.cwd(),
+        timeoutMs: callOptions.timeoutMs ?? 30_000,
+        probe,
+      });
+      if (refreshed.status === 'failed') {
+        return {
+          status: 'failed',
+          operation: 'read_bounded_output',
+          reason: refreshed.reason,
+        };
+      }
+      const currentInput = refreshed.status === 'ok'
+        && refreshed.generationChanged
+        && input.previousToken
+        ? { ...input, previousToken: null }
+        : input;
+      return originalReadBoundedOutput.call(this, currentInput, callOptions);
+    },
+  });
+
+  Object.defineProperty(prototype, 'liveness', {
+    configurable: true,
+    writable: true,
+    value: function patchedLiveness(
+      this: OrcaTaskRuntimeAdapter,
+      input: Parameters<OrcaTaskRuntimeAdapter['liveness']>[0],
+      callOptions: RuntimeCallOptions = {},
+    ): ReturnType<OrcaTaskRuntimeAdapter['liveness']> {
+      const refreshed = refreshTrackedSmokeWorker({
+        identity: input.worker,
+        cwd: callOptions.cwd ?? process.cwd(),
+        timeoutMs: callOptions.timeoutMs ?? Math.max(1, input.observationWindowMs),
+        probe,
+      });
+      if (refreshed.status === 'failed') {
+        return { status: 'unknown', worker: input.worker };
+      }
+      return originalLiveness.call(this, input, callOptions);
+    },
+  });
+
   Object.defineProperty(prototype, 'stopWorker', {
     configurable: true,
     writable: true,
@@ -487,6 +566,16 @@ export function installStableWorkerSmokeSpawnPatch(
       configurable: true,
       writable: true,
       value: originalDispatch,
+    });
+    Object.defineProperty(prototype, 'readBoundedOutput', {
+      configurable: true,
+      writable: true,
+      value: originalReadBoundedOutput,
+    });
+    Object.defineProperty(prototype, 'liveness', {
+      configurable: true,
+      writable: true,
+      value: originalLiveness,
     });
     Object.defineProperty(prototype, 'stopWorker', {
       configurable: true,
