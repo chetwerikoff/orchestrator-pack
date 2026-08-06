@@ -22,15 +22,14 @@ const USER_MESSAGE_READ_WAIT_MS = 800;
 export type ExplicitCancellationAuthority = typeof EXPLICIT_CANCELLATION_AUTHORITY;
 
 export type StopOwnedGenerationOutcome =
+  | 'not_attempted_authority_absent'
+  | 'not_attempted_identity_unproven'
   | 'not_attempted_control_absent_or_ambiguous'
   | 'confirmed'
   | 'unconfirmed'
   | 'unavailable';
 
-export type BrowserTurnCancellationDisposition =
-  | 'not_attempted_authority_absent'
-  | 'not_attempted_identity_unproven'
-  | StopOwnedGenerationOutcome;
+export type BrowserTurnCancellationDisposition = StopOwnedGenerationOutcome;
 
 export interface BrowserTurnCancellationReceipt {
   readonly schema: typeof BROWSER_TURN_CANCELLATION_RECEIPT_SCHEMA;
@@ -149,7 +148,7 @@ export async function readRecoveryAuthoritativeUserMessages(
 export async function stopOwnedGeneration(
   page: any,
   authority?: ExplicitCancellationAuthority,
-): Promise<BrowserTurnCancellationDisposition> {
+): Promise<StopOwnedGenerationOutcome> {
   if (authority !== EXPLICIT_CANCELLATION_AUTHORITY) {
     return 'not_attempted_authority_absent';
   }
