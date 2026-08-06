@@ -50,13 +50,23 @@ T3 (with the other existing phase requirements). It reports every missing
 completed stage even when stale output markers are already present.
 
 The Issue #1364 operator policy is separate from that gate: T1 has one GPT
-lens; T2 has three concurrent GPT `architectural-review` sources followed by
-one GPT lens; T3 has three concurrent GPT `competitive` sources only when the
-flow-manager/architect records genuine necessity, then three concurrent GPT
-`architectural-review` sources, one Claude lens, and one GPT lens. Browser
-starts are staggered by 10–15 seconds, and a journaled T3 competitive-stage
-skip is legal. Updating `expectedStages` to enforce this policy is separate
-future work and is not part of Issue #1364.
+lens followed by a mandatory author fix-round; T2 has three concurrent GPT
+`architectural-review` sources, a mandatory author fix-round, one GPT lens, and
+a mandatory author fix-round; T3 has three concurrent GPT `competitive` sources
+when directly required by the operator, selected by the architect, or judged
+necessary by the flow-manager because the task has fundamentally different
+plausible solution designs, then a mandatory author fix-round, three concurrent
+GPT `architectural-review` sources, a mandatory author fix-round, one Claude
+lens, a mandatory author fix-round, one GPT lens, and a mandatory author
+fix-round. Every fix-round is required even for `NO_FINDINGS`; it records “no
+findings, no changes required” in the journal, and the next stage cannot start
+until that record exists. Competitive selection and skipping are substantive
+judgments, not checklist, threshold, score, or scale decisions. A skip requires
+an explicit journal rationale for why the solution space is narrow; missing
+rationale is a process defect.
+Browser starts are staggered by 10–15 seconds. No stage starts on a stale Issue
+revision; reviewers read the latest revision. Updating `expectedStages` to
+enforce this policy is separate future work and is not part of Issue #1364.
 
 ## Evidence inputs
 
