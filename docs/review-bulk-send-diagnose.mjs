@@ -1,12 +1,11 @@
-// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/review-bulk-send-diagnose.ts.
 /**
- * Read-only Gate 0 diagnostic: undelivered/delivered changes_requested and stuck open findings (Issue #140, #625).
+ * Read-only diagnostic for undelivered changes_requested results and stuck open
+ * findings. The pack review producer/store is the only active authority.
  * Vitest: scripts/review-bulk-send-diagnose.test.ts
  */
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import { isDeliveredChangesRequested, isUndeliveredChangesRequested } from './review-producer-contract.mjs';
 
-/** Engine statuses where orchestrator rules may re-fire on open findings (AO 0.10). */
 export const ACTIONABLE_REVIEW_STATUSES = ['changes_requested'];
 
 export const GATE0_CAPABILITIES = {
@@ -15,17 +14,9 @@ export const GATE0_CAPABILITIES = {
   priorSentAtRouting: false,
 };
 
-export const UPSTREAM_TRACKING = {
+export const TRACKING = {
   packIssue: 'https://github.com/chetwerikoff/orchestrator-pack/issues/140',
-  pipelinePreferred: [
-    'https://github.com/ComposioHQ/agent-orchestrator/issues/1631',
-    'https://github.com/ComposioHQ/agent-orchestrator/issues/1346',
-  ],
-  legacyFallback: 'https://github.com/ComposioHQ/agent-orchestrator/issues/2088',
-  deliveryPrerequisites: [
-    'https://github.com/ComposioHQ/agent-orchestrator/issues/1943',
-    'https://github.com/ComposioHQ/agent-orchestrator/issues/614',
-  ],
+  authority: 'pack-review-producer-contract',
 };
 
 function isRecord(value) {
@@ -42,21 +33,13 @@ function toCount(value) {
  * @returns {Array<Record<string, unknown>>}
  */
 export function normalizeReviewRuns(payload) {
-  if (Array.isArray(payload)) {
-    return payload;
-  }
-  if (isRecord(payload) && Array.isArray(payload.runs)) {
-    return payload.runs;
-  }
-  if (isRecord(payload) && Array.isArray(payload.data)) {
-    return payload.data;
-  }
+  if (Array.isArray(payload)) return payload;
+  if (isRecord(payload) && Array.isArray(payload.runs)) return payload.runs;
+  if (isRecord(payload) && Array.isArray(payload.data)) return payload.data;
   return [];
 }
 
-/**
- * @param {Record<string, unknown>} run
- */
+/** @param {Record<string, unknown>} run */
 export function classifyBulkSendRun(run) {
   const status = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
   const open = toCount(run.openFindingCount);
@@ -72,7 +55,7 @@ export function classifyBulkSendRun(run) {
     signals.push({
       kind: 'undelivered_changes_requested',
       detail:
-        'changes_requested without deliveredAt: open findings not yet auto-delivered on AO 0.10 submit path.',
+        'changes_requested without deliveredAt: open findings are not yet confirmed as delivered by the pack producer.',
     });
   }
 
@@ -80,15 +63,14 @@ export function classifyBulkSendRun(run) {
     signals.push({
       kind: 'stuck_open',
       detail:
-        'Partial delivery: deliveredFindingCount > 0 but openFindingCount still > 0 — remainder cannot be dismissed/backlogged via pack CLI.',
+        'Partial delivery: deliveredFindingCount > 0 but openFindingCount remains > 0.',
     });
   }
 
   if (undelivered && open > 0 && delivered === 0 && findingCount > 1) {
     signals.push({
       kind: 'multi_open_awaiting_dispatch',
-      detail:
-        'Multiple open findings await auto-delivery; per-finding routing enactment remains upstream-blocked.',
+      detail: 'Multiple open findings await the pack-owned publication path.',
     });
   }
 
@@ -125,16 +107,17 @@ export function diagnoseBulkSendBlock(input = {}) {
   return {
     readOnly: true,
     gate0: {
-      aoVersionNote: 'Validated on AO 0.10 producer contract (status+verdict, deliveredAt, deliveredFindingCount).',
+      producerContractNote:
+        'Validated against pack review status, verdict, deliveredAt, and deliveredFindingCount fields.',
       capabilities: { ...GATE0_CAPABILITIES },
       verdict:
-        'Per-finding routing enactment is upstream-blocked until selective send (A) and terminal non-forward (A′) exist.',
+        'Per-finding routing remains unavailable until the pack contract explicitly adds selective send and terminal non-forward behavior.',
     },
-    upstream: { ...UPSTREAM_TRACKING },
+    tracking: { ...TRACKING },
     summary: {
       totalRuns: runs.length,
       flaggedRuns: classified.length,
-      signalKinds: [...new Set(classified.flatMap((entry) => entry.signals.map((s) => s.kind)))],
+      signalKinds: [...new Set(classified.flatMap((entry) => entry.signals.map((signal) => signal.kind)))],
     },
     flaggedRuns: classified,
   };
