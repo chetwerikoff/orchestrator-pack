@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { test } from 'vitest';
+import { test, vi } from 'vitest';
+import {
+  BEFORE_CDP_BROWSER_RELEASE,
+  releaseCdpBrowser,
+} from './chatgpt-browser-turn/browser-session.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
   parsePostSettlementCloseArgs,
   rewritePreservedTurnResult,
+  runEnhancedPageProbeCli,
   runPostSettlementClose,
   type CdpTarget,
   type ExactTargetChannel,
@@ -121,6 +126,8 @@ function guard(overrides: Record<string, unknown> = {}): Record<string, unknown>
     ordinal: 0,
     last_assistant: true,
     last_message: true,
+    completion_ready: true,
+    continuation_available: false,
     ...overrides,
   };
 }
@@ -133,6 +140,7 @@ function fixture(overrides: {
   remainingTargets?: readonly CdpTarget[];
   guards?: readonly Record<string, unknown>[];
   closeThrows?: boolean;
+  remainingCensusThrows?: boolean;
   beforeFinalGuard?: () => void;
 } = {}): {
   deps: PostSettlementCloseDependencies;
@@ -159,10 +167,12 @@ function fixture(overrides: {
         : (overrides.probe ?? probeResult())),
       readBytes: async () => overrides.harvest ?? replyBytes,
       listTargets: async () => {
-        const result = censusCount++ === 0
+        if (censusCount++ > 0 && overrides.remainingCensusThrows) {
+          throw new Error('fresh_absence_census_failed');
+        }
+        return censusCount === 1
           ? (overrides.initialTargets ?? [target, sibling])
           : (overrides.remainingTargets ?? [sibling]);
-        return result;
       },
       openExactTargetChannel: async (candidate) => {
         opened.push(candidate.id);
@@ -196,7 +206,7 @@ test('fixed CLI accepts only five governed artifact and namespace inputs', () =>
   ]), /argument_invalid|argument_set_invalid/u);
 });
 
-test('closes exactly the byte-bound owned target and leaves sibling present', async () => {
+test('closes exactly the byte-bound completed owned target and leaves sibling present', async () => {
   const state = fixture();
   const result = await runPostSettlementClose(args, state.deps);
   assert.equal(result.status, 'closed');
@@ -214,12 +224,38 @@ test('settled target already absent is success with zero close attempts', async 
   assert.equal(state.closeCalls(), 0);
 });
 
-test('launcher envelope is settlement_untrusted and never reaches CDP', async () => {
-  const state = fixture({ direct: { schema: 'flow-manager-long-running-child-terminal/v1' } });
-  const result = await runPostSettlementClose(args, state.deps);
-  assert.equal(result.status, 'settlement_untrusted');
-  assert.equal(result.close_attempt_count, 0);
-  assert.deepEqual(state.openedIds(), []);
+test('prior close or capture-failure terminal records never authorize CDP', async () => {
+  for (const direct of [
+    directResult({ cleanup: 'confirmed' }),
+    directResult({ cleanup: 'unconfirmed' }),
+    directResult({
+      post_settlement_target_capture: { status: 'unavailable', cause: 'surface_incomplete' },
+    }),
+  ]) {
+    const state = fixture({ direct });
+    const result = await runPostSettlementClose(args, state.deps);
+    assert.equal(result.status, 'settlement_untrusted');
+    assert.equal(result.close_attempt_count, 0);
+    assert.deepEqual(state.openedIds(), []);
+    assert.equal(state.closeCalls(), 0);
+  }
+});
+
+test('launcher and generic recovery envelopes never become close authority', async () => {
+  for (const direct of [
+    { schema: 'flow-manager-long-running-child-terminal/v1' },
+    directResult({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'generic_recovery_required',
+    }),
+  ]) {
+    const state = fixture({ direct });
+    const result = await runPostSettlementClose(args, state.deps);
+    assert.equal(result.status, 'settlement_untrusted');
+    assert.equal(result.close_attempt_count, 0);
+    assert.deepEqual(state.openedIds(), []);
+  }
 });
 
 test('profile namespace, probe evidence and harvested bytes must all match', async () => {
@@ -248,6 +284,34 @@ test('mutation between initial and final same-channel guards is stale_harvest', 
   assert.equal(state.closeCalls(), 0);
 });
 
+test('active, resumable or completion-unproven replies fail the final guard', async () => {
+  for (const changed of [
+    { generation_in_progress: true },
+    { continuation_available: true },
+    { completion_ready: false },
+  ]) {
+    const state = fixture({ guards: [guard(changed)] });
+    const result = await runPostSettlementClose(args, state.deps);
+    assert.equal(result.status, 'stale_harvest');
+    assert.equal(result.close_attempt_count, 0);
+    assert.equal(state.closeCalls(), 0);
+  }
+});
+
+test('appended, resumed and older-node surfaces cannot close', async () => {
+  for (const changed of [
+    { observed_message_nodes: 3, last_message: false },
+    { sha256: '1'.repeat(64), continuation_available: true },
+    { document_ordinal: 0, last_assistant: false, last_message: false },
+  ]) {
+    const state = fixture({ guards: [guard(changed)] });
+    const result = await runPostSettlementClose(args, state.deps);
+    assert.equal(result.status, 'stale_harvest');
+    assert.equal(result.close_attempt_count, 0);
+    assert.equal(state.closeCalls(), 0);
+  }
+});
+
 test('same id with changed URL fails closed without replacement or sibling close', async () => {
   const state = fixture({ initialTargets: [{ ...target, url: sibling.url }, sibling] });
   const result = await runPostSettlementClose(args, state.deps);
@@ -264,6 +328,15 @@ test('one dispatched close without fresh absence proof is close_unconfirmed', as
   assert.equal(state.closeCalls(), 1);
 });
 
+test('post-dispatch census failure preserves close_unconfirmed and count one', async () => {
+  const state = fixture({ remainingCensusThrows: true });
+  const result = await runPostSettlementClose(args, state.deps);
+  assert.equal(result.status, 'close_unconfirmed');
+  assert.equal(result.close_attempt_count, 1);
+  assert.equal(state.closeCalls(), 1);
+  assert.match(result.reason ?? '', /fresh_absence_census_failed/u);
+});
+
 test('a close transport error is still one attempt and requires fresh absence proof', async () => {
   const state = fixture({ closeThrows: true, remainingTargets: [target, sibling] });
   const result = await runPostSettlementClose(args, state.deps);
@@ -272,22 +345,15 @@ test('a close transport error is still one attempt and requires fresh absence pr
   assert.equal(state.closeCalls(), 1);
 });
 
-test('preserved eligible direct result receives the service and byte-bound witnesses', () => {
+test('preserved eligible direct result receives witnesses only before any prior cleanup', () => {
   const causalWitness = {
     user_message_id: 'user-1',
     assistant_message_id: 'assistant-1',
     relation: 'reply_to' as const,
     source: 'service' as const,
   };
-  const targetWitness = (directResult().post_settlement_target as Record<string, unknown>);
-  const rewritten = rewritePreservedTurnResult({
-    ...directResult(),
-    state: 'recovery_required',
-    scope: 'conversation',
-    cause: 'direct_publication_receipt_invalid',
-    witness: undefined,
-    post_settlement_target: undefined,
-  }, {
+  const targetWitness = directResult().post_settlement_target as Record<string, unknown>;
+  const capture = {
     config: {
       profile,
       cdp,
@@ -297,25 +363,110 @@ test('preserved eligible direct result receives the service and byte-bound witne
     },
     causalWitness,
     targetWitness: targetWitness as any,
-  });
+  };
+  const eligible = {
+    ...directResult(),
+    state: 'recovery_required',
+    scope: 'conversation',
+    cause: 'direct_publication_receipt_invalid',
+    witness: undefined,
+    post_settlement_target: undefined,
+  };
+  const rewritten = rewritePreservedTurnResult(eligible, capture);
   assert.deepEqual(rewritten.witness, causalWitness);
   assert.deepEqual(rewritten.post_settlement_target, targetWitness);
+  for (const ineligible of [
+    { ...eligible, cleanup: 'confirmed' },
+    { ...eligible, post_settlement_target_capture: { status: 'unavailable', cause: 'timeout' } },
+    { ...eligible, cause: 'generic_recovery_required' },
+  ]) {
+    assert.deepEqual(rewritePreservedTurnResult(ineligible, capture), ineligible);
+  }
 });
 
-test('mixed or ineligible terminal results are never credentialed by capture data', () => {
-  const capture = {
-    config: {
-      profile,
-      cdp,
-      profileKey,
-      repositoryFullName: 'chetwerikoff/orchestrator-pack',
-      issueNumber: 1266,
+test('production browser release awaits capture hook before disconnect', async () => {
+  const order: string[] = [];
+  let releaseCapture!: () => void;
+  const capture = new Promise<void>((resolve) => { releaseCapture = resolve; });
+  const browser = {
+    [BEFORE_CDP_BROWSER_RELEASE]: async () => {
+      order.push('capture-start');
+      await capture;
+      order.push('capture-fixed');
     },
-    causalWitness: directResult().witness as any,
-    targetWitness: directResult().post_settlement_target as any,
+    close: async () => { order.push('disconnect'); },
   };
-  const launcher = { schema: 'flow-manager-long-running-child-terminal/v1', configured_profile_key: profileKey };
-  assert.deepEqual(rewritePreservedTurnResult(launcher, capture), launcher);
-  const zeroSend = { ...directResult(), send_count: 0 };
-  assert.deepEqual(rewritePreservedTurnResult(zeroSend, capture), zeroSend);
+  const release = releaseCdpBrowser(browser);
+  await Promise.resolve();
+  assert.deepEqual(order, ['capture-start']);
+  releaseCapture();
+  await release;
+  assert.deepEqual(order, ['capture-start', 'capture-fixed', 'disconnect']);
+});
+
+test('enhanced production probe entrypoint is read-only and enriches two observations', async () => {
+  const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  const calls: string[] = [];
+  try {
+    const code = await runEnhancedPageProbeCli([
+      'export',
+      '--cdp', cdp,
+      '--target-id', String(target.id),
+      '--assistant-index', '0',
+      '--representation', 'innerText',
+      '--output', '/tmp/reply-1266.txt',
+      '--profile', profile,
+    ], {
+      runProbe: async (parsed) => {
+        calls.push(parsed.operation);
+        if (parsed.operation === 'export') return {
+          ...probeResult(),
+          configured_profile_key: undefined,
+          normalized_url: undefined,
+          assistant_message_id: undefined,
+          output_identity: undefined,
+          observed_user_nodes: undefined,
+          observed_assistant_nodes: undefined,
+          observed_message_nodes: undefined,
+          last_assistant: undefined,
+          last_message: undefined,
+          output: '/tmp/reply-1266.txt',
+        };
+        return {
+          schema: 'browser-gpt-page-probe/v1',
+          operation: 'inspect',
+          status: 'ok',
+          diagnostic_only: true,
+          workflow_authority: 'none',
+          target_id: target.id,
+          snapshot: {
+            page_url: target.url,
+            observed_user_nodes: 1,
+            observed_assistant_nodes: 1,
+            observed_message_nodes: 2,
+            generation_in_progress: false,
+            nodes_truncated: false,
+            nodes: [
+              { role: 'user', ordinal: 0, document_ordinal: 0, message_id: 'user-1' },
+              {
+                role: 'assistant',
+                ordinal: 0,
+                document_ordinal: 1,
+                message_id: 'assistant-1',
+                innerText: { byte_length: replyBytes.byteLength, sha256: replySha },
+              },
+            ],
+          },
+        };
+      },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(calls, ['export', 'inspect']);
+    const emitted = JSON.parse(String(stdout.mock.calls.at(-1)?.[0] ?? '{}')) as Record<string, unknown>;
+    assert.equal(emitted.workflow_authority, 'none');
+    assert.equal(emitted.configured_profile_key, profileKey);
+    assert.equal(emitted.last_message, true);
+  } finally {
+    stdout.mockRestore();
+  }
 });
