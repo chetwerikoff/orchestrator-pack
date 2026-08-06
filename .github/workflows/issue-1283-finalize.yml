@@ -1,16 +1,22 @@
 name: issue-1283-finalize
-# trigger: existing workflow push
 
 on:
   push:
     branches:
       - agent/issue-1283-browser-turn-recovery
+  pull_request:
+    branches:
+      - main
+    types:
+      - edited
+      - synchronize
 
 permissions:
   contents: write
 
 jobs:
   finalize:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
