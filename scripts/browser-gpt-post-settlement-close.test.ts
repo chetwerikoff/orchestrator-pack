@@ -4,7 +4,9 @@ import { test } from 'vitest';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
   parsePostSettlementCloseArgs,
+  rewritePreservedTurnResult,
   runPostSettlementClose,
+  type CdpTarget,
   type ExactTargetChannel,
   type PostSettlementCloseDependencies,
 } from './browser-gpt-post-settlement-close.ts';
@@ -16,13 +18,13 @@ const reply = 'settled browser reply';
 const replyBytes = Buffer.from(reply, 'utf8');
 const replySha = createHash('sha256').update(replyBytes).digest('hex');
 
-const target = {
+const target: CdpTarget = {
   id: 'target-owned',
   type: 'page',
   url: 'https://chatgpt.com/c/owned',
   webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/target-owned',
 };
-const sibling = {
+const sibling: CdpTarget = {
   id: 'target-sibling',
   type: 'page',
   url: 'https://chatgpt.com/c/sibling',
@@ -86,6 +88,11 @@ function probeResult(overrides: Record<string, unknown> = {}): Record<string, un
     representation: 'innerText',
     byte_length: replyBytes.byteLength,
     sha256: replySha,
+    output_identity: {
+      path: '/tmp/reply-1266.txt',
+      byte_length: replyBytes.byteLength,
+      sha256: replySha,
+    },
     observed_user_nodes: 1,
     observed_assistant_nodes: 1,
     observed_message_nodes: 2,
@@ -122,12 +129,16 @@ function fixture(overrides: {
   direct?: Record<string, unknown>;
   probe?: Record<string, unknown>;
   harvest?: Uint8Array;
-  initialTargets?: readonly Record<string, unknown>[];
-  remainingTargets?: readonly Record<string, unknown>[];
+  initialTargets?: readonly CdpTarget[];
+  remainingTargets?: readonly CdpTarget[];
   guards?: readonly Record<string, unknown>[];
   closeThrows?: boolean;
   beforeFinalGuard?: () => void;
-} = {}): { deps: PostSettlementCloseDependencies; closeCalls: () => number; openedIds: () => readonly string[] } {
+} = {}): {
+  deps: PostSettlementCloseDependencies;
+  closeCalls: () => number;
+  openedIds: () => readonly string[];
+} {
   let closeCount = 0;
   let censusCount = 0;
   let evaluateCount = 0;
@@ -164,9 +175,15 @@ function fixture(overrides: {
   };
 }
 
-const args = { turnResult: 'turn.json', probeResult: 'probe.json', harvest: 'reply.txt', profile, cdp };
+const args = {
+  turnResult: 'turn.json',
+  probeResult: 'probe.json',
+  harvest: 'reply.txt',
+  profile,
+  cdp,
+};
 
-test('fixed CLI accepts only the five governed artifact and namespace inputs', () => {
+test('fixed CLI accepts only five governed artifact and namespace inputs', () => {
   assert.deepEqual(parsePostSettlementCloseArgs([
     '--turn-result', 'turn.json',
     '--probe-result', 'probe.json',
@@ -175,7 +192,7 @@ test('fixed CLI accepts only the five governed artifact and namespace inputs', (
     '--cdp', cdp,
   ]), args);
   assert.throws(() => parsePostSettlementCloseArgs([
-    '--turn-result', 'turn.json', '--target-id', target.id,
+    '--turn-result', 'turn.json', '--target-id', String(target.id),
   ]), /argument_invalid|argument_set_invalid/u);
 });
 
@@ -245,4 +262,60 @@ test('one dispatched close without fresh absence proof is close_unconfirmed', as
   assert.equal(result.status, 'close_unconfirmed');
   assert.equal(result.close_attempt_count, 1);
   assert.equal(state.closeCalls(), 1);
+});
+
+test('a close transport error is still one attempt and requires fresh absence proof', async () => {
+  const state = fixture({ closeThrows: true, remainingTargets: [target, sibling] });
+  const result = await runPostSettlementClose(args, state.deps);
+  assert.equal(result.status, 'close_unconfirmed');
+  assert.equal(result.close_attempt_count, 1);
+  assert.equal(state.closeCalls(), 1);
+});
+
+test('preserved eligible direct result receives the service and byte-bound witnesses', () => {
+  const causalWitness = {
+    user_message_id: 'user-1',
+    assistant_message_id: 'assistant-1',
+    relation: 'reply_to' as const,
+    source: 'service' as const,
+  };
+  const targetWitness = (directResult().post_settlement_target as Record<string, unknown>);
+  const rewritten = rewritePreservedTurnResult({
+    ...directResult(),
+    state: 'recovery_required',
+    scope: 'conversation',
+    cause: 'direct_publication_receipt_invalid',
+    witness: undefined,
+    post_settlement_target: undefined,
+  }, {
+    config: {
+      profile,
+      cdp,
+      profileKey,
+      repositoryFullName: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1266,
+    },
+    causalWitness,
+    targetWitness: targetWitness as any,
+  });
+  assert.deepEqual(rewritten.witness, causalWitness);
+  assert.deepEqual(rewritten.post_settlement_target, targetWitness);
+});
+
+test('mixed or ineligible terminal results are never credentialed by capture data', () => {
+  const capture = {
+    config: {
+      profile,
+      cdp,
+      profileKey,
+      repositoryFullName: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1266,
+    },
+    causalWitness: directResult().witness as any,
+    targetWitness: directResult().post_settlement_target as any,
+  };
+  const launcher = { schema: 'flow-manager-long-running-child-terminal/v1', configured_profile_key: profileKey };
+  assert.deepEqual(rewritePreservedTurnResult(launcher, capture), launcher);
+  const zeroSend = { ...directResult(), send_count: 0 };
+  assert.deepEqual(rewritePreservedTurnResult(zeroSend, capture), zeroSend);
 });
