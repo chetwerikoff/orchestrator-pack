@@ -1,232 +1,113 @@
-# AO Codex PR Reviewer
+# Codex PR reviewer
 
-Contract and implementation notes for Codex reviewer integration with AO.
+Runtime-neutral Codex PR review contract for GitHub Issues-linked pull requests.
 
 ## Goal
 
-Run PR-level review with Codex CLI while AO planning and coding stay on Cursor CLI.
+Run a bounded Codex review against the exact PR head while the pack owns scope
+assembly, reviewer selection, start claims, cycle caps, structured verdicts, and
+publication. This is a no core patch design.
 
-## Boundaries
+## Authorities
 
-- Source of truth for tasks: GitHub Issues.
-- Source of truth for merge readiness: GitHub PR review state + CI.
-- Planner/orchestrator: Cursor CLI via AO `orchestrator.agent: cursor`.
-- Coder/worker: Cursor CLI via AO `worker.agent: cursor`.
-- Reviewer: Codex CLI, via AO's built-in review mechanism (primary) or GitHub
-  Actions workflow (alternative for CI-based review).
+- GitHub Issues: live task specification and scope fences.
+- GitHub pull request head: code identity under review.
+- Pack review runner and store: operational start, list, status, claim, and cap.
+- GitHub PR review and required CI: delivery verdict and merge-readiness evidence.
+- `PACK_REVIEWER`: tracked reviewer selector.
 
-## Reviewer time budget (Issue #461)
+No concrete runtime command, dashboard, daemon API, configuration file, or session
+state is a review fallback.
 
-- Effective hard budget defaults to **10 minutes** (`OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS`).
-- Slow/full-suite test commands are blocked by `bin/command-guard/*` wrappers prepended to `PATH` for trusted local review. Windows ships matching `.cmd` shims that delegate to the POSIX guard via Git `sh`.
-- Timeout before verdict emits `reviewer-evidence` with `failureClass: timeout_no_verdict` (distinct from empty-output failure).
-- Repeated same-head `timeout_no_verdict` failures stop automatic retries at review-start with `escalationReason: repeated_timeout_no_verdict`.
+## Reviewer budget
 
-## How review works
+The effective hard budget defaults to 10 minutes through
+`OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS`. Trusted local review prepends command guards
+that reject full-suite or destructive commands. Timeout before a verdict emits
+`failureClass: timeout_no_verdict`; repeated timeout on the same head escalates
+instead of retrying forever.
 
-Local Codex PR review **is active**. AO drives it through `ao review run`,
-`send`, `list`, and `execute`; orchestration lives in `orchestratorRules` in
-`agent-orchestrator.yaml`. Discover runs with `ao review list <project>` and the
-AO dashboard. See [`README.md`](../../README.md#local-codex-review-active) and
-[`docs/architecture.md`](../../docs/architecture.md#review-paths).
+## Entry points
 
-### Primary path — AO built-in local review (WORKING)
+Common review starts use the pack review runner. Manual Browser-GPT review uses:
 
-AO has a built-in Codex review mechanism. When a PR is created by an AO worker
-session, AO automatically calls Codex CLI **locally** on the developer's machine
-using `codex exec review`. Results appear in the AO dashboard under "Reviews".
-
-Review lifecycle:
-1. Worker session opens a PR.
-2. AO detects the PR and triggers review automatically (or via the Review button).
-3. AO calls `codex exec review` with the PR files on the local machine.
-4. Findings are shown in the AO dashboard Reviews board.
-
-Prerequisites for this path:
-- Codex CLI installed (`npm install -g @openai/codex`)
-- Codex authenticated (`codex login`)
-- AO 0.9.2 Windows patch applied (see below)
-
-#### Windows fix for AO 0.9.2
-
-AO 0.9.2 has two upstream bugs on Windows that break the built-in review:
-1. Wrong subcommand: calls `codex exec --sandbox read-only` instead of `codex exec review`
-2. `shell: true` causes Windows to split multi-word arguments incorrectly
-
-Apply the patch before running AO:
-
-```powershell
-node docs/orchestrator-message-registry.mjs generate-map
+```bash
+npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>
 ```
 
-The script patches the bundled Next.js chunk in:
-```
-%APPDATA%\npm\node_modules\@aoagents\ao\node_modules\@aoagents\ao-web\.next\server\chunks\4148.js
-```
+The reviewer-neutral wrapper ultimately invokes the selected tracked wrapper.
+Direct plugin invocation is for focused fixture/testing work only; it does not
+replace runner claims or publication authority.
 
-Re-run after every `npm install -g @aoagents/ao` upgrade.
+## Codex wrapper
 
-### Alternative path — GitHub Actions CI review
+The local Codex wrapper uses the repository's Node 22 TypeScript policy and
+`codex exec review --json`. It loads the pack-owned prompt, explicit Issue fences,
+and the active declaration snapshot. Absolute code locations are normalized to
+repository-relative paths before signatures or publication.
 
-A reusable workflow is provided at:
+Trusted local review requires explicit `--source codex-local`, no CI signal, and no
+untrusted external workspace root. Only that case may use workspace-write and
+network access for approved coworker delegation. GitHub Actions, omitted source,
+external PR workspaces, and CI signals remain read-only. Exfiltratable token and
+credential environment variables are removed from the child process in every mode.
 
-```
-.github/workflows/codex-pr-review.yml
-```
+## Verdict selection
 
-This runs Codex in GitHub Actions CI (not locally) and can post findings as
-GitHub PR comments. Authentication uses ChatGPT OAuth credentials stored as the
-`CODEX_AUTH_JSON` repository secret. Caller and reusable workflows need
-`issues: read` so `gh issue view` can load linked-issue denylist/allowed_roots fences.
+The primary source is a valid `exited_review_mode.review_output` event from Codex
+JSONL. The pack maps native findings into its structured finding contract. The
+last-message file is a bounded fallback only when no valid native review payload
+exists.
 
-The reusable workflow checks out **two** repositories: the caller PR head (workspace
-root, where `codex exec review` runs) and `orchestrator-pack` at
-`orchestrator-pack/` (wrapper + `npm ci`). The pack ref is resolved from
-required `pack_ref` input set to the same ref as the caller's `uses: ...@pin`
-(e.g. `main`, a tag, or branch). `job.workflow_sha` / `job.workflow_ref` are not
-populated for the called reusable workflow pin — do not rely on them or on
-`github.workflow_ref` (that is the caller workflow). The reviewer runs via
-`node --experimental-strip-types` inside the pack checkout so caller repos do not need
-a separate TypeScript runtime dependency installed.
+Terminal contract:
 
-### Sandbox trust split (coworker delegation)
+- exit 0 always writes one non-empty parseable verdict JSON to stdout;
+- clean emits `verdict: clean` and `findingCount: 0`;
+- findings emit `verdict: findings` with normalized findings;
+- malformed, contradictory, empty, timeout, or prose-only output exits non-zero and
+  must not parse as clean;
+- one clean result for the same PR head is terminal and is not re-invoked.
 
-Trusted local PR review requires an **explicit** `--source codex-local` on the
-CLI (the canonical `run-pack-review.ps1` / `invoke-pack-review.ps1` entrypoints
-inject this on non-CI hosts). Env-derived defaults apply only to finding
-metadata, not sandbox trust. With explicit `codex-local`, no CI/Actions signal,
-and no `PR_REPO_ROOT`, Codex runs with `--sandbox workspace-write` and
-`sandbox_workspace_write.network_access=true` so the reviewer can spawn the
-external `coworker` CLI (exec + outbound network) per pack policy.
+`NO_FINDINGS` or structured pack JSON may recover a missing native payload only
+through the shape-gated fallback. Broad JSONL errors do not fall through to prose.
 
-Untrusted PR workspaces (`codex-github-action`, `PR_REPO_ROOT`, omitted
-`--source`, or `codex-local` under a CI/Actions signal) keep fail-closed
-`--sandbox read-only` containment.
+## Finding contract
 
-Both paths omit `GH_TOKEN`, `GITHUB_TOKEN`, `CODEX_AUTH_JSON`, and related CI
-secrets from the Codex child env so prompt injection cannot exfiltrate them
-(trusted local review is network-capable and still reviews PR diffs). Codex
-CLI auth uses `~/.codex` on disk, not those env vars.
+Each finding carries stable type, code, severity, path, summary, source, and
+signature fields. Scope context comes from the linked Issue and declaration. If
+scope cannot be resolved, the wrapper reports a non-blocking
+`scope-context-unavailable` warning rather than inventing authority.
 
-Architect / draft-spec review (`scripts/review-architect-artifact.ts` /
-`codex review -c sandbox_mode=workspace-write -c sandbox_workspace_write.network_access=true`) is always
-trusted-local and coworker-capable. The script strips the same exfiltratable env
-vars as the PR wrapper before spawning Codex.
+## Optional GitHub Actions path
 
-The Windows AO 0.9.2 patch path was removed in the PR1 estate cut; legacy reference:
-it still invokes `codex exec --sandbox read-only` without network and is **not**
-coworker-capable. Pack review uses the scoped wrapper above, not that path.
+`.github/workflows/codex-pr-review.yml` runs the same wrapper in read-only CI and may
+publish findings to the PR. The caller pins the pack ref explicitly and supplies
+credentials through encrypted Actions secrets. Secrets are never copied into the
+reviewed workspace or child environment.
 
-Use this path if you want review results visible on the GitHub PR rather than
-only in the local AO dashboard.
+The local and CI paths share:
 
-**One-time secret setup (PowerShell, local machine):**
+- `prompts/codex_review_prompt.md`;
+- `plugins/codex-pr-reviewer/bin/review.{ts,ps1}`;
+- the same scope assembly and finding mapper;
+- the same terminal stdout and failure contract.
 
-```powershell
-[Convert]::ToBase64String(
-  [IO.File]::ReadAllBytes("$env:USERPROFILE\.codex\auth.json")
-) | clip
-# Paste the clipboard value as the CODEX_AUTH_JSON secret in the target repo.
-```
-
-Caller workflow for a target repository: copy
-`docs/templates/codex-pr-review-caller.yml` into `.github/workflows/pr-review.yml`
-(see `docs/target_repo_setup.md` section 6).
-
-### Scoped reviewer wrapper (local AO primary path)
-
-Use the pack-owned wrapper so Codex receives declaration scope and emits
-**native review-mode** output (hydrated `review_output` when `--json` is enabled;
-`NO_FINDINGS` / pack JSON remain **fallback** channels for split-channel recovery
-per #135, not the primary prompt contract per #136):
-
-```powershell
-# From the repository root (reviewer workspace or target repo checkout)
-ao review run <worker-session-id> --execute --command `
-  "node --experimental-strip-types plugins/codex-pr-reviewer/bin/review.ts --repo-root . --base origin/main"
-```
-
-On Windows, prefer the PowerShell launcher:
-
-```powershell
-ao review run <worker-session-id> --execute --command `
-  "pwsh -NoProfile -File plugins/codex-pr-reviewer/bin/review.ps1 --repo-root . --base origin/main"
-```
-
-Wrapper contract (event-first verdict selection):
-
-Live `codex exec review` runs pass `--json` so the wrapper captures process JSONL
-stdout, the persisted Codex session JSONL under `CODEX_HOME` / `~/.codex/sessions/**`,
-and the `--output-last-message` file as separate channels.
-
-**Native prompt → CLI hydration → existing mapper (#136):** `prompts/codex_review_prompt.md`
-asks Codex for native review-mode findings (`title`, `body`, `priority`,
-`code_location`) and machine verdicts (`patch is correct` / `patch is incorrect`).
-Codex CLI hydrates that into `exited_review_mode.review_output`; the pack maps
-hydrated fields through `plugins/codex-pr-reviewer/lib/review_jsonl.ts`
-(`parseCodexReviewOutput` / `normalizeReviewFinding`) to architecture §F
-findings. The wrapper does **not** scrape `[P1]`/`[P2]` or paths from
-`overall_explanation` or last-message prose for verdict selection.
-
-When a valid `exited_review_mode` event with `review_output` is present in the
-persisted session, that hydrated machine payload is the verdict source. The
-last-message file is fallback and diagnostics only for JSONL-enabled runs.
-
-**Terminal stdout contract (foreground CLI):** On every **exit 0** outcome, stdout
-is **non-empty** JSON — the pack terminal verdict record. Clean reviews emit
-`verdict: clean` with `findingCount: 0` (scope-warning-only clean may have a
-non-empty `findings[]`). Failure runs exit non-zero; stdout is empty or must not
-parse as a clean verdict. **Runner rule:** exit 0 + parseable clean verdict = terminal success; **do not re-invoke review** on the same PR head.
-
-| Verdict source | Condition | Wrapper exit | stdout on exit 0 | AO / worker effect |
-|----------------|-----------|--------------|------------------|-------------------|
-| Review-mode JSONL | `review_output` clean (`findings: []`, `overall_correctness: patch is correct`) | 0 | Terminal verdict JSON (`verdict: clean`, `findingCount: 0`) | `findingCount: 0`, run `clean` |
-| Review-mode JSONL | `review_output` with findings | 0 | Terminal verdict JSON (`verdict: findings`, populated `findings[]`) | Structured findings parsed into AO store (paths repo-relative) |
-| Review-mode JSONL | Split-channel recovery: empty `findings[]`, non-clean overall, pack JSON or exact `NO_FINDINGS` in `overall_explanation` and/or last message (shape-gated; see #135) | 0 | Terminal verdict JSON (clean or findings per recovery) | Findings or clean from secondary channel; broad JSONL-error → last-message fallback is **forbidden** |
-| Review-mode JSONL | Contradictory `review_output` (e.g. non-empty `findings[]` with patch-is-correct overall) | non-zero | empty or ignored | Run `failed`; recovery **must not** run |
-| Last message | Exactly `NO_FINDINGS` (no valid review-mode output) | 0 | Terminal verdict JSON (`verdict: clean`, `findingCount: 0`) | `findingCount: 0`, run `clean` |
-| Last message | JSON `{"findings":[…]}` (no valid review-mode output) | 0 | Terminal verdict JSON (`verdict: findings`) | Structured findings parsed into AO store |
-| Last message | Empty (no valid review-mode output) | non-zero | empty or ignored | Run `failed`; log: `reviewer produced empty output` |
-| Last message | Legacy prose only (no valid review-mode output) | non-zero | empty or ignored | Run `failed`; diagnostic snippet in log |
-| Review-mode JSONL | Missing, malformed, split-channel without recoverable secondary payload, or conflicting secondary channels | non-zero | empty or ignored | Run `failed`; diagnostic snippet in log |
-
-The wrapper always loads the pack-bundled `prompts/codex_review_prompt.md` (never
-a copy in the reviewed workspace), injects scope from the linked
-issue (`denylist`, `allowed_roots`) and the active declaration snapshot
-(`docs/declarations/{issue}.{iteration}.json` via `_shared` / scope-guard loaders),
-and maps findings to architecture §F (`type`, `code`, `severity`, `path`,
-`summary`, `source`, signature). JSONL `code_location.absolute_file_path` values
-are relativized against `--repo-root` before emission so AO `filePath` and finding
-signatures use stable repository paths (or `null` when outside the repo).
-
-Resolve the issue number from explicit `--issue` or the linked PR body
-(`Closes #N`). When neither issue fences nor a snapshot exist, the prompt omits
-authoritative scope and the wrapper adds a non-blocking
-`scope-context-unavailable` warning finding.
-
-### Dual-path shared contract
-
-Both the local AO path and the optional GitHub Actions workflow use:
-
-- `prompts/codex_review_prompt.md` — single prompt contract
-- `plugins/codex-pr-reviewer/bin/review.{ts,ps1}` — scope assembly, Codex
-  invocation (`codex exec review` with `--json`), review-mode JSONL verdict
-  selection, `NO_FINDINGS` / structured last-message fallback, structured output
-- Architecture §F finding format and signatures (`plugins/token-chain-ledger`)
-
-The reusable workflow calls the same wrapper; it posts
-`## Codex Review — no findings` when Codex returns `NO_FINDINGS` instead of
-dumping reviewer prose.
+This is shared implementation, not dual review authority: the pack runner and
+single publication owner still determine the lifecycle.
 
 ## Non-goals
 
-- On AO 0.9.x, a `reviewer:` YAML block is silently ignored (no schema error) —
-  wire review through `orchestratorRules` and the `ao review` CLI instead.
-- Do not patch `packages/core/**` in any vendored AO checkout. This is a no core patch design.
-- Do not store API keys, tokens, or model credentials in this repository.
+- no core patch;
+- no concrete runtime review command or dashboard integration;
+- no compatibility alias, fallback transport, hidden retry, or second publication
+  owner;
+- no stored API keys or model credentials;
+- no inference that a failed or empty run is clean.
 
 ## Contract markers
 
-- Reviewer: Codex CLI (default model `gpt-5.5`)
-- Trigger: PR review against GitHub Issues-linked PRs
-- Constraint: no core patch — AO core is never modified by this plugin
+- Reviewer: Codex
+- Default model: `gpt-5.5`
+- Trigger: PR review
+- Task source: GitHub Issues
+- Constraint: no core patch
