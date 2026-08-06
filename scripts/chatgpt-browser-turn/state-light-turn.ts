@@ -374,7 +374,11 @@ export function snapshotOwnedCarrier(
     carrier.role === 'user' && ownedPromptMatches(carrier.text, marker)
   ));
   if (matches.length !== 1) return undefined;
-  return matches[0]?.key ? matches[0] : undefined;
+  const owned = matches[0];
+  if (!owned?.key) return undefined;
+  const keyMatches = snapshot.carriers.filter((carrier) => carrier.key === owned.key);
+  if (keyMatches.length !== 1 || keyMatches[0] !== owned || keyMatches[0].role !== 'user') return undefined;
+  return owned;
 }
 
 export function keyedHarvestCandidate(
