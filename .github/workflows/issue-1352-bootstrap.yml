@@ -18,16 +18,22 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Decode staged implementation payload
+      - name: Salvage staged implementation payload
         shell: bash
         run: |
           set -euo pipefail
           base64 --decode docs/investigations/runtime-hard-cut/apply-payload-00.b64 > issue-1352-payload.xz
+          set +e
           xz --decompress --stdout issue-1352-payload.xz > issue-1352-payload.decoded
+          xz_status=$?
+          set -e
+          echo "xz_status=$xz_status"
+          test -s issue-1352-payload.decoded
           file issue-1352-payload.decoded
           wc -c issue-1352-payload.decoded
           sha256sum issue-1352-payload.decoded
           head -c 128 issue-1352-payload.decoded | od -An -tx1
+          tail -c 128 issue-1352-payload.decoded | od -An -tx1
       - uses: actions/upload-artifact@v4
         with:
           name: issue-1352-decoded-payload
