@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { runProcessSync } from './kernel/subprocess.ts';
 import {
   checkSmokeTestPlan,
   ensureSmokeRunArtifactDir,
@@ -579,6 +579,23 @@ function psQuote(value: string): string {
   return value.replaceAll("'", "''");
 }
 
+function runChild(
+  command: string,
+  args: readonly string[],
+  _options: { readonly encoding?: string } = {},
+): { status: number; stdout: string; stderr: string } {
+  const result = runProcessSync({
+    command,
+    args,
+    inheritParentEnv: true,
+  });
+  return {
+    status: result.exitCode ?? (result.ok ? 0 : 1),
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
 describe('worker-smoke consolidated gate regressions', () => {
   it('uses the canonical closing grammar and rejects missing, repeated, and mismatched relations', () => {
     for (const keyword of [
@@ -606,7 +623,7 @@ describe('worker-smoke consolidated gate regressions', () => {
     expect(callerSource).toContain(
       'Set-Content -LiteralPath $issueBodyFile.FullName -Value $issueBody -Encoding utf8NoBOM',
     );
-    const writer = spawnSync('pwsh', [
+    const writer = runChild('pwsh', [
       '-NoProfile',
       '-Command',
       `$body = [System.IO.File]::ReadAllText('${psQuote(sourceBodyFile)}'); `
@@ -641,8 +658,8 @@ if (endpoint === 'user') {
   process.exitCode = 2;
 }
 `);
-    expect(spawnSync('git', ['init', '--quiet', root], { encoding: 'utf8' }).status).toBe(0);
-    expect(spawnSync(
+    expect(runChild('git', ['init', '--quiet', root], { encoding: 'utf8' }).status).toBe(0);
+    expect(runChild(
       'git',
       ['-C', root, 'remote', 'add', 'origin', `https://github.com/${REPOSITORY}.git`],
       { encoding: 'utf8' },
