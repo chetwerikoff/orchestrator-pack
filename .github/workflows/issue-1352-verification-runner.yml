@@ -2,7 +2,7 @@ name: issue-1352-verification-runner
 
 on:
   pull_request:
-    types: [reopened]
+    types: [opened, reopened]
 
 permissions:
   contents: read
@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   verify:
-    if: github.event.pull_request.number == 1388 && github.event.pull_request.head.ref == 'verify/pr-1378-c5e1298'
+    if: github.event.pull_request.head.ref == 'verify/pr-1378-c5e1298'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
