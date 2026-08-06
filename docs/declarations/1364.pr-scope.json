@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1364,
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "docs/tiering.md"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "AGENTS.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "docs/declarations/1364.pr-scope.json",
+    "docs/tiering.md"
+  ],
+  "source_revision": "c11f9e7a9f017ca58efb9528d20ccb7f64493cf5"
+}
