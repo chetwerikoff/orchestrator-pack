@@ -49,15 +49,22 @@ blast radius.
 - **T1** — small, obvious, self-contained work with little design judgment.
 - **T2** — one coherent component that requires real design judgment.
 
-T1 and T2 use the same create-flow review pipeline: exactly one independent
-terminal browser-GPT `architectural` lens. Their classification is descriptive
-and calibrational, not a reason to buy a different review topology.
+The create-flow topology is fixed by tier:
 
-Reviewer cardinality is a separate routing decision. The review-lane classifier
-uses the author-owned changed-path declaration and blast radius to select one
-source, a conditional disputed pair, or a fixed three-source safety set; it
-never changes the complexity tier, stage order, reviewer roles, or substantive
-review contract. See [`review-lanes.md`](review-lanes.md).
+- **T1:** one GPT `architectural` lens.
+- **T2:** three GPT `architectural-review` sources launched concurrently, then
+  one GPT `architectural` lens.
+- **T3:** three GPT `competitive` sources only when the flow-manager/architect
+  records that they are genuinely necessary, then three GPT
+  `architectural-review` sources concurrently, one Claude
+  `architectural-lens`, and one GPT `architectural` lens.
+
+“Concurrently” means the slots are launched as one parallel batch, with browser
+starts staggered by 10–15 seconds. The T3 competitive decision is recorded in
+the journal; skipping that stage is legal. The stage order is
+competitive (when needed) → architectural-review → Claude lens → GPT lens.
+These fixed counts replace older single-source and configurable-cardinality
+wording.
 
 Numeric magnitude may disqualify a task from a lower tier but never qualifies a
 task into T1. Smallness is necessary, not sufficient. Stable receipt rubric
@@ -98,10 +105,10 @@ Therefore:
 
 - exact `triple-source/v1` pre-lens admission may be produced and validated by
   #1150;
-- one configured N-capture `stageAttemptId` is one full stage and one logical
-  round, never N rounds;
+- one three-capture `stageAttemptId` is one full stage and one logical round,
+  never three rounds;
 - flow-manager consolidation is forbidden;
-- live T3 final acceptance accepts configured plural rounds once #1171
+- live T3 final acceptance accepts the fixed three-source rounds once #1171
   validates canonical history, topology, relay, ledger, and terminal binding;
   `triple-source/v1` alone is not a blocker.
 
@@ -109,20 +116,21 @@ Therefore:
 
 | Tier | Review sequence | Pre-lens #975 | Terminal lens |
 |------|-----------------|---------------|---------------|
-| **T1** | Exactly one independent browser-GPT `architectural` source → acceptance | **No** | Same source owns aggregate cut + M5 |
-| **T2** | Exactly one independent browser-GPT `architectural` source → acceptance | **No** | Same source owns aggregate cut + M5 |
-| **T3** | Configured N-source `competitive` stage → configured N-source `architectural-review` stage → pre-lens guard → one Claude `architectural-lens` (or valid waiver) → one terminal GPT `architectural` → acceptance after #1171 canonical round and terminal checks | **Yes** | Terminal GPT owns final aggregate cut + M5 |
+| **T1** | One GPT `architectural` lens → acceptance | **No** | GPT lens owns aggregate cut + M5 |
+| **T2** | Three concurrent GPT `architectural-review` sources → one GPT `architectural` lens → acceptance | **No** | GPT lens owns aggregate cut + M5 |
+| **T3** | Three concurrent GPT `competitive` sources when journaled as necessary → three concurrent GPT `architectural-review` sources → one Claude `architectural-lens` (or valid waiver) → one GPT `architectural` lens → acceptance after #1171 checks | **Yes** | GPT lens owns final aggregate cut + M5 |
 
 The canonical T3 order is:
 
 ```text
-competitive[01..N] → architectural-review[01..N] → architectural-lens (or valid Claude-unavailable waiver) → architectural
+competitive[01..03] (when needed) → architectural-review[01..03] → Claude architectural-lens → GPT architectural
 ```
 
-The single operator control is `OPK_GPT_REVIEWER_CARDINALITY`. Its default T3
-value is `3`; T1/T2 remain singular. Each stage receipt freezes the selected
-`reviewerCardinality` and `cardinalityConfigIdentity`, so a running episode
-cannot silently change N.
+The stage receipts freeze the required cardinality: T1 has one GPT lens; T2 has
+three architectural-review sources followed by one GPT lens; T3 has three
+competitive sources only when journaled as necessary, three
+architectural-review sources, one Claude lens, and one GPT lens. There is no
+configurable cardinality override.
 
 There is no `architectural-final` stage. Historical captures with that name are
 audit-only.
@@ -156,11 +164,12 @@ cannot prove a later episode root by passing only a self-consistent subset.
 
 ### T3 plural source stages
 
-T3 `competitive` and `architectural-review` each use policy
-`triple-source/v1` and exact independent reviewer slots `01..N` in one staggered
-concurrent batch. The current default is N=3, not a hard-coded topology.
+T2 `architectural-review` and T3 `architectural-review` use policy
+`triple-source/v1` and exact independent reviewer slots `01..03` in one
+staggered concurrent batch. T3 `competitive` uses the same three-slot policy
+only when its necessity is recorded in the journal.
 
-- All N launches begin before harvesting/adjudicating siblings.
+- All three launches begin before harvesting/adjudicating siblings.
 - Preserve 10–15 second spacing and bounded prior-slot observation.
 - There is no account-wide hard cap or synthetic pre-attempt capacity outcome.
 - Every invocation emits immutable `reviewer-invocation-envelope/v1` evidence,
@@ -171,12 +180,12 @@ concurrent batch. The current default is N=3, not a hard-coded topology.
 - Successful siblings remain separate immutable files:
   `pass-NN-competitive-SS.capture.txt` and
   `pass-NN-architectural-review-SS.capture.txt`.
-- Exact slots `01..N` credential the stage together. Missing, duplicate, extra,
+- Exact slots `01..03` credential the stage together. Missing, duplicate, extra,
   consolidated, mislabeled, mixed-revision, or non-terminal source sets fail
   closed.
 
-T1, T2, Claude `architectural-lens`, and terminal `architectural` remain
-`single-source/v1`.
+T1, Claude `architectural-lens`, and GPT `architectural` use one source.
+T2's three-source architectural review precedes its one GPT lens.
 
 ### Retry and observable capacity
 
@@ -321,24 +330,25 @@ real occurrence; an empty decoy row cannot satisfy the protected-type floor.
 
 After each logical review round, not each sibling capture, the author updates one
 inventory of review-added mechanisms as `keep`, `simplify`, `defer`, or `cut`.
-One N-capture `stageAttemptId` consumes one round.
+One three-capture `stageAttemptId` consumes one round.
 
 ### M5 — truthful simplification verdict
 
-Terminal GPT `architectural` remains the sole final M5 anchor for all tiers.
-Pre-lens N-source aggregation is a progression gate only:
+GPT `architectural` remains the sole final M5 anchor for all tiers. The
+three-source pre-lens aggregation is a progression gate only:
 
-- union every `simplification-cut-candidate: yes` occurrence across all N
+- union every `simplification-cut-candidate: yes` occurrence across all three
   `architectural-review` sources, independent of file order;
-- aggregate `SIMPLIFICATION_CLEAN` only when all N sources carry it and no
+- aggregate `SIMPLIFICATION_CLEAN` only when all three sources carry it and no
   source emits a candidate;
-- aggregate `NO_FINDINGS` only when all N are locally no-findings;
+- aggregate `NO_FINDINGS` only when all three are locally no-findings;
 - never let one clean source erase another source's finding or candidate.
 
 ### Two-phase finding-ledger guard
 
-- **`pre-lens`** — T3 only, after configured-N `competitive` and configured-N
-  `architectural-review` are settled, fully relayed, and occurrence-accounted.
+- **`pre-lens`** — T3 only, after the selected three-source `competitive`
+  stage (if journaled as needed) and three-source `architectural-review` stage
+  are settled, fully relayed, and occurrence-accounted.
 - **`final-acceptance`** — all tiers, requiring terminal GPT M5 and all applicable
   M2/M3/relay/count evidence. T3 plural-source activation is governed by #1171's
   canonical logical-round and terminal acceptance checks.
@@ -371,10 +381,11 @@ without gaining architectural/M5 authority.
 
 ### Terminal GPT architectural lens
 
-Runs once in an independent fresh chat. T1/T2 use it as the only reviewer. T3
-uses it after plural pre-terminal stages, Claude/waiver, and author fixes. It
-remains singular and cannot be replaced by consolidation or a second Claude
-pass.
+Runs once in an independent fresh chat. T1 uses it as the only reviewer. T2
+uses it after three architectural-review sources. T3 uses it after the
+conditional three-source competitive stage, three architectural-review
+sources, Claude/waiver, and author fixes. It remains singular and cannot be
+replaced by consolidation or a second Claude pass.
 
 ### Explicit wrappers
 

@@ -43,11 +43,20 @@ Use `--phase pre-lens` when only the T3 pre-lens stages are complete. The
 command returns a non-zero status and a named missing input when evidence is
 absent. It writes no acceptance artifact on failure.
 
-`check-artifacts` applies the same tier/phase stage matrix as final acceptance:
-T1 and T2 require `architectural`; T3 pre-lens requires `competitive` and
-`architectural-review`; T3 final acceptance additionally requires
-`architectural-lens` and `architectural`. It reports every missing completed
-stage even when stale output markers are already present.
+`check-artifacts` keeps its existing enforcement matrix; this task does not
+change the gate mechanics. Its current `expectedStages` behavior still
+requires `architectural` for T2 and requires `competitive` unconditionally for
+T3 (with the other existing phase requirements). It reports every missing
+completed stage even when stale output markers are already present.
+
+The Issue #1364 operator policy is separate from that gate: T1 has one GPT
+lens; T2 has three concurrent GPT `architectural-review` sources followed by
+one GPT lens; T3 has three concurrent GPT `competitive` sources only when the
+flow-manager/architect records genuine necessity, then three concurrent GPT
+`architectural-review` sources, one Claude lens, and one GPT lens. Browser
+starts are staggered by 10–15 seconds, and a journaled T3 competitive-stage
+skip is legal. Updating `expectedStages` to enforce this policy is separate
+future work and is not part of Issue #1364.
 
 ## Evidence inputs
 
