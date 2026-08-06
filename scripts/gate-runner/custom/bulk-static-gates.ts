@@ -171,6 +171,38 @@ export function evaluateReview010Vocabulary(snapshot: SourceSnapshot): GateResul
   );
 }
 
+const RETIRED_REVIEW_CONFIG_PATH = ['agent', 'orchestrator.yaml.example'].join('-');
+
+function extractNamedReviewCommand(yaml: string): string | undefined {
+  const match = /NAMED\s+REVIEW_COMMAND[^\r\n]*\r?\n\s+(.+?)(?:\r?\n\s+Alternate|\r?\n\s+RUNTIME|\r?\n\s+[A-Z]{2,})/isu.exec(yaml);
+  return match?.[1]?.trim().split(/\r?\n/u)[0]?.trim();
+}
+
+export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult {
+  const gateId = 'review-command-not-ao';
+  const failures: string[] = [];
+  const unreachable: string[] = [];
+  let failureStdout: string | undefined;
+  const text = snapshot.files.get(RETIRED_REVIEW_CONFIG_PATH);
+  const unreadable = snapshot.unreadable.get(RETIRED_REVIEW_CONFIG_PATH);
+  if (unreadable !== undefined) {
+    unreachable.push(`${RETIRED_REVIEW_CONFIG_PATH}: ${unreadable}`);
+  } else if (text !== undefined) {
+    const command = extractNamedReviewCommand(text) ?? '<missing>';
+    failures.push(`Canonical REVIEW_COMMAND must not use gitignored .orchestrator-pack/ paths: ${command}`);
+    failureStdout = `[FAIL] Canonical REVIEW_COMMAND must not use gitignored .orchestrator-pack/ paths\n  REVIEW_COMMAND: ${command}\n`;
+  }
+  return completeStaticGate(
+    gateId,
+    'Retired example review configuration absence contract',
+    '[PASS] example REVIEW_COMMAND does not use .orchestrator-pack/ as primary path\n',
+    snapshot,
+    failures,
+    unreachable,
+    failureStdout,
+  );
+}
+
 export const VERIFY_CONTRACT_MARKERS: Readonly<Record<string, readonly string[]>> = {
   'plugins/task-declaration/README.md': ['DD-026', 'DD-027', 'declared_files', 'denylist', 'one amendment', 'baseline'],
   'plugins/scope-guard/README.md': ['DD-024', 'runtime guard', 'git add', 'commit', 'PR-level CI', 'second line'],
@@ -217,5 +249,6 @@ export const bulkStaticGateRegistrations: readonly GateRegistration[] = [
   registration('agents-report-contract', evaluateAgentsReportContract),
   registration('coworker-delegation-threshold-drift', evaluateCoworkerDelegationThreshold),
   registration('review-010-vocabulary', evaluateReview010Vocabulary),
+  registration('review-command-not-ao', evaluateReviewCommandNotAo),
   registration('verify-structure-contract', evaluateVerifyStructureContract),
 ];
