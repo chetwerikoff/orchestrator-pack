@@ -24,10 +24,10 @@ import {
 } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import {
   matchesPathPattern,
+  parsePathPattern,
   pathPatternsOverlap,
   pathPatternWithin,
 } from '@orchestrator-pack/shared/lib/path_pattern.js';
-import { validateDeclaredScope } from '../plugins/ao-task-declaration/lib/validate.ts';
 
 export const PR_SCOPE_DECLARATION_SCHEMA =
   'orchestrator-pack/pr-scope-declaration/v1';
@@ -213,6 +213,31 @@ function canonicalTexts(entries: CanonicalEntry[]): string[] {
   return entries.map(canonicalEntryText);
 }
 
+function parsePolicyEntries(
+  values: readonly string[],
+  field: string,
+): { ok: true; entries: string[] } | { ok: false; errors: string[] } {
+  const entries: string[] = [];
+  const errors: string[] = [];
+
+  values.forEach((value, index) => {
+    const parsed = parsePathPattern(value);
+    if (!parsed.ok) {
+      errors.push(`${field}[${index}] ${parsed.reason}`);
+      return;
+    }
+    if (parsed.pattern.source !== value) {
+      errors.push(
+        `${field}[${index}] "${value}" must be canonically normalized`,
+      );
+      return;
+    }
+    entries.push(parsed.pattern.source);
+  });
+
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, entries };
+}
+
 function pathEntryMatches(path: string, entry: CanonicalEntry): boolean {
   return matchesPathPattern(canonicalEntryText(entry), path);
 }
@@ -272,16 +297,11 @@ export function policySubset(
   narrower: readonly string[],
   broader: readonly string[],
 ): boolean {
-  const broad = canonicalizeEntries(broader, 'policy');
-  const narrow = canonicalizeEntries(narrower, 'policy');
+  const broad = parsePolicyEntries(broader, 'policy');
+  const narrow = parsePolicyEntries(narrower, 'policy');
   if (!broad.ok || !narrow.ok) return false;
   return narrow.entries.every((candidate) =>
-    broad.entries.some((parent) =>
-      pathPatternWithin(
-        canonicalEntryText(candidate),
-        canonicalEntryText(parent),
-      ),
-    ),
+    broad.entries.some((parent) => pathPatternWithin(candidate, parent)),
   );
 }
 
@@ -635,7 +655,23 @@ export function selectLiveIssueScope(
     };
   }
 
-  if (!policySubset(allowed_roots, REPOSITORY_ALLOWED_ROOTS)) {
+  const parsedAllowedRoots = parsePolicyEntries(allowed_roots, 'allowed-roots');
+  const parsedDenylist = parsePolicyEntries(
+    issueConstraints.denylist,
+    'denylist',
+  );
+  if (!parsedAllowedRoots.ok || !parsedDenylist.ok) {
+    const errors = [
+      ...(parsedAllowedRoots.ok ? [] : parsedAllowedRoots.errors),
+      ...(parsedDenylist.ok ? [] : parsedDenylist.errors),
+    ];
+    return {
+      ok: false,
+      message: `live-Issue scope selection failed: ${errors.join('; ')}; FAIL/no-selection/fresh-declaration`,
+    };
+  }
+
+  if (!policySubset(parsedAllowedRoots.entries, REPOSITORY_ALLOWED_ROOTS)) {
     return {
       ok: false,
       message:
@@ -643,21 +679,10 @@ export function selectLiveIssueScope(
     };
   }
 
-  const valid = validateDeclaredScope(
-    { declared_paths: [], declared_globs: allowed_roots },
-    { denylist: issueConstraints.denylist, allowed_roots },
-  );
-  if (!valid.ok) {
-    return {
-      ok: false,
-      message: `live-Issue scope selection failed: ${valid.errors.join('; ')}; FAIL/no-selection/fresh-declaration`,
-    };
-  }
-
   return {
     ok: true,
-    allowed_roots,
-    denylist: issueConstraints.denylist,
+    allowed_roots: parsedAllowedRoots.entries,
+    denylist: parsedDenylist.entries,
   };
 }
 
