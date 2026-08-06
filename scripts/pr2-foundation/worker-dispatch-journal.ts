@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { reclaimStaleJournalLock } from './journal-lock.ts';
 import { buildS2EpisodeKey, hashNudgeMessageContent } from './worker-nudge-gate.ts';
 import {
   AO_PASTE_CHAR_THRESHOLD,
@@ -257,16 +258,6 @@ function assertJournalDeadline(deadlineMs: number): void {
   }
 }
 
-function processAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function parseLockOwner(file: string): CanonicalJournalLockOwner | null {
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
@@ -315,16 +306,7 @@ async function withCanonicalJournalDeadlineLock<T>(
         ? String((error as { code?: unknown }).code ?? '')
         : '';
       if (code !== 'EEXIST') throw error;
-      const observed = parseLockOwner(lockPath);
-      if (observed && !processAlive(observed.pid)) {
-        assertJournalDeadline(deadlineMs);
-        try {
-          unlinkSync(lockPath);
-        } catch {
-          // A concurrent owner replaced or removed the stale lock.
-        }
-        continue;
-      }
+      if (reclaimStaleJournalLock(lockPath)) continue;
       await delayUntil(deadlineMs, Math.min(10 * (attempt + 1), 50));
     } finally {
       if (descriptor !== null) {
