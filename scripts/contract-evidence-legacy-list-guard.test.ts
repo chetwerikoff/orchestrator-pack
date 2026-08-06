@@ -167,7 +167,7 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     const verdict = runGuardCase({
       headLegacyListContent: legacyListWithPaths([
         'docs/issues_drafts/00-architecture-decisions.md',
-        'docs/issues_drafts/01-task-declaration-impl.md',
+        'docs/issues_drafts/01-ao-task-declaration-impl.md',
         'docs/issues_drafts/99-new-draft.md',
       ]),
     });
@@ -184,7 +184,7 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     const verdict = runGuardCase({
       headLegacyListContent: legacyListWithPaths([
         'docs/issues_drafts/00-architecture-decisions.md',
-        'docs/issues_drafts/01-task-declaration-impl.md',
+        'docs/issues_drafts/01-ao-task-declaration-impl.md',
         ...added,
       ]),
       baseAuthorizations: {
@@ -391,7 +391,7 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
       authFileChanged: true,
       headLegacyListContent: legacyListWithPaths([
         'docs/issues_drafts/00-architecture-decisions.md',
-        'docs/issues_drafts/01-task-declaration-impl.md',
+        'docs/issues_drafts/01-ao-task-declaration-impl.md',
         'docs/issues_drafts/99-new-draft.md',
       ]),
       baseAuthorizations: {
@@ -417,12 +417,12 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
       ]),
     });
     expect(verdict.verdict).toBe('pass');
-    expect(verdict.removedPaths).toEqual(['docs/issues_drafts/01-task-declaration-impl.md']);
+    expect(verdict.removedPaths).toEqual(['docs/issues_drafts/01-ao-task-declaration-impl.md']);
   });
 
   it('AC5 passes reorder/reformat with identical normalized set', () => {
     const paths = [
-      'docs/issues_drafts/01-task-declaration-impl.md',
+      'docs/issues_drafts/01-ao-task-declaration-impl.md',
       'docs/issues_drafts/00-architecture-decisions.md',
     ];
     const verdict = runGuardCase({
@@ -437,7 +437,7 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     const verdict = runGuardCase({
       headLegacyListContent: legacyListWithPaths([
         'docs/issues_drafts/00-architecture-decisions.md',
-        './docs/issues_drafts/01-task-declaration-impl.md',
+        './docs/issues_drafts/01-ao-task-declaration-impl.md',
       ]),
     });
     expect(verdict.verdict).toBe('fail');
@@ -628,7 +628,7 @@ jobs:
       changedFiles: governedManifestFiles,
       headLegacyListContent: legacyListWithPaths([
         'docs/issues_drafts/00-architecture-decisions.md',
-        'docs/issues_drafts/01-task-declaration-impl.md',
+        'docs/issues_drafts/01-ao-task-declaration-impl.md',
         'docs/issues_drafts/bootstrap-add.md',
       ]),
     });
@@ -639,7 +639,7 @@ jobs:
       bootstrap: false,
       headLegacyListContent: legacyListWithPaths([
         'docs/issues_drafts/00-architecture-decisions.md',
-        'docs/issues_drafts/01-task-declaration-impl.md',
+        'docs/issues_drafts/01-ao-task-declaration-impl.md',
         'docs/issues_drafts/bootstrap-add.md',
       ]),
     });
@@ -650,7 +650,7 @@ jobs:
     const verdict = runGuardCase({
       headLegacyListContent: legacyListWithPaths([
         'docs/issues_drafts/00-architecture-decisions.md',
-        'docs/issues_drafts/01-task-declaration-impl.md',
+        'docs/issues_drafts/01-ao-task-declaration-impl.md',
         'docs/issues_drafts/producer-emission-fail.md',
       ]),
     });
@@ -756,7 +756,7 @@ jobs:
 
       const headList = legacyListWithPaths([
         'docs/issues_drafts/00-architecture-decisions.md',
-        'docs/issues_drafts/01-task-declaration-impl.md',
+        'docs/issues_drafts/01-ao-task-declaration-impl.md',
         'docs/issues_drafts/git-diff-add.md',
       ]);
       writeFileSync(path.join(repoDir, 'scripts/contract-evidence-legacy-drafts.json'), headList);
