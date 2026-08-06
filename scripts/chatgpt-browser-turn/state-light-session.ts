@@ -1320,6 +1320,7 @@ async function cleanupSession(
   deps: StateLightSessionDependencies,
 ): Promise<ResourceCleanupOutcome> {
   let cleanup: ResourceCleanupOutcome = 'skipped';
+  // Keep the ownership disposition adjacent to the only production close sink.
   if (sessionPageCleanupAction(state) === 'close' && state.page) {
     cleanup = await deps.cleanup(() => state.page.close(), RESOURCE_CLEANUP_BOUND_MS);
   }
