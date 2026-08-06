@@ -176,20 +176,20 @@ function Register-PostRunAutonomousRetryAttemptFromClaim {
         -HeadSha $headSha -FailureClass $failureClass -RunId ([string]$failed.id)
 }
 
-function Get-PackAoReviewRuns {
+function Get-PackPackReviewRuns {
     param([string]$Project = '')
 
-    if (Get-Command Get-AoReviewRuns -ErrorAction SilentlyContinue) {
-        return @(Get-AoReviewRuns -Project $Project)
+    if (Get-Command Get-PackReviewRuns -ErrorAction SilentlyContinue) {
+        return @(Get-PackReviewRuns -Project $Project)
     }
 
     return @(& {
-        . (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
-        Get-AoReviewRuns -Project $Project
+        . (Join-Path $PSScriptRoot 'Invoke-RuntimeCliJson.ps1')
+        Get-PackReviewRuns -Project $Project
     })
 }
 
-function Get-EnrichedAoReviewRuns {
+function Get-EnrichedPackReviewRuns {
     param(
         [string]$Project = '',
         [string]$RepoRoot = '',
@@ -197,7 +197,7 @@ function Get-EnrichedAoReviewRuns {
         [string]$Namespace = ''
     )
 
-    $runs = @(Get-PackAoReviewRuns -Project $Project)
+    $runs = @(Get-PackPackReviewRuns -Project $Project)
     if ($runs.Count -eq 0) {
         return @()
     }

@@ -28,7 +28,7 @@ export function resolveWakeSupervisorStateRoot(
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const paths = pathApi(platform);
-  const override = trimmed(env.AO_WAKE_SUPERVISOR_STATE_DIR);
+  const override = trimmed(env.OPK_WAKE_SUPERVISOR_STATE_DIR);
   if (override) return override;
 
   const userHome = trimmed(env.HOME) || trimmed(options.homeDir) || homedir();
@@ -44,7 +44,7 @@ export function resolveWorkerMessageDispatchJournalPath(
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const paths = pathApi(platform);
-  const explicit = trimmed(env.AO_WORKER_MESSAGE_DISPATCH_JOURNAL);
+  const explicit = trimmed(env.OPK_WORKER_MESSAGE_DISPATCH_JOURNAL);
   if (explicit) return paths.resolve(explicit);
   return paths.join(
     resolveWakeSupervisorStateRoot(options),

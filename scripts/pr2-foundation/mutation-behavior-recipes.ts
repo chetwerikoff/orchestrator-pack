@@ -57,7 +57,7 @@ const TEXT_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     replacement: 'if (false) {',
   },
   'AC2:preflight-version-unverifiable-accepted': {
-    anchor: 'if (input.appStateVersion !== VERIFIED_AO_VERSION)',
+    anchor: 'if (input.appStateVersion !== VERIFIED_RUNTIME_VERSION)',
     replacement: 'if (false)',
   },
   'AC2:ambiguous-live-issue-index-zero': {
@@ -126,14 +126,14 @@ const TEXT_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
   },
   'AC4:notify-before-journal': {
     anchor: "  try {\n    const inspected = await inspectNotification({\n      deliveryKey,\n      findingsHash,\n      maxAttempts: config.maxJournalAttempts,\n    });\n    if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\n  } catch (error) {",
-    replacement: "  try {\n    await runProcess({ command: config.aoPath, args: [], allowEmptyStdout: true, timeoutMs: 1 });\n    const inspected = await inspectNotification({\n      deliveryKey,\n      findingsHash,\n      maxAttempts: config.maxJournalAttempts,\n    });\n    if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\n  } catch (error) {",
+    replacement: "  try {\n    await runProcess({ command: config.runtimePath, args: [], allowEmptyStdout: true, timeoutMs: 1 });\n    const inspected = await inspectNotification({\n      deliveryKey,\n      findingsHash,\n      maxAttempts: config.maxJournalAttempts,\n    });\n    if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\n  } catch (error) {",
   },
   'AC4:inline-powershell': {
     anchor: 'export interface WorkerNotificationOptions {',
     replacement: "void 'pwsh -NoProfile -File inline-notification.ps1';\nexport interface WorkerNotificationOptions {",
   },
   'AC4:powershell-child': {
-    anchor: '      const result = await runProcess({\n        command: config.aoPath,\n        args,',
+    anchor: '      const result = await runProcess({\n        command: config.runtimePath,\n        args,',
     replacement: "      const result = await runProcess({\n        command: 'pwsh',\n        args: ['-NoProfile', '-File', 'worker-notification.ps1'],",
   },
   'AC4:historical-record-unreadable': {

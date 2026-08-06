@@ -57,8 +57,8 @@ export function resolveGovernorStateDir(env = process.env) {
   if (env.GH_GOVERNOR_STATE_DIR) {
     return env.GH_GOVERNOR_STATE_DIR;
   }
-  if (env.AO_SIDE_PROCESS_STATE_DIR) {
-    return join(env.AO_SIDE_PROCESS_STATE_DIR.trim(), 'github-governor');
+  if (env.OPK_SIDE_PROCESS_STATE_DIR) {
+    return join(env.OPK_SIDE_PROCESS_STATE_DIR.trim(), 'github-governor');
   }
   const stateBase = env.XDG_STATE_HOME || join(homedir(), '.local', 'state');
   return join(stateBase, 'orchestrator-pack', 'github-governor');
@@ -145,7 +145,7 @@ export function resolveCallerLane(env = process.env, argv = []) {
   if (/interactive|orchestrator-turn|worker/i.test(consumer)) {
     return 'interactive';
   }
-  const child = String(env.AO_SIDE_PROCESS_CHILD_ID ?? '');
+  const child = String(env.OPK_SIDE_PROCESS_CHILD_ID ?? '');
   if (/preflight/i.test(child)) {
     return 'interactive-preflight';
   }

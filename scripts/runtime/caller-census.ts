@@ -284,7 +284,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Mandatory PowerShell-to-Node bridge deleted.',
   },
   {
-    surface: 'scripts/lib/Invoke-AoReviewApi.ps1',
+    surface: 'scripts/lib/Invoke-PackReviewApi.ps1',
     operations: ['review-trigger', 'review-list', 'report'],
     kind: 'non-runtime-ao-service',
     disposition: 'defer-1250',
@@ -298,7 +298,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Owns the review-start claim lifecycle through the TypeScript authority; non-runtime review transport remains #1250 work.',
   },
   {
-    surface: 'scripts/lib/Invoke-AoCliJson.ps1 (config/status/plugin/daemon operations)',
+    surface: 'scripts/lib/Invoke-RuntimeCliJson.ps1 (config/status/plugin/daemon operations)',
     operations: ['config', 'status', 'plugin-hooks', 'daemon-lifecycle'],
     kind: 'non-runtime-ao-service',
     disposition: 'defer-1250',

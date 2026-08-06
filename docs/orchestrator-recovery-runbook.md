@@ -43,7 +43,7 @@ For a **healthy orchestrator process that never reacts to CI/review events**, se
 | Spawn logs show `workspace.branch_collision` on `orchestrator/*` | Stale branch/worktree before kill/restart | `scripts/orchestrator-worktree-preflight.ps1` (Issue #91) |
 | Session restore fails with `EPERM` on `worktrees/op-orchestrator` | Orphan `pwsh` / `cursor-agent` holding the directory | `scripts/orchestrator-worktree-preflight.ps1 -Apply`; `docs/migration_notes.md` |
 | Same on **legacy native Windows** (retired) | Orphan processes + 9P locks | **Do not use** `unlock-op-orchestrator-worktree.ps1` on Linux — see migration_notes (legacy) |
-| Orchestrator PTY empty, `alive:false`, exit **0** under ~1s | `~/.ao/bin/agent` bash shim shadows real `agent` | Remove shim; `Test-Path ~/.ao/bin/agent` must be **False** before session restore |
+| Orchestrator PTY empty, `alive:false`, exit **0** under ~1s | `~/.orchestrator-pack/bin/agent` bash shim shadows real `agent` | Remove shim; `Test-Path ~/.orchestrator-pack/bin/agent` must be **False** before session restore |
 
 **Signatures A/B** (worker **and** orchestrator on Windows): Signature A — `printf` not
 recognized / `unknown option '-ne'`; Signature B — `command line is too long`.
@@ -228,7 +228,7 @@ ao send op-orchestrator @'
 Recovery ping: ao review list orchestrator-pack --json; ao status --json --reports full.
 For any worker with ready_for_review and no clean run on the current PR head, run exactly one review:
   ao review run <worker-session-id> --execute --command "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review.ps1 --repo-root . --base origin/main"
-Copy that --command string verbatim from orchestratorRules PACK_REVIEW_SHELL. Forbidden: plugins/ao-codex-pr-reviewer/bin/review.ps1 alone, npm ci && chains, cmd /c without quoting, ao review run without --command.
+Copy that --command string verbatim from orchestratorRules PACK_REVIEW_SHELL. Forbidden: plugins/codex-pr-reviewer/bin/review.ps1 alone, npm ci && chains, cmd /c without quoting, ao review run without --command.
 failed or cancelled with findingCount 0 is NOT clean — read terminationReason before retry.
 '@
 ```
@@ -315,7 +315,7 @@ pwsh -File scripts/orchestrator-worktree-preflight.ps1 -Apply
 Then restore the orchestrator session with Step 3 (`ao session restore`) and confirm no
 repeated `branch_collision` in spawn logs.
 
-### Step 2c — Worktree `EPERM` and `~/.ao/bin/agent` shim (before step 3)
+### Step 2c — Worktree `EPERM` and `~/.orchestrator-pack/bin/agent` shim (before step 3)
 
 **Linux / WSL2 (supported):** clear orphan processes holding the orchestrator
 worktree, then preflight:
@@ -341,10 +341,10 @@ Run from **external PowerShell** (not the Cursor agent terminal) when:
 - the orchestrator pipe shows `alive:false` with almost no scrollback right after start.
 
 **Prevention (do not repeat):** see `docs/migration_notes.md` — **Windows orchestrator
-prevention**. In short: never leave `~/.ao/bin\agent`; clear orphans with Handle +
+prevention**. In short: never leave `~/.orchestrator-pack/bin\agent`; clear orphans with Handle +
 targeted `taskkill /T`; confirm `Test-Path "$env:USERPROFILE\.ao\bin\agent"` is
 **False** before `ao start`; use [#2074](https://github.com/ComposioHQ/agent-orchestrator/issues/2074)
-for workers, not a standing bash shim in `~/.ao/bin`.
+for workers, not a standing bash shim in `~/.orchestrator-pack/bin`.
 
 **One-shot recovery (legacy, do not use on Linux):** formerly
 `scripts/unlock-op-orchestrator-worktree.ps1` (retired with the Ubuntu port).
@@ -371,7 +371,7 @@ undocumented on 0.10.3 — verify changed settings directly after a restore inst
 assuming adoption.
 
 **Deleted workspace under a live session** (orchestrator row non-terminated but
-`~/.ao/data/worktrees/<project>/orchestrator/…` is gone from disk — the 0.10.3
+`~/.orchestrator-pack/data/worktrees/<project>/orchestrator/…` is gone from disk — the 0.10.3
 `ao session cleanup` workspace-reclaim aliasing class, incident 2026-07-17): this same
 kill + restore sequence is the recovery path. Restore **re-materializes** the missing
 workspace, but at a **stale HEAD** (verified 2026-07-18) — after
@@ -509,7 +509,7 @@ Confirm a run appears after an uncovered head exists:
 ao review list orchestrator-pack --json
 ```
 
-Default cadence is **10 minutes** (`AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES`
+Default cadence is **10 minutes** (`OPK_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES`
 overrides). PRs without a linked worker session in `ao status --json --reports full`
 are skipped until respawn discipline creates one — the reconcile process must not
 call `ao spawn --claim-pr` (PR #97 split-brain guard).
@@ -573,8 +573,8 @@ pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -Once -DryRun
 
 | Setting | Default | Env var |
 |---------|---------|---------|
-| Tick interval | **2** minutes | `AO_REVIEW_SEND_RECONCILE_INTERVAL_MINUTES` |
-| Persisted dedupe state file | `%TEMP%\orchestrator-review-send-reconcile-state.json` | `AO_REVIEW_SEND_RECONCILE_STATE` |
+| Tick interval | **2** minutes | `OPK_REVIEW_SEND_RECONCILE_INTERVAL_MINUTES` |
+| Persisted dedupe state file | `%TEMP%\orchestrator-review-send-reconcile-state.json` | `OPK_REVIEW_SEND_RECONCILE_STATE` |
 
 The loop sends only when `needs_triage`, `sentFindingCount: 0`, `openFindingCount > 0`,
 `targetSha` equals the PR current head, linked session is live and head-owning (see
@@ -627,9 +627,9 @@ Issue #293 changes the submit contract:
 
 | Setting | Default | Env var |
 |---------|---------|---------|
-| Tick interval | **30** seconds | `AO_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS` |
-| Submit reconcile state | `%TEMP%\orchestrator-worker-message-submit-state.json` | `AO_WORKER_MESSAGE_SUBMIT_STATE` |
-| Dispatch journal | `%TEMP%\orchestrator-worker-message-dispatch-journal.json` | `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` |
+| Tick interval | **30** seconds | `OPK_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS` |
+| Submit reconcile state | `%TEMP%\orchestrator-worker-message-submit-state.json` | `OPK_WORKER_MESSAGE_SUBMIT_STATE` |
+| Dispatch journal | `%TEMP%\orchestrator-worker-message-dispatch-journal.json` | `OPK_WORKER_MESSAGE_DISPATCH_JOURNAL` |
 
 Verify: `pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun`
 
@@ -674,15 +674,15 @@ Get-Content review-message.txt -Raw |
 For `approved` reviews, pass `-Verdict approved` (daemon auto-delivery is silent; explicit
 send remains the sole pack channel when the worker is live and head-owning).
 
-The gate polls `GET /api/v1/sessions/{id}/reviews` (via `Get-AoSessionReviewsJson` /
+The gate polls `GET /api/v1/sessions/{id}/reviews` (via `Get-RuntimeWorkerReviewsJson` /
 `ao-review list --json`) until the bounded window elapses. It **never** reads `ao.db`.
 
 ### Defaults and env overrides
 
 | Setting | Default | Env var |
 |---------|---------|---------|
-| Poll window after submit | **45** seconds | `AO_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS` (hard max **120**) |
-| Poll interval | **2** seconds | `AO_SCRIPTED_REVIEW_DELIVERY_POLL_INTERVAL_SECONDS` |
+| Poll window after submit | **45** seconds | `OPK_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS` (hard max **120**) |
+| Poll interval | **2** seconds | `OPK_SCRIPTED_REVIEW_DELIVERY_POLL_INTERVAL_SECONDS` |
 
 Daemon auto-delivery is confirmed **only** when `latestRun.status == "delivered"`. Terminal
 `complete` or `failed` without `delivered` is **not** confirmation — on window expiry the
@@ -746,7 +746,7 @@ Fixture examples: `scripts/fixtures/review-ready-stuck-guard/`.
 When classified review-ready on false stuck:
 
 1. **Hold** — do **not** immediately kill, respawn, or `ao spawn --claim-pr`.
-2. **Grace** — default **15** minutes (`AO_REVIEW_READY_STUCK_GRACE_MINUTES`), anchored
+2. **Grace** — default **15** minutes (`OPK_REVIEW_READY_STUCK_GRACE_MINUTES`), anchored
    once per `(session, PR head)` on the **first** false stuck; **monotonic** (repeated
    `stuck` reports do not extend grace).
 3. **Within grace**, recovery requires **affirmative** unreachability only:
@@ -810,8 +810,8 @@ pwsh -NoProfile -File scripts/terminal-flood-detect.ps1 -FixturePath scripts/fix
 
 | Setting | Default | Env var |
 |---------|---------|---------|
-| Detection window | **60** seconds | `AO_TERMINAL_FLOOD_WINDOW_SECONDS` |
-| Minimum paired mux cycles | **6** | `AO_TERMINAL_FLOOD_MIN_PAIRED_CYCLES` |
+| Detection window | **60** seconds | `OPK_TERMINAL_FLOOD_WINDOW_SECONDS` |
+| Minimum paired mux cycles | **6** | `OPK_TERMINAL_FLOOD_MIN_PAIRED_CYCLES` |
 | Events fetch lookback | **5** minutes (`-SinceMinutes`) | — |
 
 Exit code **2** means the signature fired for the requested session. The detector uses
@@ -1089,7 +1089,7 @@ If a worker message is stuck unsubmitted:
 
 1. Check adoption first: generate and validate the side-effect-isolated adoption probes
    for the current epoch/config by running
-   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -AoEpoch <running-epoch> -ConfigPath <loaded-config-path> -WriteProbeEntries` from the
+   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -RuntimeEpoch <running-epoch> -ConfigPath <loaded-config-path> -WriteProbeEntries` from the
    operator checkout. Probe generation invokes a synthetic `ao send` carrying adoption-probe markers for required branches such as `plain-ao-send:pending-draft` and
    `plain-ao-send:self-submitted`; the live routing rule must call the journaled wrapper,
    and the preflight does not directly edit the journal to fake those records. The resulting synthetic outbox-only probes are then validated for
@@ -1098,7 +1098,7 @@ If a worker message is stuck unsubmitted:
    AO 0.10.2 that result is telemetry-only for submit reconcile. Live YAML routing and
    `ao send --file` are unavailable there, so operators should not treat `wrapper_not_adopted`
    as an Enter blocker until a future send-transport migration reinstates an authoritative check.
-2. Check the metadata-only dispatch journal (`AO_WORKER_MESSAGE_DISPATCH_JOURNAL` or the
+2. Check the metadata-only dispatch journal (`OPK_WORKER_MESSAGE_DISPATCH_JOURNAL` or the
    temp default). A `dispatch_in_flight` delivery is still being resolved until its finite budget expires; a `send_failed` or `dispatch_unknown` delivery is terminal/escalated and
    must not receive blind Enter; have the source resend if needed.
 3. Run the submit arbiter dry-run:

@@ -5,7 +5,7 @@
 
 function Get-ReviewFailureEvidenceOutputTailLimit {
     $default = 8192
-    $raw = [Environment]::GetEnvironmentVariable('AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT')
+    $raw = [Environment]::GetEnvironmentVariable('OPK_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT')
     if ([string]::IsNullOrWhiteSpace($raw)) { return $default }
     $parsed = 0
     if (-not [int]::TryParse($raw, [ref]$parsed) -or $parsed -le 0) { return $default }

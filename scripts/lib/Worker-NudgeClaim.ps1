@@ -17,7 +17,7 @@ function Get-WorkerNudgeClaimProjectNamespace {
 
     $project = ([string]$ProjectId).Trim()
     if (-not $project) { $project = 'orchestrator-pack' }
-    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
     return (Join-Path (Join-Path (Join-Path $base 'projects') $project) 'worker-nudge-claims')
 }
 
@@ -56,8 +56,8 @@ function Resolve-WorkerNudgeClaimNamespace {
     )
 
     if ($Namespace) { return $Namespace }
-    if ($env:AO_WORKER_NUDGE_CLAIM_DIR) {
-        return (Get-WorkerNudgeCanonicalClaimNamespace -CandidatePath $env:AO_WORKER_NUDGE_CLAIM_DIR.Trim() -ProjectId $ProjectId)
+    if ($env:OPK_WORKER_NUDGE_CLAIM_DIR) {
+        return (Get-WorkerNudgeCanonicalClaimNamespace -CandidatePath $env:OPK_WORKER_NUDGE_CLAIM_DIR.Trim() -ProjectId $ProjectId)
     }
     return (Get-WorkerNudgeClaimProjectNamespace -ProjectId $ProjectId)
 }
@@ -66,9 +66,9 @@ function Get-WorkerNudgeClaimStaleMinutes {
     param([scriptblock]$LogWriter = $null)
 
     $minutes = $Script:WorkerNudgeClaimDefaultStaleMinutes
-    if ($env:AO_WORKER_NUDGE_CLAIM_STALE_MINUTES) {
+    if ($env:OPK_WORKER_NUDGE_CLAIM_STALE_MINUTES) {
         $parsed = 0
-        if ([int]::TryParse($env:AO_WORKER_NUDGE_CLAIM_STALE_MINUTES, [ref]$parsed)) {
+        if ([int]::TryParse($env:OPK_WORKER_NUDGE_CLAIM_STALE_MINUTES, [ref]$parsed)) {
             $minutes = $parsed
         }
     }
@@ -85,9 +85,9 @@ function Get-WorkerNudgeClaimLeaseMs {
     param([scriptblock]$LogWriter = $null)
 
     $lease = $Script:WorkerNudgeClaimDefaultLeaseMs
-    if ($env:AO_WORKER_NUDGE_CLAIM_LEASE_MS) {
+    if ($env:OPK_WORKER_NUDGE_CLAIM_LEASE_MS) {
         $parsed = 0
-        if ([int]::TryParse($env:AO_WORKER_NUDGE_CLAIM_LEASE_MS, [ref]$parsed) -and $parsed -gt 0) {
+        if ([int]::TryParse($env:OPK_WORKER_NUDGE_CLAIM_LEASE_MS, [ref]$parsed) -and $parsed -gt 0) {
             $lease = $parsed
         }
     }
@@ -1151,14 +1151,14 @@ function Get-WorkerPrOwnershipClaimStorePath {
         [string]$ProjectId = 'orchestrator-pack',
         [int]$PrNumber
     )
-    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
     $dir = Join-Path (Join-Path (Join-Path $base 'projects') $ProjectId) 'pr-ownership-claims'
     return (Join-Path $dir "pr-$PrNumber.json")
 }
 
 function Get-WorkerPrOwnershipSessionsDir {
     param([string]$ProjectId = 'orchestrator-pack')
-    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
     return (Join-Path (Join-Path (Join-Path $base 'projects') $ProjectId) 'sessions')
 }
 
@@ -1214,11 +1214,11 @@ function Resolve-WorkerNudgeTargetFromPrClaim {
     )
 
     $libDir = $PSScriptRoot
-    . (Join-Path $libDir 'Invoke-AoCliJson.ps1')
+    . (Join-Path $libDir 'Invoke-RuntimeCliJson.ps1')
     . (Join-Path $libDir 'Worker-AutonomousNudgeGate.ps1')
 
     if (-not $Sessions -or $Sessions.Count -eq 0) {
-        $Sessions = @(Get-AoStatusSessions)
+        $Sessions = @(Get-RuntimeStatusSessions)
     }
     if (-not $SessionsDir) {
         $SessionsDir = Get-WorkerPrOwnershipSessionsDir -ProjectId $ProjectId
@@ -1305,7 +1305,7 @@ function Get-WorkerIssueOwnershipClaimStorePath {
         [string]$ProjectId = 'orchestrator-pack',
         [int]$IssueNumber
     )
-    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
     $dir = Join-Path (Join-Path (Join-Path $base 'projects') $ProjectId) 'issue-ownership-claims'
     return (Join-Path $dir "issue-$IssueNumber.json")
 }
@@ -1375,11 +1375,11 @@ function Resolve-WorkerNudgeTargetFromIssueClaim {
     )
 
     $libDir = $PSScriptRoot
-    . (Join-Path $libDir 'Invoke-AoCliJson.ps1')
+    . (Join-Path $libDir 'Invoke-RuntimeCliJson.ps1')
     . (Join-Path $libDir 'Worker-AutonomousNudgeGate.ps1')
 
     if (-not $Sessions -or $Sessions.Count -eq 0) {
-        $Sessions = @(Get-AoStatusSessions)
+        $Sessions = @(Get-RuntimeStatusSessions)
     }
     if (-not $SessionsDir) {
         $SessionsDir = Get-WorkerPrOwnershipSessionsDir -ProjectId $ProjectId

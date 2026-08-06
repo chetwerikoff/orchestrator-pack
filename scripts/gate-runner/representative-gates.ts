@@ -17,7 +17,7 @@ export const agentRulesGrepGate: DeclarativeGateDefinition = {
     excludePrefixes: [
       'docs/declarations/',
       'docs/issues_drafts/',
-      '.ao/',
+      '.orchestrator-pack/',
       '.git/',
       'node_modules/',
       'trusted-scope-guard/',

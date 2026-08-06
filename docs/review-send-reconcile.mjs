@@ -60,7 +60,7 @@ export const FORBIDDEN_LIFECYCLE_PATTERNS = [
 
 /** @typedef {{ id?: string, reviewerSessionId?: string, prNumber?: number, targetSha?: string, status?: string, prReviewStatus?: string, openFindingCount?: number, deliveredFindingCount?: number, deliveredAt?: string | null, linkedSessionId?: string }} ReviewRun */
 /** @typedef {{ number?: number, headRefOid?: string }} OpenPr */
-/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, runtime?: string }} AoSession */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, runtime?: string }} RuntimeWorker */
 /** @typedef {{ runId?: string, targetSha?: string, sessionId?: string, sentAtMs?: number }} SentDeliveryRecord */
 /** @typedef {{ sent?: Record<string, SentDeliveryRecord>, lastTickMs?: number }} ReviewSendTrackingState */
 /** @typedef {{ type: 'send', runId: string, prNumber: number, targetSha: string, sessionId: string, dedupeKey: string } | { type: 'skip', runId?: string, prNumber?: number, targetSha?: string, reason: string }} ReviewSendAction */
@@ -128,7 +128,7 @@ export function isNeedsTriageNeverSentRun(run) {
  * PR numbers referenced on runs/sessions but absent from gh open PR list are merged/closed.
  *
  * @param {ReviewRun[]} reviewRuns
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {OpenPr[]} openPrs
  * @param {number[] | Set<number>} [explicitMerged]
  */
@@ -180,7 +180,7 @@ export function countAmbiguousNeedsTriagePeers(runs, target) {
 
 /**
  * @param {ReviewRun} run
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {OpenPr[]} openPrs
  * @param {Set<number>} mergedPrNumbers
  */
@@ -269,7 +269,7 @@ export function evaluateFirstSendCandidate(run, sessions, openPrs, mergedPrNumbe
 /**
  * @param {object} input
  * @param {ReviewRun[]} input.reviewRuns
- * @param {AoSession[]} input.sessions
+ * @param {RuntimeWorker[]} input.sessions
  * @param {OpenPr[]} input.openPrs
  * @param {number[] | Set<number>} [input.mergedPrNumbers]
  * @param {ReviewSendTrackingState} [input.tracking]
@@ -327,7 +327,7 @@ export function verifyRunSentStateAfterSend(run, expectedRunId, expectedTargetSh
  * @param {string} planned.sessionId
  * @param {object} fresh
  * @param {ReviewRun[]} fresh.reviewRuns
- * @param {AoSession[]} fresh.sessions
+ * @param {RuntimeWorker[]} fresh.sessions
  * @param {OpenPr[]} fresh.openPrs
  * @param {number[] | Set<number>} [fresh.mergedPrNumbers]
  */

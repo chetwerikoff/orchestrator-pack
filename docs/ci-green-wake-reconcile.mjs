@@ -56,7 +56,7 @@ export const CI_GREEN_WAKE_MESSAGE =
 /** @typedef {'green' | 'red' | 'pending'} CiLevel */
 /** @typedef {{ name?: string, state?: string, conclusion?: string, status?: string }} CiCheck */
 /** @typedef {{ number?: number, headRefOid?: string }} OpenPr */
-/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, runtime?: string, reports?: Array<Record<string, unknown>> }} AoSession */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, runtime?: string, reports?: Array<Record<string, unknown>> }} RuntimeWorker */
 /** @typedef {{ lastCiLevel?: CiLevel, greenEpoch?: number }} HeadCiRecord */
 /** @typedef {{ heads?: Record<string, HeadCiRecord>, nudged?: Record<string, { sessionId?: string, sentAtMs?: number }>, lastTickMs?: number, cycleState?: Record<string, unknown> }} CiGreenWakeState */
 /** @typedef {{ type: 'nudge', prNumber: number, headSha: string, sessionId: string, transitionId: string, message: string, ownerCycle?: { repoId: string, cycle: Record<string, unknown> } } | { type: 'skip', prNumber: number, headSha: string, reason: string, transitionId?: string }} CiGreenWakeAction */
@@ -101,14 +101,14 @@ export function deriveGreenEpoch(record, currentLevel) {
 }
 
 /**
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  */
 export function normalizeSessionReportState(session) {
   return String(session?.status ?? session?.reportState ?? '').toLowerCase();
 }
 
 /**
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  * @param {string} headSha
  */
 export function isPreHandOffWorkerForHead(session, headSha, openPrs = [], prNumber = 0) {
@@ -139,7 +139,7 @@ export function isPreHandOffWorkerForHead(session, headSha, openPrs = [], prNumb
 
 /**
  * @param {object} input
- * @param {AoSession} input.session
+ * @param {RuntimeWorker} input.session
  * @param {number} input.prNumber
  * @param {string} input.headSha
  * @param {OpenPr[]} [input.openPrs]
@@ -222,13 +222,13 @@ export function normalizeRequiredCheckLookupFailedByPr(lookupFailedByPr) {
 /**
  * @param {object} input
  * @param {OpenPr[]} input.openPrs
- * @param {AoSession[]} input.sessions
+ * @param {RuntimeWorker[]} input.sessions
  * @param {Record<string, CiCheck[]> | Array<{ prNumber: number, checks: CiCheck[] }>} input.ciChecksByPr
  * @param {Record<string, string[]> | Array<{ prNumber: number, requiredCheckNames: string[] }>} [input.requiredCheckNamesByPr]
  * @param {Record<string, boolean> | Array<{ prNumber: number, failed: boolean }>} [input.requiredCheckLookupFailedByPr]
  * @param {CiGreenWakeState} [input.tracking]
  * @param {Array<Record<string, unknown>>} [input.workerDeliveries]
- * @param {Array<Record<string, unknown>>} [input.aoEvents]
+ * @param {Array<Record<string, unknown>>} [input.runtimeEvents]
  * @param {Record<string, unknown>} [input.dispatchJournal]
  * @param {Record<string, string>} [input.reactionMessages]
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
@@ -243,7 +243,7 @@ export function planCiGreenWakeActions({
   requiredCheckLookupFailedByPr,
   tracking = {},
   workerDeliveries = [],
-  aoEvents,
+  runtimeEvents,
   dispatchJournal,
   reactionMessages,
   reviewRuns = [],
@@ -258,7 +258,7 @@ export function planCiGreenWakeActions({
   let cycleState = { ...(tracking.cycleState ?? {}) };
   const mergedDeliveries = mergeWorkerDeliveriesFromPlanInput({
     workerDeliveries,
-    aoEvents,
+    runtimeEvents,
     dispatchJournal,
     reviewRuns,
     reactionMessages,
@@ -489,12 +489,12 @@ function evaluateCiGreenNudgeRecheck(cycleEval) {
  * @param {number} planned.prNumber
  * @param {string} planned.headSha
  * @param {OpenPr[]} fresh.openPrs
- * @param {AoSession[]} fresh.sessions
+ * @param {RuntimeWorker[]} fresh.sessions
  * @param {Record<string, CiCheck[]> | Array<{ prNumber: number, checks: CiCheck[] }>} fresh.ciChecksByPr
  * @param {Record<string, string[]> | Array<{ prNumber: number, requiredCheckNames: string[] }>} [fresh.requiredCheckNamesByPr]
  * @param {Record<string, boolean> | Array<{ prNumber: number, failed: boolean }>} [fresh.requiredCheckLookupFailedByPr]
  * @param {Array<Record<string, unknown>>} [fresh.workerDeliveries]
- * @param {Array<Record<string, unknown>>} [fresh.aoEvents]
+ * @param {Array<Record<string, unknown>>} [fresh.runtimeEvents]
  * @param {Record<string, unknown>} [fresh.dispatchJournal]
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [fresh.reviewRuns]
  * @param {Record<string, unknown>} [fresh.cycleState]
@@ -537,7 +537,7 @@ export function preSendRecheck(planned, fresh) {
   const nowMs = Number(fresh.nowMs) || Date.now();
   const mergedDeliveries = mergeWorkerDeliveriesFromPlanInput({
     workerDeliveries: fresh.workerDeliveries ?? [],
-    aoEvents: fresh.aoEvents,
+    runtimeEvents: fresh.runtimeEvents,
     dispatchJournal: fresh.dispatchJournal,
     reviewRuns: fresh.reviewRuns ?? [],
     reactionMessages: fresh.reactionMessages,

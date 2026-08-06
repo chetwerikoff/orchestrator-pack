@@ -226,8 +226,8 @@ function auditFilePath() {
   if (process.env.GH_WRAPPER_AUDIT_FILE) {
     return process.env.GH_WRAPPER_AUDIT_FILE;
   }
-  if (process.env.AO_SIDE_PROCESS_STATE_DIR) {
-    return join(process.env.AO_SIDE_PROCESS_STATE_DIR, 'gh-wrapper-audit.jsonl');
+  if (process.env.OPK_SIDE_PROCESS_STATE_DIR) {
+    return join(process.env.OPK_SIDE_PROCESS_STATE_DIR, 'gh-wrapper-audit.jsonl');
   }
   if (process.env.GH_WRAPPER_AUDIT === '1') {
     const stateHome = process.env.XDG_STATE_HOME || join(process.env.HOME || process.cwd(), '.local', 'state');
@@ -281,7 +281,7 @@ function rateLimitKind(headers = {}) {
 }
 
 function writeWrapperAudit(event, fields = {}) {
-  const childId = process.env.AO_SIDE_PROCESS_CHILD_ID;
+  const childId = process.env.OPK_SIDE_PROCESS_CHILD_ID;
   const rateLimit = fields.rateLimit && typeof fields.rateLimit === 'object' ? fields.rateLimit : {};
   const allFields = {
     ...(childId ? { child: childId } : {}),

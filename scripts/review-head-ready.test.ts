@@ -549,7 +549,7 @@ describe('mergeWorkerDeliveriesFromPlanInput', () => {
           deliveryPath: 'journal',
         },
       ],
-      aoEvents: [
+      runtimeEvents: [
         {
           kind: 'reaction.action_succeeded',
           sessionId: 'opk-37',
@@ -571,10 +571,10 @@ describe('mergeWorkerDeliveriesFromPlanInput', () => {
     );
   });
 
-  it('ignores null explicit delivery placeholders and merges aoEvents', () => {
+  it('ignores null explicit delivery placeholders and merges runtimeEvents', () => {
     const deliveries = mergeWorkerDeliveriesFromPlanInput({
       workerDeliveries: [null as unknown as Record<string, unknown>],
-      aoEvents: [
+      runtimeEvents: [
         {
           kind: 'reaction.action_succeeded',
           sessionId: 'opk-37',
@@ -782,7 +782,7 @@ describe('preRunHeadReadyRecheck', () => {
         reviewRuns: [],
         sessions: fixture.sessions,
         ciChecks: fixture.ciChecksByPr?.[String(prNumber)] ?? greenChecks,
-        aoEvents: [],
+        runtimeEvents: [],
         dispatchJournal: {},
         workerDeliveries: [],
         sharedCycleState: {

@@ -129,7 +129,7 @@ const REQUIRED_SHIPPED_VALIDATORS = [
 ];
 
 const DEAD_ARGV_BYPASS_FILES = [
-  'scripts/lib/Invoke-AoCliJson.ps1',
+  'scripts/lib/Invoke-RuntimeCliJson.ps1',
   'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
   'scripts/orchestrator-wake-supervisor.ps1',
   'scripts/wait-orchestrator-launch.ps1',
@@ -690,7 +690,7 @@ export function buildDefaultInventoryRows(repoRoot) {
     },
     {
       rowId: 'validator-ref-ao-cli-argv-shape',
-      caller: { file: 'scripts/lib/Invoke-AoCliJson.ps1', anchor: 'Invoke-AoCliJson' },
+      caller: { file: 'scripts/lib/Invoke-RuntimeCliJson.ps1', anchor: 'Invoke-RuntimeCliJson' },
       callee: { kind: 'ao', identity: 'ao session/status CLI' },
       calleeContractSourceClass: 'captured-external-help',
       coverageKind: 'validator-backed',
@@ -807,7 +807,7 @@ function cli() {
       absorbedCoverage: [
         {
           validatorId: 'ao-cli-argv-shape',
-          note: 'Capture-backed AO session/status argv probes cover Invoke-AoCliJson adoption surfaces referenced by dead-argv-bypass file list.',
+          note: 'Capture-backed AO session/status argv probes cover Invoke-RuntimeCliJson adoption surfaces referenced by dead-argv-bypass file list.',
         },
       ],
       hashPinnedAllowlist: [],

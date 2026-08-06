@@ -42,7 +42,7 @@ $cli = Split-PackReviewCliArgs -Argv $args
 $resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
 
 $evidenceHandle = Initialize-ReviewFailureEvidence -RepoRoot $resolvedRoot -WrapperKind $reviewer
-if (-not $evidenceHandle.ok -and $env:AO_REVIEW_FAILURE_EVIDENCE_DEBUG) {
+if (-not $evidenceHandle.ok -and $env:OPK_REVIEW_FAILURE_EVIDENCE_DEBUG) {
     [Console]::Error.WriteLine("review failure evidence not initialized: $($evidenceHandle.reason)")
 }
 
@@ -52,7 +52,7 @@ if ($evidenceHandle.ok) {
 }
 
 $liveness = Register-ReviewRunLivenessIdentity -RepoRoot $resolvedRoot
-if (-not $liveness.ok -and $env:AO_REVIEW_LIVENESS_DEBUG) {
+if (-not $liveness.ok -and $env:OPK_REVIEW_LIVENESS_DEBUG) {
     [Console]::Error.WriteLine("review liveness identity not captured: $($liveness.reason)")
 }
 

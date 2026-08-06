@@ -1,0 +1,50 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 1
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { scanRetiredRuntimeSurfaces } from './retired-surface-guard.ts';
+
+const roots: string[] = [];
+afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
+
+function fixture(text: string, path = 'scripts/active.ts'): string {
+  const root = mkdtempSync(join(tmpdir(), 'runtime-retirement-'));
+  roots.push(root);
+  const patterns = join(root, 'scripts/json-producers/retired-runtime-surfaces.json');
+  mkdirSync(dirname(patterns), { recursive: true });
+  writeFileSync(patterns, JSON.stringify({ version: 1, surfaces: [
+    { id: 'selector', sourceCommandPattern: '\\b(?:AO|ORCA)_[A-Z0-9_]+\\b', pathPattern: '$a', reason: 'retired', owningReference: '#1352' },
+    { id: 'command', sourceCommandPattern: '(?:^|\\s)ao\\s+(?:status|send)(?=\\s|$)', pathPattern: '(^|/)scripts/ao(?:$|[-./])', reason: 'retired', owningReference: '#1352' },
+  ] }));
+  const target = join(root, path);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, text);
+  return root;
+}
+
+describe('runtime retirement closed-world scanner', () => {
+  it('accepts neutral active code', () => {
+    expect(scanRetiredRuntimeSurfaces({ repoRoot: fixture('pack review list') }).violations).toEqual([]);
+  });
+  it.each([
+    ['selector', 'const value = process.env.AO_SESSION_ID;'],
+    ['command', 'ao status --json'],
+    ['path', 'neutral', 'scripts/ao-review.ts'],
+  ])('rejects injected %s surface', (_name, text, path = 'scripts/active.ts') => {
+    expect(scanRetiredRuntimeSurfaces({ repoRoot: fixture(text, path) }).violations).toHaveLength(1);
+  });
+  it('excludes immutable history but not active fixtures', () => {
+    const root = fixture('neutral');
+    const historical = join(root, 'docs/issues_drafts/old.md');
+    mkdirSync(dirname(historical), { recursive: true });
+    writeFileSync(historical, 'AO_SESSION_ID');
+    const activeFixture = join(root, 'scripts/fixtures/current.txt');
+    mkdirSync(dirname(activeFixture), { recursive: true });
+    writeFileSync(activeFixture, 'AO_SESSION_ID');
+    const result = scanRetiredRuntimeSurfaces({ repoRoot: root, paths: ['scripts/active.ts', 'docs/issues_drafts/old.md', 'scripts/fixtures/current.txt'] });
+    expect(result.excludedPaths).toContain('docs/issues_drafts/old.md');
+    expect(result.violations.map((entry) => entry.path)).toContain('scripts/fixtures/current.txt');
+  });
+});

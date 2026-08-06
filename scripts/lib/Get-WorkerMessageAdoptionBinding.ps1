@@ -57,10 +57,10 @@ function Get-WorkerMessageAdoptionBinding {
         $PackRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     }
 
-    $aoEpoch = [string]$env:AO_WORKER_MESSAGE_ADOPTION_EPOCH
-    $configPath = [string]$env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH
+    $runtimeEpoch = [string]$env:OPK_WORKER_MESSAGE_ADOPTION_EPOCH
+    $configPath = [string]$env:OPK_WORKER_MESSAGE_ADOPTION_CONFIG_PATH
     $runtime = $null
-    if (-not $aoEpoch) {
+    if (-not $runtimeEpoch) {
         $runtime = Get-AoRunningInstanceAdoptionEpoch
     }
 
@@ -79,20 +79,20 @@ function Get-WorkerMessageAdoptionBinding {
         }
     }
 
-    if (-not $aoEpoch) {
+    if (-not $runtimeEpoch) {
         if ($runtime) {
-            $aoEpoch = [string]$runtime.Epoch
+            $runtimeEpoch = [string]$runtime.Epoch
         }
         elseif (Test-Path -LiteralPath $configPath -PathType Leaf) {
-            $aoEpoch = (Get-Item -LiteralPath $configPath).LastWriteTimeUtc.ToString('o')
+            $runtimeEpoch = (Get-Item -LiteralPath $configPath).LastWriteTimeUtc.ToString('o')
         }
         else {
-            $aoEpoch = 'unknown-config'
+            $runtimeEpoch = 'unknown-config'
         }
     }
 
     return @{
-        AoEpoch    = $aoEpoch
+        RuntimeEpoch    = $runtimeEpoch
         ConfigPath = $configPath
     }
 }

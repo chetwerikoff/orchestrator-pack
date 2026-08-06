@@ -44,15 +44,15 @@ function resolveProductionTmp(env) {
   return env.OPK_VITEST_PRODUCTION_TMP || env.TMPDIR || env.TEMP || env.TMP || tmpdir();
 }
 
-function resolveProductionAoBase(env) {
-  return env.OPK_VITEST_PRODUCTION_AO_BASE
-    || env.AO_BASE_DIR
+function resolveProductionStateBase(env) {
+  return env.OPK_VITEST_PRODUCTION_OPK_BASE
+    || env.OPK_BASE_DIR
     || join(resolveProductionHome(env), '.agent-orchestrator');
 }
 
 function resolveProductionWakeRoot(env) {
   if (env.OPK_VITEST_PRODUCTION_WAKE_ROOT) return env.OPK_VITEST_PRODUCTION_WAKE_ROOT;
-  if (env.AO_WAKE_SUPERVISOR_STATE_DIR) return env.AO_WAKE_SUPERVISOR_STATE_DIR;
+  if (env.OPK_WAKE_SUPERVISOR_STATE_DIR) return env.OPK_WAKE_SUPERVISOR_STATE_DIR;
   if (env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
     return env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR;
   }
@@ -65,7 +65,7 @@ export function expandInventoryTemplate(value, env = process.env) {
   return String(value ?? '')
     .replaceAll('${HOME}', resolveProductionHome(env))
     .replaceAll('${TMP}', resolveProductionTmp(env))
-    .replaceAll('${AO_BASE}', resolveProductionAoBase(env))
+    .replaceAll('${OPK_BASE}', resolveProductionStateBase(env))
     .replaceAll('${WAKE_STATE}', resolveProductionWakeRoot(env));
 }
 
@@ -330,7 +330,7 @@ export function applyOpkVitestHarnessEnv(rootDir, env = process.env) {
     env.OPK_VITEST_PRODUCTION_XDG_STATE_HOME = env.XDG_STATE_HOME || '';
   }
   env.OPK_VITEST_PRODUCTION_TMP ||= env.TMPDIR || env.TEMP || env.TMP || tmpdir();
-  env.OPK_VITEST_PRODUCTION_AO_BASE ||= env.AO_BASE_DIR
+  env.OPK_VITEST_PRODUCTION_OPK_BASE ||= env.OPK_BASE_DIR
     || join(env.OPK_VITEST_PRODUCTION_HOME, '.agent-orchestrator');
 
   const root = resolve(rootDir || createHarnessRoot());
@@ -340,17 +340,17 @@ export function applyOpkVitestHarnessEnv(rootDir, env = process.env) {
   const isolatedTmp = join(root, 'tmp');
   const inbox = join(root, 'operator-inbox');
   const health = join(root, 'health-spool');
-  const aoBase = join(root, 'ao-base');
+  const stateBase = join(root, 'ao-base');
   const transport = join(root, 'transport');
-  const reviewStartClaims = join(aoBase, 'projects', 'orchestrator-pack', 'review-start-claims');
-  const workerNudgeClaims = join(aoBase, 'projects', 'orchestrator-pack', 'worker-nudge-claims');
+  const reviewStartClaims = join(stateBase, 'projects', 'orchestrator-pack', 'review-start-claims');
+  const workerNudgeClaims = join(stateBase, 'projects', 'orchestrator-pack', 'worker-nudge-claims');
   for (const dir of [
     wake,
     state,
     isolatedTmp,
     inbox,
     health,
-    aoBase,
+    stateBase,
     transport,
     reviewStartClaims,
     workerNudgeClaims,
@@ -365,58 +365,58 @@ export function applyOpkVitestHarnessEnv(rootDir, env = process.env) {
     tmp: isolatedTmp,
     operatorInbox: inbox,
     healthSpool: health,
-    aoBase,
+    stateBase,
     transport,
   };
   Object.assign(env, {
     OPK_VITEST_HARNESS: '1',
     OPK_VITEST_HARNESS_ROOT: root,
     OPK_VITEST_HARNESS_INVENTORY: inventoryPath,
-    OPK_VITEST_HARNESS_AO_BASE_DIR: aoBase,
+    OPK_VITEST_HARNESS_OPK_BASE_DIR: stateBase,
     OPK_VITEST_PRODUCTION_WAKE_ROOT: productionWakeRoot,
     XDG_STATE_HOME: state,
     TMPDIR: isolatedTmp,
     TEMP: isolatedTmp,
     TMP: isolatedTmp,
-    AO_WAKE_SUPERVISOR_STATE_DIR: wake,
+    OPK_WAKE_SUPERVISOR_STATE_DIR: wake,
     ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR: wake,
-    AO_SIDE_PROCESS_STATE_DIR: wake,
-    AO_BASE_DIR: aoBase,
-    AO_MECHANICAL_TRANSPORT_TEMP: transport,
-    AO_ORCHESTRATOR_ESCALATION_STATE: join(state, 'orchestrator-escalation-state.json'),
-    AO_OPERATOR_ESCALATION_INBOX: inbox,
-    AO_ESCALATION_HEALTH_SPOOL: health,
-    AO_WORKER_MESSAGE_DISPATCH_JOURNAL: join(wake, 'worker-message-dispatch-journal.json'),
-    AO_WORKER_MESSAGE_SUBMIT_STATE: join(state, 'orchestrator-worker-message-submit-state.json'),
-    AO_WORKER_STATUS_STORE: join(wake, 'worker-status-store.json'),
-    AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE: join(
+    OPK_SIDE_PROCESS_STATE_DIR: wake,
+    OPK_BASE_DIR: stateBase,
+    OPK_MECHANICAL_TRANSPORT_TEMP: transport,
+    OPK_ORCHESTRATOR_ESCALATION_STATE: join(state, 'orchestrator-escalation-state.json'),
+    OPK_OPERATOR_ESCALATION_INBOX: inbox,
+    OPK_ESCALATION_HEALTH_SPOOL: health,
+    OPK_WORKER_MESSAGE_DISPATCH_JOURNAL: join(wake, 'worker-message-dispatch-journal.json'),
+    OPK_WORKER_MESSAGE_SUBMIT_STATE: join(state, 'orchestrator-worker-message-submit-state.json'),
+    OPK_WORKER_STATUS_STORE: join(wake, 'worker-status-store.json'),
+    OPK_REVIEW_HANDOFF_WAKE_ADMISSION_STATE: join(
       state,
       'orchestrator-review-handoff-wake-admission.json',
     ),
-    AO_REPORT_STATE_SEED_STATE: join(
+    OPK_REPORT_STATE_SEED_STATE: join(
       state,
       'orchestrator-review-ready-report-state-seed-state.json',
     ),
-    AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE: join(
+    OPK_REVIEW_TRIGGER_REEVAL_WATCH_STATE: join(
       state,
       'orchestrator-review-trigger-reeval-watch.json',
     ),
-    AO_WORKER_REPORT_STORE: join(wake, 'worker-report-store.json'),
-    AO_PR_SESSION_BINDING_CACHE: join(wake, 'pr-session-binding-cache.json'),
-    AO_CI_GREEN_WAKE_RECONCILE_STATE: join(state, 'orchestrator-ci-green-wake-state.json'),
-    AO_DEAD_WORKER_RECONCILE_STATE: join(
+    OPK_WORKER_REPORT_STORE: join(wake, 'worker-report-store.json'),
+    OPK_PR_SESSION_BINDING_CACHE: join(wake, 'pr-session-binding-cache.json'),
+    OPK_CI_GREEN_WAKE_RECONCILE_STATE: join(state, 'orchestrator-ci-green-wake-state.json'),
+    OPK_DEAD_WORKER_RECONCILE_STATE: join(
       wake,
       'orchestrator-dead-worker-reconcile-state.json',
     ),
-    AO_REVIEW_TRIGGER_RECONCILE_STATE: join(state, 'orchestrator-review-reconcile-state.json'),
-    AO_WAKE_DEDUP_STATE: join(state, 'orchestrator-wake-dedup.json'),
-    AO_WAKE_LISTENER_SIDE_EFFECT_LOCK: join(
+    OPK_REVIEW_TRIGGER_RECONCILE_STATE: join(state, 'orchestrator-review-reconcile-state.json'),
+    OPK_WAKE_DEDUP_STATE: join(state, 'orchestrator-wake-dedup.json'),
+    OPK_WAKE_LISTENER_SIDE_EFFECT_LOCK: join(
       state,
       'orchestrator-wake-listener-side-effect.lock',
     ),
-    AO_REVIEW_CLAIM_DIR: reviewStartClaims,
-    AO_WORKER_NUDGE_CLAIM_DIR: workerNudgeClaims,
-    AO_WORKER_MESSAGE_ADOPTION_STATE: join(
+    OPK_REVIEW_CLAIM_DIR: reviewStartClaims,
+    OPK_WORKER_NUDGE_CLAIM_DIR: workerNudgeClaims,
+    OPK_WORKER_MESSAGE_ADOPTION_STATE: join(
       state,
       'orchestrator-worker-message-send-adoption.json',
     ),

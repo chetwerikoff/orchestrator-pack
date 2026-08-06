@@ -159,10 +159,10 @@ unnecessary subsystems, duplicate prompt literals, and broad scope declarations.
 
 The plugin directories are contracts, not implementations:
 
-- `ao-task-declaration` declares active scope and baseline state.
-- `ao-scope-guard` enforces active scope at runtime and defines the PR CI backup.
-- `ao-token-chain-ledger` aggregates cost/tokens by chain across sessions.
-- `ao-codex-pr-reviewer` defines Codex `gpt-5.5` review contracts for the local AO primary path and optional GitHub Actions path.
+- `task-declaration` declares active scope and baseline state.
+- `scope-guard` enforces active scope at runtime and defines the PR CI backup.
+- `token-chain-ledger` aggregates cost/tokens by chain across sessions.
+- `codex-pr-reviewer` defines Codex `gpt-5.5` review contracts for the local AO primary path and optional GitHub Actions path.
 
 Future implementations should bind to AO plugin slots, wrappers, hooks, or
 external state files. They must not patch AO core.
@@ -212,7 +212,7 @@ The common finding format and signature rules are defined in
 `docs/issues_drafts/00-architecture-decisions.md` section F.
 
 Operators may temporarily point **REVIEW_COMMAND** at a local Claude Sonnet
-bridge (gitignored `.ao/` scripts) instead of Codex; see
+bridge (gitignored `.orchestrator-pack/` scripts) instead of Codex; see
 [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md). Operator override when
 pack-review is the sole failing required check:
 [`pack-review-waiver-merge-runbook.md`](pack-review-waiver-merge-runbook.md).
@@ -236,7 +236,7 @@ Spike for draft `docs/issues_drafts/50-finding-routing-selective-send-enactment.
 |------------|----------|--------|
 | **A — selective send** | Can orchestration send a subset of open findings on a run? | **No.** `ao review send <run>` has no per-finding filter. `@aoagents/ao-core` `sendCodeReviewFindingsToAgent` loads **all** `status: "open"` findings, one worker message, bulk `sent_to_agent`. CLI: `run \| execute \| send \| list` only. |
 | **A′ — terminal non-forward** | Can backlog/drop clear `openFindingCount > 0` without send? | **No for automated enactment.** Finding statuses: `open` \| `dismissed` \| `sent_to_agent` \| `resolved` (`code-review-store.d.ts`). `openFindingCount` counts only `open`. No `backlogged` / `dropped`. `dismissed` would clear the predicate, but **no** `ao review dismiss` (or equivalent) — UI dismiss only (recovery runbook). Classifier backlog/drop that leaves findings `open` **re-triggers** pack rules (`needs_triage` + `openFindingCount > 0` → send). Same upstream class as #122. |
-| **B — `prior_sent`** | Is send history visible at the routing decision point? | **No.** `ao review list --json` exposes run aggregates only. Per-finding JSON on disk (`fingerprint`, `status`, `linkedSessionId`, `sentToAgentAt`) is **not** an orchestrator/CLI contract. `ao-token-chain-ledger` finding signatures require explicit append — **not** wired to `ao review send`. |
+| **B — `prior_sent`** | Is send history visible at the routing decision point? | **No.** `ao review list --json` exposes run aggregates only. Per-finding JSON on disk (`fingerprint`, `status`, `linkedSessionId`, `sentToAgentAt`) is **not** an orchestrator/CLI contract. `token-chain-ledger` finding signatures require explicit append — **not** wired to `ao review send`. |
 
 **Verdict:** Per-finding routing **enactment** in production is **upstream-blocked**
 (A + A′). Pack read-hook over `code-reviews/findings/` can compute B offline but
@@ -300,7 +300,7 @@ PR exists.
 Allowed local state locations for future implementations:
 
 - AO session metadata when exposed by upstream AO;
-- workspace-local `.ao/` state that is gitignored;
+- workspace-local `.orchestrator-pack/` state that is gitignored;
 - external JSONL/SQLite ledgers outside committed source;
 - CI artifacts for audit output.
 

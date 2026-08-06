@@ -4,7 +4,7 @@
   Read-only AO snapshot before orchestrator recovery escalation.
 
 .DESCRIPTION
-  Shells ao status, GET /reviews fan-out (Get-AoReviewRuns), and ao events (stuck + lifecycle) and prints
+  Shells ao status, GET /reviews fan-out (Get-PackReviewRuns), and ao events (stuck + lifecycle) and prints
   a one-screen summary. No ao send, kills, or file writes.
   See docs/orchestrator-recovery-runbook.md.
 #>
@@ -22,7 +22,7 @@ $packRoot = [string](Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-OrchestratorWorktreeHygiene.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-OrchestratorLaunchHealth.ps1')
-. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-RuntimeCliJson.ps1')
 
 $TerminalWorkerStatuses = @(
     'done', 'merged', 'terminated', 'killed', 'errored', 'cleanup', 'closed'
@@ -308,9 +308,9 @@ if ($reviewReports.Count -gt 0) {
 
 # --- review runs (AO 0.10 fan-out) ---
 Write-Host ''
-. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-RuntimeCliJson.ps1')
 
-$runs = @(Get-AoReviewRuns -Project $ProjectId)
+$runs = @(Get-PackReviewRuns -Project $ProjectId)
 
 $actionable = @($runs | Where-Object {
         $st = if ($null -ne $_.prReviewStatus) { [string]$_.prReviewStatus } else { [string]$_.status }
@@ -372,7 +372,7 @@ else {
         Write-Host ("           {0}" -f $reason)
     }
     if ($failedEmpty.Count -gt 6) {
-        Write-Host ("  ... and {0} more (Get-AoReviewRuns, field body/failureDetail)" -f ($failedEmpty.Count - 6))
+        Write-Host ("  ... and {0} more (Get-PackReviewRuns, field body/failureDetail)" -f ($failedEmpty.Count - 6))
     }
 }
 

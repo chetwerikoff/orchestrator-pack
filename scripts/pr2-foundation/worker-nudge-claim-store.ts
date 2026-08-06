@@ -99,14 +99,14 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
 
 function claimLeaseMs(): number {
   return Math.min(
-    parsePositiveInteger(process.env.AO_WORKER_NUDGE_CLAIM_LEASE_MS, CLAIM_LEASE_DEFAULT_MS),
+    parsePositiveInteger(process.env.OPK_WORKER_NUDGE_CLAIM_LEASE_MS, CLAIM_LEASE_DEFAULT_MS),
     CLAIM_LEASE_MAX_MS,
   );
 }
 
 function claimStaleMs(): number {
   const minutes = Math.max(
-    parsePositiveInteger(process.env.AO_WORKER_NUDGE_CLAIM_STALE_MINUTES, CLAIM_STALE_DEFAULT_MINUTES),
+    parsePositiveInteger(process.env.OPK_WORKER_NUDGE_CLAIM_STALE_MINUTES, CLAIM_STALE_DEFAULT_MINUTES),
     CLAIM_STALE_FLOOR_MINUTES,
   );
   return minutes * 60_000;
@@ -136,13 +136,13 @@ function claimKey(input: {
 }
 
 export function workerNudgeClaimProjectNamespace(projectId = 'orchestrator-pack'): string {
-  const base = process.env.AO_BASE_DIR?.trim() || path.join(homedir(), '.agent-orchestrator');
+  const base = process.env.OPK_BASE_DIR?.trim() || path.join(homedir(), '.agent-orchestrator');
   return path.join(base, 'projects', projectId.trim() || 'orchestrator-pack', 'worker-nudge-claims');
 }
 
 export function workerNudgeClaimNamespace(projectId = 'orchestrator-pack'): string {
   const root = workerNudgeClaimProjectNamespace(projectId);
-  const override = process.env.AO_WORKER_NUDGE_CLAIM_DIR?.trim();
+  const override = process.env.OPK_WORKER_NUDGE_CLAIM_DIR?.trim();
   if (!override) return root;
   const candidate = existsSync(override) ? realpathSync(override) : override;
   const storeId = canonicalStoreId(candidate);
@@ -1249,7 +1249,7 @@ export async function finalizeS2OneShotWorkerNudgeClaim(
 export async function withWorkerNudgeSideEffectFence<T>(
   action: () => T | Promise<T>,
 ): Promise<{ ok: true; value: T } | { ok: false; reason: 'side_effect_busy' }> {
-  const explicitRoot = process.env.AO_SIDE_PROCESS_STATE_DIR?.trim();
+  const explicitRoot = process.env.OPK_SIDE_PROCESS_STATE_DIR?.trim();
   const lockPath = explicitRoot
     ? path.join(explicitRoot, 'scripted-review-stdout-delivery.lock')
     : path.join(tmpdir(), 'orchestrator-scripted-review-stdout-delivery.lock');
@@ -1260,7 +1260,7 @@ export async function withWorkerNudgeSideEffectFence<T>(
     if (!existsSync(lockPath)) return;
     const pid = Number(record?.pid ?? 0);
     const startedAtMs = Date.parse(String(record?.startedAt ?? ''));
-    const maxAgeMinutes = parsePositiveInteger(process.env.AO_SIDE_EFFECT_LOCK_MAX_AGE_MINUTES, 180);
+    const maxAgeMinutes = parsePositiveInteger(process.env.OPK_SIDE_EFFECT_LOCK_MAX_AGE_MINUTES, 180);
     const stale = pid > 0
       ? !processAlive(pid)
       : !Number.isFinite(startedAtMs) || Date.now() - startedAtMs > maxAgeMinutes * 60_000;

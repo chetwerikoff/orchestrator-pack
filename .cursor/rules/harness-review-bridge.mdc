@@ -24,7 +24,7 @@ pwsh -NoProfile -File scripts/harness-review-bridge.ps1 `
   -TrustedBaseRoot <trusted-pack-root>
 ```
 
-`<trusted-pack-root>` is `AO_TRUSTED_PACK_ROOT`, an origin/main pack worktree, or the
+`<trusted-pack-root>` is `OPK_TRUSTED_PACK_ROOT`, an origin/main pack worktree, or the
 operator's live pack checkout — **not** the PR head worktree under review.
 
 Set `PACK_HARNESS_BRIDGE_DISABLED=1` to abort before submit (classified failure).

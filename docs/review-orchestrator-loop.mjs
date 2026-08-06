@@ -19,7 +19,7 @@ export {
 } from './review-head-ready.mjs';
 
 /** @typedef {{ id?: string, prNumber?: number | null, targetSha?: string, status?: string, prReviewStatus?: string, findingCount?: number, linkedSessionId?: string, reviewerSessionId?: string, body?: string, deliveredAt?: string | null, deliveredFindingCount?: number }} ReviewRun */
-/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string }} AoSession */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string }} RuntimeWorker */
 
 export {
   COVERED_TERMINAL_REVIEW_STATUSES,
@@ -57,7 +57,7 @@ export function shouldStartReviewRunOnUncoveredPath(runs, prNumber, headSha) {
  * @param {ReviewRun[]} input.reviewRuns
  * @param {number} input.prNumber
  * @param {string} input.headSha
- * @param {AoSession | null} [input.session]
+ * @param {RuntimeWorker | null} [input.session]
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
  * @param {string[]} [input.requiredCheckNames]
  * @param {boolean} [input.requiredCheckLookupFailed]
@@ -80,7 +80,7 @@ export function shouldStartReviewRun(input) {
  * @param {ReviewRun[]} input.runsImmediatelyBeforeRun
  * @param {number} input.prNumber
  * @param {string} input.headSha
- * @param {AoSession | null} [input.session]
+ * @param {RuntimeWorker | null} [input.session]
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecksAtStart]
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecksBeforeRun]
  * @param {string[]} [input.requiredCheckNamesAtStart]
@@ -162,7 +162,7 @@ export function getRunLinkedSessionId(run) {
 }
 
 /**
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  */
 export function resolveSessionPrNumber(session) {
   const direct = Number(session?.prNumber);
@@ -183,7 +183,7 @@ export function resolveSessionPrNumber(session) {
 
 /**
  * @param {ReviewRun} run
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  */
 export function resolveRunPrViaLinkedSession(run, sessions) {
   const linkedId = getRunLinkedSessionId(run);
@@ -210,7 +210,7 @@ export function resolveRunPrViaLinkedSession(run, sessions) {
  * Linked id absent from ao status while other worker sessions exist (restore race).
  *
  * @param {ReviewRun} run
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  */
 export function hasRestoredSessionIdMismatch(run, sessions) {
   const linkedId = getRunLinkedSessionId(run);
@@ -241,7 +241,7 @@ export function isPrMergedOnGitHub(prNumber, mergedPrNumbers) {
  * MERGED PR terminal for prNumber-less runs (Issue #54 residual, Issue #189).
  *
  * @param {ReviewRun} run
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {Set<number> | number[] | Record<string, boolean>} mergedPrNumbers
  */
 export function evaluatePrNumberLessMergedRun(run, sessions, mergedPrNumbers) {
@@ -278,7 +278,7 @@ export function evaluatePrNumberLessMergedRun(run, sessions, mergedPrNumbers) {
  * Orchestrator inaction on a review run (no send / no new round / no lifecycle).
  *
  * @param {ReviewRun} run
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {Set<number> | number[] | Record<string, boolean>} mergedPrNumbers
  */
 export function shouldOrchestratorActOnRun(run, sessions, mergedPrNumbers) {

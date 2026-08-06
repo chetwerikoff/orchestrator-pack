@@ -79,7 +79,7 @@ bypass the gate to force delegation on undeclared code.
 **Checkpoint-2 contract-evidence re-verification (reviewers only).** For every PR with a linked
 issue, run checkpoint-2 **after** contract-mapping (when applicable) and **before** final
 verdict. Use `scripts/launch-contract-evidence-reverify.ps1` from **trusted pack root**
-(origin/main worktree, `AO_TRUSTED_PACK_ROOT`, or origin/main archive — never the PR checkout).
+(origin/main worktree, `OPK_TRUSTED_PACK_ROOT`, or origin/main archive — never the PR checkout).
 Contract-mapping preflight captures the bound immutable issue snapshot (`-PrNumber`, `-PrHeadSha`)
 into the AO project store; resolve it with `scripts/resolve-bound-issue-snapshot.ps1` (never a
 live re-fetch) before checkpoint-2. Pass PR body and changed paths to the launcher. The helper
@@ -285,12 +285,12 @@ AO-injected `orchestratorRules`.
 
 - **Trigger:** automatic/common starts use `scripts/pack-review-runner.ts`; manual Browser-GPT
   review uses `npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>`. Operational status comes from
-  the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the authoritative verdict.
+  the compatible `Get-PackReviewRuns` pack-store view. GitHub PR review is the authoritative verdict.
 - Backstop: `scripts/review-trigger-reconcile.ps1`. `orchestratorRules` is **legacy-import-only** on
   AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER**; daemon review HTTP and `ao review submit`
   are not fallback or dual-write paths.
 - **Pack review stdout (issue #663):** On exit 0, `REVIEW_COMMAND` stdout is non-empty terminal
-  verdict JSON — see the behavior table in `plugins/ao-codex-pr-reviewer/README.md`. Zero-length
+  verdict JSON — see the behavior table in `plugins/codex-pr-reviewer/README.md`. Zero-length
   stdout on exit 0 is not a valid success signal; when stdout parses as `verdict: clean`, treat the
   review as terminal success and do not re-invoke on the same PR head.
 

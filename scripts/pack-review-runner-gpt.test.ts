@@ -45,7 +45,7 @@ function harnessEnv(storeRoot: string, capture: string): void {
   process.env.OPK_VITEST_HARNESS = '1';
   process.env.PACK_REVIEWER = 'gpt';
   process.env.PACK_REVIEW_GITHUB_REVIEW_CAPTURE_FILE = capture;
-  process.env.AO_BASE_DIR = path.join(storeRoot, 'ao-base');
+  process.env.OPK_BASE_DIR = path.join(storeRoot, 'ao-base');
 }
 
 function cleanTerminalPayload(): string {
@@ -736,7 +736,7 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     writeClosedPrGhFixture(commandRoot);
     const childEnv = {
       ...process.env,
-      AO_BASE_DIR: path.join(fixtureRoot, 'ao-base'),
+      OPK_BASE_DIR: path.join(fixtureRoot, 'ao-base'),
       PATH: `${commandRoot}${path.delimiter}${process.env.PATH ?? ''}`,
       npm_config_update_notifier: 'false',
     };

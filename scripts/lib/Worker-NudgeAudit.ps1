@@ -5,7 +5,7 @@
 
 function Get-WorkerNudgeGateAuditRoot {
     param([string]$ProjectId = 'orchestrator-pack')
-    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
     return (Join-Path (Join-Path (Join-Path $base 'projects') $ProjectId) 'worker-nudge-gate-audit')
 }
 

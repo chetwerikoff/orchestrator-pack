@@ -32,7 +32,7 @@ const ALLOWED_ROOTS = [
   'scripts/lib/**', 'scripts/chatgpt-browser-turn/**',
 ] as const;
 const DENYLIST = [
-  'vendor/**', 'packages/core/**', '.ao/**', '.github/workflows/**', 'prompts/**',
+  'vendor/**', 'packages/core/**', '.orchestrator-pack/**', '.github/workflows/**', 'prompts/**',
   'agent-orchestrator.yaml', 'agent-orchestrator.*.yaml',
   '**/.env*', '**/*credential*', '**/*secret*',
 ] as const;

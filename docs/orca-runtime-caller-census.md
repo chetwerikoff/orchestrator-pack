@@ -53,8 +53,8 @@ The old worker-smoke compatibility/regression seams were also deleted rather tha
 
 | Surface | Operations | Disposition |
 |---|---|---|
-| `scripts/lib/Invoke-AoReviewApi.ps1` | review trigger/list/report | `defer-1250` |
-| `scripts/lib/Invoke-AoCliJson.ps1` service branches | config, status, plugin hooks, operator daemon lifecycle | `defer-1250` |
+| `scripts/lib/Invoke-PackReviewApi.ps1` | review trigger/list/report | `defer-1250` |
+| `scripts/lib/Invoke-RuntimeCliJson.ps1` service branches | config, status, plugin hooks, operator daemon lifecycle | `defer-1250` |
 
 The review transport still used by `scripts/pack-review-runner.ts` is #1250 service work, but the runner itself stays in the active runtime-owner census because it owns review-start claim admission and settlement.
 

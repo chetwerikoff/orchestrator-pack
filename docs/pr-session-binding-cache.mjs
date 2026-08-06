@@ -159,7 +159,7 @@ function resolveProjectIdFromEnv(env = process.env, repoSlug = '') {
 /**
  * @param {unknown} payload
  */
-export function sessionRowFromAoSessionGetPayload(payload) {
+export function sessionRowFromRuntimeWorkerGetPayload(payload) {
   const session = payload && typeof payload === 'object' && payload.session ? payload.session : payload;
   if (!session || typeof session !== 'object') {
     return null;
@@ -206,8 +206,8 @@ export function loadPushRegisterVerifiedSessions(options = {}) {
   if (projectId) {
     args.push('-p', projectId);
   }
-  const aoCommand = trimText(env.AO_COMMAND) || 'ao';
-  const result = spawnSync(aoCommand, args, {
+  const runtimeCommand = trimText(env.AO_COMMAND) || 'ao';
+  const result = spawnSync(runtimeCommand, args, {
     cwd,
     env: { ...env },
     encoding: 'utf8',
@@ -224,7 +224,7 @@ export function loadPushRegisterVerifiedSessions(options = {}) {
     return { ok: false, reason: 'push_register_session_verify_failed', sessions: [] };
   }
 
-  const row = sessionRowFromAoSessionGetPayload(payload);
+  const row = sessionRowFromRuntimeWorkerGetPayload(payload);
   if (!row || getSessionIdentifier(row) !== sessionId) {
     return { ok: false, reason: 'push_register_session_verify_failed', sessions: [] };
   }
@@ -284,11 +284,11 @@ function bindingRecordIsLive(record, openPrs = [], openListAuthoritative = false
  * @param {Record<string, unknown>} [env]
  */
 export function resolvePrSessionBindingCachePath(env = process.env) {
-  if (env.AO_PR_SESSION_BINDING_CACHE) {
-    return String(env.AO_PR_SESSION_BINDING_CACHE);
+  if (env.OPK_PR_SESSION_BINDING_CACHE) {
+    return String(env.OPK_PR_SESSION_BINDING_CACHE);
   }
-  if (env.AO_REPORT_STATE_SEED_STATE) {
-    const seedPath = String(env.AO_REPORT_STATE_SEED_STATE);
+  if (env.OPK_REPORT_STATE_SEED_STATE) {
+    const seedPath = String(env.OPK_REPORT_STATE_SEED_STATE);
     return join(dirname(seedPath), 'pr-session-binding-cache.json');
   }
   return join(
@@ -478,7 +478,7 @@ export function provePushRegisterWorkerIdentity(env = process.env, options = {})
   if (claimed && claimed !== sessionId) {
     return { ok: false, reason: 'push_register_session_identity_mismatch' };
   }
-  const child = trimText(env.AO_SIDE_PROCESS_CHILD_ID);
+  const child = trimText(env.OPK_SIDE_PROCESS_CHILD_ID);
   const consumer = trimText(env.GH_GOVERNOR_CONSUMER);
   if (child && !/worker|interactive|orchestrator/i.test(consumer) && env.GH_GOVERNOR_LANE !== 'interactive') {
     return { ok: false, reason: 'push_register_non_worker_context' };
@@ -938,7 +938,7 @@ export function fetchPriorPrOpenRowForPushRegister(
   if (!slug || number <= 0) {
     return null;
   }
-  const ghCommand = trimText(env.GH_BIN ?? env.AO_GH_COMMAND) || 'gh';
+  const ghCommand = trimText(env.GH_BIN ?? env.OPK_GH_COMMAND) || 'gh';
   const args = ['pr', 'view', String(number), '--repo', slug, '--json', 'number,state,headRefOid'];
   const result = spawnSync(ghCommand, args, {
     cwd,

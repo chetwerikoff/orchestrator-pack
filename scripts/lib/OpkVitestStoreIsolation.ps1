@@ -26,15 +26,15 @@ function global:Get-OpkVitestProductionTemp {
     return [System.IO.Path]::GetTempPath()
 }
 
-function global:Get-OpkVitestProductionAoBase {
-    if ($env:OPK_VITEST_PRODUCTION_AO_BASE) { return $env:OPK_VITEST_PRODUCTION_AO_BASE }
-    if ($env:AO_BASE_DIR) { return $env:AO_BASE_DIR }
+function global:Get-OpkVitestProductionStateBase {
+    if ($env:OPK_VITEST_PRODUCTION_OPK_BASE) { return $env:OPK_VITEST_PRODUCTION_OPK_BASE }
+    if ($env:OPK_BASE_DIR) { return $env:OPK_BASE_DIR }
     return Join-Path (Get-OpkVitestProductionHome) '.agent-orchestrator'
 }
 
 function global:Get-OpkVitestProductionWakeRoot {
     if ($env:OPK_VITEST_PRODUCTION_WAKE_ROOT) { return $env:OPK_VITEST_PRODUCTION_WAKE_ROOT }
-    if ($env:AO_WAKE_SUPERVISOR_STATE_DIR) { return $env:AO_WAKE_SUPERVISOR_STATE_DIR }
+    if ($env:OPK_WAKE_SUPERVISOR_STATE_DIR) { return $env:OPK_WAKE_SUPERVISOR_STATE_DIR }
     if ($env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) { return $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR }
     if ($env:XDG_STATE_HOME) { return Join-Path $env:XDG_STATE_HOME 'orchestrator-pack-wake-supervisor' }
     if ($env:LOCALAPPDATA) { return Join-Path $env:LOCALAPPDATA 'orchestrator-pack-wake-supervisor' }
@@ -47,7 +47,7 @@ function global:Expand-OpkVitestStoreTemplate {
     $expanded = [string]$Template
     $expanded = $expanded.Replace('${HOME}', (Get-OpkVitestProductionHome))
     $expanded = $expanded.Replace('${TMP}', (Get-OpkVitestProductionTemp))
-    $expanded = $expanded.Replace('${AO_BASE}', (Get-OpkVitestProductionAoBase))
+    $expanded = $expanded.Replace('${OPK_BASE}', (Get-OpkVitestProductionStateBase))
     $expanded = $expanded.Replace('${WAKE_STATE}', (Get-OpkVitestProductionWakeRoot))
     return $expanded
 }

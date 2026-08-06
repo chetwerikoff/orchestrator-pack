@@ -14,10 +14,10 @@ import {
   captureLeakReason,
   collectOpenPrSnapshot,
   resolveFoundationBinding,
-  sanitizeAoSessions,
+  sanitizeRuntimeWorkers,
   sanitizerIdentity,
-  validateAoPreflight,
-  type AoSessionRow,
+  validateRuntimePreflight,
+  type RuntimeWorkerRow,
   type BindingCacheRecord,
   type OpenPrSnapshotRow,
 } from './binding.ts';
@@ -45,7 +45,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const HEAD_A = 'a'.repeat(40);
 const HEAD_B = 'b'.repeat(40);
 
-function session(overrides: Partial<AoSessionRow> = {}): AoSessionRow {
+function session(overrides: Partial<RuntimeWorkerRow> = {}): RuntimeWorkerRow {
   return {
     createdAt: '2026-07-20T00:00:00.000Z',
     harness: 'cursor',
@@ -116,24 +116,24 @@ describe('[AC1] inert foundation', () => {
 describe('[AC2] capture-faithful binding', () => {
   it('validates AO 0.10.3 preflight and deterministic sanitization', () => {
     const raw = [session()];
-    const sanitizedA = sanitizeAoSessions(raw);
-    const sanitizedB = sanitizeAoSessions(raw);
+    const sanitizedA = sanitizeRuntimeWorkers(raw);
+    const sanitizedB = sanitizeRuntimeWorkers(raw);
     expect(sanitizedA).toEqual(sanitizedB);
     expect(captureLeakReason(sanitizedA)).toBeNull();
     expect(sanitizerIdentity(sanitizedA)).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(validateAoPreflight({
+    expect(validateRuntimePreflight({
       command: 'ao session ls --json',
       appStateVersion: '0.10.3',
       sessions: raw,
       sanitizerId: sanitizerIdentity(sanitizedA),
     })).toMatchObject({ ok: true, fleetCount: 1 });
-    expect(validateAoPreflight({
+    expect(validateRuntimePreflight({
       command: 'ao session ls --json',
       appStateVersion: '0.10.3',
       sessions: [],
       sanitizerId: 'sha256:test',
     })).toEqual({ ok: false, reason: 'preflight_empty_fleet' });
-    expect(validateAoPreflight({
+    expect(validateRuntimePreflight({
       command: 'ao session ls --json',
       appStateVersion: '0.10.4',
       sessions: raw,

@@ -1,0 +1,17 @@
+{
+  "name": "@orchestrator-pack/token-chain-ledger",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "pack-ledger": "./bin/ledger.ts"
+  },
+  "dependencies": {
+    "@orchestrator-pack/shared": "*"
+  },
+  "scripts": {
+    "test": "npm --prefix ../.. run test -- plugins/token-chain-ledger/tests"
+  },
+  "exports": {
+    "./lib/*.js": "./lib/*.ts"
+  }
+}

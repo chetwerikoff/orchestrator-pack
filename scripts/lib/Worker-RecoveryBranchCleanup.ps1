@@ -33,7 +33,7 @@ function Invoke-WorkerRecoveryBranchCleanupCli {
 }
 
 function Get-WorkerRecoveryBranchObservationTtlSeconds {
-    $raw = [Environment]::GetEnvironmentVariable('AO_WORKER_RECOVERY_BRANCH_OBSERVATION_TTL_SECONDS')
+    $raw = [Environment]::GetEnvironmentVariable('OPK_WORKER_RECOVERY_BRANCH_OBSERVATION_TTL_SECONDS')
     if ($raw -and [int]::TryParse($raw, [ref]$null)) {
         return [int]$raw
     }

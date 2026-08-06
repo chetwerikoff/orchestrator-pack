@@ -71,7 +71,7 @@ const PR2_OWNED = new Set([
 ]);
 const EXPLICIT_DELETE = new Set([
   'scripts/review-send-reconcile.ps1',
-  'scripts/json-producers/retired-surfaces.json',
+  'scripts/json-producers/retired-runtime-surfaces.json',
   'docs/ao-reviews-board-runbook.md',
   'tests/fixtures/reviews-board-seven-columns.json',
   'docs/github-fleet-cache-measurement.md',
@@ -162,7 +162,7 @@ async function buildReachabilityWithoutGeneratedManifest() {
 function pathCategory(rel, rootClosure, dynamicHeld) {
   if (LEGACY_LIST_GUARD_SURFACE.has(rel)) return 'D';
   if (anchor.keepCoreTests.includes(rel) || rel.startsWith('scripts/gate-runner/') || rel.startsWith('scripts/kernel/')) return 'G';
-  if (rel.startsWith('plugins/ao-scope-guard/') || rel.startsWith('plugins/ao-codex-pr-reviewer/') || rel.startsWith('.github/workflows/')) return 'D';
+  if (rel.startsWith('plugins/scope-guard/') || rel.startsWith('plugins/codex-pr-reviewer/') || rel.startsWith('.github/workflows/')) return 'D';
   if (dynamicHeld.has(rel)) return 'D';
   if (rootClosure.has(rel)) return 'C';
   return 'G';

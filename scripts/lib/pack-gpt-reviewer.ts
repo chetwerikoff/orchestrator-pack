@@ -3,14 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   emitTerminalVerdictPayload,
-  toAoFindings,
-} from '../../plugins/ao-codex-pr-reviewer/lib/emit.ts';
+  toRuntimeFindings,
+} from '../../plugins/codex-pr-reviewer/lib/emit.ts';
 import {
   resolveIssueNumber,
   resolveScopeContext,
   type ResolvedScopeContext,
-} from '../../plugins/ao-codex-pr-reviewer/lib/scope_context.ts';
-import { parseCodexOutput } from '../../plugins/ao-codex-pr-reviewer/lib/parse_output.ts';
+} from '../../plugins/codex-pr-reviewer/lib/scope_context.ts';
+import { parseCodexOutput } from '../../plugins/codex-pr-reviewer/lib/parse_output.ts';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { buildGptReviewPrompt, resolvePackRepoRoot } from './pack-pr-review-contract.ts';
 
@@ -185,7 +185,7 @@ export function mapGptReplyToTerminalStdout(replyText: string): string {
   }
   if (parsed.kind === 'findings') {
     validateGptStructuredFindings(parsed);
-    const findings = toAoFindings(parsed.findings);
+    const findings = toRuntimeFindings(parsed.findings);
     return emitTerminalVerdictPayload({ verdict: 'findings', findings });
   }
   throw new Error(parsed.message);

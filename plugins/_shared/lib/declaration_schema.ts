@@ -1,6 +1,6 @@
 import { normalizePath } from './normalize.ts';
 
-export type IterationIdSource = 'ao_session' | 'wrapper_generated';
+export type IterationIdSource = 'explicit' | 'wrapper_generated';
 
 export interface DeclarationBaseline {
   commit_sha: string;
@@ -187,8 +187,8 @@ export function validateDeclarationSnapshot(
   }
 
   const source = input.iteration_id_source;
-  if (source !== 'ao_session' && source !== 'wrapper_generated') {
-    errors.push('iteration_id_source must be "ao_session" or "wrapper_generated"');
+  if (source !== 'explicit' && source !== 'wrapper_generated') {
+    errors.push('iteration_id_source must be "explicit" or "wrapper_generated"');
   }
 
   if (input.supersedes !== null && typeof input.supersedes !== 'string') {

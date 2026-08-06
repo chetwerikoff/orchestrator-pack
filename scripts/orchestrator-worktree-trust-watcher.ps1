@@ -41,7 +41,7 @@ else {
     Join-Path $userHome '.local' 'state'
 }
 $WorktreesRoots = @(
-    (Join-Path $userHome '.ao' 'data' 'worktrees' $ProjectId),
+    (Join-Path $userHome '.orchestrator-pack' 'data' 'worktrees' $ProjectId),
     (Join-Path $userHome '.agent-orchestrator' 'projects' $ProjectId 'worktrees')
 )
 $StateFile = Join-Path $stateBase 'orchestrator-pack-trusted-worktrees.txt'

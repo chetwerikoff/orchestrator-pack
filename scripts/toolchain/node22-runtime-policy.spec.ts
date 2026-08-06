@@ -113,7 +113,7 @@ function makePolicyFixture(): string {
 function makeRealDeclareBinFixture(): string {
   const root = tempRoot('opk-real-declare-bin-');
   cpSync(join(repoRoot, 'plugins/_shared'), join(root, 'plugins/_shared'), { recursive: true });
-  cpSync(join(repoRoot, 'plugins/ao-task-declaration'), join(root, 'plugins/ao-task-declaration'), { recursive: true });
+  cpSync(join(repoRoot, 'plugins/task-declaration'), join(root, 'plugins/task-declaration'), { recursive: true });
   mkdirSync(join(root, 'scripts/toolchain'), { recursive: true });
   for (const name of ['native-entrypoint-preflight.ts', 'node-runtime-contract.mjs', 'node-runtime-contract.d.mts', 'node-version.json']) {
     cpSync(join(repoRoot, 'scripts/toolchain', name), join(root, 'scripts/toolchain', name));
@@ -507,7 +507,7 @@ describe('launch inventory and fail-closed policy', () => {
       command: process.execPath,
       args: [
         '--experimental-strip-types',
-        join(root, 'plugins/ao-task-declaration/bin/declare.ts'),
+        join(root, 'plugins/task-declaration/bin/declare.ts'),
         '--issue', '900',
         '--declared-paths', 'scripts/example.ts',
         '--repo-root', root,
@@ -591,9 +591,9 @@ describe('representative real entrypoints', () => {
     expect(runner.ok, runner.stderr).toBe(true);
     expect(runner.stdout).toContain('Pack-owned review runner');
 
-    const plugin = await runNode(['--experimental-strip-types', 'plugins/ao-task-declaration/bin/declare.ts', '--help']);
+    const plugin = await runNode(['--experimental-strip-types', 'plugins/task-declaration/bin/declare.ts', '--help']);
     expect(plugin.ok).toBe(false);
-    expect(plugin.stderr).toContain('Usage: ao-declare');
+    expect(plugin.stderr).toContain('Usage: pack-declare');
     expect(plugin.stderr).not.toContain('tsx');
   }, 60_000);
 

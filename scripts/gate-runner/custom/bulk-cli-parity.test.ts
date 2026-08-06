@@ -201,14 +201,14 @@ function evaluateNegativeCapture(capture: Capture): GateResult {
       return evaluateReview010Vocabulary(memorySnapshot({ 'scripts/bad.mjs': 'const argv = ["review", "run"];\n' }));
     case 'review-command-ao-path':
       return evaluateReviewCommandNotAo(memorySnapshot({
-        'agent-orchestrator.yaml.example': 'NAMED REVIEW_COMMAND\n  pwsh .ao/review.ps1\n  RUNTIME\n',
+        'agent-orchestrator.yaml.example': 'NAMED REVIEW_COMMAND\n  pwsh .orchestrator-pack/review.ps1\n  RUNTIME\n',
       }));
     case 'verify-missing-required-file': {
       const definition = bulkDeclarativeGateDefinitions.find((candidate) => candidate.gateId === capture.gateId)!;
       return evaluateDeclarativeGate(definition, overlaySnapshot({}, ['AGENTS.md']));
     }
     case 'verify-missing-contract-marker': {
-      const path = 'plugins/ao-scope-guard/README.md';
+      const path = 'plugins/scope-guard/README.md';
       const original = liveSnapshot.files.get(path) ?? '';
       return evaluateVerifyStructureContract(overlaySnapshot({ [path]: original.replaceAll(/runtime guard/giu, 'runtime_guard_removed') }));
     }
@@ -268,7 +268,7 @@ function createReplayRoot(capture: Capture): { root: string; script: string; arg
       writeFixture(join(root, 'docs/.keep'), 'fixture\n');
       return { root, script, args: [] };
     case 'review-command-ao-path':
-      writeFixture(join(root, 'agent-orchestrator.yaml.example'), 'NAMED REVIEW_COMMAND\n  pwsh .ao/review.ps1\n  RUNTIME\n');
+      writeFixture(join(root, 'agent-orchestrator.yaml.example'), 'NAMED REVIEW_COMMAND\n  pwsh .orchestrator-pack/review.ps1\n  RUNTIME\n');
       writeFixture(join(root, 'scripts/lib/Get-PackReviewCommand.ps1'), [
         "function Get-PackReviewCommandFromYaml {",
         "  param([Parameter(Mandatory)][string]$YamlPath)",
@@ -285,12 +285,12 @@ function createReplayRoot(capture: Capture): { root: string; script: string; arg
       writeFixture(join(root, 'AGENTS.md'), 'fixture\n');
       return { root, script, args: ['-Scenario', 'required-file', '-RepoRoot', root] };
     case 'verify-contract-markers-present':
-      writeFixture(join(root, 'plugins/ao-scope-guard/README.md'), 'DD-024 runtime guard git add commit PR-level CI second line\n');
+      writeFixture(join(root, 'plugins/scope-guard/README.md'), 'DD-024 runtime guard git add commit PR-level CI second line\n');
       return { root, script, args: ['-Scenario', 'contract-marker', '-RepoRoot', root] };
     case 'verify-missing-required-file':
       return { root, script, args: ['-Scenario', 'required-file', '-RepoRoot', root] };
     case 'verify-missing-contract-marker':
-      writeFixture(join(root, 'plugins/ao-scope-guard/README.md'), 'DD-024 git add commit PR-level CI second line\n');
+      writeFixture(join(root, 'plugins/scope-guard/README.md'), 'DD-024 git add commit PR-level CI second line\n');
       return { root, script, args: ['-Scenario', 'contract-marker', '-RepoRoot', root] };
     default:
       throw new Error(`unknown replay scenario: ${capture.scenario ?? '<missing>'}`);

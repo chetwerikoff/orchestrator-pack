@@ -22,9 +22,9 @@ function Get-CiRedWatchdogDecisionSessions {
         }
         catch { }
     }
-    if (Get-Command Get-AoStatusSessions -ErrorAction SilentlyContinue) {
+    if (Get-Command Get-RuntimeStatusSessions -ErrorAction SilentlyContinue) {
         try {
-            $liveSessions = @(Get-AoStatusSessions)
+            $liveSessions = @(Get-RuntimeStatusSessions)
             if ($liveSessions.Count -gt 0) { return $liveSessions }
         }
         catch { }
@@ -223,11 +223,11 @@ function Resolve-CiRedWatchdogCurrentAttemptWorker {
 
 function Get-CiRedWatchdogSubmitState {
     $path = ''
-    if ($env:AO_WORKER_MESSAGE_SUBMIT_STATE) {
-        $path = $env:AO_WORKER_MESSAGE_SUBMIT_STATE.Trim()
+    if ($env:OPK_WORKER_MESSAGE_SUBMIT_STATE) {
+        $path = $env:OPK_WORKER_MESSAGE_SUBMIT_STATE.Trim()
     }
-    elseif ($env:AO_SIDE_PROCESS_STATE_DIR) {
-        $anchorPath = Join-Path $env:AO_SIDE_PROCESS_STATE_DIR.Trim() 'worker-message-submit-state-root.anchor.json'
+    elseif ($env:OPK_SIDE_PROCESS_STATE_DIR) {
+        $anchorPath = Join-Path $env:OPK_SIDE_PROCESS_STATE_DIR.Trim() 'worker-message-submit-state-root.anchor.json'
         if (Test-Path -LiteralPath $anchorPath -PathType Leaf) {
             try {
                 $anchor = Get-Content -LiteralPath $anchorPath -Raw | ConvertFrom-Json

@@ -5,7 +5,7 @@
   "absorbedCoverage": [
     {
       "validatorId": "ao-cli-argv-shape",
-      "note": "Capture-backed AO session/status argv probes cover Invoke-AoCliJson adoption surfaces referenced by dead-argv-bypass file list."
+      "note": "Capture-backed AO session/status argv probes cover Invoke-RuntimeCliJson adoption surfaces referenced by dead-argv-bypass file list."
     }
   ],
   "hashPinnedAllowlist": [],

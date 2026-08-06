@@ -18,7 +18,7 @@ the live-only invariant when terminated sessions are excluded.
 | `scripts/dead-worker-reconcile.ps1` | worker-status decision reader plus terminated | `Get-WorkerStatusDecisionSessionsIncludingTerminated` | Explicitly includes terminated rows for recovery classification |
 | `scripts/orchestrator-diagnose.ps1` | tracked diagnostic | `Get-WorkerStatusDecisionSessions`; prints `reportSourcePath` and worker-status diagnostics | Live-only diagnostic summary |
 | `scripts/lib/Get-WorkerStatusDecisionSessions.ps1` | shared decision reader implementation | session existence + pack report store + pack worker status store overlay | `pack-worker-status-store` JSON under wake-supervisor state dir |
-| `scripts/lib/Invoke-AoCliJson.ps1` | AO JSON adapter / legacy fixture implementation | prefix-safe parse, session list, legacy fixture report merge for tests | Not a production decision reader |
+| `scripts/lib/Invoke-RuntimeCliJson.ps1` | AO JSON adapter / legacy fixture implementation | prefix-safe parse, session list, legacy fixture report merge for tests | Not a production decision reader |
 | `scripts/orchestrator-wake-listener.ps1` | not a worker-report consumer | webhook envelope only; no `ready_for_review` verdict from AO status | n/a |
 | `scripts/lib/Invoke-ReviewStuckRunReaper.ps1` | not a worker-report consumer | review run liveness only | n/a |
 | `scripts/lib/Worker-NudgeClaim.ps1` | not a worker-report consumer | session identity / nudge claims | n/a |
@@ -36,7 +36,7 @@ the live-only invariant when terminated sessions are excluded.
    `$.sessions` alone.
 3. Diagnostics that print a hand-off verdict must name `reportSourcePath` when present
    and include worker-status degraded diagnostics when status is `unknown` or `stale`.
-4. Prefix-safe AO JSON parsing routes through `Invoke-AoCliJson` (or equivalent
+4. Prefix-safe AO JSON parsing routes through `Invoke-RuntimeCliJson` (or equivalent
    brace-index strip) for notifier/log prefixed CLI output.
 5. When `PACK_WORKER_STATUS_STORE_DISABLED` is active or sibling readiness fails,
    decision readers fail closed to `unknown`; worker-facing paths skip silently and do

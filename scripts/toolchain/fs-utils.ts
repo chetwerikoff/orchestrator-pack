@@ -3,7 +3,7 @@ import { join, relative, sep } from 'node:path';
 
 const SKIPPED_DIRECTORIES = new Set([
   '.git',
-  '.ao',
+  '.orchestrator-pack',
   'node_modules',
   'vendor',
   'packages',

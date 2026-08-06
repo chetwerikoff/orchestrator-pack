@@ -82,13 +82,13 @@ export function getFailureEvidenceRunPointerPath(storeDir, runId) {
 }
 
 export function resolveOutputTailLimit(env = process.env) {
-  const parsed = Number(env.AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT);
+  const parsed = Number(env.OPK_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_OUTPUT_TAIL_LIMIT;
   return Math.floor(parsed);
 }
 
 export function resolveSummaryTailLimit(env = process.env) {
-  const parsed = Number(env.AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT);
+  const parsed = Number(env.OPK_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_SUMMARY_TAIL_LIMIT;
   return Math.floor(parsed);
 }

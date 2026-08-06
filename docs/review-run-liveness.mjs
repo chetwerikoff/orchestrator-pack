@@ -67,15 +67,15 @@ function parsePositiveMs(value, fallback) {
 
 export function resolveRecoveryConfig(config = {}, env = process.env) {
   const maxReviewDurationMs = parsePositiveMs(
-    config.maxReviewDurationMs ?? env.AO_REVIEW_RECOVERY_MAX_REVIEW_DURATION_MS,
+    config.maxReviewDurationMs ?? env.OPK_REVIEW_RECOVERY_MAX_REVIEW_DURATION_MS,
     DEFAULT_MAX_REVIEW_DURATION_MS,
   );
   const crashGraceMs = parsePositiveMs(
-    config.crashGraceMs ?? env.AO_REVIEW_RECOVERY_CRASH_GRACE_MS,
+    config.crashGraceMs ?? env.OPK_REVIEW_RECOVERY_CRASH_GRACE_MS,
     DEFAULT_CRASH_GRACE_MS,
   );
   const ambiguousStaleMs = parsePositiveMs(
-    config.ambiguousStaleMs ?? env.AO_REVIEW_RECOVERY_AMBIGUOUS_STALE_MS,
+    config.ambiguousStaleMs ?? env.OPK_REVIEW_RECOVERY_AMBIGUOUS_STALE_MS,
     DEFAULT_AMBIGUOUS_STALE_MS,
   );
   return { crashGraceMs, maxReviewDurationMs, ambiguousStaleMs };
@@ -137,13 +137,13 @@ function writeJsonAtomic(path, value) {
   renameSync(tmp, path);
 }
 
-export function getAoProjectDir(projectId, baseDir = process.env.AO_BASE_DIR) {
+export function getAoProjectDir(projectId, baseDir = process.env.OPK_BASE_DIR) {
   const root = baseDir || join(homedir(), '.agent-orchestrator');
   return join(root, 'projects', projectId);
 }
 
 export function getCodeReviewStoreDir(projectId, options = {}) {
-  return options.storeDir || join(getAoProjectDir(projectId, options.aoBaseDir), 'code-reviews');
+  return options.storeDir || join(getAoProjectDir(projectId, options.stateBaseDir), 'code-reviews');
 }
 
 function listRunFiles(storeDir) {

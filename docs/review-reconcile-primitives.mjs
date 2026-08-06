@@ -4,7 +4,7 @@
  */
 
 /** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, prReviewStatus?: string, latestRunStatus?: string }} ReviewRun */
-/** @typedef {{ name?: string, sessionId?: string, id?: string, status?: string }} AoSession */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, status?: string }} RuntimeWorker */
 
 export const IN_FLIGHT_REVIEW_STATUSES = new Set([
   'running',
@@ -167,7 +167,7 @@ export function isHeadCovered(runs, prNumber, headSha) {
 }
 
 /**
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  */
 export function isLiveWorkerSession(session) {
   const status = String(session?.status ?? '').toLowerCase();
@@ -178,7 +178,7 @@ export function isLiveWorkerSession(session) {
 }
 
 /**
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  */
 export function getSessionIdentifier(session) {
   const name = String(session?.name ?? '').trim();
@@ -199,7 +199,7 @@ export function getSessionIdentifier(session) {
 /**
  * All non-empty session identifiers (name, sessionId, id) for delivery matching.
  *
- * @param {AoSession | null | undefined} session
+ * @param {RuntimeWorker | null | undefined} session
  */
 export function collectSessionIdentifiers(session) {
   /** @type {string[]} */

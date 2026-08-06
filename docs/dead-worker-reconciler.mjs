@@ -543,9 +543,9 @@ export function classifyWorkerLivenessEvidence(session, livenessContext = {}) {
   };
 }
 
-export function classifyWorkerDeathEvidence(session, aoEvents = [], nowMs = Date.now(), options = {}) {
+export function classifyWorkerDeathEvidence(session, runtimeEvents = [], nowMs = Date.now(), options = {}) {
   const sessionId = getSessionId(session);
-  const events = toArray(aoEvents);
+  const events = toArray(runtimeEvents);
   const matches = [];
   let manualKill = null;
   let operatorShutdown = null;
@@ -758,10 +758,10 @@ export function discoverAbsentSessions(input = {}) {
   return absentSessions;
 }
 
-export const AO_WORKER_ITERATION_BRANCH_PATTERN = /^opk-\d+$/i;
+export const OPK_WORKER_ITERATION_BRANCH_PATTERN = /^opk-\d+$/i;
 
 export function isAoWorkerIterationBranch(branch) {
-  return AO_WORKER_ITERATION_BRANCH_PATTERN.test(normalizeString(branch));
+  return OPK_WORKER_ITERATION_BRANCH_PATTERN.test(normalizeString(branch));
 }
 
 function isAuthorizedIssueOnlyPrHead(head, authorized, session) {
@@ -1037,7 +1037,7 @@ export function planDeadWorkerReconcile(input = {}) {
     }
     const evidence = input.livenessContext
       ? classifyWorkerLivenessEvidence(session, input.livenessContext)
-      : classifyWorkerDeathEvidence(session, input.aoEvents, nowMs, { respawnPolicy: input.respawnPolicy });
+      : classifyWorkerDeathEvidence(session, input.runtimeEvents, nowMs, { respawnPolicy: input.respawnPolicy });
     if (evidence.verdict === 'live_or_unknown') {
       continue;
     }

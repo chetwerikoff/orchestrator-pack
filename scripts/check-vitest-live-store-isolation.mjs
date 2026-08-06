@@ -120,7 +120,7 @@ const defaultSignals = [
   /GetTempPath\s*\(\s*\)[\s\S]{0,260}orchestrator-[A-Za-z0-9._-]+(?:\.json|\.jsonl|\.lock)/g,
   /tmpdir\s*\(\s*\)[\s\S]{0,260}orchestrator-[A-Za-z0-9._-]+(?:\.json|\.jsonl|\.lock)/g,
   /(?:\.local[\\/]state[\\/]orchestrator-pack-wake-supervisor|orchestrator-pack-wake-supervisor)[\s\S]{0,500}[A-Za-z0-9._-]+(?:\.json|\.jsonl|\.lock)/g,
-  /(?:\.agent-orchestrator|AO_BASE_DIR)[\s\S]{0,500}[A-Za-z0-9._-]+(?:claims|store|state|cache|audit|ledger|code-reviews)/g,
+  /(?:\.agent-orchestrator|OPK_BASE_DIR)[\s\S]{0,500}[A-Za-z0-9._-]+(?:claims|store|state|cache|audit|ledger|code-reviews)/g,
   /(?:\/tmp|[A-Za-z]:[\\/]Temp)[\\/]orchestrator-[A-Za-z0-9._-]+/g,
 ];
 function walkRuntime(root) {
@@ -160,7 +160,7 @@ const cleanupRoots = [];
 try {
   const fakeHome = join(fixtureRoot, 'home');
   const fakeTmp = join(fixtureRoot, 'tmp');
-  const fakeAoBase = join(fakeHome, '.agent-orchestrator');
+  const fakeRuntimeBase = join(fakeHome, '.agent-orchestrator');
   const wake = join(fakeHome, '.local', 'state', 'orchestrator-pack-wake-supervisor');
   mkdirSync(wake, { recursive: true });
   mkdirSync(fakeTmp, { recursive: true });
@@ -172,13 +172,13 @@ try {
     TMP: fakeTmp,
     OPK_VITEST_PRODUCTION_HOME: fakeHome,
     OPK_VITEST_PRODUCTION_TMP: fakeTmp,
-    OPK_VITEST_PRODUCTION_AO_BASE: fakeAoBase,
+    OPK_VITEST_PRODUCTION_OPK_BASE: fakeRuntimeBase,
     OPK_VITEST_PRODUCTION_WAKE_ROOT: wake,
     OPK_VITEST_HARNESS: '1',
   };
   for (const name of [
-    'AO_WORKER_STATUS_STORE', 'AO_WAKE_SUPERVISOR_STATE_DIR',
-    'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR', 'AO_SIDE_PROCESS_STATE_DIR', 'AO_BASE_DIR',
+    'OPK_WORKER_STATUS_STORE', 'OPK_WAKE_SUPERVISOR_STATE_DIR',
+    'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR', 'OPK_SIDE_PROCESS_STATE_DIR', 'OPK_BASE_DIR',
   ]) delete env[name];
 
   const liveWorkerStatus = join(wake, 'worker-status-store.json');
@@ -253,8 +253,8 @@ try {
   if (harnessEnv.OPK_VITEST_HARNESS !== '1') fail('harness marker was not established');
   for (const [name, value] of [
     ['TMPDIR', harnessEnv.TMPDIR],
-    ['AO_BASE_DIR', harnessEnv.AO_BASE_DIR],
-    ['AO_WAKE_SUPERVISOR_STATE_DIR', harnessEnv.AO_WAKE_SUPERVISOR_STATE_DIR],
+    ['OPK_BASE_DIR', harnessEnv.OPK_BASE_DIR],
+    ['OPK_WAKE_SUPERVISOR_STATE_DIR', harnessEnv.OPK_WAKE_SUPERVISOR_STATE_DIR],
   ]) {
     if (!String(value ?? '').startsWith(harnessRootA)) fail(`${name} was not redirected into the harness root`);
   }
@@ -263,7 +263,7 @@ try {
     if (!String(harnessEnv[name] ?? '').trim()) fail(`harness did not establish ${name}`);
   }
 
-  const unclassifiedLiveRootTarget = join(harnessEnv.AO_BASE_DIR, 'future-live-store.db');
+  const unclassifiedLiveRootTarget = join(harnessEnv.OPK_BASE_DIR, 'future-live-store.db');
   const unclassifiedRedirect = redirectHarnessWritePath(unclassifiedLiveRootTarget, harnessEnv);
   if (!unclassifiedRedirect) {
     fail('un-inventoried live-root write did not fail closed into the harness');
@@ -299,7 +299,7 @@ try {
 
   const pwsh = process.platform === 'win32' ? 'pwsh.exe' : 'pwsh';
   const helper = join(repoRoot, 'scripts', 'lib', 'OpkVitestStoreIsolation.ps1');
-  const psEnv = { ...env, AO_WORKER_STATUS_STORE: liveWorkerStatus };
+  const psEnv = { ...env, OPK_WORKER_STATUS_STORE: liveWorkerStatus };
   const psAssert = `. ${JSON.stringify(helper)}; try { Assert-OpkVitestStorePathSafe -Path ${JSON.stringify(liveWorkerStatus)} -Operation 'self-check'; exit 0 } catch { if ($_.Exception.Message -match 'OPK_VITEST_LIVE_STORE_BLOCKED.*worker-status-store') { exit 42 }; Write-Error $_; exit 1 }`;
   const assertResult = runProcessSync({
     command: pwsh,

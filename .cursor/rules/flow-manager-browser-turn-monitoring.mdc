@@ -90,14 +90,14 @@ Probe mechanics remain owned by Issues #1272 and #1122.
 
 A failure belongs to the current work only when it is reproducible and
 causally linked to the current head/diff. Clean-base reproduction,
-`stale_digest_pin`, and live-fleet `snapshot_changed` for `${AO_BASE}`,
+`stale_digest_pin`, and live-fleet `snapshot_changed` for `${OPK_BASE}`,
 `${WAKE_STATE}`, or temporary class fences are not current-work evidence.
 Rerun once after fleet quiescence; report a current-work blocker only if it
 still reproduces and remains head/diff-causal. Do not rebind `TMPDIR` or
-`AO_BASE_DIR` after failure outside the sanctioned
+`OPK_BASE_DIR` after failure outside the sanctioned
 `scripts/lib/vitest-live-store-harness.mjs` flow to make a guard pass without
 frozen `OPK_VITEST_PRODUCTION_TMP` /
-`OPK_VITEST_PRODUCTION_AO_BASE` roots and an active production-store guard.
+`OPK_VITEST_PRODUCTION_OPK_BASE` roots and an active production-store guard.
 The existing `applyOpkVitestHarnessEnv` redirection is valid isolation.
 
 ## Legacy state and diagnostic probe

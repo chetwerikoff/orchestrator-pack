@@ -2,14 +2,14 @@
 param([string[]]$Args)
 
 $ErrorActionPreference = 'Stop'
-$scenario = [string]$env:AO_REVIEW_START_SCOPED_GH_SCENARIO
+$scenario = [string]$env:OPK_REVIEW_START_SCOPED_GH_SCENARIO
 
 function Write-Err([string]$Message) {
     [Console]::Error.WriteLine($Message)
 }
 
 function Get-ScopedGhScenarioAttempt {
-    $stateFile = [string]$env:AO_REVIEW_START_SCOPED_GH_STATE_FILE
+    $stateFile = [string]$env:OPK_REVIEW_START_SCOPED_GH_STATE_FILE
     if (-not $stateFile) { return 1 }
     $count = 0
     if (Test-Path -LiteralPath $stateFile) {
@@ -45,7 +45,7 @@ for ($i = 0; $i -lt $Args.Count; $i++) {
 
 switch ($scenario) {
     'bashdb_stderr_valid_json' {
-        $head = [string]$env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA
+        $head = [string]$env:OPK_REVIEW_START_SCOPED_GH_HEAD_SHA
         if (-not $head) {
             $head = '31fc8c6143c23e6db1b47fa8525aced110e2f84e'
         }
@@ -78,7 +78,7 @@ switch ($scenario) {
         exit 0
     }
     'fill_stderr_then_valid_json' {
-        $head = [string]$env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA
+        $head = [string]$env:OPK_REVIEW_START_SCOPED_GH_HEAD_SHA
         if (-not $head) {
             $head = '31fc8c6143c23e6db1b47fa8525aced110e2f84e'
         }
@@ -96,7 +96,7 @@ switch ($scenario) {
     }
     'primary_rate_limit_then_ok' {
         $attempt = Get-ScopedGhScenarioAttempt
-        $failUntil = [int]([string]$env:AO_REVIEW_START_SCOPED_GH_FAIL_UNTIL_ATTEMPT)
+        $failUntil = [int]([string]$env:OPK_REVIEW_START_SCOPED_GH_FAIL_UNTIL_ATTEMPT)
         if ($failUntil -le 0) { $failUntil = 1 }
         if ($attempt -le $failUntil) {
             Write-Err 'retry-after: 1'
@@ -105,7 +105,7 @@ switch ($scenario) {
             Write-Err 'HTTP 403: API rate limit exceeded for user'
             exit 1
         }
-        $head = [string]$env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA
+        $head = [string]$env:OPK_REVIEW_START_SCOPED_GH_HEAD_SHA
         if (-not $head) { $head = '31fc8c6143c23e6db1b47fa8525aced110e2f84e' }
         Write-OpenPrJson -PrNumber $prNumber -HeadSha $head
         exit 0
@@ -117,7 +117,7 @@ switch ($scenario) {
             Write-Err 'HTTP 403: You have triggered an abuse detection mechanism. Please wait before retrying.'
             exit 1
         }
-        $head = [string]$env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA
+        $head = [string]$env:OPK_REVIEW_START_SCOPED_GH_HEAD_SHA
         if (-not $head) { $head = '31fc8c6143c23e6db1b47fa8525aced110e2f84e' }
         Write-OpenPrJson -PrNumber $prNumber -HeadSha $head
         exit 0
@@ -129,7 +129,7 @@ switch ($scenario) {
             Write-Err 'HTTP 429: Too Many Requests'
             exit 1
         }
-        $head = [string]$env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA
+        $head = [string]$env:OPK_REVIEW_START_SCOPED_GH_HEAD_SHA
         if (-not $head) { $head = '31fc8c6143c23e6db1b47fa8525aced110e2f84e' }
         Write-OpenPrJson -PrNumber $prNumber -HeadSha $head
         exit 0
@@ -140,7 +140,7 @@ switch ($scenario) {
             Write-Err 'HTTP 502: Bad Gateway (https://api.github.com/repos/o/r/pulls/565)'
             exit 1
         }
-        $head = [string]$env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA
+        $head = [string]$env:OPK_REVIEW_START_SCOPED_GH_HEAD_SHA
         if (-not $head) { $head = '31fc8c6143c23e6db1b47fa8525aced110e2f84e' }
         Write-OpenPrJson -PrNumber $prNumber -HeadSha $head
         exit 0
@@ -151,8 +151,8 @@ switch ($scenario) {
     }
     'head_drift_then_ok' {
         $attempt = Get-ScopedGhScenarioAttempt
-        $headA = [string]$env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA_A
-        $headB = [string]$env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA_B
+        $headA = [string]$env:OPK_REVIEW_START_SCOPED_GH_HEAD_SHA_A
+        $headB = [string]$env:OPK_REVIEW_START_SCOPED_GH_HEAD_SHA_B
         if (-not $headA) { $headA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }
         if (-not $headB) { $headB = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }
         if ($attempt -le 1) {
@@ -168,7 +168,7 @@ switch ($scenario) {
             Start-Sleep -Seconds 30
             exit 0
         }
-        $head = [string]$env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA
+        $head = [string]$env:OPK_REVIEW_START_SCOPED_GH_HEAD_SHA
         if (-not $head) { $head = '31fc8c6143c23e6db1b47fa8525aced110e2f84e' }
         Write-OpenPrJson -PrNumber $prNumber -HeadSha $head
         exit 0

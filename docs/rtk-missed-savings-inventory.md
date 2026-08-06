@@ -85,7 +85,7 @@ The helper:
 |------|-------------------------------------------------------------|
 | **low** | `grep`, `find`, `cat`/file reads, `ls`, `wc`, `head`, `tree`, ordinary read-only exploration where exact bytes are not decision-bearing. |
 | **medium** | `gh pr` / `gh issue … --json`, `git branch`, `git log` when not scope/review critical. |
-| **high** | `ao status` / `ao review list` / `ao events` / `ao report` / `ao send` / `ao spawn` / `ao review send` / `ao-declare`, any other `ao …`, `git diff`, `gh pr checks`, scope/CI/review/declaration signal. |
+| **high** | `ao status` / `ao review list` / `ao events` / `ao report` / `ao send` / `ao spawn` / `ao review send` / `pack-declare`, any other `ao …`, `git diff`, `gh pr checks`, scope/CI/review/declaration signal. |
 
 Classification logic: [`scripts/lib/Get-RtkMissedSavingsInventory.ps1`](../scripts/lib/Get-RtkMissedSavingsInventory.ps1).
 
@@ -100,7 +100,7 @@ command family — not unlockable by §6. A `cat`/`grep`/`find` of such a target
 
 | Class | Examples | Compaction |
 |-------|----------|------------|
-| **Permanently raw** | Sensitivity override targets; `ao report` / `ao send` / `ao spawn` / `ao review send` / `ao-declare`; `git diff`; `gh pr checks` | Never compacted |
+| **Permanently raw** | Sensitivity override targets; `ao report` / `ao send` / `ao spawn` / `ao review send` / `pack-declare`; `git diff`; `gh pr checks` | Never compacted |
 | **§6-unlockable only** | Structured read-only `ao … --json` inspection (`ao status`, `ao review list`, `ao events`) | Compacted only after pinned field-preservation test + schema-refresh gate passes |
 
 **Low** shapes may be compacted freely **only after** the sensitivity override clears the shape.
@@ -112,7 +112,7 @@ command family — not unlockable by §6. A `cat`/`grep`/`find` of such a target
   own. The qualifier "when not scope/review critical" is **not** enforceable under host-global
   substring matching.
 - Any change that would **compact or narrow an existing §R.3 passthrough family** (`git diff`,
-  `git log`, `gh pr checks`, the `ao ` family, `ao-declare`) or any **signal-bearing
+  `git log`, `gh pr checks`, the `ao ` family, `pack-declare`) or any **signal-bearing
   `gh … --json`** requires the **same §6-class field-preservation gate + schema refresh +
   exact-pattern rollback** as the `ao` path — never the contextual qualifier alone.
 - Only **low-risk shapes not already in §R.3 passthrough** that have cleared the sensitivity

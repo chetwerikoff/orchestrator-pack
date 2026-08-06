@@ -14,11 +14,11 @@ import {
   branchMatchesIssue,
   captureLeakReason,
   collectOpenPrSnapshot,
-  normalizeAoSessionRow,
+  normalizeRuntimeWorkerRow,
   resolveFoundationBinding,
   sanitizerIdentity,
-  sanitizeAoSessions,
-  validateAoPreflight,
+  sanitizeRuntimeWorkers,
+  validateRuntimePreflight,
   type OpenPrSnapshotRow,
 } from './binding.ts';
 import {
@@ -28,7 +28,7 @@ import {
 } from './config.ts';
 import { runSyntheticMigration } from './migration-journal.ts';
 import { buildDormantScheduler, runDormantMergeActuator } from './scheduler.ts';
-import { fixtureAoSession } from './test-fixtures.ts';
+import { fixtureRuntimeWorker } from './test-fixtures.ts';
 import {
   DISPATCH_OUTCOME_DISPATCHED,
   DRAFT_STATE_DRAFT_PRESENT,
@@ -40,7 +40,7 @@ function invariant(condition: unknown, reason: string): asserts condition {
 }
 
 function session() {
-  return fixtureAoSession();
+  return fixtureRuntimeWorker();
 }
 
 function openPr(draft = false, overrides: Partial<OpenPrSnapshotRow> = {}): OpenPrSnapshotRow {
@@ -75,26 +75,26 @@ function captureSecretRejected(): void {
 }
 
 function schemaExact(): void {
-  invariant(normalizeAoSessionRow(session()) !== null, 'verified_schema_rejected');
-  invariant(normalizeAoSessionRow({ ...session(), branch: 'issue-923' }) === null, 'schema_shape_broadened');
+  invariant(normalizeRuntimeWorkerRow(session()) !== null, 'verified_schema_rejected');
+  invariant(normalizeRuntimeWorkerRow({ ...session(), branch: 'issue-923' }) === null, 'schema_shape_broadened');
 }
 
 function preflightFailClosed(): void {
   const rows = [session()];
-  const sanitizerId = sanitizerIdentity(sanitizeAoSessions(rows));
-  invariant(!validateAoPreflight({
+  const sanitizerId = sanitizerIdentity(sanitizeRuntimeWorkers(rows));
+  invariant(!validateRuntimePreflight({
     command: 'ao session get --json',
     appStateVersion: '0.10.3',
     sessions: rows,
     sanitizerId,
   }).ok, 'preflight_command_accepted');
-  invariant(!validateAoPreflight({
+  invariant(!validateRuntimePreflight({
     command: 'ao session ls --json',
     appStateVersion: '0.10.3',
     sessions: [],
     sanitizerId,
   }).ok, 'preflight_empty_fleet_accepted');
-  invariant(!validateAoPreflight({
+  invariant(!validateRuntimePreflight({
     command: 'ao session ls --json',
     appStateVersion: '0.10.4',
     sessions: rows,

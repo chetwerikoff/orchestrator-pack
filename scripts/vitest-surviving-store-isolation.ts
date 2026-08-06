@@ -19,10 +19,10 @@ if (process.env.OPK_VITEST_HARNESS === '1') {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
   }
 
-  process.env.AO_ORCHESTRATOR_ESCALATION_STATE = join(
+  process.env.OPK_ORCHESTRATOR_ESCALATION_STATE = join(
     stateDir,
     'orchestrator-escalation-state.json',
   );
-  process.env.AO_OPERATOR_ESCALATION_INBOX = inboxDir;
-  process.env.AO_ESCALATION_HEALTH_SPOOL = healthDir;
+  process.env.OPK_OPERATOR_ESCALATION_INBOX = inboxDir;
+  process.env.OPK_ESCALATION_HEALTH_SPOOL = healthDir;
 }

@@ -31,14 +31,14 @@ afterEach(() => {
 });
 
 describe('[AC4/AC5] review 4750643719 regressions', () => {
-  it('honors AO_WORKER_NUDGE_CLAIM_DIR through the canonical store-id namespace', () => {
+  it('honors OPK_WORKER_NUDGE_CLAIM_DIR through the canonical store-id namespace', () => {
     const base = root('opk-claim-namespace-');
     const override = path.join(base, 'Claim Store');
     mkdirSync(override, { recursive: true });
-    process.env.AO_BASE_DIR = path.join(base, 'ao-base');
-    process.env.AO_WORKER_NUDGE_CLAIM_DIR = override;
+    process.env.OPK_BASE_DIR = path.join(base, 'ao-base');
+    process.env.OPK_WORKER_NUDGE_CLAIM_DIR = override;
     expect(workerNudgeClaimNamespace('orchestrator-pack')).toBe(path.join(
-      process.env.AO_BASE_DIR,
+      process.env.OPK_BASE_DIR,
       'projects',
       'orchestrator-pack',
       'worker-nudge-claims',
@@ -101,18 +101,18 @@ describe('[AC4/AC5] review 4750643719 regressions', () => {
     'keeps a successful multiline notification pending and persists reviewRunId',
     async () => {
       const base = root('opk-notification-journal-');
-      const fakeAo = path.join(base, 'ao');
+      const fakeRuntime = path.join(base, 'ao');
       const journal = path.join(base, 'dispatch-journal.json');
-      writeFileSync(fakeAo, '#!/usr/bin/env node\nprocess.exit(0);\n', 'utf8');
-      chmodSync(fakeAo, 0o755);
+      writeFileSync(fakeRuntime, '#!/usr/bin/env node\nprocess.exit(0);\n', 'utf8');
+      chmodSync(fakeRuntime, 0o755);
       Object.assign(process.env, {
         OPK_VITEST_HARNESS: '1',
         PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER: '1',
         PACK_REVIEW_WORKER_NOTIFICATION_FIXTURE_TARGET: 'worker-923:worker-923',
         AO_SESSION_ID: 'orchestrator-surface',
-        AO_BASE_DIR: path.join(base, 'ao-base'),
-        AO_JOURNALED_SEND_ASSUME_CONTRACT: '1',
-        AO_WORKER_MESSAGE_DISPATCH_JOURNAL: journal,
+        OPK_BASE_DIR: path.join(base, 'ao-base'),
+        OPK_JOURNALED_SEND_ASSUME_CONTRACT: '1',
+        OPK_WORKER_MESSAGE_DISPATCH_JOURNAL: journal,
       });
       const head = 'a'.repeat(40);
       const runId = 'prr-review-4750643719';
@@ -131,7 +131,7 @@ describe('[AC4/AC5] review 4750643719 regressions', () => {
         request: { message, idempotencyKey: key, reviewRunId: runId },
         foundationConfig: {
           notification: {
-            aoPath: fakeAo,
+            runtimePath: fakeRuntime,
             timeoutMs: 5_000,
             maxJournalAttempts: 2,
             argvCeilingChars: 32_767,

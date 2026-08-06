@@ -60,11 +60,11 @@ const LOW_PREFIXES = ['grep', 'find', 'cat ', 'cat\t', 'ls ', 'ls\t', 'wc ', 'he
 const MEDIUM_PREFIXES = ['gh pr', 'gh issue', 'git branch', 'git log'];
 const HIGH_PREFIXES = [
   'ao status', 'ao-review', 'ao events', 'ao report', 'ao send', 'ao spawn',
-  'npx ao-declare', 'ao-declare', 'git diff', 'gh pr checks',
+  'npx pack-declare', 'pack-declare', 'git diff', 'gh pr checks',
 ];
 const SENSITIVITY_TARGETS = [
   '.env', 'credentials', 'secret', 'token', 'private-key', 'id_rsa',
-  'declarations/', '.ao/declarations', 'agent-orchestrator.yaml',
+  'declarations/', '.orchestrator-pack/declarations', 'agent-orchestrator.yaml',
 ];
 
 function repoRoot(): string {

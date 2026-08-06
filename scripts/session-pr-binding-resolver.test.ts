@@ -45,7 +45,7 @@ beforeEach(() => {
     mkdtempSync(path.join(tmpdir(), 'session-pr-binding-cache-')),
     'cache.json',
   );
-  process.env.AO_PR_SESSION_BINDING_CACHE = isolatedBindingCachePath;
+  process.env.OPK_PR_SESSION_BINDING_CACHE = isolatedBindingCachePath;
 });
 
 function headOwnerOptions(extra: Record<string, unknown> = {}) {

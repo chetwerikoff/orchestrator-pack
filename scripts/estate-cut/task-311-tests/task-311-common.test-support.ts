@@ -273,7 +273,7 @@ const expectedHead = process.env.TASK311_EXPECTED_HEAD;
 const expectedSession = process.env.TASK311_EXPECTED_SESSION;
 const fail = (message) => { process.stderr.write(message + '\\n'); process.exit(64); };
 const valueAfter = (flag) => { const index = args.indexOf(flag); return index >= 0 ? args[index + 1] : ''; };
-if (!args.some((value) => /plugins[\\\\/]ao-codex-pr-reviewer[\\\\/]bin[\\\\/]review\\.ts$/.test(value))) fail('real plugin reviewer wrapper was not invoked');
+if (!args.some((value) => /plugins[\\\\/]codex-pr-reviewer[\\\\/]bin[\\\\/]review\\.ts$/.test(value))) fail('real plugin reviewer wrapper was not invoked');
 if (valueAfter('--pr-number') !== expectedPr) fail('reviewer argv lost exact PR');
 const reviewRoot = valueAfter('--repo-root');
 if (!reviewRoot) fail('reviewer argv lost worktree root');
@@ -288,10 +288,10 @@ fs.appendFileSync(trace, JSON.stringify({ event: 'reviewer-wrapper', sequence, a
 process.stdout.write(JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }) + '\\n');
 `, 'utf8');
   if (process.platform === 'win32') {
-    writeExecutable(path.join(bin, 'node.cmd'), `@echo off\r\nset args=%*\r\necho %args% | findstr /C:"plugins\\ao-codex-pr-reviewer\\bin\\review.ts" >nul\r\nif %errorlevel%==0 ("${process.execPath}" "${fakeReviewer}" %*) else ("${process.execPath}" %*)\r\n`);
+    writeExecutable(path.join(bin, 'node.cmd'), `@echo off\r\nset args=%*\r\necho %args% | findstr /C:"plugins\\codex-pr-reviewer\\bin\\review.ts" >nul\r\nif %errorlevel%==0 ("${process.execPath}" "${fakeReviewer}" %*) else ("${process.execPath}" %*)\r\n`);
     writeExecutable(path.join(bin, 'npm.cmd'), '@echo off\r\nexit /b 0\r\n');
   } else {
-    writeExecutable(path.join(bin, 'node'), `#!/usr/bin/env sh\ncase "$*" in *plugins/ao-codex-pr-reviewer/bin/review.ts*) exec "${process.execPath}" "${fakeReviewer}" "$@" ;; *) exec "${process.execPath}" "$@" ;; esac\n`);
+    writeExecutable(path.join(bin, 'node'), `#!/usr/bin/env sh\ncase "$*" in *plugins/codex-pr-reviewer/bin/review.ts*) exec "${process.execPath}" "${fakeReviewer}" "$@" ;; *) exec "${process.execPath}" "$@" ;; esac\n`);
     writeExecutable(path.join(bin, 'npm'), '#!/usr/bin/env sh\nexit 0\n');
   }
   return bin;
@@ -303,8 +303,8 @@ export async function runPackReviewEntry(options: RunnerEntryOptions): Promise<R
   try {
     process.env.PATH = `${reviewerBin}${delimiter}${process.env.PATH ?? ''}`;
     process.env.PACK_REVIEWER = fixture.assembly.reviewer;
-    process.env.AO_REVIEW_CLAIM_DIR = path.join(options.root, 'claims');
-    process.env.AO_REVIEW_START_MONOTONIC_NOW_MS = '1000';
+    process.env.OPK_REVIEW_CLAIM_DIR = path.join(options.root, 'claims');
+    process.env.OPK_REVIEW_START_MONOTONIC_NOW_MS = '1000';
     process.env.OPK_VITEST_HARNESS = '1';
     process.env.TASK311_TRACE_FILE = options.tracePath;
     process.env.TASK311_EXPECTED_PR = String(options.expectedPr ?? options.target.prNumber);
@@ -419,7 +419,7 @@ function buildTriggerSnapshot(
     ciChecks: checks,
     requiredCheckNames: checks.map((check) => check.name),
     requiredCheckLookupFailed: false,
-    aoEvents: [],
+    runtimeEvents: [],
     dispatchJournal: {},
     workerDeliveries: [],
     reactionMessages: {},

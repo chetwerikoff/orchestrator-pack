@@ -4,7 +4,7 @@
   Trusted-base entrypoint for checkpoint-2 contract-evidence re-verification (Issue #376).
 
   Reviewers must invoke this script from origin/main (clean main worktree,
-  AO_TRUSTED_PACK_ROOT, or an origin/main archive checkout), never from the PR
+  OPK_TRUSTED_PACK_ROOT, or an origin/main archive checkout), never from the PR
   checkout under review.
 #>
 param(
@@ -57,7 +57,7 @@ function Assert-LauncherInvokedOutsideReviewTarget {
 
     $reviewPrefix = $reviewTarget + [IO.Path]::DirectorySeparatorChar
     if ($launcher.StartsWith($reviewPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'refusing PR-checkout launcher: invoke launch-contract-evidence-reverify.ps1 from trusted pack root (origin/main worktree, AO_TRUSTED_PACK_ROOT, or origin/main archive), not from the review target'
+        throw 'refusing PR-checkout launcher: invoke launch-contract-evidence-reverify.ps1 from trusted pack root (origin/main worktree, OPK_TRUSTED_PACK_ROOT, or origin/main archive), not from the review target'
     }
 }
 
@@ -102,8 +102,8 @@ function Resolve-TrustedReverifyCoreScript {
         }
     }
 
-    if ($env:AO_TRUSTED_PACK_ROOT) {
-        $trustedRoot = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
+    if ($env:OPK_TRUSTED_PACK_ROOT) {
+        $trustedRoot = (Resolve-Path -LiteralPath $env:OPK_TRUSTED_PACK_ROOT).Path
         if (-not (Test-PathInsideReviewTarget -CandidatePath $trustedRoot -ReviewTargetRoot $ReviewTargetRoot)) {
             if (Test-Path -LiteralPath (Join-Path $trustedRoot '.git')) {
                 Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
@@ -178,8 +178,8 @@ $resolvedImplementation = $null
 $disposableImplementationBootstrapRoot = $false
 $launcherTrustedBase = if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) {
     (Resolve-Path -LiteralPath $TrustedBaseRoot).Path
-} elseif ($env:AO_TRUSTED_PACK_ROOT) {
-    (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
+} elseif ($env:OPK_TRUSTED_PACK_ROOT) {
+    (Resolve-Path -LiteralPath $env:OPK_TRUSTED_PACK_ROOT).Path
 } else {
     $null
 }

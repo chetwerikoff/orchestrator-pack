@@ -136,15 +136,15 @@ export function evaluateOwnershipEvidence(input) {
   const sessionId = String(input.sessionId ?? '').trim();
   const session = asRecord(input.session);
   const worktreeRecord = asRecord(input.worktreeRecord);
-  const aoBaseDir = String(input.aoBaseDir ?? '').trim();
+  const stateBaseDir = String(input.stateBaseDir ?? '').trim();
   const danglingGitdir = Boolean(input.danglingGitdir);
 
   if (!canonicalPath) {
     return { ok: false, confidence: 'none', reason: 'missing_canonical_path' };
   }
 
-  const expectedNamespace = aoBaseDir
-    ? join(normalize(aoBaseDir), 'projects', projectId, 'worktrees')
+  const expectedNamespace = stateBaseDir
+    ? join(normalize(stateBaseDir), 'projects', projectId, 'worktrees')
     : '';
   const pathUnderNamespace = expectedNamespace
     ? isPathUnderPrefix(canonicalPath, expectedNamespace)

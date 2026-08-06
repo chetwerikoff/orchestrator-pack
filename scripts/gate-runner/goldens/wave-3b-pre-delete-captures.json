@@ -112,7 +112,7 @@
         "scripts/check-review-command-not-ao.ps1"
       ],
       "exitCode": 0,
-      "stdout": "[PASS] example REVIEW_COMMAND does not use .ao/ as primary path\n",
+      "stdout": "[PASS] example REVIEW_COMMAND does not use .orchestrator-pack/ as primary path\n",
       "artifacts": [],
       "captureMode": "real-clean-tree",
       "expectedRunnerStatus": "PASS"
@@ -154,7 +154,7 @@
         "scripts/verify.ps1"
       ],
       "exitCode": 0,
-      "stdout": "[PASS] plugins/ao-scope-guard/README.md - contract markers present\n",
+      "stdout": "[PASS] plugins/scope-guard/README.md - contract markers present\n",
       "stderr": "",
       "expectedRunnerStatus": "PASS",
       "expectedRunnerStdout": "[PASS] verify prompt inventory and plugin contract markers\n",
@@ -296,12 +296,12 @@
         "scripts/check-review-command-not-ao.ps1"
       ],
       "exitCode": 1,
-      "stdout": "[FAIL] Canonical REVIEW_COMMAND must not use gitignored .ao/ paths\n  REVIEW_COMMAND: pwsh .ao/review.ps1\n",
+      "stdout": "[FAIL] Canonical REVIEW_COMMAND must not use gitignored .orchestrator-pack/ paths\n  REVIEW_COMMAND: pwsh .orchestrator-pack/review.ps1\n",
       "stderr": "",
       "expectedRunnerStatus": "FAIL",
-      "expectedRunnerStdout": "[FAIL] Canonical REVIEW_COMMAND must not use gitignored .ao/ paths\n  REVIEW_COMMAND: pwsh .ao/review.ps1\n",
+      "expectedRunnerStdout": "[FAIL] Canonical REVIEW_COMMAND must not use gitignored .orchestrator-pack/ paths\n  REVIEW_COMMAND: pwsh .orchestrator-pack/review.ps1\n",
       "expectedRunnerDiagnostics": [
-        "Canonical REVIEW_COMMAND must not use gitignored .ao/ paths"
+        "Canonical REVIEW_COMMAND must not use gitignored .orchestrator-pack/ paths"
       ],
       "artifacts": []
     },
@@ -345,11 +345,11 @@
         "scripts/verify.ps1"
       ],
       "exitCode": 1,
-      "stdout": "[FAIL] plugins/ao-scope-guard/README.md - missing markers: runtime guard\nLEGACY_DIAGNOSTIC: Contract plugins/ao-scope-guard/README.md missing markers: runtime guard\n",
+      "stdout": "[FAIL] plugins/scope-guard/README.md - missing markers: runtime guard\nLEGACY_DIAGNOSTIC: Contract plugins/scope-guard/README.md missing markers: runtime guard\n",
       "stderr": "",
       "expectedRunnerStatus": "FAIL",
       "expectedRunnerDiagnostics": [
-        "Contract plugins/ao-scope-guard/README.md missing marker: runtime guard"
+        "Contract plugins/scope-guard/README.md missing marker: runtime guard"
       ],
       "parityDisposition": "The TypeScript runner preserves the failing contract path and marker diagnostic; its structured detail is singular per missing marker rather than verify.ps1 aggregate table wording.",
       "artifacts": []

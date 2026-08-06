@@ -39,7 +39,7 @@ export async function runFaultBoundaryInjectionCase(inject: string): Promise<voi
     {
       AO_WAKE_SUPERVISOR_TEST_MODE_escalation_router: 'tick-error',
       AO_WAKE_SUPERVISOR_TEST_INJECT_FAULT_escalation_router: inject,
-      AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '3',
+      OPK_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '3',
     },
   );
 

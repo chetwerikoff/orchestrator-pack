@@ -18,7 +18,7 @@ import {
   FIXTURE_HOLDER_PROMPT,
   claimOrSpawnFixtureHolder,
   isDedicatedFixtureHolderBranch,
-  listAoSessionRecordsFromOutputs,
+  listRuntimeWorkerRecordsFromOutputs,
   resolveAoFixtureSessionId,
   sessionOwnsRealPr,
 } from './lib/reverify-e2e-fixture-session.ts';
@@ -79,7 +79,7 @@ function isCheckpoint2ReviewerSummary(text) {
     && summaryHasEvaluatedRowEntries(trimmed);
 }
 
-function listAoSessions() {
+function listRuntimeWorkers() {
   const jsonListed = spawnSync('ao', ['session', 'ls', '--json'], {
     cwd: packRoot,
     encoding: 'utf8',
@@ -91,7 +91,7 @@ function listAoSessions() {
   if (jsonListed.status !== 0 && textListed.status !== 0) {
     return { records: [], source: 'none' };
   }
-  return listAoSessionRecordsFromOutputs({
+  return listRuntimeWorkerRecordsFromOutputs({
     jsonStdout: jsonListed.status === 0 ? jsonListed.stdout : '',
     textStdout: textListed.status === 0 ? textListed.stdout : '',
   });
@@ -114,7 +114,7 @@ function spawnEphemeralFixtureSession() {
 }
 
 function resolveAoFixtureSession() {
-  const sessionListing = listAoSessions();
+  const sessionListing = listRuntimeWorkers();
   return resolveAoFixtureSessionId({
     envSession: process.env.OPK_REVERIFY_E2E_SESSION,
     liveE2eEnabled: isLiveE2eEnabled(),
@@ -159,7 +159,7 @@ function runReviewerReverifyCommand({ env: envOverrides } = {}) {
   });
 }
 
-function parseAoReviewTriggerJson(stdout) {
+function parsePackReviewTriggerJson(stdout) {
   const jsonStart = stdout.indexOf('{');
   if (jsonStart < 0) {
     return null;
@@ -171,8 +171,8 @@ function parseAoReviewTriggerJson(stdout) {
   }
 }
 
-function aoReviewTriggerFailed({ aoProc, trigger }) {
-  if (aoProc.status !== 0) {
+function packReviewTriggerFailed({ runtimeProc, trigger }) {
+  if (runtimeProc.status !== 0) {
     return true;
   }
   if (!trigger?.ok) {
@@ -181,8 +181,8 @@ function aoReviewTriggerFailed({ aoProc, trigger }) {
   return false;
 }
 
-function runAoReviewTrigger(sessionId) {
-  const aoProc = spawnSync(
+function runPackReviewTrigger(sessionId) {
+  const runtimeProc = spawnSync(
     'pwsh',
     [
       '-NoProfile',
@@ -198,8 +198,8 @@ function runAoReviewTrigger(sessionId) {
       env: liveE2eEnv(),
     },
   );
-  const trigger = parseAoReviewTriggerJson(aoProc.stdout ?? '');
-  return { aoProc, trigger };
+  const trigger = parsePackReviewTriggerJson(runtimeProc.stdout ?? '');
+  return { runtimeProc, trigger };
 }
 
 function finalizeReviewerSummary(output, summary) {
@@ -226,11 +226,11 @@ const prompt = readFileSync(path.join(packRoot, 'prompts/codex_review_prompt.md'
 
 const output = {
   skipped: false,
-  viaAoReviewExecute: false,
+  viaPackReviewExecute: false,
   viaMechanicalReviewerCommand: false,
-  aoAvailable: false,
-  aoSessionId: null,
-  aoSessionIsDedicatedFixture: false,
+  runtimeAvailable: false,
+  runtimeWorkerId: null,
+  runtimeWorkerIsDedicatedFixture: false,
   promptContainsCheckpoint2: prompt.includes('Checkpoint-2 contract-evidence re-verification'),
   promptContainsInvokeScript: prompt.includes('launch-contract-evidence-reverify.ps1'),
   summaryIncludesRows: false,
@@ -257,20 +257,20 @@ if (!isLiveE2eEnabled() && !process.env.OPK_REVERIFY_E2E_SESSION?.trim()) {
   process.exit(1);
 }
 
-const aoAvailable = spawnSync('which', ['ao']).status === 0;
-output.aoAvailable = aoAvailable;
+const runtimeAvailable = spawnSync('which', ['ao']).status === 0;
+output.runtimeAvailable = runtimeAvailable;
 
-if (!aoAvailable) {
+if (!runtimeAvailable) {
   output.error = 'ao CLI is required for AC#13 end-to-end reviewer-flow fixture';
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   process.exit(1);
 }
 
-const sessionListing = listAoSessions();
+const sessionListing = listRuntimeWorkers();
 const sessionId = resolveAoFixtureSession();
-output.aoSessionId = sessionId;
+output.runtimeWorkerId = sessionId;
 const sessionRecord = sessionListing.records.find((session) => session.id === sessionId);
-output.aoSessionIsDedicatedFixture = sessionId === preferredSessionId
+output.runtimeWorkerIsDedicatedFixture = sessionId === preferredSessionId
   || Boolean(process.env.OPK_REVERIFY_E2E_SESSION?.trim())
   || isDedicatedFixtureHolderBranch(sessionRecord?.branch);
 
@@ -284,15 +284,15 @@ if (!sessionId) {
   process.exit(1);
 }
 
-const { aoProc, trigger: aoReviewTrigger } = runAoReviewTrigger(sessionId);
-output.viaAoReviewExecute = !aoReviewTriggerFailed({ aoProc, trigger: aoReviewTrigger });
+const { runtimeProc, trigger: packReviewTrigger } = runPackReviewTrigger(sessionId);
+output.viaPackReviewExecute = !packReviewTriggerFailed({ runtimeProc, trigger: packReviewTrigger });
 
-if (!output.viaAoReviewExecute) {
-  const detail = aoReviewTrigger?.reason
-    ?? aoReviewTrigger?.detail
-    ?? `exit ${aoProc.status ?? 'null'}`;
+if (!output.viaPackReviewExecute) {
+  const detail = packReviewTrigger?.reason
+    ?? packReviewTrigger?.detail
+    ?? `exit ${runtimeProc.status ?? 'null'}`;
   output.error = `AO review trigger path failed (${detail})`;
-  output.summary = (aoProc.stdout ?? aoProc.stderr ?? '').trim();
+  output.summary = (runtimeProc.stdout ?? runtimeProc.stderr ?? '').trim();
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   process.exit(1);
 }

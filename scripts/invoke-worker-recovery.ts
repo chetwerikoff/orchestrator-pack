@@ -64,7 +64,7 @@ function text(...values: unknown[]): string {
 }
 
 function sessionMetadataPath(options: WorkerRecoveryCliOptions): string {
-  const base = process.env.AO_BASE_DIR?.trim() || join(homedir(), '.agent-orchestrator');
+  const base = process.env.OPK_BASE_DIR?.trim() || join(homedir(), '.agent-orchestrator');
   return join(base, 'projects', options.projectId, 'sessions', `${options.sessionId || options.workerId}.json`);
 }
 

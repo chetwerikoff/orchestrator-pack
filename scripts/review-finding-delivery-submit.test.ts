@@ -29,7 +29,7 @@ type FixturePayload = {
   tracking?: { runs?: Record<string, Record<string, unknown>> };
   nowMs: number;
   config?: Record<string, unknown>;
-  aoEvents?: Record<string, unknown>[];
+  runtimeEvents?: Record<string, unknown>[];
   floodActiveSessions?: Record<string, boolean>;
 };
 
@@ -47,7 +47,7 @@ function planSubmitScenario(name: string) {
     tracking: fixture.tracking ?? { runs: {} },
     nowMs: fixture.nowMs,
     config: fixture.config,
-    aoEvents: fixture.aoEvents ?? [],
+    runtimeEvents: fixture.runtimeEvents ?? [],
     floodActiveSessions: fixture.floodActiveSessions ?? {},
   });
 }
@@ -128,7 +128,7 @@ describe('evaluateSubmitEligibility unit (legacy helper)', () => {
       },
       allRuns: [],
       openPrs: [{ number: 1, headRefOid: 'abc' }],
-      aoEvents: [],
+      runtimeEvents: [],
       floodActiveSessions: { s1: true },
       nowMs: 5000,
       config: { maxSubmits: 1 },

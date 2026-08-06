@@ -1381,7 +1381,7 @@ describe('Issue #1341 accepted operator-input smoke matrix completion', () => {
         OPK_VITEST_HARNESS: '1',
         PACK_REVIEWER: 'codex',
         PACK_REVIEW_GITHUB_REVIEW_CAPTURE_FILE: capture,
-        AO_BASE_DIR: join(root, 'ao-base'),
+        OPK_BASE_DIR: join(root, 'ao-base'),
         OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR: snapshotStore,
         PATH: `${binRoot}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`,
       },

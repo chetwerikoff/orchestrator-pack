@@ -430,10 +430,10 @@ function appendVerdictJournal({ paths, prNumber, headSha, gateRunId, finding, cl
 }
 
 function resolveTrustedSessionKind(input = {}) {
-  const envKind = normalizeTriageText(process.env.AO_SESSION_KIND ?? '');
+  const envKind = normalizeTriageText(process.env.OPK_SESSION_KIND ?? '');
   const payloadKind = normalizeTriageText(input.sessionKind ?? '');
   if (envKind && payloadKind && envKind !== payloadKind) {
-    throw new Error('session kind disagrees with trusted AO_SESSION_KIND');
+    throw new Error('session kind disagrees with trusted OPK_SESSION_KIND');
   }
   return envKind || payloadKind;
 }

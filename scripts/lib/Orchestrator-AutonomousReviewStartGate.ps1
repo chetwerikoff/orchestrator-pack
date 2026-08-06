@@ -17,7 +17,7 @@ function Test-OrchestratorAutonomousSurfaceActive {
 }
 
 function Test-OrchestratorClaimedReviewRunBypassActive {
-    return [string]$env:AO_CLAIMED_REVIEW_RUN_BYPASS -eq '1'
+    return [string]$env:OPK_CLAIMED_REVIEW_RUN_BYPASS -eq '1'
 }
 
 function Get-OrchestratorClaimedReviewRunGateVersion {

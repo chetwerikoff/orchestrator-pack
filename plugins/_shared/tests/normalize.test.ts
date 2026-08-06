@@ -34,7 +34,7 @@ describe('normalizePath', () => {
   });
 
   it('rejects backslashes', () => {
-    const result = normalizePath('plugins\\ao-scope-guard\\lib\\x.ts');
+    const result = normalizePath('plugins\\scope-guard\\lib\\x.ts');
     expect(result).toEqual({
       ok: false,
       reason: 'backslashes are not allowed; use forward slashes',

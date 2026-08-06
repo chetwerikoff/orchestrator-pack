@@ -32,7 +32,7 @@ export function applyOpkVitestHarnessEscalationEnv(rootDir?: string): {
   process.env.OPK_TESTMODE_LEASE_ROOT = join(paths.state, 'testmode-fleet-leases');
   return {
     root: paths.root,
-    statePath: process.env.AO_ORCHESTRATOR_ESCALATION_STATE as string,
+    statePath: process.env.OPK_ORCHESTRATOR_ESCALATION_STATE as string,
     inboxDir: paths.operatorInbox,
     healthDir: paths.healthSpool,
   };

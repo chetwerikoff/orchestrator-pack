@@ -18,7 +18,7 @@ function Get-OrchestratorSessionId {
 }
 
 function Get-OrchestratorWakeDedupStatePath {
-    $fromEnv = $env:AO_WAKE_DEDUP_STATE
+    $fromEnv = $env:OPK_WAKE_DEDUP_STATE
     if ($fromEnv) { return $fromEnv }
     return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-wake-dedup.json'
 }

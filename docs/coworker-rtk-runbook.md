@@ -37,7 +37,7 @@ This pack adds **five pattern families** (additive only):
 | `git log` | `git log` | History context for declaration / scope reasoning. |
 | `gh pr checks` | `gh pr checks` | Required-CI discipline in worker rules. |
 | `ao *` | `ao ` | All `ao` subcommands (`status`, `review`, `spawn`, `report`, `send`, …). |
-| `ao-declare` | `ao-declare`, `npx ao-declare` | Direct executable and `npx ao-declare --issue … --declared-paths …`. |
+| `pack-declare` | `pack-declare`, `npx pack-declare` | Direct executable and `npx pack-declare --issue … --declared-paths …`. |
 
 Tracked manifests:
 
@@ -92,10 +92,10 @@ markers, no truncated diff hunks, no missing snapshot fields.
 | `git log` | `git log -n 3 --oneline` on a repo with known commits | Documented subject and short hash |
 | `gh pr checks` | `gh pr checks <known-open-pr>` | Documented check names / status fields |
 | `ao *` | `ao status` in a running AO project | Documented status fields (project, session state) |
-| `ao-declare` | `ao-declare --issue N --declared-paths 'docs/foo.md'` in a **disposable** temp clone | `declared_paths`, issue id — not denylist hash text |
-| `npx ao-declare` | `npx ao-declare --issue N --declared-paths 'docs/foo.md'` in the same disposable target | Same observable snapshot fields |
+| `pack-declare` | `pack-declare --issue N --declared-paths 'docs/foo.md'` in a **disposable** temp clone | `declared_paths`, issue id — not denylist hash text |
+| `npx pack-declare` | `npx pack-declare --issue N --declared-paths 'docs/foo.md'` in the same disposable target | Same observable snapshot fields |
 
-Use an **isolated disposable target** (temp clone or reset per runbook) for declaration smokes so you do not mutate pack `.ao/declarations/**` or live project state.
+Use an **isolated disposable target** (temp clone or reset per runbook) for declaration smokes so you do not mutate pack `.orchestrator-pack/declarations/**` or live project state.
 
 ### Negative control (mandatory for `git diff`)
 
@@ -103,7 +103,7 @@ Use an **isolated disposable target** (temp clone or reset per runbook) for decl
 2. Re-run the same `git diff` sample — confirm observable compaction/truncation vs the passthrough-enabled run.
 3. **Restore** via `pwsh -NoProfile -File scripts/apply-coworker-rtk-passthrough.ps1`, re-verify `coworker rtk passthrough list`, and confirm positive `git diff` smoke passes before production observation.
 
-Negative control is **not required** for `ao *` / `ao-declare` — positive smoke is sufficient.
+Negative control is **not required** for `ao *` / `pack-declare` — positive smoke is sufficient.
 
 **Optional:** read-heavy negative control (`grep` / `cat` / `ls`) if your RTK version compacts them — confirms the hook is active, not only list bookkeeping.
 
@@ -171,7 +171,7 @@ pwsh -NoProfile -File scripts/check-rtk-passthrough-static.ps1
 ```
 
 Also invoked from `scripts/verify.ps1`. The guard asserts the **canonical five-family checklist**
-(including both `ao-declare` forms) and that the helper **merge preview** would apply every pack
+(including both `pack-declare` forms) and that the helper **merge preview** would apply every pack
 pattern additively.
 
 ## Missed-savings inventory (Issue #199)
