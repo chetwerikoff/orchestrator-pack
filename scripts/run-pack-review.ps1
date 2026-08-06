@@ -1,6 +1,6 @@
-# Canonical AO review entrypoint: dependency preflight then pack Codex wrapper.
-# Referenced by REVIEW_COMMAND in agent-orchestrator.yaml.example (Issue #60).
-# Accepts the same CLI-style flags as review.ps1 (--repo-root, --base).
+# Pack-owned Codex review wrapper: dependency preflight followed by the neutral
+# reviewer plugin entrypoint. Accepts the same CLI-style flags as review.ps1
+# (--repo-root, --base).
 #Requires -Version 5.1
 param()
 
