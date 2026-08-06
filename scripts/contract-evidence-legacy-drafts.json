@@ -2,8 +2,8 @@
   "description": "Pre-adoption draft paths grandfathered from mandatory contract-evidence block (Issue #366).",
   "paths": [
     "docs/issues_drafts/00-architecture-decisions.md",
-    "docs/issues_drafts/01-task-declaration-impl.md",
-    "docs/issues_drafts/02-scope-guard-runtime.md",
+    "docs/issues_drafts/01-ao-task-declaration-impl.md",
+    "docs/issues_drafts/02-ao-scope-guard-runtime.md",
     "docs/issues_drafts/03-scope-guard-ci.md",
     "docs/issues_drafts/04-self-architect-lint.md",
     "docs/issues_drafts/05-token-chain-ledger.md",
