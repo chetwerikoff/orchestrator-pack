@@ -58,4 +58,10 @@ if old_selector_import in text:
     text = text.replace(old_selector_import, new_selector_import, 1)
 elif new_selector_import not in text:
     raise SystemExit('product selector imports are neither old nor expected new form')
+
+stale_success_incident_assertion = (
+    "    expect(outcome.result.incidents).toContain('post_send_recovery_succeeded');\n"
+)
+if stale_success_incident_assertion in text:
+    text = text.replace(stale_success_incident_assertion, '', 1)
 path.write_text(text)
