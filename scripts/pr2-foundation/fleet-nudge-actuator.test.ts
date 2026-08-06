@@ -35,6 +35,7 @@ import type {
 import {
   acquireS2OneShotWorkerNudgeClaim,
   finalizeS2OneShotWorkerNudgeClaim,
+  markS2OneShotWorkerNudgeSendAttempted,
   markWorkerNudgeSendAttempted,
   persistWorkerNudgeMessageHash,
   pruneS2OneShotWorkerNudgeClaims,
@@ -241,7 +242,7 @@ function realEffects(input: {
         : { status: 'claim_untrusted' };
     },
     markSendAttempted: async (handle, options) =>
-      markWorkerNudgeSendAttempted(
+      markS2OneShotWorkerNudgeSendAttempted(
         handle.opaque as S2OneShotWorkerNudgeClaimHandle,
         options,
       ),
@@ -307,6 +308,7 @@ function authorityEnv(directory: string): NodeJS.ProcessEnv {
 }
 
 function resultFor(outcome: FleetNudgeUnitOutcome): FleetNudgeResult {
+  const attempted = ['dispatched', 'send_failed', 'dispatch_unknown'].includes(outcome);
   return {
     result: 'one-budgeted-gated-nudge-per-new-eligible-episode',
     status: 'complete',
@@ -317,10 +319,40 @@ function resultFor(outcome: FleetNudgeUnitOutcome): FleetNudgeResult {
     candidateOrder: ['episode'],
     outcomes: [{ unitRef: 'u-000001', class: 'idle', outcome }],
     claimStarts: outcome === 'target_unresolved' ? 0 : 1,
-    sendAttempts: outcome === 'dispatched' || outcome === 'dispatch_unknown' ? 1 : 0,
+    sendAttempts: attempted ? 1 : 0,
     dispatched: outcome === 'dispatched' ? 1 : 0,
     returnedWithinBudget: true,
     targetBindingAvailable: outcome !== 'target_unresolved',
+  };
+}
+
+function terminalTemplate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    key: 'key',
+    tupleKey: 'tuple',
+    prNumber: 0,
+    issueNumber: 1259,
+    projectId: 'orchestrator-pack',
+    cycleKey: 'class-changed:200:u-000001:busy:idle:positive-idle',
+    intentClass: 'task-continuation',
+    workerTarget: 'sg-retain:u-000001',
+    sessionId: 'sg-retain:u-000001',
+    targetId: 'u-000001',
+    targetGeneration: 'sg-retain',
+    phase: 'SENT',
+    state: 'SENT',
+    holder: { processGuid: 'holder', pid: 1, surface: 's2', host: 'host' },
+    acquiredAtUtc: '2026-08-06T00:00:00.000Z',
+    claimLeaseExpiresAtMs: 1,
+    tokenNonce: 'nonce',
+    policyTag: S2_ONE_SHOT_POLICY,
+    schedulerGeneration: 'sg-retain',
+    tickSequence: 200,
+    transitionIdentity: 'class-changed:200:u-000001:busy:idle:positive-idle',
+    unitRef: 'u-000001',
+    eligibleClass: 'idle',
+    ...overrides,
   };
 }
 
@@ -406,7 +438,7 @@ describe('S2 fleet nudge actuator', () => {
     });
   });
 
-  it('persists real claim and journal bytes without runtime-private identity', async () => {
+  it('persists canonical claim and journal bytes without runtime-private identity', async () => {
     const namespace = root('opk-s2-persistence-');
     const { effects, journalPath } = realEffects({ namespace });
     const result = await runFleetNudgeActuator({
@@ -414,7 +446,7 @@ describe('S2 fleet nudge actuator', () => {
       schedulerIntervalMs: 16_000,
       tickSequence: 2,
     }, effects);
-    expect(result.dispatched).toBe(1);
+    expect(result).toMatchObject({ status: 'complete', dispatched: 1 });
     expect(existsSync(journalPath)).toBe(true);
 
     const persisted = [
@@ -431,8 +463,14 @@ describe('S2 fleet nudge actuator', () => {
     expect(persisted).toContain(S2_ONE_SHOT_POLICY);
     expect(persisted).toContain('sg-s2-test');
     expect(persisted).toContain('u-000001');
-    expect(persisted).toContain('"state": "FINAL"');
-    expect(persisted).toContain('"outcome": "dispatched"');
+
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as Record<string, Record<string, unknown>>;
+    const record = Object.values(journal).find((entry) => entry?.policyTag === S2_ONE_SHOT_POLICY);
+    expect(record).toMatchObject({
+      source: 's2-fleet-nudge',
+      dispatchOutcome: 'dispatched',
+      fenceLifecycle: 'completed',
+    });
   });
 
   it.each([
@@ -451,6 +489,7 @@ describe('S2 fleet nudge actuator', () => {
       tickSequence: 2,
     }, effects);
     expect(first.outcomes[0]?.outcome).toBe(dispatchStatus);
+    expect(first.status).toBe('complete');
     const second = await runFleetNudgeActuator({
       observer: oneIdleObserver(),
       schedulerIntervalMs: 16_000,
@@ -489,6 +528,82 @@ describe('S2 fleet nudge actuator', () => {
       tickSequence: 2,
     }, effects);
     expect(second.outcomes[0]?.outcome).toBe('dispatched');
+  });
+
+  it('classifies a proved absent SEND_ATTEMPTED as budget_exhausted and releases', async () => {
+    const namespace = root('opk-s2-no-attempt-');
+    const real = realEffects({ namespace });
+    let attempts = 0;
+    const effects: FleetNudgeEffects = {
+      ...real.effects,
+      markSendAttempted: async (...args) => {
+        attempts += 1;
+        return attempts === 1
+          ? { status: 'definitely_not_recorded' }
+          : real.effects.markSendAttempted(...args);
+      },
+    };
+    const first = await runFleetNudgeActuator({
+      observer: oneIdleObserver(),
+      schedulerIntervalMs: 16_000,
+      tickSequence: 2,
+    }, effects);
+    expect(first).toMatchObject({ status: 'complete', sendAttempts: 0 });
+    expect(first.outcomes[0]?.outcome).toBe('budget_exhausted');
+    const second = await runFleetNudgeActuator({
+      observer: oneIdleObserver(),
+      schedulerIntervalMs: 16_000,
+      tickSequence: 2,
+    }, effects);
+    expect(second.outcomes[0]?.outcome).toBe('dispatched');
+  });
+
+  it('settles post-SEND_ATTEMPTED deadline expiry as UNCERTAIN without dispatch', async () => {
+    const namespace = root('opk-s2-post-attempt-expiry-');
+    const startedAt = Date.now();
+    let observedNow = startedAt;
+    const real = realEffects({ namespace });
+    const originalMark = real.effects.markSendAttempted;
+    const effects: FleetNudgeEffects = {
+      ...real.effects,
+      now: () => observedNow,
+      markSendAttempted: async (...args) => {
+        const recorded = await originalMark(...args);
+        observedNow = startedAt + 1_900;
+        return recorded;
+      },
+    };
+    const result = await runFleetNudgeActuator({
+      observer: oneIdleObserver(),
+      schedulerIntervalMs: 16_000,
+      tickSequence: 2,
+      phaseStartMs: startedAt,
+    }, effects);
+    expect(result).toMatchObject({
+      status: 'complete',
+      sendAttempts: 1,
+      dispatched: 0,
+    });
+    expect(result.outcomes[0]?.outcome).toBe('dispatch_unknown');
+    const terminalBytes = filesUnder(namespace)
+      .map((name) => readFileSync(path.join(namespace, name), 'utf8'))
+      .join('\n');
+    expect(terminalBytes).toContain('"phase":"UNCERTAIN"');
+  });
+
+  it('does not report complete when authoritative terminal settlement fails', async () => {
+    const namespace = root('opk-s2-settlement-failure-');
+    const real = realEffects({ namespace });
+    const result = await runFleetNudgeActuator({
+      observer: oneIdleObserver(),
+      schedulerIntervalMs: 16_000,
+      tickSequence: 2,
+    }, {
+      ...real.effects,
+      finalizeJournal: async () => ({ ok: false }),
+    });
+    expect(result.status).toBe('failed');
+    expect(result.outcomes[0]?.outcome).toBe('dispatched');
   });
 
   it('has one claim winner and terminalizes stale SEND_ATTEMPTED as UNCERTAIN', async () => {
@@ -705,56 +820,27 @@ describe('S2 fleet nudge actuator', () => {
     expect(result.outcomes[0]?.outcome).toBe('epoch_lost');
   });
 
-  it('prunes after 128 ticks or restart and caps trusted terminals at 1024', () => {
+  it('prunes after 128 ticks or restart and rejects malformed retained state', () => {
     const namespace = root('opk-s2-retention-');
     const terminalDirectory = path.join(namespace, 'terminal', S2_ONE_SHOT_POLICY);
     mkdirSync(terminalDirectory, { recursive: true });
-    const template = {
-      schemaVersion: 1,
-      key: 'key',
-      tupleKey: 'tuple',
-      prNumber: 0,
-      issueNumber: 1259,
-      projectId: 'orchestrator-pack',
-      cycleKey: 'class-changed:1:u-000001:busy:idle:positive-idle',
-      intentClass: 'task-continuation',
-      workerTarget: 'sg-retain:u-000001',
-      sessionId: 'sg-retain:u-000001',
-      targetId: 'u-000001',
-      targetGeneration: 'sg-retain',
-      phase: 'SENT',
-      state: 'SENT',
-      holder: { processGuid: 'holder', pid: 1, surface: 's2', host: 'host' },
-      acquiredAtUtc: '2026-08-06T00:00:00.000Z',
-      claimLeaseExpiresAtMs: 1,
-      tokenNonce: 'nonce',
-      policyTag: S2_ONE_SHOT_POLICY,
-      schedulerGeneration: 'sg-retain',
-      tickSequence: 200,
-      transitionIdentity: 'class-changed:200:u-000001:busy:idle:positive-idle',
-      unitRef: 'u-000001',
-      eligibleClass: 'idle',
-    };
-    for (let index = 0; index < S2_MAX_TERMINALS_PER_GENERATION + 2; index += 1) {
-      writeFileSync(path.join(terminalDirectory, `${index}.json`), `${JSON.stringify({
-        ...template,
+    for (let index = 0; index < 32; index += 1) {
+      writeFileSync(path.join(terminalDirectory, `${index}.json`), `${JSON.stringify(terminalTemplate({
         key: `key-${index}`,
         tupleKey: `tuple-${index}`,
         tickSequence: 200 + (index % 10),
-      })}\n`, 'utf8');
+      }))}\n`, 'utf8');
     }
-    writeFileSync(path.join(terminalDirectory, 'expired.json'), `${JSON.stringify({
-      ...template,
+    writeFileSync(path.join(terminalDirectory, 'expired.json'), `${JSON.stringify(terminalTemplate({
       key: 'expired',
       tupleKey: 'expired',
       tickSequence: 72,
-    })}\n`, 'utf8');
-    writeFileSync(path.join(terminalDirectory, 'old-generation.json'), `${JSON.stringify({
-      ...template,
+    }))}\n`, 'utf8');
+    writeFileSync(path.join(terminalDirectory, 'old-generation.json'), `${JSON.stringify(terminalTemplate({
       key: 'old-generation',
       tupleKey: 'old-generation',
       schedulerGeneration: 'sg-old',
-    })}\n`, 'utf8');
+    }))}\n`, 'utf8');
 
     const pruned = pruneS2OneShotWorkerNudgeClaims({
       namespace,
@@ -762,14 +848,44 @@ describe('S2 fleet nudge actuator', () => {
       tickSequence: 200,
       deadlineMs: Date.now() + 2_000,
     });
-    expect(pruned).toMatchObject({
-      retained: S2_MAX_TERMINALS_PER_GENERATION,
-      untrusted: 0,
-    });
-    expect(pruned.removed).toBeGreaterThanOrEqual(4);
-    expect(readdirSync(terminalDirectory)).toHaveLength(S2_MAX_TERMINALS_PER_GENERATION);
+    expect(pruned).toEqual({ removed: 2, retained: 32, untrusted: 0 });
+    expect(readdirSync(terminalDirectory)).toHaveLength(32);
     expect(S2_RETENTION_TICKS).toBe(128);
+
+    writeFileSync(path.join(terminalDirectory, 'malformed.json'), '{not-json', 'utf8');
+    expect(() => pruneS2OneShotWorkerNudgeClaims({
+      namespace,
+      schedulerGeneration: 'sg-retain',
+      tickSequence: 200,
+      deadlineMs: Date.now() + 2_000,
+    })).toThrow('claim_untrusted');
   });
+
+  it('fails closed within budget for an oversized real store and a 256-unit fleet', async () => {
+    const namespace = root('opk-s2-large-store-');
+    const terminalDirectory = path.join(namespace, 'terminal', S2_ONE_SHOT_POLICY);
+    mkdirSync(terminalDirectory, { recursive: true });
+    for (let index = 0; index < S2_MAX_TERMINALS_PER_GENERATION + 1; index += 1) {
+      writeFileSync(path.join(terminalDirectory, `${index}.json`), '{}\n', 'utf8');
+    }
+    const rows = Array.from({ length: 256 }, (_, index) =>
+      row(`u-${String(index + 1).padStart(6, '0')}`, 'idle'));
+    const transitions = rows.map((entry) => changed(entry.unitRef, 'idle'));
+    const { effects, sends } = realEffects({ namespace });
+    const startedAt = Date.now();
+    const result = await runFleetNudgeActuator({
+      observer: observerResult({ rows, transitions }),
+      schedulerIntervalMs: 16_000,
+      tickSequence: 2,
+      phaseStartMs: startedAt,
+    }, effects);
+    expect(Date.now() - startedAt).toBeLessThan(2_250);
+    expect(sends).toHaveLength(0);
+    expect(result.status).toBe('failed');
+    expect(result.outcomes).toHaveLength(256);
+    expect(result.outcomes.every((entry) => entry.outcome === 'claim_untrusted')).toBe(true);
+    expect(result.returnedWithinBudget).toBe(true);
+  }, 5_000);
 
   it('orders serially and starts no more than eight candidates', async () => {
     const rows = Array.from({ length: 12 }, (_, index) => row(`u-${String(index + 1).padStart(6, '0')}`, 'idle'));
@@ -791,7 +907,7 @@ describe('S2 fleet nudge actuator', () => {
       acquireClaim: async () => ({ status: 'acquired', handle: { opaque: {} } }),
       persistMessageHash: async () => ({ ok: true }),
       admitJournal: async () => ({ status: 'admitted', handle: { opaque: {} } }),
-      markSendAttempted: async () => ({ ok: true }),
+      markSendAttempted: async () => ({ status: 'recorded' }),
       releaseClaim: async () => ({ ok: true }),
       dispatch: async () => ({ status: 'dispatched' }),
       finalizeClaim: async () => ({ ok: true }),
@@ -806,6 +922,40 @@ describe('S2 fleet nudge actuator', () => {
     expect(started).toHaveLength(S2_MAX_STARTS_PER_TICK);
     expect(started).toEqual([...result.candidateOrder].slice(0, S2_MAX_STARTS_PER_TICK));
     expect(result.outcomes.filter((entry) => entry.outcome === 'budget_exhausted')).toHaveLength(4);
+  });
+
+  it('does not carry a fresh-baseline episode into later ticks', async () => {
+    const namespace = root('opk-s2-no-carryover-');
+    const { effects, sends } = realEffects({ namespace });
+    const first = await runFleetNudgeActuator({
+      observer: observerResult({
+        rows: [row('u-000001', 'idle')],
+        transitions: [appeared('u-000001', 2)],
+        tickSequence: 2,
+        schedulerGeneration: 'sg-no-carryover',
+      }),
+      schedulerIntervalMs: 16_000,
+      tickSequence: 2,
+    }, effects);
+    const second = await runFleetNudgeActuator({
+      observer: observerResult({
+        rows: [row('u-000001', 'idle')],
+        transitions: [],
+        tickSequence: 3,
+        schedulerGeneration: 'sg-no-carryover',
+      }),
+      schedulerIntervalMs: 16_000,
+      tickSequence: 3,
+    }, effects);
+    const third = await runFleetNudgeActuator({
+      observer: oneIdleObserver('u-000001', 4, 'sg-no-carryover'),
+      schedulerIntervalMs: 16_000,
+      tickSequence: 4,
+    }, effects);
+    expect(first.outcomes[0]?.outcome).toBe('fresh_baseline_ineligible');
+    expect(second.outcomes[0]?.outcome).toBe('not_new_episode');
+    expect(third.outcomes[0]?.outcome).toBe('dispatched');
+    expect(sends).toHaveLength(1);
   });
 
   it('uses restored observer tickSequence after scheduler restart and on the next tick', async () => {
@@ -860,6 +1010,7 @@ describe('S2 fleet nudge actuator', () => {
     'claim_terminal',
     'budget_exhausted',
     'dispatch_unknown',
+    'send_failed',
     'dispatched',
     'throw',
   ] as const)('keeps review-start accounting identical for S2 outcome %s', async (outcome) => {
