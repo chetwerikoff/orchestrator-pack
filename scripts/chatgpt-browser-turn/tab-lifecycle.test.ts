@@ -28,6 +28,7 @@ import { loadChromium } from './ui-adapter.ts';
 import {
   buildBrowserTurnCancellationReceipt,
   cancelOwnedGenerationFromReceipt,
+  EXPLICIT_CANCELLATION_AUTHORITY,
   isSupportedChatGptConversationUrl,
   stopOwnedGeneration,
 } from './state-light-cancellation.ts';
@@ -506,7 +507,7 @@ describe('Issue #1238 mechanically derived production graph', () => {
 });
 
 
-describe('Issue #1283 explicit Stop authority', () => {
+describe('Issue #1377 explicit abandonment authority', () => {
   function nonOkResult() {
     return makeTurnResult({
       state: 'no_reply',
@@ -540,19 +541,18 @@ describe('Issue #1283 explicit Stop authority', () => {
     expect(close).not.toHaveBeenCalled();
   });
 
-  it('Stops the explicit proven target once and never closes it on non-ok', async () => {
+  it('does not treat an explicit owned page handle as independent cancellation authority', async () => {
     const stopClick = vi.fn(async () => undefined);
     const close = vi.fn(async () => undefined);
-    const control = {
-      click: stopClick,
-      waitFor: vi.fn(async () => undefined),
-    };
     const page = {
       isClosed: () => false,
       close,
       locator: () => ({
         count: vi.fn(async () => 1),
-        first: () => control,
+        first: () => ({
+          click: stopClick,
+          waitFor: vi.fn(async () => undefined),
+        }),
       }),
     };
     const browser = { isConnected: () => true, close: vi.fn(async () => undefined) };
@@ -562,13 +562,13 @@ describe('Issue #1283 explicit Stop authority', () => {
       browser,
       result: nonOkResult(),
     });
-    expect(stopClick).toHaveBeenCalledTimes(1);
+    expect(stopClick).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
     expect(result.cleanup).toBe('skipped');
-    expect(result.incidents).toContain('owned_generation_stop_confirmed');
+    expect(result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
   });
 
-  it('forfeiture suppresses even an otherwise explicit Stop target', async () => {
+  it('forfeiture suppresses even an otherwise exact owned target', async () => {
     const stopClick = vi.fn(async () => undefined);
     const page = {
       isClosed: () => false,
@@ -591,7 +591,7 @@ describe('Issue #1283 explicit Stop authority', () => {
 });
 
 
-describe('Issue #1283 receipt-bound cancellation primitive', () => {
+describe('Issue #1377 cancellation actuator and receipt admission', () => {
   const marker = `OPKTURNV1${'12'.repeat(16)}`;
   const ownedUrl = 'https://chatgpt.com/c/11111111-1111-4111-8111-111111111111';
   const foreignUrl = 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222';
@@ -604,38 +604,146 @@ describe('Issue #1283 receipt-bound cancellation primitive', () => {
     expect(isSupportedChatGptConversationUrl('https://chatgpt.com/c/not-a-uuid')).toBe(false);
   });
 
-  it('treats a missing Stop control as unconfirmed rather than completed', async () => {
+  it('requires explicit authority before inspecting a Stop control', async () => {
+    const count = vi.fn(async () => 1);
+    const click = vi.fn(async () => undefined);
     const page = {
       isClosed: () => false,
-      locator: () => ({ count: vi.fn(async () => 0) }),
+      locator: () => ({
+        count,
+        first: () => ({ click, waitFor: vi.fn(async () => undefined) }),
+      }),
     };
-    await expect(stopOwnedGeneration(page)).resolves.toBe('unconfirmed');
+    await expect(stopOwnedGeneration(page)).resolves.toBe('not_attempted_authority_absent');
+    expect(count).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
   });
 
-  it('Stops exactly one receipt-proven owned page and never closes a sibling', async () => {
+  it('does not click when the Stop control is absent or ambiguous', async () => {
+    for (const countValue of [0, 2]) {
+      const click = vi.fn(async () => undefined);
+      const close = vi.fn(async () => undefined);
+      const goto = vi.fn(async () => undefined);
+      const page = {
+        isClosed: () => false,
+        close,
+        goto,
+        locator: () => ({
+          count: vi.fn(async () => countValue),
+          first: () => ({ click, waitFor: vi.fn(async () => undefined) }),
+        }),
+      };
+      await expect(stopOwnedGeneration(page, EXPLICIT_CANCELLATION_AUTHORITY))
+        .resolves.toBe('not_attempted_control_absent_or_ambiguous');
+      expect(click).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+      expect(goto).not.toHaveBeenCalled();
+    }
+  });
+
+  it('clicks exactly once and confirms only from a fresh hidden witness', async () => {
+    const click = vi.fn(async () => undefined);
+    const waitFor = vi.fn(async () => undefined);
+    const count = vi.fn(async () => 1);
+    const page = {
+      isClosed: () => false,
+      locator: () => ({
+        count,
+        first: () => ({ click, waitFor }),
+      }),
+    };
+    await expect(stopOwnedGeneration(page, EXPLICIT_CANCELLATION_AUTHORITY))
+      .resolves.toBe('confirmed');
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(waitFor).toHaveBeenCalledTimes(1);
+    expect(count).toHaveBeenCalledTimes(1);
+  });
+
+  it('never retries when the post-click confirmation remains visible', async () => {
+    const click = vi.fn(async () => undefined);
+    const waitFor = vi.fn(async () => { throw new Error('still-visible'); });
+    const count = vi.fn(async () => 1);
+    const page = {
+      isClosed: () => false,
+      locator: () => ({
+        count,
+        first: () => ({ click, waitFor }),
+      }),
+    };
+    await expect(stopOwnedGeneration(page, EXPLICIT_CANCELLATION_AUTHORITY))
+      .resolves.toBe('unconfirmed');
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(count).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let a valid receipt and exact ownership proof substitute for authority', async () => {
     const owned = { url: () => ownedUrl, close: vi.fn() };
     const sibling = { url: () => foreignUrl, close: vi.fn() };
+    const connect = vi.fn(async () => ({}));
+    const enumeratePages = vi.fn(async () => [sibling, owned]);
     const stop = vi.fn(async () => 'confirmed' as const);
     const receipt = buildBrowserTurnCancellationReceipt({
-      invocationId: 'inv-1283',
-      profileKey: 'profile-1283',
+      invocationId: 'inv-1377-no-authority',
+      profileKey: 'profile-1377',
       conversationUrl: ownedUrl,
       marker,
       sendCount: 1,
     });
     expect(receipt).not.toBeNull();
     const result = await cancelOwnedGenerationFromReceipt(receipt!, 'http://127.0.0.1:9222', {
-      connect: vi.fn(async () => ({})),
+      connect,
       releaseBrowser: vi.fn(async () => undefined),
-      enumeratePages: vi.fn(async () => [sibling, owned]),
-      readUserMessages: vi.fn(async (page) => ({
-        messages: page === owned
-          ? [{ role: 'user' as const, text: `${marker}\n\nprompt` }]
-          : [{ role: 'user' as const, text: 'foreign prompt' }],
+      enumeratePages,
+      readUserMessages: vi.fn(async () => ({
+        messages: [{ role: 'user' as const, text: `${marker}\n\nprompt` }],
         incomplete: false,
       })),
       stop,
     });
+    expect(result).toMatchObject({
+      state: 'driver_error',
+      cause: 'child_stdout_eof_timeout_cancellation_authority_absent',
+      sendCount: 1,
+      stopOutcome: 'not_attempted_authority_absent',
+      identityProven: false,
+      conversationUrl: ownedUrl,
+    });
+    expect(connect).not.toHaveBeenCalled();
+    expect(enumeratePages).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect(owned.close).not.toHaveBeenCalled();
+    expect(sibling.close).not.toHaveBeenCalled();
+  });
+
+  it('allows one exact-owner Stop only when separate authority is present', async () => {
+    const owned = { url: () => ownedUrl, close: vi.fn() };
+    const sibling = { url: () => foreignUrl, close: vi.fn() };
+    const stop = vi.fn(async () => 'confirmed' as const);
+    const receipt = buildBrowserTurnCancellationReceipt({
+      invocationId: 'inv-1377-authorized',
+      profileKey: 'profile-1377',
+      conversationUrl: ownedUrl,
+      marker,
+      sendCount: 1,
+    });
+    expect(receipt).not.toBeNull();
+    const result = await cancelOwnedGenerationFromReceipt(
+      receipt!,
+      'http://127.0.0.1:9222',
+      EXPLICIT_CANCELLATION_AUTHORITY,
+      {
+        connect: vi.fn(async () => ({})),
+        releaseBrowser: vi.fn(async () => undefined),
+        enumeratePages: vi.fn(async () => [sibling, owned]),
+        readUserMessages: vi.fn(async (page) => ({
+          messages: page === owned
+            ? [{ role: 'user' as const, text: `${marker}\n\nprompt` }]
+            : [{ role: 'user' as const, text: 'foreign prompt' }],
+          incomplete: false,
+        })),
+        stop,
+      },
+    );
     expect(result).toMatchObject({
       state: 'no_reply',
       cause: 'child_stdout_eof_timeout_generation_stopped',
@@ -649,11 +757,47 @@ describe('Issue #1283 receipt-bound cancellation primitive', () => {
     expect(owned.close).not.toHaveBeenCalled();
     expect(sibling.close).not.toHaveBeenCalled();
   });
+
+  it('fails closed on duplicate exact-URL pages even with explicit authority', async () => {
+    const first = { url: () => ownedUrl, close: vi.fn() };
+    const second = { url: () => ownedUrl, close: vi.fn() };
+    const stop = vi.fn(async () => 'confirmed' as const);
+    const receipt = buildBrowserTurnCancellationReceipt({
+      invocationId: 'inv-1377-duplicate',
+      profileKey: 'profile-1377',
+      conversationUrl: ownedUrl,
+      marker,
+      sendCount: 1,
+    });
+    const result = await cancelOwnedGenerationFromReceipt(
+      receipt!,
+      'http://127.0.0.1:9222',
+      EXPLICIT_CANCELLATION_AUTHORITY,
+      {
+        connect: vi.fn(async () => ({})),
+        releaseBrowser: vi.fn(async () => undefined),
+        enumeratePages: vi.fn(async () => [first, second]),
+        readUserMessages: vi.fn(async () => ({
+          messages: [{ role: 'user' as const, text: `${marker}\n\nprompt` }],
+          incomplete: false,
+        })),
+        stop,
+      },
+    );
+    expect(result).toMatchObject({
+      state: 'driver_error',
+      stopOutcome: 'not_attempted_identity_unproven',
+      identityProven: false,
+    });
+    expect(stop).not.toHaveBeenCalled();
+    expect(first.close).not.toHaveBeenCalled();
+    expect(second.close).not.toHaveBeenCalled();
+  });
 });
 
 
 
-describe('Issue #1283 production runStateLightTurn recovery integration', () => {
+describe('Issue #1377 production runStateLightTurn recovery integration', () => {
   const marker = `OPKTURNV1${'78'.repeat(16)}`;
   const ownedUrl = 'https://chatgpt.com/c/77777777-7777-4777-8777-777777777777';
   const foreignUrl = 'https://chatgpt.com/c/88888888-8888-4888-8888-888888888888';
@@ -846,7 +990,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     expect(foreign.close).not.toHaveBeenCalled();
   });
 
-  it('emits truthful exhaustion, Stops the exact successor once, and preserves every tab', async () => {
+  it('emits truthful exhaustion and preserves the still-running exact successor', async () => {
     const owned = trackedPage(ownedUrl, true);
     const foreign = trackedPage(foreignUrl, true);
     const browser = { isConnected: () => true, close: vi.fn(async () => undefined) };
@@ -913,28 +1057,23 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       send_count: 1,
       cleanup: 'skipped',
     });
-    expect(outcome.result.incidents).toContain('owned_generation_stop_confirmed');
+    expect(outcome.result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
     expect(sends).toBe(1);
-    expect(owned.stopClick).toHaveBeenCalledTimes(1);
+    expect(owned.stopClick).not.toHaveBeenCalled();
     expect(owned.close).not.toHaveBeenCalled();
     expect(foreign.stopClick).not.toHaveBeenCalled();
     expect(foreign.close).not.toHaveBeenCalled();
   });
 
-  it('runs Stop, then fixes capture, then disconnects before emitting the production result', async () => {
-    const { BEFORE_CDP_BROWSER_RELEASE } = await import('./browser-session.ts');
+  it('fixes capture and disconnects without pressing Stop before emitting the result', async () => {
     const order: string[] = [];
-    let stopVisible = true;
-    const stopClick = vi.fn(async () => {
-      order.push('stop');
-      stopVisible = false;
-    });
+    const stopClick = vi.fn(async () => { order.push('stop'); });
     const page = {
       url: () => ownedUrl,
       isClosed: () => false,
       close: vi.fn(async () => undefined),
       locator: () => ({
-        count: vi.fn(async () => stopVisible ? 1 : 0),
+        count: vi.fn(async () => 1),
         first: () => ({
           click: stopClick,
           waitFor: vi.fn(async () => undefined),
@@ -944,7 +1083,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     const browser = {
       isConnected: () => true,
       [BEFORE_CDP_BROWSER_RELEASE]: vi.fn(async () => {
-        expect(stopClick).toHaveBeenCalledTimes(1);
+        expect(stopClick).not.toHaveBeenCalled();
         order.push('capture');
       }),
       close: vi.fn(async () => { order.push('disconnect'); }),
@@ -962,7 +1101,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       }),
     }));
     expect(outcome.code).not.toBe(0);
-    expect(order).toEqual(['stop', 'capture', 'disconnect']);
+    expect(order).toEqual(['capture', 'disconnect']);
     expect(outcome.result).toMatchObject({ cleanup: 'skipped', send_count: 1 });
   });
 });
