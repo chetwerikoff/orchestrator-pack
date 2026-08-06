@@ -485,7 +485,7 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'pages:context-pages:context:attachGateBWebSocketObservers',
       'pages:context-pages:contexts[0]:defaultEnumeratePages',
       'pages:context-pages:context:attachPlaywrightContextCdpObservers',
-      'pages:context-pages:context:recoverCurrentObservation',
+      'pages:context-pages:contexts[0]:recoverCurrentObservation',
       'pages:context-pages:context:runGateBCharacterization',
       'pages:context-pages:ctx:openGateBCharacterizationPage',
       'pages:context-pages:ctx:openTurnPage',

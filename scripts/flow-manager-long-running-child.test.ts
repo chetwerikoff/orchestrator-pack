@@ -765,6 +765,7 @@ describe('Issue #1283 long-running child EOF cancellation', () => {
       childCommand: fixture.command,
       childArgs: [
         ...fixture.args,
+        '--',
         '--cdp', cdp,
         '--profile', profile,
         '--invocation-id', invocation,
