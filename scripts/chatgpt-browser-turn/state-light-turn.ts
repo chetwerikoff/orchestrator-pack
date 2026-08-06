@@ -62,8 +62,11 @@ import {
 } from './state-light-fresh-conversation.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import {
+  ASSISTANT_TURN_ACTION_SELECTOR,
+  ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   classifyProductWall,
   COMPOSER_SELECTOR,
+  CONVERSATION_TURN_SECTION_SELECTOR,
   loadChromium,
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_NODE_SELECTOR,
@@ -141,6 +144,19 @@ export interface ParsedTurnArgs {
 interface PageMessage {
   readonly role: 'user' | 'assistant';
   readonly text: string;
+  /** Canonical observable carrier key; never synthesized from position or text. */
+  readonly key?: string;
+  readonly fingerprint?: string;
+}
+
+export interface AtomicTranscriptCarrier extends PageMessage {
+  readonly domIndex: number;
+  readonly fingerprint: string;
+}
+
+export interface AtomicTranscriptSnapshot {
+  readonly complete: boolean;
+  readonly carriers: readonly AtomicTranscriptCarrier[];
 }
 
 export interface PageObservationDecision {
@@ -179,7 +195,10 @@ export interface PageObservationResult {
   readonly messages: PageMessage[];
   readonly ownedWindowCompletionReady: boolean;
   readonly transcriptIncomplete: boolean;
+  readonly snapshot?: AtomicTranscriptSnapshot;
 }
+
+export type PageLiveness = 'live' | 'lost' | 'unknown';
 
 interface BrowserIncident {
   readonly eventClass: string;
@@ -316,6 +335,214 @@ function normalizeVisibleText(value: string): string {
   return value.replace(/\r\n?/g, '\n').replace(/[\t ]+/g, ' ').trim();
 }
 
+function transcriptFingerprint(role: PageMessage['role'], text: string): string {
+  return createHash('sha256').update(`${role}\u0000${normalizeVisibleText(text)}`, 'utf8').digest('hex');
+}
+
+function validCarrierKey(value: unknown): value is string {
+  return typeof value === 'string' && value.length >= 8;
+}
+
+async function boundedBrowserRead<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  timeoutCause: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(timeoutCause)), timeoutMs);
+    });
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+export function atomicSnapshotSignature(snapshot: AtomicTranscriptSnapshot): string {
+  return snapshot.carriers
+    .map((carrier) => `${carrier.role}\u0000${carrier.fingerprint}\u0000${carrier.key ?? ''}`)
+    .join('\u0001');
+}
+
+export function snapshotOwnedCarrier(
+  snapshot: AtomicTranscriptSnapshot,
+  marker: string,
+): AtomicTranscriptCarrier | undefined {
+  if (!snapshot.complete) return undefined;
+  const matches = snapshot.carriers.filter((carrier) => (
+    carrier.role === 'user' && ownedPromptMatches(carrier.text, marker)
+  ));
+  if (matches.length !== 1) return undefined;
+  return matches[0]?.key ? matches[0] : undefined;
+}
+
+export function keyedHarvestCandidate(
+  snapshot: AtomicTranscriptSnapshot,
+  baseline: AtomicTranscriptSnapshot | undefined,
+  ownedUserKey: string,
+): { state: 'ready'; reply: string; assistantKey: string } | { state: 'waiting' | 'foreign-user' | 'continuity-unproven' } {
+  if (!snapshot.complete || !baseline?.complete) return { state: 'continuity-unproven' };
+  const historical = snapshot.carriers.slice(0, baseline.carriers.length);
+  if (historical.length !== baseline.carriers.length) return { state: 'continuity-unproven' };
+  for (let index = 0; index < baseline.carriers.length; index++) {
+    const before = baseline.carriers[index]!;
+    const after = historical[index]!;
+    if (before.role !== after.role || before.fingerprint !== after.fingerprint) {
+      return { state: 'continuity-unproven' };
+    }
+    if (before.key && before.key !== after.key) return { state: 'continuity-unproven' };
+  }
+  const ownedIndex = snapshot.carriers.findIndex((carrier) => (
+    carrier.role === 'user' && carrier.key === ownedUserKey
+  ));
+  if (ownedIndex < baseline.carriers.length) return { state: 'continuity-unproven' };
+  const suffix = snapshot.carriers.slice(ownedIndex);
+  const laterUserOffset = suffix.slice(1).findIndex((carrier) => carrier.role === 'user');
+  const ownedWindow = laterUserOffset >= 0
+    ? suffix.slice(0, laterUserOffset + 1)
+    : suffix;
+  if (ownedWindow.some((carrier) => !carrier.key)) return { state: 'continuity-unproven' };
+  const keyedCarriers = snapshot.carriers.filter((carrier) => carrier.key);
+  const keyedValues = keyedCarriers.map((carrier) => carrier.key!);
+  if (new Set(keyedValues).size !== keyedValues.length) return { state: 'continuity-unproven' };
+  const assistants = ownedWindow.slice(1).filter((carrier) => carrier.role === 'assistant');
+  if (assistants.length === 0) {
+    return laterUserOffset >= 0 ? { state: 'foreign-user' } : { state: 'waiting' };
+  }
+  const assistant = assistants.at(-1)!;
+  const reply = normalizeVisibleText(assistant.text);
+  if (!assistant.key || !reply) return { state: 'continuity-unproven' };
+  return { state: 'ready', reply, assistantKey: assistant.key };
+}
+
+export async function revalidateKeyedHarvest(
+  page: any,
+  baseline: AtomicTranscriptSnapshot | undefined,
+  ownedUserKey: string,
+  expected: {
+    readonly reply: string;
+    readonly assistantKey: string;
+    readonly snapshotSignature: string;
+  },
+): Promise<{ state: 'ready'; reply: string } | { state: 'continuity-unproven' }> {
+  if (!page || !baseline?.complete) return { state: 'continuity-unproven' };
+  try {
+    const nodes = page.locator(MESSAGE_NODE_SELECTOR);
+    if (typeof nodes?.evaluateAll !== 'function') return { state: 'continuity-unproven' };
+    const observed = await boundedBrowserRead(
+      nodes.evaluateAll((elements: Element[], args: {
+        roleAttribute: string;
+        assistantKey: string;
+        turnSelector: string;
+        inProgressSelector: string;
+        actionSelector: string;
+      }) => {
+        const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
+        const canonicalKey = (element: Element): string | undefined => {
+          for (const attribute of ['data-message-id', 'data-turn-id']) {
+            const direct = element.getAttribute(attribute);
+            if (valid(direct)) return `${attribute}:${direct}`;
+            const descendant = Array.from(element.querySelectorAll(`[${attribute}]`))
+              .find((candidate) => valid(candidate.getAttribute(attribute)));
+            const value = descendant?.getAttribute(attribute) ?? null;
+            if (valid(value)) return `${attribute}:${value}`;
+          }
+          return undefined;
+        };
+        const rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }> = [];
+        for (let domIndex = 0; domIndex < elements.length; domIndex++) {
+          const element = elements[domIndex]!;
+          try {
+            rows.push({
+              role: element.getAttribute(args.roleAttribute) ?? '',
+              text: (element as HTMLElement).innerText,
+              key: canonicalKey(element),
+              domIndex,
+              complete: true,
+            });
+          } catch {
+            rows.push({ role: '', text: '', domIndex, complete: false });
+          }
+        }
+        const matches = rows.filter((row) => row.key === args.assistantKey);
+        if (matches.length !== 1) return { rows, assistantFinal: false };
+        const row = matches[0]!;
+        const element = elements[row.domIndex]!;
+        const turn = element.closest(args.turnSelector) ?? element;
+        const assistantFinal = !turn.querySelector(args.inProgressSelector)
+          && Boolean(turn.querySelector(args.actionSelector));
+        return { rows, assistantFinal };
+      }, {
+        roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
+        assistantKey: expected.assistantKey,
+        turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
+        inProgressSelector: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+        actionSelector: ASSISTANT_TURN_ACTION_SELECTOR,
+      }),
+      MAX_LOCAL_READ_WAIT_MS,
+      'keyed_harvest_revalidation_timeout',
+    ) as {
+      rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }>;
+      assistantFinal: boolean;
+    };
+    if (!observed.assistantFinal) return { state: 'continuity-unproven' };
+    const carriers: AtomicTranscriptCarrier[] = [];
+    for (const row of observed.rows) {
+      if (!row.complete || (row.role !== 'user' && row.role !== 'assistant') || typeof row.text !== 'string') {
+        return { state: 'continuity-unproven' };
+      }
+      const role = row.role as PageMessage['role'];
+      carriers.push({
+        role,
+        text: row.text,
+        ...(validCarrierKey(row.key) ? { key: row.key } : {}),
+        fingerprint: transcriptFingerprint(role, row.text),
+        domIndex: row.domIndex,
+      });
+    }
+    const revalidatedSnapshot = { complete: true, carriers } as const;
+    const candidate = keyedHarvestCandidate(revalidatedSnapshot, baseline, ownedUserKey);
+    if (
+      atomicSnapshotSignature(revalidatedSnapshot) !== expected.snapshotSignature
+      || candidate.state !== 'ready'
+      || candidate.assistantKey !== expected.assistantKey
+      || candidate.reply !== expected.reply
+    ) {
+      return { state: 'continuity-unproven' };
+    }
+    return { state: 'ready', reply: candidate.reply };
+  } catch {
+    return { state: 'continuity-unproven' };
+  }
+}
+
+export async function probePageLiveness(page: any, browser: any): Promise<PageLiveness> {
+  if (!page) return 'lost';
+  try {
+    if (typeof page.isClosed !== 'function') return 'unknown';
+    const closed = page.isClosed();
+    if (typeof closed !== 'boolean') return 'unknown';
+    if (closed) return 'lost';
+    if (!browser) return 'lost';
+    if (typeof browser.isConnected !== 'function') return 'unknown';
+    const connected = browser.isConnected();
+    if (typeof connected !== 'boolean') return 'unknown';
+    if (!connected) return 'lost';
+    const nodes = page.locator(MESSAGE_NODE_SELECTOR);
+    const readable = await boundedBrowserRead(
+      Promise.resolve(nodes.count()).then((value) => (
+        Number.isSafeInteger(Number(value)) && Number(value) >= 0
+      )),
+      MAX_LOCAL_READ_WAIT_MS,
+      'page_liveness_probe_timeout',
+    );
+    return readable ? 'live' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 function normalizeEchoComparisonText(value: string): string {
   return collapseUnicodeWhitespace(value.replace(/\u200b/g, ''));
 }
@@ -348,7 +575,6 @@ const REPLY_STABILITY_TAIL_CHARS = DIAGNOSTIC_HEAD_CHARS;
 function normalizeReplyForStability(text: string): string {
   return stripUiCollapseAffixes(normalizeEchoComparisonText(text));
 }
-
 
 export function hasOwnedUserMessage(messages: readonly PageMessage[], expectedMarker: string): boolean {
   return messages.some((message) => message.role === 'user' && ownedPromptMatches(message.text, expectedMarker));
@@ -451,7 +677,6 @@ function maybeEmitObservationHeartbeat(
   return now;
 }
 
-
 function maybeReturnObservationUncertain(
   now: number,
   hardExhaustionDeadline: number,
@@ -479,12 +704,19 @@ function maybeReturnObservationUncertain(
     ...(observedUserHeads && observedUserHeads.length > 0 ? { observed_user_heads: observedUserHeads } : {}),
   };
   const symptom = diagnostics.cause;
+  const terminalState: TurnState = symptom === 'foreign_user_after_owned_send'
+    || symptom === 'owned_prompt_not_observed'
+    ? 'no_reply'
+    : 'observation_uncertain';
   const ok = recordIncident(
     incidents,
     {
-      eventClass: 'interleaved_user_activity',
+      eventClass: symptom === 'foreign_user_after_owned_send'
+        || symptom === 'owned_prompt_not_observed'
+        ? 'observation_exhausted'
+        : 'post_send_observation_error',
       symptom,
-      action: 'return_local_degraded',
+      action: 'retain_owned_page_no_resend',
       uncertaintyDiagnostics: diagnostics,
     },
     invocationId,
@@ -495,7 +727,7 @@ function maybeReturnObservationUncertain(
     page,
     browser,
     result: compactResult(
-      'observation_uncertain',
+      terminalState,
       'invocation',
       symptom,
       invocationId,
@@ -533,6 +765,7 @@ function maybeReturnObservationExhausted(
   incident: (eventClass: string, symptom: string, action?: string) => void,
   expectedMarker: string,
   ownedPromptEverSeen: boolean,
+  ownedCarrierKey?: string,
 ): TurnRunOutcome | null {
   if (sendCount < 1) return null;
   const softDeadlineElapsed = now >= softDeadline;
@@ -547,16 +780,29 @@ function maybeReturnObservationExhausted(
   if (now >= hardExhaustionDeadline) {
     const markerCurrentlyVisible = expectedMarker.length > 0
       && messages.some((message) => message.role === 'user' && ownedPromptMatches(message.text, expectedMarker));
-    if (expectedMarker && !markerCurrentlyVisible) {
-      const cause = ownedPromptEverSeen
-        ? 'owned_prompt_marker_disappeared'
-        : 'owned_prompt_marker_unresolved';
-      incident('post_send_observation_error', cause, 'return_local_degraded');
+    const postBaselineUsers = messages
+      .slice(Math.min(baselineCount, messages.length))
+      .filter((message) => message.role === 'user').length;
+    if (!markerCurrentlyVisible && !ownedCarrierKey) {
+      const cause = ownedPromptEverSeen || postBaselineUsers === 1
+        ? 'owned_carrier_unproven'
+        : postBaselineUsers > 1
+          ? 'owned_reply_boundary_unproven'
+          : 'owned_prompt_not_observed';
+      const state: TurnState = cause === 'owned_prompt_not_observed'
+        ? 'no_reply'
+        : 'observation_uncertain';
+      incident(
+        cause === 'owned_prompt_not_observed' ? 'observation_exhausted' : 'post_send_observation_error',
+        cause,
+        'retain_owned_page_no_resend',
+      );
       return {
         page,
         browser,
+        cleanupAction: 'preserve',
         result: compactResult(
-          'ui_contract_mismatch',
+          state,
           'invocation',
           cause,
           invocationId,
@@ -565,7 +811,10 @@ function maybeReturnObservationExhausted(
           pollCount,
           navigation,
           incidents,
-          {},
+          {
+            ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+            observation_exhausted_diagnostics: diagnostics,
+          },
           journalWriteFailed,
         ),
       };
@@ -574,6 +823,7 @@ function maybeReturnObservationExhausted(
     return {
       page,
       browser,
+      cleanupAction: 'preserve',
       result: compactResult(
         'no_reply',
         'invocation',
@@ -594,7 +844,6 @@ function maybeReturnObservationExhausted(
   }
   return null;
 }
-
 
 function returnOwnerFenceLostAfterSend(
   page: any,
@@ -1057,65 +1306,123 @@ export async function readPageObservation(
   strictTranscriptCount = false,
 ): Promise<PageObservationResult> {
   const nodes = page.locator(MESSAGE_NODE_SELECTOR);
-  let count: number;
-  if (strictTranscriptCount) {
+  const incomplete = (): PageObservationResult => ({
+    messages: [],
+    ownedWindowCompletionReady: false,
+    transcriptIncomplete: true,
+    snapshot: { complete: false, carriers: [] },
+  });
+
+  let carriers: AtomicTranscriptCarrier[] = [];
+  let transcriptIncomplete = false;
+  const evaluateAll = nodes?.evaluateAll;
+  if (typeof evaluateAll === 'function') {
     try {
-      count = Number(await nodes.count());
-      if (!Number.isSafeInteger(count) || count < 0) {
-        return {
-          messages: [],
-          ownedWindowCompletionReady: false,
-          transcriptIncomplete: true,
-        };
+      const rows = await boundedBrowserRead(
+        evaluateAll.call(nodes, (elements: Element[], roleAttribute: string) => {
+          const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
+          const canonicalKey = (element: Element): string | undefined => {
+            for (const attribute of ['data-message-id', 'data-turn-id']) {
+              const direct = element.getAttribute(attribute);
+              if (valid(direct)) return `${attribute}:${direct}`;
+              const descendants = Array.from(element.querySelectorAll(`[${attribute}]`));
+              const descendant = descendants.find((candidate) => valid(candidate.getAttribute(attribute)));
+              const value = descendant?.getAttribute(attribute) ?? null;
+              if (valid(value)) return `${attribute}:${value}`;
+            }
+            return undefined;
+          };
+          const observed: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }> = [];
+          for (let domIndex = 0; domIndex < elements.length; domIndex++) {
+            const element = elements[domIndex]!;
+            try {
+              const role = element.getAttribute(roleAttribute) ?? '';
+              const text = (element as HTMLElement).innerText;
+              observed.push({ role, text, key: canonicalKey(element), domIndex, complete: true });
+            } catch {
+              observed.push({ role: '', text: '', domIndex, complete: false });
+            }
+          }
+          return observed;
+        }, MESSAGE_AUTHOR_ROLE_ATTR),
+        MAX_LOCAL_READ_WAIT_MS,
+        'atomic_transcript_snapshot_timeout',
+      ) as Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }>;
+      for (const row of rows) {
+        if (!row.complete || (row.role !== 'user' && row.role !== 'assistant') || typeof row.text !== 'string') {
+          transcriptIncomplete = true;
+          continue;
+        }
+        const role = row.role as PageMessage['role'];
+        const text = row.text;
+        carriers.push({
+          role,
+          text,
+          ...(validCarrierKey(row.key) ? { key: row.key } : {}),
+          fingerprint: transcriptFingerprint(role, text),
+          domIndex: row.domIndex,
+        });
       }
+      if (rows.length !== carriers.length) transcriptIncomplete = true;
     } catch {
-      return {
-        messages: [],
-        ownedWindowCompletionReady: false,
-        transcriptIncomplete: true,
-      };
+      if (strictTranscriptCount) return incomplete();
+      transcriptIncomplete = true;
     }
   } else {
-    count = await locatorCount(nodes);
-  }
-  const messages: PageMessage[] = [];
-  const domIndices: number[] = [];
-  let transcriptIncomplete = false;
-  const roleTimeouts = [
-    MESSAGE_NODE_READ_TIMEOUT_MS,
-    MESSAGE_NODE_READ_RETRY_TIMEOUT_MS,
-  ].slice(0, MESSAGE_NODE_READ_ATTEMPTS);
-  for (let index = 0; index < count; index++) {
-    const node = nodes.nth(index);
-    const role = await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, roleTimeouts);
-    if (role === null) {
-      transcriptIncomplete = true;
-      continue;
+    // Compatibility for deterministic legacy fixtures. Production Playwright
+    // locators always take the single in-page fixed-set branch above.
+    let count: number;
+    try {
+      count = Number(await nodes.count());
+      if (!Number.isSafeInteger(count) || count < 0) return incomplete();
+    } catch {
+      return incomplete();
     }
-    if (role !== 'user' && role !== 'assistant') continue;
-    const { text, readFailed } = await readMessageNodeText(node);
-    if (readFailed) transcriptIncomplete = true;
-    messages.push({ role: role as 'user' | 'assistant', text });
-    domIndices.push(index);
+    const roleTimeouts = [MESSAGE_NODE_READ_TIMEOUT_MS, MESSAGE_NODE_READ_RETRY_TIMEOUT_MS]
+      .slice(0, MESSAGE_NODE_READ_ATTEMPTS);
+    for (let domIndex = 0; domIndex < count; domIndex++) {
+      const node = nodes.nth(domIndex);
+      const role = await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, roleTimeouts);
+      if (role !== 'user' && role !== 'assistant') {
+        transcriptIncomplete = true;
+        continue;
+      }
+      const { text, readFailed } = await readMessageNodeText(node);
+      if (readFailed) transcriptIncomplete = true;
+      // Legacy fixtures without evaluateAll remain role/text-only. Stable keys
+      // are never synthesized outside the production atomic callback.
+      carriers.push({
+        role,
+        text,
+        fingerprint: transcriptFingerprint(role, text),
+        domIndex,
+      });
+    }
   }
 
+  const messages: PageMessage[] = carriers.map(({ role, text }) => ({ role, text }));
   let ownedWindowCompletionReady = false;
   if (expectedMarker !== undefined && baselineCount !== undefined) {
     const { lastOwnedAssistantMessageIndex } = resolveOwnedReplyWindow(messages, baselineCount, expectedMarker);
-    const ownedAssistantDomIndex = lastOwnedAssistantMessageIndex === null
-      ? null
-      : domIndices[lastOwnedAssistantMessageIndex] ?? null;
-    if (ownedAssistantDomIndex !== null) {
+    const ownedAssistant = lastOwnedAssistantMessageIndex === null
+      ? undefined
+      : carriers[lastOwnedAssistantMessageIndex];
+    if (ownedAssistant) {
       ownedWindowCompletionReady = await readAssistantNodeCompletionReady(
-        nodes.nth(ownedAssistantDomIndex),
+        nodes.nth(ownedAssistant.domIndex),
         MESSAGE_NODE_READ_TIMEOUT_MS,
       );
     } else {
       ownedWindowCompletionReady = await readAssistantTurnCompletionReady(page, MESSAGE_NODE_READ_TIMEOUT_MS);
     }
   }
-
-  return { messages, ownedWindowCompletionReady, transcriptIncomplete };
+  const complete = !transcriptIncomplete;
+  return {
+    messages,
+    ownedWindowCompletionReady,
+    transcriptIncomplete,
+    snapshot: { complete, carriers },
+  };
 }
 
 export type SendLandingEvidence = 'landed' | 'not_landed' | 'ambiguous';
@@ -1161,8 +1468,9 @@ async function readPostSendObservation(
   readonly wall: ReturnType<typeof classifyProductWall>;
   readonly ownedWindowCompletionReady: boolean;
   readonly transcriptIncomplete: boolean;
+  readonly snapshot: AtomicTranscriptSnapshot;
 }> {
-  const { messages, ownedWindowCompletionReady, transcriptIncomplete } = await readPageObservation(
+  const { messages, ownedWindowCompletionReady, transcriptIncomplete, snapshot } = await readPageObservation(
     page,
     expectedMarker,
     baselineCount,
@@ -1173,7 +1481,7 @@ async function readPostSendObservation(
   } catch {
     // Product-status probes must not block or invalidate transcript reads.
   }
-  return { messages, wall, ownedWindowCompletionReady, transcriptIncomplete };
+  return { messages, wall, ownedWindowCompletionReady, transcriptIncomplete, snapshot: snapshot! };
 }
 
 async function maybeContinueGeneration(page: any): Promise<boolean> {
@@ -1612,8 +1920,8 @@ async function runTurn(
     if (config.directPublication) installDirectPublicationObserver(page, directObservation);
 
     let baselineCount = 0;
+    let baselineSnapshot: AtomicTranscriptSnapshot | undefined;
     let ownedConversationUrl: string | undefined;
-
 
     const returnComposerMutationFailure = (
       cause: PreSendComposerFailureCause,
@@ -1634,6 +1942,33 @@ async function runTurn(
           journalWriteFailed,
         ),
       };
+    };
+
+    const captureBaseline = async (): Promise<TurnRunOutcome | null> => {
+      const baseline = await readPageObservation(page, undefined, undefined, true);
+      if (baseline.transcriptIncomplete || !baseline.snapshot?.complete) {
+        incident('pre_send_observation_error', 'baseline_transcript_incomplete', 'return_local_error');
+        return {
+          page,
+          browser,
+          result: compactResult(
+            'ui_contract_mismatch',
+            'invocation',
+            'baseline_transcript_incomplete',
+            invocationId,
+            profileKey,
+            sendCount,
+            pollCount,
+            navigation,
+            incidents,
+            {},
+            journalWriteFailed,
+          ),
+        };
+      }
+      baselineSnapshot = baseline.snapshot!;
+      baselineCount = baseline.messages.length;
+      return null;
     };
 
     const marker = generateOwnedPromptMarker();
@@ -1658,7 +1993,6 @@ async function runTurn(
       const mutationFailure = await mutateComposerOrCause(
         page,
         markedPayload,
-
         invocationDeadlineMs,
         insertionContext,
       );
@@ -1858,7 +2192,8 @@ async function runTurn(
               }
               continue;
             }
-            baselineCount = (await readPageMessages(page)).length;
+            const baselineFailure = await captureBaseline();
+            if (baselineFailure) return baselineFailure;
             const sendFailure = await sendOwnedPrompt();
             if (sendFailure) return sendFailure;
             sendAuthorized = false;
@@ -2077,7 +2412,8 @@ async function runTurn(
         };
       }
 
-      baselineCount = (await readPageMessages(page)).length;
+      const baselineFailure = await captureBaseline();
+      if (baselineFailure) return baselineFailure;
       const sendFailure = await sendOwnedPrompt();
       if (sendFailure) return sendFailure;
     }
@@ -2129,6 +2465,8 @@ async function runTurn(
     let uncertainCause = '';
     let observedUserHeads: string[] | undefined;
     let ownedPromptEverSeen = false;
+    let ownedCarrierKey: string | undefined;
+    let lastMarkerlessSnapshotSignature = '';
     let completionReadySeen = false;
     let sendObservationDeferredLogged = false;
     let lastHeartbeatAt = startedAt;
@@ -2308,6 +2646,10 @@ async function runTurn(
       }
       recoveryState.immutableConversationUrl = recovered.conversationUrl;
       if (config.directPublication) installDirectPublicationObserver(page, directObservation);
+      // Issue #1283 owns recovered-page integration. Do not fabricate a new
+      // pre-send baseline from a post-send successor; markerless harvest stays
+      // disabled after recovery until that sibling path supplies its own proof.
+      baselineSnapshot = undefined;
       baselineCount = 0;
       return null;
     };
@@ -2377,6 +2719,15 @@ async function runTurn(
           lastReadyReply = '';
           bestReadyReply = '';
         }
+        uncertainCause = ownedCarrierKey
+          ? 'transcript_continuity_unproven'
+          : 'owned_carrier_unproven';
+        const readErrorUncertain = maybeReturnObservationUncertain(
+          Date.now(), hardExhaustionDeadline, sendCount, uncertainCause, ownedPromptEverSeen,
+          observedUserHeads, page, browser, invocationId, profileKey, sendCount, pollCount,
+          navigation, incidents, journalWriteFailed, incident,
+        );
+        if (readErrorUncertain) return readErrorUncertain;
         const readErrorExhausted = maybeReturnObservationExhausted(
           Date.now(),
           softDeadline,
@@ -2397,6 +2748,7 @@ async function runTurn(
           incident,
           marker,
           ownedPromptEverSeen,
+          ownedCarrierKey,
         );
         if (readErrorExhausted) return readErrorExhausted;
         emitHeartbeatForPoll({ state: 'waiting' });
@@ -2404,7 +2756,7 @@ async function runTurn(
         continue;
       }
 
-      const { messages, wall, ownedWindowCompletionReady, transcriptIncomplete } = observation;
+      const { messages, wall, ownedWindowCompletionReady, transcriptIncomplete, snapshot: transcriptSnapshot } = observation;
       if (
         config.newChat
         && ownedConversationUrl
@@ -2449,6 +2801,15 @@ async function runTurn(
 
       if (transcriptIncomplete) {
         incident('post_send_observation_error', 'transcript_read_incomplete', 'continue_polling_owned_page');
+        uncertainCause = ownedCarrierKey
+          ? 'transcript_continuity_unproven'
+          : 'owned_carrier_unproven';
+        const incompleteUncertain = maybeReturnObservationUncertain(
+          Date.now(), hardExhaustionDeadline, sendCount, uncertainCause, ownedPromptEverSeen,
+          observedUserHeads, page, browser, invocationId, profileKey, sendCount, pollCount,
+          navigation, incidents, journalWriteFailed, incident,
+        );
+        if (incompleteUncertain) return incompleteUncertain;
         const incompleteExhausted = maybeReturnObservationExhausted(
           Date.now(),
           softDeadline,
@@ -2469,6 +2830,7 @@ async function runTurn(
           incident,
           marker,
           ownedPromptEverSeen,
+          ownedCarrierKey,
         );
         if (incompleteExhausted) return incompleteExhausted;
         emitHeartbeatForPoll({ state: 'waiting' });
@@ -2524,42 +2886,123 @@ async function runTurn(
         }
       }
 
+      const currentOwnedCarrier = snapshotOwnedCarrier(transcriptSnapshot, marker);
+      if (currentOwnedCarrier?.key) {
+        if (ownedCarrierKey && ownedCarrierKey !== currentOwnedCarrier.key) {
+          uncertainCause = 'transcript_continuity_unproven';
+        } else {
+          ownedCarrierKey = currentOwnedCarrier.key;
+        }
+      }
+
+      const markerVisible = hasOwnedUserMessage(messages, marker);
+      let forcedDecision: PageObservationDecision | undefined;
+      if (!markerVisible && !ownedCarrierKey) {
+        const postBaselineUsers = messages
+          .slice(Math.min(baselineCount, messages.length))
+          .filter((message) => message.role === 'user').length;
+        uncertainCause = ownedPromptEverSeen || postBaselineUsers === 1
+          ? 'owned_carrier_unproven'
+          : postBaselineUsers > 1
+            ? 'owned_reply_boundary_unproven'
+            : '';
+      } else if (!markerVisible && ownedCarrierKey) {
+        const candidate = keyedHarvestCandidate(transcriptSnapshot, baselineSnapshot, ownedCarrierKey);
+        const signature = atomicSnapshotSignature(transcriptSnapshot);
+        if (candidate.state === 'continuity-unproven') {
+          uncertainCause = 'transcript_continuity_unproven';
+        } else if (candidate.state === 'foreign-user') {
+          uncertainCause = 'foreign_user_after_owned_send';
+          forcedDecision = { state: 'uncertain', cause: uncertainCause };
+        } else {
+          uncertainCause = '';
+        }
+        if (candidate.state === 'ready' && signature === lastMarkerlessSnapshotSignature) {
+          const revalidated = await revalidateKeyedHarvest(
+            page,
+            baselineSnapshot,
+            ownedCarrierKey,
+            { ...candidate, snapshotSignature: signature },
+          );
+          if (revalidated.state !== 'ready') {
+            uncertainCause = 'transcript_continuity_unproven';
+          } else {
+            // A direct-publication settlement already observed on the incumbent
+            // network path keeps its existing precedence. The final page census
+            // authorizes only page-only harvested bytes; it must not rewrite an
+            // already-observed GitHub success, definitive no-commit, or
+            // possible-delivery outcome.
+            if (!config.directPublication) {
+              const liveness = await probePageLiveness(page, browser);
+              if (liveness === 'lost') {
+                incident('helper_failure_after_send', 'page_or_browser_lost_after_send', 'skip_lost_page_no_resend');
+                return {
+                  page,
+                  browser,
+                  cleanupAction: 'skip',
+                  result: compactResult('driver_error', 'invocation', 'page_or_browser_lost_after_send', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
+                };
+              }
+              if (liveness !== 'live') {
+                incident('helper_failure_after_send', 'helper_error_after_send_page_retained', 'retain_owned_page_no_resend');
+                return {
+                  page,
+                  browser,
+                  cleanupAction: 'preserve',
+                  result: compactResult('driver_error', 'invocation', 'helper_error_after_send_page_retained', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
+                };
+              }
+            }
+            forcedDecision = { state: 'ready', reply: revalidated.reply };
+            completionReadySeen = true;
+            lastReadyReply = revalidated.reply;
+            bestReadyReply = revalidated.reply;
+            stableReads = 1;
+          }
+        }
+        lastMarkerlessSnapshotSignature = signature;
+      } else {
+        lastMarkerlessSnapshotSignature = '';
+      }
+
       const inProgress = !ownedWindowCompletionReady && !completionReadySeen;
-      const decision = classifyPageObservation(messages, baselineCount, marker, inProgress);
+      const decision = forcedDecision ?? classifyPageObservation(messages, baselineCount, marker, inProgress);
 
       if (hasOwnedUserMessage(messages, marker)) {
         ownedPromptEverSeen = true;
       }
 
-      if (decision.state === 'uncertain' && decision.cause === 'owned_prompt_marker_ambiguous') {
-        incident('post_send_observation_error', 'owned_prompt_marker_ambiguous', 'return_local_degraded');
-        return {
-          page,
-          browser,
-          result: compactResult(
-            'ui_contract_mismatch',
-            'invocation',
-            'owned_prompt_marker_ambiguous',
-            invocationId,
-            profileKey,
-            sendCount,
-            pollCount,
-            navigation,
-            incidents,
-            {},
-            journalWriteFailed,
-          ),
-        };
-      }
-
       if (decision.state === 'uncertain') {
-        uncertainCause = decision.cause ?? 'interleaved_user_activity';
+        uncertainCause = decision.cause === 'owned_prompt_marker_ambiguous'
+          ? 'owned_reply_boundary_unproven'
+          : decision.cause ?? 'owned_reply_boundary_unproven';
         observedUserHeads = decision.observedUserHeads
           ? [...decision.observedUserHeads]
           : observedUserHeads;
         stableReads = 0;
         lastReadyReply = '';
         bestReadyReply = '';
+        if (uncertainCause === 'foreign_user_after_owned_send') {
+          incident('observation_exhausted', uncertainCause, 'retain_owned_page_no_resend');
+          return {
+            page,
+            browser,
+            cleanupAction: 'preserve',
+            result: compactResult(
+              'no_reply',
+              'invocation',
+              uncertainCause,
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              navigation,
+              incidents,
+              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+              journalWriteFailed,
+            ),
+          };
+        }
         const uncertainExhausted = maybeReturnObservationUncertain(
           Date.now(),
           hardExhaustionDeadline,
@@ -2599,6 +3042,7 @@ async function runTurn(
           incident,
           marker,
           ownedPromptEverSeen,
+          ownedCarrierKey,
         );
         if (uncertainWaitingExhausted) return uncertainWaitingExhausted;
         emitHeartbeatForPoll(decision);
@@ -2606,7 +3050,7 @@ async function runTurn(
         continue;
       }
 
-      uncertainCause = '';
+      if (markerVisible || forcedDecision) uncertainCause = '';
       observedUserHeads = undefined;
 
       if (decision.state === 'ready' && decision.reply) {
@@ -2775,6 +3219,7 @@ async function runTurn(
           incident,
           marker,
           ownedPromptEverSeen,
+          ownedCarrierKey,
         );
         if (readyExhausted) return readyExhausted;
         emitHeartbeatForPoll(decision);
@@ -2798,7 +3243,6 @@ async function runTurn(
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }
-
       if (
         config.newChat
         && sendCount >= 1
@@ -2892,6 +3336,7 @@ async function runTurn(
         incident,
         marker,
         ownedPromptEverSeen,
+        ownedCarrierKey,
       );
       if (waitingExhausted) return waitingExhausted;
 
@@ -2931,13 +3376,16 @@ async function runTurn(
         afterSend ? 'helper_failure_after_send' : 'helper_failure_before_send',
         cause,
         afterSend
-          ? 'retain_owned_page_no_resend'
+          ? lostAfterSend
+            ? 'skip_lost_page_no_resend'
+            : 'retain_owned_page_no_resend'
           : 'return_local_error',
       );
     }
     return {
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
+      ...(lostAfterSend ? { cleanupAction: 'skip' as const } : {}),
       result: compactResult(
         state,
         'invocation',
@@ -2994,7 +3442,9 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   });
   // Issue #1266 owns abandonment close. This change may Stop only the exact
   // proven target and must preserve every post-send non-ok tab.
-  const pageAction = outcome.result.send_count >= 1 && outcome.result.state !== 'ok'
+  const pageAction = outcome.result.send_count >= 1
+    && outcome.result.state !== 'ok'
+    && !pageLost
     ? 'preserve'
     : requestedPageAction;
   if (pageAction === 'close') {
