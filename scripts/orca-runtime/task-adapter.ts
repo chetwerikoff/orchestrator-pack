@@ -4,6 +4,7 @@ import {
   runtimeUnsupported,
   sameRuntimeWorker,
   type RuntimeCallOptions,
+  type RuntimeOperationFailure,
   type RuntimeResult,
   type RuntimeWorker,
   type RuntimeWorkerIdentity,
@@ -19,6 +20,29 @@ import {
   type OrcaWorktreeRemoveResult,
   type OrcaWorktreeShow,
 } from './native.ts';
+
+type RuntimeFailureWithNativeError = RuntimeOperationFailure & {
+  readonly nativeError?: Readonly<{
+    code: string;
+    message: string;
+  }>;
+};
+
+function attachNativeRuntimeError(
+  failure: RuntimeOperationFailure,
+  response: OrcaJsonResponse,
+): RuntimeOperationFailure {
+  const code = String(response.error?.code ?? '');
+  const message = String(response.error?.message ?? '');
+  if (!code && !message) return failure;
+  Object.defineProperty(failure as RuntimeFailureWithNativeError, 'nativeError', {
+    value: Object.freeze({ code, message }),
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return failure;
+}
 
 /**
  * Production Orca adapter for task lifecycle callers.
@@ -90,7 +114,10 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       options,
     );
     if (!response.ok) {
-      return runtimeFailure('stop_worker', neutralFailureReason(response));
+      return attachNativeRuntimeError(
+        runtimeFailure('stop_worker', neutralFailureReason(response)),
+        response,
+      );
     }
 
     return { status: 'ok', value: { stopped: true } };
