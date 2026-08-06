@@ -17,7 +17,7 @@ function Get-WorkerNudgeClaimProjectNamespace {
 
     $project = ([string]$ProjectId).Trim()
     if (-not $project) { $project = 'orchestrator-pack' }
-    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.orchestrator-pack' }
     return (Join-Path (Join-Path (Join-Path $base 'projects') $project) 'worker-nudge-claims')
 }
 
@@ -830,7 +830,7 @@ function Acquire-WorkerNudgeClaim {
 
             Write-WorkerNudgeClaimAtomic -Path $path -Record $record
             if (-not (Test-WorkerNudgeClaimHolderOwnsPath -Path $path -Holder $record.holder)) {
-                return @{ acquired = $false; reason = 'lost_race'; path = $path; namespace = $resolved; key = $key }
+                return @{ acquired = $false; reason = 'lost_race'; path = $path; namespace = $resolved; key = $record.key }
             }
             Clear-WorkerNudgeClaimStoreHealth -Namespace $resolved | Out-Null
             return (Add-WorkerNudgeClaimProjectId -Result @{ acquired = $true; recovered = $false; claim = $record; path = $path; namespace = $resolved; key = $record.key } -ProjectId $ProjectId)
@@ -1151,14 +1151,14 @@ function Get-WorkerPrOwnershipClaimStorePath {
         [string]$ProjectId = 'orchestrator-pack',
         [int]$PrNumber
     )
-    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.orchestrator-pack' }
     $dir = Join-Path (Join-Path (Join-Path $base 'projects') $ProjectId) 'pr-ownership-claims'
     return (Join-Path $dir "pr-$PrNumber.json")
 }
 
 function Get-WorkerPrOwnershipSessionsDir {
     param([string]$ProjectId = 'orchestrator-pack')
-    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.orchestrator-pack' }
     return (Join-Path (Join-Path (Join-Path $base 'projects') $ProjectId) 'sessions')
 }
 
@@ -1305,7 +1305,7 @@ function Get-WorkerIssueOwnershipClaimStorePath {
         [string]$ProjectId = 'orchestrator-pack',
         [int]$IssueNumber
     )
-    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.orchestrator-pack' }
     $dir = Join-Path (Join-Path (Join-Path $base 'projects') $ProjectId) 'issue-ownership-claims'
     return (Join-Path $dir "issue-$IssueNumber.json")
 }
