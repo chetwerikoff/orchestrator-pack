@@ -22,7 +22,6 @@ export const VERIFY_REQUIRED_FILES = [
   'scripts/install-git-hooks.ps1',
   'scripts/lint-self-architect.ps1',
   'scripts/lint-self-architect.config.json',
-  'agent-orchestrator.yaml.example',
   '.github/workflows/scope-guard.yml',
 ] as const;
 
