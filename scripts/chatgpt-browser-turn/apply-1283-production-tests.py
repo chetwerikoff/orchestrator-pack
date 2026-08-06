@@ -39,6 +39,10 @@ source = source.replace(
     "  matchesNewChatControlSelector,\n  matchesStopButtonSelector,\n  MESSAGE_NODE_SELECTOR,",
 )
 source = source.replace(
+    "  STOP_BUTTON_TESTID,\n} from './product-page-selectors.ts';",
+    "  STOP_BUTTON_TESTID,\n  USER_MESSAGE_SELECTOR,\n} from './product-page-selectors.ts';",
+)
+source = source.replace(
     "const recoveredMessages = readyTurnObservationFrames(prompt, reply).at(-1)!;",
     "const recoveredMessages = (): StateLightTestMessage[] => [\n"
     "      { role: 'user', text: composerText },\n"
@@ -54,12 +58,30 @@ source = source.replace("collectionLocator(recoveredMessages, false)", "collecti
 source = source.replace("recoveredMessages.filter", "recoveredMessages().filter")
 source = source.replace("const last = recoveredMessages.at(-1)!;", "const last = recoveredMessages().at(-1)!;")
 source = source.replace(
+    "if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(recoveredMessages(), false);",
+    "if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(recoveredMessages(), false);\n"
+    "        if (selector === USER_MESSAGE_SELECTOR) {\n"
+    "          return collectionLocator(recoveredMessages().filter((message) => message.role === 'user'), false);\n"
+    "        }",
+)
+source = source.replace(
+    "if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(foreignMessages, false);",
+    "if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(foreignMessages, false);\n"
+    "        if (selector === USER_MESSAGE_SELECTOR) {\n"
+    "          return collectionLocator(foreignMessages.filter((message) => message.role === 'user'), false);\n"
+    "        }",
+)
+source = source.replace(
     "press: vi.fn(async () => { sends += 1; lost = true; }),",
     "press: vi.fn(async () => { sends += 1; initialUrl = SHARED_CONV; lost = true; }),",
 )
 source = source.replace(
     "click: vi.fn(async () => { sends += 1; lost = true; }),",
     "click: vi.fn(async () => { sends += 1; initialUrl = SHARED_CONV; lost = true; }),",
+)
+source = source.replace(
+    "expect(outcome.code).toBe(0);",
+    "expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });",
 )
 source = source.replace(
     "const waitingMessages = readyTurnObservationFrames(prompt, 'UNUSED')[0]!;",
@@ -84,7 +106,12 @@ source = source.replace(
     "matchesStopButtonSelector(selector)\n        ? scalarLocator({ count: vi.fn(async () => 1), click: foreignStop })",
 )
 source = source.replace(
-    "expect(outcome.result.incidents).toContain('owned_generation_stop_completed');",
-    "expect(outcome.result.incidents).toContain('owned_generation_stop_confirmed');",
+    "expect(outcome.result.incidents).toContain('owned_generation_stop_completed');\n    expect(sends).toBe(1);\n    expect(ownedStop).toHaveBeenCalledTimes(1);",
+    "expect(ownedStop).toHaveBeenCalledTimes(1);\n"
+    "    expect(outcome.result.incidents).toEqual([\n"
+    "      'observation_exhausted',\n"
+    "      'owned_generation_stop_confirmed',\n"
+    "    ]);\n"
+    "    expect(sends).toBe(1);",
 )
 exec(compile(source, 'apply-1283-production-tests.py', 'exec'))
