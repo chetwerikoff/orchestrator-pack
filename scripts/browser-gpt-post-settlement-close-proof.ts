@@ -17,7 +17,7 @@ const normalizedUrl = 'https://chatgpt.com/c/proof-owned';
 const reply = Buffer.from('deterministic settled proof reply', 'utf8');
 const sha256 = createHash('sha256').update(reply).digest('hex');
 let targetPresent = true;
-let foreignTargetPresent = true;
+const foreignTargetPresent = true;
 let finalGuardSeen = false;
 let closeCalls = 0;
 let evaluateCalls = 0;
@@ -75,6 +75,11 @@ const probeResult = {
   representation: 'innerText',
   byte_length: reply.byteLength,
   sha256,
+  output_identity: {
+    path: 'harvest.txt',
+    byte_length: reply.byteLength,
+    sha256,
+  },
   observed_user_nodes: 1,
   observed_assistant_nodes: 1,
   observed_message_nodes: 2,
