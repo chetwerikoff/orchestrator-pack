@@ -7,54 +7,13 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  apply-issue-1283-production-tests:
-    name: Apply Issue 1283 production-path tests
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/issue-1283-browser-turn-recovery'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Install from frozen lockfile
-        run: npm ci --include=dev
-      - name: Apply fixes and production-path coverage
-        run: python scripts/chatgpt-browser-turn/apply-1283-production-tests.py
-      - name: Typecheck
-        run: npm run typecheck:foundation
-      - name: Targeted regression tests
-        run: >-
-          npx vitest run --config scripts/toolchain/vitest-foundation.config.ts
-          scripts/chatgpt-browser-turn/tab-lifecycle.test.ts
-          scripts/flow-manager-long-running-child.test.ts
-          scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts
-      - name: Commit verified patch
-        shell: bash
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: |
-          set -euo pipefail
-          git checkout "$PR_BASE_SHA" -- .github/workflows/typescript-foundation.yml
-          rm scripts/chatgpt-browser-turn/apply-1283-production-tests.py
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "test(browser-turn): cover production recovery boundaries"
-          git push origin "HEAD:$PR_HEAD_REF"
-
   runtime:
     name: TypeScript runtime (Node 22)
     runs-on: ubuntu-latest
