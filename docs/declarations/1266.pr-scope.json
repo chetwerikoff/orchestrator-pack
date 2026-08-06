@@ -8,7 +8,9 @@
     "scripts/browser-gpt-post-settlement-close-proof.ts",
     "scripts/browser-gpt-post-settlement-close.test.ts",
     "scripts/browser-gpt-post-settlement-close.ts",
+    "scripts/chatgpt-browser-turn/browser-session.ts",
     "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
