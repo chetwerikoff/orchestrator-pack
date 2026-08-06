@@ -4,6 +4,7 @@
   "declared_paths": [
     "scripts/lib/worker-smoke-bounded-create.ts",
     "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/worker-smoke-1359.test.ts",
     "scripts/worker-smoke-run",
     "scripts/worker-smoke.test.ts"
   ],
@@ -23,6 +24,7 @@
     "scripts/lib/worker-smoke-lifecycle-regressions-base.ts",
     "scripts/lib/worker-smoke-lifecycle.ts",
     "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/worker-smoke-1359.test.ts",
     "scripts/worker-smoke-run",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
