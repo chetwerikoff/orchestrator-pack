@@ -50,6 +50,14 @@ only after every launched invocation is terminal, no retry runs or remains
 eligible, and frozen revision checks match. Partial, blocked, and incident
 attempts remain ordered evidence.
 
+The fixed preparation topology is: T1 = one GPT lens; T2 = three concurrent
+GPT architectural-review slots, then one GPT lens; T3 = three concurrent GPT
+competitive slots only when the flow-manager/architect records genuine need,
+then three concurrent GPT architectural-review slots, one Claude lens, and one
+GPT lens. Concurrent browser starts are staggered by 10–15 seconds. T3 stages
+run in that order, and a journaled competitive-stage skip is legal. These
+counts replace older single-source or configurable-cardinality wording.
+
 One paced retry under the same slot and `stageAttemptId` is legal only for a
 proven pre-send quota/composer/fill failure with `send_count: 0`. It uses
 `attemptOrdinal: 2` and `retryAttempt: true`, consumes the only retry, and may
