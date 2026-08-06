@@ -31,6 +31,8 @@ import {
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
+import { defaultGhTransport } from './create-issue-stage-record-gh.ts';
+import type { GhTransport } from './create-issue-stage-record-types.ts';
 
 export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
 export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
@@ -69,6 +71,16 @@ type JsonRecord = Record<string, unknown>;
 type CycleBinding = { cycleId: string; sourceRevision: string; boundBeforeLaunch: true };
 type ProducedStageReceipt = StageCompletenessReceiptV1 & { cycleId: string; cycleBinding: CycleBinding };
 
+export interface OperatorAcceptanceAdjudication {
+  issueNumber: number;
+  sourceRevision: string;
+  verdictUrl: string;
+  verdictSha256: string;
+  verdictByteLength: number;
+  verdictFindingCount: number;
+  reason: string;
+}
+
 export interface ProduceAcceptanceArtifactsOptions {
   reviewDir: string;
   tierIntakePath: string;
@@ -77,6 +89,37 @@ export interface ProduceAcceptanceArtifactsOptions {
   claudeProducerEvidencePaths?: string[];
   outputDir?: string;
   phase?: 'pre-lens' | 'final-acceptance';
+  operatorAdjudication?: OperatorAcceptanceAdjudication;
+  operatorReferenceTransport?: GhTransport;
+  repositoryFullName?: string;
+}
+
+interface NormalizedOperatorAcceptanceAdjudication extends OperatorAcceptanceAdjudication {
+  repositoryFullName: string;
+  commentId: string;
+  authoritativeBody: string;
+  createdAt: string;
+  updatedAt: string;
+  authorLogin: string;
+  authorAssociation: string;
+}
+
+interface OperatorAdjudicationApplication {
+  invocationId: string;
+  originalTransport: {
+    state: string;
+    scope?: string;
+    cause?: string;
+    sendCount?: number;
+    terminalClassification: string;
+    turnResultPath?: string;
+    terminalResultIdentity?: string;
+  };
+}
+
+interface OperatorAdjudicationContext {
+  adjudication: NormalizedOperatorAcceptanceAdjudication;
+  applications: OperatorAdjudicationApplication[];
 }
 
 export interface AcceptanceArtifactMissingInput {
@@ -322,6 +365,206 @@ function parseCanonicalCaptureRevision(text: string): { issueNumber: number; sou
   };
 }
 
+function parseCanonicalTerminalVerdict(
+  text: string,
+): { issueNumber: number; sourceRevision: string; findingCount: number } | null {
+  const revision = parseCanonicalCaptureRevision(text);
+  if (!revision) return null;
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  const exactCount = (token: string): number => lines.filter((line) => line === token).length;
+  const verdicts = lines.flatMap((line) => {
+    const match = /^VERDICT: (CLEAN|FINDINGS)$/.exec(line);
+    return match ? [match[1]!] : [];
+  });
+  const declaredFindingCounts = lines.flatMap((line) => {
+    const match = /^FINDING_COUNT: ([0-9]+)$/.exec(line);
+    return match ? [Number(match[1])] : [];
+  });
+  const invocationIds = lines.filter((line) => /^INVOCATION_ID: \S+$/.test(line));
+  if (
+    exactCount('review-economics-contract: v1') !== 1
+    || exactCount('SIMPLIFICATION_CLEAN') !== 1
+    || verdicts.length !== 1
+    || declaredFindingCounts.length !== 1
+    || declaredFindingCounts[0] !== revision.findingCount
+    || invocationIds.length !== 1
+  ) return null;
+  if (revision.findingCount === 0) {
+    if (verdicts[0] !== 'CLEAN' || exactCount('NO_FINDINGS') !== 1) return null;
+  } else if (verdicts[0] !== 'FINDINGS' || exactCount('NO_FINDINGS') !== 0) {
+    return null;
+  }
+  return revision;
+}
+
+function normalizeOperatorAcceptanceAdjudication(
+  value: OperatorAcceptanceAdjudication | undefined,
+  phase: ProduceAcceptanceArtifactsOptions['phase'],
+  transport: GhTransport | undefined,
+  authoritativeRepositoryFullName: string,
+  authoritativeIssueNumber: number,
+  authoritativeSourceRevision: string,
+  errors: string[],
+): NormalizedOperatorAcceptanceAdjudication | null {
+  if (!value) return null;
+  const errorCountBefore = errors.length;
+  if ((phase ?? 'final-acceptance') !== 'final-acceptance') {
+    errors.push('operator adjudication is valid only for final-acceptance artifact production');
+  }
+  const issueNumber = Number(value.issueNumber);
+  const sourceRevision = String(value.sourceRevision ?? '').trim();
+  const verdictUrl = String(value.verdictUrl ?? '').trim();
+  const verdictSha256 = String(value.verdictSha256 ?? '').trim().toLowerCase();
+  const verdictByteLength = Number(value.verdictByteLength);
+  const verdictFindingCount = Number(value.verdictFindingCount);
+  const reason = String(value.reason ?? '').trim();
+  const canonicalRepository = authoritativeRepositoryFullName.trim();
+  if (!/^[^/\s]+\/[^/\s]+$/.test(canonicalRepository)) {
+    errors.push('operator adjudication authoritative repository must be owner/name');
+  }
+  if (!Number.isInteger(issueNumber) || issueNumber < 1) errors.push('operator adjudication issueNumber must be positive');
+  if (issueNumber !== authoritativeIssueNumber) {
+    errors.push('operator adjudication Issue does not match authoritative tier-intake Issue');
+  }
+  if (sourceRevision !== authoritativeSourceRevision) {
+    errors.push('operator adjudication revision does not match authoritative review episode');
+  }
+  if (!/^r[0-9]+$/.test(sourceRevision)) errors.push('operator adjudication sourceRevision must be rNN');
+  if (!/^[0-9a-f]{64}$/.test(verdictSha256)) errors.push('operator adjudication verdictSha256 must be 64 lowercase hex characters');
+  if (!Number.isInteger(verdictByteLength) || verdictByteLength < 0) errors.push('operator adjudication verdictByteLength must be non-negative');
+  if (!Number.isInteger(verdictFindingCount) || verdictFindingCount < 0) errors.push('operator adjudication verdictFindingCount must be non-negative');
+  if (!reason) errors.push('operator adjudication reason must be non-empty');
+  const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)$/.exec(verdictUrl);
+  if (!match) {
+    errors.push('operator adjudication verdictUrl must be a canonical published Issue comment URL');
+  } else {
+    if (match[1]!.toLowerCase() !== canonicalRepository.toLowerCase()) {
+      errors.push('operator adjudication verdictUrl repository does not match authoritative repository');
+    }
+    if (Number(match[2]) !== issueNumber) {
+      errors.push('operator adjudication verdictUrl Issue does not match issueNumber');
+    }
+  }
+  if (errors.length !== errorCountBefore || !match) return null;
+  if (!transport) {
+    errors.push('operator adjudication published verdict transport is unavailable');
+    return null;
+  }
+
+  const repositoryFullName = canonicalRepository;
+  const commentId = match[3]!;
+  const response = transport.runGh([
+    'gh',
+    'api',
+    `repos/${repositoryFullName}/issues/comments/${commentId}`,
+  ]);
+  if (response.exitCode !== 0) {
+    errors.push('operator adjudication published verdict reference is unavailable');
+    return null;
+  }
+  let observed: unknown;
+  try {
+    observed = JSON.parse(response.stdout) as unknown;
+  } catch {
+    errors.push('operator adjudication published verdict reference is malformed');
+    return null;
+  }
+  if (!isRecord(observed)) {
+    errors.push('operator adjudication published verdict reference is incompletely observed');
+    return null;
+  }
+  const observedId = Number(observed.id);
+  const observedUrl = typeof observed.html_url === 'string' ? observed.html_url : '';
+  const observedIssueUrl = typeof observed.issue_url === 'string' ? observed.issue_url : '';
+  const authoritativeBody = typeof observed.body === 'string' ? observed.body : '';
+  const createdAt = typeof observed.created_at === 'string' ? observed.created_at : '';
+  const updatedAt = typeof observed.updated_at === 'string' ? observed.updated_at : '';
+  const user = isRecord(observed.user) ? observed.user : null;
+  const authorLogin = typeof user?.login === 'string' ? user.login : '';
+  const authorAssociation = typeof observed.author_association === 'string' ? observed.author_association : '';
+  if (
+    !Number.isInteger(observedId)
+    || !observedUrl
+    || !observedIssueUrl
+    || !authoritativeBody
+    || !createdAt
+    || !updatedAt
+    || !authorLogin
+    || !authorAssociation
+  ) {
+    errors.push('operator adjudication published verdict reference is incompletely observed');
+    return null;
+  }
+  const expectedIssueUrl = `https://api.github.com/repos/${repositoryFullName}/issues/${issueNumber}`;
+  if (observedId !== Number(commentId) || observedUrl !== verdictUrl || observedIssueUrl !== expectedIssueUrl) {
+    errors.push('operator adjudication published verdict reference identity is mismatched');
+  }
+  if (updatedAt !== createdAt) {
+    errors.push('operator adjudication published verdict reference was edited');
+  }
+  const parsed = parseCanonicalTerminalVerdict(authoritativeBody);
+  if (!parsed) {
+    errors.push('operator adjudication published verdict is not a canonical terminal verdict');
+  } else {
+    if (parsed.issueNumber !== issueNumber) errors.push('operator adjudication published verdict Issue is mismatched');
+    if (parsed.sourceRevision !== sourceRevision) errors.push('operator adjudication published verdict revision is mismatched');
+    if (parsed.findingCount !== verdictFindingCount) errors.push('operator adjudication published verdict finding count is mismatched');
+  }
+  const observedSha256 = createHash('sha256').update(authoritativeBody).digest('hex');
+  if (observedSha256 !== verdictSha256) errors.push('operator adjudication published verdict SHA-256 is mismatched');
+  if (Buffer.byteLength(authoritativeBody) !== verdictByteLength) errors.push('operator adjudication published verdict byte length is mismatched');
+  if (rawFindingCount(authoritativeBody) !== verdictFindingCount) errors.push('operator adjudication published verdict finding count is mismatched');
+  if (errors.length !== errorCountBefore) return null;
+  return {
+    issueNumber,
+    sourceRevision,
+    verdictUrl,
+    verdictSha256,
+    verdictByteLength,
+    verdictFindingCount,
+    reason,
+    repositoryFullName,
+    commentId,
+    authoritativeBody,
+    createdAt,
+    updatedAt,
+    authorLogin,
+    authorAssociation,
+  };
+}
+
+function applyOperatorAcceptanceAdjudication(
+  context: OperatorAdjudicationContext | undefined,
+  invocation: JsonRecord,
+  capture: CaptureIdentityV1 | null,
+  captureText: string | null,
+  originalTransport: OperatorAdjudicationApplication['originalTransport'],
+  errors: string[],
+): string | null {
+  if (!context || !capture || captureText === null) return null;
+  const errorCountBefore = errors.length;
+  const adjudication = context.adjudication;
+  if (
+    capture.sha256 !== adjudication.verdictSha256
+    || capture.byteLength !== adjudication.verdictByteLength
+    || capture.rawFindingCount !== adjudication.verdictFindingCount
+    || captureText !== adjudication.authoritativeBody
+  ) return null;
+  const parsed = parseCanonicalTerminalVerdict(captureText);
+  if (!parsed) {
+    errors.push('operator adjudication governed capture is not a canonical terminal verdict');
+    return null;
+  }
+  if (parsed.issueNumber !== adjudication.issueNumber) errors.push('operator adjudication Issue does not match governed capture');
+  if (parsed.sourceRevision !== adjudication.sourceRevision) errors.push('operator adjudication revision does not match governed capture');
+  if (parsed.sourceRevision !== invocation.sourceRevision) errors.push('operator adjudication revision does not match stage invocation');
+  if (parsed.findingCount !== adjudication.verdictFindingCount) errors.push('operator adjudication finding count does not match governed capture');
+  if (errors.length !== errorCountBefore) return null;
+  const invocationId = typeof invocation.invocationId === 'string' ? invocation.invocationId : '';
+  context.applications.push({ invocationId, originalTransport });
+  return `operator-adjudicated:sha256:${adjudication.verdictSha256}:issuecomment-${adjudication.commentId}`;
+}
+
 function readClaudeProducerEvidence(
   path: string,
   errors: string[],
@@ -355,16 +598,54 @@ function readTurnResultForInvocation(
   capture: CaptureIdentityV1 | null,
   captureText: string | null,
   errors: string[],
+  operatorContext?: OperatorAdjudicationContext,
 ): string | null {
   if (invocation.terminalClassification !== 'complete') return null;
   const label = `stage evidence invocation[${index}]`;
-  const turnResultPath = requiredString(invocation.turnResultPath, `${label}.turnResultPath`, errors);
-  if (!turnResultPath) return null;
+  const pathErrors: string[] = [];
+  const turnResultPath = requiredString(invocation.turnResultPath, `${label}.turnResultPath`, pathErrors);
+  if (!turnResultPath) {
+    const adjudicated = applyOperatorAcceptanceAdjudication(
+      operatorContext,
+      invocation,
+      capture,
+      captureText,
+      {
+        state: 'absent',
+        terminalClassification: String(invocation.terminalClassification ?? ''),
+        ...(Number.isInteger(invocation.sendCount) ? { sendCount: Number(invocation.sendCount) } : {}),
+        ...(typeof invocation.terminalResultIdentity === 'string'
+? { terminalResultIdentity: invocation.terminalResultIdentity }
+: {}),
+      },
+      errors,
+    );
+    if (adjudicated) return adjudicated;
+    errors.push(...pathErrors);
+    return null;
+  }
   const resolved = resolve(dirname(evidencePath), turnResultPath);
   let stat;
   try {
     stat = lstatSync(resolved);
   } catch {
+    const adjudicated = applyOperatorAcceptanceAdjudication(
+      operatorContext,
+      invocation,
+      capture,
+      captureText,
+      {
+        state: 'absent',
+        terminalClassification: String(invocation.terminalClassification ?? ''),
+        turnResultPath: resolved,
+        ...(Number.isInteger(invocation.sendCount) ? { sendCount: Number(invocation.sendCount) } : {}),
+        ...(typeof invocation.terminalResultIdentity === 'string'
+? { terminalResultIdentity: invocation.terminalResultIdentity }
+: {}),
+      },
+      errors,
+    );
+    if (adjudicated) return adjudicated;
     errors.push(`missing turn-result/v1 artifact for ${label}: ${resolved}`);
     return null;
   }
@@ -390,16 +671,63 @@ function readTurnResultForInvocation(
     errors.push(`turn-result/v1 artifact for ${label} has an invalid schema: ${resolved}`);
     return null;
   }
-  if (!TURN_STATES.includes(value.state as (typeof TURN_STATES)[number])) {
+  const stateValid = TURN_STATES.includes(value.state as (typeof TURN_STATES)[number]);
+  if (!stateValid) {
     errors.push(`turn-result/v1 artifact for ${label} has an invalid state: ${resolved}`);
-  } else if (value.state !== 'ok') {
+  } else if (value.state !== 'ok' && !operatorContext) {
     errors.push(`turn-result/v1 artifact for ${label} is not a successful terminal result: ${resolved}`);
   }
-  if (typeof value.scope !== 'string' || typeof value.cause !== 'string' || typeof value.configured_profile_key !== 'string') {
+  const terminalFieldsValid = typeof value.scope === 'string'
+    && typeof value.cause === 'string'
+    && typeof value.configured_profile_key === 'string';
+  if (!terminalFieldsValid) {
     errors.push(`turn-result/v1 artifact for ${label} is missing required terminal fields: ${resolved}`);
   }
-  if (value.invocation_id !== invocation.invocationId) {
+  const invocationMatches = value.invocation_id === invocation.invocationId;
+  if (!invocationMatches) {
     errors.push(`turn-result/v1 artifact for ${label} invocation_id does not match stage evidence: ${resolved}`);
+  }
+  const identity = turnResultIdentity(basename(resolved), sha256(text));
+  if (stateValid && value.state !== 'ok' && terminalFieldsValid && invocationMatches) {
+    const invocationSendCount = Number(invocation.sendCount);
+    let originalSendCount = invocationSendCount;
+    let sendCountMatches = true;
+    if (value.send_count !== undefined) {
+      if (value.send_count !== 0 && value.send_count !== 1) {
+        errors.push(`turn-result/v1 artifact for ${label}.send_count must be 0 or 1: ${resolved}`);
+        sendCountMatches = false;
+      } else if (Number(value.send_count) !== invocationSendCount) {
+        errors.push(`turn-result/v1 artifact for ${label}.send_count does not match stage evidence: ${resolved}`);
+        sendCountMatches = false;
+      } else {
+        originalSendCount = Number(value.send_count);
+      }
+    }
+    const adjudicated = sendCountMatches
+      ? applyOperatorAcceptanceAdjudication(
+          operatorContext,
+          invocation,
+          capture,
+          captureText,
+          {
+            state: String(value.state),
+            scope: String(value.scope),
+            cause: String(value.cause),
+            terminalClassification: String(invocation.terminalClassification ?? ''),
+            turnResultPath: resolved,
+            sendCount: originalSendCount,
+            terminalResultIdentity: identity,
+          },
+          errors,
+        )
+      : null;
+    if (adjudicated) {
+      if (invocation.terminalResultIdentity !== identity) {
+        errors.push(`stage evidence ${label}.terminalResultIdentity is not derived from the referenced turn-result: ${resolved}`);
+      }
+    } else {
+      errors.push(`turn-result/v1 artifact for ${label} is not a successful terminal result: ${resolved}`);
+    }
   }
   const output = isRecord(value.output) ? value.output : null;
   if (
@@ -464,7 +792,6 @@ function readTurnResultForInvocation(
   } else if (!directSuccess && !directFailure && capture && output && (Number(output.byte_length) !== capture.byteLength || output.sha256 !== capture.sha256)) {
     errors.push(`turn-result/v1 artifact for ${label} output does not match capture bytes: ${resolved}`);
   }
-  const identity = turnResultIdentity(basename(resolved), sha256(text));
   if (invocation.terminalResultIdentity !== identity) {
     errors.push(`stage evidence ${label}.terminalResultIdentity is not derived from the referenced turn-result: ${resolved}`);
   }
@@ -550,6 +877,7 @@ function buildReceipt(
   captureTexts: Map<string, string>,
   captureTimestamps: Map<string, number>,
   errors: string[],
+  operatorContext?: OperatorAdjudicationContext,
 ): ProducedStageReceipt | null {
   if (raw.schema !== STAGE_EVIDENCE_SCHEMA) {
     errors.push(`stage evidence has unknown schema: ${evidencePath}`);
@@ -604,6 +932,7 @@ function buildReceipt(
         capture,
         capture ? captureTexts.get(capture.captureIdentity) ?? null : null,
         errors,
+        operatorContext,
       );
       assertDerived(value.reviewEpisodeId, episodeId, `invocation[${index}].reviewEpisodeId`, errors);
       if (receiptPolicyVersion !== null) {
@@ -864,7 +1193,7 @@ export function produceAcceptanceArtifacts(
   options: ProduceAcceptanceArtifactsOptions,
 ): AcceptanceArtifactResult {
   const outputDir = options.outputDir ?? options.reviewDir;
-  invalidateOutputArtifacts(outputDir);
+  if (!options.operatorAdjudication) invalidateOutputArtifacts(outputDir);
   const errors: string[] = [];
   const intake = loadTierIntake(options.tierIntakePath, errors);
   const taskIdentity = intake && requiredString(intake.taskIdentity, 'tier-intake.taskIdentity', errors);
@@ -872,6 +1201,30 @@ export function produceAcceptanceArtifacts(
   if (!intake || !taskIdentity || !episodeFirstRevision) {
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)] };
   }
+  let operatorAdjudication: NormalizedOperatorAcceptanceAdjudication | null = null;
+  if (options.operatorAdjudication) {
+    const taskIssueMatch = /^issue:([1-9][0-9]*)$/.exec(taskIdentity);
+    if (!taskIssueMatch) {
+      errors.push('operator adjudication requires an authoritative tier-intake Issue identity');
+    } else {
+      operatorAdjudication = normalizeOperatorAcceptanceAdjudication(
+        options.operatorAdjudication,
+        options.phase,
+        options.operatorReferenceTransport ?? defaultGhTransport(),
+        options.repositoryFullName ?? 'chetwerikoff/orchestrator-pack',
+        Number(taskIssueMatch[1]),
+        episodeFirstRevision,
+        errors,
+      );
+    }
+    if (!operatorAdjudication) {
+      return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)] };
+    }
+    invalidateOutputArtifacts(outputDir);
+  }
+  const operatorContext = operatorAdjudication
+    ? { adjudication: operatorAdjudication, applications: [] } satisfies OperatorAdjudicationContext
+    : undefined;
   const episodeId = deriveReviewEpisodeId(taskIdentity, episodeFirstRevision);
   const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(
     options.reviewDir,
@@ -886,7 +1239,9 @@ export function produceAcceptanceArtifacts(
   const receipts = canonicalStageEvidencePaths
     .map((path) => {
       const value = readJson(path, 'stage evidence', errors);
-      return isRecord(value) ? buildReceipt(path, value, taskIdentity, episodeFirstRevision, episodeId, captureTexts, captureTimestamps, errors) : null;
+      return isRecord(value)
+        ? buildReceipt(path, value, taskIdentity, episodeFirstRevision, episodeId, captureTexts, captureTimestamps, errors, operatorContext)
+        : null;
     })
     .filter((r): r is ProducedStageReceipt => r !== null)
     .sort((left, right) => left.stageSequence - right.stageSequence);
@@ -973,6 +1328,9 @@ export function produceAcceptanceArtifacts(
       if (!ledgerResult.ok) errors.push(...ledgerResult.errors);
     }
   }
+  if (operatorContext && operatorContext.applications.length !== 1) {
+    errors.push(`operator adjudication must match exactly one absent or non-ok terminal invocation; matched ${operatorContext.applications.length}`);
+  }
   if (errors.length > 0 || !ledger || !tier) {
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)], reviewEpisodeId: episodeId };
   }
@@ -990,6 +1348,30 @@ export function produceAcceptanceArtifacts(
       stageEvidence: canonicalStageEvidencePaths.map((path) => resolve(path)),
       authorDispositions: resolve(options.authorDispositionsPath),
     },
+    ...(operatorContext && operatorContext.applications[0] ? {
+      operatorAdjudication: {
+        provenance: 'operator_adjudicated',
+        target: {
+repositoryFullName: operatorContext.adjudication.repositoryFullName,
+issueNumber: operatorContext.adjudication.issueNumber,
+sourceRevision: operatorContext.adjudication.sourceRevision,
+invocationId: (operatorContext.applications[0] as OperatorAdjudicationApplication).invocationId,
+        },
+        reference: {
+url: operatorContext.adjudication.verdictUrl,
+commentId: operatorContext.adjudication.commentId,
+sha256: operatorContext.adjudication.verdictSha256,
+byteLength: operatorContext.adjudication.verdictByteLength,
+findingCount: operatorContext.adjudication.verdictFindingCount,
+createdAt: operatorContext.adjudication.createdAt,
+updatedAt: operatorContext.adjudication.updatedAt,
+authorLogin: operatorContext.adjudication.authorLogin,
+authorAssociation: operatorContext.adjudication.authorAssociation,
+        },
+        reason: operatorContext.adjudication.reason,
+        originalTransport: (operatorContext.applications[0] as OperatorAdjudicationApplication).originalTransport,
+      },
+    } : {}),
   };
   const artifactContents = new Map<string, string>();
   receipts.forEach((receipt) => artifactContents.set(
@@ -1021,6 +1403,7 @@ export function inspectAcceptanceArtifacts(
 ): AcceptanceArtifactStatus {
   const present: string[] = [];
   const missing: AcceptanceArtifactMissingInput[] = [];
+  let operatorContext: OperatorAdjudicationContext | undefined;
   const outputDir = options.outputDir ?? options.reviewDir;
   const requireRegularFile = (path: string, artifact: string, reason: string): boolean => {
     let stat;
@@ -1053,6 +1436,28 @@ export function inspectAcceptanceArtifacts(
   const intake = readArtifactJson(options.tierIntakePath, 'tier-intake/v1', 'tier intake evidence is missing');
   if (!isRecord(intake) || intake.schema !== 'tier-intake/v1') {
     addInvalid('tier-intake/v1', options.tierIntakePath, 'tier intake evidence is malformed');
+  } else if (options.operatorAdjudication) {
+    const taskIdentity = typeof intake.taskIdentity === 'string' ? intake.taskIdentity.trim() : '';
+    const firstRevision = typeof intake.firstRevision === 'string' ? intake.firstRevision.trim() : '';
+    const taskIssueMatch = /^issue:([1-9][0-9]*)$/.exec(taskIdentity);
+    const operatorErrors: string[] = [];
+    if (!taskIssueMatch || !firstRevision) {
+      operatorErrors.push('operator adjudication requires an authoritative tier-intake Issue identity');
+    } else {
+      const operatorAdjudication = normalizeOperatorAcceptanceAdjudication(
+        options.operatorAdjudication,
+        options.phase,
+        options.operatorReferenceTransport ?? defaultGhTransport(),
+        options.repositoryFullName ?? 'chetwerikoff/orchestrator-pack',
+        Number(taskIssueMatch[1]),
+        firstRevision,
+        operatorErrors,
+      );
+      if (operatorAdjudication) {
+        operatorContext = { adjudication: operatorAdjudication, applications: [] };
+      }
+    }
+    for (const error of operatorErrors) missing.push({ artifact: 'operator adjudication', reason: error });
   }
   const dispositions = readArtifactJson(options.authorDispositionsPath, 'author dispositions', 'author disposition evidence is missing');
   if (!isRecord(dispositions) || dispositions.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(dispositions.findings)) {
@@ -1123,6 +1528,7 @@ export function inspectAcceptanceArtifacts(
           capture,
           capture ? captureTexts.get(capture.captureIdentity) ?? null : null,
           turnResultErrors,
+operatorContext,
         );
         for (const error of turnResultErrors) missing.push({ artifact: 'turn-result/v1', reason: error });
       }
@@ -1170,6 +1576,13 @@ export function inspectAcceptanceArtifacts(
     missing.push({
       artifact: CLAUDE_PRODUCER_EVIDENCE_SCHEMA,
       reason: 'T3 architectural-lens capture requires --claude-producer-evidence <path>',
+    });
+  }
+
+  if (operatorContext && operatorContext.applications.length !== 1) {
+    missing.push({
+      artifact: 'operator adjudication',
+      reason: `operator adjudication must match exactly one absent or non-ok terminal invocation; matched ${operatorContext.applications.length}`,
     });
   }
 
@@ -1228,6 +1641,14 @@ export function inspectAcceptanceArtifacts(
   if (!isRecord(manifest) || manifest.schema !== ARTIFACT_MANIFEST_SCHEMA || !Array.isArray(manifest.files)) {
     addInvalid('acceptance-artifacts', join(outputDir, 'acceptance-artifacts.json'), 'acceptance artifact manifest is malformed');
   } else {
+    if (operatorContext) {
+      const provenance = isRecord(manifest.operatorAdjudication) ? manifest.operatorAdjudication : null;
+      if (!provenance || provenance.provenance !== 'operator_adjudicated') {
+        addInvalid('operator adjudication', join(outputDir, 'acceptance-artifacts.json'), 'operator-adjudicated provenance is missing');
+      }
+    } else if (manifest.operatorAdjudication !== undefined) {
+      addInvalid('operator adjudication', join(outputDir, 'acceptance-artifacts.json'), 'operator provenance requires the direct operator input');
+    }
     const declared = new Set(manifest.files.filter((value): value is string => typeof value === 'string'));
     const expected = new Set(expectedOutputNames);
     for (const name of expected) {
