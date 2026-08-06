@@ -1,142 +1,134 @@
 # GitHub Issues + Cursor planner/worker + Codex reviewer setup
 
-This pack is configured for GitHub Issues as the task source of truth and Cursor
-CLI as the AO planning/coding agent.
+This profile uses GitHub Issues as the live task specification, Cursor for planning
+and implementation, and Codex `gpt-5.5` for PR review. The pack owns scope, review
+claims, structured verdicts, and publication independently of the selected runtime
+adapter.
 
-## Supported directly by current AO schema
+## Responsibilities
 
-Current upstream AO config supports these role-specific overrides:
+- planner: Cursor CLI;
+- worker: Cursor CLI;
+- reviewer: Codex CLI through the pack reviewer wrapper;
+- task and acceptance authority: GitHub Issue;
+- code identity: current pull request head;
+- merge-readiness evidence: GitHub review plus required current-head CI;
+- runtime effects: registered `RuntimeAdapter` with exact composite identity.
 
-```yaml
-defaults:
-  runtime: process
-  agent: cursor
-  orchestrator:
-    agent: cursor
-  worker:
-    agent: cursor
-  workspace: worktree
-  notifiers: [desktop]
+A concrete runtime may supply terminal or worker operations, but its configuration,
+state, daemon, or CLI is not a task, review, or merge authority.
 
-projects:
-  example:
-    tracker:
-      plugin: github
-    scm:
-      plugin: github
-    orchestrator:
-      agent: cursor
-    worker:
-      agent: cursor
-```
+## Task convention
 
-Meaning:
+Every implementation Issue includes:
 
-- planner/orchestrator: Cursor CLI
-- coder/worker: Cursor CLI
-- task tracker: GitHub Issues
-- PR/CI/review state: GitHub SCM
-- workspace isolation: git worktrees
-- Windows runtime: process/ConPTY
+- clear problem and goal;
+- advisory tier;
+- acceptance criteria and scenario classes;
+- mandatory `denylist` and optional `allowed-roots`;
+- verification and smoke plan;
+- explicit non-goals and forbidden behavior.
 
-## Reviewer policy
-
-Local Codex PR review **is active**. AO drives it through the first-class
-`ao review` CLI (`run`, `send`, `list`, `execute`). Orchestration and the
-autonomous review loop live in `orchestratorRules` in `agent-orchestrator.yaml`
-(see `agent-orchestrator.yaml.example`). Discover current runs with
-`ao review list <project>` and the AO dashboard Reviews board.
-
-Reviewer: Codex CLI with `gpt-5.5`, authenticated via **ChatGPT OAuth**
-(`codex login`).
-
-See also: [`README.md`](../README.md#local-codex-review-active),
-[`AGENTS.md`](../AGENTS.md), and
-[`docs/architecture.md`](architecture.md#review-paths).
-
-On AO 0.9.x there is no `reviewer:` YAML role that AO reads — if you add
-`reviewer:` to YAML, AO parses it without error or warning but silently ignores
-it; wire review through `orchestratorRules` and `ao review`, not a `reviewer:`
-key.
-
-### Primary path — AO built-in local review
-
-AO 0.9.2 includes a built-in Codex review pipeline. When a worker session creates
-a PR, AO automatically calls `codex exec review` **on the local machine** and
-shows results in the dashboard Reviews board.
-
-On Windows with AO 0.9.2, this is broken upstream (wrong subcommand + Windows
-shell argument splitting). Apply the patch once after installing AO:
-
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/patch-codex-review4.ps1
-```
-
-Re-run this after every `npm install -g @aoagents/ao` upgrade.
-
-Prerequisites: Codex CLI installed and authenticated (`codex login`).
-
-### Alternative path — GitHub Actions CI review
-
-A reusable workflow at `.github/workflows/codex-pr-review.yml` runs Codex in CI
-and can post review findings as GitHub PR comments. Useful when you want review
-output visible on the GitHub PR rather than only in the local AO dashboard.
-
-See `plugins/codex-pr-reviewer/README.md` for the full wiring and secret setup.
-
-Do not patch `packages/core/**` to add reviewer routing.
-
-## GitHub Issue task convention
-
-Every issue intended for AO should include:
-
-- clear title;
-- acceptance criteria;
-- explicit path scope or denylist;
-- test/verification command when known;
-- any files that must not be touched.
-
-Every PR created from an issue should link back to the issue:
+Every PR links one implementation Issue near the top:
 
 ```text
 Closes #123
 ```
 
-or:
-
-```text
-Fixes #123
-```
+The declaration producer captures a clean baseline and writes the generated scope
+snapshot. Workers do not hand-edit declarations or broaden scope to silence a guard.
 
 ## Local prerequisites
 
-Verify tools:
-
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1 -StrictPrereqs
-```
-
-Additional expected local CLIs for this profile:
-
-```powershell
+pwsh -NoProfile -File scripts/verify.ps1 -StrictPrereqs
 cursor --version
 codex --version
-ao --version
 gh auth status
 ```
 
-## Start AO
+Node.js 22.x and npm 10.x are required. Install workspace dependencies from the
+frozen lockfile:
 
-Do not start AO without an explicit target repository. After copying the example
-config to a local ignored `agent-orchestrator.yaml` and replacing the project
-block, start one target repo explicitly:
-
-```powershell
-ao start C:\Users\che\Documents\Projects\your-target-repo
+```bash
+npm ci --include=dev
+npm run check:node-major
 ```
 
-or:
+Authenticate Cursor and Codex through their normal secure local mechanisms. Do not
+place credentials in repository files, Issues, PR text, prompts, or logs.
+
+## Runtime registration
+
+Concrete runtime selection lives in `scripts/runtime/registry.ts`. Business logic
+imports `RuntimeAdapter` only. Before any runtime effect, resolve an adapter-produced
+identity:
+
+```text
+{ runtime, id, generation }
+```
+
+Do not infer authority from a title, path, branch, process ID, short identifier,
+stale store record, or environment string. Operator-owned adapter configuration
+stays outside the repository unless a task explicitly adds a reusable example.
+
+## Cursor planning and implementation
+
+Use the published Issue as the planning input and preserve the declared scope. Run
+Cursor in the target worktree through the normal agent entrypoint or the tracked
+scope wrapper:
 
 ```powershell
-ao start https://github.com/your-org/your-repo
+node --experimental-strip-types plugins/scope-guard/bin/agent-wrap.ts `
+  --issue 123 `
+  -- cursor agent ...
 ```
+
+The wrapper checks the worktree after the turn. It does not create runtime identity,
+merge authority, or a hidden retry loop.
+
+## Codex reviewer
+
+The pack-owned review runner starts and tracks review. `PACK_REVIEWER=codex` selects
+the Codex wrapper. The reviewer consumes the exact PR head, linked Issue scope, and
+active declaration, then emits one structured terminal verdict.
+
+Common inspection:
+
+```bash
+node --experimental-strip-types scripts/pack-review-runner.ts list --pr-number <PR_NUMBER>
+node --experimental-strip-types scripts/pack-review-runner.ts status --pr-number <PR_NUMBER>
+```
+
+The wrapper uses `codex exec review --json` and maps native review output into the
+pack finding contract. Clean, findings, timeout, malformed, empty, and contradictory
+outcomes remain distinct. A clean result for one head is not reused after the head
+changes.
+
+Do not invoke Codex as an independent publication path, bypass review claims, or
+patch `packages/core/**` to add reviewer routing.
+
+## Optional GitHub Actions review
+
+`.github/workflows/codex-pr-review.yml` runs the same wrapper in read-only CI and may
+publish GitHub-visible findings. The caller pins the pack ref and stores required
+credentials only in encrypted Actions secrets.
+
+The local and Actions routes share prompt, scope assembly, finding normalization,
+and terminal verdict rules. They do not create two lifecycle or publication
+authorities.
+
+## Verification before handoff
+
+```bash
+npm run typecheck:foundation
+npm run lint:foundation
+npm run test:foundation
+npm run gate-runner-selftest
+node --experimental-strip-types scripts/runtime-retirement/retired-surface-selftest.ts
+pwsh -NoProfile -File scripts/verify.ps1
+pwsh -NoProfile -File scripts/check-reusable.ps1
+```
+
+Also run affected plugin tests and task-specific smoke. Continue through review and
+required CI on the same head. Merge only under direct operator authority.
