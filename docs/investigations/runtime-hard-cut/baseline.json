@@ -1,0 +1,13 @@
+{
+  "schema": "runtime-hard-cut-baseline/v1",
+  "issueNumber": 1352,
+  "sourceRevision": "r07-operator-scope-amendment",
+  "prBaseHead": "6cce14b7379a80e5999179476432e6c6e0bcadd8",
+  "status": "bootstrap_pending_full_census",
+  "operatorOverrideCommentId": 5200336574,
+  "notes": [
+    "Temporary bootstrap marker. The full current-base census will replace this file before ready-for-review.",
+    "Known additional active path admitted by the operator scope amendment: docs/ubuntu-setup-runbook.md."
+  ],
+  "items": []
+}
