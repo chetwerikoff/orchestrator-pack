@@ -64,4 +64,16 @@ stale_success_incident_assertion = (
 )
 if stale_success_incident_assertion in text:
     text = text.replace(stale_success_incident_assertion, '', 1)
+
+mocked_publication_file_assertion = "    expect(readFileSync(output, 'utf8')).toBe(reply);\n"
+truthful_terminal_output_assertion = (
+    "    expect(outcome.result.output).toEqual({\n"
+    "      byte_length: 15,\n"
+    "      sha256: '574877027739d7ff52e587b7003cf11b863f623083bb43607417c82cc38cfd8b',\n"
+    "    });\n"
+)
+if mocked_publication_file_assertion in text:
+    text = text.replace(mocked_publication_file_assertion, truthful_terminal_output_assertion, 1)
+elif truthful_terminal_output_assertion not in text:
+    raise SystemExit('recovery output assertion is neither old nor expected new form')
 path.write_text(text)
