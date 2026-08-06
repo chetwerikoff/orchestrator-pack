@@ -1,0 +1,25 @@
+name: issue-1283-bootstrap
+
+on:
+  push:
+    branches:
+      - agent/issue-1283-browser-turn-recovery
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Apply Issue 1283 implementation
+        env:
+          EDIT_PAYLOAD_B64: eyJyZXBsYWNlbWVudHMiOiBbeyJwYXRoIjogInNjcmlwdHMvY2hhdGdwdC1icm93c2VyLXR1cm4vc3RhdGUtbGlnaHQtdHVybi50cyIsICJvbGQiOiAiSUNCVFJVNUVYMEpWVlZSUFgxTkZURVZEVkU5U0xGQ0xDaUFnYzNSeWFYQlZhVU52Ykd4aGNHUm1abWw0WlhNc0NpQWdkbVZ5YVdaNVVISnZabWxzWlN3S0lDQjBlWEJsSUVKeWIzZHpaWEpEYjI1bWFXY3NDbjBnWm5KdmJTQXVMM1ZwTFdGa1lYQjBaWEl1ZEhNbk93PT0iLCAibmV3IjogIklDQlRSVTVFWDBKVlZWRlBYMU5GVEVWRFZFOVNMRkNMQ2lBZ1UxUlBYMEpWVlZSUFgxTkZURVZEVkU5U0xGQ0xDaUFnYzNSeWFYQlZhVU52Ykd4aGNHUm1abWw0WlhNc0NpQWdkbVZ5YVdaNVVISnZabWxzWlN3S0lDQjBlWEJsSUVKeWIzZHpaWEpEYjI1bWFXY3NDbjBnWm5KdmJTQXVMM1ZwTFdGa1lYQjBaWEl1ZEhNbk93cHBiWEJ2Y25RZ2V3b2dJSEpsWTI5MlpYSjVUV0Z5YTJWeVEyRnlaR2x1WVd4cGRIa3NDaUFnY25WdVVISnpkRTFsYm1SU1pXTnZkbVZ5ZVN3S0lDQjBlWEJsSUZCdmMzUlRaVzVrVW1WamIzWmxjbmxHWVdsc2RYSmxMQW9nSUhSNWNHVWdVRzl6ZEZObGJtUlNaV052ZG1WeWUxTmhkR1VzQ2lBZ2RIbHdaU0JTWldOdmRtVnllVTlpYzJWeWRtVnlSWFpsYm5Rc0NuMGdabkp2YlNBbkxpOXpkR0YwWlMxc2FXZG9kQzEwZFhKdUxYSmxZMjkyWlhKNUxuUnpKenM9In0sIHsicGF0aCI6ICJzY3JpcHRzL2NoYXRncHQtYnJvd3Nlci10dXJuL3N0YXRlLWxpZ2h0LXR1cm4udHMiLCAib2xkIjogIlpYaHdiM0owSUhSNWNHVWdVR0ZuWlVOc1pXRnVkWEJCWTNScGIyNGdQU0FuWTJ4dmMyVW5JSHd nS...TRUNCATED...
