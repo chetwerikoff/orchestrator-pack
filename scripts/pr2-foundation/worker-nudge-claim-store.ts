@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
+  closeSync,
   existsSync,
   mkdirSync,
   openSync,
-  closeSync,
+  opendirSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -81,6 +82,7 @@ export type WorkerNudgeClaimAcquireResult =
 
 export interface WorkerNudgeDeadlineOptions {
   readonly deadlineMs: number;
+  readonly settlementDeadlineMs?: number;
 }
 
 const CLAIM_LEASE_DEFAULT_MS = 120_000;
@@ -303,7 +305,7 @@ function terminalHit(
     .sort((left, right) => right.mtimeMs - left.mtimeMs);
   for (const file of files) {
     const record = asClaimRecord(readJsonRecord(path.join(directory, file.name)));
-    // D4: uncertain attempts remain durable history, but only SENT deduplicates.
+    // Legacy D4 behavior: uncertain attempts remain history, but only SENT deduplicates.
     if (!record || record.phase !== 'SENT') continue;
     if (record.key === key || record.tupleKey === tupleKey) {
       return { record, phase: String(record.phase) };
@@ -467,10 +469,7 @@ export async function acquireWorkerNudgeClaim(input: {
             retryAllowed: true,
           });
         } else {
-          if (existing.phase === 'CLAIMED' && !leaseExpired) {
-            return { acquired: false, reason: 'claimed', path: activePath, namespace, key };
-          }
-          if (!leaseExpired && !staleByAge && existing.phase === 'CLAIMED') {
+          if (existing.phase === 'CLAIMED' && !leaseExpired && !staleByAge) {
             return { acquired: false, reason: 'claimed', path: activePath, namespace, key };
           }
           moveToTerminal(
@@ -508,163 +507,10 @@ export async function acquireWorkerNudgeClaim(input: {
   }
 }
 
-function handleDeadline(
-  handle: WorkerNudgeClaimHandle,
-  options?: WorkerNudgeDeadlineOptions,
-): number | null {
-  const s2 = (handle.claim as Partial<S2OneShotWorkerNudgeClaimRecord>).policyTag === S2_ONE_SHOT_CLAIM_POLICY;
-  if (!s2) return null;
-  const deadlineMs = options?.deadlineMs
-    ?? (handle as Partial<S2OneShotWorkerNudgeClaimHandle>).deadlineMs;
-  return typeof deadlineMs === 'number' && Number.isFinite(deadlineMs) ? deadlineMs : 0;
-}
-
-async function mutateOwnedClaim(
-  handle: WorkerNudgeClaimHandle,
-  mutation: (record: WorkerNudgeClaimRecord) => WorkerNudgeClaimRecord,
-  options?: WorkerNudgeDeadlineOptions,
-): Promise<{ ok: true; record: WorkerNudgeClaimRecord } | { ok: false; reason: string }> {
-  const mutex = lockDir(handle.namespace, handle.key);
-  const deadlineMs = handleDeadline(handle, options);
-  const action = () => {
-    if (deadlineMs !== null) assertBeforeDeadline(deadlineMs);
-    const current = asClaimRecord(readJsonRecord(handle.path));
-    if (!current) return { ok: false as const, reason: 'claim_missing' };
-    if (current.holder.processGuid !== handle.claim.holder.processGuid) {
-      return { ok: false as const, reason: 'lost_ownership' };
-    }
-    const next = mutation(current);
-    if (deadlineMs !== null) {
-      writeJsonAtomicUntil(handle.path, next, deadlineMs, true);
-    } else {
-      writeJsonAtomic(handle.path, next, true);
-    }
-    handle.claim = next;
-    return { ok: true as const, record: next };
-  };
-  try {
-    return deadlineMs === null
-      ? await withClaimMutex(mutex, action)
-      : await withClaimMutexUntil(mutex, deadlineMs, action);
-  } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : 'storage_failure' };
-  }
-}
-
-export async function persistWorkerNudgeMessageHash(
-  handle: WorkerNudgeClaimHandle,
-  message: string,
-  options?: WorkerNudgeDeadlineOptions,
-): Promise<{ ok: boolean; reason?: string; messageContentHash?: string }> {
-  const messageContentHash = hashNudgeMessageContent(message);
-  const result = await mutateOwnedClaim(handle, (record) => {
-    if (record.phase !== 'CLAIMED') throw new Error('token_phase_invalid');
-    return { ...record, messageContentHash };
-  }, options);
-  return result.ok
-    ? { ok: true, messageContentHash }
-    : { ok: false, reason: result.reason };
-}
-
-export async function markWorkerNudgeSendAttempted(
-  handle: WorkerNudgeClaimHandle,
-  options?: WorkerNudgeDeadlineOptions,
-): Promise<{ ok: boolean; reason?: string }> {
-  const result = await mutateOwnedClaim(handle, (record) => {
-    if (record.phase !== 'CLAIMED') throw new Error(record.phase === 'SEND_ATTEMPTED' ? 'token_replayed' : 'token_phase_invalid');
-    if (record.claimLeaseExpiresAtMs <= Date.now()) throw new Error('claim_lease_expired');
-    return {
-      ...record,
-      phase: 'SEND_ATTEMPTED',
-      state: 'SEND_ATTEMPTED',
-      sendAttemptedAtUtc: new Date().toISOString(),
-    };
-  }, options);
-  return result.ok ? { ok: true } : { ok: false, reason: result.reason };
-}
-
-export async function releaseWorkerNudgeClaim(
-  handle: WorkerNudgeClaimHandle,
-): Promise<{ ok: boolean; reason: string }> {
-  const mutex = lockDir(handle.namespace, handle.key);
-  try {
-    return await withClaimMutex(mutex, () => {
-      const current = asClaimRecord(readJsonRecord(handle.path));
-      if (!current) return { ok: true, reason: 'already_released' };
-      if (current.holder.processGuid !== handle.claim.holder.processGuid) {
-        return { ok: false, reason: 'lost_ownership' };
-      }
-      unlinkSync(handle.path);
-      return { ok: true, reason: 'released' };
-    });
-  } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : 'storage_failure' };
-  }
-}
-
-export async function finalizeWorkerNudgeClaim(
-  handle: WorkerNudgeClaimHandle,
-  outcome: Extract<WorkerNudgeClaimPhase, 'SENT' | 'FAILED_DEFINITIVE' | 'UNCERTAIN'>,
-  extra: Record<string, unknown> = {},
-): Promise<{ ok: boolean; reason?: string; terminalPath?: string }> {
-  const mutex = lockDir(handle.namespace, handle.key);
-  try {
-    return await withClaimMutex(mutex, () => {
-      const current = asClaimRecord(readJsonRecord(handle.path));
-      if (!current) return { ok: false, reason: 'claim_missing' };
-      if (current.holder.processGuid !== handle.claim.holder.processGuid) {
-        return { ok: false, reason: 'lost_ownership' };
-      }
-      const terminalPath = moveToTerminal(handle.namespace, handle.path, current, outcome, extra);
-      return { ok: true, terminalPath };
-    });
-  } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : 'storage_failure' };
-  }
-}
-
-export async function withWorkerNudgeSideEffectFence<T>(
-  action: () => T | Promise<T>,
-): Promise<{ ok: true; value: T } | { ok: false; reason: 'side_effect_busy' }> {
-  const explicitRoot = process.env.AO_SIDE_PROCESS_STATE_DIR?.trim();
-  const lockPath = explicitRoot
-    ? path.join(explicitRoot, 'scripted-review-stdout-delivery.lock')
-    : path.join(tmpdir(), 'orchestrator-scripted-review-stdout-delivery.lock');
-  mkdirSync(path.dirname(lockPath), { recursive: true });
-
-  const clearStale = (): void => {
-    const record = readJsonRecord(lockPath);
-    if (!existsSync(lockPath)) return;
-    const pid = Number(record?.pid ?? 0);
-    const startedAtMs = Date.parse(String(record?.startedAt ?? ''));
-    const maxAgeMinutes = parsePositiveInteger(process.env.AO_SIDE_EFFECT_LOCK_MAX_AGE_MINUTES, 180);
-    const stale = pid > 0
-      ? !processAlive(pid)
-      : !Number.isFinite(startedAtMs) || Date.now() - startedAtMs > maxAgeMinutes * 60_000;
-    if (stale) rmSync(lockPath, { force: true });
-  };
-
-  clearStale();
-  try {
-    writeJsonAtomic(lockPath, { pid: process.pid, startedAt: new Date().toISOString() }, false);
-  } catch {
-    clearStale();
-    try {
-      writeJsonAtomic(lockPath, { pid: process.pid, startedAt: new Date().toISOString() }, false);
-    } catch {
-      return { ok: false, reason: 'side_effect_busy' };
-    }
-  }
-  try {
-    return { ok: true, value: await action() };
-  } finally {
-    rmSync(lockPath, { force: true });
-  }
-}
-
 export const S2_ONE_SHOT_CLAIM_POLICY = 's2-one-shot-v1' as const;
 const S2_RETENTION_TICKS = 128;
 const S2_MAX_TERMINALS_PER_GENERATION = 1_024;
+const S2_TERMINAL_SCAN_LIMIT = S2_MAX_TERMINALS_PER_GENERATION + 1;
 
 export interface S2OneShotWorkerNudgeClaimRecord extends WorkerNudgeClaimRecord {
   policyTag: typeof S2_ONE_SHOT_CLAIM_POLICY;
@@ -692,6 +538,11 @@ export type S2OneShotWorkerNudgeClaimAcquireResult =
     phase?: string;
   };
 
+export type S2SendAttemptAdmissionResult =
+  | { readonly status: 'recorded' }
+  | { readonly status: 'definitely_not_recorded' }
+  | { readonly status: 'state_untrusted' };
+
 function assertBeforeDeadline(deadlineMs: number): void {
   if (!Number.isFinite(deadlineMs) || Date.now() >= deadlineMs) {
     throw new Error('claim_deadline_expired');
@@ -711,6 +562,20 @@ function unlinkUntil(file: string, deadlineMs: number): void {
 function removeUntil(file: string, deadlineMs: number): void {
   assertBeforeDeadline(deadlineMs);
   rmSync(file, { force: true });
+}
+
+function readJsonRecordUntil(file: string, deadlineMs: number): Record<string, unknown> | null {
+  assertBeforeDeadline(deadlineMs);
+  if (!existsSync(file)) return null;
+  assertBeforeDeadline(deadlineMs);
+  const bytes = readFileSync(file, 'utf8');
+  assertBeforeDeadline(deadlineMs);
+  try {
+    const parsed = JSON.parse(bytes) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function writeJsonAtomicUntil(
@@ -741,37 +606,6 @@ function writeJsonAtomicUntil(
     rmSync(temporary, { force: true });
     throw error;
   }
-}
-
-function s2TerminalDir(namespace: string): string {
-  return path.join(terminalDir(namespace), S2_ONE_SHOT_CLAIM_POLICY);
-}
-
-function s2TerminalPath(namespace: string, key: string): string {
-  return path.join(s2TerminalDir(namespace), `${key}.json`);
-}
-
-function s2ClaimKey(input: {
-  projectId: string;
-  issueNumber: number;
-  schedulerGeneration: string;
-  transitionIdentity: string;
-  unitRef: string;
-  eligibleClass: 'idle' | 'livelock';
-}): string {
-  return buildS2EpisodeKey(input);
-}
-
-function asS2ClaimRecord(value: Record<string, unknown> | null): S2OneShotWorkerNudgeClaimRecord | null {
-  const record = asClaimRecord(value);
-  if (!record
-    || record.policyTag !== S2_ONE_SHOT_CLAIM_POLICY
-    || typeof record.schedulerGeneration !== 'string'
-    || !Number.isInteger(record.tickSequence)
-    || typeof record.transitionIdentity !== 'string'
-    || typeof record.unitRef !== 'string'
-    || !['idle', 'livelock'].includes(String(record.eligibleClass))) return null;
-  return record as S2OneShotWorkerNudgeClaimRecord;
 }
 
 async function withClaimMutexUntil<T>(
@@ -813,6 +647,56 @@ async function withClaimMutexUntil<T>(
   throw new Error('claim_deadline_expired');
 }
 
+function s2TerminalDir(namespace: string): string {
+  return path.join(terminalDir(namespace), S2_ONE_SHOT_CLAIM_POLICY);
+}
+
+function s2TerminalPath(namespace: string, key: string): string {
+  return path.join(s2TerminalDir(namespace), `${key}.json`);
+}
+
+function s2ClaimKey(input: {
+  projectId: string;
+  issueNumber: number;
+  schedulerGeneration: string;
+  transitionIdentity: string;
+  unitRef: string;
+  eligibleClass: 'idle' | 'livelock';
+}): string {
+  return buildS2EpisodeKey(input);
+}
+
+function asS2ClaimRecord(value: Record<string, unknown> | null): S2OneShotWorkerNudgeClaimRecord | null {
+  const record = asClaimRecord(value);
+  if (!record
+    || record.policyTag !== S2_ONE_SHOT_CLAIM_POLICY
+    || typeof record.schedulerGeneration !== 'string'
+    || !Number.isInteger(record.tickSequence)
+    || typeof record.transitionIdentity !== 'string'
+    || typeof record.unitRef !== 'string'
+    || !['idle', 'livelock'].includes(String(record.eligibleClass))) return null;
+  return record as S2OneShotWorkerNudgeClaimRecord;
+}
+
+function listS2TerminalEntriesBounded(directory: string, deadlineMs: number): string[] {
+  assertBeforeDeadline(deadlineMs);
+  if (!existsSync(directory)) return [];
+  const opened = opendirSync(directory);
+  const names: string[] = [];
+  try {
+    for (;;) {
+      assertBeforeDeadline(deadlineMs);
+      const entry = opened.readSync();
+      if (!entry) break;
+      names.push(entry.name);
+      if (names.length > S2_TERMINAL_SCAN_LIMIT) throw new Error('claim_untrusted');
+    }
+  } finally {
+    opened.closeSync();
+  }
+  return names;
+}
+
 export function pruneS2OneShotWorkerNudgeClaims(input: {
   namespace: string;
   schedulerGeneration: string;
@@ -822,42 +706,37 @@ export function pruneS2OneShotWorkerNudgeClaims(input: {
   assertBeforeDeadline(input.deadlineMs);
   const directory = s2TerminalDir(input.namespace);
   if (!existsSync(directory)) return { removed: 0, retained: 0, untrusted: 0 };
-  const files = readdirSync(directory)
-    .filter((name) => name.endsWith('.json'))
-    .map((name) => ({
-      name,
-      mtimeMs: statSync(path.join(directory, name)).mtimeMs,
-      record: asS2ClaimRecord(readJsonRecord(path.join(directory, name))),
-    }))
-    .sort((left, right) => right.mtimeMs - left.mtimeMs);
+  const names = listS2TerminalEntriesBounded(directory, input.deadlineMs);
   let removed = 0;
+  let retained = 0;
   let untrusted = 0;
-  const retained: typeof files = [];
-  for (const file of files) {
-    if (!file.record) {
+  for (const name of names) {
+    assertBeforeDeadline(input.deadlineMs);
+    if (!name.endsWith('.json')) {
       untrusted += 1;
-      retained.push(file);
+      retained += 1;
       continue;
     }
-    const expired = file.record.schedulerGeneration !== input.schedulerGeneration
-      || input.tickSequence - file.record.tickSequence >= S2_RETENTION_TICKS;
+    const file = path.join(directory, name);
+    const record = asS2ClaimRecord(readJsonRecordUntil(file, input.deadlineMs));
+    if (!record) {
+      untrusted += 1;
+      retained += 1;
+      continue;
+    }
+    const expired = record.schedulerGeneration !== input.schedulerGeneration
+      || input.tickSequence - record.tickSequence >= S2_RETENTION_TICKS;
     if (expired) {
-      removeUntil(path.join(directory, file.name), input.deadlineMs);
+      removeUntil(file, input.deadlineMs);
       removed += 1;
     } else {
-      retained.push(file);
+      retained += 1;
     }
   }
-  const trustedRetained = retained.filter((file) => file.record !== null);
-  for (const overflow of trustedRetained.slice(S2_MAX_TERMINALS_PER_GENERATION)) {
-    removeUntil(path.join(directory, overflow.name), input.deadlineMs);
-    removed += 1;
+  if (untrusted > 0 || retained > S2_MAX_TERMINALS_PER_GENERATION) {
+    throw new Error('claim_untrusted');
   }
-  return {
-    removed,
-    retained: Math.min(trustedRetained.length, S2_MAX_TERMINALS_PER_GENERATION),
-    untrusted,
-  };
+  return { removed, retained, untrusted };
 }
 
 type S2TerminalHit =
@@ -869,33 +748,30 @@ function s2TerminalHit(
   namespace: string,
   key: string,
   tupleKey: string,
+  deadlineMs: number,
 ): S2TerminalHit {
   const directory = s2TerminalDir(namespace);
   if (!existsSync(directory)) return { status: 'none' };
-  const candidates: S2OneShotWorkerNudgeClaimRecord[] = [];
-  let matchingUnreadable = false;
-  for (const name of readdirSync(directory).filter((entry) => entry.endsWith('.json'))) {
-    const file = path.join(directory, name);
-    const filenameMatches = name === `${key}.json` || name.startsWith(`${key}-`);
-    const raw = readJsonRecord(file);
-    const record = asS2ClaimRecord(raw);
-    if (!record) {
-      if (filenameMatches) matchingUnreadable = true;
-      continue;
-    }
-    if (record.key === key || record.tupleKey === tupleKey || filenameMatches) {
-      if (record.key !== key
-        || record.tupleKey !== tupleKey
-        || !['SENT', 'FAILED_DEFINITIVE', 'UNCERTAIN'].includes(record.phase)) {
-        return { status: 'untrusted' };
-      }
-      candidates.push(record);
+  const expectedPath = s2TerminalPath(namespace, key);
+  let expected: S2OneShotWorkerNudgeClaimRecord | null = null;
+  if (existsSync(expectedPath)) {
+    expected = asS2ClaimRecord(readJsonRecordUntil(expectedPath, deadlineMs));
+    if (!expected
+      || expected.key !== key
+      || expected.tupleKey !== tupleKey
+      || !['SENT', 'FAILED_DEFINITIVE', 'UNCERTAIN'].includes(expected.phase)) {
+      return { status: 'untrusted' };
     }
   }
-  if (matchingUnreadable || candidates.length > 1) return { status: 'untrusted' };
-  return candidates.length === 1
-    ? { status: 'terminal', record: candidates[0]! }
-    : { status: 'none' };
+
+  let duplicate = false;
+  for (const name of listS2TerminalEntriesBounded(directory, deadlineMs)) {
+    assertBeforeDeadline(deadlineMs);
+    if (name === `${key}.json`) continue;
+    if (name.startsWith(`${key}-`) || name.startsWith(`${key}.`)) duplicate = true;
+  }
+  if (duplicate) return { status: 'untrusted' };
+  return expected ? { status: 'terminal', record: expected } : { status: 'none' };
 }
 
 function moveS2ToTerminal(
@@ -906,6 +782,15 @@ function moveS2ToTerminal(
   deadlineMs: number,
   extra: Record<string, unknown> = {},
 ): string {
+  pruneS2OneShotWorkerNudgeClaims({
+    namespace,
+    schedulerGeneration: record.schedulerGeneration,
+    tickSequence: record.tickSequence,
+    deadlineMs,
+  });
+  const directory = s2TerminalDir(namespace);
+  const existingCount = listS2TerminalEntriesBounded(directory, deadlineMs).length;
+  if (existingCount >= S2_MAX_TERMINALS_PER_GENERATION) throw new Error('claim_untrusted');
   const terminalPath = s2TerminalPath(namespace, record.key);
   if (existsSync(terminalPath)) throw new Error('claim_untrusted');
   writeJsonAtomicUntil(terminalPath, {
@@ -956,7 +841,7 @@ export async function acquireS2OneShotWorkerNudgeClaim(input: {
 
   try {
     return await withClaimMutexUntil(mutex, input.deadlineMs, () => {
-      const served = s2TerminalHit(namespace, key, tupleKey);
+      const served = s2TerminalHit(namespace, key, tupleKey, input.deadlineMs);
       if (served.status === 'untrusted') {
         return { acquired: false, reason: 'claim_untrusted', path: activePath, namespace, key };
       }
@@ -972,7 +857,7 @@ export async function acquireS2OneShotWorkerNudgeClaim(input: {
         };
       }
 
-      const existingRaw = readJsonRecord(activePath);
+      const existingRaw = readJsonRecordUntil(activePath, input.deadlineMs);
       if (existsSync(activePath) && !existingRaw) {
         return { acquired: false, reason: 'claim_untrusted', path: activePath, namespace, key };
       }
@@ -1054,7 +939,7 @@ export async function acquireS2OneShotWorkerNudgeClaim(input: {
         eligibleClass: input.eligibleClass,
       };
       writeJsonAtomicUntil(activePath, replacement, input.deadlineMs, false);
-      const reread = asS2ClaimRecord(readJsonRecord(activePath));
+      const reread = asS2ClaimRecord(readJsonRecordUntil(activePath, input.deadlineMs));
       if (reread?.holder.processGuid !== replacement.holder.processGuid
         || reread.key !== key
         || reread.tupleKey !== tupleKey) {
@@ -1081,6 +966,201 @@ export async function acquireS2OneShotWorkerNudgeClaim(input: {
   }
 }
 
+function handleDeadline(
+  handle: WorkerNudgeClaimHandle,
+  options?: WorkerNudgeDeadlineOptions,
+): number | null {
+  const s2 = (handle.claim as Partial<S2OneShotWorkerNudgeClaimRecord>).policyTag === S2_ONE_SHOT_CLAIM_POLICY;
+  if (!s2) return null;
+  const deadlineMs = options?.deadlineMs
+    ?? (handle as Partial<S2OneShotWorkerNudgeClaimHandle>).deadlineMs;
+  return typeof deadlineMs === 'number' && Number.isFinite(deadlineMs) ? deadlineMs : 0;
+}
+
+async function mutateOwnedClaim(
+  handle: WorkerNudgeClaimHandle,
+  mutation: (record: WorkerNudgeClaimRecord) => WorkerNudgeClaimRecord,
+  options?: WorkerNudgeDeadlineOptions,
+): Promise<{ ok: true; record: WorkerNudgeClaimRecord } | { ok: false; reason: string }> {
+  const mutex = lockDir(handle.namespace, handle.key);
+  const deadlineMs = handleDeadline(handle, options);
+  const action = () => {
+    if (deadlineMs !== null) assertBeforeDeadline(deadlineMs);
+    const current = deadlineMs === null
+      ? asClaimRecord(readJsonRecord(handle.path))
+      : asClaimRecord(readJsonRecordUntil(handle.path, deadlineMs));
+    if (!current) return { ok: false as const, reason: 'claim_missing' };
+    if (current.holder.processGuid !== handle.claim.holder.processGuid) {
+      return { ok: false as const, reason: 'lost_ownership' };
+    }
+    const next = mutation(current);
+    if (deadlineMs !== null) writeJsonAtomicUntil(handle.path, next, deadlineMs, true);
+    else writeJsonAtomic(handle.path, next, true);
+    handle.claim = next;
+    return { ok: true as const, record: next };
+  };
+  try {
+    return deadlineMs === null
+      ? await withClaimMutex(mutex, action)
+      : await withClaimMutexUntil(mutex, deadlineMs, action);
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : 'storage_failure' };
+  }
+}
+
+export async function persistWorkerNudgeMessageHash(
+  handle: WorkerNudgeClaimHandle,
+  message: string,
+  options?: WorkerNudgeDeadlineOptions,
+): Promise<{ ok: boolean; reason?: string; messageContentHash?: string }> {
+  const messageContentHash = hashNudgeMessageContent(message);
+  const result = await mutateOwnedClaim(handle, (record) => {
+    if (record.phase !== 'CLAIMED') throw new Error('token_phase_invalid');
+    return { ...record, messageContentHash };
+  }, options);
+  return result.ok
+    ? { ok: true, messageContentHash }
+    : { ok: false, reason: result.reason };
+}
+
+function inspectS2SendAttemptState(
+  handle: S2OneShotWorkerNudgeClaimHandle,
+  deadlineMs: number,
+): S2SendAttemptAdmissionResult {
+  try {
+    const currentRaw = readJsonRecordUntil(handle.path, deadlineMs);
+    if (currentRaw) {
+      const current = asS2ClaimRecord(currentRaw);
+      if (!current
+        || current.key !== handle.key
+        || current.holder.processGuid !== handle.claim.holder.processGuid) {
+        return { status: 'state_untrusted' };
+      }
+      if (current.phase === 'SEND_ATTEMPTED') {
+        handle.claim = current;
+        return { status: 'recorded' };
+      }
+      if (current.phase === 'CLAIMED') {
+        handle.claim = current;
+        return { status: 'definitely_not_recorded' };
+      }
+      return { status: 'recorded' };
+    }
+    const terminal = asS2ClaimRecord(readJsonRecordUntil(
+      s2TerminalPath(handle.namespace, handle.key),
+      deadlineMs,
+    ));
+    return terminal && ['SENT', 'FAILED_DEFINITIVE', 'UNCERTAIN'].includes(terminal.phase)
+      ? { status: 'recorded' }
+      : { status: 'state_untrusted' };
+  } catch {
+    return { status: 'state_untrusted' };
+  }
+}
+
+export async function markS2OneShotWorkerNudgeSendAttempted(
+  handle: S2OneShotWorkerNudgeClaimHandle,
+  options: WorkerNudgeDeadlineOptions,
+): Promise<S2SendAttemptAdmissionResult> {
+  const attemptDeadline = options.deadlineMs;
+  const settlementDeadline = Math.max(
+    attemptDeadline,
+    options.settlementDeadlineMs ?? attemptDeadline,
+  );
+  const mutex = lockDir(handle.namespace, handle.key);
+  try {
+    return await withClaimMutexUntil(mutex, attemptDeadline, () => {
+      const current = asS2ClaimRecord(readJsonRecordUntil(handle.path, attemptDeadline));
+      if (!current
+        || current.key !== handle.key
+        || current.holder.processGuid !== handle.claim.holder.processGuid) {
+        return { status: 'state_untrusted' as const };
+      }
+      if (current.phase === 'SEND_ATTEMPTED') {
+        handle.claim = current;
+        return { status: 'recorded' as const };
+      }
+      if (current.phase !== 'CLAIMED' || current.claimLeaseExpiresAtMs <= Date.now()) {
+        return current.phase === 'CLAIMED'
+          ? { status: 'definitely_not_recorded' as const }
+          : { status: 'state_untrusted' as const };
+      }
+      const next: S2OneShotWorkerNudgeClaimRecord = {
+        ...current,
+        phase: 'SEND_ATTEMPTED',
+        state: 'SEND_ATTEMPTED',
+        sendAttemptedAtUtc: new Date().toISOString(),
+      };
+      writeJsonAtomicUntil(handle.path, next, attemptDeadline, true);
+      const reread = asS2ClaimRecord(readJsonRecordUntil(handle.path, attemptDeadline));
+      if (!reread
+        || reread.phase !== 'SEND_ATTEMPTED'
+        || reread.key !== handle.key
+        || reread.holder.processGuid !== handle.claim.holder.processGuid) {
+        return { status: 'state_untrusted' as const };
+      }
+      handle.claim = reread;
+      return { status: 'recorded' as const };
+    });
+  } catch {
+    try {
+      return await withClaimMutexUntil(mutex, settlementDeadline, () =>
+        inspectS2SendAttemptState(handle, settlementDeadline));
+    } catch {
+      return inspectS2SendAttemptState(handle, settlementDeadline);
+    }
+  }
+}
+
+export async function markWorkerNudgeSendAttempted(
+  handle: WorkerNudgeClaimHandle,
+  options?: WorkerNudgeDeadlineOptions,
+): Promise<{ ok: boolean; reason?: string }> {
+  if ((handle.claim as Partial<S2OneShotWorkerNudgeClaimRecord>).policyTag === S2_ONE_SHOT_CLAIM_POLICY) {
+    const s2Handle = handle as S2OneShotWorkerNudgeClaimHandle;
+    const deadlineMs = options?.deadlineMs ?? s2Handle.deadlineMs;
+    const result = await markS2OneShotWorkerNudgeSendAttempted(s2Handle, {
+      deadlineMs,
+      settlementDeadlineMs: options?.settlementDeadlineMs,
+    });
+    return result.status === 'recorded'
+      ? { ok: true }
+      : { ok: false, reason: result.status };
+  }
+  const result = await mutateOwnedClaim(handle, (record) => {
+    if (record.phase !== 'CLAIMED') {
+      throw new Error(record.phase === 'SEND_ATTEMPTED' ? 'token_replayed' : 'token_phase_invalid');
+    }
+    if (record.claimLeaseExpiresAtMs <= Date.now()) throw new Error('claim_lease_expired');
+    return {
+      ...record,
+      phase: 'SEND_ATTEMPTED',
+      state: 'SEND_ATTEMPTED',
+      sendAttemptedAtUtc: new Date().toISOString(),
+    };
+  }, options);
+  return result.ok ? { ok: true } : { ok: false, reason: result.reason };
+}
+
+export async function releaseWorkerNudgeClaim(
+  handle: WorkerNudgeClaimHandle,
+): Promise<{ ok: boolean; reason: string }> {
+  const mutex = lockDir(handle.namespace, handle.key);
+  try {
+    return await withClaimMutex(mutex, () => {
+      const current = asClaimRecord(readJsonRecord(handle.path));
+      if (!current) return { ok: true, reason: 'already_released' };
+      if (current.holder.processGuid !== handle.claim.holder.processGuid) {
+        return { ok: false, reason: 'lost_ownership' };
+      }
+      unlinkSync(handle.path);
+      return { ok: true, reason: 'released' };
+    });
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : 'storage_failure' };
+  }
+}
+
 export async function releaseS2OneShotWorkerNudgeClaim(
   handle: S2OneShotWorkerNudgeClaimHandle,
   options?: WorkerNudgeDeadlineOptions,
@@ -1089,7 +1169,7 @@ export async function releaseS2OneShotWorkerNudgeClaim(
   const deadlineMs = options?.deadlineMs ?? handle.deadlineMs;
   try {
     return await withClaimMutexUntil(mutex, deadlineMs, () => {
-      const current = asS2ClaimRecord(readJsonRecord(handle.path));
+      const current = asS2ClaimRecord(readJsonRecordUntil(handle.path, deadlineMs));
       if (!current) return { ok: true, reason: 'already_released' };
       if (current.holder.processGuid !== handle.claim.holder.processGuid
         || current.key !== handle.key) {
@@ -1098,6 +1178,34 @@ export async function releaseS2OneShotWorkerNudgeClaim(
       if (current.phase !== 'CLAIMED') return { ok: false, reason: 'send_attempted' };
       unlinkUntil(handle.path, deadlineMs);
       return { ok: true, reason: 'released' };
+    });
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : 'storage_failure' };
+  }
+}
+
+export async function finalizeWorkerNudgeClaim(
+  handle: WorkerNudgeClaimHandle,
+  outcome: Extract<WorkerNudgeClaimPhase, 'SENT' | 'FAILED_DEFINITIVE' | 'UNCERTAIN'>,
+  extra: Record<string, unknown> = {},
+): Promise<{ ok: boolean; reason?: string; terminalPath?: string }> {
+  if ((handle.claim as Partial<S2OneShotWorkerNudgeClaimRecord>).policyTag === S2_ONE_SHOT_CLAIM_POLICY) {
+    return finalizeS2OneShotWorkerNudgeClaim(
+      handle as S2OneShotWorkerNudgeClaimHandle,
+      outcome,
+      extra,
+    );
+  }
+  const mutex = lockDir(handle.namespace, handle.key);
+  try {
+    return await withClaimMutex(mutex, () => {
+      const current = asClaimRecord(readJsonRecord(handle.path));
+      if (!current) return { ok: false, reason: 'claim_missing' };
+      if (current.holder.processGuid !== handle.claim.holder.processGuid) {
+        return { ok: false, reason: 'lost_ownership' };
+      }
+      const terminalPath = moveToTerminal(handle.namespace, handle.path, current, outcome, extra);
+      return { ok: true, terminalPath };
     });
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : 'storage_failure' };
@@ -1114,7 +1222,7 @@ export async function finalizeS2OneShotWorkerNudgeClaim(
   const deadlineMs = options?.deadlineMs ?? handle.deadlineMs;
   try {
     return await withClaimMutexUntil(mutex, deadlineMs, () => {
-      const current = asS2ClaimRecord(readJsonRecord(handle.path));
+      const current = asS2ClaimRecord(readJsonRecordUntil(handle.path, deadlineMs));
       if (!current) return { ok: false, reason: 'claim_missing' };
       if (current.holder.processGuid !== handle.claim.holder.processGuid
         || current.key !== handle.key) {
@@ -1131,15 +1239,48 @@ export async function finalizeS2OneShotWorkerNudgeClaim(
         deadlineMs,
         extra,
       );
-      pruneS2OneShotWorkerNudgeClaims({
-        namespace: handle.namespace,
-        schedulerGeneration: current.schedulerGeneration,
-        tickSequence: current.tickSequence,
-        deadlineMs,
-      });
       return { ok: true, terminalPath };
     });
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : 'storage_failure' };
+  }
+}
+
+export async function withWorkerNudgeSideEffectFence<T>(
+  action: () => T | Promise<T>,
+): Promise<{ ok: true; value: T } | { ok: false; reason: 'side_effect_busy' }> {
+  const explicitRoot = process.env.AO_SIDE_PROCESS_STATE_DIR?.trim();
+  const lockPath = explicitRoot
+    ? path.join(explicitRoot, 'scripted-review-stdout-delivery.lock')
+    : path.join(tmpdir(), 'orchestrator-scripted-review-stdout-delivery.lock');
+  mkdirSync(path.dirname(lockPath), { recursive: true });
+
+  const clearStale = (): void => {
+    const record = readJsonRecord(lockPath);
+    if (!existsSync(lockPath)) return;
+    const pid = Number(record?.pid ?? 0);
+    const startedAtMs = Date.parse(String(record?.startedAt ?? ''));
+    const maxAgeMinutes = parsePositiveInteger(process.env.AO_SIDE_EFFECT_LOCK_MAX_AGE_MINUTES, 180);
+    const stale = pid > 0
+      ? !processAlive(pid)
+      : !Number.isFinite(startedAtMs) || Date.now() - startedAtMs > maxAgeMinutes * 60_000;
+    if (stale) rmSync(lockPath, { force: true });
+  };
+
+  clearStale();
+  try {
+    writeJsonAtomic(lockPath, { pid: process.pid, startedAt: new Date().toISOString() }, false);
+  } catch {
+    clearStale();
+    try {
+      writeJsonAtomic(lockPath, { pid: process.pid, startedAt: new Date().toISOString() }, false);
+    } catch {
+      return { ok: false, reason: 'side_effect_busy' };
+    }
+  }
+  try {
+    return { ok: true, value: await action() };
+  } finally {
+    rmSync(lockPath, { force: true });
   }
 }
