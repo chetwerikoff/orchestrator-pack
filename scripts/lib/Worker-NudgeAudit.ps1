@@ -5,7 +5,7 @@
 
 function Get-WorkerNudgeGateAuditRoot {
     param([string]$ProjectId = 'orchestrator-pack')
-    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.orchestrator-pack' }
     return (Join-Path (Join-Path (Join-Path $base 'projects') $ProjectId) 'worker-nudge-gate-audit')
 }
 
@@ -76,4 +76,3 @@ function Merge-WorkerNudgeClaimSkipAudit {
     if (-not $audit['kind']) { $audit['kind'] = 'worker-nudge-gate' }
     return $audit
 }
-
