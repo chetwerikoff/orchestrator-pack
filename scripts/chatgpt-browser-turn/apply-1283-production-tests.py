@@ -36,14 +36,25 @@ source = source.replace("join(stateDir, 'recovered.txt')", "join(integrationStat
 source = source.replace("join(stateDir, 'exhausted.txt')", "join(integrationStateDir, 'exhausted.txt')")
 source = source.replace(
     "const recoveredMessages = readyTurnObservationFrames(prompt, reply).at(-1)!;",
-    "const recoveredMessages = () => readyTurnObservationFrames(composerText, reply).at(-1)!;",
+    "const recoveredMessages = (): StateLightTestMessage[] => [\n"
+    "      { role: 'user', text: composerText },\n"
+    "      {\n"
+    "        role: 'assistant',\n"
+    "        text: reply,\n"
+    "        finalAction: true,\n"
+    "        finalActionInTurnContainer: true,\n"
+    "      },\n"
+    "    ];",
 )
 source = source.replace("collectionLocator(recoveredMessages, false)", "collectionLocator(recoveredMessages(), false)")
 source = source.replace("recoveredMessages.filter", "recoveredMessages().filter")
 source = source.replace("const last = recoveredMessages.at(-1)!;", "const last = recoveredMessages().at(-1)!;")
 source = source.replace(
     "const waitingMessages = readyTurnObservationFrames(prompt, 'UNUSED')[0]!;",
-    "const waitingMessages = () => readyTurnObservationFrames(composerText, 'UNUSED')[0]!;",
+    "const waitingMessages = (): StateLightTestMessage[] => [\n"
+    "      { role: 'user', text: composerText },\n"
+    "      { role: 'assistant', text: 'working', inProgress: true },\n"
+    "    ];",
 )
 source = source.replace("collectionLocator(waitingMessages, true)", "collectionLocator(waitingMessages(), true)")
 source = source.replace("waitingMessages.filter", "waitingMessages().filter")
