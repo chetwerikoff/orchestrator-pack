@@ -7,13 +7,20 @@
     "scripts/chatgpt-browser-turn/state-light-turn-recovery.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts"
   ],
   "denylist": [
-    "credentials/",
-    "packages/core/",
-    "secrets/",
-    "vendor/"
+    "credentials/**",
+    "package.json",
+    "packages/core/**",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/**",
+    "vendor/**"
   ],
   "allowed_roots": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -23,5 +30,5 @@
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
-  "source_revision": "6cce14b7379a80e5999179476432e6c6e0bcadd8"
+  "source_revision": "567137ba1e4f1f4bc387558a0966c0c5ce9b3f36"
 }
