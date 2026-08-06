@@ -102,7 +102,7 @@ Tier rubric is binding in `docs/tiering.md`.
 Canonical order:
 
 ```text
-competitive[01..03] (when triggered) → author fix-round → architectural-review[01..03] → author fix-round → Claude architectural-lens → author fix-round (when findings exist) → GPT architectural
+competitive[01..03] (when triggered) → author fix-round → architectural-review[01..03] → author fix-round → Claude architectural-lens → author fix-round → GPT architectural → author fix-round → acceptance
 ```
 
 1. Intake and optional adjacent correction before first capture.
@@ -122,7 +122,9 @@ competitive[01..03] (when triggered) → author fix-round → architectural-revi
 8. Run T3 `pre-lens` guard after settlement, relay equality, and occurrence
    accounting are green.
 9. Run exactly one Claude `architectural-lens`, or a valid unavailable waiver.
-10. Apply the author fix-round after the Claude lens when it has findings.
+10. Apply the mandatory author fix-round after the Claude lens. If the lens
+    returns `NO_FINDINGS`, journal “no findings, no changes required” and do
+    not start the next stage until that record exists.
 11. Run exactly one terminal GPT `architectural` source.
 12. Apply the mandatory author fix-round after the terminal GPT lens and run
     final acceptance. If the lens returns `NO_FINDINGS`, journal “no findings,
@@ -130,7 +132,9 @@ competitive[01..03] (when triggered) → author fix-round → architectural-revi
 
 If the competitive stage is skipped, the flow-manager records an explicit
 journal rationale explaining why the solution space is narrow; missing rationale
-is a process defect. Before every stage launch, verify that the Issue revision
+is a process defect. Every author fix-round is mandatory before the next stage,
+and a `NO_FINDINGS` result is journaled as “no findings, no changes required”
+before progression. Before every stage launch, verify that the Issue revision
 is current; reviewers must read that revision.
 
 For every tier, the terminal sequence ends with `GPT lens → author fix-round →
