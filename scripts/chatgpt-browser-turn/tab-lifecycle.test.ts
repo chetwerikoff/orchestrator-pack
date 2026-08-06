@@ -908,4 +908,49 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     expect(foreign.stopClick).not.toHaveBeenCalled();
     expect(foreign.close).not.toHaveBeenCalled();
   });
+
+  it('runs Stop, then fixes capture, then disconnects before emitting the production result', async () => {
+    const { BEFORE_CDP_BROWSER_RELEASE } = await import('./browser-session.ts');
+    const order: string[] = [];
+    let stopVisible = true;
+    const stopClick = vi.fn(async () => {
+      order.push('stop');
+      stopVisible = false;
+    });
+    const page = {
+      url: () => ownedUrl,
+      isClosed: () => false,
+      close: vi.fn(async () => undefined),
+      locator: () => ({
+        count: vi.fn(async () => stopVisible ? 1 : 0),
+        first: () => ({
+          click: stopClick,
+          waitFor: vi.fn(async () => undefined),
+        }),
+      }),
+    };
+    const browser = {
+      isConnected: () => true,
+      [BEFORE_CDP_BROWSER_RELEASE]: vi.fn(async () => {
+        expect(stopClick).toHaveBeenCalledTimes(1);
+        order.push('capture');
+      }),
+      close: vi.fn(async () => { order.push('disconnect'); }),
+    };
+    const outcome = await runEntry(async () => ({
+      page,
+      stopAuthorityPage: page,
+      browser,
+      cleanupAction: 'preserve' as const,
+      result: makeTurnResult({
+        state: 'no_reply',
+        scope: 'invocation',
+        cause: 'observation_exhausted_no_resend',
+        send_count: 1,
+      }),
+    }));
+    expect(outcome.code).not.toBe(0);
+    expect(order).toEqual(['stop', 'capture', 'disconnect']);
+    expect(outcome.result).toMatchObject({ cleanup: 'skipped', send_count: 1 });
+  });
 });
