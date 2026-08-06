@@ -185,6 +185,10 @@ try {
   if (classifyLiveStorePath(liveWorkerStatus, env)?.storeId !== 'worker-status-store') {
     fail('computed worker-status default is not classified');
   }
+  const liveWorkerSubmitState = join(fakeTmp, 'orchestrator-worker-message-submit-state.json');
+  if (classifyLiveStorePath(liveWorkerSubmitState, env)?.storeId !== 'worker-message-submit-state') {
+    fail('computed worker-message-submit-state fallback is not classified');
+  }
   try {
     assertHarnessWritePathSafe(liveWorkerStatus, 'self-check', env);
     fail('computed worker-status default was not blocked');
