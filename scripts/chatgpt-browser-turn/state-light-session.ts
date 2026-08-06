@@ -1290,16 +1290,36 @@ function buildSessionResult(
   };
 }
 
+const RETAINED_PAGE_CAUSES = new Set([
+  'conversation_identity_changed',
+  'owned_carrier_unproven',
+  'owned_prompt_not_observed',
+  'owned_reply_boundary_unproven',
+  'transcript_continuity_unproven',
+  'observation_exhausted_no_resend',
+  'foreign_user_after_owned_send',
+  'predecessor_ownership_unproven',
+  'predecessor_continuity_unproven',
+  'helper_error_after_send_page_retained',
+]);
+
+function sessionPageCleanupAction(state: SessionExecutionState): 'close' | 'preserve' | 'skip' {
+  if (!state.page) return 'skip';
+  const decisive = state.payloads.find((payload) => payload.terminal && payload.terminal.state !== 'ok');
+  if (!decisive?.terminal) return 'close';
+  if (RETAINED_PAGE_CAUSES.has(decisive.terminal.cause)) return 'preserve';
+  if (decisive.terminal.cause === 'page_or_browser_lost_after_send') return 'skip';
+  if (decisive.sendCount === 1 && decisive.terminal.state !== 'ok') return 'skip';
+  return 'close';
+}
+
 async function cleanupSession(
   state: SessionExecutionState,
   deps: StateLightSessionDependencies,
 ): Promise<ResourceCleanupOutcome> {
   let cleanup: ResourceCleanupOutcome = 'skipped';
-  const postSendNonOk = state.payloads.some((payload) => (
-    payload.sendCount === 1 && payload.terminal?.state !== 'ok'
-  ));
-  if (state.page && !postSendNonOk) {
-    cleanup = await deps.cleanup(() => state.page.close(), RESOURCE_CLEANUP_BOUND_MS);
+  if (sessionPageCleanupAction(state) === 'close') {
+    cleanup = await deps.cleanup(() => state.page!.close(), RESOURCE_CLEANUP_BOUND_MS);
   }
   await deps.releaseBrowser(state.browser);
   return cleanup;

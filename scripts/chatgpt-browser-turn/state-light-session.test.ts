@@ -357,7 +357,14 @@ describe('state-light explicit session mode', () => {
     });
     expect(terminal[1]).not.toHaveProperty('marker_match_count');
     expect(terminal[2]).toMatchObject({ ordinal: 3, delivery_state: 'not_attempted', send_count: 0 });
-    expect(aggregate(stream)).toMatchObject({ terminal_stop_ordinal: 2, decisive_payload_ordinal: 2, attempted_payload_count: 1 });
+    expect(aggregate(stream)).toMatchObject({
+      terminal_stop_ordinal: 2,
+      decisive_payload_ordinal: 2,
+      attempted_payload_count: 1,
+      cleanup: 'skipped',
+      owned_tab_count: 1,
+    });
+    expect(harness.metrics.closes).toBe(0);
   });
 
   it('does not continue from a keyless predecessor after its marker disappears', async () => {
