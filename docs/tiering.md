@@ -54,15 +54,23 @@ The create-flow topology is fixed by tier:
 - **T1:** one GPT `architectural` lens.
 - **T2:** three GPT `architectural-review` sources launched concurrently, then
   one GPT `architectural` lens.
-- **T3:** three GPT `competitive` sources only when the flow-manager/architect
-  records that they are genuinely necessary, then three GPT
+- **T3:** three GPT `competitive` sources when directly required by the
+  operator, selected by the architect, or judged necessary by the
+  flow-manager because the task has fundamentally different plausible
+  solution designs, then three GPT
   `architectural-review` sources concurrently, one Claude
   `architectural-lens`, and one GPT `architectural` lens.
 
 “Concurrently” means the slots are launched as one parallel batch, with browser
 starts staggered by 10–15 seconds. The T3 competitive decision is recorded in
-the journal; skipping that stage is legal. The stage order is
-competitive (when needed) → architectural-review → Claude lens → GPT lens.
+the journal. The flow-manager makes this decision from the substance of the
+task, without checklists, thresholds, scores, or formal scales. Skipping is
+legal only with an explicit journal rationale explaining why the solution
+space is narrow; missing rationale is a process defect. Between stages, the
+author must run a fix-round:
+close or substantively reject every finding, update the Issue body, and
+increment its revision before the next stage starts. No stage may start from a
+stale revision; reviewers read the latest revision.
 These fixed counts replace older single-source and configurable-cardinality
 wording.
 
@@ -116,19 +124,36 @@ Therefore:
 
 | Tier | Review sequence | Pre-lens #975 | Terminal lens |
 |------|-----------------|---------------|---------------|
-| **T1** | One GPT `architectural` lens → acceptance | **No** | GPT lens owns aggregate cut + M5 |
-| **T2** | Three concurrent GPT `architectural-review` sources → one GPT `architectural` lens → acceptance | **No** | GPT lens owns aggregate cut + M5 |
-| **T3** | Three concurrent GPT `competitive` sources when journaled as necessary → three concurrent GPT `architectural-review` sources → one Claude `architectural-lens` (or valid waiver) → one GPT `architectural` lens → acceptance after #1171 checks | **Yes** | GPT lens owns final aggregate cut + M5 |
+| **T1** | One GPT `architectural` lens → mandatory author fix-round → acceptance | **No** | GPT lens owns aggregate cut + M5 |
+| **T2** | Three concurrent GPT `architectural-review` sources → mandatory author fix-round → one GPT `architectural` lens → mandatory author fix-round → acceptance | **No** | GPT lens owns aggregate cut + M5 |
+| **T3** | Three concurrent GPT `competitive` sources when operator/architect/flow-manager judgment requires them → mandatory author fix-round → three concurrent GPT `architectural-review` sources → mandatory author fix-round → one Claude `architectural-lens` (or valid waiver) → mandatory author fix-round → one GPT `architectural` lens → mandatory author fix-round → acceptance after #1171 checks | **Yes** | GPT lens owns final aggregate cut + M5 |
 
 The canonical T3 order is:
 
 ```text
-competitive[01..03] (when needed) → architectural-review[01..03] → Claude architectural-lens → GPT architectural
+competitive[01..03] (when triggered) → author fix-round → architectural-review[01..03] → author fix-round → Claude architectural-lens → author fix-round → GPT architectural → author fix-round → acceptance
 ```
+
+Every author fix-round is mandatory before the next stage, including after the
+Claude lens and after the final GPT lens. If a review returns `NO_FINDINGS`, the
+fix-round is a journaled statement “no findings, no changes required”; the next
+stage cannot start until that record exists.
+
+The author fix-round after the terminal GPT lens is mandatory for every tier,
+even when that lens returns `NO_FINDINGS`. In that case it is a journaled
+disposition stating “no findings, no changes required”; the terminal stage is
+still recorded before acceptance.
+
+Competitive review runs when the operator requires it, the architect selects
+it, or the flow-manager judges that the task has fundamentally different
+plausible solution designs and records that substantive rationale. A skipped
+competitive stage requires an equally explicit journal rationale explaining
+why the solution space is narrow. No checklist, threshold, score, or formal
+scale may decide this; missing rationale is a process defect.
 
 The stage receipts freeze the required cardinality: T1 has one GPT lens; T2 has
 three architectural-review sources followed by one GPT lens; T3 has three
-competitive sources only when journaled as necessary, three
+competitive sources when a trigger is journaled, three
 architectural-review sources, one Claude lens, and one GPT lens. There is no
 configurable cardinality override.
 
@@ -167,10 +192,16 @@ cannot prove a later episode root by passing only a self-consistent subset.
 T2 `architectural-review` and T3 `architectural-review` use policy
 `triple-source/v1` and exact independent reviewer slots `01..03` in one
 staggered concurrent batch. T3 `competitive` uses the same three-slot policy
-only when its necessity is recorded in the journal.
+when the operator, architect, or flow-manager's substantive judgment selects
+it, with the decision and rationale recorded in the journal. A skip likewise
+requires an explicit rationale for why the solution space is narrow.
 
 - All three launches begin before harvesting/adjudicating siblings.
 - Preserve 10–15 second spacing and bounded prior-slot observation.
+- After each logical review round, the author closes or substantively rejects
+  every finding, updates the Issue body, and increments its revision before
+  the next stage. No later stage starts on a stale revision; every reviewer
+  reads the latest revision.
 - There is no account-wide hard cap or synthetic pre-attempt capacity outcome.
 - Every invocation emits immutable `reviewer-invocation-envelope/v1` evidence,
   including episode/attempt/policy/stage/revision identities, cardinality and
