@@ -102,16 +102,24 @@ function shouldAttachIssue1352SourceArchive() {
 function buildIssue1352SourceArchive(repoRoot) {
   const trackedOutput = execFileSync(
     'git',
-    ['-C', repoRoot, 'ls-files', '-z'],
+    ['-C', repoRoot, 'ls-files', '--stage', '-z'],
     { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 },
   );
-  const paths = trackedOutput
+  const entries = trackedOutput
     .toString('utf8')
     .split('\0')
     .filter(Boolean)
-    .sort((left, right) => left.localeCompare(right));
-  const files = paths.map((path) => ({
+    .map((entry) => {
+      const match = entry.match(/^(\d+) ([0-9a-f]{40}) (\d+)\t(.+)$/s);
+      if (!match) throw new Error(`unexpected git ls-files --stage entry: ${entry}`);
+      return { mode: match[1], blobSha: match[2], stage: Number(match[3]), path: match[4] };
+    })
+    .filter((entry) => entry.stage === 0)
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const files = entries.map(({ mode, blobSha, path }) => ({
     path,
+    mode,
+    blobSha,
     contentBase64: readFileSync(join(repoRoot, path)).toString('base64'),
   }));
   const archive = {
