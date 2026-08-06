@@ -252,11 +252,17 @@ function identityUnproven(
 export async function cancelOwnedGenerationFromReceipt(
   rawReceipt: BrowserTurnCancellationReceipt,
   cdp: string,
-  authority?: ExplicitCancellationAuthority,
-  dependencies: BrowserTurnCancellationDependencies = {},
+  authorityOrDependencies?: ExplicitCancellationAuthority | BrowserTurnCancellationDependencies,
+  explicitDependencies: BrowserTurnCancellationDependencies = {},
 ): Promise<BrowserTurnCancellationAttempt> {
   const receipt = parseBrowserTurnCancellationReceipt(rawReceipt);
   if (!receipt) return unavailable('child_stdout_eof_timeout_cancellation_receipt_invalid');
+  const authority = authorityOrDependencies === EXPLICIT_CANCELLATION_AUTHORITY
+    ? authorityOrDependencies
+    : undefined;
+  const dependencies = authorityOrDependencies && typeof authorityOrDependencies === 'object'
+    ? authorityOrDependencies
+    : explicitDependencies;
   if (authority !== EXPLICIT_CANCELLATION_AUTHORITY) return authorityAbsent(receipt);
   if (!cdp.trim()) {
     return identityUnproven('child_stdout_eof_timeout_cdp_unavailable', receipt);
