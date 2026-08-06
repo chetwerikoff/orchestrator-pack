@@ -13,7 +13,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runProcessSync } from './kernel/subprocess.ts';
 import {
+  computeSmokeCompletionBodyDigest,
   ensureSmokeRunArtifactDir,
+  smokeCompletionBodyPath,
+  smokeCompletionPendingBodyPath,
+  smokeCompletionSealPath,
   smokeDeliverySealedPath,
 } from './lib/worker-smoke-core.ts';
 import {
@@ -31,7 +35,12 @@ import {
   type OrcaTerminalSummary,
 } from './orca-runtime/native.ts';
 import { OrcaTaskRuntimeAdapter } from './orca-runtime/task-adapter.ts';
-import { establishRuntimeSmokeDelivery } from './worker-smoke-run.ts';
+import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
+import {
+  establishRuntimeSmokeDelivery,
+  runtimeClose,
+  waitForRuntimeSmokeCompletion,
+} from './worker-smoke-run.ts';
 
 const HEAD = '1'.repeat(40);
 
@@ -66,6 +75,17 @@ function jsonLines(value: string): unknown[] {
     .split(/\r?\n/u)
     .filter((line) => line.trim())
     .map((line) => JSON.parse(line) as unknown);
+}
+
+function sealedPassBody(): string {
+  return [
+    '```worker-smoke-report',
+    'result: PASS',
+    'tracked-files-unmodified: true',
+    'scenarios:',
+    '  - action: execute sealed completion | expected: one sealed report | observed: report sealed | outcome: pass',
+    '```',
+  ].join('\n');
 }
 
 describe('Issue #1359 production worker-smoke reachability', () => {
@@ -153,6 +173,147 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'send')).toBe(true);
     } finally {
       restore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps partial publication pending until one sealed report is complete', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-sealed-completion-'));
+    const artifactDir = join(root, 'run-sealed');
+    const runId = 'run-sealed';
+    const adapter = new DeterministicRuntimeAdapter();
+    const spawned = adapter.spawnWorker({ title: 'sealed', command: 'cursor-agent' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    ensureSmokeRunArtifactDir(artifactDir);
+    writeFileSync(smokeCompletionPendingBodyPath(artifactDir), 'in progress', 'utf8');
+    let clock = 0;
+    let published = false;
+
+    try {
+      const completion = waitForRuntimeSmokeCompletion({
+        adapter,
+        worker: spawned.value.identity,
+        binding: { runId, artifactDir },
+        scenarioCount: 1,
+        cwd: root,
+        startedAtMs: 0,
+        abortReason: () => undefined,
+        now: () => clock,
+        sleepMs: (milliseconds) => {
+          clock += milliseconds;
+          if (published) return;
+          published = true;
+          const body = sealedPassBody();
+          const digest = computeSmokeCompletionBodyDigest(body);
+          rmSync(smokeCompletionPendingBodyPath(artifactDir), { force: true });
+          writeFileSync(smokeCompletionBodyPath(artifactDir, digest), body, { flag: 'wx' });
+          writeFileSync(
+            smokeCompletionSealPath(artifactDir, digest),
+            JSON.stringify({ runId, bodySha256: digest }),
+            { flag: 'wx' },
+          );
+        },
+        absoluteCeilingMs: 1_000,
+        progressStallMs: 1_000,
+      });
+      expect(completion.ok).toBe(true);
+      expect(completion.partial?.result).toBe('PASS');
+      expect(published).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports an actionable missing-seal cause instead of terminal partial', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-unsealed-timeout-'));
+    const artifactDir = join(root, 'run-unsealed');
+    const runId = 'run-unsealed';
+    const adapter = new DeterministicRuntimeAdapter();
+    const spawned = adapter.spawnWorker({ title: 'unsealed', command: 'cursor-agent' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    ensureSmokeRunArtifactDir(artifactDir);
+    writeFileSync(smokeCompletionPendingBodyPath(artifactDir), 'unfinished report', 'utf8');
+    let clock = 0;
+
+    try {
+      const completion = waitForRuntimeSmokeCompletion({
+        adapter,
+        worker: spawned.value.identity,
+        binding: { runId, artifactDir },
+        scenarioCount: 1,
+        cwd: root,
+        startedAtMs: 0,
+        abortReason: () => undefined,
+        now: () => clock,
+        sleepMs: (milliseconds) => { clock += milliseconds; },
+        absoluteCeilingMs: 5,
+        progressStallMs: 100,
+      });
+      expect(completion.ok).toBe(false);
+      expect(completion.reason).toContain('agent_report_timeout');
+      expect(completion.reason).toContain('missing=completion_body_or_seal_incomplete');
+      expect(completion.reason).toContain('publication_state=partial');
+      expect(completion.reason).not.toBe('partial');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves the native close error and proves the owned handle remains present', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-close-failure-'));
+    const handle = 'terminal-close-failure';
+    const generation = 'generation-close-failure';
+    const message = 'close denied by runtime verbatim';
+    const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      if (args[0] === 'terminal' && args[1] === 'create') {
+        return ok({ terminal: { handle, incarnationId: generation, title: 'close-failure' } } as T);
+      }
+      if (args[0] === 'worktree' && args[1] === 'current') {
+        return ok({ worktree: { path: root, head: HEAD } } as T);
+      }
+      if (args[0] === 'terminal' && args[1] === 'list') {
+        return ok({
+          terminals: [{
+            handle,
+            incarnationId: generation,
+            title: 'close-failure',
+            worktreePath: root,
+            status: 'running',
+          }],
+        } as T);
+      }
+      if (args[0] === 'terminal' && args[1] === 'close') {
+        return {
+          ok: false,
+          outcomeCategory: 'supported_operation_failure',
+          error: { code: 'runtime_error', message },
+        };
+      }
+      return {
+        ok: false,
+        error: { code: 'unexpected_test_operation', message: args.join(' ') },
+      };
+    };
+
+    try {
+      const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
+      const spawned = adapter.spawnWorker({
+        title: 'close-failure',
+        command: 'cursor-agent',
+        workspace: 'active',
+      }, { cwd: root });
+      expect(spawned.status).toBe('ok');
+      if (spawned.status !== 'ok') return;
+
+      const outcome = runtimeClose(adapter, spawned.value.identity, { cwd: root });
+      expect(outcome).toContain('close_failed:runtime_operation_failed');
+      expect(outcome).toContain(`runtime_error=${JSON.stringify({ code: 'runtime_error', message })}`);
+      expect(outcome).toContain('presence=present');
+      expect(outcome).toContain(`handle=${handle}`);
+      expect(outcome).toContain(`generation=${generation}`);
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
