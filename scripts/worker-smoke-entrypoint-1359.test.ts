@@ -340,6 +340,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       };
     };
 
+    // Keep this negative-path fixture visibly distinct from the close-failure fixture.
     try {
       const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
       const spawned = adapter.spawnWorker(
