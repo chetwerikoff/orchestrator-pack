@@ -26,6 +26,7 @@ import {
   observeSmokeCancellationAcknowledgement,
   observeSmokeCompletionEvidence,
   observeSmokeDeliveryEstablished,
+  parseSmokeAgentReport,
   resolveSmokeRequirement,
   resolveSmokeRunArtifactDir,
   scrubForwardedGhSecrets,
@@ -686,7 +687,24 @@ export function findVerifiedSmokeReceiptWitness(input: {
       comments: [comment],
       target: input.target,
     });
-    const candidate = contribution.latestClearingPass;
+    let candidate = contribution.latestClearingPass;
+    const commentId = positiveInteger(comment.id);
+    const globalBlock = contribution.diagnostics.globalBlock;
+    if (!candidate
+      && commentId > 0
+      && globalBlock.blocked
+      && globalBlock.commentId === commentId
+      && (globalBlock.kind === 'FAIL' || globalBlock.kind === 'BLOCKED')) {
+      const partial = parseSmokeAgentReport(String(comment.body ?? ''));
+      if (partial) {
+        const normalized = normalizeSmokeReport(partial, {
+          issueNumber: input.target.issueNumber,
+          prNumber: input.target.prNumber,
+          headSha: input.target.headSha,
+        });
+        if (normalized.ok) candidate = normalized.report;
+      }
+    }
     if (candidate && verifyPublishedSmokeProvenance(candidate)) return candidate;
   }
   return undefined;
