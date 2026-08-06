@@ -18,9 +18,7 @@ import { dirname, basename, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TURN_STATES, type FailureScope, type TurnResultV1, type TurnState } from './chatgpt-browser-turn/contracts.ts';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
-import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
-  cancelOwnedGenerationFromReceipt,
   parseBrowserTurnCancellationReceipt,
   type BrowserTurnCancellationAttempt,
   type BrowserTurnCancellationDependencies,
@@ -486,7 +484,7 @@ function parseCancellationReceiptLine(line: string): BrowserTurnCancellationRece
 }
 
 async function runChildEofCancellation(
-  config: LaunchConfig,
+  _config: LaunchConfig,
   capture: CandidateCapture,
 ): Promise<BrowserTurnCancellationAttempt> {
   const receipt = capture.cancellationReceipt;
@@ -494,7 +492,7 @@ async function runChildEofCancellation(
     return {
       state: 'driver_error',
       cause: 'child_stdout_eof_timeout_cancellation_receipt_missing',
-      stopOutcome: 'unavailable',
+      stopOutcome: 'not_attempted_authority_absent',
       identityProven: false,
     };
   }
@@ -503,54 +501,19 @@ async function runChildEofCancellation(
       state: 'driver_error',
       cause: 'child_stdout_eof_timeout_cancellation_receipt_duplicate',
       sendCount: 1,
-      stopOutcome: 'unavailable',
+      stopOutcome: 'not_attempted_authority_absent',
       identityProven: false,
       conversationUrl: receipt.conversation_url,
     };
   }
-
-  const childOptions = parseFlagArgv(config.childArgs);
-  const cdp = childOptions.get('cdp');
-  const profile = childOptions.get('profile');
-  const invocation = childOptions.get('invocation-id');
-  if (typeof cdp !== 'string' || !cdp.trim()) {
-    return {
-      state: 'driver_error',
-      cause: 'child_stdout_eof_timeout_cdp_unavailable',
-      sendCount: 1,
-      stopOutcome: 'unavailable',
-      identityProven: false,
-      conversationUrl: receipt.conversation_url,
-    };
-  }
-  if (typeof invocation === 'string' && invocation !== receipt.invocation_id) {
-    return {
-      state: 'driver_error',
-      cause: 'child_stdout_eof_timeout_invocation_mismatch',
-      sendCount: 1,
-      stopOutcome: 'unavailable',
-      identityProven: false,
-      conversationUrl: receipt.conversation_url,
-    };
-  }
-  if (
-    typeof profile === 'string'
-    && configuredProfileKey(profile, cdp) !== receipt.configured_profile_key
-  ) {
-    return {
-      state: 'driver_error',
-      cause: 'child_stdout_eof_timeout_profile_mismatch',
-      sendCount: 1,
-      stopOutcome: 'unavailable',
-      identityProven: false,
-      conversationUrl: receipt.conversation_url,
-    };
-  }
-  return await cancelOwnedGenerationFromReceipt(
-    receipt,
-    cdp,
-    config.cancellationDependencies,
-  );
+  return {
+    state: 'driver_error',
+    cause: 'child_stdout_eof_timeout_cancellation_authority_absent',
+    sendCount: 1,
+    stopOutcome: 'not_attempted_authority_absent',
+    identityProven: false,
+    conversationUrl: receipt.conversation_url,
+  };
 }
 
 function cancellationDiagnostics(
