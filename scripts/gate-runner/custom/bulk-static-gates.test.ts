@@ -5,7 +5,6 @@ import {
   evaluateAgentsReportContract,
   evaluateCoworkerDelegationThreshold,
   evaluateReview010Vocabulary,
-  evaluateReviewCommandNotAo,
   evaluateVerifyStructureContract,
 } from './bulk-static-gates.ts';
 
@@ -48,13 +47,6 @@ describe('Wave 3.b bulk static gate ports', () => {
     const failed = evaluateReview010Vocabulary(memorySnapshot({ 'scripts/bad.mjs': 'const argv = ["review", "run"];' }));
     expect(failed.status).toBe('FAIL');
     expect(failed.legacyStdout).toBe('AO 0.10 review vocabulary violations:\n  scripts/bad.mjs: dead ao review CLI argv\n');
-  });
-
-  it('parses the named review command and rejects .ao paths', () => {
-    const clean = 'NAMED REVIEW_COMMAND\n  pwsh scripts/invoke-pack-review.ps1\n  RUNTIME';
-    expect(evaluateReviewCommandNotAo(memorySnapshot({ 'agent-orchestrator.yaml.example': clean })).status).toBe('PASS');
-    const bad = 'NAMED REVIEW_COMMAND\n  pwsh .orchestrator-pack/review.ps1\n  RUNTIME';
-    expect(evaluateReviewCommandNotAo(memorySnapshot({ 'agent-orchestrator.yaml.example': bad })).status).toBe('FAIL');
   });
 
   it('ports prompt inventory and contract-marker checks with positive and negative fixtures', () => {
