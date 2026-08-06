@@ -1,0 +1,31 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1343,
+  "declared_paths": [
+    "docs/worker-smoke-testing.md",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    ".github/",
+    "package-lock.json",
+    "package.json",
+    "packages/core/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/worker-smoke-bounded-create.ts",
+    "scripts/lib/worker-smoke-lifecycle.ts",
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/worker-smoke-testing.md",
+    "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "d17329c71454cd1cf349a5ae8cfebac175cdc350"
+}
