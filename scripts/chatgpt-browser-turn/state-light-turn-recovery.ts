@@ -399,7 +399,7 @@ export async function runPostSendRecovery(
     }
 
     if (deadlineReached) {
-      if (immutableUrl && state.lossEpoch >= 2 && state.successorCreated) {
+      if (immutableUrl && state.successorCreated) {
         return failure(
           browser,
           state.lossEpoch,

@@ -251,7 +251,16 @@ export async function stopOwnedGeneration(
     const controls = page.locator(STOP_BUTTON_SELECTOR);
     const count = Number(await controls.count());
     if (count < 1) return 'not_present';
-    await controls.first().click({ timeout: MAX_LOCAL_READ_WAIT_MS });
+    const control = controls.first();
+    await control.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
+    if (typeof control.waitFor === 'function') {
+      try {
+        await control.waitFor({ state: 'hidden', timeout: MAX_LOCAL_READ_WAIT_MS });
+        return 'confirmed';
+      } catch {
+        // A timed-out disappearance witness is not confirmation.
+      }
+    }
     const remaining = Number(await controls.count());
     return remaining < 1 ? 'confirmed' : 'unconfirmed';
   } catch {
@@ -2451,13 +2460,12 @@ async function runTurn(
       }
 
       if (decision.state === 'uncertain' && decision.cause === 'owned_prompt_marker_ambiguous') {
-        incident('post_send_observation_error', 'owned_prompt_marker_ambiguous', 'retain_owned_page_no_resend');
+        incident('post_send_observation_error', 'owned_prompt_marker_ambiguous', 'return_local_degraded');
         return {
           page,
           browser,
-          cleanupAction: 'preserve',
           result: compactResult(
-            'observation_uncertain',
+            'ui_contract_mismatch',
             'invocation',
             'owned_prompt_marker_ambiguous',
             invocationId,
@@ -2885,13 +2893,14 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let journalWriteFailed = outcome.result.journal_write_failed === true;
   const incidents = [...outcome.result.incidents];
   const pageLost = browserOrPageDefinitelyLost(outcome.page, outcome.browser);
+  let stopOutcome: StopOwnedGenerationOutcome | undefined;
   if (
     outcome.result.send_count >= 1
     && outcome.result.state !== 'ok'
     && outcome.page
     && !pageLost
   ) {
-    const stopOutcome = await stopOwnedGeneration(outcome.page);
+    stopOutcome = await stopOwnedGeneration(outcome.page);
     const stopIncident: BrowserIncident = {
       eventClass: `owned_generation_stop_${stopOutcome}`,
       symptom: `${outcome.result.state}:${outcome.result.cause}`,
@@ -2905,12 +2914,18 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     && typeof outcome.page === 'object'
     && !cleanupAuthorityUnprovenPages.has(outcome.page),
   );
-  const pageAction = outcome.cleanupAction ?? decidePageCleanupAction({
+  const requestedPageAction = outcome.cleanupAction ?? decidePageCleanupAction({
     sendCount: outcome.result.send_count,
     publicationState: outcome.publicationState,
     pagePresent: cleanupAuthorityProven,
     pageLost,
   });
+  const stopConfirmedBeforeClose = stopOutcome === undefined
+    || stopOutcome === 'confirmed'
+    || stopOutcome === 'not_present';
+  const pageAction = requestedPageAction === 'close' && !stopConfirmedBeforeClose
+    ? 'preserve'
+    : requestedPageAction;
   if (pageAction === 'close') {
     cleanup = await boundedResourceCleanup(
       () => outcome.page.close(),
@@ -2936,6 +2951,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
 }
 
 export const __testFinalizeTurn = finalizeTurn;
+export const __testBrowserOrPageDefinitelyLost = browserOrPageDefinitelyLost;
 
 export const __testComposerMutation = {
   remainingComposerMutationMs,

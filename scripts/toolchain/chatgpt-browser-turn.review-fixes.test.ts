@@ -1758,4 +1758,228 @@ describe('Issue #1283 post-send observation recovery', () => {
       action: 'retain_owned_page_no_resend',
     });
   });
+
+  it('fails closed when two complete pages are eligible across different URLs', async () => {
+    const first = {};
+    const second = {};
+    const pageData = new Map<unknown, {
+      url: string;
+      messages: readonly RecoveryAuthoritativeMessage[];
+    }>([
+      [first, {
+        url: knownUrl,
+        messages: messages({ role: 'user', text: `${marker}\n\nprompt` }),
+      }],
+      [second, {
+        url: 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222',
+        messages: messages({ role: 'user', text: `${marker}\n\nprompt` }),
+      }],
+    ]);
+    const adapter = adapterFor({ pages: [first, second], pageData });
+
+    const result = await runPostSendRecovery({
+      browser: {},
+      currentPage: { lost: true },
+      marker,
+      hardDeadlineMs: 1_000,
+      pollMs: 1,
+      state: {
+        lossEpoch: 0,
+        successorCreated: false,
+        immutableConversationUrl: knownUrl,
+      },
+      adapter,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'failure',
+      state: 'observation_uncertain',
+      cause: 'owned_prompt_marker_ambiguous',
+    });
+    expect(adapter.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it('binds one unknown URL and rejects one wrong URL after complete censuses', async () => {
+    const eligiblePage = {};
+    const eligibleUrl = 'https://chatgpt.com/c/33333333-3333-4333-8333-333333333333';
+    const pageData = new Map<unknown, {
+      url: string;
+      messages: readonly RecoveryAuthoritativeMessage[];
+    }>([
+      [eligiblePage, {
+        url: eligibleUrl,
+        messages: messages({ role: 'user', text: `${marker}\n\nprompt` }),
+      }],
+    ]);
+
+    const bound = await runPostSendRecovery({
+      browser: {},
+      currentPage: { lost: true },
+      marker,
+      hardDeadlineMs: 1_000,
+      pollMs: 1,
+      state: { lossEpoch: 0, successorCreated: false },
+      adapter: adapterFor({ pages: [eligiblePage], pageData }),
+    });
+    expect(bound).toMatchObject({
+      kind: 'recovered',
+      page: eligiblePage,
+      conversationUrl: eligibleUrl,
+      cleanupOwned: false,
+    });
+
+    const mismatch = await runPostSendRecovery({
+      browser: {},
+      currentPage: { lost: true },
+      marker,
+      hardDeadlineMs: 1_000,
+      pollMs: 1,
+      state: {
+        lossEpoch: 0,
+        successorCreated: false,
+        immutableConversationUrl: knownUrl,
+      },
+      adapter: adapterFor({ pages: [eligiblePage], pageData }),
+    });
+    expect(mismatch).toMatchObject({
+      kind: 'failure',
+      state: 'ui_contract_mismatch',
+      cause: 'owned_conversation_identity_mismatch',
+      eventClass: 'conversation_identity_mismatch',
+    });
+  });
+
+  it('keeps incomplete census distinct from complete unknown-URL zero match', async () => {
+    const unreadable = {};
+    const incompleteData = new Map<unknown, {
+      url: string;
+      messages: readonly RecoveryAuthoritativeMessage[];
+      incomplete?: boolean;
+    }>([
+      [unreadable, {
+        url: knownUrl,
+        messages: messages(),
+        incomplete: true,
+      }],
+    ]);
+    const censusFailed = await runPostSendRecovery({
+      browser: {},
+      currentPage: { lost: true },
+      marker,
+      hardDeadlineMs: 100,
+      pollMs: 1,
+      state: {
+        lossEpoch: 0,
+        successorCreated: false,
+        immutableConversationUrl: knownUrl,
+      },
+      adapter: adapterFor({ pages: [unreadable], pageData: incompleteData }),
+    });
+    expect(censusFailed).toMatchObject({
+      kind: 'failure',
+      state: 'driver_error',
+      cause: 'owned_conversation_recovery_census_failed',
+      eventClass: 'helper_failure_after_send',
+    });
+
+    const zeroMatchAdapter = adapterFor({ pages: [], pageData: new Map() });
+    const zeroMatch = await runPostSendRecovery({
+      browser: {},
+      currentPage: { lost: true },
+      marker,
+      hardDeadlineMs: 100,
+      pollMs: 1,
+      state: { lossEpoch: 0, successorCreated: false },
+      adapter: zeroMatchAdapter,
+    });
+    expect(zeroMatch).toMatchObject({
+      kind: 'failure',
+      state: 'ui_contract_mismatch',
+      cause: 'owned_conversation_recovery_zero_match',
+      eventClass: 'post_send_observation_error',
+    });
+    expect(zeroMatchAdapter.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it('maps reconnect and successor creation failures without retry permission', async () => {
+    const reconnectAdapter = adapterFor({
+      pages: [],
+      pageData: new Map(),
+      disconnected: true,
+    });
+    const reconnectFailure = await runPostSendRecovery({
+      browser: {},
+      currentPage: { lost: true },
+      marker,
+      hardDeadlineMs: 1_000,
+      pollMs: 1,
+      state: {
+        lossEpoch: 0,
+        successorCreated: false,
+        immutableConversationUrl: knownUrl,
+      },
+      adapter: reconnectAdapter,
+    });
+    expect(reconnectFailure).toMatchObject({
+      kind: 'failure',
+      state: 'driver_error',
+      cause: 'browser_reconnect_failed_after_send',
+      action: 'retain_owned_page_no_resend',
+    });
+    expect(reconnectAdapter.reconnect).toHaveBeenCalledTimes(1);
+
+    const successorAdapter = adapterFor({ pages: [], pageData: new Map() });
+    const successorFailure = await runPostSendRecovery({
+      browser: {},
+      currentPage: { lost: true },
+      marker,
+      hardDeadlineMs: 1_000,
+      pollMs: 1,
+      state: {
+        lossEpoch: 0,
+        successorCreated: false,
+        immutableConversationUrl: knownUrl,
+      },
+      adapter: successorAdapter,
+    });
+    expect(successorFailure).toMatchObject({
+      kind: 'failure',
+      state: 'driver_error',
+      cause: 'replacement_observation_page_create_failed',
+      action: 'retain_owned_page_no_resend',
+    });
+    expect(successorAdapter.createSuccessor).toHaveBeenCalledTimes(1);
+  });
+
+  it('extinguishes lost successor cleanup authority and exhausts without creating another', async () => {
+    const lostSuccessor = { lost: true };
+    const state: PostSendRecoveryState = {
+      lossEpoch: 1,
+      successorCreated: true,
+      immutableConversationUrl: knownUrl,
+      successorPage: lostSuccessor,
+      cleanupAuthorityPage: lostSuccessor,
+    };
+    const adapter = adapterFor({ pages: [], pageData: new Map() });
+    const result = await runPostSendRecovery({
+      browser: {},
+      currentPage: lostSuccessor,
+      marker,
+      hardDeadlineMs: 100,
+      pollMs: 1,
+      state,
+      adapter,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'failure',
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
+      eventClass: 'observation_exhausted',
+    });
+    expect(state.lossEpoch).toBe(2);
+    expect(state.cleanupAuthorityPage).toBeUndefined();
+    expect(state.successorPage).toBeUndefined();
+    expect(adapter.createSuccessor).not.toHaveBeenCalled();
+  });
 });
