@@ -6,7 +6,6 @@
     "docs/declarations/1266.pr-scope.json",
     "package.json",
     "scripts/browser-gpt-post-settlement-close-proof.ts",
-    "scripts/browser-gpt-post-settlement-close.test.ts",
     "scripts/browser-gpt-post-settlement-close.ts",
     "scripts/chatgpt-browser-turn/browser-session.ts",
     "scripts/chatgpt-browser-turn/contracts.ts",
@@ -47,5 +46,5 @@
     "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "eb27bd11995673d3641026db018b97ba74a8019f"
+  "source_revision": "ceab28b8db16e61dc779c33e248c8cd90d9ae9d0"
 }
