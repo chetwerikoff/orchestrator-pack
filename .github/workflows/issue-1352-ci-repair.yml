@@ -12,18 +12,23 @@ jobs:
   export-worktree:
     if: github.event.pull_request.head.ref == 'agent/issue-1352-hard-cut'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-1352-hard-cut
           fetch-depth: 0
-      - name: Archive exact branch worktree
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Archive exact branch worktree with git and dependencies
         shell: bash
-        run: tar --exclude=.git --exclude=node_modules -czf /tmp/issue-1352-worktree.tar.gz .
+        run: tar -czf /tmp/issue-1352-worktree.tar.gz .
       - uses: actions/upload-artifact@v4
         with:
-          name: issue-1352-worktree
+          name: issue-1352-worktree-full
           path: /tmp/issue-1352-worktree.tar.gz
           if-no-files-found: error
           retention-days: 1
