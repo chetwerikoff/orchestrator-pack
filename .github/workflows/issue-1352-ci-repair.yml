@@ -1,4 +1,4 @@
-name: Issue 1352 worktree export
+name: Issue 1352 base export
 
 on:
   pull_request:
@@ -9,26 +9,21 @@ permissions:
   contents: read
 
 jobs:
-  export-worktree:
+  export-base:
     if: github.event.pull_request.head.ref == 'agent/issue-1352-hard-cut'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-1352-hard-cut
+          ref: 9782532ce8aa6c6a173212da17753e832c65b844
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Archive exact branch worktree with git and dependencies
+      - name: Archive current base git database
         shell: bash
-        run: tar -czf /tmp/issue-1352-worktree.tar.gz .
+        run: tar -czf /tmp/issue-1352-base-git.tar.gz .git
       - uses: actions/upload-artifact@v4
         with:
-          name: issue-1352-worktree-full
-          path: /tmp/issue-1352-worktree.tar.gz
+          name: issue-1352-base-git
+          path: /tmp/issue-1352-base-git.tar.gz
           if-no-files-found: error
           retention-days: 1
