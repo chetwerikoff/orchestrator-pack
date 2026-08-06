@@ -4,13 +4,16 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - agent/issue-1283-browser-turn-recovery
 
 permissions:
   contents: write
 
 jobs:
   implement:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -27,14 +30,17 @@ jobs:
           python3 - <<'PY'
           import base64
           import json
-          import re
           from pathlib import Path
 
           bootstrap = Path('.github/workflows/issue-1283-bootstrap.yml').read_text()
-          match = re.search(r'^\s+EDIT_PAYLOAD_B64:\s+(\S+)\s*$', bootstrap, re.MULTILINE)
-          if not match:
+          payload_line = next(
+              (line for line in bootstrap.splitlines() if 'EDIT_PAYLOAD_B64:' in line),
+              None,
+          )
+          if payload_line is None:
               raise SystemExit('bootstrap payload missing')
-          payload = json.loads(base64.b64decode(match.group(1)).decode())
+          encoded_payload = payload_line.split('EDIT_PAYLOAD_B64:', 1)[1].strip()
+          payload = json.loads(base64.b64decode(encoded_payload).decode())
 
           def decode(value: str) -> str:
               return base64.b64decode(value).decode()
