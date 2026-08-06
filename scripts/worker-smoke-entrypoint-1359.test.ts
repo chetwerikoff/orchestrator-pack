@@ -17,6 +17,7 @@ import {
   type OrcaTerminalSummary,
 } from './orca-runtime/native.ts';
 import { OrcaTaskRuntimeAdapter } from './orca-runtime/task-adapter.ts';
+import { runtimeClose } from './worker-smoke-run.ts';
 
 function run(
   command: string,
@@ -252,6 +253,110 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(operations.filter((value) => value === 'terminal close')).toHaveLength(0);
       expect(operations.filter((value) => value === 'terminal list').length).toBeGreaterThanOrEqual(3);
       expect(createHash('sha256').update(readFileSync(wrapper), 'utf8').digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('treats exact owned-handle absence as closed without consulting a foreign sibling', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-owned-absent-'));
+    const owned: OrcaTerminalSummary = {
+      handle: 'terminal-owned',
+      title: 'owned',
+      incarnationId: 'generation-owned',
+      worktreePath: root,
+      status: 'running',
+    };
+    const foreign: OrcaTerminalSummary = {
+      handle: 'terminal-foreign',
+      title: 'foreign',
+      incarnationId: 'generation-foreign',
+      worktreePath: root,
+      status: 'running',
+    };
+    const calls: string[][] = [];
+    const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      calls.push([...args]);
+      if (args[0] === 'terminal' && args[1] === 'create') return ok({ terminal: owned } as T);
+      if (args[0] === 'worktree' && args[1] === 'current') {
+        return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
+      }
+      if (args[0] === 'terminal' && args[1] === 'list') {
+        return ok({ terminals: [foreign] } as T);
+      }
+      return {
+        ok: false,
+        error: { code: 'unexpected_test_operation', message: args.join(' ') },
+      };
+    };
+
+    try {
+      const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
+      const spawned = adapter.spawnWorker(
+        { title: 'owned', command: 'cursor-agent', workspace: 'active' },
+        { cwd: root },
+      );
+      expect(spawned.status).toBe('ok');
+      if (spawned.status !== 'ok') return;
+
+      expect(runtimeClose(adapter, spawned.value.identity, { cwd: root }))
+        .toBe('closed_owned_handle');
+      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'list'))
+        .toHaveLength(1);
+      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'close'))
+        .toBe(false);
+      expect(calls.some((args) => args.includes(foreign.handle!))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed as unproven_already_absent when exact inventory cannot be queried', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-inventory-unproven-'));
+    const owned: OrcaTerminalSummary = {
+      handle: 'terminal-inventory-unproven',
+      title: 'inventory-unproven',
+      incarnationId: 'generation-inventory-unproven',
+      worktreePath: root,
+      status: 'running',
+    };
+    const calls: string[][] = [];
+    const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      calls.push([...args]);
+      if (args[0] === 'terminal' && args[1] === 'create') return ok({ terminal: owned } as T);
+      if (args[0] === 'worktree' && args[1] === 'current') {
+        return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
+      }
+      if (args[0] === 'terminal' && args[1] === 'list') {
+        return {
+          ok: false,
+          outcomeCategory: 'supported_operation_failure',
+          error: { code: 'inventory_unavailable', message: 'runtime inventory unavailable' },
+        };
+      }
+      return {
+        ok: false,
+        error: { code: 'unexpected_test_operation', message: args.join(' ') },
+      };
+    };
+
+    try {
+      const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
+      const spawned = adapter.spawnWorker(
+        { title: 'inventory-unproven', command: 'cursor-agent', workspace: 'active' },
+        { cwd: root },
+      );
+      expect(spawned.status).toBe('ok');
+      if (spawned.status !== 'ok') return;
+
+      const outcome = runtimeClose(adapter, spawned.value.identity, { cwd: root });
+      expect(outcome).toContain('close_failed:unproven_already_absent');
+      expect(outcome).toContain('inventory_error=list_workers:failed:runtime_operation_failed');
+      expect(outcome).toContain('presence=unproven');
+      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'list'))
+        .toHaveLength(1);
+      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'close'))
+        .toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
