@@ -1,164 +1,118 @@
 # scope-guard contract
 
-DD-024 equivalent for Composio AO without patching AO core.
+Runtime-neutral DD-024 scope enforcement without a core patch.
 
 ## Purpose
 
-Prevent agent changes outside declared active scope before they are staged or
-committed, and provide PR-level CI as a second line of defense.
+Prevent changes outside declared active scope before `git add` and commit, then
+verify the same contract in PR-level CI as a second line of defense.
 
 ## Enforcement levels
 
 ### First line: runtime guard
 
-The runtime guard must run in the agent execution path before `git add` and
-before commit creation. Acceptable implementation surfaces include:
+The runtime guard runs in the agent execution path before staging or commit.
+Supported integration surfaces are:
 
-- agent wrapper around the AO agent plugin;
-- workspace hook;
-- repository pre-commit hook installed by the pack;
-- command wrapper that validates the index before allowing commit.
+- the tracked agent wrapper;
+- a workspace hook;
+- the managed pre-commit hook;
+- a command wrapper that validates the index before allowing the operation.
 
-Runtime behavior:
-
-1. Load active scope from `task-declaration` state.
-2. Enumerate modified and staged paths.
-3. Normalize every path relative to repository root.
-4. Reject paths outside declared allow scope.
-5. Reject paths matching the denylist even if they also match a broad allow glob.
-6. Print a clear violation report.
-7. Do not silently broaden scope.
-
-The guard may block the operation. It should not destructively reset files unless
-that behavior is explicitly configured by the user.
+The guard loads the active declaration, enumerates changed paths, normalizes every
+path relative to the repository root, rejects out-of-scope and denylisted paths,
+and prints a structured violation report. It does not silently broaden scope or
+destructively reset files.
 
 ### Second line: PR-level CI
 
-The GitHub Action checks the PR diff against the same active scope. It blocks
-merge if out-of-scope files appear in the PR.
-
-**Spec-only docs PRs** (draft publish) use a separate, lighter CI branch: no
-declaration snapshot, non-closing `Refs #N`, and a narrow docs allowlist. See
-[`docs/repository_policy.md`](../../docs/repository_policy.md#spec-only-docs-prs).
-
-CI is audit/enforcement after the fact. It is not a replacement for runtime
-guarding because an agent can mutate the working tree and index before CI runs.
+`.github/workflows/scope-guard.yml` validates the authoritative merge-base diff
+against the same Issue and declaration constraints. CI is audit and enforcement
+after the fact; it does not replace local runtime guarding.
 
 ## Required inputs
 
-- active scope from `task-declaration`;
+- explicit Issue number;
 - repository root;
-- baseline ref/tree hash;
-- changed path list from git status/diff or PR diff;
-- denylist.
+- active declaration snapshot or validated control-artifact case;
+- baseline ref and tree hash;
+- changed paths from index, worktree, or PR diff;
+- mandatory denylist and optional allowed roots from the live GitHub Issue.
 
 ## Required outputs
 
-- pass/fail status;
-- list of out-of-scope paths;
-- list of denied paths;
-- active scope hash used for the decision;
-- baseline hash/state used for the decision.
+- pass or fail;
+- out-of-scope, denied, and invalid paths;
+- active scope hash;
+- baseline identity;
+- exact configuration or read failure when authority is unavailable.
 
 ## Upgrade-safe boundary
 
-Implement as wrapper/hook/CI/plugin integration. Do not patch Composio AO
-`packages/core/`.
+The implementation lives in wrappers, hooks, CI, and plugin code. It does not patch
+`packages/core/**` or import a concrete runtime implementation.
 
-## Runtime installation (layers 1 and 2)
+## Local installation
 
-Layer 3 (PR-level CI) lives in `.github/workflows/scope-guard.yml` (#6) and
-remains the **second line** at merge time. Local enforcement uses the agent
-wrapper first, then the pre-commit hook.
-
-### Pre-commit hook (layer 2)
-
-Opt-in via the pack installer in a **target repository** (not enabled by default
-in the pack itself):
+Install the managed pre-commit hook in a target repository:
 
 ```powershell
-.\scripts\install-git-hooks.ps1 -InstallScopeGuard
+pwsh -NoProfile -File scripts/install-git-hooks.ps1 -InstallScopeGuard
 ```
 
-Requirements:
-
-- The managed hook derives the active Issue number from the branch name and passes it explicitly.
-- Direct callers must pass `--issue`; wrappers generate an explicit iteration id when omitted.
-- The hook invokes `scope-check --mode index` against staged paths.
-
-Remove the hook:
+Remove it with:
 
 ```powershell
-.\scripts\install-git-hooks.ps1 -UninstallScopeGuard
+pwsh -NoProfile -File scripts/install-git-hooks.ps1 -UninstallScopeGuard
 ```
 
-The installer is idempotent: re-running `-InstallScopeGuard` replaces the managed
-hook with the same content. If an unmanaged `pre-commit` hook already exists,
-installation is refused so local checks are not silently removed.
+The installer is idempotent and refuses to overwrite an unmanaged hook.
 
-### Bypass with justification
-
-For emergency commits, set `OPK_SCOPE_GUARD_BYPASS` to a short reason before
-committing. Document the same reason in the commit message or PR. Bypass is
-local only; PR CI (#6) still enforces scope.
-
-```powershell
-$env:OPK_SCOPE_GUARD_BYPASS = "hotfix: unblock CI while declaration is regenerated"
-git commit -m "..."
-```
-
-### Agent wrapper (layer 1)
-
-Wrap cursor/codex invocations so scope is checked after each agent turn:
-
-```powershell
-node --experimental-strip-types plugins/scope-guard/bin/agent-wrap.ts `
-  --issue 5 `
-  -- cursor agent ...
-```
-
-On success the wrapper runs `scope-check --mode worktree`, diffing the working
-tree against the active declaration baseline when one exists, otherwise against
-the repository `HEAD` captured immediately before the wrapped command starts.
-On violation it exits non-zero and refuses to proceed.
-
-The wrapper accepts no runtime identity or Issue environment fallback. Pass `--issue` explicitly; use `--iteration-id` when binding to a known declaration mirror.
-
-### scope-check CLI
-
-Direct invocation (used by the hook and wrapper):
+Direct callers pass `--issue` explicitly. Wrappers create an explicit iteration ID
+when one is not supplied.
 
 ```powershell
 node --experimental-strip-types plugins/scope-guard/bin/scope-check.ts `
-  --issue 5 `
+  --issue 1352 `
   --mode index
 
 node --experimental-strip-types plugins/scope-guard/bin/scope-check.ts `
-  --issue 5 `
+  --issue 1352 `
   --mode worktree `
   --iteration-id <id>
 ```
 
-Declaration resolution order:
+Wrap an agent command:
 
-1. `.orchestrator-pack/declarations/{issue}.{iteration}.json` mirror (runtime)
-2. `docs/declarations/{issue}.{iteration}.json` committed snapshot
+```powershell
+node --experimental-strip-types plugins/scope-guard/bin/agent-wrap.ts `
+  --issue 1352 `
+  -- cursor agent ...
+```
 
-If neither exists and the change set is **not** pure control artifacts, the
-check fails with a structured JSON report on stderr.
+The wrapper captures the pre-command repository state, runs the command, and checks
+the resulting worktree. A violation exits non-zero.
 
-### Control-artifact exclusion
+## Declaration resolution
 
-These paths are always allowed and never reported as violations (hardcoded):
+Resolution order:
 
-- `docs/declarations/**` — committed declaration snapshots
-- `.orchestrator-pack/**` — gitignored runtime mirror/state
+1. `.orchestrator-pack/declarations/{issue}.{iteration}.json` runtime mirror;
+2. `docs/declarations/{issue}.{iteration}.json` committed snapshot.
 
-**Pure control-artifact policy:** when every changed path is a control artifact,
-scope check exits 0 even without an active declaration.
+If neither exists, non-control changes fail closed. Control artifacts are the
+committed declarations and the gitignored pack mirror. Mixed changes still require
+an active declaration.
 
-**Mixed policy:** control-artifact paths are skipped; remaining paths require an
-active declaration. No declaration → reject.
+## Bypass boundary
 
-Violations emit exit code 1 and a structured JSON report listing out-of-scope,
-denied, and invalid paths plus the active scope hash used for the decision.
+`OPK_SCOPE_GUARD_BYPASS` may document a local emergency reason for the managed hook.
+It never bypasses PR-level CI, the Issue denylist, or current-head verification.
+
+## Contract markers
+
+- DD-024
+- runtime guard before `git add` and commit
+- PR-level CI as the second line
+- denylist remains stronger than broad allow globs
+- no core patch
