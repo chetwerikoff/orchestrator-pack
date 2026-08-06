@@ -103,3 +103,5 @@ describe('Issue #1283 receipt-bound cancellation', () => {
     expect(page.close).not.toHaveBeenCalled();
   });
 });
+
+// Temporary synchronize trigger; the review-scope job folds this coverage into an existing classified suite.
