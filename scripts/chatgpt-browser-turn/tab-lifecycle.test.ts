@@ -387,7 +387,7 @@ describe('Issue #1238 mechanically derived production graph', () => {
       );
       const classifySink = (kind: string, receiver: string): string => {
         if (kind === 'newContext') return 'forbidden-context-create';
-        if (kind === 'contexts' && /(?:^|\.)browser$|state\.browser$|browser as/.test(receiver)) return 'browser-contexts';
+        if (kind === 'contexts' && (receiver === '(activeBrowser as any)' || /(?:^|\.)browser$|state\.browser$|browser as/.test(receiver))) return 'browser-contexts';
         if (kind === 'pages' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-pages';
         if (kind === 'newPage' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-new-page';
         if (kind === 'close' && /browser as/.test(receiver)) return 'browser-release';
@@ -453,6 +453,7 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'close:owned-page-close:page:adoptNewPageWithBudget',
       'close:owned-page-close:secondaryPage:runGateBCharacterization',
       'close:owned-page-close:state.page:cleanupSession',
+      'contexts:browser-contexts:(activeBrowser as any):enumeratePages',
       'contexts:browser-contexts:browser:openGateBCharacterizationPage',
       'contexts:browser-contexts:browser:createDedicatedTurnPage',
       'contexts:browser-contexts:browser:openTurnPage',
@@ -466,6 +467,7 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'pages:context-pages:(contexts[0] as { pages: () => unknown[] }):probeProfileReady',
       'pages:context-pages:context:attachGateBWebSocketObservers',
       'pages:context-pages:context:attachPlaywrightContextCdpObservers',
+      'pages:context-pages:context:enumeratePages',
       'pages:context-pages:context:runGateBCharacterization',
       'pages:context-pages:ctx:openGateBCharacterizationPage',
       'pages:context-pages:ctx:openTurnPage',
