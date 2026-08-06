@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { TURN_STATES, type FailureScope, type TurnResultV1, type TurnState } from './chatgpt-browser-turn/contracts.ts';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import {
+  authorityAbsent,
   parseBrowserTurnCancellationReceipt,
   type BrowserTurnCancellationAttempt,
   type BrowserTurnCancellationDependencies,
@@ -506,14 +507,7 @@ async function runChildEofCancellation(
       conversationUrl: receipt.conversation_url,
     };
   }
-  return {
-    state: 'driver_error',
-    cause: 'child_stdout_eof_timeout_cancellation_authority_absent',
-    sendCount: 1,
-    stopOutcome: 'not_attempted_authority_absent',
-    identityProven: false,
-    conversationUrl: receipt.conversation_url,
-  };
+  return authorityAbsent(receipt);
 }
 
 function cancellationDiagnostics(

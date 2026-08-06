@@ -223,7 +223,7 @@ function unavailable(
   };
 }
 
-function authorityAbsent(
+export function authorityAbsent(
   receipt: BrowserTurnCancellationReceipt,
 ): BrowserTurnCancellationAttempt {
   return {
