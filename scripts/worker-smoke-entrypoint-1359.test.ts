@@ -113,13 +113,14 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'pass' }),
       '',
     ].join('\\n'), 'utf8');
+    const fence = String.fromCharCode(96).repeat(3);
     const body = [
-      '```worker-smoke-report',
+      fence + 'worker-smoke-report',
       'result: PASS',
       'tracked-files-unmodified: true',
       'scenarios:',
       '  - action: execute real entrypoint | expected: sealed scenario report | observed: production create lookup dispatch completed | outcome: pass',
-      '```',
+      fence,
     ].join('\\n');
     const digest = createHash('sha256').update(body, 'utf8').digest('hex');
     writeFileSync(path.join(artifactDir, 'completion-' + digest + '.body'), body, { flag: 'wx' });
