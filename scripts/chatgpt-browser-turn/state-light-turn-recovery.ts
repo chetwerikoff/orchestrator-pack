@@ -28,7 +28,10 @@ export interface PostSendRecoveryState {
   lossEpoch: number;
   successorCreated: boolean;
   immutableConversationUrl?: string;
+  /** Exact invocation-created page that may be closed after committed publication. */
   cleanupAuthorityPage?: unknown;
+  /** Exact invocation-created page that may receive a one-shot Stop action. */
+  stopAuthorityPage?: unknown;
   successorPage?: unknown;
 }
 
@@ -89,6 +92,7 @@ export interface PostSendRecoverySuccess {
   readonly page: unknown;
   readonly conversationUrl: string;
   readonly cleanupOwned: boolean;
+  readonly stopAuthorityPage?: unknown;
   readonly lossEpoch: number;
 }
 
@@ -103,6 +107,8 @@ export interface PostSendRecoveryFailure {
     | 'helper_failure_after_send'
     | 'observation_exhausted';
   readonly action: 'retain_owned_page_no_resend';
+  /** Present only for an exact invocation-created page whose handle is still held. */
+  readonly stopAuthorityPage?: unknown;
 }
 
 export type PostSendRecoveryResult = PostSendRecoverySuccess | PostSendRecoveryFailure;
@@ -188,13 +194,13 @@ export async function takeRecoveryCensus(
 
 function failure(
   browser: unknown,
-  lossEpoch: number,
+  recoveryState: PostSendRecoveryState,
   state: RecoveryTerminalState,
   cause: string,
   eventClass: PostSendRecoveryFailure['eventClass'],
   observer?: (event: RecoveryObserverEvent) => void,
 ): PostSendRecoveryFailure {
-  observer?.({ event: 'terminal', lossEpoch, cause });
+  observer?.({ event: 'terminal', lossEpoch: recoveryState.lossEpoch, cause });
   return {
     kind: 'failure',
     browser,
@@ -202,6 +208,9 @@ function failure(
     cause,
     eventClass,
     action: 'retain_owned_page_no_resend',
+    ...(recoveryState.stopAuthorityPage
+      ? { stopAuthorityPage: recoveryState.stopAuthorityPage }
+      : {}),
   };
 }
 
@@ -220,6 +229,9 @@ export async function runPostSendRecovery(
       if (currentPage && state.cleanupAuthorityPage === currentPage) {
         state.cleanupAuthorityPage = undefined;
       }
+      if (currentPage && state.stopAuthorityPage === currentPage) {
+        state.stopAuthorityPage = undefined;
+      }
       if (currentPage && state.successorPage === currentPage) {
         state.successorPage = undefined;
       }
@@ -227,7 +239,7 @@ export async function runPostSendRecovery(
       if (state.lossEpoch > 2) {
         return failure(
           browser,
-          state.lossEpoch,
+          state,
           'no_reply',
           'observation_exhausted_no_resend',
           'observation_exhausted',
@@ -243,7 +255,7 @@ export async function runPostSendRecovery(
         } catch {
           return failure(
             browser,
-            state.lossEpoch,
+            state,
             'driver_error',
             'browser_reconnect_failed_after_send',
             'helper_failure_after_send',
@@ -276,7 +288,7 @@ export async function runPostSendRecovery(
     if (census.monotonicAmbiguity) {
       return failure(
         browser,
-        state.lossEpoch,
+        state,
         'observation_uncertain',
         'owned_prompt_marker_ambiguous',
         'post_send_observation_error',
@@ -296,7 +308,7 @@ export async function runPostSendRecovery(
       if (adapter.now() >= hardDeadlineMs) {
         return failure(
           browser,
-          state.lossEpoch,
+          state,
           'driver_error',
           'owned_conversation_recovery_census_failed',
           'helper_failure_after_send',
@@ -312,7 +324,7 @@ export async function runPostSendRecovery(
       if (state.immutableConversationUrl && match.normalizedUrl !== state.immutableConversationUrl) {
         return failure(
           browser,
-          state.lossEpoch,
+          state,
           'ui_contract_mismatch',
           'owned_conversation_identity_mismatch',
           'conversation_identity_mismatch',
@@ -333,6 +345,7 @@ export async function runPostSendRecovery(
         page: match.page,
         conversationUrl: state.immutableConversationUrl,
         cleanupOwned: state.cleanupAuthorityPage === match.page,
+        ...(state.stopAuthorityPage ? { stopAuthorityPage: state.stopAuthorityPage } : {}),
         lossEpoch: state.lossEpoch,
       };
     }
@@ -343,7 +356,7 @@ export async function runPostSendRecovery(
       if (successorSnapshot && successorSnapshot.normalizedUrl !== immutableUrl) {
         return failure(
           browser,
-          state.lossEpoch,
+          state,
           'ui_contract_mismatch',
           'owned_conversation_identity_mismatch',
           'conversation_identity_mismatch',
@@ -361,7 +374,7 @@ export async function runPostSendRecovery(
       if (deadlineReached) {
         return failure(
           browser,
-          state.lossEpoch,
+          state,
           'ui_contract_mismatch',
           'owned_prompt_marker_unresolved',
           'post_send_observation_error',
@@ -380,7 +393,7 @@ export async function runPostSendRecovery(
       } catch {
         return failure(
           browser,
-          state.lossEpoch,
+          state,
           'driver_error',
           'replacement_observation_page_create_failed',
           'helper_failure_after_send',
@@ -389,6 +402,7 @@ export async function runPostSendRecovery(
       }
       state.successorPage = successor;
       state.cleanupAuthorityPage = successor;
+      state.stopAuthorityPage = successor;
       currentPage = successor;
       observer?.({
         event: 'successor_created',
@@ -402,7 +416,7 @@ export async function runPostSendRecovery(
       if (immutableUrl && state.successorCreated) {
         return failure(
           browser,
-          state.lossEpoch,
+          state,
           'no_reply',
           'observation_exhausted_no_resend',
           'observation_exhausted',
@@ -411,7 +425,7 @@ export async function runPostSendRecovery(
       }
       return failure(
         browser,
-        state.lossEpoch,
+        state,
         'ui_contract_mismatch',
         'owned_conversation_recovery_zero_match',
         'post_send_observation_error',
