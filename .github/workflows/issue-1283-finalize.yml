@@ -9,6 +9,7 @@ on:
       - main
     types:
       - edited
+      - reopened
       - synchronize
 
 permissions:
