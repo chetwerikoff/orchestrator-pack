@@ -31,7 +31,14 @@ jobs:
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
-          cat scripts/apply-1283-review-fixes.part*.py > /tmp/apply-1283-review-fixes.py
+          cat \
+            scripts/apply-1283-review-fixes.part00.py \
+            scripts/apply-1283-review-fixes.part01.py \
+            scripts/apply-1283-review-fixes.part02.py \
+            scripts/apply-1283-review-fixes.part02a.py \
+            scripts/apply-1283-review-fixes.part025.py \
+            scripts/apply-1283-review-fixes.part03.py \
+            > /tmp/apply-1283-review-fixes.py
           python /tmp/apply-1283-review-fixes.py
           git checkout "$PR_BASE_SHA" -- .github/workflows/typescript-foundation.yml
           git rm scripts/apply-1283-review-fixes.part*.py scripts/apply-1283-review-fixes.ready .github/workflows/issue-1283-review-fixes.yml
