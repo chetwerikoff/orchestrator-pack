@@ -10,6 +10,8 @@ import {
 
 export const BROWSER_TURN_CANCELLATION_RECEIPT_SCHEMA =
   'browser-turn-cancellation-receipt/v1' as const;
+// Support/test callers may consume this only after independently proving abandonment;
+// production observation-loss paths intentionally have no authority producer.
 export const EXPLICIT_CANCELLATION_AUTHORITY = 'independently_explicit' as const;
 
 const CHATGPT_CONVERSATION_ORIGINS = new Set([
