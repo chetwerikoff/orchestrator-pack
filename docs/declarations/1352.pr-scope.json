@@ -1,0 +1,48 @@
+{
+  "issue_number": 1352,
+  "iteration_id": "operator-r07",
+  "iteration_id_source": "direct_operator_instruction",
+  "supersedes": null,
+  "created_at": "2026-08-06T04:13:00.000Z",
+  "baseline": {
+    "commit_sha": "6cce14b7379a80e5999179476432e6c6e0bcadd8",
+    "worktree_dirty": false,
+    "active_scope_hash": "operator-r07-expanded-first-party-scope"
+  },
+  "declared_paths": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "agent-orchestrator.yaml.example",
+    "package.json",
+    "package-lock.json"
+  ],
+  "declared_globs": [
+    "plugins/**",
+    "scripts/**",
+    "docs/**",
+    "prompts/**",
+    ".claude/**",
+    ".cursor/**",
+    "tests/**"
+  ],
+  "denylist": [
+    "vendor/**",
+    "packages/core/**",
+    ".orca/**",
+    "credentials/**",
+    "secrets/**",
+    "docs/issues_drafts/**",
+    "docs/issue_queue_index.md",
+    "tests/external-output-references/**",
+    ".github/**",
+    "scripts/lib/vitest-pre-topology-measurement.mjs"
+  ],
+  "amendments": [
+    {
+      "reason": "Direct operator authorization to continue Issue #1352 through all active first-party AO scope mismatches without stopping",
+      "actor": "operator",
+      "timestamp": "2026-08-06T04:13:00.000Z"
+    }
+  ]
+}
