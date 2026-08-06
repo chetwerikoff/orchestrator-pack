@@ -44,10 +44,14 @@ command returns a non-zero status and a named missing input when evidence is
 absent. It writes no acceptance artifact on failure.
 
 `check-artifacts` applies the same tier/phase stage matrix as final acceptance:
-T1 and T2 require `architectural`; T3 pre-lens requires `competitive` and
-`architectural-review`; T3 final acceptance additionally requires
-`architectural-lens` and `architectural`. It reports every missing completed
-stage even when stale output markers are already present.
+T1 requires one `architectural` lens; T2 requires three
+`architectural-review` sources followed by one `architectural` lens; T3
+optionally requires three `competitive` sources when the flow-manager journal
+records that stage as genuinely necessary, then requires three
+`architectural-review` sources, one `architectural-lens`, and one
+`architectural` lens. Concurrent three-source stages launch their slots as one
+parallel batch with 10–15 second browser-start spacing. It reports every
+missing completed stage even when stale output markers are already present.
 
 ## Evidence inputs
 
