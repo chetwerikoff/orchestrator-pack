@@ -502,6 +502,7 @@ describe('state-light explicit session mode', () => {
       cleanup: 'skipped',
       owned_tab_count: 1,
     });
+    expect(harness.metrics.closes).toBe(0);
   });
 
   it('does not dispatch when the dispatch-latched stdout barrier fails', async () => {
