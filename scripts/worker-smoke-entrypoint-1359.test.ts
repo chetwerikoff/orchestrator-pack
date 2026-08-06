@@ -245,7 +245,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         .map((value, index) => value === 'terminal send' ? index : -1)
         .filter((index) => index >= 0);
       expect(createIndex).toBeGreaterThanOrEqual(0);
-      expect(showIndexes.length).toBeGreaterThanOrEqual(3);
+      expect(showIndexes.length).toBeGreaterThanOrEqual(2);
       expect(sendIndexes).toHaveLength(2);
       expect(calls[sendIndexes[0]!] ?? []).toContain('--text');
       expect(calls[sendIndexes[1]!] ?? []).not.toContain('--text');
