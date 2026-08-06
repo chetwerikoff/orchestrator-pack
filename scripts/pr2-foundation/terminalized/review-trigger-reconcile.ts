@@ -1,5 +1,5 @@
 // @ts-nocheck
-// Ported from docs/review-trigger-reconcile.mjs blob 4057b74a4719fbf4db0ace672f0204adcba68e96; executable compatibility retained after AC7 terminalization.
+// Synchronized from docs/review-trigger-reconcile.mjs blob dced5ff4a2d04057c15f90accf4755ad82f4f28c; terminalized dependencies remain authoritative after AC7 terminalization.
 /**
  * State-derived review-trigger reconciliation (Issue #163).
  * Vitest: scripts/review-trigger-reconcile.test.ts
@@ -11,7 +11,6 @@ import {
   readStdinJson,
   runStdinJsonCli,
 } from '../../../docs/review-mechanical-cli.mjs';
-import { buildReviewTriggerInvocation } from './ao-0-10-review-api.ts';
 import {
   COVERED_TERMINAL_REVIEW_STATUSES,
   collectSessionIdentifiers,
@@ -73,6 +72,7 @@ import {
 
 /** Default cadence: 10 minutes (low-frequency; tens of minutes). */
 export const DEFAULT_RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
+export const PACK_REVIEW_RUNNER_PATH = 'scripts/pack-review-runner.ts';
 
 export {
   COVERED_TERMINAL_REVIEW_STATUSES,
@@ -269,7 +269,6 @@ export function reportCoversHead(report, headSha, options = {}) {
     return false;
   }
 
-  // Head commit must not be newer than the report — otherwise the hand-off is stale.
   return headCommittedAtMs <= reportMs;
 }
 
@@ -282,8 +281,7 @@ export function resolveHeadCommittedAtMs(openPrs, prNumber) {
     if (Number(pr?.number) !== prNumber) {
       continue;
     }
-    const raw =
-      pr?.headCommittedAt ?? pr?.headCommitCommittedAt ?? pr?.head_commit_committed_at;
+    const raw = pr?.headCommittedAt ?? pr?.headCommitCommittedAt ?? pr?.head_commit_committed_at;
     if (raw == null || raw === '') {
       return undefined;
     }
@@ -357,11 +355,7 @@ export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = [], opt
   }
 
   if (isEnrichedPrBinding(binding)) {
-    if (
-      binding.source === 'display_name' &&
-      currentHead &&
-      currentHead === target
-    ) {
+    if (binding.source === 'display_name' && currentHead && currentHead === target) {
       return true;
     }
     return false;
@@ -371,8 +365,6 @@ export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = [], opt
 }
 
 /**
- * Live worker sessions linked to a PR (any liveness).
- *
  * @param {RuntimeWorker[]} sessions
  * @param {number} prNumber
  */
@@ -392,9 +384,6 @@ export function listWorkersForPr(sessions, prNumber, openPrs = [], options = {})
 }
 
 /**
- * Fail-closed owner resolution for quiescence fallback (Issue #261).
- * Returns exactly one live head owner, or a visible defer reason.
- *
  * @param {RuntimeWorker[]} sessions
  * @param {number} prNumber
  * @param {string} headSha
@@ -404,35 +393,17 @@ export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha
   const prList = toArray(openPrs);
   const sessionDetailsById = options.sessionDetailsById ?? {};
   const workers = listWorkersForPr(sessions, prNumber, prList, { headSha, sessionDetailsById });
-  const explicitOwners = workers.filter((session) =>
-    sessionExplicitlyOwnsHead(session, headSha),
-  );
-  const liveExplicitOwners = explicitOwners.filter((session) =>
-    isLiveWorkerSession(session),
-  );
+  const explicitOwners = workers.filter((session) => sessionExplicitlyOwnsHead(session, headSha));
+  const liveExplicitOwners = explicitOwners.filter((session) => isLiveWorkerSession(session));
 
   if (liveExplicitOwners.length === 1) {
-    return {
-      sessionId: getSessionIdentifier(liveExplicitOwners[0]),
-      reason: 'resolved',
-      failClosed: false,
-    };
+    return { sessionId: getSessionIdentifier(liveExplicitOwners[0]), reason: 'resolved', failClosed: false };
   }
-
   if (liveExplicitOwners.length > 1) {
-    return {
-      sessionId: null,
-      reason: 'ambiguous_head_owner',
-      failClosed: true,
-    };
+    return { sessionId: null, reason: 'ambiguous_head_owner', failClosed: true };
   }
-
   if (explicitOwners.some((session) => !isLiveWorkerSession(session))) {
-    return {
-      sessionId: null,
-      reason: 'no_live_review_target',
-      failClosed: true,
-    };
+    return { sessionId: null, reason: 'no_live_review_target', failClosed: true };
   }
 
   const implicitOwners = workers.filter(
@@ -442,46 +413,21 @@ export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha
         sessionDetail: sessionDetailsById[getSessionIdentifier(session) ?? ''] ?? null,
       }),
   );
-  const liveImplicitOwners = implicitOwners.filter((session) =>
-    isLiveWorkerSession(session),
-  );
+  const liveImplicitOwners = implicitOwners.filter((session) => isLiveWorkerSession(session));
 
   if (liveImplicitOwners.length > 1) {
-    return {
-      sessionId: null,
-      reason: AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON,
-      failClosed: false,
-    };
+    return { sessionId: null, reason: AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON, failClosed: false };
   }
-
   if (liveImplicitOwners.length === 1) {
-    return {
-      sessionId: getSessionIdentifier(liveImplicitOwners[0]),
-      reason: 'resolved',
-      failClosed: false,
-    };
+    return { sessionId: getSessionIdentifier(liveImplicitOwners[0]), reason: 'resolved', failClosed: false };
   }
-
   if (implicitOwners.some((session) => !isLiveWorkerSession(session))) {
-    return {
-      sessionId: null,
-      reason: 'no_live_review_target',
-      failClosed: true,
-    };
+    return { sessionId: null, reason: 'no_live_review_target', failClosed: true };
   }
-
-  return {
-    sessionId: null,
-    reason: 'no_worker_session',
-    failClosed: false,
-  };
+  return { sessionId: null, reason: 'no_worker_session', failClosed: false };
 }
 
 /**
- * Resolve the worker session used for reconcile eligibility and review starts.
- * Prefer the strict head owner when resolved; never fall back to legacy selection
- * when strict resolution fails closed.
- *
  * @param {RuntimeWorker[]} sessions
  * @param {number} prNumber
  * @param {string} headSha
@@ -491,47 +437,20 @@ export function resolveReconcileEvaluationSession(sessions, prNumber, headSha, o
   const sessionList = toArray(sessions);
   const prList = toArray(openPrs);
   const sessionDetailsById = options.sessionDetailsById ?? {};
-  const ownerResolution = resolveStrictHeadOwningWorkerSession(
-    sessionList,
-    prNumber,
-    headSha,
-    prList,
-    { sessionDetailsById },
-  );
+  const ownerResolution = resolveStrictHeadOwningWorkerSession(sessionList, prNumber, headSha, prList, { sessionDetailsById });
 
   if (ownerResolution.failClosed) {
-    return {
-      ownerResolution,
-      sessionId: null,
-      session: null,
-    };
+    return { ownerResolution, sessionId: null, session: null };
   }
-
   if (ownerResolution.sessionId) {
     const sessionId = ownerResolution.sessionId;
-    return {
-      ownerResolution,
-      sessionId,
-      session: findSessionById(sessionList, sessionId),
-    };
+    return { ownerResolution, sessionId, session: findSessionById(sessionList, sessionId) };
   }
-  const sessionId = resolveHeadOwningWorkerSessionId(
-    sessionList,
-    prNumber,
-    headSha,
-    prList,
-    { sessionDetailsById },
-  );
-  return {
-    ownerResolution,
-    sessionId,
-    session: sessionId ? findSessionById(sessionList, sessionId) : null,
-  };
+  const sessionId = resolveHeadOwningWorkerSessionId(sessionList, prNumber, headSha, prList, { sessionDetailsById });
+  return { ownerResolution, sessionId, session: sessionId ? findSessionById(sessionList, sessionId) : null };
 }
 
 /**
- * Pick the live worker session that owns the current PR head (not merely the first PR match).
- *
  * @param {RuntimeWorker[]} sessions
  * @param {number} prNumber
  * @param {string} headSha
@@ -564,30 +483,27 @@ export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, op
     return null;
   }
 
-  const cacheStore = readPrSessionBindingCacheFile(
-    options.cachePath ?? resolvePrSessionBindingCachePath(),
-  );
+  const cacheStore = readPrSessionBindingCacheFile(options.cachePath ?? resolvePrSessionBindingCachePath());
   const cached = lookupBindingByPr(cacheStore, repoSlug, prNumber);
   const cachedHead = normalizeSha(cached?.headSha);
   const trustCachedHead = Boolean(
-    cached
-    && (cached.source === 'push_register' || cached.source === 'claim_pr')
-    && cachedHead
-    && target
-    && cachedHead === target,
+    cached &&
+    (cached.source === 'push_register' || cached.source === 'claim_pr') &&
+    cachedHead &&
+    target &&
+    cachedHead === target,
   );
   if (
-    !target
-    || trustCachedHead
-    || sessionExplicitlyOwnsHead(session, headSha)
-    || sessionHasReportForHead(session, headSha, reportBindingOptions)
-    || sessionOwnsRunHead(session, prNumber, headSha, prList, {
+    !target ||
+    trustCachedHead ||
+    sessionExplicitlyOwnsHead(session, headSha) ||
+    sessionHasReportForHead(session, headSha, reportBindingOptions) ||
+    sessionOwnsRunHead(session, prNumber, headSha, prList, {
       sessionDetail: sessionDetailsById[cacheResolution.sessionId] ?? null,
     })
   ) {
     return cacheResolution.sessionId;
   }
-
   return null;
 }
 
@@ -614,31 +530,17 @@ export function resolveWorkerSessionId(sessions, prNumber, options = {}) {
       headSha,
       sessionDetail: sessionId ? sessionDetailsById[sessionId] ?? null : null,
     };
-    if (!sessionMatchesPr(session, prNumber, openPrs, matchOptions)) {
-      continue;
-    }
-    if (ownsHead && !ownsHead(session)) {
-      continue;
-    }
-    if (sessionId) {
-      matches.push(sessionId);
-    }
+    if (!sessionMatchesPr(session, prNumber, openPrs, matchOptions)) continue;
+    if (ownsHead && !ownsHead(session)) continue;
+    if (sessionId) matches.push(sessionId);
   }
 
-  if (matches.length > 1) {
-    return null;
-  }
+  if (matches.length > 1) return null;
   return matches[0] ?? null;
 }
 
-/**
- * @param {Record<string, Array<{ name?: string, state?: string, conclusion?: string, status?: string }>> | Array<CiChecksByPrRow> | undefined} ciChecksByPr
- * @param {number} prNumber
- */
 export function getCiChecksForPr(ciChecksByPr, prNumber) {
-  if (!ciChecksByPr) {
-    return [];
-  }
+  if (!ciChecksByPr) return [];
   if (Array.isArray(ciChecksByPr)) {
     const row = ciChecksByPr.find((entry) => Number(entry?.prNumber) === prNumber);
     return toArray(row?.checks);
@@ -646,33 +548,17 @@ export function getCiChecksForPr(ciChecksByPr, prNumber) {
   return toArray(ciChecksByPr[String(prNumber)]);
 }
 
-/**
- * @param {Record<string, string[]> | Array<RequiredCheckNamesRow> | undefined} requiredByPr
- * @param {number} prNumber
- */
 export function getRequiredCheckNamesForPr(requiredByPr, prNumber) {
-  if (!requiredByPr) {
-    return [];
-  }
+  if (!requiredByPr) return [];
   if (Array.isArray(requiredByPr)) {
     const row = requiredByPr.find((entry) => Number(entry?.prNumber) === prNumber);
-    return toArray(row?.requiredCheckNames)
-      .map((name) => String(name ?? '').trim())
-      .filter(Boolean);
+    return toArray(row?.requiredCheckNames).map((name) => String(name ?? '').trim()).filter(Boolean);
   }
-  return toArray(requiredByPr[String(prNumber)])
-    .map((name) => String(name ?? '').trim())
-    .filter(Boolean);
+  return toArray(requiredByPr[String(prNumber)]).map((name) => String(name ?? '').trim()).filter(Boolean);
 }
 
-/**
- * @param {Record<string, boolean> | Array<RequiredCheckLookupFailedRow> | undefined} lookupFailedByPr
- * @param {number} prNumber
- */
 export function getRequiredCheckLookupFailedForPr(lookupFailedByPr, prNumber) {
-  if (!lookupFailedByPr) {
-    return false;
-  }
+  if (!lookupFailedByPr) return false;
   if (Array.isArray(lookupFailedByPr)) {
     const row = lookupFailedByPr.find((entry) => Number(entry?.prNumber) === prNumber);
     return Boolean(row?.failed);
@@ -680,33 +566,14 @@ export function getRequiredCheckLookupFailedForPr(lookupFailedByPr, prNumber) {
   return Boolean(lookupFailedByPr[String(prNumber)]);
 }
 
-/**
- * @param {DegradedCiTrackingState | undefined} tracking
- * @param {number} prNumber
- * @param {string} headSha
- */
 function getDegradedCiAttempts(tracking, prNumber, headSha) {
   const key = degradedCiTrackingKey(prNumber, headSha);
   const record = tracking?.degradedCi?.[key];
   return Number(record?.attempts ?? 0);
 }
 
-/**
- * Persist ready_for_review settle debounce so later ticks do not reset startedAtMs.
- *
- * @param {Record<string, unknown>} cycleState
- * @param {Record<string, unknown>} cycleEval
- * @param {number} prNumber
- * @param {string} sessionId
- * @param {string} headSha
- * @param {number} nowMs
- */
 function commitReadyForReviewDebounceIfWaiting(cycleState, cycleEval, prNumber, sessionId, headSha, nowMs) {
-  if (
-    !cycleEval.cycle ||
-    !cycleEval.readyDebounce?.waiting ||
-    cycleEval.readyDebounce?.settled
-  ) {
+  if (!cycleEval.cycle || !cycleEval.readyDebounce?.waiting || cycleEval.readyDebounce?.settled) {
     return cycleState;
   }
   const debouncePatch = {
@@ -718,42 +585,13 @@ function commitReadyForReviewDebounceIfWaiting(cycleState, cycleEval, prNumber, 
       },
     },
   };
-  return commitOwnerCyclePatch(
-    cycleState,
-    cycleEval.repoId,
-    prNumber,
-    sessionId,
-    { ...cycleEval.cycle, ...debouncePatch },
-  );
+  return commitOwnerCyclePatch(cycleState, cycleEval.repoId, prNumber, sessionId, { ...cycleEval.cycle, ...debouncePatch });
 }
 
-/**
- * @param {RuntimeWorker[]} sessions
- * @param {string} sessionId
- */
 export function findSessionByIdForReconcile(sessions, sessionId) {
   return findSessionById(sessions, sessionId);
 }
 
-/**
- * @param {object} input
- * @param {OpenPr[]} input.openPrs
- * @param {ReviewRun[]} input.reviewRuns
- * @param {RuntimeWorker[]} input.sessions
- * @param {Record<string, CiCheck[]> | Array<CiChecksByPrRow>} [input.ciChecksByPr]
- * @param {Record<string, string[]> | Array<RequiredCheckNamesRow>} [input.requiredCheckNamesByPr]
- * @param {Record<string, boolean> | Array<RequiredCheckLookupFailedRow>} [input.requiredCheckLookupFailedByPr]
- * @param {DegradedCiTrackingState} [input.tracking]
- * @param {number} [input.nowMs]
- * @param {Array<Record<string, unknown>>} [input.workerDeliveries]
- * @param {Array<Record<string, unknown>>} [input.runtimeEvents]
- * @param {Record<string, Record<string, unknown>>} [input.dispatchJournal]
- * @param {Record<string, string>} [input.reactionMessages]
- * @param {Record<string, unknown>} [input.cycleState]
- * @param {Record<string, unknown>} [input.sharedCycleState]
- * @param {Record<string, { sessionId?: string, sentAtMs?: number }>} [input.legacyNudged]
- * @param {string} [input.repoRoot]
- */
 export function planReconcileActions({
   openPrs,
   reviewRuns,
@@ -777,7 +615,6 @@ export function planReconcileActions({
   issueBodiesByPr,
   mergedPrNumbers,
 }) {
-  /** @type {Array<{ type: 'start_review', prNumber: number, headSha: string, sessionId: string, startReason?: string, quiescenceBasis?: Record<string, unknown> } | { type: 'skip', prNumber: number, headSha: string, reason: string } | { type: 'escalate_degraded_ci', prNumber: number, headSha: string, reason: string, message: string } | { type: 'track_degraded_ci', prNumber: number, headSha: string, attempts: number, lastAttemptMs: number }>} */
   const actions = [];
   const prList = toArray(openPrs);
   const runList = toArray(reviewRuns);
@@ -801,9 +638,7 @@ export function planReconcileActions({
   for (const pr of prList) {
     const prNumber = Number(pr?.number);
     const headSha = String(pr?.headRefOid ?? '');
-    if (!prNumber || !headSha) {
-      continue;
-    }
+    if (!prNumber || !headSha) continue;
 
     const { ownerResolution, sessionId, session } = resolveReconcileEvaluationSession(
       sessionList,
@@ -814,18 +649,13 @@ export function planReconcileActions({
     );
     const ciChecks = getCiChecksForPr(ciChecksByPr, prNumber);
     const requiredCheckNames = getRequiredCheckNamesForPr(requiredCheckNamesByPr, prNumber);
-    const requiredCheckLookupFailed = getRequiredCheckLookupFailedForPr(
-      requiredCheckLookupFailedByPr,
-      prNumber,
-    );
+    const requiredCheckLookupFailed = getRequiredCheckLookupFailedForPr(requiredCheckLookupFailedByPr, prNumber);
     const degradedCiAttempts = getDegradedCiAttempts(tracking, prNumber, headSha);
     const headCommittedAtMs = resolveHeadCommittedAtMs(prList, prNumber);
     const reportBindingOptions = { headCommittedAtMs };
     const handoffAccepted = hasReadyForReviewForHead(session, headSha, reportBindingOptions);
     const handoffReportedAtMs = handoffAccepted
-      ? getReportTimestampMs(
-          findFreshReadyForReviewHandoff(session, headSha, reportBindingOptions) ?? {},
-        )
+      ? getReportTimestampMs(findFreshReadyForReviewHandoff(session, headSha, reportBindingOptions) ?? {})
       : 0;
     const cycleEval = evaluateWorkerIterationCycleForPr({
       cycleState: nextCycleState,
@@ -876,14 +706,8 @@ export function planReconcileActions({
     if (decision.eligible) {
       if (!sessionId) {
         actions.push({
-          type: 'skip',
-          prNumber,
-          headSha,
-          reason: 'no_worker_session',
-          record: buildNoStartDecisionRecord({
-            ...decisionRecordBase,
-            reason: 'no_worker_session',
-          }),
+          type: 'skip', prNumber, headSha, reason: 'no_worker_session',
+          record: buildNoStartDecisionRecord({ ...decisionRecordBase, reason: 'no_worker_session' }),
         });
         continue;
       }
@@ -893,14 +717,8 @@ export function planReconcileActions({
         const nudgePrecedence = evaluateQuiescentFallbackNudgePrecedence(cycleEval, nowMs);
         if (nudgePrecedence.blocked) {
           actions.push({
-            type: 'skip',
-            prNumber,
-            headSha,
-            reason: nudgePrecedence.reason,
-            record: buildNoStartDecisionRecord({
-              ...decisionRecordBase,
-              reason: nudgePrecedence.reason,
-            }),
+            type: 'skip', prNumber, headSha, reason: nudgePrecedence.reason,
+            record: buildNoStartDecisionRecord({ ...decisionRecordBase, reason: nudgePrecedence.reason }),
           });
           continue;
         }
@@ -919,33 +737,15 @@ export function planReconcileActions({
               blockers,
             ),
           };
-          nextCycleState = commitOwnerCyclePatch(
-            nextCycleState,
-            cycleEval.repoId,
-            prNumber,
-            sessionId,
-            cycle,
-          );
+          nextCycleState = commitOwnerCyclePatch(nextCycleState, cycleEval.repoId, prNumber, sessionId, cycle);
         }
-        if (
-          handoffAccepted &&
-          cycleEval.readyDebounce?.waiting &&
-          !cycleEval.readyDebounce?.settled
-        ) {
+        if (handoffAccepted && cycleEval.readyDebounce?.waiting && !cycleEval.readyDebounce?.settled) {
           nextCycleState = commitReadyForReviewDebounceIfWaiting(
-            nextCycleState,
-            cycleEval,
-            prNumber,
-            sessionId,
-            headSha,
-            nowMs,
+            nextCycleState, cycleEval, prNumber, sessionId, headSha, nowMs,
           );
         }
         actions.push({
-          type: 'skip',
-          prNumber,
-          headSha,
-          reason: cycleEval.reviewGate.deferReason,
+          type: 'skip', prNumber, headSha, reason: cycleEval.reviewGate.deferReason,
           record: buildNoStartDecisionRecord({
             ...decisionRecordBase,
             reason: cycleEval.reviewGate.deferReason,
@@ -955,28 +755,13 @@ export function planReconcileActions({
         continue;
       }
 
-      if (
-        handoffAccepted &&
-        cycleEval.readyDebounce.waiting &&
-        !cycleEval.readyDebounce.settled
-      ) {
+      if (handoffAccepted && cycleEval.readyDebounce.waiting && !cycleEval.readyDebounce.settled) {
         nextCycleState = commitReadyForReviewDebounceIfWaiting(
-          nextCycleState,
-          cycleEval,
-          prNumber,
-          sessionId,
-          headSha,
-          nowMs,
+          nextCycleState, cycleEval, prNumber, sessionId, headSha, nowMs,
         );
         actions.push({
-          type: 'skip',
-          prNumber,
-          headSha,
-          reason: 'ready_for_review_debounce_pending',
-          record: buildNoStartDecisionRecord({
-            ...decisionRecordBase,
-            reason: 'ready_for_review_debounce_pending',
-          }),
+          type: 'skip', prNumber, headSha, reason: 'ready_for_review_debounce_pending',
+          record: buildNoStartDecisionRecord({ ...decisionRecordBase, reason: 'ready_for_review_debounce_pending' }),
         });
         continue;
       }
@@ -995,14 +780,8 @@ export function planReconcileActions({
       nextCapCycleState = capGate.capState ?? nextCapCycleState;
       if (!capGate.allowStart) {
         actions.push({
-          type: 'skip',
-          prNumber,
-          headSha,
-          reason: capGate.reason,
-          record: buildNoStartDecisionRecord({
-            ...decisionRecordBase,
-            reason: capGate.reason,
-          }),
+          type: 'skip', prNumber, headSha, reason: capGate.reason,
+          record: buildNoStartDecisionRecord({ ...decisionRecordBase, reason: capGate.reason }),
         });
         continue;
       }
@@ -1020,9 +799,7 @@ export function planReconcileActions({
       };
       if (isQuiescentFallback) {
         startAction.startReason = decision.reason;
-        if (decision.quiescenceBasis) {
-          startAction.quiescenceBasis = decision.quiescenceBasis;
-        }
+        if (decision.quiescenceBasis) startAction.quiescenceBasis = decision.quiescenceBasis;
       }
       actions.push(startAction);
       continue;
@@ -1049,46 +826,17 @@ export function planReconcileActions({
       });
     }
 
-    if (
-      decision.reason === 'no_worker_session' ||
-      decision.reason === 'no_live_review_target' ||
-      decision.reason === 'ambiguous_head_owner'
-    ) {
-      actions.push({
-        type: 'skip',
-        prNumber,
-        headSha,
-        reason: decision.reason,
-        record: buildNoStartDecisionRecord({
-          ...decisionRecordBase,
-          reason: decision.reason,
-        }),
-      });
-      continue;
-    }
-
     actions.push({
-      type: 'skip',
-      prNumber,
-      headSha,
-      reason: decision.reason,
-      record: buildNoStartDecisionRecord({
-        ...decisionRecordBase,
-        reason: decision.reason,
-      }),
+      type: 'skip', prNumber, headSha, reason: decision.reason,
+      record: buildNoStartDecisionRecord({ ...decisionRecordBase, reason: decision.reason }),
     });
   }
 
   return { actions, cycleState: nextCycleState, capCycleState: nextCapCycleState };
 }
 
-/**
- * @param {{ actions?: unknown[], cycleState?: Record<string, unknown> } | unknown[]} result
- */
 export function unwrapReconcilePlanResult(result) {
-  if (Array.isArray(result)) {
-    return { actions: result, cycleState: {} };
-  }
+  if (Array.isArray(result)) return { actions: result, cycleState: {} };
   return {
     actions: toArray(result?.actions),
     cycleState: result?.cycleState ?? {},
@@ -1096,10 +844,6 @@ export function unwrapReconcilePlanResult(result) {
   };
 }
 
-/**
- * @param {number} prNumber
- * @param {string} headSha
- */
 export { formatDecisionRecordForLog } from './review-head-ready.ts';
 
 export function buildDegradedCiEscalationMessage(prNumber, headSha) {
@@ -1111,12 +855,6 @@ export function buildDegradedCiEscalationMessage(prNumber, headSha) {
   );
 }
 
-/**
- * @param {object} input
- * @param {number} input.nowMs
- * @param {number | undefined} input.lastTickMs
- * @param {number} input.intervalMs
- */
 export function evaluateReconcileInterval({ nowMs, lastTickMs, intervalMs }) {
   return evaluateMechanicalTickInterval({
     nowMs,
@@ -1126,27 +864,35 @@ export function evaluateReconcileInterval({ nowMs, lastTickMs, intervalMs }) {
   });
 }
 
-/**
- * @param {string[]} commandLines
- */
 export function findForbiddenLifecycleCommands(commandLines) {
   return findForbiddenCommandPatterns(commandLines, FORBIDDEN_LIFECYCLE_PATTERNS);
 }
 
-/**
- * @param {string} sessionId
- * @param {string} reviewCommand
- */
+function requireReviewSessionId(sessionId) {
+  const id = String(sessionId ?? '').trim();
+  if (!id) throw new Error('session id is required for review trigger');
+  return id;
+}
+
 export function buildReviewRunArgv(sessionId, reviewCommand = '') {
   void reviewCommand;
-  return buildReviewTriggerInvocation(sessionId).shimArgv;
+  const id = requireReviewSessionId(sessionId);
+  return [
+    'node',
+    '--experimental-strip-types',
+    PACK_REVIEW_RUNNER_PATH,
+    'start',
+    '--session-id',
+    id,
+  ];
 }
 
 export function buildReviewTriggerPath(sessionId) {
-  return buildReviewTriggerInvocation(sessionId).path;
+  requireReviewSessionId(sessionId);
+  return PACK_REVIEW_RUNNER_PATH;
 }
 
-runStdinJsonCli('review-trigger-reconcile.ts', {
+runStdinJsonCli('review-trigger-reconcile.mjs', {
   plan: () => planReconcileActions(readStdinJson()),
   interval: () => {
     const payload = readStdinJson();
