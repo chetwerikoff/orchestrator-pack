@@ -23,6 +23,10 @@ for fragment in required_issue_fragments:
 issue_body_path = Path('/tmp/issue-1283-r07.md')
 issue_body_path.write_text(body)
 
+# The canonical scope producer imports workspace packages; install exactly from
+# the frozen lockfile before the workflow invokes it.
+subprocess.run(['npm', 'ci', '--include=dev'], check=True)
+
 test_path = Path('scripts/chatgpt-browser-turn/tab-lifecycle.test.ts')
 test_text = test_path.read_text()
 import_anchor = "import { loadChromium } from './ui-adapter.ts';\n"
