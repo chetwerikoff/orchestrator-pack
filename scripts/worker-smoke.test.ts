@@ -732,6 +732,52 @@ if (endpoint === 'user') {
     }
   });
 
+  it('keeps FAIL-to-PASS admission independent of receipt write order', async () => {
+    for (const receiptOrder of ['publication', 'inverted'] as const) {
+      const root = mkdtempSync(join(tmpdir(), `worker-smoke-fail-pass-${receiptOrder}-`));
+      const body = planBody([{ action: 'A', expected: 'A passes' }]);
+      const issueBodyFile = join(root, 'issue.md');
+      writeFileSync(issueBodyFile, body, 'utf8');
+      const failReport = {
+        ...report('FAIL', [scenario('A', 'A passes', 'fail')]),
+        terminalHandle: 'terminal-fail',
+      };
+      const passReport = {
+        ...report('PASS', [scenario('A', 'A passes')]),
+        terminalHandle: 'terminal-pass',
+      };
+      const comments = [comment(1, failReport), comment(2, passReport)];
+      const previousReceiptRoot = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+      process.env.WORKER_SMOKE_RECEIPT_ROOT = root;
+      try {
+        if (receiptOrder === 'publication') {
+          writeWorkerSmokeReceipt(failReport);
+          writeWorkerSmokeReceipt(passReport);
+        } else {
+          writeWorkerSmokeReceipt(passReport);
+          writeWorkerSmokeReceipt(failReport);
+        }
+        const expectedWitness = receiptOrder === 'publication' ? 'terminal-pass' : 'terminal-fail';
+        const aggregate = coverage(comments, body);
+        expect(aggregate.accepting).toBe(true);
+        expect(aggregate.latestClearingPass?.terminalHandle).toBe('terminal-pass');
+        expect(findVerifiedSmokeReceiptWitness({
+          issueBody: body,
+          comments,
+          target: target(),
+        })?.terminalHandle).toBe(expectedWitness);
+        expect(await runGateQuietly(
+          gateOptions(root, issueBodyFile),
+          gateDependencies(body, [comments, comments, comments], root),
+        )).toBe(0);
+      } finally {
+        if (previousReceiptRoot === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
+        else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceiptRoot;
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
   it('denies allow when the immediate final census contains a same-head FAIL or BLOCKED', async () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-final-census-'));
     const body = planBody([{ action: 'A', expected: 'A passes' }]);
