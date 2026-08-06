@@ -1,0 +1,125 @@
+name: issue-1283-finalize
+
+on:
+  push:
+    branches:
+      - agent/issue-1283-browser-turn-recovery
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-1283-browser-turn-recovery
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Apply final fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          turn = Path('scripts/chatgpt-browser-turn/state-light-turn.ts')
+          text = turn.read_text()
+          old = """          enumeratePages: async (activeBrowser) => {
+            const contexts = (activeBrowser as any).contexts();
+"""
+          new = """          enumeratePages: async (activeBrowser) => {
+            const browser = activeBrowser as { contexts: () => unknown[] };
+            const contexts = browser.contexts();
+"""
+          if text.count(old) != 1:
+              raise SystemExit('state-light-turn enumeration replacement mismatch')
+          turn.write_text(text.replace(old, new, 1))
+
+          lifecycle = Path('scripts/chatgpt-browser-turn/tab-lifecycle.test.ts')
+          text = lifecycle.read_text()
+          old = """      'contexts:browser-contexts:browser:openGateBCharacterizationPage',
+      'contexts:browser-contexts:browser:createDedicatedTurnPage',
+      'contexts:browser-contexts:browser:openTurnPage',
+"""
+          new = """      'contexts:browser-contexts:browser:openGateBCharacterizationPage',
+      'contexts:browser-contexts:browser:createDedicatedTurnPage',
+      'contexts:browser-contexts:browser:enumeratePages',
+      'contexts:browser-contexts:browser:openTurnPage',
+"""
+          if text.count(old) != 1:
+              raise SystemExit('tab lifecycle contexts inventory replacement mismatch')
+          text = text.replace(old, new, 1)
+          old = """      'pages:context-pages:context:runGateBCharacterization',
+      'pages:context-pages:ctx:openGateBCharacterizationPage',
+"""
+          new = """      'pages:context-pages:context:enumeratePages',
+      'pages:context-pages:context:runGateBCharacterization',
+      'pages:context-pages:ctx:openGateBCharacterizationPage',
+"""
+          if text.count(old) != 1:
+              raise SystemExit('tab lifecycle pages inventory replacement mismatch')
+          lifecycle.write_text(text.replace(old, new, 1))
+          PY
+          cat > docs/declarations/1283.pr-scope.json <<'JSON'
+          {
+            "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+            "issue_number": 1283,
+            "declared_paths": [
+              ".claude/skills/create-issue-draft/SKILL.md",
+              "docs/declarations/1283.pr-scope.json",
+              "scripts/chatgpt-browser-turn/state-light-turn-recovery.ts",
+              "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+              "scripts/chatgpt-browser-turn/state-light-turn.ts",
+              "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+              "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts"
+            ],
+            "denylist": [
+              "credentials/",
+              "package.json",
+              "packages/core/",
+              "scripts/browser-gpt-page-probe.ts",
+              "scripts/lib/create-issue-stage-record-artifacts.ts",
+              "scripts/lib/stage-completeness-core.ts",
+              "scripts/lib/vitest-pre-topology-measurement.mjs",
+              "scripts/vitest-ci-lanes.config.json",
+              "secrets/",
+              "vendor/"
+            ],
+            "allowed_roots": [
+              ".claude/skills/create-issue-draft/SKILL.md",
+              ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+              "docs/declarations/",
+              "scripts/chatgpt-browser-turn/",
+              "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
+              "scripts/toolchain/chatgpt-browser-turn.test.ts"
+            ],
+            "source_revision": "6cce14b7379a80e5999179476432e6c6e0bcadd8"
+          }
+          JSON
+      - name: Install dependencies
+        run: npm ci
+      - name: Focused verification
+        run: |
+          git diff --check
+          npm run check:node-major --silent
+          npm test -- --maxWorkers=1 scripts/chatgpt-browser-turn/tab-lifecycle.test.ts scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts scripts/chatgpt-browser-turn/state-light-turn.test-support.ts
+          npm run typecheck:foundation
+          npm run lint:foundation
+      - name: Repository verification
+        shell: pwsh
+        run: |
+          ./scripts/verify.ps1
+          ./scripts/check-reusable.ps1
+      - name: Publish verified final fixes
+        run: |
+          rm .github/workflows/issue-1283-finalize.yml
+          git diff --check
+          git config user.name "orchestrator-pack implementation bot"
+          git config user.email "85295154+chetwerikoff@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: align recovery census with lifecycle guard"
+          git push origin HEAD:agent/issue-1283-browser-turn-recovery
