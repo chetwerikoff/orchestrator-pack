@@ -29,7 +29,7 @@ function global:Get-OpkVitestProductionTemp {
 function global:Get-OpkVitestProductionStateBase {
     if ($env:OPK_VITEST_PRODUCTION_OPK_BASE) { return $env:OPK_VITEST_PRODUCTION_OPK_BASE }
     if ($env:OPK_BASE_DIR) { return $env:OPK_BASE_DIR }
-    return Join-Path (Get-OpkVitestProductionHome) '.agent-orchestrator'
+    return Join-Path (Get-OpkVitestProductionHome) '.orchestrator-pack'
 }
 
 function global:Get-OpkVitestProductionWakeRoot {
