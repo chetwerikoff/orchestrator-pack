@@ -11,7 +11,6 @@ import {
   readStdinJson,
   runStdinJsonCli,
 } from '../../../docs/review-mechanical-cli.mjs';
-import { buildReviewTriggerInvocation } from './ao-0-10-review-api.ts';
 import {
   COVERED_TERMINAL_REVIEW_STATUSES,
   collectSessionIdentifiers,
@@ -73,6 +72,7 @@ import {
 
 /** Default cadence: 10 minutes (low-frequency; tens of minutes). */
 export const DEFAULT_RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
+export const PACK_REVIEW_RUNNER_PATH = 'scripts/pack-review-runner.ts';
 
 export {
   COVERED_TERMINAL_REVIEW_STATUSES,
@@ -1133,17 +1133,34 @@ export function findForbiddenLifecycleCommands(commandLines) {
   return findForbiddenCommandPatterns(commandLines, FORBIDDEN_LIFECYCLE_PATTERNS);
 }
 
+function requireReviewSessionId(sessionId) {
+  const id = String(sessionId ?? '').trim();
+  if (!id) {
+    throw new Error('session id is required for review trigger');
+  }
+  return id;
+}
+
 /**
  * @param {string} sessionId
  * @param {string} reviewCommand
  */
 export function buildReviewRunArgv(sessionId, reviewCommand = '') {
   void reviewCommand;
-  return buildReviewTriggerInvocation(sessionId).shimArgv;
+  const id = requireReviewSessionId(sessionId);
+  return [
+    'node',
+    '--experimental-strip-types',
+    PACK_REVIEW_RUNNER_PATH,
+    'start',
+    '--session-id',
+    id,
+  ];
 }
 
 export function buildReviewTriggerPath(sessionId) {
-  return buildReviewTriggerInvocation(sessionId).path;
+  requireReviewSessionId(sessionId);
+  return PACK_REVIEW_RUNNER_PATH;
 }
 
 runStdinJsonCli('review-trigger-reconcile.ts', {
