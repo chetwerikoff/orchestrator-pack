@@ -104,4 +104,4 @@ describe('Issue #1283 receipt-bound cancellation', () => {
   });
 });
 
-// Temporary synchronize trigger; the review-scope job folds this coverage into an existing classified suite.
+// Synchronize trigger for the valid amendment runner; the runner deletes this file.
