@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   checkSmokeTestPlan,
   ensureSmokeRunArtifactDir,
@@ -16,13 +17,23 @@ import {
   type WorkerSmokeCommentRecord,
   type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
+import { evaluateSmokeLifecycleCleanliness } from './lib/worker-smoke-lifecycle.ts';
+import { writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import type { RuntimeDispatchResult, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 import {
   establishRuntimeSmokeDelivery,
+  exactClosingIssue,
+  finalSmokeCommentSnapshotMatches,
+  findVerifiedSmokeReceiptWitness,
   parsePaginatedSmokeComments,
+  resolveSmokeTarget,
+  runGateCheck,
   smokeCommentSnapshotDigest,
   stabilizeSmokeCommentCensus,
+  type CliOptions,
+  type GateCheckDependencies,
+  type ResolvedSmokeTarget,
 } from './worker-smoke-run.ts';
 
 const issueBody = `
@@ -497,5 +508,307 @@ describe('exact-head cross-run worker-smoke coverage', () => {
     expect(evaluateWorkerSmokeGate({ ...common, ciGreen: false }).reason).toBe('required_ci_not_green');
     expect(evaluateWorkerSmokeGate({ ...common, ciGreen: true, terminalProvenanceOk: false }).reason)
       .toBe('smoke_terminal_provenance_unverified');
+  });
+});
+
+function gateOptions(root: string, issueBodyFile: string): CliOptions {
+  return {
+    command: 'gate-check',
+    issueNumber: 1343,
+    prNumber: 2001,
+    headSha: HEAD_ONE,
+    issueBodyFile,
+    repoRoot: root,
+    cwd: root,
+    dryRun: false,
+    json: true,
+  };
+}
+
+function resolvedTarget(body: string): ResolvedSmokeTarget {
+  return {
+    repositorySlug: REPOSITORY,
+    issueNumber: 1343,
+    prNumber: 2001,
+    headSha: HEAD_ONE,
+    issueBody: body,
+    issueBodyMatchesTarget: true,
+    trustedPublisherLogin: TRUSTED_ACTOR,
+  };
+}
+
+function gateDependencies(
+  body: string,
+  snapshots: readonly WorkerSmokeCommentRecord[][],
+  root: string,
+  resolveTargetOverride: GateCheckDependencies['resolveTarget'] = () => resolvedTarget(body),
+): GateCheckDependencies {
+  let snapshotIndex = 0;
+  return {
+    evaluateLifecycle: () => evaluateSmokeLifecycleCleanliness(root),
+    resolveTarget: resolveTargetOverride,
+    fetchComments: () => {
+      const selected = snapshots[Math.min(snapshotIndex, snapshots.length - 1)] ?? [];
+      snapshotIndex += 1;
+      return [...selected];
+    },
+    fetchHead: () => HEAD_ONE,
+    selectAdapter: async () => new DeterministicRuntimeAdapter(),
+    ciGreen: () => true,
+  };
+}
+
+async function runGateQuietly(
+  options: CliOptions,
+  dependencies: GateCheckDependencies,
+): Promise<number> {
+  const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  try {
+    return await runGateCheck(options, dependencies);
+  } finally {
+    output.mockRestore();
+  }
+}
+
+function executable(path: string, source: string): void {
+  writeFileSync(path, source, 'utf8');
+  chmodSync(path, 0o755);
+}
+
+function psQuote(value: string): string {
+  return value.replaceAll("'", "''");
+}
+
+describe('worker-smoke consolidated gate regressions', () => {
+  it('uses the canonical closing grammar and rejects missing, repeated, and mismatched relations', () => {
+    for (const keyword of [
+      'Close', 'Closes', 'Closed',
+      'Fix', 'Fixes', 'Fixed',
+      'Resolve', 'Resolves', 'Resolved',
+    ]) {
+      expect(exactClosingIssue(`${keyword} #1343`)).toBe(1343);
+    }
+    expect(exactClosingIssue('No closing relation')).toBeUndefined();
+    expect(exactClosingIssue('Closes #1343\nFixes #1343')).toBeUndefined();
+    expect(exactClosingIssue('Closes #1343\nFixes #999')).toBeUndefined();
+    expect(exactClosingIssue('```md\nCloses #999\n```\nClose #1343')).toBe(1343);
+  });
+
+  it('accepts the existing caller Set-Content newline but evaluates the freshly fetched Issue body', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-caller-gate-'));
+    const bin = join(root, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const body = planBody([{ action: 'caller writes Issue body', expected: 'gate evaluates fetched bytes' }]);
+    const sourceBodyFile = join(root, 'source-issue.md');
+    const issueBodyFile = join(root, 'caller-issue.md');
+    writeFileSync(sourceBodyFile, body, 'utf8');
+    const callerSource = readFileSync(resolve('scripts/pack-worker-report.ps1'), 'utf8');
+    expect(callerSource).toContain(
+      'Set-Content -LiteralPath $issueBodyFile.FullName -Value $issueBody -Encoding utf8NoBOM',
+    );
+    const writer = spawnSync('pwsh', [
+      '-NoProfile',
+      '-Command',
+      `$body = [System.IO.File]::ReadAllText('${psQuote(sourceBodyFile)}'); `
+        + `Set-Content -LiteralPath '${psQuote(issueBodyFile)}' -Value $body -Encoding utf8NoBOM`,
+    ], { encoding: 'utf8' });
+    expect(writer.status, `${writer.stdout}\n${writer.stderr}`).toBe(0);
+    const suppliedBody = readFileSync(issueBodyFile, 'utf8');
+    expect([`${body}\n`, `${body}\r\n`]).toContain(suppliedBody);
+
+    executable(join(bin, 'gh'), `#!/usr/bin/env node
+const endpoint = process.argv[3] ?? '';
+if (endpoint === 'user') {
+  process.stdout.write(JSON.stringify({ login: '${TRUSTED_ACTOR}' }));
+} else if (endpoint.endsWith('/issues/1343')) {
+  process.stdout.write(JSON.stringify({
+    number: 1343,
+    body: process.env.FAKE_ISSUE_BODY,
+    html_url: 'https://github.com/${REPOSITORY}/issues/1343',
+    state: 'open',
+  }));
+} else if (endpoint.endsWith('/pulls/2001')) {
+  process.stdout.write(JSON.stringify({
+    number: 2001,
+    body: 'Close #1343',
+    html_url: 'https://github.com/${REPOSITORY}/pull/2001',
+    state: 'open',
+    head: { sha: '${HEAD_ONE}' },
+    base: { ref: 'main' },
+  }));
+} else {
+  process.stderr.write('unexpected endpoint: ' + endpoint);
+  process.exitCode = 2;
+}
+`);
+    expect(spawnSync('git', ['init', '--quiet', root], { encoding: 'utf8' }).status).toBe(0);
+    expect(spawnSync(
+      'git',
+      ['-C', root, 'remote', 'add', 'origin', `https://github.com/${REPOSITORY}.git`],
+      { encoding: 'utf8' },
+    ).status).toBe(0);
+
+    const previousPath = process.env.PATH;
+    const previousBody = process.env.FAKE_ISSUE_BODY;
+    const previousReceiptRoot = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+    process.env.PATH = `${bin}:${previousPath ?? ''}`;
+    process.env.FAKE_ISSUE_BODY = body;
+    process.env.WORKER_SMOKE_RECEIPT_ROOT = root;
+    try {
+      const smoke = report('PASS', [scenario(
+        'caller writes Issue body',
+        'gate evaluates fetched bytes',
+      )]);
+      writeWorkerSmokeReceipt(smoke);
+      const comments = [comment(1, smoke)];
+      const options = gateOptions(root, issueBodyFile);
+      const resolved = resolveSmokeTarget(options, suppliedBody);
+      expect(resolved.issueBody).toBe(body);
+      expect(() => resolveSmokeTarget(options, `${body}\n\n`)).toThrow(/does not match/u);
+      expect(await runGateQuietly(
+        options,
+        gateDependencies(body, [comments, comments, comments], root, resolveSmokeTarget),
+      )).toBe(0);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousBody === undefined) delete process.env.FAKE_ISSUE_BODY;
+      else process.env.FAKE_ISSUE_BODY = previousBody;
+      if (previousReceiptRoot === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
+      else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceiptRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps comment publication order authoritative when receipt writes finish in reverse', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-receipt-order-'));
+    const body = planBody([
+      { action: 'A', expected: 'A passes' },
+      { action: 'B', expected: 'B passes' },
+    ]);
+    const issueBodyFile = join(root, 'issue.md');
+    writeFileSync(issueBodyFile, body, 'utf8');
+    const first = { ...report('PASS', [scenario('A', 'A passes')]), terminalHandle: 'terminal-a' };
+    const second = { ...report('PASS', [scenario('B', 'B passes')]), terminalHandle: 'terminal-b' };
+    const comments = [comment(1, first), comment(2, second)];
+    const previousReceiptRoot = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+    process.env.WORKER_SMOKE_RECEIPT_ROOT = root;
+    try {
+      writeWorkerSmokeReceipt(second);
+      writeWorkerSmokeReceipt(first);
+      const aggregate = coverage(comments, body);
+      expect(aggregate.accepting).toBe(true);
+      expect(aggregate.latestClearingPass?.terminalHandle).toBe('terminal-b');
+      expect(findVerifiedSmokeReceiptWitness({
+        issueBody: body,
+        comments,
+        target: target(),
+      })?.terminalHandle).toBe('terminal-a');
+      expect(await runGateQuietly(
+        gateOptions(root, issueBodyFile),
+        gateDependencies(body, [comments, comments, comments], root),
+      )).toBe(0);
+    } finally {
+      if (previousReceiptRoot === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
+      else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceiptRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('denies allow when the immediate final census contains a same-head FAIL or BLOCKED', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-final-census-'));
+    const body = planBody([{ action: 'A', expected: 'A passes' }]);
+    const issueBodyFile = join(root, 'issue.md');
+    writeFileSync(issueBodyFile, body, 'utf8');
+    const passReport = report('PASS', [scenario('A', 'A passes')]);
+    const pass = comment(1, passReport);
+    const blocked = comment(2, report('BLOCKED', [scenario('A', 'A passes', 'blocked')]));
+    const previousReceiptRoot = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+    process.env.WORKER_SMOKE_RECEIPT_ROOT = root;
+    try {
+      writeWorkerSmokeReceipt(passReport);
+      expect(finalSmokeCommentSnapshotMatches([pass], [pass, blocked])).toBe(false);
+      const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        const code = await runGateCheck(
+          gateOptions(root, issueBodyFile),
+          gateDependencies(body, [[pass], [pass], [pass, blocked]], root),
+        );
+        expect(code).toBe(1);
+        expect(output.mock.calls.map((entry) => String(entry[0])).join(''))
+          .toContain('comment_snapshot_changed_before_allow');
+      } finally {
+        output.mockRestore();
+      }
+    } finally {
+      if (previousReceiptRoot === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
+      else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceiptRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('applies the same strict admission grammar to malformed BLOCKED evidence', () => {
+    const body = planBody([{ action: 'A', expected: 'A passes' }]);
+    const pass = comment(1, report('PASS', [scenario('A', 'A passes')]));
+    const malformedReport = report('BLOCKED', [scenario('A', 'A passes', 'blocked')]);
+    const malformedBody = mutateMachineBlock(
+      formatSmokeReportComment(malformedReport),
+      (block) => block.replace(`producer: ${SMOKE_REPORT_PRODUCER}`, 'producer: '),
+    );
+    const result = coverage([
+      pass,
+      comment(2, malformedReport, { body: malformedBody }),
+    ], body);
+    expect(result.accepting).toBe(false);
+    expect(result.diagnostics.invalidCandidates.total).toBe(1);
+    expect(result.diagnostics.globalBlock.kind).toBe('invalid_candidate');
+  });
+
+  it('trims a real combined payload over 64 KiB deterministically without changing totals', () => {
+    const escaped = '\\'.repeat(240);
+    const rows = Array.from({ length: 180 }, (_, index) => ({
+      action: `${escaped} action-${index}`,
+      expected: `${escaped} expected-${index}`,
+    }));
+    const body = planBody(rows);
+    const comments = [
+      comment(1, report('PASS', rows.slice(0, 60).map((row) => scenario(row.action, row.expected)))),
+      comment(2, report('FAIL', rows.slice(60, 120).map(
+        (row) => scenario(row.action, row.expected, 'fail'),
+      ))),
+      comment(3, report('PASS', [scenario('unknown tuple', 'clear global block')])),
+    ];
+    const first = coverage(comments, body);
+    const second = coverage(comments, body);
+    expect(first.diagnostics.covered.total).toBe(60);
+    expect(first.diagnostics.latestNonPass.total).toBe(60);
+    expect(first.diagnostics.missing.total).toBe(60);
+    expect(first.diagnostics.payloadOverflow).toBe(true);
+    expect(first.diagnostics.payloadBytes).toBeLessThanOrEqual(64 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(first.diagnostics), 'utf8')).toBeLessThanOrEqual(64 * 1024);
+    expect(JSON.stringify(first.diagnostics)).toBe(JSON.stringify(second.diagnostics));
+  });
+
+  it('uses a fresh runtime identity for each accumulated publication and leaves no live worker', () => {
+    const adapter = new DeterministicRuntimeAdapter();
+    const first = adapter.spawnWorker({ title: 'smoke-1', command: 'cursor-agent' });
+    const second = adapter.spawnWorker({ title: 'smoke-2', command: 'cursor-agent' });
+    expect(first.status).toBe('ok');
+    expect(second.status).toBe('ok');
+    if (first.status !== 'ok' || second.status !== 'ok') return;
+    expect(first.value.identity).not.toEqual(second.value.identity);
+    expect(adapter.stopWorker(first.value.identity).status).toBe('ok');
+    expect(adapter.stopWorker(second.value.identity).status).toBe('ok');
+    expect(adapter.listWorkers()).toEqual({ status: 'ok', value: [] });
+
+    const body = planBody([
+      { action: 'A', expected: 'A passes' },
+      { action: 'B', expected: 'B passes' },
+    ]);
+    const comments = [
+      comment(1, { ...report('PASS', [scenario('A', 'A passes')]), terminalHandle: first.value.identity.id }),
+      comment(2, { ...report('PASS', [scenario('B', 'B passes')]), terminalHandle: second.value.identity.id }),
+    ];
+    expect(coverage(comments, body).accepting).toBe(true);
   });
 });
