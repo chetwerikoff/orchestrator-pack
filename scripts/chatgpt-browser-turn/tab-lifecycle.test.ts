@@ -474,3 +474,88 @@ describe('Issue #1238 mechanically derived production graph', () => {
     ].sort());
   });
 });
+
+
+describe('Issue #1283 explicit Stop authority', () => {
+  function nonOkResult() {
+    return makeTurnResult({
+      state: 'no_reply',
+      scope: 'invocation',
+      cause: 'observation_exhausted_no_resend',
+      send_count: 1,
+    });
+  }
+
+  it('does not Stop or close an unproven reachable page through runStateLightTurn', async () => {
+    const stopClick = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const page = {
+      isClosed: () => false,
+      close,
+      locator: () => ({
+        count: vi.fn(async () => 1),
+        first: () => ({ click: stopClick, waitFor: vi.fn(async () => undefined) }),
+      }),
+    };
+    const browser = { isConnected: () => true, close: vi.fn(async () => undefined) };
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await runStateLightTurn(['--profile', 'fixture'], {
+        runTurn: async () => ({ page, browser, result: nonOkResult() }),
+      });
+    } finally {
+      write.mockRestore();
+    }
+    expect(stopClick).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('Stops the explicit proven target once and never closes it on non-ok', async () => {
+    const stopClick = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const control = {
+      click: stopClick,
+      waitFor: vi.fn(async () => undefined),
+    };
+    const page = {
+      isClosed: () => false,
+      close,
+      locator: () => ({
+        count: vi.fn(async () => 1),
+        first: () => control,
+      }),
+    };
+    const browser = { isConnected: () => true, close: vi.fn(async () => undefined) };
+    const result = await __testFinalizeTurn({
+      page,
+      stopAuthorityPage: page,
+      browser,
+      result: nonOkResult(),
+    });
+    expect(stopClick).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+    expect(result.cleanup).toBe('skipped');
+    expect(result.incidents).toContain('owned_generation_stop_confirmed');
+  });
+
+  it('forfeiture suppresses even an otherwise explicit Stop target', async () => {
+    const stopClick = vi.fn(async () => undefined);
+    const page = {
+      isClosed: () => false,
+      close: vi.fn(async () => undefined),
+      locator: () => ({
+        count: vi.fn(async () => 1),
+        first: () => ({ click: stopClick, waitFor: vi.fn(async () => undefined) }),
+      }),
+    };
+    const result = await __testFinalizeTurn({
+      page,
+      stopAuthorityPage: page,
+      ownershipForfeited: true,
+      browser: { isConnected: () => true, close: vi.fn(async () => undefined) },
+      result: nonOkResult(),
+    });
+    expect(stopClick).not.toHaveBeenCalled();
+    expect(result.incidents).toContain('owned_generation_stop_unavailable');
+  });
+});

@@ -1591,6 +1591,7 @@ describe('Issue #1283 post-send observation recovery', () => {
       successorCreated: false,
       immutableConversationUrl: knownUrl,
       cleanupAuthorityPage: lostPage,
+      stopAuthorityPage: lostPage,
     };
 
     const result = await runPostSendRecovery({
@@ -1638,6 +1639,7 @@ describe('Issue #1283 post-send observation recovery', () => {
       successorCreated: false,
       immutableConversationUrl: knownUrl,
       cleanupAuthorityPage: lostPage,
+      stopAuthorityPage: lostPage,
     };
 
     const result = await runPostSendRecovery({
@@ -1682,6 +1684,7 @@ describe('Issue #1283 post-send observation recovery', () => {
       successorCreated: false,
       immutableConversationUrl: knownUrl,
       cleanupAuthorityPage: lostPage,
+      stopAuthorityPage: lostPage,
     };
 
     const result = await runPostSendRecovery({
@@ -1701,6 +1704,8 @@ describe('Issue #1283 post-send observation recovery', () => {
     });
     expect(adapter.createSuccessor).toHaveBeenCalledTimes(1);
     expect(state.successorCreated).toBe(true);
+    expect(state.stopAuthorityPage).toBe(successor);
+    expect(result).toMatchObject({ stopAuthorityPage: successor });
   });
 
   it('fails closed on repeated marker evidence and maps a third loss to no-resend exhaustion', async () => {
@@ -1959,6 +1964,7 @@ describe('Issue #1283 post-send observation recovery', () => {
       immutableConversationUrl: knownUrl,
       successorPage: lostSuccessor,
       cleanupAuthorityPage: lostSuccessor,
+      stopAuthorityPage: lostSuccessor,
     };
     const adapter = adapterFor({ pages: [], pageData: new Map() });
     const result = await runPostSendRecovery({
@@ -1979,7 +1985,52 @@ describe('Issue #1283 post-send observation recovery', () => {
     });
     expect(state.lossEpoch).toBe(2);
     expect(state.cleanupAuthorityPage).toBeUndefined();
+    expect(state.stopAuthorityPage).toBeUndefined();
     expect(state.successorPage).toBeUndefined();
     expect(adapter.createSuccessor).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('Issue #1283 recovery authority regressions', () => {
+  const marker = `OPKTURNV1${'56'.repeat(16)}`;
+  const knownUrl = 'https://chatgpt.com/c/55555555-5555-4555-8555-555555555555';
+
+  it('carries a still-held successor Stop target on terminal recovery failure', async () => {
+    const successor = {};
+    const state: PostSendRecoveryState = {
+      lossEpoch: 1,
+      successorCreated: true,
+      immutableConversationUrl: knownUrl,
+      successorPage: successor,
+      cleanupAuthorityPage: successor,
+      stopAuthorityPage: successor,
+    };
+    const result = await runPostSendRecovery({
+      browser: {},
+      currentPage: undefined,
+      marker,
+      hardDeadlineMs: 0,
+      pollMs: 1,
+      state,
+      adapter: {
+        enumeratePages: vi.fn(async () => [successor]),
+        pageUrl: () => knownUrl,
+        normalizeConversationUrl: (value) => value,
+        isSupportedConversationUrl: () => true,
+        readAuthoritativeMessages: vi.fn(async () => ({ messages: [], incomplete: true })),
+        browserDefinitelyDisconnected: () => false,
+        pageDefinitelyLost: () => false,
+        reconnect: vi.fn(async () => ({})),
+        createSuccessor: vi.fn(async () => successor),
+        sleep: vi.fn(async () => undefined),
+        now: () => 1,
+      },
+    });
+    expect(result).toMatchObject({
+      kind: 'failure',
+      cause: 'owned_conversation_recovery_census_failed',
+      stopAuthorityPage: successor,
+    });
   });
 });
