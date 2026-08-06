@@ -8,16 +8,9 @@
     "scripts/worker-smoke.test.ts"
   ],
   "denylist": [
-    ".github/",
-    "package-lock.json",
-    "package.json",
+    "credentials/",
     "packages/core/",
-    "scripts/lib/vitest-pre-topology-measurement.mjs",
-    "scripts/lib/worker-smoke-bounded-create.ts",
-    "scripts/lib/worker-smoke-lifecycle.ts",
-    "scripts/lib/worker-smoke-receipt.ts",
-    "scripts/vitest-ci-lanes.config.json",
-    "scripts/vitest-runtime-history.json",
+    "secrets/",
     "vendor/"
   ],
   "allowed_roots": [
