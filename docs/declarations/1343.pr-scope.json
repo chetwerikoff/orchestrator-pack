@@ -23,13 +23,12 @@
     "vendor/"
   ],
   "allowed_roots": [
+    "docs/declarations/1343.pr-scope.json",
     "docs/worker-smoke-testing.md",
     "scripts/lib/worker-smoke-core-base.ts",
     "scripts/lib/worker-smoke-core.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "2d7b5413fc42d824e93f73c2c626dcbe858d4c49"
+  "source_revision": "a7ad6fb7511888bdf22985499fb5836f5b34d7fc"
 }
-
-
