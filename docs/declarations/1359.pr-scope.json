@@ -5,10 +5,12 @@
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/lib/worker-smoke-bounded-create.ts",
     "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/orca-runtime/task-adapter.ts",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-1359.test.ts",
     "scripts/worker-smoke-entrypoint-1359.test.ts",
-    "scripts/worker-smoke-run"
+    "scripts/worker-smoke-run",
+    "scripts/worker-smoke-run.ts"
   ],
   "denylist": [
     "credentials/",
@@ -27,6 +29,7 @@
     "scripts/lib/worker-smoke-lifecycle-regressions-base.ts",
     "scripts/lib/worker-smoke-lifecycle.ts",
     "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/orca-runtime/task-adapter.ts",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-1359.test.ts",
     "scripts/worker-smoke-entrypoint-1359.test.ts",
@@ -34,5 +37,5 @@
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "77d3c46cad43e6bfd03863a67e468a531c71d7ec"
+  "source_revision": "a986ac0d945805fbfcb2124149d98da94a49835e"
 }
