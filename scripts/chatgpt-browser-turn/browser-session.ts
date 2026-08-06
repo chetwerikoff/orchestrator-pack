@@ -73,7 +73,7 @@ export async function releaseCdpBrowser(
   }
   const remainingBudgetMs = Math.max(0, cleanupBudgetMs - (Date.now() - startedAt));
   await boundedResourceCleanup(
-    () => releasable.close(),
+    () => (browser as { close: () => Promise<void> }).close(),
     remainingBudgetMs,
   );
 }
