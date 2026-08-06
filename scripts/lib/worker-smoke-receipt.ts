@@ -7,12 +7,25 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { SMOKE_REPORT_PRODUCER, type SmokeReport } from './worker-smoke-core.ts';
 import type { SmokeLifecycleRegistry } from './worker-smoke-lifecycle-base.ts';
+import {
+  installStableWorkerSmokeSpawnPatch,
+  quarantineUnsupportedHistoricalSmokeRuns,
+  smokeRunCwdFromArgv,
+} from './worker-smoke-bounded-create.ts';
 
 export const WORKER_SMOKE_RECEIPT_SCHEMA = 'worker-smoke-receipt/v1';
 export const SMOKE_CLOSE_SETTLEMENT_REASON = 'owned_terminal_cleanup' as const;
+
+export interface WorkerSmokeFailureCause {
+  phase: 'harness' | 'scenario';
+  code: string;
+  action: string;
+  observed: string;
+  resolution: string;
+}
 
 export interface WorkerSmokeReceipt {
   schema: typeof WORKER_SMOKE_RECEIPT_SCHEMA;
@@ -24,6 +37,7 @@ export interface WorkerSmokeReceipt {
   producer: string;
   result: SmokeReport['result'];
   publishedAt: string;
+  failureCause?: WorkerSmokeFailureCause;
 }
 
 export interface SmokeCloseSettlementIdentity {
@@ -50,6 +64,13 @@ type JsonRecord = Record<string, unknown>;
 
 const isRecord = (value: unknown): value is JsonRecord =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const workerSmokeEntrypoint = basename(process.argv[1] ?? '') === 'worker-smoke-run.ts';
+if (workerSmokeEntrypoint && process.argv[2] === 'run') {
+  const argv = process.argv.slice(2);
+  quarantineUnsupportedHistoricalSmokeRuns(smokeRunCwdFromArgv(argv));
+  installStableWorkerSmokeSpawnPatch();
+}
 
 export function buildSmokeCloseSettlementIdentity(runId: string): SmokeCloseSettlementIdentity {
   const normalizedRunId = runId.trim();
@@ -189,7 +210,69 @@ function receiptPath(prNumber: number, headSha: string): string {
   return join(receiptRoot(), `${receiptKey(prNumber, headSha)}.json`);
 }
 
+const harnessActions = new Set([
+  'parse smoke-test-plan',
+  'resolve runtime worktree',
+  'bind smoke to current head',
+  'verify clean tracked worktree',
+  'acquire smoke spawn admission',
+  'spawn runtime smoke worker',
+  'dispatch smoke prompt once',
+  'wait for sealed smoke completion',
+  'run runtime-neutral worker smoke',
+]);
+
+function causeCode(observed: string, result: SmokeReport['result']): string {
+  if (observed.includes('worker_generation_not_found')) return 'worker_generation_not_found';
+  if (observed.startsWith('unsupported_historical_cleanup:')) return 'unsupported_historical_cleanup';
+  const primary = observed.split(';', 1)[0]?.trim() ?? '';
+  const first = primary.split(':', 1)[0]?.trim().toLowerCase() ?? '';
+  const normalized = first.replace(/[^a-z0-9_]+/gu, '_').replace(/^_+|_+$/gu, '');
+  return normalized || `worker_smoke_${result.toLowerCase()}`;
+}
+
+function causeResolution(observed: string, code: string): string {
+  const match = observed.match(/(?:^|;)resolution=([^;]+)/u);
+  if (match?.[1]) return match[1];
+  if (code === 'worker_generation_not_found') {
+    return 'resolve_the_current_generation_for_the_created_handle_then_retry_from_the_exact_pr_head';
+  }
+  if (code === 'unsupported_historical_cleanup') {
+    return 'inspect_the_named_record_then_repair_its_close_receipt_or_move_the_whole_run_directory_to_quarantine_before_retry';
+  }
+  return `inspect_${code}_and_retry_from_the_exact_pr_head`;
+}
+
+export function deriveWorkerSmokeFailureCause(
+  report: SmokeReport,
+): WorkerSmokeFailureCause | undefined {
+  if (report.result === 'PASS') return undefined;
+  const scenario = report.scenarios.find((candidate) => candidate.outcome !== 'pass')
+    ?? report.scenarios[0];
+  const action = scenario?.action?.trim() || 'worker smoke harness';
+  const observed = scenario?.observed?.trim() || `result:${report.result.toLowerCase()}`;
+  const code = causeCode(observed, report.result);
+  return {
+    phase: harnessActions.has(action) ? 'harness' : 'scenario',
+    code,
+    action,
+    observed,
+    resolution: causeResolution(observed, code),
+  };
+}
+
+function markWrapperReportWritten(): void {
+  const path = process.env.WORKER_SMOKE_WRAPPER_STATE_FILE?.trim();
+  if (!path) return;
+  try {
+    writeFileSync(path, 'report_written\n', 'utf8');
+  } catch {
+    // Wrapper fallback remains available if this best-effort marker cannot be written.
+  }
+}
+
 export function writeWorkerSmokeReceipt(report: SmokeReport): WorkerSmokeReceipt {
+  const failureCause = deriveWorkerSmokeFailureCause(report);
   const receipt: WorkerSmokeReceipt = {
     schema: WORKER_SMOKE_RECEIPT_SCHEMA,
     issueNumber: report.issueNumber,
@@ -200,9 +283,11 @@ export function writeWorkerSmokeReceipt(report: SmokeReport): WorkerSmokeReceipt
     producer: report.producer ?? SMOKE_REPORT_PRODUCER,
     result: report.result,
     publishedAt: new Date().toISOString(),
+    ...(failureCause ? { failureCause } : {}),
   };
   mkdirSync(receiptRoot(), { recursive: true });
   writeFileSync(receiptPath(report.prNumber, report.headSha), `${JSON.stringify(receipt)}\n`, 'utf8');
+  markWrapperReportWritten();
   return receipt;
 }
 
@@ -223,11 +308,13 @@ export function verifySmokeRunReceipt(report: SmokeReport): boolean {
   if (!receipt) {
     return false;
   }
+  const expectedFailureCause = deriveWorkerSmokeFailureCause(report);
   return receipt.producer === SMOKE_REPORT_PRODUCER
     && receipt.issueNumber === report.issueNumber
     && receipt.prNumber === report.prNumber
     && receipt.headSha === report.headSha.trim().toLowerCase()
     && receipt.terminalHandle === String(report.terminalHandle ?? '').trim()
     && receipt.orcaExecutable === String(report.orcaExecutable ?? '').trim()
-    && receipt.result === report.result;
+    && receipt.result === report.result
+    && JSON.stringify(receipt.failureCause ?? null) === JSON.stringify(expectedFailureCause ?? null);
 }
