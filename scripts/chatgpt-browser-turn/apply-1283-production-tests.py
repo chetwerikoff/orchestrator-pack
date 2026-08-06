@@ -1,117 +1,50 @@
+from pathlib import Path
 from subprocess import check_output
 
-source = check_output([
+base = check_output([
     'git',
     'show',
-    '678c281ec52cb8eafc38b9fa3af1e7f76d068573:scripts/chatgpt-browser-turn/apply-1283-production-tests.py',
+    'd4846a3e3e24bdc5e53bd8c1fb146ca79da2becc:scripts/chatgpt-browser-turn/apply-1283-production-tests.py',
 ], text=True)
-start = source.index('flow_test =')
-end = source.index('support =')
-source = source[:start] + source[end:]
-source = source.replace(
-    "describe('Issue #1283 production runStateLightTurn recovery integration', () => {\n  function browserWithPages(",
-    "describe('Issue #1283 production runStateLightTurn recovery integration', () => {\n"
-    "  let integrationStateDir: string;\n\n"
-    "  beforeEach(() => {\n"
-    "    integrationStateDir = mkdtempSync(join(tmpdir(), 'slt-recovery-'));\n"
-    "    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = integrationStateDir;\n"
-    "    disableSendSlotForTest();\n"
-    "    mocks.browserQueue.length = 0;\n"
-    "    mocks.cleanupOutcome = 'confirmed';\n"
-    "    mocks.nowMs = 10_000;\n"
-    "    mocks.productStatusText.mockReset();\n"
-    "    mocks.productStatusText.mockResolvedValue({ text: '', composer: true });\n"
-    "    mocks.readStableInput.mockReset();\n"
-    "    vi.spyOn(Date, 'now').mockImplementation(() => mocks.nowMs);\n"
-    "  });\n\n"
-    "  afterEach(() => {\n"
-    "    delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;\n"
-    "    clearSendSlotDisableEnv();\n"
-    "    rmSync(integrationStateDir, { recursive: true, force: true });\n"
-    "    vi.restoreAllMocks();\n"
-    "  });\n\n"
-    "  function browserWithPages(",
+exec(compile(base, 'apply-1283-production-tests-base.py', 'exec'))
+
+path = Path('scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts')
+text = path.read_text()
+text = text.replace(
+    "import { classifyPageObservation, classifySendLandingEvidence, runStateLightTurn } from './state-light-turn.ts';",
+    "import { classifyPageObservation, classifySendLandingEvidence, runStateLightTurn } from './state-light-turn.ts';\n"
+    "import { readRecoveryAuthoritativeUserMessages, stopOwnedGeneration } from './state-light-cancellation.ts';",
+    1,
 )
-source = source.replace("join(stateDir, 'recovered.txt')", "join(integrationStateDir, 'recovered.txt')")
-source = source.replace("join(stateDir, 'exhausted.txt')", "join(integrationStateDir, 'exhausted.txt')")
-source = source.replace(
-    "  matchesNewChatControlSelector,\n  MESSAGE_NODE_SELECTOR,",
-    "  matchesNewChatControlSelector,\n  matchesStopButtonSelector,\n  MESSAGE_NODE_SELECTOR,",
+text = text.replace(
+    "    const initialBrowser = browserWithPages(initialPage, [initialPage], () => !lost);",
+    "    expect(await readRecoveryAuthoritativeUserMessages(recoveredPage)).toMatchObject({ incomplete: false });\n"
+    "    expect(await readRecoveryAuthoritativeUserMessages(foreignPage)).toMatchObject({ incomplete: false });\n\n"
+    "    const initialBrowser = browserWithPages(initialPage, [initialPage], () => !lost);",
+    1,
 )
-source = source.replace(
-    "  STOP_BUTTON_TESTID,\n} from './product-page-selectors.ts';",
-    "  STOP_BUTTON_TESTID,\n  USER_MESSAGE_SELECTOR,\n} from './product-page-selectors.ts';",
+text = text.replace(
+    "    mocks.browserQueue.push(browserWithPages(ownedPage, [ownedPage, foreignPage], () => true));",
+    "    const stopProbeClick = vi.fn(async () => undefined);\n"
+    "    const stopProbePage = {\n"
+    "      isClosed: vi.fn(() => false),\n"
+    "      locator: vi.fn((selector: string) => matchesStopButtonSelector(selector)\n"
+    "        ? scalarLocator({\n"
+    "          count: vi.fn()\n"
+    "            .mockResolvedValueOnce(1)\n"
+    "            .mockResolvedValueOnce(0),\n"
+    "          click: stopProbeClick,\n"
+    "        })\n"
+    "        : scalarLocator()),\n"
+    "    };\n"
+    "    expect(await stopOwnedGeneration(stopProbePage)).toBe('confirmed');\n"
+    "    expect(stopProbeClick).toHaveBeenCalledTimes(1);\n\n"
+    "    mocks.browserQueue.push(browserWithPages(ownedPage, [ownedPage, foreignPage], () => true));",
+    1,
 )
-source = source.replace(
-    "const recoveredMessages = readyTurnObservationFrames(prompt, reply).at(-1)!;",
-    "const recoveredMessages = (): StateLightTestMessage[] => [\n"
-    "      { role: 'user', text: composerText },\n"
-    "      {\n"
-    "        role: 'assistant',\n"
-    "        text: reply,\n"
-    "        finalAction: true,\n"
-    "        finalActionInTurnContainer: true,\n"
-    "      },\n"
-    "    ];",
+text = text.replace(
+    "    expect(ownedStop).toHaveBeenCalledTimes(1);",
+    "    expect(ownedStop, JSON.stringify(outcome)).toHaveBeenCalledTimes(1);",
+    1,
 )
-source = source.replace("collectionLocator(recoveredMessages, false)", "collectionLocator(recoveredMessages(), false)")
-source = source.replace("recoveredMessages.filter", "recoveredMessages().filter")
-source = source.replace("const last = recoveredMessages.at(-1)!;", "const last = recoveredMessages().at(-1)!;")
-source = source.replace(
-    "if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(recoveredMessages(), false);",
-    "if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(recoveredMessages(), false);\n"
-    "        if (selector === USER_MESSAGE_SELECTOR) {\n"
-    "          return collectionLocator(recoveredMessages().filter((message) => message.role === 'user'), false);\n"
-    "        }",
-)
-source = source.replace(
-    "if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(foreignMessages, false);",
-    "if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(foreignMessages, false);\n"
-    "        if (selector === USER_MESSAGE_SELECTOR) {\n"
-    "          return collectionLocator(foreignMessages.filter((message) => message.role === 'user'), false);\n"
-    "        }",
-)
-source = source.replace(
-    "press: vi.fn(async () => { sends += 1; lost = true; }),",
-    "press: vi.fn(async () => { sends += 1; initialUrl = SHARED_CONV; lost = true; }),",
-)
-source = source.replace(
-    "click: vi.fn(async () => { sends += 1; lost = true; }),",
-    "click: vi.fn(async () => { sends += 1; initialUrl = SHARED_CONV; lost = true; }),",
-)
-source = source.replace(
-    "expect(outcome.code).toBe(0);",
-    "expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });",
-)
-source = source.replace(
-    "const waitingMessages = readyTurnObservationFrames(prompt, 'UNUSED')[0]!;",
-    "const waitingMessages = (): StateLightTestMessage[] => [\n"
-    "      { role: 'user', text: composerText },\n"
-    "      { role: 'assistant', text: 'working', inProgress: true },\n"
-    "    ];",
-)
-source = source.replace("collectionLocator(waitingMessages, true)", "collectionLocator(waitingMessages(), true)")
-source = source.replace("waitingMessages.filter", "waitingMessages().filter")
-source = source.replace("const last = waitingMessages.at(-1)!;", "const last = waitingMessages().at(-1)!;")
-source = source.replace(
-    "const ownedStop = vi.fn(async () => undefined);",
-    "let ownedStopped = false;\n    const ownedStop = vi.fn(async () => { ownedStopped = true; });",
-)
-source = source.replace(
-    "if (selector.includes(STOP_BUTTON_TESTID)) {\n          return scalarLocator({ count: vi.fn(async () => sent ? 1 : 0), click: ownedStop });\n        }",
-    "if (matchesStopButtonSelector(selector)) {\n          return scalarLocator({\n            count: vi.fn(async () => sent && !ownedStopped ? 1 : 0),\n            click: ownedStop,\n          });\n        }",
-)
-source = source.replace(
-    "selector.includes(STOP_BUTTON_TESTID)\n        ? scalarLocator({ count: vi.fn(async () => 1), click: foreignStop })",
-    "matchesStopButtonSelector(selector)\n        ? scalarLocator({ count: vi.fn(async () => 1), click: foreignStop })",
-)
-source = source.replace(
-    "expect(outcome.result.incidents).toContain('owned_generation_stop_completed');\n    expect(sends).toBe(1);\n    expect(ownedStop).toHaveBeenCalledTimes(1);",
-    "expect(ownedStop).toHaveBeenCalledTimes(1);\n"
-    "    expect(outcome.result.incidents).toEqual([\n"
-    "      'observation_exhausted',\n"
-    "      'owned_generation_stop_confirmed',\n"
-    "    ]);\n"
-    "    expect(sends).toBe(1);",
-)
-exec(compile(source, 'apply-1283-production-tests.py', 'exec'))
+path.write_text(text)
