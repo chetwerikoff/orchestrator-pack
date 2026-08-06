@@ -1320,8 +1320,8 @@ async function cleanupSession(
   deps: StateLightSessionDependencies,
 ): Promise<ResourceCleanupOutcome> {
   let cleanup: ResourceCleanupOutcome = 'skipped';
-  if (sessionPageCleanupAction(state) === 'close') {
-    cleanup = await deps.cleanup(() => state.page!.close(), RESOURCE_CLEANUP_BOUND_MS);
+  if (sessionPageCleanupAction(state) === 'close' && state.page) {
+    cleanup = await deps.cleanup(() => state.page.close(), RESOURCE_CLEANUP_BOUND_MS);
   }
   await deps.releaseBrowser(state.browser);
   return cleanup;
