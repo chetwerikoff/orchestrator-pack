@@ -112,7 +112,7 @@ Therefore:
   validates canonical history, topology, relay, ledger, and terminal binding;
   `triple-source/v1` alone is not a blocker.
 
-### Per-tier pipeline (fixed topology)
+### Per-tier pipeline (ceilings, not quotas)
 
 | Tier | Review sequence | Pre-lens #975 | Terminal lens |
 |------|-----------------|---------------|---------------|
