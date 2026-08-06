@@ -323,8 +323,8 @@ describe('state-light explicit session mode', () => {
       ordinal: 2,
       delivery_state: 'not_attempted',
       send_count: 0,
-      state: 'foreign_activity',
-      cause: 'foreign_user_after_predecessor',
+      state: 'observation_uncertain',
+      cause: 'predecessor_continuity_unproven',
     });
     expect(terminal[1]).not.toHaveProperty('marker_match_count');
     expect(terminal[2]).toMatchObject({ ordinal: 3, delivery_state: 'not_attempted', send_count: 0 });

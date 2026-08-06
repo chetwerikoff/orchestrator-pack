@@ -51,6 +51,12 @@ import {
   POST_SEND_OBSERVATION_POLL_MS,
   readPageObservation,
   replyStabilityMatches,
+  atomicSnapshotSignature,
+  snapshotOwnedCarrier,
+  keyedHarvestCandidate,
+  probePageLiveness,
+  revalidateKeyedHarvest,
+  type AtomicTranscriptSnapshot,
   type CompactTurnResult,
   type PageObservationDecision,
   type PageObservationResult,
@@ -163,6 +169,7 @@ interface MutablePayloadState {
   deliveryState: SessionDeliveryState;
   expectedMarker?: string;
   markerMatchCount?: number;
+  ownedCarrierKey?: string;
   conversationId?: string;
   output?: SessionDigest;
   terminal?: SessionTerminalTuple;
@@ -297,8 +304,7 @@ export function publishSessionReply(
       state: 'committed_ok',
       output: { byte_length: bytes.byteLength, sha256: sha256(bytes) },
     };
-  } catch (error) {
-    if (fd >= 0) {
+  } catch (error) {    if (fd >= 0) {
       try { closeSync(fd); } catch { /* best effort */ }
     }
     bestEffortUnlink(tempPath);
@@ -574,6 +580,7 @@ async function readObservationWithinDeadline(
   deps: StateLightSessionDependencies,
   expectedMarker?: string,
   baselineCount?: number,
+  strictTranscriptCount = false,
 ): Promise<PageObservationResult> {
   const remaining = remainingMs(state, deps);
   if (remaining <= 0) throw new Error('whole_session_deadline_exhausted');
@@ -583,7 +590,7 @@ async function readObservationWithinDeadline(
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error('whole_session_deadline_exhausted')), remaining);
     });
-    const observationPromise = deps.readObservation(state.page, expectedMarker, baselineCount);
+    const observationPromise = deps.readObservation(state.page, expectedMarker, baselineCount, strictTranscriptCount);
     try {
       const observation = await Promise.race([observationPromise, timeout]);
       if (!deadlineOpen(state, deps)) throw new Error('whole_session_deadline_exhausted');
@@ -650,15 +657,19 @@ function countExpectedMarker(messages: readonly { role: string; text: string }[]
   return messages.filter((message) => message.role === 'user' && ownedPromptMarkerMatches(message.text, marker)).length;
 }
 
-function hasLaterUserAfterMarker(
-  messages: readonly { role: string; text: string }[],
-  marker: string,
-): boolean {
-  const ownedIndex = messages.findIndex(
-    (message) => message.role === 'user' && ownedPromptMarkerMatches(message.text, marker),
-  );
-  return ownedIndex >= 0 && messages.slice(ownedIndex + 1).some((message) => message.role === 'user');
+function sessionObservationSnapshot(observation: PageObservationResult): AtomicTranscriptSnapshot {
+  if (observation.snapshot) return observation.snapshot;
+  return {
+    complete: !observation.transcriptIncomplete,
+    carriers: observation.messages.map((message, domIndex) => ({
+      role: message.role,
+      text: message.text,
+      fingerprint: sha256(`${message.role}\u0000${message.text.replace(/\r\n?/g, '\n').replace(/[\t ]+/g, ' ').trim()}`),
+      domIndex,
+    })),
+  };
 }
+
 
 function conversationIdentityContinuity(state: SessionExecutionState): SessionTerminalTuple | null {
   if (!state.conversationId) return null;
@@ -681,17 +692,21 @@ function predecessorContinuity(
   if (identityFailure) return identityFailure;
   const marker = predecessor.expectedMarker;
   if (!marker) return tuple('ui_contract_mismatch', 'invocation', 'predecessor_marker_missing');
-  if (observation.transcriptIncomplete) {
-    return tuple('ui_contract_mismatch', 'conversation', 'predecessor_observation_incomplete');
+  if (observation.transcriptIncomplete || !sessionObservationSnapshot(observation).complete) {
+    return tuple('observation_uncertain', 'invocation', 'predecessor_continuity_unproven');
   }
   const matches = countExpectedMarker(observation.messages, marker);
-  if (matches === 0) return tuple('ui_contract_mismatch', 'invocation', 'predecessor_marker_unresolved');
-  if (matches > 1) return tuple('ui_contract_mismatch', 'invocation', 'predecessor_marker_ambiguous');
-  const ownedIndex = observation.messages.findIndex(
-    (message) => message.role === 'user' && ownedPromptMatches(message.text, marker),
-  );
+  if (matches > 1) return tuple('observation_uncertain', 'invocation', 'predecessor_continuity_unproven');
+  const ownedIndex = matches === 1
+    ? observation.messages.findIndex(
+      (message) => message.role === 'user' && ownedPromptMatches(message.text, marker),
+    )
+    : sessionObservationSnapshot(observation).carriers.findIndex((carrier) => (
+      carrier.role === 'user' && carrier.key === predecessor.ownedCarrierKey
+    ));
+  if (ownedIndex < 0) return tuple('observation_uncertain', 'invocation', 'predecessor_continuity_unproven');
   const laterUser = observation.messages.slice(ownedIndex + 1).some((message) => message.role === 'user');
-  if (laterUser) return tuple('foreign_activity', 'conversation', 'foreign_user_after_predecessor');
+  if (laterUser) return tuple('observation_uncertain', 'invocation', 'predecessor_continuity_unproven');
   return null;
 }
 
@@ -784,6 +799,7 @@ async function observeAndPublish(
   state: SessionExecutionState,
   payload: MutablePayloadState,
   baselineCount: number,
+  baselineSnapshot: AtomicTranscriptSnapshot,
   deps: StateLightSessionDependencies,
 ): Promise<ObservePayloadResult> {
   const marker = payload.expectedMarker!;
@@ -791,6 +807,10 @@ async function observeAndPublish(
   let stableReads = 0;
   let previousReply = '';
   let bestReply = '';
+  let lastMarkerlessSnapshotSignature = '';
+  let ownedPromptEverSeen = false;
+  let uncertaintyCause = '';
+  let lastCompleteObservation: PageObservationResult | undefined;
   let pollCount = 0;
   let lastHeartbeatAt = deps.now();
 
@@ -801,10 +821,15 @@ async function observeAndPublish(
       observation = await readObservationWithinDeadline(state, deps, marker, baselineCount);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      if (!deadlineOpen(state, deps) || detail === 'whole_session_deadline_exhausted') {
-        return { terminal: tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted') };
-      }
-      return { terminal: tuple('driver_error', 'invocation', `observation_failed:${detail}`) };
+      uncertaintyCause = payload.ownedCarrierKey
+        ? 'transcript_continuity_unproven'
+        : 'owned_carrier_unproven';
+      if (!deadlineOpen(state, deps) || detail === 'whole_session_deadline_exhausted') break;
+      await deps.sleep(
+        state.page,
+        Math.min(state.config.pollMs, Math.max(0, remainingMs(state, deps))),
+      );
+      continue;
     }
     try {
       const wallBudget = Math.min(800, Math.max(1, remainingMs(state, deps)));
@@ -815,10 +840,6 @@ async function observeAndPublish(
     } catch {
       // Product-wall diagnostics stay advisory when the transcript remains readable.
     }
-    if (!deadlineOpen(state, deps)) {
-      return { terminal: tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted') };
-    }
-
     const currentConversation = pageConversationId(state.page);
     if (state.conversationId) {
       if (!currentConversation || !ownedConversationIdentityMatches(currentConversation, state.conversationId)) {
@@ -828,21 +849,88 @@ async function observeAndPublish(
       state.conversationId = currentConversation;
     }
 
+    const snapshot = sessionObservationSnapshot(observation);
     const markerCount = countExpectedMarker(observation.messages, marker);
     payload.markerMatchCount = markerCount;
+    if (!observation.transcriptIncomplete && snapshot.complete) {
+      lastCompleteObservation = observation;
+    } else {
+      uncertaintyCause = payload.ownedCarrierKey
+        ? 'transcript_continuity_unproven'
+        : 'owned_carrier_unproven';
+    }
+
     if (markerCount > 1) {
-      return { terminal: tuple('ui_contract_mismatch', 'invocation', 'owned_prompt_marker_ambiguous'), markerCount };
+      uncertaintyCause = 'owned_reply_boundary_unproven';
     }
-    if (deliveryBound && markerCount !== 1) {
-      return {
-        terminal: tuple('ui_contract_mismatch', 'invocation', markerCount === 0
-          ? 'owned_prompt_marker_disappeared'
-          : 'owned_prompt_marker_ambiguous'),
-        markerCount,
-      };
+    const ownedCarrier = markerCount === 1
+      ? snapshotOwnedCarrier(snapshot, marker)
+      : undefined;
+    if (markerCount === 1) ownedPromptEverSeen = true;
+    if (ownedCarrier?.key) {
+      if (payload.ownedCarrierKey && payload.ownedCarrierKey !== ownedCarrier.key) {
+        uncertaintyCause = 'transcript_continuity_unproven';
+      } else if (!payload.ownedCarrierKey) {
+        payload.ownedCarrierKey = ownedCarrier.key;
+      }
     }
-    if (!observation.transcriptIncomplete && markerCount === 1 && hasLaterUserAfterMarker(observation.messages, marker)) {
-      return { terminal: tuple('foreign_activity', 'conversation', 'foreign_user_after_owned_send'), markerCount };
+
+    let harvestedDecision: PageObservationDecision | undefined;
+    if (!observation.transcriptIncomplete && markerCount === 0) {
+      const postBaselineUsers = observation.messages
+        .slice(Math.min(baselineCount, observation.messages.length))
+        .filter((message) => message.role === 'user').length;
+      if (deliveryBound || ownedPromptEverSeen) {
+        if (!payload.ownedCarrierKey) {
+          uncertaintyCause = 'owned_carrier_unproven';
+        } else {
+          const candidate = keyedHarvestCandidate(snapshot, baselineSnapshot, payload.ownedCarrierKey);
+          const signature = atomicSnapshotSignature(snapshot);
+          if (candidate.state === 'continuity-unproven') {
+            uncertaintyCause = 'transcript_continuity_unproven';
+          } else if (candidate.state === 'foreign-user') {
+            uncertaintyCause = 'foreign_user_after_owned_send';
+            harvestedDecision = { state: 'uncertain', cause: uncertaintyCause };
+          } else {
+            uncertaintyCause = '';
+          }
+          if (candidate.state === 'ready' && signature === lastMarkerlessSnapshotSignature) {
+            const revalidated = await revalidateKeyedHarvest(
+              state.page,
+              baselineSnapshot,
+              payload.ownedCarrierKey,
+              { ...candidate, snapshotSignature: signature },
+            );
+            if (revalidated.state !== 'ready') {
+              uncertaintyCause = 'transcript_continuity_unproven';
+            } else {
+              const liveness = await probePageLiveness(state.page, state.browser);
+              if (liveness === 'lost') {
+                return { terminal: tuple('driver_error', 'invocation', 'page_or_browser_lost_after_send'), markerCount };
+              }
+              if (liveness !== 'live') {
+                return { terminal: tuple('driver_error', 'invocation', 'helper_error_after_send_page_retained'), markerCount };
+              }
+              harvestedDecision = { state: 'ready', reply: revalidated.reply };
+              previousReply = revalidated.reply;
+              bestReply = revalidated.reply;
+              stableReads = 1;
+            }
+          }
+          lastMarkerlessSnapshotSignature = signature;
+        }
+      } else {
+        uncertaintyCause = postBaselineUsers === 0
+          ? ''
+          : postBaselineUsers === 1
+            ? 'owned_carrier_unproven'
+            : 'owned_reply_boundary_unproven';
+      }
+    } else if (markerCount === 1) {
+      lastMarkerlessSnapshotSignature = '';
+      // Exact-marker observation remains the ordinary fast path. A previously
+      // captured key is retained only as a future disappearance bridge.
+      uncertaintyCause = '';
     }
     if (!observation.transcriptIncomplete && !deliveryBound && markerCount === 1) {
       payload.deliveryState = 'delivered';
@@ -869,10 +957,24 @@ async function observeAndPublish(
       stableReads = 0;
       previousReply = '';
     } else {
-      const inProgress = !observation.ownedWindowCompletionReady;
-      const decision = deps.classifyObservation(observation.messages, baselineCount, marker, inProgress);
+      const inProgress = !observation.ownedWindowCompletionReady && !harvestedDecision;
+      const decision = harvestedDecision
+        ?? deps.classifyObservation(observation.messages, baselineCount, marker, inProgress);
       if (decision.state === 'uncertain') {
-        return { terminal: tuple('foreign_activity', 'conversation', decision.cause ?? 'observation_uncertain'), markerCount };
+        const cause = decision.cause === 'foreign_user_after_owned_send'
+          ? 'foreign_user_after_owned_send'
+          : decision.cause === 'owned_prompt_marker_ambiguous'
+            ? 'owned_reply_boundary_unproven'
+            : decision.cause ?? 'owned_reply_boundary_unproven';
+        if (cause === 'foreign_user_after_owned_send') {
+          return {
+            terminal: tuple('no_reply', 'invocation', cause),
+            markerCount,
+          };
+        }
+        uncertaintyCause = cause;
+        stableReads = 0;
+        previousReply = '';
       }
       if (decision.state === 'ready' && decision.reply) {
         if (decision.reply.length > bestReply.length) bestReply = decision.reply;
@@ -881,8 +983,8 @@ async function observeAndPublish(
           previousReply = decision.reply;
           stableReads = 1;
         }
-        if (deliveryBound && observation.ownedWindowCompletionReady && stableReads >= 2) {
-          if (!deadlineOpen(state, deps)) {
+        if (deliveryBound && (observation.ownedWindowCompletionReady || harvestedDecision) && stableReads >= 2) {
+          if (!deadlineOpen(state, deps) && !harvestedDecision) {
             return { terminal: tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted'), markerCount };
           }
           const reply = bestReply.length >= decision.reply.length ? bestReply : decision.reply;
@@ -899,7 +1001,7 @@ async function observeAndPublish(
           }
           payload.output = publication.output;
           return {
-            terminal: deps.now() < state.wholeSessionDeadline
+            terminal: harvestedDecision || deps.now() < state.wholeSessionDeadline
               ? tuple('ok', 'none', 'completed_page_only')
               : tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted_after_output'),
             markerCount,
@@ -911,9 +1013,7 @@ async function observeAndPublish(
         previousReply = '';
       }
       await maybeContinue(state.page, state.wholeSessionDeadline, deps);
-      if (!deadlineOpen(state, deps)) {
-        return { terminal: tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted') };
-      }
+      if (!deadlineOpen(state, deps)) break;
 
       const now = deps.now();
       const dueByPoll = pollCount % HEARTBEAT_POLL_INTERVAL === 0;
@@ -940,10 +1040,26 @@ async function observeAndPublish(
     await deps.sleep(state.page, delay);
   }
 
+  const completeMessages = lastCompleteObservation?.messages ?? [];
+  const postBaselineUsers = completeMessages
+    .slice(Math.min(baselineCount, completeMessages.length))
+    .filter((message) => message.role === 'user').length;
+  let terminal: SessionTerminalTuple;
+  if (uncertaintyCause) {
+    terminal = uncertaintyCause === 'foreign_user_after_owned_send'
+      ? tuple('no_reply', 'invocation', uncertaintyCause)
+      : tuple('observation_uncertain', 'invocation', uncertaintyCause);
+  } else if (payload.deliveryState === 'delivered' || ownedPromptEverSeen) {
+    terminal = tuple('no_reply', 'invocation', 'observation_exhausted_no_resend');
+  } else if (postBaselineUsers === 0) {
+    terminal = tuple('no_reply', 'invocation', 'owned_prompt_not_observed');
+  } else if (postBaselineUsers === 1) {
+    terminal = tuple('observation_uncertain', 'invocation', 'owned_carrier_unproven');
+  } else {
+    terminal = tuple('observation_uncertain', 'invocation', 'owned_reply_boundary_unproven');
+  }
   return {
-    terminal: payload.deliveryState === 'delivered'
-      ? tuple('no_reply', 'invocation', 'observation_exhausted_no_resend')
-      : tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted'),
+    terminal,
     ...(payload.markerMatchCount !== undefined ? { markerCount: payload.markerMatchCount } : {}),
   };
 }
@@ -1086,7 +1202,7 @@ async function runActivePayload(
     }
 
     try {
-      baseline = await readObservationWithinDeadline(state, deps);
+      baseline = await readObservationWithinDeadline(state, deps, undefined, undefined, true);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       if (!deadlineOpen(state, deps) || detail === 'whole_session_deadline_exhausted') {
@@ -1094,13 +1210,16 @@ async function runActivePayload(
       }
       return tuple('driver_error', 'invocation', `baseline_observation_failed:${detail}`);
     }
+    if (baseline.transcriptIncomplete || !sessionObservationSnapshot(baseline).complete) {
+      return tuple('ui_contract_mismatch', 'invocation', 'baseline_transcript_incomplete');
+    }
     const dispatchFailure = await dispatchOnce(state, payload, wrapped, insertionDeadline, ordinalIndex, deps);
     if (dispatchFailure) return dispatchFailure;
   } finally {
     state.releaseFreshSlot?.();
   }
 
-  const observed = await observeAndPublish(state, payload, baseline.messages.length, deps);
+  const observed = await observeAndPublish(state, payload, baseline.messages.length, sessionObservationSnapshot(baseline), deps);
   if (observed.markerCount !== undefined) payload.markerMatchCount = observed.markerCount;
   if (observed.output) payload.output = observed.output;
   payload.conversationId = state.conversationId;
@@ -1170,7 +1289,10 @@ async function cleanupSession(
   deps: StateLightSessionDependencies,
 ): Promise<ResourceCleanupOutcome> {
   let cleanup: ResourceCleanupOutcome = 'skipped';
-  if (state.page) {
+  const postSendNonOk = state.payloads.some((payload) => (
+    payload.sendCount === 1 && payload.terminal?.state !== 'ok'
+  ));
+  if (state.page && !postSendNonOk) {
     cleanup = await deps.cleanup(() => state.page.close(), RESOURCE_CLEANUP_BOUND_MS);
   }
   await deps.releaseBrowser(state.browser);
