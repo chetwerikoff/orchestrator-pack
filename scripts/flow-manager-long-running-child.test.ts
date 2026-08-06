@@ -724,13 +724,13 @@ describe('flow-manager long-running child (#1164)', () => {
 });
 
 
-describe('Issue #1283 long-running child EOF cancellation', () => {
-  it('attempts proven Stop before process termination and records an honest terminal result', async () => {
-    const root = tempDir('opk-1283-eof-');
-    const paths = launchPaths(root, 'receipt-stop');
+describe('Issue #1377 long-running child abandonment proof', () => {
+  it('preserves a valid exact-owned receipt without using it as Stop authority', async () => {
+    const root = tempDir('opk-1377-eof-');
+    const paths = launchPaths(root, 'receipt-preserve');
     const cdp = 'http://127.0.0.1:9222';
     const profile = join(root, 'profile');
-    const invocation = 'invocation-1283-eof';
+    const invocation = 'invocation-1377-eof';
     const marker = `OPKTURNV1${'34'.repeat(16)}`;
     const conversationUrl = 'https://chatgpt.com/c/33333333-3333-4333-8333-333333333333';
     const receipt = buildBrowserTurnCancellationReceipt({
@@ -750,14 +750,19 @@ describe('Issue #1283 long-running child EOF cancellation', () => {
       url: () => 'https://chatgpt.com/c/44444444-4444-4444-8444-444444444444',
       close: vi.fn(),
     };
-    const stop = vi.fn(async (page: unknown) => {
-      expect(page).toBe(owned);
-      return 'confirmed' as const;
-    });
+    const connect = vi.fn(async () => ({}));
+    const enumeratePages = vi.fn(async () => [sibling, owned]);
+    const readUserMessages = vi.fn(async (page: unknown) => ({
+      messages: page === owned
+        ? [{ role: 'user' as const, text: `${marker}\n\nprompt` }]
+        : [{ role: 'user' as const, text: 'foreign' }],
+      incomplete: false,
+    }));
+    const stop = vi.fn(async () => 'confirmed' as const);
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
     const code = await runLaunch({
-      runIdentity: 'run-1283',
-      attemptIdentity: 'attempt-1283',
+      runIdentity: 'run-1377',
+      attemptIdentity: 'attempt-1377',
       handoffReceiptPath: paths.receipt,
       terminalEnvelopePath: paths.envelope,
       browserOutputPath: paths.output,
@@ -771,36 +776,34 @@ describe('Issue #1283 long-running child EOF cancellation', () => {
         '--invocation-id', invocation,
       ],
       cancellationDependencies: {
-        connect: vi.fn(async () => ({})),
+        connect,
         releaseBrowser: vi.fn(async () => undefined),
-        enumeratePages: vi.fn(async () => [sibling, owned]),
-        readUserMessages: vi.fn(async (page) => ({
-          messages: page === owned
-            ? [{ role: 'user' as const, text: `${marker}\n\nprompt` }]
-            : [{ role: 'user' as const, text: 'foreign' }],
-          incomplete: false,
-        })),
+        enumeratePages,
+        readUserMessages,
         stop,
       },
     });
     expect(code).toBe(1);
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(connect).not.toHaveBeenCalled();
+    expect(enumeratePages).not.toHaveBeenCalled();
+    expect(readUserMessages).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
     expect(owned.close).not.toHaveBeenCalled();
     expect(sibling.close).not.toHaveBeenCalled();
     const envelope = readTerminalEnvelope(paths.envelope);
     expect(envelope).toMatchObject({
       incident: 'child_stdout_eof_timeout',
       delivery: 'POSSIBLY_DELIVERED',
-      turn_result_state: 'no_reply',
-      turn_result_cause: 'child_stdout_eof_timeout_generation_stopped',
+      turn_result_state: 'driver_error',
+      turn_result_cause: 'child_stdout_eof_timeout_cancellation_authority_absent',
       send_count: 1,
       recovery_available: true,
       conversation_locator: conversationUrl,
     });
     expect(envelope?.diagnostics).toMatchObject({
       cancellation: {
-        stop_outcome: 'confirmed',
-        identity_proven: true,
+        stop_outcome: 'not_attempted_authority_absent',
+        identity_proven: false,
       },
     });
   });
