@@ -9,247 +9,136 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  issue-1343-finalizer:
-    name: Apply Issue 1343 final fixes
-    if: github.event_name == 'pull_request' && github.event.pull_request.number == 1360 && github.event.pull_request.head.repo.full_name == github.repository
+  runtime:
+    name: TypeScript runtime (Node 22)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce pinned Node major
+        run: npm run check:node-major
+      - name: Execute TypeScript without a build artifact
+        run: npm run ts:smoke
+
+  typecheck:
+    name: TypeScript strict typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Typecheck without emit
+        run: npm run typecheck:foundation
+
+  lint:
+    name: TypeScript policy lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce Promise and subprocess policies
+        run: npm run lint:foundation
 
-      - name: Apply remaining reviewed fixes
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
+  kernels:
+    name: TypeScript kernel tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Run in-process foundation tests
+        run: npm run test:foundation
+
+  powershell-child-growth:
+    name: PowerShell child-test growth guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce committed PowerShell child-test baseline
+        run: npm run check:pwsh-test-growth
+
+  contract-mutations:
+    name: Contract mutation evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce pinned Node major
+        run: npm run check:node-major
+      - name: Detect complete mutation surface
+        id: detect
+        shell: bash
         run: |
           set -euo pipefail
-          PATCH_REF=e2845033c3a85279b7fd85311b477a0199a5071c
-          gh api "repos/${REPO}/contents/docs/declarations/1343-fix.patch?ref=${PATCH_REF}" --jq .content \
-            | tr -d '\n' | base64 -d > /tmp/1343-fix.patch
-          git apply \
-            --include='scripts/lib/gh-inventory-match.mjs' \
-            --include='scripts/lib/gh-rest-routes.mjs' \
-            --include='scripts/gh-wrapper.test.ts' \
-            /tmp/1343-fix.patch
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          run_path = Path('scripts/worker-smoke-run.ts')
-          run = run_path.read_text(encoding='utf-8')
-          old = """    if (decision.allowed) {
-      const finalComments = dependencies.fetchComments(
-        options.prNumber,
-        target.repositorySlug,
-        options.repoRoot,
-      );
-      if (!finalSmokeCommentSnapshotMatches(comments, finalComments)) {
-        decision = {
-          allowed: false,
-          reason: 'comment_snapshot_changed_before_allow',
-          smokeRequired: true,
-          diagnostics: decision.diagnostics,
-        };
-      } else {
-        const finalHeadSha = dependencies.fetchHead(
-          options.prNumber,
-          target.repositorySlug,
-          options.repoRoot,
-        );
-        if (finalHeadSha !== target.headSha) {
-          decision = {
-            allowed: false,
-            reason: 'live_pr_head_changed_during_evaluation',
-            smokeRequired: true,
-            diagnostics: decision.diagnostics,
-          };
-        }
-      }
-    }
-"""
-          new = """    if (decision.allowed) {
-      const finalHeadSha = dependencies.fetchHead(
-        options.prNumber,
-        target.repositorySlug,
-        options.repoRoot,
-      );
-      if (finalHeadSha !== target.headSha) {
-        decision = {
-          allowed: false,
-          reason: 'live_pr_head_changed_during_evaluation',
-          smokeRequired: true,
-          diagnostics: decision.diagnostics,
-        };
-      } else {
-        const finalComments = dependencies.fetchComments(
-          options.prNumber,
-          target.repositorySlug,
-          options.repoRoot,
-        );
-        if (!finalSmokeCommentSnapshotMatches(comments, finalComments)) {
-          decision = {
-            allowed: false,
-            reason: 'comment_snapshot_changed_before_allow',
-            smokeRequired: true,
-            diagnostics: decision.diagnostics,
-          };
-        }
-      }
-    }
-"""
-          if old not in run:
-              raise SystemExit('final authority block was not found')
-          run_path.write_text(run.replace(old, new, 1), encoding='utf-8')
-
-          core_path = Path('scripts/lib/worker-smoke-core.ts')
-          core = core_path.read_text(encoding='utf-8')
-          old_core = 'if (!input.ownedTerminalClosed && !coverage.latestClearingPass) {'
-          if old_core not in core:
-              raise SystemExit('terminal cleanup condition was not found')
-          core_path.write_text(core.replace(old_core, 'if (!input.ownedTerminalClosed) {', 1), encoding='utf-8')
-
-          test_path = Path('scripts/worker-smoke.test.ts')
-          test = test_path.read_text(encoding='utf-8')
-          old_import = "import { spawnSync } from 'node:child_process';\n"
-          new_import = "import { runProcessSync } from './kernel/subprocess.ts';\n"
-          if old_import not in test:
-              raise SystemExit('spawnSync import was not found')
-          test = test.replace(old_import, new_import, 1)
-          anchor = "const REPOSITORY = 'chetwerikoff/orchestrator-pack';\n"
-          helper = """
-
-function runChild(
-  command: string,
-  args: readonly string[],
-  options: { env?: NodeJS.ProcessEnv } = {},
-): { status: number; stdout: string; stderr: string } {
-  const result = runProcessSync({
-    command,
-    args,
-    env: options.env,
-    inheritParentEnv: options.env === undefined,
-  });
-  return {
-    status: result.exitCode ?? (result.ok ? 0 : 1),
-    stdout: result.stdout,
-    stderr: result.stderr,
-  };
-}
-"""
-          if anchor not in test:
-              raise SystemExit('test helper insertion anchor was not found')
-          test = test.replace(anchor, anchor + helper, 1)
-          test = test.replace('spawnSync(', 'runChild(')
-          test_path.write_text(test, encoding='utf-8')
-          PY
-
-      - name: Amend Issue scope to r06
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          gh issue view 1343 --repo "$REPO" --json body --jq .body > /tmp/issue-1343.md
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path('/tmp/issue-1343.md')
-          body = path.read_text(encoding='utf-8')
-          if '<!-- source-revision: r05 -->' in body:
-              body = body.replace('<!-- source-revision: r05 -->', '<!-- source-revision: r06 -->', 1)
-          elif '<!-- source-revision: r06 -->' not in body:
-              raise SystemExit('unexpected Issue revision marker')
-
-          roots = [
-              'docs/declarations/1343.pr-scope.json',
-              'docs/worker-smoke-testing.md',
-              'scripts/gh-wrapper.test.ts',
-              'scripts/lib/gh-inventory-match.mjs',
-              'scripts/lib/gh-rest-routes.mjs',
-              'scripts/lib/worker-smoke-core-base.ts',
-              'scripts/lib/worker-smoke-core.ts',
-              'scripts/toolchain/powershell-child-tests.json',
-              'scripts/worker-smoke-run.ts',
-              'scripts/worker-smoke.test.ts',
-          ]
-          body, count = re.subn(
-              r'```allowed-roots\s*\r?\n[\s\S]*?```',
-              '```allowed-roots\n' + '\n'.join(roots) + '\n```',
-              body,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit('allowed-roots fence not found')
-
-          scope = '''## Files in scope
-
-- `docs/declarations/1343.pr-scope.json` — regenerated declaration for the final r06 path set.
-- `docs/worker-smoke-testing.md` — operator-visible publication-order, receipt-witness, and final re-census semantics.
-- `scripts/lib/worker-smoke-core-base.ts` and `scripts/lib/worker-smoke-core.ts` — canonical report primitives, same-head fold, and strict terminal admission.
-- `scripts/worker-smoke-run.ts` — trusted target acquisition, canonical closing grammar, exhaustive census, receipt witness validation, and final authority re-census.
-- `scripts/lib/gh-inventory-match.mjs` and `scripts/lib/gh-rest-routes.mjs` — inventory-approved authenticated-principal and exhaustive comment-census reads.
-- `scripts/worker-smoke.test.ts` and `scripts/gh-wrapper.test.ts` — production-shaped caller, receipt inversion, final census, canonical grammar, malformed BLOCKED, lifecycle, real 64 KiB, and inventory regressions.
-- `scripts/toolchain/powershell-child-tests.json` — generated policy baseline for the intentional caller-level PowerShell child regression.'''
-          body, count = re.subn(
-              r'## Files in scope\n[\s\S]*?\n\nNot every listed path must change\.',
-              scope + '\n\nNot every listed path must change.',
-              body,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit('Files in scope section not found')
-          path.write_text(body, encoding='utf-8')
-          PY
-          gh issue edit 1343 --repo "$REPO" --body-file /tmp/issue-1343.md
-
-      - name: Regenerate declaration and validate
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          npm ci --include=dev
-          node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts --write-baseline
-          gh issue view 1343 --repo "$REPO" --json body --jq .body > /tmp/issue-1343-r06.md
-          grep -q '<!-- source-revision: r06 -->' /tmp/issue-1343-r06.md
-          node --experimental-strip-types scripts/pr-scope-declaration.ts \
-            --issue 1343 \
-            --issue-body-file /tmp/issue-1343-r06.md \
-            --declared-paths docs/worker-smoke-testing.md,scripts/gh-wrapper.test.ts,scripts/lib/gh-inventory-match.mjs,scripts/lib/gh-rest-routes.mjs,scripts/lib/worker-smoke-core.ts,scripts/toolchain/powershell-child-tests.json,scripts/worker-smoke-run.ts,scripts/worker-smoke.test.ts \
-            --output docs/declarations/1343.pr-scope.json
-          node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/worker-smoke.test.ts scripts/gh-wrapper.test.ts
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run check:pwsh-test-growth
-          pwsh ./scripts/check-ci-pipeline-split.ps1
-          pwsh ./scripts/lint-self-architect.ps1 -Strict -BaseRef origin/main -HeadRef HEAD
-
-      - name: Publish clean final commit
-        run: |
-          set -euo pipefail
-          git fetch origin main
-          git checkout origin/main -- .github/workflows/typescript-foundation.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m 'Finish all Issue 1343 review fixes'
-          unexpected="$(git diff --name-only origin/main...HEAD | grep -Ev '^(docs/declarations/1343\.pr-scope\.json|docs/worker-smoke-testing\.md|scripts/gh-wrapper\.test\.ts|scripts/lib/gh-inventory-match\.mjs|scripts/lib/gh-rest-routes\.mjs|scripts/lib/worker-smoke-core\.ts|scripts/toolchain/powershell-child-tests\.json|scripts/worker-smoke-run\.ts|scripts/worker-smoke\.test\.ts)$' || true)"
-          if [ -n "$unexpected" ]; then
-            printf 'unexpected final PR paths:\n%s\n' "$unexpected" >&2
-            exit 1
-          fi
-          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          node <<'NODE'
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const required = [
+            'scripts/pr2-foundation/mutation-runner.ts',
+            'scripts/pr2-foundation/mutation-catalog.ts',
+            'scripts/pr2-foundation/mutation-semantic-gates.ts',
+          ];
+          const present = required.filter((file) => fs.existsSync(file));
+          const command = pkg.scripts?.['test:contract-mutations'];
+          if (!command && present.length > 0) {
+            throw new Error(`partial mutation surface without test:contract-mutations: ${present.join(',')}`);
+          }
+          if (command && present.length !== required.length) {
+            throw new Error(`test:contract-mutations without complete mutation surface: ${present.length}/${required.length}`);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `run_evidence=${command ? 'true' : 'false'}\n`);
+          console.log(command ? 'complete mutation surface detected' : 'mutation surface absent');
+          NODE
+      - name: Run external red-green mutation evidence
+        if: steps.detect.outputs.run_evidence == 'true'
+        run: npm run test:contract-mutations
