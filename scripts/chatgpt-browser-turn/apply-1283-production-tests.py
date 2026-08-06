@@ -8,6 +8,17 @@ base = check_output([
 ], text=True)
 exec(compile(base, 'apply-1283-production-tests-base.py', 'exec'))
 
+cancellation = Path('scripts/chatgpt-browser-turn/state-light-cancellation.ts')
+cancellation_text = cancellation.read_text()
+old_import = "import { normalizeConversationUrl, STOP_BUTTON_SELECTOR, USER_MESSAGE_SELECTOR } from './ui-adapter.ts';"
+new_import = (
+    "import { STOP_BUTTON_SELECTOR, USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';\n"
+    "import { normalizeConversationUrl } from './ui-adapter.ts';"
+)
+if cancellation_text.count(old_import) != 1:
+    raise SystemExit(f'expected one cancellation selector import, found {cancellation_text.count(old_import)}')
+cancellation.write_text(cancellation_text.replace(old_import, new_import, 1))
+
 path = Path('scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts')
 text = path.read_text()
 old = "  const mock = buildUiAdapterTestMock(actual, mocks);\n  return {\n    ...mock,\n    productStatusText: mocks.productStatusText,\n  };"
