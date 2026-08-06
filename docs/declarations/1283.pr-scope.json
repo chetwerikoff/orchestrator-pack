@@ -10,13 +10,9 @@
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts"
   ],
   "denylist": [
-    "package.json",
+    "credentials/",
     "packages/core/",
-    "scripts/browser-gpt-page-probe.ts",
-    "scripts/lib/create-issue-stage-record-artifacts.ts",
-    "scripts/lib/stage-completeness-core.ts",
-    "scripts/lib/vitest-pre-topology-measurement.mjs",
-    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
     "vendor/"
   ],
   "allowed_roots": [
