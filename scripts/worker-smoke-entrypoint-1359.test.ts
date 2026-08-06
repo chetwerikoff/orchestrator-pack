@@ -50,7 +50,7 @@ function ok<T>(result: T): OrcaJsonResponse<T> {
 }
 
 describe('Issue #1359 real worker-smoke entrypoint', () => {
-  it('submits a pasted prompt, confirms child evidence, and proves owned-handle absence on cleanup', () => {
+  it('submits a pasted prompt, confirms first-ordinal evidence, and proves owned-handle absence', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-entrypoint-1359-'));
     const bin = join(root, 'bin');
     const callsPath = join(root, 'orca-calls.jsonl');
@@ -230,6 +230,24 @@ if (args[0] === 'worktree' && args[1] === 'current') {
           closeOutcome: 'closed_owned_handle',
         },
       });
+
+      const prompt = readFileSync(promptPath, 'utf8');
+      const runId = prompt.match(/^run-id:\s*(\S+)\s*$/mu)?.[1]?.trim();
+      const progressPath = prompt.match(/^- Progress file:\s*(.+?)\s*$/mu)?.[1]?.trim();
+      expect(runId).toBeTruthy();
+      expect(progressPath).toBeTruthy();
+      expect(prompt).toContain('Canonical progress serialization (mandatory):');
+      expect(prompt).toContain('JSON.stringify(event)');
+      const progressLines = readFileSync(progressPath!, 'utf8')
+        .split(/\r?\n/u)
+        .filter((line) => line.trim());
+      expect(progressLines).toHaveLength(2);
+      const firstProgress = JSON.parse(progressLines[0]!) as Record<string, unknown>;
+      expect(firstProgress).toEqual({ runId, scenarioOrdinal: 1, phase: 'started' });
+      expect(Object.keys(firstProgress)).toEqual(['runId', 'scenarioOrdinal', 'phase']);
+      expect(prompt).toContain(
+        `The first non-empty progress line must parse exactly as: ${JSON.stringify(firstProgress)}`,
+      );
 
       const calls = readFileSync(callsPath, 'utf8')
         .trim()
@@ -431,6 +449,45 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(sends[1]).toContain('--enter');
     } finally {
       restore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('serializes a thrown non-Error object as a readable machine cause', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-object-cause-'));
+    const scriptsDir = join(root, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const wrapper = join(scriptsDir, 'worker-smoke-run');
+    writeFileSync(wrapper, readFileSync(resolve('scripts/worker-smoke-run')), 'utf8');
+    chmodSync(wrapper, 0o755);
+    writeFileSync(join(scriptsDir, 'worker-smoke-run.ts'), [
+      'export async function main(): Promise<number> {',
+      "  throw { message: 'fixture object failure', code: 'fixture_non_error', detail: { scenarioOrdinal: 1 }, retryable: false };",
+      '}',
+      '',
+    ].join('\n'), 'utf8');
+
+    try {
+      const result = run(wrapper, ['run', '--json'], { cwd: root });
+      expect(result.exitCode).toBe(1);
+      expect(`${result.stdout}\n${result.stderr}`).not.toContain('[object Object]');
+      const lines = String(result.stdout).split(/\r?\n/u).filter((line) => line.trim());
+      expect(lines).toHaveLength(1);
+      const receipt = JSON.parse(lines[0]!) as {
+        schema?: string;
+        result?: string;
+        cause?: { code?: string; detail?: string };
+      };
+      expect(receipt).toMatchObject({
+        schema: 'worker-smoke-run/v1',
+        result: 'FAIL',
+        cause: { code: 'entrypoint_exception' },
+      });
+      expect(receipt.cause?.detail).toContain('fixture object failure');
+      expect(receipt.cause?.detail).toContain('fixture_non_error');
+      expect(receipt.cause?.detail).toContain('"scenarioOrdinal":1');
+      expect(receipt.cause?.detail).toContain('"kind":"non_error_object"');
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
