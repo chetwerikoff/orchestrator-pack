@@ -4,9 +4,10 @@
   "declared_paths": [
     "scripts/lib/worker-smoke-bounded-create.ts",
     "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-1359.test.ts",
-    "scripts/worker-smoke-run",
-    "scripts/worker-smoke.test.ts"
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run"
   ],
   "denylist": [
     "credentials/",
@@ -24,10 +25,12 @@
     "scripts/lib/worker-smoke-lifecycle-regressions-base.ts",
     "scripts/lib/worker-smoke-lifecycle.ts",
     "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-1359.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "f9cf2c96434e10ca62bd138ff83b053ace1b9b27"
+  "source_revision": "4141467d771d8225756f5e817e61e659facdbd31"
 }
