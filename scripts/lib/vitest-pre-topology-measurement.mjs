@@ -49,6 +49,10 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1198 launch/watch contract tests are fast deterministic coverage.
   'scripts/launch-watch/launch-watch.test.ts': 120,
   'scripts/launch-watch/watch.test.ts': 120,
+  // Issue #1250 proof wrappers execute deterministic local fixtures. Fixed
+  // estimates preserve the existing 32-file pre-topology measurement bound.
+  'scripts/ao-retirement/retired-surface-guard.test.ts': 120,
+  'scripts/runtime/ao-absent-two-lifecycle-proof.test.ts': 120,
   // Issue #1248 adds fast runtime-boundary contract suites. Fixed estimates keep
   // the bounded topology producer stable until runtime history is refreshed.
   'scripts/invoke-gated-worker-nudge.test.ts': 120,

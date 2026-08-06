@@ -101,14 +101,76 @@ unit counter may reuse a suffix, but old exceptions remain inert because
 their namespace differs. Corrupt prior state never restores runtime
 continuity.
 
+## S2 one-shot fleet nudge
+
+Issue #1259 adds one bounded actuator phase immediately after accepted S1
+evidence in the existing scheduler tick. It creates no daemon, watcher,
+second timer owner, fleet manager, queue, or backlog. Issue #1260 escalation
+is a separate later task and is not implemented here.
+
+A candidate is eligible only when the accepted current-generation S1 snapshot
+is complete, current, and internally consistent; the row has `internal`
+provenance; the class is `idle` or `livelock`; and the same tick contains the
+corresponding `class-changed` transition. A fresh `unit-appeared` baseline is
+never an episode. `busy`, `exempt`, `unknown`, external provenance, stale or
+malformed evidence, and repeated unchanged eligible classes do not send.
+
+After a scheduler process restart, the scheduler accepts the observer's
+restored `tickSequence` as authoritative and advances its local counter from
+that value. The first restored baseline remains no-send; a later genuine
+same-generation `class-changed` transition can form an episode without being
+permanently rejected as `observer_untrusted`.
+
+The exact bounded messages are:
+
+- idle: `Continue the current task. If you are blocked or finished, publish the required worker report.`
+- livelock: `No progress was observed for the configured livelock window. Reassess the current task; continue, or publish a blocker/ready report.`
+
+Candidates are ordered by deterministic transition identity and then
+`unitRef`, processed serially, and limited to eight starts per tick. The total
+S2 phase budget is
+`min(2000, max(1, floor(schedulerIntervalMs / 8)))`; settlement reserves
+`min(200, max(1, floor(effectiveS2BudgetMs / 5)))` milliseconds. Every target,
+revalidation, claim, journal, message-hash, send-attempt, dispatch, release,
+and finalization operation receives the same absolute phase deadline (or its
+admission/dispatch sub-deadline) and claim/journal stores enforce it
+internally. Mutex contention and never-resolving operations therefore cannot
+extend S2 beyond the hard return boundary, and no candidate crosses into a
+later tick.
+
+The isolated claim policy is `s2-one-shot-v1`. Its durable tuple contains only
+project, Issue, scheduler generation, transition identity, local `unitRef`,
+eligible class, and `task-continuation`. Runtime-private ids, generations,
+paths, output, and observation tokens remain in memory. The tuple is hashed to
+one deterministic episode key used by both the active claim and its single
+terminal tombstone. A matching unreadable or malformed tombstone, multiple
+matching tombstones, or contradictory tombstone bytes yields
+`claim_untrusted`; it can never be treated as absence and reacquired.
+`SENT`, `FAILED_DEFINITIVE`, and `UNCERTAIN` are terminal for one episode. A
+stale `SEND_ATTEMPTED` record becomes `UNCERTAIN`; only a pre-attempt
+`CLAIMED` record may be safely released. S2 terminals are retained for 128
+completed ticks in the active generation, dropped on generation restart, and
+capped at 1,024 records. Untagged legacy `task-continuation` callers remain on
+the pre-existing legacy claim policy.
+
+The accepted specification requires a separately reviewed producer that maps
+`{schedulerGeneration,unitRef}` to the exact live Issue incarnation and
+runtime-neutral worker identity. That producer is not present at this landing.
+Therefore the production scheduler composition hard-wires the
+`target_unresolved` actuator and deliberately returns `target_unresolved` for
+every otherwise eligible candidate before claim, journal, message hash, or
+dispatch. A caller cannot inject an enabled actuator through the production
+constructor. The injected target/revalidation path exists for focused contract
+coverage only and is not production actuation evidence.
+
 ## Diagnostics and rollback
 
 The latest accepted snapshot is diagnostic evidence. Stale progress indicates
 observer silence; it does not authorize any action and no second watchdog is
-created. To roll back, revert the scoped scheduler/observer/docs/test change;
-the local snapshot may be ignored or removed manually. No service or
-supervisor child is started during adoption.
+created. To roll back, revert the scoped scheduler/observer/actuator/docs/test
+change; the local snapshot and isolated S2 claim partition may be ignored or
+removed manually. No service or supervisor child is started during adoption.
 
-S1 ends at observation evidence. Nudge, send, stop, remove, escalation,
-delivery, Browser-GPT, report, PR, review, merge, and exception-release policy
-belong to later reviewed issues.
+S1 ends at observation evidence. S2 adds only the gated one-shot nudge boundary
+described above. Stop, remove, escalation, delivery, Browser-GPT, report, PR,
+review, merge, and exception-release policy remain outside this issue.
