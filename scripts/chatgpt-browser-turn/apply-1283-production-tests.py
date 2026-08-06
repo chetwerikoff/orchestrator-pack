@@ -7,4 +7,31 @@ source = check_output([
 ], text=True)
 start = source.index('flow_test =')
 end = source.index('support =')
-exec(compile(source[:start] + source[end:], 'apply-1283-production-tests.py', 'exec'))
+source = source[:start] + source[end:]
+source = source.replace(
+    "describe('Issue #1283 production runStateLightTurn recovery integration', () => {\n  function browserWithPages(",
+    "describe('Issue #1283 production runStateLightTurn recovery integration', () => {\n"
+    "  let integrationStateDir: string;\n\n"
+    "  beforeEach(() => {\n"
+    "    integrationStateDir = mkdtempSync(join(tmpdir(), 'slt-recovery-'));\n"
+    "    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = integrationStateDir;\n"
+    "    disableSendSlotForTest();\n"
+    "    mocks.browserQueue.length = 0;\n"
+    "    mocks.cleanupOutcome = 'confirmed';\n"
+    "    mocks.nowMs = 10_000;\n"
+    "    mocks.productStatusText.mockReset();\n"
+    "    mocks.productStatusText.mockResolvedValue({ text: '', composer: true });\n"
+    "    mocks.readStableInput.mockReset();\n"
+    "    vi.spyOn(Date, 'now').mockImplementation(() => mocks.nowMs);\n"
+    "  });\n\n"
+    "  afterEach(() => {\n"
+    "    delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;\n"
+    "    clearSendSlotDisableEnv();\n"
+    "    rmSync(integrationStateDir, { recursive: true, force: true });\n"
+    "    vi.restoreAllMocks();\n"
+    "  });\n\n"
+    "  function browserWithPages(",
+)
+source = source.replace("join(stateDir, 'recovered.txt')", "join(integrationStateDir, 'recovered.txt')")
+source = source.replace("join(stateDir, 'exhausted.txt')", "join(integrationStateDir, 'exhausted.txt')")
+exec(compile(source, 'apply-1283-production-tests.py', 'exec'))
