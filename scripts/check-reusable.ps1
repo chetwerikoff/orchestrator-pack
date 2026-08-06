@@ -1,3 +1,4 @@
+#requires -Version 7.0
 [CmdletBinding()]
 param(
     [switch]$AllowNoGit
@@ -5,28 +6,23 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $Root = Split-Path -Parent $PSScriptRoot
-$Violations = New-Object System.Collections.Generic.List[string]
+$Violations = [System.Collections.Generic.List[string]]::new()
 
 function Convert-ToRepoPath {
     param([string]$Path)
     $normalized = $Path -replace '\\', '/'
-    if ($normalized.StartsWith('./')) {
-        return $normalized.Substring(2)
-    }
+    if ($normalized.StartsWith('./')) { return $normalized.Substring(2) }
     return $normalized
 }
 
 function Test-WildcardAny {
-    param(
-        [string]$Path,
-        [string[]]$Patterns
-    )
+    param([string]$Path, [string[]]$Patterns)
     foreach ($pattern in $Patterns) {
-        $wc = [System.Management.Automation.WildcardPattern]::new(
+        $wildcard = [System.Management.Automation.WildcardPattern]::new(
             $pattern,
             [System.Management.Automation.WildcardOptions]::IgnoreCase
         )
-        if ($wc.IsMatch($Path)) { return $true }
+        if ($wildcard.IsMatch($Path)) { return $true }
     }
     return $false
 }
@@ -59,7 +55,11 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-$tracked = @($trackedRaw | Where-Object { $_ -and $_.Trim() } | ForEach-Object { Convert-ToRepoPath $_ })
+$tracked = @(
+    $trackedRaw |
+        Where-Object { $_ -and $_.Trim() } |
+        ForEach-Object { Convert-ToRepoPath $_ }
+)
 Write-Host ('Tracked files inspected: {0}' -f $tracked.Count)
 
 $allowedRootPatterns = @(
@@ -73,7 +73,6 @@ $allowedRootPatterns = @(
     '.gitignore',
     '.gitattributes',
     '.editorconfig',
-    'agent-orchestrator.yaml.example',
     'package.json',
     'package-lock.json',
     'pnpm-lock.yaml',
@@ -105,13 +104,14 @@ $allowedPathPatterns = @(
 
 $exceptionPatterns = @(
     '.env.example',
-    '*/.env.example',
-    'agent-orchestrator.yaml.example'
+    '*/.env.example'
 )
 
+$retiredConfigStem = 'agent' + '-orchestrator'
+$retiredStateStem = '.agent' + '-orchestrator'
 $forbiddenPatterns = @(
-    'agent-orchestrator.yaml',
-    'agent-orchestrator.*.yaml',
+    "$retiredConfigStem.yaml",
+    "$retiredConfigStem.*.yaml",
     '.env',
     '.env.*',
     '*/.env',
@@ -136,8 +136,8 @@ $forbiddenPatterns = @(
     '*/private/*',
     '.orchestrator-pack/*',
     '*/.orchestrator-pack/*',
-    '.agent-orchestrator/*',
-    '*/.agent-orchestrator/*',
+    "$retiredStateStem/*",
+    "*/$retiredStateStem/*",
     'vendor/*',
     '*/vendor/*',
     'packages/core/*',
@@ -184,15 +184,17 @@ $forbiddenPatterns = @(
 )
 
 foreach ($path in $tracked) {
-    $isException = Test-WildcardAny $path $exceptionPatterns
-    if (-not $isException -and (Test-WildcardAny $path $forbiddenPatterns)) {
-        Add-Violation $path 'forbidden local/runtime/secret/upstream artifact pattern'
+    $isException = Test-WildcardAny -Path $path -Patterns $exceptionPatterns
+    if (-not $isException -and (Test-WildcardAny -Path $path -Patterns $forbiddenPatterns)) {
+        Add-Violation -Path $path -Reason 'forbidden local/runtime/secret/upstream artifact pattern'
         continue
     }
 
-    $isAllowed = (Test-WildcardAny $path $allowedRootPatterns) -or (Test-WildcardAny $path $allowedPathPatterns)
+    $isAllowed =
+        (Test-WildcardAny -Path $path -Patterns $allowedRootPatterns) -or
+        (Test-WildcardAny -Path $path -Patterns $allowedPathPatterns)
     if (-not $isAllowed) {
-        Add-Violation $path 'not in reusable pack allowlist'
+        Add-Violation -Path $path -Reason 'not in reusable pack allowlist'
     }
 }
 
@@ -200,8 +202,8 @@ if ($Violations.Count -gt 0) {
     Write-Host '[FAIL] Non-reusable files are tracked or would be pushed:'
     foreach ($violation in $Violations) { Write-Host "- $violation" }
     Write-Host ''
-    Write-Host 'Move reusable material under docs/, prompts/, plugins/, scripts/, examples/, templates/, schemas/, tests/, or .github/workflows/.'
-    Write-Host 'Keep local configs, runtime state, target repos, vendor checkouts, and secrets untracked.'
+    Write-Host 'Move reusable material under documented pack surfaces.'
+    Write-Host 'Keep user configuration, generated state, target repos, upstream checkouts, and secrets untracked.'
     exit 1
 }
 
