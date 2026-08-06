@@ -1,5 +1,221 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-exec node --experimental-strip-types "$root/scripts/worker-smoke-run.ts" "$@"
+entrypoint="$root/scripts/worker-smoke-run.ts"
+
+run_entrypoint() {
+  node --experimental-strip-types --input-type=module - "$entrypoint" "$@" <<'NODE'
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const [entrypoint, ...args] = process.argv.slice(2);
+
+function structuredValue(value, seen = new WeakSet()) {
+  if (value === null || value === undefined) return value ?? null;
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'symbol' || typeof value === 'function') return String(value);
+  if (typeof value !== 'object') return value;
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((entry) => structuredValue(entry, seen));
+  const record = {};
+  for (const key of Object.keys(value).sort()) {
+    try { record[key] = structuredValue(value[key], seen); }
+    catch { record[key] = '[Unserializable]'; }
+  }
+  return record;
+}
+
+function serializeCause(cause) {
+  try {
+    if (cause instanceof Error) {
+      const fields = structuredValue(cause);
+      return JSON.stringify({
+        message: cause.message || cause.name || 'error_thrown',
+        name: cause.name || 'Error',
+        ...(cause.code === undefined ? {} : { code: structuredValue(cause.code) }),
+        ...(cause.cause === undefined ? {} : { cause: structuredValue(cause.cause) }),
+        ...(Object.keys(fields).length === 0 ? {} : { fields }),
+      });
+    }
+    if (cause && typeof cause === 'object') {
+      const fields = structuredValue(cause);
+      const message = typeof cause.message === 'string' && cause.message.trim()
+        ? cause.message.trim()
+        : typeof cause.code === 'string' && cause.code.trim()
+          ? cause.code.trim()
+          : 'non_error_object_thrown';
+      return JSON.stringify({ message, kind: 'non_error_object', fields });
+    }
+    return JSON.stringify({
+      message: String(cause ?? 'unknown_thrown_value'),
+      kind: typeof cause,
+      value: structuredValue(cause),
+    });
+  } catch {
+    return '{"message":"termination_cause_serialization_failed","kind":"unknown"}';
+  }
+}
+
+function installCanonicalProgressProtocol(adapter) {
+  const prototype = adapter?.prototype;
+  if (!prototype || typeof prototype.dispatchInput !== 'function') return;
+  const marker = Symbol.for('orchestrator-pack.worker-smoke.canonical-progress-v1');
+  if (prototype[marker]) return;
+  const originalDispatch = prototype.dispatchInput;
+  Object.defineProperty(prototype, marker, { value: true, configurable: true });
+  Object.defineProperty(prototype, 'dispatchInput', {
+    configurable: true,
+    writable: true,
+    value: function canonicalProgressDispatch(input, callOptions = {}) {
+      let nextInput = input;
+      if (!input?.submitOnly && typeof input?.text === 'string') {
+        const runId = input.text.match(/^run-id:\s*(\S+)\s*$/mu)?.[1]?.trim() ?? '';
+        const progressPath = input.text.match(/^- Progress file:\s*(.+?)\s*$/mu)?.[1]?.trim() ?? '';
+        if (runId && progressPath && !input.text.includes('Canonical progress serialization (mandatory):')) {
+          const pathToken = Buffer.from(progressPath, 'utf8').toString('base64');
+          const runToken = Buffer.from(runId, 'utf8').toString('base64');
+          const writer = [
+            'node -e',
+            "'const fs=require(\"node:fs\");const [p64,r64,ordinal,phase,outcome]=process.argv.slice(1);const event={runId:Buffer.from(r64,\"base64\").toString(\"utf8\"),scenarioOrdinal:Number(ordinal),phase};if(outcome)event.outcome=outcome;fs.appendFileSync(Buffer.from(p64,\"base64\").toString(\"utf8\"),JSON.stringify(event)+\"\\n\",\"utf8\")'",
+          ].join(' ');
+          const firstEvent = JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'started' });
+          const protocol = [
+            '',
+            'Canonical progress serialization (mandatory):',
+            `- Before scenario 1, run exactly: ${writer} ${pathToken} ${runToken} 1 started`,
+            `- The first non-empty progress line must parse exactly as: ${firstEvent}`,
+            '- Never hand-assemble progress JSON; the command above appends JSON.stringify(event) plus one newline.',
+            '- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.',
+            '- For terminal events, reuse it with the same ordinal, phase terminal, and one outcome: pass|fail|blocked|skipped.',
+            '- Never append a terminal event before its matching started event.',
+          ].join('\n');
+          nextInput = { ...input, text: `${input.text}${protocol}\n` };
+        }
+      }
+      return originalDispatch.call(this, nextInput, callOptions);
+    },
+  });
+}
+
+try {
+  const bootstrapArgv1 = join(dirname(entrypoint), '.worker-smoke-bootstrap', 'worker-smoke-run.ts');
+  process.argv = [process.argv[0], bootstrapArgv1, ...args];
+  const module = await import(pathToFileURL(entrypoint).href);
+  const adapterPath = join(dirname(entrypoint), 'orca-runtime', 'task-adapter.ts');
+  if (existsSync(adapterPath)) {
+    const adapterModule = await import(pathToFileURL(adapterPath).href);
+    installCanonicalProgressProtocol(adapterModule.OrcaTaskRuntimeAdapter);
+  }
+  if (typeof module.main !== 'function') throw new Error('worker-smoke entrypoint does not export main');
+  const code = await module.main(args);
+  process.exitCode = Number.isInteger(code) ? code : 1;
+} catch (cause) {
+  process.stderr.write(`worker-smoke-run: ${serializeCause(cause)}\n`);
+  process.exitCode = 1;
+}
+NODE
+}
+
+if [[ "${1:-}" != "run" ]]; then
+  run_entrypoint "$@"
+  exit $?
+fi
+
+stdout_file="$(mktemp "${TMPDIR:-/tmp}/worker-smoke-stdout.XXXXXX")"
+stderr_file="$(mktemp "${TMPDIR:-/tmp}/worker-smoke-stderr.XXXXXX")"
+state_file="$(mktemp "${TMPDIR:-/tmp}/worker-smoke-state.XXXXXX")"
+cleanup() {
+  rm -f "$stdout_file" "$stderr_file" "$state_file"
+}
+trap cleanup EXIT
+
+export WORKER_SMOKE_WRAPPER_STATE_FILE="$state_file"
+
+set +e
+run_entrypoint "$@" >"$stdout_file" 2>"$stderr_file"
+status=$?
+set -e
+
+cat "$stdout_file"
+cat "$stderr_file" >&2
+
+if (( status == 0 )); then
+  exit 0
+fi
+
+if grep -qx 'report_written' "$state_file" 2>/dev/null; then
+  exit "$status"
+fi
+if grep -Eq '"report"[[:space:]]*:|pack-worker-smoke-report/v1' "$stdout_file" 2>/dev/null; then
+  exit "$status"
+fi
+
+detail="$(tr '\r\n\t' '   ' <"$stderr_file" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-2048)"
+if [[ -z "$detail" ]]; then
+  detail="worker-smoke-run terminated with exit status $status before producing a scenario report"
+fi
+
+code='entrypoint_exception'
+phase='bootstrap'
+resolution='fix_the_named_harness_cause_and_retry_from_the_exact_pr_head'
+if [[ "$detail" =~ unknown\ argument|usage: ]]; then
+  code='invalid_cli'
+elif [[ "$detail" =~ issue-body-file ]]; then
+  code='issue_body_unavailable'
+elif [[ "$detail" =~ native-entrypoint-preflight|[Nn]ode\ 22|unsupported\ [Nn]ode ]]; then
+  code='node_preflight_failed'
+elif [[ "$detail" =~ ERR_MODULE_NOT_FOUND|cannot\ find\ module|[Mm]odule\ not\ found|SyntaxError ]]; then
+  code='entrypoint_import_failed'
+elif (( status == 126 )) && [[ "$detail" =~ Permission\ denied ]]; then
+  code='entrypoint_launch_permission_denied'
+  resolution='restore_the_entrypoint_permissions_then_retry_from_the_exact_pr_head'
+else
+  phase='harness'
+fi
+
+issue=''
+pr=''
+head=''
+args=("$@")
+for ((index = 0; index < ${#args[@]}; index += 1)); do
+  case "${args[$index]}" in
+    --issue) issue="${args[$((index + 1))]:-}" ;;
+    --pr) pr="${args[$((index + 1))]:-}" ;;
+    --head-sha) head="${args[$((index + 1))]:-}" ;;
+  esac
+done
+
+json_escape() {
+  local value="${1-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '%s' "$value"
+}
+
+wrapper_path="$root/scripts/worker-smoke-run"
+wrapper_executable=false
+[[ -x "$wrapper_path" ]] && wrapper_executable=true
+
+binding=''
+if [[ "$issue" =~ ^[1-9][0-9]*$ ]] \
+  && [[ "$pr" =~ ^[1-9][0-9]*$ ]] \
+  && [[ "$head" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  binding=",\"binding\":{\"issueNumber\":$issue,\"prNumber\":$pr,\"headSha\":\"${head,,}\"}"
+fi
+
+printf '{"schema":"worker-smoke-run/v1","result":"FAIL","cause":{"phase":"%s","code":"%s","detail":"%s","resolution":"%s"}%s,"wrapper":{"path":"%s","executable":%s,"launchFailure":"none"}}\n' \
+  "$phase" \
+  "$code" \
+  "$(json_escape "$detail")" \
+  "$resolution" \
+  "$binding" \
+  "$(json_escape "$wrapper_path")" \
+  "$wrapper_executable"
+
+exit "$status"

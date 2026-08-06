@@ -1,22 +1,25 @@
 # Axis 5 — lifecycle and recovery assumption bindings
 
-Inspected revision: `dcda4ed83ffb9027948607860bcdd5276abb2752`
+Inspected revision: `afd99fb7bc5f4fcb210005d96b56db7d3064a45f` after #1248 landed at `cb765cb3a2c225581b1d350a292abfa0fa7fe2bf`.
 
-**Unit:** consumer path × canonical surface ID × axis 5. Summary table in [`census.md`](./census.md) §5.5 is derived from this inventory.
+**Unit:** consumer path × canonical surface ID × axis 5. Retired command patterns are owned by `scripts/json-producers/retired-surfaces.json`; current-head path classification is owned by `scripts/ao-retirement/retired-surface-inventory.json`.
 
 | Consumer path | Canonical surface ID | Class | Evidence |
 |---|---|---|---|
-| `scripts/lib/Orchestrator-SideProcessHealth.ps1` | `daemon.health` | **port** | Side-process ticks require live daemon |
-| `scripts/lib/Invoke-AoCliJson.ps1` | `daemon.health` | **port** | Health probe adapter |
-| `AGENTS.md` | `session.get` | **port** | Workers verify session within 60s of start |
-| `AGENTS.md` | `daemon.lifecycle` | **port** | Managed workers must not restart daemon |
-| `docs/orchestrator-recovery-runbook.md` | `session.lifecycle` | **port** | Prefer `session kill` + `restore` over full daemon cycle |
-| `scripts/wait-orchestrator-launch.ps1` | `session.get` | **port** | Orchestrator launch / session wait |
-| `scripts/set-pack-reviewer.ps1` | `daemon.lifecycle` | **port** | Operator `ao stop` / `ao start` for reviewer switch |
-| `.claude/skills/change-orchestrator-runtime/SKILL.md` | `daemon.lifecycle` | **port** | Operator yaml/rules adoption restart |
-| `.claude/skills/merge-with-local-adoption/SKILL.md` | `session.lifecycle` | **port** | Session recycle after runtime-sensitive merge |
-| `docs/orchestrator-recovery-runbook.md` | `report.status-embed` | **shed** | Retired `ao status --reports` ack path |
-| `docs/orchestrator-recovery-runbook.md` | `report.worker-state` | **shed** | Retired `ao report` ack path |
-| `docs/orchestrator-recovery-runbook.md` | `review.project-list` | **shed** | Retired `ao review list` board assumption |
+| `scripts/lib/Invoke-AoCliJson.ps1` | `daemon.health` | **port** | Remaining AO service health adapter, explicitly deferred. |
+| `AGENTS.md` | `session.get` | **port** | AO-managed workers still verify live session identity at pickup. |
+| `AGENTS.md` | `daemon.lifecycle` | **port** | Managed workers remain forbidden from restarting the runtime. |
+| `docs/orchestrator-recovery-runbook.md` | `session.lifecycle` | **port** | AO operator recovery remains an explicitly deferred active-service surface. |
+| `scripts/wait-orchestrator-launch.ps1` | `session.get` | **port** | AO launch/session wait remains an explicitly deferred service caller. |
+| `.claude/skills/change-orchestrator-runtime/SKILL.md` | `daemon.lifecycle` | **port** | Runtime-change adoption remains outside this cut. |
+| `docs/orchestrator-recovery-runbook.md` | `report.status-embed` | **shed** | Retired status/report vocabulary remains bounded deferred debt. |
+| `docs/orchestrator-recovery-runbook.md` | `report.worker-state` | **shed** | Retired report vocabulary remains bounded deferred debt. |
+| `docs/orchestrator-recovery-runbook.md` | `review.project-list` | **shed** | Retired project review-list vocabulary remains bounded deferred debt. |
 
-**Binding rows:** 12
+Removed stale rows:
+
+- `scripts/lib/Orchestrator-SideProcessHealth.ps1` is absent from current tracked production paths after the #1248 runtime hard cut.
+- `scripts/set-pack-reviewer.ps1` is absent; reviewer selection is now the pack-owned TypeScript preference CLI.
+- `.claude/skills/merge-with-local-adoption/SKILL.md` uses Orca and explicitly declares AO retired, so it no longer owns AO lifecycle recovery.
+
+**Binding rows:** 9

@@ -50,6 +50,14 @@ only after every launched invocation is terminal, no retry runs or remains
 eligible, and frozen revision checks match. Partial, blocked, and incident
 attempts remain ordered evidence.
 
+The fixed preparation topology is: T1 = one GPT lens; T2 = three concurrent
+GPT architectural-review slots, then one GPT lens; T3 = three concurrent GPT
+competitive slots only when the flow-manager/architect records genuine need,
+then three concurrent GPT architectural-review slots, one Claude lens, and one
+GPT lens. Concurrent browser starts are staggered by 10–15 seconds. T3 stages
+run in that order, and a journaled competitive-stage skip is legal. These
+counts replace older single-source or configurable-cardinality wording.
+
 One paced retry under the same slot and `stageAttemptId` is legal only for a
 proven pre-send quota/composer/fill failure with `send_count: 0`. It uses
 `attemptOrdinal: 2` and `retryAttempt: true`, consumes the only retry, and may
@@ -66,6 +74,23 @@ the exact retained invocation page may close. After send with no publication,
 preserve the reachable page; release only this browser client. A lost page
 receives no later close authority. Never close or commandeer a foreign,
 sibling, or orphan tab by URL, target id, age, focus, metadata, or liveness.
+
+For an eligible direct `turn-result/v1` carrying
+`post_settlement_target.disposition: preserved_after_settlement`, the operator
+**MUST** perform this sequence exactly once:
+
+1. retain the complete direct final result;
+2. preserve the byte-verified probe export result and harvested file;
+3. verify `preserved_after_settlement` and that the helper made no close attempt;
+4. prevent reuse, navigation, or send on the target during harvest and close;
+5. invoke `npm run browser-gpt-post-settlement-close --` with the same configured profile/CDP namespace and those exact artifacts; and
+6. record the structured `browser-gpt-post-settlement-close/v1` result before advancing.
+
+The explicit command is the only later close authority. `closed` and
+`already_absent` are terminal cleanup outcomes; launcher envelopes and every
+ineligible, uncertain, or other non-`closed` path remain manual browser-UI
+cleanup. They cannot authorize resend, close retry, target substitution,
+compatibility inference, or harvest deletion.
 
 ## Observation loss and incident attribution
 
@@ -143,6 +168,7 @@ npm run browser-gpt-page-probe -- list --cdp http://127.0.0.1:9222
 npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --target-id <exact-target-id>
 npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --url <exact-conversation-url> --open-if-missing true
 npm run browser-gpt-page-probe -- liveness --cdp http://127.0.0.1:9222
+npm run browser-gpt-page-probe -- export --cdp http://127.0.0.1:9222 --profile <configured-profile> --target-id <exact-target-id> --role assistant --ordinal <n> --message-id <id> --representation innerText --expected-byte-length <bytes> --expected-sha256 <sha256> --output <new-file>
 ```
 
 The exact URL form remains existing-target-only unless `--open-if-missing true` is explicitly supplied. Without acquisition it reuses exactly one normalized match without creating or closing anything. With explicit acquisition it may create one page, waits for exact normalized conversation identity and bounded readable SPA state, then closes only the valid target identity returned by that same invocation. A redirect or same-path cross-host result is `surface_unknown` with `conversation_identity_mismatch`. Duplicate matches, malformed or timed-out creation, cleanup failure, and every reused-page path fail closed without guessed or delayed cleanup.

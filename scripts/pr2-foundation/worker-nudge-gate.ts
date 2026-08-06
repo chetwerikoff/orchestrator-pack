@@ -208,3 +208,62 @@ export function resolveWorkerTargetFromPrClaim(input: {
     targetResolutionSource: claims.length ? 'pr-claim-record' : 'ao-pr-ownership-claim',
   };
 }
+
+const S2_GENERATION_PATTERN = /^sg-[A-Za-z0-9._~-]{1,80}$/u;
+const S2_UNIT_REF_PATTERN = /^u-[0-9]{1,9}$/u;
+const S2_TRANSITION_PATTERN = /^[A-Za-z0-9:._~-]{1,384}$/u;
+const S2_PROJECT_PATTERN = /^[A-Za-z0-9._~-]{1,80}$/u;
+
+/** A local S1 reference, never a runtime id or generation. */
+export function buildS2SafeWorkerReference(input: {
+  schedulerGeneration: string;
+  unitRef: string;
+}): string {
+  if (!S2_GENERATION_PATTERN.test(input.schedulerGeneration)
+    || !S2_UNIT_REF_PATTERN.test(input.unitRef)) {
+    throw new Error('invalid_s2_safe_worker_reference');
+  }
+  return `${input.schedulerGeneration}:${input.unitRef}`;
+}
+
+/** Persistence-safe one-shot tuple. Runtime-private identity is intentionally absent. */
+export function buildS2EpisodeTupleKey(input: {
+  projectId: string;
+  issueNumber: number;
+  schedulerGeneration: string;
+  transitionIdentity: string;
+  unitRef: string;
+  eligibleClass: 'idle' | 'livelock';
+}): string {
+  if (!S2_PROJECT_PATTERN.test(input.projectId)
+    || !Number.isInteger(input.issueNumber)
+    || input.issueNumber <= 0
+    || !S2_GENERATION_PATTERN.test(input.schedulerGeneration)
+    || !S2_TRANSITION_PATTERN.test(input.transitionIdentity)
+    || !S2_UNIT_REF_PATTERN.test(input.unitRef)
+    || !['idle', 'livelock'].includes(input.eligibleClass)) {
+    throw new Error('invalid_s2_episode_tuple');
+  }
+  return JSON.stringify([
+    input.projectId,
+    input.issueNumber,
+    input.schedulerGeneration,
+    input.transitionIdentity,
+    input.unitRef,
+    input.eligibleClass,
+    'task-continuation',
+  ]);
+}
+
+/** Deterministic durable identity for one persistence-safe S2 episode. */
+export function buildS2EpisodeKey(input: {
+  projectId: string;
+  issueNumber: number;
+  schedulerGeneration: string;
+  transitionIdentity: string;
+  unitRef: string;
+  eligibleClass: 'idle' | 'livelock';
+}): string {
+  const tupleKey = buildS2EpisodeTupleKey(input);
+  return `s2-${createHash('sha256').update(tupleKey, 'utf8').digest('hex')}`;
+}

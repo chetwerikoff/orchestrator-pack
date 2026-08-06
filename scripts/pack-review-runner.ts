@@ -138,6 +138,10 @@ interface StartInput {
   baseRef?: string;
   startReason?: string;
   surface?: string;
+  operatorRepository?: string;
+  operatorIssueNumber?: number;
+  operatorBoundSnapshot?: string;
+  operatorReason?: string;
   storeRoot?: string;
   timeoutSeconds?: unknown;
   tier?: 'T1' | 'T2' | 'T3';
@@ -211,6 +215,13 @@ interface BindingRecord {
   repoSlug?: string;
   issueNumber?: number | null;
   superseded?: boolean;
+}
+
+interface OperatorPackReviewStart {
+  repository: string;
+  issueNumber: number;
+  boundSnapshot: string;
+  reason: string;
 }
 
 interface ReviewPayloadFinding {
@@ -352,6 +363,42 @@ function positiveInteger(value: unknown, label: string): number | undefined {
   return number;
 }
 
+function resolveOperatorPackReviewStart(
+  input: StartInput,
+  sessionId: string,
+): OperatorPackReviewStart | undefined {
+  const raw = [
+    input.operatorRepository,
+    input.operatorIssueNumber,
+    input.operatorBoundSnapshot,
+    input.operatorReason,
+  ];
+  if (raw.every((value) => value === undefined || value === null || value === '')) return undefined;
+  if (raw.some((value) => value === undefined || value === null || String(value).trim() === '')) {
+    throw new Error('operator pack-review start requires repository, Issue number, bound snapshot, and reason');
+  }
+  if (sessionId) throw new Error('operator pack-review start is valid only when the session binding is absent');
+  const repository = trim(input.operatorRepository);
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repository)) {
+    throw new Error('operator pack-review repository must be owner/name');
+  }
+  const issueNumber = positiveInteger(input.operatorIssueNumber, 'operatorIssueNumber');
+  if (!issueNumber) throw new Error('operatorIssueNumber must be a positive integer');
+  const boundSnapshot = trim(input.operatorBoundSnapshot).toLowerCase();
+  if (!/^sha256:[0-9a-f]{64}$/.test(boundSnapshot)) {
+    throw new Error('operatorBoundSnapshot must be an existing sha256:<64-hex> snapshot identity');
+  }
+  const reason = trim(input.operatorReason);
+  if (!reason) throw new Error('operatorReason must be non-empty');
+  const prNumber = positiveInteger(input.prNumber, 'prNumber');
+  if (!prNumber) throw new Error('operator pack-review start requires prNumber');
+  const headSha = trim(input.headSha).toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(headSha)) {
+    throw new Error('operator pack-review start requires a full 40-hex head SHA');
+  }
+  return { repository, issueNumber, boundSnapshot, reason };
+}
+
 function advancePackReviewAuthority(
   authority: PackReviewAuthorityDocument,
   nextPhase: PackReviewAuthorityPhase,
@@ -443,13 +490,15 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
   issueNumber?: number;
   repoSlug: string;
   sourceRepoRoot: string;
+  operatorStart?: OperatorPackReviewStart;
 }> {
   const sessionId = trim(input.sessionId || input.linkedSessionId);
+  const operatorStart = resolveOperatorPackReviewStart(input, sessionId);
   const fixtureCurrentHead = trim(input.fixtureCurrentPrHeadSha).toLowerCase();
-  const harnessExplicit = process.env.OPK_VITEST_HARNESS === '1'
-    && Boolean(input.prNumber && (input.headSha || fixtureCurrentHead));
-  const binding = sessionId && !harnessExplicit ? resolveBindingFromCache(sessionId) : undefined;
-  if (!harnessExplicit && !binding) {
+  const harness = process.env.OPK_VITEST_HARNESS === '1';
+  const harnessExplicit = harness && Boolean(input.prNumber && (input.headSha || fixtureCurrentHead));
+  const binding = sessionId && !harnessExplicit && !operatorStart ? resolveBindingFromCache(sessionId) : undefined;
+  if (!harnessExplicit && !binding && !operatorStart) {
     throw new Error('pack review target requires an immutable session PR/Issue binding');
   }
   const requestedPr = positiveInteger(input.prNumber, 'prNumber');
@@ -459,7 +508,7 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
   const prNumber = positiveInteger(requestedPr ?? binding?.prNumber, 'prNumber');
   if (!prNumber) throw new Error('pack review runner could not resolve PR number');
   const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || trustedPackRoot);
-  if (!harnessExplicit && !existsSync(join(sourceRepoRoot, '.git')) && !existsSync(join(sourceRepoRoot, 'HEAD'))) {
+  if (!harness && !existsSync(join(sourceRepoRoot, '.git')) && !existsSync(join(sourceRepoRoot, 'HEAD'))) {
     throw new Error(`source repository root is not a git checkout: ${sourceRepoRoot}`);
   }
   const requestedHead = trim(input.headSha || binding?.headSha).toLowerCase();
@@ -479,6 +528,9 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
   if (binding?.repoSlug && repoSlug && binding.repoSlug.toLowerCase() !== repoSlug.toLowerCase()) {
     throw new Error('pack review repository does not match session binding');
   }
+  if (operatorStart && operatorStart.repository.toLowerCase() !== repoSlug.toLowerCase()) {
+    throw new Error(`pack review repository does not match operator target: requested ${operatorStart.repository}, live ${repoSlug}`);
+  }
   if (requestedHead && requestedHead !== liveHead) {
     throw new Error(`review target head changed for PR #${prNumber}: requested ${requestedHead}, live ${liveHead}`);
   }
@@ -486,9 +538,10 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
     prNumber,
     headSha: liveHead,
     sessionId,
-    issueNumber: binding?.issueNumber ? Number(binding.issueNumber) : undefined,
+    issueNumber: operatorStart?.issueNumber ?? (binding?.issueNumber ? Number(binding.issueNumber) : undefined),
     repoSlug,
     sourceRepoRoot,
+    ...(operatorStart ? { operatorStart } : {}),
   };
 }
 
@@ -1732,6 +1785,15 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       httpStatus: 409,
     };
   }
+  if (target.operatorStart) {
+    const existingSameHead = listPackReviewRunRecordsRaw({ projectId, storeRoot }).find((record) => (
+      record.prNumber === target.prNumber
+      && record.headSha.toLowerCase() === target.headSha.toLowerCase()
+    ));
+    if (existingSameHead) {
+      throw new Error(`operator pack-review start cannot reuse or resume existing same-head run ${existingSameHead.id}`);
+    }
+  }
 
   const reviewer = resolvePackReviewerFromEnv(process.env, {
     layerOverrides: input.fixtureReviewerLayerOverrides,
@@ -1741,6 +1803,14 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     throw new Error('pack review reviewer selector did not resolve');
   }
   const authoritative = resolveAuthoritativeReviewContext(input, target, projectId);
+  if (target.operatorStart && authoritative.snapshotDigest !== target.operatorStart.boundSnapshot) {
+    throw new Error(
+      `operator bound snapshot does not match authoritative review context: expected ${target.operatorStart.boundSnapshot}, got ${authoritative.snapshotDigest}`,
+    );
+  }
+  const operatorSurface = target.operatorStart
+    ? `operator_adjudicated;session-binding=absent;issue=${target.operatorStart.issueNumber};bound-snapshot=${target.operatorStart.boundSnapshot}`
+    : undefined;
   const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
   const retainedOpenCycle = readRetainedLegacyOpenCycle(projectId, target.prNumber);
   let authority = initializePackReviewAuthority({
@@ -1905,8 +1975,8 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       storeRoot,
       prNumber: target.prNumber,
       headSha: target.headSha,
-      surface: trim(input.surface) || 'pack-review-runner-manual',
-      startReason: trim(input.startReason) || 'manual',
+      surface: operatorSurface ?? (trim(input.surface) || 'pack-review-runner-manual'),
+      startReason: target.operatorStart?.reason ?? (trim(input.startReason) || 'manual'),
       resumeRunId: resumeCandidate?.id,
     });
     if (!claimLease.acquired) {
@@ -2073,8 +2143,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       prNumber: target.prNumber,
       headSha: target.headSha,
       linkedSessionId: target.sessionId,
-      startReason: trim(input.startReason) || (claimMode === 'preacquired' ? 'automatic' : 'manual'),
-      surface: trim(input.surface) || 'pack-review-runner',
+      startReason: target.operatorStart?.reason
+        ?? (trim(input.startReason) || (claimMode === 'preacquired' ? 'automatic' : 'manual')),
+      surface: operatorSurface ?? (trim(input.surface) || 'pack-review-runner'),
       trustedPackRoot: trusted.trustedPackRoot,
       sourceRepoRoot: target.sourceRepoRoot,
       canonicalRepository: target.repoSlug,
@@ -2594,6 +2665,7 @@ function usage(): string {
     '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n>',
     '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n> --head-sha <40-hex>',
     '  node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>',
+    '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n> --head-sha <40-hex> --operator-repository <owner/name> --operator-issue-number <n> --operator-bound-snapshot <sha256:64-hex> --operator-reason <text>',
     '',
     'Status:',
     '  node --experimental-strip-types scripts/pack-review-runner.ts list [--project-id orchestrator-pack]',
@@ -2620,6 +2692,10 @@ function parseArgs(argv: string[]): Record<string, unknown> {
     '--base': 'baseRef',
     '--start-reason': 'startReason',
     '--surface': 'surface',
+    '--operator-repository': 'operatorRepository',
+    '--operator-issue-number': 'operatorIssueNumber',
+    '--operator-bound-snapshot': 'operatorBoundSnapshot',
+    '--operator-reason': 'operatorReason',
     '--store-root': 'storeRoot',
     '--timeout-seconds': 'timeoutSeconds',
     '--claim-mode': 'claimMode',
@@ -2642,7 +2718,7 @@ function parseArgs(argv: string[]): Record<string, unknown> {
     if (!key) throw new Error(`unknown argument '${flag}'\n${usage()}`);
     const value = argv[++index];
     if (value === undefined) throw new Error(`missing value for ${flag}`);
-    result[key] = key === 'prNumber' ? Number(value) : value;
+    result[key] = key === 'prNumber' || key === 'operatorIssueNumber' ? Number(value) : value;
   }
   return result;
 }
@@ -2662,7 +2738,12 @@ async function main(): Promise<void> {
     process.stdout.write(`${usage()}\n`);
     return;
   }
-  const input = { ...readStdinPayload(), ...parseArgs(argv) };
+  const stdinPayload = readStdinPayload();
+  const operatorFields = ['operatorRepository', 'operatorIssueNumber', 'operatorBoundSnapshot', 'operatorReason'];
+  if (operatorFields.some((field) => Object.prototype.hasOwnProperty.call(stdinPayload, field))) {
+    throw new Error('operator pack-review start inputs are accepted only from direct CLI arguments');
+  }
+  const input = { ...stdinPayload, ...parseArgs(argv) };
   if (subcommand === 'list') {
     const options = input as ListInput;
     process.stdout.write(`${JSON.stringify({ runs: listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot }) })}\n`);

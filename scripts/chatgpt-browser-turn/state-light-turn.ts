@@ -77,6 +77,23 @@ import {
   verifyProfile,
   type BrowserConfig,
 } from './ui-adapter.ts';
+import {
+  recoveryMarkerCardinality,
+  runPostSendRecovery,
+  type PostSendRecoveryFailure,
+  type PostSendRecoveryState,
+  type RecoveryObserverEvent,
+} from './state-light-turn-recovery.ts';
+import {
+  buildBrowserTurnCancellationReceipt,
+  isSupportedChatGptConversationUrl,
+  readRecoveryAuthoritativeUserMessages,
+  stopOwnedGeneration,
+  type StopOwnedGenerationOutcome,
+} from './state-light-cancellation.ts';
+
+export { stopOwnedGeneration };
+export type { StopOwnedGenerationOutcome };
 
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 /** Local CDP DOM reads after dispatch; not send/navigation pacing. */
@@ -189,6 +206,8 @@ export interface TurnRunOutcome {
   /** Process-local publication fact; not part of turn-result/v1. */
   readonly publicationState?: StateLightPublicationResult['state'];
   readonly cleanupAction?: PageCleanupAction;
+  /** Exact invocation-created page authorized for one Stop attempt. */
+  readonly stopAuthorityPage?: any;
   readonly ownedConversationUrl?: string;
   readonly profileKey?: string;
   readonly ownershipForfeited?: boolean;
@@ -207,6 +226,23 @@ interface StateLightPublicationHooks {
 }
 
 export type PageCleanupAction = 'close' | 'preserve' | 'skip';
+
+const cleanupAuthorityUnprovenPages = new WeakSet<object>();
+const stopAuthorityPages = new WeakSet<object>();
+
+export interface StateLightRecoveryHooks {
+  readonly observer?: (event: RecoveryObserverEvent) => void;
+  readonly faultActuator?: (input: {
+    readonly page: unknown;
+    readonly browser: unknown;
+    readonly sendCount: number;
+    readonly conversationUrlSha256: string;
+    readonly markerSha256: string;
+    readonly matchingUserCarrierCount: number;
+    readonly exactMarkerTokenCount: number;
+  }) => Promise<void> | void;
+  readonly sleep?: (milliseconds: number) => Promise<void>;
+}
 
 export function decidePageCleanupAction(input: {
   readonly sendCount: number;
@@ -693,7 +729,11 @@ export function resolveOwnedReplyWindow(
   if (ownedUsers.length === 0) {
     return { replyWindow: [], lastOwnedAssistantMessageIndex: null };
   }
-  if (ownedUsers.length > 1) {
+  const cardinality = recoveryMarkerCardinality(messages, expectedMarker);
+  if (
+    cardinality.matchingUserCarrierCount !== 1
+    || cardinality.exactMarkerTokenCount !== 1
+  ) {
     return { replyWindow: [], uncertainCause: 'owned_prompt_marker_ambiguous', lastOwnedAssistantMessageIndex: null };
   }
 
@@ -1014,9 +1054,30 @@ export async function readPageObservation(
   page: any,
   expectedMarker?: string,
   baselineCount?: number,
+  strictTranscriptCount = false,
 ): Promise<PageObservationResult> {
   const nodes = page.locator(MESSAGE_NODE_SELECTOR);
-  const count = await locatorCount(nodes);
+  let count: number;
+  if (strictTranscriptCount) {
+    try {
+      count = Number(await nodes.count());
+      if (!Number.isSafeInteger(count) || count < 0) {
+        return {
+          messages: [],
+          ownedWindowCompletionReady: false,
+          transcriptIncomplete: true,
+        };
+      }
+    } catch {
+      return {
+        messages: [],
+        ownedWindowCompletionReady: false,
+        transcriptIncomplete: true,
+      };
+    }
+  } else {
+    count = await locatorCount(nodes);
+  }
   const messages: PageMessage[] = [];
   const domIndices: number[] = [];
   let transcriptIncomplete = false;
@@ -1427,7 +1488,7 @@ function returnFreshConversationLandingMismatch(
 function pageConversationUrl(page: any): string | undefined {
   try {
     const url = normalizeConversationUrl(String(page.url()));
-    return url.includes('/c/') ? url : undefined;
+    return isSupportedChatGptConversationUrl(url) ? url : undefined;
   } catch {
     return undefined;
   }
@@ -1448,7 +1509,10 @@ function browserOrPageDefinitelyLost(page: any, browser: any): boolean {
   return false;
 }
 
-async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
+async function runTurn(
+  args: ParsedTurnArgs,
+  recoveryHooks: StateLightRecoveryHooks = {},
+): Promise<TurnRunOutcome> {
   rejectUnknownOptions(args, [
     'profile',
     'cdp',
@@ -1477,6 +1541,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
   const incidents: BrowserIncident[] = [];
   let afterSend = false;
   let ownershipForfeited = false;
+  let cancellationReceiptEmitted = false;
 
   const incident = (eventClass: string, symptom: string, action?: string): void => {
     const ok = recordIncident(
@@ -1574,6 +1639,20 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     const marker = generateOwnedPromptMarker();
     const markedPayload = wrapOwnedPromptPayload(marker, snapshot.text);
 
+    const emitCancellationReceipt = (conversationUrl: string): void => {
+      if (cancellationReceiptEmitted || sendCount !== 1) return;
+      const receipt = buildBrowserTurnCancellationReceipt({
+        invocationId,
+        profileKey,
+        conversationUrl,
+        marker,
+        sendCount,
+      });
+      if (!receipt) return;
+      emit(receipt);
+      cancellationReceiptEmitted = true;
+    };
+
     const sendOwnedPrompt = async (): Promise<TurnRunOutcome | null> => {
       const insertionContext: { insertionDeadlineMs?: number } = {};
       const mutationFailure = await mutateComposerOrCause(
@@ -1609,6 +1688,10 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
       sendCount += 1;
       afterSend = true;
+      if (page && typeof page === 'object') stopAuthorityPages.add(page);
+      if (!config.newChat && config.chatUrl) {
+        emitCancellationReceipt(normalizeConversationUrl(config.chatUrl));
+      }
       return null;
     };
 
@@ -1782,13 +1865,25 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           }
 
           const urlDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
-          const conversationUrl = await waitForConversationUrlAfterSend(
-            page,
-            config.projectUrl!,
-            urlDeadline,
-            sleep,
-            INITIAL_POLL_MS,
-          );
+          let conversationUrl: string | undefined;
+          try {
+            conversationUrl = await waitForConversationUrlAfterSend(
+              page,
+              config.projectUrl!,
+              urlDeadline,
+              sleep,
+              INITIAL_POLL_MS,
+            );
+          } catch (error) {
+            if (!browserOrPageDefinitelyLost(page, browser)) throw error;
+            incident(
+              'send_observation_deferred',
+              'fresh_conversation_page_lost_after_send',
+              'recover_same_conversation_no_resend',
+            );
+            claimed = true;
+            break;
+          }
           if (!conversationUrl) {
             if (sendCount >= 1) {
               incident(
@@ -1890,6 +1985,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           if (claim === 'claimed' || claim === 'owned') {
             claimed = true;
             ownedConversationUrl = conversationUrl;
+            emitCancellationReceipt(conversationUrl);
             break;
           }
         }
@@ -1989,7 +2085,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     const targetChatUrl = config.newChat
       ? undefined
       : normalizeConversationUrl(config.chatUrl ?? '');
-    if (targetChatUrl) {
+    if (targetChatUrl && !browserOrPageDefinitelyLost(page, browser)) {
       const landingIdentity = readOwnedConversationIdentity(page, targetChatUrl);
       if (!landingIdentity.matched) {
         return returnOwnedConversationIdentityMismatch(
@@ -2009,7 +2105,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
     }
 
-    if (config.newChat && ownedConversationUrl) {
+    if (config.newChat && ownedConversationUrl && !browserOrPageDefinitelyLost(page, browser)) {
       await navigateToProjectConversationIfNeeded(
         page,
         ownedConversationUrl,
@@ -2047,15 +2143,190 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       );
     };
 
+    const recoveryState: PostSendRecoveryState = {
+      lossEpoch: 0,
+      successorCreated: false,
+      cleanupAuthorityPage: page,
+      stopAuthorityPage: page,
+      ...(targetChatUrl ?? ownedConversationUrl
+        ? { immutableConversationUrl: targetChatUrl ?? ownedConversationUrl }
+        : {}),
+    };
+    let faultActuatorUsed = false;
+
+    const recoveryFailureOutcome = (
+      failure: PostSendRecoveryFailure,
+    ): TurnRunOutcome => {
+      incident(failure.eventClass, failure.cause, failure.action);
+      return {
+        browser: failure.browser,
+        ...(failure.stopAuthorityPage ? {
+          page: failure.stopAuthorityPage,
+          stopAuthorityPage: failure.stopAuthorityPage,
+        } : {}),
+        cleanupAction: 'preserve',
+        result: compactResult(
+          failure.state,
+          'invocation',
+          failure.cause,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount,
+          navigation,
+          incidents,
+          {},
+          journalWriteFailed,
+        ),
+      };
+    };
+
+    const recoverCurrentObservation = async (): Promise<TurnRunOutcome | null> => {
+      const recovered = await runPostSendRecovery({
+        browser,
+        currentPage: page,
+        marker,
+        hardDeadlineMs: hardExhaustionDeadline,
+        pollMs: config.pollMs,
+        state: recoveryState,
+        observer: recoveryHooks.observer,
+        adapter: {
+          enumeratePages: async (activeBrowser) => {
+            const contexts = (activeBrowser as any).contexts();
+            if (!Array.isArray(contexts) || contexts.length !== 1) {
+              throw new Error('recovery_context_count_unproven');
+            }
+            const pages = contexts[0].pages();
+            if (!Array.isArray(pages)) throw new Error('recovery_page_enumeration_failed');
+            const targetUrl = recoveryState.immutableConversationUrl;
+            if (!targetUrl) return pages;
+            return pages.filter((candidate: any) => {
+              try {
+                return normalizeConversationUrl(String(candidate.url())) === targetUrl;
+              } catch {
+                return false;
+              }
+            });
+          },
+          pageUrl: (candidate) => String((candidate as any).url()),
+          normalizeConversationUrl,
+          isSupportedConversationUrl: isSupportedChatGptConversationUrl,
+          readAuthoritativeMessages: readRecoveryAuthoritativeUserMessages,
+          browserDefinitelyDisconnected: (candidateBrowser) => {
+            try {
+              return typeof (candidateBrowser as any)?.isConnected === 'function'
+                && (candidateBrowser as any).isConnected() === false;
+            } catch {
+              return false;
+            }
+          },
+          pageDefinitelyLost: (candidatePage) => {
+            try {
+              return typeof (candidatePage as any)?.isClosed === 'function'
+                && (candidatePage as any).isClosed() === true;
+            } catch {
+              return false;
+            }
+          },
+          reconnect: async () => {
+            const remainingMs = Math.max(1, hardExhaustionDeadline - Date.now());
+            return await chromium.connectOverCDP(config.cdp, {
+              timeout: Math.min(30_000, remainingMs),
+            });
+          },
+          createSuccessor: async (activeBrowser, immutableConversationUrl) => {
+            const successor = await createDedicatedTurnPage(activeBrowser);
+            navigation.recordGoto();
+            await successor.goto(immutableConversationUrl, {
+              waitUntil: 'domcontentloaded',
+              timeout: Math.min(
+                MAX_LOCAL_READ_WAIT_MS * 6,
+                Math.max(1, hardExhaustionDeadline - Date.now()),
+              ),
+            });
+            return successor;
+          },
+          sleep: recoveryHooks.sleep ?? (async (milliseconds) => {
+            await sleep(page, milliseconds);
+          }),
+          now: () => Date.now(),
+        },
+      });
+
+      browser = recovered.browser;
+      if (recovered.kind === 'failure') return recoveryFailureOutcome(recovered);
+
+      if (config.newChat && !ownedConversationUrl) {
+        let claim: ReturnType<typeof tryClaimStateLightFreshConversation>;
+        try {
+          claim = tryClaimStateLightFreshConversation(
+            profileKey,
+            recovered.conversationUrl,
+            invocationId,
+            config.timeoutMs,
+          );
+        } catch {
+          claim = 'contended';
+        }
+        if (claim === 'contended') {
+          ownershipForfeited = true;
+          incident(
+            'ownership_fence_lost',
+            'state_light_recovered_conversation_claim_contended',
+            'retain_owned_page_no_resend',
+          );
+          return {
+            page: recovered.page,
+            browser,
+            ownershipForfeited: true,
+            cleanupAction: 'preserve',
+            result: compactResult(
+              'driver_error',
+              'invocation',
+              'state_light_recovered_conversation_claim_contended',
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              navigation,
+              incidents,
+              { conversation_id: recovered.conversationUrl },
+              journalWriteFailed,
+            ),
+          };
+        }
+        ownedConversationUrl = recovered.conversationUrl;
+        emitCancellationReceipt(recovered.conversationUrl);
+      }
+
+      page = recovered.page;
+      if (!recovered.cleanupOwned && page && typeof page === 'object') {
+        cleanupAuthorityUnprovenPages.add(page);
+      }
+      if (recovered.stopAuthorityPage === page && page && typeof page === 'object') {
+        stopAuthorityPages.add(page);
+      }
+      recoveryState.immutableConversationUrl = recovered.conversationUrl;
+      if (config.directPublication) installDirectPublicationObserver(page, directObservation);
+      baselineCount = 0;
+      return null;
+    };
+
     // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
     // landed and this invocation still owns a reachable page, #1120 requires us
     // to keep that page rather than manufacture lost-chat/resend eligibility.
     while (true) {
+      if (sendCount >= 1 && browserOrPageDefinitelyLost(page, browser)) {
+        const terminal = await recoverCurrentObservation();
+        if (terminal) return terminal;
+        continue;
+      }
       pollCount++;
       if (config.newChat && sendCount >= 1) {
         const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
         if (observedConversationUrl) {
           if (!ownedConversationUrl) ownedConversationUrl = observedConversationUrl;
+          recoveryState.immutableConversationUrl = observedConversationUrl;
           await navigateToProjectConversationIfNeeded(
             page,
             observedConversationUrl,
@@ -2094,7 +2365,11 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       try {
         observation = await readPostSendObservation(page, marker, baselineCount);
       } catch (error) {
-        if (browserOrPageDefinitelyLost(page, browser)) throw error;
+        if (browserOrPageDefinitelyLost(page, browser)) {
+          const terminal = await recoverCurrentObservation();
+          if (terminal) return terminal;
+          continue;
+        }
         const symptom = error instanceof Error ? error.message : String(error);
         incident('post_send_observation_error', symptom, 'continue_polling_owned_page');
         if (!(completionReadySeen && bestReadyReply.length > 0)) {
@@ -2201,6 +2476,54 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         continue;
       }
 
+      const markerCardinality = recoveryMarkerCardinality(messages, marker);
+      const durableConversationUrl = targetChatUrl
+        ?? ownedConversationUrl
+        ?? pageConversationUrl(page);
+      if (
+        durableConversationUrl
+        && markerCardinality.matchingUserCarrierCount === 1
+        && markerCardinality.exactMarkerTokenCount === 1
+      ) {
+        emitCancellationReceipt(durableConversationUrl);
+      }
+      if (
+        !faultActuatorUsed
+        && recoveryHooks.faultActuator
+        && durableConversationUrl
+        && markerCardinality.matchingUserCarrierCount === 1
+        && markerCardinality.exactMarkerTokenCount === 1
+      ) {
+        faultActuatorUsed = true;
+        recoveryState.immutableConversationUrl = durableConversationUrl;
+        const conversationUrlSha256 = createHash('sha256')
+          .update(durableConversationUrl, 'utf8')
+          .digest('hex');
+        const markerSha256 = createHash('sha256').update(marker, 'utf8').digest('hex');
+        recoveryHooks.observer?.({
+          event: 'census',
+          lossEpoch: recoveryState.lossEpoch,
+          eligiblePageCount: 1,
+          supportedPageCount: 1,
+          censusComplete: true,
+          conversationUrlSha256,
+        });
+        await recoveryHooks.faultActuator({
+          page,
+          browser,
+          sendCount,
+          conversationUrlSha256,
+          markerSha256,
+          matchingUserCarrierCount: markerCardinality.matchingUserCarrierCount,
+          exactMarkerTokenCount: markerCardinality.exactMarkerTokenCount,
+        });
+        if (browserOrPageDefinitelyLost(page, browser)) {
+          const terminal = await recoverCurrentObservation();
+          if (terminal) return terminal;
+          continue;
+        }
+      }
+
       const inProgress = !ownedWindowCompletionReady && !completionReadySeen;
       const decision = classifyPageObservation(messages, baselineCount, marker, inProgress);
 
@@ -2210,7 +2533,23 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
       if (decision.state === 'uncertain' && decision.cause === 'owned_prompt_marker_ambiguous') {
         incident('post_send_observation_error', 'owned_prompt_marker_ambiguous', 'return_local_degraded');
-        return { page, browser, result: compactResult('ui_contract_mismatch', 'invocation', 'owned_prompt_marker_ambiguous', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed) };
+        return {
+          page,
+          browser,
+          result: compactResult(
+            'ui_contract_mismatch',
+            'invocation',
+            'owned_prompt_marker_ambiguous',
+            invocationId,
+            profileKey,
+            sendCount,
+            pollCount,
+            navigation,
+            incidents,
+            {},
+            journalWriteFailed,
+          ),
+        };
       }
 
       if (decision.state === 'uncertain') {
@@ -2592,9 +2931,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         afterSend ? 'helper_failure_after_send' : 'helper_failure_before_send',
         cause,
         afterSend
-          ? lostAfterSend
-            ? 'caller_may_open_fresh_chat'
-            : 'retain_owned_page_no_resend'
+          ? 'retain_owned_page_no_resend'
           : 'return_local_error',
       );
     }
@@ -2617,22 +2954,49 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 }
 
 async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult> {
-  if (outcome.profileKey && outcome.ownedConversationUrl && !outcome.ownershipForfeited) {
-    releaseStateLightFreshConversationClaim(
-      outcome.profileKey,
-      outcome.ownedConversationUrl,
-      outcome.result.invocation_id,
-    );
-  }
   let cleanup: ResourceCleanupOutcome = 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
   const incidents = [...outcome.result.incidents];
-  const pageAction = outcome.cleanupAction ?? decidePageCleanupAction({
+  const pageLost = browserOrPageDefinitelyLost(outcome.page, outcome.browser);
+  const implicitStopAuthority = Boolean(
+    outcome.page
+    && typeof outcome.page === 'object'
+    && stopAuthorityPages.has(outcome.page),
+  ) ? outcome.page : undefined;
+  const stopAuthorityPage = !outcome.ownershipForfeited
+    ? outcome.stopAuthorityPage ?? implicitStopAuthority
+    : undefined;
+
+  if (outcome.result.send_count >= 1 && outcome.result.state !== 'ok') {
+    const stopOutcome: StopOwnedGenerationOutcome = stopAuthorityPage
+      && !browserOrPageDefinitelyLost(stopAuthorityPage, outcome.browser)
+      ? await stopOwnedGeneration(stopAuthorityPage)
+      : 'unavailable';
+    const stopIncident: BrowserIncident = {
+      eventClass: `owned_generation_stop_${stopOutcome}`,
+      symptom: `${outcome.result.state}:${outcome.result.cause}`,
+      action: 'defer_exact_target_close_to_issue_1266',
+    };
+    incidents.push(stopIncident.eventClass);
+    if (!appendIncident(stopIncident, outcome.result.invocation_id)) journalWriteFailed = true;
+  }
+
+  const cleanupAuthorityProven = Boolean(
+    outcome.page
+    && typeof outcome.page === 'object'
+    && !cleanupAuthorityUnprovenPages.has(outcome.page),
+  );
+  const requestedPageAction = outcome.cleanupAction ?? decidePageCleanupAction({
     sendCount: outcome.result.send_count,
     publicationState: outcome.publicationState,
-    pagePresent: Boolean(outcome.page),
-    pageLost: browserOrPageDefinitelyLost(outcome.page, outcome.browser),
+    pagePresent: cleanupAuthorityProven,
+    pageLost,
   });
+  // Issue #1266 owns abandonment close. This change may Stop only the exact
+  // proven target and must preserve every post-send non-ok tab.
+  const pageAction = outcome.result.send_count >= 1 && outcome.result.state !== 'ok'
+    ? 'preserve'
+    : requestedPageAction;
   if (pageAction === 'close') {
     cleanup = await boundedResourceCleanup(
       () => outcome.page.close(),
@@ -2648,6 +3012,14 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
     }
   }
+
+  if (outcome.profileKey && outcome.ownedConversationUrl && !outcome.ownershipForfeited) {
+    releaseStateLightFreshConversationClaim(
+      outcome.profileKey,
+      outcome.ownedConversationUrl,
+      outcome.result.invocation_id,
+    );
+  }
   await releaseCdpBrowser(outcome.browser);
   return {
     ...outcome.result,
@@ -2658,6 +3030,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
 }
 
 export const __testFinalizeTurn = finalizeTurn;
+export const __testBrowserOrPageDefinitelyLost = browserOrPageDefinitelyLost;
 
 export const __testComposerMutation = {
   remainingComposerMutationMs,
@@ -2669,6 +3042,7 @@ export const __testComposerMutation = {
 
 export type StateLightTurnDependencies = {
   readonly runTurn?: (args: ParsedTurnArgs) => Promise<TurnRunOutcome>;
+  readonly recoveryHooks?: StateLightRecoveryHooks;
 };
 
 export async function runStateLightTurn(
@@ -2697,7 +3071,10 @@ export async function runStateLightTurn(
     return 22;
   }
 
-  const result = await finalizeTurn(await (dependencies.runTurn ?? runTurn)(args));
+  const outcome = dependencies.runTurn
+    ? await dependencies.runTurn(args)
+    : await runTurn(args, dependencies.recoveryHooks);
+  const result = await finalizeTurn(outcome);
   emit(result);
   return turnExitCode(result.state);
 }

@@ -43,11 +43,30 @@ Use `--phase pre-lens` when only the T3 pre-lens stages are complete. The
 command returns a non-zero status and a named missing input when evidence is
 absent. It writes no acceptance artifact on failure.
 
-`check-artifacts` applies the same tier/phase stage matrix as final acceptance:
-T1 and T2 require `architectural`; T3 pre-lens requires `competitive` and
-`architectural-review`; T3 final acceptance additionally requires
-`architectural-lens` and `architectural`. It reports every missing completed
-stage even when stale output markers are already present.
+`check-artifacts` keeps its existing enforcement matrix; this task does not
+change the gate mechanics. Its current `expectedStages` behavior still
+requires `architectural` for T2 and requires `competitive` unconditionally for
+T3 (with the other existing phase requirements). It reports every missing
+completed stage even when stale output markers are already present.
+
+The Issue #1364 operator policy is separate from that gate: T1 has one GPT
+lens followed by a mandatory author fix-round; T2 has three concurrent GPT
+`architectural-review` sources, a mandatory author fix-round, one GPT lens, and
+a mandatory author fix-round; T3 has three concurrent GPT `competitive` sources
+when directly required by the operator, selected by the architect, or judged
+necessary by the flow-manager because the task has fundamentally different
+plausible solution designs, then a mandatory author fix-round, three concurrent
+GPT `architectural-review` sources, a mandatory author fix-round, one Claude
+lens, a mandatory author fix-round, one GPT lens, and a mandatory author
+fix-round. Every fix-round is required even for `NO_FINDINGS`; it records “no
+findings, no changes required” in the journal, and the next stage cannot start
+until that record exists. Competitive selection and skipping are substantive
+judgments, not checklist, threshold, score, or scale decisions. A skip requires
+an explicit journal rationale for why the solution space is narrow; missing
+rationale is a process defect.
+Browser starts are staggered by 10–15 seconds. No stage starts on a stale Issue
+revision; reviewers read the latest revision. Updating `expectedStages` to
+enforce this policy is separate future work and is not part of Issue #1364.
 
 ## Evidence inputs
 
@@ -137,3 +156,23 @@ be read. A missing stage result or capture is reported by name. All fields
 derived from capture bytes are computed before any output directory is created;
 any error leaves the output artifact set absent. The resulting receipt,
 inventory, relay manifest, and ledger are then checked by the existing guards.
+
+## Direct operator adjudication for missing/non-ok turn transport
+
+For `final-acceptance` artifact production only, the direct operator CLI may
+supply one exact Issue number and revision, a canonical already-published
+verdict comment URL, the governed verdict bytes' SHA-256, byte length and
+finding count, plus a non-empty reason. The producer accepts this only when
+those values exactly match one governed terminal capture and that invocation's
+`turn-result/v1` is absent or non-`ok`. Before accepting, the canonical GitHub
+transport reads the exact referenced comment and rejects an unavailable, edited,
+identity-mismatched, malformed, or incompletely observed reference. The observed
+comment bytes must exactly equal the governed capture bytes.
+
+The manifest records `operator_adjudicated` provenance, the exact
+target/reference/reason, the immutable observed comment metadata, and the
+original absent or non-`ok` transport fact (including `send_count` when
+present). It never creates or rewrites `turn-result/v1 state: ok`. Without all
+direct operator flags, the legacy fail-closed behavior and artifact bytes are
+unchanged. Workers, reviewers and flow-manager evidence must not synthesize
+these flags.

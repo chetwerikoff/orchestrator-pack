@@ -26,6 +26,10 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/lib/review-lane-routing.test.ts': 120,
   'scripts/lib/create-issue-stage-record-review-lane.test.ts': 120,
   'scripts/worker-smoke.test.ts': 120,
+  // Issue #1359 adds deterministic worker-smoke lifecycle and real-entrypoint fixtures.
+  // Fixed estimates keep pre-topology bounded; both suites still run in the light lanes.
+  'scripts/worker-smoke-1359.test.ts': 120,
+  'scripts/worker-smoke-entrypoint-1359.test.ts': 120,
   'scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts': 120,
   'scripts/chatgpt-browser-turn/state-light-page-observation.test.ts': 120,
   // Issue #1238 lifecycle tests were locally measured at 350ms and 23ms.
@@ -49,6 +53,10 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1198 launch/watch contract tests are fast deterministic coverage.
   'scripts/launch-watch/launch-watch.test.ts': 120,
   'scripts/launch-watch/watch.test.ts': 120,
+  // Issue #1250 proof wrappers execute deterministic local fixtures. Fixed
+  // estimates preserve the existing 32-file pre-topology measurement bound.
+  'scripts/ao-retirement/retired-surface-guard.test.ts': 120,
+  'scripts/runtime/ao-absent-two-lifecycle-proof.test.ts': 120,
   // Issue #1248 adds fast runtime-boundary contract suites. Fixed estimates keep
   // the bounded topology producer stable until runtime history is refreshed.
   'scripts/invoke-gated-worker-nudge.test.ts': 120,

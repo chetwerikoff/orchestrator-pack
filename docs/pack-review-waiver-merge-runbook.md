@@ -13,9 +13,12 @@ and recorded an explicit decision.
 (2026-07-21) — all other required CI green; one blocking P1 finding on non-Linux egress
 trap; operator authorized merge in current state.
 
-Post-merge pull, orchestrator worktree sync, and adoption still follow
-[`.claude/skills/merge-with-local-adoption/SKILL.md`](../.claude/skills/merge-with-local-adoption/SKILL.md)
-(Steps 4–10).
+This runbook supplies only the waiver prerequisites and authorization-status POST/read-back
+for the waiver branch in
+[`.claude/skills/merge-with-local-adoption/SKILL.md`](../.claude/skills/merge-with-local-adoption/SKILL.md).
+After those checks, return to that skill's ordinary Steps 4–10. The waiver branch must not
+execute this runbook's merge or adoption steps, because that would duplicate the skill's
+merge/adoption flow.
 
 ## When this applies
 
@@ -117,8 +120,10 @@ Replace `P`, `HEAD_SHA`, and the description with live values.
 
 For either waiver path, branch protection requires a `success` commit status on the
 exact PR head. The description must state that the operator authorized merging
-without pack review. For a failed review, identify the open finding; for a missing
-status, state that the review status was absent for this head. Posting this status
+without pack review and identify the non-private source of that direct authorization
+(for example, `source=operator-chat` or `source=issue-comment`; do not include names,
+handles, message contents, or other private data). For a failed review, identify the
+open finding; for a missing status, state that the review status was absent for this head. Posting this status
 does not show that a review ran or was clean. Do not start `pack-review-runner` just
 to manufacture the status.
 
@@ -129,12 +134,12 @@ HEAD_SHA="$(./scripts/gh pr view "$P" --json headRefOid -q .headRefOid)"
 ./scripts/gh api "repos/chetwerikoff/orchestrator-pack/statuses/${HEAD_SHA}" \
   -f state=success \
   -f context='orchestrator-pack/pack-review' \
-  -f description="Operator authorization: merge without pack review — <finding or reason; state if status was absent for this head>"
+  -f description="Operator authorization: merge without pack review; source=<non-private channel/reference>; <finding or reason; state if status was absent for this head>"
 ```
 
-Use a concrete reason (finding title, issue link, or operator ticket). Avoid empty or
-generic descriptions. This POST records authorization; it does not create review
-evidence.
+Use a concrete reason (finding title, issue link, or operator ticket) and a non-private
+authorization source. Avoid empty or generic descriptions. This POST records authorization;
+it does not create review evidence.
 
 ### 2. Verify the status flipped
 
@@ -145,7 +150,10 @@ evidence.
 
 The **newest** row for `orchestrator-pack/pack-review` must be `success`.
 
-### 3. Merge (no `--admin` required once status is green)
+### 3. Merge (reference only; not executed by the waiver branch)
+
+The merge skill does not execute this section from its waiver branch. It returns to the
+skill's ordinary Step 4 and then executes the skill's Step 5.
 
 ```bash
 ./scripts/gh pr merge "$P" --repo chetwerikoff/orchestrator-pack --merge --delete-branch
@@ -155,7 +163,10 @@ The **newest** row for `orchestrator-pack/pack-review` must be `success`.
 If merge still fails, re-read checks — another context may have regressed, or
 `HEAD_SHA` drifted after a push.
 
-### 4. Complete local adoption
+### 4. Complete local adoption (reference only; not executed by the waiver branch)
+
+The merge skill does not execute this section from its waiver branch. It returns to the
+skill's ordinary Step 4 and then executes the skill's Steps 5–10.
 
 Continue with **merge-with-local-adoption** from Step 4 (adoption scan) through Step 10
 (report). Minimum after merge:
@@ -170,6 +181,7 @@ Then Step **6e** orchestrator worktree fast-forward if a live orchestrator row e
 In the Step 10 report, record verbatim:
 
 - operator waiver authorization;
+- the non-private source of the direct authorization (channel/reference only);
 - waiver status POST (SHA, description, timestamp);
 - that open findings were **not** cleared;
 - normal merge vs `--admin` attempt outcome.
