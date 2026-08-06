@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import {
   parseCliArgs as parsePageProbeArgs,
   runProbe as runPageProbe,
+  type ParsedArgs as ParsedProbeArgs,
   type ProbeDependencies,
 } from './browser-gpt-page-probe.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
@@ -33,13 +34,25 @@ const MAX_INPUT_BYTES = 2 * 1024 * 1024;
 const MAX_ID_LENGTH = 512;
 const MAX_URL_LENGTH = 2_048;
 const MAX_CAPTURE_MESSAGE_NODES = 100;
-export const CDP_REQUEST_TIMEOUT_MS = 10_000;
+const CDP_TIMEOUT_MS = 10_000;
 const SHA256_RE = /^[0-9a-f]{64}$/u;
 const TARGET_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/u;
 const ELIGIBLE_RECOVERY_CAUSES = new Set([
   'direct_publication_observation_missing',
   'direct_publication_source_invalid',
   'direct_publication_receipt_invalid',
+]);
+const PROBE_STATUSES = new Set([
+  'ok',
+  'not_found',
+  'ambiguous',
+  'stale_node',
+  'unsafe_output',
+  'surface_unknown',
+  'unavailable',
+  'export_failed',
+  'cleanup_failed',
+  'input_invalid',
 ]);
 
 export interface CausalWitness {
@@ -74,53 +87,6 @@ export type PostSettlementCaptureCause =
   | 'surface_incomplete'
   | 'malformed';
 
-export interface ProbeExportEvidence {
-  readonly schema: 'browser-gpt-page-probe/v1';
-  readonly operation: 'export';
-  readonly status: 'ok';
-  readonly diagnostic_only: true;
-  readonly workflow_authority: 'none';
-  readonly configured_profile_key: string;
-  readonly target_id: string;
-  readonly normalized_url: string;
-  readonly page_url?: string;
-  readonly node: {
-    readonly role: 'assistant';
-    readonly ordinal: number;
-    readonly document_ordinal: number;
-    readonly message_id: string;
-  };
-  readonly assistant_message_id: string;
-  readonly representation: 'innerText' | 'textContent';
-  readonly byte_length: number;
-  readonly sha256: string;
-  readonly output_identity: {
-    readonly path: string;
-    readonly byte_length: number;
-    readonly sha256: string;
-  };
-  readonly observed_user_nodes: number;
-  readonly observed_assistant_nodes: number;
-  readonly observed_message_nodes: number;
-  readonly generation_in_progress: false;
-  readonly nodes_truncated: false;
-  readonly last_assistant: true;
-  readonly last_message: true;
-}
-
-export interface PostSettlementCloseResult {
-  readonly schema: typeof POST_SETTLEMENT_CLOSE_SCHEMA;
-  readonly status: PostSettlementCloseStatus;
-  readonly close_attempt_count: 0 | 1;
-  readonly configured_profile_key: string;
-  readonly target_id?: string;
-  readonly normalized_url?: string;
-  readonly terminal_evidence_schema: string;
-  readonly resend_authority: 'none';
-  readonly reason?: string;
-  readonly proof?: Readonly<Record<string, unknown>>;
-}
-
 export interface CdpTarget {
   readonly id?: string;
   readonly type?: string;
@@ -152,10 +118,24 @@ export interface ParsedCloseArgs {
   readonly cdp: string;
 }
 
+export interface PostSettlementCloseResult {
+  readonly schema: typeof POST_SETTLEMENT_CLOSE_SCHEMA;
+  readonly status: PostSettlementCloseStatus;
+  readonly close_attempt_count: 0 | 1;
+  readonly configured_profile_key: string;
+  readonly target_id?: string;
+  readonly normalized_url?: string;
+  readonly terminal_evidence_schema: string;
+  readonly resend_authority: 'none';
+  readonly reason?: string;
+  readonly proof?: Readonly<Record<string, unknown>>;
+}
+
 class CloseError extends Error {
   readonly status: PostSettlementCloseStatus;
-  constructor(status: PostSettlementCloseStatus, message: string) {
-    super(message);
+
+  constructor(status: PostSettlementCloseStatus, reason: string) {
+    super(reason);
     this.name = 'CloseError';
     this.status = status;
   }
@@ -169,33 +149,33 @@ function isSafeCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-function isBoundedString(value: unknown, max = MAX_ID_LENGTH): value is string {
-  return typeof value === 'string' && value.length > 0 && Array.from(value).length <= max;
+function isBoundedString(value: unknown, maximum = MAX_ID_LENGTH): value is string {
+  return typeof value === 'string' && value.length > 0 && Array.from(value).length <= maximum;
 }
 
-function hashBytes(bytes: Uint8Array): string {
+function boundedReason(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return Array.from(raw).slice(0, 240).join('');
+}
+
+function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function normalizeUrl(value: string): string {
-  const url = new URL(value);
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('unsupported_url');
-  if (url.username || url.password) throw new Error('credentials_not_allowed');
-  url.hash = '';
-  url.search = '';
-  url.hostname = url.hostname.toLowerCase();
-  url.pathname = url.pathname.replace(/\/+$/u, '') || '/';
-  const normalized = url.toString().replace(/\/$/u, '');
+function normalizeUrl(raw: string): string {
+  const value = new URL(raw);
+  if (value.protocol !== 'http:' && value.protocol !== 'https:') throw new Error('unsupported_url');
+  if (value.username || value.password) throw new Error('credentials_not_allowed');
+  value.hash = '';
+  value.search = '';
+  value.hostname = value.hostname.toLowerCase();
+  value.pathname = value.pathname.replace(/\/+$/u, '') || '/';
+  const normalized = value.toString().replace(/\/$/u, '');
   if (Array.from(normalized).length > MAX_URL_LENGTH) throw new Error('url_too_long');
   return normalized;
 }
 
-function boundedReason(error: unknown): string {
-  const value = error instanceof Error ? error.message : String(error);
-  return Array.from(value).slice(0, 240).join('');
-}
-
-function baseResult(
+function resultEnvelope(
   status: PostSettlementCloseStatus,
   profileKey: string,
   evidenceSchema: string,
@@ -222,12 +202,12 @@ export function parsePostSettlementCloseArgs(argv: readonly string[]): ParsedClo
   const accepted = new Set(['--turn-result', '--probe-result', '--harvest', '--profile', '--cdp']);
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 2) {
-    const key = argv[index];
+    const name = argv[index];
     const value = argv[index + 1];
-    if (!key || !accepted.has(key) || !value || value.startsWith('--') || values.has(key)) {
+    if (!name || !accepted.has(name) || !value || value.startsWith('--') || values.has(name)) {
       throw new CloseError('input_invalid', 'argument_invalid');
     }
-    values.set(key, value);
+    values.set(name, value);
   }
   if (argv.length !== accepted.size * 2 || values.size !== accepted.size) {
     throw new CloseError('input_invalid', 'argument_set_invalid');
@@ -241,7 +221,7 @@ export function parsePostSettlementCloseArgs(argv: readonly string[]): ParsedClo
   };
 }
 
-async function readRegularFile(path: string): Promise<Uint8Array> {
+async function readRegularBytes(path: string): Promise<Uint8Array> {
   const stat = await lstat(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_INPUT_BYTES) {
     throw new CloseError('input_invalid', 'input_file_untrusted');
@@ -250,66 +230,61 @@ async function readRegularFile(path: string): Promise<Uint8Array> {
 }
 
 async function readRegularText(path: string): Promise<string> {
-  return Buffer.from(await readRegularFile(path)).toString('utf8');
+  return Buffer.from(await readRegularBytes(path)).toString('utf8');
 }
 
-function cdpBase(cdp: string): string {
-  const url = new URL(cdp);
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('unsupported_cdp');
-  url.hash = '';
-  url.search = '';
-  url.pathname = '';
-  return url.toString().replace(/\/$/u, '');
+function cdpBase(raw: string): string {
+  const value = new URL(raw);
+  if (value.protocol !== 'http:' && value.protocol !== 'https:') throw new Error('unsupported_cdp');
+  value.hash = '';
+  value.search = '';
+  value.pathname = '';
+  return value.toString().replace(/\/$/u, '');
 }
 
-async function defaultListTargets(cdp: string): Promise<readonly CdpTarget[]> {
+async function listCdpTargets(cdp: string): Promise<readonly CdpTarget[]> {
   const response = await fetch(`${cdpBase(cdp)}/json/list`, {
-    signal: AbortSignal.timeout(CDP_REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(CDP_TIMEOUT_MS),
     headers: { accept: 'application/json' },
   });
   if (!response.ok) throw new Error(`cdp_list_http_${response.status}`);
-  const value: unknown = await response.json();
-  if (!Array.isArray(value)) throw new Error('cdp_list_not_array');
-  return value as readonly CdpTarget[];
+  const parsed: unknown = await response.json();
+  if (!Array.isArray(parsed)) throw new Error('cdp_list_not_array');
+  return parsed as readonly CdpTarget[];
 }
 
-interface WebSocketLike {
-  addEventListener(
-    type: string,
-    listener: (event: { readonly data?: unknown }) => void,
-    options?: { readonly once?: boolean },
-  ): void;
+interface SocketEvent { readonly data?: unknown }
+interface SocketLike {
+  addEventListener(type: string, listener: (event: SocketEvent) => void, options?: { readonly once?: boolean }): void;
   send(data: string): void;
   close(): void;
 }
-
-interface WebSocketConstructorLike {
-  new(url: string): WebSocketLike;
+interface SocketConstructor { new(url: string): SocketLike }
+interface PendingCommand {
+  readonly resolve: (value: unknown) => void;
+  readonly reject: (error: Error) => void;
 }
 
-async function defaultOpenExactTargetChannel(
+async function openTargetChannel(
   target: Required<Pick<CdpTarget, 'id' | 'url' | 'webSocketDebuggerUrl'>>,
 ): Promise<ExactTargetChannel> {
-  const WebSocketCtor = (globalThis as unknown as { WebSocket?: WebSocketConstructorLike }).WebSocket;
-  if (!WebSocketCtor) throw new Error('websocket_unavailable');
-  const socket = new WebSocketCtor(target.webSocketDebuggerUrl);
-  let commandId = 0;
-  let openedResolve!: () => void;
-  let openedReject!: (error: Error) => void;
-  const opened = new Promise<void>((resolve, reject) => {
-    openedResolve = resolve;
-    openedReject = reject;
-  });
-  const pending = new Map<number, {
-    resolve: (value: unknown) => void;
-    reject: (error: Error) => void;
-  }>();
+  const Constructor = (globalThis as unknown as { WebSocket?: SocketConstructor }).WebSocket;
+  if (!Constructor) throw new Error('websocket_unavailable');
+  const socket = new Constructor(target.webSocketDebuggerUrl);
+  const pending = new Map<number, PendingCommand>();
   let closed = false;
-  socket.addEventListener('open', () => openedResolve(), { once: true });
-  socket.addEventListener('error', () => openedReject(new Error('cdp_websocket_error')), { once: true });
+  let nextId = 0;
+  let resolveOpen!: () => void;
+  let rejectOpen!: (error: Error) => void;
+  const opened = new Promise<void>((resolve, reject) => {
+    resolveOpen = resolve;
+    rejectOpen = reject;
+  });
+  socket.addEventListener('open', () => resolveOpen(), { once: true });
+  socket.addEventListener('error', () => rejectOpen(new Error('cdp_websocket_error')), { once: true });
   socket.addEventListener('message', (event) => {
     try {
-      const payload = JSON.parse(String(event.data)) as {
+      const message = JSON.parse(String(event.data)) as {
         readonly id?: number;
         readonly error?: { readonly message?: string };
         readonly result?: {
@@ -317,42 +292,41 @@ async function defaultOpenExactTargetChannel(
           readonly result?: { readonly value?: unknown };
         };
       };
-      if (!payload.id) return;
-      const waiter = pending.get(payload.id);
-      if (!waiter) return;
-      pending.delete(payload.id);
-      if (payload.error) waiter.reject(new Error(payload.error.message ?? 'cdp_command_error'));
-      else if (payload.result?.exceptionDetails) {
-        waiter.reject(new Error(payload.result.exceptionDetails.text ?? 'cdp_expression_exception'));
-      } else waiter.resolve(payload.result?.result?.value ?? payload.result);
+      if (!message.id) return;
+      const command = pending.get(message.id);
+      if (!command) return;
+      pending.delete(message.id);
+      if (message.error) command.reject(new Error(message.error.message ?? 'cdp_command_error'));
+      else if (message.result?.exceptionDetails) {
+        command.reject(new Error(message.result.exceptionDetails.text ?? 'cdp_expression_exception'));
+      } else command.resolve(message.result?.result?.value ?? message.result);
     } catch {
-      // Unrelated malformed events cannot authorize or prevent close.
+      // Unrelated events cannot create close authority.
     }
   });
   socket.addEventListener('close', () => {
     closed = true;
-    for (const waiter of pending.values()) waiter.reject(new Error('cdp_websocket_closed'));
+    for (const command of pending.values()) command.reject(new Error('cdp_websocket_closed'));
     pending.clear();
   }, { once: true });
   await Promise.race([
     opened,
-    new Promise<void>((_, reject) => {
-      setTimeout(() => reject(new Error('cdp_connect_timeout')), CDP_REQUEST_TIMEOUT_MS);
-    }),
+    new Promise<void>((_, reject) => setTimeout(
+      () => reject(new Error('cdp_connect_timeout')),
+      CDP_TIMEOUT_MS,
+    )),
   ]);
 
   const command = async (method: string, params?: unknown): Promise<unknown> => {
     if (closed) throw new Error('cdp_websocket_closed');
-    const id = ++commandId;
-    const result = new Promise<unknown>((resolve, reject) => pending.set(id, { resolve, reject }));
+    const id = ++nextId;
+    const response = new Promise<unknown>((resolve, reject) => pending.set(id, { resolve, reject }));
     socket.send(JSON.stringify({ id, method, ...(params ? { params } : {}) }));
     return await Promise.race([
-      result,
-      new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          if (pending.delete(id)) reject(new Error('cdp_command_timeout'));
-        }, CDP_REQUEST_TIMEOUT_MS);
-      }),
+      response,
+      new Promise<never>((_, reject) => setTimeout(() => {
+        if (pending.delete(id)) reject(new Error('cdp_command_timeout'));
+      }, CDP_TIMEOUT_MS)),
     ]);
   };
 
@@ -380,23 +354,23 @@ async function defaultOpenExactTargetChannel(
 
 export const defaultPostSettlementCloseDependencies: PostSettlementCloseDependencies = {
   readText: readRegularText,
-  readBytes: readRegularFile,
-  listTargets: defaultListTargets,
-  openExactTargetChannel: defaultOpenExactTargetChannel,
+  readBytes: readRegularBytes,
+  listTargets: listCdpTargets,
+  openExactTargetChannel: openTargetChannel,
 };
 
-function parseJson(
+function parseJsonRecord(
   text: string,
   status: PostSettlementCloseStatus,
   reason: string,
 ): Record<string, unknown> {
-  let value: unknown;
-  try { value = JSON.parse(text); } catch { throw new CloseError(status, reason); }
-  if (!isRecord(value)) throw new CloseError(status, reason);
-  return value;
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { throw new CloseError(status, reason); }
+  if (!isRecord(parsed)) throw new CloseError(status, reason);
+  return parsed;
 }
 
-function validateWitness(value: unknown): PostSettlementTargetWitness {
+function validateTargetWitness(value: unknown): PostSettlementTargetWitness {
   if (!isRecord(value)
     || value.disposition !== 'preserved_after_settlement'
     || !isBoundedString(value.configured_profile_key)
@@ -416,8 +390,8 @@ function validateWitness(value: unknown): PostSettlementTargetWitness {
     || value.nodes_truncated !== false) {
     throw new CloseError('settlement_untrusted', 'preserved_target_witness_invalid');
   }
-  if (value.observed_message_nodes !== value.observed_user_nodes + value.observed_assistant_nodes
-    || value.observed_message_nodes < 1
+  if (value.observed_message_nodes < 1
+    || value.observed_message_nodes !== value.observed_user_nodes + value.observed_assistant_nodes
     || value.document_ordinal !== value.observed_message_nodes - 1) {
     throw new CloseError('settlement_untrusted', 'preserved_target_tail_invalid');
   }
@@ -425,21 +399,20 @@ function validateWitness(value: unknown): PostSettlementTargetWitness {
 }
 
 function isEligibleDirectResult(value: Record<string, unknown>): boolean {
-  const eligibleOk = value.state === 'ok'
+  const normal = value.state === 'ok'
     && value.scope === 'none'
     && value.cause === 'completed_page_only';
-  const eligibleRecovery = value.state === 'recovery_required'
+  const recovery = value.state === 'recovery_required'
     && value.scope === 'conversation'
     && typeof value.cause === 'string'
     && ELIGIBLE_RECOVERY_CAUSES.has(value.cause);
-  return value.schema === 'turn-result/v1'
-    && value.send_count === 1
-    && (eligibleOk || eligibleRecovery);
+  return value.schema === 'turn-result/v1' && value.send_count === 1 && (normal || recovery);
 }
 
-function validateDirectResult(
-  value: Record<string, unknown>,
-): { witness: PostSettlementTargetWitness; schema: string } {
+function validateDirectResult(value: Record<string, unknown>): {
+  readonly witness: PostSettlementTargetWitness;
+  readonly schema: string;
+} {
   if (value.schema === 'flow-manager-long-running-child-terminal/v1') {
     throw new CloseError('settlement_untrusted', 'launcher_envelope_forbidden');
   }
@@ -452,7 +425,7 @@ function validateDirectResult(
     || value.witness.source !== 'service') {
     throw new CloseError('settlement_untrusted', 'direct_result_invalid');
   }
-  const witness = validateWitness(value.post_settlement_target);
+  const witness = validateTargetWitness(value.post_settlement_target);
   if (witness.configured_profile_key !== value.configured_profile_key
     || witness.assistant_message_id !== value.witness.assistant_message_id) {
     throw new CloseError('settlement_untrusted', 'terminal_witness_mismatch');
@@ -460,10 +433,16 @@ function validateDirectResult(
   return { witness, schema: String(value.schema) };
 }
 
-function validateProbe(
+interface ValidatedProbe {
+  readonly nodeOrdinal: number;
+}
+
+function validateProbeExport(
   value: Record<string, unknown>,
   witness: PostSettlementTargetWitness,
-): ProbeExportEvidence {
+): ValidatedProbe {
+  const node = isRecord(value.node) ? value.node : undefined;
+  const outputIdentity = isRecord(value.output_identity) ? value.output_identity : undefined;
   if (value.schema !== 'browser-gpt-page-probe/v1'
     || value.operation !== 'export'
     || value.status !== 'ok'
@@ -472,19 +451,19 @@ function validateProbe(
     || value.configured_profile_key !== witness.configured_profile_key
     || value.target_id !== witness.target_id
     || value.normalized_url !== witness.normalized_url
-    || !isRecord(value.node)
-    || value.node.role !== 'assistant'
-    || !isSafeCount(value.node.ordinal)
-    || value.node.document_ordinal !== witness.document_ordinal
-    || value.node.message_id !== witness.assistant_message_id
+    || !node
+    || node.role !== 'assistant'
+    || !isSafeCount(node.ordinal)
+    || node.document_ordinal !== witness.document_ordinal
+    || node.message_id !== witness.assistant_message_id
     || value.assistant_message_id !== witness.assistant_message_id
     || value.representation !== witness.representation
     || value.byte_length !== witness.byte_length
     || value.sha256 !== witness.sha256
-    || !isRecord(value.output_identity)
-    || value.output_identity.byte_length !== witness.byte_length
-    || value.output_identity.sha256 !== witness.sha256
-    || !isBoundedString(value.output_identity.path, MAX_URL_LENGTH)
+    || !outputIdentity
+    || !isBoundedString(outputIdentity.path, MAX_URL_LENGTH)
+    || outputIdentity.byte_length !== witness.byte_length
+    || outputIdentity.sha256 !== witness.sha256
     || value.observed_user_nodes !== witness.observed_user_nodes
     || value.observed_assistant_nodes !== witness.observed_assistant_nodes
     || value.observed_message_nodes !== witness.observed_message_nodes
@@ -494,86 +473,15 @@ function validateProbe(
     || value.last_message !== true) {
     throw new CloseError('harvest_untrusted', 'probe_export_evidence_mismatch');
   }
-  return value as unknown as ProbeExportEvidence;
+  return { nodeOrdinal: node.ordinal };
 }
 
-function guardExpression(witness: PostSettlementTargetWitness, ordinal: number): string {
+function finalGuardExpression(witness: PostSettlementTargetWitness, ordinal: number): string {
   const encoded = Buffer.from(JSON.stringify({ ...witness, ordinal }), 'utf8').toString('base64');
-  return `(async () => {
-    const expected = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'), (c) => c.charCodeAt(0))));
-    const normalize = (raw) => {
-      const url = new URL(raw);
-      url.hash = '';
-      url.search = '';
-      url.hostname = url.hostname.toLowerCase();
-      url.pathname = url.pathname.replace(/\\/+$/u, '') || '/';
-      return url.toString().replace(/\\/$/u, '');
-    };
-    const raw = Array.from(document.querySelectorAll('[data-message-author-role]'));
-    const counts = { user: 0, assistant: 0 };
-    const nodes = [];
-    for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
-      const node = raw[documentOrdinal];
-      const role = node.getAttribute('data-message-author-role');
-      if (role !== 'user' && role !== 'assistant') continue;
-      nodes.push({
-        node,
-        role,
-        ordinal: counts[role]++,
-        documentOrdinal,
-        messageId: node.getAttribute('data-message-id'),
-      });
-    }
-    const idMatches = nodes.filter((entry) => entry.messageId === expected.assistant_message_id);
-    if (idMatches.length !== 1) return { ok: false, reason: 'assistant_message_identity_changed' };
-    const candidate = idMatches[0];
-    const lastAssistant = [...nodes].reverse().find((entry) => entry.role === 'assistant');
-    if (candidate.role !== 'assistant'
-      || candidate.ordinal !== expected.ordinal
-      || candidate.documentOrdinal !== expected.document_ordinal
-      || candidate !== lastAssistant
-      || candidate !== nodes[nodes.length - 1]) {
-      return { ok: false, reason: 'assistant_tail_changed' };
-    }
-    let generating = 'unknown';
-    try {
-      generating = Boolean(document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]'));
-    } catch { generating = 'unknown'; }
-    if (generating !== false) return { ok: false, reason: 'generation_state_changed' };
-    const text = expected.representation === 'innerText'
-      ? candidate.node.innerText
-      : candidate.node.textContent;
-    if (typeof text !== 'string') return { ok: false, reason: 'representation_unavailable' };
-    const bytes = new TextEncoder().encode(text);
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
-    const sha256 = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
-    const currentUrl = normalize(location.href);
-    return {
-      ok: currentUrl === expected.normalized_url
-        && bytes.byteLength === expected.byte_length
-        && sha256 === expected.sha256
-        && counts.user === expected.observed_user_nodes
-        && counts.assistant === expected.observed_assistant_nodes
-        && nodes.length === expected.observed_message_nodes,
-      normalized_url: currentUrl,
-      byte_length: bytes.byteLength,
-      sha256,
-      observed_user_nodes: counts.user,
-      observed_assistant_nodes: counts.assistant,
-      observed_message_nodes: nodes.length,
-      generation_in_progress: generating,
-      nodes_truncated: false,
-      assistant_message_id: candidate.messageId,
-      representation: expected.representation,
-      document_ordinal: candidate.documentOrdinal,
-      ordinal: candidate.ordinal,
-      last_assistant: candidate === lastAssistant,
-      last_message: candidate === nodes[nodes.length - 1],
-    };
-  })()`;
+  return `(async()=>{const e=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'),c=>c.charCodeAt(0))));const n=r=>{const u=new URL(r);u.hash='';u.search='';u.hostname=u.hostname.toLowerCase();u.pathname=u.pathname.replace(/\\/+$/u,'')||'/';return u.toString().replace(/\\/$/u,'')};const raw=Array.from(document.querySelectorAll('[data-message-author-role]'));const counts={user:0,assistant:0};const nodes=[];for(let d=0;d<raw.length;d++){const node=raw[d],role=node.getAttribute('data-message-author-role');if(role!=='user'&&role!=='assistant')continue;nodes.push({node,role,ordinal:counts[role]++,documentOrdinal:d,messageId:node.getAttribute('data-message-id')})}const matches=nodes.filter(x=>x.messageId===e.assistant_message_id);if(matches.length!==1)return{ok:false,reason:'assistant_message_identity_changed'};const c=matches[0],last=[...nodes].reverse().find(x=>x.role==='assistant');if(c.role!=='assistant'||c.ordinal!==e.ordinal||c.documentOrdinal!==e.document_ordinal||c!==last||c!==nodes[nodes.length-1])return{ok:false,reason:'assistant_tail_changed'};let generating='unknown';try{generating=Boolean(document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]'))}catch{}if(generating!==false)return{ok:false,reason:'generation_state_changed'};const text=e.representation==='innerText'?c.node.innerText:c.node.textContent;if(typeof text!=='string')return{ok:false,reason:'representation_unavailable'};const bytes=new TextEncoder().encode(text),digest=await crypto.subtle.digest('SHA-256',bytes),hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join(''),url=n(location.href);return{ok:url===e.normalized_url&&bytes.byteLength===e.byte_length&&hash===e.sha256&&counts.user===e.observed_user_nodes&&counts.assistant===e.observed_assistant_nodes&&nodes.length===e.observed_message_nodes,normalized_url:url,byte_length:bytes.byteLength,sha256:hash,observed_user_nodes:counts.user,observed_assistant_nodes:counts.assistant,observed_message_nodes:nodes.length,generation_in_progress:generating,nodes_truncated:false,assistant_message_id:c.messageId,representation:e.representation,document_ordinal:c.documentOrdinal,ordinal:c.ordinal,last_assistant:c===last,last_message:c===nodes[nodes.length-1]}})()`;
 }
 
-function guardMatches(
+function finalGuardMatches(
   value: unknown,
   witness: PostSettlementTargetWitness,
   ordinal: number,
@@ -596,109 +504,85 @@ function guardMatches(
     && value.last_message === true;
 }
 
-function exactTarget(
+function resolveExactTarget(
   targets: readonly CdpTarget[],
   witness: PostSettlementTargetWitness,
 ): Required<Pick<CdpTarget, 'id' | 'url' | 'webSocketDebuggerUrl'>> | undefined {
-  const identityMatches = targets.filter(
-    (target) => target.type === 'page' && target.id === witness.target_id,
-  );
-  if (identityMatches.length === 0) return undefined;
-  if (identityMatches.length !== 1) {
-    throw new CloseError('target_identity_mismatch', 'target_identity_ambiguous');
-  }
-  const target = identityMatches[0]!;
+  const matches = targets.filter((target) => target.type === 'page' && target.id === witness.target_id);
+  if (matches.length === 0) return undefined;
+  if (matches.length !== 1) throw new CloseError('target_identity_mismatch', 'target_identity_ambiguous');
+  const target = matches[0]!;
   if (!isBoundedString(target.url, MAX_URL_LENGTH)
     || normalizeUrl(target.url) !== witness.normalized_url
     || !isBoundedString(target.webSocketDebuggerUrl, MAX_URL_LENGTH)) {
     throw new CloseError('target_identity_mismatch', 'target_identity_changed');
   }
-  return {
-    id: target.id!,
-    url: target.url,
-    webSocketDebuggerUrl: target.webSocketDebuggerUrl,
-  };
+  return { id: target.id!, url: target.url, webSocketDebuggerUrl: target.webSocketDebuggerUrl };
 }
 
 export async function runPostSettlementClose(
   args: ParsedCloseArgs,
-  deps: PostSettlementCloseDependencies = defaultPostSettlementCloseDependencies,
+  dependencies: PostSettlementCloseDependencies = defaultPostSettlementCloseDependencies,
 ): Promise<PostSettlementCloseResult> {
   let profileKey = 'profile-unresolved';
   let evidenceSchema = 'unresolved';
   let witness: PostSettlementTargetWitness | undefined;
   try {
     profileKey = configuredProfileKey(args.profile, args.cdp);
-    const direct = parseJson(
-      await deps.readText(args.turnResult),
+    const direct = parseJsonRecord(
+      await dependencies.readText(args.turnResult),
       'settlement_untrusted',
       'turn_result_invalid_json',
     );
     const validated = validateDirectResult(direct);
     witness = validated.witness;
     evidenceSchema = validated.schema;
-    if (profileKey !== witness.configured_profile_key) {
+    if (witness.configured_profile_key !== profileKey) {
       throw new CloseError('settlement_untrusted', 'configured_profile_namespace_mismatch');
     }
-    const probe = validateProbe(
-      parseJson(
-        await deps.readText(args.probeResult),
+    const probe = validateProbeExport(
+      parseJsonRecord(
+        await dependencies.readText(args.probeResult),
         'harvest_untrusted',
         'probe_result_invalid_json',
       ),
       witness,
     );
-    const bytes = await deps.readBytes(args.harvest);
-    if (bytes.byteLength !== witness.byte_length || hashBytes(bytes) !== witness.sha256) {
+    const harvest = await dependencies.readBytes(args.harvest);
+    if (harvest.byteLength !== witness.byte_length || sha256(harvest) !== witness.sha256) {
       throw new CloseError('harvest_untrusted', 'harvest_file_mismatch');
     }
 
-    const target = exactTarget(await deps.listTargets(args.cdp), witness);
-    if (!target) return baseResult('already_absent', profileKey, evidenceSchema, witness);
-    const channel = await deps.openExactTargetChannel(target);
+    const target = resolveExactTarget(await dependencies.listTargets(args.cdp), witness);
+    if (!target) return resultEnvelope('already_absent', profileKey, evidenceSchema, witness);
+    const channel = await dependencies.openExactTargetChannel(target);
     let closeAttempted = false;
     try {
-      const expression = guardExpression(witness, probe.node.ordinal);
+      const expression = finalGuardExpression(witness, probe.nodeOrdinal);
       const initial = await channel.evaluate(expression);
-      if (!guardMatches(initial, witness, probe.node.ordinal)) {
-        return baseResult(
-          'stale_harvest',
-          profileKey,
-          evidenceSchema,
-          witness,
-          0,
-          'initial_guard_failed',
+      if (!finalGuardMatches(initial, witness, probe.nodeOrdinal)) {
+        return resultEnvelope(
+          'stale_harvest', profileKey, evidenceSchema, witness, 0, 'initial_guard_failed',
         );
       }
-      await deps.beforeFinalGuard?.();
+      await dependencies.beforeFinalGuard?.();
       const final = await channel.evaluate(expression);
-      if (!guardMatches(final, witness, probe.node.ordinal)) {
-        return baseResult(
-          'stale_harvest',
-          profileKey,
-          evidenceSchema,
-          witness,
-          0,
-          'final_guard_failed',
+      if (!finalGuardMatches(final, witness, probe.nodeOrdinal)) {
+        return resultEnvelope(
+          'stale_harvest', profileKey, evidenceSchema, witness, 0, 'final_guard_failed',
         );
       }
-      // There is deliberately no mutable-page await between this final guard
-      // and the one exact-target close dispatch.
+      // The next mutable-page action is the sole exact-target close dispatch.
       closeAttempted = true;
-      try {
-        await channel.close();
-      } catch {
-        // A dispatched close without fresh absence proof is never reported closed.
-      }
+      try { await channel.close(); } catch { /* absence proof remains authoritative */ }
     } finally {
       channel.disconnect();
     }
-
-    const remaining = await deps.listTargets(args.cdp);
-    const absent = !remaining.some(
-      (candidate) => candidate.type === 'page' && candidate.id === witness!.target_id,
-    );
-    return baseResult(
+    const remaining = await dependencies.listTargets(args.cdp);
+    const absent = !remaining.some((candidate) => (
+      candidate.type === 'page' && candidate.id === witness!.target_id
+    ));
+    return resultEnvelope(
       absent ? 'closed' : 'close_unconfirmed',
       profileKey,
       evidenceSchema,
@@ -708,7 +592,7 @@ export async function runPostSettlementClose(
     );
   } catch (error) {
     const status = error instanceof CloseError ? error.status : 'unavailable';
-    return baseResult(status, profileKey, evidenceSchema, witness, 0, boundedReason(error));
+    return resultEnvelope(status, profileKey, evidenceSchema, witness, 0, boundedReason(error));
   }
 }
 
@@ -724,13 +608,13 @@ function closeExitCode(status: PostSettlementCloseStatus): number {
 
 export async function runPostSettlementCloseCli(
   argv = process.argv.slice(2),
-  deps: PostSettlementCloseDependencies = defaultPostSettlementCloseDependencies,
+  dependencies: PostSettlementCloseDependencies = defaultPostSettlementCloseDependencies,
 ): Promise<number> {
   let result: PostSettlementCloseResult;
   try {
-    result = await runPostSettlementClose(parsePostSettlementCloseArgs(argv), deps);
+    result = await runPostSettlementClose(parsePostSettlementCloseArgs(argv), dependencies);
   } catch (error) {
-    result = baseResult(
+    result = resultEnvelope(
       error instanceof CloseError ? error.status : 'input_invalid',
       'profile-unresolved',
       'unresolved',
@@ -743,13 +627,14 @@ export async function runPostSettlementCloseCli(
   return closeExitCode(result.status);
 }
 
-// Additive diagnostic export evidence. The underlying probe stays read-only.
+// The diagnostic probe remains read-only. Export is followed by a second
+// inspect of the same exact target so the exported bytes carry complete close evidence.
 export interface EnhancedProbeDependencies {
-  readonly runProbe: typeof runPageProbe;
+  readonly runProbe: (args: ParsedProbeArgs, dependencies?: ProbeDependencies) => Promise<unknown>;
   readonly probeDependencies?: ProbeDependencies;
 }
 
-function removeProfileOption(argv: readonly string[]): {
+function splitProfileArgument(argv: readonly string[]): {
   readonly profile?: string;
   readonly probeArgv: string[];
 } {
@@ -762,27 +647,38 @@ function removeProfileOption(argv: readonly string[]): {
       continue;
     }
     const candidate = argv[++index];
-    if (!candidate || candidate.startsWith('--') || profile !== undefined) {
-      throw new Error('profile_argument_invalid');
-    }
+    if (!candidate || candidate.startsWith('--') || profile) throw new Error('profile_argument_invalid');
     profile = candidate;
   }
   return { profile, probeArgv };
 }
 
-function probeStatusExitCode(status: string): number {
-  return ({
-    ok: 0,
-    not_found: 2,
-    ambiguous: 3,
-    stale_node: 4,
-    unsafe_output: 5,
-    surface_unknown: 6,
-    unavailable: 7,
-    export_failed: 8,
-    input_invalid: 9,
-    cleanup_failed: 10,
-  } as Record<string, number>)[status] ?? 7;
+function probeStatus(error: unknown): string {
+  if (isRecord(error) && typeof error.status === 'string' && PROBE_STATUSES.has(error.status)) {
+    return error.status;
+  }
+  return 'unavailable';
+}
+
+function probeReason(error: unknown): string {
+  if (isRecord(error) && isBoundedString(error.reason, 240)) return error.reason;
+  return boundedReason(error);
+}
+
+function probeExitCode(status: string): number {
+  switch (status) {
+    case 'ok': return 0;
+    case 'not_found': return 2;
+    case 'ambiguous': return 3;
+    case 'stale_node': return 4;
+    case 'unsafe_output': return 5;
+    case 'surface_unknown': return 6;
+    case 'unavailable': return 7;
+    case 'export_failed': return 8;
+    case 'input_invalid': return 9;
+    case 'cleanup_failed': return 10;
+    default: return 7;
+  }
 }
 
 function probeFailure(operation: string, status: string, reason: string): Record<string, unknown> {
@@ -796,20 +692,22 @@ function probeFailure(operation: string, status: string, reason: string): Record
   };
 }
 
-function enrichProbeExport(
+function enrichExportEvidence(
   exported: Record<string, unknown>,
   inspected: Record<string, unknown>,
   profile: string,
   cdp: string,
 ): Record<string, unknown> {
+  const exportedNode = isRecord(exported.node) ? exported.node : undefined;
+  const snapshot = isRecord(inspected.snapshot) ? inspected.snapshot : undefined;
   if (exported.schema !== 'browser-gpt-page-probe/v1'
     || exported.operation !== 'export'
     || exported.status !== 'ok'
-    || !isRecord(exported.node)
-    || exported.node.role !== 'assistant'
-    || !isBoundedString(exported.node.message_id)
-    || !isSafeCount(exported.node.ordinal)
-    || !isSafeCount(exported.node.document_ordinal)
+    || !exportedNode
+    || exportedNode.role !== 'assistant'
+    || !isBoundedString(exportedNode.message_id)
+    || !isSafeCount(exportedNode.ordinal)
+    || !isSafeCount(exportedNode.document_ordinal)
     || !isSafeCount(exported.byte_length)
     || typeof exported.sha256 !== 'string'
     || !SHA256_RE.test(exported.sha256)
@@ -820,10 +718,9 @@ function enrichProbeExport(
     || inspected.operation !== 'inspect'
     || inspected.status !== 'ok'
     || inspected.target_id !== exported.target_id
-    || !isRecord(inspected.snapshot)) {
+    || !snapshot) {
     return probeFailure('export', 'stale_node', 'extended_export_evidence_unavailable');
   }
-  const snapshot = inspected.snapshot;
   if (!Array.isArray(snapshot.nodes)
     || snapshot.nodes_truncated !== false
     || snapshot.generation_in_progress !== false
@@ -836,32 +733,30 @@ function enrichProbeExport(
     return probeFailure('export', 'surface_unknown', 'extended_export_surface_incomplete');
   }
   const nodes = snapshot.nodes.filter(isRecord);
-  const selected = nodes.filter((node) => node.message_id === exported.node!.message_id);
-  const assistants = nodes.filter((node) => node.role === 'assistant');
+  const selectedId = exportedNode.message_id;
+  const selected = nodes.filter((node) => node.message_id === selectedId);
   const candidate = selected.length === 1 ? selected[0] : undefined;
+  const assistants = nodes.filter((node) => node.role === 'assistant');
   const representation = exported.representation;
-  const representationSummary = candidate && isRecord(candidate[representation])
+  const summary = candidate && isRecord(candidate[representation])
     ? candidate[representation]
     : undefined;
-  const lastAssistant = assistants.at(-1);
-  const lastMessage = nodes.at(-1);
   if (!candidate
     || candidate.role !== 'assistant'
-    || candidate.ordinal !== exported.node.ordinal
-    || candidate.document_ordinal !== exported.node.document_ordinal
-    || candidate !== lastAssistant
-    || candidate !== lastMessage
-    || !representationSummary
-    || representationSummary.byte_length !== exported.byte_length
-    || representationSummary.sha256 !== exported.sha256) {
+    || candidate.ordinal !== exportedNode.ordinal
+    || candidate.document_ordinal !== exportedNode.document_ordinal
+    || candidate !== assistants.at(-1)
+    || candidate !== nodes.at(-1)
+    || !summary
+    || summary.byte_length !== exported.byte_length
+    || summary.sha256 !== exported.sha256) {
     return probeFailure('export', 'stale_node', 'extended_export_witness_mismatch');
   }
-  const normalizedUrl = normalizeConversationUrl(snapshot.page_url);
   return {
     ...exported,
     configured_profile_key: configuredProfileKey(profile, cdp),
-    normalized_url: normalizedUrl,
-    assistant_message_id: exported.node.message_id,
+    normalized_url: normalizeConversationUrl(snapshot.page_url),
+    assistant_message_id: selectedId,
     output_identity: {
       path: exported.output,
       byte_length: exported.byte_length,
@@ -884,36 +779,36 @@ export async function runEnhancedPageProbeCli(
   let operation = argv[0] ?? 'list';
   let result: Record<string, unknown>;
   try {
-    const separated = removeProfileOption(argv);
-    const parsed = parsePageProbeArgs(separated.probeArgv);
+    const split = splitProfileArgument(argv);
+    const parsed = parsePageProbeArgs(split.probeArgv);
     operation = parsed.operation;
-    const exported = await dependencies.runProbe(parsed, dependencies.probeDependencies) as unknown;
-    result = isRecord(exported)
-      ? exported
-      : probeFailure(operation, 'unavailable', 'malformed_probe_result');
+    const raw = await dependencies.runProbe(parsed, dependencies.probeDependencies);
+    result = isRecord(raw) ? raw : probeFailure(operation, 'unavailable', 'malformed_probe_result');
     if (parsed.operation === 'export' && result.status === 'ok') {
-      if (!separated.profile) {
+      if (!split.profile) {
         result = probeFailure('export', 'input_invalid', 'profile_required_for_export');
       } else {
-        const inspected = await dependencies.runProbe({
+        const inspectArgs: ParsedProbeArgs = {
           operation: 'inspect',
           cdp: parsed.cdp,
           targetId: parsed.targetId,
-        }, dependencies.probeDependencies) as unknown;
-        result = isRecord(inspected)
-          ? enrichProbeExport(result, inspected, separated.profile, parsed.cdp)
+        };
+        const inspectedRaw = await dependencies.runProbe(inspectArgs, dependencies.probeDependencies);
+        result = isRecord(inspectedRaw)
+          ? enrichExportEvidence(result, inspectedRaw, split.profile, parsed.cdp)
           : probeFailure('export', 'unavailable', 'malformed_inspect_result');
       }
     }
   } catch (error) {
-    result = probeFailure(operation, 'input_invalid', boundedReason(error));
+    const status = probeStatus(error);
+    result = probeFailure(operation, status, probeReason(error));
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
-  return probeStatusExitCode(String(result.status ?? 'unavailable'));
+  return probeExitCode(String(result.status ?? 'unavailable'));
 }
 
-// Sanctioned state-light helper integration. It captures only open pages for
-// which state-light made no page.close call, before browser disconnect.
+// State-light preload: observe service identities, capture an actionable
+// witness only for a page the helper preserved, then enrich its direct result.
 interface DirectCaptureConfig {
   readonly profile: string;
   readonly cdp: string;
@@ -936,70 +831,69 @@ interface CaptureState {
   captureCause?: PostSettlementCaptureCause;
 }
 
-function optionMap(argv: readonly string[]): Map<string, string | true> {
+function parseTurnOptions(argv: readonly string[]): Map<string, string | true> {
   const options = new Map<string, string | true>();
   const args = argv[0] === 'turn' ? argv.slice(1) : argv;
   for (let index = 0; index < args.length; index++) {
-    const key = args[index];
-    if (!key?.startsWith('--')) continue;
-    if (key === '--new-chat') {
-      options.set(key.slice(2), true);
+    const name = args[index];
+    if (!name?.startsWith('--')) continue;
+    if (name === '--new-chat') {
+      options.set('new-chat', true);
       continue;
     }
     const value = args[++index];
-    if (value) options.set(key.slice(2), value);
+    if (value) options.set(name.slice(2), value);
   }
   return options;
 }
 
 function directCaptureConfig(argv: readonly string[]): DirectCaptureConfig | undefined {
-  const options = optionMap(argv);
+  const options = parseTurnOptions(argv);
   if (!options.has('reviewer-source-output')) return undefined;
   const profile = options.get('profile');
   const cdp = options.get('cdp');
   const repositoryFullName = options.get('repository');
-  const issueRaw = options.get('issue-number');
+  const issueNumber = options.get('issue-number');
   if (typeof profile !== 'string'
     || typeof cdp !== 'string'
     || typeof repositoryFullName !== 'string'
-    || typeof issueRaw !== 'string'
-    || !/^[1-9][0-9]*$/u.test(issueRaw)) return undefined;
+    || typeof issueNumber !== 'string'
+    || !/^[1-9][0-9]*$/u.test(issueNumber)) return undefined;
   return {
     profile,
     cdp,
     profileKey: configuredProfileKey(profile, cdp),
     repositoryFullName,
-    issueNumber: Number(issueRaw),
+    issueNumber: Number(issueNumber),
   };
 }
 
-function observePageTraffic(page: any, observation: DirectPublicationObservationState): void {
+function observeServiceTraffic(page: any, observation: DirectPublicationObservationState): void {
   const consume = (payload: string): void => {
-    if (!payload) return;
-    observeDirectPublicationPayloadTree(observation, payload);
+    if (payload) observeDirectPublicationPayloadTree(observation, payload);
   };
   page.on?.('response', async (response: any) => {
     try { consume(await response.text()); } catch { /* opaque body */ }
   });
   page.on?.('websocket', (socket: any) => {
-    socket.on?.('framereceived', (frame: { payload?: string }) => consume(frame.payload ?? ''));
+    socket.on?.('framereceived', (frame: { readonly payload?: string }) => consume(frame.payload ?? ''));
   });
 }
 
 function resolveCausalWitness(state: CaptureState): CausalWitness | undefined {
-  const invocations = state.observation.invocations.filter((item) => (
-    item.repositoryFullName === state.config.repositoryFullName
-    && item.issueNumber === state.config.issueNumber
+  const invocations = state.observation.invocations.filter((entry) => (
+    entry.repositoryFullName === state.config.repositoryFullName
+    && entry.issueNumber === state.config.issueNumber
   ));
   if (invocations.length !== 1) return undefined;
   const invocation = invocations[0]!;
-  const matchingResults = state.observation.results.filter((item) => (
-    item.repositoryFullName === state.config.repositoryFullName
-    && item.issueNumber === state.config.issueNumber
-    && item.toolCallId === invocation.toolCallId
+  const results = state.observation.results.filter((entry) => (
+    entry.repositoryFullName === state.config.repositoryFullName
+    && entry.issueNumber === state.config.issueNumber
+    && entry.toolCallId === invocation.toolCallId
   ));
-  if (matchingResults.length > 1) return undefined;
-  const result = matchingResults[0];
+  if (results.length > 1) return undefined;
+  const result = results[0];
   const parentIds = new Set(
     [invocation.parentUserMessageId, result?.parentUserMessageId]
       .filter((value): value is string => isBoundedString(value)),
@@ -1017,29 +911,27 @@ function resolveCausalWitness(state: CaptureState): CausalWitness | undefined {
   };
 }
 
-async function withCaptureTimeout<T>(operation: Promise<T>): Promise<T> {
-  return await Promise.race([
-    operation,
-    new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('post_settlement_capture_timeout')), CDP_REQUEST_TIMEOUT_MS);
-    }),
-  ]);
-}
-
-function captureCause(error: unknown): PostSettlementCaptureCause {
-  const message = boundedReason(error);
-  if (message === 'post_settlement_capture_timeout') return 'timeout';
-  if (/closed|detached/iu.test(message)) return 'page_detached';
-  if (/target/iu.test(message)) return 'target_identity_unavailable';
-  if (/assistant|reply|witness/iu.test(message)) return 'reply_identity_unavailable';
-  if (/surface|generation|tail|truncated|count/iu.test(message)) return 'surface_incomplete';
+function classifyCaptureFailure(error: unknown): PostSettlementCaptureCause {
+  const reason = boundedReason(error);
+  if (reason === 'post_settlement_capture_timeout') return 'timeout';
+  if (/closed|detached/iu.test(reason)) return 'page_detached';
+  if (/target/iu.test(reason)) return 'target_identity_unavailable';
+  if (/assistant|reply|witness/iu.test(reason)) return 'reply_identity_unavailable';
+  if (/surface|generation|tail|truncated|count/iu.test(reason)) return 'surface_incomplete';
   return 'malformed';
 }
 
-async function capturePreservedPage(
-  state: CaptureState,
-  tracked: TrackedPage,
-): Promise<void> {
+async function withCaptureTimeout<T>(operation: Promise<T>): Promise<T> {
+  return await Promise.race([
+    operation,
+    new Promise<never>((_, reject) => setTimeout(
+      () => reject(new Error('post_settlement_capture_timeout')),
+      CDP_TIMEOUT_MS,
+    )),
+  ]);
+}
+
+async function capturePreservedPage(state: CaptureState, tracked: TrackedPage): Promise<void> {
   const page = tracked.page;
   if (tracked.closeAttempted || page.isClosed?.() === true) return;
   const causal = resolveCausalWitness(state);
@@ -1047,9 +939,9 @@ async function capturePreservedPage(
   const session = await page.context().newCDPSession(page);
   let targetInfo: Record<string, unknown>;
   try {
-    const raw = await session.send('Target.getTargetInfo');
-    if (!isRecord(raw) || !isRecord(raw.targetInfo)) throw new Error('target_info_malformed');
-    targetInfo = raw.targetInfo;
+    const response: unknown = await session.send('Target.getTargetInfo');
+    if (!isRecord(response) || !isRecord(response.targetInfo)) throw new Error('target_info_malformed');
+    targetInfo = response.targetInfo;
   } finally {
     await session.detach().catch(() => undefined);
   }
@@ -1061,18 +953,18 @@ async function capturePreservedPage(
     || normalizeUrl(targetInfo.url) !== pageUrl) {
     throw new Error('target_identity_unavailable');
   }
-  const surface = await page.evaluate(async ({ assistantMessageId, maximumNodes }: {
-    assistantMessageId: string;
-    maximumNodes: number;
+  const surface: unknown = await page.evaluate(async ({ assistantMessageId, maximumNodes }: {
+    readonly assistantMessageId: string;
+    readonly maximumNodes: number;
   }) => {
     const raw = Array.from(document.querySelectorAll('[data-message-author-role]'));
     const counts = { user: 0, assistant: 0 };
     const nodes: Array<{
-      node: Element;
-      role: 'user' | 'assistant';
-      ordinal: number;
-      documentOrdinal: number;
-      messageId: string | null;
+      readonly node: Element;
+      readonly role: 'user' | 'assistant';
+      readonly ordinal: number;
+      readonly documentOrdinal: number;
+      readonly messageId: string | null;
     }> = [];
     for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
       const node = raw[documentOrdinal]!;
@@ -1089,8 +981,8 @@ async function capturePreservedPage(
     if (nodes.length === 0 || nodes.length > maximumNodes) {
       return { ok: false, reason: 'surface_count_invalid' };
     }
-    const idMatches = nodes.filter((entry) => entry.messageId === assistantMessageId);
-    const candidate = idMatches.length === 1 ? idMatches[0] : undefined;
+    const matches = nodes.filter((entry) => entry.messageId === assistantMessageId);
+    const candidate = matches.length === 1 ? matches[0] : undefined;
     const lastAssistant = [...nodes].reverse().find((entry) => entry.role === 'assistant');
     if (!candidate
       || candidate.role !== 'assistant'
@@ -1100,15 +992,17 @@ async function capturePreservedPage(
     }
     let generating: boolean | 'unknown' = 'unknown';
     try {
-      generating = Boolean(document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]'));
+      generating = Boolean(document.querySelector(
+        '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]',
+      ));
     } catch { generating = 'unknown'; }
     if (generating !== false) return { ok: false, reason: 'generation_state_unknown_or_active' };
-    const html = candidate.node as HTMLElement;
-    const text = typeof html.innerText === 'string' ? html.innerText : null;
-    if (text === null) return { ok: false, reason: 'assistant_representation_unavailable' };
+    const element = candidate.node as HTMLElement;
+    const text = typeof element.innerText === 'string' ? element.innerText : undefined;
+    if (text === undefined) return { ok: false, reason: 'assistant_representation_unavailable' };
     const bytes = new TextEncoder().encode(text);
     const digest = await crypto.subtle.digest('SHA-256', bytes);
-    const sha256 = Array.from(
+    const hash = Array.from(
       new Uint8Array(digest),
       (byte) => byte.toString(16).padStart(2, '0'),
     ).join('');
@@ -1118,7 +1012,7 @@ async function capturePreservedPage(
       assistant_message_id: assistantMessageId,
       representation: 'innerText',
       byte_length: bytes.byteLength,
-      sha256,
+      sha256: hash,
       document_ordinal: candidate.documentOrdinal,
       observed_user_nodes: counts.user,
       observed_assistant_nodes: counts.assistant,
@@ -1126,10 +1020,7 @@ async function capturePreservedPage(
       generation_in_progress: false,
       nodes_truncated: false,
     };
-  }, {
-    assistantMessageId: causal.assistant_message_id,
-    maximumNodes: MAX_CAPTURE_MESSAGE_NODES,
-  });
+  }, { assistantMessageId: causal.assistant_message_id, maximumNodes: MAX_CAPTURE_MESSAGE_NODES });
   if (!isRecord(surface)
     || surface.ok !== true
     || surface.assistant_message_id !== causal.assistant_message_id
@@ -1147,7 +1038,9 @@ async function capturePreservedPage(
     || surface.nodes_truncated !== false
     || !isBoundedString(surface.normalized_url, MAX_URL_LENGTH)
     || normalizeUrl(surface.normalized_url) !== pageUrl) {
-    throw new Error(String(surface.reason ?? 'surface_incomplete'));
+    throw new Error(isRecord(surface) && typeof surface.reason === 'string'
+      ? surface.reason
+      : 'surface_incomplete');
   }
   state.causalWitness = causal;
   state.targetWitness = {
@@ -1168,9 +1061,9 @@ async function capturePreservedPage(
   };
 }
 
-async function captureBeforeBrowserDisconnect(state: CaptureState): Promise<void> {
-  const candidates = state.pages.filter((tracked) => (
-    !tracked.closeAttempted && tracked.page.isClosed?.() !== true
+async function captureBeforeDisconnect(state: CaptureState): Promise<void> {
+  const candidates = state.pages.filter((entry) => (
+    !entry.closeAttempted && entry.page.isClosed?.() !== true
   ));
   if (candidates.length !== 1) {
     if (candidates.length > 1) state.captureCause = 'target_identity_unavailable';
@@ -1179,14 +1072,14 @@ async function captureBeforeBrowserDisconnect(state: CaptureState): Promise<void
   try {
     await withCaptureTimeout(capturePreservedPage(state, candidates[0]!));
   } catch (error) {
-    state.captureCause = captureCause(error);
+    state.captureCause = classifyCaptureFailure(error);
   }
 }
 
 function instrumentPage(state: CaptureState, page: any): void {
   const tracked: TrackedPage = { page, closeAttempted: false };
   state.pages.push(tracked);
-  observePageTraffic(page, state.observation);
+  observeServiceTraffic(page, state.observation);
   const originalClose = page.close?.bind(page);
   if (typeof originalClose === 'function') {
     page.close = async (...args: unknown[]) => {
@@ -1199,17 +1092,18 @@ function instrumentPage(state: CaptureState, page: any): void {
 function instrumentBrowser(state: CaptureState, browser: any): void {
   for (const context of browser.contexts?.() ?? []) {
     const originalNewPage = context.newPage?.bind(context);
-    if (typeof originalNewPage !== 'function') continue;
-    context.newPage = async (...args: unknown[]) => {
-      const page = await originalNewPage(...args);
-      instrumentPage(state, page);
-      return page;
-    };
+    if (typeof originalNewPage === 'function') {
+      context.newPage = async (...args: unknown[]) => {
+        const page = await originalNewPage(...args);
+        instrumentPage(state, page);
+        return page;
+      };
+    }
   }
   const originalClose = browser.close?.bind(browser);
   if (typeof originalClose === 'function') {
     browser.close = async (...args: unknown[]) => {
-      await captureBeforeBrowserDisconnect(state);
+      await captureBeforeDisconnect(state);
       return await originalClose(...args);
     };
   }
@@ -1219,8 +1113,9 @@ export function rewritePreservedTurnResult(
   value: Record<string, unknown>,
   state: Pick<CaptureState, 'config' | 'causalWitness' | 'targetWitness' | 'captureCause'>,
 ): Record<string, unknown> {
-  if (!isEligibleDirectResult(value)
-    || value.configured_profile_key !== state.config.profileKey) return value;
+  if (!isEligibleDirectResult(value) || value.configured_profile_key !== state.config.profileKey) {
+    return value;
+  }
   if (state.causalWitness && state.targetWitness) {
     return {
       ...value,
@@ -1231,35 +1126,31 @@ export function rewritePreservedTurnResult(
   if (state.captureCause) {
     return {
       ...value,
-      post_settlement_target_capture: {
-        status: 'unavailable',
-        cause: state.captureCause,
-      },
+      post_settlement_target_capture: { status: 'unavailable', cause: state.captureCause },
     };
   }
   return value;
 }
 
 function installTurnResultRewrite(state: CaptureState): void {
-  const stream = process.stdout as unknown as {
+  const output = process.stdout as unknown as {
     write: (chunk: string | Uint8Array, encoding?: BufferEncoding, callback?: () => void) => boolean;
   };
-  const originalWrite = stream.write.bind(process.stdout);
-  stream.write = (chunk, encoding, callback) => {
+  const originalWrite = output.write.bind(process.stdout);
+  output.write = (chunk, encoding, callback) => {
     const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString(encoding ?? 'utf8');
-    const hasSingleLine = text.endsWith('\n') && text.indexOf('\n') === text.length - 1;
-    if (hasSingleLine) {
+    if (text.endsWith('\n') && text.indexOf('\n') === text.length - 1) {
       try {
-        const value: unknown = JSON.parse(text.slice(0, -1));
-        if (isRecord(value) && value.schema === 'turn-result/v1') {
+        const parsed: unknown = JSON.parse(text.slice(0, -1));
+        if (isRecord(parsed) && parsed.schema === 'turn-result/v1') {
           return originalWrite(
-            `${JSON.stringify(rewritePreservedTurnResult(value, state))}\n`,
+            `${JSON.stringify(rewritePreservedTurnResult(parsed, state))}\n`,
             encoding,
             callback,
           );
         }
       } catch {
-        // Non-JSON helper output is forwarded unchanged.
+        // Non-result stdout is untouched.
       }
     }
     return originalWrite(chunk, encoding, callback);
@@ -1277,9 +1168,9 @@ export function installStateLightPostSettlementCapture(argv: readonly string[]):
   installTurnResultRewrite(state);
   try {
     const chromium = loadChromium();
-    const originalConnect = chromium.connectOverCDP.bind(chromium);
+    const connect = chromium.connectOverCDP.bind(chromium);
     chromium.connectOverCDP = async (...args: unknown[]) => {
-      const browser = await originalConnect(...args);
+      const browser = await connect(...args);
       instrumentBrowser(state, browser);
       return browser;
     };
@@ -1292,7 +1183,8 @@ export function installStateLightPostSettlementCapture(argv: readonly string[]):
 
 const invokedPath = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
 const entryPath = process.argv[1]?.replaceAll('\\', '/');
-if (invokedPath !== import.meta.url && entryPath?.endsWith('/scripts/chatgpt-browser-turn/state-light-entry.ts')) {
+if (invokedPath !== import.meta.url
+  && entryPath?.endsWith('/scripts/chatgpt-browser-turn/state-light-entry.ts')) {
   installStateLightPostSettlementCapture(process.argv.slice(2));
 }
 
