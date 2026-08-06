@@ -105,8 +105,12 @@ orca terminal list --json
 
 Resolve one absolute non-primary worktree path `WT` in the same repository. Save its actual
 live head and branch/detached state. Branch, head, or linkage mismatches are report facts; they
-are not repository-policy vetoes after a direct user instruction. A second plausible target or
-an inability to distinguish the primary checkout remains real ambiguity.
+are not repository-policy vetoes after a direct user instruction. A branch mismatch, third head,
+stale or conflicting linkage, missing gate-specific input, or `cleanup_deferred` result is
+diagnostic evidence, not a terminal cleanup veto. Continue with the exact absolute target path
+through the lower-level Orca/Git removal path in Step 9, then perform the final Git/Orca
+read-back. A second plausible target or an inability to distinguish the primary checkout remains
+real ambiguity.
 
 ## Step 3 — Inspect readiness
 

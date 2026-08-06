@@ -48,6 +48,11 @@ describe('review-lane declaration and blast-radius routing', () => {
     expect(family.status).toBe('usable');
     if (family.status === 'usable') expect(family.blastRadius).toBe('high-or-uncertain');
 
+    const browserFamily = normalizeReviewLaneDeclaration(declaration([
+      { kind: 'family', path: 'scripts/chatgpt-browser-turn/**', behaviors: ['pure-review-lane-selection'] },
+    ]));
+    expect(browserFamily).toMatchObject({ status: 'usable', blastRadius: 'high' });
+
     const seven = normalizeReviewLaneDeclaration(declaration(Array.from({ length: 7 }, (_, index) => ({
       kind: 'exact' as const,
       path: `scripts/lib/review-lane-${index}.ts`,
@@ -55,6 +60,37 @@ describe('review-lane declaration and blast-radius routing', () => {
     }))));
     expect(seven.status).toBe('usable');
     if (seven.status === 'usable') expect(seven.blastRadius).toBe('high');
+  });
+
+  it('admits browser-turn paths with high blast radius for the security lane', () => {
+    const value = declaration([
+      { kind: 'exact', path: 'scripts/chatgpt-browser-turn/driver.ts', behaviors: ['pure-review-lane-selection'] },
+    ]);
+    const input = normalizeReviewLaneDeclaration(value);
+    const classification = classifyReviewLaneDeclaration(value);
+
+    expect(input).toMatchObject({ status: 'usable', blastRadius: 'high' });
+    expect(classification).toMatchObject({ policyStatus: 'available', scopeClass: 'security-sensitive' });
+    if (input.status !== 'usable') return;
+    expect(buildReviewLaneRouting(input, classification, 'r1', 'attempt-browser-turn')).toMatchObject({
+      lane: 'disputed',
+      topology: 'fixed/v1',
+    });
+  });
+
+  it('classifies normalized browser-turn paths as security-sensitive', () => {
+    const value = declaration([
+      { kind: 'exact', path: '  ./scripts/chatgpt-browser-turn/x.ts  ', behaviors: ['pure-review-lane-selection'] },
+    ]);
+    const input = normalizeReviewLaneDeclaration(value);
+    const classification = classifyReviewLaneDeclaration(value);
+
+    expect(input).toMatchObject({ status: 'usable', blastRadius: 'high' });
+    expect(classification).toMatchObject({ policyStatus: 'available', scopeClass: 'security-sensitive' });
+    expect(classification.paths[0]).toMatchObject({
+      path: 'scripts/chatgpt-browser-turn/x.ts',
+      scopeClass: 'security-sensitive',
+    });
   });
 
   it('rejects wildcard syntax in exact declaration entries', () => {
@@ -77,9 +113,19 @@ describe('review-lane declaration and blast-radius routing', () => {
   });
 
   it('rejects denied and outside paths without repairing author input', () => {
-    expect(normalizeReviewLaneDeclaration(declaration([
-      { kind: 'exact', path: 'prompts/example.md', behaviors: ['documentation-only'] },
-    ])).reason).toBe('declared-path-denied');
+    for (const path of [
+      'vendor/example.ts',
+      'packages/core/example.ts',
+      '.ao/state.json',
+      '.github/workflows/check.yml',
+      'prompts/example.md',
+      'agent-orchestrator.yaml',
+      'agent-orchestrator.local.yaml',
+    ]) {
+      expect(normalizeReviewLaneDeclaration(declaration([
+        { kind: 'exact', path, behaviors: ['documentation-only'] },
+      ])).reason, path).toBe('declared-path-denied');
+    }
     expect(normalizeReviewLaneDeclaration(declaration([
       { kind: 'exact', path: 'src/new.ts', behaviors: ['pure-review-lane-selection'] },
     ])).reason).toBe('declared-path-outside-allowed-roots');
@@ -93,6 +139,11 @@ describe('review-lane declaration and blast-radius routing', () => {
       'scripts/lib/my-secret.ts',
       'scripts/lib/nested/SECRET.config.ts',
       'scripts/lib/review-lane-safe/secret-policy.ts',
+      'scripts/chatgpt-browser-turn/credential-helper.ts',
+      'scripts/chatgpt-browser-turn/nested/.env.production.ts',
+      'scripts/chatgpt-browser-turn/secret/nested.ts',
+      'scripts/chatgpt-browser-turn/credentials/nested.ts',
+      'scripts/chatgpt-browser-turn/.env/nested.ts',
     ]) {
       expect(normalizeReviewLaneDeclaration(declaration([
         { kind: 'exact', path, behaviors: ['pure-review-lane-selection'] },
