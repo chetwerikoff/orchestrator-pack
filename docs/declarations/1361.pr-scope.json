@@ -3,7 +3,8 @@
   "issue_number": 1361,
   "declared_paths": [
     ".claude/skills/merge-with-local-adoption/SKILL.md",
-    ".cursor/skills/merge-with-local-adoption/SKILL.md"
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/pack-review-waiver-merge-runbook.md"
   ],
   "denylist": [
     "credentials/",
@@ -17,5 +18,5 @@
     "docs/declarations",
     "docs/pack-review-waiver-merge-runbook.md"
   ],
-  "source_revision": "ae91d0e0ec91bd2c6515dada0c1fdb4143fc8af6"
+  "source_revision": "64caf195d510dfc08d4d48dfb62dd84ccaffd46e"
 }
