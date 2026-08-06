@@ -39,7 +39,7 @@ function requireSuccess(
 }
 
 describe('Issue #1359 real worker-smoke entrypoint', () => {
-  it('runs production spawn, generation lookup, one dispatch, scenario seal, and owned close', () => {
+  it('refreshes a changed generation before dispatch, executes the scenario, and closes the owned handle', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-entrypoint-1359-'));
     const bin = join(root, 'bin');
     const callsPath = join(root, 'orca-calls.jsonl');
@@ -70,17 +70,25 @@ describe('Issue #1359 real worker-smoke entrypoint', () => {
       const fakeOrca = join(bin, 'orca');
       writeFileSync(fakeOrca, `#!/usr/bin/env node
 const { createHash } = require('node:crypto');
-const { appendFileSync, mkdirSync, writeFileSync } = require('node:fs');
+const { appendFileSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
 const args = process.argv.slice(2).filter((value) => value !== '--json');
 appendFileSync(process.env.FAKE_ORCA_CALLS, JSON.stringify(args) + '\\n', 'utf8');
 const root = process.env.FAKE_ORCA_ROOT;
 const head = process.env.FAKE_ORCA_HEAD;
+const showCallCount = readFileSync(process.env.FAKE_ORCA_CALLS, 'utf8')
+  .split(/\\r?\\n/u)
+  .filter((line) => line.trim())
+  .map((line) => JSON.parse(line))
+  .filter((entry) => entry[0] === 'terminal' && entry[1] === 'show')
+  .length;
 const terminal = {
   handle: 'terminal-1359',
   title: 'smoke-1359',
-  incarnationId: 'stable-generation-1359',
+  incarnationId: showCallCount >= 2
+    ? 'dispatch-generation-1359'
+    : 'spawn-generation-1359',
   worktreePath: root,
   status: 'running',
 };
@@ -196,13 +204,17 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       const operation = (args: readonly string[]): string => `${args[0] ?? ''} ${args[1] ?? ''}`;
       const operations = calls.map(operation);
       const createIndex = operations.indexOf('terminal create');
-      const showIndex = operations.indexOf('terminal show');
-      const listIndex = operations.indexOf('terminal list');
+      const showIndexes = operations
+        .map((value, index) => value === 'terminal show' ? index : -1)
+        .filter((index) => index >= 0);
+      const listIndex = operations.indexOf('terminal list', showIndexes[1] ?? 0);
       const sendIndex = operations.indexOf('terminal send');
       const closeIndex = operations.lastIndexOf('terminal close');
       expect(createIndex).toBeGreaterThanOrEqual(0);
-      expect(showIndex).toBeGreaterThan(createIndex);
-      expect(listIndex).toBeGreaterThan(showIndex);
+      expect(showIndexes.length).toBeGreaterThanOrEqual(2);
+      expect(showIndexes[0]).toBeGreaterThan(createIndex);
+      expect(showIndexes[1]).toBeGreaterThan(showIndexes[0] ?? -1);
+      expect(listIndex).toBeGreaterThan(showIndexes[1] ?? -1);
       expect(sendIndex).toBeGreaterThan(listIndex);
       expect(closeIndex).toBeGreaterThan(sendIndex);
       expect(operations.filter((value) => value === 'terminal send')).toHaveLength(1);
