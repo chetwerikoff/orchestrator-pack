@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   resolveFoundationBinding,
   validateBindingCacheRecord,
-  type AoSessionRow,
+  type RuntimeWorkerRow,
   type BindingCacheRecord,
   type OpenPrSnapshotRow,
 } from './binding.ts';
@@ -10,7 +10,7 @@ import {
 const HEAD_A = 'a'.repeat(40);
 const HEAD_B = 'b'.repeat(40);
 
-function session(): AoSessionRow {
+function session(): RuntimeWorkerRow {
   return {
     createdAt: '2026-07-20T00:00:00.000Z',
     harness: 'cursor',

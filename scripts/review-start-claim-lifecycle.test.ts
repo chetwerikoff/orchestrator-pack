@@ -54,7 +54,7 @@ describe('review-start-claim-lifecycle predicates', () => {
   it('caps readiness envelope operator override at 30 seconds', () => {
     const config = resolveClaimLifecycleConfig(
       { readinessEnvelopeMs: 60_000 },
-      { AO_REVIEW_CLAIM_READINESS_ENVELOPE_MS: '90000' },
+      { OPK_REVIEW_CLAIM_READINESS_ENVELOPE_MS: '90000' },
     );
     expect(config.readinessEnvelopeMs).toBe(30_000);
   });
@@ -62,7 +62,7 @@ describe('review-start-claim-lifecycle predicates', () => {
   it('caps reaper period operator override at 30 seconds', () => {
     const config = resolveClaimLifecycleConfig(
       {},
-      { AO_REVIEW_CLAIM_REAPER_PERIOD_SECONDS: '120' },
+      { OPK_REVIEW_CLAIM_REAPER_PERIOD_SECONDS: '120' },
     );
     expect(config.reaperPeriodSeconds).toBe(30);
   });

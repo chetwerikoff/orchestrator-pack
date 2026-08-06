@@ -12,7 +12,7 @@
     }
   ],
   "dispatchJournal": {},
-  "aoEvents": [],
+  "runtimeEvents": [],
   "reviewRuns": [],
   "tracking": { "deliveries": {}, "audit": [] }
 }

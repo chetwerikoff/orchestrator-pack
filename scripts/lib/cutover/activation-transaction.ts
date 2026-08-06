@@ -25,7 +25,7 @@ import { observeSchedulerHealthAndDelivery, type SchedulerHealthDeliveryObservat
 import type { ActivationRequest, CutoverStoreId, EpochCommitCore, FoundationAdmissionEvidence } from './types.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 import { D928 as D928_PATHS, TARGET_LIBRARIES as TARGET_LIBRARY_PATHS } from '../../pr2a/contracts.ts';
-import { validateAoPreflight } from '../../pr2-foundation/binding.ts';
+import { validateRuntimePreflight } from '../../pr2-foundation/binding.ts';
 import { parseFoundationConfig } from '../../pr2-foundation/config.ts';
 import { readMigrationJournal } from '../../pr2-foundation/migration-journal.ts';
 import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog, type RuntimeSurface } from '../../pr2-foundation/runtime-catalog.ts';
@@ -204,7 +204,7 @@ function readFoundationEvidence(request: ActivationRequest): { evidence: Foundat
 
 function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissionProof {
   const { evidence, evidencePath } = readFoundationEvidence(request);
-  const preflight = validateAoPreflight(evidence.preflight);
+  const preflight = validateRuntimePreflight(evidence.preflight);
   if (!preflight.ok) throw new Error(`foundation_preflight_invalid:${preflight.reason}`);
   const config = parseFoundationConfig(evidence.typedConfig);
   if (!config.ok) throw new Error(`foundation_typed_config_invalid:${config.reason}:${config.path}`);

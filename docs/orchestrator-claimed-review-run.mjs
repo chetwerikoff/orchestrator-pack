@@ -39,7 +39,7 @@ export const ORCHESTRATOR_CLAIMED_REVIEW_RUN_GATE_VERSION =
 export const ATOMIC_REVIEW_START_CLAIM_CAPABILITY = 'review-start-claim-atomic/v1';
 export const ORCHESTRATOR_TURN_SURFACE = 'orchestrator-turn';
 export const AUTONOMOUS_SURFACE_ENV = 'AO_SESSION_ID';
-export const CLAIMED_REVIEW_RUN_BYPASS_ENV = 'AO_CLAIMED_REVIEW_RUN_BYPASS';
+export const CLAIMED_REVIEW_RUN_BYPASS_ENV = 'OPK_CLAIMED_REVIEW_RUN_BYPASS';
 
 
 function resolveCoverageRetryEligible(latest, rows) {
@@ -212,7 +212,7 @@ export function evaluateScenarioMatrixCell({ claimWindow, reviewRuns, prNumber, 
  * @param {string} [input.eventHeadSha]
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [input.sessions]
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker[]} [input.sessions]
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
  * @param {string[]} [input.requiredCheckNames]
  * @param {boolean} [input.requiredCheckLookupFailed]
@@ -465,19 +465,19 @@ function containsUnquotedShellCompoundOperator(segment) {
  */
 export function isClaimedReviewRunParentCommandLine(commandLine) {
   const text = String(commandLine ?? '');
-  const aoReviewRun = /\bao(?:\.cmd)?\s+review\s+run\b/i.exec(text)
+  const packReviewRun = /\bao(?:\.cmd)?\s+review\s+run\b/i.exec(text)
     ?? /\breview\s+run\b.*--execute\b/i.exec(text);
-  if (!aoReviewRun) {
+  if (!packReviewRun) {
     return false;
   }
   const gitPrimary = /\bgit\s+(?:-[a-zA-Z]|branch|checkout|switch|worktree|reset|commit|merge|rebase|pull|tag|stash|push|fetch)\b/i.exec(text);
   if (!gitPrimary) {
     return true;
   }
-  if (gitPrimary.index < aoReviewRun.index) {
+  if (gitPrimary.index < packReviewRun.index) {
     return false;
   }
-  const reviewRunEnd = aoReviewRun.index + aoReviewRun[0].length;
+  const reviewRunEnd = packReviewRun.index + packReviewRun[0].length;
   const between = text.slice(reviewRunEnd, gitPrimary.index);
   if (containsUnquotedShellCompoundOperator(between)) {
     return false;
@@ -489,21 +489,21 @@ export function isClaimedReviewRunParentCommandLine(commandLine) {
  * AO-owned worktree setup encoded in review-run --command (not reviewer-side git).
  * @param {string} commandLine
  */
-export function isAoReviewRunGitWorktreeSetupCommandLine(commandLine) {
+export function isPackReviewRunGitWorktreeSetupCommandLine(commandLine) {
   const text = String(commandLine ?? '');
-  const aoReviewRun = /\bao(?:\.cmd)?\s+review\s+run\b/i.exec(text)
+  const packReviewRun = /\bao(?:\.cmd)?\s+review\s+run\b/i.exec(text)
     ?? /\breview\s+run\b.*--execute\b/i.exec(text);
-  if (!aoReviewRun) {
+  if (!packReviewRun) {
     return false;
   }
   const gitWorktree = /\bgit\s+worktree\s+add\b/i.exec(text);
   if (!gitWorktree) {
     return false;
   }
-  if (gitWorktree.index < aoReviewRun.index) {
+  if (gitWorktree.index < packReviewRun.index) {
     return false;
   }
-  const reviewRunEnd = aoReviewRun.index + aoReviewRun[0].length;
+  const reviewRunEnd = packReviewRun.index + packReviewRun[0].length;
   const between = text.slice(reviewRunEnd, gitWorktree.index);
   if (containsUnquotedShellCompoundOperator(between)) {
     return false;

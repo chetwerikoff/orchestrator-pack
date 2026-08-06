@@ -359,7 +359,7 @@ describe('gh recursion guard', () => {
   });
 });
 
-const AO_WRAPPER_SCRIPT = `#!/usr/bin/env bash
+const OPK_WRAPPER_SCRIPT = `#!/usr/bin/env bash
 set -euo pipefail
 ao_bin_dir="$(cd "$(dirname "$0")" && pwd)"
 clean_path="$(echo "$PATH" | tr ':' '\\n' | grep -Fxv "$ao_bin_dir" | grep . | tr '\\n' ':')"
@@ -387,7 +387,7 @@ describe('gh wrapper audit telemetry', () => {
         GH_REAL_BINARY: '/bin/true',
         GH_WRAPPER_AUDIT: '1',
         GH_WRAPPER_AUDIT_FILE: auditPath,
-        AO_SIDE_PROCESS_CHILD_ID: 'review-trigger-reconcile',
+        OPK_SIDE_PROCESS_CHILD_ID: 'review-trigger-reconcile',
       },
       encoding: 'utf8',
     });
@@ -641,7 +641,7 @@ function twoWrapperPathFixture(order: 'ao-first' | 'pack-first') {
   const packScripts = join(import.meta.dirname);
   const packGh = join(packScripts, 'gh');
   mkdirSync(aoDir, { recursive: true });
-  writeExecutable(join(aoDir, 'gh'), AO_WRAPPER_SCRIPT);
+  writeExecutable(join(aoDir, 'gh'), OPK_WRAPPER_SCRIPT);
 
   const pathParts = order === 'ao-first'
     ? [aoDir, packScripts]
@@ -780,8 +780,8 @@ describe('gh mutual-recursion terminality (Issue #442)', () => {
     const shimB = join(root, 'b');
     mkdirSync(shimA, { recursive: true });
     mkdirSync(shimB, { recursive: true });
-    writeExecutable(join(shimA, 'gh'), AO_WRAPPER_SCRIPT);
-    writeExecutable(join(shimB, 'gh'), AO_WRAPPER_SCRIPT);
+    writeExecutable(join(shimA, 'gh'), OPK_WRAPPER_SCRIPT);
+    writeExecutable(join(shimB, 'gh'), OPK_WRAPPER_SCRIPT);
     const prevPath = process.env.PATH;
     const prevReal = process.env.GH_REAL_BINARY;
     const prevMax = process.env.GH_RESOLVE_MAX_NON_NATIVE;

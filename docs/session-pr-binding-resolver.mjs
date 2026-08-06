@@ -6,7 +6,7 @@ import { toArray, normalizeSha } from './review-reconcile-primitives.mjs';
 import { isAoWorkerIterationBranch } from './dead-worker-reconciler.mjs';
 
 /** @typedef {{ number?: number, headRefOid?: string, headRefName?: string, head?: string, state?: string }} OpenPr */
-/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, issue?: string | number | null, issueId?: string | number | null, issueNumber?: number | null, displayName?: string, branch?: string, headBranch?: string, headRefName?: string, ownedHeadSha?: string, headRefOid?: string, status?: string }} AoSession */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, issue?: string | number | null, issueId?: string | number | null, issueNumber?: number | null, displayName?: string, branch?: string, headBranch?: string, headRefName?: string, ownedHeadSha?: string, headRefOid?: string, status?: string }} RuntimeWorker */
 /** @typedef {'explicit_pr' | 'display_name' | 'issue_correlation' | 'none'} SessionPrBindingSource */
 
 export const DEFER_NO_ISSUE_BINDING = 'no_issue_binding';
@@ -42,7 +42,7 @@ function normalizeString(value) {
 }
 
 /**
- * @param {AoSession | null | undefined} session
+ * @param {RuntimeWorker | null | undefined} session
  */
 export function getSessionIssueNumber(session) {
   const issue = numberOrZero(session?.issueNumber ?? session?.issue ?? session?.issueId);
@@ -50,7 +50,7 @@ export function getSessionIssueNumber(session) {
 }
 
 /**
- * @param {AoSession | null | undefined} session
+ * @param {RuntimeWorker | null | undefined} session
  */
 export function getExplicitSessionPrNumber(session) {
   const pr = numberOrZero(session?.prNumber);
@@ -80,7 +80,7 @@ export function sessionDetailFromSessionGetPayload(payload) {
 }
 
 /**
- * @param {AoSession | null | undefined} session
+ * @param {RuntimeWorker | null | undefined} session
  */
 export function shouldEnrichSessionDetailFromGet(session) {
   if (getExplicitSessionPrNumber(session) > 0) {
@@ -98,7 +98,7 @@ export function shouldEnrichSessionDetailFromGet(session) {
 }
 
 /**
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {Record<string, unknown>} [sessionGetsById]
  */
 export function buildSessionDetailsById(sessions, sessionGetsById = {}) {
@@ -140,7 +140,7 @@ export function issueLinkedWorkerBranchLiterals(issueNumber) {
 /**
  * @param {string} headRefName
  * @param {number} issueNumber
- * @param {AoSession | null | undefined} [session]
+ * @param {RuntimeWorker | null | undefined} [session]
  */
 export function headRefCorrelatesToIssue(headRefName, issueNumber, session = null) {
   const head = normalizeString(headRefName);
@@ -175,7 +175,7 @@ export function headRefCorrelatesToIssue(headRefName, issueNumber, session = nul
 /**
  * @param {number} issueNumber
  * @param {OpenPr[]} openPrs
- * @param {AoSession | null | undefined} [session]
+ * @param {RuntimeWorker | null | undefined} [session]
  * @param {{ headSha?: string }} [options]
  */
 export function listIssueCorrelatedOpenPrs(issueNumber, openPrs = [], session = null, options = {}) {
@@ -200,7 +200,7 @@ export function listIssueCorrelatedOpenPrs(issueNumber, openPrs = [], session = 
 /**
  * Numeric displayName is enriched evidence only when available head/issue signals corroborate.
  *
- * @param {AoSession | null | undefined} session
+ * @param {RuntimeWorker | null | undefined} session
  * @param {OpenPr} pr
  * @param {{ headSha?: string }} [options]
  */
@@ -230,7 +230,7 @@ function numericDisplayNameCorroboratesPr(session, pr, options = {}) {
 }
 
 /**
- * @param {AoSession | null | undefined} session
+ * @param {RuntimeWorker | null | undefined} session
  * @param {OpenPr[]} [openPrs]
  * @param {{ headSha?: string, sessionDetail?: { displayName?: string } | null }} [options]
  * @returns {SessionPrBinding}
@@ -320,7 +320,7 @@ export function isEnrichedPrBinding(binding) {
 }
 
 /**
- * @param {AoSession | null | undefined} session
+ * @param {RuntimeWorker | null | undefined} session
  * @param {number} prNumber
  * @param {OpenPr[]} [openPrs]
  * @param {{ headSha?: string, sessionDetail?: { displayName?: string } | null }} [options]
@@ -331,15 +331,15 @@ export function sessionMatchesPrBound(session, prNumber, openPrs = [], options =
 }
 
 /**
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {number} prNumber
  * @param {OpenPr[]} [openPrs]
  * @param {{
  *   headSha?: string,
  *   requireLive?: boolean,
  *   sessionDetailsById?: Record<string, { displayName?: string }>,
- *   isLive?: (session: AoSession) => boolean,
- *   getSessionId?: (session: AoSession) => string | null,
+ *   isLive?: (session: RuntimeWorker) => boolean,
+ *   getSessionId?: (session: RuntimeWorker) => string | null,
  * }} [options]
  * @returns {PrSessionBindingResolution}
  */
@@ -360,7 +360,7 @@ export function resolvePrOwningWorkerSessionBinding(
     ((session) => normalizeString(session?.sessionId ?? session?.id ?? session?.name) || null);
   const sessionDetailsById = options.sessionDetailsById ?? {};
 
-  /** @type {Array<{ session: AoSession, binding: SessionPrBinding, sessionId: string }>} */
+  /** @type {Array<{ session: RuntimeWorker, binding: SessionPrBinding, sessionId: string }>} */
   const matches = [];
   let sawIssueAmbiguityDefer = false;
   for (const session of toArray(sessions)) {

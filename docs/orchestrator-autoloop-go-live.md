@@ -77,9 +77,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervis
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
 ```
 
-Optional env (safe defaults when unset): `AO_WAKE_SUPERVISOR_WAIT_SECONDS` (default
-120 — bounded wait for orchestrator session before exit), `AO_WAKE_SUPERVISOR_POLL_SECONDS`
-(supervisor poll, default 5), `AO_WAKE_SUPERVISOR_STATE_DIR`, `AO_WAKE_SUPERVISOR_PROJECT_ID`
+Optional env (safe defaults when unset): `OPK_WAKE_SUPERVISOR_WAIT_SECONDS` (default
+120 — bounded wait for orchestrator session before exit), `OPK_WAKE_SUPERVISOR_POLL_SECONDS`
+(supervisor poll, default 5), `OPK_WAKE_SUPERVISOR_STATE_DIR`, `OPK_WAKE_SUPERVISOR_PROJECT_ID`
 (default `orchestrator-pack`). See [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md).
 
 **Manual fallback — per-process launches** (when debugging one path in isolation):
@@ -156,7 +156,7 @@ worker PR/report/CI state
 | Fleet status | `orchestrator-wake-supervisor.ps1 -Action Status` | Nine registry children healthy |
 | Listener retired | `check-vestigial-fleet-children-retired.ps1 -Json` | `status: pass` |
 | Orchestrator alive | `ao status` | Not `stuck` / `probe_failure` on orchestrator row |
-| Review started | `Get-AoReviewRuns` / `ao-review list <session> --json` | New run after worker `ready_for_review` |
+| Review started | `Get-PackReviewRuns` / `ao-review list <session> --json` | New run after worker `ready_for_review` |
 | Command correct | `latestRun.body` (failure detail) on failed runs | Names wrapper matching `PACK_REVIEWER` (`run-pack-review.ps1` or `run-pack-review-claude.ps1`), not bare `review.ps1` alone |
 | Strict gate (operator) | `pwsh -File scripts/orchestrator-diagnose.ps1 -Strict` | Exit 0 before human merge when AO is running |
 | Harness guard | `pwsh -File scripts/check-ao-0-10-review-trigger.ps1` | Exit 0 |

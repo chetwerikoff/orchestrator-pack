@@ -24,42 +24,42 @@ export function functionBody(source: string, name: string): string {
 
 export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
   const bypassHarness = extraEnv.OPK_VITEST_HARNESS === '';
-  const harnessAoBaseDir = process.env.OPK_VITEST_HARNESS_AO_BASE_DIR;
+  const harnessStateBaseDir = process.env.OPK_VITEST_HARNESS_OPK_BASE_DIR;
   const harnessRoot = process.env.OPK_VITEST_HARNESS_ROOT;
-  const isHarnessOwnedAoBase = process.env.AO_BASE_DIR === harnessAoBaseDir
+  const isHarnessOwnedStateBase = process.env.OPK_BASE_DIR === harnessStateBaseDir
     || (
       process.env.OPK_VITEST_HARNESS === '1'
       && Boolean(harnessRoot)
-      && Boolean(process.env.AO_BASE_DIR)
-      && path.resolve(process.env.AO_BASE_DIR ?? '').startsWith(`${path.resolve(harnessRoot ?? '')}${path.sep}`)
+      && Boolean(process.env.OPK_BASE_DIR)
+      && path.resolve(process.env.OPK_BASE_DIR ?? '').startsWith(`${path.resolve(harnessRoot ?? '')}${path.sep}`)
     );
-  const inheritedAoBaseDir = isHarnessOwnedAoBase
+  const inheritedStateBaseDir = isHarnessOwnedStateBase
     ? undefined
-    : process.env.AO_BASE_DIR;
-  const harnessMechanicalTransport = process.env.AO_MECHANICAL_TRANSPORT_TEMP
+    : process.env.OPK_BASE_DIR;
+  const harnessMechanicalTransport = process.env.OPK_MECHANICAL_TRANSPORT_TEMP
     || (harnessRoot ? path.join(harnessRoot, 'transport') : '');
-  const explicitAoBaseDir = extraEnv.AO_BASE_DIR;
-  if (!bypassHarness && (process.env.OPK_VITEST_HARNESS !== '1' || !process.env.AO_ORCHESTRATOR_ESCALATION_STATE)) {
+  const explicitStateBaseDir = extraEnv.OPK_BASE_DIR;
+  if (!bypassHarness && (process.env.OPK_VITEST_HARNESS !== '1' || !process.env.OPK_ORCHESTRATOR_ESCALATION_STATE)) {
     applyOpkVitestHarnessEscalationEnv();
   }
-  const managedAoBaseDir = inheritedAoBaseDir || explicitAoBaseDir
+  const managedStateBaseDir = inheritedStateBaseDir || explicitStateBaseDir
     ? null
     : mkdtempSync(path.join(tmpdir(), 'opk-vitest-ao-base-'));
   const scopedClaimDirEnv = {
-    AO_REVIEW_CLAIM_DIR: Object.prototype.hasOwnProperty.call(extraEnv, 'AO_REVIEW_CLAIM_DIR')
-      ? extraEnv.AO_REVIEW_CLAIM_DIR
+    OPK_REVIEW_CLAIM_DIR: Object.prototype.hasOwnProperty.call(extraEnv, 'OPK_REVIEW_CLAIM_DIR')
+      ? extraEnv.OPK_REVIEW_CLAIM_DIR
       : '',
-    AO_WORKER_NUDGE_CLAIM_DIR: Object.prototype.hasOwnProperty.call(extraEnv, 'AO_WORKER_NUDGE_CLAIM_DIR')
-      ? extraEnv.AO_WORKER_NUDGE_CLAIM_DIR
+    OPK_WORKER_NUDGE_CLAIM_DIR: Object.prototype.hasOwnProperty.call(extraEnv, 'OPK_WORKER_NUDGE_CLAIM_DIR')
+      ? extraEnv.OPK_WORKER_NUDGE_CLAIM_DIR
       : '',
   };
   const scopedGhHarnessEnv = {
-    AO_REVIEW_START_SCOPED_GH_COMMAND: '',
-    AO_REVIEW_START_SCOPED_GH_SCENARIO: '',
-    AO_REVIEW_START_SCOPED_GH_STATE_FILE: '',
-    AO_REVIEW_START_SCOPED_GH_HEAD_SHA: '',
-    AO_REVIEW_START_SCOPED_GH_HEAD_SHA_A: '',
-    AO_REVIEW_START_SCOPED_GH_HEAD_SHA_B: '',
+    OPK_REVIEW_START_SCOPED_GH_COMMAND: '',
+    OPK_REVIEW_START_SCOPED_GH_SCENARIO: '',
+    OPK_REVIEW_START_SCOPED_GH_STATE_FILE: '',
+    OPK_REVIEW_START_SCOPED_GH_HEAD_SHA: '',
+    OPK_REVIEW_START_SCOPED_GH_HEAD_SHA_A: '',
+    OPK_REVIEW_START_SCOPED_GH_HEAD_SHA_B: '',
   };
   try {
     const result = runProcessSync({
@@ -69,12 +69,12 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
       encoding: 'utf8',
       env: {
         ...process.env,
-        AO_BASE_DIR: managedAoBaseDir ?? inheritedAoBaseDir ?? '',
+        OPK_BASE_DIR: managedStateBaseDir ?? inheritedStateBaseDir ?? '',
         OPK_VITEST_HARNESS: '1',
-        AO_ORCHESTRATOR_ESCALATION_STATE: process.env.AO_ORCHESTRATOR_ESCALATION_STATE ?? '',
-        AO_OPERATOR_ESCALATION_INBOX: process.env.AO_OPERATOR_ESCALATION_INBOX ?? '',
-        AO_ESCALATION_HEALTH_SPOOL: process.env.AO_ESCALATION_HEALTH_SPOOL ?? '',
-        AO_MECHANICAL_TRANSPORT_TEMP: harnessMechanicalTransport,
+        OPK_ORCHESTRATOR_ESCALATION_STATE: process.env.OPK_ORCHESTRATOR_ESCALATION_STATE ?? '',
+        OPK_OPERATOR_ESCALATION_INBOX: process.env.OPK_OPERATOR_ESCALATION_INBOX ?? '',
+        OPK_ESCALATION_HEALTH_SPOOL: process.env.OPK_ESCALATION_HEALTH_SPOOL ?? '',
+        OPK_MECHANICAL_TRANSPORT_TEMP: harnessMechanicalTransport,
         ...scopedClaimDirEnv,
         ...scopedGhHarnessEnv,
         ...extraEnv,
@@ -86,8 +86,8 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
     }
     return result.stdout.trim();
   } finally {
-    if (managedAoBaseDir) {
-      rmSync(managedAoBaseDir, { recursive: true, force: true });
+    if (managedStateBaseDir) {
+      rmSync(managedStateBaseDir, { recursive: true, force: true });
     }
   }
 }

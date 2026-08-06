@@ -5,11 +5,11 @@ contain AO core patches.
 
 Contract directories:
 
-- `ao-task-declaration` — DD-026/DD-027 equivalent for declared task scope,
+- `task-declaration` — DD-026/DD-027 equivalent for declared task scope,
   denylist validation, amendments, and baseline state.
-- `ao-scope-guard` — DD-024 equivalent runtime guard plus PR-level CI backup.
-- `ao-token-chain-ledger` — cross-session `chain_id` cost/token accounting.
-- `ao-codex-pr-reviewer` — Codex `gpt-5.5` PR-review contract while planner and
+- `scope-guard` — DD-024 equivalent runtime guard plus PR-level CI backup.
+- `token-chain-ledger` — cross-session `chain_id` cost/token accounting.
+- `codex-pr-reviewer` — Codex `gpt-5.5` PR-review contract while planner and
   worker roles remain on Cursor CLI.
 
 Implementation rules:
@@ -18,7 +18,7 @@ Implementation rules:
   CI, or external state files.
 - Do not modify `packages/core/` in Composio AO.
 - Prefer AO session metadata when available.
-- Keep workspace-local `.ao/` state gitignored.
+- Keep workspace-local `.orchestrator-pack/` state gitignored.
 - Never commit tokens, API keys, or private credentials.
 
 The README in each plugin directory is the source contract until an implementation

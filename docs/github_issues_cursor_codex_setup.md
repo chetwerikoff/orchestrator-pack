@@ -82,7 +82,7 @@ A reusable workflow at `.github/workflows/codex-pr-review.yml` runs Codex in CI
 and can post review findings as GitHub PR comments. Useful when you want review
 output visible on the GitHub PR rather than only in the local AO dashboard.
 
-See `plugins/ao-codex-pr-reviewer/README.md` for the full wiring and secret setup.
+See `plugins/codex-pr-reviewer/README.md` for the full wiring and secret setup.
 
 Do not patch `packages/core/**` to add reviewer routing.
 

@@ -32,7 +32,7 @@ Checks:
 - Trust-watcher running-state (read-only): distinct signal when
   `orchestrator-worktree-trust-watcher.ps1` is absent.
 
-Failures emit stderr JSON alerts and optionally append to `AO_FLEET_HYGIENE_ALERT_FILE`
+Failures emit stderr JSON alerts and optionally append to `OPK_FLEET_HYGIENE_ALERT_FILE`
 (same sink as fleet hygiene sentinel #711).
 
 **PTY trap:** do not probe via `tmux new-session` + `send-keys` — documented invalid

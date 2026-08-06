@@ -22,7 +22,7 @@ Do not commit or push:
 
 - real `agent-orchestrator.yaml` files for a target repo;
 - `.env*` secrets, tokens, certificates, SSH keys, or local credential files;
-- AO runtime/session state: `.ao/`, `.agent-orchestrator/`, ledgers/databases;
+- AO runtime/session state: `.orchestrator-pack/`, `.agent-orchestrator/`, ledgers/databases;
 - target repository clones, worktrees, scratch directories, or generated logs;
 - `vendor/agent-orchestrator` or any modified upstream AO source;
 - `packages/core/**` patches from Composio AO.

@@ -167,7 +167,7 @@ addProbe(['AC3:untyped-live-key'], () => requireSource(
 addProbe(['AC4:notify-before-journal'], () => requireSource(
   'scripts/pr2-foundation/worker-notification.ts',
   ['const inspected = await inspectNotification({'],
-  ['await runProcess({ command: config.aoPath, args: [], allowEmptyStdout: true, timeoutMs: 1 });'],
+  ['await runProcess({ command: config.runtimePath, args: [], allowEmptyStdout: true, timeoutMs: 1 });'],
 ));
 addProbe(['AC4:inline-powershell'], () => requireSource(
   'scripts/lib/pack-review-worker-notification.ts',

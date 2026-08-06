@@ -43,7 +43,7 @@ export interface TerminalMuxFloodResult {
   flaggedSessions: TerminalMuxSessionResult[];
 }
 
-export declare function normalizeAoEvents(payload: unknown): Array<Record<string, unknown>>;
+export declare function normalizeRuntimeEvents(payload: unknown): Array<Record<string, unknown>>;
 export declare function resolveEventSessionId(event: Record<string, unknown>): string | null;
 export declare function getEventTimestampMs(event: Record<string, unknown>): number | null;
 export declare function isTerminalMuxEvent(event: Record<string, unknown>): boolean;

@@ -77,17 +77,6 @@ not duplicate tracked helper launch, polling, retry, tab-close, probe, or
 observation-loss mechanics. The long-running adapter completion mode remains
 `browser-turn-result-v1`.
 
-One helper invocation still dispatches the marked payload exactly once from its
-initial tab. Only after definite post-send page/browser loss may that helper
-re-enumerate the same normalized conversation, observe one URL-plus-exact-marker
-eligible page, or create at most one non-sending successor observation page.
-The flow-manager does not select, navigate, harvest, resend, stop, or clean up
-tabs. Every possible/post-send outcome and every `send_count: 1` result remains
-retry-forbidden. When an identity-proven owned turn is abandoned, the helper
-attempts the sanctioned **Stop generating** action before recording the incident;
-exact-target tab close remains the separate Issue #1266 seam and is not granted
-to recovery by this alignment.
-
 ## Fixed per-tier pipeline
 
 Tier rubric is binding in `docs/tiering.md`.

@@ -79,7 +79,7 @@ working artifact; the issue carries everything the worker needs.
 3. Confirm the draft header records `GitHub Issue: #N`.
 4. Confirm the registry row for this draft is defined (draft path → **N**); it will be
    written to `docs/issue_queue_index.md` by Cursor at publish, not by the architect.
-5. **Stop.** Do not open a PR, do not run `ao-declare`, do not run scope checks.
+5. **Stop.** Do not open a PR, do not run `pack-declare`, do not run scope checks.
 6. Report to the user:
    - Issue URL and number **N** (open for `ao spawn`).
    - "Draft kept local — not committed. Say *batch* or *publish this draft* to land it in `main`."
@@ -125,7 +125,7 @@ the full heavy flow. Run the Common steps end-to-end for the one draft.
 > **primary** path.
 >
 > Direct `gh pr merge` / `gh pr create` / `gh issue create` is blocked by the RTK
-> hook. Run it with the **`AO_PUBLISH_FALLBACK=1`** prefix — you are already the
+> hook. Run it with the **`OPK_PUBLISH_FALLBACK=1`** prefix — you are already the
 > executing agent, so the fallback is the correct path. If a PR head is behind
 > base (`not mergeable: head … not up to date`), run `gh pr update-branch <N>`
 > first, then re-run the merge.
@@ -138,7 +138,7 @@ the full heavy flow. Run the Common steps end-to-end for the one draft.
 > checkout, and tears it down. Direct
 > `gh pr create` / `gh pr merge` / `gh issue create` is blocked by the publish
 > hook for the architect — use `opencode run` as the delegate so deepseek runs
-> those commands. The **direct `AO_PUBLISH_FALLBACK=1`** path (manual
+> those commands. The **direct `OPK_PUBLISH_FALLBACK=1`** path (manual
 > PowerShell/`gh` steps below) is the **fallback** — use it only when
 > `opencode run` is unavailable, errors, or leaves the publish half-done.
 
@@ -382,7 +382,7 @@ touched `agent-orchestrator.yaml.example`, run the adoption scan from
 
 - Sync or publish while `contract-evidence` exits non-zero (Issue #366).
 - Run publish mechanics directly by default — delegate to `opencode run
-  --dangerously-skip-permissions --dir .` first; use `AO_PUBLISH_FALLBACK=1`
+  --dangerously-skip-permissions --dir .` first; use `OPK_PUBLISH_FALLBACK=1`
   only as fallback (opencode unavailable or half-done).
 - Hand-edit, wholesale-stage, or reset `docs/issue_queue_index.md` — selective
   single-row staging only (see Index ownership), whoever runs the publish.

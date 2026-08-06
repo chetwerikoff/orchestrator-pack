@@ -10,7 +10,7 @@ CI.
 Copy or vendor the pack layout into your target repository so these paths exist
 at the repo root:
 
-- `plugins/` (including `_shared`, `ao-task-declaration`, `ao-scope-guard`)
+- `plugins/` (including `_shared`, `task-declaration`, `scope-guard`)
 - `scripts/` (including `install-git-hooks.ps1`, `pr-scope-check.ps1`)
 - `prompts/`
 - `.github/workflows/scope-guard.yml`
@@ -105,7 +105,7 @@ In the **target repository** on GitHub: **Settings → Secrets and variables →
 Actions → New repository secret**. Name it `CODEX_AUTH_JSON` and paste the
 clipboard value.
 
-See `plugins/ao-codex-pr-reviewer/README.md` for details.
+See `plugins/codex-pr-reviewer/README.md` for details.
 
 ### 5. Install scope-guard pre-commit hook and agent wrapper
 
@@ -117,7 +117,7 @@ npm ci --include=dev
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-git-hooks.ps1 -InstallScopeGuard
 ```
 
-The hook calls `plugins/ao-scope-guard/bin/scope-check.ts` on staged paths.
+The hook calls `plugins/scope-guard/bin/scope-check.ts` on staged paths.
 Set `AO_ISSUE_NUMBER` to the active GitHub Issue number before committing.
 
 Wrap agent invocations so the working tree is checked after each turn (layer 1
@@ -125,12 +125,12 @@ guard):
 
 ```powershell
 $env:AO_ISSUE_NUMBER = '<issue-number>'
-node --experimental-strip-types plugins/ao-scope-guard/bin/agent-wrap.ts `
+node --experimental-strip-types plugins/scope-guard/bin/agent-wrap.ts `
   --issue <issue-number> `
   -- cursor agent ...
 ```
 
-See `plugins/ao-scope-guard/README.md` for bypass, direct `scope-check`, and
+See `plugins/scope-guard/README.md` for bypass, direct `scope-check`, and
 uninstall options.
 
 ### 6. Add Codex PR review workflow
@@ -195,7 +195,7 @@ Confirm the wrapper or pre-commit hook rejects paths outside the snapshot.
 ```powershell
 $env:AO_ISSUE_NUMBER = '<n>'
 # Edit a file outside declared scope, e.g. README.md, without amending the snapshot.
-node --experimental-strip-types plugins/ao-scope-guard/bin/scope-check.ts `
+node --experimental-strip-types plugins/scope-guard/bin/scope-check.ts `
   --issue <n> `
   --mode worktree
 ```
@@ -239,5 +239,5 @@ merging.
 - `docs/github_issues_cursor_codex_setup.md` — Cursor planner/worker + Codex review
 - `docs/repository_policy.md` — what not to commit
 - `docs/pr-scope-declaration.md` — AO-free declaration contract
-- `plugins/ao-scope-guard/README.md` — runtime guard and hook
-- `plugins/ao-codex-pr-reviewer/README.md` — `CODEX_AUTH_JSON` and CI review
+- `plugins/scope-guard/README.md` — runtime guard and hook
+- `plugins/codex-pr-reviewer/README.md` — `CODEX_AUTH_JSON` and CI review

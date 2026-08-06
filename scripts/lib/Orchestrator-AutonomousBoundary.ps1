@@ -143,25 +143,25 @@ function Test-ProcessCommandLineContainsUnquotedShellCompoundOperator {
     return $false
 }
 
-function Test-ProcessCommandLineIsAoReviewRunGitWorktreeSetup {
+function Test-ProcessCommandLineIsPackReviewRunGitWorktreeSetup {
     param([string]$CommandLine)
 
     if (-not $CommandLine) { return $false }
-    $aoReviewRun = [regex]::Match($CommandLine, '(?i)\bao(?:\.cmd)?\s+review\s+run\b')
-    if (-not $aoReviewRun.Success) {
-        $aoReviewRun = [regex]::Match($CommandLine, '(?i)\breview\s+run\b.*--execute\b')
+    $packReviewRun = [regex]::Match($CommandLine, '(?i)\bao(?:\.cmd)?\s+review\s+run\b')
+    if (-not $packReviewRun.Success) {
+        $packReviewRun = [regex]::Match($CommandLine, '(?i)\breview\s+run\b.*--execute\b')
     }
-    if (-not $aoReviewRun.Success) {
+    if (-not $packReviewRun.Success) {
         return $false
     }
     $gitWorktree = [regex]::Match($CommandLine, '(?i)\bgit\s+worktree\s+add\b')
     if (-not $gitWorktree.Success) {
         return $false
     }
-    if ($gitWorktree.Index -lt $aoReviewRun.Index) {
+    if ($gitWorktree.Index -lt $packReviewRun.Index) {
         return $false
     }
-    $reviewRunEnd = $aoReviewRun.Index + $aoReviewRun.Length
+    $reviewRunEnd = $packReviewRun.Index + $packReviewRun.Length
     $between = $CommandLine.Substring($reviewRunEnd, $gitWorktree.Index - $reviewRunEnd)
     if (Test-ProcessCommandLineContainsUnquotedShellCompoundOperator -Segment $between) {
         return $false
@@ -204,7 +204,7 @@ function Get-AutonomousGitSanctionedProvenanceClass {
 
     for ($i = 0; $i -lt $depthLimit; $i++) {
         $cmd = $chain[$i]
-        if (Test-ProcessCommandLineIsAoReviewRunGitWorktreeSetup -CommandLine $cmd) {
+        if (Test-ProcessCommandLineIsPackReviewRunGitWorktreeSetup -CommandLine $cmd) {
             return 'review_run_worktree_command'
         }
     }

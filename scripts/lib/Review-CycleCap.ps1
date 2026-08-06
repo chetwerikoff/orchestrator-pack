@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
   Pack-owned per-tier PR review-cycle cap state (Issue #646).
-  Consumes pre-fetched review run rows from Get-AoReviewRuns (#611 read model).
+  Consumes pre-fetched review run rows from Get-PackReviewRuns (#611 read model).
 #>
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')

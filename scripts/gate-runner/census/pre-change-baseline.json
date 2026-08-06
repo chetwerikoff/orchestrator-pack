@@ -138,7 +138,7 @@
       "marker": "check-ao-0-10-cli-capture-redaction.ps1",
       "classification": "ported-custom",
       "gateIds": [
-        "ao-capture-redaction"
+        "capture-redaction"
       ],
       "portedInWave": "3.a"
     },
@@ -155,13 +155,13 @@
       }
     },
     {
-      "id": "check-script:scripts/check-ao-capture-redaction-selftest.ps1",
+      "id": "check-script:scripts/check-capture-redaction-selftest.ps1",
       "sourceKind": "check-script",
-      "sourcePath": "scripts/check-ao-capture-redaction-selftest.ps1",
-      "marker": "check-ao-capture-redaction-selftest.ps1",
+      "sourcePath": "scripts/check-capture-redaction-selftest.ps1",
+      "marker": "check-capture-redaction-selftest.ps1",
       "classification": "ported-custom",
       "gateIds": [
-        "ao-capture-redaction"
+        "capture-redaction"
       ],
       "portedInWave": "3.a"
     },
@@ -1485,10 +1485,10 @@
       "keepCategory": "D"
     },
     {
-      "id": "verify-inline:contract-marker:plugins/ao-codex-pr-reviewer/README.md",
+      "id": "verify-inline:contract-marker:plugins/codex-pr-reviewer/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "Test-ContractMarkers 'plugins/ao-codex-pr-reviewer/README.md'",
+      "marker": "Test-ContractMarkers 'plugins/codex-pr-reviewer/README.md'",
       "classification": "ported-custom",
       "gateIds": [
         "verify-structure-contract"
@@ -1496,10 +1496,10 @@
       "portedInWave": "3.b"
     },
     {
-      "id": "verify-inline:contract-marker:plugins/ao-scope-guard/README.md",
+      "id": "verify-inline:contract-marker:plugins/scope-guard/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "Test-ContractMarkers 'plugins/ao-scope-guard/README.md'",
+      "marker": "Test-ContractMarkers 'plugins/scope-guard/README.md'",
       "classification": "ported-custom",
       "gateIds": [
         "verify-structure-contract"
@@ -1507,10 +1507,10 @@
       "portedInWave": "3.b"
     },
     {
-      "id": "verify-inline:contract-marker:plugins/ao-task-declaration/README.md",
+      "id": "verify-inline:contract-marker:plugins/task-declaration/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "Test-ContractMarkers 'plugins/ao-task-declaration/README.md'",
+      "marker": "Test-ContractMarkers 'plugins/task-declaration/README.md'",
       "classification": "ported-custom",
       "gateIds": [
         "verify-structure-contract"
@@ -1518,10 +1518,10 @@
       "portedInWave": "3.b"
     },
     {
-      "id": "verify-inline:contract-marker:plugins/ao-token-chain-ledger/README.md",
+      "id": "verify-inline:contract-marker:plugins/token-chain-ledger/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "Test-ContractMarkers 'plugins/ao-token-chain-ledger/README.md'",
+      "marker": "Test-ContractMarkers 'plugins/token-chain-ledger/README.md'",
       "classification": "ported-custom",
       "gateIds": [
         "verify-structure-contract"
@@ -1650,10 +1650,10 @@
       "portedInWave": "3.b"
     },
     {
-      "id": "verify-inline:required-file:plugins/ao-codex-pr-reviewer/README.md",
+      "id": "verify-inline:required-file:plugins/codex-pr-reviewer/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "plugins/ao-codex-pr-reviewer/README.md",
+      "marker": "plugins/codex-pr-reviewer/README.md",
       "classification": "ported-declarative",
       "gateIds": [
         "verify-required-files"
@@ -1661,10 +1661,10 @@
       "portedInWave": "3.b"
     },
     {
-      "id": "verify-inline:required-file:plugins/ao-scope-guard/README.md",
+      "id": "verify-inline:required-file:plugins/scope-guard/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "plugins/ao-scope-guard/README.md",
+      "marker": "plugins/scope-guard/README.md",
       "classification": "ported-declarative",
       "gateIds": [
         "verify-required-files"
@@ -1672,10 +1672,10 @@
       "portedInWave": "3.b"
     },
     {
-      "id": "verify-inline:required-file:plugins/ao-task-declaration/README.md",
+      "id": "verify-inline:required-file:plugins/task-declaration/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "plugins/ao-task-declaration/README.md",
+      "marker": "plugins/task-declaration/README.md",
       "classification": "ported-declarative",
       "gateIds": [
         "verify-required-files"
@@ -1683,10 +1683,10 @@
       "portedInWave": "3.b"
     },
     {
-      "id": "verify-inline:required-file:plugins/ao-token-chain-ledger/README.md",
+      "id": "verify-inline:required-file:plugins/token-chain-ledger/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "plugins/ao-token-chain-ledger/README.md",
+      "marker": "plugins/token-chain-ledger/README.md",
       "classification": "ported-declarative",
       "gateIds": [
         "verify-required-files"
@@ -2096,7 +2096,7 @@
       "marker": "scripts/check-ao-0-10-cli-capture-redaction.ps1",
       "classification": "ported-custom",
       "gateIds": [
-        "ao-capture-redaction"
+        "capture-redaction"
       ],
       "portedInWave": "3.a"
     },
@@ -2113,13 +2113,13 @@
       }
     },
     {
-      "id": "verify-script:scripts/check-ao-capture-redaction-selftest.ps1",
+      "id": "verify-script:scripts/check-capture-redaction-selftest.ps1",
       "sourceKind": "verify-script-member",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "scripts/check-ao-capture-redaction-selftest.ps1",
+      "marker": "scripts/check-capture-redaction-selftest.ps1",
       "classification": "ported-custom",
       "gateIds": [
-        "ao-capture-redaction"
+        "capture-redaction"
       ],
       "portedInWave": "3.a"
     },

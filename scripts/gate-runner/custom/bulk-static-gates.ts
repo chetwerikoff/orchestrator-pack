@@ -192,14 +192,14 @@ export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult
       failures.push('NAMED REVIEW_COMMAND not found in agent-orchestrator.yaml.example');
       failureStdout = '[FAIL] NAMED REVIEW_COMMAND not found in agent-orchestrator.yaml.example\n';
     } else if (/(^|[\s"'`])\.ao\/|\\\.ao\\/iu.test(command)) {
-      failures.push(`Canonical REVIEW_COMMAND must not use gitignored .ao/ paths: ${command}`);
-      failureStdout = `[FAIL] Canonical REVIEW_COMMAND must not use gitignored .ao/ paths\n  REVIEW_COMMAND: ${command}\n`;
+      failures.push(`Canonical REVIEW_COMMAND must not use gitignored .orchestrator-pack/ paths: ${command}`);
+      failureStdout = `[FAIL] Canonical REVIEW_COMMAND must not use gitignored .orchestrator-pack/ paths\n  REVIEW_COMMAND: ${command}\n`;
     }
   }
   return completeStaticGate(
     gateId,
     'Example REVIEW_COMMAND path contract',
-    '[PASS] example REVIEW_COMMAND does not use .ao/ as primary path\n',
+    '[PASS] example REVIEW_COMMAND does not use .orchestrator-pack/ as primary path\n',
     snapshot,
     failures,
     unreachable,
@@ -208,10 +208,10 @@ export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult
 }
 
 export const VERIFY_CONTRACT_MARKERS: Readonly<Record<string, readonly string[]>> = {
-  'plugins/ao-task-declaration/README.md': ['DD-026', 'DD-027', 'declared_files', 'denylist', 'one amendment', 'baseline'],
-  'plugins/ao-scope-guard/README.md': ['DD-024', 'runtime guard', 'git add', 'commit', 'PR-level CI', 'second line'],
-  'plugins/ao-token-chain-ledger/README.md': ['chain_id', 'planner', 'reviewer', 'worker', 'per-session cost', 'estimated_cost_usd'],
-  'plugins/ao-codex-pr-reviewer/README.md': ['Codex', 'gpt-5.5', 'PR review', 'GitHub Issues', 'no core patch'],
+  'plugins/task-declaration/README.md': ['DD-026', 'DD-027', 'declared_files', 'denylist', 'one amendment', 'baseline'],
+  'plugins/scope-guard/README.md': ['DD-024', 'runtime guard', 'git add', 'commit', 'PR-level CI', 'second line'],
+  'plugins/token-chain-ledger/README.md': ['chain_id', 'planner', 'reviewer', 'worker', 'per-session cost', 'estimated_cost_usd'],
+  'plugins/codex-pr-reviewer/README.md': ['Codex', 'gpt-5.5', 'PR review', 'GitHub Issues', 'no core patch'],
 };
 
 export const VERIFY_PROMPT_GLOB = 'prompts/*.md';

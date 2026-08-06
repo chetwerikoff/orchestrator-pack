@@ -22,7 +22,7 @@
       "messageShape": { "charLength": 400, "lineCount": 5 }
     }
   },
-  "aoEvents": [],
+  "runtimeEvents": [],
   "reviewRuns": [],
   "tracking": {
     "deliveries": {

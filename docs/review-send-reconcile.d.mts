@@ -5,9 +5,9 @@ export declare const FIRST_SEND_RUN_STATUS: string;
 export declare const INELIGIBLE_FIRST_SEND_STATUSES: ReadonlySet<string>;
 export declare const FORBIDDEN_LIFECYCLE_PATTERNS: readonly RegExp[];
 
-import type { AoSession, OpenPr } from './review-trigger-reconcile.d.mts';
+import type { RuntimeWorker, OpenPr } from './review-trigger-reconcile.d.mts';
 
-export type { AoSession, OpenPr };
+export type { RuntimeWorker, OpenPr };
 
 export interface ReviewRun {
   id?: string;
@@ -53,7 +53,7 @@ export type ReviewSendAction =
 
 export interface PlanReviewSendInput {
   reviewRuns: ReviewRun[];
-  sessions: AoSession[];
+  sessions: RuntimeWorker[];
   openPrs: OpenPr[];
   mergedPrNumbers?: number[] | Set<number>;
   tracking?: ReviewSendTrackingState;
@@ -77,7 +77,7 @@ export declare function isNeedsTriageNeverSentRun(run: ReviewRun): boolean;
 
 export declare function buildMergedPrNumberSet(
   reviewRuns: ReviewRun[],
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
   openPrs: OpenPr[],
   explicitMerged?: number[] | Set<number>,
 ): Set<number>;
@@ -89,7 +89,7 @@ export declare function countAmbiguousNeedsTriagePeers(
 
 export declare function evaluateFirstSendCandidate(
   run: ReviewRun,
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
   openPrs: OpenPr[],
   mergedPrNumbers: Set<number>,
 ): {
@@ -123,7 +123,7 @@ export declare function preSendRecheck(
   },
   fresh: {
     reviewRuns: ReviewRun[];
-    sessions: AoSession[];
+    sessions: RuntimeWorker[];
     openPrs: OpenPr[];
     mergedPrNumbers?: number[] | Set<number>;
   },

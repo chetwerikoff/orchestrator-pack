@@ -112,7 +112,7 @@ export function findFailedOrCancelledRunOnHead(reviewRuns, prNumber, headSha) {
  * @param {number} [input.nowMs]
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [input.sessions]
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker[]} [input.sessions]
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
  * @param {string[]} [input.requiredCheckNames]
  * @param {boolean} [input.requiredCheckLookupFailed]

@@ -29,7 +29,7 @@ Project: `orchestrator-pack` · orchestrator session: `opk-orchestrator`
    restore instead of fresh-spawning. While it exists, edits never land.
    (`ao session kill --purge-session` is NOT enough — start then fails with
    "cannot be restored: OpenCode session mapping is missing".)
-4. **AO 0.10.x stores the live registered project config in `~/.ao/data/ao.db`.**
+4. **AO 0.10.x stores the live registered project config in `~/.orchestrator-pack/data/ao.db`.**
    The repo-local YAML can say `cursor` while `ao project get orchestrator-pack`
    still says `orchestrator.agent: opencode`; the daemon follows the registered
    project config.
@@ -51,7 +51,7 @@ runtime-independent; the opencode shim is opencode-only.
   - replace: `ao project set-config orchestrator-pack --config-json '<full-object>'`
   - WARNING: `ao project set-config --orchestrator-agent cursor` replaces the
     config object in AO 0.10.2; preserve `sessionPrefix`, `env`, and `worker`.
-- AO 0.10.x runtime data: `~/.ao/data/`
+- AO 0.10.x runtime data: `~/.orchestrator-pack/data/`
   - worktree: `worktrees/orchestrator-pack/orchestrator/opk-orchestrator`
   - daemon state: `running.json`, `ao.db`
 - AO data: `~/.agent-orchestrator/projects/orchestrator-pack/`
@@ -139,7 +139,7 @@ pkill -f '/home/che/.npm-global/bin/opencode' 2>/dev/null || true
 pkill -f '/home/che/.local/share/cursor-agent/.*/index.js worker-server' 2>/dev/null || true
 
 # 4. Remove stale current worktree/session prompt so AO fresh-spawns.
-rm -rf "$HOME/.ao/data/worktrees/$P/orchestrator/$S"
+rm -rf "$HOME/.orchestrator-pack/data/worktrees/$P/orchestrator/$S"
 rm -f "$HOME/.agent-orchestrator/projects/$P/orchestrator-prompt-$S.md"
 if [ -f "$HOME/.agent-orchestrator/projects/$P/sessions/$S.json" ]; then
   mkdir -p "$HOME/.agent-orchestrator/projects/$P/session-backups"

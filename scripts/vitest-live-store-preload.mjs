@@ -241,32 +241,32 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
 
   const harnessSnapshotEnv = { ...process.env };
   const derivedHarnessKeys = new Set([
-    'AO_BASE_DIR',
-    'AO_CI_GREEN_WAKE_RECONCILE_STATE',
-    'AO_DEAD_WORKER_RECONCILE_STATE',
-    'AO_ORCHESTRATOR_ESCALATION_STATE',
-    'AO_OPERATOR_ESCALATION_INBOX',
-    'AO_ESCALATION_HEALTH_SPOOL',
-    'AO_PR_SESSION_BINDING_CACHE',
-    'AO_REPORT_STATE_SEED_STATE',
-    'AO_REVIEW_CLAIM_DIR',
-    'AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE',
-    'AO_REVIEW_TRIGGER_RECONCILE_STATE',
-    'AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE',
-    'AO_SIDE_PROCESS_STATE_DIR',
-    'AO_WAKE_DEDUP_STATE',
-    'AO_WAKE_LISTENER_SIDE_EFFECT_LOCK',
-    'AO_WORKER_MESSAGE_ADOPTION_STATE',
-    'AO_WORKER_MESSAGE_DISPATCH_JOURNAL',
-    'AO_WORKER_MESSAGE_SUBMIT_STATE',
-    'AO_WORKER_NUDGE_CLAIM_DIR',
-    'AO_WORKER_REPORT_STORE',
-    'AO_WORKER_STATUS_STORE',
-    'AO_MECHANICAL_TRANSPORT_TEMP',
+    'OPK_BASE_DIR',
+    'OPK_CI_GREEN_WAKE_RECONCILE_STATE',
+    'OPK_DEAD_WORKER_RECONCILE_STATE',
+    'OPK_ORCHESTRATOR_ESCALATION_STATE',
+    'OPK_OPERATOR_ESCALATION_INBOX',
+    'OPK_ESCALATION_HEALTH_SPOOL',
+    'OPK_PR_SESSION_BINDING_CACHE',
+    'OPK_REPORT_STATE_SEED_STATE',
+    'OPK_REVIEW_CLAIM_DIR',
+    'OPK_REVIEW_HANDOFF_WAKE_ADMISSION_STATE',
+    'OPK_REVIEW_TRIGGER_RECONCILE_STATE',
+    'OPK_REVIEW_TRIGGER_REEVAL_WATCH_STATE',
+    'OPK_SIDE_PROCESS_STATE_DIR',
+    'OPK_WAKE_DEDUP_STATE',
+    'OPK_WAKE_LISTENER_SIDE_EFFECT_LOCK',
+    'OPK_WORKER_MESSAGE_ADOPTION_STATE',
+    'OPK_WORKER_MESSAGE_DISPATCH_JOURNAL',
+    'OPK_WORKER_MESSAGE_SUBMIT_STATE',
+    'OPK_WORKER_NUDGE_CLAIM_DIR',
+    'OPK_WORKER_REPORT_STORE',
+    'OPK_WORKER_STATUS_STORE',
+    'OPK_MECHANICAL_TRANSPORT_TEMP',
   ]);
-  const harnessOwnedAoBase = String(
-    harnessSnapshotEnv.OPK_VITEST_HARNESS_AO_BASE_DIR
-    || harnessSnapshotEnv.AO_BASE_DIR
+  const harnessOwnedStateBase = String(
+    harnessSnapshotEnv.OPK_VITEST_HARNESS_OPK_BASE_DIR
+    || harnessSnapshotEnv.OPK_BASE_DIR
     || '',
   ).trim();
   const stableHarnessKeys = new Set([
@@ -281,19 +281,19 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     'OPK_REAL_AO_BINARY',
     'GIT_REAL_BINARY',
     'GIT_SYSTEM_BINARY',
-    'AO_MECHANICAL_TRANSPORT_TEMP',
+    'OPK_MECHANICAL_TRANSPORT_TEMP',
   ]);
   const explicitBypassKeys = [
     'OPK_VITEST_HARNESS_ROOT',
     'OPK_VITEST_HARNESS_INVENTORY',
-    'AO_ORCHESTRATOR_ESCALATION_STATE',
-    'AO_OPERATOR_ESCALATION_INBOX',
-    'AO_ESCALATION_HEALTH_SPOOL',
-    'AO_WAKE_SUPERVISOR_STATE_DIR',
+    'OPK_ORCHESTRATOR_ESCALATION_STATE',
+    'OPK_OPERATOR_ESCALATION_INBOX',
+    'OPK_ESCALATION_HEALTH_SPOOL',
+    'OPK_WAKE_SUPERVISOR_STATE_DIR',
     'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
-    'AO_SIDE_PROCESS_STATE_DIR',
-    'AO_BASE_DIR',
-    'AO_MECHANICAL_TRANSPORT_TEMP',
+    'OPK_SIDE_PROCESS_STATE_DIR',
+    'OPK_BASE_DIR',
+    'OPK_MECHANICAL_TRANSPORT_TEMP',
     'TMPDIR',
     'TEMP',
     'TMP',
@@ -327,7 +327,7 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     });
   };
   const inheritedHarnessWakeRoot = () => String(
-    harnessSnapshotEnv.AO_WAKE_SUPERVISOR_STATE_DIR
+    harnessSnapshotEnv.OPK_WAKE_SUPERVISOR_STATE_DIR
     || harnessSnapshotEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
     || '',
   ).trim();
@@ -336,8 +336,8 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     harnessSnapshotEnv.OPK_VITEST_PRODUCTION_WAKE_ROOT
     || '',
   ).trim();
-  let childAoBaseSequence = 0;
-  const createChildAoBase = () => {
+  let childStateBaseSequence = 0;
+  const createChildStateBase = () => {
     const root = inheritedHarnessRoot();
     const prefixRoot = root || String(harnessSnapshotEnv.TMPDIR || harnessSnapshotEnv.TEMP || harnessSnapshotEnv.TMP || '').trim();
     if (prefixRoot) {
@@ -348,23 +348,23 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
         // Fall through to a deterministic in-harness path when mkdtemp is unavailable.
       }
     }
-    childAoBaseSequence += 1;
-    return join(process.cwd(), '.opk-vitest-ao-child-base', `${process.pid}-${childAoBaseSequence}`);
+    childStateBaseSequence += 1;
+    return join(process.cwd(), '.opk-vitest-ao-child-base', `${process.pid}-${childStateBaseSequence}`);
   };
 
   const isHarnessOwnedValue = (name, value) => {
     const text = String(value ?? '').trim();
     if (!text) return false;
-    if (name === 'AO_BASE_DIR') return Boolean(harnessOwnedAoBase) && text === harnessOwnedAoBase;
+    if (name === 'OPK_BASE_DIR') return Boolean(harnessOwnedStateBase) && text === harnessOwnedStateBase;
     if (derivedHarnessKeys.has(name)) return text === String(harnessSnapshotEnv[name] ?? '').trim();
     return false;
   };
 
-  const isHarnessAoBaseScopedValue = (value) => {
+  const isHarnessStateBaseScopedValue = (value) => {
     const text = String(value ?? '').trim();
-    if (!text || !harnessOwnedAoBase) return false;
+    if (!text || !harnessOwnedStateBase) return false;
     const candidate = canonicalizeFast(text);
-    const root = canonicalizeFast(harnessOwnedAoBase);
+    const root = canonicalizeFast(harnessOwnedStateBase);
     return Boolean(candidate && root && pathIsSameOrWithin(candidate, root));
   };
 
@@ -436,14 +436,14 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     const mergedEnv = explicitEnv
       ? mergeHarnessChildEnv(explicitEnv)
       : mergeHarnessChildEnv(process.env);
-    const hasExplicitTestAoBase = Object.prototype.hasOwnProperty.call(explicitEnv ?? {}, 'AO_BASE_DIR')
-      && !isHarnessOwnedValue('AO_BASE_DIR', explicitEnv.AO_BASE_DIR);
-    if (hasExplicitTestAoBase) {
+    const hasExplicitTestStateBase = Object.prototype.hasOwnProperty.call(explicitEnv ?? {}, 'OPK_BASE_DIR')
+      && !isHarnessOwnedValue('OPK_BASE_DIR', explicitEnv.OPK_BASE_DIR);
+    if (hasExplicitTestStateBase) {
       for (const name of derivedHarnessKeys) {
         if (
           Object.prototype.hasOwnProperty.call(mergedEnv, name)
-          && name !== 'AO_BASE_DIR'
-          && isHarnessAoBaseScopedValue(mergedEnv[name])
+          && name !== 'OPK_BASE_DIR'
+          && isHarnessStateBaseScopedValue(mergedEnv[name])
         ) {
           delete mergedEnv[name];
         }
@@ -460,9 +460,9 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
       }
       const wakeRoot = inheritedHarnessWakeRoot();
       if (wakeRoot) {
-        nestedEnv.AO_WAKE_SUPERVISOR_STATE_DIR = wakeRoot;
+        nestedEnv.OPK_WAKE_SUPERVISOR_STATE_DIR = wakeRoot;
         nestedEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = wakeRoot;
-        nestedEnv.AO_SIDE_PROCESS_STATE_DIR = wakeRoot;
+        nestedEnv.OPK_SIDE_PROCESS_STATE_DIR = wakeRoot;
       }
       const productionWakeRoot = inheritedProductionWakeRoot();
       if (productionWakeRoot) {
@@ -482,8 +482,8 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     }
     if (mergedEnv.OPK_VITEST_HARNESS === '1' && explicitEnv) {
       for (const key of [
-        'AO_SIDE_PROCESS_STATE_DIR',
-        'AO_WAKE_SUPERVISOR_STATE_DIR',
+        'OPK_SIDE_PROCESS_STATE_DIR',
+        'OPK_WAKE_SUPERVISOR_STATE_DIR',
         'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
       ]) {
         if (!Object.prototype.hasOwnProperty.call(explicitEnv, key)) {
@@ -498,8 +498,8 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
         }
       }
     }
-    if (!Object.prototype.hasOwnProperty.call(mergedEnv, 'AO_BASE_DIR') && !hasExplicitTestAoBase) {
-      mergedEnv.AO_BASE_DIR = createChildAoBase();
+    if (!Object.prototype.hasOwnProperty.call(mergedEnv, 'OPK_BASE_DIR') && !hasExplicitTestStateBase) {
+      mergedEnv.OPK_BASE_DIR = createChildStateBase();
     }
     if (explicitEnv && Object.prototype.hasOwnProperty.call(explicitEnv, 'HOME')
       && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_HOME')) {
@@ -515,20 +515,20 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
         mergedEnv.OPK_VITEST_PRODUCTION_TMP = productionTmp;
       }
     }
-    if (explicitEnv && Object.prototype.hasOwnProperty.call(explicitEnv, 'AO_BASE_DIR')
-      && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_AO_BASE')) {
-      const explicitAoBase = String(mergedEnv.AO_BASE_DIR ?? '').trim();
-      if (explicitAoBase) {
-        mergedEnv.OPK_VITEST_PRODUCTION_AO_BASE = explicitAoBase;
+    if (explicitEnv && Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_BASE_DIR')
+      && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_OPK_BASE')) {
+      const explicitStateBase = String(mergedEnv.OPK_BASE_DIR ?? '').trim();
+      if (explicitStateBase) {
+        mergedEnv.OPK_VITEST_PRODUCTION_OPK_BASE = explicitStateBase;
       }
     }
     const explicitWake = String(
-      mergedEnv.AO_WAKE_SUPERVISOR_STATE_DIR
+      mergedEnv.OPK_WAKE_SUPERVISOR_STATE_DIR
       || mergedEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
       || '',
     ).trim();
     if (explicitEnv && (
-      Object.prototype.hasOwnProperty.call(explicitEnv, 'AO_WAKE_SUPERVISOR_STATE_DIR')
+      Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_WAKE_SUPERVISOR_STATE_DIR')
       || Object.prototype.hasOwnProperty.call(explicitEnv, 'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR')
     ) && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_WAKE_ROOT')
       && explicitWake) {
@@ -538,8 +538,8 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     const explicitStateDir = getPowerShellSwitchValue(argv, '-StateDir');
     if ((commandBase === 'pwsh' || commandBase === 'pwsh.exe' || commandBase === 'powershell' || commandBase === 'powershell.exe')
       && explicitStateDir) {
-      mergedEnv.AO_SIDE_PROCESS_STATE_DIR = explicitStateDir;
-      mergedEnv.AO_WAKE_SUPERVISOR_STATE_DIR = explicitStateDir;
+      mergedEnv.OPK_SIDE_PROCESS_STATE_DIR = explicitStateDir;
+      mergedEnv.OPK_WAKE_SUPERVISOR_STATE_DIR = explicitStateDir;
       mergedEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = explicitStateDir;
     }
     if (commandBase === 'ao' || commandBase === 'ao.cmd' || commandBase === 'ao.exe' || commandBase === 'ao.bat') {

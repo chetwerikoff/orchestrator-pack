@@ -5,14 +5,14 @@
 
 $Script:AutonomousClaimPrResumeMutexStaleSeconds = 5
 
-. (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'Invoke-RuntimeCliJson.ps1')
 
 function Get-AutonomousClaimPrResumeNamespace {
     param([string]$ProjectId = 'orchestrator-pack')
 
     $project = ([string]$ProjectId).Trim()
     if (-not $project) { $project = 'orchestrator-pack' }
-    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
     return (Join-Path (Join-Path (Join-Path $base 'projects') $project) 'claim-pr-resume-claims')
 }
 
@@ -138,18 +138,18 @@ function Release-AutonomousClaimPrResumeMutex {
     Remove-Item -LiteralPath $Mutex.lockDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-function Get-AutonomousGateResolvedAoCommand {
+function Get-AutonomousGateResolvedRuntimeCommand {
     return 'ao'
 }
 
-function Invoke-AutonomousGateResolvedAoCliJson {
+function Invoke-AutonomousGateResolvedRuntimeCliJson {
     param(
         [Parameter(Mandatory = $true)]
         [string[]]$AoArgs,
         [string]$FailureLabel = ''
     )
 
-    $realAo = Get-AutonomousGateResolvedAoCommand
+    $realAo = Get-AutonomousGateResolvedRuntimeCommand
     $label = if ($FailureLabel) { $FailureLabel } else { "resolved ao $($AoArgs -join ' ')" }
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -176,11 +176,11 @@ function Invoke-AutonomousGateResolvedAoCliJson {
 function Get-AutonomousGateStatusSessions {
     param([switch]$IncludeTerminated)
 
-    $aoCommand = Get-AutonomousGateResolvedAoCommand
+    $runtimeCommand = Get-AutonomousGateResolvedRuntimeCommand
     if ($IncludeTerminated) {
-        return @(Get-WorkerStatusDecisionSessionsIncludingTerminated -AoCommand $aoCommand)
+        return @(Get-WorkerStatusDecisionSessionsIncludingTerminated -RuntimeCommand $runtimeCommand)
     }
-    return @(Get-WorkerStatusDecisionSessions -AoCommand $aoCommand)
+    return @(Get-WorkerStatusDecisionSessions -RuntimeCommand $runtimeCommand)
 }
 
 function Get-AutonomousGateSessionPrNumber {
@@ -226,7 +226,7 @@ function Test-AutonomousGateSessionStatusIsTerminal {
 function Get-AutonomousClaimPrProjectPaths {
     param([string]$ProjectId = 'orchestrator-pack')
 
-    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
     $projectRoot = Join-Path (Join-Path $base 'projects') $ProjectId
     return @{
         ProjectRoot          = $projectRoot

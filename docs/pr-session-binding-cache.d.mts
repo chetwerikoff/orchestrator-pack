@@ -80,7 +80,7 @@ export declare function buildSessionBindingKey(repoSlug: string, sessionId: stri
 
 export declare function buildPrBindingKey(repoSlug: string, prNumber: number): string;
 
-export declare function sessionRowFromAoSessionGetPayload(
+export declare function sessionRowFromRuntimeWorkerGetPayload(
   payload: unknown,
 ): Record<string, unknown> | null;
 

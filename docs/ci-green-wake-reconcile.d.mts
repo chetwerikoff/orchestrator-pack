@@ -5,9 +5,9 @@ export declare const POST_HANDOFF_REPORT_STATES: ReadonlySet<string>;
 export declare const FORBIDDEN_LIFECYCLE_PATTERNS: readonly RegExp[];
 export declare const CI_GREEN_WAKE_MESSAGE: string;
 
-import type { AoSession, OpenPr } from './review-trigger-reconcile.d.mts';
+import type { RuntimeWorker, OpenPr } from './review-trigger-reconcile.d.mts';
 
-export type { AoSession, OpenPr };
+export type { RuntimeWorker, OpenPr };
 
 export type CiLevel = 'green' | 'red' | 'pending';
 
@@ -51,7 +51,7 @@ export type CiGreenWakeAction =
 
 export interface PlanCiGreenWakeInput {
   openPrs: OpenPr[];
-  sessions: AoSession[];
+  sessions: RuntimeWorker[];
   ciChecksByPr: Record<string, CiCheck[]> | Array<{ prNumber: number; checks: CiCheck[] }>;
   requiredCheckNamesByPr?:
     | Record<string, string[]>
@@ -61,7 +61,7 @@ export interface PlanCiGreenWakeInput {
     | Array<{ prNumber: number; failed: boolean }>;
   tracking?: CiGreenWakeState;
   workerDeliveries?: Array<Record<string, unknown>>;
-  aoEvents?: Array<Record<string, unknown>>;
+  runtimeEvents?: Array<Record<string, unknown>>;
   dispatchJournal?: Record<string, Record<string, unknown>>;
   reactionMessages?: Record<string, string>;
   reviewRuns?: Array<Record<string, unknown>>;
@@ -97,10 +97,10 @@ export declare function deriveGreenEpoch(
   currentLevel: CiLevel,
 ): { greenEpoch: number; lastCiLevel: CiLevel };
 
-export declare function normalizeSessionReportState(session: AoSession): string;
+export declare function normalizeSessionReportState(session: RuntimeWorker): string;
 
 export declare function isPreHandOffWorkerForHead(
-  session: AoSession,
+  session: RuntimeWorker,
   headSha: string,
   openPrs?: OpenPr[],
   prNumber?: number,
@@ -113,7 +113,7 @@ export declare function normalizeRequiredCheckLookupFailedByPr(
 export { resolveHeadOwningWorkerSessionId } from './review-trigger-reconcile.d.mts';
 
 export declare function evaluateCiGreenWakeCandidate(input: {
-  session: AoSession;
+  session: RuntimeWorker;
   prNumber: number;
   headSha: string;
   openPrs?: OpenPr[];
@@ -139,12 +139,12 @@ export declare function preSendRecheck(
   planned: { sessionId: string; prNumber: number; headSha: string },
   fresh: {
     openPrs: OpenPr[];
-    sessions: AoSession[];
+    sessions: RuntimeWorker[];
     ciChecksByPr: PlanCiGreenWakeInput['ciChecksByPr'];
     requiredCheckNamesByPr?: PlanCiGreenWakeInput['requiredCheckNamesByPr'];
     requiredCheckLookupFailedByPr?: PlanCiGreenWakeInput['requiredCheckLookupFailedByPr'];
     workerDeliveries?: PlanCiGreenWakeInput['workerDeliveries'];
-    aoEvents?: PlanCiGreenWakeInput['aoEvents'];
+    runtimeEvents?: PlanCiGreenWakeInput['runtimeEvents'];
     dispatchJournal?: PlanCiGreenWakeInput['dispatchJournal'];
     reactionMessages?: PlanCiGreenWakeInput['reactionMessages'];
     reviewRuns?: PlanCiGreenWakeInput['reviewRuns'];

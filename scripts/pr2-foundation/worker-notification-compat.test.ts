@@ -7,8 +7,8 @@ import {
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  normalizeAoSessionRow,
-  type AoSessionRow,
+  normalizeRuntimeWorkerRow,
+  type RuntimeWorkerRow,
   type OpenPrSnapshotRow,
 } from './binding.ts';
 import { DEFAULT_FOUNDATION_CONFIG } from './config.ts';
@@ -36,11 +36,11 @@ import {
 import { resolveVerifiedWorkerNotificationTarget } from './worker-notification-target.ts';
 
 const testRoots = createTestRootRegistry();
-const originalAoBaseDir = process.env.AO_BASE_DIR;
-const originalLockStaleMs = process.env.AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS;
-const originalSideProcessStateDir = process.env.AO_SIDE_PROCESS_STATE_DIR;
+const originalStateBaseDir = process.env.OPK_BASE_DIR;
+const originalLockStaleMs = process.env.OPK_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS;
+const originalSideProcessStateDir = process.env.OPK_SIDE_PROCESS_STATE_DIR;
 
-function workerSession(overrides: Partial<AoSessionRow> = {}): AoSessionRow {
+function workerSession(overrides: Partial<RuntimeWorkerRow> = {}): RuntimeWorkerRow {
   return {
     createdAt: '2026-07-20T00:00:00.000Z',
     harness: 'cursor',
@@ -89,27 +89,27 @@ function historicalDispatchRecord(overrides: Partial<DispatchJournalRecord> = {}
 }
 
 afterEach(() => {
-  if (originalAoBaseDir === undefined) delete process.env.AO_BASE_DIR;
-  else process.env.AO_BASE_DIR = originalAoBaseDir;
+  if (originalStateBaseDir === undefined) delete process.env.OPK_BASE_DIR;
+  else process.env.OPK_BASE_DIR = originalStateBaseDir;
   if (originalLockStaleMs === undefined) {
-    delete process.env.AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS;
+    delete process.env.OPK_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS;
   } else {
-    process.env.AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS = originalLockStaleMs;
+    process.env.OPK_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS = originalLockStaleMs;
   }
-  if (originalSideProcessStateDir === undefined) delete process.env.AO_SIDE_PROCESS_STATE_DIR;
-  else process.env.AO_SIDE_PROCESS_STATE_DIR = originalSideProcessStateDir;
+  if (originalSideProcessStateDir === undefined) delete process.env.OPK_SIDE_PROCESS_STATE_DIR;
+  else process.env.OPK_SIDE_PROCESS_STATE_DIR = originalSideProcessStateDir;
   testRoots.cleanup();
 });
 
 describe('[AC4] TypeScript notification compatibility', () => {
   it('normalizes the verified live AO string issueId without broadening the row schema', () => {
-    expect(normalizeAoSessionRow({ ...workerSession(), issueId: '923' })).toMatchObject({ issueId: 923 });
-    expect(normalizeAoSessionRow({ ...workerSession(), issueId: '923', branch: 'issue-923' })).toBeNull();
+    expect(normalizeRuntimeWorkerRow({ ...workerSession(), issueId: '923' })).toMatchObject({ issueId: 923 });
+    expect(normalizeRuntimeWorkerRow({ ...workerSession(), issueId: '923', branch: 'issue-923' })).toBeNull();
   });
 
   it('resolves one live owner from one session-list and one bulk PR snapshot, then persists generation ownership', async () => {
     const root = testRoots.create('opk-pr2-target-');
-    process.env.AO_BASE_DIR = path.join(root, 'ao-base');
+    process.env.OPK_BASE_DIR = path.join(root, 'ao-base');
     let versionReads = 0;
     let sessionReads = 0;
     let prReads = 0;
@@ -124,7 +124,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
       headSha: 'a'.repeat(40),
       config: DEFAULT_FOUNDATION_CONFIG.notification,
       dependencies: {
-        loadAoVersion: async () => {
+        loadRuntimeVersion: async () => {
           versionReads += 1;
           return '0.10.3';
         },
@@ -156,7 +156,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
       workerTarget: 'worker-923:worker-923',
     });
     const claimPath = path.join(
-      process.env.AO_BASE_DIR,
+      process.env.OPK_BASE_DIR,
       'projects',
       'orchestrator-pack',
       'pr-ownership-claims',
@@ -172,7 +172,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
 
   it('delivers to a successor exact-head owner when the review session is stale', async () => {
     const root = testRoots.create('opk-pr2-successor-target-');
-    process.env.AO_BASE_DIR = path.join(root, 'ao-base');
+    process.env.OPK_BASE_DIR = path.join(root, 'ao-base');
     const successor = workerSession({
       id: 'worker-923-successor',
       createdAt: '2026-07-20T01:00:00.000Z',
@@ -188,7 +188,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
       headSha: 'a'.repeat(40),
       config: DEFAULT_FOUNDATION_CONFIG.notification,
       dependencies: {
-        loadAoVersion: async () => '0.10.3',
+        loadRuntimeVersion: async () => '0.10.3',
         loadSessions: async () => [
           workerSession({ isTerminated: true, status: 'terminated' }),
           successor,
@@ -204,7 +204,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
       workerTarget: 'worker-923-successor:worker-923-successor',
     });
     const claimPath = path.join(
-      process.env.AO_BASE_DIR,
+      process.env.OPK_BASE_DIR,
       'projects',
       'orchestrator-pack',
       'pr-ownership-claims',
@@ -219,7 +219,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
   it('matches canonical wake-supervisor state-root precedence on Linux and Windows', () => {
     expect(resolveWakeSupervisorStateRoot({
       env: {
-        AO_WAKE_SUPERVISOR_STATE_DIR: '/override/wake',
+        OPK_WAKE_SUPERVISOR_STATE_DIR: '/override/wake',
         XDG_STATE_HOME: '/ignored/xdg',
       },
       platform: 'linux',
@@ -244,7 +244,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
 
   it('fails closed when live AO version provenance is not exactly 0.10.3', async () => {
     const root = testRoots.create('opk-pr2-version-');
-    process.env.AO_BASE_DIR = path.join(root, 'ao-base');
+    process.env.OPK_BASE_DIR = path.join(root, 'ao-base');
     await expect(resolveVerifiedWorkerNotificationTarget({
       trustedPackRoot: root,
       repoRoot: root,
@@ -254,7 +254,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
       headSha: 'a'.repeat(40),
       config: DEFAULT_FOUNDATION_CONFIG.notification,
       dependencies: {
-        loadAoVersion: async () => '0.10.4',
+        loadRuntimeVersion: async () => '0.10.4',
         loadSessions: async () => [workerSession()],
         loadOpenPrs: async () => [openPr()],
         resolveRepoSlug: async () => 'chetwerikoff/orchestrator-pack',
@@ -264,7 +264,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
 
   it('preserves single-flight claim, message hash, send-attempt, terminal dedupe, and material-change escalation', async () => {
     const root = testRoots.create('opk-pr2-claim-');
-    process.env.AO_BASE_DIR = path.join(root, 'ao-base');
+    process.env.OPK_BASE_DIR = path.join(root, 'ao-base');
     const base = {
       prNumber: 923,
       cycleKey: `stdout:sha256:${'b'.repeat(64)}`,
@@ -300,7 +300,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
 
   it('retries D4 sends after uncertain finalization and dead-owner send-attempt recovery', async () => {
     const root = testRoots.create('opk-pr2-claim-d4-');
-    process.env.AO_BASE_DIR = path.join(root, 'ao-base');
+    process.env.OPK_BASE_DIR = path.join(root, 'ao-base');
     const base = {
       prNumber: 923,
       cycleKey: `stdout:sha256:${'c'.repeat(64)}`,
@@ -384,8 +384,8 @@ describe('[AC4] TypeScript notification compatibility', () => {
 
   it('does not steal a live send-attempt while its side-effect fence is held', async () => {
     const root = testRoots.create('opk-pr2-claim-live-fence-');
-    process.env.AO_BASE_DIR = path.join(root, 'ao-base');
-    process.env.AO_SIDE_PROCESS_STATE_DIR = path.join(root, 'side-process');
+    process.env.OPK_BASE_DIR = path.join(root, 'ao-base');
+    process.env.OPK_SIDE_PROCESS_STATE_DIR = path.join(root, 'side-process');
     const base = {
       prNumber: 923,
       cycleKey: `stdout:sha256:${'d'.repeat(64)}`,
@@ -488,7 +488,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
     const root = testRoots.create('opk-pr2-journal-lock-');
     const journalPath = path.join(root, 'dispatch.json');
     const lockPath = `${journalPath}.lock`;
-    process.env.AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS = '1000';
+    process.env.OPK_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS = '1000';
 
     writeFileSync(lockPath, `${JSON.stringify({
       schemaVersion: 1,
@@ -536,7 +536,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
 describe('[S2] legacy caller compatibility', () => {
   it('keeps untagged task-continuation on the legacy retry policy', async () => {
     const root = testRoots.create('opk-s2-legacy-task-continuation-');
-    process.env.AO_BASE_DIR = path.join(root, 'ao-base');
+    process.env.OPK_BASE_DIR = path.join(root, 'ao-base');
     const request = {
       prNumber: 923,
       issueNumber: 1259,

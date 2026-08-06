@@ -94,13 +94,13 @@ export function resolveDefaultAoProjectId(env: NodeJS.ProcessEnv = process.env):
 
 export function resolveBoundIssueSnapshotStoreDir(
   projectId: string,
-  options: { aoBaseDir?: string; storeDirOverride?: string | null } = {},
+  options: { stateBaseDir?: string; storeDirOverride?: string | null } = {},
 ): string {
   const override = options.storeDirOverride ?? process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR ?? null;
   if (override) {
     return override;
   }
-  return join(getAoProjectDir(projectId, options.aoBaseDir), BOUND_ISSUE_SNAPSHOT_STORE_REL);
+  return join(getAoProjectDir(projectId, options.stateBaseDir), BOUND_ISSUE_SNAPSHOT_STORE_REL);
 }
 
 export function boundIssueSnapshotArtifactPaths(input: {
@@ -108,13 +108,13 @@ export function boundIssueSnapshotArtifactPaths(input: {
   prNumber: number;
   prHeadSha: string;
   issueNumber: number;
-  aoBaseDir?: string;
+  stateBaseDir?: string;
   storeDirOverride?: string | null;
 }): { artifactDir: string; snapshotPath: string; metadataPath: string } {
   const prHeadSha = normalizeSha(input.prHeadSha);
   const artifactDir = join(
     resolveBoundIssueSnapshotStoreDir(input.projectId, {
-      aoBaseDir: input.aoBaseDir,
+      stateBaseDir: input.stateBaseDir,
       storeDirOverride: input.storeDirOverride,
     }),
     `pr-${input.prNumber}`,
@@ -142,7 +142,7 @@ export function captureBoundIssueSnapshot(input: {
   prHeadSha: string;
   issueNumber: number;
   issueBody: string;
-  aoBaseDir?: string;
+  stateBaseDir?: string;
   storeDirOverride?: string | null;
   capturedAt?: string;
 }): BoundIssueSnapshotCaptureResult {
@@ -162,7 +162,7 @@ export function captureBoundIssueSnapshot(input: {
     prNumber: input.prNumber,
     prHeadSha,
     issueNumber: input.issueNumber,
-    aoBaseDir: input.aoBaseDir,
+    stateBaseDir: input.stateBaseDir,
     storeDirOverride: input.storeDirOverride,
   });
   const snapshotHash = computeBoundIssueSnapshotHash(input.issueBody);
@@ -225,7 +225,7 @@ export function captureBoundIssueSnapshotsFromPreflight(input: {
   prNumber: number;
   prHeadSha: string;
   specBodies: Array<{ issueNumber: number; body: string }>;
-  aoBaseDir?: string;
+  stateBaseDir?: string;
   storeDirOverride?: string | null;
 }): BoundIssueSnapshotCaptureResult[] {
   if (!Number.isInteger(input.prNumber) || input.prNumber <= 0) {
@@ -242,7 +242,7 @@ export function captureBoundIssueSnapshotsFromPreflight(input: {
     prHeadSha,
     issueNumber: spec.issueNumber,
     issueBody: spec.body,
-    aoBaseDir: input.aoBaseDir,
+    stateBaseDir: input.stateBaseDir,
     storeDirOverride: input.storeDirOverride,
   }));
 }
@@ -253,7 +253,7 @@ export function loadValidatedBoundSnapshotBody(input: {
   prHeadSha: string;
   issueNumber: number;
   snapshotFilePath: string;
-  aoBaseDir?: string;
+  stateBaseDir?: string;
   storeDirOverride?: string | null;
 }): { body: string; snapshotHash: string; snapshotPath: string } {
   const resolved = resolveBoundIssueSnapshot({
@@ -261,7 +261,7 @@ export function loadValidatedBoundSnapshotBody(input: {
     prNumber: input.prNumber,
     prHeadSha: input.prHeadSha,
     issueNumber: input.issueNumber,
-    aoBaseDir: input.aoBaseDir,
+    stateBaseDir: input.stateBaseDir,
     storeDirOverride: input.storeDirOverride,
   });
 
@@ -291,7 +291,7 @@ export function resolveBoundIssueSnapshot(input: {
   prNumber: number;
   prHeadSha: string;
   issueNumber: number;
-  aoBaseDir?: string;
+  stateBaseDir?: string;
   storeDirOverride?: string | null;
 }): BoundIssueSnapshotResolveResult {
   const paths = boundIssueSnapshotArtifactPaths({
@@ -299,7 +299,7 @@ export function resolveBoundIssueSnapshot(input: {
     prNumber: input.prNumber,
     prHeadSha: input.prHeadSha,
     issueNumber: input.issueNumber,
-    aoBaseDir: input.aoBaseDir,
+    stateBaseDir: input.stateBaseDir,
     storeDirOverride: input.storeDirOverride,
   });
 

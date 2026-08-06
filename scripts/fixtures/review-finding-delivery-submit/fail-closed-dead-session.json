@@ -30,5 +30,5 @@
     "maxRedeliveries": 2,
     "maxSubmits": 1
   },
-  "aoEvents": []
+  "runtimeEvents": []
 }

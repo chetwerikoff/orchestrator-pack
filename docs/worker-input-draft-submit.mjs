@@ -146,11 +146,11 @@ export function isSessionFloodActive(floodActiveSessions, sessionId) {
 /**
  * @param {object} input
  * @param {import('./review-finding-delivery-confirm.mjs').ReviewRun} input.run
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} input.sessions
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker[]} input.sessions
  * @param {import('./review-finding-delivery-confirm.mjs').DeliveryTrackingState} input.tracking
  * @param {import('./review-finding-delivery-confirm.mjs').ReviewRun[]} input.allRuns
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
- * @param {Array<Record<string, unknown>>} [input.aoEvents]
+ * @param {Array<Record<string, unknown>>} [input.runtimeEvents]
  * @param {Record<string, boolean>} [input.floodActiveSessions]
  * @param {number} input.nowMs
  * @param {object} [input.config]
@@ -161,7 +161,7 @@ export function evaluateSubmitEligibility({
   tracking,
   allRuns,
   openPrs,
-  aoEvents,
+  runtimeEvents,
   floodActiveSessions,
   nowMs,
   config,
@@ -221,7 +221,7 @@ export function evaluateSubmitEligibility({
     lastRedeliveryAtMs: record.lastRedeliveryAtMs,
   });
   if (
-    hasInterveningInputActivity(toArray(aoEvents), linkedSessionId, controlledAnchorMs)
+    hasInterveningInputActivity(toArray(runtimeEvents), linkedSessionId, controlledAnchorMs)
   ) {
     return { ok: false, reason: 'stale_input' };
   }

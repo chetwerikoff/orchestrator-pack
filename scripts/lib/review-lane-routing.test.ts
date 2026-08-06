@@ -116,7 +116,7 @@ describe('review-lane declaration and blast-radius routing', () => {
     for (const path of [
       'vendor/example.ts',
       'packages/core/example.ts',
-      '.ao/state.json',
+      '.orchestrator-pack/state.json',
       '.github/workflows/check.yml',
       'prompts/example.md',
       'agent-orchestrator.yaml',

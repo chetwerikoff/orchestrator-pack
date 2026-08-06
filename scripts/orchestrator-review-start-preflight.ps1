@@ -16,11 +16,11 @@ $result = Test-OrchestratorReviewStartGatePreflight -ConfiguredGateVersion $Conf
 if (-not $result.ok) {
   $auditRoot = Get-OrchestratorReviewStartAuditRoot
   $prNumber = 0
-  foreach ($candidate in @($env:AO_REVIEW_START_PR_NUMBER, $env:AO_PR_NUMBER)) {
+  foreach ($candidate in @($env:OPK_REVIEW_START_PR_NUMBER, $env:AO_PR_NUMBER)) {
     if ($candidate -and [int]::TryParse([string]$candidate, [ref]$prNumber)) { break }
   }
   $headSha = ''
-  foreach ($candidate in @($env:AO_REVIEW_START_HEAD_SHA, $env:AO_PR_HEAD_SHA, $env:AO_HEAD_SHA)) {
+  foreach ($candidate in @($env:OPK_REVIEW_START_HEAD_SHA, $env:AO_PR_HEAD_SHA, $env:AO_HEAD_SHA)) {
     if (-not [string]::IsNullOrWhiteSpace($candidate)) {
       $headSha = [string]$candidate
       break

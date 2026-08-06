@@ -79,7 +79,7 @@ function readProvenanceFields(provenancePath) {
 export function generateCaptureManifest(repoRoot, options = {}) {
   const corpusRelative = options.corpusRoot ?? 'tests/external-output-references';
   const normalizedCorpusRelative = corpusRelative.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
-  const retiredCatalogPath = path.join(repoRoot, 'scripts', 'json-producers', 'retired-surfaces.json');
+  const retiredCatalogPath = path.join(repoRoot, 'scripts', 'json-producers', 'retired-runtime-surfaces.json');
   const retiredSurfaces = normalizedCorpusRelative === 'tests/external-output-references' && existsSync(retiredCatalogPath)
     ? JSON.parse(readFileSync(retiredCatalogPath, 'utf8')).surfaces ?? []
     : [];

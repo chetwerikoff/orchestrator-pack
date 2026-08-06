@@ -129,7 +129,7 @@ jobs:
           PR_REPO_ROOT: ${{ github.workspace }}
         run: |
           set -o pipefail
-          node --experimental-strip-types plugins/ao-codex-pr-reviewer/bin/review.ts \
+          node --experimental-strip-types plugins/codex-pr-reviewer/bin/review.ts \
             --repo-root "$PR_REPO_ROOT" \
             --base "origin/${{ github.base_ref }}" \
             --pr-number "${{ github.event.pull_request.number }}" \

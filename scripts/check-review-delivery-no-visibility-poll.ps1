@@ -44,7 +44,7 @@ $forbidden = @(
     'find-submitted-run',
     'resolve-submit-visibility-config',
     'journaled-worker-send.ps1',
-    'Get-AoSessionReviewsJson'
+    'Get-RuntimeWorkerReviewsJson'
 )
 foreach ($token in $forbidden) {
     if ($delivery -match [regex]::Escape($token)) {

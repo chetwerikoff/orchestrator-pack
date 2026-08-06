@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Default (CI / verify.ps1): evaluates committed JSON fixtures only — no ao, gh, or network.
-  -Live: reads live agent-orchestrator.yaml and Get-AoReviewRuns fan-out (operator workstation).
+  -Live: reads live agent-orchestrator.yaml and Get-PackReviewRuns fan-out (operator workstation).
 
   Exit non-zero when the latest run violates empty-review trap or command-drift rules.
 #>
@@ -21,7 +21,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 if ($Live) {
-    . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+    . (Join-Path $PSScriptRoot 'lib/Invoke-RuntimeCliJson.ps1')
 }
 
 $PackRoot = Split-Path -Parent $PSScriptRoot
@@ -99,8 +99,8 @@ function Invoke-LiveGate {
         return $false
     }
 
-    $payload = Get-AoReviewRuns -Project $Project
-    $runs = Get-AoReviewRunsFromPayload -Payload $payload -Project $Project
+    $payload = Get-PackReviewRuns -Project $Project
+    $runs = Get-PackReviewRunsFromPayload -Payload $payload -Project $Project
 
     $expectedReviewer = Get-PackReviewerFromSelector
     $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $expectedReviewer

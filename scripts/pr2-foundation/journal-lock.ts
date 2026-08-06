@@ -26,7 +26,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function lockStaleMs(): number {
-  const raw = Number(process.env.AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS ?? DEFAULT_STALE_MS);
+  const raw = Number(process.env.OPK_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS ?? DEFAULT_STALE_MS);
   return Number.isInteger(raw) && raw >= 1_000 ? raw : DEFAULT_STALE_MS;
 }
 

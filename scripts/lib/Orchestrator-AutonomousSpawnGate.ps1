@@ -139,7 +139,7 @@ function Test-AutonomousSpawnDenied {
     }
 
     if ($FixtureMode) {
-        $env:AO_SPAWN_WORKTREE_FIXTURE_MODE = '1'
+        $env:OPK_SPAWN_WORKTREE_FIXTURE_MODE = '1'
     }
 
     $sub = Get-AoArgvSubcommand -Argv $Argv

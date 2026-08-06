@@ -32,7 +32,7 @@ key.
 See also: [`AGENTS.md`](AGENTS.md),
 [`docs/architecture.md`](docs/architecture.md#review-paths),
 [`docs/github_issues_cursor_codex_setup.md`](docs/github_issues_cursor_codex_setup.md),
-and [`plugins/ao-codex-pr-reviewer/README.md`](plugins/ao-codex-pr-reviewer/README.md).
+and [`plugins/codex-pr-reviewer/README.md`](plugins/codex-pr-reviewer/README.md).
 
 ## What this pack adds
 
@@ -219,7 +219,7 @@ agent CLIs):
 - [`docs/ubuntu-setup-runbook.md`](docs/ubuntu-setup-runbook.md)
 
 End-to-end adoption checklist (pre-commit hook, Codex CI workflow, first scoped
-issue, `ao-declare`, and scope-guard smoke tests):
+issue, `pack-declare`, and scope-guard smoke tests):
 
 - [`docs/target_repo_setup.md`](docs/target_repo_setup.md)
 - [`docs/issue_template_example.md`](docs/issue_template_example.md) — minimal

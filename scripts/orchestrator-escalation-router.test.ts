@@ -55,9 +55,9 @@ describe('orchestrator escalation router', () => {
       } | ConvertTo-Json -Compress
     `,
       {
-        AO_ORCHESTRATOR_ESCALATION_STATE: state,
-        AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
-        AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
+        OPK_ORCHESTRATOR_ESCALATION_STATE: state,
+        OPK_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
+        OPK_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
       },
     );
     expect(emit.status, `${emit.stdout}\n${emit.stderr}`).toBe(0);
@@ -113,10 +113,10 @@ describe('orchestrator escalation router', () => {
         encoding: 'utf8',
         env: {
           ...process.env,
-          AO_ESCALATION_FORCE_SEND_FAILURE: '1',
-          AO_ORCHESTRATOR_ESCALATION_STATE: state,
-          AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
-          AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
+          OPK_ESCALATION_FORCE_SEND_FAILURE: '1',
+          OPK_ORCHESTRATOR_ESCALATION_STATE: state,
+          OPK_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
+          OPK_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
         },
       },
     );
@@ -202,10 +202,10 @@ describe('orchestrator escalation router', () => {
         encoding: 'utf8',
         env: {
           ...process.env,
-          AO_ESCALATION_FORCE_SEND_FAILURE: '1',
-          AO_ORCHESTRATOR_ESCALATION_STATE: state,
-          AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
-          AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
+          OPK_ESCALATION_FORCE_SEND_FAILURE: '1',
+          OPK_ORCHESTRATOR_ESCALATION_STATE: state,
+          OPK_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
+          OPK_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
         },
       },
     );
@@ -329,9 +329,9 @@ describe('orchestrator escalation router', () => {
         encoding: 'utf8',
         env: {
           ...process.env,
-          AO_ORCHESTRATOR_ESCALATION_STATE: state,
-          AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
-          AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
+          OPK_ORCHESTRATOR_ESCALATION_STATE: state,
+          OPK_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
+          OPK_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
         },
       },
     );
@@ -430,9 +430,9 @@ describe('orchestrator escalation router', () => {
         encoding: 'utf8',
         env: {
           ...process.env,
-          AO_ORCHESTRATOR_ESCALATION_STATE: state,
-          AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
-          AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
+          OPK_ORCHESTRATOR_ESCALATION_STATE: state,
+          OPK_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
+          OPK_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
         },
       },
     );

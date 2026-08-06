@@ -180,10 +180,10 @@ function openPrForTarget(target: RunnerTarget): Record<string, unknown> {
 function runPreRunSubject(
   root: string,
   target: RunnerTarget,
-  aoPath: string,
+  runtimePath: string,
   options: { name?: string } = {},
 ): string {
-  const ao = readArtifact<AoBoundaryPayload>(aoPath);
+  const ao = readArtifact<AoBoundaryPayload>(runtimePath);
   invariant(ao.subject === 'capture-backed-ao-boundary', 'pre-run subject received wrong AO boundary');
   const session = ao.payload.row;
   const openPr = openPrForTarget(target);
@@ -198,7 +198,7 @@ function runPreRunSubject(
   });
   invariant(result.emitReviewRun, `real pre-run subject denied positive path: ${result.reason}`);
   return writeArtifact(root, options.name ?? 'subject-1-pre-run', 'preRunHeadReadyRecheck', 'docs/review-head-ready.mjs#preRunHeadReadyRecheck', {
-    inputArtifactSha256: artifactSha(aoPath),
+    inputArtifactSha256: artifactSha(runtimePath),
     target,
     openPr,
     session,
@@ -207,10 +207,10 @@ function runPreRunSubject(
   });
 }
 
-function runHarnessPreRunSubject(root: string, target: RunnerTarget, aoPath: string): string {
-  const ao = readArtifact<AoBoundaryPayload>(aoPath);
+function runHarnessPreRunSubject(root: string, target: RunnerTarget, runtimePath: string): string {
+  const ao = readArtifact<AoBoundaryPayload>(runtimePath);
   return writeArtifact(root, `fake-pre-run-${Math.random()}`, 'preRunHeadReadyRecheck', 'harness/fake-pre-run', {
-    inputArtifactSha256: artifactSha(aoPath),
+    inputArtifactSha256: artifactSha(runtimePath),
     target,
     openPr: openPrForTarget(target),
     session: ao.payload.row,
@@ -338,9 +338,9 @@ if (result.error) { process.stderr.write(String(result.error) + '\\n'); process.
 process.exit(result.status === null ? 71 : result.status);
 `, 'utf8');
   if (process.platform === 'win32') {
-    writeExecutable(path.join(reviewerBin, 'node.cmd'), `@echo off\r\nset args=%*\r\necho %args% | findstr /C:"plugins\\ao-codex-pr-reviewer\\bin\\review.ts" >nul\r\nif %errorlevel%==0 ("${process.execPath}" "${dispatcher}" "${fakeReviewer}" %*) else ("${process.execPath}" %*)\r\n`);
+    writeExecutable(path.join(reviewerBin, 'node.cmd'), `@echo off\r\nset args=%*\r\necho %args% | findstr /C:"plugins\\codex-pr-reviewer\\bin\\review.ts" >nul\r\nif %errorlevel%==0 ("${process.execPath}" "${dispatcher}" "${fakeReviewer}" %*) else ("${process.execPath}" %*)\r\n`);
   } else {
-    writeExecutable(path.join(reviewerBin, 'node'), `#!/usr/bin/env sh\ncase "$*" in *plugins/ao-codex-pr-reviewer/bin/review.ts*) exec "${process.execPath}" "${dispatcher}" "${fakeReviewer}" "$@" ;; *) exec "${process.execPath}" "$@" ;; esac\n`);
+    writeExecutable(path.join(reviewerBin, 'node'), `#!/usr/bin/env sh\ncase "$*" in *plugins/codex-pr-reviewer/bin/review.ts*) exec "${process.execPath}" "${dispatcher}" "${fakeReviewer}" "$@" ;; *) exec "${process.execPath}" "$@" ;; esac\n`);
   }
   process.env.TASK311_REVIEW_ROOT_OVERRIDE = reviewerRootOverride;
   return await pending;
@@ -527,11 +527,11 @@ async function runThreeSubjectAssembly(trap: EgressTrap): Promise<{
   const root = tempRoot('task-311-three-subjects-');
   try {
     const { row: session } = readCapture();
-    const aoPath = writeAoBoundary(root, session, Object.values(fixture.capture.selectors));
-    const ao = readArtifact<AoBoundaryPayload>(aoPath);
+    const runtimePath = writeAoBoundary(root, session, Object.values(fixture.capture.selectors));
+    const ao = readArtifact<AoBoundaryPayload>(runtimePath);
     const target = { prNumber: fixture.assembly.prNumber, headSha: currentHeadSha(), sessionId: String(session.id) };
     invariant(Number(session.issueId) === target.prNumber, 'capture issueId does not bind fixture PR');
-    const preRunPath = runPreRunSubject(root, target, aoPath);
+    const preRunPath = runPreRunSubject(root, target, runtimePath);
     const bindingPath = runBindingSubject(root, preRunPath);
     const runnerPath = await runRunnerSubject(root, bindingPath, trap);
     const preRun = readArtifact<Record<string, unknown>>(preRunPath);
@@ -542,7 +542,7 @@ async function runThreeSubjectAssembly(trap: EgressTrap): Promise<{
 
     const AC1: MutationRecord[] = [];
     AC1.push(await expectAssemblyRed('AC1', 'real-subject-boundary-broken', async () => {
-      const badPreRunPath = runHarnessPreRunSubject(root, target, aoPath);
+      const badPreRunPath = runHarnessPreRunSubject(root, target, runtimePath);
       const downstreamBindingPath = runBindingSubject(root, badPreRunPath, { name: `binding-after-fake-pre-run-${Math.random()}` });
       const downstreamRunnerPath = await runRunnerSubject(root, downstreamBindingPath, trap);
       return assembleEvidence(
@@ -584,24 +584,24 @@ async function runThreeSubjectAssembly(trap: EgressTrap): Promise<{
 
     const AC2: MutationRecord[] = [];
     AC2.push(await expectAssemblyRed('AC2', 'invented-ao-field', async () => {
-      const fakeAoPath = writeAoBoundary(
+      const fakeRuntimePath = writeAoBoundary(
         root,
         { ...session, prNumber: target.prNumber },
         [...Object.values(fixture.capture.selectors), '$.data[0].prNumber'],
         { name: `fake-ao-${Math.random()}`, implementation: 'harness/invented-ao-field' },
       );
-      const fakeAo = readArtifact<AoBoundaryPayload>(fakeAoPath);
+      const fakeRuntime = readArtifact<AoBoundaryPayload>(fakeRuntimePath);
       const inventedTarget = {
-        prNumber: Number(fakeAo.payload.row.prNumber),
+        prNumber: Number(fakeRuntime.payload.row.prNumber),
         headSha: target.headSha,
-        sessionId: String(fakeAo.payload.row.id),
+        sessionId: String(fakeRuntime.payload.row.id),
       };
-      const badPreRunPath = runPreRunSubject(root, inventedTarget, fakeAoPath, { name: `pre-run-from-invented-ao-${Math.random()}` });
+      const badPreRunPath = runPreRunSubject(root, inventedTarget, fakeRuntimePath, { name: `pre-run-from-invented-ao-${Math.random()}` });
       const badBindingPath = runBindingSubject(root, badPreRunPath, { name: `binding-from-invented-ao-${Math.random()}` });
       const badRunnerPath = await runRunnerSubject(root, badBindingPath, trap);
       return assembleEvidence(
         inventedTarget,
-        fakeAo,
+        fakeRuntime,
         readArtifact(badPreRunPath),
         readArtifact(badBindingPath),
         readArtifact(badRunnerPath),

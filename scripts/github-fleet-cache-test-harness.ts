@@ -159,7 +159,7 @@ export function createGithubFleetCacheHarness(prefix = 'gh-fleet-cache-'): Fleet
   chmodSync(join(binDir, 'gh'), 0o755);
   const env = {
     ...process.env,
-    AO_SIDE_PROCESS_STATE_DIR: join(root, 'supervisor-state'),
+    OPK_SIDE_PROCESS_STATE_DIR: join(root, 'supervisor-state'),
     GH_FLEET_OPEN_PR_LIST_TTL_SECONDS: '30',
     GH_FLEET_PR_VIEW_TTL_SECONDS: '15',
     GH_FLEET_CI_CHECKS_TTL_SECONDS: '15',

@@ -15,11 +15,11 @@ export interface AoFixtureSessionRecord {
   pr?: string | null;
 }
 
-export type AoSessionListingSource = 'json' | 'text' | 'none';
+export type RuntimeWorkerListingSource = 'json' | 'text' | 'none';
 
-export interface AoSessionListing {
+export interface RuntimeWorkerListing {
   records: AoFixtureSessionRecord[];
-  source: AoSessionListingSource;
+  source: RuntimeWorkerListingSource;
 }
 
 export const FIXTURE_HOLDER_PROMPT = 'checkpoint-2 contract-evidence reverify e2e fixture holder';
@@ -34,7 +34,7 @@ function defaultSleepMs(ms: number): void {
 }
 
 /** Parse `ao session ls` text for active session rows (TTY-indented or piped). */
-export function parseAoSessionLsText(stdout: string): AoFixtureSessionRecord[] {
+export function parseRuntimeWorkerLsText(stdout: string): AoFixtureSessionRecord[] {
   const records: AoFixtureSessionRecord[] = [];
   const seen = new Set<string>();
 
@@ -64,7 +64,7 @@ export function parseAoSessionLsText(stdout: string): AoFixtureSessionRecord[] {
   return records;
 }
 
-export function normalizeAoSessionRecordsFromJson(stdout: string): AoFixtureSessionRecord[] {
+export function normalizeRuntimeWorkerRecordsFromJson(stdout: string): AoFixtureSessionRecord[] {
   const payload = JSON.parse(stdout);
   return (payload?.data ?? [])
     .filter((session: { id?: string }) => typeof session?.id === 'string' && session.id.startsWith('opk-'))
@@ -75,13 +75,13 @@ export function normalizeAoSessionRecordsFromJson(stdout: string): AoFixtureSess
     }));
 }
 
-export function listAoSessionRecordsFromOutputs(options: {
+export function listRuntimeWorkerRecordsFromOutputs(options: {
   jsonStdout?: string | null;
   textStdout?: string | null;
-}): AoSessionListing {
+}): RuntimeWorkerListing {
   if (options.jsonStdout?.trim()) {
     try {
-      const records = normalizeAoSessionRecordsFromJson(options.jsonStdout);
+      const records = normalizeRuntimeWorkerRecordsFromJson(options.jsonStdout);
       return { records, source: 'json' };
     } catch {
       // fall through to text
@@ -90,7 +90,7 @@ export function listAoSessionRecordsFromOutputs(options: {
 
   if (options.textStdout?.trim()) {
     return {
-      records: parseAoSessionLsText(options.textStdout),
+      records: parseRuntimeWorkerLsText(options.textStdout),
       source: 'text',
     };
   }
@@ -98,7 +98,7 @@ export function listAoSessionRecordsFromOutputs(options: {
   return { records: [], source: 'none' };
 }
 
-export function isSpawnTrustworthySessionListing(source: AoSessionListingSource): boolean {
+export function isSpawnTrustworthySessionListing(source: RuntimeWorkerListingSource): boolean {
   return source === 'json';
 }
 
@@ -168,7 +168,7 @@ export function resolveAoFixtureSessionId(options: {
   liveE2eEnabled: boolean;
   preferredSessionId: string;
   knownSessions: AoFixtureSessionRecord[];
-  sessionListingSource?: AoSessionListingSource;
+  sessionListingSource?: RuntimeWorkerListingSource;
   allowSpawn: boolean;
   spawnSession: () => string | null;
   claimSpawn?: (spawnSession: () => string | null, knownSessions: AoFixtureSessionRecord[]) => string | null;

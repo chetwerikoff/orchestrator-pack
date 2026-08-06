@@ -25,7 +25,7 @@ import {
   type CiGreenWakeAction,
   type PlanCiGreenWakeInput,
 } from '../docs/ci-green-wake-reconcile.mjs';
-import type { AoSession } from '../docs/review-trigger-reconcile.d.mts';
+import type { RuntimeWorker } from '../docs/review-trigger-reconcile.d.mts';
 import { QUIESCENCE_DEBOUNCE_MS } from './pr2-foundation/terminalized/worker-iteration-cycle.ts';
 import { liveWorker, packGreenCiChecks, packRedCiChecks } from './_test-worker-session-fixtures.js';
 
@@ -136,7 +136,7 @@ describe('resolveHeadOwningWorkerSessionId', () => {
 
   it('skips stale live PR session and returns head owner', () => {
     const headSha = 'currenthead';
-    const sessions: AoSession[] = [
+    const sessions: RuntimeWorker[] = [
       {
         name: 'op-stale',
         role: 'worker',
@@ -222,7 +222,7 @@ describe('planCiGreenWakeActions', () => {
           deliveryPath: 'pending-draft',
         },
       },
-      aoEvents: [],
+      runtimeEvents: [],
       nowMs,
     });
     expect(nudgeActions(result.actions)).toHaveLength(0);
@@ -323,7 +323,7 @@ describe('planCiGreenWakeActions', () => {
               reportedAt: '2026-06-01T00:00:00.000Z',
             },
           ],
-        } as unknown as AoSession,
+        } as unknown as RuntimeWorker,
         {
           name: 'op-owner',
           role: 'worker',
@@ -333,7 +333,7 @@ describe('planCiGreenWakeActions', () => {
           reports: [
             { reportState: 'fixing_ci', reportedAt: '2026-06-05T00:00:00.000Z' },
           ],
-        } as unknown as AoSession,
+        } as unknown as RuntimeWorker,
       ],
       ciChecksByPr: {
         77: [
@@ -528,7 +528,7 @@ describe('preSendRecheck', () => {
             deliveryPath: 'pending-draft',
           },
         },
-        aoEvents: [],
+        runtimeEvents: [],
         nowMs,
       },
     );

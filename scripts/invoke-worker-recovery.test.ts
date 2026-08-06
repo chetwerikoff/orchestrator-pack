@@ -92,7 +92,7 @@ describe('TypeScript worker recovery entrypoint', () => {
 
   it('loads durable runtimeHandle authority in the public main path', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-recovery-main-'));
-    const previousAoBase = process.env.AO_BASE_DIR;
+    const previousStateBase = process.env.OPK_BASE_DIR;
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     try {
       const adapter = new DeterministicRuntimeAdapter();
@@ -105,8 +105,8 @@ describe('TypeScript worker recovery entrypoint', () => {
       expect(owned.status).toBe('ok');
       if (owned.status !== 'ok') return;
       expect(adapter.stopWorker(owned.value.identity).status).toBe('ok');
-      process.env.AO_BASE_DIR = join(root, 'ao');
-      const sessionDir = join(process.env.AO_BASE_DIR, 'projects', 'orchestrator-pack', 'sessions');
+      process.env.OPK_BASE_DIR = join(root, 'ao');
+      const sessionDir = join(process.env.OPK_BASE_DIR, 'projects', 'orchestrator-pack', 'sessions');
       mkdirSync(sessionDir, { recursive: true });
       writeFileSync(join(sessionDir, `${owned.value.identity.id}.json`), `${JSON.stringify({
         runtimeHandle: {
@@ -139,8 +139,8 @@ describe('TypeScript worker recovery entrypoint', () => {
       expect(spawnWorker).toHaveBeenCalledTimes(1);
       expect(stdout).toHaveBeenCalledWith(expect.stringContaining('"outcome":"spawn_started"'));
     } finally {
-      if (previousAoBase === undefined) delete process.env.AO_BASE_DIR;
-      else process.env.AO_BASE_DIR = previousAoBase;
+      if (previousStateBase === undefined) delete process.env.OPK_BASE_DIR;
+      else process.env.OPK_BASE_DIR = previousStateBase;
       stdout.mockRestore();
       rmSync(root, { recursive: true, force: true });
     }
@@ -148,10 +148,10 @@ describe('TypeScript worker recovery entrypoint', () => {
 
   it('rejects a durable runtimeHandle generation mismatch', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-recovery-authority-'));
-    const previousAoBase = process.env.AO_BASE_DIR;
+    const previousStateBase = process.env.OPK_BASE_DIR;
     try {
-      process.env.AO_BASE_DIR = join(root, 'ao');
-      const sessionDir = join(process.env.AO_BASE_DIR, 'projects', 'orchestrator-pack', 'sessions');
+      process.env.OPK_BASE_DIR = join(root, 'ao');
+      const sessionDir = join(process.env.OPK_BASE_DIR, 'projects', 'orchestrator-pack', 'sessions');
       mkdirSync(sessionDir, { recursive: true });
       writeFileSync(join(sessionDir, 'worker-1.json'), `${JSON.stringify({
         runtimeHandle: {
@@ -172,8 +172,8 @@ describe('TypeScript worker recovery entrypoint', () => {
         reason: 'cleanup_ownership_authority_mismatch',
       });
     } finally {
-      if (previousAoBase === undefined) delete process.env.AO_BASE_DIR;
-      else process.env.AO_BASE_DIR = previousAoBase;
+      if (previousStateBase === undefined) delete process.env.OPK_BASE_DIR;
+      else process.env.OPK_BASE_DIR = previousStateBase;
       rmSync(root, { recursive: true, force: true });
     }
   });

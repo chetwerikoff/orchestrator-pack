@@ -7,13 +7,13 @@ This document records the shipped operator and implementation contract for Issue
 The resolver default remains ten minutes:
 
 ```text
-AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS absent or empty -> 600000
+OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS absent or empty -> 600000
 ```
 
 The live operator configuration is:
 
 ```text
-AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS=2400000
+OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS=2400000
 ```
 
 `2400000` is an override, not the built-in default. The resolver accepts only canonical positive decimal integers for this variable and caps it at `2147183000`. The runner overhead is `300000` ms. Its whole-second timeout is the ceiling of `(effectiveBudgetMs + 300000) / 1000`, so the default yields 900 seconds and the live override yields 2700 seconds. `600001` yields 901 seconds rather than 900. An explicit runner timeout must be canonical, must fit the Node timer ceiling, and must not be lower than the derived value.

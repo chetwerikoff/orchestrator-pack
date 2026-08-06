@@ -78,14 +78,14 @@ const SUCCESS_CHECK_RE = /^(success|successful|passed|pass|neutral|skipped)$/i;
 const FAILURE_CHECK_RE = /^(failure|failed|fail|error|cancelled|timed_out|action_required)$/i;
 const PENDING_CHECK_RE = /^(pending|queued|in_progress|running|waiting|requested)$/i;
 export function resolveWorkerStatusStorePath(env = process.env) {
-  if (env.AO_WORKER_STATUS_STORE) {
-    return String(env.AO_WORKER_STATUS_STORE);
+  if (env.OPK_WORKER_STATUS_STORE) {
+    return String(env.OPK_WORKER_STATUS_STORE);
   }
   if (env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
     return join(String(env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR), 'worker-status-store.json');
   }
-  if (env.AO_REPORT_STATE_SEED_STATE) {
-    return join(dirname(String(env.AO_REPORT_STATE_SEED_STATE)), 'worker-status-store.json');
+  if (env.OPK_REPORT_STATE_SEED_STATE) {
+    return join(dirname(String(env.OPK_REPORT_STATE_SEED_STATE)), 'worker-status-store.json');
   }
   return join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', 'worker-status-store.json');
 }
@@ -701,8 +701,8 @@ export function evaluateWorkerStatusKillSwitch(env = process.env) {
 
 export function testSiblingReadiness(env = process.env) {
   const docsDir = join(dirname(new URL(import.meta.url).pathname), '..', '..', 'docs');
-  const reportStorePath = env.AO_WORKER_REPORT_STORE
-    ? String(env.AO_WORKER_REPORT_STORE)
+  const reportStorePath = env.OPK_WORKER_REPORT_STORE
+    ? String(env.OPK_WORKER_REPORT_STORE)
     : (env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
       ? join(String(env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR), 'worker-report-store.json')
       : '');

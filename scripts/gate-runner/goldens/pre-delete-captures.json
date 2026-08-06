@@ -131,7 +131,7 @@
       "artifacts": []
     },
     {
-      "gateId": "ao-capture-redaction",
+      "gateId": "capture-redaction",
       "legacyScript": "scripts/check-ao-0-10-cli-capture-redaction.ps1",
       "sourceBlobSha": "e5e463136b99ed50e150a5f5c927b3c7f734a2e7",
       "case": "real-clean-tree",
@@ -146,7 +146,7 @@
       "artifacts": []
     },
     {
-      "gateId": "ao-capture-redaction",
+      "gateId": "capture-redaction",
       "legacyScript": "scripts/check-ao-0-10-cli-capture-redaction.ps1",
       "sourceBlobSha": "e5e463136b99ed50e150a5f5c927b3c7f734a2e7",
       "case": "credential-url-fixture",
@@ -163,15 +163,15 @@
       "artifacts": []
     },
     {
-      "gateId": "ao-capture-redaction",
-      "legacyScript": "scripts/check-ao-capture-redaction-selftest.ps1",
+      "gateId": "capture-redaction",
+      "legacyScript": "scripts/check-capture-redaction-selftest.ps1",
       "sourceBlobSha": "4b680c0da622f900ac81b4d741938c85b3e923bd",
       "case": "selftest-clean",
       "argv": [
         "pwsh",
         "-NoProfile",
         "-File",
-        "scripts/check-ao-capture-redaction-selftest.ps1"
+        "scripts/check-capture-redaction-selftest.ps1"
       ],
       "exitCode": 0,
       "stdout": "[PASS] detected ghp_ via pattern(s): ghp_\n[PASS] detected gho_ via pattern(s): gho_\n[PASS] detected ghu_ via pattern(s): ghu_\n[PASS] detected ghs_ via pattern(s): ghs_\n[PASS] detected ghr_ via pattern(s): ghr_\n[PASS] detected github_pat_ via pattern(s): github_pat_\n[PASS] detected credential-in-URL via pattern: [a-zA-Z][a-zA-Z0-9+.-]*://[^:]+:[^@]+@\n[PASS] out-of-dir gate scan detects forbidden fixture\n[PASS] AO capture redaction self-test (Issue #637)\n",

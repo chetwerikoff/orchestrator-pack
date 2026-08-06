@@ -31,7 +31,7 @@ function Get-WorkerLaunchFailureSignature {
         $messages.Add('Signature B: Windows command-line length limit exceeded') | Out-Null
     }
     if ($normalized -match '(?is)agent:\s*command not found') {
-        $messages.Add('Git Bash: agent binary not on PATH (AO_SHELL=bash without shim)') | Out-Null
+        $messages.Add('Git Bash: agent binary not on PATH (OPK_SHELL=bash without shim)') | Out-Null
     }
 
   return [pscustomobject]@{

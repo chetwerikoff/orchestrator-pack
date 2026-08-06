@@ -42,11 +42,11 @@ export function useIsolatedPrSessionBindingCache() {
     isolatedBindingCacheDir = mkdtempSync(path.join(tmpdir(), 'pr-session-binding-cache-'));
     isolatedBindingCachePath = path.join(isolatedBindingCacheDir, 'cache.json');
     writeFileSync(isolatedBindingCachePath, JSON.stringify(createDefaultPrSessionBindingCache()), 'utf8');
-    process.env.AO_PR_SESSION_BINDING_CACHE = isolatedBindingCachePath;
+    process.env.OPK_PR_SESSION_BINDING_CACHE = isolatedBindingCachePath;
   });
 
   afterEach(() => {
-    delete process.env.AO_PR_SESSION_BINDING_CACHE;
+    delete process.env.OPK_PR_SESSION_BINDING_CACHE;
     if (isolatedBindingCacheDir) {
       rmSync(isolatedBindingCacheDir, { recursive: true, force: true });
       isolatedBindingCacheDir = '';

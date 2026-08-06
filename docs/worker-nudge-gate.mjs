@@ -24,7 +24,7 @@ export const WORKER_NUDGE_GATE_VERSION = 'worker-nudge-gate/v1';
 export const ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY = 'worker-nudge-claim-atomic/v1';
 export const ORCHESTRATOR_TURN_SURFACE = 'orchestrator-turn';
 export const AUTONOMOUS_SURFACE_ENV = 'AO_SESSION_ID';
-export const JOURNALED_SEND_INTERNAL_ENV = 'AO_JOURNALED_SEND_INTERNAL';
+export const JOURNALED_SEND_INTERNAL_ENV = 'OPK_JOURNALED_SEND_INTERNAL';
 export const JOURNALED_SEND_INTERNAL_CAPABILITY = 'journaled-worker-send-internal/v1';
 export const OPERATOR_ESCALATION_PREFIX = '[worker-nudge-gate] ESCALATION:';
 export const CLASSIFIER_VERSION = 'worker-nudge-intent/v1';
@@ -897,12 +897,12 @@ export function buildAuditRecord(input) {
 function resolveUnresolvedEscalationBounds(input) {
   const count = Math.max(
     1,
-    Number(input.unresolvedEscalateCount ?? process.env.AO_NUDGE_GATE_UNRESOLVED_ESCALATE_COUNT) ||
+    Number(input.unresolvedEscalateCount ?? process.env.OPK_NUDGE_GATE_UNRESOLVED_ESCALATE_COUNT) ||
       DEFAULT_UNRESOLVED_ESCALATE_COUNT,
   );
   const ms = Math.max(
     1,
-    Number(input.unresolvedEscalateMs ?? process.env.AO_NUDGE_GATE_UNRESOLVED_ESCALATE_MS) ||
+    Number(input.unresolvedEscalateMs ?? process.env.OPK_NUDGE_GATE_UNRESOLVED_ESCALATE_MS) ||
       DEFAULT_UNRESOLVED_ESCALATE_MS,
   );
   const reportStaleMs = Math.max(1, Number(input.reportStaleMs ?? 30 * 60 * 1000));

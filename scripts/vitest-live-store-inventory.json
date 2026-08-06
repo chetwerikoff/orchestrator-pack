@@ -15,14 +15,14 @@
     {
       "id": "wake-supervisor-state-root",
       "defaultTemplate": "${WAKE_STATE}",
-      "harnessEnv": "AO_WAKE_SUPERVISOR_STATE_DIR",
+      "harnessEnv": "OPK_WAKE_SUPERVISOR_STATE_DIR",
       "kind": "directory",
       "watchTransient": true
     },
     {
       "id": "ao-base-root",
-      "defaultTemplate": "${AO_BASE}",
-      "harnessEnv": "AO_BASE_DIR",
+      "defaultTemplate": "${OPK_BASE}",
+      "harnessEnv": "OPK_BASE_DIR",
       "kind": "directory",
       "watchTransient": false
     }
@@ -55,7 +55,7 @@
       "resolver": "Get-OrchestratorEscalationStatePath",
       "writeBoundary": "Publish-OrchestratorEscalation / Set-MechanicalJsonStateFile",
       "envOverrides": [
-        "AO_ORCHESTRATOR_ESCALATION_STATE"
+        "OPK_ORCHESTRATOR_ESCALATION_STATE"
       ],
       "canonicalDefault": "${TMP}/orchestrator-escalation-state.json",
       "liveRoot": "${TMP}",
@@ -78,7 +78,7 @@
       "resolver": "Get-OrchestratorEscalationOperatorInboxDir",
       "writeBoundary": "Publish-OrchestratorEscalation operator route",
       "envOverrides": [
-        "AO_OPERATOR_ESCALATION_INBOX"
+        "OPK_OPERATOR_ESCALATION_INBOX"
       ],
       "canonicalDefault": "${TMP}/orchestrator-operator-inbox",
       "liveRoot": "${TMP}",
@@ -96,7 +96,7 @@
       "resolver": "Get-OrchestratorEscalationHealthSpoolDir",
       "writeBoundary": "Publish-OrchestratorEscalation health route",
       "envOverrides": [
-        "AO_ESCALATION_HEALTH_SPOOL"
+        "OPK_ESCALATION_HEALTH_SPOOL"
       ],
       "canonicalDefault": "${TMP}/orchestrator-escalation-health",
       "liveRoot": "${TMP}",
@@ -114,9 +114,9 @@
       "resolver": "Get-OrchestratorWakeSupervisorStateRoot",
       "writeBoundary": "wake-supervisor pid/state/progress/log/lock writers",
       "envOverrides": [
-        "AO_WAKE_SUPERVISOR_STATE_DIR",
+        "OPK_WAKE_SUPERVISOR_STATE_DIR",
         "ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR",
-        "AO_SIDE_PROCESS_STATE_DIR"
+        "OPK_SIDE_PROCESS_STATE_DIR"
       ],
       "canonicalDefault": "${WAKE_STATE}",
       "liveRoot": "${WAKE_STATE}",
@@ -136,8 +136,8 @@
       "resolver": "resolveWorkerMessageDispatchJournalPath",
       "writeBoundary": "Set-WorkerMessageDispatchJournal / Set-MechanicalJsonStateFile",
       "envOverrides": [
-        "AO_WORKER_MESSAGE_DISPATCH_JOURNAL",
-        "AO_WAKE_SUPERVISOR_STATE_DIR",
+        "OPK_WORKER_MESSAGE_DISPATCH_JOURNAL",
+        "OPK_WAKE_SUPERVISOR_STATE_DIR",
         "ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR"
       ],
       "canonicalDefault": "${WAKE_STATE}/worker-message-dispatch-journal.json",
@@ -161,9 +161,9 @@
       "resolver": "Get-WorkerStatusStorePath",
       "writeBoundary": "PowerShell and Node worker-status store writers",
       "envOverrides": [
-        "AO_WORKER_STATUS_STORE",
+        "OPK_WORKER_STATUS_STORE",
         "ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR",
-        "AO_REPORT_STATE_SEED_STATE"
+        "OPK_REPORT_STATE_SEED_STATE"
       ],
       "canonicalDefault": "${WAKE_STATE}/worker-status-store.json",
       "liveRoot": "${WAKE_STATE}",
@@ -187,7 +187,7 @@
       "resolver": "Get-ReviewDeliveryLifecycleStorePath",
       "writeBoundary": "review-delivery-lifecycle.mjs writeJsonAtomic",
       "envOverrides": [
-        "AO_WAKE_SUPERVISOR_STATE_DIR",
+        "OPK_WAKE_SUPERVISOR_STATE_DIR",
         "ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR"
       ],
       "canonicalDefault": "${WAKE_STATE}/review-delivery-lifecycle.json",
@@ -209,7 +209,7 @@
       "resolver": "Get-ReviewTriggerReevalWatchPath",
       "writeBoundary": "Set-ReviewTriggerReevalWatchState / Set-MechanicalJsonStateFile",
       "envOverrides": [
-        "AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE"
+        "OPK_REVIEW_TRIGGER_REEVAL_WATCH_STATE"
       ],
       "canonicalDefault": "${TMP}/orchestrator-review-trigger-reeval-watch.json",
       "liveRoot": "${TMP}",
@@ -232,8 +232,8 @@
       "resolver": "resolveWorkerReportStorePath",
       "writeBoundary": "writeWorkerReportStoreFile",
       "envOverrides": [
-        "AO_WORKER_REPORT_STORE",
-        "AO_REPORT_STATE_SEED_STATE"
+        "OPK_WORKER_REPORT_STORE",
+        "OPK_REPORT_STATE_SEED_STATE"
       ],
       "canonicalDefault": "${WAKE_STATE}/worker-report-store.json",
       "liveRoot": "${WAKE_STATE}",
@@ -256,8 +256,8 @@
       "resolver": "resolvePrSessionBindingCachePath",
       "writeBoundary": "writePrSessionBindingCacheFile / writePrSessionBindingCacheFileWithCas",
       "envOverrides": [
-        "AO_PR_SESSION_BINDING_CACHE",
-        "AO_REPORT_STATE_SEED_STATE"
+        "OPK_PR_SESSION_BINDING_CACHE",
+        "OPK_REPORT_STATE_SEED_STATE"
       ],
       "canonicalDefault": "${WAKE_STATE}/pr-session-binding-cache.json",
       "liveRoot": "${WAKE_STATE}",
@@ -278,11 +278,11 @@
       "resolver": "resolveReviewStartClaimNamespace",
       "writeBoundary": "review-start-claim-store.ts atomic claim/terminal writes",
       "envOverrides": [
-        "AO_BASE_DIR",
-        "AO_REVIEW_CLAIM_DIR"
+        "OPK_BASE_DIR",
+        "OPK_REVIEW_CLAIM_DIR"
       ],
-      "canonicalDefault": "${AO_BASE}/projects/orchestrator-pack/review-start-claims",
-      "liveRoot": "${AO_BASE}",
+      "canonicalDefault": "${OPK_BASE}/projects/orchestrator-pack/review-start-claims",
+      "liveRoot": "${OPK_BASE}",
       "sidecars": [
         ".locks/*",
         "terminal/*",
@@ -302,11 +302,11 @@
       "resolver": "Resolve-WorkerNudgeClaimNamespace",
       "writeBoundary": "Worker-NudgeClaim claim/terminal writes",
       "envOverrides": [
-        "AO_BASE_DIR",
-        "AO_WORKER_NUDGE_CLAIM_DIR"
+        "OPK_BASE_DIR",
+        "OPK_WORKER_NUDGE_CLAIM_DIR"
       ],
-      "canonicalDefault": "${AO_BASE}/projects/orchestrator-pack/worker-nudge-claims",
-      "liveRoot": "${AO_BASE}",
+      "canonicalDefault": "${OPK_BASE}/projects/orchestrator-pack/worker-nudge-claims",
+      "liveRoot": "${OPK_BASE}",
       "sidecars": [
         ".lock-*",
         "terminal/*",
@@ -326,7 +326,7 @@
       "resolver": "Get-MechanicalTransportTempRoot",
       "writeBoundary": "Write-MechanicalTransportPrivateFile / Write-MechanicalWorkerMessagePayloadFile",
       "envOverrides": [
-        "AO_MECHANICAL_TRANSPORT_TEMP"
+        "OPK_MECHANICAL_TRANSPORT_TEMP"
       ],
       "canonicalDefault": "${HOME}/.orchestrator-mechanical-transport",
       "liveRoot": "${HOME}",
@@ -348,7 +348,7 @@
       "resolver": "Get-OrchestratorWakeDedupStatePath",
       "writeBoundary": "orchestrator wake listener dedup state writer",
       "envOverrides": [
-        "AO_WAKE_DEDUP_STATE"
+        "OPK_WAKE_DEDUP_STATE"
       ],
       "canonicalDefault": "${TMP}/orchestrator-wake-dedup.json",
       "liveRoot": "${TMP}",
@@ -370,7 +370,7 @@
       "resolver": "Get-WorkerMessageSendAdoptionPreflightStatePath",
       "writeBoundary": "Test-WorkerMessageSendAdoptionPreflight persisted state",
       "envOverrides": [
-        "AO_WORKER_MESSAGE_ADOPTION_STATE"
+        "OPK_WORKER_MESSAGE_ADOPTION_STATE"
       ],
       "canonicalDefault": "${TMP}/orchestrator-worker-message-send-adoption.json",
       "liveRoot": "${TMP}",
@@ -413,10 +413,10 @@
       "resolver": "Get-AutonomousClaimPrResumeNamespace",
       "writeBoundary": "claim-pr resume mutex owner and lock-directory writes",
       "envOverrides": [
-        "AO_BASE_DIR"
+        "OPK_BASE_DIR"
       ],
-      "canonicalDefault": "${AO_BASE}/projects/orchestrator-pack/claim-pr-resume-claims",
-      "liveRoot": "${AO_BASE}",
+      "canonicalDefault": "${OPK_BASE}/projects/orchestrator-pack/claim-pr-resume-claims",
+      "liveRoot": "${OPK_BASE}",
       "sidecars": [
         ".locks/*"
       ],
@@ -433,10 +433,10 @@
       "resolver": "Get-OrchestratorReviewStartAuditRoot",
       "writeBoundary": "review-start denial/preflight/shield audit writers",
       "envOverrides": [
-        "AO_BASE_DIR"
+        "OPK_BASE_DIR"
       ],
-      "canonicalDefault": "${AO_BASE}/projects/orchestrator-pack/orchestrator-review-start-audit",
-      "liveRoot": "${AO_BASE}",
+      "canonicalDefault": "${OPK_BASE}/projects/orchestrator-pack/orchestrator-review-start-audit",
+      "liveRoot": "${OPK_BASE}",
       "sidecars": [
         "denials/*.json",
         "preflight/*.json",
@@ -455,10 +455,10 @@
       "resolver": "Get-WorkerNudgeGateAuditRoot",
       "writeBoundary": "Write-WorkerNudgeGateAudit",
       "envOverrides": [
-        "AO_BASE_DIR"
+        "OPK_BASE_DIR"
       ],
-      "canonicalDefault": "${AO_BASE}/projects/orchestrator-pack/worker-nudge-gate-audit",
-      "liveRoot": "${AO_BASE}",
+      "canonicalDefault": "${OPK_BASE}/projects/orchestrator-pack/worker-nudge-gate-audit",
+      "liveRoot": "${OPK_BASE}",
       "sidecars": [
         "*.json"
       ],
@@ -475,10 +475,10 @@
       "resolver": "getCodeReviewStoreDir",
       "writeBoundary": "review-run liveness state, audit, sidecar, and run-record writers",
       "envOverrides": [
-        "AO_BASE_DIR"
+        "OPK_BASE_DIR"
       ],
-      "canonicalDefault": "${AO_BASE}/projects/orchestrator-pack/code-reviews",
-      "liveRoot": "${AO_BASE}",
+      "canonicalDefault": "${OPK_BASE}/projects/orchestrator-pack/code-reviews",
+      "liveRoot": "${OPK_BASE}",
       "sidecars": [
         "runs/*.json",
         "reviewer-liveness/*.json",
@@ -500,9 +500,9 @@
       "resolver": "Get-CiRedWatchdogSubmitState",
       "writeBoundary": "CI-red watchdog submit-state reader and state writers",
       "envOverrides": [
-        "AO_WORKER_MESSAGE_SUBMIT_STATE",
-        "AO_SIDE_PROCESS_STATE_DIR",
-        "AO_WORKER_MESSAGE_DISPATCH_JOURNAL"
+        "OPK_WORKER_MESSAGE_SUBMIT_STATE",
+        "OPK_SIDE_PROCESS_STATE_DIR",
+        "OPK_WORKER_MESSAGE_DISPATCH_JOURNAL"
       ],
       "canonicalDefault": "${TMP}/orchestrator-worker-message-submit-state.json",
       "liveRoot": "${TMP}",

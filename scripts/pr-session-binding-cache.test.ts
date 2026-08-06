@@ -16,7 +16,7 @@ import {
   provePushRegisterWorkerIdentity,
   readPrSessionBindingCacheFile,
   registerPrSessionBindingRecord,
-  sessionRowFromAoSessionGetPayload,
+  sessionRowFromRuntimeWorkerGetPayload,
   resolvePrSessionBindingCachePath,
   resolvePrSessionBindingForConsumer,
   isGhPrCreateArgv,
@@ -190,7 +190,7 @@ describe('pr-session-binding-cache push-register', () => {
       AO_WORKER_SESSION_ID: 'opk-verified',
       AO_REPO_SLUG: repoSlug,
       AO_PROJECT_ID: 'orchestrator-pack',
-      AO_PR_SESSION_BINDING_CACHE: cachePath,
+      OPK_PR_SESSION_BINDING_CACHE: cachePath,
     };
     const sessions = [liveWorker('opk-verified', 719)];
     const register = tryPushRegisterFromPrCreate({
@@ -211,7 +211,7 @@ describe('pr-session-binding-cache push-register', () => {
       AO_WORKER_SESSION_ID: 'opk-verified',
       AO_REPO_SLUG: repoSlug,
       AO_PROJECT_ID: 'orchestrator-pack',
-      AO_PR_SESSION_BINDING_CACHE: cachePath,
+      OPK_PR_SESSION_BINDING_CACHE: cachePath,
     };
     const sessions = [liveWorker('opk-verified', 719)];
     const proof = provePushRegisterWorkerIdentity(env, { sessions });
@@ -235,7 +235,7 @@ describe('pr-session-binding-cache push-register', () => {
       AO_WORKER_SESSION_ID: 'opk-rebind',
       AO_REPO_SLUG: repoSlug,
       AO_PROJECT_ID: 'orchestrator-pack',
-      AO_PR_SESSION_BINDING_CACHE: cachePath,
+      OPK_PR_SESSION_BINDING_CACHE: cachePath,
     };
     const sessions = [liveWorker('opk-rebind', 719)];
     const store = seedStore({ sessionId: 'opk-rebind', prNumber: 11, headSha: 'old11' });
@@ -260,7 +260,7 @@ describe('pr-session-binding-cache push-register', () => {
       AO_WORKER_SESSION_ID: 'opk-rebind',
       AO_REPO_SLUG: repoSlug,
       AO_PROJECT_ID: 'orchestrator-pack',
-      AO_PR_SESSION_BINDING_CACHE: cachePath,
+      OPK_PR_SESSION_BINDING_CACHE: cachePath,
     };
     const sessions = [liveWorker('opk-rebind', 719)];
     const store = seedStore({ sessionId: 'opk-rebind', prNumber: 11, headSha: 'old11' });
@@ -289,7 +289,7 @@ describe('pr-session-binding-cache push-register', () => {
       AO_WORKER_SESSION_ID: 'opk-rebind-terminal',
       AO_REPO_SLUG: repoSlug,
       AO_PROJECT_ID: 'orchestrator-pack',
-      AO_PR_SESSION_BINDING_CACHE: cachePath,
+      OPK_PR_SESSION_BINDING_CACHE: cachePath,
     };
     const sessions = [liveWorker('opk-rebind-terminal', 719)];
     const store = seedStore({ sessionId: 'opk-rebind-terminal', prNumber: 11, headSha: 'old11' });
@@ -313,7 +313,7 @@ describe('pr-session-binding-cache push-register', () => {
       AO_WORKER_SESSION_ID: 'opk-io',
       AO_REPO_SLUG: repoSlug,
       AO_PROJECT_ID: 'orchestrator-pack',
-      AO_PR_SESSION_BINDING_CACHE: '/definitely/not/a/dir/cache.json',
+      OPK_PR_SESSION_BINDING_CACHE: '/definitely/not/a/dir/cache.json',
     };
     const sessions = [liveWorker('opk-io', 719)];
     const register = tryPushRegisterFromPrCreate({
@@ -333,7 +333,7 @@ describe('pr-session-binding-cache push-register', () => {
       path.join(repoRootFromTest(), 'tests/external-output-references/captures/ao-0-10-cli/session-get-worker.raw.json'),
       'utf8',
     ));
-    const row = sessionRowFromAoSessionGetPayload(capture);
+    const row = sessionRowFromRuntimeWorkerGetPayload(capture);
     expect(row?.sessionId).toBe('orchestrator-pack-7');
     expect(row?.role).toBe('worker');
     expect(row?.projectId).toBe('orchestrator-pack');
@@ -697,7 +697,7 @@ describe('pr-session-binding-cache collision', () => {
 
 describe('pr-session-binding-cache path resolution', () => {
   it('defaults cache path under wake-supervisor state root', () => {
-    const resolved = resolvePrSessionBindingCachePath({ AO_PR_SESSION_BINDING_CACHE: '/tmp/test-cache.json' });
+    const resolved = resolvePrSessionBindingCachePath({ OPK_PR_SESSION_BINDING_CACHE: '/tmp/test-cache.json' });
     expect(resolved).toBe('/tmp/test-cache.json');
   });
 });

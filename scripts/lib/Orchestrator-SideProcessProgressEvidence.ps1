@@ -11,8 +11,8 @@ $Script:SideProcessProgressMaxWorkStepLength = 64
 $Script:SideProcessProgressMaxTickIdLength = 64
 
 function Get-OrchestratorSideProcessNowMs {
-    if ($env:AO_SIDE_PROCESS_NOW_MS -and [long]::TryParse($env:AO_SIDE_PROCESS_NOW_MS, [ref]$null)) {
-        return [long]$env:AO_SIDE_PROCESS_NOW_MS
+    if ($env:OPK_SIDE_PROCESS_NOW_MS -and [long]::TryParse($env:OPK_SIDE_PROCESS_NOW_MS, [ref]$null)) {
+        return [long]$env:OPK_SIDE_PROCESS_NOW_MS
     }
     return [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 }

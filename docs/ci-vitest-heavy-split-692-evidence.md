@@ -72,6 +72,6 @@ Mega-file replacements are spread across shards (no monolithic mega-file remains
 
 Supplementary planner-weight view (not a substitute for measured CI timings above). Weights are conservative estimates / `heavyDefaultRuntimeMs` defaults until brief #1 harvest (#691).
 
-Slowest shard by estimate weight after split: **shard 5 — 915s total**, heaviest file `plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts` (120s default).
+Slowest shard by estimate weight after split: **shard 5 — 915s total**, heaviest file `plugins/codex-pr-reviewer/tests/reviewer-budget.test.ts` (120s default).
 
 Slowest shard by estimate weight before split (mega-files restored in plan): **shard 8 — 1320s total**, heaviest `scripts/orchestrator-message-registry.test.ts` (400s).

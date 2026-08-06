@@ -26,7 +26,7 @@ function Test-WorkerStatusGithubDependencyModule {
         'Invoke-GhOpenPrList',
         'Invoke-GhOpenPrListForNumbers',
         'Get-ReconcileChecksByPr',
-        'Get-EnrichedAoReviewRuns'
+        'Get-EnrichedPackReviewRuns'
     )
     foreach ($commandName in $requiredCommands) {
         if (-not $Module.ExportedFunctions.ContainsKey($commandName)) {
@@ -81,7 +81,7 @@ function Import-WorkerStatusGithubDependencies {
                 'Invoke-GhOpenPrList',
                 'Invoke-GhOpenPrListForNumbers',
                 'Get-ReconcileChecksByPr',
-                'Get-EnrichedAoReviewRuns'
+                'Get-EnrichedPackReviewRuns'
             )
             $missingCommands = @($requiredCommands | Where-Object {
                     -not $importedModule.ExportedFunctions.ContainsKey($_)
@@ -227,7 +227,7 @@ function Get-WorkerStatusRecomputeGithubSnapshot {
         $checksBundle = Get-ReconcileChecksByPr -RepoRoot $repoRoot -OpenPrs $openPrs
         $reviewRuns = @()
         try {
-            $reviewRuns = @(Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $repoRoot)
+            $reviewRuns = @(Get-EnrichedPackReviewRuns -Project $Project -RepoRoot $repoRoot)
         }
         catch {
             $reviewRuns = @()
@@ -297,8 +297,8 @@ function Resolve-WorkerStatusSessionGithubBlock {
 }
 
 function Get-WorkerStatusStorePath {
-    if ($env:AO_WORKER_STATUS_STORE) {
-        return $env:AO_WORKER_STATUS_STORE
+    if ($env:OPK_WORKER_STATUS_STORE) {
+        return $env:OPK_WORKER_STATUS_STORE
     }
     if ($env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
         return Join-Path $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR 'worker-status-store.json'
@@ -395,7 +395,7 @@ function Test-WorkerStatusKillSwitchActive {
 function Test-WorkerStatusSiblingReadiness {
     $result = Invoke-WorkerStatusStoreCli -Subcommand 'testSiblingReadiness' -Payload @{
         env = @{
-            AO_WORKER_REPORT_STORE                      = $env:AO_WORKER_REPORT_STORE
+            OPK_WORKER_REPORT_STORE                      = $env:OPK_WORKER_REPORT_STORE
             ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
         }
     }
@@ -404,11 +404,11 @@ function Test-WorkerStatusSiblingReadiness {
 
 
 function Get-WorkerStatusPrSessionBindingCachePath {
-    if ($env:AO_PR_SESSION_BINDING_CACHE) {
-        return [string]$env:AO_PR_SESSION_BINDING_CACHE
+    if ($env:OPK_PR_SESSION_BINDING_CACHE) {
+        return [string]$env:OPK_PR_SESSION_BINDING_CACHE
     }
-    if ($env:AO_REPORT_STATE_SEED_STATE) {
-        $seedPath = [string]$env:AO_REPORT_STATE_SEED_STATE
+    if ($env:OPK_REPORT_STATE_SEED_STATE) {
+        $seedPath = [string]$env:OPK_REPORT_STATE_SEED_STATE
         $parent = Split-Path -Parent $seedPath
         if (-not $parent) {
             return 'pr-session-binding-cache.json'
@@ -701,7 +701,7 @@ function Merge-SessionsWithWorkerStatusStore {
     return @($result.sessions)
 }
 
-function Merge-AoSessionRowsWithWorkerStatusStore {
+function Merge-RuntimeWorkerRowsWithWorkerStatusStore {
     param(
         [object[]]$Sessions,
         [string]$StorePath = '',

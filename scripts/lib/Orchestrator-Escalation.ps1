@@ -53,8 +53,8 @@ function Get-OrchestratorEscalationStatePath {
     $resolved = if ($StatePath) {
         $StatePath
     }
-    elseif ($env:AO_ORCHESTRATOR_ESCALATION_STATE) {
-        $env:AO_ORCHESTRATOR_ESCALATION_STATE
+    elseif ($env:OPK_ORCHESTRATOR_ESCALATION_STATE) {
+        $env:OPK_ORCHESTRATOR_ESCALATION_STATE
     }
     else {
         Get-OrchestratorEscalationSharedDefaultStatePath
@@ -68,8 +68,8 @@ function Get-OrchestratorEscalationOperatorInboxDir {
     $resolved = if ($OperatorInboxDir) {
         $OperatorInboxDir
     }
-    elseif ($env:AO_OPERATOR_ESCALATION_INBOX) {
-        $env:AO_OPERATOR_ESCALATION_INBOX
+    elseif ($env:OPK_OPERATOR_ESCALATION_INBOX) {
+        $env:OPK_OPERATOR_ESCALATION_INBOX
     }
     else {
         Get-OrchestratorEscalationSharedDefaultOperatorInboxDir
@@ -83,8 +83,8 @@ function Get-OrchestratorEscalationHealthSpoolDir {
     $resolved = if ($HealthSpoolDir) {
         $HealthSpoolDir
     }
-    elseif ($env:AO_ESCALATION_HEALTH_SPOOL) {
-        $env:AO_ESCALATION_HEALTH_SPOOL
+    elseif ($env:OPK_ESCALATION_HEALTH_SPOOL) {
+        $env:OPK_ESCALATION_HEALTH_SPOOL
     }
     else {
         Get-OrchestratorEscalationSharedDefaultHealthSpoolDir
@@ -386,10 +386,10 @@ function Write-OrchestratorEscalationJsonFile {
         [Parameter(Mandatory = $true)]$Envelope,
         [string]$StableId = ''
     )
-    if ($env:AO_ESCALATION_FORCE_INBOX_FAILURE -eq '1' -and $Prefix -eq 'operator') {
+    if ($env:OPK_ESCALATION_FORCE_INBOX_FAILURE -eq '1' -and $Prefix -eq 'operator') {
         throw 'forced operator inbox failure'
     }
-    if ($env:AO_ESCALATION_FORCE_HEALTH_FAILURE -eq '1' -and $Prefix -eq 'health') {
+    if ($env:OPK_ESCALATION_FORCE_HEALTH_FAILURE -eq '1' -and $Prefix -eq 'health') {
         throw 'forced health spool failure'
     }
     New-Item -ItemType Directory -Force -Path $Directory | Out-Null
@@ -450,16 +450,16 @@ function Invoke-OrchestratorEscalationLlmDelivery {
     param(
         [Parameter(Mandatory = $true)]$Envelope,
         [string]$OrchestratorSessionId = '',
-        [string]$AoPath = 'ao',
+        [string]$RuntimePath = 'ao',
         [switch]$DryRun
     )
     $session = if ($OrchestratorSessionId) { $OrchestratorSessionId } elseif ($env:AO_ORCHESTRATOR_SESSION_ID) { $env:AO_ORCHESTRATOR_SESSION_ID } else { '' }
     if (-not $session) { throw 'missing orchestrator session id' }
-    if ($env:AO_ESCALATION_FORCE_SEND_FAILURE -eq '1') { throw 'forced llm delivery failure' }
+    if ($env:OPK_ESCALATION_FORCE_SEND_FAILURE -eq '1') { throw 'forced llm delivery failure' }
     $json = $Envelope | ConvertTo-Json -Depth 30 -Compress
     if ($DryRun) { return @{ ok = $true; reason = 'dry_run'; session = $session } }
     $json | & pwsh -NoProfile -ExecutionPolicy Bypass -File $Script:OrchestratorEscalationJournaledSend `
-        $session -Source 'orchestrator-escalation' -SourceKey ([string]$Envelope.escalation_id) -AoPath $AoPath -NoWait
+        $session -Source 'orchestrator-escalation' -SourceKey ([string]$Envelope.escalation_id) -RuntimePath $RuntimePath -NoWait
     if ($LASTEXITCODE -ne 0) {
         throw "journaled-worker-send failed with exit code $LASTEXITCODE"
     }
@@ -729,7 +729,7 @@ function Publish-OrchestratorEscalation {
         [string]$HealthSpoolDir = '',
         [string]$OrchestratorSessionId = '',
         [string]$CatalogPath = '',
-        [string]$AoPath = 'ao',
+        [string]$RuntimePath = 'ao',
         [Nullable[long]]$NowMs = $null,
         [string]$ReplayEscalationId = '',
         [switch]$SkipWakeSuppression,
@@ -810,7 +810,7 @@ function Publish-OrchestratorEscalation {
             return Publish-OrchestratorEscalation -EscalationClassId $promotedClass -CorrelationKey $CorrelationKey `
                 -Payload $Payload -Message $Message -StatePath $path -OperatorInboxDir $OperatorInboxDir `
                 -HealthSpoolDir $HealthSpoolDir -OrchestratorSessionId $OrchestratorSessionId -CatalogPath $CatalogPath `
-                -AoPath $AoPath -NowMs $now -DryRun:$DryRun
+                -RuntimePath $RuntimePath -NowMs $now -DryRun:$DryRun
         }
         return @{ ok = $true; status = 'auto_retry_waiting'; escalationId = $recordKey; ticks = $record.autoRetryTicks; delivered = $false }
     }
@@ -844,7 +844,7 @@ function Publish-OrchestratorEscalation {
     $state.wakeWindows[$wakeKey] = $now
     try {
         if ($route -eq 'llm-orchestrator') {
-            $delivery = Invoke-OrchestratorEscalationLlmDelivery -Envelope $envelope -OrchestratorSessionId $OrchestratorSessionId -AoPath $AoPath -DryRun:$DryRun
+            $delivery = Invoke-OrchestratorEscalationLlmDelivery -Envelope $envelope -OrchestratorSessionId $OrchestratorSessionId -RuntimePath $RuntimePath -DryRun:$DryRun
             $record.status = 'delivered'
             $record.terminalState = 'open'
             $record.lastDelivery = $delivery

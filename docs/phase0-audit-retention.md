@@ -7,8 +7,8 @@ best-effort, opportunistic on append, and must never fail or delay wrapped GitHu
 
 | Stream | Default active path | Producer |
 | --- | --- | --- |
-| Wrapper audit | `$XDG_STATE_HOME/orchestrator-pack/gh-wrapper-audit.jsonl` (supervisor children use `$AO_SIDE_PROCESS_STATE_DIR/gh-wrapper-audit.jsonl`) | `scripts/lib/gh-wrapper.mjs` |
-| Fleet cache audit | `$AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` | `Write-GhFleetInventoryCacheAudit` in `scripts/lib/Gh-FleetInventoryCache.ps1` |
+| Wrapper audit | `$XDG_STATE_HOME/orchestrator-pack/gh-wrapper-audit.jsonl` (supervisor children use `$OPK_SIDE_PROCESS_STATE_DIR/gh-wrapper-audit.jsonl`) | `scripts/lib/gh-wrapper.mjs` |
+| Fleet cache audit | `$OPK_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` | `Write-GhFleetInventoryCacheAudit` in `scripts/lib/Gh-FleetInventoryCache.ps1` |
 
 Enable stderr mirrors with `GH_WRAPPER_AUDIT=1` and `GH_FLEET_CACHE_AUDIT=1` (supervisor
 children inherit both).

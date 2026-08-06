@@ -64,7 +64,7 @@ export const DELIVERY_STATE_UNCONFIRMED = 'unconfirmed';
 
 /** @typedef {{ id?: string, reviewerSessionId?: string, prNumber?: number, targetSha?: string, status?: string, prReviewStatus?: string, deliveredFindingCount?: number, deliveredAt?: string | null, linkedSessionId?: string, updatedAt?: string }} ReviewRun */
 /** @typedef {{ number?: number, headRefOid?: string }} OpenPr */
-/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<{ reportState?: string, report_state?: string, reportedAt?: string, timestamp?: string, createdAt?: string }> }} AoSession */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<{ reportState?: string, report_state?: string, reportedAt?: string, timestamp?: string, createdAt?: string }> }} RuntimeWorker */
 /** @typedef {{ deliveryState?: string, sendObservedAtMs?: number, redeliveryCount?: number, lastRedeliveryAtMs?: number, escalatedAtMs?: number, submitCount?: number, lastSubmitAtMs?: number, submitDecisionKey?: string }} RunDeliveryRecord */
 /** @typedef {{ runs?: Record<string, RunDeliveryRecord>, lastTickMs?: number }} DeliveryTrackingState */
 
@@ -128,7 +128,7 @@ export function getReportTimestampMs(report) {
  * Pack report-store / fixture path. AO 0.10.2 removed ao report and status --reports;
  * live ticks confirm worker-ack only from pack-worker-report-store rows.
  *
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  * @param {number} sendObservedAtMs
  */
 export function findReviewRoundReportAfterSend(session, sendObservedAtMs) {
@@ -147,7 +147,7 @@ export function findReviewRoundReportAfterSend(session, sendObservedAtMs) {
 
 /**
  * @param {ReviewRun} run
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {OpenPr[]} [openPrs]
  */
 export function isLinkedSessionLiveOwner(run, sessions, openPrs, options = {}) {
@@ -194,7 +194,7 @@ export function isLinkedSessionLiveOwner(run, sessions, openPrs, options = {}) {
 }
 
 /**
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {string} linkedA
  * @param {string} linkedB
  */
@@ -218,7 +218,7 @@ export function linkedRunSessionsMatch(sessions, linkedA, linkedB) {
  * @param {ReviewRun[]} runs
  * @param {DeliveryTrackingState} tracking
  * @param {ReviewRun} target
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  */
 export function countAmbiguousUnconfirmedPeers(runs, tracking, target, sessions) {
   const prNumber = Number(target?.prNumber);
@@ -260,7 +260,7 @@ export function countAmbiguousUnconfirmedPeers(runs, tracking, target, sessions)
 
 /**
  * @param {ReviewRun} run
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {number} sendObservedAtMs
  * @param {ReviewRun[]} allRuns
  * @param {DeliveryTrackingState} tracking
@@ -305,7 +305,7 @@ export function isDeliveryConfirmed(
 
 /**
  * @param {ReviewRun[]} reviewRuns
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  */
 export function pendingDeliveredRunsLackReportReceiptSurface(reviewRuns, sessions) {
   const sessionList = toArray(sessions);
@@ -380,12 +380,12 @@ export const OPERATOR_REMEDY_TEXT =
 /**
  * @param {object} input
  * @param {ReviewRun[]} input.reviewRuns
- * @param {AoSession[]} input.sessions
+ * @param {RuntimeWorker[]} input.sessions
  * @param {DeliveryTrackingState} input.tracking
  * @param {number} input.nowMs
  * @param {object} [input.config]
  * @param {OpenPr[]} [input.openPrs]
- * @param {Array<Record<string, unknown>>} [input.aoEvents]
+ * @param {Array<Record<string, unknown>>} [input.runtimeEvents]
  * @param {Record<string, boolean>} [input.floodActiveSessions]
  */
 export function planDeliveryConfirmActions({
@@ -395,7 +395,7 @@ export function planDeliveryConfirmActions({
   nowMs,
   config,
   openPrs,
-  aoEvents,
+  runtimeEvents,
   floodActiveSessions,
 }) {
   const { confirmationWindowMs, maxRedeliveries } = resolveDeliveryConfig(config);
@@ -574,7 +574,7 @@ runStdinJsonCli('review-finding-delivery-confirm.ts', {
       tracking: payload.tracking ?? { runs: {} },
       nowMs: Number(payload.nowMs) || Date.now(),
       config: payload.config ?? {},
-      aoEvents: payload.aoEvents ?? [],
+      runtimeEvents: payload.runtimeEvents ?? [],
       floodActiveSessions: payload.floodActiveSessions ?? {},
     });
   },

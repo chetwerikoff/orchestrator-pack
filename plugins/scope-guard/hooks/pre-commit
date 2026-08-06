@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+set -eu
+ROOT="$(git rev-parse --show-toplevel)"
+BRANCH="$(git -C "$ROOT" branch --show-current)"
+ISSUE="$(printf '%s' "$BRANCH" | sed -nE 's/.*issue[-/]([0-9]+).*/\1/p')"
+if [ -z "$ISSUE" ]; then
+  echo "scope-guard pre-commit: branch does not identify an issue; run scope-check --issue <n> explicitly" >&2
+  exit 0
+fi
+if command -v pwsh >/dev/null 2>&1; then PS_BIN=pwsh; else PS_BIN=powershell.exe; fi
+"$PS_BIN" -NoProfile -ExecutionPolicy Bypass -File "$ROOT/plugins/scope-guard/hooks/pre-commit.ps1" -IssueNumber "$ISSUE"

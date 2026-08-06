@@ -32,12 +32,12 @@ Rollback is a plain revert to the prior single-source GPT runner and runbook.
 The pack review runner now owns the Issue #898 authority lifecycle, including carry-over,
 trusted cap triage evidence, audited cap reset, legacy cap migration, and resumed-delivery
 publication finalization. Configure the live reviewer budget in the operator environment:
-`AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS=2400000` (2700-second runner timeout).
+`OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS=2400000` (2700-second runner timeout).
 
 ### Operator adoption
 
 1. Pull the merged pack into the operator checkout and the AO runtime worktree if separate.
-2. Export `AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS=2400000` in the environment inherited by the
+2. Export `OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS=2400000` in the environment inherited by the
    supervised review runner; restart/recycle only affected review processes as required by the
    local supervisor.
 3. Verify one real-head review run and retain the authority record; use the runner's audited
@@ -261,7 +261,7 @@ roster matches the registry:
 ## Review-status report-full JSON readers (Issue #611)
 
 Pack review-status consumers (`review-trigger-reconcile.ps1`, wake/reconcile scripts, and
-diagnostics) now load session snapshots via `Get-AoStatusSessionsWithReports*` (`ao status
+diagnostics) now load session snapshots via `Get-RuntimeStatusSessionsWithReports*` (`ao status
 --json --reports full` on AO 0.9; `.agent-report-audit/<session>.ndjson` fallback on AO 0.10).
 Head-ready predicate semantics are unchanged — only the reader boundary is fixed.
 
@@ -271,7 +271,7 @@ No operator adoption required beyond the usual supervised-child restart after de
 
 After merging the #625 vocabulary migration:
 
-1. **Dead CLI retired:** production scripts use `ao-review run` / `Get-AoReviewRuns` fan-out — not `ao review run|list|send|execute`.
+1. **Dead CLI retired:** production scripts use `ao-review run` / `Get-PackReviewRuns` fan-out — not `ao review run|list|send|execute`.
 2. **`review-send-reconcile.ps1` REMOVED:** auto-delivery on submit supersedes first-send `ao review send`; drop the child from wake-supervisor if still registered locally.
 3. **Status vocabulary:** `needs_triage` / `waiting_update` / `sentFindingCount` / `terminationReason` → `changes_requested` / `deliveredAt` / `deliveredFindingCount` / `latestRun.body`.
 4. **Live orchestration:** `orchestratorRules` yaml is legacy-import-only at 0.10; follow `AGENTS.md` + the supervised `review-trigger-reconcile.ps1` backstop.
@@ -340,8 +340,8 @@ The pack therefore adds contracts around AO instead of replacing AO orchestratio
 
 All supervised automated review starters share one machine-local claim namespace for
 `(prNumber, full normalized head SHA)`: periodic reconcile, wake listener, and deferred-head
-reeval. The default namespace is `${AO_REVIEW_CLAIM_DIR}` when set, otherwise
-`${AO_BASE_DIR:-~/.agent-orchestrator}/projects/<projectId>/review-start-claims` (Issue #308).
+reeval. The default namespace is `${OPK_REVIEW_CLAIM_DIR}` when set, otherwise
+`${OPK_BASE_DIR:-~/.agent-orchestrator}/projects/<projectId>/review-start-claims` (Issue #308).
 All children log the resolved namespace at startup.
 
 Operator adoption after merge:
@@ -365,7 +365,7 @@ Recovery / escalation:
   `scripts/lib/Review-StartClaim.ps1`) only after re-checking current `ao review list --json`
   coverage and PR head state. Resolution moves the active/ambiguous record to `terminal/` and
   either leaves the visible run as coverage or re-arms the key for normal claim arbitration.
-- The stale recovery interval is configurable with `AO_REVIEW_CLAIM_STALE_MINUTES`; values below
+- The stale recovery interval is configurable with `OPK_REVIEW_CLAIM_STALE_MINUTES`; values below
   the documented safe floor of 2 minutes are clamped with a warning. The default is 10 minutes,
   intentionally much larger than seconds-scale AO run registration.
 - Manual operator `ao review run` is still manual and outside the claim. Once its run record is
@@ -376,7 +376,7 @@ Recovery / escalation:
 
 Hold budget now starts at the launch gate (when `Confirm-ReviewStartClaimLaunchGate` runs), not at
 claim acquisition. Mandatory pre-launch snapshot/revalidation/workspace-preflight work is bounded
-only by the shared readiness envelope (`AO_REVIEW_CLAIM_READINESS_ENVELOPE_MS`, default 30s). Fresh
+only by the shared readiness envelope (`OPK_REVIEW_CLAIM_READINESS_ENVELOPE_MS`, default 30s). Fresh
 self-expiry during healthy pre-launch work is classified as `readiness_envelope_exceeded` when the
 envelope closes, not `hold_budget_exceeded` / concurrent-review pressure.
 
@@ -390,7 +390,7 @@ Mandatory pre-launch supervised `gh` transport failures classified as `infra_tra
 advance the 30s readiness envelope; the liveness reaper uses the same monotonic pause accounting.
 New active claims record `firstAttemptAtMonotonicMs`; uncovered heads terminalize as
 `readiness_attempt_ceiling_exceeded` after five minutes of monotonic attempt age. Tests may inject
-`AO_REVIEW_START_MONOTONIC_NOW_MS` and `AO_REVIEW_START_SUPERVISED_GH_COMMAND`.
+`OPK_REVIEW_START_MONOTONIC_NOW_MS` and `OPK_REVIEW_START_SUPERVISED_GH_COMMAND`.
 
 No operator adoption required beyond the usual supervised-child restart after deploy.
 
@@ -428,14 +428,14 @@ mechanically. Raw `ao review run` from the autonomous surface is denied at the p
 via `scripts/ao` (PATH shim → `scripts/ao-autonomous-guard.ps1`) when
 `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`. Tree-mutating `git` is denied the same way via
 `scripts/git` → `scripts/git-autonomous-guard.ps1` (#324). Real `ao`/`git` paths resolve
-out-of-band from gitignored `.ao/autonomous-real-binaries.json` (see
+out-of-band from gitignored `.orchestrator-pack/autonomous-real-binaries.json` (see
 `docs/autonomous-real-binaries.example.json`) — do **not** set turn-visible
 `AO_REAL_BINARY` / `GIT_REAL_BINARY` in orchestrator `agentConfig`. Prepend `scripts/` to
 orchestrator `agentConfig.env.PATH` (not worker PATH).
 
 Operator adoption after merge:
 
-1. Copy `docs/autonomous-real-binaries.example.json` to `.ao/autonomous-real-binaries.json`
+1. Copy `docs/autonomous-real-binaries.example.json` to `.orchestrator-pack/autonomous-real-binaries.json`
    with pack `scripts/git-real-binary` as `git` and the host system binary as `gitSystemBinary`
    (never point `git` at `/usr/bin/git` directly).
 2. Merge `agent-orchestrator.yaml.example` orchestrator gate block into live
@@ -450,7 +450,7 @@ Operator adoption after merge:
 
 ### Broken explicit `ao` pointer (Issue #495)
 
-When `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1` and `.ao/autonomous-real-binaries.json` exists with a
+When `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1` and `.orchestrator-pack/autonomous-real-binaries.json` exists with a
 broken non-empty `ao` path (missing, non-executable, or pack shim) or invalid JSON, the pack `ao`
 resolver emits a one-per-process stderr line:
 
@@ -541,9 +541,9 @@ Operator adoption after merge:
 2. Run once: `pwsh -NoProfile -File scripts/orchestrator-fleet-hygiene-sentinel.ps1 -Action Hygiene`
    and confirm exit **0** on a healthy fleet.
 3. Leave kill mode **disabled** unless explicitly remediating a storm:
-   `AO_FLEET_HYGIENE_KILL_ENABLE=1` (default off).
-4. Optional caps/alerts: `AO_FLEET_HYGIENE_MAX_PWSH_COUNT`,
-   `AO_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB`, `AO_FLEET_HYGIENE_ALERT_FILE`.
+   `OPK_FLEET_HYGIENE_KILL_ENABLE=1` (default off).
+4. Optional caps/alerts: `OPK_FLEET_HYGIENE_MAX_PWSH_COUNT`,
+   `OPK_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB`, `OPK_FLEET_HYGIENE_ALERT_FILE`.
 
 Runbook: [`docs/fleet-hygiene-sentinel-runbook.md`](fleet-hygiene-sentinel-runbook.md).
 
@@ -560,7 +560,7 @@ Operator adoption after merge:
    on its poll loop — bounded latency ≈ poll interval, default ~8s).
 3. After `cursor-agent` self-update, confirm:
    `pwsh -NoProfile -File scripts/verify-cursor-agent-tui-shim.ps1`
-4. Optional alerts: set `AO_FLEET_HYGIENE_ALERT_FILE` (reuses fleet hygiene #711 sink).
+4. Optional alerts: set `OPK_FLEET_HYGIENE_ALERT_FILE` (reuses fleet hygiene #711 sink).
 
 **Rollback** (restore stock cursor-agent only; stop or restart trust-watcher with self-heal disabled):
 
@@ -649,9 +649,9 @@ Operator adoption after merge:
    `running`, child logs show `degraded backoff` (not thousands of `recovering (attempt 1/3)`
    per hour), and children auto-resume when quota resets without operator intervention.
 
-Optional env overrides (safe defaults when unset): `AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS`,
-`AO_WAKE_SUPERVISOR_DEGRADED_MAX_BACKOFF_SECONDS`, `AO_WAKE_SUPERVISOR_DEGRADED_STABLE_WORKING_POLLS`,
-`AO_WAKE_SUPERVISOR_DEGRADED_REPEATED_REASON_THRESHOLD`, `AO_WAKE_SUPERVISOR_DEGRADED_REPEATED_REASON_WINDOW_MS`.
+Optional env overrides (safe defaults when unset): `OPK_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS`,
+`OPK_WAKE_SUPERVISOR_DEGRADED_MAX_BACKOFF_SECONDS`, `OPK_WAKE_SUPERVISOR_DEGRADED_STABLE_WORKING_POLLS`,
+`OPK_WAKE_SUPERVISOR_DEGRADED_REPEATED_REASON_THRESHOLD`, `OPK_WAKE_SUPERVISOR_DEGRADED_REPEATED_REASON_WINDOW_MS`.
 
 ## Wake-supervisor child gh PATH (Issue #447)
 
@@ -671,7 +671,7 @@ Operator adoption after merge:
 ## GitHub fleet inventory read-through cache (Issue #453)
 
 Wake-supervisor children now share a cross-process open-PR list snapshot (short TTL) and
-SHA→committed-date memo in `AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/`. Inventory helpers
+SHA→committed-date memo in `OPK_SIDE_PROCESS_STATE_DIR/github-fleet-cache/`. Inventory helpers
 (`Invoke-GhOpenPrList`, `Invoke-GhOpenPrListForNumbers`) route list/commit enrichment through
 this layer above the Issue #447 `scripts/gh` REST shim.
 
@@ -680,7 +680,7 @@ Operator adoption after merge:
 1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
 2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
 3. Optional observability: `export GH_FLEET_CACHE_AUDIT=1` and inspect
-   `$AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` for `open_pr_list_hit` under routine ticks.
+   `$OPK_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` for `open_pr_list_hit` under routine ticks.
 4. Run the ≥72h measurement in `docs/github-fleet-cache-measurement.md` before opening Phase 2 (`#142`).
 
 ## GitHub fleet shared PR/CI/protection read model (Issue #569)
@@ -696,7 +696,7 @@ Operator adoption after merge:
 1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
 2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
 3. Optional: `export GH_FLEET_CACHE_AUDIT=1` and inspect
-   `$AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` for `pr_view_hit`, `ci_checks_hit`,
+   `$OPK_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` for `pr_view_hit`, `ci_checks_hit`,
    and `branch_protection_hit` during warm ticks (not repeated same-key upstream `gh` calls).
 4. Verification: `npm test -- github-fleet-shared-read-model` and
    `pwsh -NoProfile -File scripts/check-github-fleet-cache-bypass.ps1`.
@@ -708,7 +708,7 @@ Operator adoption after merge:
 
 Adds a file-backed, identity-keyed admission governor in `scripts/lib/gh-governor.mjs`,
 consulted by pack `scripts/gh` / `gh-wrapper.mjs` before upstream GitHub reads. State lives
-under `$AO_SIDE_PROCESS_STATE_DIR/github-governor/`. Conservative placeholder budgets ship
+under `$OPK_SIDE_PROCESS_STATE_DIR/github-governor/`. Conservative placeholder budgets ship
 until Phase-0/1 telemetry tunes limits.
 
 Operator adoption after merge:
@@ -747,10 +747,10 @@ Operator adoption after merge:
 3. AC#10 measurement uses shipped #582/#581 telemetry (no local helper):
    - `export GH_FLEET_CACHE_AUDIT=1` and `export GH_WRAPPER_AUDIT=1` (supervisor children
      default both post-#581).
-   - Wrapper audit: `$AO_SIDE_PROCESS_STATE_DIR/gh-wrapper-audit.jsonl` — compare `entry` /
+   - Wrapper audit: `$OPK_SIDE_PROCESS_STATE_DIR/gh-wrapper-audit.jsonl` — compare `entry` /
      `complete` rows by `child`, `route`, `command`, `prNumber`, `headRef`, `status`,
      `rateLimit`, and `rateLimitKind`.
-   - Fleet cache audit: `$AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` —
+   - Fleet cache audit: `$OPK_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` —
      `repo_tick_populate`, `repo_tick_hit`, `repo_tick_wait_hit`, `repo_tick_stale_hit`,
      populate failures, and bypass denials.
    - Record one normal fleet window and one busy/head-advance window; compare wrapper
@@ -807,7 +807,7 @@ pack path). Capability inventory: `docs/autonomous-review-start-capabilities.jso
 (`autonomous-orchestrator-boundary/v1`).
 
 Operator adoption: follow the Issue #318 section above (shared marker + PATH shim) plus steps 1,
-5, and 6 there for `.ao/autonomous-real-binaries.json` and live denial verification.
+5, and 6 there for `.orchestrator-pack/autonomous-real-binaries.json` and live denial verification.
 
 Safe rollback: revert the whole boundary feature — do not leave autonomous orchestrator turns with
 `scripts/` on PATH but permissive real-binary env bypasses.
@@ -939,8 +939,8 @@ documented for 0.9.x; on 0.10 the harness API is authoritative for reviewer sele
 ## Autonomous spawn worktree provenance (Issue #470)
 
 When spawn policy allows `ao spawn` or `ao spawn --claim-pr`, the pack `ao` guard mints a
-short-lived spawn-worktree grant (`AO_SPAWN_WORKTREE_GRANT_ID`) that authorizes exactly one
-worker `git worktree add` under `{AO_BASE_DIR}/projects/<project>/worktrees/` with hardened
+short-lived spawn-worktree grant (`OPK_SPAWN_WORKTREE_GRANT_ID`) that authorizes exactly one
+worker `git worktree add` under `{OPK_BASE_DIR}/projects/<project>/worktrees/` with hardened
 path checks. Direct unsanctioned mutating git remains exit 93. Fully escaped absolute-binary
 calls after surface/PATH stripping are not pack-enforceable; boundary-escape signals are
 audited under `boundary-escape-audit/events.jsonl` when bootstrap arms but surface/PATH drift
@@ -957,7 +957,7 @@ Orchestrator bash turns arm through **tracked** wiring instead of operator-only
 `coworker.env` logic:
 
 1. Point `BASH_ENV` at `scripts/autonomous-orchestrator-surface-bootstrap.sh`
-   (thin bootstrap — prepends pack `scripts/`, maps live `AO_TMUX_NAME`
+   (thin bootstrap — prepends pack `scripts/`, maps live `OPK_TMUX_NAME`
    `*orchestrator*` → surface marker when needed, sources `scripts/autonomous-bash-env.sh`).
 2. Keep pack `scripts/` first on `PATH` in orchestrator `agentConfig` (same as
    Issue #324).
@@ -970,7 +970,7 @@ Orchestrator bash turns arm through **tracked** wiring instead of operator-only
    `npm test -- scripts/autonomous-orchestrator-interposer.test.ts` and
    `pwsh -NoProfile -File scripts/check-autonomous-orchestrator-boundary.ps1 -Boundary`.
 
-Live arming: tracked bootstrap maps `AO_TMUX_NAME` `*orchestrator*` →
+Live arming: tracked bootstrap maps `OPK_TMUX_NAME` `*orchestrator*` →
 `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1` for AO 0.9.x tmux shells where
 `agentConfig.env` does not propagate.
 
@@ -1197,7 +1197,7 @@ checkouts without `node_modules`. The pack wrapper requires the repository-owned
 
 **Canonical review command.** Copy **REVIEW_COMMAND** from
 `agent-orchestrator.yaml.example` — it runs `scripts/run-pack-review.ps1`, which
-executes `npm ci --include=dev` then `plugins/ao-codex-pr-reviewer/bin/review.ps1`.
+executes `npm ci --include=dev` then `plugins/codex-pr-reviewer/bin/review.ps1`.
 Do not improvise alternate `--command` chains (`&&`, nested `if`, or bare
 `review.ps1` without preflight).
 
@@ -1331,16 +1331,16 @@ alone is not enforcement.
 
 Optional env overrides (operator checkout only):
 
-- `AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS`
-- `AO_CODEX_REVIEW_SOFT_DEADLINE_MS`
-- `AO_CODEX_REVIEW_TEST_BUDGET_MS`
-- `AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX` (default `1` retry after first timeout)
+- `OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS`
+- `OPK_CODEX_REVIEW_SOFT_DEADLINE_MS`
+- `OPK_CODEX_REVIEW_TEST_BUDGET_MS`
+- `OPK_CODEX_REVIEW_TIMEOUT_RETRY_MAX` (default `1` retry after first timeout)
 
 No AO restart required for env-only tuning; wrapper reads env per run.
 
 ### Autonomous post-run review retry after recoverable infra failure (Issue #539)
 
-Pack gates now consume an **enriched** review-run view from `Get-EnrichedAoReviewRuns`
+Pack gates now consume an **enriched** review-run view from `Get-EnrichedPackReviewRuns`
 (`scripts/lib/Review-PostRunRetry.ps1`), not raw `ao review list` rows alone. Enrichment joins
 fresh #312 `reviewer-failure-evidence` sidecars when linkage is consistent and exposes
 `failureClass`, `retryEligible`, and `escalationReason` for failed/cancelled runs.
@@ -1381,7 +1381,7 @@ consulted layers fails closed (no reviewer run, no Codex default).
 names `run-pack-review.ps1` or `run-pack-review-claude.ps1` in **REVIEW_COMMAND**,
 copy the **NAMED REVIEW_COMMAND** line from the example (`invoke-pack-review.ps1`)
 and set `PACK_REVIEWER` to match the reviewer you were using. Gitignored
-`.ao/run-pack-review-claude.ps1` remains deprecated.
+`.orchestrator-pack/run-pack-review-claude.ps1` remains deprecated.
 
 **Strict gate (Issue #79 + #86).** CI runs `scripts/invoke-pack-review-strict-gate.ps1`
 on fixtures (no `ao` / `gh`). The gate checks empty-failed trap and
@@ -1420,7 +1420,7 @@ Occurs when the inlined prompt exceeds the Windows argv limit (observed with
 ~24 KB worker prompt files on issue #60). The orchestrator often survives
 because its launch uses `$(cat <file>)` only (no `printf`) and a smaller prompt.
 
-**`AO_SHELL=bash` is not a sufficient workaround.** Tested on this pack: bash
+**`OPK_SHELL=bash` is not a sufficient workaround.** Tested on this pack: bash
 clears Signature A but then `agent: command not found` (Git Bash does not run
 `agent.cmd` without a shim), and with a shim large prompts still hit Signature B.
 
@@ -1526,7 +1526,7 @@ pwsh -File scripts/wait-orchestrator-launch.ps1
 Attach within the first ~20s for live PTY output:
 `ao session attach op-orchestrator`.
 
-### Windows orchestrator prevention — `~/.ao/bin/agent` shim and worktree EPERM (RCA 2026-05-30)
+### Windows orchestrator prevention — `~/.orchestrator-pack/bin/agent` shim and worktree EPERM (RCA 2026-05-30)
 
 **Observed:** `op-orchestrator` exits instantly (`runtime=exited`, `process_missing`,
 empty PTY / `alive:false`); or `ao start` fails with `EPERM` on
@@ -1535,10 +1535,10 @@ stays resident.
 
 **Root causes (two layers, often together):**
 
-1. **Bash `agent` shim in `~/.ao/bin`** — AO prepends that directory on every spawn
+1. **Bash `agent` shim in `~/.orchestrator-pack/bin`** — AO prepends that directory on every spawn
    (`buildAgentPath` in `@aoagents/ao-core`). AO installs only **`gh` / `git`**
    wrappers there (`.cjs` + `.cmd` on Windows), **never** `agent`. A manual
-   `~/.ao/bin/agent` bash script (historically created for `AO_SHELL=bash` worker
+   `~/.orchestrator-pack/bin/agent` bash script (historically created for `OPK_SHELL=bash` worker
    experiments — Git Bash cannot resolve `agent.cmd`) makes **pwsh** resolve
    `agent` to the shim → immediate exit **0**, no cursor-agent child.
 2. **Orphan ConPTY children** — `pwsh` + `cursor-agent` under the orchestrator
@@ -1552,11 +1552,11 @@ cat-only `$(cat <file>)`).
 
 #### Do not repeat (operator checklist)
 
-1. **Do not place `~/.ao/bin\agent`** (or any bash shim) in the directory AO always
+1. **Do not place `~/.orchestrator-pack/bin\agent`** (or any bash shim) in the directory AO always
    prepends to `PATH`. For Windows workers use upstream
    [#2074](https://github.com/ComposioHQ/agent-orchestrator/issues/2074) (task
    prompt via temp file in the patched cursor plugin), not a permanent shim in
-   `~/.ao/bin`.
+   `~/.orchestrator-pack/bin`.
 2. **After `ao session kill`, failed spawn, or `EPERM`** — clear orphans before the
    next `ao start`. Use [Sysinternals Handle](https://learn.microsoft.com/en-us/sysinternals/downloads/handle)
    on the worktree path → `taskkill /T /F /PID <pid>` for each holder. **Do not**
@@ -1569,12 +1569,12 @@ cat-only `$(cat <file>)`).
 
    ```powershell
    if (Test-Path "$env:USERPROFILE\.ao\bin\agent") {
-     Write-Error "Remove ~/.ao/bin/agent before ao start (see migration_notes.md)"
+     Write-Error "Remove ~/.orchestrator-pack/bin/agent before ao start (see migration_notes.md)"
    }
    ```
 
 4. **Workers on Windows** — durable fix is [#2074](https://github.com/ComposioHQ/agent-orchestrator/issues/2074);
-   do not reintroduce `~/.ao/bin/agent` as a standing workaround. After every
+   do not reintroduce `~/.orchestrator-pack/bin/agent` as a standing workaround. After every
    `npm i -g @aoagents/ao@…`, run the **After `ao` upgrade — verify worker #2074
    patch** check above (`ao-worker-prompt-` + two `cat`, not reverted `printf %s`).
 
@@ -1744,7 +1744,7 @@ Full method: [`docs/rtk-missed-savings-inventory.md`](rtk-missed-savings-invento
 Wake-supervisor children (`review-trigger-reconcile`, `ci-green-wake-reconcile`,
 `review-send-reconcile`, `review-finding-delivery-confirm`, `ci-failure-notification-reconcile`,
 `ci-failure-notification-reaction`) must consume the shared REST-backed open-PR snapshot from
-`AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/` and must not fail through to per-child upstream
+`OPK_SIDE_PROCESS_STATE_DIR/github-fleet-cache/` and must not fail through to per-child upstream
 `gh pr list` when the snapshot is warm. Producer REST `403` surfaces as
 `snapshot_populate_failed`; child bypass attempts surface as `child_list_bypass`.
 
@@ -1836,9 +1836,9 @@ Terminal D/F reconcile launches and the older #168-era listener+heartbeat+review
    pre-#721 heartbeat process that survived from an older checkout.
 3. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
 4. Confirm: `-Action Status` lists **all** registry children as `running`.
-5. Optional env: `AO_WAKE_SUPERVISOR_ID_DEBOUNCE_POLLS` (default 2),
-   `AO_WAKE_SUPERVISOR_SESSION_GLITCH_POLLS` (default 2),
-   `AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS` (default 500).
+5. Optional env: `OPK_WAKE_SUPERVISOR_ID_DEBOUNCE_POLLS` (default 2),
+   `OPK_WAKE_SUPERVISOR_SESSION_GLITCH_POLLS` (default 2),
+   `OPK_WAKE_SUPERVISOR_RESTART_STAGGER_MS` (default 500).
 
 Registry: `scripts/orchestrator-side-process-registry.json` — add new long-running
 side-processes here in the same PR that introduces the process.
@@ -1857,8 +1857,8 @@ To adopt after merge:
    for operators; the process is the script, not a YAML scheduler).
 2. Start reconciliation in a dedicated terminal (default **20**-minute interval):
    `pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1`
-3. Optional env: `AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES`,
-   `AO_REVIEW_TRIGGER_RECONCILE_STATE`.
+3. Optional env: `OPK_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES`,
+   `OPK_REVIEW_TRIGGER_RECONCILE_STATE`.
 4. Verify: `pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun`
    then confirm `ao review list --json` shows a run for an uncovered PR head.
 
@@ -1883,7 +1883,7 @@ To adopt after merge:
 3. Restart AO: `ao stop` then `ao start`.
 4. Restart `scripts/review-trigger-reconcile.ps1` if it runs as a standalone loop (the script
    now fetches `gh pr checks` and branch-protection required-check names per tick).
-5. Optional env: `AO_REVIEW_DEGRADED_CI_MAX_ATTEMPTS` (default **3**).
+5. Optional env: `OPK_REVIEW_DEGRADED_CI_MAX_ATTEMPTS` (default **3**).
 6. Verify fixtures: `npx vitest run scripts/review-head-ready.test.ts scripts/review-trigger-reconcile.test.ts`
    and `pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun`.
 
@@ -1919,10 +1919,10 @@ To adopt after merge:
 
 1. Start in a dedicated terminal (default **5**-minute tick and confirmation window):
    `pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1`
-2. Optional env: `AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES`,
-   `AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES`,
-   `AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES` (default **2**),
-   `AO_REVIEW_DELIVERY_CONFIRM_STATE`.
+2. Optional env: `OPK_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES`,
+   `OPK_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES`,
+   `OPK_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES` (default **2**),
+   `OPK_REVIEW_DELIVERY_CONFIRM_STATE`.
 3. Verify: `pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1 -Once -DryRun`
 
 See `docs/orchestrator-recovery-runbook.md` (Review finding delivery unconfirmed).
@@ -1951,8 +1951,8 @@ To adopt after merge:
 1. Merge updated `scripts/orchestrator-side-process-registry.json` (includes
    `worker-message-submit-reconcile` child).
 2. Restart the supervisor so the new child starts: `ao stop` then `ao start`.
-3. Optional env: `AO_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS` (default **30**),
-   `AO_WORKER_MESSAGE_SUBMIT_STATE`, `AO_WORKER_MESSAGE_DISPATCH_JOURNAL`.
+3. Optional env: `OPK_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS` (default **30**),
+   `OPK_WORKER_MESSAGE_SUBMIT_STATE`, `OPK_WORKER_MESSAGE_DISPATCH_JOURNAL`.
 4. Verify: `pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun`
 5. Busy dispatch remains **default-off** until the operator records a valid smoke marker in
    `docs/worker-message-submit-busy-dispatch-smoke-markers.json`. A missing / stale / mismatched
@@ -1984,7 +1984,7 @@ To adopt after merge:
 1. Merge the **REVIEW-READY WORKER STUCK GUARD** block from
    `agent-orchestrator.yaml.example` into live `orchestratorRules`.
 2. Restart AO so rules reload: `ao stop` then `ao start`.
-3. Optional env: `AO_REVIEW_READY_STUCK_GRACE_MINUTES` (default **15**).
+3. Optional env: `OPK_REVIEW_READY_STUCK_GRACE_MINUTES` (default **15**).
 4. Verify fixtures: `npx vitest run scripts/review-ready-stuck-guard.test.ts`.
 
 See `docs/orchestrator-recovery-runbook.md` (Review-ready worker false stuck).
@@ -2003,8 +2003,8 @@ To adopt after merge:
 1. When a worker shows flood symptoms (CPU pegged, unsubmitted paste, stalled review),
    run:
    `pwsh -NoProfile -File scripts/terminal-flood-detect.ps1 -SessionId <worker-session-id>`
-2. Optional env: `AO_TERMINAL_FLOOD_WINDOW_SECONDS` (default **60**),
-   `AO_TERMINAL_FLOOD_MIN_PAIRED_CYCLES` (default **6**).
+2. Optional env: `OPK_TERMINAL_FLOOD_WINDOW_SECONDS` (default **60**),
+   `OPK_TERMINAL_FLOOD_MIN_PAIRED_CYCLES` (default **6**).
 3. Follow `docs/orchestrator-recovery-runbook.md` (Terminal Device-Attributes flood):
    stop the dashboard terminal view → verify signature subsided → re-deliver via Issue #171
    run evidence when quiet.
@@ -2155,7 +2155,7 @@ operators to run removed `--file` transport.
    define the supported ProjectConfig/session mechanism before this proof becomes mandatory.
 3. After that migration exists, generate the side-effect-isolated adoption probes and validate them for the running AO
    epoch/config path with the preflight's `-WriteProbeEntries` mode:
-   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -AoEpoch <running-epoch> -ConfigPath <loaded-config-path> -WriteProbeEntries`.
+   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -RuntimeEpoch <running-epoch> -ConfigPath <loaded-config-path> -WriteProbeEntries`.
    Probe generation invokes a synthetic `ao send` carrying adoption-probe markers so the live routing rule must call `scripts/journaled-worker-send.ps1`; the
    preflight does not create probe records by directly editing the journal. The generated probes use
    branch source keys such as `plain-ao-send:pending-draft` and
@@ -2165,8 +2165,8 @@ operators to run removed `--file` transport.
    branch with matching epoch/config hashes; a missing probe, present-but-ineffective
    rule, or stale-epoch rule escalates `wrapper_not_adopted`.
 4. Keep `worker-message-submit-reconcile` under the existing supervised side-process host.
-   Optional env vars: `AO_WORKER_MESSAGE_DISPATCH_JOURNAL`,
-   `AO_WORKER_MESSAGE_SUBMIT_STATE`, `AO_WORKER_MESSAGE_ADOPTION_STATE`.
+   Optional env vars: `OPK_WORKER_MESSAGE_DISPATCH_JOURNAL`,
+   `OPK_WORKER_MESSAGE_SUBMIT_STATE`, `OPK_WORKER_MESSAGE_ADOPTION_STATE`.
 5. Manual live smoke (not CI): send one synthetic non-secret multi-line message through the
    wrapper to a live Codex worker and record only sanitized metadata evidence (delivery id,
    outcome, draft state, timestamps). For busy-dispatch enablement (#293), capture the marker
@@ -2214,9 +2214,9 @@ Operator adoption after merge:
    recovery path, is invalid and must be fixed before relying on automatic
    recovery.
 
-Optional window overrides are `AO_REVIEW_RECOVERY_CRASH_GRACE_MS`,
-`AO_REVIEW_RECOVERY_MAX_REVIEW_DURATION_MS`, and
-`AO_REVIEW_RECOVERY_AMBIGUOUS_STALE_MS`. The ambiguous stale threshold must exceed
+Optional window overrides are `OPK_REVIEW_RECOVERY_CRASH_GRACE_MS`,
+`OPK_REVIEW_RECOVERY_MAX_REVIEW_DURATION_MS`, and
+`OPK_REVIEW_RECOVERY_AMBIGUOUS_STALE_MS`. The ambiguous stale threshold must exceed
 the enforced review timeout; otherwise the recovery check fails closed and emits
 a de-duplicated escalation audit rather than terminalizing runs.
 
@@ -2228,7 +2228,7 @@ AO 0.10 exposes no engine-side reaper for `review_run` rows stuck in
 `review-stuck-run-reaper` from `scripts/orchestrator-side-process-registry.json`.
 The tick scans worker sessions via daemon HTTP, classifies `stuck_same_head` when
 the reviewer pane is absent and age is at or above the configured floor, and
-invokes the fail-stale-run surface only when `AO_REVIEW_FAIL_STALE_SURFACE` is
+invokes the fail-stale-run surface only when `OPK_REVIEW_FAIL_STALE_SURFACE` is
 `available`. On AO 0.10, `scripts/review-run-recovery.ps1` skips its legacy tick
 and defers to this reaper.
 
@@ -2243,7 +2243,7 @@ Operator adoption after merge:
    `pwsh -NoProfile -File scripts/check-review-stuck-run-reaper.ps1`.
    Expected output: `review-stuck-run-reaper registration/config OK`.
 4. When upstream fail-stale-run is available, set
-   `AO_REVIEW_FAIL_STALE_SURFACE=available` in the operator environment before
+   `OPK_REVIEW_FAIL_STALE_SURFACE=available` in the operator environment before
    `ao start` if automated recovery (not alert-only) is desired.
 
 ## Reviewer failure evidence log (Issue #312)
@@ -2271,9 +2271,9 @@ Operator adoption after merge:
    runs, inspect `review-run-recovery-audit.json` for `failureEvidence.lastPhase`
    and the linked artifact path under `reviewer-failure-evidence/`.
 
-Optional tail limits: `AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT` (artifact,
-default 8192) and `AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT` (recovery
-summary, default 1024). Debug init failures with `AO_REVIEW_FAILURE_EVIDENCE_DEBUG=1`.
+Optional tail limits: `OPK_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT` (artifact,
+default 8192) and `OPK_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT` (recovery
+summary, default 1024). Debug init failures with `OPK_REVIEW_FAILURE_EVIDENCE_DEBUG=1`.
 
 ## CI-failure notification cross-path dedup (Issue #283)
 
@@ -2344,7 +2344,7 @@ head-scoped report timestamp is within `progressFreshnessMs` (default 15 minutes
 through the existing `ci-failure-notification-reconcile.ps1` delivery path (no parallel send surface).
 
 1. Pull merged pack; no `agent-orchestrator.yaml.example` schema change is required for this issue.
-2. Optional override: set `AO_CI_FAILURE_PROGRESS_FRESHNESS_MS` (positive integer milliseconds, must stay
+2. Optional override: set `OPK_CI_FAILURE_PROGRESS_FRESHNESS_MS` (positive integer milliseconds, must stay
    below `REPORT_STALE_BACKSTOP_MS` / ~30 minutes) in the operator environment for supervised reconcile
    children if the default 15-minute window is too tight or too loose.
 3. `ao stop` then `ao start` so reconcile children reload helper code after merge.
@@ -2501,7 +2501,7 @@ Operator adoption after merge:
 
 Ships tracked PreToolUse hook source at `scripts/guard-direct-edit.mjs` with a
 draft-file gate: architect-session Write/Edit of `docs/issues_drafts/<draft>.md` denies
-unless `AO_DRAFT_AUTHOR_FALLBACK_REASON` is set. Cursor draft-author sessions are
+unless `OPK_DRAFT_AUTHOR_FALLBACK_REASON` is set. Cursor draft-author sessions are
 unaffected (different runtime).
 
 **Operator adoption** — after merge:
@@ -2537,10 +2537,10 @@ unaffected (different runtime).
    `node .claude/hooks/guard-direct-edit.mjs` (symlink target resolves to tracked source).
 4. Restart the architect Claude Code session so settings reload.
 5. **Verification probe** (architect session):
-   - Without `AO_DRAFT_AUTHOR_FALLBACK_REASON`, attempt Write/Edit on
+   - Without `OPK_DRAFT_AUTHOR_FALLBACK_REASON`, attempt Write/Edit on
      `docs/issues_drafts/618-adoption-probe.md` — must **deny** with a message naming
-     draft-author delegation and `AO_DRAFT_AUTHOR_FALLBACK_REASON`.
-   - Set `AO_DRAFT_AUTHOR_FALLBACK_REASON` to a short audit reason, retry the same path —
+     draft-author delegation and `OPK_DRAFT_AUTHOR_FALLBACK_REASON`.
+   - Set `OPK_DRAFT_AUTHOR_FALLBACK_REASON` to a short audit reason, retry the same path —
      must **allow**.
    - Write/Edit under `docs/issues_drafts/.review/618-probe/` must **allow** without either
      override env var.
@@ -2586,7 +2586,7 @@ On AO 0.10.2, `ao session claim-pr <session> <pr>` may set numeric `displayName`
 
 ## Wake-supervisor fleet cardinality lease (Issue #709)
 
-State-root singleton enforcement uses `<stateRoot>/supervisor.lock` (held `flock` on Linux/WSL2). One supervisor fleet per shared `AO_SIDE_PROCESS_STATE_DIR` / default wake state root.
+State-root singleton enforcement uses `<stateRoot>/supervisor.lock` (held `flock` on Linux/WSL2). One supervisor fleet per shared `OPK_SIDE_PROCESS_STATE_DIR` / default wake state root.
 
 ### Ordinary Stop blocked (ambiguous fleet)
 
@@ -2622,16 +2622,16 @@ Pre-709 supervisors without `supervisor.lock` block new `Start` with a legacy-ho
 
 ### Stale-live heartbeat reclaim
 
-When a holder pid is alive but `heartbeatMs` in `supervisor.lock` is older than `AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` (default derived from poll interval) for longer than `AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS`, the next `Start` may reclaim after structured `wake-supervisor-audit kind=stale-live-reclaim` output. Ordinary reclaim does **not** kill immediately on first stale detection — grace avoids false steals after WSL2 suspend/pause.
+When a holder pid is alive but `heartbeatMs` in `supervisor.lock` is older than `OPK_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` (default derived from poll interval) for longer than `OPK_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS`, the next `Start` may reclaim after structured `wake-supervisor-audit kind=stale-live-reclaim` output. Ordinary reclaim does **not** kill immediately on first stale detection — grace avoids false steals after WSL2 suspend/pause.
 
 ### Lease tuning env vars
 
 | Variable | Purpose |
 | --- | --- |
-| `AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` | Max age before heartbeat considered stale |
-| `AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS` | Two-phase grace before stale-live reclaim |
-| `AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS` | Delay between role restarts on session-id flap |
-| `AO_WAKE_SUPERVISOR_START_HANDOFF_TIMEOUT_SEC` | Seconds to wait for detached loop to assume `supervisor.lock` after `Start` |
+| `OPK_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` | Max age before heartbeat considered stale |
+| `OPK_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS` | Two-phase grace before stale-live reclaim |
+| `OPK_WAKE_SUPERVISOR_RESTART_STAGGER_MS` | Delay between role restarts on session-id flap |
+| `OPK_WAKE_SUPERVISOR_START_HANDOFF_TIMEOUT_SEC` | Seconds to wait for detached loop to assume `supervisor.lock` after `Start` |
 
 ### Start blocked during Stop maintenance (AC#8a)
 
@@ -2660,9 +2660,9 @@ Pack consumers resolve PR↔session ownership from the durable binding cache bef
 `docs/session-pr-binding-resolver.mjs` backfill. Worker PR create through the pack
 `gh` wrapper push-registers bindings at PR-create time.
 
-- **Env:** `AO_PR_SESSION_BINDING_CACHE` — optional override for cache JSON path.
+- **Env:** `OPK_PR_SESSION_BINDING_CACHE` — optional override for cache JSON path.
 - **Default path:** `~/.local/state/orchestrator-pack-wake-supervisor/pr-session-binding-cache.json`
-- **Fallback:** sibling of `AO_REPORT_STATE_SEED_STATE` when set.
+- **Fallback:** sibling of `OPK_REPORT_STATE_SEED_STATE` when set.
 
 No operator restart required for the cache file itself; reconcile side processes pick up
 the module on next tick after deploy.
@@ -2727,7 +2727,7 @@ See `scripts/graphify/README.md` for build/refresh/query usage once bootstrapped
 - GitHub PR review posts are always COMMENT. Merge authority moved to the exact-head commit status context `orchestrator-pack/pack-review`: `pending` when a run is admitted for the current head, `success` for clean or non-blocking-only findings, `failure` for blocking findings, and `error` for malformed terminal output.
 - Repository operators must add `orchestrator-pack/pack-review` to branch protection as a required status check. Until configured, GitHub review comments remain advisory; once configured, a missing status blocks merge fail-closed.
 - `invoke-pack-review.ps1` no longer invokes post-submit delivery in-process, so wrapper stdout and exit code are unaffected by delivery failures. The existing PowerShell worker-send path remains only as the isolated adapter invoked by TypeScript.
-- `AO_SCRIPTED_REVIEW_SKIP_POST_SUBMIT_DELIVERY` remains recognized by the legacy adapter as an operator kill-switch, but the main entrypoint no longer depends on the adapter or the flag.
+- `OPK_SCRIPTED_REVIEW_SKIP_POST_SUBMIT_DELIVERY` remains recognized by the legacy adapter as an operator kill-switch, but the main entrypoint no longer depends on the adapter or the flag.
 - The direct REST inventory includes the exact-head commit-status write shape `repos/{owner}/{repo}/statuses/{sha}`; it uses the same existing `gh` authentication as COMMENT review posting.
 
 

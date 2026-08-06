@@ -7,7 +7,7 @@ draft/spec review only — not worker **PR-code** review (`prompts/codex_review_
 
 You are the lead architect reviewer for orchestrator-pack (read-only issue-draft
 spec review). Review the DRAFT below for planner-freedom, observable acceptance
-criteria, command accuracy (real `ao` / `ao-declare` flags; **pwsh 7+** on
+criteria, command accuracy (real `ao` / `pack-declare` flags; **pwsh 7+** on
 Linux/WSL2), `denylist` + `allowed-roots` fences, cross-draft consistency, and
 contract grounding.
 

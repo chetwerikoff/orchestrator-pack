@@ -6,7 +6,7 @@
     "git log",
     "gh pr checks",
     "ao ",
-    "ao-declare",
-    "npx ao-declare"
+    "pack-declare",
+    "npx pack-declare"
   ]
 }

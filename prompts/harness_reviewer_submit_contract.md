@@ -5,7 +5,7 @@ reviewer sessions. It does **not** replace the trusted-root prompt or mapper cha
 
 ## Before `ao review submit`
 
-1. Resolve trusted pack root (`AO_TRUSTED_PACK_ROOT` or operator main worktree).
+1. Resolve trusted pack root (`OPK_TRUSTED_PACK_ROOT` or operator main worktree).
 2. Run `node --experimental-strip-types scripts/harness-review-bridge.ts` from that root with `--run-id` and `--trusted-pack-root`.
 3. Confirm stdout JSON carries `[P0]`–`[P3]` on every finding title (scope findings may
    also include `[scope-violation]` but still require the priority prefix) and

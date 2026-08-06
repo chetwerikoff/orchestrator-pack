@@ -10,7 +10,7 @@
       "worktree": "/tmp/opk dead 593/worktree path"
     }
   ],
-  "aoEvents": [
+  "runtimeEvents": [
     { "name": "session.spawned", "sessionId": "opk-dead-593", "timestampMs": 1780000100000 },
     { "name": "agent_process_exited", "sessionId": "opk-dead-593", "timestampMs": 1780000105000, "data": { "exitCode": 1 } }
   ],

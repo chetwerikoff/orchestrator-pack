@@ -80,7 +80,7 @@ export function classifyEffectivePath(effectivePath, packScriptsDir) {
   for (const part of String(effectivePath ?? '').split(':').filter(Boolean)) {
     if (part === packScriptsDir) {
       classes.push('pack-scripts');
-    } else if (part.includes('/.ao/bin')) {
+    } else if (part.includes('/.orchestrator-pack/bin')) {
       classes.push('ao-bin');
     } else if (part === '/usr/bin') {
       classes.push('usr-bin');

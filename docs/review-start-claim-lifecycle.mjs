@@ -88,37 +88,37 @@ function clampInt(value, fallback, min, max) {
 
 export function resolveClaimLifecycleConfig(config = {}, env = process.env) {
   const readinessEnvelopeMs = clampInt(
-    config.readinessEnvelopeMs ?? env.AO_REVIEW_CLAIM_READINESS_ENVELOPE_MS,
+    config.readinessEnvelopeMs ?? env.OPK_REVIEW_CLAIM_READINESS_ENVELOPE_MS,
     DEFAULT_READINESS_ENVELOPE_MS,
     5_000,
     DEFAULT_READINESS_ENVELOPE_MS,
   );
   const holdBudgetMs = clampInt(
-    config.holdBudgetMs ?? env.AO_REVIEW_CLAIM_HOLD_BUDGET_MS,
+    config.holdBudgetMs ?? env.OPK_REVIEW_CLAIM_HOLD_BUDGET_MS,
     DEFAULT_HOLD_BUDGET_MS,
     1_000,
     readinessEnvelopeMs,
   );
   const launchPendingBudgetMs = clampInt(
-    config.launchPendingBudgetMs ?? env.AO_REVIEW_CLAIM_LAUNCH_PENDING_BUDGET_MS,
+    config.launchPendingBudgetMs ?? env.OPK_REVIEW_CLAIM_LAUNCH_PENDING_BUDGET_MS,
     DEFAULT_LAUNCH_PENDING_BUDGET_MS,
     1_000,
     readinessEnvelopeMs,
   );
   const visibilityBudgetMs = clampInt(
-    config.visibilityBudgetMs ?? env.AO_REVIEW_CLAIM_VISIBILITY_BUDGET_MS,
+    config.visibilityBudgetMs ?? env.OPK_REVIEW_CLAIM_VISIBILITY_BUDGET_MS,
     DEFAULT_VISIBILITY_BUDGET_MS,
     1_000,
     readinessEnvelopeMs,
   );
   const reaperPeriodSeconds = clampInt(
-    config.reaperPeriodSeconds ?? env.AO_REVIEW_CLAIM_REAPER_PERIOD_SECONDS,
+    config.reaperPeriodSeconds ?? env.OPK_REVIEW_CLAIM_REAPER_PERIOD_SECONDS,
     DEFAULT_REAPER_PERIOD_SECONDS,
     5,
     DEFAULT_REAPER_PERIOD_SECONDS,
   );
   const attemptCeilingMs = clampInt(
-    config.attemptCeilingMs ?? env.AO_REVIEW_CLAIM_ATTEMPT_CEILING_MS,
+    config.attemptCeilingMs ?? env.OPK_REVIEW_CLAIM_ATTEMPT_CEILING_MS,
     DEFAULT_ATTEMPT_CEILING_MS,
     60_000,
     DEFAULT_ATTEMPT_CEILING_MS,
