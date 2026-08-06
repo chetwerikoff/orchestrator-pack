@@ -123,15 +123,20 @@ Therefore:
 
 | Tier | Review sequence | Pre-lens #975 | Terminal lens |
 |------|-----------------|---------------|---------------|
-| **T1** | One GPT `architectural` lens → author fix-round when findings exist → acceptance | **No** | GPT lens owns aggregate cut + M5 |
-| **T2** | Three concurrent GPT `architectural-review` sources → author fix-round → one GPT `architectural` lens → acceptance | **No** | GPT lens owns aggregate cut + M5 |
-| **T3** | Three concurrent GPT `competitive` sources when triggered → author fix-round → three concurrent GPT `architectural-review` sources → author fix-round → one Claude `architectural-lens` (or valid waiver) → author fix-round when findings exist → one GPT `architectural` lens → acceptance after #1171 checks | **Yes** | GPT lens owns final aggregate cut + M5 |
+| **T1** | One GPT `architectural` lens → mandatory author fix-round → acceptance | **No** | GPT lens owns aggregate cut + M5 |
+| **T2** | Three concurrent GPT `architectural-review` sources → author fix-round → one GPT `architectural` lens → mandatory author fix-round → acceptance | **No** | GPT lens owns aggregate cut + M5 |
+| **T3** | Three concurrent GPT `competitive` sources when triggered → author fix-round → three concurrent GPT `architectural-review` sources → author fix-round → one Claude `architectural-lens` (or valid waiver) → author fix-round when findings exist → one GPT `architectural` lens → mandatory author fix-round → acceptance after #1171 checks | **Yes** | GPT lens owns final aggregate cut + M5 |
 
 The canonical T3 order is:
 
 ```text
-competitive[01..03] (when triggered) → author fix-round → architectural-review[01..03] → author fix-round → Claude architectural-lens → author fix-round (when findings exist) → GPT architectural
+competitive[01..03] (when triggered) → author fix-round → architectural-review[01..03] → author fix-round → Claude architectural-lens → author fix-round (when findings exist) → GPT architectural → author fix-round → acceptance
 ```
+
+The author fix-round after the terminal GPT lens is mandatory for every tier,
+even when that lens returns `NO_FINDINGS`. In that case it is a journaled
+disposition stating “no findings, no changes required”; the terminal stage is
+still recorded before acceptance.
 
 The competitive trigger is satisfied by any one of: direct operator
 instruction, an architect decision, or task complexity reaching R4 under the

@@ -121,14 +121,21 @@ competitive[01..03] (when triggered) → author fix-round → architectural-revi
 8. Run T3 `pre-lens` guard after settlement, relay equality, and occurrence
    accounting are green.
 9. Run exactly one Claude `architectural-lens`, or a valid unavailable waiver.
-10. Apply the author fix-round when Claude has findings.
+10. Apply the author fix-round after the Claude lens when it has findings.
 11. Run exactly one terminal GPT `architectural` source.
-12. Apply author dispositions/fixes and run final acceptance.
+12. Apply the mandatory author fix-round after the terminal GPT lens and run
+    final acceptance. If the lens returns `NO_FINDINGS`, journal “no findings,
+    no changes required” and still record the terminal stage.
 
 If no competitive trigger is satisfied, the flow-manager records the checks of
 the operator, architect, and external R4 criteria in the journal before
 skipping that stage. Before every stage launch, verify that the Issue revision
 is current; reviewers must read that revision.
+
+For every tier, the terminal sequence ends with `GPT lens → author fix-round →
+acceptance`. The terminal author fix-round is mandatory even for `NO_FINDINGS`;
+in that case it records “no findings, no changes required” in the journal and
+still records the terminal stage.
 
 No `architectural-final`, post-capture tier transition, narrow demotion
 revalidation, engine substitution, or sibling consolidation exists.

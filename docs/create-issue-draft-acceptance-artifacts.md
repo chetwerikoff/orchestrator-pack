@@ -50,14 +50,16 @@ T3 (with the other existing phase requirements). It reports every missing
 completed stage even when stale output markers are already present.
 
 The Issue #1364 operator policy is separate from that gate: T1 has one GPT
-lens followed by an author fix-round when findings exist; T2 has three
-concurrent GPT `architectural-review` sources, an author fix-round, and one GPT
-lens; T3 has three concurrent GPT `competitive` sources when any one of direct
-operator instruction, architect decision, or complexity reaching external R4
-is present, then an author fix-round, three concurrent GPT
+lens followed by a mandatory author fix-round; T2 has three concurrent GPT
+`architectural-review` sources, an author fix-round, one GPT lens, and a
+mandatory author fix-round; T3 has three concurrent GPT `competitive` sources
+when any one of direct operator instruction, architect decision, or complexity
+reaching external R4 is present, then an author fix-round, three concurrent GPT
 `architectural-review` sources, an author fix-round, one Claude lens, an author
-fix-round when findings exist, and one GPT lens. Browser starts are staggered
-by 10–15 seconds. If no T3 competitive trigger is met, the journal records the
+fix-round when findings exist, one GPT lens, and a mandatory author fix-round. The final fix-round
+is required even for `NO_FINDINGS`; it records “no findings, no changes
+required” in the journal before acceptance. Browser starts are staggered by
+10–15 seconds. If no T3 competitive trigger is met, the journal records the
 checks of all three triggers before skipping. No stage starts on a stale Issue
 revision; reviewers read the latest revision. This repository defines no R4
 scale and must not invent one. Updating `expectedStages` to enforce this
