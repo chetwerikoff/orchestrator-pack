@@ -1,12 +1,8 @@
 import { releaseCdpBrowser } from './browser-session.ts';
 import { isOwnedPromptMarker } from './owned-prompt-marker.ts';
 import { conversationUuidFromUrl } from './state-light-fresh-conversation.ts';
-import {
-  loadChromium,
-  normalizeConversationUrl,
-  STOP_BUTTON_SELECTOR,
-  USER_MESSAGE_SELECTOR,
-} from './ui-adapter.ts';
+import { STOP_BUTTON_SELECTOR, USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
+import { loadChromium, normalizeConversationUrl } from './ui-adapter.ts';
 import {
   recoveryMarkerCardinality,
   type RecoveryAuthoritativeMessage,

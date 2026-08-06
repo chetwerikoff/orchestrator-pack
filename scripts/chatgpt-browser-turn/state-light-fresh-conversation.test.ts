@@ -53,8 +53,10 @@ vi.mock('./ui-adapter.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./ui-adapter.ts')>();
   const { buildUiAdapterTestMock } = await import('./state-light-turn.test-fixtures.ts');
   const mock = buildUiAdapterTestMock(actual, mocks);
+  const selectors = await import('./product-page-selectors.ts');
   return {
     ...mock,
+    ...selectors,
     productStatusText: mocks.productStatusText,
   };
 });
@@ -74,15 +76,18 @@ import {
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
 import { classifyPageObservation, classifySendLandingEvidence, runStateLightTurn } from './state-light-turn.ts';
+import { readRecoveryAuthoritativeUserMessages, stopOwnedGeneration } from './state-light-cancellation.ts';
 import * as uiAdapter from './ui-adapter.ts';
 import {
   ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_TURN_ANCESTOR_XPATH,
   COMPOSER_SELECTOR,
   matchesNewChatControlSelector,
+  matchesStopButtonSelector,
   MESSAGE_NODE_SELECTOR,
   SEND_BUTTON_SELECTOR,
   STOP_BUTTON_TESTID,
+  USER_MESSAGE_SELECTOR,
 } from './product-page-selectors.ts';
 import {
   acquireStateLightNewChatSendSlot,
@@ -969,4 +974,309 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
   });
 });
 
+
+describe('Issue #1283 production runStateLightTurn recovery integration', () => {
+  let integrationStateDir: string;
+
+  beforeEach(() => {
+    integrationStateDir = mkdtempSync(join(tmpdir(), 'slt-recovery-'));
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = integrationStateDir;
+    disableSendSlotForTest();
+    mocks.browserQueue.length = 0;
+    mocks.cleanupOutcome = 'confirmed';
+    mocks.nowMs = 10_000;
+    mocks.productStatusText.mockReset();
+    mocks.productStatusText.mockResolvedValue({ text: '', composer: true });
+    mocks.readStableInput.mockReset();
+    vi.spyOn(Date, 'now').mockImplementation(() => mocks.nowMs);
+  });
+
+  afterEach(() => {
+    delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    clearSendSlotDisableEnv();
+    rmSync(integrationStateDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  function browserWithPages(
+    newPage: any,
+    pages: any[],
+    connected: () => boolean,
+  ) {
+    const context = {
+      newPage: vi.fn(async () => newPage),
+      pages: vi.fn(() => pages),
+    };
+    return {
+      contexts: vi.fn(() => [context]),
+      isConnected: vi.fn(connected),
+      close: vi.fn(async () => undefined),
+    };
+  }
+
+  function runProductionNewChat(outputPath: string, timeoutMs: string) {
+    return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--output', outputPath,
+      '--new-chat',
+      '--project-url', PROJECT_URL,
+      '--timeout-ms', timeoutMs,
+      '--poll-ms', '1',
+    ]);
+  }
+
+  it('reconnects after post-send browser loss, claims the exact recovered conversation, and never resends or mutates a foreign page', async () => {
+    const prompt = 'PROMPT-RECOVER';
+    const reply = 'RECOVERED FINAL';
+    const output = join(integrationStateDir, 'recovered.txt');
+    let sends = 0;
+    let lost = false;
+    let composerText = '';
+    let initialUrl = PROJECT_URL;
+
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => composerText),
+      textContent: vi.fn(async () => composerText),
+      press: vi.fn(async () => { sends += 1; initialUrl = SHARED_CONV; lost = true; }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => { sends += 1; initialUrl = SHARED_CONV; lost = true; }),
+    });
+    const initialClose = vi.fn(async () => undefined);
+    const initialPage: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async (target: string) => { initialUrl = target; }),
+      url: vi.fn(() => initialUrl),
+      isClosed: vi.fn(() => lost),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: initialClose,
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
+        if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator([]);
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator([]);
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    const recoveredMessages = (): StateLightTestMessage[] => [
+      { role: 'user', text: composerText },
+      {
+        role: 'assistant',
+        text: reply,
+        finalAction: true,
+        finalActionInTurnContainer: true,
+      },
+    ];
+    const recoveredClose = vi.fn(async () => undefined);
+    const recoveredPage: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => SHARED_CONV),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: recoveredClose,
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(recoveredMessages(), false);
+        if (selector === USER_MESSAGE_SELECTOR) {
+          return collectionLocator(recoveredMessages().filter((message) => message.role === 'user'), false);
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return collectionLocator(
+            recoveredMessages().filter((message: StateLightTestMessage) => message.role === 'assistant'),
+            false,
+          );
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          const last = recoveredMessages().at(-1)!;
+          return messageLocator(last, false);
+        }
+        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    const foreignStop = vi.fn(async () => undefined);
+    const foreignClose = vi.fn(async () => undefined);
+    const foreignMessages: StateLightTestMessage[] = [
+      { role: 'user', text: 'FOREIGN PROMPT' },
+      { role: 'assistant', text: 'FOREIGN ANSWER', finalAction: true },
+    ];
+    const foreignPage: any = {
+      __fakeBrowserGptPage: true,
+      url: vi.fn(() => LOSER_CONV),
+      isClosed: vi.fn(() => false),
+      close: foreignClose,
+      locator: vi.fn((selector: string) => {
+        if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(foreignMessages, false);
+        if (selector === USER_MESSAGE_SELECTOR) {
+          return collectionLocator(foreignMessages.filter((message) => message.role === 'user'), false);
+        }
+        if (selector.includes(STOP_BUTTON_TESTID)) {
+          return scalarLocator({ count: vi.fn(async () => 1), click: foreignStop });
+        }
+        return scalarLocator();
+      }),
+      getByRole: vi.fn(() => scalarLocator()),
+      getByText: vi.fn(() => scalarLocator()),
+    };
+
+    expect(await readRecoveryAuthoritativeUserMessages(recoveredPage)).toMatchObject({ incomplete: false });
+    expect(await readRecoveryAuthoritativeUserMessages(foreignPage)).toMatchObject({ incomplete: false });
+
+    const initialBrowser = browserWithPages(initialPage, [initialPage], () => !lost);
+    const recoveredBrowser = browserWithPages(recoveredPage, [foreignPage, recoveredPage], () => true);
+    mocks.browserQueue.push(initialBrowser, recoveredBrowser);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await runProductionNewChat(output, '50');
+
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      cause: 'completed_page_only',
+      send_count: 1,
+      conversation_id: SHARED_CONV,
+    });
+    expect(outcome.result.output).toEqual({
+      byte_length: 15,
+      sha256: '574877027739d7ff52e587b7003cf11b863f623083bb43607417c82cc38cfd8b',
+    });
+    expect(sends).toBe(1);
+    expect(mocks.browserQueue).toHaveLength(0);
+    expect(initialClose).not.toHaveBeenCalled();
+    expect(foreignStop).not.toHaveBeenCalled();
+    expect(foreignClose).not.toHaveBeenCalled();
+  });
+
+  it('terminates observation exhaustion truthfully after one send, Stops only the proven owned page, and preserves every tab', async () => {
+    const prompt = 'PROMPT-EXHAUST';
+    const output = join(integrationStateDir, 'exhausted.txt');
+    let sends = 0;
+    let sent = false;
+    let url = PROJECT_URL;
+    let composerText = '';
+    let ownedStopped = false;
+    const ownedStop = vi.fn(async () => { ownedStopped = true; });
+    const ownedClose = vi.fn(async () => undefined);
+    const foreignStop = vi.fn(async () => undefined);
+    const foreignClose = vi.fn(async () => undefined);
+    const waitingMessages = (): StateLightTestMessage[] => [
+      { role: 'user', text: composerText },
+      { role: 'assistant', text: 'working', inProgress: true },
+    ];
+
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => composerText),
+      textContent: vi.fn(async () => composerText),
+      press: vi.fn(async () => { sends += 1; sent = true; url = SHARED_CONV; }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => { sends += 1; sent = true; url = SHARED_CONV; }),
+    });
+    const ownedPage: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async (target: string) => { url = target; }),
+      url: vi.fn(() => url),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += Math.max(1, ms); }),
+      close: ownedClose,
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
+        if (selector === MESSAGE_NODE_SELECTOR) return sent
+          ? collectionLocator(waitingMessages(), true)
+          : collectionLocator([]);
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return sent
+            ? collectionLocator(
+              waitingMessages().filter((message: StateLightTestMessage) => message.role === 'assistant'),
+              true,
+            )
+            : collectionLocator([]);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          const last = waitingMessages().at(-1)!;
+          return sent ? messageLocator(last, true) : scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (matchesStopButtonSelector(selector)) {
+          return scalarLocator({
+            count: vi.fn(async () => sent && !ownedStopped ? 1 : 0),
+            click: ownedStop,
+          });
+        }
+        return scalarLocator();
+      }),
+    };
+
+    const foreignPage: any = {
+      __fakeBrowserGptPage: true,
+      url: vi.fn(() => LOSER_CONV),
+      isClosed: vi.fn(() => false),
+      close: foreignClose,
+      locator: vi.fn((selector: string) => matchesStopButtonSelector(selector)
+        ? scalarLocator({ count: vi.fn(async () => 1), click: foreignStop })
+        : scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      getByText: vi.fn(() => scalarLocator()),
+    };
+
+    const stopProbeClick = vi.fn(async () => undefined);
+    const stopProbePage = {
+      isClosed: vi.fn(() => false),
+      locator: vi.fn((selector: string) => matchesStopButtonSelector(selector)
+        ? scalarLocator({
+          count: vi.fn()
+            .mockResolvedValueOnce(1)
+            .mockResolvedValueOnce(0),
+          click: stopProbeClick,
+        })
+        : scalarLocator()),
+    };
+    expect(await stopOwnedGeneration(stopProbePage)).toBe('confirmed');
+    expect(stopProbeClick).toHaveBeenCalledTimes(1);
+
+    mocks.browserQueue.push(browserWithPages(ownedPage, [ownedPage, foreignPage], () => true));
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await runProductionNewChat(output, '5');
+
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
+      send_count: 1,
+      cleanup: 'skipped',
+    });
+    expect(outcome.result.incidents).toContain('observation_exhausted');
+    expect(ownedStop, JSON.stringify(outcome)).toHaveBeenCalledTimes(1);
+    expect(outcome.result.incidents).toEqual([
+      'observation_exhausted',
+      'owned_generation_stop_confirmed',
+    ]);
+    expect(sends).toBe(1);
+    expect(foreignStop).not.toHaveBeenCalled();
+    expect(ownedClose).not.toHaveBeenCalled();
+    expect(foreignClose).not.toHaveBeenCalled();
+  });
+});
 

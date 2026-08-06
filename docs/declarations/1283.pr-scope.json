@@ -5,8 +5,8 @@
     ".claude/skills/create-issue-draft/SKILL.md",
     "docs/declarations/1283.pr-scope.json",
     "scripts/chatgpt-browser-turn/state-light-cancellation.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn-recovery.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
     "scripts/flow-manager-long-running-child.test.ts",
@@ -35,5 +35,5 @@
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
-  "source_revision": "b66a67ca4e3310ca3a9319e00ca307fb40655b09"
+  "source_revision": "8133b61a5c96e3e85c38c574e1ab3ea90c7b6f60"
 }
