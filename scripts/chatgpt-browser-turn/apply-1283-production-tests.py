@@ -29,9 +29,33 @@ elif new_import not in cancellation_text:
 
 path = Path('scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts')
 text = path.read_text()
-old = "  const mock = buildUiAdapterTestMock(actual, mocks);\n  return {\n    ...mock,\n    productStatusText: mocks.productStatusText,\n  };"
-new = "  const mock = buildUiAdapterTestMock(actual, mocks);\n  const selectors = await import('./product-page-selectors.ts');\n  return {\n    ...mock,\n    ...selectors,\n    productStatusText: mocks.productStatusText,\n  };"
-if old in text:
-    path.write_text(text.replace(old, new, 1))
-elif new not in text:
+old_mock = "  const mock = buildUiAdapterTestMock(actual, mocks);\n  return {\n    ...mock,\n    productStatusText: mocks.productStatusText,\n  };"
+new_mock = "  const mock = buildUiAdapterTestMock(actual, mocks);\n  const selectors = await import('./product-page-selectors.ts');\n  return {\n    ...mock,\n    ...selectors,\n    productStatusText: mocks.productStatusText,\n  };"
+if old_mock in text:
+    text = text.replace(old_mock, new_mock, 1)
+elif new_mock not in text:
     raise SystemExit('ui-adapter mock is neither old nor expected new form')
+
+old_selector_import = (
+    "  COMPOSER_SELECTOR,\n"
+    "  matchesNewChatControlSelector,\n"
+    "  MESSAGE_NODE_SELECTOR,\n"
+    "  SEND_BUTTON_SELECTOR,\n"
+    "  STOP_BUTTON_TESTID,\n"
+    "} from './product-page-selectors.ts';"
+)
+new_selector_import = (
+    "  COMPOSER_SELECTOR,\n"
+    "  matchesNewChatControlSelector,\n"
+    "  matchesStopButtonSelector,\n"
+    "  MESSAGE_NODE_SELECTOR,\n"
+    "  SEND_BUTTON_SELECTOR,\n"
+    "  STOP_BUTTON_TESTID,\n"
+    "  USER_MESSAGE_SELECTOR,\n"
+    "} from './product-page-selectors.ts';"
+)
+if old_selector_import in text:
+    text = text.replace(old_selector_import, new_selector_import, 1)
+elif new_selector_import not in text:
+    raise SystemExit('product selector imports are neither old nor expected new form')
+path.write_text(text)
