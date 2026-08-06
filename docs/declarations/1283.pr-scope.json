@@ -35,5 +35,5 @@
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
-  "source_revision": "fea5c65599b452e5b47a254840b8c4bcc80bb875"
+  "source_revision": "b66a67ca4e3310ca3a9319e00ca307fb40655b09"
 }
