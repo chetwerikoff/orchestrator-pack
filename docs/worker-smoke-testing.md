@@ -1,10 +1,11 @@
-# Worker smoke testing (Issues #1061 and #1138)
+# Worker smoke testing (Issues #1061, #1138, and #1343)
 
 Workers prove operator-visible behavior with a **head-bound Orca smoke run** before
 `ready_for_review`. CI remains mandatory and separate. Issue #1138 adds progress-aware
 deadlines, durable spawn state, cooperative cancellation, deterministic recovery, and an
-orthogonal lifecycle-cleanliness gate without changing Browser-GPT transport or smoke report
-authority.
+orthogonal lifecycle-cleanliness gate without changing Browser-GPT transport. Issue #1343
+changes readiness evidence from one latest all-covering report to a trusted point-in-time fold of
+canonical reports on one exact PR head.
 
 ## When smoke is required
 
@@ -94,13 +95,88 @@ The supported lifecycle is:
    handle may be closed. Operator-action files are tombstoned and `terminal.json` records the
    result even when no PR smoke report is published.
 8. The PR comment is published only after owned-terminal cleanup. `gate-check` independently
-   requires both current-head smoke/CI evidence and clean lifecycle state.
+   requires exact-target smoke evidence, current-head CI, and clean lifecycle state.
+
+## Report admission and trust boundary
+
+`gate-check` first resolves one trusted target: canonical repository slug, positive exact Issue and
+PR numbers, full requested head SHA, the fetched exact Issue body, the PR-to-Issue closing relation,
+and the live PR head. The repository view, origin remote, Issue URL, and PR URL must agree. Missing,
+ambient-only, multiple, stale, or mismatched identity is non-accepting before any report contributes.
+
+The report census comes from the exact PR issue-comment endpoint. `gh api --paginate --slurp`
+exhausts and flattens every page; malformed pages, duplicate comment ids, missing metadata, parse
+failure, or inability to stabilize the snapshot fail closed. The gate compares bounded repeated
+complete censuses. It evaluates only after two consecutive canonical snapshot digests agree and
+revalidates the live PR head before returning allow.
+
+A comment is eligible only when GitHub actor metadata matches the authenticated principal used by
+the current publication path. Body fields such as `producer`, `terminal-handle`, and
+`orca-executable` remain mandatory report invariants, not authentication. A matching body from
+another actor is a non-candidate. A trusted report comment with `updated_at != created_at` is
+invalid. Privileged deletion and trusted-account forgery remain outside this evidence model; the
+current census cannot prove deleted history.
+
+A canonical current-target candidate has exactly one `pack-worker-smoke-report/v1` marker, one
+`worker-smoke-report` machine block, and one non-conflicting Issue/PR/head binding. Duplicate or
+mixed markers, blocks, target lines, or scenario tuples invalidate the whole candidate. PASS,
+FAIL, and BLOCKED use the same admission floor: expected producer, non-empty executable and terminal
+handle, unmodified tracked files, accepted owned-terminal cleanup, and complete rows with action,
+expected, observed, and a supported outcome. Top-level PASS additionally requires every included
+row to pass. An invalid candidate contributes no row observation.
+
+The singular local receipt remains the current-publication witness used at the final gate. It is
+not historical authority for earlier aggregate contributors and does not order comments.
+
+## Exact-head point-in-time coverage
+
+The current Issue plan is folded by the exact trimmed `(action, expected)` tuple. Canonical
+candidates are ordered by GitHub `created_at`, then numeric comment id. Report-local timestamps,
+run start order, terminal order, receipt write order, API array order, and local clocks are not
+authority.
+
+For each current tuple, the latest admitted-valid row wins:
+
+- `pass` covers the tuple;
+- `fail`, `blocked`, or `skipped` leaves it uncovered;
+- a later `pass` restores coverage; and
+- omission preserves the prior latest row.
+
+PASS observations may accumulate across several canonical comments on the exact same head. A
+single ordinary all-PASS report is still sufficient. A valid top-level FAIL or BLOCKED applies its
+valid matching rows and sets a global non-accepting block even when it contains zero current-plan
+tuples. An admitted-invalid current-target candidate also sets that block without changing row
+state. A later admitted top-level PASS clears the global block; omitted tuples retain their prior
+row state.
+
+A different full head SHA starts from zero. Old-head reports cannot contribute, revoke, restore,
+quarantine, or appear in current-head candidate diagnostics. On a same-head Issue edit, unchanged
+exact tuples retain observations, changed and added tuples start uncovered, and removed tuples
+disappear. This is tuple-local reuse, not a hidden whole-plan revision claim.
+
+The semantic authority point is the final stabilized census used by one gate invocation. A relevant
+publication observed while stabilization is in progress forces a complete re-evaluation or bounded
+denial. A comment published after the final stable observation belongs to the next invocation and
+does not retroactively rewrite an already-emitted `ready_for_review` record.
+
+Partial coverage is never autonomous-ready. Machine-readable diagnostics include the target,
+scenario count, covered tuples, missing tuples, latest non-PASS tuples, invalid/rejected candidate
+reasons, global block, and complete/partial state. Each collection emits at most 50 items with the
+complete total and explicit truncation/overflow flags. Tuple previews and free-form reasons are at
+most 256 UTF-8 bytes per item, and the serialized diagnostic payload is at most 64 KiB. These caps
+never truncate the internal census or tuple fold.
+
+This evidence gate applies to autonomous `ready_for_review` admission. It does not create a waiver,
+approval token, second authorization service, or unavoidable veto over a direct top-level operator
+command. Evidence and diagnostics remain truthful in every path.
 
 ## Report and control-plane semantics
 
-Top-level `PASS | FAIL | BLOCKED`, current-head report selection, receipt/provenance checks, and
-latest-same-head revocation remain unchanged. Pack-generated non-PASS causes continue to include
-zero parsed scenarios, missing/invalid agent reports, and executed scenario failures.
+Top-level `PASS | FAIL | BLOCKED`, pack-generated non-PASS causes, and control-plane diagnostics
+remain unchanged for each individual run. Pack-generated non-PASS causes continue to include zero
+parsed scenarios, missing/invalid agent reports, and executed scenario failures. The aggregate does
+not claim that separate comments prove distinct fresh agents or retain a per-run attestation; fresh
+disposable-agent creation and cleanup remain lifecycle responsibilities.
 
 Issue #1125 control-plane classification also remains unchanged:
 
@@ -220,11 +296,6 @@ No terminal-list lookup, title matching, process scan, or recency heuristic is c
 Unrelated or unattributable Browser-GPT work is never killed, adopted, or made blocking merely
 because it exists.
 
-The earlier documentation-only caveat is revised as follows: automatic harness teardown now has a
-candidate implementation in `worker-smoke-run`, but the implementation PR must remain draft until
-a current-head reduced-threshold lifecycle canary and required CI pass. A failed or unavailable
-canary is not permission to claim runtime verification or mark the PR ready.
-
 ## Deterministic preflight and concurrent starts
 
 Before create, preflight performs one bounded classify/clean/re-evaluate pass:
@@ -245,31 +316,34 @@ Browser-GPT lock and does not serialize unrelated browser work.
 `pack-worker-report --state ready_for_review` invokes `worker-smoke-run gate-check`. Handoff is
 allowed only when all independent predicates hold:
 
-- the Issue requires smoke and the current PR head has a fully covering pack-produced PASS;
-- required CI is green;
-- the owned terminal was closed and report provenance/receipt validate;
+- the exact target and complete comment census stabilize on the requested live PR head;
+- every current tuple's latest admitted observation is PASS and the global block is clear;
+- required CI is green for the same head;
+- the current clearing publication's terminal cleanup and singular receipt/provenance validate; and
 - there is no active admission, live bound worker-smoke child, incomplete teardown, executable
   ambiguous state, corrupt registry, or unsafe smoke operator-routing file.
 
-A same-head PASS cannot bypass unclean lifecycle state. Operator cancellation may omit a new FAIL
-comment, but it still must produce clean durable lifecycle state before admission or handoff.
+Accumulated historical comments supply tuple evidence only; they are not authenticated or ordered
+by the singular receipt. A same-head aggregate PASS cannot bypass unclean lifecycle state. Operator
+cancellation may omit a new FAIL comment, but it still must produce clean durable lifecycle state
+before admission or handoff.
 
 ## Runtime verification and rollback
 
-Run the focused current-head canary with controllable clocks before marking the PR ready:
+Run the focused current-head suite before marking the PR ready:
 
 ```bash
-npx vitest run scripts/worker-smoke.test.ts -t '#1138'
+node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/worker-smoke.test.ts
 ```
 
-The canary must visibly cover: a sealed PASS after virtual elapsed time beyond 30 minutes, a true
-stall, continuously progressing absolute-ceiling termination, create timeout ambiguity, concurrent
-admission, restart recovery, idempotent bound-only close, and stale operator-file tombstoning.
+The suite covers the existing send-once and lifecycle boundaries plus exact-target admission,
+canonical actor/envelope validation, edited and malformed evidence, cross-run accumulation,
+quarantine clearing, row revocation/restoration, page crossing, high-water stabilization, head
+reset, same-head Issue edits, publication-order ties, bounded diagnostics, and one-run compatibility.
 A real Orca smoke run remains required when the binding Issue's smoke plan requires it.
 
-Rollback is allowed only after current lifecycle state is clean. Do not roll back while a bound
-child, active admission, incomplete teardown, or executable ambiguous reservation remains. Durable
-historical and `abandoned_unbound` diagnostics may remain; they are non-blocking audit records.
+Rollback is allowed only after current lifecycle state is clean. No aggregate state cleanup is
+needed because the fold creates no cache, ledger, service, watcher, or second durable store.
 
 ## Orca executable selection
 

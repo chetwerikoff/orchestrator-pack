@@ -3,6 +3,9 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcessSync } from './kernel/subprocess.ts';
+import { ghApiJson } from './lib/gh-repo-resolve.mjs';
+import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,8 +17,8 @@ import {
   createSmokeRunIdentity,
   detectTrackedImplementationMutation,
   ensureSmokeRunArtifactDir,
+  evaluateWorkerSmokeCoverage,
   evaluateWorkerSmokeGate,
-  findCurrentHeadSmokePass,
   formatSmokeReportComment,
   hasPreexistingTrackedDirtiness,
   inspectSmokeProgress,
@@ -23,7 +26,6 @@ import {
   observeSmokeCancellationAcknowledgement,
   observeSmokeCompletionEvidence,
   observeSmokeDeliveryEstablished,
-  ownedSmokeTerminalClosedFromReports,
   resolveSmokeRequirement,
   resolveSmokeRunArtifactDir,
   scrubForwardedGhSecrets,
@@ -35,6 +37,8 @@ import {
   writeSmokeCancelRequest,
   type SmokeReport,
   type SmokeRunBinding,
+  type WorkerSmokeCommentRecord,
+  type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
 import {
   bindSmokeTerminalHandle,
@@ -64,7 +68,7 @@ import type {
   RuntimeWorkerIdentity,
 } from './runtime/contracts.ts';
 
-interface CliOptions {
+export interface CliOptions {
   command: string;
   issueNumber: number;
   prNumber: number;
@@ -74,6 +78,16 @@ interface CliOptions {
   cwd: string;
   dryRun: boolean;
   json: boolean;
+}
+
+export interface ResolvedSmokeTarget {
+  repositorySlug: string;
+  issueNumber: number;
+  prNumber: number;
+  headSha: string;
+  issueBody: string;
+  issueBodyMatchesTarget: boolean;
+  trustedPublisherLogin: string;
 }
 
 function parseArgs(argv: readonly string[]): CliOptions {
@@ -156,6 +170,15 @@ function gitHead(cwd: string): string {
   })).trim().toLowerCase();
 }
 
+function gitOriginRepositorySlug(cwd: string): string {
+  const remote = requireProcessOutput('git remote get-url origin', runProcessSync({
+    command: 'git', args: ['remote', 'get-url', 'origin'], cwd,
+  })).trim();
+  const match = remote.match(/(?:github\.com[/:])([^/]+)\/([^/]+?)(?:\.git)?$/iu);
+  if (!match) throw new Error('trusted_target: origin repository slug unresolved');
+  return `${match[1]}/${match[2]}`;
+}
+
 function hashTrackedPaths(cwd: string, paths: readonly string[]): Record<string, string> {
   const hashes: Record<string, string> = {};
   for (const path of paths) {
@@ -165,11 +188,206 @@ function hashTrackedPaths(cwd: string, paths: readonly string[]): Record<string,
   return hashes;
 }
 
-function fetchPrComments(prNumber: number, repoRoot: string): { body?: string }[] {
-  const parsed = JSON.parse(requireProcessOutput('pr-issue-comments', runSmokeGhSync(
-    ['api', `repos/{owner}/{repo}/issues/${prNumber}/comments`, '--paginate'], repoRoot,
-  ))) as unknown;
-  return Array.isArray(parsed) ? parsed : [];
+function positiveInteger(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function canonicalRepositorySlug(value: unknown): string {
+  const slug = String(value ?? '').trim();
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(slug)) {
+    throw new Error('trusted_target: canonical repository slug missing or invalid');
+  }
+  return slug;
+}
+
+const TRUSTED_REPOSITORY_SLUG = 'chetwerikoff/orchestrator-pack';
+
+function repositoryFromGithubUrl(value: unknown): string {
+  const match = String(value ?? '').trim().match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\/\d+(?:$|[?#])/iu);
+  return match ? `${match[1]}/${match[2]}` : '';
+}
+
+function githubApiObject(label: string, endpoint: string, cwd: string): Record<string, unknown> {
+  const value = ghApiJson('gh', endpoint, { cwd }) as unknown;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label}: expected one JSON object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+export function exactClosingIssue(body: string): number | undefined {
+  const scannable = prBodyScannableForIssueLinks(body);
+  const pattern = new RegExp(ISSUE_LINK_PATTERN.source, ISSUE_LINK_PATTERN.flags);
+  const matches = [...scannable.matchAll(pattern)];
+  if (matches.length !== 1) return undefined;
+  const issueNumber = Number(matches[0]?.[1]);
+  return Number.isSafeInteger(issueNumber) && issueNumber > 0 ? issueNumber : undefined;
+}
+
+function suppliedIssueBodyMatches(fetched: string, supplied: string): boolean {
+  return supplied === fetched || supplied === `${fetched}\n` || supplied === `${fetched}\r\n`;
+}
+
+export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: string): ResolvedSmokeTarget {
+  const repositorySlug = canonicalRepositorySlug(TRUSTED_REPOSITORY_SLUG);
+  const originSlug = gitOriginRepositorySlug(options.repoRoot);
+  if (originSlug.toLowerCase() !== repositorySlug.toLowerCase()) {
+    throw new Error('trusted_target: trusted repository and origin mismatch');
+  }
+
+  const principal = githubApiObject('authenticated-principal', 'user', options.repoRoot);
+  const trustedPublisherLogin = String(principal.login ?? '').trim();
+  if (!trustedPublisherLogin) throw new Error('trusted_target: authenticated publication principal unresolved');
+
+  const issue = githubApiObject(
+    'issue-view',
+    `repos/${repositorySlug}/issues/${options.issueNumber}`,
+    options.repoRoot,
+  );
+  const pr = githubApiObject(
+    'pr-view-binding',
+    `repos/${repositorySlug}/pulls/${options.prNumber}`,
+    options.repoRoot,
+  );
+
+  const issueNumber = positiveInteger(issue.number);
+  const prNumber = positiveInteger(pr.number);
+  const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head)
+    ? pr.head as Record<string, unknown>
+    : {};
+  const headSha = String(head.sha ?? '').trim().toLowerCase();
+  const issueRepository = repositoryFromGithubUrl(issue.html_url);
+  const prRepository = repositoryFromGithubUrl(pr.html_url);
+  if (issueNumber !== options.issueNumber || prNumber !== options.prNumber) {
+    throw new Error('trusted_target: resolved Issue or PR number mismatch');
+  }
+  if (issueRepository.toLowerCase() !== repositorySlug.toLowerCase()
+    || prRepository.toLowerCase() !== repositorySlug.toLowerCase()) {
+    throw new Error('trusted_target: resolved repository mismatch');
+  }
+  if (String(issue.state ?? '').toLowerCase() !== 'open'
+    || String(pr.state ?? '').toLowerCase() !== 'open') {
+    throw new Error('trusted_target: Issue or PR is not open');
+  }
+  if (!/^[0-9a-f]{40}$/u.test(options.headSha.trim().toLowerCase())
+    || headSha !== options.headSha.trim().toLowerCase()) {
+    throw new Error('trusted_target: exact PR head mismatch');
+  }
+  const issueBody = String(issue.body ?? '');
+  if (!suppliedIssueBodyMatches(issueBody, suppliedIssueBody)) {
+    throw new Error('trusted_target: Issue body file does not match the fetched Issue body');
+  }
+  if (exactClosingIssue(String(pr.body ?? '')) !== issueNumber) {
+    throw new Error('trusted_target: PR-to-Issue resolution is missing, multiple, or mismatched');
+  }
+
+  return {
+    repositorySlug,
+    issueNumber,
+    prNumber,
+    headSha,
+    issueBody,
+    issueBodyMatchesTarget: true,
+    trustedPublisherLogin,
+  };
+}
+
+export function parsePaginatedSmokeComments(text: string): WorkerSmokeCommentRecord[] {
+  const parsed = JSON.parse(text) as unknown;
+  if (!Array.isArray(parsed) || parsed.some((page) => !Array.isArray(page))) {
+    throw new Error('comment_census: paginated output was not one slurped page array');
+  }
+  const comments = (parsed as unknown[][]).flat();
+  const ids = new Set<number>();
+  const normalized: WorkerSmokeCommentRecord[] = [];
+  for (const raw of comments) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('comment_census: comment record was not an object');
+    }
+    const comment = raw as WorkerSmokeCommentRecord;
+    const id = positiveInteger(comment.id);
+    if (!id) throw new Error('comment_census: comment id missing or invalid');
+    if (ids.has(id)) throw new Error('comment_census: duplicate comment id');
+    ids.add(id);
+    if (typeof comment.body !== 'string'
+      || !String(comment.created_at ?? comment.createdAt ?? '').trim()
+      || !String(comment.updated_at ?? comment.updatedAt ?? '').trim()) {
+      throw new Error('comment_census: comment body or timestamp metadata missing');
+    }
+    normalized.push(comment);
+  }
+  return normalized;
+}
+
+export function fetchPrComments(
+  prNumber: number,
+  repositorySlug: string,
+  repoRoot: string,
+): WorkerSmokeCommentRecord[] {
+  const pages: unknown[][] = [];
+  const perPage = 100;
+  for (let page = 1; page <= 100; page += 1) {
+    const batch = ghApiJson(
+      'gh',
+      `repos/${repositorySlug}/issues/${prNumber}/comments?per_page=${perPage}&page=${page}`,
+      { cwd: repoRoot },
+    ) as unknown;
+    if (!Array.isArray(batch)) {
+      throw new Error('comment_census: comment page was not an array');
+    }
+    pages.push(batch);
+    if (batch.length < perPage) return parsePaginatedSmokeComments(JSON.stringify(pages));
+  }
+  throw new Error('comment_census: pagination completeness unprovable');
+}
+
+export function smokeCommentSnapshotDigest(comments: readonly WorkerSmokeCommentRecord[]): string {
+  const canonical = comments.map((comment) => ({
+    id: positiveInteger(comment.id),
+    createdAt: String(comment.created_at ?? comment.createdAt ?? ''),
+    updatedAt: String(comment.updated_at ?? comment.updatedAt ?? ''),
+    actor: typeof comment.actor === 'string'
+      ? comment.actor
+      : String(comment.user?.login ?? comment.actor?.login ?? ''),
+    body: String(comment.body ?? ''),
+  })).sort((left, right) => left.id - right.id);
+  return createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex');
+}
+
+export function stabilizeSmokeCommentCensus(
+  fetchCensus: () => WorkerSmokeCommentRecord[],
+  maxTransitions = 3,
+): WorkerSmokeCommentRecord[] {
+  let previous = fetchCensus();
+  let previousDigest = smokeCommentSnapshotDigest(previous);
+  for (let transition = 0; transition < maxTransitions; transition += 1) {
+    const next = fetchCensus();
+    const nextDigest = smokeCommentSnapshotDigest(next);
+    if (nextDigest === previousDigest) return next;
+    previous = next;
+    previousDigest = nextDigest;
+  }
+  throw new Error('comment_snapshot: failed to stabilize within bounded attempts');
+}
+
+export function fetchLivePrHead(
+  prNumber: number,
+  repositorySlug: string,
+  repoRoot: string,
+): string {
+  const pr = githubApiObject(
+    'pr-view-head',
+    `repos/${repositorySlug}/pulls/${prNumber}`,
+    repoRoot,
+  );
+  const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head)
+    ? pr.head as Record<string, unknown>
+    : {};
+  if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open') {
+    throw new Error('trusted_target: live PR binding changed');
+  }
+  return String(head.sha ?? '').trim().toLowerCase();
 }
 
 function publishPrComment(prNumber: number, body: string, repoRoot: string): void {
@@ -185,27 +403,43 @@ function publishPrComment(prNumber: number, body: string, repoRoot: string): voi
   }
 }
 
-function resolveCiGreen(prNumber: number, headSha: string, repoRoot: string): boolean {
-  const prMeta = JSON.parse(requireProcessOutput('pr-view-head-base', runSmokeGhSync(
-    ['pr', 'view', String(prNumber), '--json', 'headRefOid,baseRefName'], repoRoot,
-  ))) as { headRefOid?: string; baseRefName?: string };
-  if ((prMeta.headRefOid ?? '').trim().toLowerCase() !== headSha.trim().toLowerCase()) return false;
-  const checks = JSON.parse(requireProcessOutput('required-ci-checks', runSmokeGhSync(
-    ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
-  ))) as { name?: string; state?: string; bucket?: string }[];
-  const baseRef = String(prMeta.baseRefName ?? 'main').trim() || 'main';
-  const protection = runSmokeGhSync(
-    ['api', `repos/{owner}/{repo}/branches/${baseRef}/protection/required_status_checks`], repoRoot,
+export function resolveCiGreen(
+  prNumber: number,
+  headSha: string,
+  repositorySlug: string,
+  repoRoot: string,
+): boolean {
+  const pr = githubApiObject(
+    'pr-view-head-base',
+    `repos/${repositorySlug}/pulls/${prNumber}`,
+    repoRoot,
   );
+  const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head)
+    ? pr.head as Record<string, unknown>
+    : {};
+  const base = pr.base && typeof pr.base === 'object' && !Array.isArray(pr.base)
+    ? pr.base as Record<string, unknown>
+    : {};
+  if (positiveInteger(pr.number) !== prNumber
+    || String(pr.state ?? '').toLowerCase() !== 'open'
+    || String(head.sha ?? '').trim().toLowerCase() !== headSha.trim().toLowerCase()) return false;
+  const checks = JSON.parse(requireProcessOutput('required-ci-checks', runSmokeGhSync(
+    ['pr', 'checks', String(prNumber), '--repo', repositorySlug, '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
+  ))) as { name?: string; state?: string; bucket?: string }[];
+  const baseRef = String(base.ref ?? 'main').trim() || 'main';
   let requiredCheckNames: string[] = [];
   let requiredCheckLookupFailed = false;
-  if (protection.ok) {
-    try {
-      const parsed = JSON.parse(protection.stdout) as { contexts?: string[] };
-      requiredCheckNames = Array.isArray(parsed.contexts) ? parsed.contexts : [];
-    } catch {
-      requiredCheckLookupFailed = true;
-    }
+  try {
+    const protection = githubApiObject(
+      'required-status-checks',
+      `repos/${repositorySlug}/branches/${baseRef}/protection/required_status_checks`,
+      repoRoot,
+    );
+    requiredCheckNames = Array.isArray(protection.contexts)
+      ? protection.contexts.map((value) => String(value))
+      : [];
+  } catch {
+    requiredCheckLookupFailed = true;
   }
   return classifyRequiredCiLevel(checks, { requiredCheckNames, requiredCheckLookupFailed }) === 'green';
 }
@@ -422,6 +656,49 @@ function verifyPublishedSmokeProvenance(report: SmokeReport): boolean {
   return smokeReportHasPackProducer(report) && verifySmokeRunReceipt(report);
 }
 
+function coverageTarget(
+  target: ResolvedSmokeTarget,
+  liveHeadSha: string,
+): WorkerSmokeTrustedTarget {
+  return {
+    repositorySlug: target.repositorySlug,
+    issueNumber: target.issueNumber,
+    prNumber: target.prNumber,
+    headSha: target.headSha,
+    resolvedIssueNumber: target.issueNumber,
+    resolvedPrNumber: target.prNumber,
+    liveHeadSha,
+    issueBodyMatchesTarget: target.issueBodyMatchesTarget,
+    trustedPublisherLogin: target.trustedPublisherLogin,
+    commentCensusComplete: true,
+    commentSnapshotStable: true,
+  };
+}
+
+export function findVerifiedSmokeReceiptWitness(input: {
+  issueBody: string;
+  comments: readonly WorkerSmokeCommentRecord[];
+  target: WorkerSmokeTrustedTarget;
+}): SmokeReport | undefined {
+  for (const comment of input.comments) {
+    const contribution = evaluateWorkerSmokeCoverage({
+      issueBody: input.issueBody,
+      comments: [comment],
+      target: input.target,
+    });
+    const candidate = contribution.latestClearingPass;
+    if (candidate && verifyPublishedSmokeProvenance(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+export function finalSmokeCommentSnapshotMatches(
+  stabilized: readonly WorkerSmokeCommentRecord[],
+  finalCensus: readonly WorkerSmokeCommentRecord[],
+): boolean {
+  return smokeCommentSnapshotDigest(stabilized) === smokeCommentSnapshotDigest(finalCensus);
+}
+
 function runValidatePlan(options: CliOptions): number {
   const result = checkSmokeTestPlan(readIssueBody(options.issueBodyFile));
   if (!result.ok) {
@@ -432,34 +709,124 @@ function runValidatePlan(options: CliOptions): number {
   return 0;
 }
 
-async function runGateCheck(options: CliOptions): Promise<number> {
-  const lifecycle = evaluateSmokeLifecycleCleanliness(options.cwd);
+export interface GateCheckDependencies {
+  evaluateLifecycle: (cwd: string) => ReturnType<typeof evaluateSmokeLifecycleCleanliness>;
+  resolveTarget: (options: CliOptions, suppliedIssueBody: string) => ResolvedSmokeTarget;
+  fetchComments: (
+    prNumber: number,
+    repositorySlug: string,
+    repoRoot: string,
+  ) => WorkerSmokeCommentRecord[];
+  fetchHead: (prNumber: number, repositorySlug: string, repoRoot: string) => string;
+  selectAdapter: (cwd: string) => Promise<RuntimeAdapter>;
+  ciGreen: (
+    prNumber: number,
+    headSha: string,
+    repositorySlug: string,
+    repoRoot: string,
+  ) => boolean;
+}
+
+const DEFAULT_GATE_DEPENDENCIES: GateCheckDependencies = {
+  evaluateLifecycle: evaluateSmokeLifecycleCleanliness,
+  resolveTarget: resolveSmokeTarget,
+  fetchComments: fetchPrComments,
+  fetchHead: fetchLivePrHead,
+  selectAdapter: async (cwd) => selectRuntimeAdapter({}, { cwd }),
+  ciGreen: resolveCiGreen,
+};
+
+export async function runGateCheck(
+  options: CliOptions,
+  dependencies: GateCheckDependencies = DEFAULT_GATE_DEPENDENCIES,
+): Promise<number> {
+  const lifecycle = dependencies.evaluateLifecycle(options.cwd);
   if (!lifecycle.clean) {
     emit({ ok: false, allowed: false, reason: `smoke_lifecycle_unclean:${lifecycle.reasons[0]}`, lifecycle }, options.json);
     return 1;
   }
-  const issueBody = readIssueBody(options.issueBodyFile);
-  const comments = options.prNumber > 0 ? fetchPrComments(options.prNumber, options.repoRoot) : [];
-  const adapter = await selectRuntimeAdapter({}, { cwd: options.cwd });
-  const readiness = adapter.readiness({ cwd: options.cwd });
-  const pass = options.prNumber > 0
-    ? findCurrentHeadSmokePass(comments, options.prNumber, options.headSha, options.issueNumber)
-    : null;
-  const decision = evaluateWorkerSmokeGate({
-    issueBody,
-    issueNumber: options.issueNumber,
-    prNumber: options.prNumber,
-    headSha: options.headSha,
-    prComments: comments,
-    ciGreen: options.prNumber > 0 ? resolveCiGreen(options.prNumber, options.headSha, options.repoRoot) : false,
-    orcaWorktreeOk: readiness.status === 'ok',
-    ownedTerminalClosed: options.prNumber > 0
-      ? ownedSmokeTerminalClosedFromReports(comments, options.prNumber, options.headSha, options.issueNumber)
-      : false,
-    terminalProvenanceOk: pass ? verifyPublishedSmokeProvenance(pass) : false,
-  });
-  emit({ ok: decision.allowed, ...decision, lifecycle }, options.json);
-  return decision.allowed ? 0 : 1;
+
+  try {
+    const suppliedIssueBody = readIssueBody(options.issueBodyFile);
+    const target = dependencies.resolveTarget(options, suppliedIssueBody);
+    const issueBody = target.issueBody;
+    const comments = stabilizeSmokeCommentCensus(
+      () => dependencies.fetchComments(options.prNumber, target.repositorySlug, options.repoRoot),
+    );
+    const liveHeadSha = dependencies.fetchHead(
+      options.prNumber,
+      target.repositorySlug,
+      options.repoRoot,
+    );
+    const trustedTarget = coverageTarget(target, liveHeadSha);
+    const receiptWitness = findVerifiedSmokeReceiptWitness({
+      issueBody,
+      comments,
+      target: trustedTarget,
+    });
+    const adapter = await dependencies.selectAdapter(options.cwd);
+    const readiness = adapter.readiness({ cwd: options.cwd });
+    let decision = evaluateWorkerSmokeGate({
+      issueBody,
+      issueNumber: target.issueNumber,
+      prNumber: target.prNumber,
+      headSha: target.headSha,
+      prComments: comments,
+      ciGreen: dependencies.ciGreen(
+        options.prNumber,
+        options.headSha,
+        target.repositorySlug,
+        options.repoRoot,
+      ),
+      orcaWorktreeOk: readiness.status === 'ok',
+      ownedTerminalClosed: Boolean(receiptWitness),
+      terminalProvenanceOk: Boolean(receiptWitness),
+      repositorySlug: target.repositorySlug,
+      resolvedIssueNumber: target.issueNumber,
+      resolvedPrNumber: target.prNumber,
+      liveHeadSha,
+      issueBodyMatchesTarget: target.issueBodyMatchesTarget,
+      trustedPublisherLogin: target.trustedPublisherLogin,
+      commentCensusComplete: true,
+      commentSnapshotStable: true,
+    });
+
+    if (decision.allowed) {
+      const finalHeadSha = dependencies.fetchHead(
+        options.prNumber,
+        target.repositorySlug,
+        options.repoRoot,
+      );
+      if (finalHeadSha !== target.headSha) {
+        decision = {
+          allowed: false,
+          reason: 'live_pr_head_changed_during_evaluation',
+          smokeRequired: true,
+          diagnostics: decision.diagnostics,
+        };
+      } else {
+        const finalComments = dependencies.fetchComments(
+          options.prNumber,
+          target.repositorySlug,
+          options.repoRoot,
+        );
+        if (!finalSmokeCommentSnapshotMatches(comments, finalComments)) {
+          decision = {
+            allowed: false,
+            reason: 'comment_snapshot_changed_before_allow',
+            smokeRequired: true,
+            diagnostics: decision.diagnostics,
+          };
+        }
+      }
+    }
+    emit({ ok: decision.allowed, ...decision, lifecycle }, options.json);
+    return decision.allowed ? 0 : 1;
+  } catch (error) {
+    const reason = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
+    emit({ ok: false, allowed: false, reason, smokeRequired: true, lifecycle }, options.json);
+    return 1;
+  }
 }
 
 async function runSmokeAttempt(options: CliOptions): Promise<number> {
