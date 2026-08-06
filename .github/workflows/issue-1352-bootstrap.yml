@@ -12,27 +12,22 @@ permissions:
   contents: read
 
 jobs:
-  export-merge-tree:
+  export-dependencies:
     if: github.repository == 'chetwerikoff/orchestrator-pack'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
-      - name: Archive exact checked-out tree
-        shell: bash
-        run: |
-          set -euo pipefail
-          git rev-parse HEAD > issue-1352-merge-head.txt
-          git ls-files -z | tar --null --files-from=- --create --gzip --file=issue-1352-merge-tree.tar.gz
-          sha256sum issue-1352-merge-tree.tar.gz
-          wc -c issue-1352-merge-tree.tar.gz
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Archive dependencies
+        run: tar -czf issue-1352-node-modules.tar.gz node_modules
       - uses: actions/upload-artifact@v4
         with:
-          name: issue-1352-merge-tree
-          path: |
-            issue-1352-merge-tree.tar.gz
-            issue-1352-merge-head.txt
+          name: issue-1352-node-modules
+          path: issue-1352-node-modules.tar.gz
           if-no-files-found: error
           retention-days: 1
