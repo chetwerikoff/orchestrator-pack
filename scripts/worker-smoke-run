@@ -1,5 +1,105 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-exec node --experimental-strip-types "$root/scripts/worker-smoke-run.ts" "$@"
+entrypoint="$root/scripts/worker-smoke-run.ts"
+
+if [[ "${1:-}" != "run" ]]; then
+  exec node --experimental-strip-types "$entrypoint" "$@"
+fi
+
+stdout_file="$(mktemp "${TMPDIR:-/tmp}/worker-smoke-stdout.XXXXXX")"
+stderr_file="$(mktemp "${TMPDIR:-/tmp}/worker-smoke-stderr.XXXXXX")"
+state_file="$(mktemp "${TMPDIR:-/tmp}/worker-smoke-state.XXXXXX")"
+cleanup() {
+  rm -f "$stdout_file" "$stderr_file" "$state_file"
+}
+trap cleanup EXIT
+
+export WORKER_SMOKE_WRAPPER_STATE_FILE="$state_file"
+
+set +e
+node --experimental-strip-types "$entrypoint" "$@" >"$stdout_file" 2>"$stderr_file"
+status=$?
+set -e
+
+cat "$stdout_file"
+cat "$stderr_file" >&2
+
+if (( status == 0 )); then
+  exit 0
+fi
+
+if grep -qx 'report_written' "$state_file" 2>/dev/null; then
+  exit "$status"
+fi
+if grep -Eq '"report"[[:space:]]*:|pack-worker-smoke-report/v1' "$stdout_file" 2>/dev/null; then
+  exit "$status"
+fi
+
+detail="$(tr '\r\n\t' '   ' <"$stderr_file" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-2048)"
+if [[ -z "$detail" ]]; then
+  detail="worker-smoke-run terminated with exit status $status before producing a scenario report"
+fi
+
+code='entrypoint_exception'
+phase='bootstrap'
+resolution='fix_the_named_harness_cause_and_retry_from_the_exact_pr_head'
+if [[ "$detail" =~ unknown\ argument|usage: ]]; then
+  code='invalid_cli'
+elif [[ "$detail" =~ issue-body-file ]]; then
+  code='issue_body_unavailable'
+elif [[ "$detail" =~ native-entrypoint-preflight|[Nn]ode\ 22|unsupported\ [Nn]ode ]]; then
+  code='node_preflight_failed'
+elif [[ "$detail" =~ ERR_MODULE_NOT_FOUND|cannot\ find\ module|[Mm]odule\ not\ found|SyntaxError ]]; then
+  code='entrypoint_import_failed'
+elif (( status == 126 )) && [[ "$detail" =~ Permission\ denied ]]; then
+  code='entrypoint_launch_permission_denied'
+  resolution='restore_the_entrypoint_permissions_then_retry_from_the_exact_pr_head'
+else
+  phase='harness'
+fi
+
+issue=''
+pr=''
+head=''
+args=("$@")
+for ((index = 0; index < ${#args[@]}; index += 1)); do
+  case "${args[$index]}" in
+    --issue) issue="${args[$((index + 1))]:-}" ;;
+    --pr) pr="${args[$((index + 1))]:-}" ;;
+    --head-sha) head="${args[$((index + 1))]:-}" ;;
+  esac
+done
+
+json_escape() {
+  local value="${1-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '%s' "$value"
+}
+
+wrapper_path="$root/scripts/worker-smoke-run"
+wrapper_executable=false
+[[ -x "$wrapper_path" ]] && wrapper_executable=true
+
+binding=''
+if [[ "$issue" =~ ^[1-9][0-9]*$ ]] \
+  && [[ "$pr" =~ ^[1-9][0-9]*$ ]] \
+  && [[ "$head" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  binding=",\"binding\":{\"issueNumber\":$issue,\"prNumber\":$pr,\"headSha\":\"${head,,}\"}"
+fi
+
+printf '{"schema":"worker-smoke-run/v1","result":"FAIL","cause":{"phase":"%s","code":"%s","detail":"%s","resolution":"%s"}%s,"wrapper":{"path":"%s","executable":%s,"launchFailure":"none"}}\n' \
+  "$phase" \
+  "$code" \
+  "$(json_escape "$detail")" \
+  "$resolution" \
+  "$binding" \
+  "$(json_escape "$wrapper_path")" \
+  "$wrapper_executable"
+
+exit "$status"
