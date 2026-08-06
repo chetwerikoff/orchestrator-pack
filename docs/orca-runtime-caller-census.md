@@ -13,7 +13,7 @@ Compatibility with AO-era callers, PowerShell bridges, old result envelopes, and
 | Surface | Operations | Disposition | Result |
 |---|---|---|---|
 | `scripts/launch-watch/watch.ts` | runtime composition, readiness, list/find, read, liveness | `already-runtime-neutral` | Reference observation caller from #1245. |
-| `scripts/worker-smoke-run.ts` | runtime composition, readiness, spawn, send, read, liveness, stop | `use-runtime-interface` | Selected adapter, composite identity, exactly one dispatch attempt, exact-generation stop. |
+| `scripts/worker-smoke-run.ts` | runtime composition, readiness, spawn, send, read, liveness, stop, find | `use-runtime-interface` | Selected adapter, composite identity, exactly one dispatch attempt, exact-generation stop, and exact post-close presence proof. |
 | `scripts/runtime/task-lifecycle.ts` | spawn, send, read, liveness, stop | `already-runtime-neutral` | Direct lifecycle caller retains exact spawned identity after ambiguous dispatch and never resends. |
 | `scripts/pr2-foundation/fleet-observer.ts` | list/find, read, liveness | `already-runtime-neutral` | Observer-only fleet census through `RuntimeAdapter`; no actuation or compatibility bridge. |
 | `scripts/pr2-foundation/scheduler.ts` | runtime composition, fleet observer | `use-runtime-interface` | Production scheduler composes the selected runtime and observer and is included in the repository-derived owner census. |
@@ -69,6 +69,7 @@ The review transport still used by `scripts/pack-review-runner.ts` is #1250 serv
 - Stop, workspace removal, and dispatch are attempted once; ambiguous transport never creates a retry authority.
 - `dispatch_unknown` retains the exact spawned identity for explicit recovery and is never automatically resent.
 - Worker-smoke output heuristics are observation-only and cannot trigger a second submit.
+- Worker-smoke close settlement verifies the exact runtime identity is absent or present before reporting lifecycle cleanliness.
 - Side-effect fence ownership includes process start ticks, preventing a reused PID from impersonating the prior owner.
 - The same direct lifecycle caller runs with Orca and deterministic adapters without adapter-type branches.
 - Canonical side-process topology is Node supervisor → Node `pr2-scheduler`; no PowerShell child remains in the registry.

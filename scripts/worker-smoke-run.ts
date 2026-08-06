@@ -26,6 +26,7 @@ import {
   observeSmokeCancellationAcknowledgement,
   observeSmokeCompletionEvidence,
   observeSmokeDeliveryEstablished,
+  parseSmokeAgentReport,
   resolveSmokeRequirement,
   resolveSmokeRunArtifactDir,
   scrubForwardedGhSecrets,
@@ -490,15 +491,34 @@ function publishSmokeReport(report: SmokeReport, options: CliOptions): void {
   }
 }
 
-function runtimeClose(
+type RuntimeFailureWithNativeError = RuntimeOperationFailure & {
+  readonly nativeError?: Readonly<{
+    code: string;
+    message: string;
+  }>;
+};
+
+export function runtimeClose(
   adapter: RuntimeAdapter,
   worker: RuntimeWorkerIdentity,
-  options: CliOptions,
+  options: Pick<CliOptions, 'cwd'>,
 ): string {
   const result = adapter.stopWorker(worker, { cwd: options.cwd });
   if (result.status === 'ok') return 'closed_owned_handle';
-  if (result.reason === 'worker_generation_not_found') return 'closed_owned_handle_already_absent';
-  return `close_failed:${result.reason}`;
+
+  const presence = adapter.findWorker(worker, { cwd: options.cwd });
+  if (presence.status === 'ok' && presence.value === null) {
+    return 'closed_owned_handle_already_absent';
+  }
+
+  const nativeError = (result as RuntimeFailureWithNativeError).nativeError;
+  const runtimeError = nativeError
+    ? `;runtime_error=${JSON.stringify(nativeError)}`
+    : '';
+  if (presence.status === 'ok') {
+    return `close_failed:${result.reason}${runtimeError};presence=present;runtime=${worker.runtime};handle=${worker.id};generation=${worker.generation}`;
+  }
+  return `close_failed:${result.reason}${runtimeError};presence=unproven;presence_error=${failureReason(presence)}`;
 }
 
 function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scenarioCount: number): string {
@@ -562,7 +582,38 @@ export function establishRuntimeSmokeDelivery(input: {
   return { ok: false, reason: 'prompt_delivery_unconfirmed', observationToken: token, submitCount };
 }
 
-function waitForRuntimeSmokeCompletion(input: {
+type SmokeCompletionObservation = ReturnType<typeof observeSmokeCompletionEvidence>['observation'];
+type SmokeProgress = ReturnType<typeof inspectSmokeProgress>;
+
+function missingCompletionEvidence(observation: SmokeCompletionObservation): string {
+  if (observation.wrongRunBinding) return 'sealed_report_for_expected_run';
+  switch (observation.publicationState) {
+    case 'partial': return 'completion_body_or_seal_incomplete';
+    case 'publish_complete_duplicate': return 'exactly_one_sealed_report';
+    case 'publish_complete_unfenced': return 'valid_worker_smoke_report';
+    case 'publish_complete_single': return observation.partial ? 'none' : 'valid_worker_smoke_report';
+    case 'none':
+    default: return 'completion_sealed_report';
+  }
+}
+
+function completionFailureReason(
+  cause: string,
+  observation: SmokeCompletionObservation,
+  progress: SmokeProgress,
+  detail?: string,
+): string {
+  return [
+    cause,
+    detail,
+    `publication_state=${observation.publicationState}`,
+    `missing=${missingCompletionEvidence(observation)}`,
+    `plan_complete=${progress.planComplete}`,
+    observation.wrongRunBinding ? 'wrong_run_binding=true' : '',
+  ].filter(Boolean).join(';');
+}
+
+export function waitForRuntimeSmokeCompletion(input: {
   adapter: RuntimeAdapter;
   worker: RuntimeWorkerIdentity;
   binding: SmokeRunBinding;
@@ -571,19 +622,29 @@ function waitForRuntimeSmokeCompletion(input: {
   startedAtMs: number;
   previousToken?: RuntimeObservationToken;
   abortReason: () => string | undefined;
+  now?: () => number;
+  sleepMs?: (milliseconds: number) => void;
+  absoluteCeilingMs?: number;
+  progressStallMs?: number;
 }): {
   ok: boolean;
   partial?: Partial<SmokeReport> | null;
   reason?: string;
-  progress?: ReturnType<typeof inspectSmokeProgress>;
+  progress?: SmokeProgress;
 } {
-  const absoluteDeadline = input.startedAtMs + SMOKE_ABSOLUTE_CEILING_MS;
-  let lastProgressAt = Date.now();
+  const now = input.now ?? (() => Date.now());
+  const sleepMs = input.sleepMs ?? sleep;
+  const absoluteDeadline = input.startedAtMs
+    + (input.absoluteCeilingMs ?? SMOKE_ABSOLUTE_CEILING_MS);
+  const progressStallMs = input.progressStallMs ?? SMOKE_PROGRESS_STALL_MS;
+  let lastProgressAt = now();
   let acceptedProgress = 0;
   let token = input.previousToken;
   let completionState = createSmokeCompletionObservationState();
+  let lastObservation: SmokeCompletionObservation | undefined;
+  let lastProgress: SmokeProgress | undefined;
 
-  while (Date.now() < absoluteDeadline) {
+  while (now() < absoluteDeadline) {
     const aborted = input.abortReason();
     if (aborted) return { ok: false, reason: `operator_cancelled:${aborted}` };
 
@@ -592,21 +653,32 @@ function waitForRuntimeSmokeCompletion(input: {
       runId: input.binding.runId,
       scenarioCount: input.scenarioCount,
     });
+    lastProgress = progress;
     if (progress.acceptedCount > acceptedProgress) {
       acceptedProgress = progress.acceptedCount;
-      lastProgressAt = Date.now();
-    }
-    if (Date.now() - lastProgressAt >= SMOKE_PROGRESS_STALL_MS) {
-      return { ok: false, reason: 'progress_stall', progress };
+      lastProgressAt = now();
     }
 
     const observed = observeSmokeCompletionEvidence(input.binding, completionState);
     completionState = observed.state;
-    if (observed.observation.publicationState === 'publish_complete_single') {
+    lastObservation = observed.observation;
+    if (observed.observation.publicationState === 'publish_complete_single'
+      && observed.observation.partial) {
       return { ok: true, partial: observed.observation.partial, progress };
     }
-    if (observed.observation.publicationState !== 'none') {
-      return { ok: false, reason: observed.observation.publicationState, progress };
+    if (observed.observation.publicationState === 'publish_complete_duplicate') {
+      return {
+        ok: false,
+        reason: completionFailureReason('agent_report_duplicate', observed.observation, progress),
+        progress,
+      };
+    }
+    if (observed.observation.publicationState === 'publish_complete_unfenced') {
+      return {
+        ok: false,
+        reason: completionFailureReason('agent_report_unfenced', observed.observation, progress),
+        progress,
+      };
     }
 
     const read = input.adapter.readBoundedOutput({
@@ -614,23 +686,92 @@ function waitForRuntimeSmokeCompletion(input: {
       previousToken: token,
       limit: 200,
     }, { cwd: input.cwd });
-    if (read.status !== 'ok') return { ok: false, reason: failureReason(read), progress };
+    if (read.status !== 'ok') {
+      return {
+        ok: false,
+        reason: completionFailureReason(
+          failureReason(read),
+          observed.observation,
+          progress,
+        ),
+        progress,
+      };
+    }
     token = read.value.observationToken;
 
     const liveness = input.adapter.liveness({
       worker: input.worker,
       observationWindowMs: SMOKE_LIFECYCLE_POLL_MS,
     }, { cwd: input.cwd });
-    if (liveness.status === 'gone') {
+    if (read.value.terminalState === 'exited' || liveness.status === 'gone') {
       const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState);
-      if (finalObservation.observation.publicationState === 'publish_complete_single') {
+      completionState = finalObservation.state;
+      if (finalObservation.observation.publicationState === 'publish_complete_single'
+        && finalObservation.observation.partial) {
         return { ok: true, partial: finalObservation.observation.partial, progress };
       }
-      return { ok: false, reason: 'agent_exited_without_report', progress };
+      return {
+        ok: false,
+        reason: completionFailureReason(
+          'agent_exited_without_report',
+          finalObservation.observation,
+          progress,
+        ),
+        progress,
+      };
     }
-    sleep(SMOKE_LIFECYCLE_POLL_MS);
+    if (liveness.status === 'idle' && progress.planComplete) {
+      const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState);
+      completionState = finalObservation.state;
+      if (finalObservation.observation.publicationState === 'publish_complete_single'
+        && finalObservation.observation.partial) {
+        return { ok: true, partial: finalObservation.observation.partial, progress };
+      }
+      return {
+        ok: false,
+        reason: completionFailureReason(
+          'agent_idle_without_report',
+          finalObservation.observation,
+          progress,
+        ),
+        progress,
+      };
+    }
+    if (now() - lastProgressAt >= progressStallMs) {
+      return {
+        ok: false,
+        reason: completionFailureReason(
+          'agent_report_timeout',
+          observed.observation,
+          progress,
+          'reason=progress_stall',
+        ),
+        progress,
+      };
+    }
+    sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, absoluteDeadline - now())));
   }
-  return { ok: false, reason: 'absolute_safety_ceiling' };
+
+  const progress = lastProgress ?? inspectSmokeProgress({
+    artifactDir: input.binding.artifactDir,
+    runId: input.binding.runId,
+    scenarioCount: input.scenarioCount,
+  });
+  const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState);
+  if (finalObservation.observation.publicationState === 'publish_complete_single'
+    && finalObservation.observation.partial) {
+    return { ok: true, partial: finalObservation.observation.partial, progress };
+  }
+  return {
+    ok: false,
+    reason: completionFailureReason(
+      'agent_report_timeout',
+      finalObservation.observation ?? lastObservation!,
+      progress,
+      'reason=absolute_safety_ceiling',
+    ),
+    progress,
+  };
 }
 
 function waitForCooperativeShutdown(input: {
@@ -686,7 +827,24 @@ export function findVerifiedSmokeReceiptWitness(input: {
       comments: [comment],
       target: input.target,
     });
-    const candidate = contribution.latestClearingPass;
+    let candidate = contribution.latestClearingPass;
+    const commentId = positiveInteger(comment.id);
+    const globalBlock = contribution.diagnostics.globalBlock;
+    if (!candidate
+      && commentId > 0
+      && globalBlock.blocked
+      && globalBlock.commentId === commentId
+      && (globalBlock.kind === 'FAIL' || globalBlock.kind === 'BLOCKED')) {
+      const partial = parseSmokeAgentReport(String(comment.body ?? ''));
+      if (partial) {
+        const normalized = normalizeSmokeReport(partial, {
+          issueNumber: input.target.issueNumber,
+          prNumber: input.target.prNumber,
+          headSha: input.target.headSha,
+        });
+        if (normalized.ok) candidate = normalized.report;
+      }
+    }
     if (candidate && verifyPublishedSmokeProvenance(candidate)) return candidate;
   }
   return undefined;
