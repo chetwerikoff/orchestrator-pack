@@ -1,0 +1,49 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1266,
+  "declared_paths": [
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    "docs/declarations/1266.pr-scope.json",
+    "package.json",
+    "scripts/browser-gpt-post-settlement-close-proof.ts",
+    "scripts/browser-gpt-post-settlement-close.test.ts",
+    "scripts/browser-gpt-post-settlement-close.ts",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    ".ao/",
+    "agent-orchestrator.yaml",
+    "agent-orchestrator.yaml.example",
+    "credentials/",
+    "package-lock.json",
+    "packages/core/",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-runtime-history.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".claude/skills/discuss-with-gpt/SKILL.md",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/discuss-with-gpt/SKILL.md",
+    "docs/declarations/",
+    "package.json",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/browser-gpt-post-settlement-close-proof.ts",
+    "scripts/browser-gpt-post-settlement-close.test.ts",
+    "scripts/browser-gpt-post-settlement-close.ts",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/browser-session.ts",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "eb27bd11995673d3641026db018b97ba74a8019f"
+}
