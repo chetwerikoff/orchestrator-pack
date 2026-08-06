@@ -35,6 +35,10 @@ source = source.replace(
 source = source.replace("join(stateDir, 'recovered.txt')", "join(integrationStateDir, 'recovered.txt')")
 source = source.replace("join(stateDir, 'exhausted.txt')", "join(integrationStateDir, 'exhausted.txt')")
 source = source.replace(
+    "  matchesNewChatControlSelector,\n  MESSAGE_NODE_SELECTOR,",
+    "  matchesNewChatControlSelector,\n  matchesStopButtonSelector,\n  MESSAGE_NODE_SELECTOR,",
+)
+source = source.replace(
     "const recoveredMessages = readyTurnObservationFrames(prompt, reply).at(-1)!;",
     "const recoveredMessages = (): StateLightTestMessage[] => [\n"
     "      { role: 'user', text: composerText },\n"
@@ -50,6 +54,14 @@ source = source.replace("collectionLocator(recoveredMessages, false)", "collecti
 source = source.replace("recoveredMessages.filter", "recoveredMessages().filter")
 source = source.replace("const last = recoveredMessages.at(-1)!;", "const last = recoveredMessages().at(-1)!;")
 source = source.replace(
+    "press: vi.fn(async () => { sends += 1; lost = true; }),",
+    "press: vi.fn(async () => { sends += 1; initialUrl = SHARED_CONV; lost = true; }),",
+)
+source = source.replace(
+    "click: vi.fn(async () => { sends += 1; lost = true; }),",
+    "click: vi.fn(async () => { sends += 1; initialUrl = SHARED_CONV; lost = true; }),",
+)
+source = source.replace(
     "const waitingMessages = readyTurnObservationFrames(prompt, 'UNUSED')[0]!;",
     "const waitingMessages = (): StateLightTestMessage[] => [\n"
     "      { role: 'user', text: composerText },\n"
@@ -59,4 +71,20 @@ source = source.replace(
 source = source.replace("collectionLocator(waitingMessages, true)", "collectionLocator(waitingMessages(), true)")
 source = source.replace("waitingMessages.filter", "waitingMessages().filter")
 source = source.replace("const last = waitingMessages.at(-1)!;", "const last = waitingMessages().at(-1)!;")
+source = source.replace(
+    "const ownedStop = vi.fn(async () => undefined);",
+    "let ownedStopped = false;\n    const ownedStop = vi.fn(async () => { ownedStopped = true; });",
+)
+source = source.replace(
+    "if (selector.includes(STOP_BUTTON_TESTID)) {\n          return scalarLocator({ count: vi.fn(async () => sent ? 1 : 0), click: ownedStop });\n        }",
+    "if (matchesStopButtonSelector(selector)) {\n          return scalarLocator({\n            count: vi.fn(async () => sent && !ownedStopped ? 1 : 0),\n            click: ownedStop,\n          });\n        }",
+)
+source = source.replace(
+    "selector.includes(STOP_BUTTON_TESTID)\n        ? scalarLocator({ count: vi.fn(async () => 1), click: foreignStop })",
+    "matchesStopButtonSelector(selector)\n        ? scalarLocator({ count: vi.fn(async () => 1), click: foreignStop })",
+)
+source = source.replace(
+    "expect(outcome.result.incidents).toContain('owned_generation_stop_completed');",
+    "expect(outcome.result.incidents).toContain('owned_generation_stop_confirmed');",
+)
 exec(compile(source, 'apply-1283-production-tests.py', 'exec'))
