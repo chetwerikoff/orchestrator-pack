@@ -30,5 +30,5 @@
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "a7ad6fb7511888bdf22985499fb5836f5b34d7fc"
+  "source_revision": "8d689125b52383f686b5f92a866c8fc730371723"
 }
