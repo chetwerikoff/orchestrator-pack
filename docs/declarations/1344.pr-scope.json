@@ -2,6 +2,7 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1344,
   "declared_paths": [
+    "scripts/chatgpt-browser-turn/state-light-session.test.ts",
     "scripts/chatgpt-browser-turn/state-light-session.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts"
   ],
@@ -36,5 +37,5 @@
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
-  "source_revision": "4b612fd687443719167e92dd7c1bd5a62f1c73d9"
+  "source_revision": "6687d00a35ce36cad4219b3b59027a9e9edd1989"
 }
