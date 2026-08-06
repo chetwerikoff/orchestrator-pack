@@ -23,8 +23,8 @@
   "allowed_roots": [
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
     "docs/browser-gpt-turn-runbook.md",
-    "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts",
+    "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-session.test.ts",
