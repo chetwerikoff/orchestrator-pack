@@ -105,8 +105,12 @@ orca terminal list --json
 
 Resolve one absolute non-primary worktree path `WT` in the same repository. Save its actual
 live head and branch/detached state. Branch, head, or linkage mismatches are report facts; they
-are not repository-policy vetoes after a direct user instruction. A second plausible target or
-an inability to distinguish the primary checkout remains real ambiguity.
+are not repository-policy vetoes after a direct user instruction. A branch mismatch, third head,
+stale or conflicting linkage, missing gate-specific input, or `cleanup_deferred` result is
+diagnostic evidence, not a terminal cleanup veto. Continue with the exact absolute target path
+through the lower-level Orca/Git removal path in Step 9, then perform the final Git/Orca
+read-back. A second plausible target or an inability to distinguish the primary checkout remains
+real ambiguity.
 
 ## Step 3 — Inspect readiness
 
@@ -123,6 +127,38 @@ user merge instruction, red/pending/missing repository-owned CI or review is rec
 not stop the merge attempt. Normalize draft/behind state when practical. If GitHub itself
 refuses the merge because of branch protection, permissions, or another service-side rule,
 report that exact external refusal; do not relabel it as a pack decision.
+
+### Step 3-waiver — operator-authorized pack-review waiver
+
+When the merge command includes either **«мерж N без ревью»**, **«merge N without review»**,
+or the equivalent **«мерж без ревью и смоука»**, consult
+[`docs/pack-review-waiver-merge-runbook.md`](../../../docs/pack-review-waiver-merge-runbook.md)
+before attempting the merge. In this branch, execute only the runbook's
+**Prerequisites** and its authorization-status **POST plus read-back** (the waiver
+procedure's sections 1–2):
+
+1. Confirm that the PR is open, non-draft, non-conflicting, and that every required context
+   other than `orchestrator-pack/pack-review` is green or an expected skip.
+2. Confirm that `orchestrator-pack/pack-review` is **FAILURE** or absent for the exact current
+   head, and that the operator gave explicit written authorization for this merge.
+3. Post and verify the operator-authorization `success` status on that exact head, with a
+   concrete reason and the non-private source of the direct authorization in its description.
+   This status records authorization; it is not evidence that pack review ran, was clean, or
+   that findings were cleared. Do not start the reviewer merely to manufacture a missing status.
+
+Truth-preservation is mandatory: record the exact head, authorization, status POST/read-back,
+the authorization source (channel/reference only; no private data), and the fact that review
+was not performed or was not cleared. A review waiver never waives another failing required
+check. In **«мерж без ревью и смоука»**, the smoke waiver is a separate, explicitly recorded
+decision; a review waiver must not be presented as smoke evidence or as authorization for an
+unrelated smoke exception.
+
+**Do not execute the runbook's merge or local-adoption steps from this branch** (including its
+sections 3–4); doing so would duplicate the merge/adoption work. After only the prerequisite
+and status POST/read-back work completes, return to the unchanged ordinary flow: finish Step 4,
+then continue with Step 5+ (merge, adoption, cleanup, and final read-back). A failed or missing
+pack-review status is not silently normalized when the required operator authorization, its
+non-private source, or the exact-head status evidence is absent.
 
 ## Step 4 — Collect local adoption instructions
 
@@ -265,6 +301,8 @@ Report in the user's language:
 
 - PR, Issue, merge SHA, saved and actual target head/branch, and current main;
 - CI/review facts and whether they were overridden;
+- for any waiver, the source of the direct operator authorization (channel/reference only,
+  with private data omitted), plus the waiver status description and POST/read-back result;
 - operator-checkout adoption and preservation of existing changes;
 - target absolute path and why it was the selected non-primary worktree;
 - every lifecycle disagreement/blocked condition that was overridden;

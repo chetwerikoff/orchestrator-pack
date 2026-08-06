@@ -1,0 +1,26 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1348,
+  "declared_paths": [
+    "package.json",
+    "scripts/check-vitest-live-store-isolation.mjs",
+    "scripts/vitest-live-store-inventory.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".github/workflows",
+    "docs/declarations",
+    "package.json",
+    "scripts/check-vitest-live-store-isolation.mjs",
+    "scripts/lib/vitest-live-store-harness.mjs",
+    "scripts/pr2-foundation",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-live-store-inventory.json"
+  ],
+  "source_revision": "00b4bdf961269d62fd4efe9557b34c9d869e1726"
+}

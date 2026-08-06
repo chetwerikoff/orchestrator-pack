@@ -40,6 +40,31 @@ const declarationFreeIssueBody = [
   '```',
 ].join('\n');
 
+const filePatternLiveIssueBody = [
+  '```denylist',
+  'docs/declarations/**',
+  'plugins/**/tests/secret*.test.ts',
+  'scripts/foo-secret.test.ts',
+  '```',
+  '```allowed-roots',
+  'plugins/**/tests/*.test.ts',
+  'scripts/foo*.test.ts',
+  '```',
+].join('\n');
+
+const filePatternDeclarationIssueBody = [
+  '```denylist',
+  'vendor/**',
+  'packages/core/**',
+  'secrets/**',
+  'credentials/**',
+  '```',
+  '```allowed-roots',
+  'plugins/**/tests/*.test.ts',
+  'scripts/foo*.test.ts',
+  '```',
+].join('\n');
+
 const firstPartySurfaceIssueBody = [
   '```denylist',
   'vendor/**',
@@ -171,6 +196,14 @@ describe('AO-free PR scope declaration contract', () => {
       validatePrScopeDeclaration({
         ...declaration(),
         declared_paths: ['scripts/allowed '],
+      }),
+    ).toMatchObject({ ok: false, kind: 'invalid-normalization' });
+
+    expect(
+      validatePrScopeDeclaration({
+        ...declaration(),
+        declared_paths: ['scripts/foo-public.test.ts'],
+        allowed_roots: ['scripts/foo*.test.ts'],
       }),
     ).toMatchObject({ ok: false, kind: 'invalid-normalization' });
   });
@@ -400,6 +433,178 @@ describe('AO-free PR scope declaration contract', () => {
       checkPrScope({
         ...base,
         issueBody: `${declarationFreeIssueBody}\n\`\`\`allowed-roots\nscripts/**\n\`\`\`\n`,
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: 'declaration-selection-failed',
+    });
+  });
+
+  it('selects full-grammar live-Issue policy without rejecting deny overlap', () => {
+    expect(
+      selectLiveIssueScope(
+        filePatternLiveIssueBody,
+        parseIssueBody(filePatternLiveIssueBody),
+      ),
+    ).toEqual({
+      ok: true,
+      allowed_roots: [
+        'plugins/**/tests/*.test.ts',
+        'scripts/foo*.test.ts',
+      ],
+      denylist: [
+        'docs/declarations/**',
+        'plugins/**/tests/secret*.test.ts',
+        'scripts/foo-secret.test.ts',
+      ],
+    });
+
+    const outsideCeiling = filePatternLiveIssueBody.replace(
+      'scripts/foo*.test.ts',
+      'outside/**/tests/*.test.ts',
+    );
+    expect(
+      selectLiveIssueScope(outsideCeiling, parseIssueBody(outsideCeiling)),
+    ).toMatchObject({ ok: false });
+
+    const malformed = filePatternLiveIssueBody.replace(
+      'scripts/foo*.test.ts',
+      'scripts/*/foo.test.ts',
+    );
+    expect(
+      selectLiveIssueScope(malformed, parseIssueBody(malformed)),
+    ).toMatchObject({ ok: false });
+  });
+
+  it('checks final-segment and nested file-pattern roots on the live-Issue route', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+    const base = {
+      repoRoot: root,
+      prBody: 'Closes #42',
+      issueBody: filePatternLiveIssueBody,
+      degradedMode: false,
+      forkPr: false,
+    };
+    const allowedPaths = [
+      'plugins/ao-scope-guard/tests/check.test.ts',
+      'plugins/one/two/tests/nested.test.ts',
+      'scripts/foo-public.test.ts',
+    ];
+
+    expect(checkPrScope({ ...base, prPaths: allowedPaths })).toMatchObject({
+      ok: true,
+      scopeSource: 'live-issue',
+      checkedPaths: allowedPaths,
+    });
+
+    for (const deniedPath of [
+      'plugins/one/two/tests/secret-access.test.ts',
+      'scripts/foo-secret.test.ts',
+    ]) {
+      const denied = checkPrScope({ ...base, prPaths: [deniedPath] });
+      expect(denied).toMatchObject({
+        ok: false,
+        reason: 'scope_violation',
+      });
+      if (denied.ok) throw new Error('expected denylist priority to fail');
+      expect(denied.violations?.denied).toEqual([deniedPath]);
+    }
+
+    const outside = checkPrScope({
+      ...base,
+      prPaths: ['plugins/ao-scope-guard/lib/check.test.ts'],
+    });
+    expect(outside).toMatchObject({ ok: false, reason: 'scope_violation' });
+    if (outside.ok) throw new Error('expected outside path to fail');
+    expect(outside.violations?.outOfScope).toEqual([
+      expect.stringContaining('plugins/ao-scope-guard/lib/check.test.ts'),
+    ]);
+  });
+
+  it('compares declaration artifacts against full-grammar Issue roots', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+    mkdirSync(join(root, 'docs', 'declarations'), { recursive: true });
+    const artifactPath = join(root, 'docs', 'declarations', '42.pr-scope.json');
+    const allowedDeclaration = {
+      schema_version: PR_SCOPE_DECLARATION_SCHEMA,
+      issue_number: 42,
+      declared_paths: [
+        'plugins/ao-scope-guard/tests/check.test.ts',
+        'scripts/foo-public.test.ts',
+      ],
+      denylist: [
+        'credentials/',
+        'packages/core/',
+        'secrets/',
+        'vendor/',
+      ],
+      allowed_roots: [
+        'plugins/ao-scope-guard/tests/check.test.ts',
+        'scripts/foo-public.test.ts',
+      ],
+    };
+    writeFileSync(artifactPath, `${JSON.stringify(allowedDeclaration)}\n`, 'utf8');
+
+    const base = {
+      repoRoot: root,
+      prBody: 'Closes #42',
+      issueBody: filePatternDeclarationIssueBody,
+      degradedMode: false,
+      forkPr: false,
+    };
+    const declarationPath = 'docs/declarations/42.pr-scope.json';
+    expect(
+      checkPrScope({
+        ...base,
+        prPaths: [
+          declarationPath,
+          'plugins/ao-scope-guard/tests/check.test.ts',
+          'scripts/foo-public.test.ts',
+        ],
+      }),
+    ).toMatchObject({
+      ok: true,
+      scopeSource: 'declaration',
+      declarationPath,
+    });
+
+    const denied = checkPrScope({
+      ...base,
+      prPaths: [declarationPath, 'vendor/secret.ts'],
+    });
+    expect(denied).toMatchObject({ ok: false, reason: 'scope_violation' });
+    if (denied.ok) throw new Error('expected declaration denylist to fail');
+    expect(denied.violations?.denied).toEqual(['vendor/secret.ts']);
+
+    const outside = checkPrScope({
+      ...base,
+      prPaths: [declarationPath, 'plugins/ao-scope-guard/lib/check.test.ts'],
+    });
+    expect(outside).toMatchObject({ ok: false, reason: 'scope_violation' });
+    if (outside.ok) throw new Error('expected declaration outside path to fail');
+    expect(outside.violations?.outOfScope).toEqual([
+      expect.stringContaining('plugins/ao-scope-guard/lib/check.test.ts'),
+    ]);
+
+    const outsideIssuePolicy = {
+      ...allowedDeclaration,
+      declared_paths: ['plugins/ao-scope-guard/lib/check.test.ts'],
+      allowed_roots: ['plugins/ao-scope-guard/lib/check.test.ts'],
+    };
+    writeFileSync(
+      artifactPath,
+      `${JSON.stringify(outsideIssuePolicy)}\n`,
+      'utf8',
+    );
+    expect(
+      checkPrScope({
+        ...base,
+        prPaths: [
+          declarationPath,
+          'plugins/ao-scope-guard/lib/check.test.ts',
+        ],
       }),
     ).toMatchObject({
       ok: false,
