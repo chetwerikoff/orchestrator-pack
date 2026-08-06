@@ -1,157 +1,96 @@
 # token-chain-ledger contract
 
-Cross-session token and cost accounting for Composio AO chains without patching
-AO core.
+Runtime-neutral cross-session token, cost, and convergence accounting.
 
 ## Purpose
 
-AO can expose per-session cost information when available. This contract adds a
-chain-level ledger over related sessions, for example:
+The ledger answers what an entire task chain cost, rather than only what one
+executor session cost:
 
 ```text
-task_chain_id
-  planner session
-  reviewer session
-  worker session
-  fix-worker session
-  final-review session
+chain_id
+  planner
+  reviewer
+  worker
+  fix-worker
+  final-review
 ```
 
-The ledger answers "what did the whole task chain cost?" instead of only "what
-did this one session cost?".
+It consumes explicit observations. It never discovers sessions through a concrete
+runtime API and never invents unavailable token or cost data.
 
 ## Extension boundary
 
-Allowed implementation surfaces:
-
-- observability/accounting plugin;
-- agent wrapper that records session start/end events;
-- external ledger writer;
-- AO session metadata when available;
-- workspace-local or user-local `.orchestrator-pack/ledger/*.jsonl` / SQLite state.
-
-Disallowed:
-
-- Tracker plugin misuse for token accounting;
-- patches to upstream `packages/core/`;
-- committed secrets or API keys.
+Supported surfaces are the accounting plugin, explicit wrapper events, external
+ledger writers, and pack-owned `.orchestrator-pack/ledger/` state. Do not patch
+`packages/core/**`, misuse tracker fields as cost authority, or commit credentials.
 
 ## Required fields
-
-Each ledger row should record:
 
 ```json
 {
   "chain_id": "stable-task-chain-id",
-  "session_id": "ao-session-id",
-  "parent_session_id": "optional-parent-session-id",
+  "session_id": "explicit-session-id",
+  "parent_session_id": null,
   "role": "planner|reviewer|worker|fix-worker|final-review|other",
-  "task_id": "tracker-or-ao-task-id",
+  "task_id": "issue-1352",
   "started_at": "iso8601",
   "ended_at": "iso8601",
   "input_tokens": 0,
   "output_tokens": 0,
   "estimated_cost_usd": 0.0,
-  "source": "ao-session-cost|agent-wrapper|manual-import"
+  "source": "runtime-session-cost|agent-output-parse|manual-import|unavailable"
 }
 ```
 
-## Accounting rules
+Preserve `chain_id` across planner, reviewer, worker, and fix sessions. Each session
+is counted once. Missing values are `null` or unavailable, not zero by assumption.
+Per-session cost is attached only to terminal or explicit cost-observed rows; the
+aggregator deduplicates equivalent observations by `session_id` and source priority.
 
-- Use AO per-session cost first when available.
-- Preserve chain_id across planner, reviewer, worker, and fix sessions.
-- Do not double count retries; record each session once and aggregate by
-  `chain_id`.
-- Mark missing token/cost data as unknown instead of inventing values.
-- Keep raw ledger state outside committed source unless it is a sanitized sample.
+## Recording events
 
-## Usage
-
-Install workspace dependencies from the repository root (`npm install`), then use the
-`pack-ledger` CLI via `npx pack-ledger` (Node bin wrapper; PowerShell-safe on Windows).
-
-### Recording events (writer)
-
-Append-only rows are written to `.orchestrator-pack/ledger/events.jsonl` under the repository root.
-`chain_id` is resolved from explicit writer input, then explicit task-chain metadata, then `issue-{n}`, and finally a persisted pack-owned fallback (`chain-{utc}-{uuid}` in `.orchestrator-pack/ledger/active-chain.json`). Runtime/session metadata is accepted only through the explicit input object; environment aliases are not read.
-
-```typescript
-import { appendLedgerRow, prepareLedgerRow } from './lib/writer.js';
-
-const row = prepareLedgerRow({
-  repoRoot: process.cwd(),
-  issueNumber: 8,
-  event_kind: 'finished',
-  role: 'worker',
-  task_id: '8',
-});
-appendLedgerRow(row, { repoRoot: process.cwd() });
-```
-
-Cost fields use explicit runtime-session metadata, `agent-output-parse` from stdout, or `manual-import`. Session rows use the explicit `session_id`/runtime metadata supplied by the caller.
-Session-level cost is attached only on `finished` and `cost-observed` rows so a
-`started`/`finished` pair does not double-count the same session. The aggregator
-also keeps at most one `runtime-session-cost` / `agent-output-parse` row per
-`session_id` (preferring `runtime-session-cost`, then `agent-output-parse`, then
-`finished` over `cost-observed`). Explicit
-`manual-import` rows always count. Missing cost is stored as `null` with
-`source: "unavailable"`.
-
-### Aggregating a chain
+Install dependencies from the frozen lockfile, then use `pack-ledger`:
 
 ```bash
-pack-ledger report --chain issue-8
-pack-ledger report --chain fixture-chain-8 --ledger plugins/token-chain-ledger/tests/fixtures/three-session-chain.jsonl
-pack-ledger report --chain issue-8 --json
+npm ci --include=dev
+pack-ledger report --chain issue-1352 --json
 ```
 
-Reports include total in/out tokens, total estimated cost, per-role and per-iteration
-rollups, missing-data counts, finding signature recurrence, preserved unknown
-`event_kind` values, and an auto-fix **convergence** section.
+Append-only rows live under `.orchestrator-pack/ledger/events.jsonl`. `chain_id` is
+resolved from explicit input, explicit task metadata, `issue-{n}`, or a persisted
+pack-owned fallback. Runtime and session metadata are accepted only through the
+explicit input object; environment aliases are not read.
 
-### Convergence report
+## Aggregation
 
-Convergence is derived only from ledger JSONL rows (no runtime adapter reads). A loop is
-**converged** when the chronologically last `iteration_id` has:
+Reports include total input and output tokens, total `estimated_cost_usd`, per-role,
+per-session cost, per-iteration rollups, missing-data counts, repeated finding
+signatures, preserved unknown event kinds, and convergence.
 
-- no `severity: blocking` findings;
-- no `type: scope-violation` findings;
-- no blocking `type: ci` findings and no `reaction` rows whose trigger is
-  `ci-failed`.
+Convergence is derived only from ledger rows. The latest iteration is converged when
+it has no blocking finding, no scope violation, and no blocking CI finding or
+`ci-failed` reaction. An escalation row yields `escalated`; a terminal chain without
+convergence or escalation yields `abandoned`.
 
-The same finding `signature` (sha256 of `type`, `code`, normalized path per #3.F)
-appearing in two or more iterations is reported as a **repeated signature**.
+Finding signatures are stable hashes of normalized type, code, and path. The same
+signature in multiple iterations is reported as repeated evidence; it does not
+automatically authorize a retry or runtime effect.
 
-Rows with a missing `iteration_id` are labeled `(no-iteration-id)` in convergence
-output. That label is reserved for null ids only; a literal AO iteration id of
-`(none)` is reported unchanged and remains distinct in per-iteration breakdowns.
-Operational retry/escalation limits live in `agent-orchestrator.yaml.example`
-`reactions:`; analytical warnings (for example repeated signatures across
-iterations) use optional ledger report configuration only — prompt rules must not
-duplicate numeric thresholds.
+## Safety
 
-`final_state` is one of:
+- ledger data is accounting evidence, not lifecycle authority;
+- a `session_id`, cost row, path, or role never authorizes a runtime action;
+- exact runtime effects require an adapter-produced `{ runtime, id, generation }`
+  identity;
+- raw ledger state remains untracked unless it is a sanitized fixture;
+- no core patch, hidden retry, or runtime fallback is part of this plugin.
 
-| State | Meaning |
-| --- | --- |
-| `converged` | Last iteration meets the convergence criteria above |
-| `escalated` | Chain includes an `escalation` ledger event |
-| `abandoned` | Chain ended without convergence or escalation |
+## Contract markers
 
-```bash
-pack-ledger report --chain fixture-converging --ledger plugins/token-chain-ledger/tests/fixtures/converging-loop.jsonl
-pack-ledger report --chain fixture-repeated-finding --ledger plugins/token-chain-ledger/tests/fixtures/repeated-finding-loop.jsonl
-pack-ledger report --chain fixture-ci-fail --ledger plugins/token-chain-ledger/tests/fixtures/ci-fail-loop.jsonl
-pack-ledger report --chain fixture-missing-cost --ledger plugins/token-chain-ledger/tests/fixtures/missing-cost-loop.jsonl
-```
-
-Sanitized fixtures under `tests/fixtures/` cover: review → fix → clean review,
-repeated signatures, CI fail then pass, and missing cost with valid iteration
-accounting.
-
-## Outputs
-
-- total input/output tokens per `chain_id`;
-- total estimated cost per `chain_id`;
-- per-role breakdown;
-- missing-data report when some sessions lack AO cost data.
+- `chain_id`
+- planner
+- reviewer
+- worker
+- per-session cost
+- `estimated_cost_usd`
