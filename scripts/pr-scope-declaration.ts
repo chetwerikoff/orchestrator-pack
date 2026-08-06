@@ -22,16 +22,16 @@ import {
   parseIssueBody,
   type IssueConstraints,
 } from '@orchestrator-pack/shared/lib/issue_parser.js';
-import { validateDeclaredScope } from '../plugins/ao-task-declaration/lib/validate.ts';
+import {
+  matchesPathPattern,
+  parsePathPattern,
+  pathPatternsOverlap,
+  pathPatternWithin,
+} from '@orchestrator-pack/shared/lib/path_pattern.js';
 
 export const PR_SCOPE_DECLARATION_SCHEMA =
   'orchestrator-pack/pr-scope-declaration/v1';
 
-/**
- * Repository policy is deliberately defined once here. Both producer and
- * verifier import this source; an artifact can narrow roots or add denials,
- * but cannot widen this policy.
- */
 export const REPOSITORY_DENYLIST = [
   'vendor/**',
   'packages/core/**',
@@ -110,7 +110,6 @@ function canonicalizeEntry(
   if (typeof raw !== 'string') {
     return { ok: false, error: `${field}[${index}] must be a string` };
   }
-
   if (raw.length === 0) {
     return { ok: false, error: `${field}[${index}] is empty` };
   }
@@ -129,12 +128,8 @@ function canonicalizeEntry(
   const globPrefix = value.endsWith('/**');
   const trailingSlash = value.endsWith('/');
   const prefix = globPrefix || trailingSlash;
-  if (globPrefix) {
-    value = value.slice(0, -3);
-  }
-  if (value.endsWith('/')) {
-    value = value.slice(0, -1);
-  }
+  if (globPrefix) value = value.slice(0, -3);
+  if (value.endsWith('/')) value = value.slice(0, -1);
 
   value = value.replaceAll('\\', '/');
   if (DRIVE_PREFIX.test(value) || value.startsWith('/')) {
@@ -153,9 +148,7 @@ function canonicalizeEntry(
 
   const segments: string[] = [];
   for (const segment of value.split('/')) {
-    if (!segment || segment === '.') {
-      continue;
-    }
+    if (!segment || segment === '.') continue;
     if (segment === '..') {
       if (segments.length === 0) {
         return {
@@ -173,8 +166,10 @@ function canonicalizeEntry(
     return { ok: false, error: `${field}[${index}] "${raw}" normalizes to empty` };
   }
 
-  const normalized = segments.join('/');
-  return { ok: true, entry: { value: normalized, prefix } };
+  return {
+    ok: true,
+    entry: { value: segments.join('/'), prefix },
+  };
 }
 
 function canonicalEntryText(entry: CanonicalEntry): string {
@@ -207,10 +202,7 @@ function canonicalizeEntries(
     entries.push(result.entry);
   });
 
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-
+  if (errors.length > 0) return { ok: false, errors };
   entries.sort((left, right) =>
     canonicalEntryText(left).localeCompare(canonicalEntryText(right)),
   );
@@ -221,23 +213,40 @@ function canonicalTexts(entries: CanonicalEntry[]): string[] {
   return entries.map(canonicalEntryText);
 }
 
-function pathEntryMatches(path: string, entry: CanonicalEntry): boolean {
-  return entry.prefix
-    ? path === entry.value || path.startsWith(`${entry.value}/`)
-    : path === entry.value;
+function parsePolicyEntries(
+  values: readonly string[],
+  field: string,
+): { ok: true; entries: string[] } | { ok: false; errors: string[] } {
+  const entries: string[] = [];
+  const errors: string[] = [];
+
+  values.forEach((value, index) => {
+    const parsed = parsePathPattern(value);
+    if (!parsed.ok) {
+      errors.push(`${field}[${index}] ${parsed.reason}`);
+      return;
+    }
+    if (parsed.pattern.source !== value) {
+      errors.push(
+        `${field}[${index}] "${value}" must be canonically normalized`,
+      );
+      return;
+    }
+    entries.push(parsed.pattern.source);
+  });
+
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, entries };
 }
 
-export function normalizeRepositoryPath(raw: unknown): {
-  ok: true;
-  path: string;
-} | {
-  ok: false;
-  reason: string;
-} {
+function pathEntryMatches(path: string, entry: CanonicalEntry): boolean {
+  return matchesPathPattern(canonicalEntryText(entry), path);
+}
+
+export function normalizeRepositoryPath(raw: unknown):
+  | { ok: true; path: string }
+  | { ok: false; reason: string } {
   const result = canonicalizeEntry(raw, 'path', 0);
-  if (!result.ok) {
-    return { ok: false, reason: result.error };
-  }
+  if (!result.ok) return { ok: false, reason: result.error };
   if (result.entry.prefix) {
     return {
       ok: false,
@@ -273,21 +282,12 @@ export function entriesWithinRoots(
     if (!entry.ok) {
       return { ok: false, path: raw, root: entry.error };
     }
-    const covered = canonicalRoots.entries.some((root) => {
-      if (root.prefix) {
-        return (
-          entry.entry.value === root.value ||
-          entry.entry.value.startsWith(`${root.value}/`)
-        );
-      }
-      return !entry.entry.prefix && entry.entry.value === root.value;
-    });
+    const candidate = canonicalEntryText(entry.entry);
+    const covered = canonicalRoots.entries.some((root) =>
+      pathPatternWithin(candidate, canonicalEntryText(root)),
+    );
     if (!covered) {
-      return {
-        ok: false,
-        path: canonicalEntryText(entry.entry),
-        root: roots.join(', '),
-      };
+      return { ok: false, path: candidate, root: roots.join(', ') };
     }
   }
   return { ok: true };
@@ -297,19 +297,11 @@ export function policySubset(
   narrower: readonly string[],
   broader: readonly string[],
 ): boolean {
-  const broad = canonicalizeEntries(broader, 'policy');
-  const narrow = canonicalizeEntries(narrower, 'policy');
+  const broad = parsePolicyEntries(broader, 'policy');
+  const narrow = parsePolicyEntries(narrower, 'policy');
   if (!broad.ok || !narrow.ok) return false;
   return narrow.entries.every((candidate) =>
-    broad.entries.some((parent) => {
-      if (parent.prefix) {
-        return (
-          candidate.value === parent.value ||
-          candidate.value.startsWith(`${parent.value}/`)
-        );
-      }
-      return !candidate.prefix && candidate.value === parent.value;
-    }),
+    broad.entries.some((parent) => pathPatternWithin(candidate, parent)),
   );
 }
 
@@ -334,9 +326,7 @@ export function validatePrScopeDeclaration(
     return {
       ok: false,
       kind: 'unsupported-schema',
-      errors: [
-        `schema_version must be "${PR_SCOPE_DECLARATION_SCHEMA}"`,
-      ],
+      errors: [`schema_version must be "${PR_SCOPE_DECLARATION_SCHEMA}"`],
     };
   }
   if (
@@ -369,11 +359,7 @@ export function validatePrScopeDeclaration(
     ...(roots.ok ? [] : roots.errors),
   ];
   if (!declared.ok || !denylist.ok || !roots.ok || errors.length > 0) {
-    return {
-      ok: false,
-      kind: 'invalid-normalization',
-      errors,
-    };
+    return { ok: false, kind: 'invalid-normalization', errors };
   }
   if (declared.entries.length === 0) {
     return {
@@ -409,10 +395,7 @@ export function validatePrScopeDeclaration(
       errors: ['artifact allowed_roots widens the repository allowed-root ceiling'],
     };
   }
-  const effectiveDenylist = [
-    ...REPOSITORY_DENYLIST,
-    ...canonicalTexts(denylist.entries),
-  ];
+
   const withinRoots = entriesWithinRoots(
     canonicalTexts(declared.entries),
     canonicalTexts(roots.entries),
@@ -426,10 +409,21 @@ export function validatePrScopeDeclaration(
       ],
     };
   }
+
+  const effectiveDenylist = [
+    ...REPOSITORY_DENYLIST,
+    ...canonicalTexts(denylist.entries),
+  ];
   const denied = declared.entries.find((entry) =>
     effectiveDenylist.some((raw) => {
       const parsed = canonicalizeEntry(raw, 'denylist', 0);
-      return parsed.ok && pathEntryMatches(entry.value, parsed.entry);
+      return (
+        parsed.ok &&
+        pathPatternsOverlap(
+          canonicalEntryText(entry),
+          canonicalEntryText(parsed.entry),
+        )
+      );
     }),
   );
   if (denied) {
@@ -500,15 +494,8 @@ export type DeclarationSelectionResult =
     };
 
 export type LiveIssueScopeSelectionResult =
-  | {
-      ok: true;
-      allowed_roots: string[];
-      denylist: string[];
-    }
-  | {
-      ok: false;
-      message: string;
-    };
+  | { ok: true; allowed_roots: string[]; denylist: string[] }
+  | { ok: false; message: string };
 
 export interface LiveIssueScopeBinding {
   issueNumber?: number;
@@ -523,7 +510,6 @@ const LIVE_ISSUE_BOOTSTRAP_FENCE_PATTERN =
 const SOURCE_REVISION_MARKER_PATTERN =
   /^<!--[ \t]*source-revision:[ \t]*(r\d+)[ \t]*-->[ \t]*\r?$/gm;
 const FULL_GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
-
 const ISSUE_SCOPE_FENCE_PATTERN =
   /```(denylist|allowed-roots)\s*\r?\n([\s\S]*?)```/gi;
 
@@ -593,7 +579,9 @@ function validateLiveIssueBootstrap(
   const implementationPaths = bootstrap.allowedImplementationPaths;
   if (
     !Array.isArray(implementationPaths) ||
-    !implementationPaths.every((value): value is string => typeof value === 'string')
+    !implementationPaths.every(
+      (value): value is string => typeof value === 'string',
+    )
   ) {
     return 'live-Issue scope selection failed: bootstrap allowedImplementationPaths must be a string array; FAIL/no-selection/fresh-declaration';
   }
@@ -616,13 +604,6 @@ function validateLiveIssueBootstrap(
   return null;
 }
 
-/**
- * Select the current Issue's explicit scope when no declaration candidate exists.
- *
- * This is intentionally stricter than parseIssueBody: a declaration-free
- * selection needs one unambiguous scope contract, not a merged interpretation
- * of repeated fences or a repository-wide fallback.
- */
 export function selectLiveIssueScope(
   issueBody: string,
   issueConstraints: IssueConstraints,
@@ -661,9 +642,7 @@ export function selectLiveIssueScope(
     allowed_roots,
     binding,
   );
-  if (bootstrapError) {
-    return { ok: false, message: bootstrapError };
-  }
+  if (bootstrapError) return { ok: false, message: bootstrapError };
 
   if (
     hasDuplicateEntries(issueConstraints.denylist) ||
@@ -676,7 +655,23 @@ export function selectLiveIssueScope(
     };
   }
 
-  if (!policySubset(allowed_roots, REPOSITORY_ALLOWED_ROOTS)) {
+  const parsedAllowedRoots = parsePolicyEntries(allowed_roots, 'allowed-roots');
+  const parsedDenylist = parsePolicyEntries(
+    issueConstraints.denylist,
+    'denylist',
+  );
+  if (!parsedAllowedRoots.ok || !parsedDenylist.ok) {
+    const errors = [
+      ...(parsedAllowedRoots.ok ? [] : parsedAllowedRoots.errors),
+      ...(parsedDenylist.ok ? [] : parsedDenylist.errors),
+    ];
+    return {
+      ok: false,
+      message: `live-Issue scope selection failed: ${errors.join('; ')}; FAIL/no-selection/fresh-declaration`,
+    };
+  }
+
+  if (!policySubset(parsedAllowedRoots.entries, REPOSITORY_ALLOWED_ROOTS)) {
     return {
       ok: false,
       message:
@@ -684,21 +679,10 @@ export function selectLiveIssueScope(
     };
   }
 
-  const valid = validateDeclaredScope(
-    { declared_paths: [], declared_globs: allowed_roots },
-    { denylist: issueConstraints.denylist, allowed_roots },
-  );
-  if (!valid.ok) {
-    return {
-      ok: false,
-      message: `live-Issue scope selection failed: ${valid.errors.join('; ')}; FAIL/no-selection/fresh-declaration`,
-    };
-  }
-
   return {
     ok: true,
-    allowed_roots,
-    denylist: issueConstraints.denylist,
+    allowed_roots: parsedAllowedRoots.entries,
+    denylist: parsedDenylist.entries,
   };
 }
 
@@ -792,7 +776,10 @@ export function selectDeclarationArtifact(
     };
   }
 
-  const valid: Array<{ candidate: DeclarationCandidate; declaration: PrScopeDeclaration }> = [];
+  const valid: Array<{
+    candidate: DeclarationCandidate;
+    declaration: PrScopeDeclaration;
+  }> = [];
   for (const candidate of candidates) {
     if (candidate.readError) {
       return {
@@ -844,9 +831,7 @@ export function selectDeclarationArtifact(
   }
 
   const selected = valid[0]!;
-  if (
-    selected.candidate.issueByFilename !== issueNumber
-  ) {
+  if (selected.candidate.issueByFilename !== issueNumber) {
     return {
       ok: false,
       reason: 'wrong-Issue',
@@ -870,7 +855,9 @@ function issueBodyForProducer(
   if (bodyFile) return readFileSync(bodyFile, 'utf8');
   const ghWrapper = join(repoRoot, 'scripts', 'gh');
   if (!existsSync(ghWrapper)) {
-    throw new Error('pack scripts/gh wrapper is required when --issue-body-file is not supplied');
+    throw new Error(
+      'pack scripts/gh wrapper is required when --issue-body-file is not supplied',
+    );
   }
   const result = runProcessSync({
     command: ghWrapper,
@@ -879,7 +866,9 @@ function issueBodyForProducer(
     inheritParentEnv: true,
   });
   if (!result.ok) {
-    throw new Error(`gh issue view failed: ${result.stderr || result.error || result.outcome}`);
+    throw new Error(
+      `gh issue view failed: ${result.stderr || result.error || result.outcome}`,
+    );
   }
   const parsed = JSON.parse(result.stdout) as { body?: unknown };
   if (typeof parsed.body !== 'string') {
@@ -891,9 +880,7 @@ function issueBodyForProducer(
 function parseListArg(argv: string[], index: number): string[] {
   const value = argv[index + 1];
   if (!value) throw new Error(`missing value for ${argv[index]}`);
-  return value
-    .split(',')
-    .filter((entry) => entry.length > 0);
+  return value.split(',').filter((entry) => entry.length > 0);
 }
 
 export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration {
@@ -938,6 +925,7 @@ export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration {
         throw new Error(`unknown argument: ${argv[index]}`);
     }
   }
+
   if (!Number.isInteger(issueNumber) || issueNumber! <= 0) {
     throw new Error('--issue must be a positive integer');
   }
@@ -945,8 +933,6 @@ export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration {
     throw new Error('at least one declared path or prefix is required');
   }
   if (amend) {
-    // Keep the operator's old invocation spelling from silently creating a
-    // legacy artifact. The bytes produced remain the new schema.
     process.stderr.write(
       'notice: --amend is accepted as a compatibility spelling; scope changes still require a fresh declaration\n',
     );
@@ -973,6 +959,7 @@ export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration {
     ];
     throw new Error(errors.join('; '));
   }
+
   const declarationInput = {
     schema_version: PR_SCOPE_DECLARATION_SCHEMA,
     issue_number: issueNumber,
@@ -987,13 +974,16 @@ export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration {
           cwd: repoRoot,
           inheritParentEnv: true,
         });
-        if (!result.ok) throw new Error(result.stderr || result.error || result.outcome);
+        if (!result.ok) {
+          throw new Error(result.stderr || result.error || result.outcome);
+        }
         return result.stdout.trim();
       } catch {
         return undefined;
       }
     })(),
   };
+
   const validated = validatePrScopeDeclaration(declarationInput, issueNumber);
   if (!validated.ok) throw new Error(validated.errors.join('; '));
 
@@ -1010,7 +1000,11 @@ export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration {
     throw new Error('output must be under docs/declarations/');
   }
   mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, `${JSON.stringify(validated.declaration, null, 2)}\n`, 'utf8');
+  writeFileSync(
+    target,
+    `${JSON.stringify(validated.declaration, null, 2)}\n`,
+    'utf8',
+  );
   process.stdout.write(`${JSON.stringify(validated.declaration, null, 2)}\n`);
   return validated.declaration;
 }

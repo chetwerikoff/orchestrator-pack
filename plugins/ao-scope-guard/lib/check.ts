@@ -27,10 +27,7 @@ export function pathInDeclaredScope(
   declaredPaths: string[],
   declaredGlobs: string[],
 ): boolean {
-  if (declaredPaths.includes(path)) {
-    return true;
-  }
-  return pathMatchesAnyPattern(path, declaredGlobs);
+  return pathMatchesAnyPattern(path, [...declaredPaths, ...declaredGlobs]);
 }
 
 export interface ScopedPathClassification {

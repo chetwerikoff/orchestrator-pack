@@ -3,6 +3,7 @@ import type { IssueConstraints } from '@orchestrator-pack/shared/lib/issue_parse
 import {
   globIsWithinAllowedRoot,
   globPatternsOverlap,
+  parsePathPattern,
   pathMatchesAnyPattern,
 } from './glob_match.ts';
 
@@ -28,7 +29,12 @@ function normalizeConstraintPatterns(
       errors.push(`${field}[${index}]: ${result.reason}`);
       continue;
     }
-    normalized.push(result.path);
+    const parsed = parsePathPattern(result.path);
+    if (!parsed.ok) {
+      errors.push(`${field}[${index}]: ${parsed.reason}`);
+      continue;
+    }
+    normalized.push(parsed.pattern.source);
   }
 
   if (errors.length > 0) {
@@ -36,6 +42,24 @@ function normalizeConstraintPatterns(
   }
 
   return { ok: true, patterns: normalized };
+}
+
+function validateDeclaredPatterns(
+  patterns: string[],
+  field: 'declared_paths' | 'declared_globs',
+): string[] {
+  const errors: string[] = [];
+  for (const [index, pattern] of patterns.entries()) {
+    const parsed = parsePathPattern(pattern);
+    if (!parsed.ok) {
+      errors.push(`${field}[${index}]: ${parsed.reason}`);
+      continue;
+    }
+    if (field === 'declared_paths' && parsed.pattern.kind !== 'exact') {
+      errors.push(`${field}[${index}] "${pattern}" must be an exact path`);
+    }
+  }
+  return errors;
 }
 
 /**
@@ -57,9 +81,14 @@ export function validateDeclaredScope(
     return { ok: false, errors: [`declared_globs: ${normalizedGlobs.reason}`] };
   }
 
+  errors.push(
+    ...validateDeclaredPatterns(normalizedPaths.paths, 'declared_paths'),
+    ...validateDeclaredPatterns(normalizedGlobs.paths, 'declared_globs'),
+  );
+
   const denylist = normalizeConstraintPatterns(constraints.denylist, 'issue.denylist');
   if (!denylist.ok) {
-    return { ok: false, errors: denylist.errors };
+    return { ok: false, errors: [...errors, ...denylist.errors] };
   }
 
   let allowedRoots: string[] | undefined;
@@ -69,12 +98,15 @@ export function validateDeclaredScope(
       'issue.allowed_roots',
     );
     if (!roots.ok) {
-      return { ok: false, errors: roots.errors };
+      return { ok: false, errors: [...errors, ...roots.errors] };
     }
     allowedRoots = roots.patterns;
   }
 
   for (const [index, path] of normalizedPaths.paths.entries()) {
+    const parsed = parsePathPattern(path);
+    if (!parsed.ok || parsed.pattern.kind !== 'exact') continue;
+
     if (pathMatchesAnyPattern(path, denylist.patterns)) {
       errors.push(
         `declared_paths[${index}] "${path}" intersects issue denylist`,
@@ -94,6 +126,9 @@ export function validateDeclaredScope(
   }
 
   for (const [index, glob] of normalizedGlobs.paths.entries()) {
+    const parsed = parsePathPattern(glob);
+    if (!parsed.ok) continue;
+
     for (const denied of denylist.patterns) {
       if (globPatternsOverlap(glob, denied)) {
         errors.push(
