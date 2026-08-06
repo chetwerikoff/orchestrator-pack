@@ -225,6 +225,93 @@ describe('Issue #1359 production worker-smoke reachability', () => {
     }
   });
 
+  it('refuses actionably before send when the created handle disappears before dispatch', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-handle-disappeared-'));
+    let probeCalls = 0;
+    let lookupCalls = 0;
+    let sendCalls = 0;
+    const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      if (args[0] === 'terminal' && args[1] === 'create') {
+        return ok({
+          terminal: {
+            handle: 'terminal-dead',
+            title: 'smoke-1359',
+            incarnationId: 'create-generation',
+          },
+        } as T);
+      }
+      if (args[0] === 'worktree' && args[1] === 'current') {
+        return ok({ worktree: { path: root, head: HEAD } } as T);
+      }
+      if (args[0] === 'terminal' && args[1] === 'list') {
+        lookupCalls += 1;
+        return ok({ terminals: [] } as T);
+      }
+      if (args[0] === 'terminal' && args[1] === 'send') {
+        sendCalls += 1;
+        return ok({ sent: true } as T);
+      }
+      return {
+        ok: false,
+        error: { code: 'unexpected_test_operation', message: args.join(' ') },
+      };
+    };
+    const restore = installStableWorkerSmokeSpawnPatch({
+      probe: () => {
+        probeCalls += 1;
+        if (probeCalls === 1) {
+          return ok({
+            terminal: {
+              handle: 'terminal-dead',
+              title: 'smoke-1359',
+              incarnationId: 'stable-generation',
+              worktreePath: root,
+              status: 'running',
+            },
+          });
+        }
+        return {
+          ok: false,
+          operation: 'terminal_show',
+          outcomeCategory: 'supported_operation_failure',
+          error: { code: 'terminal_not_found', message: 'terminal is no longer alive' },
+        };
+      },
+    });
+
+    try {
+      const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
+      const spawned = adapter.spawnWorker({
+        title: 'smoke-1359',
+        command: 'cursor-agent',
+        workspace: 'active',
+      }, { cwd: root });
+      expect(spawned.status).toBe('ok');
+      if (spawned.status !== 'ok') return;
+      expect(spawned.value.identity.generation).toBe('stable-generation');
+
+      const dispatched = adapter.dispatchInput({
+        worker: spawned.value.identity,
+        text: 'must never be sent',
+      }, { cwd: root });
+      expect(dispatched.status).toBe('send_failed');
+      if (dispatched.status === 'send_failed') {
+        expect(dispatched.reason).toContain('worker_generation_not_found');
+        expect(dispatched.reason).toContain('expected_handle=terminal-dead');
+        expect(dispatched.reason).toContain('expected_generation=stable-generation');
+        expect(dispatched.reason).toContain('observed_generation=not_found');
+        expect(dispatched.reason).toContain('lookup_failure=terminal_show%3Aterminal_not_found');
+        expect(dispatched.reason).toContain('resolution=');
+      }
+      expect(probeCalls).toBe(2);
+      expect(lookupCalls).toBe(0);
+      expect(sendCalls).toBe(0);
+    } finally {
+      restore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('quarantines unsupported historical cleanup before real admission', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-historical-admission-'));
     const historicalRunId = 'historical-unsupported';
