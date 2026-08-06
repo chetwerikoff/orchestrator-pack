@@ -21,9 +21,20 @@
     "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    "docs/browser-gpt-turn-runbook.md",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-session.test.ts",
     "scripts/chatgpt-browser-turn/state-light-session.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn.ts"
+    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
-  "source_revision": "239cb9e4b0232e71c0920dba19aa183fc16e4df0"
+  "source_revision": "4b612fd687443719167e92dd7c1bd5a62f1c73d9"
 }
