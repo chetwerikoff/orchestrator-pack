@@ -12,3 +12,5 @@ description: >-
 ---
 
 Read and execute [`.claude/skills/merge-with-local-adoption/SKILL.md`](../../../.claude/skills/merge-with-local-adoption/SKILL.md) in full. Do not re-derive the workflow inline.
+The canonical skill includes the `без ревью` / `without review` operator-authorization
+branch; keep this mirror as a pointer if its wording diverges.

@@ -128,6 +128,33 @@ not stop the merge attempt. Normalize draft/behind state when practical. If GitH
 refuses the merge because of branch protection, permissions, or another service-side rule,
 report that exact external refusal; do not relabel it as a pack decision.
 
+### Step 3-waiver — operator-authorized pack-review waiver
+
+When the merge command includes either **«мерж N без ревью»**, **«merge N without review»**,
+or the equivalent **«мерж без ревью и смоука»**, branch into
+[`docs/pack-review-waiver-merge-runbook.md`](../../../docs/pack-review-waiver-merge-runbook.md)
+before attempting the merge. The runbook is the source of truth for this branch:
+
+1. Confirm that the PR is open, non-draft, non-conflicting, and that every required context
+   other than `orchestrator-pack/pack-review` is green or an expected skip.
+2. Confirm that `orchestrator-pack/pack-review` is **FAILURE** or absent for the exact current
+   head, and that the operator gave explicit written authorization for this merge.
+3. Post and verify the operator-authorization `success` status on that exact head, with a
+   concrete reason in its description. This status records authorization; it is not evidence
+   that pack review ran, was clean, or that findings were cleared. Do not start the reviewer
+   merely to manufacture a missing status.
+
+Truth-preservation is mandatory: record the exact head, authorization, status POST/read-back,
+and the fact that review was not performed or was not cleared. A review waiver never waives
+another failing required check. In **«мерж без ревью и смоука»**, the smoke waiver is a
+separate, explicitly recorded decision; a review waiver must not be presented as smoke evidence
+or as authorization for an unrelated smoke exception.
+
+After the runbook branch completes, return to the unchanged ordinary flow: finish Step 4,
+then continue with Step 5+ (merge, adoption, cleanup, and final read-back). A failed or missing
+pack-review status is not silently normalized when the required operator authorization or the
+exact-head status evidence is absent.
+
 ## Step 4 — Collect local adoption instructions
 
 Read the PR body, changed paths/content, linked Issue, applicable migration notes, examples,
