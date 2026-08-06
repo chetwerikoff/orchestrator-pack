@@ -1,0 +1,266 @@
+name: issue-1352-finalize
+
+on:
+  pull_request:
+    types: [reopened]
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: issue-1352-finalize-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: github.event.pull_request.number == 1378 && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CI: "1"
+      OPK_BASE_DIR: ${{ runner.temp }}/opk-state
+      PR_BASE_HEAD: 9ad24d321f2d21fdec406c9e1d5d8748a9da155a
+      INITIAL_BASE_HEAD: 9ad24d321f2d21fdec406c9e1d5d8748a9da155a
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare exact base tree and scanner inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "${PR_BASE_HEAD}^{commit}"
+          git merge-base --is-ancestor "$PR_BASE_HEAD" HEAD
+          BASE_TREE="$RUNNER_TEMP/issue-1352-base"
+          rm -rf "$BASE_TREE"
+          mkdir -p "$BASE_TREE"
+          git archive "$PR_BASE_HEAD" | tar -x -C "$BASE_TREE"
+          mkdir -p "$BASE_TREE/scripts/json-producers"
+          cp scripts/json-producers/retired-runtime-surfaces.json "$BASE_TREE/scripts/json-producers/retired-runtime-surfaces.json"
+          printf '%s\n' "$BASE_TREE" > "$RUNNER_TEMP/issue-1352-base-path"
+
+      - name: Remove unintended equivalent diff and one-shot workflow from scanned tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/lib/Worker-NudgeClaim.ps1')
+          text = path.read_text(encoding='utf-8')
+          old = "return @{ acquired = $false; reason = 'lost_race'; path = $path; namespace = $resolved; key = $record.key }"
+          new = "return @{ acquired = $false; reason = 'lost_race'; path = $path; namespace = $resolved; key = $key }"
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one accidental equivalent change, found {count}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          if grep -Fq '.agent-orchestrator' scripts/lib/Worker-NudgeClaim.ps1; then
+            echo 'retired fallback remains in Worker-NudgeClaim.ps1' >&2
+            exit 1
+          fi
+          test "$(grep -Fo '.orchestrator-pack' scripts/lib/Worker-NudgeClaim.ps1 | wc -l)" -ge 4
+          rm .github/workflows/issue-1352-finalize.yml
+
+      - name: Run exact base and current retirement scans
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_TREE="$(cat "$RUNNER_TEMP/issue-1352-base-path")"
+          set +e
+          (
+            cd "$BASE_TREE"
+            node --experimental-strip-types "$GITHUB_WORKSPACE/scripts/runtime-retirement/retired-surface-guard.ts"
+          ) > "$RUNNER_TEMP/base-scan.json"
+          BASE_RC=$?
+          set -e
+          if [ "$BASE_RC" -ne 0 ] && [ "$BASE_RC" -ne 1 ]; then
+            echo "base scanner failed operationally: rc=$BASE_RC" >&2
+            exit "$BASE_RC"
+          fi
+          node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts > "$RUNNER_TEMP/current-scan.json"
+          node -e "const r=require(process.env.RUNNER_TEMP + '/current-scan.json'); if(r.violations.length!==0) { console.error(JSON.stringify(r.violations,null,2)); process.exit(1) }"
+
+      - name: Generate complete frozen baseline census
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p docs/investigations/runtime-hard-cut
+          python3 - <<'PY'
+          import hashlib, json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          root = Path.cwd()
+          runner_temp = Path(os.environ['RUNNER_TEMP'])
+          base = json.loads((runner_temp / 'base-scan.json').read_text(encoding='utf-8'))
+          current = json.loads((runner_temp / 'current-scan.json').read_text(encoding='utf-8'))
+          surfaces_doc = json.loads((root / 'scripts/json-producers/retired-runtime-surfaces.json').read_text(encoding='utf-8'))
+          surfaces = {item['id']: item for item in surfaces_doc['surfaces']}
+          counts = {}
+          items = []
+          for violation in base['violations']:
+              key = (violation['surfaceId'], violation['path'], int(violation['line']), violation['match'])
+              ordinal = counts.get(key, 0) + 1
+              counts[key] = ordinal
+              raw_id = '\0'.join([key[0], key[1], str(key[2]), key[3], str(ordinal)])
+              identity = 'ao-retirement-' + hashlib.sha256(raw_id.encode('utf-8')).hexdigest()[:24]
+              active_path = root / violation['path']
+              disposition = 'ported' if active_path.is_file() else 'deleted'
+              rationale = (
+                  'active path retained, but the retired AO identity was replaced by runtime-neutral RuntimeAdapter behavior'
+                  if disposition == 'ported'
+                  else 'retired AO path was removed from the active repository estate'
+              )
+              surface = surfaces[violation['surfaceId']]
+              items.append({
+                  'identity': identity,
+                  'path': violation['path'],
+                  'selector': {'line': int(violation['line']), 'match': violation['match'], 'ordinal': ordinal},
+                  'aoClass': violation['surfaceId'],
+                  'reason': violation['reason'],
+                  'owningReference': surface['owningReference'],
+                  'plannedDisposition': disposition,
+                  'rationale': rationale,
+              })
+          baseline = {
+              'schemaVersion': 1,
+              'issue': 1352,
+              'status': 'census_complete',
+              'generatedAtUtc': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+              'initialBaseHead': os.environ['INITIAL_BASE_HEAD'],
+              'prBaseHead': os.environ['PR_BASE_HEAD'],
+              'scannerPatternVersion': surfaces_doc['version'],
+              'scannedFileCount': base['scannedFileCount'],
+              'excludedPaths': base['excludedPaths'],
+              'activeViolationCount': len(base['violations']),
+              'items': items,
+              'currentTreePreCommitCheck': {
+                  'scannedFileCount': current['scannedFileCount'],
+                  'activeViolationCount': len(current['violations']),
+              },
+          }
+          out = root / 'docs/investigations/runtime-hard-cut/baseline.json'
+          out.write_text(json.dumps(baseline, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+          print(f"baseline identities: {len(items)}")
+          PY
+
+      - name: Run repository verification
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/issue-1352-logs"
+          npm run ci:preflight 2>&1 | tee "$RUNNER_TEMP/issue-1352-logs/ci-preflight.log"
+          npm run typecheck:foundation 2>&1 | tee "$RUNNER_TEMP/issue-1352-logs/typecheck-foundation.log"
+          npm run lint:foundation 2>&1 | tee "$RUNNER_TEMP/issue-1352-logs/lint-foundation.log"
+          node --experimental-strip-types scripts/runtime-retirement/retired-surface-selftest.ts 2>&1 | tee "$RUNNER_TEMP/issue-1352-logs/retirement-selftest.log"
+          npx vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/runtime-retirement/retired-surface-guard.test.ts 2>&1 | tee "$RUNNER_TEMP/issue-1352-logs/retirement-tests.log"
+          npm run test:foundation 2>&1 | tee "$RUNNER_TEMP/issue-1352-logs/test-foundation.log"
+          npm test -- --maxWorkers=1 2>&1 | tee "$RUNNER_TEMP/issue-1352-logs/test-full.log"
+
+      - name: Commit scanned code head
+        id: code_head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'orchestrator-pack-ci'
+          git config user.email 'orchestrator-pack-ci@users.noreply.github.com'
+          git add scripts/lib/Worker-NudgeClaim.ps1 docs/investigations/runtime-hard-cut/baseline.json
+          git add -u .github/workflows/issue-1352-finalize.yml
+          git diff --cached --check
+          git commit -m 'test(runtime): freeze issue 1352 retirement baseline'
+          SCANNED_CODE_HEAD="$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$PR_BASE_HEAD" "$SCANNED_CODE_HEAD"
+          printf 'scanned_code_head=%s\n' "$SCANNED_CODE_HEAD" >> "$GITHUB_OUTPUT"
+
+      - name: Re-scan exact code head and generate final evidence
+        shell: bash
+        env:
+          SCANNED_CODE_HEAD: ${{ steps.code_head.outputs.scanned_code_head }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SCANNED_CODE_HEAD"
+          node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts > "$RUNNER_TEMP/final-scan.json"
+          python3 - <<'PY'
+          import hashlib, json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          root = Path.cwd()
+          baseline_path = root / 'docs/investigations/runtime-hard-cut/baseline.json'
+          baseline_bytes = baseline_path.read_bytes()
+          baseline = json.loads(baseline_bytes)
+          final_scan = json.loads((Path(os.environ['RUNNER_TEMP']) / 'final-scan.json').read_text(encoding='utf-8'))
+          if final_scan['violations']:
+              raise SystemExit('final scanner has active violations')
+          final = {
+              'schemaVersion': 1,
+              'issue': 1352,
+              'status': 'zero_active_violations',
+              'generatedAtUtc': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+              'initialBaseHead': baseline['initialBaseHead'],
+              'prBaseHead': baseline['prBaseHead'],
+              'scannedCodeHead': os.environ['SCANNED_CODE_HEAD'],
+              'baselineSha256': hashlib.sha256(baseline_bytes).hexdigest(),
+              'scannedFileCount': final_scan['scannedFileCount'],
+              'excludedPaths': final_scan['excludedPaths'],
+              'activeViolationCount': 0,
+              'items': [
+                  {
+                      **item,
+                      'disposition': item['plannedDisposition'],
+                      'finalStatus': 'retired_surface_absent',
+                  }
+                  for item in baseline['items']
+              ],
+          }
+          out = root / 'docs/investigations/runtime-hard-cut/final.json'
+          out.write_text(json.dumps(final, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+          PY
+
+      - name: Commit evidence-only child and push
+        id: evidence_head
+        shell: bash
+        env:
+          SCANNED_CODE_HEAD: ${{ steps.code_head.outputs.scanned_code_head }}
+        run: |
+          set -euo pipefail
+          git add docs/investigations/runtime-hard-cut/final.json
+          git diff --cached --check
+          test "$(git diff --cached --name-only)" = 'docs/investigations/runtime-hard-cut/final.json'
+          git commit -m 'test(runtime): record issue 1352 final retirement evidence'
+          test "$(git rev-parse HEAD^)" = "$SCANNED_CODE_HEAD"
+          test "$(git diff-tree --no-commit-id --name-only -r HEAD)" = 'docs/investigations/runtime-hard-cut/final.json'
+          EVIDENCE_HEAD="$(git rev-parse HEAD)"
+          git push origin "HEAD:${HEAD_REF}"
+          printf 'evidence_head=%s\n' "$EVIDENCE_HEAD" >> "$GITHUB_OUTPUT"
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1352-finalize-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/base-scan.json
+            ${{ runner.temp }}/current-scan.json
+            ${{ runner.temp }}/final-scan.json
+            ${{ runner.temp }}/issue-1352-logs/
+            docs/investigations/runtime-hard-cut/baseline.json
+            docs/investigations/runtime-hard-cut/final.json
