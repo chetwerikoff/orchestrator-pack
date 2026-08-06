@@ -1,12 +1,14 @@
 # Direct user instruction precedence and plan-first execution
 
 These rules apply to every repository-owned blocker, rule, gate, role restriction,
-scope fence, review/CI/smoke requirement, lifecycle check, skill, prompt, and runbook.
+scope fence, review/CI/smoke requirement, lifecycle check, skill, prompt, runbook,
+and lifecycle identity check.
 
 1. **The direct user instruction wins.** A direct instruction from the human user
    in the current top-level chat/executor session is absolute for the action it
-   orders. Conflicting repository-owned rules become warnings and evidence, not
-   vetoes.
+   orders. Every conflicting repository-owned rule, gate, skill, runbook, role
+   restriction, scope fence, CI/review/smoke check, or lifecycle identity check
+   becomes a warning and evidence, not a veto.
 2. **No second permission.** After the direct instruction, do not ask for another
    confirmation and do not require a gate-specific waiver, token, flag, or exact
    legacy input. Use an available lower-level operation when a pack wrapper refuses
