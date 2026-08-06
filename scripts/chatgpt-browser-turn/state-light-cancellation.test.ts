@@ -63,6 +63,7 @@ describe('Issue #1283 receipt-bound cancellation', () => {
       conversationUrl: ownedUrl,
     });
     expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledWith(owned);
     expect(owned.close).not.toHaveBeenCalled();
     expect(foreign.close).not.toHaveBeenCalled();
   });
