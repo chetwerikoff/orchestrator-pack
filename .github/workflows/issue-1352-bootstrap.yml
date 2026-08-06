@@ -9,22 +9,25 @@ permissions:
   contents: read
 
 jobs:
-  export-dependencies:
+  decode-payload:
     if: github.repository == 'chetwerikoff/orchestrator-pack'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Archive dependencies
-        run: tar -czf issue-1352-node-modules.tar.gz node_modules
+      - name: Decode staged implementation payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode docs/investigations/runtime-hard-cut/apply-payload-00.b64 > issue-1352-payload.xz
+          xz --decompress --stdout issue-1352-payload.xz > issue-1352-payload.decoded
+          file issue-1352-payload.decoded
+          wc -c issue-1352-payload.decoded
+          sha256sum issue-1352-payload.decoded
+          head -c 128 issue-1352-payload.decoded | od -An -tx1
       - uses: actions/upload-artifact@v4
         with:
-          name: issue-1352-node-modules
-          path: issue-1352-node-modules.tar.gz
+          name: issue-1352-decoded-payload
+          path: issue-1352-payload.decoded
           if-no-files-found: error
           retention-days: 1
