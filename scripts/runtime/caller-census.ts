@@ -85,10 +85,10 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   },
   {
     surface: 'scripts/worker-smoke-run.ts',
-    operations: ['runtime-composition', 'readiness', 'spawn', 'send', 'read', 'liveness', 'stop'],
+    operations: ['runtime-composition', 'readiness', 'spawn', 'send', 'read', 'liveness', 'stop', 'find'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
-    note: 'Uses the selected RuntimeAdapter with composite identity and one dispatch attempt.',
+    note: 'Uses the selected RuntimeAdapter with composite identity, one dispatch attempt, and exact post-close presence proof.',
   },
   {
     surface: 'scripts/runtime/task-lifecycle.ts',
