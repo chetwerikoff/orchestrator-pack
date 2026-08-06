@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   mkdirSync,
@@ -11,18 +10,21 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
 
 function run(
   command: string,
   args: readonly string[],
   options: { cwd: string; env?: NodeJS.ProcessEnv },
-) {
-  return spawnSync(command, [...args], {
+): ProcessResult {
+  return runProcessSync({
+    command,
+    args,
     cwd: options.cwd,
-    env: { ...process.env, ...options.env },
+    env: options.env,
+    inheritParentEnv: true,
     encoding: 'utf8',
-    timeout: 30_000,
-    maxBuffer: 16 * 1024 * 1024,
+    timeoutMs: 30_000,
   });
 }
 
@@ -30,9 +32,9 @@ function requireSuccess(
   command: string,
   args: readonly string[],
   cwd: string,
-): ReturnType<typeof run> {
+): ProcessResult {
   const result = run(command, args, { cwd });
-  expect(result.status, `${command} ${args.join(' ')}\n${result.stdout}\n${result.stderr}`).toBe(0);
+  expect(result.exitCode, `${command} ${args.join(' ')}\n${result.stdout}\n${result.stderr}`).toBe(0);
   return result;
 }
 
@@ -165,7 +167,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         },
       });
 
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(result.signal).toBeNull();
       const lines = String(result.stdout).split(/\r?\n/u).filter((line) => line.trim());
       expect(lines).toHaveLength(1);
