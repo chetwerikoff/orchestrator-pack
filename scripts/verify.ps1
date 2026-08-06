@@ -39,10 +39,10 @@ function Test-RequiredPath {
     )
     $absolute = Join-Path $Root $Path
     if (Test-Path -LiteralPath $absolute -PathType $PathType) {
-        Write-Check $Path 'PASS' 'present'
+        Write-Check -Name $Path -Status 'PASS' -Detail 'present'
         return $true
     }
-    Write-Check $Path 'FAIL' 'missing'
+    Write-Check -Name $Path -Status 'FAIL' -Detail 'missing'
     Add-Failure "Missing required path: $Path"
     return $false
 }
@@ -51,11 +51,11 @@ function Test-AbsentPath {
     param([Parameter(Mandatory)][string]$Path)
     $absolute = Join-Path $Root $Path
     if (Test-Path -LiteralPath $absolute) {
-        Write-Check $Path 'FAIL' 'must be absent'
+        Write-Check -Name $Path -Status 'FAIL' -Detail 'must be absent'
         Add-Failure "Retired path remains active: $Path"
         return $false
     }
-    Write-Check $Path 'PASS' 'absent'
+    Write-Check -Name $Path -Status 'PASS' -Detail 'absent'
     return $true
 }
 
@@ -69,11 +69,11 @@ function Invoke-RepositoryCheck {
     $absolute = Join-Path $Root $Path
     if (-not (Test-Path -LiteralPath $absolute -PathType Leaf)) {
         if ($Optional) {
-            Write-Check $Name 'WARN' "missing optional check: $Path"
+            Write-Check -Name $Name -Status 'WARN' -Detail "missing optional check: $Path"
             Add-Warning "Missing optional check: $Path"
             return
         }
-        Write-Check $Name 'FAIL' "missing: $Path"
+        Write-Check -Name $Name -Status 'FAIL' -Detail "missing: $Path"
         Add-Failure "Missing required check: $Path"
         return
     }
@@ -81,10 +81,10 @@ function Invoke-RepositoryCheck {
     & pwsh -NoProfile -File $absolute @Arguments
     $exitCode = $LASTEXITCODE
     if ($exitCode -eq 0) {
-        Write-Check $Name 'PASS' 'completed'
+        Write-Check -Name $Name -Status 'PASS' -Detail 'completed'
     }
     else {
-        Write-Check $Name 'FAIL' "exit=$exitCode"
+        Write-Check -Name $Name -Status 'FAIL' -Detail "exit=$exitCode"
         Add-Failure "$Name failed with exit $exitCode"
     }
 }
@@ -94,11 +94,11 @@ function Get-Node22 {
     if (-not $command) {
         $message = 'Node.js is not available'
         if ($StrictPrereqs) {
-            Write-Check 'node' 'FAIL' $message
+            Write-Check -Name 'node' -Status 'FAIL' -Detail $message
             Add-Failure $message
         }
         else {
-            Write-Check 'node' 'WARN' $message
+            Write-Check -Name 'node' -Status 'WARN' -Detail $message
             Add-Warning $message
         }
         return $null
@@ -106,7 +106,7 @@ function Get-Node22 {
 
     $text = ((& $command.Source '--version' 2>&1 | Out-String).Trim())
     if ($LASTEXITCODE -ne 0) {
-        Write-Check 'node' 'FAIL' "version command failed: $text"
+        Write-Check -Name 'node' -Status 'FAIL' -Detail "version command failed: $text"
         Add-Failure 'Unable to read Node.js version'
         return $null
     }
@@ -114,16 +114,16 @@ function Get-Node22 {
     if (-not $version -or $version.Major -ne 22) {
         $message = "Node.js 22.x is required; detected $text"
         if ($StrictPrereqs) {
-            Write-Check 'node' 'FAIL' $message
+            Write-Check -Name 'node' -Status 'FAIL' -Detail $message
             Add-Failure $message
         }
         else {
-            Write-Check 'node' 'WARN' $message
+            Write-Check -Name 'node' -Status 'WARN' -Detail $message
             Add-Warning $message
         }
         return $null
     }
-    Write-Check 'node' 'PASS' $text
+    Write-Check -Name 'node' -Status 'PASS' -Detail $text
     return $command.Source
 }
 
@@ -135,7 +135,7 @@ function Test-PluginIdentity {
     )
     $packagePath = Join-Path $Root "plugins/$Directory/package.json"
     if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
-        Write-Check "plugin/$Directory" 'FAIL' 'package.json missing'
+        Write-Check -Name "plugin/$Directory" -Status 'FAIL' -Detail 'package.json missing'
         Add-Failure "Missing plugin package: $Directory"
         return
     }
@@ -143,7 +143,7 @@ function Test-PluginIdentity {
         $package = Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json -ErrorAction Stop
     }
     catch {
-        Write-Check "plugin/$Directory" 'FAIL' 'malformed package.json'
+        Write-Check -Name "plugin/$Directory" -Status 'FAIL' -Detail 'malformed package.json'
         Add-Failure "Malformed package manifest: $Directory"
         return
     }
@@ -152,10 +152,10 @@ function Test-PluginIdentity {
     $binNames = @($package.bin.PSObject.Properties.Name)
     $commandMatches = $binNames -contains $CommandName
     if ($nameMatches -and $commandMatches) {
-        Write-Check "plugin/$Directory" 'PASS' "$PackageName / $CommandName"
+        Write-Check -Name "plugin/$Directory" -Status 'PASS' -Detail "$PackageName / $CommandName"
         return
     }
-    Write-Check "plugin/$Directory" 'FAIL' "name=$($package.name); bins=$($binNames -join ',')"
+    Write-Check -Name "plugin/$Directory" -Status 'FAIL' -Detail "name=$($package.name); bins=$($binNames -join ',')"
     Add-Failure "Plugin identity mismatch: $Directory"
 }
 
@@ -164,10 +164,10 @@ Write-Host "Root: $Root"
 Write-Host ''
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
-    Write-Check 'pwsh' 'FAIL' "PowerShell 7+ required; detected $($PSVersionTable.PSVersion)"
+    Write-Check -Name 'pwsh' -Status 'FAIL' -Detail "PowerShell 7+ required; detected $($PSVersionTable.PSVersion)"
     exit 1
 }
-Write-Check 'pwsh' 'PASS' [string]$PSVersionTable.PSVersion
+Write-Check -Name 'pwsh' -Status 'PASS' -Detail ([string]$PSVersionTable.PSVersion)
 
 $node = Get-Node22
 
@@ -178,6 +178,8 @@ $requiredFiles = @(
     'README.md',
     'package.json',
     'package-lock.json',
+    '.claude/skills/change-orchestrator-runtime/SKILL.md',
+    '.cursor/skills/change-orchestrator-runtime/SKILL.md',
     'scripts/runtime/contracts.ts',
     'scripts/runtime/registry.ts',
     'scripts/runtime/runtime-cli.ts',
@@ -212,9 +214,7 @@ Test-PluginIdentity -Directory 'codex-pr-reviewer' -PackageName '@orchestrator-p
 Write-Host ''
 Write-Host '== Removed configuration surfaces =='
 $retiredConfig = ('agent' + '-orchestrator.yaml.example')
-$retiredSkill = '.claude/skills/change-' + 'orchestrator-runtime/SKILL.md'
 [void](Test-AbsentPath -Path $retiredConfig)
-[void](Test-AbsentPath -Path $retiredSkill)
 
 Write-Host ''
 Write-Host '== Static repository checks =='
@@ -231,17 +231,24 @@ if ($node) {
         @{ Name = 'runtime retirement scan'; Path = 'scripts/runtime-retirement/retired-surface-selftest.ts'; Args = @('--experimental-strip-types') },
         @{ Name = 'gate runner'; Path = 'scripts/gate-runner/runner.ts'; Args = @('--experimental-strip-types') }
     )
-    foreach ($check in $nodeChecks) {
-        $scriptPath = Join-Path $Root $check.Path
-        & $node @($check.Args) $scriptPath '--repo-root' $Root
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -eq 0) {
-            Write-Check $check.Name 'PASS' 'completed'
+    Push-Location $Root
+    try {
+        foreach ($check in $nodeChecks) {
+            $scriptPath = Join-Path $Root $check.Path
+            $nodeArgs = @($check.Args) + @($scriptPath, '--repo-root', $Root)
+            & $node @nodeArgs
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -eq 0) {
+                Write-Check -Name $check.Name -Status 'PASS' -Detail 'completed'
+            }
+            else {
+                Write-Check -Name $check.Name -Status 'FAIL' -Detail "exit=$exitCode"
+                Add-Failure "$($check.Name) failed with exit $exitCode"
+            }
         }
-        else {
-            Write-Check $check.Name 'FAIL' "exit=$exitCode"
-            Add-Failure "$($check.Name) failed with exit $exitCode"
-        }
+    }
+    finally {
+        Pop-Location
     }
 }
 
@@ -250,16 +257,16 @@ if ($TestBackedSmoke) {
     Write-Host '== Optional test-backed smoke =='
     $smoke = Join-Path $Root 'scripts/invoke-verify-test-backed-smoke.ps1'
     if (-not (Test-Path -LiteralPath $smoke -PathType Leaf)) {
-        Write-Check 'test-backed smoke' 'FAIL' 'helper missing'
+        Write-Check -Name 'test-backed smoke' -Status 'FAIL' -Detail 'helper missing'
         Add-Failure 'Missing scripts/invoke-verify-test-backed-smoke.ps1'
     }
     else {
         & pwsh -NoProfile -File $smoke
         if ($LASTEXITCODE -eq 0) {
-            Write-Check 'test-backed smoke' 'PASS' 'completed'
+            Write-Check -Name 'test-backed smoke' -Status 'PASS' -Detail 'completed'
         }
         else {
-            Write-Check 'test-backed smoke' 'FAIL' "exit=$LASTEXITCODE"
+            Write-Check -Name 'test-backed smoke' -Status 'FAIL' -Detail "exit=$LASTEXITCODE"
             Add-Failure 'Test-backed smoke failed'
         }
     }
