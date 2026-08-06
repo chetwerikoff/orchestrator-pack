@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import {
   closeSync,
   existsSync,
   mkdirSync,
   openSync,
+  readFileSync,
   renameSync,
   rmSync,
+  statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -229,9 +231,7 @@ export interface S2FleetNudgeJournalHandle {
 
 export type S2FleetNudgeJournalOutcome = 'dispatched' | 'send_failed' | 'dispatch_unknown';
 
-interface S2JournalRecord extends Record<string, unknown> {
-  schemaVersion: 1;
-  deliveryId: string;
+interface S2CanonicalDispatchRecord extends DispatchJournalRecord {
   policyTag: 's2-one-shot-v1';
   projectId: string;
   issueNumber: number;
@@ -242,10 +242,13 @@ interface S2JournalRecord extends Record<string, unknown> {
   eligibleClass: 'idle' | 'livelock';
   intentClass: 'task-continuation';
   messageContentHash: string;
-  state: 'ADMITTED' | 'FINAL';
-  outcome?: S2FleetNudgeJournalOutcome;
-  admittedAtUtc: string;
-  finalizedAtUtc?: string;
+}
+
+interface CanonicalJournalLockOwner {
+  schemaVersion: 1;
+  pid: number;
+  nonce: string;
+  acquiredAtMs: number;
 }
 
 function assertJournalDeadline(deadlineMs: number): void {
@@ -254,48 +257,121 @@ function assertJournalDeadline(deadlineMs: number): void {
   }
 }
 
-function readS2Journal(file: string): Record<string, unknown> {
-  if (!existsSync(file)) return {};
+function processAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parseLockOwner(file: string): CanonicalJournalLockOwner | null {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    if (parsed.schemaVersion !== 1
+      || !Number.isInteger(parsed.pid)
+      || typeof parsed.nonce !== 'string'
+      || !Number.isFinite(parsed.acquiredAtMs)) return null;
+    return parsed as unknown as CanonicalJournalLockOwner;
+  } catch {
+    return null;
+  }
+}
+
+async function delayUntil(deadlineMs: number, milliseconds: number): Promise<void> {
+  const remaining = deadlineMs - Date.now();
+  if (remaining <= 0) throw new Error('journal_deadline_expired');
+  await new Promise<void>((resolvePromise) =>
+    setTimeout(resolvePromise, Math.min(milliseconds, remaining)));
+}
+
+async function withCanonicalJournalDeadlineLock<T>(
+  journalPath: string,
+  deadlineMs: number,
+  action: () => T | Promise<T>,
+): Promise<T> {
+  const lockPath = `${journalPath}.lock`;
+  mkdirSync(path.dirname(lockPath), { recursive: true });
+  for (let attempt = 0; Date.now() < deadlineMs; attempt += 1) {
+    const owner: CanonicalJournalLockOwner = {
+      schemaVersion: 1,
+      pid: process.pid,
+      nonce: randomUUID().replace(/-/g, ''),
+      acquiredAtMs: Date.now(),
+    };
+    let descriptor: number | null = null;
+    try {
+      assertJournalDeadline(deadlineMs);
+      descriptor = openSync(lockPath, 'wx', 0o600);
+      writeFileSync(descriptor, `${JSON.stringify(owner)}\n`, 'utf8');
+      assertJournalDeadline(deadlineMs);
+      const value = await action();
+      assertJournalDeadline(deadlineMs);
+      return value;
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error
+        ? String((error as { code?: unknown }).code ?? '')
+        : '';
+      if (code !== 'EEXIST') throw error;
+      const observed = parseLockOwner(lockPath);
+      if (observed && !processAlive(observed.pid)) {
+        assertJournalDeadline(deadlineMs);
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          // A concurrent owner replaced or removed the stale lock.
+        }
+        continue;
+      }
+      await delayUntil(deadlineMs, Math.min(10 * (attempt + 1), 50));
+    } finally {
+      if (descriptor !== null) {
+        closeSync(descriptor);
+        const observed = parseLockOwner(lockPath);
+        if (observed?.nonce === owner.nonce) {
+          try {
+            unlinkSync(lockPath);
+          } catch {
+            // Already removed after ownership verification.
+          }
+        }
+      }
+    }
+  }
+  throw new Error('journal_deadline_expired');
+}
+
+function readCanonicalJournal(file: string, deadlineMs: number): DispatchJournal {
+  assertJournalDeadline(deadlineMs);
+  if (!existsSync(file)) return {};
+  const size = statSync(file).size;
+  if (size > MECHANICAL_PERSISTED_STORE_CEILING_BYTES) throw new Error('journal_untrusted');
+  assertJournalDeadline(deadlineMs);
+  const bytes = readFileSync(file, 'utf8');
+  assertJournalDeadline(deadlineMs);
+  try {
+    const parsed = JSON.parse(bytes) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('journal_untrusted');
-    return parsed as Record<string, unknown>;
+    return parsed as DispatchJournal;
   } catch (error) {
     if (error instanceof Error && error.message === 'journal_untrusted') throw error;
     throw new Error('journal_untrusted');
   }
 }
 
-function asS2JournalRecord(value: unknown): S2JournalRecord | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (record.schemaVersion !== 1
-    || record.policyTag !== 's2-one-shot-v1'
-    || typeof record.deliveryId !== 'string'
-    || typeof record.projectId !== 'string'
-    || !Number.isInteger(record.issueNumber)
-    || typeof record.schedulerGeneration !== 'string'
-    || !Number.isInteger(record.tickSequence)
-    || typeof record.transitionIdentity !== 'string'
-    || typeof record.unitRef !== 'string'
-    || !['idle', 'livelock'].includes(String(record.eligibleClass))
-    || record.intentClass !== 'task-continuation'
-    || typeof record.messageContentHash !== 'string'
-    || !['ADMITTED', 'FINAL'].includes(String(record.state))) return null;
-  return record as S2JournalRecord;
-}
-
-function writeS2JournalAtomic(
-  file: string,
-  journal: Record<string, unknown>,
-  deadlineMs: number,
-): void {
+function writeCanonicalJournal(file: string, journal: DispatchJournal, deadlineMs: number): void {
   assertJournalDeadline(deadlineMs);
+  const bytes = `${JSON.stringify(journal, null, 2)}\n`;
+  if (Buffer.byteLength(bytes, 'utf8') > MECHANICAL_PERSISTED_STORE_CEILING_BYTES) {
+    throw new Error('journal_untrusted');
+  }
   mkdirSync(path.dirname(file), { recursive: true });
   const temporary = path.join(path.dirname(file), `.${randomUUID().replace(/-/g, '')}.tmp`);
   try {
     assertJournalDeadline(deadlineMs);
-    writeFileSync(temporary, `${JSON.stringify(journal, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    writeFileSync(temporary, bytes, { encoding: 'utf8', mode: 0o600 });
     assertJournalDeadline(deadlineMs);
     renameSync(temporary, file);
   } catch (error) {
@@ -304,61 +380,56 @@ function writeS2JournalAtomic(
   }
 }
 
-function processAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try { process.kill(pid, 0); return true; } catch { return false; }
+function asS2CanonicalRecord(value: unknown): S2CanonicalDispatchRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.policyTag !== 's2-one-shot-v1'
+    || typeof record.deliveryId !== 'string'
+    || typeof record.sessionId !== 'string'
+    || !Number.isFinite(record.deliveredAtMs)
+    || record.source !== 's2-fleet-nudge'
+    || typeof record.sourceKey !== 'string'
+    || typeof record.deliveryPath !== 'string'
+    || !record.messageShape
+    || typeof record.dispatchOutcome !== 'string'
+    || typeof record.draftState !== 'string'
+    || typeof record.projectId !== 'string'
+    || !Number.isInteger(record.issueNumber)
+    || typeof record.schedulerGeneration !== 'string'
+    || !Number.isInteger(record.tickSequence)
+    || typeof record.transitionIdentity !== 'string'
+    || typeof record.unitRef !== 'string'
+    || !['idle', 'livelock'].includes(String(record.eligibleClass))
+    || record.intentClass !== 'task-continuation'
+    || typeof record.messageContentHash !== 'string') return null;
+  return record as unknown as S2CanonicalDispatchRecord;
 }
 
-async function delayUntil(deadlineMs: number, milliseconds: number): Promise<void> {
-  const remaining = deadlineMs - Date.now();
-  if (remaining <= 0) throw new Error('journal_deadline_expired');
-  await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, Math.min(milliseconds, remaining)));
+function exactS2Record(
+  record: S2CanonicalDispatchRecord,
+  episode: S2FleetNudgeJournalEpisode,
+  deliveryId: string,
+  messageContentHash: string,
+): boolean {
+  return record.deliveryId === deliveryId
+    && record.deterministicKey === deliveryId
+    && record.messageContentHash === messageContentHash
+    && record.projectId === episode.projectId
+    && record.issueNumber === episode.issueNumber
+    && record.schedulerGeneration === episode.schedulerGeneration
+    && record.tickSequence === episode.tickSequence
+    && record.transitionIdentity === episode.transitionIdentity
+    && record.unitRef === episode.unitRef
+    && record.eligibleClass === episode.eligibleClass
+    && record.intentClass === 'task-continuation';
 }
 
-async function withS2JournalMutex<T>(
-  journalPath: string,
-  deadlineMs: number,
-  action: () => T | Promise<T>,
-): Promise<T> {
-  const directory = `${journalPath}.s2-lock`;
-  for (let attempt = 0; Date.now() < deadlineMs; attempt += 1) {
-    try {
-      assertJournalDeadline(deadlineMs);
-      mkdirSync(directory, { recursive: false });
-      const ownerPath = path.join(directory, 'owner.json');
-      const descriptor = openSync(ownerPath, 'wx', 0o600);
-      try {
-        writeFileSync(descriptor, `${JSON.stringify({ pid: process.pid })}\n`, 'utf8');
-      } finally {
-        closeSync(descriptor);
-      }
-      try {
-        assertJournalDeadline(deadlineMs);
-        return await action();
-      } finally {
-        rmSync(directory, { recursive: true, force: true });
-      }
-    } catch (error) {
-      const code = error && typeof error === 'object' && 'code' in error
-        ? String((error as { code?: unknown }).code ?? '')
-        : '';
-      if (code !== 'EEXIST') throw error;
-      let ownerPid = 0;
-      try {
-        const owner = JSON.parse(readFileSync(path.join(directory, 'owner.json'), 'utf8')) as Record<string, unknown>;
-        ownerPid = Number(owner.pid ?? 0);
-      } catch {
-        ownerPid = 0;
-      }
-      if (ownerPid > 0 && !processAlive(ownerPid)) {
-        assertJournalDeadline(deadlineMs);
-        rmSync(directory, { recursive: true, force: true });
-        continue;
-      }
-      await delayUntil(deadlineMs, Math.min(10 * (attempt + 1), 50));
-    }
-  }
-  throw new Error('journal_deadline_expired');
+function dispatchOutcomeForS2(outcome: S2FleetNudgeJournalOutcome): string {
+  return outcome === 'dispatched'
+    ? DISPATCH_OUTCOME_DISPATCHED
+    : outcome === 'send_failed'
+      ? DISPATCH_OUTCOME_SEND_FAILED
+      : DISPATCH_OUTCOME_UNKNOWN;
 }
 
 export async function admitS2FleetNudgeJournal(input: {
@@ -370,27 +441,20 @@ export async function admitS2FleetNudgeJournal(input: {
   | { readonly status: 'admitted'; readonly handle: S2FleetNudgeJournalHandle }
   | { readonly status: 'claim_untrusted' }
 > {
-  let deliveryId: string;
-  let messageContentHash: string;
   try {
-    deliveryId = buildS2EpisodeKey(input.episode);
-    messageContentHash = hashNudgeMessageContent(input.message);
+    const deliveryId = buildS2EpisodeKey(input.episode);
+    const messageContentHash = hashNudgeMessageContent(input.message);
     if (!messageContentHash) throw new Error('journal_untrusted');
-    return await withS2JournalMutex(input.journalPath, input.deadlineMs, () => {
-      const journal = readS2Journal(input.journalPath);
-      const existing = journal[deliveryId];
+    return await withCanonicalJournalDeadlineLock(input.journalPath, input.deadlineMs, () => {
+      const nowMs = Date.now();
+      const compacted = compactDispatchJournal(
+        readCanonicalJournal(input.journalPath, input.deadlineMs),
+        nowMs,
+      ).journal;
+      const existing = compacted[deliveryId];
       if (existing !== undefined) {
-        const record = asS2JournalRecord(existing);
-        if (!record
-          || record.deliveryId !== deliveryId
-          || record.messageContentHash !== messageContentHash
-          || record.projectId !== input.episode.projectId
-          || record.issueNumber !== input.episode.issueNumber
-          || record.schedulerGeneration !== input.episode.schedulerGeneration
-          || record.tickSequence !== input.episode.tickSequence
-          || record.transitionIdentity !== input.episode.transitionIdentity
-          || record.unitRef !== input.episode.unitRef
-          || record.eligibleClass !== input.episode.eligibleClass) {
+        const record = asS2CanonicalRecord(existing);
+        if (!record || !exactS2Record(record, input.episode, deliveryId, messageContentHash)) {
           return { status: 'claim_untrusted' as const };
         }
         return {
@@ -398,9 +462,21 @@ export async function admitS2FleetNudgeJournal(input: {
           handle: { journalPath: input.journalPath, deliveryId },
         };
       }
-      const record: S2JournalRecord = {
-        schemaVersion: 1,
+
+      const shape = deriveMessageShape(input.message);
+      const record = withPendingDispatchFence({
         deliveryId,
+        sessionId: `${input.episode.schedulerGeneration}:${input.episode.unitRef}`,
+        deliveredAtMs: nowMs,
+        source: 's2-fleet-nudge',
+        sourceKey: deliveryId,
+        deliveryPath: shape.deliveryPath,
+        messageShape: { charLength: shape.charLength, lineCount: shape.lineCount },
+        dispatchOutcome: DISPATCH_OUTCOME_IN_FLIGHT,
+        draftState: shape.deliveryPath === DELIVERY_PATH_SELF_SUBMITTED
+          ? DRAFT_STATE_AUTO_SUBMITTED
+          : DRAFT_STATE_DRAFT_PRESENT,
+        deterministicKey: deliveryId,
         policyTag: 's2-one-shot-v1',
         projectId: input.episode.projectId,
         issueNumber: input.episode.issueNumber,
@@ -411,10 +487,12 @@ export async function admitS2FleetNudgeJournal(input: {
         eligibleClass: input.episode.eligibleClass,
         intentClass: 'task-continuation',
         messageContentHash,
-        state: 'ADMITTED',
-        admittedAtUtc: new Date().toISOString(),
-      };
-      writeS2JournalAtomic(input.journalPath, { ...journal, [deliveryId]: record }, input.deadlineMs);
+      } as S2CanonicalDispatchRecord);
+      const capacity = evaluateDispatchJournalAdmission(compacted, record);
+      if (!capacity.ok) return { status: 'claim_untrusted' as const };
+      const admitted = admitDispatchJournalRecord(compacted, record, nowMs);
+      if (!admitted.ok) return { status: 'claim_untrusted' as const };
+      writeCanonicalJournal(input.journalPath, admitted.journal, input.deadlineMs);
       return {
         status: 'admitted' as const,
         handle: { journalPath: input.journalPath, deliveryId },
@@ -431,20 +509,29 @@ export async function finalizeS2FleetNudgeJournal(
   options: { readonly deadlineMs: number },
 ): Promise<{ readonly ok: boolean }> {
   try {
-    return await withS2JournalMutex(handle.journalPath, options.deadlineMs, () => {
-      const journal = readS2Journal(handle.journalPath);
-      const current = asS2JournalRecord(journal[handle.deliveryId]);
+    return await withCanonicalJournalDeadlineLock(handle.journalPath, options.deadlineMs, () => {
+      const journal = readCanonicalJournal(handle.journalPath, options.deadlineMs);
+      const current = asS2CanonicalRecord(journal[handle.deliveryId]);
       if (!current || current.deliveryId !== handle.deliveryId) return { ok: false };
-      if (current.state === 'FINAL') return { ok: current.outcome === outcome };
-      const next: S2JournalRecord = {
-        ...current,
-        state: 'FINAL',
-        outcome,
-        finalizedAtUtc: new Date().toISOString(),
-      };
-      writeS2JournalAtomic(
+      const canonicalOutcome = dispatchOutcomeForS2(outcome);
+      if (current.dispatchOutcome !== DISPATCH_OUTCOME_IN_FLIGHT) {
+        return { ok: current.dispatchOutcome === canonicalOutcome };
+      }
+      const finalized = finalizeDispatchJournalRecord(
+        journal,
+        handle.deliveryId,
+        canonicalOutcome,
+        Date.now(),
+        current.draftState,
+      );
+      if (!finalized.ok) return { ok: false };
+      const nextRecord = advanceDispatchFenceLifecycle(
+        finalized.record,
+        canonicalOutcome,
+      );
+      writeCanonicalJournal(
         handle.journalPath,
-        { ...journal, [handle.deliveryId]: next },
+        { ...finalized.journal, [handle.deliveryId]: nextRecord },
         options.deadlineMs,
       );
       return { ok: true };
