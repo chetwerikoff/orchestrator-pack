@@ -34,4 +34,18 @@ source = source.replace(
 )
 source = source.replace("join(stateDir, 'recovered.txt')", "join(integrationStateDir, 'recovered.txt')")
 source = source.replace("join(stateDir, 'exhausted.txt')", "join(integrationStateDir, 'exhausted.txt')")
+source = source.replace(
+    "const recoveredMessages = readyTurnObservationFrames(prompt, reply).at(-1)!;",
+    "const recoveredMessages = () => readyTurnObservationFrames(composerText, reply).at(-1)!;",
+)
+source = source.replace("collectionLocator(recoveredMessages, false)", "collectionLocator(recoveredMessages(), false)")
+source = source.replace("recoveredMessages.filter", "recoveredMessages().filter")
+source = source.replace("const last = recoveredMessages.at(-1)!;", "const last = recoveredMessages().at(-1)!;")
+source = source.replace(
+    "const waitingMessages = readyTurnObservationFrames(prompt, 'UNUSED')[0]!;",
+    "const waitingMessages = () => readyTurnObservationFrames(composerText, 'UNUSED')[0]!;",
+)
+source = source.replace("collectionLocator(waitingMessages, true)", "collectionLocator(waitingMessages(), true)")
+source = source.replace("waitingMessages.filter", "waitingMessages().filter")
+source = source.replace("const last = waitingMessages.at(-1)!;", "const last = waitingMessages().at(-1)!;")
 exec(compile(source, 'apply-1283-production-tests.py', 'exec'))
