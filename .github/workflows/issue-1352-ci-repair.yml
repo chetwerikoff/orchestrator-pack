@@ -54,3 +54,4 @@ jobs:
           git diff --cached --check
           git commit -m 'fix: refresh hard-cut CI registries'
           git push origin HEAD:agent/issue-1352-hard-cut
+# second connector push intentionally triggers the newly installed workflow
