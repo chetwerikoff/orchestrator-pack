@@ -1,15 +1,15 @@
 name: issue-1352-base-sync
 
 on:
-  push:
-    branches:
-      - agent/issue-1352-hard-cut
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   integrate-current-main:
+    if: github.event.pull_request.head.ref == 'agent/issue-1352-base-sync-trigger' && github.event.pull_request.base.ref == 'agent/issue-1352-hard-cut'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -23,6 +23,8 @@ jobs:
           node-version: 22
           cache: npm
       - name: Merge current main, verify, and publish
+        id: merge
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -33,10 +35,40 @@ jobs:
           fi
           git config user.name chetwerikoff
           git config user.email 85295154+chetwerikoff@users.noreply.github.com
+          set +e
           git merge --no-commit --no-ff origin/main
+          merge_status=$?
+          set -e
+          if [ "$merge_status" -ne 0 ]; then
+            artifact="$RUNNER_TEMP/issue-1352-merge-conflicts"
+            mkdir -p "$artifact/base" "$artifact/ours" "$artifact/theirs" "$artifact/merged"
+            git diff --name-only --diff-filter=U | tee "$artifact/conflicts.txt"
+            git diff --cc > "$artifact/conflict.diff"
+            while IFS= read -r path; do
+              [ -z "$path" ] && continue
+              mkdir -p "$artifact/base/$(dirname "$path")" "$artifact/ours/$(dirname "$path")" "$artifact/theirs/$(dirname "$path")" "$artifact/merged/$(dirname "$path")"
+              git show ":1:$path" > "$artifact/base/$path" || true
+              git show ":2:$path" > "$artifact/ours/$path" || true
+              git show ":3:$path" > "$artifact/theirs/$path" || true
+              cp "$path" "$artifact/merged/$path"
+            done < "$artifact/conflicts.txt"
+            exit 86
+          fi
           npm ci --include=dev
           npm run typecheck:foundation
           npm run lint:foundation
           git diff --check
           git commit -m 'merge: integrate current main for issue 1352 evidence'
           git push origin HEAD:agent/issue-1352-hard-cut
+      - name: Upload conflict evidence
+        if: steps.merge.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1352-merge-conflicts
+          path: ${{ runner.temp }}/issue-1352-merge-conflicts
+          if-no-files-found: error
+          retention-days: 1
+      - name: Fail after preserving conflict evidence
+        if: steps.merge.outcome == 'failure'
+        shell: bash
+        run: exit 1
