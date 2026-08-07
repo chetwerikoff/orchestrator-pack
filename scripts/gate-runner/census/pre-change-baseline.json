@@ -648,8 +648,12 @@
       "sourceKind": "check-script",
       "sourcePath": "scripts/check-harness-post-submit-pn-live-smoke.ps1",
       "marker": "check-harness-post-submit-pn-live-smoke.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "Issue #1352 retires the daemon-only harness post-submit PN smoke after live inspection confirmed that it installs the retired runtime CLI, requires the retired daemon URL, and has no surviving runtime-neutral caller contract.",
+        "replacement": "Pack-owned review acceptance and RuntimeAdapter-backed runtime tests cover the surviving behavior; no retired daemon/API smoke is retained."
+      }
     },
     {
       "id": "check-script:scripts/check-harness-review-bridge.ps1",

@@ -31,7 +31,6 @@ const PINNED_LEGACY_SUBJECTS = new Set([
   'scripts/check-ci-cheap-wins.ps1',
   'scripts/check-ci-pipeline-split.ps1',
   'scripts/check-gh-inventory-static.ps1',
-  'scripts/check-harness-post-submit-pn-live-smoke.ps1',
   'scripts/check-operator-adoption-example.ps1',
   'scripts/check-read-delegation-audit-ci-gate.ps1',
   'scripts/check-read-delegation-policy-consistency.ps1',

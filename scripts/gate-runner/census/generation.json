@@ -2,7 +2,7 @@
   "tool": "scripts/gate-runner/census-generator.ts",
   "baseCommitSha": "b7394065b9ee1b046abb4cf29aff456df1935571",
   "populationDigest": "427a91429a56f7236b67ea076f422263fc8ab31f76255e50c03383b910244ab1",
-  "migrationOwnershipDigest": "b0fdea6198a2f886c30fef17fc37ebed4425806e43f26ba3f5c99359a06f2e58",
+  "migrationOwnershipDigest": "bf64da9af43ab2a44a4259508bfaaf8d62646578f001dee5d14caab70cc31500",
   "currentSourceHashes": {
     "scripts/check-reusable.ps1": "cd6bfa034eb3e26cbccc6e9f03b476ca05e673d8aaae9c3c69b1d066f14b77d2"
   }

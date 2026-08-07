@@ -122,7 +122,7 @@ export const CENSUS_PATH = 'scripts/gate-runner/census/pre-change-baseline.json'
 export const CENSUS_GENERATION_PATH = 'scripts/gate-runner/census/generation.json';
 
 const EXPECTED_BASE_COMMIT = 'b7394065b9ee1b046abb4cf29aff456df1935571';
-const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = 'b0fdea6198a2f886c30fef17fc37ebed4425806e43f26ba3f5c99359a06f2e58';
+const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = 'bf64da9af43ab2a44a4259508bfaaf8d62646578f001dee5d14caab70cc31500';
 const EXPECTED_SOURCE_HASHES = {
   'scripts/verify.ps1': '6bf8b3459885d603fa112d56c1a5afff6e472c2676c71eeb3e1510f0553562c9',
   'scripts/check-reusable.ps1': 'dafb1766d1d7b60181527dbb24593051270d21814291909000355541da26e0eb',
