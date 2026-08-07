@@ -25,6 +25,59 @@ import {
   deriveAdmission,
 } from './lib/create-issue-stage-topology.ts';
 
+vi.mock('./lib/create-issue-stage-record-gh.ts', () => ({
+  defaultGhTransport: () => {
+    const repository = 'chetwerikoff/orchestrator-pack';
+    const issueNumber = 1287;
+    const createdAt = '2026-08-07T04:00:00Z';
+    const publisherLogin = 'chetwerikoff';
+    const invocationIds = [
+      'competitive-attempt-invocation-1',
+      'competitive-attempt-invocation-2',
+      'competitive-attempt-invocation-3',
+      'architectural-review-attempt-invocation-1',
+      'architectural-review-attempt-invocation-2',
+      'architectural-review-attempt-invocation-3',
+    ];
+    const comments = invocationIds.map((invocationId, index) => {
+      const id = 7000000001 + index;
+      return {
+        id,
+        html_url: `https://github.com/${repository}/issues/${issueNumber}#issuecomment-${id}`,
+        issue_url: `https://api.github.com/repos/${repository}/issues/${issueNumber}`,
+        body: [
+          `Read revision: #${issueNumber} r01`,
+          'review-economics-contract: v1',
+          'NO_FINDINGS',
+          'SIMPLIFICATION_CLEAN',
+          `INVOCATION_ID: ${invocationId}`,
+          '',
+        ].join('\n'),
+        created_at: createdAt,
+        updated_at: createdAt,
+        user: { login: publisherLogin },
+      };
+    });
+    return {
+      runGh: (argv: string[]) => {
+        if (argv[2] === 'user') return { exitCode: 0, stdout: `${publisherLogin}\n`, stderr: '' };
+        const target = argv[2] ?? '';
+        if (target === `repos/${repository}/issues/${issueNumber}/comments?per_page=100&page=1`) {
+          return { exitCode: 0, stdout: JSON.stringify(comments), stderr: '' };
+        }
+        if (target.startsWith(`repos/${repository}/issues/comments/`)) {
+          const id = Number(target.split('/').at(-1));
+          const match = comments.find((comment) => comment.id === id);
+          return match
+            ? { exitCode: 0, stdout: JSON.stringify(match), stderr: '' }
+            : { exitCode: 1, stdout: '', stderr: 'comment not found' };
+        }
+        return { exitCode: 1, stdout: '', stderr: `unexpected gh call: ${argv.join(' ')}` };
+      },
+    };
+  },
+}));
+
 const TASK = 'issue:1150';
 const REVISION = 'r09';
 const EPISODE = `${TASK}@${REVISION}`;
@@ -32,6 +85,17 @@ const CONFIG = 'env:OPK_GPT_REVIEWER_CARDINALITY';
 const CLEAN = 'review-economics-contract: v1\nNO_FINDINGS\nSIMPLIFICATION_CLEAN\n';
 
 function hash(text: string): string { return createHash('sha256').update(text).digest('hex'); }
+
+function canonicalAcceptanceArtifact(invocationId: string): string {
+  return [
+    'Read revision: #1287 r01',
+    'review-economics-contract: v1',
+    'NO_FINDINGS',
+    'SIMPLIFICATION_CLEAN',
+    `INVOCATION_ID: ${invocationId}`,
+    '',
+  ].join('\n');
+}
 
 function documentedFindingLedgerFlags(skill: string): string[] {
   const block = skill.match(/```bash\n(node scripts\/finding-ledger-guard\.mjs[\s\S]*?)\n```/)?.[1];
@@ -63,14 +127,15 @@ function writeT3AcceptanceFixture() {
       const ordinal = index + 1;
       const captureName = `pass-${String(spec.sequence).padStart(2, '0')}-${spec.stage}-${String(ordinal).padStart(2, '0')}.capture.txt`;
       const capturePath = join(dir, captureName);
-      writeFileSync(capturePath, CLEAN);
       const invocationId = `${stageAttemptId}-invocation-${ordinal}`;
+      const captureText = canonicalAcceptanceArtifact(invocationId);
+      writeFileSync(capturePath, captureText);
       const turnResultName = `turn-result-${stageAttemptId}-${ordinal}.json`;
       const turnResultPath = join(dir, turnResultName);
       const turnResult = {
         schema: TURN_RESULT_SCHEMA, state: 'ok', scope: 'conversation', cause: 'ok', invocation_id: invocationId,
         configured_profile_key: 'fixture-profile',
-        output: { byte_length: Buffer.byteLength(CLEAN), sha256: hash(CLEAN) },
+        output: { byte_length: Buffer.byteLength(captureText), sha256: hash(captureText) },
       };
       const turnResultText = JSON.stringify(turnResult);
       writeFileSync(turnResultPath, turnResultText);
@@ -96,14 +161,20 @@ function writeT3AcceptanceFixture() {
       sourceRevision, outcome: 'complete',
       revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
       settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
-      invocations, credentialingCaptures: invocations.map((invocation) => ({
-        captureIdentity: `sha256:${hash(CLEAN)}:${invocation.capturePath.split(/[\/]/).at(-1)}`,
-        name: invocation.capturePath.split(/[\/]/).at(-1), byteLength: Buffer.byteLength(CLEAN), sha256: hash(CLEAN), rawFindingCount: 0,
-      })),
-      relayEligibleCaptures: invocations.map((invocation) => ({
-        captureIdentity: `sha256:${hash(CLEAN)}:${invocation.capturePath.split(/[\/]/).at(-1)}`,
-        name: invocation.capturePath.split(/[\/]/).at(-1), byteLength: Buffer.byteLength(CLEAN), sha256: hash(CLEAN), rawFindingCount: 0,
-      })),
+      invocations, credentialingCaptures: invocations.map((invocation) => {
+        const text = canonicalAcceptanceArtifact(invocation.invocationId);
+        return {
+          captureIdentity: `sha256:${hash(text)}:${invocation.capturePath.split(/[\/]/).at(-1)}`,
+          name: invocation.capturePath.split(/[\/]/).at(-1), byteLength: Buffer.byteLength(text), sha256: hash(text), rawFindingCount: 0,
+        };
+      }),
+      relayEligibleCaptures: invocations.map((invocation) => {
+        const text = canonicalAcceptanceArtifact(invocation.invocationId);
+        return {
+          captureIdentity: `sha256:${hash(text)}:${invocation.capturePath.split(/[\/]/).at(-1)}`,
+          name: invocation.capturePath.split(/[\/]/).at(-1), byteLength: Buffer.byteLength(text), sha256: hash(text), rawFindingCount: 0,
+        };
+      }),
     }));
   }
   writeFileSync(authorDispositionsPath, JSON.stringify({ schema: 'create-issue-author-dispositions/v1', findings: [] }));
@@ -229,6 +300,52 @@ describe('Issue #1150 stage authority', () => {
       expect(state.errors, state.errors.join('\n')).toEqual([]);
       expect(state.credentialingCapturesByStage.competitive).toHaveLength(cardinality);
     }
+  });
+
+  it('credentials a post-send incident capture only with explicit authoritative GitHub artifact authority', () => {
+    const item = capture('artifact-backed-01', 'pass-01-competitive-01.capture.txt');
+    const attemptId = 'artifact-backed-attempt';
+    const artifactAuthority = {
+      kind: 'authoritative-github-artifact' as const,
+      repositoryFullName: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1150,
+      commentId: 7000000101,
+      commentUrl: 'https://github.com/chetwerikoff/orchestrator-pack/issues/1150#issuecomment-7000000101',
+      publisherLogin: 'chetwerikoff',
+      createdAt: '2026-08-07T04:00:00Z',
+      updatedAt: '2026-08-07T04:00:00Z',
+    };
+    const artifactBacked = invocation('competitive', attemptId, 1, 1, item, {
+      terminalResultIdentity: undefined,
+      reviewerSource: undefined,
+      terminalClassification: 'incident',
+      sendCount: 1,
+      retryClass: 'retry-forbidden',
+      artifactAuthority,
+    });
+    const accepted = receipt('competitive', 1, attemptId, 1, [item], [artifactBacked]);
+    const state = deriveReviewEpisodeState([accepted], relay([item]), authority([accepted]));
+    expect(state.errors, state.errors.join('\n')).toEqual([]);
+    expect(state.credentialingCapturesByStage.competitive).toEqual([item]);
+
+    const missingAuthority = structuredClone(accepted);
+    delete missingAuthority.invocations![0]!.artifactAuthority;
+    expect(deriveReviewEpisodeState([missingAuthority], relay([item]), authority([missingAuthority])).errors.join('\n'))
+      .toMatch(/non-complete result cannot credential a capture without artifactAuthority/);
+  });
+
+  it('keeps the first receipt at the intake root while allowing later stages to bind a newer revision', () => {
+    const fixture = preLens();
+    const laterRevision = structuredClone(fixture.receipts);
+    laterRevision[1]!.sourceRevision = 'r10';
+    laterRevision[1]!.invocations = laterRevision[1]!.invocations!.map((item) => ({ ...item, sourceRevision: 'r10' }));
+    expect(deriveReviewEpisodeState(laterRevision, fixture.relay, authority(laterRevision)).errors).toEqual([]);
+
+    const reRootedFirst = structuredClone(laterRevision);
+    reRootedFirst[0]!.sourceRevision = 'r10';
+    reRootedFirst[0]!.invocations = reRootedFirst[0]!.invocations!.map((item) => ({ ...item, sourceRevision: 'r10' }));
+    expect(deriveReviewEpisodeState(reRootedFirst, fixture.relay, authority(reRootedFirst)).errors.join('\n'))
+      .toContain('first stage receipt sourceRevision must equal episodeFirstRevision');
   });
 
   it('rejects missing slots, mismatched snapshots, and later-root re-anchoring', () => {
@@ -625,7 +742,7 @@ describe('Issue #1287 acceptance inventory parity', () => {
       'rNN/tier-gate-receipt.json',
     ]);
     expect(actualInventory).toEqual(expectedInventory);
-    expect(inventory).toContain(`(\`${TURN_RESULT_SCHEMA}\`), required for every completed browser invocation`);
+    expect(inventory).toContain(`(\`${TURN_RESULT_SCHEMA}\`), required for transport-classified \`complete\` browser invocations`);
 
     const requiredFlags = ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => input.flag);
     for (const command of ['produce-artifacts', 'check-artifacts']) {
