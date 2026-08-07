@@ -586,7 +586,7 @@ describe('Issue #1377 explicit abandonment authority', () => {
       result: nonOkResult(),
     });
     expect(stopClick).not.toHaveBeenCalled();
-    expect(result.incidents).toContain('owned_generation_stop_unavailable');
+    expect(result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
   });
 });
 

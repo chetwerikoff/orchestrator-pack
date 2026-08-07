@@ -389,6 +389,39 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(readTerminalEnvelope(paths.envelope)?.incident).toBe('child_stdout_eof_timeout');
   });
 
+  it('preserves POSSIBLY_DELIVERED when a started new-chat child times out before its cancellation receipt', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'new-chat-before-receipt');
+    const fixture = nodeFixture('setInterval(() => {}, 1000);');
+    process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
+    const code = await runLaunch({
+      runIdentity: 'run-new-chat-before-receipt',
+      attemptIdentity: 'attempt-new-chat-before-receipt',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: [
+        ...fixture.args,
+        '--',
+        '--new-chat',
+        '--cdp', 'http://127.0.0.1:9222',
+        '--profile', join(root, 'profile'),
+        '--invocation-id', 'invocation-before-receipt',
+      ],
+    });
+    expect(code).toBe(1);
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope).toMatchObject({
+      incident: 'child_stdout_eof_timeout',
+      delivery: 'POSSIBLY_DELIVERED',
+      recovery_available: false,
+    });
+    expect(envelope).not.toHaveProperty('send_count');
+    expect(envelope).not.toHaveProperty('conversation_locator');
+  });
+
   it('waiter is non-terminal before envelope exists', async () => {
     const root = tempDir();
     const paths = launchPaths(root, 'wait');
@@ -898,7 +931,7 @@ describe('Issue #1377 long-running child abandonment proof', () => {
       childInvocation,
     });
     expect(envelope).toMatchObject({
-      delivery: 'not-sent',
+      delivery: 'POSSIBLY_DELIVERED',
       recovery_available: false,
       turn_result_cause: 'child_stdout_eof_timeout_cancellation_receipt_identity_unproven',
     });
@@ -934,7 +967,7 @@ describe('Issue #1377 long-running child abandonment proof', () => {
       childProfile: foreignProfile,
     });
     expect(envelope).toMatchObject({
-      delivery: 'not-sent',
+      delivery: 'POSSIBLY_DELIVERED',
       recovery_available: false,
       turn_result_cause: 'child_stdout_eof_timeout_cancellation_receipt_identity_unproven',
     });

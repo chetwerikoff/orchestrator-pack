@@ -549,9 +549,10 @@ async function runChildEofCancellation(
 
 function cancellationEnvelopeFields(
   attempt: BrowserTurnCancellationAttempt,
+  childStartFailed: boolean,
 ): Pick<TerminalEnvelope, 'delivery' | 'send_count' | 'recovery_available' | 'conversation_locator'> {
   return {
-    delivery: attempt.sendCount === 1 ? 'POSSIBLY_DELIVERED' : 'not-sent',
+    delivery: childStartFailed ? 'not-sent' : 'POSSIBLY_DELIVERED',
     ...(attempt.sendCount ? { send_count: attempt.sendCount } : {}),
     recovery_available: Boolean(attempt.conversationUrl),
     ...(attempt.conversationUrl ? { conversation_locator: attempt.conversationUrl } : {}),
@@ -920,7 +921,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
         child_exit_code: childExitCode,
         turn_result_state: cancellation.state,
         turn_result_cause: cancellation.cause,
-        ...cancellationEnvelopeFields(cancellation),
+        ...cancellationEnvelopeFields(cancellation, spawnFailed),
         diagnostics: cancellationDiagnostics(cancellation, lastHeartbeatDiagnostics),
       });
       await abortManagedProcess(controller, runPromise);
@@ -962,7 +963,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     child_exit_code: childExitCode,
     turn_result_state: cancellation.state,
     turn_result_cause: cancellation.cause,
-    ...cancellationEnvelopeFields(cancellation),
+    ...cancellationEnvelopeFields(cancellation, false),
     diagnostics: cancellationDiagnostics(cancellation, lastHeartbeatDiagnostics),
   });
   await abortManagedProcess(controller, runPromise);

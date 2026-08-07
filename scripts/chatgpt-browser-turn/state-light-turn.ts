@@ -2951,9 +2951,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
 
   if (outcome.result.send_count >= 1 && outcome.result.state !== 'ok') {
     const stopIncident: BrowserIncident = {
-      eventClass: outcome.ownershipForfeited
-        ? 'owned_generation_stop_unavailable'
-        : 'owned_generation_stop_not_attempted_authority_absent',
+      eventClass: 'owned_generation_stop_not_attempted_authority_absent',
       symptom: `${outcome.result.state}:${outcome.result.cause}`,
       action: 'preserve_live_generation_no_stop',
     };
