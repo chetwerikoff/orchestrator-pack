@@ -47,7 +47,7 @@ jobs:
 
           review_fixture_old = "writeFixture(join(root, 'agent-orchestrator.yaml.example'), 'NAMED REVIEW_COMMAND\\n  pwsh .orchestrator-pack/review.ps1\\n  RUNTIME\\n');"
           review_fixture_new = "writeFixture(join(root, 'agent-orchestrator.yaml.example'), 'NAMED REVIEW_COMMAND\\n  pwsh .ao/review.ps1\\n  RUNTIME\\n');"
-          if fixture.count(review_fixture_old) != 2:
+          if fixture.count(review_fixture_old) != 1:
               raise SystemExit(f'unexpected review-command replay fixture count: {fixture.count(review_fixture_old)}')
           review_fixture_index = fixture.rfind(review_fixture_old)
           fixture = fixture[:review_fixture_index] + review_fixture_new + fixture[review_fixture_index + len(review_fixture_old):]
