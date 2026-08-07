@@ -40,7 +40,6 @@ jobs:
             exit 90
           fi
           python - <<'PY'
-          import json
           import os
           import re
           from pathlib import Path
@@ -82,23 +81,20 @@ jobs:
           )
           if count != 1:
               raise SystemExit(f'unexpected helper foundation transform count: {count}')
-          old_regex = """const RETIRED_RUNTIME_COMMAND_PATTERN = new RegExp(
-            `\\b${['a', 'o'].join('')}\\s+(?:send|report)\\b`,
-            'i',
-          );"""
-          new_regex = """const RETIRED_RUNTIME_COMMAND_PATTERN = new RegExp(
-            String.raw`\\b${['a', 'o'].join('')}\\s+(?:send|report)\\b`,
-            'i',
-          );"""
-          if helper.count(old_regex) != 1:
-              raise SystemExit(f'unexpected helper retired-command regex count: {helper.count(old_regex)}')
-          helper = helper.replace(old_regex, new_regex, 1)
           helper_path.write_text(helper, encoding='utf-8')
           PY
           python "$RUNNER_TEMP/issue-1352-regression-repair-v2.py"
           python - <<'PY'
           import json
           from pathlib import Path
+
+          ci_doc_path = Path('docs/ci-green-wake-reconcile.mjs')
+          ci_doc = ci_doc_path.read_text(encoding='utf-8')
+          regex_literal = "`\\b${['a', 'o'].join('')}\\s+(?:send|report)\\b`"
+          raw_regex_literal = "String.raw`\\b${['a', 'o'].join('')}\\s+(?:send|report)\\b`"
+          if ci_doc.count(regex_literal) != 1:
+              raise SystemExit(f'unexpected emitted retired-command regex count: {ci_doc.count(regex_literal)}')
+          ci_doc_path.write_text(ci_doc.replace(regex_literal, raw_regex_literal, 1), encoding='utf-8')
 
           assembly_path = Path('scripts/estate-cut/task-311-tests/task-311-assembly.test.ts')
           assembly = assembly_path.read_text(encoding='utf-8')
