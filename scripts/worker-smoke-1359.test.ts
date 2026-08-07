@@ -128,10 +128,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
         sendCalls += 1;
         return ok({ sent: true } as T);
       }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     const restore = installStableWorkerSmokeSpawnPatch({
       agentStartupProbe: () => true,
@@ -301,10 +298,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
           error: { code: 'runtime_error', message },
         };
       }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     const restore = installStableWorkerSmokeSpawnPatch({
       agentStartupProbe: () => true,
@@ -364,10 +358,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
         sendCalls += 1;
         return ok({ sent: true } as T);
       }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     const restore = installStableWorkerSmokeSpawnPatch({
       agentStartupProbe: () => true,
@@ -444,10 +435,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
         sendCalls += 1;
         return ok({ sent: true } as T);
       }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     const restore = installStableWorkerSmokeSpawnPatch({
       agentStartupProbe: () => true,

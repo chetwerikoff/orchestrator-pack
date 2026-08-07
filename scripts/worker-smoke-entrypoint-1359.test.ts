@@ -367,10 +367,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
       if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal: owned } as T);
-      return {
-        ok: false,
-        error: { code: 'unexpected_inventory_fixture_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     let probeCalls = 0;
     const restore = installStableWorkerSmokeSpawnPatch({
@@ -437,10 +434,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         } as T);
       }
       if (args[0] === 'terminal' && args[1] === 'close') return ok({ closed: true } as T);
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     let clock = 0;
     const restore = installStableWorkerSmokeSpawnPatch({
@@ -546,10 +540,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
           },
         } as T);
       }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     const restore = installStableWorkerSmokeSpawnPatch({
       agentStartupProbe: () => true,
@@ -663,10 +654,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         readCalls += 1;
         return ok({ terminal: { handle, status: 'running', tail: [], nextCursor: '1' } } as T);
       }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     const restore = installStableWorkerSmokeSpawnPatch({
       agentStartupProbe: () => true,
