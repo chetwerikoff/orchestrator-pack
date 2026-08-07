@@ -75,6 +75,7 @@ import {
   locateContinueGeneratingControl,
   readAssistantNodeCompletionReady,
   readAssistantTurnCompletionReady,
+  readAssistantTurnGenerating,
   SEND_BUTTON_SELECTOR,
   stripUiCollapseAffixes,
   verifyProfile,
@@ -196,6 +197,25 @@ export interface PageObservationResult {
   readonly ownedWindowCompletionReady: boolean;
   readonly transcriptIncomplete: boolean;
   readonly snapshot?: AtomicTranscriptSnapshot;
+}
+
+export type BrowserGptPageTurnStatus = 'dead' | 'long_running' | 'completed' | 'unknown';
+
+/**
+ * Issue #1386's amended discriminator deliberately consumes only the two facts
+ * already emitted by browser-gpt-page-probe: generation_in_progress and
+ * observed_assistant_nodes. Unknown generation evidence never authorizes a
+ * dead-turn conclusion.
+ */
+export function classifyBrowserGptPageTurnStatus(
+  generationInProgress: boolean | 'unknown',
+  observedAssistantNodes: number,
+): BrowserGptPageTurnStatus {
+  if (generationInProgress === true) return 'long_running';
+  if (generationInProgress !== false) return 'unknown';
+  if (observedAssistantNodes === 0) return 'dead';
+  if (Number.isSafeInteger(observedAssistantNodes) && observedAssistantNodes > 0) return 'completed';
+  return 'unknown';
 }
 
 export type PageLiveness = 'live' | 'lost' | 'unknown';
@@ -1469,6 +1489,7 @@ async function readPostSendObservation(
 ): Promise<{
   readonly messages: PageMessage[];
   readonly wall: ReturnType<typeof classifyProductWall>;
+  readonly generationInProgress: boolean;
   readonly ownedWindowCompletionReady: boolean;
   readonly transcriptIncomplete: boolean;
   readonly snapshot: AtomicTranscriptSnapshot;
@@ -1478,13 +1499,21 @@ async function readPostSendObservation(
     expectedMarker,
     baselineCount,
   );
+  const generationInProgress = await readAssistantTurnGenerating(page, MESSAGE_NODE_READ_TIMEOUT_MS);
   let wall: ReturnType<typeof classifyProductWall> = {};
   try {
     wall = classifyProductWall(await productStatusText(page, POST_SEND_PRODUCT_WALL_PROBE_MS));
   } catch {
     // Product-status probes must not block or invalidate transcript reads.
   }
-  return { messages, wall, ownedWindowCompletionReady, transcriptIncomplete, snapshot: snapshot! };
+  return {
+    messages,
+    wall,
+    generationInProgress,
+    ownedWindowCompletionReady,
+    transcriptIncomplete,
+    snapshot: snapshot!,
+  };
 }
 
 async function maybeContinueGeneration(page: any): Promise<boolean> {
@@ -2470,6 +2499,7 @@ async function runTurn(
     let ownedCarrierKey: string | undefined;
     let lastMarkerlessSnapshotSignature = '';
     let completionReadySeen = false;
+    let deadEvidenceReads = 0;
     let sendObservationDeferredLogged = false;
     let lastHeartbeatAt = startedAt;
     const emitHeartbeatForPoll = (decision: PageObservationDecision): void => {
@@ -2755,7 +2785,14 @@ async function runTurn(
         continue;
       }
 
-      const { messages, wall, ownedWindowCompletionReady, transcriptIncomplete, snapshot: transcriptSnapshot } = observation;
+      const {
+        messages,
+        wall,
+        generationInProgress,
+        ownedWindowCompletionReady,
+        transcriptIncomplete,
+        snapshot: transcriptSnapshot,
+      } = observation;
       if (
         config.newChat
         && ownedConversationUrl
@@ -2962,6 +2999,48 @@ async function runTurn(
         lastMarkerlessSnapshotSignature = signature;
       } else {
         lastMarkerlessSnapshotSignature = '';
+      }
+
+      const ownedReplyWindow = resolveOwnedReplyWindow(messages, baselineCount, marker);
+      const observedAssistantNodes = ownedReplyWindow.replyWindow
+        .filter((message) => message.role === 'assistant').length;
+      const pageTurnStatus = classifyBrowserGptPageTurnStatus(
+        generationInProgress,
+        observedAssistantNodes,
+      );
+      const deadEvidenceEligible = Boolean(
+        markerVisible
+        && durableConversationUrl
+        && !ownedReplyWindow.uncertainCause
+        && markerCardinality.matchingUserCarrierCount === 1
+        && markerCardinality.exactMarkerTokenCount === 1
+        && Date.now() >= dispatchDeadline
+      );
+      if (deadEvidenceEligible && pageTurnStatus === 'dead') {
+        deadEvidenceReads += 1;
+        if (deadEvidenceReads >= 2) {
+          incident('dead_turn_observed', 'dead_turn_page_evidence', 'retain_owned_page_no_resend');
+          return {
+            page,
+            browser,
+            cleanupAction: 'preserve',
+            result: compactResult(
+              'no_reply',
+              'conversation',
+              'dead_turn_page_evidence',
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              navigation,
+              incidents,
+              { conversation_id: durableConversationUrl },
+              journalWriteFailed,
+            ),
+          };
+        }
+      } else {
+        deadEvidenceReads = 0;
       }
 
       const inProgress = !ownedWindowCompletionReady && !completionReadySeen;
