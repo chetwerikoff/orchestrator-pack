@@ -41,8 +41,8 @@ replace_exact(
 # Production already writes UTF-8 without BOM and without the legacy Set-Content newline.
 replace_exact(
     "scripts/worker-smoke.test.ts",
-    "  it('accepts the existing caller Set-Content newline but evaluates the freshly fetched Issue body', () => {",
-    "  it('accepts a legacy fixture newline but verifies the caller writes the freshly fetched Issue body without BOM', () => {",
+    "  it('accepts the existing caller Set-Content newline but evaluates the freshly fetched Issue body', async () => {",
+    "  it('accepts a legacy fixture newline but verifies the caller writes the freshly fetched Issue body without BOM', async () => {",
 )
 replace_exact(
     "scripts/worker-smoke.test.ts",
