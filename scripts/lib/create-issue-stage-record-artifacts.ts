@@ -119,7 +119,7 @@ interface AuthoritativeIssueComment {
   body: string;
   createdAt: string;
   updatedAt: string;
-  userLogin: string;
+  userLogin: string | null;
   htmlUrl: string;
   issueUrl: string;
 }
@@ -582,10 +582,6 @@ function parseAuthoritativeIssueComment(
   const userLogin = typeof user?.login === 'string' && user.login.trim() !== '' ? user.login.trim() : null;
   const htmlUrl = typeof raw.html_url === 'string' ? raw.html_url : null;
   const issueUrl = typeof raw.issue_url === 'string' ? raw.issue_url : null;
-  if (!userLogin) {
-    errors.push(temporaryError('provenance-unresolved', `${label} has no comment-author login`));
-    return null;
-  }
   if (!Number.isSafeInteger(id) || id < 1 || body === null || !createdAt || !updatedAt || !htmlUrl || !issueUrl) {
     errors.push(temporaryError(unavailableClassification, `${label} lacks authoritative identity/source fields`));
     return null;
@@ -800,6 +796,14 @@ function rereadAuthoritativeIssueComment(
     errors.push(`authoritative GitHub artifact target mismatch on reread: comment ${censusComment.id}`);
     return null;
   }
+  if (!reread.userLogin) {
+    errors.push(temporaryError('provenance-unresolved', `authoritative reread comment ${reread.id} has no comment-author login`));
+    return null;
+  }
+  if (!censusComment.userLogin) {
+    errors.push(temporaryError('provenance-unresolved', `authoritative census candidate ${censusComment.id} has no comment-author login`));
+    return null;
+  }
   if (!sameGithubLogin(reread.userLogin, context.census.publisherLogin)) {
     errors.push(`provenance-mismatch: authoritative comment ${reread.id} author ${reread.userLogin} does not equal authenticated principal ${context.census.publisherLogin}`);
     return null;
@@ -868,10 +872,18 @@ function resolveAuthoritativeArtifact(
     return observedRevision ? [{ comment, observedRevision }] : [];
   });
   const principalCandidates = invocationCandidates.filter(({ comment }) => (
-    sameGithubLogin(comment.userLogin, context.census.publisherLogin)
+    comment.userLogin !== null && sameGithubLogin(comment.userLogin, context.census.publisherLogin)
   ));
+  const sameRevisionCandidates = invocationCandidates.filter(({ observedRevision }) => observedRevision === sourceRevision);
   const matches = principalCandidates.filter(({ observedRevision }) => observedRevision === sourceRevision);
   if (matches.length === 0) {
+    if (sameRevisionCandidates.some(({ comment }) => comment.userLogin === null)) {
+      errors.push(temporaryError(
+        'provenance-unresolved',
+        `invocation ${invocationId} canonical artifact candidate has no authoritative comment-author login`,
+      ));
+      return null;
+    }
     if (principalCandidates.length > 0) {
       const observedRevisions = [...new Set(principalCandidates.map(({ observedRevision }) => observedRevision))].sort();
       errors.push(
@@ -880,7 +892,7 @@ function resolveAuthoritativeArtifact(
       return null;
     }
     if (invocationCandidates.length > 0) {
-      const observedAuthors = [...new Set(invocationCandidates.map(({ comment }) => comment.userLogin))].sort();
+      const observedAuthors = [...new Set(invocationCandidates.map(({ comment }) => comment.userLogin ?? '<missing>'))].sort();
       errors.push(
         `provenance-mismatch: invocation ${invocationId} canonical artifact author(s) ${observedAuthors.join(',')} do not equal authenticated principal ${context.census.publisherLogin}`,
       );
@@ -946,7 +958,7 @@ function resolveAuthoritativeArtifact(
       issueNumber: context.census.issueNumber,
       commentId: comment.id,
       commentUrl: comment.htmlUrl,
-      publisherLogin: comment.userLogin,
+      publisherLogin: comment.userLogin!,
       createdAt: comment.createdAt,
       updatedAt: comment.updatedAt,
     },
@@ -1821,11 +1833,11 @@ export function inspectAcceptanceArtifacts(
           missing.push({ artifact: 'stage evidence', reason: 'stage evidence invocation[' + index + '] must be an object: ' + path });
           continue;
         }
-        const artifactEligible = invocationRequiresAuthoritativeArtifact(invocation);
-        if (!artifactEligible && invocation.terminalClassification === 'complete' && invocation.capturePath === undefined) {
+        const transportComplete = invocation.terminalClassification === 'complete';
+        if (transportComplete && invocation.capturePath === undefined) {
           missing.push({ artifact: 'capture', reason: 'completed invocation[' + index + '] is missing capturePath: ' + path });
         }
-        if (!artifactEligible && invocation.capturePath !== undefined) {
+        if (transportComplete && invocation.capturePath !== undefined) {
           const captureErrors: string[] = [];
           const captureTexts = new Map<string, string>();
           const captureTimestamps = new Map<string, number>();
