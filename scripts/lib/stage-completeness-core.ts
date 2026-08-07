@@ -100,6 +100,16 @@ export interface CaptureIdentityV1 {
   sha256: string;
   rawFindingCount: number;
 }
+export interface AuthoritativeGithubArtifactAuthorityV1 {
+  kind: 'authoritative-github-artifact';
+  repositoryFullName: string;
+  issueNumber: number;
+  commentId: number;
+  commentUrl: string;
+  publisherLogin: string;
+  createdAt: string;
+  updatedAt: string;
+}
 export interface ReviewerInvocationEnvelopeV1 {
   schema: typeof REVIEWER_INVOCATION_ENVELOPE_SCHEMA;
   reviewEpisodeId: string;
@@ -110,8 +120,8 @@ export interface ReviewerInvocationEnvelopeV1 {
   stage: Exclude<ReviewStage, 'architectural-lens'>;
   sourceRevision: string;
   invocationId: string;
-  terminalResultIdentity: string;
-  reviewerSource: string;
+  terminalResultIdentity?: string;
+  reviewerSource?: string;
   reviewerSlot: ReviewerSlot;
   reviewerOrdinal: number;
   attemptOrdinal: 1 | 2;
@@ -124,6 +134,7 @@ export interface ReviewerInvocationEnvelopeV1 {
   capacityOutcome: 'admitted' | 'rejected-after-local-wait';
   capacityWaitMs: number;
   capture?: CaptureIdentityV1;
+  artifactAuthority?: AuthoritativeGithubArtifactAuthorityV1;
   reviewLaneRouting?: ReviewLaneRouting;
 }
 export interface ClaudeCaptureBranchV1 {
@@ -401,6 +412,44 @@ function expectedCaptureName(stage: ReviewStage, capture: CaptureIdentityV1, slo
   if (stage === 'architectural-lens') return /^pass-\d+-architectural-lens\.capture\.txt$/i.test(capture.name);
   return /^pass-\d+-architectural\.capture\.txt$/i.test(capture.name);
 }
+function validateArtifactAuthority(
+  value: unknown,
+  label: string,
+  errors: string[],
+): AuthoritativeGithubArtifactAuthorityV1 | null {
+  if (!isRecord(value)) { errors.push(`${label} must be an object`); return null; }
+  const repositoryFullName = nonEmpty(value.repositoryFullName) ? value.repositoryFullName.trim() : '';
+  const issueNumber = value.issueNumber;
+  const commentId = value.commentId;
+  const commentUrl = nonEmpty(value.commentUrl) ? value.commentUrl.trim() : '';
+  const publisherLogin = nonEmpty(value.publisherLogin) ? value.publisherLogin.trim() : '';
+  const createdAt = nonEmpty(value.createdAt) ? value.createdAt.trim() : '';
+  const updatedAt = nonEmpty(value.updatedAt) ? value.updatedAt.trim() : '';
+  if (value.kind !== 'authoritative-github-artifact') errors.push(`${label}.kind must be authoritative-github-artifact`);
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repositoryFullName)) errors.push(`${label}.repositoryFullName must be owner/name`);
+  if (!Number.isInteger(issueNumber) || Number(issueNumber) < 1) errors.push(`${label}.issueNumber must be positive`);
+  if (!Number.isInteger(commentId) || Number(commentId) < 1) errors.push(`${label}.commentId must be positive`);
+  if (!publisherLogin) errors.push(`${label}.publisherLogin is missing`);
+  if (!isStrictIso8601Timestamp(createdAt) || !isStrictIso8601Timestamp(updatedAt)) errors.push(`${label} timestamps must be strict ISO-8601`);
+  if (createdAt && updatedAt && createdAt !== updatedAt) errors.push(`${label} authoritative comment must be unedited`);
+  if (repositoryFullName && Number.isInteger(issueNumber) && Number.isInteger(commentId)) {
+    const expectedUrl = `https://github.com/${repositoryFullName}/issues/${Number(issueNumber)}#issuecomment-${Number(commentId)}`;
+    if (commentUrl !== expectedUrl) errors.push(`${label}.commentUrl is not canonical for repository/Issue/comment`);
+  } else if (!commentUrl) {
+    errors.push(`${label}.commentUrl is missing`);
+  }
+  if (errors.some((error) => error.startsWith(label))) return null;
+  return {
+    kind: 'authoritative-github-artifact',
+    repositoryFullName,
+    issueNumber: Number(issueNumber),
+    commentId: Number(commentId),
+    commentUrl,
+    publisherLogin,
+    createdAt,
+    updatedAt,
+  };
+}
 function parseInvocation(
   value: unknown,
   receipt: Pick<StageCompletenessReceiptV1, 'reviewEpisodeId' | 'stageAttemptId' | 'policyVersion' | 'reviewerCardinality' | 'cardinalityConfigIdentity' | 'stage' | 'sourceRevision' | 'reviewLane'>,
@@ -411,11 +460,15 @@ function parseInvocation(
   if (!isRecord(value)) { errors.push(`${label} must be an object`); return null; }
   const stage = value.stage;
   const invocationId = nonEmpty(value.invocationId) ? value.invocationId.trim() : '';
-  const terminalResultIdentity = nonEmpty(value.terminalResultIdentity) ? value.terminalResultIdentity.trim() : '';
-  const reviewerSource = nonEmpty(value.reviewerSource) ? value.reviewerSource.trim() : '';
+  const terminalResultIdentity = nonEmpty(value.terminalResultIdentity) ? value.terminalResultIdentity.trim() : undefined;
+  const reviewerSource = nonEmpty(value.reviewerSource) ? value.reviewerSource.trim() : undefined;
+  const artifactAuthority = value.artifactAuthority === undefined
+    ? undefined
+    : validateArtifactAuthority(value.artifactAuthority, `${label}.artifactAuthority`, errors) ?? undefined;
   if (
-    (reviewerSource.includes('#capture=') && !parseReviewerSourcePolicy(reviewerSource))
-    || BARE_REVIEWER_SOURCE_POLICY_RE.test(reviewerSource)
+    reviewerSource
+    && ((reviewerSource.includes('#capture=') && !parseReviewerSourcePolicy(reviewerSource))
+      || BARE_REVIEWER_SOURCE_POLICY_RE.test(reviewerSource))
   ) {
     errors.push(`${label} reviewerSource has an unknown or malformed capture policy`);
   }
@@ -427,8 +480,8 @@ function parseInvocation(
   const sendCount = value.sendCount;
   if (value.schema !== REVIEWER_INVOCATION_ENVELOPE_SCHEMA) errors.push(`${label} has unknown schema`);
   if (!invocationId) errors.push(`${label} missing invocationId`);
-  if (!terminalResultIdentity) errors.push(`${label} missing terminalResultIdentity`);
-  if (!reviewerSource) errors.push(`${label} missing reviewerSource`);
+  if (!artifactAuthority && !terminalResultIdentity) errors.push(`${label} missing terminalResultIdentity`);
+  if (!artifactAuthority && !reviewerSource) errors.push(`${label} missing reviewerSource`);
   if (value.reviewEpisodeId !== receipt.reviewEpisodeId) errors.push(`${label} reviewEpisodeId mismatch`);
   if (value.stageAttemptId !== receipt.stageAttemptId) errors.push(`${label} stageAttemptId mismatch`);
   if (value.policyVersion !== receipt.policyVersion) errors.push(`${label} policyVersion mismatch`);
@@ -458,9 +511,12 @@ function parseInvocation(
   if (!Number.isInteger(value.capacityWaitMs) || Number(value.capacityWaitMs) < 0) errors.push(`${label} capacityWaitMs must be a non-negative integer`);
   if (terminalClassification === 'complete' && value.capacityOutcome !== 'admitted') errors.push(`${label} complete invocation must have been admitted`);
   const capture = value.capture === undefined ? undefined : validateCaptureIdentity(value.capture, `${label}.capture`, errors) ?? undefined;
+  if (terminalClassification === 'complete' && !terminalResultIdentity) errors.push(`${label} complete result requires terminalResultIdentity`);
+  if (terminalClassification === 'complete' && !reviewerSource) errors.push(`${label} complete result requires reviewerSource`);
   if (terminalClassification === 'complete' && !capture) errors.push(`${label} complete result requires capture`);
   if (terminalClassification === 'complete' && Number(sendCount) !== 1) errors.push(`${label} complete result requires sendCount 1`);
-  if (terminalClassification !== 'complete' && capture) errors.push(`${label} non-complete result cannot credential a capture`);
+  if (terminalClassification !== 'complete' && capture && !artifactAuthority) errors.push(`${label} non-complete result cannot credential a capture without artifactAuthority`);
+  if (artifactAuthority && !capture) errors.push(`${label} artifactAuthority requires capture`);
   if (Number(sendCount) === 1 && terminalClassification !== 'complete' && retryClass !== 'retry-forbidden') errors.push(`${label} possible/post-send failure must forbid blind resend`);
   if (Number(sendCount) === 0 && ZERO_SEND_RETRYABLE.has(terminalClassification as TerminalClassification) && attemptOrdinal === 1 && retryClass !== 'eligible-zero-send') errors.push(`${label} proven zero-send quota/composer failure must be classified retry-eligible`);
   if (attemptOrdinal === 2 && retryClass === 'eligible-zero-send') errors.push(`${label} the one retry cannot create another retry opportunity`);
@@ -476,8 +532,8 @@ function parseInvocation(
     stage: receipt.stage as Exclude<ReviewStage, 'architectural-lens'>,
     sourceRevision: receipt.sourceRevision,
     invocationId,
-    terminalResultIdentity,
-    reviewerSource,
+    ...(terminalResultIdentity ? { terminalResultIdentity } : {}),
+    ...(reviewerSource ? { reviewerSource } : {}),
     reviewerSlot: slot,
     reviewerOrdinal: Number(reviewerOrdinal),
     attemptOrdinal: attemptOrdinal as 1 | 2,
@@ -490,6 +546,7 @@ function parseInvocation(
     capacityOutcome: value.capacityOutcome as 'admitted' | 'rejected-after-local-wait',
     capacityWaitMs: Number(value.capacityWaitMs),
     capture,
+    ...(artifactAuthority ? { artifactAuthority } : {}),
     ...(receipt.reviewLane ? { reviewLaneRouting: receipt.reviewLane.routing } : {}),
   };
 }
@@ -498,12 +555,19 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
   if (!Array.isArray(receipt.invocations)) { errors.push(`stage ${receipt.stage} requires invocation envelopes`); return; }
   const invocations = receipt.invocations.map((value, index) => parseInvocation(value, receipt, index, errors)).filter((value): value is ReviewerInvocationEnvelopeV1 => Boolean(value));
   const bySlot = new Map<ReviewerSlot, ReviewerInvocationEnvelopeV1[]>();
-  const invocationIds = new Set<string>(); const terminalResultIds = new Set<string>();
+  const invocationIds = new Set<string>(); const terminalResultIds = new Set<string>(); const artifactCommentIds = new Set<string>();
   for (const invocation of invocations) {
     if (invocationIds.has(invocation.invocationId)) errors.push(`stage ${receipt.stage} repeats invocationId ${invocation.invocationId}`);
     invocationIds.add(invocation.invocationId);
-    if (terminalResultIds.has(invocation.terminalResultIdentity)) errors.push(`stage ${receipt.stage} repeats terminalResultIdentity ${invocation.terminalResultIdentity}`);
-    terminalResultIds.add(invocation.terminalResultIdentity);
+    if (invocation.terminalResultIdentity) {
+      if (terminalResultIds.has(invocation.terminalResultIdentity)) errors.push(`stage ${receipt.stage} repeats terminalResultIdentity ${invocation.terminalResultIdentity}`);
+      terminalResultIds.add(invocation.terminalResultIdentity);
+    }
+    if (invocation.artifactAuthority) {
+      const artifactId = `${invocation.artifactAuthority.repositoryFullName}#${invocation.artifactAuthority.issueNumber}:${invocation.artifactAuthority.commentId}`;
+      if (artifactCommentIds.has(artifactId)) errors.push(`stage ${receipt.stage} repeats authoritative GitHub comment ${artifactId}`);
+      artifactCommentIds.add(artifactId);
+    }
     const list = bySlot.get(invocation.reviewerSlot) ?? []; list.push(invocation); bySlot.set(invocation.reviewerSlot, list);
   }
   for (const slot of bySlot.keys()) if (!requiredSlots.includes(slot)) errors.push(`stage ${receipt.stage} has unexpected reviewer slot ${slot}`);
@@ -536,10 +600,16 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
     const final = attempts.at(-1)!;
     if (!final.terminal) errors.push(`stage ${receipt.stage} slot ${slot} has no terminal helper result`);
     if (attempts.length === 1 && final.retryClass === 'eligible-zero-send') hasEligibleRetry = true;
-    if (final.terminalClassification !== 'complete' || !final.capture) allFinalComplete = false;
-    else finalCaptures.push(final.capture);
+    const finalCredentialed = Boolean(final.capture && (final.terminalClassification === 'complete' || final.artifactAuthority));
+    if (!finalCredentialed) allFinalComplete = false;
+    else finalCaptures.push(final.capture!);
   }
-  const finalSources = requiredSlots.map((slot) => [...(bySlot.get(slot) ?? [])].sort((a, b) => a.attemptOrdinal - b.attemptOrdinal).at(-1)?.reviewerSource).filter((source): source is string => Boolean(source));
+  const finalSources = requiredSlots
+    .map((slot) => [...(bySlot.get(slot) ?? [])].sort((a, b) => a.attemptOrdinal - b.attemptOrdinal).at(-1))
+    .map((invocation) => invocation?.reviewerSource ?? (invocation?.artifactAuthority
+      ? `github:${invocation.artifactAuthority.repositoryFullName}#${invocation.artifactAuthority.issueNumber}:${invocation.artifactAuthority.commentId}`
+      : undefined))
+    .filter((source): source is string => Boolean(source));
   if (new Set(finalSources).size !== finalSources.length) errors.push(`stage ${receipt.stage} reviewer sources must be independent across slots`);
   const retryWasUsed = [...bySlot.values()].some((attempts) => attempts.length === 2);
   if (receipt.settlement.retryState === 'eligible' || (hasEligibleRetry && receipt.settlement.retryState !== 'abandoned')) errors.push(`stage ${receipt.stage} remains unsettled while a zero-send retry is eligible`);
@@ -562,7 +632,7 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
   }
   if (!exactIdentitySet(allInvocationCaptures, receipt.relayEligibleCaptures)) errors.push(`stage ${receipt.stage} relayEligibleCaptures do not equal invocation capture evidence`);
   if (receipt.outcome === 'complete') {
-    if (!allFinalComplete) errors.push(`stage ${receipt.stage} complete outcome requires every required slot complete`);
+    if (!allFinalComplete) errors.push(`stage ${receipt.stage} complete outcome requires every required slot credentialed by successful transport or artifactAuthority`);
     if (receipt.settlement.retryState !== 'none' && receipt.settlement.retryState !== 'exhausted') errors.push(`stage ${receipt.stage} complete outcome has invalid retry settlement`);
     if (!exactIdentitySet(finalCaptures, receipt.credentialingCaptures)) errors.push(`stage ${receipt.stage} credentialingCaptures do not equal final successful slot captures`);
   } else {
