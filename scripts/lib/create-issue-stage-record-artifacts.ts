@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   lstatSync,
@@ -463,6 +464,23 @@ function isCanonicalReviewerArtifact(
     || (declaredFindingCounts.length === 1 && declaredFindingCounts[0] === revision.findingCount);
 }
 
+function canonicalReviewerArtifactRevision(
+  text: string,
+  stage: Exclude<ReviewStage, 'architectural-lens'>,
+  issueNumber: number,
+  invocationId: string,
+): string | null {
+  const revision = parseCanonicalCaptureRevision(text);
+  if (!revision || revision.issueNumber !== issueNumber) return null;
+  return isCanonicalReviewerArtifact(text, stage, issueNumber, revision.sourceRevision, invocationId)
+    ? revision.sourceRevision
+    : null;
+}
+
+function sameGithubLogin(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
 function temporaryError(
   classification: AcceptanceArtifactTemporaryClassification,
   detail: string,
@@ -623,8 +641,7 @@ function authoritativeIssueCommentCensus(
 }
 
 function invocationRequiresAuthoritativeArtifact(invocation: JsonRecord): boolean {
-  return parseReviewerSourcePolicy(optionalString(invocation.reviewerSource) ?? '') !== null
-    || invocation.terminalClassification !== 'complete';
+  return invocation.terminalClassification === 'complete' || invocation.sendCount === 1;
 }
 
 function expectedCaptureName(
@@ -677,22 +694,33 @@ function materializeAuthoritativeCapture(
       return null;
     }
   } else {
+    const stagingDir = mkdtempSync(join(reviewDir, `.${name}.tmp-`));
+    const staged = join(stagingDir, name);
     try {
-      writeFileSync(target, text, { encoding: 'utf8', flag: 'wx' });
-    } catch {
-      if (!existsSync(target)) {
-        errors.push(temporaryError('observation-lost', `authoritative capture materialization failed before durable observation: ${target}`));
+      writeFileSync(staged, text, { encoding: 'utf8', flag: 'wx' });
+      if (readFileSync(staged, 'utf8') !== text) {
+        errors.push(temporaryError('observation-lost', `authoritative capture staging bytes could not be verified: ${target}`));
         return null;
       }
-      let raced: string;
-      try { raced = readFileSync(target, 'utf8'); } catch {
-        errors.push(temporaryError('observation-lost', `raced canonical capture could not be reread: ${target}`));
-        return null;
+      try {
+        linkSync(staged, target);
+      } catch {
+        if (!existsSync(target)) {
+          errors.push(temporaryError('observation-lost', `authoritative capture atomic materialization failed before durable observation: ${target}`));
+          return null;
+        }
+        let raced: string;
+        try { raced = readFileSync(target, 'utf8'); } catch {
+          errors.push(temporaryError('observation-lost', `raced canonical capture could not be reread: ${target}`));
+          return null;
+        }
+        if (raced !== text) {
+          errors.push(`authoritative GitHub artifact conflicts with concurrently materialized canonical capture: ${target}`);
+          return null;
+        }
       }
-      if (raced !== text) {
-        errors.push(`authoritative GitHub artifact conflicts with concurrently materialized canonical capture: ${target}`);
-        return null;
-      }
+    } finally {
+      rmSync(stagingDir, { recursive: true, force: true });
     }
   }
   let verifiedText: string;
@@ -772,7 +800,7 @@ function rereadAuthoritativeIssueComment(
     errors.push(`authoritative GitHub artifact target mismatch on reread: comment ${censusComment.id}`);
     return null;
   }
-  if (reread.userLogin !== context.census.publisherLogin) {
+  if (!sameGithubLogin(reread.userLogin, context.census.publisherLogin)) {
     errors.push(`provenance-mismatch: authoritative comment ${reread.id} author ${reread.userLogin} does not equal authenticated principal ${context.census.publisherLogin}`);
     return null;
   }
@@ -787,7 +815,17 @@ function rereadAuthoritativeIssueComment(
     sourceRevision,
     invocationId,
   )) {
-    errors.push(`authoritative GitHub artifact is malformed or revision/invocation-mismatched on reread: ${reread.htmlUrl}`);
+    const observedRevision = canonicalReviewerArtifactRevision(
+      reread.body,
+      stage,
+      context.census.issueNumber,
+      invocationId,
+    );
+    if (observedRevision) {
+      errors.push(`authoritative GitHub artifact revision mismatch: expected=${sourceRevision} observed=${observedRevision} comment=${reread.htmlUrl}`);
+    } else {
+      errors.push(`authoritative GitHub artifact is malformed or invocation-mismatched on reread: ${reread.htmlUrl}`);
+    }
     return null;
   }
   if (
@@ -795,7 +833,7 @@ function rereadAuthoritativeIssueComment(
     || reread.body !== censusComment.body
     || reread.createdAt !== censusComment.createdAt
     || reread.updatedAt !== censusComment.updatedAt
-    || reread.userLogin !== censusComment.userLogin
+    || !sameGithubLogin(reread.userLogin, censusComment.userLogin)
     || reread.htmlUrl !== censusComment.htmlUrl
     || reread.issueUrl !== censusComment.issueUrl
   ) {
@@ -819,35 +857,49 @@ function resolveAuthoritativeArtifact(
   const sourceRevision = optionalString(invocation.sourceRevision) ?? '';
   const reviewerSlot = optionalString(invocation.reviewerSlot) ?? '';
   if (!invocationId || !sourceRevision || !reviewerSlot) return null;
-  const matches = context.census.comments.filter((comment) => (
-    commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)
-    && isCanonicalReviewerArtifact(
+  const invocationCandidates = context.census.comments.flatMap((comment) => {
+    if (!commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)) return [];
+    const observedRevision = canonicalReviewerArtifactRevision(
       comment.body,
       stage,
       context.census.issueNumber,
-      sourceRevision,
       invocationId,
-    )
+    );
+    return observedRevision ? [{ comment, observedRevision }] : [];
+  });
+  const principalCandidates = invocationCandidates.filter(({ comment }) => (
+    sameGithubLogin(comment.userLogin, context.census.publisherLogin)
   ));
+  const matches = principalCandidates.filter(({ observedRevision }) => observedRevision === sourceRevision);
   if (matches.length === 0) {
+    if (principalCandidates.length > 0) {
+      const observedRevisions = [...new Set(principalCandidates.map(({ observedRevision }) => observedRevision))].sort();
+      errors.push(
+        `authoritative GitHub artifact revision mismatch: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} invocationId=${invocationId} expected=${sourceRevision} observed=${observedRevisions.join(',')}`,
+      );
+      return null;
+    }
+    if (invocationCandidates.length > 0) {
+      const observedAuthors = [...new Set(invocationCandidates.map(({ comment }) => comment.userLogin))].sort();
+      errors.push(
+        `provenance-mismatch: invocation ${invocationId} canonical artifact author(s) ${observedAuthors.join(',')} do not equal authenticated principal ${context.census.publisherLogin}`,
+      );
+      return null;
+    }
     errors.push(
       `authoritative GitHub artifact absent after complete census: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} sourceRevision=${sourceRevision} invocationId=${invocationId} source=GitHub-Issue-comments`,
     );
     return null;
   }
   if (matches.length !== 1) {
-    const identities = matches.map((comment) => `${comment.id}:${comment.htmlUrl}`).join(', ');
+    const identities = matches.map(({ comment }) => `${comment.id}:${comment.htmlUrl}`).join(', ');
     errors.push(temporaryError(
       'identity-unresolved',
-      `invocation ${invocationId} resolved to ${matches.length} canonical Issue comments: ${identities}`,
+      `invocation ${invocationId} resolved to ${matches.length} canonical principal-owned Issue comments: ${identities}`,
     ));
     return null;
   }
-  const censusComment = matches[0]!;
-  if (censusComment.userLogin !== context.census.publisherLogin) {
-    errors.push(`provenance-mismatch: authoritative comment ${censusComment.id} author ${censusComment.userLogin} does not equal authenticated principal ${context.census.publisherLogin}`);
-    return null;
-  }
+  const censusComment = matches[0]!.comment;
   if (censusComment.createdAt !== censusComment.updatedAt) {
     errors.push(`authoritative GitHub artifact was edited: ${censusComment.htmlUrl}`);
     return null;
