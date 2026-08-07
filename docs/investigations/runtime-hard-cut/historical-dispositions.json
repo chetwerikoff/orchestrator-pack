@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "owningIssue": 1352,
+  "dispositions": [
+    {
+      "path": "docs/launch-argv-registry.mjs",
+      "class": "precut-behavioral-contract",
+      "reason": "Frozen generated launch-argv contract retained as regression evidence; it is not a current runtime transport authority.",
+      "owningReference": "Issue #1352 r07; Issue #1036 census section 2.8"
+    },
+    {
+      "path": "docs/orchestrator-message-registry.mjs",
+      "class": "precut-behavioral-contract",
+      "reason": "Frozen generated message-registry contract retained as regression evidence; current delivery authority lives under scripts/.",
+      "owningReference": "Issue #1352 r07; Issue #1036 census section 2.8"
+    },
+    {
+      "path": "docs/review-finding-delivery-confirm.mjs",
+      "class": "precut-behavioral-contract",
+      "reason": "Frozen generated review-delivery contract retained as regression evidence; it is not an executable current-runtime transport.",
+      "owningReference": "Issue #1352 r07; Issue #1036 census section 2.8"
+    },
+    {
+      "path": "docs/review-head-ready.mjs",
+      "class": "precut-behavioral-contract",
+      "reason": "Frozen generated review-head contract retained as regression evidence; the live implementation was ported under scripts/.",
+      "owningReference": "Issue #1352 r07; Issue #1036 census section 2.8"
+    },
+    {
+      "path": "docs/review-orchestrator-loop.mjs",
+      "class": "precut-behavioral-contract",
+      "reason": "Frozen generated review-loop contract retained as regression evidence; it carries no current runtime authority.",
+      "owningReference": "Issue #1352 r07; Issue #1036 census section 2.8"
+    },
+    {
+      "path": "docs/review-producer-contract.mjs",
+      "class": "precut-behavioral-contract",
+      "reason": "Frozen generated producer contract retained as pre-cut regression evidence; current producer logic is runtime-neutral TypeScript.",
+      "owningReference": "Issue #1352 r07; Issue #1036 census section 2.8"
+    },
+    {
+      "path": "docs/scripted-review-confirmed-delivery-gate.mjs",
+      "class": "precut-behavioral-contract",
+      "reason": "Frozen generated delivery-gate contract retained as regression evidence; it is not a current transport authority.",
+      "owningReference": "Issue #1352 r07; Issue #1036 census section 2.8"
+    },
+    {
+      "path": "docs/scripted-review-post-submit-delivery.mjs",
+      "class": "precut-behavioral-contract",
+      "reason": "Frozen generated post-submit contract retained as regression evidence; current delivery is owned by pack review/runtime-neutral code.",
+      "owningReference": "Issue #1352 r07; Issue #1036 census section 2.8"
+    },
+    {
+      "path": "docs/session-pr-binding-resolver.mjs",
+      "class": "precut-behavioral-contract",
+      "reason": "Frozen generated binding-resolver contract retained as regression evidence; current binding authority is runtime-neutral.",
+      "owningReference": "Issue #1352 r07; Issue #1036 census section 2.8"
+    },
+    {
+      "path": "docs/session-runtime-liveness.mjs",
+      "class": "precut-behavioral-contract",
+      "reason": "Frozen generated liveness contract retained as regression evidence; current liveness is provided by RuntimeAdapter.",
+      "owningReference": "Issue #1352 r07; Issue #1036 census section 2.8"
+    },
+    {
+      "path": "docs/terminal-flood-detect.mjs",
+      "class": "precut-behavioral-contract",
+      "reason": "Frozen generated terminal-flood contract retained as regression evidence; it is not a current runtime event transport.",
+      "owningReference": "Issue #1352 r07; Issue #1036 census section 2.8"
+    },
+    {
+      "path": "docs/rtk-missed-savings-inventory.md",
+      "class": "precut-inventory",
+      "reason": "Record-only optimization inventory describing pre-cut commands; it is not an operator runbook or live execution root.",
+      "owningReference": "Issue #1352 r07"
+    },
+    {
+      "path": "docs/session-runtime-liveness-gate-inventory.md",
+      "class": "precut-inventory",
+      "reason": "Record-only liveness-gate inventory describing pre-cut review surfaces; it is not an active instruction surface.",
+      "owningReference": "Issue #1352 r07"
+    },
+    {
+      "path": "scripts/fixtures/ci-failure-notification/README.md",
+      "class": "fixture-documentation",
+      "reason": "Fixture-local documentation preserves the historical state-root shape needed to interpret the captured fixture; production code does not read it.",
+      "owningReference": "Issue #1352 r07"
+    }
+  ]
+}
