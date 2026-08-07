@@ -62,6 +62,7 @@ jobs:
               .filter(([key]) => !retiredRuntimePrefixes.some((prefix) => key.startsWith(prefix))),
           ) as NodeJS.ProcessEnv;
           const env: NodeJS.ProcessEnv = {
+            ...sanitizedParentEnv,
           """
           runner = runner[:start] + new_prefix + runner[budget:]
           inherit_old = "    inheritParentEnv: true,\n    env,\n    allowEmptyStdout: true,"
@@ -69,6 +70,20 @@ jobs:
           if runner.count(inherit_old) != 1:
               raise SystemExit(f'unexpected reviewer inheritance block count: {runner.count(inherit_old)}')
           runner_path.write_text(runner.replace(inherit_old, inherit_new, 1), encoding='utf-8')
+
+          contracts_path = Path('scripts/pr2-foundation/contracts.ts')
+          contracts = contracts_path.read_text(encoding='utf-8')
+          replacements = [
+              ("  'docs/ao-0-10-review-api.mjs',\n", ""),
+              ("{ ok: true; result: 'foundation-16-cutover-6' }", "{ ok: true; result: 'foundation-15-cutover-6' }"),
+              ("denominator_not_exactly_twenty_two_rows", "denominator_not_exactly_twenty_one_rows"),
+              ("{ ok: true, result: 'foundation-16-cutover-6' }", "{ ok: true, result: 'foundation-15-cutover-6' }"),
+          ]
+          for old, new in replacements:
+              if contracts.count(old) != 1:
+                  raise SystemExit(f'unexpected foundation contract occurrence count for {old!r}: {contracts.count(old)}')
+              contracts = contracts.replace(old, new, 1)
+          contracts_path.write_text(contracts, encoding='utf-8')
 
           foundation_path = Path('scripts/pr2-foundation/foundation.test.ts')
           foundation = foundation_path.read_text(encoding='utf-8')
@@ -89,7 +104,31 @@ jobs:
               .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
           }
           """
-          foundation_path.write_text(foundation[:start] + final_block + foundation[end:], encoding='utf-8')
+          foundation = foundation[:start] + final_block + foundation[end:]
+          old_result = "{ ok: true, result: 'foundation-16-cutover-6' }"
+          new_result = "{ ok: true, result: 'foundation-15-cutover-6' }"
+          if foundation.count(old_result) != 1:
+              raise SystemExit(f'unexpected foundation result count: {foundation.count(old_result)}')
+          foundation_path.write_text(foundation.replace(old_result, new_result, 1), encoding='utf-8')
+
+          mutation_path = Path('scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts')
+          mutation = mutation_path.read_text(encoding='utf-8')
+          for old, new in [
+              ("result.result === 'foundation-16-cutover-6'", "result.result === 'foundation-15-cutover-6'"),
+              ("denominator.length === 22", "denominator.length === 21"),
+          ]:
+              if mutation.count(old) != 1:
+                  raise SystemExit(f'unexpected mutation foundation occurrence count for {old!r}: {mutation.count(old)}')
+              mutation = mutation.replace(old, new, 1)
+          mutation_path.write_text(mutation, encoding='utf-8')
+
+          cutover_path = Path('scripts/cutover/issue-928.test.ts')
+          cutover = cutover_path.read_text(encoding='utf-8')
+          old_result = "{ ok: true, result: 'foundation-16-cutover-6' }"
+          new_result = "{ ok: true, result: 'foundation-15-cutover-6' }"
+          if cutover.count(old_result) != 1:
+              raise SystemExit(f'unexpected cutover foundation result count: {cutover.count(old_result)}')
+          cutover_path.write_text(cutover.replace(old_result, new_result, 1), encoding='utf-8')
           PY
       - name: Verify repairs
         shell: bash
@@ -103,6 +142,7 @@ jobs:
             scripts/ci-green-wake-reconcile.test.ts \
             scripts/estate-cut/task-311-tests/task-311-assembly.test.ts \
             scripts/pr2-foundation/foundation.test.ts \
+            scripts/cutover/issue-928.test.ts \
             scripts/review-trigger-reeval.test.ts \
             --reporter=dot
           git diff --check
@@ -117,15 +157,18 @@ jobs:
             docs/ci-green-wake-reconcile.mjs \
             docs/declarations/1352.pr-scope.json \
             scripts/ci-green-wake-reconcile.test.ts \
+            scripts/cutover/issue-928.test.ts \
             scripts/estate-cut/task-311-tests/task-311-assembly.test.ts \
             scripts/estate-cut/task-311-tests/task-311-common.test-support.ts \
             scripts/lib/Review-FailureEvidence.ps1 \
             scripts/lib/Review-PostRunRetry.ps1 \
             scripts/lib/Review-RecoveryPaths.ps1 \
             scripts/pack-review-runner.ts \
+            scripts/pr2-foundation/contracts.ts \
             scripts/pr2-foundation/foundation.test.ts \
+            scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts \
             scripts/review-trigger-reeval.test.ts \
             scripts/test-all.ps1
           git diff --cached --check
-          git commit -m 'fix(runtime): remove stale runtime regression dependencies'
+          git commit -m 'fix(runtime): finish hard-cut regression repairs'
           git push origin HEAD:agent/issue-1352-hard-cut
