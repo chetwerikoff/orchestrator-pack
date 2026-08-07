@@ -1,180 +1,64 @@
-name: issue-1352-regression-repair
+name: issue-1352-current-census
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair-current-head:
+  current-census:
     if: github.event.pull_request.head.ref == 'agent/issue-1352-regression-carrier' && github.event.pull_request.base.ref == 'agent/issue-1352-hard-cut'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-1352-regression-carrier
+          ref: agent/issue-1352-hard-cut
           fetch-depth: 0
-          persist-credentials: true
-      - name: Preserve helper and switch to exact target
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp .github/issue-1352-regression-repair-v2.py "$RUNNER_TEMP/issue-1352-regression-repair-v2.py"
-          git fetch origin agent/issue-1352-hard-cut
-          git checkout -B agent/issue-1352-hard-cut origin/agent/issue-1352-hard-cut
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Apply reviewed repairs
+      - name: Capture exact current residual census
         shell: bash
         run: |
           set -euo pipefail
-          expected_head='2b4cba4beef24c7d8a77cff00591c61ed0c4fa5b'
+          expected_head='33aabaf9607fffa361ec22f4bcb2a9f979d19e4c'
           actual_head="$(git rev-parse HEAD)"
           if [ "$actual_head" != "$expected_head" ]; then
             echo "target head drift: expected $expected_head, got $actual_head" >&2
             exit 90
           fi
-          python "$RUNNER_TEMP/issue-1352-regression-repair-v2.py"
-          python - <<'PY'
-          from pathlib import Path
-
-          runner_path = Path('scripts/pack-review-runner.ts')
-          runner = runner_path.read_text(encoding='utf-8')
-          start_marker = "  const retiredRuntimePrefixes = [\n"
-          budget_marker = "    ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),"
-          if runner.count(start_marker) != 1 or runner.count(budget_marker) != 1:
-              raise SystemExit(
-                  f'unexpected reviewer env markers: start={runner.count(start_marker)} budget={runner.count(budget_marker)}'
-              )
-          start = runner.index(start_marker)
-          budget = runner.index(budget_marker, start)
-          new_prefix = """  const retiredRuntimePrefixes = [
-            ['A', 'O', '_'].join(''),
-            ['O', 'R', 'C', 'A', '_'].join(''),
-          ];
-          const sanitizedParentEnv = Object.fromEntries(
-            Object.entries(process.env)
-              .filter(([key]) => !retiredRuntimePrefixes.some((prefix) => key.startsWith(prefix))),
-          ) as NodeJS.ProcessEnv;
-          const env: NodeJS.ProcessEnv = {
-            ...sanitizedParentEnv,
-          """
-          runner = runner[:start] + new_prefix + runner[budget:]
-          inherit_old = "    inheritParentEnv: true,\n    env,\n    allowEmptyStdout: true,"
-          inherit_new = "    inheritParentEnv: false,\n    env,\n    allowEmptyStdout: true,"
-          if runner.count(inherit_old) != 1:
-              raise SystemExit(f'unexpected reviewer inheritance block count: {runner.count(inherit_old)}')
-          runner_path.write_text(runner.replace(inherit_old, inherit_new, 1), encoding='utf-8')
-
-          delivery_path = Path('scripts/estate-cut/task-311-tests/task-311-delivery.test-support.ts')
-          delivery = delivery_path.read_text(encoding='utf-8')
-          for legacy_line in [
-              "        AO_SESSION_ID: M1Run.linkedSessionId,\n",
-              "        AO_WORKER_SESSION_ID: M1Run.linkedSessionId,\n",
-          ]:
-              if delivery.count(legacy_line) != 1:
-                  raise SystemExit(f'unexpected TASK-311 injected env occurrence count for {legacy_line!r}: {delivery.count(legacy_line)}')
-              delivery = delivery.replace(legacy_line, '', 1)
-          delivery_path.write_text(delivery, encoding='utf-8')
-
-          contracts_path = Path('scripts/pr2-foundation/contracts.ts')
-          contracts = contracts_path.read_text(encoding='utf-8')
-          replacements = [
-              ("  'docs/ao-0-10-review-api.mjs',\n", ""),
-              ("{ ok: true; result: 'foundation-16-cutover-6' }", "{ ok: true; result: 'foundation-15-cutover-6' }"),
-              ("denominator_not_exactly_twenty_two_rows", "denominator_not_exactly_twenty_one_rows"),
-              ("{ ok: true, result: 'foundation-16-cutover-6' }", "{ ok: true, result: 'foundation-15-cutover-6' }"),
-          ]
-          for old, new in replacements:
-              if contracts.count(old) != 1:
-                  raise SystemExit(f'unexpected foundation contract occurrence count for {old!r}: {contracts.count(old)}')
-              contracts = contracts.replace(old, new, 1)
-          contracts_path.write_text(contracts, encoding='utf-8')
-
-          foundation_path = Path('scripts/pr2-foundation/foundation.test.ts')
-          foundation = foundation_path.read_text(encoding='utf-8')
-          start_marker = "    for (const file of FOUNDATION_DOC_ROWS) {\n"
-          if foundation.count(start_marker) != 1:
-              raise SystemExit(f'unexpected foundation loop count: {foundation.count(start_marker)}')
-          start = foundation.index(start_marker)
-          end_marker = "    }\n"
-          end = foundation.index(end_marker, start) + len(end_marker)
-          final_block = """    for (const file of FOUNDATION_DOC_ROWS) {
-            const source = path.join(repoRoot, file);
-            expect(existsSync(source), file).toBe(true);
-          }
-          """
-          foundation = foundation[:start] + final_block + foundation[end:]
-          old_result = "{ ok: true, result: 'foundation-16-cutover-6' }"
-          new_result = "{ ok: true, result: 'foundation-15-cutover-6' }"
-          if foundation.count(old_result) != 1:
-              raise SystemExit(f'unexpected foundation result count: {foundation.count(old_result)}')
-          foundation_path.write_text(foundation.replace(old_result, new_result, 1), encoding='utf-8')
-
-          mutation_path = Path('scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts')
-          mutation = mutation_path.read_text(encoding='utf-8')
-          for old, new in [
-              ("result.result === 'foundation-16-cutover-6'", "result.result === 'foundation-15-cutover-6'"),
-              ("denominator.length === 22", "denominator.length === 21"),
-          ]:
-              if mutation.count(old) != 1:
-                  raise SystemExit(f'unexpected mutation foundation occurrence count for {old!r}: {mutation.count(old)}')
-              mutation = mutation.replace(old, new, 1)
-          mutation_path.write_text(mutation, encoding='utf-8')
-
-          cutover_path = Path('scripts/cutover/issue-928.test.ts')
-          cutover = cutover_path.read_text(encoding='utf-8')
-          old_result = "{ ok: true, result: 'foundation-16-cutover-6' }"
-          new_result = "{ ok: true, result: 'foundation-15-cutover-6' }"
-          if cutover.count(old_result) != 1:
-              raise SystemExit(f'unexpected cutover foundation result count: {cutover.count(old_result)}')
-          cutover_path.write_text(cutover.replace(old_result, new_result, 1), encoding='utf-8')
-          PY
-      - name: Verify repairs
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm ci --include=dev
-          npm run typecheck:foundation
-          pwsh -NoProfile -File scripts/check-gh-inventory-static.ps1
-          pwsh -NoProfile -File scripts/test-all.ps1 -SkipNpm
-          npm test -- --maxWorkers=1 \
-            scripts/ci-green-wake-reconcile.test.ts \
-            scripts/estate-cut/task-311-tests/task-311-assembly.test.ts \
-            scripts/pr2-foundation/foundation.test.ts \
-            scripts/cutover/issue-928.test.ts \
-            scripts/review-trigger-reeval.test.ts \
-            --reporter=dot
-          git diff --check
-      - name: Publish verified repair
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name chetwerikoff
-          git config user.email 85295154+chetwerikoff@users.noreply.github.com
-          git add \
-            AGENTS.md \
-            docs/ci-green-wake-reconcile.mjs \
-            docs/declarations/1352.pr-scope.json \
-            scripts/ci-green-wake-reconcile.test.ts \
-            scripts/cutover/issue-928.test.ts \
-            scripts/estate-cut/task-311-tests/task-311-assembly.test.ts \
-            scripts/estate-cut/task-311-tests/task-311-common.test-support.ts \
-            scripts/estate-cut/task-311-tests/task-311-delivery.test-support.ts \
-            scripts/lib/Review-FailureEvidence.ps1 \
-            scripts/lib/Review-PostRunRetry.ps1 \
-            scripts/lib/Review-RecoveryPaths.ps1 \
-            scripts/pack-review-runner.ts \
-            scripts/pr2-foundation/contracts.ts \
-            scripts/pr2-foundation/foundation.test.ts \
-            scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts \
-            scripts/review-trigger-reeval.test.ts \
-            scripts/test-all.ps1
-          git diff --cached --check
-          git commit -m 'fix(runtime): finish hard-cut regression repairs'
-          git push origin HEAD:agent/issue-1352-hard-cut
+          node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts > "$RUNNER_TEMP/current-census.json" || true
+          node --input-type=module - "$RUNNER_TEMP/current-census.json" "$actual_head" <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const raw = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          const bySurface = Object.entries(raw.violations.reduce((acc, row) => {
+            acc[row.surfaceId] = (acc[row.surfaceId] ?? 0) + 1;
+            return acc;
+          }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+          const byPath = Object.entries(raw.violations.reduce((acc, row) => {
+            acc[row.path] = (acc[row.path] ?? 0) + 1;
+            return acc;
+          }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+          const summary = {
+            scannedCodeHead: process.argv[3],
+            scannedFileCount: raw.scannedFileCount,
+            excludedPathCount: raw.excludedPaths.length,
+            violationCount: raw.violations.length,
+            uniquePathCount: byPath.length,
+            bySurface,
+            byPath,
+          };
+          writeFileSync(process.env.RUNNER_TEMP + '/current-summary.json', JSON.stringify(summary, null, 2) + '\n');
+          console.log(JSON.stringify(summary, null, 2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-1352-current-census
+          path: |
+            ${{ runner.temp }}/current-census.json
+            ${{ runner.temp }}/current-summary.json
+          retention-days: 1
