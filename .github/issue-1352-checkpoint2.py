@@ -84,7 +84,7 @@ function runTestProcessSync(
 }
 """,
 )
-replace_exact(reviewer, "spawnSync(", "runTestProcessSync(", count=17)
+replace_exact(reviewer, "spawnSync(", "runTestProcessSync(", count=19)
 
 router = "scripts/orchestrator-escalation-router.test.ts"
 replace_exact(router, "import { spawnSync } from 'node:child_process';\n", "")
@@ -141,7 +141,15 @@ replace_exact(
       env: {
 """,
 )
-replace_exact(gh_test, "    expect(result.status).toBe(0);", "    expect(result.exitCode).toBe(0);", count=1)
+replace_exact(
+    gh_test,
+    """    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('gh-wrapper-audit: entry child=review-trigger-reconcile');
+""",
+    """    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain('gh-wrapper-audit: entry child=review-trigger-reconcile');
+""",
+)
 
 pr_test = "scripts/pr-session-binding-cache.test.ts"
 for old, new in (
