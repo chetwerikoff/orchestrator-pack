@@ -21,7 +21,7 @@ description: >-
 > `docs/issues_drafts/**` (edits, batches, re-syncs of historical specs).
 
 The GitHub **Issue** is the live queue and the source of truth a worker reads
-(`ao spawn`, scope guard, planner all read the issue body). Landing the local
+(worker execution, scope guard, and planner all read the issue body). Landing the local
 draft *file* in `main` is a separate, optional act of repo snapshotting.
 
 This skill picks **how** a draft is persisted after `create-issue-draft`:
@@ -81,7 +81,7 @@ working artifact; the issue carries everything the worker needs.
    written to `docs/issue_queue_index.md` by Cursor at publish, not by the architect.
 5. **Stop.** Do not open a PR, do not run `pack-declare`, do not run scope checks.
 6. Report to the user:
-   - Issue URL and number **N** (open for `ao spawn`).
+   - Issue URL and number **N** (open for worker execution).
    - "Draft kept local — not committed. Say *batch* or *publish this draft* to land it in `main`."
 
 **Accepted risk:** `main` will lag the local draft. If a *future* draft's
@@ -117,10 +117,11 @@ the full heavy flow. Run the Common steps end-to-end for the one draft.
 > **Self-delegation guard — am I already inside OpenCode?** The `opencode run`
 > delegation below is **only** for an architect surface (Claude Code, Cursor CLI)
 > handing the GitHub work to a fresh deepseek session. **If you are yourself
-> running inside an OpenCode session** (e.g. the `opk-orchestrator` worktree or
-> any AO-managed session — check `echo $AO_SESSION_ID`), do NOT call
-> `opencode run` — that spawns a nested OpenCode. Instead run the publish
-> mechanics (branch, commit, push, PR, merge, issue create/re-sync) yourself,
+> running inside an OpenCode session** (for example the `opk-orchestrator` worktree
+> or another session already launched by the operator), do NOT call `opencode run`
+> again — that spawns a nested OpenCode. Determine this from the current invocation
+> context rather than a runtime-specific environment variable. Instead run the
+> publish mechanics (branch, commit, push, PR, merge, issue create/re-sync) yourself,
 > directly, using the manual `gh`/git commands in the steps below as your
 > **primary** path.
 >
@@ -252,7 +253,7 @@ Include **only** what the draft session touched:
 - `docs/issues_drafts/00-architecture-decisions.md` (if decision log updated)
 - `.claude/skills/**` or `.cursor/skills/**` only when the draft itself required skill changes
 
-Do **not** bundle unrelated local edits (other skills, `agent-orchestrator.yaml`, WIP code).
+Do **not** bundle unrelated local edits (other skills, machine-local runtime config, WIP code).
 
 **Index ownership (delegated agent during publish):** `docs/issue_queue_index.md` is owned by
 the delegated agent (deepseek via opencode run) for the publish commit. The agent derives
@@ -355,8 +356,8 @@ gh pr create --repo chetwerikoff/orchestrator-pack `
 
 ### Review and merge
 
-Architect PRs do not get AO auto-review. Either wait for CI green then merge, or
-run manual pack review per [`direct-fix-checklist`](../direct-fix-checklist/SKILL.md)
+Architect PRs do not get automatic pack review. Either wait for CI green then merge,
+or run manual pack review per [`direct-fix-checklist`](../direct-fix-checklist/SKILL.md)
 if the user expects a Codex pass before merge.
 
 When the user asked to merge, follow
@@ -375,7 +376,7 @@ for re-implementation (architect + user decide).
 ## Operator adoption
 
 Docs-only draft publishes normally need **no** local operator steps. If a draft
-touched `agent-orchestrator.yaml.example`, run the adoption scan from
+touched an operator runtime configuration example, run the adoption scan from
 `merge-with-local-adoption` even when merging a spec PR.
 
 ## Do not
@@ -391,4 +392,4 @@ touched `agent-orchestrator.yaml.example`, run the adoption scan from
 - Open a PR in sync-only mode — that is the whole point of the default.
 - Merge with failing scope guard or self-architect `-Strict`.
 - Use `gh pr merge --admin` to skip checks unless the user explicitly requests it.
-- Commit secrets or `agent-orchestrator.yaml` (gitignored).
+- Commit secrets or machine-local runtime config.
