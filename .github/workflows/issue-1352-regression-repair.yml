@@ -150,48 +150,19 @@ jobs:
               raise SystemExit(f'unexpected ao-review allowance assertion count: {count}')
           reeval_path.write_text(reeval, encoding='utf-8')
 
-          issue771_path = Path('tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1')
-          issue771 = issue771_path.read_text(encoding='utf-8')
-          issue771_replacements = {
-              "    $InvokeAo = Join-Path $RepoRoot 'scripts/lib/Invoke-AoCliJson.ps1'\n": '',
-              "    $WakeTrigger = Join-Path $RepoRoot 'scripts/lib/Invoke-ReviewWakeTrigger.ps1'\n": '',
-              "reviews=[bool](Get-Command Get-EnrichedAoReviewRuns -CommandType Function -ErrorAction SilentlyContinue)":
-                  "reviews=[bool](Get-Command Get-EnrichedPackReviewRuns -CommandType Function -ErrorAction SilentlyContinue)",
-              "            Set-Content (Join-Path $dir 'Review-PostRunRetry.ps1') 'function Get-EnrichedAoReviewRuns { @() }'":
-                  "            Set-Content (Join-Path $dir 'Review-PostRunRetry.ps1') 'function Get-EnrichedPackReviewRuns { @() }'",
-              ". $(Quote-Issue771 $InvokeAo)\nImport-WorkerStatusGithubDependencies":
-                  ". $(Quote-Issue771 $WorkerStore)\nImport-WorkerStatusGithubDependencies",
-              "function global:Get-EnrichedAoReviewRuns { @() }":
-                  "function global:Get-EnrichedPackReviewRuns { @() }",
-          }
-          for old, new in issue771_replacements.items():
-              count = issue771.count(old)
-              if count != 1:
-                  raise SystemExit(f'Issue771 unexpected replacement count {count}: {old}')
-              issue771 = issue771.replace(old, new, 1)
-          old_wake_test = r'''    It 'keeps review-wake retry commands visible after snapshot loading returns' {
-              $result = Invoke-Issue771Pwsh @"
-          . $(Quote-Issue771 $WakeTrigger)
-          @{
-           retry=[bool](Get-Command Register-PostRunAutonomousRetryAttemptFromClaim -CommandType Function -ErrorAction SilentlyContinue)
-           snapshot=[bool](Get-Command Get-ReviewWakeTriggerSnapshot -CommandType Function -ErrorAction SilentlyContinue)
-          } | ConvertTo-Json -Compress
-          "@
-              $result.retry | Should -BeTrue
-              $result.snapshot | Should -BeTrue
-          }'''
-          new_wake_test = r'''    It 'keeps post-run retry commands visible after direct runtime-neutral loading' {
-              $result = Invoke-Issue771Pwsh @"
-          . $(Quote-Issue771 (Join-Path $RepoRoot 'scripts/lib/Review-PostRunRetry.ps1'))
-          @{
-           retry=[bool](Get-Command Register-PostRunAutonomousRetryAttemptFromClaim -CommandType Function -ErrorAction SilentlyContinue)
-          } | ConvertTo-Json -Compress
-          "@
-              $result.retry | Should -BeTrue
-          }'''
-          if issue771.count(old_wake_test) != 1:
-              raise SystemExit('Issue771 unexpected retired wake test block count')
-          issue771_path.write_text(issue771.replace(old_wake_test, new_wake_test, 1), encoding='utf-8')
+          test_all_path = Path('scripts/test-all.ps1')
+          test_all = test_all_path.read_text(encoding='utf-8')
+          retirement_anchor = "            (Join-Path $Root 'tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1')\n"
+          retirement_row = "            (Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1')\n"
+          if test_all.count(retirement_anchor) != 1 or retirement_row in test_all:
+              raise SystemExit('unexpected central Pester retirement inventory state')
+          test_all = test_all.replace(retirement_anchor, retirement_anchor + retirement_row, 1)
+          test_all = test_all.replace(
+              "        # #1248 r12: keep tests/** untouched while no longer discovering suites bound\n        # exclusively to the intentionally deleted PowerShell owner-chain runtime.\n",
+              "        # #1248 r12 / #1352 r07: keep tests/** untouched while no longer discovering\n        # suites bound exclusively to intentionally deleted PowerShell/AO owner chains.\n",
+              1,
+          )
+          test_all_path.write_text(test_all, encoding='utf-8')
 
           declaration_path = Path('docs/declarations/1352.pr-scope.json')
           declaration = json.loads(declaration_path.read_text(encoding='utf-8'))
@@ -202,7 +173,7 @@ jobs:
               'scripts/lib/Review-PostRunRetry.ps1',
               'scripts/pr2-foundation/foundation.test.ts',
               'scripts/review-trigger-reeval.test.ts',
-              'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1',
+              'scripts/test-all.ps1',
           }
           declaration['declared_paths'] = sorted(set(declaration.get('declared_paths', [])) | touched)
           declaration_path.write_text(json.dumps(declaration, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
@@ -214,7 +185,7 @@ jobs:
           npm ci --include=dev
           npm run typecheck:foundation
           pwsh -NoProfile -File scripts/check-gh-inventory-static.ps1
-          pwsh -NoProfile -Command "Invoke-Pester -Path 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1' -CI"
+          pwsh -NoProfile -File scripts/test-all.ps1 -SkipNpm
           npm test -- --maxWorkers=1 \
             scripts/ci-green-wake-reconcile.test.ts \
             scripts/estate-cut/task-311-tests/task-311-assembly.test.ts \
@@ -236,7 +207,7 @@ jobs:
             scripts/lib/Review-PostRunRetry.ps1 \
             scripts/pr2-foundation/foundation.test.ts \
             scripts/review-trigger-reeval.test.ts \
-            tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1
+            scripts/test-all.ps1
           git diff --cached --check
           git commit -m 'fix(runtime): remove stale AO regression dependencies'
           git push origin HEAD:agent/issue-1352-hard-cut
