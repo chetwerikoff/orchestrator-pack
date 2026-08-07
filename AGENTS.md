@@ -136,8 +136,8 @@ an excepted reasoning step:
   least 400 lines;
 - diff or log material to summarize is **more than 200 lines**.
 
-Tracked first-party source-code reads already served by a trusted semantic index do
-not require delegation solely because of size. This carve-out does not cover CI
+**Cursor index-coverage carve-out (Issue #309).** Tracked first-party source-code reads already
+served by a trusted semantic index do not require delegation solely because of size. This carve-out does not cover CI
 logs, diffs, external URLs, vendored dumps, or tracked non-code bulk data.
 
 Bounded fallback is allowed only when the command is missing, unavailable,
