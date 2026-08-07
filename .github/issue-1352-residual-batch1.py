@@ -10,91 +10,60 @@ def replace_exact(path: str, old: str, new: str, count: int = 1) -> None:
     p.write_text(text.replace(old, new), encoding='utf-8')
 
 
-def remove_exact(path: str, old: str, count: int = 1) -> None:
-    replace_exact(path, old, '', count)
-
-
-replace_exact(
-    '.gitignore',
-    '# Local AO config generated from the reusable example.\n# Commit agent-orchestrator.yaml.example, not real target-repo configs.\nagent-orchestrator.yaml\nagent-orchestrator.*.yaml\n!agent-orchestrator.yaml.example\n',
-    '# Operator-local pack state. Repository behavior is config-file independent.\n.orchestrator-pack/\n',
-)
-remove_exact('.gitignore', '# AO runtime/session state. Keep committed material reusable only.\n.ao/\n.agent-orchestrator/\n\n')
-
-for path, line in [
-    ('scripts/estate-cut/capture-base-anchor.mjs', "  'agent-orchestrator.yaml.example',\n"),
-    ('scripts/estate-cut/manifest-generator.mjs', "  if (!currentSet.has('agent-orchestrator.yaml.example')) failures.push('agent-orchestrator.yaml.example is missing');\n"),
-    ('scripts/lib/graphql-quota-github-read-inventory.json', '      "agent-orchestrator.yaml.example"\n'),
-    ('scripts/pr-scope-declaration.ts', "  'agent-orchestrator.yaml.example',\n"),
-    ('scripts/pr2-foundation/contracts.ts', "  'agent-orchestrator.yaml.example',\n"),
-]:
-    remove_exact(path, line)
-
-replace_exact(
-    'scripts/lib/graphql-quota-github-read-inventory.json',
-    '      "prompts/investigate_root_cause.md",\n',
-    '      "prompts/investigate_root_cause.md"\n',
-)
-replace_exact(
-    'scripts/orchestrator-message-audit-roots.manifest.json',
-    '  "orchestratorRulesBindings": [\n    "agent-orchestrator.yaml.example"\n  ]\n',
-    '  "orchestratorRulesBindings": []\n',
-)
-replace_exact(
-    'scripts/orchestrator-message-protected-runtime.manifest.json',
-    '    "scripts/review-trigger-reconcile.ps1",\n    "scripts/review-trigger-reeval.ps1",\n    "agent-orchestrator.yaml.example"\n',
-    '    "scripts/review-trigger-reconcile.ps1",\n    "scripts/review-trigger-reeval.ps1"\n',
-)
-replace_exact(
-    'scripts/pr2a/closed-world-scanner.ts',
-    "      'scripts', 'tests', '.github', 'package.json', 'tsconfig.json', 'agent-orchestrator.yaml.example', 'docs',\n",
-    "      'scripts', 'tests', '.github', 'package.json', 'tsconfig.json', 'docs',\n",
-)
-replace_exact(
-    'scripts/pr2a/execution-root-registry.json',
-    '"patterns": ["agent-orchestrator.yaml.example", "scripts/**/*.json", "docs/**/*.md"]',
-    '"patterns": ["scripts/**/*.json", "docs/**/*.md"]',
-)
-replace_exact(
-    'scripts/toolchain/check-typescript-runtime-policy.ts',
-    "const ROOTS = ['package.json', 'agent-orchestrator.yaml.example', '.github', 'docs', 'plugins', 'scripts', 'tests'] as const;",
-    "const ROOTS = ['package.json', '.github', 'docs', 'plugins', 'scripts', 'tests'] as const;",
-)
-remove_exact(
-    'scripts/toolchain/check-typescript-runtime-policy.ts',
-    "        || path === 'agent-orchestrator.yaml.example'\n",
-)
-replace_exact(
-    'scripts/gate-runner/bulk-declarative-gates.ts',
-    "export const VERIFY_RETIRED_FILES = ['agent-orchestrator.yaml.example'] as const;",
-    "const retiredConfigExample = ['agent', 'orchestrator.yaml.example'].join('-');\nexport const VERIFY_RETIRED_FILES = [retiredConfigExample] as const;",
-)
-
-for path in [
-    'scripts/lib/Autonomous-ClaimPrResumeGate.ps1',
-    'scripts/lib/Autonomous-SpawnWorktreeGate.ps1',
-    'scripts/lib/Journaled-WorkerSendInternalCapability.ps1',
-]:
+def replace_all(path: str, old: str, new: str) -> None:
     p = Path(path)
     text = p.read_text(encoding='utf-8')
-    if '.agent-orchestrator' not in text:
-        raise SystemExit(f'{path}: retired state-root fallback missing')
-    p.write_text(text.replace('.agent-orchestrator', '.orchestrator-pack'), encoding='utf-8')
+    if old not in text:
+        raise SystemExit(f'{path}: missing {old!r}')
+    p.write_text(text.replace(old, new), encoding='utf-8')
 
-replace_exact(
-    'scripts/lib/Autonomous-SpawnWorktreeGate.ps1',
-    """function Get-AutonomousSpawnWorktreeProjectId {
-    $project = if ($env:AO_PROJECT_ID) { $env:AO_PROJECT_ID.Trim() }
-    elseif ($env:AO_PROJECT) { $env:AO_PROJECT.Trim() }
-    else { 'orchestrator-pack' }
-    if (-not $project) { return 'orchestrator-pack' }
-    return $project
-}
-""",
-    """function Get-AutonomousSpawnWorktreeProjectId {
-    $project = if ($env:OPK_PROJECT_ID) { $env:OPK_PROJECT_ID.Trim() } else { 'orchestrator-pack' }
-    if (-not $project) { return 'orchestrator-pack' }
-    return $project
-}
-""",
-)
+
+replace_exact('scripts/lib/Review-CycleCap.ps1', """    if ($env:AO_PR_NUMBER) {
+        [void][int]::TryParse([string]$env:AO_PR_NUMBER, [ref]$workerPr)
+    }
+    elseif ($env:GITHUB_PULL_REQUEST_NUMBER) {
+""", """    if ($env:GITHUB_PULL_REQUEST_NUMBER) {
+""")
+replace_exact('scripts/lib/Review-CycleCap.ps1', """    # Per-PR declaration diff first — reconcile/reeval iterate many open PRs; AO_ISSUE_NUMBER
+    # is the active worker session and must not override other PRs' tier budgets.
+""", """    # Per-PR declaration/GitHub identity is authoritative; runtime/session state
+    # must not override another PR's tier budget.
+""")
+replace_exact('scripts/lib/Review-CycleCap.ps1', """    if ($issueNumber -le 0 -and $env:AO_ISSUE_NUMBER) {
+        $workerPr = Get-ReviewCycleCapWorkerPrNumber
+        if ($workerPr -gt 0 -and $workerPr -eq $PrNumber) {
+            [void][int]::TryParse([string]$env:AO_ISSUE_NUMBER, [ref]$issueNumber)
+        }
+    }
+
+""", '')
+replace_exact('scripts/orchestrator-review-start-preflight.ps1', '@($env:OPK_REVIEW_START_PR_NUMBER, $env:AO_PR_NUMBER)', '@($env:OPK_REVIEW_START_PR_NUMBER)')
+replace_exact('scripts/orchestrator-review-start-preflight.ps1', '@($env:OPK_REVIEW_START_HEAD_SHA, $env:AO_PR_HEAD_SHA, $env:AO_HEAD_SHA)', '@($env:OPK_REVIEW_START_HEAD_SHA)')
+replace_exact('scripts/orchestrator-wake-common.ps1', """    $fromEnv = $env:AO_ORCHESTRATOR_SESSION_ID
+    if ($fromEnv) { return $fromEnv.Trim() }
+    throw 'Orchestrator session id required: -OrchestratorSessionId or AO_ORCHESTRATOR_SESSION_ID'
+""", """    throw 'Orchestrator session id required: pass -OrchestratorSessionId explicitly'
+""")
+replace_exact('scripts/wait-orchestrator-launch.ps1', "$orchId = if ($env:AO_ORCHESTRATOR_SESSION_ID) { $env:AO_ORCHESTRATOR_SESSION_ID.Trim() } else { 'op-orchestrator' }", "$orchId = 'op-orchestrator'")
+replace_exact('scripts/orchestrator-worktree-preflight.ps1', 'List stale orchestrator/* branches and AO worktrees before ao start (Issue #91).', 'List stale orchestrator/* branches and owned worktrees before runtime start (Issue #91).')
+replace_exact('scripts/orchestrator-worktree-preflight.ps1', 'the AO worktree directory (orchestrator namespace only).', 'the owned worktree directory (orchestrator namespace only).')
+replace_exact('scripts/orchestrator-worktree-preflight.ps1', "$orchId = if ($env:AO_ORCHESTRATOR_SESSION_ID) { $env:AO_ORCHESTRATOR_SESSION_ID.Trim() } else { 'op-orchestrator' }", "$orchId = 'op-orchestrator'")
+replace_exact('scripts/orchestrator-worktree-preflight.ps1', 'run cleanup before ao start if spawn shows branch_collision', 'run cleanup before runtime start if spawn shows branch_collision')
+replace_exact('scripts/orchestrator-worktree-preflight.ps1', 'verify with git worktree list and ao start.', 'verify with git worktree list and the runtime adapter start path.')
+replace_exact('scripts/lib/Orchestrator-Escalation.ps1', "$session = if ($OrchestratorSessionId) { $OrchestratorSessionId } elseif ($env:AO_ORCHESTRATOR_SESSION_ID) { $env:AO_ORCHESTRATOR_SESSION_ID } else { '' }", "$session = if ($OrchestratorSessionId) { $OrchestratorSessionId } else { '' }")
+replace_exact('scripts/lib/gh-governor.mjs', """  if (env.AO_SESSION_ID && !child) {
+    return 'interactive';
+  }
+""", '')
+replace_exact('scripts/lib/worker-status-store.mjs', """      ?? env.AO_REPO_SLUG
+      ?? env.GITHUB_REPOSITORY""", """      ?? env.GITHUB_REPOSITORY""")
+replace_exact('scripts/lib/Orchestrator-SideProcessProgress.ps1', 'AO_SIDE_PROCESS_AO_LIVENESS_SHIM_DISABLED', 'OPK_SIDE_PROCESS_LIVENESS_SHIM_DISABLED')
+replace_all('scripts/lib/Autonomous-GateCommon.ps1', 'Get-AoArgvSubcommand', 'Get-RuntimeArgvSubcommand')
+replace_all('scripts/lib/Orchestrator-AutonomousSpawnGate.ps1', 'Get-AoArgvSubcommand', 'Get-RuntimeArgvSubcommand')
+replace_all('scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1', 'Invoke-AoSendProbeViaMessage', 'Invoke-WorkerMessageSendProbe')
+replace_exact('scripts/lib/Journaled-WorkerSendInternalCapability.ps1', 'Process-bound journaled-worker-send internal ao send capabilities', 'Process-bound journaled-worker-send internal runtime send capabilities')
+replace_all('scripts/lib/Journaled-WorkerSendInternalCapability.ps1', 'Invoke-AoSendViaMessage', 'Invoke-WorkerMessageViaCatalog')
+replace_all('scripts/lib/Journaled-WorkerSendInternalCapability.ps1', 'Test-AoSendMessageContract', 'Test-WorkerMessageSendContract')
+replace_all('scripts/orchestrator-message-catalog.json', 'Invoke-AoSendViaMessage', 'Invoke-WorkerMessageViaCatalog')
+replace_all('scripts/orchestrator-message-send-helpers.manifest.json', 'Invoke-AoSendViaMessage', 'Invoke-WorkerMessageViaCatalog')
+replace_exact('.claude/skills/merge-with-local-adoption/reap-worktree.mjs', 'ORCA_WORKTREE_ID', 'runtime worktree-id selector')
