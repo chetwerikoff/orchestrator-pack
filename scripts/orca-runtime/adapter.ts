@@ -432,6 +432,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       readonly worker: RuntimeWorkerIdentity;
       readonly text?: string;
       readonly submitOnly?: boolean;
+      readonly writeOnly?: boolean;
     },
     options: RuntimeCallOptions = {},
   ): RuntimeDispatchResult {
@@ -447,7 +448,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');
-    args.push('--enter');
+    if (!input.writeOnly) args.push('--enter');
     const response = this.#run(args, options);
     if (response.ok) return { status: 'dispatched' };
     const reason = neutralFailureReason(response);

@@ -134,6 +134,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       };
     };
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => {
         probeCalls += 1;
         return ok({
@@ -306,6 +307,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       };
     };
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => ok({ terminal }),
     });
 
@@ -368,6 +370,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       };
     };
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => {
         probeCalls += 1;
         return ok({
@@ -447,6 +450,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       };
     };
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => {
         probeCalls += 1;
         if (probeCalls === 1) return ok({ terminal: stable });
@@ -517,6 +521,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       return { ok: false, error: { code: 'unexpected_test_operation', message: args.join(' ') } };
     };
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => {
         probeCalls += 1;
         return ok({

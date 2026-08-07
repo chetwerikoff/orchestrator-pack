@@ -59,6 +59,7 @@ export type StableSpawnIdentityResult =
 export interface StableWorkerSmokeSpawnPatchOptions {
   probe?: SmokeGenerationProbe;
   deliveryProbe?: SmokeDeliveryProbe;
+  agentStartupProbe?: (lines: readonly string[]) => boolean;
   now?: () => number;
   sleepMs?: (milliseconds: number) => void;
   deliveryConfirmationTimeoutMs?: number;
@@ -126,6 +127,11 @@ function defaultGenerationProbe(
 function defaultSleep(milliseconds: number): void {
   if (milliseconds <= 0) return;
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function hasCursorAgentStartupBanner(lines: readonly string[]): boolean {
+  return lines.some((line) => /^\s*Cursor Agent\s*$/u.test(line))
+    && lines.some((line) => /^\s*v\d+\.\d+\./u.test(line));
 }
 
 function defaultDeliveryProbe(binding: SmokeDeliveryBinding): boolean {
@@ -389,6 +395,7 @@ export function installStableWorkerSmokeSpawnPatch(
   const originalStop = prototype.stopWorker;
   const probe = options.probe ?? defaultGenerationProbe;
   const deliveryProbe = options.deliveryProbe ?? defaultDeliveryProbe;
+  const agentStartupProbe = options.agentStartupProbe ?? hasCursorAgentStartupBanner;
   const now = options.now ?? Date.now;
   const sleepMs = options.sleepMs ?? defaultSleep;
 
@@ -444,6 +451,121 @@ export function installStableWorkerSmokeSpawnPatch(
       };
       spawnedSmokeWorkers.set(stabilized.worker.identity, tracked);
       spawnedSmokeWorkers.set(result.value.identity, tracked);
+      if (options.agentStartupProbe) return { status: 'ok', value: stabilized.worker };
+
+      const startupTimeoutMs = Math.max(2, callOptions.timeoutMs ?? 30_000);
+      const startupDeadline = now() + startupTimeoutMs;
+      const startupRead = originalReadBoundedOutput.call(this, {
+        worker: stabilized.worker.identity,
+        limit: 200,
+      }, callOptions);
+      if (startupRead.status !== 'ok') {
+        tracked.preserveOwnedPanelOnDeliveryFailure = true;
+        return {
+          status: 'failed',
+          operation: 'spawn_worker',
+          reason: [
+            'worker_agent_start_observation_failed',
+            `observation=${safeToken(startupRead.reason)}`,
+            'agent_banner=unobserved',
+            'resolution=inspect_the_preserved_child_panel_then_retry_from_the_exact_pr_head',
+          ].join(';'),
+        };
+      }
+
+      let startupLines = startupRead.value.lines;
+      let startupToken = startupRead.value.observationToken;
+      let startupSubmit: RuntimeDispatchResult = { status: 'dispatched' };
+      if (!agentStartupProbe(startupLines)) {
+        const remainingBeforeSubmit = startupDeadline - now();
+        if (remainingBeforeSubmit <= 0) {
+          tracked.preserveOwnedPanelOnDeliveryFailure = true;
+          return {
+            status: 'failed',
+            operation: 'spawn_worker',
+            reason: [
+              'worker_agent_not_started',
+              'agent_banner=missing',
+              'command_submit=not_attempted',
+              'pane_observation=unchanged_before_submit',
+              'resolution=inspect_the_preserved_child_panel_then_retry_from_the_exact_pr_head',
+            ].join(';'),
+          };
+        }
+        sleepMs(Math.min(50, remainingBeforeSubmit));
+        startupSubmit = originalDispatch.call(this, {
+          worker: stabilized.worker.identity,
+          submitOnly: true,
+        }, {
+          ...callOptions,
+          timeoutMs: Math.max(
+            1,
+            Math.min(callOptions.timeoutMs ?? startupTimeoutMs, startupDeadline - now()),
+          ),
+        });
+        if (startupSubmit.status !== 'dispatched') {
+          tracked.preserveOwnedPanelOnDeliveryFailure = true;
+          return {
+            status: 'failed',
+            operation: 'spawn_worker',
+            reason: [
+              'worker_agent_start_failed',
+              `command_submit=${safeToken(dispatchDiagnostic(startupSubmit))}`,
+              'agent_banner=missing',
+              'resolution=inspect_the_preserved_child_panel_then_retry_from_the_exact_pr_head',
+            ].join(';'),
+          };
+        }
+
+        while (now() < startupDeadline) {
+          sleepMs(Math.min(250, Math.max(1, startupDeadline - now())));
+          const remaining = startupDeadline - now();
+          if (remaining <= 0) break;
+          const observed = originalReadBoundedOutput.call(this, {
+            worker: stabilized.worker.identity,
+            previousToken: startupToken,
+            limit: 200,
+          }, {
+            ...callOptions,
+            timeoutMs: Math.max(
+              1,
+              Math.min(callOptions.timeoutMs ?? startupTimeoutMs, remaining),
+            ),
+          });
+          if (observed.status !== 'ok') {
+            tracked.preserveOwnedPanelOnDeliveryFailure = true;
+            return {
+              status: 'failed',
+              operation: 'spawn_worker',
+              reason: [
+                'worker_agent_start_observation_failed',
+                `observation=${safeToken(observed.reason)}`,
+                `command_submit=${safeToken(dispatchDiagnostic(startupSubmit))}`,
+                'agent_banner=unobserved',
+                'resolution=inspect_the_preserved_child_panel_then_retry_from_the_exact_pr_head',
+              ].join(';'),
+            };
+          }
+          startupLines = observed.value.lines;
+          startupToken = observed.value.observationToken;
+          if (agentStartupProbe(startupLines)) break;
+        }
+      }
+
+      if (!agentStartupProbe(startupLines)) {
+        tracked.preserveOwnedPanelOnDeliveryFailure = true;
+        return {
+          status: 'failed',
+          operation: 'spawn_worker',
+          reason: [
+            'worker_agent_not_started',
+            `command_submit=${safeToken(dispatchDiagnostic(startupSubmit))}`,
+            'agent_banner=missing',
+            'pane_observation=changed_without_agent_banner',
+            'resolution=inspect_the_preserved_child_panel_then_retry_from_the_exact_pr_head',
+          ].join(';'),
+        };
+      }
       return { status: 'ok', value: stabilized.worker };
     },
   });
@@ -467,11 +589,16 @@ export function installStableWorkerSmokeSpawnPatch(
         return { status: 'send_failed', reason: refreshed.reason };
       }
 
-      const result = originalDispatch.call(this, input, callOptions);
-      if (input.submitOnly || result.status === 'send_failed') return result;
-
       const binding = smokeDeliveryBindingFromPrompt(input.text ?? '');
-      if (!binding) return result;
+      if (input.submitOnly || !binding) {
+        return originalDispatch.call(this, input, callOptions);
+      }
+
+      const result = originalDispatch.call(this, {
+        ...input,
+        writeOnly: true,
+      }, callOptions);
+      if (result.status === 'send_failed') return result;
       const envTimeoutMs = Number.parseInt(
         process.env.WORKER_SMOKE_SUBMIT_CONFIRMATION_TIMEOUT_MS ?? '',
         10,
@@ -491,6 +618,7 @@ export function installStableWorkerSmokeSpawnPatch(
         worker: input.worker,
         limit: 200,
       }, callOptions);
+      sleepMs(50);
       const retried = originalDispatch.call(this, {
         worker: input.worker,
         submitOnly: true,

@@ -89,12 +89,13 @@ describe('Issue #1359 real worker-smoke entrypoint', () => {
       const fakeOrca = join(bin, 'orca');
       writeFileSync(fakeOrca, `#!/usr/bin/env node
 const { createHash } = require('node:crypto');
-const { appendFileSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
 const args = process.argv.slice(2).filter((value) => value !== '--json');
 appendFileSync(process.env.FAKE_ORCA_CALLS, JSON.stringify(args) + '\\n', 'utf8');
 const root = process.env.FAKE_ORCA_ROOT;
+const startupPath = path.join(root, 'agent-started');
 const head = process.env.FAKE_ORCA_HEAD;
 const terminal = {
   handle: 'terminal-1359',
@@ -122,7 +123,11 @@ if (args[0] === 'worktree' && args[1] === 'current') {
   writeFileSync(process.env.FAKE_ORCA_PROMPT, text, 'utf8');
   ok({ sent: true });
 } else if (args[0] === 'terminal' && args[1] === 'send' && args.includes('--enter')) {
-  const text = readFileSync(process.env.FAKE_ORCA_PROMPT, 'utf8');
+  if (!existsSync(process.env.FAKE_ORCA_PROMPT)) {
+    writeFileSync(startupPath, 'started', 'utf8');
+    ok({ sent: true, startup: true });
+  } else {
+    const text = readFileSync(process.env.FAKE_ORCA_PROMPT, 'utf8');
   const runId = /run-id:\\s*([^\\r\\n]+)/u.exec(text)?.[1]?.trim();
   const artifactDir = /artifact-dir:\\s*([^\\r\\n]+)/u.exec(text)?.[1]?.trim();
   const progressPath = /Progress file:\\s*([^\\r\\n]+)/u.exec(text)?.[1]?.trim();
@@ -154,10 +159,17 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     );
     ok({ sent: true });
   }
+  }
 } else if (args[0] === 'terminal' && args[1] === 'close') {
   ok({ closed: true });
 } else if (args[0] === 'terminal' && args[1] === 'read') {
-  ok({ terminal: { handle: terminal.handle, status: 'running', tail: [], nextCursor: '1' } });
+  const started = existsSync(startupPath);
+  ok({ terminal: {
+    handle: terminal.handle,
+    status: 'running',
+    tail: started ? ['Cursor Agent', 'v2026.08.04-test'] : ['$ cursor-agent'],
+    nextCursor: started ? '2' : '1',
+  } });
 } else if (args[0] === 'terminal' && args[1] === 'wait') {
   ok({ wait: { handle: terminal.handle, condition: 'tui-idle', satisfied: true, status: 'running' } });
 } else {
@@ -251,12 +263,17 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         .filter((index) => index >= 0);
       expect(createIndex).toBeGreaterThanOrEqual(0);
       expect(showIndexes.length).toBeGreaterThanOrEqual(3);
-      expect(sendIndexes).toHaveLength(2);
-      expect(calls[sendIndexes[0]!] ?? []).toContain('--text');
-      expect(calls[sendIndexes[1]!] ?? []).not.toContain('--text');
-      expect(calls[sendIndexes[1]!] ?? []).toContain('--enter');
+      expect(sendIndexes).toHaveLength(3);
+      expect(calls[sendIndexes[0]!] ?? []).not.toContain('--text');
+      expect(calls[sendIndexes[0]!] ?? []).toContain('--enter');
+      expect(calls[sendIndexes[1]!] ?? []).toContain('--text');
+      expect(calls[sendIndexes[1]!] ?? []).not.toContain('--enter');
+      expect(calls[sendIndexes[2]!] ?? []).not.toContain('--text');
+      expect(calls[sendIndexes[2]!] ?? []).toContain('--enter');
+      expect(readIndexes.some((index) => index > createIndex && index < sendIndexes[0]!)).toBe(true);
       expect(readIndexes.some((index) => index > sendIndexes[0]! && index < sendIndexes[1]!)).toBe(true);
-      const postSubmitReadIndex = readIndexes.find((index) => index > sendIndexes[1]!);
+      expect(readIndexes.some((index) => index > sendIndexes[1]! && index < sendIndexes[2]!)).toBe(true);
+      const postSubmitReadIndex = readIndexes.find((index) => index > sendIndexes[2]!);
       expect(postSubmitReadIndex).toBeDefined();
       expect(calls[postSubmitReadIndex!] ?? []).toContain('--cursor');
       expect(operations.filter((value) => value === 'terminal close')).toHaveLength(1);
@@ -296,6 +313,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     };
     let probeCalls = 0;
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => {
         const attempt = ++probeCalls;
         if (attempt === 1) return ok({ terminal: owned });
@@ -356,6 +374,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     };
     let probeCalls = 0;
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => {
         probeCalls += 1;
         if (probeCalls === 1) return ok({ terminal: owned });
@@ -425,6 +444,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     };
     let clock = 0;
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => ok({ terminal }),
       deliveryProbe: () => false,
       deliveryConfirmationTimeoutMs: 4,
@@ -532,6 +552,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       };
     };
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => {
         probeCalls += 1;
         return ok({ terminal: terminal() });
@@ -648,6 +669,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       };
     };
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => {
         probeCalls += 1;
         return probeCalls === 1 ? ok({ terminal }) : ok({});
@@ -718,6 +740,61 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(receipt.cause?.detail).toContain('"scenarioOrdinal":1');
       expect(receipt.cause?.detail).toContain('"kind":"non_error_object"');
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies a missing Cursor Agent banner as a transport startup failure', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-agent-start-'));
+    const terminal: OrcaTerminalSummary = {
+      handle: 'terminal-agent-start',
+      title: 'agent-start',
+      incarnationId: 'generation-agent-start',
+      worktreePath: root,
+      status: 'running',
+    };
+    const calls: string[][] = [];
+    const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      calls.push([...args]);
+      if (args[0] === 'terminal' && args[1] === 'create') return ok({ terminal } as T);
+      if (args[0] === 'worktree' && args[1] === 'current') {
+        return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
+      }
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal } as T);
+      if (args[0] === 'terminal' && args[1] === 'send') return ok({ sent: true } as T);
+      if (args[0] === 'terminal' && args[1] === 'read') {
+        return ok({ terminal: {
+          handle: terminal.handle,
+          status: 'running',
+          tail: ['$ cursor-agent'],
+          nextCursor: '1',
+        } } as T);
+      }
+      return { ok: false, error: { code: 'unexpected_test_operation', message: args.join(' ') } };
+    };
+    const restore = installStableWorkerSmokeSpawnPatch({
+      probe: () => ok({ terminal }),
+    });
+
+    try {
+      const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
+      const spawned = adapter.spawnWorker(
+        { title: 'agent-start', command: 'cursor-agent', workspace: 'active' },
+        { cwd: root, timeoutMs: 20 },
+      );
+
+      expect(spawned.status).toBe('failed');
+      if (spawned.status === 'failed') {
+        expect(spawned.reason).toContain('worker_agent_not_started');
+        expect(spawned.reason).toContain('agent_banner=missing');
+        expect(spawned.reason).not.toContain('prompt_delivery_unconfirmed');
+      }
+      const sends = calls.filter((args) => args[0] === 'terminal' && args[1] === 'send');
+      expect(sends).toHaveLength(1);
+      expect(sends[0]).not.toContain('--text');
+      expect(sends[0]).toContain('--enter');
+    } finally {
+      restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
