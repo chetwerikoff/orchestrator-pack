@@ -37,6 +37,20 @@ replace_exact('scripts/lib/Review-CycleCap.ps1', """    if ($issueNumber -le 0 -
     }
 
 """, '')
+replace_exact('scripts/review-cycle-cap.test.ts', """  it('Review-CycleCap.ps1 scopes AO_ISSUE_NUMBER to worker PR only', () => {
+    expect(capPsHelperSource).toMatch(/Get-ReviewCycleCapWorkerPrNumber/);
+    expect(capPsHelperSource).toMatch(/workerPr -gt 0 -and \\$workerPr -eq \\$PrNumber/);
+    expect(capPsHelperSource).toMatch(/Get-GhPrContextFromView/);
+  });
+""", """  it('Review-CycleCap.ps1 derives issue authority without retired runtime env', () => {
+    const retiredIssueSelector = ['AO', 'ISSUE', 'NUMBER'].join('_');
+    const retiredPrSelector = ['AO', 'PR', 'NUMBER'].join('_');
+    expect(capPsHelperSource).not.toContain(retiredIssueSelector);
+    expect(capPsHelperSource).not.toContain(retiredPrSelector);
+    expect(capPsHelperSource).toMatch(/Get-IssueNumberFromPrDiff/);
+    expect(capPsHelperSource).toMatch(/Get-GhPrContextFromView/);
+  });
+""")
 replace_exact('scripts/orchestrator-review-start-preflight.ps1', '@($env:OPK_REVIEW_START_PR_NUMBER, $env:AO_PR_NUMBER)', '@($env:OPK_REVIEW_START_PR_NUMBER)')
 replace_exact('scripts/orchestrator-review-start-preflight.ps1', '@($env:OPK_REVIEW_START_HEAD_SHA, $env:AO_PR_HEAD_SHA, $env:AO_HEAD_SHA)', '@($env:OPK_REVIEW_START_HEAD_SHA)')
 replace_exact('scripts/orchestrator-wake-common.ps1', """    $fromEnv = $env:AO_ORCHESTRATOR_SESSION_ID
