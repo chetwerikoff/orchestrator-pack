@@ -17,6 +17,7 @@ jobs:
       - name: Checkout exact head
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Setup Node.js
@@ -26,6 +27,8 @@ jobs:
       - name: Run fixture
         shell: bash
         run: |
+          git config user.name 'fixture-smoke'
+          git config user.email 'fixture-smoke@example.invalid'
           set +e
           node scripts/lib/vitest-runtime-history-merge.fixture.mjs
           code=$?
