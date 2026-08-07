@@ -51,12 +51,18 @@ const EXCLUDED_PREFIXES = [
   'scripts/gate-runner/census/',
   'scripts/gate-runner/goldens/',
   'scripts/fixtures/gate-runner/legacy-wave-3b/',
+  // Foundation-terminalized sources are frozen pre-hard-cut behavior witnesses;
+  // no production caller imports this directory.
+  'scripts/pr2-foundation/terminalized/',
 ] as const;
 const EXCLUDED_EXACT = new Set([
   'docs/issue_queue_index.md',
   'docs/vitest-light-lane-isolation-audit-874.md',
   'docs/submit-reconcile-delivery-source-audit.json',
   'scripts/estate-cut/issue-906.base-anchor.json',
+  'scripts/estate-cut/issue-906.manifest.json',
+  'scripts/pr2a/planning-manifest.json',
+  'scripts/reachability-purge.manifest.json',
   'scripts/fixtures/reaction-config/report_stale_message.live-capture.provenance.json',
   'scripts/fixtures/reaction-config/report_stale_message.live-capture.txt',
   'scripts/lib/vitest-pre-topology-measurement.mjs',

@@ -2,17 +2,17 @@ import { accessSync, constants } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { delimiter, join } from 'node:path';
 
-export const ORCA_WORKER_SMOKE_CONTRACT_EVIDENCE_DIR =
+export const orcaWorkerSmokeContractEvidenceDir =
   'tests/external-output-references/captures/orca-worker-smoke';
 
-export const ORCA_SMOKE_CONTROL_PLANE_CODES = [
+export const orcaSmokeControlPlaneCodes = [
   'channel_stale_handle',
   'channel_lookup_empty',
   'channel_control_unavailable',
   'channel_control_overwritten',
 ] as const;
 
-export type OrcaSmokeControlPlaneCode = (typeof ORCA_SMOKE_CONTROL_PLANE_CODES)[number];
+export type OrcaSmokeControlPlaneCode = (typeof orcaSmokeControlPlaneCodes)[number];
 
 export type OrcaOperationName =
   | 'worktree_current'
@@ -115,7 +115,7 @@ export interface OrcaRunOptions {
   readonly inheritParentEnv?: boolean;
 }
 
-const ORCA_CANDIDATES = ['orca-dev', 'orca-ide', 'orca'] as const;
+const orcaCandidates = ['orca-dev', 'orca-ide', 'orca'] as const;
 
 function errnoCode(error: unknown): string | undefined {
   return error instanceof Error && 'code' in error
@@ -126,7 +126,7 @@ function errnoCode(error: unknown): string | undefined {
 export function isOrcaSmokeControlPlaneCode(
   value: string | undefined,
 ): value is OrcaSmokeControlPlaneCode {
-  return (ORCA_SMOKE_CONTROL_PLANE_CODES as readonly string[]).includes(value ?? '');
+  return (orcaSmokeControlPlaneCodes as readonly string[]).includes(value ?? '');
 }
 
 export function resolveOrcaOperation(args: readonly string[]): OrcaOperationName | undefined {
@@ -158,10 +158,10 @@ export function findExecutableOnPath(name: string, pathEnv = process.env.PATH ??
 }
 
 export function resolveOrcaExecutable(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.ORCA_CLI_COMMAND?.trim();
+  const override = env.OPK_RUNTIME_CLI_COMMAND?.trim();
   if (override) return override;
   const pathEnv = env.PATH ?? process.env.PATH ?? '';
-  for (const candidate of ORCA_CANDIDATES) {
+  for (const candidate of orcaCandidates) {
     if (findExecutableOnPath(candidate, pathEnv)) return candidate;
   }
   return 'orca';

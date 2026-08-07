@@ -347,5 +347,5 @@ needed because the fold creates no cache, ledger, service, watcher, or second du
 
 ## Orca executable selection
 
-Use `ORCA_CLI_COMMAND` when exported. Otherwise prefer `orca-dev`, then `orca-ide`, then `orca`.
+Use `OPK_RUNTIME_CLI_COMMAND` when exported. Otherwise prefer `orca-dev`, then `orca-ide`, then `orca`.
 Do not assume `/usr/bin/orca` is the CLI on Linux.
