@@ -1,4 +1,4 @@
-name: issue-1352-residual-batch3
+name: issue-1352-residual-batch4
 
 on:
   pull_request:
@@ -22,10 +22,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp .github/issue-1352-residual-batch1.py "$RUNNER_TEMP/issue-1352-residual-batch3.py"
+          cp .github/issue-1352-residual-batch1.py "$RUNNER_TEMP/issue-1352-residual-batch4.py"
           git fetch origin agent/issue-1352-hard-cut
           git checkout -B agent/issue-1352-hard-cut origin/agent/issue-1352-hard-cut
-          expected_head='3b0f3201d6b25e94fd2ae3868d60f0dd5443a991'
+          expected_head='3665d0ac34ce669949f8f006f3a2e9ae0db400f9'
           actual_head="$(git rev-parse HEAD)"
           test "$actual_head" = "$expected_head"
       - uses: actions/setup-node@v4
@@ -36,30 +36,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python "$RUNNER_TEMP/issue-1352-residual-batch3.py"
+          python "$RUNNER_TEMP/issue-1352-residual-batch4.py"
           npm ci --include=dev
           npm run typecheck:foundation
-          pwsh -NoProfile -File scripts/test-all.ps1 -SkipNpm
           npm test -- --maxWorkers=1 \
+            scripts/pr-session-binding-cache.test.ts \
+            scripts/gh-wrapper.test.ts \
             scripts/runtime-retirement/retired-surface-guard.test.ts \
-            scripts/review-cycle-cap.test.ts \
-            scripts/gh-governor.test.ts \
-            scripts/worker-status-store.test.ts \
             --reporter=dot
           node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts > "$RUNNER_TEMP/residual.json" || true
           node --input-type=module - "$RUNNER_TEMP/residual.json" <<'NODE'
           import { readFileSync } from 'node:fs';
           const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-          if (result.violations.length >= 240) {
-            console.error(`residual census did not shrink: ${result.violations.length}`);
-            process.exit(3);
-          }
-          const retiredSelectors = ['AO_PR_NUMBER','AO_ISSUE_NUMBER','AO_ORCHESTRATOR_SESSION_ID','AO_REPO_SLUG','AO_PR_HEAD_SHA','AO_HEAD_SHA'];
-          const migrated = new Set(['scripts/lib/Review-CycleCap.ps1','scripts/orchestrator-review-start-preflight.ps1','scripts/orchestrator-wake-common.ps1','scripts/wait-orchestrator-launch.ps1','scripts/orchestrator-worktree-preflight.ps1','scripts/lib/Orchestrator-Escalation.ps1','scripts/lib/gh-governor.mjs','scripts/lib/worker-status-store.mjs']);
-          const forbidden = result.violations.filter((row) => migrated.has(row.path) && retiredSelectors.includes(row.match));
+          const migrated = new Set(['docs/pr-session-binding-cache.mjs','scripts/pr-session-binding-cache.test.ts']);
+          const forbidden = result.violations.filter((row) => migrated.has(row.path) && row.surfaceId === 'legacy-runtime-selector');
           if (forbidden.length) {
             console.error(JSON.stringify(forbidden, null, 2));
-            process.exit(4);
+            process.exit(2);
+          }
+          if (result.violations.length >= 208) {
+            console.error(`residual census did not shrink: ${result.violations.length}`);
+            process.exit(3);
           }
           console.log(`residual_hits=${result.violations.length}`);
           NODE
@@ -71,5 +68,5 @@ jobs:
           git config user.name chetwerikoff
           git config user.email 85295154+chetwerikoff@users.noreply.github.com
           git add -A
-          git commit -m 'refactor(runtime): make review and wake identity explicit'
+          git commit -m 'refactor(runtime): make push-register identity explicit'
           git push origin HEAD:agent/issue-1352-hard-cut
