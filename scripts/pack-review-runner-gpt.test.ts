@@ -1747,3 +1747,266 @@ describe('GPT frozen census persistence and stale recovery (Issue #1276 r08)', (
     }
   });
 });
+
+describe('Issue #1393 legacy aggregate compatibility and runner harvest matrix', () => {
+  type HarvestClass = 'harvest_failed' | 'no_reply' | 'forbidden_verdict_envelope';
+
+  function issue1393Start(
+    storeRoot: string,
+    overrides: Record<string, unknown> = {},
+  ): Parameters<typeof startPackReview>[0] {
+    return {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 1276,
+      headSha: HEAD_A,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixturePrState: 'OPEN',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixturePostReviewHeadSha: HEAD_A,
+      fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      claimMode: 'preacquired',
+      ...overrides,
+    };
+  }
+
+  function expectPersistedHarvestSlot(
+    runId: string,
+    storeRoot: string,
+    slotId: string,
+    invocationId: string,
+    harvestClass: HarvestClass,
+  ): void {
+    const run = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    const slot = run?.reviewRound?.sourceSlots.find((candidate) => candidate.slotId === slotId);
+    const evidenceRoot = `/fixture/gpt-evidence/${invocationId}`;
+    expect(slot).toMatchObject({
+      slotId,
+      lifecycle: 'terminal',
+      invocationId,
+      terminalClass: harvestClass,
+      terminalResult: {
+        invocation_id: invocationId,
+        send_count: 1,
+        review_harvest_class: harvestClass,
+        review_evidence: {
+          adapterPromptPath: `${evidenceRoot}/adapter-prompt.txt`,
+          terminalReplyPath: `${evidenceRoot}/terminal-reply.txt`,
+          mappingErrorPath: `${evidenceRoot}/mapping-error.txt`,
+          adapterStdoutPath: `${evidenceRoot}/adapter-stdout.json`,
+        },
+      },
+    });
+    expect(slot?.payload).toBeUndefined();
+  }
+
+  function expectSingleReconciledComment(
+    runId: string,
+    storeRoot: string,
+    capture: string,
+    reviewId: number,
+  ): void {
+    const url = `fixture://pull/1276/review/${reviewId}`;
+    const run = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(run?.githubReviewReconciliation).toMatchObject({
+      event: 'COMMENT',
+      phase: 'complete',
+      commentReviewId: reviewId,
+      commentReviewUrl: url,
+    });
+    const captured = JSON.parse(readFileSync(capture, 'utf8')) as {
+      event: string;
+      body: string;
+      actions: Array<{ kind: string; event: string }>;
+    };
+    expect(captured.event).toBe('COMMENT');
+    expect(captured.actions.filter((action) => action.kind === 'post' && action.event === 'COMMENT')).toHaveLength(1);
+  }
+
+  it('reads the exact legacy schema-v1 synthetic aggregate as historical while rejecting it on current writes', async () => {
+    const storeRoot = tempRoot('opk-1393-legacy-synthetic-read-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const legacyRound = storedGptRound();
+    legacyRound.issueNumber = 1393;
+    const malformed = legacyRound.sourceSlots[1]!;
+    legacyRound.sourceSlots[1] = {
+      ...malformed,
+      terminalClass: 'reviewer_output_malformed',
+      terminalResult: storedTerminalTurnResult(malformed.invocationId!),
+      payload: undefined,
+    };
+    const legacy = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1393,
+      headSha: HEAD_B,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      reviewRound: legacyRound,
+    }).run;
+    const recordPath = path.join(storeRoot, 'runs', `${legacy.id}.json`);
+    const raw = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>;
+    const syntheticFinding = {
+      title: 'GPT source source-02 did not complete',
+      body: 'The frozen GPT source slot settled as reviewer_output_malformed; the round cannot be clean.',
+      severity: 'blocking',
+      sourceSlotId: 'source-02',
+    };
+    const recordedAtUtc = new Date().toISOString();
+    Object.assign(raw, {
+      status: 'changes_requested',
+      latestRunStatus: 'changes_requested',
+      completedAtUtc: recordedAtUtc,
+      exitCode: 0,
+      reviewVerdict: 'findings',
+      findingCount: 1,
+      findings: [syntheticFinding],
+      journalOutcome: {
+        state: 'persisted',
+        recordedAtUtc,
+        reason: 'legacy schema-v1 persisted verdict',
+        idempotencyKey: `verdict:${legacy.id}:${HEAD_B}`,
+        attempts: 1,
+      },
+    });
+    writeFileSync(recordPath, `${JSON.stringify(raw)}\n`, 'utf8');
+
+    const listed = listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot });
+    const historical = listed.find((record) => record.id === legacy.id);
+    expect(historical).toMatchObject({ status: 'changes_requested' });
+    expect(historical?.reviewVerdict).toBeUndefined();
+    expect(historical?.findingCount).toBeUndefined();
+    expect(historical?.findings).toEqual([]);
+    expect(historical?.reviewRound?.sourceSlots[1]?.terminalClass).toBe('reviewer_output_malformed');
+    expect(() => updatePackReviewRun(
+      legacy.id,
+      { surface: 'current-write-must-not-repersist-synthetic-aggregate' },
+      { projectId: 'orchestrator-pack', storeRoot },
+    )).toThrow(/reviewVerdict does not match terminal source census/);
+
+    const result = await startPackReview(issue1393Start(storeRoot, {
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-current-source-01') }],
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-current-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-current-source-03') }],
+      },
+    }));
+    expect(result.ok).toBe(true);
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(2);
+  });
+
+  it.each([
+    ['harvest_failed', 139301],
+    ['no_reply', 139302],
+    ['forbidden_verdict_envelope', 139303],
+  ] as const)('carries %s through runner persistence, error status, reconciliation, and receipt', async (harvestClass, reviewId) => {
+    const storeRoot = tempRoot(`opk-1393-runner-${harvestClass}-`);
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const statusStates: string[] = [];
+
+    const result = await startPackReview(issue1393Start(storeRoot, {
+      fixtureGithubReviewId: reviewId,
+      fixtureRequiredStatusWriter: async (request) => {
+        statusStates.push(request.state);
+      },
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
+        'source-02': [{ stdout: harvestTerminalPayload('inv-source-02', harvestClass), exitCode: 1 }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
+    }));
+
+    const expectedUrl = `fixture://pull/1276/review/${reviewId}`;
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'failed',
+      reason: 'harvest_failed',
+      githubReviewId: reviewId,
+      githubReviewUrl: expectedUrl,
+    });
+    expect(statusStates).toEqual(['pending', 'error']);
+    expectPersistedHarvestSlot(String(result.runId), storeRoot, 'source-02', 'inv-source-02', harvestClass);
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(run?.reviewVerdict).toBeUndefined();
+    expect(run?.findingCount ?? 0).toBe(0);
+    expect(run?.findings).toEqual([]);
+    expectSingleReconciledComment(String(result.runId), storeRoot, capture, reviewId);
+    const posted = readFileSync(capture, 'utf8');
+    expect(posted).toContain('source-02');
+    expect(posted).toContain(harvestClass);
+    expect(posted).toContain('/fixture/gpt-evidence/inv-source-02/adapter-prompt.txt');
+    expect(posted).not.toContain('GPT source source-02 did not complete');
+  });
+
+  it('persists multiple different harvest incident classes in one round with one reconciled COMMENT', async () => {
+    const storeRoot = tempRoot('opk-1393-runner-multi-harvest-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    const reviewId = 139304;
+    harnessEnv(storeRoot, capture);
+    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const statusStates: string[] = [];
+
+    const result = await startPackReview(issue1393Start(storeRoot, {
+      fixtureGithubReviewId: reviewId,
+      fixtureRequiredStatusWriter: async (request) => {
+        statusStates.push(request.state);
+      },
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: harvestTerminalPayload('inv-source-01', 'harvest_failed'), exitCode: 1 }],
+        'source-02': [{ stdout: harvestTerminalPayload('inv-source-02', 'no_reply'), exitCode: 1 }],
+        'source-03': [{ stdout: harvestTerminalPayload('inv-source-03', 'forbidden_verdict_envelope'), exitCode: 1 }],
+      },
+    }));
+
+    const expectedUrl = `fixture://pull/1276/review/${reviewId}`;
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'failed',
+      reason: 'harvest_failed',
+      githubReviewId: reviewId,
+      githubReviewUrl: expectedUrl,
+    });
+    expect(statusStates).toEqual(['pending', 'error']);
+    expectPersistedHarvestSlot(String(result.runId), storeRoot, 'source-01', 'inv-source-01', 'harvest_failed');
+    expectPersistedHarvestSlot(String(result.runId), storeRoot, 'source-02', 'inv-source-02', 'no_reply');
+    expectPersistedHarvestSlot(
+      String(result.runId),
+      storeRoot,
+      'source-03',
+      'inv-source-03',
+      'forbidden_verdict_envelope',
+    );
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(run?.reviewVerdict).toBeUndefined();
+    expect(run?.findingCount ?? 0).toBe(0);
+    expect(run?.findings).toEqual([]);
+    expectSingleReconciledComment(String(result.runId), storeRoot, capture, reviewId);
+    const posted = readFileSync(capture, 'utf8');
+    for (const value of [
+      'source-01',
+      'harvest_failed',
+      'source-02',
+      'no_reply',
+      'source-03',
+      'forbidden_verdict_envelope',
+    ]) {
+      expect(posted).toContain(value);
+    }
+    expect(posted).not.toContain('GPT source source-01 did not complete');
+    expect(posted).not.toContain('GPT source source-02 did not complete');
+    expect(posted).not.toContain('GPT source source-03 did not complete');
+  });
+});
