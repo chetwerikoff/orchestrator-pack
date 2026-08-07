@@ -81,7 +81,7 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout HEAD^ -- .github/workflows/read-delegation-audit.yml
+          git checkout origin/main -- .github/workflows/read-delegation-audit.yml
           git rm scripts/issue-1352-focused-repair.py
           git add scripts/pr-scope-declaration.ts scripts/worker-smoke.test.ts scripts/runtime/caller-census.ts docs/orca-runtime-caller-census.md plugins/codex-pr-reviewer/tests/review.test.ts scripts/pack-review-runner.ts scripts/pack-review-runner-gpt.test.ts scripts/pr2-foundation/real-scope-proof.ts .github/workflows/read-delegation-audit.yml
           git diff --cached --check
