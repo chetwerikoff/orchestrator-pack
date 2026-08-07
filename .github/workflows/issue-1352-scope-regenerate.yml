@@ -1,0 +1,51 @@
+name: Issue 1352 scope regeneration
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  regenerate:
+    if: github.event.pull_request.number == 1378
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Regenerate canonical declaration and remove this temporary workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git rm -- .github/workflows/issue-1352-scope-regenerate.yml
+          gh issue view 1352 --repo "$GITHUB_REPOSITORY" --json body -q .body > "$RUNNER_TEMP/issue-1352.md"
+          git diff --name-only origin/main -- . > "$RUNNER_TEMP/changed-paths.txt"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/tmp/unused')
+          PY
+          declared="$(paste -sd, "$RUNNER_TEMP/changed-paths.txt")"
+          node --experimental-strip-types scripts/pr-scope-declaration.ts \
+            --issue 1352 \
+            --declared-paths "$declared" \
+            --issue-body-file "$RUNNER_TEMP/issue-1352.md" \
+            --output docs/declarations/1352.pr-scope.json
+          git add docs/declarations/1352.pr-scope.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "chore(scope): regenerate issue 1352 declaration"
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
