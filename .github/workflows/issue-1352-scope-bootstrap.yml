@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: write
-  issues: read
 
 jobs:
   apply:
@@ -19,19 +18,12 @@ jobs:
         with:
           ref: agent/issue-1352-hard-cut
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Apply exact PR bootstrap and regenerate declaration
+      - name: Apply exact PR migration bootstrap
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git fetch origin main
           python - <<'PY'
           from pathlib import Path
           path = Path('.github/workflows/scope-guard.yml')
@@ -48,18 +40,6 @@ jobs:
           path.write_text(text.replace(needle, replacement, 1))
           PY
           rm .github/workflows/issue-1352-scope-bootstrap.yml
-          npm ci --include=dev
-          mapfile -t paths < <(git diff --name-only origin/main -- . ':(exclude)docs/declarations/1352.pr-scope.json')
-          if [ "${#paths[@]}" -eq 0 ]; then
-            echo 'no implementation paths found' >&2
-            exit 1
-          fi
-          joined=$(IFS=,; echo "${paths[*]}")
-          node --experimental-strip-types scripts/pr-scope-declaration.ts \
-            --issue 1352 \
-            --declared-paths "$joined" \
-            --output docs/declarations/1352.pr-scope.json
-          node --experimental-strip-types -e "import('./scripts/pr-scope-declaration.ts').then(m=>{const fs=require('node:fs');const v=m.validatePrScopeDeclaration(JSON.parse(fs.readFileSync('docs/declarations/1352.pr-scope.json','utf8')),1352);if(!v.ok){console.error(v);process.exit(1)}})"
           git add -A
           git commit -m 'fix(scope): bootstrap Issue 1352 migration guard'
           git push origin HEAD:agent/issue-1352-hard-cut
