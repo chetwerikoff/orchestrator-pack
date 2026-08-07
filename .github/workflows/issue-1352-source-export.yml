@@ -1,0 +1,28 @@
+name: issue-1352-source-export
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    if: github.event.pull_request.number == 1378
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - name: Archive exact PR head
+        shell: bash
+        run: tar --exclude=.git --exclude=node_modules -czf "$RUNNER_TEMP/pr-1378-source.tgz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-1378-source-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/pr-1378-source.tgz
+          if-no-files-found: error
+          retention-days: 1
