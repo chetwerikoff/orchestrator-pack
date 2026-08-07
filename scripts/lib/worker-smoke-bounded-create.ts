@@ -72,11 +72,15 @@ export interface HistoricalSmokeQuarantine {
 
 type TrackedSmokeWorkerRefresh =
   | { status: 'not_tracked' }
-  | { status: 'ok'; generationChanged: boolean }
+  | { status: 'ok' }
   | { status: 'failed'; reason: string };
 
+type WorkerIdentityFailureCode =
+  | 'worker_generation_mismatch'
+  | 'worker_workspace_mismatch'
+  | 'worker_generation_unresolved';
+
 const patchedTaskAdapterPrototypes = new WeakSet<object>();
-const spawnIdentityFailures = new WeakMap<object, string>();
 const spawnedSmokeWorkers = new WeakMap<object, RuntimeWorker>();
 
 const acceptedHistoricalStaleOutcomes = new Set([
@@ -159,17 +163,6 @@ function dispatchDiagnostic(result: RuntimeDispatchResult): string {
     : `${result.status}:${safeToken(result.reason)}`;
 }
 
-function absenceProven(response: OrcaJsonResponse<{ terminal?: OrcaTerminalSummary }>): boolean {
-  if (response.ok) return !response.result?.terminal;
-  const code = String(response.error?.code ?? '').trim().toLowerCase();
-  const message = String(response.error?.message ?? '').trim().toLowerCase();
-  return code === 'terminal_not_found'
-    || code === 'not_found'
-    || code === 'terminal_absent'
-    || message.includes('terminal not found')
-    || message.includes('terminal is no longer alive');
-}
-
 function absenceProbeFailure(
   response: OrcaJsonResponse<{ terminal?: OrcaTerminalSummary }>,
 ): string {
@@ -182,29 +175,33 @@ function absenceProbeFailure(
   ].join(';');
 }
 
-export function workerGenerationNotFoundReason(input: {
+export function workerIdentityFailureReason(input: {
+  code: WorkerIdentityFailureCode;
   worker: RuntimeWorker;
+  observedHandle?: string;
   observedGeneration?: string;
+  observedWorkspace?: string;
   lookupFailure?: string;
 }): string {
   return [
-    'worker_generation_not_found',
+    input.code,
     `expected_runtime=${safeToken(input.worker.identity.runtime)}`,
     `expected_handle=${safeToken(input.worker.identity.id)}`,
     `expected_generation=${safeToken(input.worker.identity.generation)}`,
-    `observed_generation=${safeToken(input.observedGeneration ?? 'not_found')}`,
+    `expected_workspace=${safeToken(input.worker.workspacePath)}`,
+    `observed_handle=${safeToken(input.observedHandle ?? 'unresolved')}`,
+    `observed_generation=${safeToken(input.observedGeneration ?? 'unresolved')}`,
+    `observed_workspace=${safeToken(input.observedWorkspace ?? 'unresolved')}`,
     `identity_source=orca_terminal_show(${safeToken(input.worker.identity.id)})`,
     ...(input.lookupFailure ? [`lookup_failure=${safeToken(input.lookupFailure)}`] : []),
-    'resolution=resolve_the_current_generation_for_the_created_handle_then_retry_from_the_exact_pr_head',
+    'resolution=rerun_from_the_exact_pr_head_after_the_created_handle_identity_is_resolved',
   ].join(';');
 }
 
 /**
- * Orca may return a create-time generation that differs from the immediately
- * authoritative terminal-show generation. The runtime adapters retain the
- * exact identity object for later ownership checks, so update that same object
- * only after handle, title, and worktree all prove this is the terminal just
- * created by the harness.
+ * The Orca adapter establishes the smoke worker exactly once from terminal-show.
+ * Every later smoke-layer observation only confirms that frozen identity. Title
+ * is diagnostic and a later generation is replacement evidence, never a rebind.
  */
 export function stabilizeSpawnedSmokeWorkerIdentity(input: {
   worker: RuntimeWorker;
@@ -222,7 +219,8 @@ export function stabilizeSpawnedSmokeWorkerIdentity(input: {
   if (!response.ok) {
     return {
       ok: false,
-      reason: workerGenerationNotFoundReason({
+      reason: workerIdentityFailureReason({
+        code: 'worker_generation_unresolved',
         worker: input.worker,
         lookupFailure: `${response.operation ?? 'terminal_show'}:${response.error?.code ?? response.outcomeCategory ?? 'unavailable'}`,
       }),
@@ -232,79 +230,75 @@ export function stabilizeSpawnedSmokeWorkerIdentity(input: {
   if (!observed) {
     return {
       ok: false,
-      reason: workerGenerationNotFoundReason({
+      reason: workerIdentityFailureReason({
+        code: 'worker_generation_unresolved',
         worker: input.worker,
         lookupFailure: 'terminal_show:missing_terminal',
       }),
     };
   }
   const observedHandle = observed.handle?.trim() ?? '';
-  const observedTitle = observed.title ?? null;
   const observedWorkspace = observed.worktreePath?.trim() ?? '';
   const observedGeneration = generationFromTerminal(observed);
   if (observedHandle !== input.worker.identity.id) {
     return {
       ok: false,
-      reason: `spawned_worker_handle_mismatch;expected_handle=${safeToken(input.worker.identity.id)};observed_handle=${safeToken(observedHandle)};resolution=inspect_orca_terminal_show_binding_and_retry`,
-    };
-  }
-  if (observedTitle !== input.worker.title) {
-    return {
-      ok: false,
-      reason: `spawned_worker_title_mismatch;expected_title=${safeToken(input.worker.title ?? '')};observed_title=${safeToken(observedTitle ?? '')};resolution=inspect_orca_terminal_show_binding_and_retry`,
+      reason: workerIdentityFailureReason({
+        code: 'worker_generation_unresolved',
+        worker: input.worker,
+        observedHandle,
+        observedGeneration,
+        observedWorkspace,
+        lookupFailure: 'terminal_show:handle_mismatch',
+      }),
     };
   }
   if (!observedWorkspace || !samePath(observedWorkspace, input.worker.workspacePath)) {
     return {
       ok: false,
-      reason: `spawned_worker_workspace_mismatch;expected_workspace=${safeToken(input.worker.workspacePath)};observed_workspace=${safeToken(observedWorkspace)};resolution=rerun_from_the_exact_head_worktree`,
+      reason: workerIdentityFailureReason({
+        code: 'worker_workspace_mismatch',
+        worker: input.worker,
+        observedHandle,
+        observedGeneration,
+        observedWorkspace,
+      }),
     };
   }
   if (!observedGeneration) {
     return {
       ok: false,
-      reason: workerGenerationNotFoundReason({
+      reason: workerIdentityFailureReason({
+        code: 'worker_generation_unresolved',
         worker: input.worker,
+        observedHandle,
+        observedWorkspace,
         lookupFailure: 'terminal_show:generation_missing',
       }),
     };
   }
-  if (observedGeneration === input.worker.identity.generation) {
-    return { ok: true, worker: input.worker };
+  if (observedGeneration !== input.worker.identity.generation) {
+    return {
+      ok: false,
+      reason: workerIdentityFailureReason({
+        code: 'worker_generation_mismatch',
+        worker: input.worker,
+        observedHandle,
+        observedGeneration,
+        observedWorkspace,
+      }),
+    };
   }
 
-  const expectedGeneration = input.worker.identity.generation;
-  try {
-    (input.worker.identity as { generation: string }).generation = observedGeneration;
-  } catch {
-    return {
-      ok: false,
-      reason: workerGenerationNotFoundReason({
-        worker: input.worker,
-        observedGeneration,
-        lookupFailure: 'identity_object_not_mutable',
-      }),
-    };
-  }
-  if (input.worker.identity.generation !== observedGeneration) {
-    return {
-      ok: false,
-      reason: workerGenerationNotFoundReason({
-        worker: input.worker,
-        observedGeneration,
-        lookupFailure: 'identity_rebind_readback_failed',
-      }),
-    };
-  }
+  const observedTitle = observed.title ?? null;
   return {
     ok: true,
     worker: input.worker,
-    diagnostic: [
-      'worker_generation_rebound',
-      `expected_generation=${safeToken(expectedGeneration)}`,
-      `observed_generation=${safeToken(observedGeneration)}`,
-      `identity_source=orca_terminal_show(${safeToken(input.worker.identity.id)})`,
-    ].join(';'),
+    ...(observedTitle !== input.worker.title
+      ? {
+          diagnostic: `worker_title_drift;expected_title=${safeToken(input.worker.title ?? '')};observed_title=${safeToken(observedTitle ?? '')}`,
+        }
+      : {}),
   };
 }
 
@@ -315,34 +309,24 @@ function refreshTrackedSmokeWorker(input: {
   probe: SmokeGenerationProbe;
 }): TrackedSmokeWorkerRefresh {
   const spawnedWorker = spawnedSmokeWorkers.get(input.identity);
-  if (!spawnedWorker) {
-    const failure = spawnIdentityFailures.get(input.identity);
-    return failure ? { status: 'failed', reason: failure } : { status: 'not_tracked' };
-  }
+  if (!spawnedWorker) return { status: 'not_tracked' };
 
-  const previousGeneration = spawnedWorker.identity.generation;
   const refreshed = stabilizeSpawnedSmokeWorkerIdentity({
     worker: spawnedWorker,
     cwd: input.cwd,
     timeoutMs: input.timeoutMs,
     probe: input.probe,
   });
-  if (!refreshed.ok) {
-    spawnIdentityFailures.set(input.identity, refreshed.reason);
-    return { status: 'failed', reason: refreshed.reason };
-  }
-  spawnIdentityFailures.delete(input.identity);
-  return {
-    status: 'ok',
-    generationChanged: previousGeneration !== spawnedWorker.identity.generation,
-  };
+  if (!refreshed.ok) return { status: 'failed', reason: refreshed.reason };
+  return { status: 'ok' };
 }
 
 /**
  * Install the narrow worker-smoke compatibility repair on the production task
- * adapter. Every generation-bound query re-resolves the exact created handle,
- * delivery is accepted only after the child-owned seal appears, and one
- * submit-only retry is allowed without ever sending the payload a second time.
+ * adapter. The adapter establishes the created handle/generation/worktree once;
+ * smoke-layer queries only confirm that frozen identity. Delivery is accepted
+ * only after the child-owned seal appears, and one submit-only retry is allowed
+ * without ever sending the payload a second time.
  */
 export function installStableWorkerSmokeSpawnPatch(
   options: StableWorkerSmokeSpawnPatchOptions = {},
@@ -370,19 +354,7 @@ export function installStableWorkerSmokeSpawnPatch(
       callOptions: RuntimeCallOptions = {},
     ): ReturnType<OrcaTaskRuntimeAdapter['spawnWorker']> {
       const result = originalSpawn.call(this, input, callOptions);
-      if (result.status !== 'ok') return result;
-      spawnedSmokeWorkers.set(result.value.identity, result.value);
-      const stabilized = refreshTrackedSmokeWorker({
-        identity: result.value.identity,
-        cwd: callOptions.cwd ?? process.cwd(),
-        timeoutMs: callOptions.timeoutMs ?? 30_000,
-        probe,
-      });
-      if (stabilized.status === 'failed') {
-        spawnIdentityFailures.set(result.value.identity, stabilized.reason);
-      } else {
-        spawnIdentityFailures.delete(result.value.identity);
-      }
+      if (result.status === 'ok') spawnedSmokeWorkers.set(result.value.identity, result.value);
       return result;
     },
   });
@@ -406,16 +378,21 @@ export function installStableWorkerSmokeSpawnPatch(
       }
 
       const result = originalDispatch.call(this, input, callOptions);
-      if (result.status === 'send_failed' && result.reason === 'worker_generation_not_found') {
+      if (result.status === 'send_failed'
+        && ['worker_generation_mismatch', 'worker_workspace_mismatch', 'worker_generation_unresolved']
+          .includes(result.reason)) {
+        const worker = spawnedSmokeWorkers.get(input.worker) ?? {
+          identity: input.worker,
+          workspacePath: callOptions.cwd ?? process.cwd(),
+          title: null,
+          provenance: 'internal' as const,
+        };
         return {
           status: 'send_failed',
-          reason: workerGenerationNotFoundReason({
-            worker: {
-              identity: input.worker,
-              workspacePath: callOptions.cwd ?? process.cwd(),
-              title: null,
-              provenance: 'internal',
-            },
+          reason: workerIdentityFailureReason({
+            code: result.reason as WorkerIdentityFailureCode,
+            worker,
+            lookupFailure: `adapter_dispatch:${result.reason}`,
           }),
         };
       }
@@ -491,12 +468,7 @@ export function installStableWorkerSmokeSpawnPatch(
           reason: refreshed.reason,
         };
       }
-      const currentInput = refreshed.status === 'ok'
-        && refreshed.generationChanged
-        && input.previousToken
-        ? { ...input, previousToken: null }
-        : input;
-      return originalReadBoundedOutput.call(this, currentInput, callOptions);
+      return originalReadBoundedOutput.call(this, input, callOptions);
     },
   });
 
@@ -537,8 +509,7 @@ export function installStableWorkerSmokeSpawnPatch(
         callOptions.timeoutMs ?? 30_000,
       );
       const observed = response.result?.terminal;
-      if (absenceProven(response)
-        || (observed && generationFromTerminal(observed) !== worker.generation)) {
+      if (observed && generationFromTerminal(observed) !== worker.generation) {
         return { status: 'ok', value: { stopped: true } };
       }
       if (observed && generationFromTerminal(observed) === worker.generation) {
