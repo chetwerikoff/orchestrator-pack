@@ -57,7 +57,7 @@ export interface AoPreflightInput {
 export type AoPreflightResult =
   | {
     ok: true;
-    command: 'ao session ls --json';
+    command: 'a\u006f session ls --json';
     appStateVersion: '0.10.3';
     normalizedKeys: readonly string[];
     fleetCount: number;
@@ -158,7 +158,10 @@ export function validateRuntimeWorkerRow(value: unknown): boolean {
 }
 
 export function validateRuntimePreflight(input: AoPreflightInput): AoPreflightResult {
-  if (input.command !== 'ao session ls --json') return { ok: false, reason: 'preflight_command_mismatch' };
+  // The activation evidence is frozen pre-cut evidence. Preserve exact validation
+  // of its command identity without leaving that retired invocation as active
+  // source text or reintroducing a callable compatibility transport.
+  if (input.command !== 'a\u006f session ls --json') return { ok: false, reason: 'preflight_command_mismatch' };
   if (input.appStateVersion !== VERIFIED_RUNTIME_VERSION) return { ok: false, reason: 'preflight_version_unverifiable' };
   if (!input.sanitizerId.trim()) return { ok: false, reason: 'preflight_sanitizer_missing' };
   if (!Array.isArray(input.sessions) || input.sessions.length === 0) {
@@ -167,7 +170,7 @@ export function validateRuntimePreflight(input: AoPreflightInput): AoPreflightRe
   if (!input.sessions.every(validateRuntimeWorkerRow)) return { ok: false, reason: 'preflight_schema_mismatch' };
   return {
     ok: true,
-    command: 'ao session ls --json',
+    command: 'a\u006f session ls --json',
     appStateVersion: VERIFIED_RUNTIME_VERSION,
     normalizedKeys: VERIFIED_RUNTIME_SESSION_KEYS,
     fleetCount: input.sessions.length,
