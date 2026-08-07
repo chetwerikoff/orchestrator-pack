@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { scanRetiredRuntimeSurfaces } from './retired-surface-guard.ts';
+import { loadHistoricalDispositionPaths, scanRetiredRuntimeSurfaces } from './retired-surface-guard.ts';
 
 const roots: string[] = [];
 afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
@@ -65,5 +65,48 @@ describe('runtime retirement closed-world scanner', () => {
     expect(result.excludedPaths).toContain('docs/issues_drafts/old.md');
     expect(result.excludedPaths).toContain('scripts/gate-runner/census/pre-change-baseline.json');
     expect(result.violations.map((entry) => entry.path)).toContain('scripts/fixtures/current.txt');
+  });
+
+  it('honors only exact per-file historical dispositions', () => {
+    const root = fixture('neutral');
+    const manifest = join(root, 'docs/investigations/runtime-hard-cut/historical-dispositions.json');
+    mkdirSync(dirname(manifest), { recursive: true });
+    writeFileSync(manifest, JSON.stringify({
+      version: 1,
+      dispositions: [{
+        path: 'docs/frozen-contract.mjs',
+        class: 'precut-behavioral-contract',
+        reason: 'frozen evidence',
+        owningReference: 'Issue #1352',
+      }],
+    }));
+    const frozen = join(root, 'docs/frozen-contract.mjs');
+    writeFileSync(frozen, 'AO_SESSION_ID');
+    const sibling = join(root, 'docs/current-contract.mjs');
+    writeFileSync(sibling, 'AO_SESSION_ID');
+
+    expect([...loadHistoricalDispositionPaths(root)]).toEqual(['docs/frozen-contract.mjs']);
+    const result = scanRetiredRuntimeSurfaces({ repoRoot: root, paths: [
+      'docs/frozen-contract.mjs',
+      'docs/current-contract.mjs',
+    ] });
+    expect(result.excludedPaths).toEqual(['docs/frozen-contract.mjs']);
+    expect(result.violations.map((entry) => entry.path)).toEqual(['docs/current-contract.mjs']);
+  });
+
+  it('rejects wildcard historical dispositions', () => {
+    const root = fixture('neutral');
+    const manifest = join(root, 'docs/investigations/runtime-hard-cut/historical-dispositions.json');
+    mkdirSync(dirname(manifest), { recursive: true });
+    writeFileSync(manifest, JSON.stringify({
+      version: 1,
+      dispositions: [{
+        path: 'docs/*.mjs',
+        class: 'precut-behavioral-contract',
+        reason: 'too broad',
+        owningReference: 'Issue #1352',
+      }],
+    }));
+    expect(() => loadHistoricalDispositionPaths(root)).toThrow(/exact file/);
   });
 });
