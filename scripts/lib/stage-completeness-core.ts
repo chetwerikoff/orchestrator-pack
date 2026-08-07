@@ -452,7 +452,7 @@ function validateArtifactAuthority(
 }
 function parseInvocation(
   value: unknown,
-  receipt: Pick<StageCompletenessReceiptV1, 'reviewEpisodeId' | 'stageAttemptId' | 'policyVersion' | 'reviewerCardinality' | 'cardinalityConfigIdentity' | 'stage' | 'sourceRevision' | 'reviewLane'>,
+  receipt: Pick<StageCompletenessReceiptV1, 'taskIdentity' | 'reviewEpisodeId' | 'stageAttemptId' | 'policyVersion' | 'reviewerCardinality' | 'cardinalityConfigIdentity' | 'stage' | 'sourceRevision' | 'reviewLane'>,
   index: number,
   errors: string[],
 ): ReviewerInvocationEnvelopeV1 | null {
@@ -517,6 +517,12 @@ function parseInvocation(
   if (terminalClassification === 'complete' && Number(sendCount) !== 1) errors.push(`${label} complete result requires sendCount 1`);
   if (terminalClassification !== 'complete' && capture && !artifactAuthority) errors.push(`${label} non-complete result cannot credential a capture without artifactAuthority`);
   if (artifactAuthority && !capture) errors.push(`${label} artifactAuthority requires capture`);
+  if (artifactAuthority && Number(sendCount) !== 1) errors.push(`${label} artifactAuthority requires sendCount 1`);
+  if (artifactAuthority) {
+    const taskIssueMatch = /^issue:([1-9][0-9]*)$/.exec(receipt.taskIdentity);
+    if (!taskIssueMatch) errors.push(`${label}.artifactAuthority requires receipt taskIdentity issue:<N>`);
+    else if (artifactAuthority.issueNumber !== Number(taskIssueMatch[1])) errors.push(`${label}.artifactAuthority.issueNumber does not match receipt taskIdentity`);
+  }
   if (Number(sendCount) === 1 && terminalClassification !== 'complete' && retryClass !== 'retry-forbidden') errors.push(`${label} possible/post-send failure must forbid blind resend`);
   if (Number(sendCount) === 0 && ZERO_SEND_RETRYABLE.has(terminalClassification as TerminalClassification) && attemptOrdinal === 1 && retryClass !== 'eligible-zero-send') errors.push(`${label} proven zero-send quota/composer failure must be classified retry-eligible`);
   if (attemptOrdinal === 2 && retryClass === 'eligible-zero-send') errors.push(`${label} the one retry cannot create another retry opportunity`);
