@@ -698,18 +698,29 @@ function predecessorContinuity(
   const matches = countExpectedMarker(observation.messages, marker);
   if (matches > 1) return tuple('observation_uncertain', 'invocation', 'predecessor_continuity_unproven');
   const snapshot = sessionObservationSnapshot(observation);
-  const ownedIndex = matches === 1
-    ? observation.messages.findIndex(
-      (message) => message.role === 'user' && ownedPromptMatches(message.text, marker),
-    )
-    : (() => {
-      const key = predecessor.ownedCarrierKey;
-      if (!key || key.length < 8) return -1;
-      const keyedMatches = snapshot.carriers.filter((carrier) => carrier.role === 'user' && carrier.key === key);
-      return keyedMatches.length === 1
-        ? snapshot.carriers.findIndex((carrier) => carrier.role === 'user' && carrier.key === key)
-        : -1;
-    })();
+  const predecessorKey = predecessor.ownedCarrierKey;
+  let ownedIndex: number;
+  if (predecessorKey) {
+    const keyedMatches = snapshot.carriers.filter((carrier) => carrier.key === predecessorKey);
+    if (keyedMatches.length !== 1 || keyedMatches[0]?.role !== 'user') {
+      return tuple('observation_uncertain', 'invocation', 'predecessor_continuity_unproven');
+    }
+    ownedIndex = snapshot.carriers.findIndex((carrier) => carrier.key === predecessorKey);
+    if (matches === 1) {
+      const markerIndex = snapshot.carriers.findIndex(
+        (carrier) => carrier.role === 'user' && ownedPromptMatches(carrier.text, marker),
+      );
+      if (markerIndex < 0 || markerIndex !== ownedIndex) {
+        return tuple('observation_uncertain', 'invocation', 'predecessor_continuity_unproven');
+      }
+    }
+  } else {
+    ownedIndex = matches === 1
+      ? observation.messages.findIndex(
+        (message) => message.role === 'user' && ownedPromptMatches(message.text, marker),
+      )
+      : -1;
+  }
   if (ownedIndex < 0) return tuple('observation_uncertain', 'invocation', 'predecessor_continuity_unproven');
   const laterUser = observation.messages.slice(ownedIndex + 1).some((message) => message.role === 'user');
   if (laterUser) return tuple('observation_uncertain', 'invocation', 'predecessor_continuity_unproven');
@@ -856,9 +867,10 @@ async function observeAndPublish(
     }
 
     const snapshot = sessionObservationSnapshot(observation);
+    const observationComplete = !observation.transcriptIncomplete && snapshot.complete;
     const markerCount = countExpectedMarker(observation.messages, marker);
     payload.markerMatchCount = markerCount;
-    if (!observation.transcriptIncomplete && snapshot.complete) {
+    if (observationComplete) {
       lastCompleteObservation = observation;
     } else {
       uncertaintyCause = payload.ownedCarrierKey
@@ -866,13 +878,13 @@ async function observeAndPublish(
         : 'owned_carrier_unproven';
     }
 
-    if (markerCount > 1) {
+    if (observationComplete && markerCount > 1) {
       uncertaintyCause = 'owned_reply_boundary_unproven';
     }
-    const ownedCarrier = markerCount === 1
+    const ownedCarrier = observationComplete && markerCount === 1
       ? snapshotOwnedCarrier(snapshot, marker)
       : undefined;
-    if (markerCount === 1) ownedPromptEverSeen = true;
+    if (observationComplete && markerCount === 1) ownedPromptEverSeen = true;
     if (ownedCarrier?.key) {
       if (payload.ownedCarrierKey && payload.ownedCarrierKey !== ownedCarrier.key) {
         uncertaintyCause = 'transcript_continuity_unproven';
@@ -925,14 +937,14 @@ async function observeAndPublish(
           }
           lastMarkerlessSnapshotSignature = signature;
         }
-      } else {
+      } else if (uncertaintyCause !== 'owned_carrier_unproven' || payload.ownedCarrierKey) {
         uncertaintyCause = postBaselineUsers === 0
           ? ''
           : postBaselineUsers === 1
             ? 'owned_carrier_unproven'
             : 'owned_reply_boundary_unproven';
       }
-    } else if (markerCount === 1) {
+    } else if (observationComplete && markerCount === 1) {
       lastMarkerlessSnapshotSignature = '';
       // Exact-marker observation remains the ordinary fast path. A previously
       // captured key is retained only as a future disappearance bridge.

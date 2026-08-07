@@ -368,6 +368,168 @@ describe('state-light explicit session mode', () => {
     expect(harness.metrics.closes).toBe(0);
   });
 
+  it('keeps an incomplete one-marker observation uncertain until the hard deadline', async () => {
+    const harness = makeHarness(['one'], { timeoutMs: 30 });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async () => {
+        if (harness.metrics.sends === 0) {
+          return {
+            messages: [],
+            ownedWindowCompletionReady: false,
+            transcriptIncomplete: false,
+            snapshot: { complete: true, carriers: [] },
+          };
+        }
+        const markerText = harness.messages.find((message) => message.role === 'user')?.text ?? '';
+        return {
+          messages: [{ role: 'user' as const, text: markerText }],
+          ownedWindowCompletionReady: false,
+          transcriptIncomplete: true,
+          snapshot: {
+            complete: false,
+            carriers: [{
+              role: 'user' as const,
+              text: markerText,
+              fingerprint: 'partial-marker',
+              domIndex: 0,
+            }],
+          },
+        };
+      },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(11);
+    expect(harness.metrics.sends).toBe(1);
+    expect(harness.metrics.closes).toBe(0);
+    expect(aggregate(harness.stream)).toMatchObject({
+      state: 'observation_uncertain',
+      cause: 'owned_carrier_unproven',
+      total_send_count: 1,
+      payloads: [expect.objectContaining({ delivery_state: 'delivery_unknown' })],
+    });
+  });
+
+  it('does not continue when a visible predecessor marker keeps a changed carrier key', async () => {
+    const predecessorKey = 'data-message-id:predecessor-key-12345678';
+    const changedKey = 'data-message-id:changed-key-12345678';
+    let predecessorSettled = false;
+    const stream = new CaptureStream(
+      () => false,
+      (value) => {
+        if (value.schema === 'session-payload/v1' && value.ordinal === 1 && value.phase === 'terminal') {
+          predecessorSettled = true;
+        }
+      },
+    );
+    const harness = makeHarness(['one', 'two'], { stream });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async () => {
+        if (harness.metrics.sends === 0) {
+          return {
+            messages: [],
+            ownedWindowCompletionReady: false,
+            transcriptIncomplete: false,
+            snapshot: { complete: true, carriers: [] },
+          };
+        }
+        const markerText = harness.messages.find((message) => message.role === 'user')?.text ?? '';
+        const key = predecessorSettled ? changedKey : predecessorKey;
+        const messages = [
+          { role: 'user' as const, text: markerText },
+          { role: 'assistant' as const, text: 'reply-1' },
+        ];
+        return {
+          messages,
+          ownedWindowCompletionReady: true,
+          transcriptIncomplete: false,
+          snapshot: {
+            complete: true,
+            carriers: [
+              { role: 'user' as const, text: markerText, key, fingerprint: 'user-1', domIndex: 0 },
+              { role: 'assistant' as const, text: 'reply-1', key: 'data-message-id:assistant-key-12345678', fingerprint: 'reply-1', domIndex: 1 },
+            ],
+          },
+        };
+      },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(11);
+    expect(harness.metrics.sends).toBe(1);
+    expect(records(stream).find((record) => record.ordinal === 2 && record.phase === 'terminal')).toMatchObject({
+      state: 'observation_uncertain',
+      cause: 'predecessor_continuity_unproven',
+      send_count: 0,
+      delivery_state: 'not_attempted',
+    });
+  });
+
+  it('does not continue when a markerless predecessor key is duplicated across user and assistant', async () => {
+    const predecessorKey = 'data-message-id:predecessor-key-12345678';
+    let predecessorSettled = false;
+    const stream = new CaptureStream(
+      () => false,
+      (value) => {
+        if (value.schema === 'session-payload/v1' && value.ordinal === 1 && value.phase === 'terminal') {
+          predecessorSettled = true;
+        }
+      },
+    );
+    const harness = makeHarness(['one', 'two'], { stream });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async () => {
+        if (harness.metrics.sends === 0) {
+          return {
+            messages: [],
+            ownedWindowCompletionReady: false,
+            transcriptIncomplete: false,
+            snapshot: { complete: true, carriers: [] },
+          };
+        }
+        const markerText = harness.messages.find((message) => message.role === 'user')?.text ?? '';
+        const markerVisible = !predecessorSettled;
+        const messages = markerVisible
+          ? [
+            { role: 'user' as const, text: markerText },
+            { role: 'assistant' as const, text: 'reply-1' },
+          ]
+          : [
+            { role: 'user' as const, text: 'markerless predecessor' },
+            { role: 'assistant' as const, text: 'reply-1' },
+          ];
+        return {
+          messages,
+          ownedWindowCompletionReady: markerVisible,
+          transcriptIncomplete: false,
+          snapshot: {
+            complete: true,
+            carriers: [
+              { role: 'user' as const, text: messages[0]!.text, key: predecessorKey, fingerprint: 'user-1', domIndex: 0 },
+              { role: 'assistant' as const, text: 'reply-1', key: markerVisible ? 'data-message-id:assistant-key-12345678' : predecessorKey, fingerprint: 'reply-1', domIndex: 1 },
+            ],
+          },
+        };
+      },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(11);
+    expect(harness.metrics.sends).toBe(1);
+    expect(records(stream).find((record) => record.ordinal === 2 && record.phase === 'terminal')).toMatchObject({
+      state: 'observation_uncertain',
+      cause: 'predecessor_continuity_unproven',
+      send_count: 0,
+      delivery_state: 'not_attempted',
+    });
+  });
+
   it('does not continue from a keyless predecessor after its marker disappears', async () => {
     let hideMarker = false;
     const stream = new CaptureStream(
