@@ -53,8 +53,8 @@ replace_exact(
 # Runtime composition is an operation of the surviving worker-status caller, not an unclassified edge.
 replace_exact(
     "scripts/runtime/caller-census.ts",
-    "    operations: ['list'],\n    kind: 'runtime-port',\n    disposition: 'use-runtime-interface',\n    note: 'Builds live worker status from RuntimeAdapter.listWorkers.',",
-    "    operations: ['runtime-composition', 'list'],\n    kind: 'runtime-port',\n    disposition: 'use-runtime-interface',\n    note: 'Builds live worker status from RuntimeAdapter.listWorkers.',",
+    "    operations: ['list'],\n    kind: 'runtime-port',\n    disposition: 'use-runtime-interface',\n    note: 'Builds the live worker-status report from RuntimeAdapter.listWorkers without retired CLI discovery.',",
+    "    operations: ['runtime-composition', 'list'],\n    kind: 'runtime-port',\n    disposition: 'use-runtime-interface',\n    note: 'Builds the live worker-status report from RuntimeAdapter.listWorkers without retired CLI discovery.',",
 )
 replace_exact(
     "docs/orca-runtime-caller-census.md",
