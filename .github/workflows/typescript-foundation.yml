@@ -172,11 +172,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$(git log -1 --pretty=%s)" != "chore(ci): reconcile PN smoke census" ]; then
+          if [ "$(git log -1 --pretty=%s)" != "chore(ci): retry PN smoke census reconcile" ]; then
             echo "one-shot census reconciliation already consumed"
             exit 0
           fi
-          test "$(git rev-parse HEAD^)" = "cae2dc3e2073ab1ea56188d908135c271082c7c5"
+          test "$(git rev-parse HEAD^)" = "77eddc7a58fdcce991496c75ea1887b39d468459"
           node <<'NODE'
           const fs = require('node:fs');
           const crypto = require('node:crypto');
@@ -221,8 +221,8 @@ jobs:
           fs.writeFileSync(generationPath, `${JSON.stringify(generation, null, 2)}\n`);
 
           let census = fs.readFileSync(censusPath, 'utf8');
-          const oldLiteral = `export const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '${oldDigest}' as const;`;
-          const newLiteral = `export const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '${digest}' as const;`;
+          const oldLiteral = `const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '${oldDigest}' as const;`;
+          const newLiteral = `const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '${digest}' as const;`;
           if (census.split(oldLiteral).length !== 2) throw new Error('expected exactly one census digest literal');
           census = census.replace(oldLiteral, newLiteral);
           fs.writeFileSync(censusPath, census);
