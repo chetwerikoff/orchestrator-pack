@@ -1,0 +1,68 @@
+name: issue-1352-node22-checkpoint
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-checkpoint:
+    if: github.event.pull_request.number == 1378 && github.event.pull_request.head.ref == 'agent/issue-1352-hard-cut'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-1352-hard-cut
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply, verify, and publish Node 22 contract checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          agents = Path('AGENTS.md')
+          agents_text = agents.read_text(encoding='utf-8')
+          paragraph = "**Node 22-only TypeScript runtime:** direct native TypeScript entrypoints must use the Node major declared in `scripts/toolchain/node-version.json`; `package.json.engines.node` and every `actions/setup-node` declaration must mirror that authority. Entrypoints must run the canonical declaration preflight before importing business modules."
+          marker = "## Portable contracts\n\n"
+          if paragraph not in agents_text:
+              if marker not in agents_text:
+                  raise SystemExit('Portable contracts marker not found')
+              agents.write_text(agents_text.replace(marker, marker + paragraph + "\n\n", 1), encoding='utf-8')
+
+          for path in (
+              'scripts/runtime-retirement/retired-surface-guard.ts',
+              'scripts/runtime-retirement/retired-surface-selftest.ts',
+          ):
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              preflight = "import '../toolchain/native-entrypoint-preflight.ts';"
+              if preflight not in text:
+                  shebang = '#!/usr/bin/env -S node --experimental-strip-types\n'
+                  if not text.startswith(shebang):
+                      raise SystemExit(f'unexpected entrypoint header: {path}')
+                  target.write_text(text.replace(shebang, shebang + preflight + '\n', 1), encoding='utf-8')
+          PY
+          npm ci --include=dev
+          npm run lint:foundation
+          git diff --check
+          git config user.name chetwerikoff
+          git config user.email 85295154+chetwerikoff@users.noreply.github.com
+          git add AGENTS.md \
+            scripts/runtime-retirement/retired-surface-guard.ts \
+            scripts/runtime-retirement/retired-surface-selftest.ts
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'checkpoint already applied'
+            exit 0
+          fi
+          git commit -m 'fix(toolchain): declare Node 22 runtime contract'
+          git push origin HEAD:agent/issue-1352-hard-cut
