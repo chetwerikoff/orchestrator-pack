@@ -1,97 +1,45 @@
-name: issue-1352-residual-batch4
+name: issue-1352-exact-residual-capture
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair:
+  capture:
     if: github.event.pull_request.head.ref == 'agent/issue-1352-regression-carrier' && github.event.pull_request.base.ref == 'agent/issue-1352-hard-cut'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-1352-regression-carrier
-          fetch-depth: 0
-          persist-credentials: true
-      - name: Preserve batch executor and switch to exact target
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp .github/issue-1352-residual-batch1.py "$RUNNER_TEMP/issue-1352-residual-batch4.py"
-          python - "$RUNNER_TEMP/issue-1352-residual-batch4.py" <<'PY'
-          from pathlib import Path
-          import sys
-          p = Path(sys.argv[1])
-          text = p.read_text(encoding='utf-8')
-          replacements = [
-            (
-              """replace_exact(path, \"\"\"  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\", \"\"\"  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessionId?: string;\n  repoSlug?: string;\n  projectId?: string;\n  issueNumber?: number;\n  headSha?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\", 1)""",
-              """replace_exact(path, \"\"\"export declare function tryPushRegisterFromPrCreate(input: {\n  argv: string[];\n  status: number;\n  stdout: string;\n  stderr: string;\n  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\", \"\"\"export declare function tryPushRegisterFromPrCreate(input: {\n  argv: string[];\n  status: number;\n  stdout: string;\n  stderr: string;\n  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessionId?: string;\n  repoSlug?: string;\n  projectId?: string;\n  issueNumber?: number;\n  headSha?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\")""",
-            ),
-            (
-              """marker = \"\"\"    const sessions = [liveWorker('opk-rebind', 719)];\n    const store = seedStore({ sessionId: 'opk-rebind', prNumber: 11, headSha: 'old11' });\n\"\"\"""",
-              """marker = \"\"\"  it('push-register treats indeterminate same-session rebind as collision', () => {\n\"\"\"""",
-            ),
-            (
-              """marker = \"\"\"    const sessions = [liveWorker('opk-rebind-terminal', 719)];\n    const store = seedStore({ sessionId: 'opk-rebind-terminal', prNumber: 11, headSha: 'old11' });\n\"\"\"""",
-              """marker = \"\"\"  it('push-register supersedes terminal same-session rebind via prior-pr lookup', () => {\n\"\"\"""",
-            ),
-          ]
-          for old, new in replacements:
-              if text.count(old) != 1:
-                  raise SystemExit(f'helper patch drifted: {old[:80]!r} count={text.count(old)}')
-              text = text.replace(old, new, 1)
-          p.write_text(text, encoding='utf-8')
-          PY
-          git fetch origin agent/issue-1352-hard-cut
-          git checkout -B agent/issue-1352-hard-cut origin/agent/issue-1352-hard-cut
-          expected_head='3665d0ac34ce669949f8f006f3a2e9ae0db400f9'
-          actual_head="$(git rev-parse HEAD)"
-          test "$actual_head" = "$expected_head"
+          ref: agent/issue-1352-hard-cut
+          fetch-depth: 1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - name: Apply and verify batch
+      - name: Capture exact residual and tree
         shell: bash
         run: |
           set -euo pipefail
-          python "$RUNNER_TEMP/issue-1352-residual-batch4.py"
-          npm ci --include=dev
-          npm run typecheck:foundation
-          npm test -- --maxWorkers=1 \
-            scripts/pr-session-binding-cache.test.ts \
-            scripts/gh-wrapper.test.ts \
-            scripts/runtime-retirement/retired-surface-guard.test.ts \
-            --reporter=dot
+          expected_head='2b9484e7773af07eb68d24656001272675f984d4'
+          actual_head="$(git rev-parse HEAD)"
+          test "$actual_head" = "$expected_head"
           node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts > "$RUNNER_TEMP/residual.json" || true
           node --input-type=module - "$RUNNER_TEMP/residual.json" <<'NODE'
           import { readFileSync } from 'node:fs';
           const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-          const migrated = new Set(['docs/pr-session-binding-cache.mjs','scripts/pr-session-binding-cache.test.ts']);
-          const forbidden = result.violations.filter((row) => migrated.has(row.path) && row.surfaceId === 'legacy-runtime-selector');
-          if (forbidden.length) {
-            console.error(JSON.stringify(forbidden, null, 2));
-            process.exit(2);
-          }
-          if (result.violations.length >= 208) {
-            console.error(`residual census did not shrink: ${result.violations.length}`);
-            process.exit(3);
-          }
-          console.log(`residual_hits=${result.violations.length}`);
+          if (result.violations.length !== 179) throw new Error(`unexpected residual ${result.violations.length}`);
+          console.log(`exact_residual=${result.violations.length}`);
           NODE
-          git diff --check
-      - name: Publish verified batch
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name chetwerikoff
-          git config user.email 85295154+chetwerikoff@users.noreply.github.com
-          git add -A
-          git commit -m 'refactor(runtime): make push-register identity explicit'
-          git push origin HEAD:agent/issue-1352-hard-cut
+          rm -rf .git
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-1352-exact-tree-2b9484
+          path: |
+            .
+            ${{ runner.temp }}/residual.json
+          include-hidden-files: true
+          retention-days: 1
