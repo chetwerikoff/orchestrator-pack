@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   diagnose:
-    name: Diagnose PR1376 AC12 lane coverage
+    name: Diagnose repaired current replay
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -27,28 +27,28 @@ jobs:
           node-version: '22'
       - name: Install dependencies
         run: npm ci --include=dev
-      - name: Diagnose historical plan
+      - name: Diagnose current replay
         shell: bash
         run: |
-          git config user.name fixture-smoke
-          git config user.email fixture-smoke@example.invalid
-          rm -rf /tmp/pr1376
-          git worktree add --detach /tmp/pr1376 6e9614d0c9ce0c34b41a731059df4398b770c162
-          git -C /tmp/pr1376 merge --no-commit --no-ff de03343f3f71f0c673157e055bf47f62700a576b
           node --input-type=module <<'NODE'
-          import { buildLanePlan } from './scripts/lib/vitest-ci-lanes.mjs';
+          import { buildHeavyTopology } from './scripts/lib/vitest-heavy-topology.mjs';
           import { resolvePreTopologyMeasurementPlan } from './scripts/lib/vitest-pre-topology-measurement.mjs';
-          const plan = buildLanePlan('/tmp/pr1376');
-          if (!plan.ok) throw new Error(plan.errors.join('; '));
-          const pre = resolvePreTopologyMeasurementPlan(plan, { maxFiles: Number.MAX_SAFE_INTEGER });
-          const heavy = pre.targets.filter((f) => plan.heavy.includes(f));
-          const light = pre.targets.filter((f) => plan.light.includes(f));
-          console.log('pre_count=' + pre.targets.length);
-          console.log('heavy_count=' + heavy.length);
-          console.log('light_count=' + light.length);
-          console.log('pre_heavy=' + JSON.stringify(heavy));
-          console.log('pre_light=' + JSON.stringify(light));
-          console.log('heavy_shard_files=' + JSON.stringify(plan.heavyShards.flatMap((s) => s.files)));
+          const changedFiles = [
+            '.cursor/rules/flow-manager-browser-turn-monitoring.mdc',
+            'docs/declarations/1266.pr-scope.json',
+            'package.json',
+            'scripts/browser-gpt-post-settlement-close-proof.ts',
+            'scripts/browser-gpt-post-settlement-close.test.ts',
+            'scripts/browser-gpt-post-settlement-close.ts',
+            'scripts/chatgpt-browser-turn/contracts.ts',
+            'scripts/vitest-ci-lanes.config.json',
+          ].sort();
+          for (const mode of ['none','actual']) {
+            const topology = buildHeavyTopology(process.cwd(), mode === 'actual' ? {changedFiles} : {});
+            if (!topology.ok) throw new Error(topology.errors.join('; '));
+            const plan = resolvePreTopologyMeasurementPlan(topology, {maxFiles:Number.MAX_SAFE_INTEGER});
+            console.log(mode + '_raw_unresolved=' + topology.topology.unresolvedGuardWeights.length);
+            console.log(mode + '_targets=' + plan.targets.length);
+            console.log(mode + '_target_files=' + JSON.stringify(plan.targets));
+          }
           NODE
-          git -C /tmp/pr1376 merge --abort || true
-          git worktree remove --force /tmp/pr1376
