@@ -209,10 +209,10 @@ export interface PageObservationResult {
 export type BrowserGptPageTurnStatus = 'dead' | 'long_running' | 'completed' | 'unknown';
 
 /**
- * Issue #1386's amended discriminator deliberately consumes only the two facts
- * already emitted by browser-gpt-page-probe: generation_in_progress and
- * observed_assistant_nodes. Unknown generation evidence never authorizes a
- * dead-turn conclusion.
+ * Issue #1386's amended discriminator consumes the producer's tri-state
+ * generation observation plus an assistant count scoped by the consumer to
+ * the current owned user carrier. Unknown generation evidence never authorizes
+ * a dead-turn conclusion.
  */
 export function classifyBrowserGptPageTurnStatus(
   generationInProgress: boolean | 'unknown',
@@ -405,6 +405,22 @@ export function snapshotOwnedCarrier(
   const keyMatches = snapshot.carriers.filter((carrier) => carrier.key === owned.key);
   if (keyMatches.length !== 1 || keyMatches[0] !== owned || keyMatches[0].role !== 'user') return undefined;
   return owned;
+}
+
+/** Count assistants only in the current owned turn, never in page history. */
+export function countAssistantNodesAfterOwnedCarrier(
+  snapshot: AtomicTranscriptSnapshot,
+  ownedUserKey: string,
+): number | undefined {
+  if (!snapshot.complete || !validCarrierKey(ownedUserKey)) return undefined;
+  const ownedMatches = snapshot.carriers
+    .map((carrier, index) => ({ carrier, index }))
+    .filter(({ carrier }) => carrier.role === 'user' && carrier.key === ownedUserKey);
+  if (ownedMatches.length !== 1) return undefined;
+  const afterOwned = snapshot.carriers.slice(ownedMatches[0]!.index + 1);
+  const nextUserOffset = afterOwned.findIndex((carrier) => carrier.role === 'user');
+  const ownedTurn = nextUserOffset >= 0 ? afterOwned.slice(0, nextUserOffset) : afterOwned;
+  return ownedTurn.filter((carrier) => carrier.role === 'assistant').length;
 }
 
 export function keyedHarvestCandidate(
@@ -2293,6 +2309,25 @@ async function runTurn(
           }
           if (!conversationUrl) {
             if (sendCount >= 1) {
+              const landingEvidence = await classifySendLandingEvidence(
+                page,
+                markedPayload,
+                lastAttemptConversationUrl,
+              );
+              if (landingEvidence === 'not_landed' && !pageConversationUrl(page)) {
+                return returnFreshConversationLandingMismatch(
+                  page,
+                  browser,
+                  invocationId,
+                  profileKey,
+                  sendCount,
+                  pollCount,
+                  navigation,
+                  incidents,
+                  journalWriteFailed,
+                  incident,
+                );
+              }
               incident(
                 'send_observation_deferred',
                 'fresh_conversation_url_not_observed',
@@ -3043,18 +3078,8 @@ async function runTurn(
       }
 
       const ownedReplyWindow = resolveOwnedReplyWindow(messages, baselineCount, marker);
-      // The sanctioned observedAssistantNodes value is conversation-global. Bind
-      // it to this owned turn by subtracting the strict pre-send atomic baseline;
-      // if the baseline was lost (for example after recovery) or counts regress,
-      // fail closed instead of inventing current-turn assistant evidence.
-      const baselineAssistantNodes = baselineSnapshot?.complete
-        ? baselineSnapshot.carriers.filter((carrier) => carrier.role === 'assistant').length
-        : undefined;
-      const currentTurnAssistantNodes = pageTurnEvidence
-        && baselineAssistantNodes !== undefined
-        && Number.isSafeInteger(pageTurnEvidence.observedAssistantNodes)
-        && pageTurnEvidence.observedAssistantNodes >= baselineAssistantNodes
-        ? pageTurnEvidence.observedAssistantNodes - baselineAssistantNodes
+      const currentTurnAssistantNodes = currentOwnedCarrier?.key
+        ? countAssistantNodesAfterOwnedCarrier(transcriptSnapshot, currentOwnedCarrier.key)
         : undefined;
       const pageTurnStatus = pageTurnEvidence && currentTurnAssistantNodes !== undefined
         ? classifyBrowserGptPageTurnStatus(
