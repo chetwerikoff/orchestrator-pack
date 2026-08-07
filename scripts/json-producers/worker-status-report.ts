@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runProcess } from '#opk-kernel/subprocess';
 import {
   PRETTY_JSON_WITH_NEWLINE,
   serializeJsonArtifact,
@@ -13,12 +12,14 @@ import {
   resolveWorkerStatusStorePath,
   testSiblingReadiness,
 } from '../lib/worker-status-store.mjs';
+import type { RuntimeWorker } from '../runtime/contracts.ts';
+import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import {
   argumentValue,
-  describeError,
   integerArgument,
   isDirectExecution,
   parseArguments,
+  describeError,
 } from './cli.ts';
 
 interface AnyRow { readonly [key: string]: unknown }
@@ -72,17 +73,7 @@ function dataRows(payload: unknown, label: string): readonly AnyRow[] {
   });
 }
 
-export function parseAoPrefixedJson(text: string, label: string): unknown {
-  const start = text.indexOf('{');
-  if (start < 0) throw new Error(`${label} produced no JSON output`);
-  try {
-    return JSON.parse(text.slice(start)) as unknown;
-  } catch (error) {
-    throw new Error(`${label} parse failed: ${describeError(error)}`);
-  }
-}
-
-function normalizeRuntimeWorkerRow(row: AnyRow): AnyRow {
+function normalizeFixtureSessionRow(row: AnyRow): AnyRow {
   const id = nonEmpty(row.id) || nonEmpty(row.name) || nonEmpty(row.sessionId);
   const projectId = nonEmpty(row.projectId) || nonEmpty(row.project);
   const normalized: Record<string, unknown> = { ...row };
@@ -99,34 +90,70 @@ function normalizeRuntimeWorkerRow(row: AnyRow): AnyRow {
   return normalized;
 }
 
-function assertSessionRow(row: AnyRow): void {
+function assertFixtureSessionRow(row: AnyRow): void {
   const id = nonEmpty(row.id);
-  if (!id) throw new Error('ao session adapter: session row missing non-empty id');
+  if (!id) throw new Error('runtime worker fixture: session row missing non-empty id');
   const role = nonEmpty(row.role);
-  if (role !== 'worker' && role !== 'orchestrator') throw new Error(`ao session adapter: session row ${id} has invalid role '${role}'`);
-  if (!nonEmpty(row.status)) throw new Error(`ao session adapter: session row ${id} missing status`);
+  if (role !== 'worker' && role !== 'orchestrator') throw new Error(`runtime worker fixture: session row ${id} has invalid role '${role}'`);
+  if (!nonEmpty(row.status)) throw new Error(`runtime worker fixture: session row ${id} missing status`);
   if (!Object.hasOwn(row, 'isTerminated') || typeof row.isTerminated !== 'boolean') {
-    throw new Error(`ao session adapter: session row ${id} isTerminated must be boolean`);
+    throw new Error(`runtime worker fixture: session row ${id} isTerminated must be boolean`);
   }
-  if (Object.hasOwn(row, 'reports')) throw new Error(`ao session adapter: session row ${id} must not carry reports field on AO 0.10`);
+  if (Object.hasOwn(row, 'reports')) throw new Error(`runtime worker fixture: session row ${id} must not carry reports field`);
 }
 
+/**
+ * Preserve the historical fixture seam without retaining any executable runtime
+ * discovery. Production inventory is owned by RuntimeAdapter below.
+ */
 export function mergeRuntimeStatusSessionRows(
   workerPayload: unknown,
   orchestratorPayload: unknown,
   project: string,
 ): AnyRow[] {
   const merged = new Map<string, AnyRow>();
-  for (const row of [...dataRows(workerPayload, 'ao session ls'), ...dataRows(orchestratorPayload, 'ao orchestrator ls')]) {
-    const normalized = normalizeRuntimeWorkerRow(row);
+  for (const row of [...dataRows(workerPayload, 'runtime worker fixture'), ...dataRows(orchestratorPayload, 'runtime orchestrator fixture')]) {
+    const normalized = normalizeFixtureSessionRow(row);
     if (project && nonEmpty(normalized.projectId) !== project) continue;
     if (normalized.isTerminated === true) continue;
-    assertSessionRow(normalized);
+    assertFixtureSessionRow(normalized);
     const id = nonEmpty(normalized.id);
-    if (merged.has(id)) throw new Error(`ao session adapter: duplicate session id '${id}' across worker and orchestrator lists`);
+    if (merged.has(id)) throw new Error(`runtime worker fixture: duplicate session id '${id}' across worker and orchestrator lists`);
     merged.set(id, normalized);
   }
   return [...merged.values()];
+}
+
+/** Runtime-neutral inventory projection consumed by the pack-owned status store. */
+export function runtimeWorkersToStatusSessions(
+  workers: readonly RuntimeWorker[],
+  project: string,
+): AnyRow[] {
+  const seen = new Set<string>();
+  return workers.map((worker) => {
+    const id = nonEmpty(worker.identity.id);
+    const runtime = nonEmpty(worker.identity.runtime);
+    const generation = nonEmpty(worker.identity.generation);
+    if (!id || !runtime || !generation) {
+      throw new Error('runtime worker inventory returned incomplete composite identity');
+    }
+    if (seen.has(id)) throw new Error(`runtime worker inventory returned duplicate id '${id}'`);
+    seen.add(id);
+    return {
+      id,
+      name: id,
+      sessionId: id,
+      role: 'worker',
+      status: 'unknown',
+      isTerminated: false,
+      ...(project ? { projectId: project, project } : {}),
+      runtime,
+      generation,
+      workspacePath: worker.workspacePath,
+      title: worker.title,
+      provenance: worker.provenance,
+    };
+  });
 }
 
 function unknownRows(sessions: readonly AnyRow[], reason: string): AnyRow[] {
@@ -190,12 +217,6 @@ export const WORKER_STATUS_REPORT_CONTRACT: JsonArtifactContract<WorkerStatusRep
   format: PRETTY_JSON_WITH_NEWLINE,
 };
 
-async function invokeAo(args: readonly string[], label: string, runtimeCommand: string): Promise<unknown> {
-  const result = await runProcess({ command: runtimeCommand, args, inheritParentEnv: true, timeoutMs: 60_000 });
-  if (!result.ok) throw new Error(`${label} failed (exit ${result.exitCode ?? result.outcome}): ${result.stderr || result.error || result.stdout}`);
-  return parseAoPrefixedJson(result.stdout, label);
-}
-
 async function loadSessions(args: ReturnType<typeof parseArguments>, project: string): Promise<AnyRow[]> {
   const fixture = argumentValue(args, 'session-lists-fixture');
   if (fixture) {
@@ -203,14 +224,14 @@ async function loadSessions(args: ReturnType<typeof parseArguments>, project: st
     if (!isRecord(payload)) throw new Error('session-lists fixture must be an object');
     return mergeRuntimeStatusSessionRows(payload.workerList, payload.orchestratorList, project);
   }
-  const runtimeCommand = argumentValue(args, 'ao-command', 'ao');
-  const workerArgs = ['session', 'ls', '--json'];
-  if (project) workerArgs.push('-p', project);
-  const [workerList, orchestratorList] = await Promise.all([
-    invokeAo(workerArgs, 'ao session ls', runtimeCommand),
-    invokeAo(['orchestrator', 'ls', '--json'], 'ao orchestrator ls', runtimeCommand),
-  ]);
-  return mergeRuntimeStatusSessionRows(workerList, orchestratorList, project);
+
+  const requestedAdapter = argumentValue(args, 'runtime-adapter');
+  const runtime = await selectRuntimeAdapter(requestedAdapter ? { adapter: requestedAdapter } : {});
+  const inventory = runtime.listWorkers({ workspace: 'active' }, { timeoutMs: 60_000 });
+  if (inventory.status !== 'ok') {
+    throw new Error(`runtime worker inventory failed: ${inventory.operation}:${inventory.status}:${inventory.reason}`);
+  }
+  return runtimeWorkersToStatusSessions(inventory.value, project);
 }
 
 export function renderWorkerStatusText(report: WorkerStatusReportArtifact): string {
@@ -221,7 +242,6 @@ export function renderWorkerStatusText(report: WorkerStatusReportArtifact): stri
   }
   return `${lines.join('\n')}\n`;
 }
-
 
 async function main(argv: readonly string[]): Promise<number> {
   const args = parseArguments(argv);
