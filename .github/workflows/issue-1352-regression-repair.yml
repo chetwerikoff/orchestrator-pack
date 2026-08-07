@@ -39,6 +39,32 @@ jobs:
             echo "target head drift: expected $expected_head, got $actual_head" >&2
             exit 90
           fi
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path('scripts/pr2-foundation/foundation.test.ts')
+          text = path.read_text(encoding='utf-8')
+          pattern = re.compile(
+              r"    for \(const file of FOUNDATION_DOC_ROWS\) \{\n"
+              r"\s*const source = path\.join\(repoRoot, file\);\n"
+              r"\s*expect\(existsSync\(source\), file\)\.toBe\(true\);\n"
+              r"\s*expect\(readFileSync\(source, 'utf8'\), file\)\n"
+              r"\s*\.toMatch\(/\^\\/\\/ Issue #923 foundation-terminalized:/\);\n"
+              r"\s*\}\n",
+          )
+          normalized = """    for (const file of FOUNDATION_DOC_ROWS) {
+              const source = path.join(repoRoot, file);
+              expect(existsSync(source), file).toBe(true);
+              expect(readFileSync(source, 'utf8'), file)
+                .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
+            }
+          """
+          text, count = pattern.subn(normalized, text)
+          if count != 1:
+              raise SystemExit(f'unexpected malformed foundation fixture count: {count}')
+          path.write_text(text, encoding='utf-8')
+          PY
           python "$RUNNER_TEMP/issue-1352-regression-repair-v2.py"
       - name: Verify repairs
         shell: bash
