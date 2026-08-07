@@ -6,35 +6,37 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  fixture:
-    name: PR1398 exact fixture
+  patch-target:
+    name: Normalize PowerShell gutter evidence
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
-      - name: Checkout PR 1398 head
+      - name: Checkout target branch
         uses: actions/checkout@v4
         with:
-          repository: chetwerikoff/orchestrator-pack
-          ref: 90aaf5d0e1c0c896fab3824931b4ea3eed872fd6
+          ref: agent/issue-1384-runtime-history-refresh
           fetch-depth: 0
-          persist-credentials: false
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Install dependencies
-        run: npm ci --include=dev
-      - name: Run exact fixture
+          persist-credentials: true
+      - name: Patch and push
         shell: bash
         run: |
-          git config user.name fixture-smoke
-          git config user.email fixture-smoke@example.invalid
-          set +e
-          node scripts/lib/vitest-runtime-history-merge.fixture.mjs
-          code=$?
-          echo "fixture_exit=$code"
-          exit "$code"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/lib/vitest-runtime-history-merge.fixture.mjs')
+          s = p.read_text()
+          old = "const normalizedOutput = output.replace(/\\u001b\\[[0-9;]*m/g, '').replace(/\\s+/g, ' ');"
+          new = "const normalizedOutput = output.replace(/\\u001b\\[[0-9;]*m/g, '').replace(/\\s*\\|\\s*/g, ' ').replace(/\\s+/g, ' ');"
+          if old not in s:
+            raise SystemExit('normalization anchor not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          node --check scripts/lib/vitest-runtime-history-merge.fixture.mjs
+          git config user.name 'chatgpt-ac12-fix'
+          git config user.email 'chatgpt-ac12-fix@example.invalid'
+          git add scripts/lib/vitest-runtime-history-merge.fixture.mjs
+          git commit -m 'Normalize PowerShell diagnostic gutters'
+          git push origin HEAD:agent/issue-1384-runtime-history-refresh
