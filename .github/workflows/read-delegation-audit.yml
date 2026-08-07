@@ -39,3 +39,51 @@ jobs:
       - name: Verify read-delegation audit CI gate (meta-check)
         shell: pwsh
         run: ./scripts/check-read-delegation-audit-ci-gate.ps1
+
+  issue-1352-focused-repair:
+    name: Issue 1352 focused repair
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 1378
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Verify event head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Apply exact focused repairs
+        run: python scripts/issue-1352-focused-repair.py
+      - name: Typecheck repaired sources
+        run: npm run typecheck
+      - name: Focused Vitest
+        run: >-
+          npm test --
+          plugins/codex-pr-reviewer/tests/review.test.ts
+          scripts/worker-smoke.test.ts
+          scripts/runtime/caller-census.test.ts
+          scripts/pack-review-runner-gpt.test.ts
+          scripts/pr2-foundation/real-scope-proof.test.ts
+      - name: Commit repaired files and remove carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout HEAD^ -- .github/workflows/read-delegation-audit.yml
+          git rm scripts/issue-1352-focused-repair.py
+          git add scripts/pr-scope-declaration.ts scripts/worker-smoke.test.ts scripts/runtime/caller-census.ts docs/orca-runtime-caller-census.md plugins/codex-pr-reviewer/tests/review.test.ts scripts/pack-review-runner.ts scripts/pack-review-runner-gpt.test.ts scripts/pr2-foundation/real-scope-proof.ts .github/workflows/read-delegation-audit.yml
+          git diff --cached --check
+          git commit -m 'Repair runtime-neutral review fixtures'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
