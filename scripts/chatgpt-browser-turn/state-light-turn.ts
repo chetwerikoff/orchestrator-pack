@@ -125,6 +125,8 @@ const BLOCKING_PAGE_OVERLAY_SELECTOR = '[role="dialog"][aria-modal="true"], [dat
 const MESSAGE_NODE_READ_TIMEOUT_MS = 800;
 const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
 const MESSAGE_NODE_READ_ATTEMPTS = 2;
+/** Exact generation selector already owned by browser-gpt-page-probe; do not widen it here. */
+const BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR = '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]';
 /** Post-send wall probes must not block transcript reads or the confirm loop. */
 const POST_SEND_PRODUCT_WALL_PROBE_MS = 800;
 export const OBSERVATION_HEARTBEAT_MS = 30_000;
@@ -157,6 +159,11 @@ export interface AtomicTranscriptCarrier extends PageMessage {
 export interface AtomicTranscriptSnapshot {
   readonly complete: boolean;
   readonly carriers: readonly AtomicTranscriptCarrier[];
+}
+
+export interface BrowserGptPageTurnEvidence {
+  readonly generationInProgress: boolean | 'unknown';
+  readonly observedAssistantNodes: number;
 }
 
 export interface PageObservationDecision {
@@ -196,6 +203,26 @@ export interface PageObservationResult {
   readonly ownedWindowCompletionReady: boolean;
   readonly transcriptIncomplete: boolean;
   readonly snapshot?: AtomicTranscriptSnapshot;
+  readonly pageTurnEvidence?: BrowserGptPageTurnEvidence;
+}
+
+export type BrowserGptPageTurnStatus = 'dead' | 'long_running' | 'completed' | 'unknown';
+
+/**
+ * Issue #1386's amended discriminator consumes the producer's tri-state
+ * generation observation plus an assistant count scoped by the consumer to
+ * the current owned user carrier. Unknown generation evidence never authorizes
+ * a dead-turn conclusion.
+ */
+export function classifyBrowserGptPageTurnStatus(
+  generationInProgress: boolean | 'unknown',
+  observedAssistantNodes: number,
+): BrowserGptPageTurnStatus {
+  if (generationInProgress === true) return 'long_running';
+  if (generationInProgress !== false) return 'unknown';
+  if (observedAssistantNodes === 0) return 'dead';
+  if (Number.isSafeInteger(observedAssistantNodes) && observedAssistantNodes > 0) return 'completed';
+  return 'unknown';
 }
 
 export type PageLiveness = 'live' | 'lost' | 'unknown';
@@ -378,6 +405,22 @@ export function snapshotOwnedCarrier(
   const keyMatches = snapshot.carriers.filter((carrier) => carrier.key === owned.key);
   if (keyMatches.length !== 1 || keyMatches[0] !== owned || keyMatches[0].role !== 'user') return undefined;
   return owned;
+}
+
+/** Count assistants only in the current owned turn, never in page history. */
+export function countAssistantNodesAfterOwnedCarrier(
+  snapshot: AtomicTranscriptSnapshot,
+  ownedUserKey: string,
+): number | undefined {
+  if (!snapshot.complete || !validCarrierKey(ownedUserKey)) return undefined;
+  const ownedMatches = snapshot.carriers
+    .map((carrier, index) => ({ carrier, index }))
+    .filter(({ carrier }) => carrier.role === 'user' && carrier.key === ownedUserKey);
+  if (ownedMatches.length !== 1) return undefined;
+  const afterOwned = snapshot.carriers.slice(ownedMatches[0]!.index + 1);
+  const nextUserOffset = afterOwned.findIndex((carrier) => carrier.role === 'user');
+  const ownedTurn = nextUserOffset >= 0 ? afterOwned.slice(0, nextUserOffset) : afterOwned;
+  return ownedTurn.filter((carrier) => carrier.role === 'assistant').length;
 }
 
 export function keyedHarvestCandidate(
@@ -1318,11 +1361,15 @@ export async function readPageObservation(
 
   let carriers: AtomicTranscriptCarrier[] = [];
   let transcriptIncomplete = false;
+  let pageTurnEvidence: BrowserGptPageTurnEvidence | undefined;
   const evaluateAll = nodes?.evaluateAll;
   if (typeof evaluateAll === 'function') {
     try {
-      const rows = await boundedBrowserRead(
-        evaluateAll.call(nodes, (elements: Element[], roleAttribute: string) => {
+      const observed = await boundedBrowserRead(
+        evaluateAll.call(nodes, (elements: Element[], args: {
+          roleAttribute: string;
+          generationSelector: string;
+        }) => {
           const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
           const canonicalKey = (element: Element): string | undefined => {
             for (const attribute of ['data-message-id', 'data-turn-id']) {
@@ -1335,23 +1382,47 @@ export async function readPageObservation(
             }
             return undefined;
           };
-          const observed: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }> = [];
+          const rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }> = [];
+          let observedAssistantNodes = 0;
+          let observedMessageNodes = 0;
           for (let domIndex = 0; domIndex < elements.length; domIndex++) {
             const element = elements[domIndex]!;
             try {
-              const role = element.getAttribute(roleAttribute) ?? '';
+              const role = element.getAttribute(args.roleAttribute) ?? '';
+              if (role === 'user' || role === 'assistant') {
+                observedMessageNodes += 1;
+                if (role === 'assistant') observedAssistantNodes += 1;
+              }
               const text = (element as HTMLElement).innerText;
-              observed.push({ role, text, key: canonicalKey(element), domIndex, complete: true });
+              rows.push({ role, text, key: canonicalKey(element), domIndex, complete: true });
             } catch {
-              observed.push({ role: '', text: '', domIndex, complete: false });
+              rows.push({ role: '', text: '', domIndex, complete: false });
             }
           }
-          return observed;
-        }, MESSAGE_AUTHOR_ROLE_ATTR),
+          let generationInProgress: boolean | 'unknown' = 'unknown';
+          try {
+            generationInProgress = Boolean(document.querySelector(args.generationSelector));
+          } catch {
+            generationInProgress = 'unknown';
+          }
+          return {
+            rows,
+            pageTurnEvidence: observedMessageNodes > 0
+              ? { generationInProgress, observedAssistantNodes }
+              : undefined,
+          };
+        }, {
+          roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
+          generationSelector: BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR,
+        }),
         MAX_LOCAL_READ_WAIT_MS,
         'atomic_transcript_snapshot_timeout',
-      ) as Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }>;
-      for (const row of rows) {
+      ) as {
+        rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }>;
+        pageTurnEvidence?: BrowserGptPageTurnEvidence;
+      };
+      pageTurnEvidence = observed.pageTurnEvidence;
+      for (const row of observed.rows) {
         if (!row.complete || (row.role !== 'user' && row.role !== 'assistant') || typeof row.text !== 'string') {
           transcriptIncomplete = true;
           continue;
@@ -1366,7 +1437,7 @@ export async function readPageObservation(
           domIndex: row.domIndex,
         });
       }
-      if (rows.length !== carriers.length) transcriptIncomplete = true;
+      if (observed.rows.length !== carriers.length) transcriptIncomplete = true;
     } catch {
       if (strictTranscriptCount) return incomplete();
       transcriptIncomplete = true;
@@ -1425,6 +1496,7 @@ export async function readPageObservation(
     ownedWindowCompletionReady,
     transcriptIncomplete,
     snapshot: { complete, carriers },
+    ...(pageTurnEvidence ? { pageTurnEvidence } : {}),
   };
 }
 
@@ -1469,11 +1541,18 @@ async function readPostSendObservation(
 ): Promise<{
   readonly messages: PageMessage[];
   readonly wall: ReturnType<typeof classifyProductWall>;
+  readonly pageTurnEvidence?: BrowserGptPageTurnEvidence;
   readonly ownedWindowCompletionReady: boolean;
   readonly transcriptIncomplete: boolean;
   readonly snapshot: AtomicTranscriptSnapshot;
 }> {
-  const { messages, ownedWindowCompletionReady, transcriptIncomplete, snapshot } = await readPageObservation(
+  const {
+    messages,
+    ownedWindowCompletionReady,
+    transcriptIncomplete,
+    snapshot,
+    pageTurnEvidence,
+  } = await readPageObservation(
     page,
     expectedMarker,
     baselineCount,
@@ -1484,7 +1563,14 @@ async function readPostSendObservation(
   } catch {
     // Product-status probes must not block or invalidate transcript reads.
   }
-  return { messages, wall, ownedWindowCompletionReady, transcriptIncomplete, snapshot: snapshot! };
+  return {
+    messages,
+    wall,
+    ...(pageTurnEvidence ? { pageTurnEvidence } : {}),
+    ownedWindowCompletionReady,
+    transcriptIncomplete,
+    snapshot: snapshot!,
+  };
 }
 
 async function maybeContinueGeneration(page: any): Promise<boolean> {
@@ -2223,6 +2309,25 @@ async function runTurn(
           }
           if (!conversationUrl) {
             if (sendCount >= 1) {
+              const landingEvidence = await classifySendLandingEvidence(
+                page,
+                markedPayload,
+                lastAttemptConversationUrl,
+              );
+              if (landingEvidence === 'not_landed' && !pageConversationUrl(page)) {
+                return returnFreshConversationLandingMismatch(
+                  page,
+                  browser,
+                  invocationId,
+                  profileKey,
+                  sendCount,
+                  pollCount,
+                  navigation,
+                  incidents,
+                  journalWriteFailed,
+                  incident,
+                );
+              }
               incident(
                 'send_observation_deferred',
                 'fresh_conversation_url_not_observed',
@@ -2470,6 +2575,7 @@ async function runTurn(
     let ownedCarrierKey: string | undefined;
     let lastMarkerlessSnapshotSignature = '';
     let completionReadySeen = false;
+    let deadEvidenceReads = 0;
     let sendObservationDeferredLogged = false;
     let lastHeartbeatAt = startedAt;
     const emitHeartbeatForPoll = (decision: PageObservationDecision): void => {
@@ -2755,7 +2861,14 @@ async function runTurn(
         continue;
       }
 
-      const { messages, wall, ownedWindowCompletionReady, transcriptIncomplete, snapshot: transcriptSnapshot } = observation;
+      const {
+        messages,
+        wall,
+        pageTurnEvidence,
+        ownedWindowCompletionReady,
+        transcriptIncomplete,
+        snapshot: transcriptSnapshot,
+      } = observation;
       if (
         config.newChat
         && ownedConversationUrl
@@ -2962,6 +3075,51 @@ async function runTurn(
         lastMarkerlessSnapshotSignature = signature;
       } else {
         lastMarkerlessSnapshotSignature = '';
+      }
+
+      const ownedReplyWindow = resolveOwnedReplyWindow(messages, baselineCount, marker);
+      const currentTurnAssistantNodes = currentOwnedCarrier?.key
+        ? countAssistantNodesAfterOwnedCarrier(transcriptSnapshot, currentOwnedCarrier.key)
+        : undefined;
+      const pageTurnStatus = pageTurnEvidence && currentTurnAssistantNodes !== undefined
+        ? classifyBrowserGptPageTurnStatus(
+          pageTurnEvidence.generationInProgress,
+          currentTurnAssistantNodes,
+        )
+        : 'unknown';
+      const deadEvidenceEligible = Boolean(
+        markerVisible
+        && durableConversationUrl
+        && !ownedReplyWindow.uncertainCause
+        && markerCardinality.matchingUserCarrierCount === 1
+        && markerCardinality.exactMarkerTokenCount === 1
+        && Date.now() >= dispatchDeadline
+      );
+      if (deadEvidenceEligible && pageTurnStatus === 'dead') {
+        deadEvidenceReads += 1;
+        if (deadEvidenceReads >= 2) {
+          incident('dead_turn_observed', 'dead_turn_page_evidence', 'retain_owned_page_no_resend');
+          return {
+            page,
+            browser,
+            cleanupAction: 'preserve',
+            result: compactResult(
+              'no_reply',
+              'conversation',
+              'dead_turn_page_evidence',
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              navigation,
+              incidents,
+              { conversation_id: durableConversationUrl },
+              journalWriteFailed,
+            ),
+          };
+        }
+      } else {
+        deadEvidenceReads = 0;
       }
 
       const inProgress = !ownedWindowCompletionReady && !completionReadySeen;
