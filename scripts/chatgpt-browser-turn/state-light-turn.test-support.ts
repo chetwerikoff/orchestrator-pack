@@ -1076,9 +1076,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
 
   it('stabilizes a long reply when successive reads differ only by render artifacts', async () => {
     const body = `${'detail '.repeat(60)} Section footer with enough words.`;
-    const renderA = `Intro paragraph.
-
-${body}`;
+    const renderA = `Intro paragraph.\n\n${body}`;
     const renderB = `Intro paragraph. ${body} show more`;
     const snapshots: StateLightTestSnapshot[] = [
       {
@@ -1770,5 +1768,232 @@ describe('browser-turn recurrence journal fixture coverage', () => {
         .map((entry) => entry.id),
     );
     expect(legacyKinds.size).toBeGreaterThan(0);
+  });
+});
+
+describe('Issue #1386 dead-turn transport evidence', () => {
+  type GenerationEvidence = boolean | 'unknown';
+  type EvidenceFrame = {
+    readonly generationInProgress: GenerationEvidence;
+    readonly assistant?: StateLightTestMessage;
+  };
+
+  function atomicCollection(messages: StateLightTestMessage[], generationInProgress: GenerationEvidence) {
+    const legacy = collectionLocator(messages, generationInProgress === true);
+    const elements = messages.map((message, index) => ({
+      getAttribute: (name: string) => {
+        if (name === 'data-message-author-role') return message.role;
+        if (name === 'data-message-id') return `${message.role}-${index}-12345678`;
+        return null;
+      },
+      querySelectorAll: () => [],
+      innerText: message.text,
+    }));
+    return scalarLocator({
+      count: legacy.count,
+      nth: legacy.nth,
+      evaluateAll: vi.fn(async (
+        callback: (items: Element[], args: unknown) => unknown,
+        args: unknown,
+      ) => {
+        const priorDocument = (globalThis as { document?: unknown }).document;
+        (globalThis as { document?: unknown }).document = {
+          querySelector: vi.fn(() => {
+            if (generationInProgress === 'unknown') throw new Error('generation read failed');
+            return generationInProgress ? {} : null;
+          }),
+        };
+        try {
+          return callback(elements as unknown as Element[], args);
+        } finally {
+          if (priorDocument === undefined) delete (globalThis as { document?: unknown }).document;
+          else (globalThis as { document?: unknown }).document = priorDocument;
+        }
+      }),
+    });
+  }
+
+  function makeEvidencePage(
+    frames: readonly EvidenceFrame[],
+    preSendMessages: readonly StateLightTestMessage[] = [],
+  ) {
+    let sent = false;
+    let filled = '';
+    let frameIndex = 0;
+    let activeMessages = [...preSendMessages];
+    let activeGeneration: GenerationEvidence = false;
+    let closed = false;
+    const metrics = {
+      sends: 0,
+      closes: 0,
+      polls: 0,
+      waitedMs: 0,
+      continuationClicks: 0,
+    };
+
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      fill: vi.fn(async (value: string) => { filled = value; }),
+      press: vi.fn(async (key: string) => {
+        if (key !== 'Enter') throw new Error(`unexpected key: ${key}`);
+        sent = true;
+        metrics.sends += 1;
+      }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        sent = true;
+        metrics.sends += 1;
+      }),
+    });
+
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      __productStatusText: () => '',
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => 'https://chatgpt.com/c/existing'),
+      isClosed: vi.fn(() => closed),
+      waitForTimeout: vi.fn(async (ms: number) => {
+        metrics.waitedMs += ms;
+        mocks.nowMs += ms;
+      }),
+      close: vi.fn(async () => {
+        closed = true;
+        metrics.closes += 1;
+      }),
+      getByRole: vi.fn(() => scalarLocator({
+        count: vi.fn(async () => 0),
+        click: vi.fn(async () => { metrics.continuationClicks += 1; }),
+      })),
+      getByText: vi.fn(() => scalarLocator({
+        count: vi.fn(async () => 0),
+        click: vi.fn(async () => { metrics.continuationClicks += 1; }),
+      })),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          if (!sent) {
+            activeMessages = [...preSendMessages];
+            activeGeneration = false;
+            return atomicCollection(activeMessages, activeGeneration);
+          }
+          const frame = frames[Math.min(frameIndex, Math.max(0, frames.length - 1))]
+            ?? { generationInProgress: false };
+          frameIndex += 1;
+          metrics.polls += 1;
+          activeGeneration = frame.generationInProgress;
+          activeMessages = [
+            ...preSendMessages,
+            { role: 'user', text: filled },
+            ...(frame.assistant ? [frame.assistant] : []),
+          ];
+          return atomicCollection(activeMessages, activeGeneration);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          const last = activeMessages.filter((message) => message.role === 'assistant').at(-1);
+          if (!last?.finalActionInTurnContainer) return scalarLocator({ count: vi.fn(async () => 0) });
+          return messageLocator(last, activeGeneration === true);
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return collectionLocator(
+            activeMessages.filter((message) => message.role === 'assistant'),
+            activeGeneration === true,
+          );
+        }
+        if (matchesStopButtonSelector(selector)) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    return { page, metrics };
+  }
+
+  it('returns dead_turn_page_evidence after two eligible dead observations with one send and no extra actuation', async () => {
+    const fake = makeEvidencePage([
+      { generationInProgress: false },
+      { generationInProgress: false },
+      { generationInProgress: false },
+    ]);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '1', pollMs: '1' });
+
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      scope: 'conversation',
+      cause: 'dead_turn_page_evidence',
+      send_count: 1,
+      goto_count: 1,
+      navigation_count: 1,
+      cleanup: 'skipped',
+    });
+    expect(outcome.result.poll_count).toBeGreaterThanOrEqual(3);
+    expect(fake.metrics.sends).toBe(1);
+    expect(fake.metrics.continuationClicks).toBe(0);
+    expect(fake.metrics.closes).toBe(0);
+    expect(fake.page.goto).toHaveBeenCalledTimes(1);
+    expect(outcome.context.newPage).toHaveBeenCalledTimes(1);
+    expect(mocks.linkSync).not.toHaveBeenCalled();
+  });
+
+  it('subtracts historical assistant nodes before classifying the current owned turn dead', async () => {
+    const fake = makeEvidencePage([
+      { generationInProgress: false },
+      { generationInProgress: false },
+      { generationInProgress: false },
+    ], BASELINE);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '1', pollMs: '1' });
+
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      scope: 'conversation',
+      cause: 'dead_turn_page_evidence',
+      send_count: 1,
+      cleanup: 'skipped',
+    });
+    expect(fake.metrics.sends).toBe(1);
+    expect(fake.metrics.closes).toBe(0);
+    expect(mocks.linkSync).not.toHaveBeenCalled();
+  });
+
+  it('does not classify active generation as dead at the transport boundary', async () => {
+    const active = { generationInProgress: true } as const;
+    const complete = {
+      generationInProgress: false,
+      assistant: { role: 'assistant', text: 'FINAL', finalAction: true } as StateLightTestMessage,
+    } as const;
+    const fake = makeEvidencePage([active, active, active, active, active, complete, complete]);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '2000', pollMs: '1' });
+
+    expect(outcome.result).toMatchObject({ state: 'ok', cause: 'completed_page_only', send_count: 1 });
+    expect(outcome.result.cause).not.toBe('dead_turn_page_evidence');
+    expect(fake.metrics.sends).toBe(1);
+  });
+
+  it('keeps unknown generation evidence fail-closed until a real completion arrives', async () => {
+    const unknown = { generationInProgress: 'unknown' } as const;
+    const complete = {
+      generationInProgress: false,
+      assistant: { role: 'assistant', text: 'FINAL', finalAction: true } as StateLightTestMessage,
+    } as const;
+    const fake = makeEvidencePage([unknown, unknown, unknown, unknown, unknown, complete, complete]);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '2000', pollMs: '1' });
+
+    expect(outcome.result).toMatchObject({ state: 'ok', cause: 'completed_page_only', send_count: 1 });
+    expect(outcome.result.cause).not.toBe('dead_turn_page_evidence');
+    expect(fake.metrics.sends).toBe(1);
+  });
+
+  it('keeps a current assistant delta completed when historical assistants are present', async () => {
+    const complete = {
+      generationInProgress: false,
+      assistant: { role: 'assistant', text: 'FINAL', finalAction: true } as StateLightTestMessage,
+    } as const;
+    const fake = makeEvidencePage([complete, complete], BASELINE);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '2000', pollMs: '1' });
+
+    expect(outcome.result).toMatchObject({ state: 'ok', cause: 'completed_page_only', send_count: 1 });
+    expect(outcome.result.cause).not.toBe('dead_turn_page_evidence');
+    expect(fake.metrics.sends).toBe(1);
   });
 });

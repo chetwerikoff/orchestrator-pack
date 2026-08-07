@@ -14,6 +14,7 @@ import {
 } from './product-page-selectors.ts';
 import {
   buildObservationHeartbeat,
+  classifyBrowserGptPageTurnStatus,
   classifyPageObservation,
   ownedPromptMatches,
   readPageObservation,
@@ -142,6 +143,21 @@ async function runCollapsedDuplicateFixture() {
     published: true,
   } as const;
 }
+
+describe('browser turn page evidence classification', () => {
+  it('distinguishes dead, long-running, and completed turns from the existing probe fields', () => {
+    expect(classifyBrowserGptPageTurnStatus(false, 0)).toBe('dead');
+    expect(classifyBrowserGptPageTurnStatus(true, 0)).toBe('long_running');
+    expect(classifyBrowserGptPageTurnStatus(false, 1)).toBe('completed');
+    expect(classifyBrowserGptPageTurnStatus(false, 3)).toBe('completed');
+  });
+
+  it('fails closed when generation evidence is unknown and never calls active generation dead', () => {
+    expect(classifyBrowserGptPageTurnStatus('unknown', 0)).toBe('unknown');
+    expect(classifyBrowserGptPageTurnStatus('unknown', 2)).toBe('unknown');
+    expect(classifyBrowserGptPageTurnStatus(true, 2)).toBe('long_running');
+  });
+});
 
 describe('state-light completion probes', () => {
   function makeTurnContainerPage(actionButtons: boolean, generating = false) {
@@ -309,6 +325,86 @@ describe('owned marker primitive', () => {
 });
 
 describe('DOM observation boundary', () => {
+  async function readAtomicEvidence(
+    messages: Array<{ role: 'user' | 'assistant'; text: string }>,
+    generationQuery: () => unknown,
+  ) {
+    const elements = messages.map((message, index) => ({
+      getAttribute: (name: string) => {
+        if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role;
+        if (name === 'data-message-id') return `${message.role}-${index}-12345678`;
+        return null;
+      },
+      querySelectorAll: () => [],
+      innerText: message.text,
+    }));
+    const querySelector = vi.fn(generationQuery);
+    const priorDocument = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: unknown }).document = { querySelector };
+    const nodes = scalarLocator({
+      evaluateAll: vi.fn(async (callback: (items: Element[], args: unknown) => unknown, args: unknown) => (
+        callback(elements as unknown as Element[], args)
+      )),
+    });
+    const page = {
+      locator: vi.fn((selector: string) => selector === MESSAGE_NODE_SELECTOR
+        ? nodes
+        : scalarLocator()),
+    };
+    try {
+      return { result: await readPageObservation(page), querySelector };
+    } finally {
+      if (priorDocument === undefined) delete (globalThis as { document?: unknown }).document;
+      else (globalThis as { document?: unknown }).document = priorDocument;
+    }
+  }
+
+  it('carries the exact probe tuple from one atomic production DOM read', async () => {
+    const dead = await readAtomicEvidence([{ role: 'user', text: markedPrompt }], () => null);
+    expect(dead.result.pageTurnEvidence).toEqual({ generationInProgress: false, observedAssistantNodes: 0 });
+    expect(classifyBrowserGptPageTurnStatus(
+      dead.result.pageTurnEvidence!.generationInProgress,
+      dead.result.pageTurnEvidence!.observedAssistantNodes,
+    )).toBe('dead');
+
+    const live = await readAtomicEvidence([{ role: 'user', text: markedPrompt }], () => ({}));
+    expect(live.result.pageTurnEvidence).toEqual({ generationInProgress: true, observedAssistantNodes: 0 });
+    expect(classifyBrowserGptPageTurnStatus(
+      live.result.pageTurnEvidence!.generationInProgress,
+      live.result.pageTurnEvidence!.observedAssistantNodes,
+    )).toBe('long_running');
+
+    const completed = await readAtomicEvidence([
+      { role: 'user', text: markedPrompt },
+      { role: 'assistant', text: 'historical or completed assistant' },
+    ], () => null);
+    expect(completed.result.pageTurnEvidence).toEqual({ generationInProgress: false, observedAssistantNodes: 1 });
+    expect(classifyBrowserGptPageTurnStatus(
+      completed.result.pageTurnEvidence!.generationInProgress,
+      completed.result.pageTurnEvidence!.observedAssistantNodes,
+    )).toBe('completed');
+    expect(completed.querySelector).toHaveBeenCalledWith(
+      '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]',
+    );
+  });
+
+  it('preserves a valid transcript and fails closed when generation reading throws', async () => {
+    const observation = await readAtomicEvidence(
+      [{ role: 'user', text: markedPrompt }],
+      () => { throw new Error('generation read failed'); },
+    );
+    expect(observation.result.messages).toEqual([{ role: 'user', text: markedPrompt }]);
+    expect(observation.result.transcriptIncomplete).toBe(false);
+    expect(observation.result.pageTurnEvidence).toEqual({
+      generationInProgress: 'unknown',
+      observedAssistantNodes: 0,
+    });
+    expect(classifyBrowserGptPageTurnStatus(
+      observation.result.pageTurnEvidence!.generationInProgress,
+      observation.result.pageTurnEvidence!.observedAssistantNodes,
+    )).toBe('unknown');
+  });
+
   it('reads complete rendered innerText and never textContent', async () => {
     const user = {
       ...({ role: 'user', text: markedPrompt } as const),

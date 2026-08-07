@@ -1,0 +1,36 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1384,
+  "declared_paths": [
+    ".github/workflows/vitest-runtime-history-refresh.yml",
+    "scripts/lib/vitest-runtime-history-merge.fixture.mjs",
+    "scripts/lib/vitest-runtime-history-merge.mjs",
+    "scripts/refresh-vitest-runtime-history.mjs",
+    "scripts/refresh-vitest-runtime-history.ps1"
+  ],
+  "denylist": [
+    "credentials/",
+    "package-lock.json",
+    "package.json",
+    "packages/core/",
+    "plugins/",
+    "scripts/emit-vitest-heavy-topology.mjs",
+    "scripts/lib/vitest-heavy-topology.mjs",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/run-vitest-heavy-shard.ps1",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "tests/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".github/workflows/vitest-runtime-history-refresh.yml",
+    "docs/declarations/1384.pr-scope.json",
+    "scripts/lib/vitest-runtime-history-merge.fixture.mjs",
+    "scripts/lib/vitest-runtime-history-merge.mjs",
+    "scripts/refresh-vitest-runtime-history.mjs",
+    "scripts/refresh-vitest-runtime-history.ps1",
+    "scripts/vitest-runtime-history.json"
+  ],
+  "source_revision": "669d9d2b19807dc0bda1beed17a105242084b7f6"
+}
