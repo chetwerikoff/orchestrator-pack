@@ -22,7 +22,8 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
       expect(existsSync(path.resolve(source)), source).toBe(true);
       const text = readFileSync(path.resolve(source), 'utf8');
       if (source === runtimeNeutralFoundationSource) {
-        expect(text, source).toContain('Issue #1352 runtime-neutral review bulk-send diagnostic.');
+        expect(text, source).toContain('The pack review producer/store is the only active authority.');
+        expect(text, source).not.toContain('ao-0-10-review-api');
       } else {
         expect(text, source).toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
       }
