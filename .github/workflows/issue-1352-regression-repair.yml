@@ -1,4 +1,4 @@
-name: issue-1352-residual-batch2
+name: issue-1352-residual-batch3
 
 on:
   pull_request:
@@ -22,10 +22,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp .github/issue-1352-residual-batch1.py "$RUNNER_TEMP/issue-1352-residual-batch2.py"
+          cp .github/issue-1352-residual-batch1.py "$RUNNER_TEMP/issue-1352-residual-batch3.py"
           git fetch origin agent/issue-1352-hard-cut
           git checkout -B agent/issue-1352-hard-cut origin/agent/issue-1352-hard-cut
-          expected_head='5c431f53b414ff740034d5b622515437a68668f3'
+          expected_head='3b0f3201d6b25e94fd2ae3868d60f0dd5443a991'
           actual_head="$(git rev-parse HEAD)"
           test "$actual_head" = "$expected_head"
       - uses: actions/setup-node@v4
@@ -36,49 +36,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python "$RUNNER_TEMP/issue-1352-residual-batch2.py"
+          python "$RUNNER_TEMP/issue-1352-residual-batch3.py"
           npm ci --include=dev
           npm run typecheck:foundation
           pwsh -NoProfile -File scripts/test-all.ps1 -SkipNpm
           npm test -- --maxWorkers=1 \
             scripts/runtime-retirement/retired-surface-guard.test.ts \
-            scripts/gate-runner/custom/bulk-cli-parity.test.ts \
-            scripts/pr2-foundation/foundation.test.ts \
+            scripts/review-cycle-cap.test.ts \
+            scripts/gh-governor.test.ts \
+            scripts/worker-status-store.test.ts \
             --reporter=dot
           node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts > "$RUNNER_TEMP/residual.json" || true
           node --input-type=module - "$RUNNER_TEMP/residual.json" <<'NODE'
           import { readFileSync } from 'node:fs';
           const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-          const migratedPaths = new Set([
-            '.gitignore',
-            'scripts/estate-cut/capture-base-anchor.mjs',
-            'scripts/estate-cut/manifest-generator.mjs',
-            'scripts/gate-runner/bulk-declarative-gates.ts',
-            'scripts/lib/Autonomous-ClaimPrResumeGate.ps1',
-            'scripts/lib/Autonomous-SpawnWorktreeGate.ps1',
-            'scripts/lib/Journaled-WorkerSendInternalCapability.ps1',
-            'scripts/lib/graphql-quota-github-read-inventory.json',
-            'scripts/orchestrator-message-audit-roots.manifest.json',
-            'scripts/orchestrator-message-protected-runtime.manifest.json',
-            'scripts/pr-scope-declaration.ts',
-            'scripts/pr2-foundation/contracts.ts',
-            'scripts/pr2a/closed-world-scanner.ts',
-            'scripts/pr2a/execution-root-registry.json',
-            'scripts/toolchain/check-typescript-runtime-policy.ts',
-          ]);
-          const forbidden = result.violations.filter((row) => migratedPaths.has(row.path)
-            && (row.match.includes('agent-orchestrator.yaml')
-              || row.match.includes('.agent-orchestrator')
-              || row.match === '.ao/'
-              || row.match === 'AO_PROJECT_ID'
-              || row.match === 'AO_PROJECT'));
-          if (forbidden.length) {
-            console.error(JSON.stringify(forbidden, null, 2));
-            process.exit(2);
-          }
-          if (result.violations.length >= 288) {
+          if (result.violations.length >= 240) {
             console.error(`residual census did not shrink: ${result.violations.length}`);
             process.exit(3);
+          }
+          const retiredSelectors = ['AO_PR_NUMBER','AO_ISSUE_NUMBER','AO_ORCHESTRATOR_SESSION_ID','AO_REPO_SLUG','AO_PR_HEAD_SHA','AO_HEAD_SHA'];
+          const migrated = new Set(['scripts/lib/Review-CycleCap.ps1','scripts/orchestrator-review-start-preflight.ps1','scripts/orchestrator-wake-common.ps1','scripts/wait-orchestrator-launch.ps1','scripts/orchestrator-worktree-preflight.ps1','scripts/lib/Orchestrator-Escalation.ps1','scripts/lib/gh-governor.mjs','scripts/lib/worker-status-store.mjs']);
+          const forbidden = result.violations.filter((row) => migrated.has(row.path) && retiredSelectors.includes(row.match));
+          if (forbidden.length) {
+            console.error(JSON.stringify(forbidden, null, 2));
+            process.exit(4);
           }
           console.log(`residual_hits=${result.violations.length}`);
           NODE
@@ -90,5 +71,5 @@ jobs:
           git config user.name chetwerikoff
           git config user.email 85295154+chetwerikoff@users.noreply.github.com
           git add -A
-          git commit -m 'refactor(runtime): retire legacy config and state roots'
+          git commit -m 'refactor(runtime): make review and wake identity explicit'
           git push origin HEAD:agent/issue-1352-hard-cut
