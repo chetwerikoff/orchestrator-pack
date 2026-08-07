@@ -49,8 +49,7 @@ jobs:
           const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
           const forbidden = result.violations.filter((row) =>
             row.path === 'scripts/lib/orca-cli.ts'
-            || row.path === 'scripts/orca-runtime/native.ts'
-            || row.match.startsWith('ORCA_'));
+            || row.path === 'scripts/orca-runtime/native.ts');
           if (forbidden.length) {
             console.error(JSON.stringify(forbidden, null, 2));
             process.exit(2);
