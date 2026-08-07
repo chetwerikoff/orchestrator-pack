@@ -1,6 +1,6 @@
-# Canonical AO review entrypoint: dependency preflight then pack Codex wrapper.
-# Referenced by REVIEW_COMMAND in agent-orchestrator.yaml.example (Issue #60).
-# Accepts the same CLI-style flags as review.ps1 (--repo-root, --base).
+# Pack-owned Codex review wrapper: dependency preflight followed by the neutral
+# reviewer plugin entrypoint. Accepts the same CLI-style flags as review.ps1
+# (--repo-root, --base).
 #Requires -Version 5.1
 param()
 
@@ -24,7 +24,7 @@ Push-Location -LiteralPath $resolvedRoot
 try {
     Install-PackReviewDependencies -WrapperName $Script:WrapperName
 
-    $reviewScript = Join-Path $PSScriptRoot '../plugins/ao-codex-pr-reviewer/bin/review.ps1'
+    $reviewScript = Join-Path $PSScriptRoot '../plugins/codex-pr-reviewer/bin/review.ps1'
     if (-not (Test-Path -LiteralPath $reviewScript -PathType Leaf)) {
         Write-Error "Pack review wrapper not found at $reviewScript"
     }

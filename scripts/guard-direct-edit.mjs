@@ -3,10 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DRAFT_AUTHOR_DENY_REASON =
-  'Task draft authoring is delegated to an isolated Cursor draft-author session from the architect brief (Issue #579). Set AO_DRAFT_AUTHOR_FALLBACK_REASON to record a legitimate architect-as-author override per #579.';
+  'Task draft authoring is delegated to an isolated Cursor draft-author session from the architect brief (Issue #579). Set OPK_DRAFT_AUTHOR_FALLBACK_REASON to record a legitimate architect-as-author override per #579.';
 
 const DIRECT_EDIT_DENY_REASON =
-  'Architect direct edits to tracked implementation surfaces are blocked. Spawn an AO worker (`ao spawn`) instead, or set AO_DIRECT_EDIT_REASON to record an authorized override (see direct-fix-checklist skill).';
+  'Architect direct edits to tracked implementation surfaces are blocked. Use the runtime-backed worker workflow instead, or set OPK_DIRECT_EDIT_REASON to record an authorized override (see direct-fix-checklist skill).';
 
 /**
  * @typedef {'allow' | 'deny'} GuardDecision
@@ -45,8 +45,7 @@ export function isUnchangedAllowlisted(relativePosix) {
   if (
     relativePosix === 'CLAUDE.md' ||
     relativePosix === 'docs/architecture.md' ||
-    relativePosix === 'docs/issue_queue_index.md' ||
-    relativePosix === 'agent-orchestrator.yaml'
+    relativePosix === 'docs/issue_queue_index.md'
   ) {
     return true;
   }
@@ -54,8 +53,8 @@ export function isUnchangedAllowlisted(relativePosix) {
   return (
     relativePosix === '.claude' ||
     relativePosix.startsWith('.claude/') ||
-    relativePosix === '.ao' ||
-    relativePosix.startsWith('.ao/')
+    relativePosix === '.orchestrator-pack' ||
+    relativePosix.startsWith('.orchestrator-pack/')
   );
 }
 
@@ -108,7 +107,7 @@ export function evaluateDirectEditGuard(input) {
   }
 
   if (isGatedDraftFile(relative)) {
-    if (trimmedEnv(env, 'AO_DRAFT_AUTHOR_FALLBACK_REASON')) {
+    if (trimmedEnv(env, 'OPK_DRAFT_AUTHOR_FALLBACK_REASON')) {
       return { decision: 'allow', rule: 'draft-override' };
     }
     return {
@@ -118,7 +117,7 @@ export function evaluateDirectEditGuard(input) {
     };
   }
 
-  if (trimmedEnv(env, 'AO_DIRECT_EDIT_REASON')) {
+  if (trimmedEnv(env, 'OPK_DIRECT_EDIT_REASON')) {
     return { decision: 'allow', rule: 'direct-edit-override' };
   }
 

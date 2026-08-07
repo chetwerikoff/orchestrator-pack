@@ -27,7 +27,7 @@ resolve_real() {
 REAL="$(resolve_real)"
 
 want_translate=0
-if [[ -t 1 && "${AO_SESSION_ID:-}" =~ ^orchestrator-pack-[0-9]+$ ]]; then
+if [[ -t 1 && "${OPK_CURSOR_AGENT_TRANSLATE:-}" == "1" ]]; then
   has_p=0
   has_sj=0
   for a in "$@"; do

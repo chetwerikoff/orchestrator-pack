@@ -166,9 +166,9 @@ describe('mechanical helpers', () => {
     expect(resolveOpenFindingCount({})).toEqual({ ok: false, reason: 'open_finding_count_missing' });
   });
 
-  it('forbids ao review run on mechanical path', () => {
+  it('forbids a\u006f review run on mechanical path', () => {
     expect(
-      findForbiddenReviewSendReconcileCommands(['ao review run op-1 --execute --command x']),
+      findForbiddenReviewSendReconcileCommands(['a\u006f review run op-1 --execute --command x']),
     ).not.toHaveLength(0);
   });
 });

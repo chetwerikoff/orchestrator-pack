@@ -4,7 +4,7 @@
       "id": "autonomous-session-id",
       "classification": "gated",
       "surface": "process-env",
-      "path": "AO_SESSION_ID"
+      "path": "OPK_AUTONOMOUS_SURFACE"
     },
     {
       "id": "autonomous-spawn-gate",

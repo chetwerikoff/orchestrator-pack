@@ -19,7 +19,7 @@ $ErrorActionPreference = 'Stop'
 $packRoot = [string](Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $detectCli = Join-Path $packRoot 'docs/review-bulk-send-diagnose.mjs'
 
-. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-RuntimeCliJson.ps1')
 
 if (-not (Test-Path -LiteralPath $detectCli -PathType Leaf)) {
     throw "Missing $detectCli"
@@ -47,8 +47,8 @@ if ($FixturePath) {
     if (-not $runs -and $fixture.data) { $runs = @($fixture.data) }
 }
 else {
-    $payload = Get-AoReviewRuns -Project $ProjectId
-    $runs = @(Get-AoReviewRunsFromPayload -Payload $payload -Project $ProjectId)
+    $payload = Get-PackReviewRuns -Project $ProjectId
+    $runs = @(Get-PackReviewRunsFromPayload -Payload $payload -Project $ProjectId)
 }
 
 $result = Invoke-BulkSendDiagnoseCli -Payload @{
@@ -68,7 +68,7 @@ Write-Host ("Runs scanned: {0}; flagged: {1}" -f $result.summary.totalRuns, $res
 
 if ($result.summary.flaggedRuns -eq 0) {
     Write-Host ''
-    Write-Host 'No bulk-send trap or stuck-open runs detected in current Get-AoReviewRuns snapshot.'
+    Write-Host 'No bulk-send trap or stuck-open runs detected in current Get-PackReviewRuns snapshot.'
 }
 else {
     Write-Host ''

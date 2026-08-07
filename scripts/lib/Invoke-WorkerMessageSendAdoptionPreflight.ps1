@@ -10,7 +10,7 @@
 function Get-WorkerMessageSendAdoptionPreflightStatePath {
     param([string]$Path)
     if ($Path) { return $Path }
-    if ($env:AO_WORKER_MESSAGE_ADOPTION_STATE) { return $env:AO_WORKER_MESSAGE_ADOPTION_STATE }
+    if ($env:OPK_WORKER_MESSAGE_ADOPTION_STATE) { return $env:OPK_WORKER_MESSAGE_ADOPTION_STATE }
     return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-worker-message-send-adoption.json'
 }
 
@@ -28,21 +28,21 @@ function New-WorkerMessageAdoptionProbePayload {
     )
 
     if ($Branch -match ':self-submitted$') {
-        return "AO_WORKER_MESSAGE_ADOPTION_PROBE_V1 b=$Branch e=$EpochHash c=$ConfigHash r=$RunIdHash"
+        return "OPK_WORKER_MESSAGE_ADOPTION_PROBE_V1 b=$Branch e=$EpochHash c=$ConfigHash r=$RunIdHash"
     }
 
     $filler = 'x' * 240
-    return "AO_WORKER_MESSAGE_ADOPTION_PROBE_V1`nbranch=$Branch`naoEpochHash=$EpochHash`nconfigPathHash=$ConfigHash`nadoptionProbeRunIdHash=$RunIdHash`n$filler"
+    return "OPK_WORKER_MESSAGE_ADOPTION_PROBE_V1`nbranch=$Branch`nruntimeEpochHash=$EpochHash`nconfigPathHash=$ConfigHash`nadoptionProbeRunIdHash=$RunIdHash`n$filler"
 }
 
-function Invoke-AoSendProbeViaMessage {
+function Invoke-WorkerMessageSendProbe {
     param(
-        [string]$AoPath,
+        [string]$RuntimePath,
         [string]$SessionId,
         [string]$Payload
     )
 
-    $output = & $AoPath send --message $Payload --session $SessionId 2>&1
+    $output = & $RuntimePath send --message $Payload --session $SessionId 2>&1
     $exitCode = $LASTEXITCODE
     if ($null -eq $exitCode) { $exitCode = 0 }
     return @{ output = @($output); exitCode = $exitCode }
@@ -51,8 +51,8 @@ function Invoke-AoSendProbeViaMessage {
 function Invoke-WorkerMessageAdoptionProbeGeneration {
     param(
         [string[]]$RequiredBranches,
-        [string]$AoPath,
-        [string]$AoEpoch,
+        [string]$RuntimePath,
+        [string]$RuntimeEpoch,
         [string]$ConfigPath,
         [string]$EffectiveJournalPath,
         [ref]$ProbeRunIdHash
@@ -62,28 +62,28 @@ function Invoke-WorkerMessageAdoptionProbeGeneration {
     foreach ($branch in $RequiredBranches) {
         $savedEnv = @{}
         foreach ($name in @(
-            'AO_WORKER_MESSAGE_ADOPTION_PROBE',
-            'AO_WORKER_MESSAGE_ADOPTION_BRANCH',
-            'AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH',
-            'AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH',
-            'AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH',
-            'AO_WORKER_MESSAGE_DISPATCH_JOURNAL'
+            'OPK_WORKER_MESSAGE_ADOPTION_PROBE',
+            'OPK_WORKER_MESSAGE_ADOPTION_BRANCH',
+            'OPK_WORKER_MESSAGE_ADOPTION_EPOCH_HASH',
+            'OPK_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH',
+            'OPK_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH',
+            'OPK_WORKER_MESSAGE_DISPATCH_JOURNAL'
         )) {
             $savedEnv[$name] = [System.Environment]::GetEnvironmentVariable($name, 'Process')
         }
         $probeOutput = @()
         $probeExit = 1
         try {
-            [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_PROBE', '1', 'Process')
-            [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_BRANCH', $branch, 'Process')
-            $epochHash = ConvertTo-WorkerMessageSafeHashText $AoEpoch
+            [System.Environment]::SetEnvironmentVariable('OPK_WORKER_MESSAGE_ADOPTION_PROBE', '1', 'Process')
+            [System.Environment]::SetEnvironmentVariable('OPK_WORKER_MESSAGE_ADOPTION_BRANCH', $branch, 'Process')
+            $epochHash = ConvertTo-WorkerMessageSafeHashText $RuntimeEpoch
             $configHash = ConvertTo-WorkerMessageSafeHashText $ConfigPath
-            [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH', $epochHash, 'Process')
-            [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH', $configHash, 'Process')
-            [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH', $ProbeRunIdHash.Value, 'Process')
-            [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_DISPATCH_JOURNAL', $EffectiveJournalPath, 'Process')
+            [System.Environment]::SetEnvironmentVariable('OPK_WORKER_MESSAGE_ADOPTION_EPOCH_HASH', $epochHash, 'Process')
+            [System.Environment]::SetEnvironmentVariable('OPK_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH', $configHash, 'Process')
+            [System.Environment]::SetEnvironmentVariable('OPK_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH', $ProbeRunIdHash.Value, 'Process')
+            [System.Environment]::SetEnvironmentVariable('OPK_WORKER_MESSAGE_DISPATCH_JOURNAL', $EffectiveJournalPath, 'Process')
             $probePayload = New-WorkerMessageAdoptionProbePayload -Branch $branch -EpochHash $epochHash -ConfigHash $configHash -RunIdHash $ProbeRunIdHash.Value
-            $sendResult = Invoke-AoSendProbeViaMessage -AoPath $AoPath -SessionId 'synthetic-adoption-probe' -Payload $probePayload
+            $sendResult = Invoke-WorkerMessageSendProbe -RuntimePath $RuntimePath -SessionId 'synthetic-adoption-probe' -Payload $probePayload
             $probeOutput = $sendResult.output
             $probeExit = [int]$sendResult.exitCode
         }
@@ -115,10 +115,10 @@ function Test-WorkerMessageSendAdoptionPreflight {
     param(
         [string]$JournalPath = '',
         [string]$StateFile = '',
-        [string]$AoEpoch = '',
+        [string]$RuntimeEpoch = '',
         [string]$ConfigPath = '',
         [switch]$WriteProbeEntries,
-        [string]$AoPath = 'ao',
+        [string]$RuntimePath = 'ao',
         [string[]]$RequiredBranches = @('plain-ao-send:pending-draft', 'plain-ao-send:self-submitted'),
         [switch]$DryRun,
         [switch]$PersistState
@@ -138,8 +138,8 @@ function Test-WorkerMessageSendAdoptionPreflight {
         $probeRunRef = [ref]$probeRunIdHash
         $generation = Invoke-WorkerMessageAdoptionProbeGeneration `
             -RequiredBranches $RequiredBranches `
-            -AoPath $AoPath `
-            -AoEpoch $AoEpoch `
+            -RuntimePath $RuntimePath `
+            -RuntimeEpoch $RuntimeEpoch `
             -ConfigPath $ConfigPath `
             -EffectiveJournalPath $effectiveJournalPath `
             -ProbeRunIdHash $probeRunRef
@@ -169,7 +169,7 @@ function Test-WorkerMessageSendAdoptionPreflight {
         if (Test-MechanicalJsonReflectionKey -Key ([string]$key)) { continue }
         $record = ConvertTo-MechanicalJsonMap -Value $journal[$key]
         if (-not [bool]$record['adoptionProbe']) { continue }
-        $epochOk = (-not $AoEpoch) -or ($record.ContainsKey('aoEpochHash') -and [string]$record['aoEpochHash'] -eq (ConvertTo-WorkerMessageSafeHashText $AoEpoch))
+        $epochOk = (-not $RuntimeEpoch) -or ($record.ContainsKey('runtimeEpochHash') -and [string]$record['runtimeEpochHash'] -eq (ConvertTo-WorkerMessageSafeHashText $RuntimeEpoch))
         $configOk = (-not $ConfigPath) -or ($record.ContainsKey('configPathHash') -and [string]$record['configPathHash'] -eq (ConvertTo-WorkerMessageSafeHashText $ConfigPath))
         $runOk = (-not $WriteProbeEntries) -or ($record.ContainsKey('adoptionProbeRunIdHash') -and [string]$record['adoptionProbeRunIdHash'] -eq $probeRunIdHash)
         $outcomeOk = $record.ContainsKey('dispatchOutcome') -and [string]$record['dispatchOutcome'] -eq 'dispatched'
@@ -184,7 +184,7 @@ function Test-WorkerMessageSendAdoptionPreflight {
         if (-not $seen.ContainsKey($safe) -and -not $seen.ContainsKey($branch)) { $missing += $branch }
     }
 
-    $epochHash = ConvertTo-WorkerMessageSafeHashText $AoEpoch
+    $epochHash = ConvertTo-WorkerMessageSafeHashText $RuntimeEpoch
     $configHash = ConvertTo-WorkerMessageSafeHashText $ConfigPath
 
     if ($missing.Count -gt 0) {
@@ -193,7 +193,7 @@ function Test-WorkerMessageSendAdoptionPreflight {
                 lastCheckedAt = (Get-Date).ToString('o')
                 status = 'wrapper_not_adopted'
                 missingBranchCount = $missing.Count
-                aoEpochHash = $epochHash
+                runtimeEpochHash = $epochHash
                 configPathHash = $configHash
             }
             Set-MechanicalJsonStateFile -Path $statePath -State $failState -DefaultState @{} -JsonDepth 10
@@ -203,7 +203,7 @@ function Test-WorkerMessageSendAdoptionPreflight {
             reason = 'wrapper_not_adopted'
             diagnosis = "[worker-message-send-adoption-preflight] ESCALATION: wrapper_not_adopted missing branch count=$($missing.Count) under current AO epoch/config"
             exitCode = 46
-            aoEpochHash = $epochHash
+            runtimeEpochHash = $epochHash
             configPathHash = $configHash
         }
     }
@@ -212,7 +212,7 @@ function Test-WorkerMessageSendAdoptionPreflight {
         $okState = @{
             lastValidatedAt = (Get-Date).ToString('o')
             status = 'adopted'
-            aoEpochHash = $epochHash
+            runtimeEpochHash = $epochHash
             configPathHash = $configHash
             branchCount = $RequiredBranches.Count
         }
@@ -222,7 +222,7 @@ function Test-WorkerMessageSendAdoptionPreflight {
     return @{
         ok = $true
         reason = 'adopted'
-        aoEpochHash = $epochHash
+        runtimeEpochHash = $epochHash
         configPathHash = $configHash
         exitCode = 0
     }

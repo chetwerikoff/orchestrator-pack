@@ -123,7 +123,7 @@ function sameSnapshot(left: MutexSnapshot, right: MutexSnapshot): boolean {
   return left.dev === right.dev && left.ino === right.ino;
 }
 function staleSeconds(): number {
-  const parsed = Number(process.env.AO_REVIEW_CLAIM_MUTEX_STALE_SECONDS ?? DEFAULT_MUTEX_STALE_SECONDS);
+  const parsed = Number(process.env.OPK_REVIEW_CLAIM_MUTEX_STALE_SECONDS ?? DEFAULT_MUTEX_STALE_SECONDS);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MUTEX_STALE_SECONDS;
 }
 function isClaimMutexDirectory(pathValue: fs.PathLike, options?: fs.RmDirOptions | fs.RmOptions): pathValue is string {
@@ -244,7 +244,7 @@ function restoreQuarantine(lockDir: string, quarantine: string): void {
 }
 function waitAtStaleTakeoverBarrier(): void {
   if (process.env.OPK_VITEST_HARNESS !== '1') return;
-  const barrierDir = asString(process.env.AO_REVIEW_CLAIM_TEST_STALE_BARRIER_DIR);
+  const barrierDir = asString(process.env.OPK_REVIEW_CLAIM_TEST_STALE_BARRIER_DIR);
   if (!barrierDir) return;
   originalMkdirSync(barrierDir, { recursive: true, mode: 0o700 });
   originalWriteFileSync(join(barrierDir, `${process.pid}.observed`), 'observed\n', 'utf8');

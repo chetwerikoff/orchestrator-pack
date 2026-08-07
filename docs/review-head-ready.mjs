@@ -73,7 +73,7 @@ export { hasFailedOrCancelledOnHead } from './review-trigger-reconcile.mjs';
 /** Bounded orchestrator/reconciler re-attempts when required-check visibility is degraded. */
 export const DEFAULT_DEGRADED_CI_MAX_ATTEMPTS = 3;
 
-export const DEGRADED_CI_MAX_ATTEMPTS_ENV = 'AO_REVIEW_DEGRADED_CI_MAX_ATTEMPTS';
+export const DEGRADED_CI_MAX_ATTEMPTS_ENV = 'OPK_REVIEW_DEGRADED_CI_MAX_ATTEMPTS';
 
 /** @typedef {'fresh-by-monotonic-order' | 'stale-only' | 'no-report' | 'ambiguous/incomplete-fail-closed'} ReadyForReviewFreshnessBasis */
 
@@ -212,7 +212,7 @@ export function isWorkerDegradedCiHandoff(report) {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker} session
  * @param {string} headSha
  * @param {{ headCommittedAtMs?: number }} [options]
  */
@@ -221,7 +221,7 @@ export function findLatestAcceptedReportForHead(session, headSha, options = {}) 
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker} session
  * @param {string} headSha
  * @param {{ headCommittedAtMs?: number }} [options]
  */
@@ -230,7 +230,7 @@ export function findLatestAcceptedReportForHead(session, headSha, options = {}) 
  * Live `ao status --json` stores newest-first; array position is authoritative
  * over per-report payload timestamps (Issue #352).
  *
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null | undefined} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null | undefined} session
  */
 export function enumerateReportsInEmissionOrder(session) {
   const reports = toArray(session?.reports);
@@ -266,7 +266,7 @@ function segmentHasHandoffPrecursor(stream, fromIndex, toIndex) {
  * Classify whether the current head has a fresh ready_for_review hand-off using
  * monotonic report emission order relative to iteration boundaries (Issue #352).
  *
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null | undefined} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null | undefined} session
  * @param {string} headSha
  * @param {{ headCommittedAtMs?: number }} [options]
  * @returns {ReadyForReviewFreshnessClassification}
@@ -377,7 +377,7 @@ export function classifyReadyForReviewFreshness(session, headSha, options = {}) 
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker} session
  * @param {string} headSha
  * @param {{ headCommittedAtMs?: number }} [options]
  */
@@ -408,12 +408,12 @@ export function mergeWorkerDeliveriesFromPlanInput(input = {}) {
     (entry) => entry != null && typeof entry === 'object',
   );
   const hasSynthesisSources =
-    input.aoEvents != null ||
+    input.runtimeEvents != null ||
     input.dispatchJournal != null ||
     input.reviewRuns != null;
   const synthesized = hasSynthesisSources
     ? mergeDeliveryRecords({
-        aoEvents: toArray(input.aoEvents),
+        runtimeEvents: toArray(input.runtimeEvents),
         dispatchJournal: input.dispatchJournal ?? {},
         reviewRuns: toArray(input.reviewRuns),
         reactionMessages: input.reactionMessages ?? {},
@@ -446,7 +446,7 @@ export function mergeWorkerDeliveriesFromPlanInput(input = {}) {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker} session
  * @param {string} sessionId
  * @param {Array<Record<string, unknown>>} workerDeliveries
  */
@@ -476,7 +476,7 @@ export function hasPendingUnconsumedDelivery(session, sessionId, workerDeliverie
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker} session
  * @param {string} headSha
  * @param {number} nowMs
  * @param {{ headCommittedAtMs?: number, debounceMs?: number, workerDeliveries?: Array<Record<string, unknown>> }} [options]
@@ -544,7 +544,7 @@ export function isWorkerActivelyWorking(session, headSha, nowMs, options = {}) {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker} session
  * @param {string} headSha
  * @param {number} nowMs
  * @param {{ headCommittedAtMs?: number, debounceMs?: number, workerDeliveries?: Array<Record<string, unknown>> }} [options]
@@ -577,7 +577,7 @@ export function evaluateWorkerQuiescenceBasis(session, headSha, nowMs, options =
 
 /**
  * @param {object} input
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} input.session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null} input.session
  * @param {string} input.headSha
  * @param {number} input.nowMs
  * @param {number} [input.headCommittedAtMs]
@@ -666,7 +666,7 @@ export function degradedCiTrackingKey(prNumber, headSha) {
 
 /**
  * @param {object} input
- * @param {import('./review-trigger-reconcile.mjs').AoSession} input.session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker} input.session
  * @param {string} input.headSha
  * @param {{ headCommittedAtMs?: number }} input.reportBindingOptions
  * @param {number} input.degradedCiAttempts
@@ -710,7 +710,7 @@ function buildDegradedCiRetryDecision({
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
  * @param {number} input.prNumber
  * @param {string} input.headSha
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} [input.session]
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null} [input.session]
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
  * @param {string[]} [input.requiredCheckNames]
  * @param {boolean} [input.requiredCheckLookupFailed]
@@ -896,7 +896,7 @@ export function resolveCurrentPrHeadSha(openPrs, prNumber) {
  * @param {object} fresh
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [fresh.openPrs]
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} fresh.reviewRuns
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} fresh.sessions
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker[]} fresh.sessions
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [fresh.ciChecks]
  * @param {string[]} [fresh.requiredCheckNames]
  * @param {boolean} [fresh.requiredCheckLookupFailed]
@@ -915,7 +915,7 @@ export function preRunHeadReadyRecheck(planned, fresh) {
   const nowMs = Number(fresh?.nowMs) || Date.now();
   const workerDeliveries = mergeWorkerDeliveriesFromPlanInput({
     workerDeliveries: fresh?.workerDeliveries,
-    aoEvents: fresh?.aoEvents,
+    runtimeEvents: fresh?.runtimeEvents,
     dispatchJournal: fresh?.dispatchJournal,
     reviewRuns: fresh?.reviewRuns,
     reactionMessages: fresh?.reactionMessages,
@@ -1081,7 +1081,7 @@ export function preRunHeadReadyRecheck(planned, fresh) {
 /**
  * Stale ready_for_review on an older head does not authorize the current head.
  *
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker} session
  * @param {string} currentHeadSha
  * @param {{ headCommittedAtMs?: number }} [options]
  */
@@ -1141,7 +1141,7 @@ export function resolveReportRoute(report) {
 /**
  * Latest `ready_for_review` report bound to a head other than the current one.
  *
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker} session
  * @param {string} currentHeadSha
  * @param {{ headCommittedAtMs?: number }} [options]
  */
@@ -1178,7 +1178,7 @@ export function findLatestStaleReadyForReviewReport(session, currentHeadSha, opt
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker} session
  * @param {string} headSha
  * @param {{ headCommittedAtMs?: number }} [options]
  */
@@ -1190,7 +1190,7 @@ function findLatestReportBoundToHead(session, headSha, options = {}) {
  * Evaluate every head-ready component that is not satisfied (metadata only).
  *
  * @param {object} input
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} input.session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null} input.session
  * @param {string} input.headSha
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} input.ciChecks
  * @param {string[]} input.requiredCheckNames
@@ -1266,7 +1266,7 @@ export function collectFailedNotReadyComponents({
  * @param {object} input
  * @param {number} input.prNumber
  * @param {string} input.headSha
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} [input.session]
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null} [input.session]
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
  * @param {string[]} [input.requiredCheckNames]
  * @param {boolean} [input.requiredCheckLookupFailed]
@@ -1387,7 +1387,7 @@ export function buildFailedCancelledObserved(run, prNumber, headSha, reviewRuns 
  * @param {number} input.prNumber
  * @param {string} input.headSha
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} [input.session]
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null} [input.session]
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
  * @param {string[]} [input.requiredCheckNames]
  * @param {boolean} [input.requiredCheckLookupFailed]

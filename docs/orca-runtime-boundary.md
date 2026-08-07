@@ -6,8 +6,8 @@ Issue #1245 extracts a runtime-neutral TypeScript contract around the already-wo
 
 | Current live caller | Operations consumed here | Disposition |
 |---|---|---|
-| `scripts/worker-smoke-run.ts` through `scripts/lib/orca-cli.ts` | current-worktree readiness, terminal create, send/submit, bounded read, bounded wait, close | existing behavior remains on the compatibility facade; caller-wide migration and a generation-bound destructive operation remain #1248 |
-| `scripts/lib/worker-smoke-bounded-create.ts` through `scripts/lib/orca-cli.ts` | bounded terminal creation | continues through the compatibility facade; no second Orca parser or runtime operation is introduced |
+| `scripts/worker-smoke-run.ts` through the runtime adapter / native Orca edge | current-worktree readiness, terminal create, send/submit, bounded read, bounded wait, close | current behavior is owned by the runtime boundary; no compatibility facade remains |
+| `scripts/lib/worker-smoke-bounded-create.ts` through the runtime adapter / native Orca edge | bounded terminal creation | current behavior remains behind the same runtime boundary; no second parser or compatibility layer is introduced |
 | `scripts/launch-watch/watch.ts` | exact current-worker resolution by opaque id and bounded terminal output observation | production path uses the runtime-neutral adapter; explicit injected process runners remain only as a test seam |
 | observer fleet (#1258 and dependent tasks) | workspace-complete list/find, bounded liveness, identity/generation, provenance, bounded output | named consumer of this interface; no new monitoring operation or watcher service |
 
@@ -22,7 +22,7 @@ Operations required only by remaining supervisor/recovery callers are intentiona
 - Every bounded-output result exposes an equality-only observation token scoped to worker id and generation. Orca cursor strings/numbers and cursor arithmetic remain inside the adapter. Cursor progression is authoritative: the adapter uses `nextCursor`, or `latestCursor` when `nextCursor` is null. If Orca supplies neither monotonic witness, the operation fails closed as `runtime_output_progress_unavailable`; line batches and terminal-state changes are never treated as synthetic progress.
 - The deterministic test adapter applies the same identity/generation token scope and rejects cross-worker or prior-generation continuation tokens.
 - Dispatch performs exactly one native send attempt and returns `dispatched | send_failed | dispatch_unknown`. Ambiguous transport outcomes are never retried automatically.
-- The current public Orca CLI closes terminals only by handle and exposes no expected-generation binding. Therefore the shared Orca adapter does not issue a destructive close and returns `runtime_generation_bound_stop_unsupported` for an otherwise owned worker. The existing worker-smoke compatibility facade retains its current close behavior until #1248 can bind migration to a generation-safe native operation; the shared boundary does not claim atomicity that Orca cannot provide.
+- The current public Orca CLI closes terminals only by handle and exposes no expected-generation binding. Therefore the shared runtime boundary does not claim generation-safe destructive authority where the native operation cannot prove it; callers must use only the exact supported boundary semantics and may not fall back to a compatibility facade.
 - Current upstream Orca output (`result.terminal.tail`, string-or-null cursor plus optional `latestCursor`) and the captured legacy smoke shape (`result.lines`, numeric cursor) are normalized internally. Any unsupported consumed response or progress shape returns the named `unsupported` result.
 
 ## Worktree lifecycle continuity (Issues #1298 and #1328)

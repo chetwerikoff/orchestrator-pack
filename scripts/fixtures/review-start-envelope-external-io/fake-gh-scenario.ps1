@@ -2,10 +2,10 @@
 param([string[]]$Args)
 
 $ErrorActionPreference = 'Stop'
-$scenario = [string]$env:AO_REVIEW_START_GH_SCENARIO
+$scenario = [string]$env:OPK_REVIEW_START_GH_SCENARIO
 $call = 0
-if ($env:AO_REVIEW_START_GH_CALL_COUNT) { $call = [int]$env:AO_REVIEW_START_GH_CALL_COUNT }
-$env:AO_REVIEW_START_GH_CALL_COUNT = [string]($call + 1)
+if ($env:OPK_REVIEW_START_GH_CALL_COUNT) { $call = [int]$env:OPK_REVIEW_START_GH_CALL_COUNT }
+$env:OPK_REVIEW_START_GH_CALL_COUNT = [string]($call + 1)
 
 function Write-Err([string]$Message) {
     [Console]::Error.WriteLine($Message)
@@ -30,7 +30,7 @@ switch ($scenario) {
         exit 0
     }
     'wrapper_spawn_hang' {
-        $pidFile = [string]$env:AO_REVIEW_START_WRAPPER_CHILD_PID_FILE
+        $pidFile = [string]$env:OPK_REVIEW_START_WRAPPER_CHILD_PID_FILE
         $child = Start-Process -FilePath 'sleep' -ArgumentList @('60') -PassThru -NoNewWindow
         if ($pidFile) {
             Set-Content -LiteralPath $pidFile -Value ([string]$child.Id) -Encoding ASCII -NoNewline

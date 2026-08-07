@@ -984,7 +984,7 @@ export function evaluateSubmitDecision({
   delivery,
   session,
   tracking,
-  aoEvents,
+  runtimeEvents,
   floodActiveSessions,
   nowMs,
   config,
@@ -1151,7 +1151,7 @@ export function evaluateSubmitDecision({
   const inputAnchorMs = getDeliveryInputAnchorMs(delivery, record);
   if (
     hasInterveningInputActivityForDelivery(
-      toArray(aoEvents),
+      toArray(runtimeEvents),
       session ?? {},
       delivery,
       inputAnchorMs,
@@ -1467,7 +1467,7 @@ export function evaluateWorktreeDriftVanishSuppression({ record, reviewRuns, ses
 
 export function planWorkerMessageSubmitActions(input) {
   const {
-    aoEvents,
+    runtimeEvents,
     dispatchJournal,
     reviewRuns,
     reactionMessages,
@@ -1517,7 +1517,7 @@ export function planWorkerMessageSubmitActions(input) {
   const baseTracking = convergence.tracking;
   const compactedJournal = convergence.journal ?? dispatchJournal ?? {};
   const deliveries = mergeDeliveryRecords({
-    aoEvents,
+    runtimeEvents,
     dispatchJournal: compactedJournal,
     reviewRuns,
     reactionMessages,
@@ -1580,7 +1580,7 @@ export function planWorkerMessageSubmitActions(input) {
         delivery: failed,
         session,
         tracking: { deliveries: nextDeliveries },
-        aoEvents,
+        runtimeEvents,
         floodActiveSessions,
         nowMs,
         config,
@@ -1735,7 +1735,7 @@ export function planWorkerMessageSubmitActions(input) {
         deliveries: nextDeliveries,
         failedDeliveries: nextFailedDeliveries,
       },
-      aoEvents,
+      runtimeEvents,
       floodActiveSessions,
       nowMs,
       config,

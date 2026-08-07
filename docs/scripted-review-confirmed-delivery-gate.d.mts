@@ -1,4 +1,4 @@
-import type { AoSession, OpenPr } from './review-trigger-reconcile.d.mts';
+import type { RuntimeWorker, OpenPr } from './review-trigger-reconcile.d.mts';
 
 export declare const DEFAULT_POLL_WINDOW_MS: number;
 export declare const DEFAULT_POLL_INTERVAL_MS: number;
@@ -21,7 +21,7 @@ export declare const POLL_AMBIGUOUS: 'ambiguous';
 
 export declare const OPERATOR_REMEDY_TEXT: string;
 
-export type { AoSession, OpenPr };
+export type { RuntimeWorker, OpenPr };
 
 export interface GateConfig {
   pollWindowMs: number;
@@ -105,7 +105,7 @@ export declare function classifyPollDatum(input: {
   attributionReason?: string;
 }): PollOutcome;
 export declare function classifyWorkerLiveness(input: {
-  session?: AoSession;
+  session?: RuntimeWorker;
   openPrs?: OpenPr[];
   prNumber?: number;
   targetSha?: string;

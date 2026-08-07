@@ -63,8 +63,8 @@ export function resolveHarnessExecutionSurfaces(trustedPackRoot) {
     promptPath: join(root, 'prompts/codex_review_prompt.md'),
     bridgeEntrypoint: join(root, 'scripts/harness-review-bridge.ts'),
     bridgeRunner: join(root, 'scripts/harness-review-bridge.ts'),
-    mapperPath: join(root, 'plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts'),
-    reviewScript: join(root, 'plugins/ao-codex-pr-reviewer/bin/review.ps1'),
+    mapperPath: join(root, 'plugins/codex-pr-reviewer/lib/review_jsonl.ts'),
+    reviewScript: join(root, 'plugins/codex-pr-reviewer/bin/review.ps1'),
   };
 }
 
@@ -233,7 +233,7 @@ export function validateHarnessSubmitBody(body) {
 }
 
 /**
- * @param {import('../plugins/ao-codex-pr-reviewer/lib/emit.ts').TerminalVerdictPayload} payload
+ * @param {import('../plugins/codex-pr-reviewer/lib/emit.ts').TerminalVerdictPayload} payload
  */
 export function buildHarnessSubmitVerdict(payload) {
   if (payload.verdict === 'clean' && payload.findingCount === 0) {
@@ -270,7 +270,7 @@ export function assertNoBoardFieldEmission(value, path = '') {
 }
 
 /**
- * @param {import('../plugins/ao-codex-pr-reviewer/lib/emit.ts').TerminalVerdictPayload} payload
+ * @param {import('../plugins/codex-pr-reviewer/lib/emit.ts').TerminalVerdictPayload} payload
  */
 export function formatHarnessSubmitBody(payload) {
   return `${JSON.stringify(payload, null, 2)}\n`;

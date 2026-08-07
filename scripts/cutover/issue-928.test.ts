@@ -201,7 +201,7 @@ describe('[AC4][AC6] estate successor state', () => {
       (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)
       || (CUTOVER_ROWS as readonly string[]).includes(row.path),
     );
-    expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-16-cutover-6' });
+    expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-15-cutover-6' });
     const byPath = new Map((manifest.rows ?? []).map((row) => [row.path, row]));
     for (const file of CUTOVER_ROWS) {
       expect(byPath.get(file)).toMatchObject({ terminalState: 'cutover-terminalized', replacementOwner: 'scripts/orchestrator-cutover-activate.ts' });
@@ -513,9 +513,9 @@ describe('[AC4] scheduler-driven #918 successor slice', () => {
         starts.push({ pr: row.prNumber, head });
         const reviews: any[] = [];
         const previousHarness = process.env.OPK_VITEST_HARNESS;
-        const previousClaimRoot = process.env.AO_REVIEW_CLAIM_DIR;
+        const previousClaimRoot = process.env.OPK_REVIEW_CLAIM_DIR;
         process.env.OPK_VITEST_HARNESS = '1';
-        process.env.AO_REVIEW_CLAIM_DIR = path.join(root, 'claims');
+        process.env.OPK_REVIEW_CLAIM_DIR = path.join(root, 'claims');
         try {
           const result = await startPackReview({
             projectId: 'orchestrator-pack',
@@ -573,8 +573,8 @@ describe('[AC4] scheduler-driven #918 successor slice', () => {
         } finally {
           if (previousHarness === undefined) delete process.env.OPK_VITEST_HARNESS;
           else process.env.OPK_VITEST_HARNESS = previousHarness;
-          if (previousClaimRoot === undefined) delete process.env.AO_REVIEW_CLAIM_DIR;
-          else process.env.AO_REVIEW_CLAIM_DIR = previousClaimRoot;
+          if (previousClaimRoot === undefined) delete process.env.OPK_REVIEW_CLAIM_DIR;
+          else process.env.OPK_REVIEW_CLAIM_DIR = previousClaimRoot;
         }
       },
     };

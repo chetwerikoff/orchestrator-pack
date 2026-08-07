@@ -1,5 +1,5 @@
 import type {
-  AoSession as ReconcileAoSession,
+  RuntimeWorker as ReconcileRuntimeWorker,
   OpenPr,
   ReviewRun as ReconcileReviewRun,
 } from './review-trigger-reconcile.d.mts';
@@ -27,7 +27,7 @@ export interface ReviewRun extends ReconcileReviewRun {
   linkedSessionId?: string;
 }
 
-export interface AoSession extends ReconcileAoSession {
+export interface RuntimeWorker extends ReconcileRuntimeWorker {
   runtime?: string;
   reports?: Array<Record<string, unknown>>;
 }
@@ -86,7 +86,7 @@ export interface StuckGuardPlanResult {
   graceDeadlineMs: number | null;
 }
 
-export declare function isRuntimeAlive(session: AoSession): boolean;
+export declare function isRuntimeAlive(session: RuntimeWorker): boolean;
 export declare function resolveGraceMs(config?: { graceMs?: number }): number;
 export declare function normalizeCiState(raw: string | undefined): string;
 export declare function isCiCheckSuccess(check: CiCheck): boolean;
@@ -108,12 +108,12 @@ export declare function reportCoversHead(
   options?: { headCommittedAtMs?: number },
 ): boolean;
 export declare function findLatestReportForHead(
-  session: AoSession,
+  session: RuntimeWorker,
   headSha: string,
   options?: { matchStates?: ReadonlySet<string>; headCommittedAtMs?: number },
 ): Record<string, unknown> | null;
 export declare function findLastReadyForReviewReport(
-  session: AoSession,
+  session: RuntimeWorker,
   headSha: string,
   options?: { headCommittedAtMs?: number },
 ): Record<string, unknown> | null;
@@ -128,7 +128,7 @@ export declare function findCoveringCleanRun(
   prNumber: number,
   headSha: string,
   sessionId: string,
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
 ): ReviewRun | null;
 export declare function graceTrackingKey(sessionId: string, headSha: string): string;
 export declare function getGraceAnchorMs(
@@ -146,11 +146,11 @@ export declare function hasAffirmativeUnreachability(
   evidence: UnreachabilityEvidence,
 ): boolean;
 export declare function classifyReviewReadySnapshot(input: {
-  session: AoSession;
+  session: RuntimeWorker;
   openPr: OpenPr;
   reviewRuns: ReviewRun[];
   ciChecks: CiCheck[];
-  sessions?: AoSession[];
+  sessions?: RuntimeWorker[];
 }): ReviewReadyClassification;
 export declare function isDeliveryEscalatedForUnreachability(input: {
   deliveryTracking?: { runs?: Record<string, { deliveryState?: string }> };
@@ -160,11 +160,11 @@ export declare function findBlindRecoveryViolations(
   commandLines: string[],
 ): Array<{ command: string; pattern: string }>;
 export declare function planStuckGuardReaction(input: {
-  session: AoSession;
+  session: RuntimeWorker;
   openPr: OpenPr;
   reviewRuns: ReviewRun[];
   ciChecks: CiCheck[];
-  sessions?: AoSession[];
+  sessions?: RuntimeWorker[];
   tracking?: GraceTrackingState;
   unreachability?: UnreachabilityEvidence;
   nowMs: number;
@@ -174,7 +174,7 @@ export declare function planStuckGuardReaction(input: {
 export declare function preShieldRecheck(
   planned: { sessionId: string; prNumber: number; headSha: string },
   fresh: {
-    sessions: AoSession[];
+    sessions: RuntimeWorker[];
     openPrs: OpenPr[];
     reviewRuns: ReviewRun[];
     ciChecks: CiCheck[];

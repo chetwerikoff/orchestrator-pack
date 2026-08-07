@@ -6,7 +6,7 @@
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessProgressEvidence.ps1')
 
 function Get-OrchestratorSideProcessHealthDegradedThreshold {
-    $fromEnv = $env:AO_SIDE_PROCESS_HEALTH_DEGRADED_THRESHOLD
+    $fromEnv = $env:OPK_SIDE_PROCESS_HEALTH_DEGRADED_THRESHOLD
     if ($fromEnv -and [int]::TryParse($fromEnv, [ref]$null)) {
         return [Math]::Max(2, [int]$fromEnv)
     }
@@ -14,7 +14,7 @@ function Get-OrchestratorSideProcessHealthDegradedThreshold {
 }
 
 function Get-OrchestratorSideProcessHealthRecoveryMaxAttempts {
-    $fromEnv = $env:AO_SIDE_PROCESS_HEALTH_RECOVERY_MAX_ATTEMPTS
+    $fromEnv = $env:OPK_SIDE_PROCESS_HEALTH_RECOVERY_MAX_ATTEMPTS
     if ($fromEnv -and [int]::TryParse($fromEnv, [ref]$null)) {
         return [Math]::Max(1, [int]$fromEnv)
     }

@@ -20,7 +20,7 @@ import {
 } from './lib/reviewer-contract-mapping.ts';
 import {
   captureBoundIssueSnapshotsFromPreflight,
-  resolveDefaultAoProjectId,
+  resolveDefaultProjectId,
   type BoundIssueSnapshotCaptureResult,
 } from './lib/reverify-bound-issue-snapshot.ts';
 
@@ -174,7 +174,7 @@ Options:
   --provider-input-byte-limit <n>  Provider/input ceiling for preflight
   --preflight-only              Stop after mapping preflight (fixture/integration smoke)
   --pr-number <n>               PR number for bound issue snapshot capture
-  --project-id <id>             AO project id for bound issue snapshot store
+  --project-id <id>             pack project id for bound issue snapshot store
   --text                        Human-readable output instead of JSON
 `);
 }
@@ -556,7 +556,7 @@ export function captureValidatedBoundIssueSnapshots(input: {
   }
 
   return captureBoundIssueSnapshotsFromPreflight({
-    projectId: input.opts.projectId ?? resolveDefaultAoProjectId(),
+    projectId: input.opts.projectId ?? resolveDefaultProjectId(),
     prNumber: input.opts.prNumber,
     prHeadSha: input.prHeadSha,
     specBodies: validatedBodies,

@@ -17,7 +17,7 @@ function Invoke-ReviewStartEnvelopeExternalIoCli {
 }
 
 function Get-ReviewStartMonotonicNowMs {
-    $injected = [string]$env:AO_REVIEW_START_MONOTONIC_NOW_MS
+    $injected = [string]$env:OPK_REVIEW_START_MONOTONIC_NOW_MS
     $parsed = 0L
     if ($injected -and [int64]::TryParse($injected, [ref]$parsed)) {
         return $parsed

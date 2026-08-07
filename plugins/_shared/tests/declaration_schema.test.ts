@@ -18,7 +18,7 @@ describe('validateDeclarationSnapshot', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.snapshot.issue_number).toBe(4);
-      expect(result.snapshot.iteration_id_source).toBe('ao_session');
+      expect(result.snapshot.iteration_id_source).toBe('explicit');
     }
   });
 

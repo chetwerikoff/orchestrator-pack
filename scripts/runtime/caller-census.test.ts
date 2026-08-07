@@ -92,9 +92,7 @@ function unclassifiedRuntimeCalls(
   const unclassified: string[] = [];
   for (const [surface, operations] of discovered) {
     const row = rows.get(surface);
-    if (!row || row.kind !== 'runtime-port'
-      || row.disposition === 'delete-dead'
-      || row.disposition === 'defer-1250') {
+    if (!row || row.kind !== 'runtime-port' || row.disposition === 'delete-dead') {
       unclassified.push(`${surface}:row_missing_or_inactive`);
       continue;
     }
@@ -167,12 +165,8 @@ describe('runtime caller census', () => {
     expect(residualRetiredPowerShellImports()).toEqual([]);
   });
 
-  it('keeps genuinely non-runtime AO service operations outside RuntimeAdapter', () => {
-    const serviceRows = RUNTIME_CALLER_CENSUS.filter(
-      (row) => row.kind === 'non-runtime-ao-service',
-    );
-    expect(serviceRows.length).toBeGreaterThan(0);
-    expect(serviceRows.every((row) => row.disposition === 'defer-1250')).toBe(true);
+  it('contains no deferred service census rows after the hard cut', () => {
+    expect([...new Set(RUNTIME_CALLER_CENSUS.map((row) => row.kind))]).toEqual(['runtime-port']);
   });
 
   it('retains the closed send outcome in the runtime contract', async () => {

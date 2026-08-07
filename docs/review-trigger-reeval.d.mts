@@ -6,9 +6,9 @@ export declare const REPORT_STATE_SEED_START_REASON: 'report_state_seed';
 export declare const IN_PROGRESS_REPORT_STATES: ReadonlySet<string>;
 export declare const MECHANICAL_FORBIDDEN_REVIEW_REEVAL: readonly RegExp[];
 
-import type { AoSession, OpenPr, ReviewRun } from './review-trigger-reconcile.d.mts';
+import type { RuntimeWorker, OpenPr, ReviewRun } from './review-trigger-reconcile.d.mts';
 
-export type { AoSession, OpenPr, ReviewRun };
+export type { RuntimeWorker, OpenPr, ReviewRun };
 
 export interface WatchEntry {
   prNumber: number;
@@ -85,7 +85,7 @@ export declare function mergeWatchState(
 ): Record<string, WatchEntry>;
 
 export declare function hasInProgressReportForHead(
-  session: AoSession | null | undefined,
+  session: RuntimeWorker | null | undefined,
   headSha: string,
   options?: { headCommittedAtMs?: number },
 ): boolean;
@@ -93,12 +93,12 @@ export declare function hasInProgressReportForHead(
 export declare function evaluateBackstopOnlyZeroSignal(input: {
   prNumber: number;
   headSha: string;
-  session?: AoSession | null;
+  session?: RuntimeWorker | null;
   hadCompletionWake?: boolean;
 }): { backstopOnly: boolean; reason: string };
 
 export declare function detectReadinessTransition(input: {
-  session?: AoSession | null;
+  session?: RuntimeWorker | null;
   headSha: string;
   priorReadyMs?: number | null;
   bindingOptions?: { headCommittedAtMs?: number };
@@ -114,7 +114,7 @@ export declare function evaluateHeadReviewTriggerDecision(input: {
   snapshotError?: boolean;
   openPrs?: OpenPr[];
   reviewRuns?: ReviewRun[];
-  sessions?: AoSession[];
+  sessions?: RuntimeWorker[];
   ciChecks?: Array<{ name?: string; state?: string; conclusion?: string; status?: string }>;
   requiredCheckNames?: string[];
   requiredCheckLookupFailed?: boolean;

@@ -63,7 +63,7 @@ function Get-ProcessCommandLineById {
 function Get-OrchestratorWakeSupervisorProcessCommandLineFixture {
     param([int]$ProcessId)
 
-    $fixturePath = $env:AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE
+    $fixturePath = $env:OPK_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE
     if (-not $fixturePath) { return $null }
     if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) { return $null }
 

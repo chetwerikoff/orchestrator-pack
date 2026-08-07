@@ -23,7 +23,7 @@
       "restoreRetry": true
     }
   },
-  "aoEvents": [],
+  "runtimeEvents": [],
   "reviewRuns": [],
   "tracking": { "deliveries": {}, "audit": [] }
 }

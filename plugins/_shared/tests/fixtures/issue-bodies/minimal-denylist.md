@@ -7,5 +7,5 @@ Implement something small.
 ```denylist
 vendor/**
 packages/core/**
-.ao/**
+.orchestrator-pack/**
 ```

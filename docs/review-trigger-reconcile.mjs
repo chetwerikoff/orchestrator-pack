@@ -10,7 +10,6 @@ import {
   readStdinJson,
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
-import { buildReviewTriggerInvocation } from './ao-0-10-review-api.mjs';
 import {
   COVERED_TERMINAL_REVIEW_STATUSES,
   collectSessionIdentifiers,
@@ -61,7 +60,7 @@ import {
 } from './pr-session-binding-cache.mjs';
 /** @typedef {{ number: number, headRefOid: string, headCommittedAt?: string | number, headCommitCommittedAt?: string | number, head_commit_committed_at?: string | number }} OpenPr */
 /** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, prReviewStatus?: string, latestRunStatus?: string, findingCount?: number, openFindingCount?: number, deliveredFindingCount?: number, deliveredAt?: string | null, body?: string, retryEligible?: boolean, retryCount?: number }} ReviewRun */
-/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<Record<string, unknown>> }} AoSession */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<Record<string, unknown>> }} RuntimeWorker */
 /** @typedef {{ prNumber?: number, checks?: Array<{ name?: string, state?: string, conclusion?: string, status?: string }> }} CiChecksByPrRow */
 /** @typedef {{ prNumber?: number, requiredCheckNames?: string[] }} RequiredCheckNamesRow */
 /** @typedef {{ prNumber?: number, failed?: boolean }} RequiredCheckLookupFailedRow */
@@ -72,6 +71,7 @@ import {
 
 /** Default cadence: 10 minutes (low-frequency; tens of minutes). */
 export const DEFAULT_RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
+export const PACK_REVIEW_RUNNER_PATH = 'scripts/pack-review-runner.ts';
 
 export {
   COVERED_TERMINAL_REVIEW_STATUSES,
@@ -164,7 +164,7 @@ export function findCoveringRunForHead(runs, prNumber, headSha) {
  * True when needle matches any stable session identifier field (name, sessionId, id).
  * Review runs may store linkedSessionId as sessionId while status rows also carry name.
  *
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  * @param {string} needle
  */
 export function sessionMatchesIdentifier(session, needle) {
@@ -182,7 +182,7 @@ export function sessionMatchesIdentifier(session, needle) {
 }
 
 /**
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {string} sessionId
  */
 export function findSessionById(sessions, sessionId) {
@@ -199,7 +199,7 @@ export function findSessionById(sessions, sessionId) {
 }
 
 /**
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  * @param {number} prNumber
  * @param {OpenPr[]} [openPrs]
  * @param {{ headSha?: string, sessionDetail?: { displayName?: string } | null }} [options]
@@ -296,7 +296,7 @@ export function resolveHeadCommittedAtMs(openPrs, prNumber) {
 }
 
 /**
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  * @param {string} headSha
  * @param {{ headCommittedAtMs?: number }} [options]
  */
@@ -314,7 +314,7 @@ function sessionHasReportForHead(session, headSha, options = {}) {
 }
 
 /**
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  * @param {string} headSha
  */
 function sessionExplicitlyOwnsHead(session, headSha) {
@@ -324,7 +324,7 @@ function sessionExplicitlyOwnsHead(session, headSha) {
 }
 
 /**
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  * @param {number} prNumber
  * @param {string} headSha
  * @param {OpenPr[]} [openPrs]
@@ -372,7 +372,7 @@ export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = [], opt
 /**
  * Live worker sessions linked to a PR (any liveness).
  *
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {number} prNumber
  */
 export function listWorkersForPr(sessions, prNumber, openPrs = [], options = {}) {
@@ -394,7 +394,7 @@ export function listWorkersForPr(sessions, prNumber, openPrs = [], options = {})
  * Fail-closed owner resolution for quiescence fallback (Issue #261).
  * Returns exactly one live head owner, or a visible defer reason.
  *
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {number} prNumber
  * @param {string} headSha
  * @param {OpenPr[]} [openPrs]
@@ -481,7 +481,7 @@ export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha
  * Prefer the strict head owner when resolved; never fall back to legacy selection
  * when strict resolution fails closed.
  *
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {number} prNumber
  * @param {string} headSha
  * @param {OpenPr[]} [openPrs]
@@ -531,7 +531,7 @@ export function resolveReconcileEvaluationSession(sessions, prNumber, headSha, o
 /**
  * Pick the live worker session that owns the current PR head (not merely the first PR match).
  *
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {number} prNumber
  * @param {string} headSha
  * @param {OpenPr[]} [openPrs]
@@ -591,9 +591,9 @@ export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, op
 }
 
 /**
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {number} prNumber
- * @param {{ ownsHead?: (session: AoSession) => boolean }} [options]
+ * @param {{ ownsHead?: (session: RuntimeWorker) => boolean }} [options]
  */
 export function resolveWorkerSessionId(sessions, prNumber, options = {}) {
   const ownsHead = options.ownsHead;
@@ -727,7 +727,7 @@ function commitReadyForReviewDebounceIfWaiting(cycleState, cycleEval, prNumber, 
 }
 
 /**
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  * @param {string} sessionId
  */
 export function findSessionByIdForReconcile(sessions, sessionId) {
@@ -738,14 +738,14 @@ export function findSessionByIdForReconcile(sessions, sessionId) {
  * @param {object} input
  * @param {OpenPr[]} input.openPrs
  * @param {ReviewRun[]} input.reviewRuns
- * @param {AoSession[]} input.sessions
+ * @param {RuntimeWorker[]} input.sessions
  * @param {Record<string, CiCheck[]> | Array<CiChecksByPrRow>} [input.ciChecksByPr]
  * @param {Record<string, string[]> | Array<RequiredCheckNamesRow>} [input.requiredCheckNamesByPr]
  * @param {Record<string, boolean> | Array<RequiredCheckLookupFailedRow>} [input.requiredCheckLookupFailedByPr]
  * @param {DegradedCiTrackingState} [input.tracking]
  * @param {number} [input.nowMs]
  * @param {Array<Record<string, unknown>>} [input.workerDeliveries]
- * @param {Array<Record<string, unknown>>} [input.aoEvents]
+ * @param {Array<Record<string, unknown>>} [input.runtimeEvents]
  * @param {Record<string, Record<string, unknown>>} [input.dispatchJournal]
  * @param {Record<string, string>} [input.reactionMessages]
  * @param {Record<string, unknown>} [input.cycleState]
@@ -764,7 +764,7 @@ export function planReconcileActions({
   tracking,
   nowMs = Date.now(),
   workerDeliveries,
-  aoEvents,
+  runtimeEvents,
   dispatchJournal,
   reactionMessages,
   cycleState,
@@ -790,7 +790,7 @@ export function planReconcileActions({
   );
   const mergedDeliveries = mergeWorkerDeliveriesFromPlanInput({
     workerDeliveries,
-    aoEvents,
+    runtimeEvents,
     dispatchJournal,
     reviewRuns: runList,
     reactionMessages,
@@ -1132,17 +1132,34 @@ export function findForbiddenLifecycleCommands(commandLines) {
   return findForbiddenCommandPatterns(commandLines, FORBIDDEN_LIFECYCLE_PATTERNS);
 }
 
+function requireReviewSessionId(sessionId) {
+  const id = String(sessionId ?? '').trim();
+  if (!id) {
+    throw new Error('session id is required for review trigger');
+  }
+  return id;
+}
+
 /**
  * @param {string} sessionId
  * @param {string} reviewCommand
  */
 export function buildReviewRunArgv(sessionId, reviewCommand = '') {
   void reviewCommand;
-  return buildReviewTriggerInvocation(sessionId).shimArgv;
+  const id = requireReviewSessionId(sessionId);
+  return [
+    'node',
+    '--experimental-strip-types',
+    PACK_REVIEW_RUNNER_PATH,
+    'start',
+    '--session-id',
+    id,
+  ];
 }
 
 export function buildReviewTriggerPath(sessionId) {
-  return buildReviewTriggerInvocation(sessionId).path;
+  requireReviewSessionId(sessionId);
+  return PACK_REVIEW_RUNNER_PATH;
 }
 
 runStdinJsonCli('review-trigger-reconcile.mjs', {

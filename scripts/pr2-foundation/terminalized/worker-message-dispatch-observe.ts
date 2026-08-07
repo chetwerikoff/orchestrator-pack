@@ -35,7 +35,7 @@ import { evaluateDeterministicJournalAdmission } from '../../../docs/review-deli
 
 
 /** AO tmux paste path threshold (matches AO 0.9.2 sendMessage). */
-export const AO_PASTE_CHAR_THRESHOLD = 200;
+export const OPK_PASTE_CHAR_THRESHOLD = 200;
 
 export const DELIVERY_PATH_PENDING_DRAFT = 'pending-draft';
 export const DELIVERY_PATH_SELF_SUBMITTED = 'self-submitted';
@@ -66,7 +66,7 @@ export function classifyDeliveryPath(shape) {
   const charLength = Number(shape?.charLength ?? 0);
   const lineCount = Number(shape?.lineCount ?? 0);
   const multiline = Boolean(shape?.multiline) || lineCount > 1;
-  if (multiline || charLength > AO_PASTE_CHAR_THRESHOLD) {
+  if (multiline || charLength > OPK_PASTE_CHAR_THRESHOLD) {
     return DELIVERY_PATH_PENDING_DRAFT;
   }
   return DELIVERY_PATH_SELF_SUBMITTED;
@@ -379,7 +379,7 @@ function journalReviewSendDeliveredAtBySourceKey(journalDeliveries) {
  */
 export function mergeDeliveryRecords(input) {
   const {
-    aoEvents,
+    runtimeEvents,
     dispatchJournal,
     reviewRuns,
     reactionMessages,
@@ -402,8 +402,8 @@ export function mergeDeliveryRecords(input) {
     const runAt = Number(row.deliveredAtMs ?? 0);
     return runAt > journalAt;
   });
-  const reactionObservation = toArray(aoEvents).length > 0
-    ? extractReactionDeliveries(toArray(aoEvents), reactionMessages ?? {})
+  const reactionObservation = toArray(runtimeEvents).length > 0
+    ? extractReactionDeliveries(toArray(runtimeEvents), reactionMessages ?? {})
     : { deliveries: [], audits: [] };
   const byId = new Map();
   for (const row of [
@@ -430,7 +430,7 @@ export function mergeDeliveryRecords(input) {
 export function observeReactionDeliveries(input) {
   const deliveries = mergeDeliveryRecords(input);
   const reactionObservation = extractReactionDeliveries(
-    toArray(input.aoEvents),
+    toArray(input.runtimeEvents),
     input.reactionMessages ?? {},
   );
   return {

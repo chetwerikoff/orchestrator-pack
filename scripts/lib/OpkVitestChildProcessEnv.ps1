@@ -21,8 +21,6 @@ function Get-OpkVitestChildProcessEnvOverrides {
         'OPK_VITEST_PRODUCTION_XDG_STATE_HOME',
         'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
         'OPK_REAL_PWSH',
-        'OPK_REAL_AO',
-        'OPK_REAL_AO_BINARY',
         'GIT_REAL_BINARY',
         'GIT_SYSTEM_BINARY'
     )
@@ -32,7 +30,7 @@ function Get-OpkVitestChildProcessEnvOverrides {
         if (-not $name) {
             continue
         }
-        if ($name -like 'AO_*' -or $name -like 'OPK_VITEST_*' -or $explicitKeys -contains $name) {
+        if ($name -like 'OPK_VITEST_*' -or $explicitKeys -contains $name) {
             $overrides[$name] = [string]$item.Value
         }
     }

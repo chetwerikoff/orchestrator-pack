@@ -1,4 +1,4 @@
-export declare const AO_PASTE_CHAR_THRESHOLD: number;
+export declare const OPK_PASTE_CHAR_THRESHOLD: number;
 
 export declare const DELIVERY_PATH_PENDING_DRAFT: 'pending-draft';
 export declare const DELIVERY_PATH_SELF_SUBMITTED: 'self-submitted';
@@ -109,7 +109,7 @@ export declare function extractReviewFindingDeliveries(
 ): DeliveryRecord[];
 
 export declare function mergeDeliveryRecords(input: {
-  aoEvents?: Array<Record<string, unknown>>;
+  runtimeEvents?: Array<Record<string, unknown>>;
   dispatchJournal?: Record<string, Record<string, unknown>>;
   reviewRuns?: Array<Record<string, unknown>>;
   reactionMessages?: Record<string, string>;
@@ -117,7 +117,7 @@ export declare function mergeDeliveryRecords(input: {
 }): DeliveryRecord[];
 
 export declare function observeReactionDeliveries(input: {
-  aoEvents?: Array<Record<string, unknown>>;
+  runtimeEvents?: Array<Record<string, unknown>>;
   dispatchJournal?: Record<string, Record<string, unknown>>;
   reviewRuns?: Array<Record<string, unknown>>;
   reactionMessages?: Record<string, string>;

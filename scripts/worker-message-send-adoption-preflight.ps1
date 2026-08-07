@@ -7,10 +7,10 @@
 param(
     [string]$JournalPath = '',
     [string]$StateFile = '',
-    [string]$AoEpoch = '',
+    [string]$RuntimeEpoch = '',
     [string]$ConfigPath = '',
     [switch]$WriteProbeEntries,
-    [string]$AoPath = 'ao',
+    [string]$RuntimePath = 'ao',
     [string[]]$RequiredBranches = @('plain-ao-send:pending-draft','plain-ao-send:self-submitted'),
     [switch]$DryRun
 )
@@ -21,10 +21,10 @@ $ErrorActionPreference = 'Stop'
 $result = Test-WorkerMessageSendAdoptionPreflight `
     -JournalPath $JournalPath `
     -StateFile $StateFile `
-    -AoEpoch $AoEpoch `
+    -RuntimeEpoch $RuntimeEpoch `
     -ConfigPath $ConfigPath `
     -WriteProbeEntries:$WriteProbeEntries `
-    -AoPath $AoPath `
+    -RuntimePath $RuntimePath `
     -RequiredBranches $RequiredBranches `
     -DryRun:$DryRun `
     -PersistState

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { formatScopeSection, type ResolvedScopeContext } from '../../plugins/ao-codex-pr-reviewer/lib/scope_context.ts';
+import { formatScopeSection, type ResolvedScopeContext } from '../../plugins/codex-pr-reviewer/lib/scope_context.ts';
 
 export const CANONICAL_CONTRACT_RELATIVE = 'prompts/pack_pr_review_contract.md';
 export const GPT_PROMPT_RELATIVE = 'prompts/gpt_pack_review_prompt.md';

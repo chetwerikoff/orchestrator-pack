@@ -160,8 +160,8 @@ function estateSplitValid(): void {
         replacementOwner?: string;
       }>;
   const result = validateEstateSplit(denominator);
-  invariant(result.ok && result.result === 'foundation-16-cutover-6', 'estate_split_invalid');
-  invariant(denominator.length === 22, `estate_denominator_size:${denominator.length}`);
+  invariant(result.ok && result.result === 'foundation-15-cutover-6', 'estate_split_invalid');
+  invariant(denominator.length === 21, `estate_denominator_size:${denominator.length}`);
   for (const file of FOUNDATION_DOC_ROWS) {
     invariant(existsSync(path.resolve(file)), `foundation_row_missing:${file}`);
     invariant(

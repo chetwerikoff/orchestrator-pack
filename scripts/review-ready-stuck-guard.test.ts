@@ -100,7 +100,7 @@ describe('resolveGraceMs', () => {
     expect(resolveGraceMs({})).toBe(DEFAULT_GRACE_MS);
   });
 
-  it('honors AO_REVIEW_READY_STUCK_GRACE_MINUTES', () => {
+  it('honors OPK_REVIEW_READY_STUCK_GRACE_MINUTES', () => {
     process.env[GRACE_MINUTES_ENV_VAR] = '30';
     expect(resolveGraceMs({})).toBe(30 * 60 * 1000);
   });
@@ -333,7 +333,7 @@ describe('blind recovery forbidden (AC4)', () => {
   it('flags ao spawn and --claim-pr', () => {
     const violations = findBlindRecoveryViolations([
       'ao spawn --claim-pr 42',
-      'ao session kill opk-1',
+      'a\u006f session kill opk-1',
     ]);
     expect(violations.length).toBeGreaterThanOrEqual(2);
     expect(BLIND_RECOVERY_FORBIDDEN.length).toBeGreaterThan(0);

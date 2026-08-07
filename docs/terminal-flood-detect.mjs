@@ -39,7 +39,7 @@ function nonEmptyString(value) {
  * @param {unknown} payload
  * @returns {Array<Record<string, unknown>>}
  */
-export function normalizeAoEvents(payload) {
+export function normalizeRuntimeEvents(payload) {
   if (Array.isArray(payload)) {
     return payload;
   }
@@ -171,7 +171,7 @@ export function detectTerminalMuxFlood({
   sessionIdFilter,
 }) {
   const windowStart = nowMs - windowMs;
-  const muxEvents = normalizeAoEvents(events)
+  const muxEvents = normalizeRuntimeEvents(events)
     .filter(isTerminalMuxEvent)
     .map((event) => {
       const tsMs = getEventTimestampMs(event);
@@ -296,7 +296,7 @@ runStdinJsonCli('terminal-flood-detect.mjs', {
     const config = resolveFloodDetectConfig(payload.config ?? payload);
     const nowMs = Number(payload.nowMs) || Date.now();
     return detectTerminalMuxFlood({
-      events: normalizeAoEvents(payload.events ?? payload),
+      events: normalizeRuntimeEvents(payload.events ?? payload),
       nowMs,
       ...config,
     });

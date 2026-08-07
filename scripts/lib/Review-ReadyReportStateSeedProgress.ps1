@@ -76,8 +76,8 @@ function New-ReviewReadyReportStateSeedProgressWriter {
         Write-OrchestratorSideProcessWorkHeartbeat -ChildId $resolvedChildId -Phase 'poll' `
             -WorkStep $stepName -WorkCursor $cursor -WorkTotal $stepTotal -TickId $resolvedTickId
 
-        if ($env:AO_REPORT_STATE_SEED_FIXTURE_STEP_DELAY_MS -and [int]::TryParse($env:AO_REPORT_STATE_SEED_FIXTURE_STEP_DELAY_MS, [ref]$null)) {
-            Start-Sleep -Milliseconds ([Math]::Max(0, [int]$env:AO_REPORT_STATE_SEED_FIXTURE_STEP_DELAY_MS))
+        if ($env:OPK_REPORT_STATE_SEED_FIXTURE_STEP_DELAY_MS -and [int]::TryParse($env:OPK_REPORT_STATE_SEED_FIXTURE_STEP_DELAY_MS, [ref]$null)) {
+            Start-Sleep -Milliseconds ([Math]::Max(0, [int]$env:OPK_REPORT_STATE_SEED_FIXTURE_STEP_DELAY_MS))
         }
     }.GetNewClosure()
 
@@ -91,8 +91,8 @@ function Test-ReviewReadyReportStateSeedTickInFlight {
     param([string]$StateRoot = '')
 
     $root = $StateRoot
-    if (-not $root -and $env:AO_SIDE_PROCESS_STATE_DIR) {
-        $root = $env:AO_SIDE_PROCESS_STATE_DIR.Trim()
+    if (-not $root -and $env:OPK_SIDE_PROCESS_STATE_DIR) {
+        $root = $env:OPK_SIDE_PROCESS_STATE_DIR.Trim()
     }
     if (-not $root) {
         return $false
@@ -147,8 +147,8 @@ function Enter-ReviewReadyReportStateSeedTick {
     }
 
     $root = $StateRoot
-    if (-not $root -and $env:AO_SIDE_PROCESS_STATE_DIR) {
-        $root = $env:AO_SIDE_PROCESS_STATE_DIR.Trim()
+    if (-not $root -and $env:OPK_SIDE_PROCESS_STATE_DIR) {
+        $root = $env:OPK_SIDE_PROCESS_STATE_DIR.Trim()
     }
     if (-not $root) {
         return @{ acquired = $true; tickId = $TickId }
@@ -197,8 +197,8 @@ function Exit-ReviewReadyReportStateSeedTick {
     param([string]$StateRoot = '')
 
     $root = $StateRoot
-    if (-not $root -and $env:AO_SIDE_PROCESS_STATE_DIR) {
-        $root = $env:AO_SIDE_PROCESS_STATE_DIR.Trim()
+    if (-not $root -and $env:OPK_SIDE_PROCESS_STATE_DIR) {
+        $root = $env:OPK_SIDE_PROCESS_STATE_DIR.Trim()
     }
     if (-not $root) {
         return

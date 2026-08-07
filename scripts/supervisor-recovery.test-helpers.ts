@@ -152,7 +152,7 @@ export function cleanupSupervisorTests(): void {
 }
 
 function killSupervisorStateDir(root: string): void {
-  const fastStopEnv = { ...process.env, AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1' };
+  const fastStopEnv = { ...process.env, OPK_WAKE_SUPERVISOR_TEST_FAST_STOP: '1' };
   try {
     execFileSync(
       'pwsh',
@@ -528,7 +528,7 @@ export async function stopSupervisorChild(
     await waitForProcessesStopped([supervisorPid], settleMs);
   }
   runSupervisor(['-Action', 'Stop', '-StateDir', stateDir], {
-    AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1',
+    OPK_WAKE_SUPERVISOR_TEST_FAST_STOP: '1',
   });
 }
 

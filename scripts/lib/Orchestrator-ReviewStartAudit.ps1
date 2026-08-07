@@ -13,10 +13,10 @@ function Get-OrchestratorReviewStartAuditRoot {
     $isTestContext = -not [string]::IsNullOrWhiteSpace($env:VITEST) -or `
         -not [string]::IsNullOrWhiteSpace($env:VITEST_WORKER_ID) -or `
         [string]$env:NODE_ENV -eq 'test'
-    if (-not $env:AO_BASE_DIR -and $isTestContext) {
-        throw 'Get-OrchestratorReviewStartAuditRoot requires AO_BASE_DIR under test context; refusing to resolve live $HOME/.agent-orchestrator audit path.'
+    if (-not $env:OPK_BASE_DIR -and $isTestContext) {
+        throw 'Get-OrchestratorReviewStartAuditRoot requires OPK_BASE_DIR under test context; refusing to resolve the live pack audit path.'
     }
-    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.orchestrator-pack' }
     return (Join-Path (Join-Path (Join-Path $base 'projects') $project) 'orchestrator-review-start-audit')
 }
 

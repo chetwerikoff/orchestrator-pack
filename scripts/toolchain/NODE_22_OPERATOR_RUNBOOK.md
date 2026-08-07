@@ -63,7 +63,7 @@ Sanitize the captured evidence before attaching it to the PR. Retain the Node ve
 Plugin bins are native Node 22 TypeScript entrypoints. A non-destructive proof is:
 
 ```bash
-node --experimental-strip-types plugins/ao-task-declaration/bin/declare.ts --help
+node --experimental-strip-types plugins/task-declaration/bin/declare.ts --help
 ```
 
 The command intentionally exits non-zero after printing usage because required business arguments are absent. It must reach the CLI usage path without a loader, `tsx`, or module-resolution error.
@@ -85,7 +85,7 @@ From the side-process environment, repeat:
 ```bash
 npm run check:node-major
 node --experimental-strip-types scripts/pack-review-runner.ts help
-node --experimental-strip-types plugins/ao-task-declaration/bin/declare.ts --help
+node --experimental-strip-types plugins/task-declaration/bin/declare.ts --help
 ```
 
 Then exercise the production-shaped PowerShell bridge above.

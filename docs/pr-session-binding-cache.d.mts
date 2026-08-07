@@ -80,7 +80,7 @@ export declare function buildSessionBindingKey(repoSlug: string, sessionId: stri
 
 export declare function buildPrBindingKey(repoSlug: string, prNumber: number): string;
 
-export declare function sessionRowFromAoSessionGetPayload(
+export declare function sessionRowFromRuntimeWorkerGetPayload(
   payload: unknown,
 ): Record<string, unknown> | null;
 
@@ -98,7 +98,11 @@ export declare function loadPushRegisterVerifiedSessions(options?: {
 export declare function provePushRegisterWorkerIdentity(
   env?: NodeJS.ProcessEnv,
   options?: {
+    sessionId?: string;
     claimedSessionId?: string;
+    repoSlug?: string;
+    projectId?: string;
+    issueNumber?: number;
     cwd?: string;
     sessions?: Array<Record<string, unknown>>;
   },
@@ -187,6 +191,11 @@ export declare function tryPushRegisterFromPrCreate(input: {
   stderr: string;
   env?: NodeJS.ProcessEnv;
   cwd?: string;
+  sessionId?: string;
+  repoSlug?: string;
+  projectId?: string;
+  issueNumber?: number;
+  headSha?: string;
   sessions?: Array<Record<string, unknown>>;
   fetchPriorPrOpenRow?: (
     repoSlug: string,

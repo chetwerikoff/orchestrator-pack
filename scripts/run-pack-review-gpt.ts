@@ -8,7 +8,7 @@ import {
   assertGptHarnessFixtureAllowed,
   type GptReviewRequest,
 } from './lib/pack-gpt-reviewer.ts';
-import type { ResolvedScopeContext } from '../plugins/ao-codex-pr-reviewer/lib/scope_context.ts';
+import type { ResolvedScopeContext } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 import { runProcess } from './kernel/subprocess.ts';
 
 function trim(value: unknown): string {
@@ -117,12 +117,11 @@ function parseArgs(argv: string[]): {
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  const prFromEnv = Number(process.env.AO_PR_NUMBER || process.env.GITHUB_PR_NUMBER || 0);
   const prNumber = Number.isInteger(options.prNumber) && options.prNumber! > 0
     ? options.prNumber!
-    : prFromEnv;
+    : 0;
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
-    throw new Error('run-pack-review-gpt requires --pr-number or AO_PR_NUMBER');
+    throw new Error('run-pack-review-gpt requires --pr-number');
   }
 
   const repoSlug = trim(process.env.PACK_GPT_FIXTURE_REPO_SLUG);

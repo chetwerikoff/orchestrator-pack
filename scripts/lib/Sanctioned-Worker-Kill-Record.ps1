@@ -7,8 +7,8 @@ if ($LASTEXITCODE -ne 0 -or $Script:OpkTsNodeVersion -notmatch '^v22\.') { throw
 $Script:OpkTypeScriptLauncher = (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ts')
 
 function Get-SanctionedWorkerKillRecordPath {
-    if ($env:AO_SANCTIONED_WORKER_KILL_RECORD_PATH) {
-        return $env:AO_SANCTIONED_WORKER_KILL_RECORD_PATH
+    if ($env:OPK_SANCTIONED_WORKER_KILL_RECORD_PATH) {
+        return $env:OPK_SANCTIONED_WORKER_KILL_RECORD_PATH
     }
     $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     return Join-Path $root 'docs/state/sanctioned-worker-kills.json'

@@ -53,7 +53,7 @@ export const SPAWN_WORKTREE_GRANT_BOUNDARY_REASONS = new Set([
 ]);
 
 /** AO worker session worktree basenames allocated by @aoagents/ao-plugin-workspace-worktree. */
-export const AO_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN = /^opk-\d+$/i;
+export const OPK_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN = /^opk-\d+$/i;
 
 /** Git globals that select a repository other than the process cwd. */
 export const GIT_SOURCE_SELECTING_GLOBAL_FLAGS = new Set(['-C', '--git-dir', '--work-tree']);
@@ -411,7 +411,7 @@ export function pathIsUnderCanonicalPrefix(candidatePath, prefixPath) {
  * @param {string} basename
  */
 export function isAoSpawnWorktreeSessionBasename(basename) {
-  return AO_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN.test(String(basename ?? ''));
+  return OPK_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN.test(String(basename ?? ''));
 }
 
 /**
@@ -961,9 +961,9 @@ export function buildSpawnWorktreeGrantRecord(input) {
  */
 export function evaluateBoundaryEscapeSignal(input) {
   const env = input.env ?? {};
-  const orchestratorTmux = /\borchestrator\b/i.test(String(env.AO_TMUX_NAME ?? ''));
-  const surfaceArmed = String(env.AO_SESSION_ID ?? '').trim() !== '';
-  const bootstrapSeen = String(env.__AO_AUTONOMOUS_SURFACE_BOOTSTRAP ?? '') === '1';
+  const orchestratorTmux = /\borchestrator\b/i.test(String(env.OPK_TMUX_NAME ?? ''));
+  const surfaceArmed = String(env.OPK_AUTONOMOUS_SURFACE ?? '').trim() === '1';
+  const bootstrapSeen = String(env.OPK_AUTONOMOUS_SURFACE_BOOTSTRAP ?? '') === '1';
   const pathValue = String(env.PATH ?? '');
   const packScripts = String(input.packScriptsDir ?? '');
   const packOnPath = packScripts ? pathValue.split(':').includes(packScripts) : true;

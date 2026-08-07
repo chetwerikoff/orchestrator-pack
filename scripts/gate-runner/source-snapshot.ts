@@ -8,7 +8,7 @@ export interface SourceSnapshot {
   readonly unreadable: ReadonlyMap<string, string>;
 }
 
-const EXCLUDED_DIRECTORY_NAMES = new Set(['.git', '.ao', '.graphify', 'node_modules']);
+const EXCLUDED_DIRECTORY_NAMES = new Set(['.git', '.orchestrator-pack', '.graphify', 'node_modules']);
 
 function repoPath(root: string, absolutePath: string): string {
   return relative(root, absolutePath).split(sep).join('/');

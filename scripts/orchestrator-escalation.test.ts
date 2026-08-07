@@ -141,7 +141,7 @@ describe('orchestrator escalation contract (#641)', () => {
   it('escalation publish leaves llm delivery open for router retry', () => {
     const parsed = runJson(`
       . ./scripts/lib/Orchestrator-Escalation.ps1
-      $env:AO_ESCALATION_FORCE_SEND_FAILURE = '1'
+      $env:OPK_ESCALATION_FORCE_SEND_FAILURE = '1'
       $r = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:fail-closed:s1' -Payload @{ reason = 'forced' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000
       $files = @(Get-ChildItem -LiteralPath ${ps(inbox)} -Filter '*.json' -ErrorAction SilentlyContinue)
       [pscustomobject]@{ ok = [bool]$r.ok; status = [string]$r.status; inboxCount = $files.Count } | ConvertTo-Json -Compress
@@ -166,8 +166,8 @@ describe('orchestrator escalation contract (#641)', () => {
   it('escalation meta watchdog writes health spool when inbox is unavailable', () => {
     const parsed = runJson(`
       . ./scripts/lib/Orchestrator-Escalation.ps1
-      $env:AO_ESCALATION_FORCE_SEND_FAILURE = '1'
-      $env:AO_ESCALATION_FORCE_INBOX_FAILURE = '1'
+      $env:OPK_ESCALATION_FORCE_SEND_FAILURE = '1'
+      $env:OPK_ESCALATION_FORCE_INBOX_FAILURE = '1'
       $r = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:watchdog:s1' -Payload @{ reason = 'forced' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000
       $files = @(Get-ChildItem -LiteralPath ${ps(health)} -Filter '*.json' -ErrorAction SilentlyContinue)
       [pscustomobject]@{ ok = [bool]$r.ok; status = [string]$r.status; healthCount = $files.Count } | ConvertTo-Json -Compress
@@ -181,8 +181,8 @@ describe('orchestrator escalation contract (#641)', () => {
     const parsed = runJson(`
       $ErrorActionPreference = 'Stop'
       . ./scripts/lib/Orchestrator-Escalation.ps1
-      $env:AO_ESCALATION_FORCE_SEND_FAILURE = '1'
-      $env:AO_ESCALATION_FORCE_INBOX_FAILURE = '1'
+      $env:OPK_ESCALATION_FORCE_SEND_FAILURE = '1'
+      $env:OPK_ESCALATION_FORCE_INBOX_FAILURE = '1'
       $r = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:stop-mode:s1' -Payload @{ reason = 'forced' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000
       [pscustomobject]@{ ok = [bool]$r.ok; status = [string]$r.status; stateExists = (Test-Path -LiteralPath ${ps(state)}) } | ConvertTo-Json -Compress
     `);
@@ -227,7 +227,7 @@ describe('orchestrator escalation contract (#641)', () => {
   it('operator-route failures preserve operatorFallback details', () => {
     const parsed = runJson(`
       . ./scripts/lib/Orchestrator-Escalation.ps1
-      $env:AO_ESCALATION_FORCE_INBOX_FAILURE = '1'
+      $env:OPK_ESCALATION_FORCE_INBOX_FAILURE = '1'
       $pub = Publish-OrchestratorEscalation -EscalationClassId 'escalation-claim-store-integrity' -CorrelationKey 'corr:claim-store:fail' -Payload @{ failureKind = 'ambiguous_claim' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -NowMs 1000
       $stateFile = Get-MechanicalJsonStateFile -Path ${ps(state)} -DefaultState $Script:OrchestratorEscalationDefaultState
       $record = $stateFile.records[$pub.escalationId]
@@ -275,8 +275,8 @@ describe('orchestrator escalation contract (#641)', () => {
       $stateFile = Get-MechanicalJsonStateFile -Path ${ps(state)} -DefaultState $Script:OrchestratorEscalationDefaultState
       $record = $stateFile.records[$pub.escalationId]
       $record.lastDeliveryFailure = 'forced llm delivery failure'
-      $env:AO_ESCALATION_FORCE_INBOX_FAILURE = '1'
-      $env:AO_ESCALATION_FORCE_HEALTH_FAILURE = '1'
+      $env:OPK_ESCALATION_FORCE_INBOX_FAILURE = '1'
+      $env:OPK_ESCALATION_FORCE_HEALTH_FAILURE = '1'
       Complete-OrchestratorEscalationDeadLetter -State $stateFile -Record $record -Class (Resolve-OrchestratorEscalationClass -EscalationClassId 'escalation-dead-worker-recovery') -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -Now 2000 | Out-Null
       [pscustomobject]@{
         status = [string]$record.status
@@ -294,9 +294,9 @@ describe('orchestrator escalation contract (#641)', () => {
   it('operator-route failures remain retryable by later source publishes', () => {
     const parsed = runJson(`
       . ./scripts/lib/Orchestrator-Escalation.ps1
-      $env:AO_ESCALATION_FORCE_INBOX_FAILURE = '1'
+      $env:OPK_ESCALATION_FORCE_INBOX_FAILURE = '1'
       $failed = Publish-OrchestratorEscalation -EscalationClassId 'escalation-claim-store-integrity' -CorrelationKey 'corr:claim-store:retryable' -Payload @{ failureKind = 'ambiguous_claim' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -NowMs 1000
-      Remove-Item Env:AO_ESCALATION_FORCE_INBOX_FAILURE
+      Remove-Item Env:OPK_ESCALATION_FORCE_INBOX_FAILURE
       $retried = Publish-OrchestratorEscalation -EscalationClassId 'escalation-claim-store-integrity' -CorrelationKey 'corr:claim-store:retryable' -Payload @{ failureKind = 'ambiguous_claim' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -NowMs 2000
       $stateFile = Get-MechanicalJsonStateFile -Path ${ps(state)} -DefaultState $Script:OrchestratorEscalationDefaultState
       $record = $stateFile.records[$retried.escalationId]

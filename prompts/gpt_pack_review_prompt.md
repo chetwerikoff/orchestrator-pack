@@ -1,6 +1,6 @@
 # Browser GPT pack PR review
 
-You are reviewing a pull request for an Agent Orchestrator managed repository.
+You are reviewing a pull request for an orchestrator-pack managed repository.
 
 ## Transport rules (mandatory)
 

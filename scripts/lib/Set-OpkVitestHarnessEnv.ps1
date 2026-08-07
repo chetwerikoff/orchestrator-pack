@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Establish pack-owned Vitest marker and isolate every inventoried live-default store (Issues #664, #752).
+  Establish pack-owned Vitest marker and isolate every inventoried live-default store.
 #>
 
 . (Join-Path $PSScriptRoot 'OpkVitestStoreIsolation.ps1')
@@ -51,8 +51,6 @@ function Protect-OpkVitestHarnessDirectory {
         }
         return
     }
-    # Native Windows is not a supported pack runtime. Keep the directory private
-    # when possible without introducing a dependency on an elevated shell.
     try {
         $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
         $acl = Get-Acl -LiteralPath $Path
@@ -73,8 +71,8 @@ function Protect-OpkVitestHarnessDirectory {
 }
 
 function Get-OpkVitestProductionWakeRoot {
-    if ($env:AO_WAKE_SUPERVISOR_STATE_DIR) {
-        return $env:AO_WAKE_SUPERVISOR_STATE_DIR.Trim()
+    if ($env:OPK_WAKE_SUPERVISOR_STATE_DIR) {
+        return $env:OPK_WAKE_SUPERVISOR_STATE_DIR.Trim()
     }
     if ($env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
         return $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR.Trim()
@@ -107,17 +105,18 @@ function Set-OpkVitestHarnessEnv {
     if (-not $env:OPK_VITEST_PRODUCTION_TMP) {
         $env:OPK_VITEST_PRODUCTION_TMP = if ($env:TMPDIR) { $env:TMPDIR } elseif ($env:TEMP) { $env:TEMP } elseif ($env:TMP) { $env:TMP } else { [System.IO.Path]::GetTempPath() }
     }
-    if (-not $env:OPK_VITEST_PRODUCTION_AO_BASE) {
-        $env:OPK_VITEST_PRODUCTION_AO_BASE = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $env:OPK_VITEST_PRODUCTION_HOME '.agent-orchestrator' }
+    if (-not $env:OPK_VITEST_PRODUCTION_OPK_BASE) {
+        $env:OPK_VITEST_PRODUCTION_OPK_BASE = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $env:OPK_VITEST_PRODUCTION_HOME '.orchestrator-pack' }
     }
+
     $wakeDir = Join-Path $RootDir 'wake'
     $stateDir = Join-Path $RootDir 'state'
     $tmpDir = Join-Path $RootDir 'tmp'
     $inboxDir = Join-Path $RootDir 'operator-inbox'
     $healthDir = Join-Path $RootDir 'health-spool'
-    $aoBaseDir = Join-Path $RootDir 'ao-base'
+    $packStateDir = Join-Path $RootDir 'pack-state'
     $transportDir = Join-Path $RootDir 'transport'
-    foreach ($dir in @($RootDir, $wakeDir, $stateDir, $tmpDir, $inboxDir, $healthDir, $aoBaseDir, $transportDir)) {
+    foreach ($dir in @($RootDir, $wakeDir, $stateDir, $tmpDir, $inboxDir, $healthDir, $packStateDir, $transportDir)) {
         if (-not (Test-Path -LiteralPath $dir)) {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
         }
@@ -135,39 +134,36 @@ function Set-OpkVitestHarnessEnv {
     $env:TMPDIR = $tmpDir
     $env:TEMP = $tmpDir
     $env:TMP = $tmpDir
-    $env:AO_WAKE_SUPERVISOR_STATE_DIR = $wakeDir
+    $env:OPK_WAKE_SUPERVISOR_STATE_DIR = $wakeDir
     $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $wakeDir
-    $env:AO_SIDE_PROCESS_STATE_DIR = $wakeDir
-    $env:AO_BASE_DIR = $aoBaseDir
-    $env:AO_MECHANICAL_TRANSPORT_TEMP = $transportDir
-    $env:AO_ORCHESTRATOR_ESCALATION_STATE = Join-Path $stateDir 'orchestrator-escalation-state.json'
-    $env:AO_OPERATOR_ESCALATION_INBOX = $inboxDir
-    $env:AO_ESCALATION_HEALTH_SPOOL = $healthDir
-    $env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL = Join-Path $wakeDir 'worker-message-dispatch-journal.json'
-    $env:AO_WORKER_MESSAGE_SUBMIT_STATE = Join-Path $stateDir 'orchestrator-worker-message-submit-state.json'
-    $env:AO_WORKER_STATUS_STORE = Join-Path $wakeDir 'worker-status-store.json'
-    $env:AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE = Join-Path $stateDir 'orchestrator-review-handoff-wake-admission.json'
-    $env:AO_REPORT_STATE_SEED_STATE = Join-Path $stateDir 'orchestrator-review-ready-report-state-seed-state.json'
-    $env:AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE = Join-Path $stateDir 'orchestrator-review-trigger-reeval-watch.json'
-    $env:AO_WORKER_REPORT_STORE = Join-Path $wakeDir 'worker-report-store.json'
-    $env:AO_PR_SESSION_BINDING_CACHE = Join-Path $wakeDir 'pr-session-binding-cache.json'
-    $env:AO_CI_GREEN_WAKE_RECONCILE_STATE = Join-Path $stateDir 'orchestrator-ci-green-wake-state.json'
-    $env:AO_DEAD_WORKER_RECONCILE_STATE = Join-Path $wakeDir 'orchestrator-dead-worker-reconcile-state.json'
-    $env:AO_REVIEW_TRIGGER_RECONCILE_STATE = Join-Path $stateDir 'orchestrator-review-reconcile-state.json'
-    $env:AO_WAKE_DEDUP_STATE = Join-Path $stateDir 'orchestrator-wake-dedup.json'
-    $env:AO_WAKE_LISTENER_SIDE_EFFECT_LOCK = Join-Path $stateDir 'orchestrator-wake-listener-side-effect.lock'
-    $env:AO_WORKER_MESSAGE_ADOPTION_STATE = Join-Path $stateDir 'orchestrator-worker-message-send-adoption.json'
+    $env:OPK_SIDE_PROCESS_STATE_DIR = $wakeDir
+    $env:OPK_BASE_DIR = $packStateDir
+    $env:OPK_MECHANICAL_TRANSPORT_TEMP = $transportDir
+    $env:OPK_ORCHESTRATOR_ESCALATION_STATE = Join-Path $stateDir 'orchestrator-escalation-state.json'
+    $env:OPK_OPERATOR_ESCALATION_INBOX = $inboxDir
+    $env:OPK_ESCALATION_HEALTH_SPOOL = $healthDir
+    $env:OPK_WORKER_MESSAGE_DISPATCH_JOURNAL = Join-Path $wakeDir 'worker-message-dispatch-journal.json'
+    $env:OPK_WORKER_MESSAGE_SUBMIT_STATE = Join-Path $stateDir 'orchestrator-worker-message-submit-state.json'
+    $env:OPK_WORKER_STATUS_STORE = Join-Path $wakeDir 'worker-status-store.json'
+    $env:OPK_REPORT_STATE_SEED_STATE = Join-Path $stateDir 'orchestrator-review-ready-report-state-seed-state.json'
+    $env:OPK_REVIEW_TRIGGER_REEVAL_WATCH_STATE = Join-Path $stateDir 'orchestrator-review-trigger-reeval-watch.json'
+    $env:OPK_WORKER_REPORT_STORE = Join-Path $wakeDir 'worker-report-store.json'
+    $env:OPK_PR_SESSION_BINDING_CACHE = Join-Path $wakeDir 'pr-session-binding-cache.json'
+    $env:OPK_CI_GREEN_WAKE_RECONCILE_STATE = Join-Path $stateDir 'orchestrator-ci-green-wake-state.json'
+    $env:OPK_DEAD_WORKER_RECONCILE_STATE = Join-Path $wakeDir 'orchestrator-dead-worker-reconcile-state.json'
+    $env:OPK_REVIEW_TRIGGER_RECONCILE_STATE = Join-Path $stateDir 'orchestrator-review-reconcile-state.json'
+    $env:OPK_WAKE_DEDUP_STATE = Join-Path $stateDir 'orchestrator-wake-dedup.json'
     Enable-OpkVitestStoreIsolation
 
     return @{
-        root         = $RootDir
-        wakeDir      = $wakeDir
-        statePath    = $env:AO_ORCHESTRATOR_ESCALATION_STATE
-        inboxDir     = $inboxDir
-        healthDir    = $healthDir
-        stateDir     = $stateDir
-        tmpDir       = $tmpDir
-        aoBaseDir    = $aoBaseDir
-        transportDir = $transportDir
+        root          = $RootDir
+        wakeDir       = $wakeDir
+        statePath     = $env:OPK_ORCHESTRATOR_ESCALATION_STATE
+        inboxDir      = $inboxDir
+        healthDir     = $healthDir
+        stateDir      = $stateDir
+        tmpDir        = $tmpDir
+        stateBaseDir  = $packStateDir
+        transportDir  = $transportDir
     }
 }
