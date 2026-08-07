@@ -22,6 +22,18 @@ npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>
 
 The review-start claim authority and run store prevent duplicate starts for one PR/head. A terminal result from another head is stale evidence; a clean terminal result for the exact current head is not re-invoked.
 
+## Event-driven review trigger
+
+The event-driven review trigger is a pack-owned decision: worker handoff state, required CI, exact PR/head binding, existing current-head review evidence, and the review-start claim are evaluated before a new run starts. A status transition alone is never permission to create a duplicate review run.
+
+## Orchestrator review-run coverage
+
+Review-run coverage is closed over the exact current PR head. A terminal run for another head is stale; a missing, failed, cancelled, malformed, or ambiguous current-head result is not clean evidence. The pack review runner and review-start claim authority own start/list/status behavior independently of worker runtime transport.
+
+## Head ready for review
+
+A head is ready for review only when the worker's exact PR/head binding is current and required CI is green. The pack must re-evaluate those facts at review start rather than trusting an earlier observation. Head drift invalidates the prior review target and requires a fresh current-head decision.
+
 ## Findings and delivery
 
 The runner publishes review output through the pack-owned review path. A worker with delivered findings reports `addressing_reviews`, fixes the exact current head, then returns through required CI and current-head review before handoff. Missing, malformed, failed, cancelled, or ambiguous review evidence never becomes clean.
