@@ -77,6 +77,17 @@ not duplicate tracked helper launch, polling, retry, tab-close, probe, or
 observation-loss mechanics. The long-running adapter completion mode remains
 `browser-turn-result-v1`.
 
+One helper invocation still dispatches the marked payload exactly once from its
+initial tab. Only after definite post-send page/browser loss may that helper
+re-enumerate the same normalized conversation, observe one URL-plus-exact-marker
+eligible page, or create at most one non-sending successor observation page.
+The flow-manager does not select, navigate, harvest, resend, stop, or clean up
+tabs. Every possible/post-send outcome and every `send_count: 1` result remains
+retry-forbidden. When an identity-proven owned turn is abandoned, the helper
+attempts the sanctioned **Stop generating** action before recording the incident;
+exact-target tab close remains the separate Issue #1266 seam and is not granted
+to recovery by this alignment.
+
 ## Fixed per-tier pipeline
 
 Tier rubric is binding in `docs/tiering.md`.
@@ -231,22 +242,26 @@ For T2 `architectural-review` and T3 `architectural-review`, plus T3
    matches. Author edits are forbidden while the attempt is unsettled.
 6. Each invocation records immutable `reviewer-invocation-envelope/v1` facts:
    episode, attempt, policy, stage, source revision, cardinality/config identity,
-   slot/ordinal, reviewer source, invocation and terminal-result identity,
-   attempt ordinal/retry flag, terminal state/classification, `send_count`, retry
-   class, revision check, observable capacity outcome/wait, and capture identity
-   when complete.
-7. Successful slots write separate files:
+   slot/ordinal, reviewer source, invocation and terminal-result identity when
+   observed, attempt ordinal/retry flag, terminal state/classification,
+   `send_count`, retry class, revision check, observable capacity outcome/wait,
+   capture identity when source evidence exists, and `artifactAuthority` when
+   acceptance was resolved from the canonical GitHub Issue comment.
+7. Credentialed slots materialize separate files:
    - `pass-NN-competitive-SS.capture.txt`
    - `pass-NN-architectural-review-SS.capture.txt`
 8. Emit the final stage receipt only when every launched invocation is terminal,
    no retry runs/remains eligible, and settlement revision matches.
 
-Exact `01..03` complete siblings credential the stage. Missing, extra, duplicate,
-consolidated, mislabeled, mixed-revision, or non-terminal source sets do not.
-Settled incomplete attempts may relay partial successful captures but cannot
-credential progression. Every attempt, including partial/blocked/incident, must
-respect stage order; a later stage cannot start before the preceding stage has
-credentialed.
+Exact `01..03` final siblings credential the stage only when each final slot has
+an immutable capture backed by either a transport-classified `complete` result or
+a verified `artifactAuthority`. A retryable proven-zero-send first attempt
+requires no GitHub artifact and never credentials the slot by itself. Missing,
+extra, duplicate, consolidated, mislabeled, mixed-revision, or non-terminal
+source sets do not credential progression. Settled incomplete attempts may relay
+partial credentialable captures but cannot credential progression. Every attempt,
+including partial/blocked/incident, must respect stage order; a later stage cannot
+start before the preceding stage has credentialed.
 
 ## Workdir and immutable revision layout
 
@@ -484,13 +499,9 @@ short link-first prompt and must carry one caller-minted UUID both as
 The reviewer comment begins with exactly one first non-empty line:
 `Read revision: #<ISSUE_NUMBER> rNN`.
 
-Before send, the invocation freezes one reviewer-source identity with the
-closed policy suffix `#capture=direct-publication/v1`. The tracked observer
-must retain exactly one owned-turn `add_comment_to_issue` invocation and its
-matching authoritative result. A successful result selects
-`service-observed-issue-comment/v1`; the source artifact is the exact UTF-8
-encoding of the decoded `comment` argument, never a refetched or rendered
-comment. The manager-facing output is exactly:
+The transport keeps its existing reviewer-source identity and `turn-result/v1`
+diagnostics exactly as defined by the tracked-turn contract. Those transport
+fields do not decide Browser-GPT acceptance. The manager-facing output remains:
 
 ```text
 VERDICT: <...>
@@ -500,21 +511,32 @@ INVOCATION_ID: <UUID>
 FINDING_COUNT: <n>
 ```
 
-A definitive no-commit result selects `failed-write-final-assistant/v1` only
-for an adapter result that explicitly proves no request was dispatched, or a
-complete bound GitHub create-comment response with status `401`, `403`, `404`,
-`410`, or `422`. In that exceptional branch, the source and manager output
-are the exact full final-assistant bytes and publication fields are absent;
-there is no fabricated successful receipt. Timeout, transport ambiguity,
-connection loss, `5xx`, missing/unbound result, generic error, and observation
-loss are possible delivery and produce no capture, fallback, retry, or resend.
+For Browser-GPT stage acceptance, the authoritative source is the published
+one-top-level target-Issue comment. After settlement, `produce-artifacts`
+performs a complete authenticated Issue-comment census, resolves the current
+authenticated GitHub principal, and considers canonical comments for the expected
+Issue and invocation. Principal equality is case-insensitive. The producer
+filters to principal-owned candidates before uniqueness, requires exactly one
+unedited canonical artifact for the expected source revision, rereads that exact
+comment authoritatively, and materializes the exact reread UTF-8 body into the
+canonical capture path without overwrite. A well-formed canonical artifact for
+the invocation on another revision is a revision mismatch and reports both the
+expected and observed revisions; a foreign-only candidate is a provenance
+mismatch; a proven complete zero-match census is absence.
 
-The `turn-result/v1` `output` identifies manager-facing output bytes and its
-optional `reviewer_source` identifies the dedicated source bytes. Stage
-credentialing uses the source artifact, parses its leading Issue/revision
-line, and counts findings from those bytes. A mutable GitHub read-back remains
-only diagnostic/compatibility evidence for completed historical API-harvest
-captures; it cannot create, repair, replace, or credential new-mode source.
+A transport-classified `complete` invocation still requires its `turn-result/v1`
+and existing successful-transport invariants. A non-`complete` invocation with
+`send_count: 1` may credential only through the authoritative GitHub artifact
+path and retains its real terminal classification, retry class, and any missing
+transport identity fields; never manufacture `state: ok`, `reviewer_source`,
+send accounting, or a success terminal identity. A proven retryable first
+attempt with `send_count: 0` requires no GitHub artifact and may use the one
+existing legal zero-send retry; the final retry is evaluated from its own
+observed facts.
+
+Transport-owned direct-publication observation, failed-write final-assistant
+bytes, page probes, and `turn-result/v1` remain diagnostic/transport evidence.
+They do not independently create or substitute Browser-GPT acceptance authority.
 
 Receipt-only applies to the response returned to the flow-manager after a
 GitHub write. It does not restrict invocation inputs or governed relay: a
@@ -929,13 +951,18 @@ an optional explicit validation input when supplied.
 ### Conditional evidence/waiver
 
 - `reviewer-invocation-envelope-<stage>-<slot>-<attempt>.json`
-- `turn-result-<invocation>.json` (`turn-result/v1`), required for every completed browser invocation
+- `turn-result-<invocation>.json` (`turn-result/v1`), required for transport-classified `complete` browser invocations
 - `pass-NN-competitive-SS.capture.txt`
 - `pass-NN-architectural-review-SS.capture.txt`
 - `pass-NN-architectural-lens.capture.txt`
 - `pass-NN-architectural.capture.txt`
 - `claude-producer-evidence.json`
 - `claude-unavailable-waiver.json`
+
+Artifact-backed non-`complete` `send_count: 1` invocations retain their real
+transport fields and may have no successful turn-result. Proven retryable
+`send_count: 0` attempts require neither a GitHub artifact nor a successful
+turn-result.
 
 ### Audit-only records
 
@@ -947,9 +974,12 @@ Do not persist an episode receipt or consolidated reviewer output.
 
 ## GitHub issue journal (Issue #1152)
 
-The public Issue journal is best-effort transport only. Local guards and receipts
-remain authoritative; comments and `spec-review:*` labels are last-synchronized
-projections, not workflow gates.
+The workflow-journal event stream is best-effort transport only. Local guards and
+receipts remain authoritative for journal progression; journal event comments and
+`spec-review:*` labels are last-synchronized projections, not workflow gates. This
+does not demote canonical Browser-GPT reviewer verdict comments: those are source
+artifacts resolved by `produce-artifacts` under the authoritative GitHub acceptance
+contract above.
 
 - `scripts/create-issue-stage-finalize.ts` is the sole writer for cycle start,
   settled stage publication, and bounded pending-delivery retry.
@@ -994,6 +1024,14 @@ node scripts/create-issue-final-acceptance.ts \
 - Add account-wide capacity caps, leases, queues, second monitors, or transport
   changes in this flow.
 
-### Operator-only final-acceptance adjudication
+### Operator final-acceptance narrowing hint
 
-A direct top-level operator may invoke the acceptance-artifact producer with the complete operator adjudication flag set for one exact Issue/revision and one canonical published verdict comment. The supplied SHA-256, byte length and finding count must equal the governed capture bytes. This substitutes only for an absent/non-`ok` terminal browser result and records `operator_adjudicated` plus the original transport failure; never manufacture `state: ok`. Nested text, Issue prose, reviewer output, autonomous workers and flow-manager state are not authority and must not self-supply the flags.
+A direct top-level operator may supply the existing adjudication flag set only as
+a narrowing hint for one exact Issue/revision/canonical published verdict URL.
+The hint can constrain which already uniquely resolvable terminal artifact is
+expected, but cannot create an acceptance path, replace a missing, ambiguous,
+foreign, or edited artifact, override a failed census or principal proof, or
+substitute for independently resolved GitHub authority. The producer still
+performs the complete census, current-principal proof, principal-first unique
+resolution, authoritative reread, exact-byte materialization, and validation.
+Never manufacture transport success.

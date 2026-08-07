@@ -18,6 +18,10 @@ import {
   writeHistoryIfChanged,
 } from './lib/vitest-runtime-history-merge.mjs';
 import { buildHeavyTopology } from './lib/vitest-heavy-topology.mjs';
+import { discoverVitestFiles } from './lib/vitest-ci-lanes.mjs';
+
+const SUPPLEMENTAL_TUPLE_ERROR =
+  'SupplementalReportsDir, SupplementalSourceSha, SupplementalRunId, and SupplementalRunAttempt must be supplied together';
 
 function printUsage() {
   console.error(`Usage: node scripts/refresh-vitest-runtime-history.mjs \\
@@ -31,7 +35,9 @@ function printUsage() {
 Or: node scripts/refresh-vitest-runtime-history.mjs reconcile \\
   --remote <path> \\
   --proposed <path> \\
-  --output <path>`);
+  --output <path> \\
+  [--repo-root <path>] \\
+  [--require-equal-inventory]`);
 }
 
 function parseArgs(argv) {
@@ -41,6 +47,8 @@ function parseArgs(argv) {
       remotePath: '',
       proposedPath: '',
       outputPath: '',
+      repoRoot: defaultRepoRoot,
+      requireEqualInventory: false,
     };
     for (let index = 1; index < argv.length; index += 1) {
       const arg = argv[index];
@@ -50,6 +58,10 @@ function parseArgs(argv) {
         options.proposedPath = argv[++index] ?? '';
       } else if (arg === '--output') {
         options.outputPath = argv[++index] ?? '';
+      } else if (arg === '--repo-root') {
+        options.repoRoot = argv[++index] ?? defaultRepoRoot;
+      } else if (arg === '--require-equal-inventory') {
+        options.requireEqualInventory = true;
       } else if (arg === '--help' || arg === '-h') {
         printUsage();
         process.exit(0);
@@ -114,9 +126,22 @@ function runReconcile(options) {
   }
   const remoteHistory = loadHistoryFromFile(options.remotePath);
   const proposedHistory = loadHistoryFromFile(options.proposedPath);
-  const merged = reconcileProposedHistoryAgainstRemote(proposedHistory, remoteHistory);
-  writeFileSync(options.outputPath, historyBytes(merged), 'utf8');
-  console.log('[PASS] runtime-history stale-base reconcile complete');
+  try {
+    const currentInventory = options.requireEqualInventory
+      ? discoverVitestFiles(options.repoRoot)
+      : null;
+    const merged = reconcileProposedHistoryAgainstRemote(proposedHistory, remoteHistory, {
+      currentInventory,
+      requireEqualInventory: options.requireEqualInventory,
+    });
+    writeFileSync(options.outputPath, historyBytes(merged), 'utf8');
+    console.log('[PASS] runtime-history stale-base reconcile complete');
+  } catch (error) {
+    console.error(
+      `[FAIL] runtime-history stale-base reconcile refused: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  }
 }
 
 function main() {
@@ -130,12 +155,15 @@ function main() {
     printUsage();
     process.exit(1);
   }
-  if (Boolean(options.supplementalReportsDir) !== Boolean(options.supplementalSourceSha)) {
-    printUsage();
-    process.exit(1);
-  }
-  if (options.supplementalReportsDir && (!options.supplementalRunId || !options.supplementalRunAttempt)) {
-    printUsage();
+  const supplementalTuple = [
+    options.supplementalReportsDir,
+    options.supplementalSourceSha,
+    options.supplementalRunId,
+    options.supplementalRunAttempt,
+  ];
+  const supplementalCount = supplementalTuple.filter((value) => Boolean(String(value ?? '').trim())).length;
+  if (supplementalCount !== 0 && supplementalCount !== supplementalTuple.length) {
+    console.error(`[FAIL] ${SUPPLEMENTAL_TUPLE_ERROR}`);
     process.exit(1);
   }
 
@@ -150,7 +178,7 @@ function main() {
     options.reportsDir,
     topologyResult.topology.heavyShardCount,
   );
-  const supplementalReports = options.supplementalReportsDir
+  const supplementalReports = supplementalCount === supplementalTuple.length
     ? loadSupplementalReportsFromDir(options.supplementalReportsDir)
     : null;
   const baseHistory = options.baseHistoryFile
@@ -171,12 +199,12 @@ function main() {
   emitCoverageSignal(result.coverage);
 
   if (result.rejected) {
-    console.warn('[WARN] runtime-history refresh rejected bad provenance:');
+    console.error('[FAIL] runtime-history refresh rejected evidence:');
     for (const error of result.errors) {
-      console.warn(` - ${error}`);
+      console.error(` - ${error}`);
     }
-    console.log('[PASS] runtime-history refresh left committed history unchanged');
-    process.exit(0);
+    console.error('[FAIL] runtime-history refresh left committed history unchanged after rejection');
+    process.exit(1);
   }
 
   if (result.idempotent) {
@@ -193,4 +221,11 @@ function main() {
   );
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  console.error(
+    `[FAIL] runtime-history refresh execution failed: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(1);
+}

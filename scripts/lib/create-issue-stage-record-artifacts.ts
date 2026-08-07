@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   lstatSync,
@@ -21,6 +22,7 @@ import {
   validateReviewEpisodeTopology,
   CLAUDE_PRODUCER_EVIDENCE_SCHEMA,
   parseReviewerSourcePolicy,
+  type AuthoritativeGithubArtifactAuthorityV1,
   type CaptureIdentityV1,
   type ReviewerInvocationEnvelopeV1,
   type ReviewEpisodeDerivationAuthorityV1,
@@ -38,6 +40,7 @@ export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
 export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
 export const ARTIFACT_MANIFEST_SCHEMA = 'create-issue-acceptance-artifacts/v1' as const;
 export const TURN_RESULT_SCHEMA = 'turn-result/v1' as const;
+export const AUTHORITATIVE_GITHUB_ARTIFACT_BASIS = 'authoritative-github-artifact' as const;
 
 export const ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS = [
   { property: 'tierIntakePath', flag: '--tier-intake', file: 'tier-intake.json', schema: 'tier-intake/v1', classification: 'flow-manager-authored input', repeatable: false },
@@ -67,6 +70,12 @@ export const REMEDY_DISPOSITION_VALUES = [
   'rejected-as-overengineering',
 ] as const;
 
+export type AcceptanceArtifactTemporaryClassification =
+  | 'source-unavailable'
+  | 'identity-unresolved'
+  | 'provenance-unresolved'
+  | 'observation-lost';
+
 type JsonRecord = Record<string, unknown>;
 type CycleBinding = { cycleId: string; sourceRevision: string; boundBeforeLaunch: true };
 type ProducedStageReceipt = StageCompletenessReceiptV1 & { cycleId: string; cycleBinding: CycleBinding };
@@ -90,36 +99,49 @@ export interface ProduceAcceptanceArtifactsOptions {
   outputDir?: string;
   phase?: 'pre-lens' | 'final-acceptance';
   operatorAdjudication?: OperatorAcceptanceAdjudication;
+  /** Backward-compatible injection point; it is only a transport seam, never an authority seam. */
   operatorReferenceTransport?: GhTransport;
+  artifactSourceTransport?: GhTransport;
   repositoryFullName?: string;
 }
 
-interface NormalizedOperatorAcceptanceAdjudication extends OperatorAcceptanceAdjudication {
+interface OperatorNarrowingHint {
   repositoryFullName: string;
-  commentId: string;
-  authoritativeBody: string;
+  issueNumber: number;
+  sourceRevision: string;
+  commentId: number;
+  commentUrl: string;
+  reason: string;
+}
+
+interface AuthoritativeIssueComment {
+  id: number;
+  body: string;
   createdAt: string;
   updatedAt: string;
-  authorLogin: string;
-  authorAssociation: string;
+  userLogin: string | null;
+  htmlUrl: string;
+  issueUrl: string;
 }
 
-interface OperatorAdjudicationApplication {
-  invocationId: string;
-  originalTransport: {
-    state: string;
-    scope?: string;
-    cause?: string;
-    sendCount?: number;
-    terminalClassification: string;
-    turnResultPath?: string;
-    terminalResultIdentity?: string;
-  };
+interface AuthoritativeIssueCensus {
+  repositoryFullName: string;
+  issueNumber: number;
+  publisherLogin: string;
+  comments: AuthoritativeIssueComment[];
 }
 
-interface OperatorAdjudicationContext {
-  adjudication: NormalizedOperatorAcceptanceAdjudication;
-  applications: OperatorAdjudicationApplication[];
+interface ArtifactAuthorityContext {
+  transport: GhTransport;
+  census: AuthoritativeIssueCensus;
+  operatorHint?: OperatorNarrowingHint;
+}
+
+interface AuthoritativeArtifactResolution {
+  capture: CaptureIdentityV1;
+  captureText: string;
+  capturePath: string;
+  authority: AuthoritativeGithubArtifactAuthorityV1;
 }
 
 export interface AcceptanceArtifactMissingInput {
@@ -134,6 +156,7 @@ export interface AcceptanceArtifactResult {
   missing: AcceptanceArtifactMissingInput[];
   errors: string[];
   reviewEpisodeId?: string;
+  temporary?: AcceptanceArtifactTemporaryClassification;
 }
 
 export interface AcceptanceArtifactStatus {
@@ -152,6 +175,10 @@ function requiredString(value: unknown, label: string, errors: string[]): string
     return '';
   }
   return value.trim();
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
 }
 
 function reviewTier(value: unknown): ReviewTier | null {
@@ -176,7 +203,9 @@ function reviewerStage(value: unknown): Exclude<ReviewStage, 'architectural-lens
 }
 
 function policyVersion(value: unknown): ReviewerInvocationEnvelopeV1['policyVersion'] | null {
-  return value === 'triple-source/v1' || value === 'single-source/v1' ? value : null;
+  return value === 'triple-source/v1' || value === 'single-source/v1' || value === 'review-lane-routing/v1'
+    ? value
+    : null;
 }
 
 function terminalClassification(value: unknown): ReviewerInvocationEnvelopeV1['terminalClassification'] | null {
@@ -218,6 +247,8 @@ function buildInvocation(
     | 'sourceRevision'
   >,
   capture: CaptureIdentityV1 | undefined,
+  artifactAuthority: AuthoritativeGithubArtifactAuthorityV1 | undefined,
+  validatedTerminalResultIdentity: string | undefined,
   errors: string[],
 ): ReviewerInvocationEnvelopeV1 | null {
   const label = `stage ${context.stage} invocation[${index}]`;
@@ -233,12 +264,9 @@ function buildInvocation(
   const stage = reviewerStage(value.stage);
   const sourceRevision = requiredString(value.sourceRevision, `${label}.sourceRevision`, errors);
   const invocationId = requiredString(value.invocationId, `${label}.invocationId`, errors);
-  const terminalResultIdentity = requiredString(
-    value.terminalResultIdentity,
-    `${label}.terminalResultIdentity`,
-    errors,
-  );
-  const reviewerSource = requiredString(value.reviewerSource, `${label}.reviewerSource`, errors);
+  const assertedTerminalResultIdentity = optionalString(value.terminalResultIdentity);
+  const terminalResultIdentity = validatedTerminalResultIdentity ?? assertedTerminalResultIdentity;
+  const reviewerSource = optionalString(value.reviewerSource);
   const reviewerSlot = requiredString(value.reviewerSlot, `${label}.reviewerSlot`, errors);
   const reviewerOrdinal = Number.isInteger(value.reviewerOrdinal) && Number(value.reviewerOrdinal) >= 1
     ? Number(value.reviewerOrdinal)
@@ -267,6 +295,10 @@ function buildInvocation(
   if (schema === null) errors.push(`${label} has unknown schema`);
   if (invocationPolicyVersion === null) errors.push(`${label} has unknown policyVersion`);
   if (stage === null) errors.push(`${label} has unknown stage`);
+  if (!artifactAuthority && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing`);
+  if (!artifactAuthority && !reviewerSource) errors.push(`${label}.reviewerSource is missing`);
+  if (invocationTerminalClassification === 'complete' && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing for successful transport`);
+  if (invocationTerminalClassification === 'complete' && !reviewerSource) errors.push(`${label}.reviewerSource is missing for successful transport`);
   if (reviewerOrdinal === null) errors.push(`${label}.reviewerOrdinal must be a positive integer`);
   if (attemptOrdinal === null) errors.push(`${label}.attemptOrdinal must be 1 or 2`);
   if (retryAttempt === null) errors.push(`${label}.retryAttempt must be boolean`);
@@ -307,8 +339,8 @@ function buildInvocation(
     stage,
     sourceRevision,
     invocationId,
-    terminalResultIdentity,
-    reviewerSource,
+    ...(terminalResultIdentity ? { terminalResultIdentity } : {}),
+    ...(reviewerSource ? { reviewerSource } : {}),
     reviewerSlot,
     reviewerOrdinal,
     attemptOrdinal,
@@ -321,6 +353,7 @@ function buildInvocation(
     capacityOutcome: invocationCapacityOutcome,
     capacityWaitMs,
     ...(capture ? { capture } : {}),
+    ...(artifactAuthority ? { artifactAuthority } : {}),
   };
 }
 
@@ -351,6 +384,7 @@ function rawFindingCount(text: string): number {
 }
 
 const CANONICAL_REVISION_LINE_RE = /^Read revision: #([1-9][0-9]*) (r[0-9]+)$/;
+const INVOCATION_ECHO_RE = /^INVOCATION_ID: (\S+)$/;
 
 function parseCanonicalCaptureRevision(text: string): { issueNumber: number; sourceRevision: string; findingCount: number } | null {
   const lines = text.split(/\n/).map((line) => line.replace(/\r$/, ''));
@@ -380,14 +414,16 @@ function parseCanonicalTerminalVerdict(
     const match = /^FINDING_COUNT: ([0-9]+)$/.exec(line);
     return match ? [Number(match[1])] : [];
   });
-  const invocationIds = lines.filter((line) => /^INVOCATION_ID: \S+$/.test(line));
+  const invocationIds = lines.filter((line) => INVOCATION_ECHO_RE.test(line));
+  const cutCandidates = exactCount('simplification-cut-candidate: yes');
+  const simplificationClean = exactCount('SIMPLIFICATION_CLEAN');
   if (
     exactCount('review-economics-contract: v1') !== 1
-    || exactCount('SIMPLIFICATION_CLEAN') !== 1
     || verdicts.length !== 1
     || declaredFindingCounts.length !== 1
     || declaredFindingCounts[0] !== revision.findingCount
     || invocationIds.length !== 1
+    || (cutCandidates === 0 ? simplificationClean !== 1 : simplificationClean !== 0)
   ) return null;
   if (revision.findingCount === 0) {
     if (verdicts[0] !== 'CLEAN' || exactCount('NO_FINDINGS') !== 1) return null;
@@ -397,172 +433,536 @@ function parseCanonicalTerminalVerdict(
   return revision;
 }
 
-function normalizeOperatorAcceptanceAdjudication(
+function isCanonicalReviewerArtifact(
+  text: string,
+  stage: Exclude<ReviewStage, 'architectural-lens'>,
+  issueNumber: number,
+  sourceRevision: string,
+  invocationId: string,
+): boolean {
+  const revision = parseCanonicalCaptureRevision(text);
+  if (!revision || revision.issueNumber !== issueNumber || revision.sourceRevision !== sourceRevision) return false;
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  if (lines.filter((line) => line === 'review-economics-contract: v1').length !== 1) return false;
+  const invocationEchoes = lines.flatMap((line) => {
+    const match = INVOCATION_ECHO_RE.exec(line);
+    return match ? [match[1]!] : [];
+  });
+  if (invocationEchoes.length !== 1 || invocationEchoes[0] !== invocationId) return false;
+  if (stage === 'architectural') return parseCanonicalTerminalVerdict(text) !== null;
+  const noFindings = lines.filter((line) => line === 'NO_FINDINGS').length;
+  const cutCandidates = lines.filter((line) => line === 'simplification-cut-candidate: yes').length;
+  const simplificationClean = lines.filter((line) => line === 'SIMPLIFICATION_CLEAN').length;
+  if (revision.findingCount === 0) return noFindings === 1 && cutCandidates === 0 && simplificationClean === 1;
+  if (noFindings !== 0) return false;
+  if (cutCandidates === 0 ? simplificationClean !== 1 : simplificationClean !== 0) return false;
+  const declaredFindingCounts = lines.flatMap((line) => {
+    const match = /^FINDING_COUNT: ([0-9]+)$/.exec(line);
+    return match ? [Number(match[1])] : [];
+  });
+  return declaredFindingCounts.length === 0
+    || (declaredFindingCounts.length === 1 && declaredFindingCounts[0] === revision.findingCount);
+}
+
+function canonicalReviewerArtifactRevision(
+  text: string,
+  stage: Exclude<ReviewStage, 'architectural-lens'>,
+  issueNumber: number,
+  invocationId: string,
+): string | null {
+  const revision = parseCanonicalCaptureRevision(text);
+  if (!revision || revision.issueNumber !== issueNumber) return null;
+  return isCanonicalReviewerArtifact(text, stage, issueNumber, revision.sourceRevision, invocationId)
+    ? revision.sourceRevision
+    : null;
+}
+
+function sameGithubLogin(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+function temporaryError(
+  classification: AcceptanceArtifactTemporaryClassification,
+  detail: string,
+): string {
+  return `TEMPORARY ${classification}: ${detail}`;
+}
+
+function temporaryClassification(errors: readonly string[]): AcceptanceArtifactTemporaryClassification | undefined {
+  for (const classification of ['source-unavailable', 'identity-unresolved', 'provenance-unresolved', 'observation-lost'] as const) {
+    if (errors.some((error) => error.startsWith(`TEMPORARY ${classification}:`))) return classification;
+  }
+  return undefined;
+}
+
+function parseRepositoryFullName(value: string, errors: string[]): { owner: string; name: string; fullName: string } | null {
+  const fullName = value.trim();
+  const match = /^([^/\s]+)\/([^/\s]+)$/.exec(fullName);
+  if (!match) {
+    errors.push('authoritative GitHub repository must be owner/name');
+    return null;
+  }
+  return { owner: match[1]!, name: match[2]!, fullName };
+}
+
+function normalizeOperatorNarrowingHint(
   value: OperatorAcceptanceAdjudication | undefined,
   phase: ProduceAcceptanceArtifactsOptions['phase'],
-  transport: GhTransport | undefined,
-  authoritativeRepositoryFullName: string,
-  authoritativeIssueNumber: number,
-  authoritativeSourceRevision: string,
+  repositoryFullName: string,
+  issueNumber: number,
   errors: string[],
-): NormalizedOperatorAcceptanceAdjudication | null {
-  if (!value) return null;
-  const errorCountBefore = errors.length;
+): OperatorNarrowingHint | undefined {
+  if (!value) return undefined;
   if ((phase ?? 'final-acceptance') !== 'final-acceptance') {
-    errors.push('operator adjudication is valid only for final-acceptance artifact production');
+    errors.push('operator verdict URL hint is valid only for final-acceptance artifact production');
+    return undefined;
   }
-  const issueNumber = Number(value.issueNumber);
   const sourceRevision = String(value.sourceRevision ?? '').trim();
   const verdictUrl = String(value.verdictUrl ?? '').trim();
-  const verdictSha256 = String(value.verdictSha256 ?? '').trim().toLowerCase();
-  const verdictByteLength = Number(value.verdictByteLength);
-  const verdictFindingCount = Number(value.verdictFindingCount);
   const reason = String(value.reason ?? '').trim();
-  const canonicalRepository = authoritativeRepositoryFullName.trim();
-  if (!/^[^/\s]+\/[^/\s]+$/.test(canonicalRepository)) {
-    errors.push('operator adjudication authoritative repository must be owner/name');
-  }
-  if (!Number.isInteger(issueNumber) || issueNumber < 1) errors.push('operator adjudication issueNumber must be positive');
-  if (issueNumber !== authoritativeIssueNumber) {
-    errors.push('operator adjudication Issue does not match authoritative tier-intake Issue');
-  }
-  if (sourceRevision !== authoritativeSourceRevision) {
-    errors.push('operator adjudication revision does not match authoritative review episode');
-  }
-  if (!/^r[0-9]+$/.test(sourceRevision)) errors.push('operator adjudication sourceRevision must be rNN');
-  if (!/^[0-9a-f]{64}$/.test(verdictSha256)) errors.push('operator adjudication verdictSha256 must be 64 lowercase hex characters');
-  if (!Number.isInteger(verdictByteLength) || verdictByteLength < 0) errors.push('operator adjudication verdictByteLength must be non-negative');
-  if (!Number.isInteger(verdictFindingCount) || verdictFindingCount < 0) errors.push('operator adjudication verdictFindingCount must be non-negative');
-  if (!reason) errors.push('operator adjudication reason must be non-empty');
   const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)$/.exec(verdictUrl);
-  if (!match) {
-    errors.push('operator adjudication verdictUrl must be a canonical published Issue comment URL');
-  } else {
-    if (match[1]!.toLowerCase() !== canonicalRepository.toLowerCase()) {
-      errors.push('operator adjudication verdictUrl repository does not match authoritative repository');
-    }
-    if (Number(match[2]) !== issueNumber) {
-      errors.push('operator adjudication verdictUrl Issue does not match issueNumber');
-    }
-  }
-  if (errors.length !== errorCountBefore || !match) return null;
-  if (!transport) {
-    errors.push('operator adjudication published verdict transport is unavailable');
-    return null;
-  }
-
-  const repositoryFullName = canonicalRepository;
-  const commentId = match[3]!;
-  const response = transport.runGh([
-    'gh',
-    'api',
-    `repos/${repositoryFullName}/issues/comments/${commentId}`,
-  ]);
-  if (response.exitCode !== 0) {
-    errors.push('operator adjudication published verdict reference is unavailable');
-    return null;
-  }
-  let observed: unknown;
-  try {
-    observed = JSON.parse(response.stdout) as unknown;
-  } catch {
-    errors.push('operator adjudication published verdict reference is malformed');
-    return null;
-  }
-  if (!isRecord(observed)) {
-    errors.push('operator adjudication published verdict reference is incompletely observed');
-    return null;
-  }
-  const observedId = Number(observed.id);
-  const observedUrl = typeof observed.html_url === 'string' ? observed.html_url : '';
-  const observedIssueUrl = typeof observed.issue_url === 'string' ? observed.issue_url : '';
-  const authoritativeBody = typeof observed.body === 'string' ? observed.body : '';
-  const createdAt = typeof observed.created_at === 'string' ? observed.created_at : '';
-  const updatedAt = typeof observed.updated_at === 'string' ? observed.updated_at : '';
-  const user = isRecord(observed.user) ? observed.user : null;
-  const authorLogin = typeof user?.login === 'string' ? user.login : '';
-  const authorAssociation = typeof observed.author_association === 'string' ? observed.author_association : '';
-  if (
-    !Number.isInteger(observedId)
-    || !observedUrl
-    || !observedIssueUrl
-    || !authoritativeBody
-    || !createdAt
-    || !updatedAt
-    || !authorLogin
-    || !authorAssociation
-  ) {
-    errors.push('operator adjudication published verdict reference is incompletely observed');
-    return null;
-  }
-  const expectedIssueUrl = `https://api.github.com/repos/${repositoryFullName}/issues/${issueNumber}`;
-  if (observedId !== Number(commentId) || observedUrl !== verdictUrl || observedIssueUrl !== expectedIssueUrl) {
-    errors.push('operator adjudication published verdict reference identity is mismatched');
-  }
-  if (updatedAt !== createdAt) {
-    errors.push('operator adjudication published verdict reference was edited');
-  }
-  const parsed = parseCanonicalTerminalVerdict(authoritativeBody);
-  if (!parsed) {
-    errors.push('operator adjudication published verdict is not a canonical terminal verdict');
-  } else {
-    if (parsed.issueNumber !== issueNumber) errors.push('operator adjudication published verdict Issue is mismatched');
-    if (parsed.sourceRevision !== sourceRevision) errors.push('operator adjudication published verdict revision is mismatched');
-    if (parsed.findingCount !== verdictFindingCount) errors.push('operator adjudication published verdict finding count is mismatched');
-  }
-  const observedSha256 = createHash('sha256').update(authoritativeBody).digest('hex');
-  if (observedSha256 !== verdictSha256) errors.push('operator adjudication published verdict SHA-256 is mismatched');
-  if (Buffer.byteLength(authoritativeBody) !== verdictByteLength) errors.push('operator adjudication published verdict byte length is mismatched');
-  if (rawFindingCount(authoritativeBody) !== verdictFindingCount) errors.push('operator adjudication published verdict finding count is mismatched');
-  if (errors.length !== errorCountBefore) return null;
+  const errorCountBefore = errors.length;
+  if (!match) errors.push('operator verdict URL hint must be a canonical published Issue comment URL');
+  if (Number(value.issueNumber) !== issueNumber) errors.push('operator verdict URL hint Issue does not match tier-intake Issue');
+  if (!/^r[0-9]+$/.test(sourceRevision)) errors.push('operator verdict URL hint sourceRevision must be rNN');
+  if (!reason) errors.push('operator verdict URL hint reason must be non-empty');
+  if (match && match[1]!.toLowerCase() !== repositoryFullName.toLowerCase()) errors.push('operator verdict URL hint repository mismatch');
+  if (match && Number(match[2]) !== issueNumber) errors.push('operator verdict URL hint Issue mismatch');
+  if (!match || errors.length !== errorCountBefore) return undefined;
   return {
+    repositoryFullName,
     issueNumber,
     sourceRevision,
-    verdictUrl,
-    verdictSha256,
-    verdictByteLength,
-    verdictFindingCount,
+    commentId: Number(match[3]),
+    commentUrl: verdictUrl,
     reason,
-    repositoryFullName,
-    commentId,
-    authoritativeBody,
-    createdAt,
-    updatedAt,
-    authorLogin,
-    authorAssociation,
   };
 }
 
-function applyOperatorAcceptanceAdjudication(
-  context: OperatorAdjudicationContext | undefined,
-  invocation: JsonRecord,
-  capture: CaptureIdentityV1 | null,
-  captureText: string | null,
-  originalTransport: OperatorAdjudicationApplication['originalTransport'],
+function authenticatedGithubPrincipal(
+  transport: GhTransport,
   errors: string[],
 ): string | null {
-  if (!context || !capture || captureText === null) return null;
-  const errorCountBefore = errors.length;
-  const adjudication = context.adjudication;
-  if (
-    capture.sha256 !== adjudication.verdictSha256
-    || capture.byteLength !== adjudication.verdictByteLength
-    || capture.rawFindingCount !== adjudication.verdictFindingCount
-    || captureText !== adjudication.authoritativeBody
-  ) return null;
-  const parsed = parseCanonicalTerminalVerdict(captureText);
-  if (!parsed) {
-    errors.push('operator adjudication governed capture is not a canonical terminal verdict');
+  const response = transport.runGh(['gh', 'api', 'user', '--jq', '.login']);
+  if (response.exitCode !== 0) {
+    errors.push(temporaryError('provenance-unresolved', 'current authenticated GitHub principal could not be resolved'));
     return null;
   }
-  if (parsed.issueNumber !== adjudication.issueNumber) errors.push('operator adjudication Issue does not match governed capture');
-  if (parsed.sourceRevision !== adjudication.sourceRevision) errors.push('operator adjudication revision does not match governed capture');
-  if (parsed.sourceRevision !== invocation.sourceRevision) errors.push('operator adjudication revision does not match stage invocation');
-  if (parsed.findingCount !== adjudication.verdictFindingCount) errors.push('operator adjudication finding count does not match governed capture');
-  if (errors.length !== errorCountBefore) return null;
-  const invocationId = typeof invocation.invocationId === 'string' ? invocation.invocationId : '';
-  context.applications.push({ invocationId, originalTransport });
-  return `operator-adjudicated:sha256:${adjudication.verdictSha256}:issuecomment-${adjudication.commentId}`;
+  let login = response.stdout.trim();
+  if (login.startsWith('"')) {
+    try {
+      const parsed = JSON.parse(login) as unknown;
+      login = typeof parsed === 'string' ? parsed.trim() : '';
+    } catch {
+      login = '';
+    }
+  }
+  if (!login) {
+    errors.push(temporaryError('provenance-unresolved', 'current authenticated GitHub principal is empty or malformed'));
+    return null;
+  }
+  return login;
+}
+
+function parseAuthoritativeIssueComment(
+  raw: unknown,
+  label: string,
+  errors: string[],
+  unavailableClassification: AcceptanceArtifactTemporaryClassification = 'source-unavailable',
+): AuthoritativeIssueComment | null {
+  if (!isRecord(raw)) {
+    errors.push(temporaryError(unavailableClassification, `${label} is malformed`));
+    return null;
+  }
+  const user = isRecord(raw.user) ? raw.user : null;
+  const id = Number(raw.id);
+  const body = typeof raw.body === 'string' ? raw.body : null;
+  const createdAt = typeof raw.created_at === 'string' ? raw.created_at : null;
+  const updatedAt = typeof raw.updated_at === 'string' ? raw.updated_at : null;
+  const userLogin = typeof user?.login === 'string' && user.login.trim() !== '' ? user.login.trim() : null;
+  const htmlUrl = typeof raw.html_url === 'string' ? raw.html_url : null;
+  const issueUrl = typeof raw.issue_url === 'string' ? raw.issue_url : null;
+  if (!Number.isSafeInteger(id) || id < 1 || body === null || !createdAt || !updatedAt || !htmlUrl || !issueUrl) {
+    errors.push(temporaryError(unavailableClassification, `${label} lacks authoritative identity/source fields`));
+    return null;
+  }
+  return { id, body, createdAt, updatedAt, userLogin, htmlUrl, issueUrl };
+}
+
+function authoritativeIssueCommentCensus(
+  transport: GhTransport,
+  repositoryFullName: string,
+  issueNumber: number,
+  errors: string[],
+): AuthoritativeIssueCensus | null {
+  const parsedRepo = parseRepositoryFullName(repositoryFullName, errors);
+  if (!parsedRepo) return null;
+  const publisherLogin = authenticatedGithubPrincipal(transport, errors);
+  if (!publisherLogin) return null;
+  const comments: AuthoritativeIssueComment[] = [];
+  const pageSize = 100;
+  const maxPages = 100;
+  for (let page = 1; page <= maxPages; page += 1) {
+    const response = transport.runGh([
+      'gh',
+      'api',
+      `repos/${parsedRepo.fullName}/issues/${issueNumber}/comments?per_page=${pageSize}&page=${page}`,
+    ]);
+    if (response.exitCode !== 0) {
+      errors.push(temporaryError('source-unavailable', `Issue comment census failed on page ${page}`));
+      return null;
+    }
+    let rawPage: unknown;
+    try {
+      rawPage = JSON.parse(response.stdout) as unknown;
+    } catch {
+      errors.push(temporaryError('source-unavailable', `Issue comment census page ${page} is malformed JSON`));
+      return null;
+    }
+    if (!Array.isArray(rawPage)) {
+      errors.push(temporaryError('source-unavailable', `Issue comment census page ${page} is not an array`));
+      return null;
+    }
+    for (const [index, raw] of rawPage.entries()) {
+      const parsed = parseAuthoritativeIssueComment(raw, `Issue comment census page ${page} item ${index}`, errors);
+      if (!parsed) return null;
+      comments.push(parsed);
+    }
+    if (rawPage.length < pageSize) {
+      return { repositoryFullName: parsedRepo.fullName, issueNumber, publisherLogin, comments };
+    }
+  }
+  errors.push(temporaryError('source-unavailable', `Issue comment census exceeded ${maxPages} pages without proving completeness`));
+  return null;
+}
+
+function invocationRequiresAuthoritativeArtifact(invocation: JsonRecord): boolean {
+  return invocation.terminalClassification === 'complete' || invocation.sendCount === 1;
+}
+
+function expectedCaptureName(
+  stage: Exclude<ReviewStage, 'architectural-lens'>,
+  stageSequence: number,
+  reviewerSlot: string,
+): string {
+  const pass = String(stageSequence).padStart(2, '0');
+  return stage === 'competitive' || stage === 'architectural-review'
+    ? `pass-${pass}-${stage}-${reviewerSlot}.capture.txt`
+    : `pass-${pass}-architectural.capture.txt`;
+}
+
+function materializeAuthoritativeCapture(
+  reviewDir: string,
+  name: string,
+  text: string,
+  assertedCapturePath: unknown,
+  assertedIdentity: unknown,
+  captureTexts: Map<string, string>,
+  captureTimestamps: Map<string, number>,
+  errors: string[],
+): { capture: CaptureIdentityV1; path: string } | null {
+  const target = resolve(reviewDir, name);
+  if (assertedCapturePath !== undefined) {
+    const asserted = resolve(reviewDir, String(assertedCapturePath));
+    if (asserted !== target) {
+      errors.push(`authoritative artifact capturePath must resolve to canonical path ${target}`);
+      return null;
+    }
+  }
+  mkdirSync(reviewDir, { recursive: true });
+  if (existsSync(target)) {
+    let stat;
+    try { stat = lstatSync(target); } catch {
+      errors.push(temporaryError('observation-lost', `canonical capture became unreadable before verification: ${target}`));
+      return null;
+    }
+    if (!stat.isFile()) {
+      errors.push(`canonical capture target is not a regular file: ${target}`);
+      return null;
+    }
+    let existing: string;
+    try { existing = readFileSync(target, 'utf8'); } catch {
+      errors.push(temporaryError('observation-lost', `canonical capture could not be reread: ${target}`));
+      return null;
+    }
+    if (existing !== text) {
+      errors.push(`authoritative GitHub artifact conflicts with existing canonical capture: ${target}`);
+      return null;
+    }
+  } else {
+    const stagingDir = mkdtempSync(join(reviewDir, `.${name}.tmp-`));
+    const staged = join(stagingDir, name);
+    try {
+      writeFileSync(staged, text, { encoding: 'utf8', flag: 'wx' });
+      if (readFileSync(staged, 'utf8') !== text) {
+        errors.push(temporaryError('observation-lost', `authoritative capture staging bytes could not be verified: ${target}`));
+        return null;
+      }
+      try {
+        linkSync(staged, target);
+      } catch {
+        if (!existsSync(target)) {
+          errors.push(temporaryError('observation-lost', `authoritative capture atomic materialization failed before durable observation: ${target}`));
+          return null;
+        }
+        let raced: string;
+        try { raced = readFileSync(target, 'utf8'); } catch {
+          errors.push(temporaryError('observation-lost', `raced canonical capture could not be reread: ${target}`));
+          return null;
+        }
+        if (raced !== text) {
+          errors.push(`authoritative GitHub artifact conflicts with concurrently materialized canonical capture: ${target}`);
+          return null;
+        }
+      }
+    } finally {
+      rmSync(stagingDir, { recursive: true, force: true });
+    }
+  }
+  let verifiedText: string;
+  try { verifiedText = readFileSync(target, 'utf8'); } catch {
+    errors.push(temporaryError('observation-lost', `canonical capture was lost before final verification: ${target}`));
+    return null;
+  }
+  if (verifiedText !== text) {
+    errors.push(`canonical capture bytes do not equal authoritative GitHub artifact: ${target}`);
+    return null;
+  }
+  const digest = sha256(verifiedText);
+  const identity = captureIdentity(name, digest);
+  if (assertedIdentity !== undefined && assertedIdentity !== identity) {
+    errors.push(`capture identity assertion does not match authoritative bytes for ${target}`);
+    return null;
+  }
+  const capture: CaptureIdentityV1 = {
+    captureIdentity: identity,
+    name,
+    byteLength: Buffer.byteLength(verifiedText),
+    sha256: digest,
+    rawFindingCount: rawFindingCount(verifiedText),
+  };
+  captureTexts.set(identity, verifiedText);
+  try { captureTimestamps.set(identity, statSync(target).mtimeMs); } catch {
+    errors.push(temporaryError('observation-lost', `canonical capture could not be statted after materialization: ${target}`));
+    return null;
+  }
+  return { capture, path: target };
+}
+
+function expectedCommentUrl(repositoryFullName: string, issueNumber: number, commentId: number): string {
+  return `https://github.com/${repositoryFullName}/issues/${issueNumber}#issuecomment-${commentId}`;
+}
+
+function expectedIssueApiUrl(repositoryFullName: string, issueNumber: number): string {
+  return `https://api.github.com/repos/${repositoryFullName}/issues/${issueNumber}`;
+}
+
+function commentTargetsExpectedIssue(
+  comment: AuthoritativeIssueComment,
+  repositoryFullName: string,
+  issueNumber: number,
+): boolean {
+  return comment.htmlUrl === expectedCommentUrl(repositoryFullName, issueNumber, comment.id)
+    && comment.issueUrl === expectedIssueApiUrl(repositoryFullName, issueNumber);
+}
+
+function rereadAuthoritativeIssueComment(
+  context: ArtifactAuthorityContext,
+  censusComment: AuthoritativeIssueComment,
+  stage: Exclude<ReviewStage, 'architectural-lens'>,
+  sourceRevision: string,
+  invocationId: string,
+  errors: string[],
+): AuthoritativeIssueComment | null {
+  const response = context.transport.runGh([
+    'gh',
+    'api',
+    `repos/${context.census.repositoryFullName}/issues/comments/${censusComment.id}`,
+  ]);
+  if (response.exitCode !== 0) {
+    errors.push(temporaryError('source-unavailable', `authoritative reread failed for comment ${censusComment.id}`));
+    return null;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(response.stdout) as unknown;
+  } catch {
+    errors.push(temporaryError('source-unavailable', `authoritative reread for comment ${censusComment.id} is malformed JSON`));
+    return null;
+  }
+  const reread = parseAuthoritativeIssueComment(raw, `authoritative reread comment ${censusComment.id}`, errors);
+  if (!reread) return null;
+  if (!commentTargetsExpectedIssue(reread, context.census.repositoryFullName, context.census.issueNumber)) {
+    errors.push(`authoritative GitHub artifact target mismatch on reread: comment ${censusComment.id}`);
+    return null;
+  }
+  if (!reread.userLogin) {
+    errors.push(temporaryError('provenance-unresolved', `authoritative reread comment ${reread.id} has no comment-author login`));
+    return null;
+  }
+  if (!censusComment.userLogin) {
+    errors.push(temporaryError('provenance-unresolved', `authoritative census candidate ${censusComment.id} has no comment-author login`));
+    return null;
+  }
+  if (!sameGithubLogin(reread.userLogin, context.census.publisherLogin)) {
+    errors.push(`provenance-mismatch: authoritative comment ${reread.id} author ${reread.userLogin} does not equal authenticated principal ${context.census.publisherLogin}`);
+    return null;
+  }
+  if (reread.createdAt !== reread.updatedAt) {
+    errors.push(`authoritative GitHub artifact was edited: ${reread.htmlUrl}`);
+    return null;
+  }
+  if (!isCanonicalReviewerArtifact(
+    reread.body,
+    stage,
+    context.census.issueNumber,
+    sourceRevision,
+    invocationId,
+  )) {
+    const observedRevision = canonicalReviewerArtifactRevision(
+      reread.body,
+      stage,
+      context.census.issueNumber,
+      invocationId,
+    );
+    if (observedRevision) {
+      errors.push(`authoritative GitHub artifact revision mismatch: expected=${sourceRevision} observed=${observedRevision} comment=${reread.htmlUrl}`);
+    } else {
+      errors.push(`authoritative GitHub artifact is malformed or invocation-mismatched on reread: ${reread.htmlUrl}`);
+    }
+    return null;
+  }
+  if (
+    reread.id !== censusComment.id
+    || reread.body !== censusComment.body
+    || reread.createdAt !== censusComment.createdAt
+    || reread.updatedAt !== censusComment.updatedAt
+    || !sameGithubLogin(reread.userLogin, censusComment.userLogin)
+    || reread.htmlUrl !== censusComment.htmlUrl
+    || reread.issueUrl !== censusComment.issueUrl
+  ) {
+    errors.push(`authoritative GitHub artifact changed between complete census and reread: ${censusComment.htmlUrl}`);
+    return null;
+  }
+  return reread;
+}
+
+function resolveAuthoritativeArtifact(
+  context: ArtifactAuthorityContext,
+  reviewDir: string,
+  stage: Exclude<ReviewStage, 'architectural-lens'>,
+  stageSequence: number,
+  invocation: JsonRecord,
+  captureTexts: Map<string, string>,
+  captureTimestamps: Map<string, number>,
+  errors: string[],
+): AuthoritativeArtifactResolution | null {
+  const invocationId = optionalString(invocation.invocationId) ?? '';
+  const sourceRevision = optionalString(invocation.sourceRevision) ?? '';
+  const reviewerSlot = optionalString(invocation.reviewerSlot) ?? '';
+  if (!invocationId || !sourceRevision || !reviewerSlot) return null;
+  const invocationCandidates = context.census.comments.flatMap((comment) => {
+    if (!commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)) return [];
+    const observedRevision = canonicalReviewerArtifactRevision(
+      comment.body,
+      stage,
+      context.census.issueNumber,
+      invocationId,
+    );
+    return observedRevision ? [{ comment, observedRevision }] : [];
+  });
+  const principalCandidates = invocationCandidates.filter(({ comment }) => (
+    comment.userLogin !== null && sameGithubLogin(comment.userLogin, context.census.publisherLogin)
+  ));
+  const sameRevisionCandidates = invocationCandidates.filter(({ observedRevision }) => observedRevision === sourceRevision);
+  const matches = principalCandidates.filter(({ observedRevision }) => observedRevision === sourceRevision);
+  if (matches.length === 0) {
+    if (sameRevisionCandidates.some(({ comment }) => comment.userLogin === null)) {
+      errors.push(temporaryError(
+        'provenance-unresolved',
+        `invocation ${invocationId} canonical artifact candidate has no authoritative comment-author login`,
+      ));
+      return null;
+    }
+    if (principalCandidates.length > 0) {
+      const observedRevisions = [...new Set(principalCandidates.map(({ observedRevision }) => observedRevision))].sort();
+      errors.push(
+        `authoritative GitHub artifact revision mismatch: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} invocationId=${invocationId} expected=${sourceRevision} observed=${observedRevisions.join(',')}`,
+      );
+      return null;
+    }
+    if (invocationCandidates.length > 0) {
+      const observedAuthors = [...new Set(invocationCandidates.map(({ comment }) => comment.userLogin ?? '<missing>'))].sort();
+      errors.push(
+        `provenance-mismatch: invocation ${invocationId} canonical artifact author(s) ${observedAuthors.join(',')} do not equal authenticated principal ${context.census.publisherLogin}`,
+      );
+      return null;
+    }
+    errors.push(
+      `authoritative GitHub artifact absent after complete census: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} sourceRevision=${sourceRevision} invocationId=${invocationId} source=GitHub-Issue-comments`,
+    );
+    return null;
+  }
+  if (matches.length !== 1) {
+    const identities = matches.map(({ comment }) => `${comment.id}:${comment.htmlUrl}`).join(', ');
+    errors.push(temporaryError(
+      'identity-unresolved',
+      `invocation ${invocationId} resolved to ${matches.length} canonical principal-owned Issue comments: ${identities}`,
+    ));
+    return null;
+  }
+  const censusComment = matches[0]!.comment;
+  if (censusComment.createdAt !== censusComment.updatedAt) {
+    errors.push(`authoritative GitHub artifact was edited: ${censusComment.htmlUrl}`);
+    return null;
+  }
+  const hint = context.operatorHint;
+  if (hint && stage === 'architectural') {
+    if (
+      hint.sourceRevision !== sourceRevision
+      || hint.commentId !== censusComment.id
+      || hint.commentUrl !== censusComment.htmlUrl
+    ) {
+      errors.push('operator verdict URL hint does not identify the uniquely resolved canonical invocation artifact');
+      return null;
+    }
+  }
+  const comment = rereadAuthoritativeIssueComment(
+    context,
+    censusComment,
+    stage,
+    sourceRevision,
+    invocationId,
+    errors,
+  );
+  if (!comment) return null;
+  const name = expectedCaptureName(stage, stageSequence, reviewerSlot);
+  const materialized = materializeAuthoritativeCapture(
+    reviewDir,
+    name,
+    comment.body,
+    invocation.capturePath,
+    invocation.captureIdentity,
+    captureTexts,
+    captureTimestamps,
+    errors,
+  );
+  if (!materialized) return null;
+  return {
+    capture: materialized.capture,
+    captureText: comment.body,
+    capturePath: materialized.path,
+    authority: {
+      kind: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
+      repositoryFullName: context.census.repositoryFullName,
+      issueNumber: context.census.issueNumber,
+      commentId: comment.id,
+      commentUrl: comment.htmlUrl,
+      publisherLogin: comment.userLogin!,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+    },
+  };
 }
 
 function readClaudeProducerEvidence(
@@ -598,137 +998,65 @@ function readTurnResultForInvocation(
   capture: CaptureIdentityV1 | null,
   captureText: string | null,
   errors: string[],
-  operatorContext?: OperatorAdjudicationContext,
+  artifactBacked: boolean,
 ): string | null {
-  if (invocation.terminalClassification !== 'complete') return null;
+  const transportClassification = invocation.terminalClassification;
+  if (transportClassification !== 'complete' && !artifactBacked) return null;
   const label = `stage evidence invocation[${index}]`;
-  const pathErrors: string[] = [];
-  const turnResultPath = requiredString(invocation.turnResultPath, `${label}.turnResultPath`, pathErrors);
+  const turnResultPath = optionalString(invocation.turnResultPath);
   if (!turnResultPath) {
-    const adjudicated = applyOperatorAcceptanceAdjudication(
-      operatorContext,
-      invocation,
-      capture,
-      captureText,
-      {
-        state: 'absent',
-        terminalClassification: String(invocation.terminalClassification ?? ''),
-        ...(Number.isInteger(invocation.sendCount) ? { sendCount: Number(invocation.sendCount) } : {}),
-        ...(typeof invocation.terminalResultIdentity === 'string'
-? { terminalResultIdentity: invocation.terminalResultIdentity }
-: {}),
-      },
-      errors,
-    );
-    if (adjudicated) return adjudicated;
-    errors.push(...pathErrors);
+    if (transportClassification === 'complete') errors.push(`${label}.turnResultPath is missing`);
     return null;
   }
   const resolved = resolve(dirname(evidencePath), turnResultPath);
   let stat;
-  try {
-    stat = lstatSync(resolved);
-  } catch {
-    const adjudicated = applyOperatorAcceptanceAdjudication(
-      operatorContext,
-      invocation,
-      capture,
-      captureText,
-      {
-        state: 'absent',
-        terminalClassification: String(invocation.terminalClassification ?? ''),
-        turnResultPath: resolved,
-        ...(Number.isInteger(invocation.sendCount) ? { sendCount: Number(invocation.sendCount) } : {}),
-        ...(typeof invocation.terminalResultIdentity === 'string'
-? { terminalResultIdentity: invocation.terminalResultIdentity }
-: {}),
-      },
-      errors,
-    );
-    if (adjudicated) return adjudicated;
-    errors.push(`missing turn-result/v1 artifact for ${label}: ${resolved}`);
+  try { stat = lstatSync(resolved); } catch {
+    if (transportClassification === 'complete') errors.push(`missing turn-result/v1 artifact for ${label}: ${resolved}`);
     return null;
   }
   if (!stat.isFile()) {
-    errors.push(`turn-result/v1 artifact for ${label} is not a regular file: ${resolved}`);
+    if (transportClassification === 'complete') errors.push(`turn-result/v1 artifact for ${label} is not a regular file: ${resolved}`);
     return null;
   }
   let text: string;
-  try {
-    text = readFileSync(resolved, 'utf8');
-  } catch {
-    errors.push(`unable to read turn-result/v1 artifact for ${label}: ${resolved}`);
+  try { text = readFileSync(resolved, 'utf8'); } catch {
+    if (transportClassification === 'complete') errors.push(`unable to read turn-result/v1 artifact for ${label}: ${resolved}`);
     return null;
   }
   let value: unknown;
-  try {
-    value = JSON.parse(text) as unknown;
-  } catch {
-    errors.push(`turn-result/v1 artifact for ${label} is malformed: ${resolved}`);
+  try { value = JSON.parse(text) as unknown; } catch {
+    if (transportClassification === 'complete') errors.push(`turn-result/v1 artifact for ${label} is malformed: ${resolved}`);
     return null;
   }
   if (!isRecord(value) || value.schema !== TURN_RESULT_SCHEMA) {
-    errors.push(`turn-result/v1 artifact for ${label} has an invalid schema: ${resolved}`);
+    if (transportClassification === 'complete') errors.push(`turn-result/v1 artifact for ${label} has an invalid schema: ${resolved}`);
     return null;
   }
   const stateValid = TURN_STATES.includes(value.state as (typeof TURN_STATES)[number]);
   if (!stateValid) {
-    errors.push(`turn-result/v1 artifact for ${label} has an invalid state: ${resolved}`);
-  } else if (value.state !== 'ok' && !operatorContext) {
+    if (transportClassification === 'complete') errors.push(`turn-result/v1 artifact for ${label} has an invalid state: ${resolved}`);
+    return null;
+  }
+  if (transportClassification === 'complete' && value.state !== 'ok') {
     errors.push(`turn-result/v1 artifact for ${label} is not a successful terminal result: ${resolved}`);
   }
+  const invocationMatches = value.invocation_id === invocation.invocationId;
+  if (!invocationMatches) errors.push(`turn-result/v1 artifact for ${label} invocation_id does not match stage evidence: ${resolved}`);
+  if (value.send_count !== undefined) {
+    if ((value.send_count !== 0 && value.send_count !== 1) || Number(value.send_count) !== Number(invocation.sendCount)) {
+      errors.push(`turn-result/v1 artifact for ${label}.send_count does not match stage evidence: ${resolved}`);
+    }
+  }
+  const identity = turnResultIdentity(basename(resolved), sha256(text));
+  if (invocation.terminalResultIdentity !== undefined && invocation.terminalResultIdentity !== identity) {
+    errors.push(`stage evidence ${label}.terminalResultIdentity is not derived from the referenced turn-result: ${resolved}`);
+  }
+  if (transportClassification !== 'complete') return identity;
+
   const terminalFieldsValid = typeof value.scope === 'string'
     && typeof value.cause === 'string'
     && typeof value.configured_profile_key === 'string';
-  if (!terminalFieldsValid) {
-    errors.push(`turn-result/v1 artifact for ${label} is missing required terminal fields: ${resolved}`);
-  }
-  const invocationMatches = value.invocation_id === invocation.invocationId;
-  if (!invocationMatches) {
-    errors.push(`turn-result/v1 artifact for ${label} invocation_id does not match stage evidence: ${resolved}`);
-  }
-  const identity = turnResultIdentity(basename(resolved), sha256(text));
-  if (stateValid && value.state !== 'ok' && terminalFieldsValid && invocationMatches) {
-    const invocationSendCount = Number(invocation.sendCount);
-    let originalSendCount = invocationSendCount;
-    let sendCountMatches = true;
-    if (value.send_count !== undefined) {
-      if (value.send_count !== 0 && value.send_count !== 1) {
-        errors.push(`turn-result/v1 artifact for ${label}.send_count must be 0 or 1: ${resolved}`);
-        sendCountMatches = false;
-      } else if (Number(value.send_count) !== invocationSendCount) {
-        errors.push(`turn-result/v1 artifact for ${label}.send_count does not match stage evidence: ${resolved}`);
-        sendCountMatches = false;
-      } else {
-        originalSendCount = Number(value.send_count);
-      }
-    }
-    const adjudicated = sendCountMatches
-      ? applyOperatorAcceptanceAdjudication(
-          operatorContext,
-          invocation,
-          capture,
-          captureText,
-          {
-            state: String(value.state),
-            scope: String(value.scope),
-            cause: String(value.cause),
-            terminalClassification: String(invocation.terminalClassification ?? ''),
-            turnResultPath: resolved,
-            sendCount: originalSendCount,
-            terminalResultIdentity: identity,
-          },
-          errors,
-        )
-      : null;
-    if (adjudicated) {
-      if (invocation.terminalResultIdentity !== identity) {
-        errors.push(`stage evidence ${label}.terminalResultIdentity is not derived from the referenced turn-result: ${resolved}`);
-      }
-    } else {
-      errors.push(`turn-result/v1 artifact for ${label} is not a successful terminal result: ${resolved}`);
-    }
-  }
+  if (!terminalFieldsValid) errors.push(`turn-result/v1 artifact for ${label} is missing required terminal fields: ${resolved}`);
   const output = isRecord(value.output) ? value.output : null;
   if (
     !output
@@ -743,9 +1071,7 @@ function readTurnResultForInvocation(
   const reviewerSourceKind = reviewerSource?.kind;
   const directSuccess = reviewerSourceKind === 'service-observed-issue-comment/v1';
   const directFailure = reviewerSourceKind === 'failed-write-final-assistant/v1';
-  const frozenPolicy = parseReviewerSourcePolicy(
-    typeof invocation.reviewerSource === 'string' ? invocation.reviewerSource : '',
-  )?.capturePolicy;
+  const frozenPolicy = parseReviewerSourcePolicy(optionalString(invocation.reviewerSource) ?? '')?.capturePolicy;
   if (frozenPolicy === 'direct-publication/v1' && !directSuccess && !directFailure) {
     errors.push(`turn-result/v1 artifact for ${label} direct-publication policy requires terminal reviewer_source metadata: ${resolved}`);
   }
@@ -792,9 +1118,6 @@ function readTurnResultForInvocation(
   } else if (!directSuccess && !directFailure && capture && output && (Number(output.byte_length) !== capture.byteLength || output.sha256 !== capture.sha256)) {
     errors.push(`turn-result/v1 artifact for ${label} output does not match capture bytes: ${resolved}`);
   }
-  if (invocation.terminalResultIdentity !== identity) {
-    errors.push(`stage evidence ${label}.terminalResultIdentity is not derived from the referenced turn-result: ${resolved}`);
-  }
   return identity;
 }
 
@@ -814,9 +1137,7 @@ function captureFromEvidence(
     return null;
   }
   let text: string;
-  try {
-    text = readFileSync(resolved, 'utf8');
-  } catch {
+  try { text = readFileSync(resolved, 'utf8'); } catch {
     errors.push(`unable to read capture file: ${resolved}`);
     return null;
   }
@@ -824,9 +1145,7 @@ function captureFromEvidence(
   const digest = sha256(text);
   const identity = captureIdentity(name, digest);
   captureTexts.set(identity, text);
-  try {
-    captureTimestamps.set(identity, statSync(resolved).mtimeMs);
-  } catch {
+  try { captureTimestamps.set(identity, statSync(resolved).mtimeMs); } catch {
     errors.push(`unable to stat capture file: ${resolved}`);
     return null;
   }
@@ -868,6 +1187,33 @@ function assertDerived(
   if (value !== undefined && value !== expected) errors.push(`${label} is not canonical; expected ${expected}`);
 }
 
+function requiredFinalSlots(raw: JsonRecord): string[] {
+  if (isRecord(raw.reviewLane) && Array.isArray(raw.reviewLane.finalRequiredSlots)) {
+    const slots = raw.reviewLane.finalRequiredSlots.filter((slot): slot is string => typeof slot === 'string' && /^\d{2}$/.test(slot));
+    if (slots.length > 0) return slots;
+  }
+  const cardinality = Number(raw.reviewerCardinality);
+  return Number.isInteger(cardinality) && cardinality > 0
+    ? Array.from({ length: cardinality }, (_, index) => String(index + 1).padStart(2, '0'))
+    : [];
+}
+
+function finalCredentialingCaptures(
+  invocations: readonly ReviewerInvocationEnvelopeV1[],
+  requiredSlots: readonly string[],
+): CaptureIdentityV1[] | null {
+  const captures: CaptureIdentityV1[] = [];
+  for (const slot of requiredSlots) {
+    const final = invocations
+      .filter((invocation) => invocation.reviewerSlot === slot)
+      .sort((left, right) => left.attemptOrdinal - right.attemptOrdinal)
+      .at(-1);
+    if (!final?.capture || (final.terminalClassification !== 'complete' && !final.artifactAuthority)) return null;
+    captures.push(final.capture);
+  }
+  return captures;
+}
+
 function buildReceipt(
   evidencePath: string,
   raw: JsonRecord,
@@ -877,7 +1223,7 @@ function buildReceipt(
   captureTexts: Map<string, string>,
   captureTimestamps: Map<string, number>,
   errors: string[],
-  operatorContext?: OperatorAdjudicationContext,
+  artifactContext?: ArtifactAuthorityContext,
 ): ProducedStageReceipt | null {
   if (raw.schema !== STAGE_EVIDENCE_SCHEMA) {
     errors.push(`stage evidence has unknown schema: ${evidencePath}`);
@@ -917,13 +1263,32 @@ function buildReceipt(
         errors.push(`stage evidence invocation[${index}] must be an object`);
         continue;
       }
-      if (value.capture !== undefined) errors.push(`stage evidence invocation[${index}] capture must be derived from capturePath`);
-      if (value.terminalClassification === 'complete' && value.capturePath === undefined) {
+      if (value.capture !== undefined) errors.push(`stage evidence invocation[${index}] capture must be derived from source bytes`);
+      const browserStage = reviewerStage(stage);
+      const artifactRequired = browserStage !== null && invocationRequiresAuthoritativeArtifact(value);
+      let artifactResolution: AuthoritativeArtifactResolution | null = null;
+      if (artifactRequired) {
+        if (!artifactContext || browserStage === null) {
+          errors.push(temporaryError('source-unavailable', `authoritative GitHub artifact census unavailable for invocation ${String(value.invocationId ?? index)}`));
+        } else {
+          artifactResolution = resolveAuthoritativeArtifact(
+            artifactContext,
+            dirname(evidencePath),
+            browserStage,
+            sequence,
+            value,
+            captureTexts,
+            captureTimestamps,
+            errors,
+          );
+        }
+      }
+      if (!artifactRequired && value.terminalClassification === 'complete' && value.capturePath === undefined) {
         errors.push(`missing capture file evidence for completed invocation[${index}]`);
       }
-      const capture = value.capturePath === undefined
+      const capture = artifactResolution?.capture ?? (value.capturePath === undefined
         ? null
-        : captureFromEvidence(evidencePath, value.capturePath, value.captureIdentity, captureTexts, captureTimestamps, errors);
+        : captureFromEvidence(evidencePath, value.capturePath, value.captureIdentity, captureTexts, captureTimestamps, errors));
       if (capture) captures.push(capture);
       const validatedTerminalResultIdentity = readTurnResultForInvocation(
         evidencePath,
@@ -932,29 +1297,25 @@ function buildReceipt(
         capture,
         capture ? captureTexts.get(capture.captureIdentity) ?? null : null,
         errors,
-        operatorContext,
-      );
+        Boolean(artifactResolution),
+      ) ?? undefined;
       assertDerived(value.reviewEpisodeId, episodeId, `invocation[${index}].reviewEpisodeId`, errors);
       if (receiptPolicyVersion !== null) {
         const invocation = buildInvocation(
-          validatedTerminalResultIdentity
-            ? { ...value, terminalResultIdentity: validatedTerminalResultIdentity }
-            : value,
+          value,
           index,
           {
             reviewEpisodeId: episodeId,
             stageAttemptId,
             policyVersion: receiptPolicyVersion,
             reviewerCardinality: Number(raw.reviewerCardinality),
-            cardinalityConfigIdentity: requiredString(
-              raw.cardinalityConfigIdentity,
-              'stage evidence.cardinalityConfigIdentity',
-              errors,
-            ),
+            cardinalityConfigIdentity: requiredString(raw.cardinalityConfigIdentity, 'stage evidence.cardinalityConfigIdentity', errors),
             stage,
             sourceRevision,
           },
           capture ?? undefined,
+          artifactResolution?.authority,
+          validatedTerminalResultIdentity,
           errors,
         );
         if (invocation) invocations.push(invocation);
@@ -979,6 +1340,16 @@ function buildReceipt(
     }
   }
 
+  const browserCredentialing = stage === 'architectural-lens'
+    ? null
+    : finalCredentialingCaptures(invocations, requiredFinalSlots(raw));
+  const derivedOutcome: StageCompletenessReceiptV1['outcome'] = browserCredentialing
+    ? 'complete'
+    : raw.outcome as StageCompletenessReceiptV1['outcome'];
+  const credentialingCaptures = stage === 'architectural-lens'
+    ? (raw.outcome === 'complete' ? captures : [])
+    : (browserCredentialing ?? []);
+
   const receipt: ProducedStageReceipt = {
     schema: 'stage-completeness-receipt/v1',
     tier,
@@ -997,13 +1368,14 @@ function buildReceipt(
     sourceRevision,
     cycleId,
     cycleBinding: cycleBinding as { cycleId: string; sourceRevision: string; boundBeforeLaunch: true },
-    outcome: raw.outcome as StageCompletenessReceiptV1['outcome'],
+    outcome: derivedOutcome,
     revisionChecks: raw.revisionChecks as StageCompletenessReceiptV1['revisionChecks'],
     settlement: raw.settlement as StageCompletenessReceiptV1['settlement'],
     ...(invocations.length > 0 ? { invocations } : {}),
     ...(claude ? { claude: claude as unknown as StageCompletenessReceiptV1['claude'] } : {}),
-    credentialingCaptures: raw.outcome === 'complete' ? captures : [],
+    credentialingCaptures,
     relayEligibleCaptures: captures,
+    ...(isRecord(raw.reviewLane) ? { reviewLane: raw.reviewLane as unknown as StageCompletenessReceiptV1['reviewLane'] } : {}),
   };
   return receipt;
 }
@@ -1131,12 +1503,8 @@ function resolveCanonicalStageEvidencePaths(
   const unexpected = requestedPaths
     .map((path) => resolve(path))
     .filter((path) => !canonicalSet.has(path));
-  if (missing.length > 0) {
-    errors.push(`--stage-evidence omitted canonical stage evidence files: ${missing.join(', ')}`);
-  }
-  if (unexpected.length > 0) {
-    errors.push(`--stage-evidence includes files outside the canonical review directory: ${[...new Set(unexpected)].join(', ')}`);
-  }
+  if (missing.length > 0) errors.push(`--stage-evidence omitted canonical stage evidence files: ${missing.join(', ')}`);
+  if (unexpected.length > 0) errors.push(`--stage-evidence includes files outside the canonical review directory: ${[...new Set(unexpected)].join(', ')}`);
   return missing.length === 0 && unexpected.length === 0 ? canonicalPaths : null;
 }
 
@@ -1159,17 +1527,13 @@ function publishArtifactSet(
   const stagingDir = mkdtempSync(join(parentDir, `.${basename(outputDir)}.tmp-`));
   const movedTargets: string[] = [];
   try {
-    for (const file of files) {
-      writeFileSync(join(stagingDir, file), contents.get(file) ?? '');
-    }
+    for (const file of files) writeFileSync(join(stagingDir, file), contents.get(file) ?? '');
     mkdirSync(outputDir, { recursive: true });
     for (const file of files) {
       const target = join(outputDir, file);
       if (existsSync(target)) {
         const targetStat = lstatSync(target);
-        if (!targetStat.isFile()) {
-          throw new Error(`cannot replace non-file artifact target: ${target}`);
-        }
+        if (!targetStat.isFile()) throw new Error(`cannot replace non-file artifact target: ${target}`);
         unlinkSync(target);
       }
       renameSync(join(stagingDir, file), target);
@@ -1177,11 +1541,7 @@ function publishArtifactSet(
     }
   } catch (error) {
     for (const target of movedTargets.reverse()) {
-      try {
-        unlinkSync(target);
-      } catch {
-        // Preserve the original publication failure.
-      }
+      try { unlinkSync(target); } catch { /* Preserve original publication failure. */ }
     }
     throw error;
   } finally {
@@ -1189,11 +1549,16 @@ function publishArtifactSet(
   }
 }
 
+function stageInputsRequireAuthoritativeCensus(values: readonly JsonRecord[]): boolean {
+  return values.some((stage) => Array.isArray(stage.invocations)
+    && stage.invocations.some((invocation) => isRecord(invocation) && invocationRequiresAuthoritativeArtifact(invocation)));
+}
+
 export function produceAcceptanceArtifacts(
   options: ProduceAcceptanceArtifactsOptions,
 ): AcceptanceArtifactResult {
   const outputDir = options.outputDir ?? options.reviewDir;
-  if (!options.operatorAdjudication) invalidateOutputArtifacts(outputDir);
+  invalidateOutputArtifacts(outputDir);
   const errors: string[] = [];
   const intake = loadTierIntake(options.tierIntakePath, errors);
   const taskIdentity = intake && requiredString(intake.taskIdentity, 'tier-intake.taskIdentity', errors);
@@ -1201,49 +1566,68 @@ export function produceAcceptanceArtifacts(
   if (!intake || !taskIdentity || !episodeFirstRevision) {
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)] };
   }
-  let operatorAdjudication: NormalizedOperatorAcceptanceAdjudication | null = null;
-  if (options.operatorAdjudication) {
-    const taskIssueMatch = /^issue:([1-9][0-9]*)$/.exec(taskIdentity);
-    if (!taskIssueMatch) {
-      errors.push('operator adjudication requires an authoritative tier-intake Issue identity');
-    } else {
-      operatorAdjudication = normalizeOperatorAcceptanceAdjudication(
-        options.operatorAdjudication,
-        options.phase,
-        options.operatorReferenceTransport ?? defaultGhTransport(),
-        options.repositoryFullName ?? 'chetwerikoff/orchestrator-pack',
-        Number(taskIssueMatch[1]),
-        episodeFirstRevision,
-        errors,
-      );
-    }
-    if (!operatorAdjudication) {
-      return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)] };
-    }
-    invalidateOutputArtifacts(outputDir);
-  }
-  const operatorContext = operatorAdjudication
-    ? { adjudication: operatorAdjudication, applications: [] } satisfies OperatorAdjudicationContext
-    : undefined;
   const episodeId = deriveReviewEpisodeId(taskIdentity, episodeFirstRevision);
-  const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(
-    options.reviewDir,
-    options.stageEvidencePaths,
-    errors,
-  );
+  const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(options.reviewDir, options.stageEvidencePaths, errors);
   if (canonicalStageEvidencePaths === null) {
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)], reviewEpisodeId: episodeId };
   }
+  const stageInputs = canonicalStageEvidencePaths.map((path) => {
+    const value = readJson(path, 'stage evidence', errors);
+    return { path, value: isRecord(value) ? value : null };
+  });
+  const validStageInputs = stageInputs.filter((entry): entry is { path: string; value: JsonRecord } => entry.value !== null);
+  const taskIssueMatch = /^issue:([1-9][0-9]*)$/.exec(taskIdentity);
+  const repositoryFullName = options.repositoryFullName ?? 'chetwerikoff/orchestrator-pack';
+  let artifactContext: ArtifactAuthorityContext | undefined;
+  if (stageInputsRequireAuthoritativeCensus(validStageInputs.map((entry) => entry.value))) {
+    if (!taskIssueMatch) {
+      errors.push('authoritative GitHub artifact acceptance requires tier-intake taskIdentity issue:<N>');
+    } else {
+      const issueNumber = Number(taskIssueMatch[1]);
+      const operatorHint = normalizeOperatorNarrowingHint(
+        options.operatorAdjudication,
+        options.phase,
+        repositoryFullName,
+        issueNumber,
+        errors,
+      );
+      const transport = options.artifactSourceTransport ?? options.operatorReferenceTransport ?? defaultGhTransport();
+      const census = errors.length === 0
+        ? authoritativeIssueCommentCensus(transport, repositoryFullName, issueNumber, errors)
+        : null;
+      if (census) artifactContext = { transport, census, ...(operatorHint ? { operatorHint } : {}) };
+    }
+  } else if (options.operatorAdjudication) {
+    errors.push('operator verdict URL hint cannot create an acceptance path when no invocation requires authoritative artifact resolution');
+  }
+  if (errors.length > 0) {
+    const temporary = temporaryClassification(errors);
+    return {
+      ok: false,
+      outputDir,
+      files: [],
+      missing: [],
+      errors: [...new Set(errors)],
+      reviewEpisodeId: episodeId,
+      ...(temporary ? { temporary } : {}),
+    };
+  }
+
   const captureTexts = new Map<string, string>();
   const captureTimestamps = new Map<string, number>();
-  const receipts = canonicalStageEvidencePaths
-    .map((path) => {
-      const value = readJson(path, 'stage evidence', errors);
-      return isRecord(value)
-        ? buildReceipt(path, value, taskIdentity, episodeFirstRevision, episodeId, captureTexts, captureTimestamps, errors, operatorContext)
-        : null;
-    })
-    .filter((r): r is ProducedStageReceipt => r !== null)
+  const receipts = validStageInputs
+    .map(({ path, value }) => buildReceipt(
+      path,
+      value,
+      taskIdentity,
+      episodeFirstRevision,
+      episodeId,
+      captureTexts,
+      captureTimestamps,
+      errors,
+      artifactContext,
+    ))
+    .filter((receipt): receipt is ProducedStageReceipt => receipt !== null)
     .sort((left, right) => left.stageSequence - right.stageSequence);
   const tier = receipts[0]?.tier;
   const cycleIds = new Set(receipts.map((receipt) => receipt.cycleId));
@@ -1265,12 +1649,9 @@ export function produceAcceptanceArtifacts(
   const captures = receipts.flatMap((receipt) => receipt.relayEligibleCaptures);
   const relay = relayEvidence(episodeId, captures);
   const ledger = buildLedger(options.authorDispositionsPath, captures, errors);
-  const claudeProducerEvidence = (options.claudeProducerEvidencePaths ?? [])
-    .flatMap((path) => readClaudeProducerEvidence(path, errors));
+  const claudeProducerEvidence = (options.claudeProducerEvidencePaths ?? []).flatMap((path) => readClaudeProducerEvidence(path, errors));
   const requiresClaudeProducerEvidence = tier === 'T3' && receipts.some((receipt) => (
-    receipt.stage === 'architectural-lens'
-    && isRecord(receipt.claude)
-    && receipt.claude.kind === 'capture'
+    receipt.stage === 'architectural-lens' && isRecord(receipt.claude) && receipt.claude.kind === 'capture'
   ));
   if (requiresClaudeProducerEvidence && (options.claudeProducerEvidencePaths ?? []).length === 0) {
     errors.push(`missing ${CLAUDE_PRODUCER_EVIDENCE_SCHEMA} input for T3 architectural-lens capture: --claude-producer-evidence <path>`);
@@ -1303,9 +1684,7 @@ export function produceAcceptanceArtifacts(
       receipt.settlement.allLaunchedTerminal === true
       && (receipt.invocations ?? []).every((invocation) => invocation.terminal === true)
     ));
-    if (!stageTerminalConfirmed) {
-      errors.push('stage evidence does not prove terminal settlement for every launched invocation');
-    }
+    if (!stageTerminalConfirmed) errors.push('stage evidence does not prove terminal settlement for every launched invocation');
     if (settlementsValid) {
       const ledgerResult = checkFindingLedgerGuard(
         captures.map((capture) => captureTexts.get(capture.captureIdentity) ?? ''),
@@ -1313,7 +1692,7 @@ export function produceAcceptanceArtifacts(
         {
           reviewEconomics: true,
           phase: options.phase ?? 'final-acceptance',
-          issueRevision: episodeFirstRevision,
+          issueRevision: receipts.at(-1)?.sourceRevision ?? episodeFirstRevision,
           stageTerminalConfirmed,
           stageReceipts: receipts,
           verifiedRelayEvidence: relay,
@@ -1328,11 +1707,17 @@ export function produceAcceptanceArtifacts(
       if (!ledgerResult.ok) errors.push(...ledgerResult.errors);
     }
   }
-  if (operatorContext && operatorContext.applications.length !== 1) {
-    errors.push(`operator adjudication must match exactly one absent or non-ok terminal invocation; matched ${operatorContext.applications.length}`);
-  }
   if (errors.length > 0 || !ledger || !tier) {
-    return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)], reviewEpisodeId: episodeId };
+    const temporary = temporaryClassification(errors);
+    return {
+      ok: false,
+      outputDir,
+      files: [],
+      missing: [],
+      errors: [...new Set(errors)],
+      reviewEpisodeId: episodeId,
+      ...(temporary ? { temporary } : {}),
+    };
   }
 
   const files = [
@@ -1342,36 +1727,13 @@ export function produceAcceptanceArtifacts(
   const manifest = {
     schema: ARTIFACT_MANIFEST_SCHEMA,
     reviewEpisodeId: episodeId,
+    acceptanceBasis: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
     files,
     derivedFrom: {
       tierIntake: resolve(options.tierIntakePath),
       stageEvidence: canonicalStageEvidencePaths.map((path) => resolve(path)),
       authorDispositions: resolve(options.authorDispositionsPath),
     },
-    ...(operatorContext && operatorContext.applications[0] ? {
-      operatorAdjudication: {
-        provenance: 'operator_adjudicated',
-        target: {
-repositoryFullName: operatorContext.adjudication.repositoryFullName,
-issueNumber: operatorContext.adjudication.issueNumber,
-sourceRevision: operatorContext.adjudication.sourceRevision,
-invocationId: (operatorContext.applications[0] as OperatorAdjudicationApplication).invocationId,
-        },
-        reference: {
-url: operatorContext.adjudication.verdictUrl,
-commentId: operatorContext.adjudication.commentId,
-sha256: operatorContext.adjudication.verdictSha256,
-byteLength: operatorContext.adjudication.verdictByteLength,
-findingCount: operatorContext.adjudication.verdictFindingCount,
-createdAt: operatorContext.adjudication.createdAt,
-updatedAt: operatorContext.adjudication.updatedAt,
-authorLogin: operatorContext.adjudication.authorLogin,
-authorAssociation: operatorContext.adjudication.authorAssociation,
-        },
-        reason: operatorContext.adjudication.reason,
-        originalTransport: (operatorContext.applications[0] as OperatorAdjudicationApplication).originalTransport,
-      },
-    } : {}),
   };
   const artifactContents = new Map<string, string>();
   receipts.forEach((receipt) => artifactContents.set(
@@ -1403,13 +1765,10 @@ export function inspectAcceptanceArtifacts(
 ): AcceptanceArtifactStatus {
   const present: string[] = [];
   const missing: AcceptanceArtifactMissingInput[] = [];
-  let operatorContext: OperatorAdjudicationContext | undefined;
   const outputDir = options.outputDir ?? options.reviewDir;
   const requireRegularFile = (path: string, artifact: string, reason: string): boolean => {
     let stat;
-    try {
-      stat = lstatSync(path);
-    } catch {
+    try { stat = lstatSync(path); } catch {
       missing.push({ artifact, reason: reason + ': ' + path });
       return false;
     }
@@ -1422,9 +1781,7 @@ export function inspectAcceptanceArtifacts(
   };
   const readArtifactJson = (path: string, artifact: string, reason: string): unknown | null => {
     if (!requireRegularFile(path, artifact, reason)) return null;
-    try {
-      return JSON.parse(readFileSync(path, 'utf8')) as unknown;
-    } catch {
+    try { return JSON.parse(readFileSync(path, 'utf8')) as unknown; } catch {
       missing.push({ artifact, reason: artifact + ' is malformed JSON: ' + path });
       return null;
     }
@@ -1436,28 +1793,6 @@ export function inspectAcceptanceArtifacts(
   const intake = readArtifactJson(options.tierIntakePath, 'tier-intake/v1', 'tier intake evidence is missing');
   if (!isRecord(intake) || intake.schema !== 'tier-intake/v1') {
     addInvalid('tier-intake/v1', options.tierIntakePath, 'tier intake evidence is malformed');
-  } else if (options.operatorAdjudication) {
-    const taskIdentity = typeof intake.taskIdentity === 'string' ? intake.taskIdentity.trim() : '';
-    const firstRevision = typeof intake.firstRevision === 'string' ? intake.firstRevision.trim() : '';
-    const taskIssueMatch = /^issue:([1-9][0-9]*)$/.exec(taskIdentity);
-    const operatorErrors: string[] = [];
-    if (!taskIssueMatch || !firstRevision) {
-      operatorErrors.push('operator adjudication requires an authoritative tier-intake Issue identity');
-    } else {
-      const operatorAdjudication = normalizeOperatorAcceptanceAdjudication(
-        options.operatorAdjudication,
-        options.phase,
-        options.operatorReferenceTransport ?? defaultGhTransport(),
-        options.repositoryFullName ?? 'chetwerikoff/orchestrator-pack',
-        Number(taskIssueMatch[1]),
-        firstRevision,
-        operatorErrors,
-      );
-      if (operatorAdjudication) {
-        operatorContext = { adjudication: operatorAdjudication, applications: [] };
-      }
-    }
-    for (const error of operatorErrors) missing.push({ artifact: 'operator adjudication', reason: error });
   }
   const dispositions = readArtifactJson(options.authorDispositionsPath, 'author dispositions', 'author disposition evidence is missing');
   if (!isRecord(dispositions) || dispositions.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(dispositions.findings)) {
@@ -1465,17 +1800,9 @@ export function inspectAcceptanceArtifacts(
   }
 
   const coverageErrors: string[] = [];
-  const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(
-    options.reviewDir,
-    options.stageEvidencePaths,
-    coverageErrors,
-  );
-  for (const error of coverageErrors) {
-    missing.push({ artifact: 'stage-completeness-receipt/v1', reason: error });
-  }
-  if (options.stageEvidencePaths.length === 0) {
-    missing.push({ artifact: 'stage-completeness-receipt/v1', reason: 'no recorded stage evidence paths were supplied' });
-  }
+  const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(options.reviewDir, options.stageEvidencePaths, coverageErrors);
+  for (const error of coverageErrors) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: error });
+  if (options.stageEvidencePaths.length === 0) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: 'no recorded stage evidence paths were supplied' });
   const stageEvidencePaths = canonicalStageEvidencePaths ?? options.stageEvidencePaths;
   const stageReceiptNames: string[] = [];
   const completedStages = new Set<ReviewStage>();
@@ -1489,66 +1816,47 @@ export function inspectAcceptanceArtifacts(
     }
     const stageTier = reviewTier(value.tier);
     const stage = reviewStage(value.stage);
-    if (stageTier && evidenceTier && stageTier !== evidenceTier) {
-      missing.push({ artifact: 'stage-completeness-receipt', reason: 'stage evidence mixes tier values: ' + path });
-    } else if (stageTier) {
-      evidenceTier = stageTier;
-    }
-    if (stage && value.outcome === 'complete') completedStages.add(stage);
+    if (stageTier && evidenceTier && stageTier !== evidenceTier) missing.push({ artifact: 'stage-completeness-receipt', reason: 'stage evidence mixes tier values: ' + path });
+    else if (stageTier) evidenceTier = stageTier;
+    const invocations = Array.isArray(value.invocations) ? value.invocations.filter(isRecord) : [];
+    const potentiallyArtifactComplete = stage !== 'architectural-lens'
+      && invocations.length > 0
+      && invocations.every((invocation) => invocation.terminal === true && (invocation.terminalClassification === 'complete' || invocationRequiresAuthoritativeArtifact(invocation)));
+    if (stage && (value.outcome === 'complete' || potentiallyArtifactComplete)) completedStages.add(stage);
     const stageAttemptId = typeof value.stageAttemptId === 'string' ? value.stageAttemptId.trim() : '';
-    if (isSafeFileComponent(stageAttemptId)) {
-      stageReceiptNames.push(stageCompletenessReceiptFileName(stageAttemptId));
-    } else {
-      missing.push({ artifact: 'stage-completeness-receipt', reason: 'stage evidence has no safe stageAttemptId: ' + path });
-    }
-    const captureTexts = new Map<string, string>();
-    const captureTimestamps = new Map<string, number>();
+    if (isSafeFileComponent(stageAttemptId)) stageReceiptNames.push(stageCompletenessReceiptFileName(stageAttemptId));
+    else missing.push({ artifact: 'stage-completeness-receipt', reason: 'stage evidence has no safe stageAttemptId: ' + path });
+
     if (Array.isArray(value.invocations)) {
       for (const [index, invocation] of value.invocations.entries()) {
         if (!isRecord(invocation)) {
           missing.push({ artifact: 'stage evidence', reason: 'stage evidence invocation[' + index + '] must be an object: ' + path });
           continue;
         }
-        if (invocation.terminalClassification === 'complete' && invocation.capturePath === undefined) {
-          missing.push({
-            artifact: 'capture',
-            reason: 'completed invocation[' + index + '] is missing capturePath: ' + path,
-          });
+        const transportComplete = invocation.terminalClassification === 'complete';
+        if (transportComplete && invocation.capturePath === undefined) {
+          missing.push({ artifact: 'capture', reason: 'completed invocation[' + index + '] is missing capturePath: ' + path });
         }
-        const captureErrors: string[] = [];
-        const capture = invocation.capturePath === undefined
-          ? null
-          : captureFromEvidence(path, invocation.capturePath, invocation.captureIdentity, captureTexts, captureTimestamps, captureErrors);
-        for (const error of captureErrors) missing.push({ artifact: 'capture', reason: error });
-        const turnResultErrors: string[] = [];
-        readTurnResultForInvocation(
-          path,
-          invocation,
-          index,
-          capture,
-          capture ? captureTexts.get(capture.captureIdentity) ?? null : null,
-          turnResultErrors,
-operatorContext,
-        );
-        for (const error of turnResultErrors) missing.push({ artifact: 'turn-result/v1', reason: error });
+        if (transportComplete && invocation.capturePath !== undefined) {
+          const captureErrors: string[] = [];
+          const captureTexts = new Map<string, string>();
+          const captureTimestamps = new Map<string, number>();
+          const capture = captureFromEvidence(path, invocation.capturePath, invocation.captureIdentity, captureTexts, captureTimestamps, captureErrors);
+          for (const error of captureErrors) missing.push({ artifact: 'capture', reason: error });
+          const turnResultErrors: string[] = [];
+          readTurnResultForInvocation(path, invocation, index, capture, capture ? captureTexts.get(capture.captureIdentity) ?? null : null, turnResultErrors, false);
+          for (const error of turnResultErrors) missing.push({ artifact: 'turn-result/v1', reason: error });
+        }
       }
     } else if (value.stage !== 'architectural-lens') {
       missing.push({ artifact: 'stage evidence', reason: 'stage evidence.invocations is missing: ' + path });
     }
-    if (
-      value.tier === 'T3'
-      && value.stage === 'architectural-lens'
-      && isRecord(value.claude)
-      && value.claude.kind === 'capture'
-    ) {
+    if (value.tier === 'T3' && value.stage === 'architectural-lens' && isRecord(value.claude) && value.claude.kind === 'capture') {
       requiresClaudeProducerEvidence = true;
     }
     if (isRecord(value.claude)) {
       if (value.claude.kind === 'capture' && value.claude.capturePath === undefined) {
-        missing.push({
-          artifact: 'capture',
-          reason: 'Claude capture branch is missing capturePath: ' + path,
-        });
+        missing.push({ artifact: 'capture', reason: 'Claude capture branch is missing capturePath: ' + path });
       } else if (value.claude.capturePath !== undefined) {
         const capturePath = resolve(dirname(path), String(value.claude.capturePath));
         requireRegularFile(capturePath, 'capture', 'Claude capture is missing; stage evidence names a capture that is not present');
@@ -1559,39 +1867,17 @@ operatorContext,
   if (evidenceTier) {
     const requiredStages = expectedStages(evidenceTier, options.phase ?? 'final-acceptance');
     for (const stage of requiredStages) {
-      if (!completedStages.has(stage)) {
-        missing.push({
-          artifact: 'stage-completeness-receipt',
-          reason: 'missing completed stage evidence for ' + stage + ' at ' + (options.phase ?? 'final-acceptance'),
-        });
-      }
+      if (!completedStages.has(stage)) missing.push({ artifact: 'stage-completeness-receipt', reason: 'missing completed stage evidence for ' + stage + ' at ' + (options.phase ?? 'final-acceptance') });
     }
   }
 
   const claudeProducerEvidencePaths = options.claudeProducerEvidencePaths ?? [];
-  for (const path of claudeProducerEvidencePaths) {
-    readArtifactJson(path, CLAUDE_PRODUCER_EVIDENCE_SCHEMA, 'Claude producer evidence is missing');
-  }
+  for (const path of claudeProducerEvidencePaths) readArtifactJson(path, CLAUDE_PRODUCER_EVIDENCE_SCHEMA, 'Claude producer evidence is missing');
   if (requiresClaudeProducerEvidence && claudeProducerEvidencePaths.length === 0) {
-    missing.push({
-      artifact: CLAUDE_PRODUCER_EVIDENCE_SCHEMA,
-      reason: 'T3 architectural-lens capture requires --claude-producer-evidence <path>',
-    });
+    missing.push({ artifact: CLAUDE_PRODUCER_EVIDENCE_SCHEMA, reason: 'T3 architectural-lens capture requires --claude-producer-evidence <path>' });
   }
 
-  if (operatorContext && operatorContext.applications.length !== 1) {
-    missing.push({
-      artifact: 'operator adjudication',
-      reason: `operator adjudication must match exactly one absent or non-ok terminal invocation; matched ${operatorContext.applications.length}`,
-    });
-  }
-
-  const expectedOutputNames = [
-    ...new Set([
-      ...stageReceiptNames,
-      ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
-    ]),
-  ];
+  const expectedOutputNames = [...new Set([...stageReceiptNames, ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES])];
   const outputValues = new Map<string, unknown>();
   for (const name of expectedOutputNames) {
     const artifact = name.startsWith('stage-completeness-receipt-')
@@ -1615,48 +1901,34 @@ operatorContext,
     }
   }
   const relay = outputValues.get('verified-relay-evidence.json');
-  if (relay !== undefined && !Array.isArray(relay)) {
-    addInvalid('verified-relay-evidence', join(outputDir, 'verified-relay-evidence.json'), 'verified relay evidence is malformed');
-  }
+  if (relay !== undefined && !Array.isArray(relay)) addInvalid('verified-relay-evidence', join(outputDir, 'verified-relay-evidence.json'), 'verified relay evidence is malformed');
   const ledger = outputValues.get('finding-disposition-ledger.json');
-  if (
-    ledger !== undefined
-    && (!isRecord(ledger) || ledger.version !== 2 || !isRecord(ledger.counts) || !Array.isArray(ledger.findings))
-  ) {
+  if (ledger !== undefined && (!isRecord(ledger) || ledger.version !== 2 || !isRecord(ledger.counts) || !Array.isArray(ledger.findings))) {
     addInvalid('finding-disposition-ledger', join(outputDir, 'finding-disposition-ledger.json'), 'finding disposition ledger is malformed');
   }
   const inventory = outputValues.get('review-episode-inventory.json');
-  if (
-    inventory !== undefined
-    && (!isRecord(inventory)
-      || inventory.source !== 'canonical-review-directory'
-      || typeof inventory.taskIdentity !== 'string'
-      || typeof inventory.episodeFirstRevision !== 'string'
-      || typeof inventory.reviewEpisodeId !== 'string'
-      || !Array.isArray(inventory.stageReceiptIds))
-  ) {
+  if (inventory !== undefined && (!isRecord(inventory)
+    || inventory.source !== 'canonical-review-directory'
+    || typeof inventory.taskIdentity !== 'string'
+    || typeof inventory.episodeFirstRevision !== 'string'
+    || typeof inventory.reviewEpisodeId !== 'string'
+    || !Array.isArray(inventory.stageReceiptIds))) {
     addInvalid('review-episode-inventory', join(outputDir, 'review-episode-inventory.json'), 'review episode inventory is malformed');
   }
   const manifest = outputValues.get('acceptance-artifacts.json');
   if (!isRecord(manifest) || manifest.schema !== ARTIFACT_MANIFEST_SCHEMA || !Array.isArray(manifest.files)) {
     addInvalid('acceptance-artifacts', join(outputDir, 'acceptance-artifacts.json'), 'acceptance artifact manifest is malformed');
   } else {
-    if (operatorContext) {
-      const provenance = isRecord(manifest.operatorAdjudication) ? manifest.operatorAdjudication : null;
-      if (!provenance || provenance.provenance !== 'operator_adjudicated') {
-        addInvalid('operator adjudication', join(outputDir, 'acceptance-artifacts.json'), 'operator-adjudicated provenance is missing');
-      }
-    } else if (manifest.operatorAdjudication !== undefined) {
-      addInvalid('operator adjudication', join(outputDir, 'acceptance-artifacts.json'), 'operator provenance requires the direct operator input');
+    if (manifest.acceptanceBasis !== AUTHORITATIVE_GITHUB_ARTIFACT_BASIS) {
+      addInvalid('acceptance-artifacts', join(outputDir, 'acceptance-artifacts.json'), 'acceptanceBasis must be authoritative-github-artifact');
+    }
+    if (manifest.operatorAdjudication !== undefined) {
+      addInvalid('acceptance-artifacts', join(outputDir, 'acceptance-artifacts.json'), 'operator adjudication is not an acceptance authority');
     }
     const declared = new Set(manifest.files.filter((value): value is string => typeof value === 'string'));
     const expected = new Set(expectedOutputNames);
-    for (const name of expected) {
-      if (!declared.has(name)) missing.push({ artifact: 'acceptance-artifacts', reason: 'manifest omits required artifact ' + name + ': ' + join(outputDir, 'acceptance-artifacts.json') });
-    }
-    for (const name of declared) {
-      if (!expected.has(name)) missing.push({ artifact: 'acceptance-artifacts', reason: 'manifest names unexpected artifact ' + name + ': ' + join(outputDir, 'acceptance-artifacts.json') });
-    }
+    for (const name of expected) if (!declared.has(name)) missing.push({ artifact: 'acceptance-artifacts', reason: 'manifest omits required artifact ' + name + ': ' + join(outputDir, 'acceptance-artifacts.json') });
+    for (const name of declared) if (!expected.has(name)) missing.push({ artifact: 'acceptance-artifacts', reason: 'manifest names unexpected artifact ' + name + ': ' + join(outputDir, 'acceptance-artifacts.json') });
   }
   return { ok: missing.length === 0, present, missing };
 }
