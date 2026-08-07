@@ -32,5 +32,5 @@
     "scripts/refresh-vitest-runtime-history.ps1",
     "scripts/vitest-runtime-history.json"
   ],
-  "source_revision": "90c6a738ad85e078bf8af83da8c8aee212d7aec2"
+  "source_revision": "669d9d2b19807dc0bda1beed17a105242084b7f6"
 }
