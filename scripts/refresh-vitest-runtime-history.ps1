@@ -31,6 +31,18 @@ $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $historyFile = if ($HistoryPath) { $HistoryPath } else { Join-Path $RepoRoot 'scripts/vitest-runtime-history.json' }
 $refreshScript = Join-Path $PSScriptRoot 'refresh-vitest-runtime-history.mjs'
 
+$supplementalTuple = [ordered]@{
+    SupplementalReportsDir = -not [string]::IsNullOrWhiteSpace($SupplementalReportsDir)
+    SupplementalSourceSha = -not [string]::IsNullOrWhiteSpace($SupplementalSourceSha)
+    SupplementalRunId = -not [string]::IsNullOrWhiteSpace($SupplementalRunId)
+    SupplementalRunAttempt = -not [string]::IsNullOrWhiteSpace($SupplementalRunAttempt)
+}
+$supplementalCount = @($supplementalTuple.Values | Where-Object { $_ }).Count
+if ($supplementalCount -ne 0 -and $supplementalCount -ne 4) {
+    throw 'SupplementalReportsDir, SupplementalSourceSha, SupplementalRunId, and SupplementalRunAttempt must be supplied together'
+}
+$hasSupplemental = $supplementalCount -eq 4
+
 function Sync-RemoteRuntimeHistoryBase {
     git -C $RepoRoot fetch origin main | Out-Host
     if ($LASTEXITCODE -ne 0) {
@@ -55,10 +67,7 @@ function Invoke-RuntimeHistoryRefresh {
         '--repo-root', $RepoRoot,
         '--history-path', $historyFile
     )
-    if ($SupplementalReportsDir -or $SupplementalSourceSha) {
-        if (-not $SupplementalReportsDir -or -not $SupplementalSourceSha -or -not $SupplementalRunId -or -not $SupplementalRunAttempt) {
-            throw 'SupplementalReportsDir, SupplementalSourceSha, SupplementalRunId, and SupplementalRunAttempt must be supplied together'
-        }
+    if ($hasSupplemental) {
         $args += @(
             '--supplemental-reports-dir', $SupplementalReportsDir,
             '--supplemental-source-sha', $SupplementalSourceSha,
