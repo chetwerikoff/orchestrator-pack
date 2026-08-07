@@ -4,7 +4,7 @@
 #>
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
-. (Join-Path $PSScriptRoot 'Review-RunLiveness.ps1')
+. (Join-Path $PSScriptRoot 'Review-RecoveryPaths.ps1')
 
 $Script:AutonomousReviewRetryCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/autonomous-review-retry.mjs'
 $Script:PostRunRetryLedgerCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/post-run-retry-ledger.mjs'

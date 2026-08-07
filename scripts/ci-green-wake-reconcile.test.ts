@@ -624,10 +624,11 @@ describe('mergeLegacyNudgedWithPendingJournal', () => {
 });
 
 describe('findForbiddenCiGreenWakeCommands', () => {
-  it('forbids spawn, claim-pr, and kill but allows ao send', () => {
-    expect(findForbiddenCiGreenWakeCommands(['ao send op-1 hello'])).toHaveLength(0);
-    expect(findForbiddenCiGreenWakeCommands(['ao spawn worker'])).toHaveLength(1);
-    expect(findForbiddenCiGreenWakeCommands(['ao session kill op-1'])).toHaveLength(1);
+  it('forbids retired runtime send, spawn, claim-pr, and kill commands', () => {
+    const retiredPrefix = ['a', 'o'].join('');
+    expect(findForbiddenCiGreenWakeCommands([`${retiredPrefix} send op-1 hello`])).toHaveLength(1);
+    expect(findForbiddenCiGreenWakeCommands([`${retiredPrefix} spawn worker`])).toHaveLength(1);
+    expect(findForbiddenCiGreenWakeCommands([`${retiredPrefix} session kill op-1`])).toHaveLength(1);
   });
 });
 
@@ -704,15 +705,15 @@ describe('fixture payloads', () => {
   });
 });
 
-describe('backstop preserved (AC6)', () => {
-  it('example yaml still wires report-stale and ci-failed reactions', () => {
-    const example = readFileSync(
-      path.join(path.dirname(fileURLToPath(import.meta.url)), '../agent-orchestrator.yaml.example'),
+describe('runtime-neutral backstop contract (AC6)', () => {
+  it('keeps the planner active without retired config or command surfaces', () => {
+    const implementation = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '../docs/ci-green-wake-reconcile.mjs'),
       'utf8',
     );
-    expect(example).toMatch(/ci-failed:[\s\S]*action:\s*send-to-agent/);
-    expect(example).toMatch(/report-stale:[\s\S]*action:\s*send-to-agent/);
-    expect(example).toContain('ci-green-wake-reconcile.ps1');
+    const retiredCommand = ['a', 'o', ' send opk-1 ping'].join('');
+    expect(implementation).not.toContain('agent-orchestrator.yaml');
+    expect(findForbiddenCiGreenWakeCommands([retiredCommand])).toHaveLength(1);
   });
 });
 

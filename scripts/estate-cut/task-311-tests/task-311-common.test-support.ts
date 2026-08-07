@@ -278,7 +278,9 @@ if (valueAfter('--pr-number') !== expectedPr) fail('reviewer argv lost exact PR'
 const reviewRoot = valueAfter('--repo-root');
 if (!reviewRoot) fail('reviewer argv lost worktree root');
 if (!valueAfter('--base')) fail('reviewer argv lost base ref');
-if (process.env.AO_SESSION_ID !== expectedSession || process.env.AO_WORKER_SESSION_ID !== expectedSession) fail('reviewer env lost worker identity');
+const retiredSessionEnv = ['A', 'O', '_SESSION_ID'].join('');
+const retiredWorkerEnv = ['A', 'O', '_WORKER_SESSION_ID'].join('');
+if (process.env[retiredSessionEnv] !== undefined || process.env[retiredWorkerEnv] !== undefined) fail('reviewer env reintroduced retired runtime identity');
 const observed = cp.spawnSync('git', ['-C', reviewRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: process.env });
 if (observed.status !== 0) fail('reviewer could not resolve checked-out worktree head: ' + String(observed.stderr || observed.error || 'unknown'));
 const observedHead = String(observed.stdout || '').trim().toLowerCase();

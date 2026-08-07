@@ -97,12 +97,13 @@ if (-not $SkipPester) {
     else {
         Import-Module Pester -MinimumVersion 5.0.0 -ErrorAction Stop
 
-        # #1248 r12: keep tests/** untouched while no longer discovering suites bound
-        # exclusively to the intentionally deleted PowerShell owner-chain runtime.
+        # #1248 r12 / #1352 r07: keep tests/** untouched while no longer discovering
+        # suites bound exclusively to intentionally deleted runtime owner chains.
         $retiredPesterSuitePaths = @(
             (Join-Path $Root 'tests/powershell/Issue748.RefreshConcurrency.Tests.ps1')
             (Join-Path $Root 'tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1')
             (Join-Path $Root 'tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1')
+            (Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1')
             (Join-Path $Root 'scripts/review-trigger-reconcile-worker-selected.Tests.ps1')
             (Join-Path $Root 'scripts/review-trigger-reconcile-worker-status.Tests.ps1')
             (Join-Path $Root 'scripts/review-trigger-reconcile.Tests.ps1')

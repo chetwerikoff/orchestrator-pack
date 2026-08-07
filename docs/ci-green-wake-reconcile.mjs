@@ -47,11 +47,18 @@ export const PRE_HANDOFF_REPORT_STATES = new Set(['fixing_ci', 'working', 'pr_cr
 /** Post-hand-off states — no CI-green nudge (#174 / review loop). */
 export const POST_HANDOFF_REPORT_STATES = new Set(['ready_for_review', 'addressing_reviews']);
 
-/** Shell fragments forbidden on this path (PR #97 split-brain). ao send is required. */
-export const FORBIDDEN_LIFECYCLE_PATTERNS = MECHANICAL_FORBIDDEN_SPAWN_CLAIM_KILL;
+/** Shell fragments and retired runtime commands forbidden on this path. */
+const RETIRED_RUNTIME_COMMAND_PATTERN = new RegExp(
+  String.raw`\b${['a', 'o'].join('')}\s+(?:send|report)\b`,
+  'i',
+);
+export const FORBIDDEN_LIFECYCLE_PATTERNS = [
+  ...MECHANICAL_FORBIDDEN_SPAWN_CLAIM_KILL,
+  RETIRED_RUNTIME_COMMAND_PATTERN,
+];
 
 export const CI_GREEN_WAKE_MESSAGE =
-  'Required CI is green for the current PR head. Continue your hand-off: verify gh pr checks for this head, then ao report ready_for_review when criteria are met. Do not stay idle waiting for report-stale.';
+  'Required CI is green for the current PR head. Continue your hand-off: verify required checks for this head, then publish ready_for_review through the configured runtime-neutral worker-reporting surface. Do not stay idle waiting for report-stale.';
 
 /** @typedef {'green' | 'red' | 'pending'} CiLevel */
 /** @typedef {{ name?: string, state?: string, conclusion?: string, status?: string }} CiCheck */

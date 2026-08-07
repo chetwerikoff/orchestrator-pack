@@ -2,6 +2,7 @@
 
 . (Join-Path $PSScriptRoot 'QuotedProcessArguments.ps1')
 . (Join-Path $PSScriptRoot 'OpkVitestChildProcessEnv.ps1')
+. (Join-Path $PSScriptRoot 'Review-RecoveryPaths.ps1')
 
 function Get-ReviewFailureEvidenceOutputTailLimit {
     $default = 8192

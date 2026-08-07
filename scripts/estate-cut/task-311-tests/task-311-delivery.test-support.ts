@@ -678,8 +678,6 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
         ...process.env,
         OPK_REVIEW_RUN_ID: M1Run.id,
         PACK_REVIEW_RUN_ID: M1Run.id,
-        AO_SESSION_ID: M1Run.linkedSessionId,
-        AO_WORKER_SESSION_ID: M1Run.linkedSessionId,
       },
       inheritParentEnv: false,
       encoding: 'utf8',

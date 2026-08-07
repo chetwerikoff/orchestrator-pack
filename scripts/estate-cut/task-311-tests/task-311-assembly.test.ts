@@ -27,6 +27,7 @@ import {
 } from '../../lib/github-review-reconciliation.js';
 import {
   getPackReviewRun,
+  packReviewLogsDir,
   updatePackReviewRun,
 } from '../../lib/pack-review-run-store.js';
 import { runClaimMatrix } from './task-311-claim.test-support.js';
@@ -424,7 +425,17 @@ async function runRunnerSubject(
   const result = faults.reviewerRootOverride
     ? await runPackReviewEntryWithReviewerRootOverride(entryOptions, faults.reviewerRootOverride)
     : await runPackReviewEntry(entryOptions);
-  invariant(result.ok === true && result.created === true, `real runner subject failed: ${String(result.reason)}`);
+  const failedRunId = String(result.runId ?? '');
+  const reviewerStderrPath = failedRunId
+    ? path.join(packReviewLogsDir(storeRoot), `${failedRunId}.stderr.log`)
+    : '';
+  const reviewerStderr = reviewerStderrPath && existsSync(reviewerStderrPath)
+    ? readFileSync(reviewerStderrPath, 'utf8').trim()
+    : '';
+  invariant(
+    result.ok === true && result.created === true,
+    `real runner subject failed: ${String(result.reason)}${reviewerStderr ? `\nREVIEWER STDERR:\n${reviewerStderr}` : ''}`,
+  );
   const runId = String(result.runId);
   const run = getPackReviewRun(runId, { projectId, storeRoot });
   invariant(run, 'runner returned missing run');

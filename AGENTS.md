@@ -170,7 +170,7 @@ status evidence.
 
 On supported hosts with pack `scripts/` on `PATH`, GitHub reads MUST go through the
 tracked `scripts/gh` transport using inventory-listed canonical forms. Agents MUST
-NOT improvise raw `curl` calls to `api.github.com`, `gh api graphql`, temporary
+NOT improvise raw `curl` calls to `api.github.com`, ad hoc GitHub CLI GraphQL calls, temporary
 GitHub wrappers such as `/tmp/gh-rest-bin/gh`, or environment manipulation that
 bypasses the tracked transport.
 

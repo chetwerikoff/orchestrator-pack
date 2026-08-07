@@ -201,7 +201,7 @@ describe('[AC4][AC6] estate successor state', () => {
       (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)
       || (CUTOVER_ROWS as readonly string[]).includes(row.path),
     );
-    expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-16-cutover-6' });
+    expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-15-cutover-6' });
     const byPath = new Map((manifest.rows ?? []).map((row) => [row.path, row]));
     for (const file of CUTOVER_ROWS) {
       expect(byPath.get(file)).toMatchObject({ terminalState: 'cutover-terminalized', replacementOwner: 'scripts/orchestrator-cutover-activate.ts' });

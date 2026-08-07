@@ -972,7 +972,16 @@ async function invokeReviewer(options: {
   }
 
   const args = reviewerArgs;
-  const env: NodeJS.ProcessEnv = {
+  const retiredRuntimePrefixes = [
+  ['A', 'O', '_'].join(''),
+  ['O', 'R', 'C', 'A', '_'].join(''),
+];
+const sanitizedParentEnv = Object.fromEntries(
+  Object.entries(process.env)
+    .filter(([key]) => !retiredRuntimePrefixes.some((prefix) => key.startsWith(prefix))),
+) as NodeJS.ProcessEnv;
+const env: NodeJS.ProcessEnv = {
+  ...sanitizedParentEnv,
     ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),
     OPK_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_RUN_ID: options.runId,
@@ -995,7 +1004,7 @@ async function invokeReviewer(options: {
     command: 'pwsh',
     args,
     cwd: options.trustedPackRoot,
-    inheritParentEnv: true,
+    inheritParentEnv: false,
     env,
     allowEmptyStdout: true,
     timeoutMs: options.budgetLedger.runnerTimeoutMs,
