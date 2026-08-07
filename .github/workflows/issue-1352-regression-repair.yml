@@ -35,11 +35,11 @@ jobs:
             ),
             (
               """marker = \"\"\"    const sessions = [liveWorker('opk-rebind', 719)];\n    const store = seedStore({ sessionId: 'opk-rebind', prNumber: 11, headSha: 'old11' });\n\"\"\"""",
-              """marker = \"\"\"    const sessions = [liveWorker('opk-rebind', 719)];\n\"\"\"""",
+              """marker = \"\"\"  it('push-register treats indeterminate same-session rebind as collision', () => {\n\"\"\"""",
             ),
             (
               """marker = \"\"\"    const sessions = [liveWorker('opk-rebind-terminal', 719)];\n    const store = seedStore({ sessionId: 'opk-rebind-terminal', prNumber: 11, headSha: 'old11' });\n\"\"\"""",
-              """marker = \"\"\"    const sessions = [liveWorker('opk-rebind-terminal', 719)];\n\"\"\"""",
+              """marker = \"\"\"  it('push-register supersedes terminal same-session rebind via prior-pr lookup', () => {\n\"\"\"""",
             ),
           ]
           for old, new in replacements:
