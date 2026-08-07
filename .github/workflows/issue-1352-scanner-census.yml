@@ -1,0 +1,56 @@
+name: issue-1352-scanner-census
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    if: github.event.pull_request.head.ref == 'agent/issue-1352-scanner-census' && github.event.pull_request.base.ref == 'agent/issue-1352-hard-cut'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-1352-hard-cut
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Capture scanner JSON and summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts > "$RUNNER_TEMP/runtime-retirement-census.json" || true
+          node --input-type=module - "$RUNNER_TEMP/runtime-retirement-census.json" <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const path = process.argv[2];
+          const result = JSON.parse(readFileSync(path, 'utf8'));
+          const bySurface = Object.entries(result.violations.reduce((acc, row) => {
+            acc[row.surfaceId] = (acc[row.surfaceId] ?? 0) + 1;
+            return acc;
+          }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+          const byPath = Object.entries(result.violations.reduce((acc, row) => {
+            acc[row.path] = (acc[row.path] ?? 0) + 1;
+            return acc;
+          }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+          const summary = {
+            scannedFileCount: result.scannedFileCount,
+            violationCount: result.violations.length,
+            uniquePathCount: byPath.length,
+            bySurface,
+            byPath,
+          };
+          writeFileSync(process.env.RUNNER_TEMP + '/runtime-retirement-summary.json', JSON.stringify(summary, null, 2) + '\n');
+          console.log(JSON.stringify({ ...summary, byPath: byPath.slice(0, 40) }, null, 2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-1352-runtime-retirement-census
+          path: |
+            ${{ runner.temp }}/runtime-retirement-census.json
+            ${{ runner.temp }}/runtime-retirement-summary.json
+          retention-days: 1
