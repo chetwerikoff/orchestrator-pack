@@ -852,12 +852,12 @@ describe('Issue #1377 long-running child abandonment proof', () => {
       },
     });
     expect(code).toBe(1);
-    expect(connect).not.toHaveBeenCalled();
-    expect(enumeratePages).not.toHaveBeenCalled();
-    expect(readUserMessages).not.toHaveBeenCalled();
-    expect(stop).not.toHaveBeenCalled();
-    expect(owned.close).not.toHaveBeenCalled();
-    expect(sibling.close).not.toHaveBeenCalled();
+    expect(connect).toHaveBeenCalledTimes(0);
+    expect(enumeratePages).toHaveBeenCalledTimes(0);
+    expect(readUserMessages).toHaveBeenCalledTimes(0);
+    expect(stop).toHaveBeenCalledTimes(0);
+    expect(owned.close).toHaveBeenCalledTimes(0);
+    expect(sibling.close).toHaveBeenCalledTimes(0);
     const envelope = readTerminalEnvelope(paths.envelope);
     expect(envelope).toMatchObject({
       incident: 'child_stdout_eof_timeout',
