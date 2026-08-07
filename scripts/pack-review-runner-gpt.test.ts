@@ -235,6 +235,7 @@ describe('Issue #1341 operator-only pack-review start', () => {
         'source-02': [{ stdout: successfulCleanReviewPayload('inv-1341-source-02') }],
         'source-03': [{ stdout: successfulCleanReviewPayload('inv-1341-source-03') }],
       },
+      fixtureReviewStdout: successfulCleanReviewPayload('inv-1341-fallback'),
       fixtureRequiredStatusWriter: async () => {},
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
       ...overrides,
