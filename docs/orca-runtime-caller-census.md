@@ -32,7 +32,7 @@ Worktree lifecycle remains the deliberate narrower exception documented in `docs
 | `scripts/runtime/single-instance-lease.ts` | singleton lease | `already-runtime-neutral` | PID/start-ticks/generation singleton ownership. |
 | `scripts/lib/review-start-claim-store.ts` | claim TOCTOU | `already-runtime-neutral` | Sole TypeScript claim lifecycle authority. |
 | `scripts/orchestrator-side-process-registry.json` | child selection | `already-runtime-neutral` | Contains only the Node scheduler child. |
-| `scripts/json-producers/worker-status-report.ts` | list | `use-runtime-interface` | Builds live worker status from `RuntimeAdapter.listWorkers`. |
+| `scripts/json-producers/worker-status-report.ts` | runtime composition, list | `use-runtime-interface` | Builds live worker status from `RuntimeAdapter.listWorkers`. |
 | `scripts/lib/operator-publication.ts` | send | `already-runtime-neutral` | Exact zero-or-one operator publication through `RuntimeAdapter.dispatchInput`. |
 | `scripts/lib/worker-degraded-ci-handoff.ts` | find, send | `already-runtime-neutral` | One exact freshness lookup before bounded publication. |
 | `scripts/runtime/runtime-cli.ts` | runtime composition, readiness, list, find | `already-runtime-neutral` | PowerShell-facing facade exposes only registered runtime operations. |
