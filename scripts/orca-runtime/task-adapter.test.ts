@@ -224,7 +224,7 @@ describe('Orca task adapter destructive operations', () => {
         case 'terminal create':
           return { ok: true, result: { terminal: { handle, incarnationId: generation, title: 'owned' } } };
         case 'worktree current':
-          return { ok: true, result: { worktree: { path: WORKSPACE, head: HEAD } };
+          return { ok: true, result: { worktree: { path: WORKSPACE, head: HEAD } } };
         case 'terminal show':
           return { ok: true, result: { terminal: observed } };
         case 'terminal send':
