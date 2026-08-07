@@ -48,7 +48,10 @@ foreach ($file in @($files)) {
 }
 
 $retiredCli = ([char]97).ToString() + ([char]111).ToString()
-$reviewRunLiteral = [regex]("(?is)(\b{0}\s+review\s+run\b|@\(\s*[''\"]review[''\"]\s*,\s*[''\"]run[''\"]|@runArgs)" -f [regex]::Escape($retiredCli))
+$reviewRunPattern = @'
+(?is)(\b{0}\s+review\s+run\b|@\(\s*['"]review['"]\s*,\s*['"]run['"]|@runArgs)
+'@
+$reviewRunLiteral = [regex](($reviewRunPattern.Trim()) -f [regex]::Escape($retiredCli))
 $claimGate = [regex]'(?is)(Acquire-ReviewStartClaim|acquireReviewStartClaim|review-start-claim-store\.ts|Review-StartClaimLifecycle\.ps1|Invoke-ReviewWakeTriggerOnCompletionWake|Invoke-ReviewTriggerReevalPlannedRun|Invoke-PlannedReviewRun|Invoke-OrchestratorClaimedReviewRun|invoke-orchestrator-claimed-review-run\.ps1)'
 $violations = @($allowlistViolations)
 foreach ($rel in ($textByRel.Keys | Sort-Object)) {
