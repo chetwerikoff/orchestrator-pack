@@ -650,7 +650,9 @@
     "scripts/pr2-foundation/terminalized/review-bulk-send-diagnose.ts",
     "scripts/review-wake-trigger.test.ts",
     "scripts/run-vitest-with-harness.mjs",
-    "scripts/verify.ps1"
+    "scripts/verify.ps1",
+    "docs/review-start-claim-run-binding.mjs",
+    "scripts/toolchain/powershell-child-tests.json"
   ],
   "denylist": [
     ".orca/",

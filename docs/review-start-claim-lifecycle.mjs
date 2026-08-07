@@ -1,10 +1,12 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 /**
  * Review-start claim lifecycle predicates (Issue #417).
  *
  * Shared reclaim, hold-budget, launch-pending, and post-run visibility rules
  * consumed by the claim reaper, acquire path, and automated starters.
  */
-import { printJson, readStdinJson, resolveBoundedInt, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
+import { asRecord, printJson, readStdinJson, resolveBoundedInt, runAsyncStdinJsonCliMain, toArray } from './review-mechanical-cli.mjs';
 import {
   isRunCoveringHead,
   normalizeLegacyReviewRunStatus,
@@ -19,13 +21,6 @@ import {
   resolveReadinessStartMonotonicMs,
 } from './review-start-envelope-external-io.mjs';
 import {
-  asRecord,
-  classifyReviewerLiveness,
-  readCurrentBootHash,
-  readProcStartTimeTicks,
-  toArray,
-} from './review-run-liveness.mjs';
-import {
   evaluateLaunchPendingBudgetDecision,
   resolveBindingProjectNamespace,
   runMatchesBindingKey,
@@ -37,6 +32,57 @@ export const DEFAULT_HOLD_BUDGET_MS = 15_000;
 export const DEFAULT_LAUNCH_PENDING_BUDGET_MS = 15_000;
 export const DEFAULT_VISIBILITY_BUDGET_MS = 15_000;
 export const DEFAULT_REAPER_PERIOD_SECONDS = 30;
+
+function readCurrentBootHash() {
+  try {
+    return createHash('sha256')
+      .update(readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim())
+      .digest('hex')
+      .slice(0, 16);
+  } catch {
+    return null;
+  }
+}
+
+function readProcStartTimeTicks(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const end = stat.lastIndexOf(')');
+    if (end < 0) return null;
+    const rest = stat.slice(end + 2).trim().split(/\s+/);
+    return rest[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function classifyExactProcessIdentity(sidecar, options = {}) {
+  const identity = asRecord(sidecar?.identity);
+  const processIdentity = asRecord(identity?.process);
+  if (identity?.kind !== 'linux_proc_pid_starttime_boot' || !processIdentity) {
+    return { outcome: 'ambiguous', reason: 'unsupported_or_missing_identity' };
+  }
+  const pid = Number(processIdentity.pid);
+  const expectedStart = String(processIdentity.startTimeTicks ?? '').trim();
+  const expectedBoot = String(processIdentity.bootIdHash ?? '').trim();
+  if (!Number.isInteger(pid) || pid <= 0 || !expectedStart || !expectedBoot) {
+    return { outcome: 'ambiguous', reason: 'partial_identity' };
+  }
+  if (process.platform !== 'linux' && !options.allowNonLinuxProc) {
+    return { outcome: 'ambiguous', reason: 'process_table_unverifiable' };
+  }
+  const bootHash = options.bootIdHash ?? readCurrentBootHash();
+  if (!bootHash || bootHash !== expectedBoot) {
+    return { outcome: 'ambiguous', reason: 'boot_identity_unverifiable' };
+  }
+  const actualStart = options.procStartTimeTicks ?? readProcStartTimeTicks(pid);
+  if (!actualStart) return { outcome: 'provably_not_alive', reason: 'proc_entry_missing' };
+  if (String(actualStart) !== expectedStart) {
+    return { outcome: 'provably_not_alive', reason: 'pid_reused_or_wrong_instance' };
+  }
+  return { outcome: 'alive', reason: 'pid_starttime_boot_match' };
+}
+
 
 export const COVERED_RUN_STATUSES = [
   'queued',
@@ -169,7 +215,7 @@ export function classifyClaimHolderLiveness(holder, options = {}) {
       return { outcome: 'provably_not_alive', reason: 'proc_entry_missing' };
     }
   }
-  const liveness = classifyReviewerLiveness(holderToLivenessSidecar(holder), {
+  const liveness = classifyExactProcessIdentity(holderToLivenessSidecar(holder), {
     bootIdHash: options.bootIdHash ?? readCurrentBootHash(),
     procStartTimeTicks: options.procStartTimeTicks,
     allowNonLinuxProc: options.allowNonLinuxProc,

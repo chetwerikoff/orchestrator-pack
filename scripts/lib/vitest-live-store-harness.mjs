@@ -103,7 +103,8 @@ function resolveStore(store, env) {
 export function resolvedLiveStores(env = process.env) {
   return (liveStoreInventory.stores ?? [])
     .filter((store) => !store.excluded)
-    .map((store) => resolveStore(store, env));
+    .map((store) => resolveStore(store, env))
+    .sort((left, right) => Number(left.kind === 'directory') - Number(right.kind === 'directory'));
 }
 
 export function resolvedClassFences(env = process.env) {
