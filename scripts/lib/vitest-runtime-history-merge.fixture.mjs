@@ -41,6 +41,7 @@ import {
 const failures = [];
 const SUPPLEMENTAL_TUPLE_ERROR =
   'SupplementalReportsDir, SupplementalSourceSha, SupplementalRunId, and SupplementalRunAttempt must be supplied together';
+const ISSUE_1384_STARTING_CENSUS_SHA256 = 'a6ea3c28c365898a52a8aa8a0c06f97b7158c94184054daef2f61bc5c5dfa36a';
 const PR_1376_REPLAY_BASE_SHA = '6e9614d0c9ce0c34b41a731059df4398b770c162';
 const PR_1376_REPLAY_HEAD_SHA = 'de03343f3f71f0c673157e055bf47f62700a576b';
 const PR_1376_CHANGED_FILES = [
@@ -712,6 +713,10 @@ function runIssue1384StartingCensusFixture() {
   assert(currentFiles.length === 145, `Issue #1384 baseline canonical inventory must remain 145 before generated delivery (got ${currentFiles.length})`);
   assert(census.rightOnly.length === 74, `Issue #1384 baseline current files missing from history must remain 74 before generated delivery (got ${census.rightOnly.length})`);
   assert(census.leftOnly.length === 138, `Issue #1384 baseline history-only count must remain 138 before generated delivery (got ${census.leftOnly.length})`);
+  assert(
+    exactSetsSha256 === ISSUE_1384_STARTING_CENSUS_SHA256,
+    `Issue #1384 exact starting census path sets drifted: expected ${ISSUE_1384_STARTING_CENSUS_SHA256}, got ${exactSetsSha256}`,
+  );
   console.log(`runtime-history-issue-1384-starting-census ${JSON.stringify({
     historyCount: historyFiles.length,
     currentCount: currentFiles.length,
