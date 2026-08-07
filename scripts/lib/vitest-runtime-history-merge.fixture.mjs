@@ -874,7 +874,7 @@ function runPartialSupplementalTupleWrapperFixture() {
       timeoutMs: 30_000,
     });
     const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-    const normalizedOutput = output.replace(/\u001b\[[0-9;]*m/g, '').replace(/\s+/g, ' ');
+    const normalizedOutput = output.replace(/\u001b\[[0-9;]*m/g, '').replace(/\s*\|\s*/g, ' ').replace(/\s+/g, ' ');
     assert(result.exitCode !== 0, `partial supplemental tuple mask ${mask} must fail`);
     assert(normalizedOutput.includes(SUPPLEMENTAL_TUPLE_ERROR), `partial supplemental tuple mask ${mask} must emit exact refusal`);
     assert(readFileSync(historyPath, 'utf8') === sentinel, `partial supplemental tuple mask ${mask} must preserve history bytes`);
