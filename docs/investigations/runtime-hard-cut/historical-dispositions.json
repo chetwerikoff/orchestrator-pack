@@ -3,6 +3,12 @@
   "owningIssue": 1352,
   "dispositions": [
     {
+      "path": ".gitignore",
+      "class": "negative-safety-exclusion",
+      "reason": "Retired config/state paths remain ignored only to prevent accidental recommit of operator-local residue; this file neither reads nor prescribes that runtime.",
+      "owningReference": "Issue #1352 r07 host-state disposition"
+    },
+    {
       "path": "docs/launch-argv-registry.mjs",
       "class": "precut-behavioral-contract",
       "reason": "Frozen generated launch-argv contract retained as regression evidence; it is not a current runtime transport authority.",
