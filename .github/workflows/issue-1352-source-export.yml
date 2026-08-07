@@ -1,0 +1,37 @@
+name: issue-1352-exact-source-export
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    if: github.event.pull_request.number == 1378 && github.event.pull_request.head.ref == 'agent/issue-1352-hard-cut'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-1352-hard-cut
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Pack exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > .opk-export-head
+          tar --exclude='.git/objects/pack/*.keep' -czf "$RUNNER_TEMP/pr-1378-exact-source.tgz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-1378-exact-source
+          path: ${{ runner.temp }}/pr-1378-exact-source.tgz
+          if-no-files-found: error
+          retention-days: 1
