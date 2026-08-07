@@ -1,6 +1,12 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { InputSnapshot } from './input.ts';
-import { COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR } from './ui-adapter.ts';
+import {
+  COMPOSER_SELECTOR,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_NODE_SELECTOR,
+  SEND_BUTTON_SELECTOR,
+} from './ui-adapter.ts';
 import {
   runStateLightSession,
   SessionStdoutWriter,
@@ -67,6 +73,8 @@ function makeHarness(
     readonly timeoutMs?: number;
     readonly cleanup?: 'confirmed' | 'unconfirmed';
     readonly profileState?: 'verified' | 'unavailable' | 'mismatch';
+    readonly atomicRows?: () => readonly { role: 'user' | 'assistant'; text: string; key?: string }[];
+    readonly pageUrl?: () => string;
   } = {},
 ): Harness {
   const metrics = { sends: 0, pages: 0, gotos: 0, closes: 0, releases: 0 };
@@ -89,7 +97,7 @@ function makeHarness(
   let markerIndex = 0;
   const page = {
     __fakeBrowserGptPage: true,
-    url: () => 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111',
+    url: () => options.pageUrl?.() ?? 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111',
     goto: async () => { metrics.gotos += 1; },
     close: async () => { metrics.closes += 1; },
     waitForTimeout: async (ms: number) => { nowMs += ms; },
@@ -115,10 +123,32 @@ function makeHarness(
           messages.push({ role: 'assistant', text: `reply-${metrics.sends}` });
         },
       };
+      if (selector === MESSAGE_NODE_SELECTOR && options.atomicRows) {
+        return {
+          count: async () => options.atomicRows!().length,
+          evaluateAll: async (callback: (elements: any[], args: any) => unknown, args: any) => {
+            const elements = options.atomicRows!().map((row) => ({
+              getAttribute: (attribute: string) => {
+                if (attribute === MESSAGE_AUTHOR_ROLE_ATTR) return row.role;
+                if (attribute === 'data-message-id' && row.key?.startsWith('data-message-id:')) return row.key.slice('data-message-id:'.length);
+                if (attribute === 'data-turn-id' && row.key?.startsWith('data-turn-id:')) return row.key.slice('data-turn-id:'.length);
+                return null;
+              },
+              innerText: row.text,
+              querySelectorAll: () => [],
+              closest: () => ({
+                querySelector: (query: string) => query === args.inProgressSelector ? null : {},
+              }),
+            }));
+            return callback(elements, args);
+          },
+        };
+      }
       return { count: async () => 0 };
     },
   };
   const browser = {
+    isConnected: () => true,
     contexts: () => [{
       newPage: async () => {
         metrics.pages += 1;
@@ -323,12 +353,319 @@ describe('state-light explicit session mode', () => {
       ordinal: 2,
       delivery_state: 'not_attempted',
       send_count: 0,
-      state: 'foreign_activity',
-      cause: 'foreign_user_after_predecessor',
+      state: 'observation_uncertain',
+      cause: 'predecessor_continuity_unproven',
     });
     expect(terminal[1]).not.toHaveProperty('marker_match_count');
     expect(terminal[2]).toMatchObject({ ordinal: 3, delivery_state: 'not_attempted', send_count: 0 });
-    expect(aggregate(stream)).toMatchObject({ terminal_stop_ordinal: 2, decisive_payload_ordinal: 2, attempted_payload_count: 1 });
+    expect(aggregate(stream)).toMatchObject({
+      terminal_stop_ordinal: 2,
+      decisive_payload_ordinal: 2,
+      attempted_payload_count: 1,
+      cleanup: 'skipped',
+      owned_tab_count: 1,
+    });
+    expect(harness.metrics.closes).toBe(0);
+  });
+
+  it('keeps an incomplete one-marker observation uncertain until the hard deadline', async () => {
+    const harness = makeHarness(['one'], { timeoutMs: 30 });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async () => {
+        if (harness.metrics.sends === 0) {
+          return {
+            messages: [],
+            ownedWindowCompletionReady: false,
+            transcriptIncomplete: false,
+            snapshot: { complete: true, carriers: [] },
+          };
+        }
+        const markerText = harness.messages.find((message) => message.role === 'user')?.text ?? '';
+        return {
+          messages: [{ role: 'user' as const, text: markerText }],
+          ownedWindowCompletionReady: false,
+          transcriptIncomplete: true,
+          snapshot: {
+            complete: false,
+            carriers: [{
+              role: 'user' as const,
+              text: markerText,
+              fingerprint: 'partial-marker',
+              domIndex: 0,
+            }],
+          },
+        };
+      },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(11);
+    expect(harness.metrics.sends).toBe(1);
+    expect(harness.metrics.closes).toBe(0);
+    expect(aggregate(harness.stream)).toMatchObject({
+      state: 'observation_uncertain',
+      cause: 'owned_carrier_unproven',
+      total_send_count: 1,
+      payloads: [expect.objectContaining({ delivery_state: 'delivery_unknown' })],
+    });
+  });
+
+  it('does not continue when a visible predecessor marker keeps a changed carrier key', async () => {
+    const predecessorKey = 'data-message-id:predecessor-key-12345678';
+    const changedKey = 'data-message-id:changed-key-12345678';
+    let predecessorSettled = false;
+    const stream = new CaptureStream(
+      () => false,
+      (value) => {
+        if (value.schema === 'session-payload/v1' && value.ordinal === 1 && value.phase === 'terminal') {
+          predecessorSettled = true;
+        }
+      },
+    );
+    const harness = makeHarness(['one', 'two'], { stream });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async () => {
+        if (harness.metrics.sends === 0) {
+          return {
+            messages: [],
+            ownedWindowCompletionReady: false,
+            transcriptIncomplete: false,
+            snapshot: { complete: true, carriers: [] },
+          };
+        }
+        const markerText = harness.messages.find((message) => message.role === 'user')?.text ?? '';
+        const key = predecessorSettled ? changedKey : predecessorKey;
+        const messages = [
+          { role: 'user' as const, text: markerText },
+          { role: 'assistant' as const, text: 'reply-1' },
+        ];
+        return {
+          messages,
+          ownedWindowCompletionReady: true,
+          transcriptIncomplete: false,
+          snapshot: {
+            complete: true,
+            carriers: [
+              { role: 'user' as const, text: markerText, key, fingerprint: 'user-1', domIndex: 0 },
+              { role: 'assistant' as const, text: 'reply-1', key: 'data-message-id:assistant-key-12345678', fingerprint: 'reply-1', domIndex: 1 },
+            ],
+          },
+        };
+      },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(11);
+    expect(harness.metrics.sends).toBe(1);
+    expect(records(stream).find((record) => record.ordinal === 2 && record.phase === 'terminal')).toMatchObject({
+      state: 'observation_uncertain',
+      cause: 'predecessor_continuity_unproven',
+      send_count: 0,
+      delivery_state: 'not_attempted',
+    });
+  });
+
+  it('does not continue when a markerless predecessor key is duplicated across user and assistant', async () => {
+    const predecessorKey = 'data-message-id:predecessor-key-12345678';
+    let predecessorSettled = false;
+    const stream = new CaptureStream(
+      () => false,
+      (value) => {
+        if (value.schema === 'session-payload/v1' && value.ordinal === 1 && value.phase === 'terminal') {
+          predecessorSettled = true;
+        }
+      },
+    );
+    const harness = makeHarness(['one', 'two'], { stream });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async () => {
+        if (harness.metrics.sends === 0) {
+          return {
+            messages: [],
+            ownedWindowCompletionReady: false,
+            transcriptIncomplete: false,
+            snapshot: { complete: true, carriers: [] },
+          };
+        }
+        const markerText = harness.messages.find((message) => message.role === 'user')?.text ?? '';
+        const markerVisible = !predecessorSettled;
+        const messages = markerVisible
+          ? [
+            { role: 'user' as const, text: markerText },
+            { role: 'assistant' as const, text: 'reply-1' },
+          ]
+          : [
+            { role: 'user' as const, text: 'markerless predecessor' },
+            { role: 'assistant' as const, text: 'reply-1' },
+          ];
+        return {
+          messages,
+          ownedWindowCompletionReady: markerVisible,
+          transcriptIncomplete: false,
+          snapshot: {
+            complete: true,
+            carriers: [
+              { role: 'user' as const, text: messages[0]!.text, key: predecessorKey, fingerprint: 'user-1', domIndex: 0 },
+              { role: 'assistant' as const, text: 'reply-1', key: markerVisible ? 'data-message-id:assistant-key-12345678' : predecessorKey, fingerprint: 'reply-1', domIndex: 1 },
+            ],
+          },
+        };
+      },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(11);
+    expect(harness.metrics.sends).toBe(1);
+    expect(records(stream).find((record) => record.ordinal === 2 && record.phase === 'terminal')).toMatchObject({
+      state: 'observation_uncertain',
+      cause: 'predecessor_continuity_unproven',
+      send_count: 0,
+      delivery_state: 'not_attempted',
+    });
+  });
+
+  it('does not continue from a keyless predecessor after its marker disappears', async () => {
+    let hideMarker = false;
+    const stream = new CaptureStream(
+      () => false,
+      (value) => {
+        if (value.schema === 'session-payload/v1' && value.ordinal === 1 && value.phase === 'terminal') {
+          hideMarker = true;
+        }
+      },
+    );
+    const harness = makeHarness(['one', 'two'], { stream });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async () => ({
+        messages: hideMarker
+          ? harness.messages.map((message) => (
+            message.role === 'user'
+              ? { role: 'user' as const, text: 'keyless predecessor' }
+              : message
+          ))
+          : [...harness.messages],
+        ownedWindowCompletionReady: harness.metrics.sends > 0,
+        transcriptIncomplete: false,
+      }),
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(11);
+    expect(harness.metrics.sends).toBe(1);
+    const terminal = records(stream).filter((record) => record.phase === 'terminal');
+    expect(terminal.find((record) => record.ordinal === 2 && record.state)).toMatchObject({
+      ordinal: 2,
+      delivery_state: 'not_attempted',
+      send_count: 0,
+      state: 'observation_uncertain',
+      cause: 'predecessor_continuity_unproven',
+    });
+  });
+
+  it('rejects a duplicate bridge key that disappears before harvest', async () => {
+    const bridgeKey = 'data-message-id:bridge-key-12345678';
+    const assistantKey = 'data-message-id:assistant-key-12345678';
+    const foreignUser = 'foreign user';
+    const foreignReply = 'foreign reply';
+    const fingerprint = (role: string, text: string): string => createHash('sha256')
+      .update(`${role}\u0000${text.replace(/\r\n?/g, '\n').replace(/[\t ]+/g, ' ').trim()}`)
+      .digest('hex');
+    let hideMarker = false;
+    let publishedReply: string | undefined;
+    const stream = new CaptureStream(
+      () => false,
+      (value) => {
+        if (value.schema === 'session-payload/v1' && value.ordinal === 1 && value.phase === 'delivery-bound') {
+          hideMarker = true;
+        }
+      },
+    );
+    const harness = makeHarness(['one'], {
+      stream,
+      atomicRows: () => [
+        { role: 'user', text: foreignUser, key: bridgeKey },
+        { role: 'assistant', text: foreignReply, key: assistantKey },
+      ],
+    });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async () => {
+        const marker = harness.messages.find((message) => message.role === 'user')?.text.split('\n', 1)[0] ?? '';
+        const markerUser = { role: 'user' as const, text: `${marker}\n\none`, key: bridgeKey };
+        const markerSnapshot = {
+          complete: true,
+          carriers: [
+            { ...markerUser, fingerprint: fingerprint(markerUser.role, markerUser.text), domIndex: 0 },
+            { role: 'user' as const, text: foreignUser, key: bridgeKey, fingerprint: fingerprint('user', foreignUser), domIndex: 1 },
+            { role: 'assistant' as const, text: foreignReply, key: assistantKey, fingerprint: fingerprint('assistant', foreignReply), domIndex: 2 },
+          ],
+        };
+        const foreignSnapshot = {
+          complete: true,
+          carriers: [
+            { role: 'user' as const, text: foreignUser, key: bridgeKey, fingerprint: fingerprint('user', foreignUser), domIndex: 0 },
+            { role: 'assistant' as const, text: foreignReply, key: assistantKey, fingerprint: fingerprint('assistant', foreignReply), domIndex: 1 },
+          ],
+        };
+        return hideMarker
+          ? { messages: [{ role: 'user' as const, text: foreignUser }, { role: 'assistant' as const, text: foreignReply }], ownedWindowCompletionReady: false, transcriptIncomplete: false, snapshot: foreignSnapshot }
+          : { messages: [markerUser, { role: 'assistant' as const, text: foreignReply }], ownedWindowCompletionReady: false, transcriptIncomplete: false, snapshot: markerSnapshot };
+      },
+      classifyObservation: () => ({ state: 'waiting' as const }),
+      publishReply: (_path, _invocation, reply) => {
+        publishedReply = reply;
+        return { state: 'committed_ok' as const, output: { byte_length: Buffer.byteLength(reply), sha256: `hash-${reply}` } };
+      },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(11);
+    expect(harness.metrics.sends).toBe(1);
+    expect(publishedReply).toBeUndefined();
+    expect(aggregate(stream)).toMatchObject({ state: 'observation_uncertain', cause: 'owned_carrier_unproven' });
+  });
+
+  it('revalidates conversation identity after final readiness and before publication', async () => {
+    const targetUrl = 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111';
+    const foreignUrl = 'https://chatgpt.com/c/22222222-2222-2222-2222-222222222222';
+    let foreign = false;
+    let publishedReply: string | undefined;
+    const harness = makeHarness(['one'], { pageUrl: () => foreign ? foreignUrl : targetUrl });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      replyStable: (left, right) => {
+        const stable = left.length > 0 && left === right;
+        if (stable) foreign = true;
+        return stable;
+      },
+      publishReply: (_path, _invocation, reply) => {
+        publishedReply = reply;
+        return { state: 'committed_ok', output: { byte_length: Buffer.byteLength(reply), sha256: `hash-${reply}` } };
+      },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(10);
+    expect(harness.metrics.sends).toBe(1);
+    expect(publishedReply).toBeUndefined();
+    expect(aggregate(harness.stream)).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'conversation_identity_changed',
+      cleanup: 'skipped',
+      owned_tab_count: 1,
+    });
+    expect(harness.metrics.closes).toBe(0);
+    expect(harness.metrics.releases).toBe(1);
   });
 
   it('does not dispatch when the dispatch-latched stdout barrier fails', async () => {

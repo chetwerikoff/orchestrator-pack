@@ -78,26 +78,83 @@ contains the stage facts already recorded by the flow-manager:
 - `cycleId` and the recorded `cycleBinding` witness;
 - `reviewerCardinality`, `cardinalityConfigIdentity`, `sourceRevision`;
 - `outcome`, `revisionChecks`, `settlement`;
-- `invocations`, with the recorded invocation envelope fields, a `capturePath`
-  for each successful capture, and a `turnResultPath` for each completed
-  browser invocation.
+- `invocations`, with the recorded invocation envelope fields and, when they
+  exist, `capturePath` and `turnResultPath` transport evidence.
 
-The producer reads every `capturePath`. It computes the capture byte length,
-SHA-256, raw finding count, and capture identity from the bytes. A supplied
-capture object or mismatching asserted capture identity is rejected.
+For covered Browser-GPT review and terminal-lens stages, stage readiness has one
+authority path: the live GitHub Issue artifact. A `turn-result/v1` receipt is
+transport diagnostics only; its presence or state does not create a second
+acceptance path and is not required to prove that the stage artifact exists.
 
-Each completed browser invocation must have a referenced `turnResultPath` for a
-`turn-result/v1` file. The producer reads it as a `turn-result/v1` artifact; its
-`invocation_id` must match
-the stage evidence and its state must be `ok`. Historical final-node and API-
-harvest results retain the rule that committed output bytes match the capture.
-For `service-observed-issue-comment/v1`, `reviewer_source` instead binds the
-capture byte length, SHA-256, target, tool call, revision, and finding count;
-`output` remains the separate receipt identity. For
-`failed-write-final-assistant/v1`, output and source bytes must match and
-publication fields must be absent. The recorded `terminalResultIdentity` is
-derived from the referenced result file; a missing, malformed, stale, or
-mismatched result is a named input error.
+Immediately before the Issue-comment census, the producer resolves the current
+authenticated GitHub login through the same existing GitHub transport. It then
+exhausts the complete paginated top-level comment census for the exact target
+Issue once for the production attempt. For each expected invocation, exactly
+one unedited comment must satisfy the canonical reviewer grammar and bind the
+exact Issue, that invocation's own `sourceRevision`, invocation id, stage/slot
+facts exposed by the grammar, and the authenticated publisher login. The
+producer never accepts caller-supplied comment bytes, publisher identity,
+hashes, lengths, finding counts, or a partial census as authority.
+
+A proven-complete census with zero canonical matches proves absence. An
+incomplete/unavailable census is TEMPORARY `source-unavailable`; multiple
+canonical matches are TEMPORARY `identity-unresolved`; unavailable authenticated
+principal or comment-author evidence is TEMPORARY `provenance-unresolved`; local
+observer loss before the authoritative reread finishes is TEMPORARY
+`observation-lost`. An observed publisher mismatch is `provenance-mismatch`.
+Unknown is never rewritten into absence.
+
+The exact decoded GitHub comment body becomes the stage source bytes. The
+producer derives the existing canonical capture name from stage evidence:
+
+- plural `competitive` / `architectural-review`:
+  `pass-<stageSequence>-<stage>-<reviewerSlot>.capture.txt`;
+- singular terminal `architectural`:
+  `pass-<stageSequence>-architectural.capture.txt`.
+
+If that capture is absent, the producer atomically materializes the exact live
+bytes in the canonical review directory. If it already exists, the live body
+must be byte-for-byte identical; a conflict is rejected and never overwritten.
+The producer computes the existing `CaptureIdentityV1` byte length, SHA-256,
+raw finding count, and capture identity from those bytes. This same capture is
+then contributed exactly once to the existing credentialing, relay, governed
+capture union, finding ledger, occurrence, and stage-completeness topology.
+
+When transport evidence exists, the producer still reads it for diagnostics and
+preserves its actual `state`, `send_count`, scope/cause, retry class,
+`terminalClassification`, terminal-result identity, and `reviewer_source`.
+Artifact acceptance never creates or upgrades `turn-result/v1 state: ok`, never
+invents `reviewer_source` or parentage, and never synthesizes a successful
+terminal-result identity. A successful receipt is accepted only after the same
+authoritative artifact census/reread and exact capture comparison.
+
+The existing `reviewer-invocation-envelope/v1` represents artifact authority
+with the bounded optional `artifactAuthority` branch:
+
+```text
+artifactAuthority:
+  kind: authoritative-github-artifact
+  repositoryFullName: <owner/repo>
+  issueNumber: <positive integer>
+  commentId: <canonical comment id>
+  commentUrl: <canonical Issue-comment URL>
+  publisherLogin: <authenticated principal>
+  createdAt: <immutable timestamp>
+  updatedAt: <same timestamp>
+```
+
+That branch requires the ordinary existing capture. It may credential a capture
+when the transport classification is non-`complete`, while the original
+transport classification remains unchanged. `terminalResultIdentity` and
+`reviewerSource` are present only when actually observed. The pre-existing
+successful transport branch retains its existing invariants.
+
+Each stage is bound to its own recorded `sourceRevision`; `tier-intake.firstRevision`
+remains the immutable episode root, not the required revision for every later
+stage. Therefore a mandatory author fix-round from intake r03 to terminal r04
+is valid when the terminal invocation and live terminal verdict both bind r04.
+A verdict declaring a revision different from its own invocation's frozen
+`sourceRevision` is rejected.
 
 `author-dispositions.json` has this shape:
 
@@ -133,6 +190,10 @@ schemas and manifest coverage. Directories and malformed files are rejected.
 - `review-episode-inventory.json`
 - `acceptance-artifacts.json`
 
+`acceptance-artifacts.json` records
+`acceptanceBasis: authoritative-github-artifact`. It does not introduce a
+second receipt acceptance value or a new artifact class.
+
 `reviewEpisodeId` is computed as
 `<tierIntake.taskIdentity>@<tierIntake.firstRevision>`.
 `stageReceiptId` is computed as
@@ -149,30 +210,31 @@ The finding-ledger dispositions are closed:
 
 ## Why this cannot forge a stage
 
-The producer does not accept a `stage-ran` flag, caller-supplied capture bytes,
-or caller-supplied artifact fields. A receipt can be built only after the
-recorded stage-evidence file is present and every referenced capture file can
-be read. A missing stage result or capture is reported by name. All fields
-derived from capture bytes are computed before any output directory is created;
-any error leaves the output artifact set absent. The resulting receipt,
-inventory, relay manifest, and ledger are then checked by the existing guards.
+The producer does not accept a `stage-ran` flag, caller-supplied source bytes,
+publisher login, or caller-supplied artifact identity fields. A Browser-GPT
+stage can be credentialed only after a complete target-Issue census resolves
+exactly one unedited canonical comment for the expected invocation and the
+observed comment author equals the authenticated GitHub principal. All source
+identity is recomputed from the live body before any acceptance artifact is
+published.
 
-## Direct operator adjudication for missing/non-ok turn transport
+The source-to-governance bridge writes only the pre-existing capture format and
+refuses to overwrite conflicting bytes. The additive `artifactAuthority` branch
+states why that capture may credential the invocation; it does not repair or
+replace transport truth. The resulting receipt, inventory, relay evidence, and
+ledger are checked by the existing guards.
 
-For `final-acceptance` artifact production only, the direct operator CLI may
-supply one exact Issue number and revision, a canonical already-published
-verdict comment URL, the governed verdict bytes' SHA-256, byte length and
-finding count, plus a non-empty reason. The producer accepts this only when
-those values exactly match one governed terminal capture and that invocation's
-`turn-result/v1` is absent or non-`ok`. Before accepting, the canonical GitHub
-transport reads the exact referenced comment and rejects an unavailable, edited,
-identity-mismatched, malformed, or incompletely observed reference. The observed
-comment bytes must exactly equal the governed capture bytes.
+## Operator URL compatibility
 
-The manifest records `operator_adjudicated` provenance, the exact
-target/reference/reason, the immutable observed comment metadata, and the
-original absent or non-`ok` transport fact (including `send_count` when
-present). It never creates or rewrites `turn-result/v1 state: ok`. Without all
-direct operator flags, the legacy fail-closed behavior and artifact bytes are
-unchanged. Workers, reviewers and flow-manager evidence must not synthesize
-these flags.
+The existing direct-operator URL input remains parse-compatible only as a
+non-authoritative narrowing hint inside the same complete census. It cannot
+supply comment bytes, hashes, counts, publisher identity, uniqueness, or a
+second acceptance route. Any supplied URL must identify the same unique
+canonical comment already proven by the census.
+
+The URL cannot convert `source-unavailable`, `identity-unresolved`,
+`provenance-unresolved`, `observation-lost`, a proven zero-match, publisher
+mismatch, edited/malformed source, byte mismatch, or capture conflict into
+acceptance. Browser-GPT artifact acceptance never writes an
+`operator_adjudicated` readiness fact and never upgrades absent/non-`ok`
+transport evidence.
