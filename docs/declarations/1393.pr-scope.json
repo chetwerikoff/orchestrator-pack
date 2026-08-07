@@ -2,9 +2,13 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1393,
   "declared_paths": [
+    "plugins/ao-codex-pr-reviewer/lib/parse_output.ts",
+    "plugins/ao-codex-pr-reviewer/tests/review.test.ts",
     "scripts/lib/pack-gpt-reviewer.ts",
+    "scripts/lib/pack-review-delivery.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/pack-review-delivery.cases.ts",
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts"
   ],
@@ -34,5 +38,5 @@
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts"
   ],
-  "source_revision": "c6cb292757d42b3200c8c06e207faf63729d191d"
+  "source_revision": "edc82a064b6a4bbeb1cc7aade95dfed510007133"
 }
