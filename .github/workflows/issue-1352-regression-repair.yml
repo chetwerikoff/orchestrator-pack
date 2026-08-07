@@ -23,6 +23,17 @@ jobs:
         run: |
           set -euo pipefail
           cp .github/issue-1352-residual-batch1.py "$RUNNER_TEMP/issue-1352-residual-batch4.py"
+          python - "$RUNNER_TEMP/issue-1352-residual-batch4.py" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          text = p.read_text(encoding='utf-8')
+          old = """replace_exact(path, \"\"\"  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\", \"\"\"  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessionId?: string;\n  repoSlug?: string;\n  projectId?: string;\n  issueNumber?: number;\n  headSha?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\", 1)"""
+          new = """replace_exact(path, \"\"\"export declare function tryPushRegisterFromPrCreate(input: {\n  argv: string[];\n  status: number;\n  stdout: string;\n  stderr: string;\n  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\", \"\"\"export declare function tryPushRegisterFromPrCreate(input: {\n  argv: string[];\n  status: number;\n  stdout: string;\n  stderr: string;\n  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessionId?: string;\n  repoSlug?: string;\n  projectId?: string;\n  issueNumber?: number;\n  headSha?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\")"""
+          if text.count(old) != 1:
+              raise SystemExit(f'helper declaration patch drifted: {text.count(old)}')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           git fetch origin agent/issue-1352-hard-cut
           git checkout -B agent/issue-1352-hard-cut origin/agent/issue-1352-hard-cut
           expected_head='3665d0ac34ce669949f8f006f3a2e9ae0db400f9'
