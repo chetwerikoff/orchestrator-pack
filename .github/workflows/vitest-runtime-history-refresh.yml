@@ -291,7 +291,7 @@ jobs:
           merge-multiple: true
 
       - name: Download fixed supplemental report
-        if: inputs.supplemental_source_sha != ''
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != ''
         uses: actions/download-artifact@v4
         with:
           name: vitest-supplemental-report-pack-reviewer-preference
@@ -319,7 +319,7 @@ jobs:
           }
 
       - name: Stage fixed supplemental report for refresh
-        if: inputs.supplemental_source_sha != ''
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != ''
         shell: pwsh
         run: |
           $source = Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports'
@@ -336,25 +336,57 @@ jobs:
       - name: Refresh committed runtime-history
         shell: pwsh
         env:
-          COMMIT_SHA: ${{ github.sha }}
-          SUPPLEMENTAL_SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
+          REFRESH_EVENT_NAME: ${{ github.event_name }}
+          REFRESH_REF: ${{ github.ref }}
+          TRUSTED_REFRESH_SHA: ${{ github.sha }}
+          REFRESH_WORKFLOW_REF: ${{ github.workflow_ref }}
+          REFRESH_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          SUPPLEMENTAL_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha || '' }}
           SUPPLEMENTAL_RUN_ID: ${{ github.run_id }}
           SUPPLEMENTAL_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          $args = @(
-            '-ReportsDir', (Join-Path $env:GITHUB_WORKSPACE 'vitest-heavy-reports-staged'),
-            '-CommitSha', $env:COMMIT_SHA,
-            '-CommitBack'
-          )
-          if ($env:SUPPLEMENTAL_SOURCE_SHA) {
-            $args += @(
-              '-SupplementalReportsDir', (Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports-staged'),
-              '-SupplementalSourceSha', $env:SUPPLEMENTAL_SOURCE_SHA,
-              '-SupplementalRunId', $env:SUPPLEMENTAL_RUN_ID,
-              '-SupplementalRunAttempt', $env:SUPPLEMENTAL_RUN_ATTEMPT
-            )
+          $refreshArgs = @{
+            ReportsDir = (Join-Path $env:GITHUB_WORKSPACE 'vitest-heavy-reports-staged')
+            CommitSha = $env:TRUSTED_REFRESH_SHA
+            CommitBack = $true
           }
-          ./scripts/refresh-vitest-runtime-history.ps1 @args
+          if (-not [string]::IsNullOrWhiteSpace($env:SUPPLEMENTAL_SOURCE_SHA)) {
+            $refreshArgs['SupplementalReportsDir'] = (Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports-staged')
+            $refreshArgs['SupplementalSourceSha'] = $env:SUPPLEMENTAL_SOURCE_SHA
+            $refreshArgs['SupplementalRunId'] = $env:SUPPLEMENTAL_RUN_ID
+            $refreshArgs['SupplementalRunAttempt'] = $env:SUPPLEMENTAL_RUN_ATTEMPT
+          }
+
+          $resolvedArguments = [ordered]@{}
+          foreach ($name in @(
+            'ReportsDir',
+            'CommitSha',
+            'CommitBack',
+            'SupplementalReportsDir',
+            'SupplementalSourceSha',
+            'SupplementalRunId',
+            'SupplementalRunAttempt'
+          )) {
+            if ($refreshArgs.ContainsKey($name)) {
+              $resolvedArguments[$name] = $refreshArgs[$name]
+            }
+          }
+          $boundarySignal = [ordered]@{
+            event = $env:REFRESH_EVENT_NAME
+            ref = $env:REFRESH_REF
+            trustedSha = $env:TRUSTED_REFRESH_SHA
+            workflowRef = $env:REFRESH_WORKFLOW_REF
+            workflowSha = $env:REFRESH_WORKFLOW_SHA
+            supplementalTuple = [ordered]@{
+              SupplementalReportsDir = $refreshArgs.ContainsKey('SupplementalReportsDir')
+              SupplementalSourceSha = $refreshArgs.ContainsKey('SupplementalSourceSha')
+              SupplementalRunId = $refreshArgs.ContainsKey('SupplementalRunId')
+              SupplementalRunAttempt = $refreshArgs.ContainsKey('SupplementalRunAttempt')
+            }
+            arguments = $resolvedArguments
+          }
+          Write-Host ('runtime-history-refresh-boundary ' + ($boundarySignal | ConvertTo-Json -Compress -Depth 5))
+          ./scripts/refresh-vitest-runtime-history.ps1 @refreshArgs
 
       - name: Require delivery credential
         shell: bash
@@ -366,6 +398,7 @@ jobs:
             echo "VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN is required for protected-branch delivery" >&2
             exit 1
           fi
+          git remote set-url origin "https://x-access-token:${DELIVERY_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
       - name: Detect prepared delivery commit
         id: delivery
@@ -390,18 +423,44 @@ jobs:
           set -euo pipefail
           remote_sha=""
           should_push="true"
+          pending_history=""
+          status_history=""
+          actions_run=""
+          trusted_main_root="$(mktemp -d)"
+          inventory_probe="$(mktemp)"
+          cleanup() {
+            git worktree remove --force "${trusted_main_root}" >/dev/null 2>&1 || true
+            rm -f "${inventory_probe}"
+            [ -z "${pending_history}" ] || rm -f "${pending_history}"
+            [ -z "${status_history}" ] || rm -f "${status_history}"
+            [ -z "${actions_run}" ] || rm -f "${actions_run}"
+          }
+          trap cleanup EXIT
+
+          git fetch origin main
+          trusted_main_sha="$(git rev-parse origin/main)"
+          git worktree add --detach "${trusted_main_root}" "${trusted_main_sha}" >/dev/null
+          node scripts/refresh-vitest-runtime-history.mjs reconcile \
+            --remote scripts/vitest-runtime-history.json \
+            --proposed scripts/vitest-runtime-history.json \
+            --output "${inventory_probe}" \
+            --repo-root "${trusted_main_root}" \
+            --require-equal-inventory
+          echo "runtime-history delivery inventory guard: trusted main ${trusted_main_sha} matches prepared membership"
+
           if git ls-remote --exit-code origin "refs/heads/${DELIVERY_BRANCH}" >/dev/null 2>&1; then
-            git fetch origin main "refs/heads/${DELIVERY_BRANCH}:refs/remotes/origin/${DELIVERY_BRANCH}"
+            git fetch origin "refs/heads/${DELIVERY_BRANCH}:refs/remotes/origin/${DELIVERY_BRANCH}"
             remote_sha="$(git rev-parse "origin/${DELIVERY_BRANCH}")"
             pending_history="$(mktemp)"
             status_history="$(mktemp)"
             actions_run="$(mktemp)"
-            trap 'rm -f "${pending_history}" "${status_history}" "${actions_run}"' EXIT
             git show "origin/${DELIVERY_BRANCH}:scripts/vitest-runtime-history.json" > "${pending_history}"
             node scripts/refresh-vitest-runtime-history.mjs reconcile \
               --remote "${pending_history}" \
               --proposed scripts/vitest-runtime-history.json \
-              --output scripts/vitest-runtime-history.json
+              --output scripts/vitest-runtime-history.json \
+              --repo-root "${trusted_main_root}" \
+              --require-equal-inventory
             git add -- scripts/vitest-runtime-history.json
             if ! git diff --cached --quiet HEAD -- scripts/vitest-runtime-history.json; then
               git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
@@ -447,8 +506,6 @@ jobs:
                 fi
               fi
             fi
-          else
-            git fetch origin main
           fi
           echo "remote_sha=${remote_sha}" >> "$GITHUB_OUTPUT"
           echo "should_push=${should_push}" >> "$GITHUB_OUTPUT"
@@ -459,17 +516,122 @@ jobs:
         shell: bash
         env:
           DELIVERY_BRANCH: ci/vitest-runtime-history-refresh
-          DELIVERY_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}
+          GH_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}
           REMOTE_SHA: ${{ steps.delivery_branch.outputs.remote_sha }}
         run: |
           set -euo pipefail
-          git remote set-url origin "https://x-access-token:${DELIVERY_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          if [ -n "${REMOTE_SHA}" ]; then
-            git push --force-with-lease="refs/heads/${DELIVERY_BRANCH}:${REMOTE_SHA}" origin "HEAD:refs/heads/${DELIVERY_BRANCH}"
-          else
-            git push --force-with-lease origin "HEAD:refs/heads/${DELIVERY_BRANCH}"
+          trusted_main_root="$(mktemp -d)"
+          inventory_probe="$(mktemp)"
+          delivery_api_root="$(mktemp -d)"
+          cleanup() {
+            git worktree remove --force "${trusted_main_root}" >/dev/null 2>&1 || true
+            rm -f "${inventory_probe}"
+            rm -rf "${delivery_api_root}"
+          }
+          trap cleanup EXIT
+          git fetch origin main
+          trusted_main_sha="$(git rev-parse origin/main)"
+          git worktree add --detach "${trusted_main_root}" "${trusted_main_sha}" >/dev/null
+          node scripts/refresh-vitest-runtime-history.mjs reconcile \
+            --remote scripts/vitest-runtime-history.json \
+            --proposed scripts/vitest-runtime-history.json \
+            --output "${inventory_probe}" \
+            --repo-root "${trusted_main_root}" \
+            --require-equal-inventory
+          echo "runtime-history pre-delivery inventory guard: trusted main ${trusted_main_sha} matches prepared membership"
+
+          mapfile -t delivery_paths < <(git diff --name-only HEAD^ HEAD --)
+          if [ "${#delivery_paths[@]}" -ne 1 ] || [ "${delivery_paths[0]:-}" != 'scripts/vitest-runtime-history.json' ]; then
+            printf 'runtime-history delivery commit must change only scripts/vitest-runtime-history.json; got: %s\n' "${delivery_paths[*]:-<none>}" >&2
+            exit 1
           fi
-          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+          parent_sha="$(git rev-parse HEAD^)"
+          parent_tree_sha="$(git rev-parse "${parent_sha}^{tree}")"
+          expected_tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          expected_blob_sha="$(git hash-object scripts/vitest-runtime-history.json)"
+          repository_node_id="$(./scripts/gh api "repos/${GITHUB_REPOSITORY}" --jq .node_id)"
+
+          blob_request="${delivery_api_root}/blob.json"
+          HISTORY_PATH='scripts/vitest-runtime-history.json' node --input-type=module <<'NODE' > "${blob_request}"
+          import { readFileSync } from 'node:fs';
+          process.stdout.write(JSON.stringify({
+            content: readFileSync(process.env.HISTORY_PATH).toString('base64'),
+            encoding: 'base64',
+          }));
+          NODE
+          blob_sha="$(./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/git/blobs" --input "${blob_request}" --jq .sha)"
+          if [ "${blob_sha}" != "${expected_blob_sha}" ]; then
+            echo "runtime-history delivery blob mismatch: expected ${expected_blob_sha}, got ${blob_sha}" >&2
+            exit 1
+          fi
+
+          tree_request="${delivery_api_root}/tree.json"
+          BASE_TREE_SHA="${parent_tree_sha}" BLOB_SHA="${blob_sha}" node --input-type=module <<'NODE' > "${tree_request}"
+          process.stdout.write(JSON.stringify({
+            base_tree: process.env.BASE_TREE_SHA,
+            tree: [{
+              path: 'scripts/vitest-runtime-history.json',
+              mode: '100644',
+              type: 'blob',
+              sha: process.env.BLOB_SHA,
+            }],
+          }));
+          NODE
+          tree_sha="$(./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/git/trees" --input "${tree_request}" --jq .sha)"
+          if [ "${tree_sha}" != "${expected_tree_sha}" ]; then
+            echo "runtime-history delivery tree mismatch: expected ${expected_tree_sha}, got ${tree_sha}" >&2
+            exit 1
+          fi
+
+          commit_message_file="${delivery_api_root}/commit-message.txt"
+          git log -1 --format=%B HEAD > "${commit_message_file}"
+          commit_request="${delivery_api_root}/commit.json"
+          TREE_SHA="${tree_sha}" PARENT_SHA="${parent_sha}" COMMIT_MESSAGE_FILE="${commit_message_file}" \
+            node --input-type=module <<'NODE' > "${commit_request}"
+          import { readFileSync } from 'node:fs';
+          process.stdout.write(JSON.stringify({
+            message: readFileSync(process.env.COMMIT_MESSAGE_FILE, 'utf8').replace(/\n+$/, ''),
+            tree: process.env.TREE_SHA,
+            parents: [process.env.PARENT_SHA],
+          }));
+          NODE
+          delivery_head="$(./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/git/commits" --input "${commit_request}" --jq .sha)"
+
+          zero_oid='0000000000000000000000000000000000000000'
+          delivery_before_oid="${REMOTE_SHA:-${zero_oid}}"
+          update_refs_request="${delivery_api_root}/update-refs.json"
+          REPOSITORY_NODE_ID="${repository_node_id}" \
+          TRUSTED_MAIN_SHA="${trusted_main_sha}" \
+          DELIVERY_BRANCH="${DELIVERY_BRANCH}" \
+          DELIVERY_BEFORE_OID="${delivery_before_oid}" \
+          DELIVERY_HEAD="${delivery_head}" \
+            node --input-type=module <<'NODE' > "${update_refs_request}"
+          const input = {
+            repositoryId: process.env.REPOSITORY_NODE_ID,
+            refUpdates: [
+              {
+                name: 'refs/heads/main',
+                beforeOid: process.env.TRUSTED_MAIN_SHA,
+                afterOid: process.env.TRUSTED_MAIN_SHA,
+                force: false,
+              },
+              {
+                name: `refs/heads/${process.env.DELIVERY_BRANCH}`,
+                beforeOid: process.env.DELIVERY_BEFORE_OID,
+                afterOid: process.env.DELIVERY_HEAD,
+                force: true,
+              },
+            ],
+          };
+          process.stdout.write(JSON.stringify({
+            query: 'mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }',
+            variables: { input },
+          }));
+          NODE
+          ./scripts/gh api graphql --input "${update_refs_request}" >/dev/null
+          echo "runtime-history delivery atomic guard: trusted main ${trusted_main_sha} remained current in the same updateRefs transaction as ${DELIVERY_BRANCH}"
+          echo "head_sha=${delivery_head}" >> "$GITHUB_OUTPUT"
 
       - name: Publish pending delivery provenance
         if: steps.delivery.outputs.ahead != '0' && steps.delivery_branch.outputs.should_push == 'true'
