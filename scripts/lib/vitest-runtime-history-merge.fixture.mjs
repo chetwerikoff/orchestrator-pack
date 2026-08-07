@@ -2,10 +2,10 @@
 /**
  * Fixture suite for runtime-history refresh guards (Issue #691 / #1384).
  */
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { buildLanePlan, discoverVitestFiles } from './vitest-ci-lanes.mjs';
 import {
   buildHeavyTopology,
@@ -833,9 +833,15 @@ function runPartialSupplementalTupleWrapperFixture() {
     for (let index = 0; index < tuple.length; index += 1) {
       if ((mask & (1 << index)) !== 0) args.push(...tuple[index]);
     }
-    const result = spawnSync('pwsh', args, { encoding: 'utf8' });
+    const result = runProcessSync({
+      command: 'pwsh',
+      args,
+      encoding: 'utf8',
+      inheritParentEnv: true,
+      timeoutMs: 30_000,
+    });
     const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-    assert(result.status !== 0, `partial supplemental tuple mask ${mask} must fail`);
+    assert(result.exitCode !== 0, `partial supplemental tuple mask ${mask} must fail`);
     assert(output.includes(SUPPLEMENTAL_TUPLE_ERROR), `partial supplemental tuple mask ${mask} must emit exact refusal`);
     assert(readFileSync(historyPath, 'utf8') === sentinel, `partial supplemental tuple mask ${mask} must preserve history bytes`);
   }
@@ -872,17 +878,29 @@ function runWrapperAbsentAndCompleteTupleFixture() {
     '-DryRun',
   ];
 
-  const ordinary = spawnSync('pwsh', common, { encoding: 'utf8' });
-  assert(ordinary.status === 0, `ordinary heavy-only wrapper invocation must pass: ${ordinary.stderr ?? ''}`);
+  const ordinary = runProcessSync({
+    command: 'pwsh',
+    args: common,
+    encoding: 'utf8',
+    inheritParentEnv: true,
+    timeoutMs: 60_000,
+  });
+  assert(ordinary.exitCode === 0, `ordinary heavy-only wrapper invocation must pass: ${ordinary.stderr ?? ''}`);
 
-  const complete = spawnSync('pwsh', [
-    ...common,
-    '-SupplementalReportsDir', supplementalDir,
-    '-SupplementalSourceSha', 'aede47815ccadb54ac0ce405e8e359a343d196fe',
-    '-SupplementalRunId', '9001',
-    '-SupplementalRunAttempt', '1',
-  ], { encoding: 'utf8' });
-  assert(complete.status === 0, `complete supplemental wrapper invocation must pass: ${complete.stderr ?? ''}`);
+  const complete = runProcessSync({
+    command: 'pwsh',
+    args: [
+      ...common,
+      '-SupplementalReportsDir', supplementalDir,
+      '-SupplementalSourceSha', 'aede47815ccadb54ac0ce405e8e359a343d196fe',
+      '-SupplementalRunId', '9001',
+      '-SupplementalRunAttempt', '1',
+    ],
+    encoding: 'utf8',
+    inheritParentEnv: true,
+    timeoutMs: 60_000,
+  });
+  assert(complete.exitCode === 0, `complete supplemental wrapper invocation must pass: ${complete.stderr ?? ''}`);
 
   rmSync(dir, { recursive: true, force: true });
 }
@@ -924,16 +942,22 @@ function runRejectedTerminalStatusFixture() {
   const historyPath = join(defaultRepoRoot, 'scripts/vitest-runtime-history.json');
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const result = spawnSync(process.execPath, [
-      cli,
-      '--reports-dir', dir,
-      '--commit-sha', 'deadbeef',
-      '--repo-root', defaultRepoRoot,
-      '--history-path', historyPath,
-      '--dry-run',
-    ], { encoding: 'utf8' });
+    const result = runProcessSync({
+      command: process.execPath,
+      args: [
+        cli,
+        '--reports-dir', dir,
+        '--commit-sha', 'deadbeef',
+        '--repo-root', defaultRepoRoot,
+        '--history-path', historyPath,
+        '--dry-run',
+      ],
+      encoding: 'utf8',
+      inheritParentEnv: true,
+      timeoutMs: 30_000,
+    });
     const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-    assert(result.status !== 0, `rejected evidence attempt ${attempt} must remain non-successful`);
+    assert(result.exitCode !== 0, `rejected evidence attempt ${attempt} must remain non-successful`);
     assert(output.includes('[FAIL] runtime-history refresh rejected evidence:'), `rejected evidence attempt ${attempt} must emit failure signal`);
     assert(!output.includes('[PASS] runtime-history refresh left committed history unchanged'), `rejected evidence attempt ${attempt} must not masquerade as idempotent success`);
   }
