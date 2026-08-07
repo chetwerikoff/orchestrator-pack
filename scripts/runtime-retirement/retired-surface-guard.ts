@@ -46,9 +46,19 @@ const EXCLUDED_PREFIXES = [
   'docs/issues_drafts/',
   'docs/declarations/',
   'docs/archive/',
+  // Frozen pre-cut evidence for the gate-runner migration. These files are
+  // historical inputs/goldens, never executable current-runtime authority.
+  'scripts/gate-runner/census/',
+  'scripts/gate-runner/goldens/',
+  'scripts/fixtures/gate-runner/legacy-wave-3b/',
 ] as const;
 const EXCLUDED_EXACT = new Set([
   'docs/issue_queue_index.md',
+  'docs/vitest-light-lane-isolation-audit-874.md',
+  'docs/submit-reconcile-delivery-source-audit.json',
+  'scripts/estate-cut/issue-906.base-anchor.json',
+  'scripts/fixtures/reaction-config/report_stale_message.live-capture.provenance.json',
+  'scripts/fixtures/reaction-config/report_stale_message.live-capture.txt',
   'scripts/lib/vitest-pre-topology-measurement.mjs',
 ]);
 
@@ -98,7 +108,10 @@ export function loadRetiredSurfaces(repoRoot: string): readonly RetiredSurfaceDe
     const definition = value as unknown as RetiredSurfaceDefinition;
     if (ids.has(definition.id)) throw new Error(`duplicate retired surface id: ${definition.id}`);
     ids.add(definition.id);
-    new RegExp(definition.sourceCommandPattern, 'gmi');
+    // Source patterns are deliberately case-sensitive. Runtime selectors and
+    // executable names are exact identities; case-folding turns neutral status
+    // codes and historical prose into false active-runtime violations.
+    new RegExp(definition.sourceCommandPattern, 'gm');
     new RegExp(definition.pathPattern, 'i');
     return definition;
   });
@@ -132,7 +145,7 @@ export function scanRetiredRuntimeSurfaces(input: {
     }
     const content = readFileSync(absolute, 'utf8');
     for (const surface of surfaces) {
-      const regex = new RegExp(surface.sourceCommandPattern, 'gmi');
+      const regex = new RegExp(surface.sourceCommandPattern, 'gm');
       for (const match of content.matchAll(regex)) {
         violations.push({
           path,
