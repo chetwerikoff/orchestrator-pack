@@ -10,6 +10,9 @@ import {
 
 export const BROWSER_TURN_CANCELLATION_RECEIPT_SCHEMA =
   'browser-turn-cancellation-receipt/v1' as const;
+// Support/test callers may consume this only after independently proving abandonment;
+// production observation-loss paths intentionally have no authority producer.
+export const EXPLICIT_CANCELLATION_AUTHORITY = 'independently_explicit' as const;
 
 const CHATGPT_CONVERSATION_ORIGINS = new Set([
   'https://chatgpt.com',
@@ -18,10 +21,17 @@ const CHATGPT_CONVERSATION_ORIGINS = new Set([
 const CANCELLATION_LOCAL_WAIT_MS = 5_000;
 const USER_MESSAGE_READ_WAIT_MS = 800;
 
+export type ExplicitCancellationAuthority = typeof EXPLICIT_CANCELLATION_AUTHORITY;
+
 export type StopOwnedGenerationOutcome =
+  | 'not_attempted_authority_absent'
+  | 'not_attempted_identity_unproven'
+  | 'not_attempted_control_absent_or_ambiguous'
   | 'confirmed'
   | 'unconfirmed'
   | 'unavailable';
+
+export type BrowserTurnCancellationDisposition = StopOwnedGenerationOutcome;
 
 export interface BrowserTurnCancellationReceipt {
   readonly schema: typeof BROWSER_TURN_CANCELLATION_RECEIPT_SCHEMA;
@@ -36,7 +46,7 @@ export interface BrowserTurnCancellationAttempt {
   readonly state: 'no_reply' | 'driver_error';
   readonly cause: string;
   readonly sendCount?: 1;
-  readonly stopOutcome: StopOwnedGenerationOutcome;
+  readonly stopOutcome: BrowserTurnCancellationDisposition;
   readonly identityProven: boolean;
   readonly conversationUrl?: string;
 }
@@ -139,7 +149,11 @@ export async function readRecoveryAuthoritativeUserMessages(
 
 export async function stopOwnedGeneration(
   page: any,
+  authority?: ExplicitCancellationAuthority,
 ): Promise<StopOwnedGenerationOutcome> {
+  if (authority !== EXPLICIT_CANCELLATION_AUTHORITY) {
+    return 'not_attempted_authority_absent';
+  }
   if (!page) return 'unavailable';
   try {
     if (typeof page.isClosed === 'function' && page.isClosed() === true) {
@@ -149,27 +163,40 @@ export async function stopOwnedGeneration(
     return 'unavailable';
   }
 
+  let controls: any;
+  let count: number;
   try {
-    const controls = page.locator(STOP_BUTTON_SELECTOR);
-    const count = Number(await controls.count());
-    // Selector absence is not evidence that server-side generation completed.
-    if (!Number.isSafeInteger(count) || count < 1) return 'unconfirmed';
-    const control = controls.first();
+    controls = page.locator(STOP_BUTTON_SELECTOR);
+    count = Number(await controls.count());
+  } catch {
+    return 'not_attempted_control_absent_or_ambiguous';
+  }
+  if (!Number.isSafeInteger(count) || count !== 1) {
+    return 'not_attempted_control_absent_or_ambiguous';
+  }
+
+  const control = controls.first();
+  try {
     await control.click({ timeout: CANCELLATION_LOCAL_WAIT_MS });
-    if (typeof control.waitFor === 'function') {
-      try {
-        await control.waitFor({ state: 'hidden', timeout: CANCELLATION_LOCAL_WAIT_MS });
-        return 'confirmed';
-      } catch {
-        // Continue to the independent post-click count witness.
-      }
-    }
-    const remaining = Number(await controls.count());
-    return Number.isSafeInteger(remaining) && remaining < 1
-      ? 'confirmed'
-      : 'unconfirmed';
   } catch {
     return 'unconfirmed';
+  }
+
+  if (typeof control.waitFor === 'function') {
+    try {
+      await control.waitFor({ state: 'hidden', timeout: CANCELLATION_LOCAL_WAIT_MS });
+      return 'confirmed';
+    } catch {
+      // Continue to a fresh independent post-click count witness.
+    }
+  }
+
+  try {
+    const remaining = Number(await controls.count());
+    if (!Number.isSafeInteger(remaining) || remaining < 0) return 'unavailable';
+    return remaining === 0 ? 'confirmed' : 'unconfirmed';
+  } catch {
+    return 'unavailable';
   }
 }
 
@@ -196,14 +223,51 @@ function unavailable(
   };
 }
 
+export function authorityAbsent(
+  receipt: BrowserTurnCancellationReceipt,
+): BrowserTurnCancellationAttempt {
+  return {
+    state: 'driver_error',
+    cause: 'child_stdout_eof_timeout_cancellation_authority_absent',
+    sendCount: 1,
+    stopOutcome: 'not_attempted_authority_absent',
+    identityProven: false,
+    conversationUrl: receipt.conversation_url,
+  };
+}
+
+function identityUnproven(
+  cause: string,
+  receipt: BrowserTurnCancellationReceipt,
+): BrowserTurnCancellationAttempt {
+  return {
+    state: 'driver_error',
+    cause,
+    sendCount: 1,
+    stopOutcome: 'not_attempted_identity_unproven',
+    identityProven: false,
+    conversationUrl: receipt.conversation_url,
+  };
+}
+
 export async function cancelOwnedGenerationFromReceipt(
   rawReceipt: BrowserTurnCancellationReceipt,
   cdp: string,
-  dependencies: BrowserTurnCancellationDependencies = {},
+  authorityOrDependencies?: ExplicitCancellationAuthority | BrowserTurnCancellationDependencies,
+  explicitDependencies: BrowserTurnCancellationDependencies = {},
 ): Promise<BrowserTurnCancellationAttempt> {
   const receipt = parseBrowserTurnCancellationReceipt(rawReceipt);
   if (!receipt) return unavailable('child_stdout_eof_timeout_cancellation_receipt_invalid');
-  if (!cdp.trim()) return unavailable('child_stdout_eof_timeout_cdp_unavailable', receipt);
+  const authority = authorityOrDependencies === EXPLICIT_CANCELLATION_AUTHORITY
+    ? authorityOrDependencies
+    : undefined;
+  const dependencies = authorityOrDependencies && typeof authorityOrDependencies === 'object'
+    ? authorityOrDependencies
+    : explicitDependencies;
+  if (authority !== EXPLICIT_CANCELLATION_AUTHORITY) return authorityAbsent(receipt);
+  if (!cdp.trim()) {
+    return identityUnproven('child_stdout_eof_timeout_cdp_unavailable', receipt);
+  }
 
   let browser: any;
   try {
@@ -211,7 +275,7 @@ export async function cancelOwnedGenerationFromReceipt(
       ? await dependencies.connect(cdp)
       : await loadChromium().connectOverCDP(cdp, { timeout: 30_000 });
   } catch {
-    return unavailable('child_stdout_eof_timeout_cancellation_reconnect_failed', receipt);
+    return identityUnproven('child_stdout_eof_timeout_cancellation_reconnect_failed', receipt);
   }
 
   try {
@@ -227,35 +291,33 @@ export async function cancelOwnedGenerationFromReceipt(
         // An unreadable page has no authority for this exact receipt.
       }
     }
-    if (exactUrlPages.length < 1) {
-      return unavailable('child_stdout_eof_timeout_owned_conversation_not_found', receipt);
+    if (exactUrlPages.length !== 1) {
+      return identityUnproven(
+        exactUrlPages.length > 1
+          ? 'child_stdout_eof_timeout_cancellation_identity_ambiguous'
+          : 'child_stdout_eof_timeout_owned_conversation_not_found',
+        receipt,
+      );
     }
 
-    const eligible: any[] = [];
-    for (const page of exactUrlPages) {
-      const observed = dependencies.readUserMessages
-        ? await dependencies.readUserMessages(page)
-        : await readRecoveryAuthoritativeUserMessages(page);
-      if (observed.incomplete) {
-        return unavailable('child_stdout_eof_timeout_cancellation_identity_unreadable', receipt);
-      }
-      const cardinality = recoveryMarkerCardinality(observed.messages, receipt.marker);
-      if (
-        cardinality.matchingUserCarrierCount > 1
-        || cardinality.exactMarkerTokenCount > 1
-      ) {
-        return unavailable('child_stdout_eof_timeout_cancellation_identity_ambiguous', receipt);
-      }
-      if (
-        cardinality.matchingUserCarrierCount === 1
-        && cardinality.exactMarkerTokenCount === 1
-      ) {
-        eligible.push(page);
-      }
+    const page = exactUrlPages[0];
+    const observed = dependencies.readUserMessages
+      ? await dependencies.readUserMessages(page)
+      : await readRecoveryAuthoritativeUserMessages(page);
+    if (observed.incomplete) {
+      return identityUnproven(
+        'child_stdout_eof_timeout_cancellation_identity_unreadable',
+        receipt,
+      );
     }
-    if (eligible.length !== 1) {
-      return unavailable(
-        eligible.length > 1
+    const cardinality = recoveryMarkerCardinality(observed.messages, receipt.marker);
+    if (
+      cardinality.matchingUserCarrierCount !== 1
+      || cardinality.exactMarkerTokenCount !== 1
+    ) {
+      return identityUnproven(
+        cardinality.matchingUserCarrierCount > 1
+          || cardinality.exactMarkerTokenCount > 1
           ? 'child_stdout_eof_timeout_cancellation_identity_ambiguous'
           : 'child_stdout_eof_timeout_cancellation_identity_unproven',
         receipt,
@@ -263,8 +325,8 @@ export async function cancelOwnedGenerationFromReceipt(
     }
 
     const stopOutcome = dependencies.stop
-      ? await dependencies.stop(eligible[0])
-      : await stopOwnedGeneration(eligible[0]);
+      ? await dependencies.stop(page)
+      : await stopOwnedGeneration(page, authority);
     return {
       state: stopOutcome === 'confirmed' ? 'no_reply' : 'driver_error',
       cause: stopOutcome === 'confirmed'
@@ -276,7 +338,10 @@ export async function cancelOwnedGenerationFromReceipt(
       conversationUrl: receipt.conversation_url,
     };
   } catch {
-    return unavailable('child_stdout_eof_timeout_cancellation_handshake_failed', receipt);
+    return identityUnproven(
+      'child_stdout_eof_timeout_cancellation_handshake_failed',
+      receipt,
+    );
   } finally {
     try {
       if (dependencies.releaseBrowser) await dependencies.releaseBrowser(browser);

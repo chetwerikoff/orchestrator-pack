@@ -18,14 +18,14 @@ import { dirname, basename, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TURN_STATES, type FailureScope, type TurnResultV1, type TurnState } from './chatgpt-browser-turn/contracts.ts';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
-import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
-  cancelOwnedGenerationFromReceipt,
+  authorityAbsent,
   parseBrowserTurnCancellationReceipt,
   type BrowserTurnCancellationAttempt,
   type BrowserTurnCancellationDependencies,
   type BrowserTurnCancellationReceipt,
 } from './chatgpt-browser-turn/state-light-cancellation.ts';
+import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 
 export const COMPLETION_MODE = 'browser-turn-result-v1' as const;
 export const HANDOFF_SCHEMA = 'flow-manager-long-running-child-handoff/v1' as const;
@@ -485,6 +485,39 @@ function parseCancellationReceiptLine(line: string): BrowserTurnCancellationRece
   }
 }
 
+function cancellationReceiptIsBound(
+  config: LaunchConfig,
+  receipt: BrowserTurnCancellationReceipt,
+): boolean {
+  const childArgValue = (flag: string): string | undefined => {
+    for (let index = 0; index + 1 < config.childArgs.length; index += 1) {
+      if (config.childArgs[index] !== flag) continue;
+      const value = config.childArgs[index + 1];
+      if (value && !value.startsWith('--')) return value;
+    }
+    return undefined;
+  };
+  const invocationId = childArgValue('--invocation-id');
+  const profile = childArgValue('--profile');
+  const cdp = childArgValue('--cdp');
+  if (!invocationId || !profile || !cdp) return false;
+  try {
+    return receipt.invocation_id === invocationId
+      && receipt.configured_profile_key === configuredProfileKey(profile, cdp);
+  } catch {
+    return false;
+  }
+}
+
+function identityUnprovenCancellation(): BrowserTurnCancellationAttempt {
+  return {
+    state: 'driver_error',
+    cause: 'child_stdout_eof_timeout_cancellation_receipt_identity_unproven',
+    stopOutcome: 'not_attempted_identity_unproven',
+    identityProven: false,
+  };
+}
+
 async function runChildEofCancellation(
   config: LaunchConfig,
   capture: CandidateCapture,
@@ -494,63 +527,36 @@ async function runChildEofCancellation(
     return {
       state: 'driver_error',
       cause: 'child_stdout_eof_timeout_cancellation_receipt_missing',
-      stopOutcome: 'unavailable',
+      stopOutcome: 'not_attempted_authority_absent',
       identityProven: false,
     };
+  }
+  if (!cancellationReceiptIsBound(config, receipt)) {
+    return identityUnprovenCancellation();
   }
   if (capture.duplicateCancellationReceipt) {
     return {
       state: 'driver_error',
       cause: 'child_stdout_eof_timeout_cancellation_receipt_duplicate',
       sendCount: 1,
-      stopOutcome: 'unavailable',
+      stopOutcome: 'not_attempted_authority_absent',
       identityProven: false,
       conversationUrl: receipt.conversation_url,
     };
   }
+  return authorityAbsent(receipt);
+}
 
-  const childOptions = parseFlagArgv(config.childArgs);
-  const cdp = childOptions.get('cdp');
-  const profile = childOptions.get('profile');
-  const invocation = childOptions.get('invocation-id');
-  if (typeof cdp !== 'string' || !cdp.trim()) {
-    return {
-      state: 'driver_error',
-      cause: 'child_stdout_eof_timeout_cdp_unavailable',
-      sendCount: 1,
-      stopOutcome: 'unavailable',
-      identityProven: false,
-      conversationUrl: receipt.conversation_url,
-    };
-  }
-  if (typeof invocation === 'string' && invocation !== receipt.invocation_id) {
-    return {
-      state: 'driver_error',
-      cause: 'child_stdout_eof_timeout_invocation_mismatch',
-      sendCount: 1,
-      stopOutcome: 'unavailable',
-      identityProven: false,
-      conversationUrl: receipt.conversation_url,
-    };
-  }
-  if (
-    typeof profile === 'string'
-    && configuredProfileKey(profile, cdp) !== receipt.configured_profile_key
-  ) {
-    return {
-      state: 'driver_error',
-      cause: 'child_stdout_eof_timeout_profile_mismatch',
-      sendCount: 1,
-      stopOutcome: 'unavailable',
-      identityProven: false,
-      conversationUrl: receipt.conversation_url,
-    };
-  }
-  return await cancelOwnedGenerationFromReceipt(
-    receipt,
-    cdp,
-    config.cancellationDependencies,
-  );
+function cancellationEnvelopeFields(
+  attempt: BrowserTurnCancellationAttempt,
+  childStartFailed: boolean,
+): Pick<TerminalEnvelope, 'delivery' | 'send_count' | 'recovery_available' | 'conversation_locator'> {
+  return {
+    delivery: childStartFailed ? 'not-sent' : 'POSSIBLY_DELIVERED',
+    ...(attempt.sendCount ? { send_count: attempt.sendCount } : {}),
+    recovery_available: Boolean(attempt.conversationUrl),
+    ...(attempt.conversationUrl ? { conversation_locator: attempt.conversationUrl } : {}),
+  };
 }
 
 function cancellationDiagnostics(
@@ -899,7 +905,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
       );
     }
     const spawnFailed = completion.result?.outcome === 'spawn-failure';
-    if (!completion.completed) {
+    if (!completion.completed || capture.cancellationReceipt) {
       const cancellation = await runChildEofCancellation(config, capture);
       await publishEnvelope(config, {
         schema: TERMINAL_SCHEMA,
@@ -912,15 +918,10 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
         terminal_at: nowIso(),
         lifecycle_outcome: 'incident',
         incident: 'child_stdout_eof_timeout',
-        delivery: 'POSSIBLY_DELIVERED',
         child_exit_code: childExitCode,
         turn_result_state: cancellation.state,
         turn_result_cause: cancellation.cause,
-        ...(cancellation.sendCount ? { send_count: cancellation.sendCount } : {}),
-        recovery_available: Boolean(cancellation.conversationUrl),
-        ...(cancellation.conversationUrl
-          ? { conversation_locator: cancellation.conversationUrl }
-          : {}),
+        ...cancellationEnvelopeFields(cancellation, spawnFailed),
         diagnostics: cancellationDiagnostics(cancellation, lastHeartbeatDiagnostics),
       });
       await abortManagedProcess(controller, runPromise);
@@ -959,15 +960,10 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     terminal_at: nowIso(),
     lifecycle_outcome: 'incident',
     incident: 'child_stdout_eof_timeout',
-    delivery: 'POSSIBLY_DELIVERED',
     child_exit_code: childExitCode,
     turn_result_state: cancellation.state,
     turn_result_cause: cancellation.cause,
-    ...(cancellation.sendCount ? { send_count: cancellation.sendCount } : {}),
-    recovery_available: Boolean(cancellation.conversationUrl),
-    ...(cancellation.conversationUrl
-      ? { conversation_locator: cancellation.conversationUrl }
-      : {}),
+    ...cancellationEnvelopeFields(cancellation, false),
     diagnostics: cancellationDiagnostics(cancellation, lastHeartbeatDiagnostics),
   });
   await abortManagedProcess(controller, runPromise);

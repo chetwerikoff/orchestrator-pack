@@ -76,7 +76,11 @@ import {
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
 import { classifyPageObservation, classifySendLandingEvidence, runStateLightTurn } from './state-light-turn.ts';
-import { readRecoveryAuthoritativeUserMessages, stopOwnedGeneration } from './state-light-cancellation.ts';
+import {
+  EXPLICIT_CANCELLATION_AUTHORITY,
+  readRecoveryAuthoritativeUserMessages,
+  stopOwnedGeneration,
+} from './state-light-cancellation.ts';
 import * as uiAdapter from './ui-adapter.ts';
 import {
   ASSISTANT_MESSAGE_SELECTOR,
@@ -1162,7 +1166,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     expect(foreignClose).not.toHaveBeenCalled();
   });
 
-  it('terminates observation exhaustion truthfully after one send, Stops only the proven owned page, and preserves every tab', async () => {
+  it('terminates observation exhaustion truthfully after one send without stopping and preserves every tab', async () => {
     const prompt = 'PROMPT-EXHAUST';
     const output = join(integrationStateDir, 'exhausted.txt');
     let sends = 0;
@@ -1253,7 +1257,8 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
         })
         : scalarLocator()),
     };
-    expect(await stopOwnedGeneration(stopProbePage)).toBe('confirmed');
+    expect(await stopOwnedGeneration(stopProbePage, EXPLICIT_CANCELLATION_AUTHORITY))
+      .toBe('confirmed');
     expect(stopProbeClick).toHaveBeenCalledTimes(1);
 
     mocks.browserQueue.push(browserWithPages(ownedPage, [ownedPage, foreignPage], () => true));
@@ -1268,10 +1273,10 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       cleanup: 'skipped',
     });
     expect(outcome.result.incidents).toContain('observation_exhausted');
-    expect(ownedStop, JSON.stringify(outcome)).toHaveBeenCalledTimes(1);
+    expect(ownedStop, JSON.stringify(outcome)).not.toHaveBeenCalled();
     expect(outcome.result.incidents).toEqual([
       'observation_exhausted',
-      'owned_generation_stop_confirmed',
+      'owned_generation_stop_not_attempted_authority_absent',
     ]);
     expect(sends).toBe(1);
     expect(foreignStop).not.toHaveBeenCalled();
