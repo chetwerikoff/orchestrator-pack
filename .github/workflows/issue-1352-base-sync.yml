@@ -63,12 +63,14 @@ jobs:
               exit 86
             fi
 
-            # Issue #1352 permits selector neutralization but requires preservation of
-            # active observable behavior. The branch had deleted the runtime-neutral
-            # browser recovery/cancellation machinery wholesale, while current main
-            # only hardens that machinery. Preserve current main and reapply only the
-            # exact AO selector removals authorized by AO-11.
-            git checkout --theirs -- scripts/chatgpt-browser-turn/state-light-turn.ts
+            # These files implement active runtime-neutral browser recovery and EOF
+            # cancellation. The #1352 side changed them only by removing that live
+            # behavior plus three AO-keyed incident fallbacks. Preserve current main
+            # wholesale, then reapply only the selector neutralization authorized by AO-11.
+            git checkout --theirs -- \
+              scripts/chatgpt-browser-turn/state-light-turn.ts \
+              scripts/flow-manager-long-running-child.test.ts \
+              scripts/flow-manager-long-running-child.ts
             python - <<'PY'
           from pathlib import Path
 
@@ -88,48 +90,6 @@ jobs:
                   raise SystemExit(f'unexpected selector occurrence count {count}: {old}')
               text = text.replace(old, new, 1)
           path.write_text(text, encoding='utf-8')
-          PY
-
-            # The remaining two conflicts are narrow #1377 behavior additions. Keep
-            # all non-conflicting #1352 changes and select current-main only inside
-            # the reviewed conflict blocks.
-            python - <<'PY'
-          from pathlib import Path
-
-          paths = [
-              Path('scripts/flow-manager-long-running-child.test.ts'),
-              Path('scripts/flow-manager-long-running-child.ts'),
-          ]
-          for path in paths:
-              lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
-              output: list[str] = []
-              state = 'normal'
-              saw_conflict = False
-              for line in lines:
-                  if line.startswith('<<<<<<< '):
-                      if state != 'normal':
-                          raise SystemExit(f'nested conflict marker in {path}')
-                      state = 'ours'
-                      saw_conflict = True
-                      continue
-                  if line.startswith('======='):
-                      if state != 'ours':
-                          raise SystemExit(f'unexpected separator in {path}')
-                      state = 'theirs'
-                      continue
-                  if line.startswith('>>>>>>> '):
-                      if state != 'theirs':
-                          raise SystemExit(f'unexpected closing marker in {path}')
-                      state = 'normal'
-                      continue
-                  if state in ('normal', 'theirs'):
-                      output.append(line)
-              if state != 'normal' or not saw_conflict:
-                  raise SystemExit(f'incomplete or absent conflict markers in {path}')
-              resolved = ''.join(output)
-              if any(marker in resolved for marker in ('<<<<<<< ', '=======', '>>>>>>> ')):
-                  raise SystemExit(f'residual conflict marker in {path}')
-              path.write_text(resolved, encoding='utf-8')
           PY
             git add \
               scripts/chatgpt-browser-turn/state-light-turn.ts \
