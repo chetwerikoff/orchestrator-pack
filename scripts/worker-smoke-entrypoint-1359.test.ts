@@ -57,12 +57,11 @@ function ok<T>(result: T): OrcaJsonResponse<T> {
 }
 
 describe('Issue #1359 real worker-smoke entrypoint', () => {
-  it('submits a pasted prompt, confirms first-ordinal evidence, and proves owned-handle absence', () => {
+  it('submits a pasted prompt, confirms first-ordinal evidence, and closes the frozen owned handle', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-entrypoint-1359-'));
     const bin = join(root, 'bin');
     const callsPath = join(root, 'orca-calls.jsonl');
     const promptPath = join(root, 'pasted-prompt.txt');
-    const absencePath = join(root, 'terminal-absent');
     const issueBodyPath = join(root, 'issue.md');
     mkdirSync(bin, { recursive: true });
 
@@ -90,29 +89,17 @@ describe('Issue #1359 real worker-smoke entrypoint', () => {
       const fakeOrca = join(bin, 'orca');
       writeFileSync(fakeOrca, `#!/usr/bin/env node
 const { createHash } = require('node:crypto');
-const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const { appendFileSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
 const args = process.argv.slice(2).filter((value) => value !== '--json');
 appendFileSync(process.env.FAKE_ORCA_CALLS, JSON.stringify(args) + '\\n', 'utf8');
 const root = process.env.FAKE_ORCA_ROOT;
 const head = process.env.FAKE_ORCA_HEAD;
-const calls = readFileSync(process.env.FAKE_ORCA_CALLS, 'utf8')
-  .split(/\\r?\\n/u)
-  .filter((line) => line.trim())
-  .map((line) => JSON.parse(line));
-const showCallCount = calls
-  .filter((entry) => entry[0] === 'terminal' && entry[1] === 'show')
-  .length;
-const listCallCount = calls
-  .filter((entry) => entry[0] === 'terminal' && entry[1] === 'list')
-  .length;
 const terminal = {
   handle: 'terminal-1359',
-  title: 'smoke-1359',
-  incarnationId: showCallCount >= 2
-    ? 'dispatch-generation-1359'
-    : 'spawn-generation-1359',
+  title: 'smoke-1359-renamed',
+  incarnationId: 'stable-generation-1359',
   worktreePath: root,
   status: 'running',
 };
@@ -125,20 +112,11 @@ const fail = (code, message) => {
 if (args[0] === 'worktree' && args[1] === 'current') {
   ok({ worktree: { path: root, head, linkedIssue: 1359 } });
 } else if (args[0] === 'terminal' && args[1] === 'create') {
-  ok({ terminal: { ...terminal, incarnationId: 'create-generation-1359' } });
+  ok({ terminal: { ...terminal, title: 'smoke-1359', incarnationId: 'create-generation-1359' } });
 } else if (args[0] === 'terminal' && args[1] === 'show') {
-  if (existsSync(process.env.FAKE_ORCA_ABSENCE)) {
-    fail('terminal_not_found', 'terminal is no longer alive');
-  } else {
-    ok({ terminal });
-  }
+  ok({ terminal });
 } else if (args[0] === 'terminal' && args[1] === 'list') {
-  if (listCallCount >= 3) {
-    writeFileSync(process.env.FAKE_ORCA_ABSENCE, 'absent\\n', 'utf8');
-    ok({ terminals: [] });
-  } else {
-    ok({ terminals: [terminal] });
-  }
+  ok({ terminals: [] });
 } else if (args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')) {
   const text = args[args.indexOf('--text') + 1] || '';
   writeFileSync(process.env.FAKE_ORCA_PROMPT, text, 'utf8');
@@ -177,7 +155,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     ok({ sent: true });
   }
 } else if (args[0] === 'terminal' && args[1] === 'close') {
-  fail('unexpected_close', 'owned terminal was already absent and must not be closed by handle');
+  ok({ closed: true });
 } else if (args[0] === 'terminal' && args[1] === 'read') {
   ok({ terminal: { handle: terminal.handle, status: 'running', tail: [], nextCursor: '1' } });
 } else if (args[0] === 'terminal' && args[1] === 'wait') {
@@ -207,7 +185,6 @@ if (args[0] === 'worktree' && args[1] === 'current') {
           FAKE_ORCA_ROOT: root,
           FAKE_ORCA_HEAD: head,
           FAKE_ORCA_PROMPT: promptPath,
-          FAKE_ORCA_ABSENCE: absencePath,
           WORKER_SMOKE_SUBMIT_CONFIRMATION_TIMEOUT_MS: '20',
         },
       });
@@ -270,20 +247,20 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         .map((value, index) => value === 'terminal send' ? index : -1)
         .filter((index) => index >= 0);
       expect(createIndex).toBeGreaterThanOrEqual(0);
-      expect(showIndexes.length).toBeGreaterThanOrEqual(2);
+      expect(showIndexes.length).toBeGreaterThanOrEqual(3);
       expect(sendIndexes).toHaveLength(2);
       expect(calls[sendIndexes[0]!] ?? []).toContain('--text');
       expect(calls[sendIndexes[1]!] ?? []).not.toContain('--text');
       expect(calls[sendIndexes[1]!] ?? []).toContain('--enter');
-      expect(operations.filter((value) => value === 'terminal close')).toHaveLength(0);
-      expect(operations.filter((value) => value === 'terminal list').length).toBeGreaterThanOrEqual(3);
+      expect(operations.filter((value) => value === 'terminal close')).toHaveLength(1);
+      expect(operations.filter((value) => value === 'terminal list')).toHaveLength(0);
       expect(createHash('sha256').update(readFileSync(wrapper), 'utf8').digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('treats exact owned-handle absence as closed without consulting a foreign sibling', () => {
+  it('keeps a missing-handle-like close observation unproven without consulting a foreign sibling', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-owned-absent-'));
     const owned: OrcaTerminalSummary = {
       handle: 'terminal-owned',
@@ -299,6 +276,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       worktreePath: root,
       status: 'running',
     };
+    let showCalls = 0;
     const calls: string[][] = [];
     const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
       calls.push([...args]);
@@ -306,9 +284,16 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
-        return ok({ terminals: [foreign] } as T);
+      if (args[0] === 'terminal' && args[1] === 'show') {
+        showCalls += 1;
+        if (showCalls === 1) return ok({ terminal: owned } as T);
+        return {
+          ok: false,
+          outcomeCategory: 'supported_operation_failure',
+          error: { code: 'terminal_not_found', message: 'terminal is no longer alive' },
+        };
       }
+      if (args[0] === 'terminal' && args[1] === 'list') return ok({ terminals: [foreign] } as T);
       return {
         ok: false,
         error: { code: 'unexpected_test_operation', message: args.join(' ') },
@@ -324,12 +309,12 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(spawned.status).toBe('ok');
       if (spawned.status !== 'ok') return;
 
-      expect(runtimeClose(adapter, spawned.value.identity, { cwd: root }))
-        .toBe('closed_owned_handle');
-      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'list'))
-        .toHaveLength(1);
-      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'close'))
-        .toBe(false);
+      const outcome = runtimeClose(adapter, spawned.value.identity, { cwd: root });
+      expect(outcome).toContain('close_failed:unproven_already_absent');
+      expect(outcome).toContain('inventory_error=find_worker_by_id:failed:runtime_operation_failed');
+      expect(outcome).toContain('presence=unproven');
+      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'list')).toHaveLength(0);
+      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'close')).toBe(false);
       expect(calls.some((args) => args.includes(foreign.handle!))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -345,6 +330,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       worktreePath: root,
       status: 'running',
     };
+    let showCalls = 0;
     const calls: string[][] = [];
     const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
       calls.push([...args]);
@@ -352,7 +338,9 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
+      if (args[0] === 'terminal' && args[1] === 'show') {
+        showCalls += 1;
+        if (showCalls === 1) return ok({ terminal: owned } as T);
         return {
           ok: false,
           outcomeCategory: 'supported_operation_failure',
@@ -365,7 +353,6 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       };
     };
 
-    // Keep this negative-path fixture visibly distinct from the close-failure fixture.
     try {
       const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
       const spawned = adapter.spawnWorker(
@@ -377,12 +364,10 @@ if (args[0] === 'worktree' && args[1] === 'current') {
 
       const outcome = runtimeClose(adapter, spawned.value.identity, { cwd: root });
       expect(outcome).toContain('close_failed:unproven_already_absent');
-      expect(outcome).toContain('inventory_error=list_workers:failed:runtime_operation_failed');
+      expect(outcome).toContain('inventory_error=find_worker_by_id:failed:runtime_operation_failed');
       expect(outcome).toContain('presence=unproven');
-      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'list'))
-        .toHaveLength(1);
-      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'close'))
-        .toBe(false);
+      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'show')).toHaveLength(2);
+      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'close')).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -400,18 +385,12 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     const calls: string[][] = [];
     const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
       calls.push([...args]);
-      if (args[0] === 'terminal' && args[1] === 'create') {
-        return ok({ terminal } as T);
-      }
+      if (args[0] === 'terminal' && args[1] === 'create') return ok({ terminal } as T);
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
-        return ok({ terminals: [terminal] } as T);
-      }
-      if (args[0] === 'terminal' && args[1] === 'send') {
-        return ok({ sent: true } as T);
-      }
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal } as T);
+      if (args[0] === 'terminal' && args[1] === 'send') return ok({ sent: true } as T);
       return {
         ok: false,
         error: { code: 'unexpected_test_operation', message: args.join(' ') },
@@ -460,20 +439,20 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     }
   });
 
-  it('resolves the current generation before read and reaches plan_complete with a sealed report', () => {
+  it('keeps the established generation frozen while read reaches plan_complete', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-read-generation-'));
     const artifactDir = join(root, 'run-read-generation');
     const runId = 'run-read-generation';
     const handle = 'terminal-read-generation';
     const title = 'smoke-read-generation-1359';
-    let currentGeneration = 'create-generation';
+    const frozenGeneration = 'frozen-generation';
     let probeCalls = 0;
     let readCalls = 0;
     let waitCalls = 0;
     const terminal = (): OrcaTerminalSummary => ({
       handle,
       title,
-      incarnationId: currentGeneration,
+      incarnationId: frozenGeneration,
       worktreePath: root,
       status: 'running',
     });
@@ -484,12 +463,8 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
-        return ok({ terminals: [terminal()] } as T);
-      }
-      if (args[0] === 'terminal' && args[1] === 'send') {
-        return ok({ sent: true } as T);
-      }
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal: terminal() } as T);
+      if (args[0] === 'terminal' && args[1] === 'send') return ok({ sent: true } as T);
       if (args[0] === 'terminal' && args[1] === 'read') {
         readCalls += 1;
         return ok({
@@ -520,11 +495,6 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     const restore = installStableWorkerSmokeSpawnPatch({
       probe: () => {
         probeCalls += 1;
-        currentGeneration = probeCalls === 1
-          ? 'spawn-generation'
-          : probeCalls === 2
-            ? 'dispatch-generation'
-            : 'read-generation';
         return ok({ terminal: terminal() });
       },
     });
@@ -563,14 +533,14 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       );
       expect(spawned.status).toBe('ok');
       if (spawned.status !== 'ok') return;
-      expect(spawned.value.identity.generation).toBe('spawn-generation');
+      expect(spawned.value.identity.generation).toBe(frozenGeneration);
 
       const dispatched = adapter.dispatchInput({
         worker: spawned.value.identity,
         text: 'execute the sealed-report scenario',
       }, { cwd: root });
       expect(dispatched.status).toBe('dispatched');
-      expect(spawned.value.identity.generation).toBe('dispatch-generation');
+      expect(spawned.value.identity.generation).toBe(frozenGeneration);
 
       ensureSmokeRunArtifactDir(artifactDir);
       const completion = waitForRuntimeSmokeCompletion({
@@ -595,8 +565,8 @@ if (args[0] === 'worktree' && args[1] === 'current') {
 
       expect(readCalls).toBeGreaterThan(0);
       expect(waitCalls).toBeGreaterThan(0);
-      expect(probeCalls).toBeGreaterThanOrEqual(4);
-      expect(spawned.value.identity.generation).toBe('read-generation');
+      expect(probeCalls).toBeGreaterThan(0);
+      expect(spawned.value.identity.generation).toBe(frozenGeneration);
       expect(completion).toMatchObject({
         ok: true,
         partial: { result: 'PASS' },
@@ -608,7 +578,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     }
   });
 
-  it('refuses bounded output actionably when the exact handle is truly absent', () => {
+  it('refuses bounded output when exact-handle observation is unresolved', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-read-handle-absent-'));
     const handle = 'terminal-read-absent';
     const title = 'smoke-read-absent-1359';
@@ -628,6 +598,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal } as T);
       if (args[0] === 'terminal' && args[1] === 'read') {
         readCalls += 1;
         return ok({ terminal: { handle, status: 'running', tail: [], nextCursor: '1' } } as T);
@@ -640,7 +611,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     const restore = installStableWorkerSmokeSpawnPatch({
       probe: () => {
         probeCalls += 1;
-        return probeCalls === 1 ? ok({ terminal }) : ok({});
+        return ok({});
       },
     });
 
@@ -660,13 +631,13 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(read.status).toBe('failed');
       if (read.status === 'failed') {
         expect(read.operation).toBe('read_bounded_output');
-        expect(read.reason).toContain('worker_generation_not_found');
+        expect(read.reason).toContain('worker_generation_unresolved');
         expect(read.reason).toContain(`expected_handle=${handle}`);
         expect(read.reason).toContain('lookup_failure=terminal_show%3Amissing_terminal');
         expect(read.reason).toContain('resolution=');
       }
       expect(readCalls).toBe(0);
-      expect(probeCalls).toBe(2);
+      expect(probeCalls).toBe(1);
     } finally {
       restore();
       rmSync(root, { recursive: true, force: true });
