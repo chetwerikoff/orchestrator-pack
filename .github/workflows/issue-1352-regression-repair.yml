@@ -1,64 +1,33 @@
-name: issue-1352-current-census
+name: issue-1352-target-export
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - agent/issue-1352-regression-carrier
 
 permissions:
   contents: read
 
 jobs:
-  current-census:
-    if: github.event.pull_request.head.ref == 'agent/issue-1352-regression-carrier' && github.event.pull_request.base.ref == 'agent/issue-1352-hard-cut'
+  export-target:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-1352-hard-cut
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - name: Capture exact current residual census
+          fetch-depth: 1
+      - name: Assert exact target head
         shell: bash
         run: |
           set -euo pipefail
-          expected_head='33aabaf9607fffa361ec22f4bcb2a9f979d19e4c'
+          expected_head='1174975f3605b02955079ee55657cc2fbf1e0119'
           actual_head="$(git rev-parse HEAD)"
-          if [ "$actual_head" != "$expected_head" ]; then
-            echo "target head drift: expected $expected_head, got $actual_head" >&2
-            exit 90
-          fi
-          node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts > "$RUNNER_TEMP/current-census.json" || true
-          node --input-type=module - "$RUNNER_TEMP/current-census.json" "$actual_head" <<'NODE'
-          import { readFileSync, writeFileSync } from 'node:fs';
-          const raw = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-          const bySurface = Object.entries(raw.violations.reduce((acc, row) => {
-            acc[row.surfaceId] = (acc[row.surfaceId] ?? 0) + 1;
-            return acc;
-          }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-          const byPath = Object.entries(raw.violations.reduce((acc, row) => {
-            acc[row.path] = (acc[row.path] ?? 0) + 1;
-            return acc;
-          }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-          const summary = {
-            scannedCodeHead: process.argv[3],
-            scannedFileCount: raw.scannedFileCount,
-            excludedPathCount: raw.excludedPaths.length,
-            violationCount: raw.violations.length,
-            uniquePathCount: byPath.length,
-            bySurface,
-            byPath,
-          };
-          writeFileSync(process.env.RUNNER_TEMP + '/current-summary.json', JSON.stringify(summary, null, 2) + '\n');
-          console.log(JSON.stringify(summary, null, 2));
-          NODE
+          test "$actual_head" = "$expected_head"
+          rm -rf .git
       - uses: actions/upload-artifact@v4
         with:
-          name: issue-1352-current-census
-          path: |
-            ${{ runner.temp }}/current-census.json
-            ${{ runner.temp }}/current-summary.json
+          name: issue-1352-target-1174975
+          path: .
+          include-hidden-files: true
           retention-days: 1
