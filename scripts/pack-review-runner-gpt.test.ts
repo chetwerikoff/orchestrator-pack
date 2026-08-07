@@ -976,7 +976,11 @@ describe('GPT plural source round (Issue #1276)', () => {
       fixturePrState: 'OPEN',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD_A,
-      fixtureReviewStdout: successfulCleanReviewPayload('inv-plural-clean'),
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-plural-source-01') }],
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-plural-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-plural-source-03') }],
+      },
       fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
       claimMode: 'preacquired',
     });
