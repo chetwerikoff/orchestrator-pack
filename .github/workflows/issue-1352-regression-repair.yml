@@ -15,9 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-1352-hard-cut
+          ref: agent/issue-1352-regression-carrier
           fetch-depth: 0
           persist-credentials: true
+      - name: Preserve helper and switch to exact target
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/issue-1352-regression-repair-v2.py "$RUNNER_TEMP/issue-1352-regression-repair-v2.py"
+          git fetch origin agent/issue-1352-hard-cut
+          git checkout -B agent/issue-1352-hard-cut origin/agent/issue-1352-hard-cut
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -32,7 +39,7 @@ jobs:
             echo "target head drift: expected $expected_head, got $actual_head" >&2
             exit 90
           fi
-          python .github/issue-1352-regression-repair-v2.py
+          python "$RUNNER_TEMP/issue-1352-regression-repair-v2.py"
       - name: Verify repairs
         shell: bash
         run: |
