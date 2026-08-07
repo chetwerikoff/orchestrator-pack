@@ -11,7 +11,7 @@ permissions:
 jobs:
   fixture:
     name: AC12 fixture exact head
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout PR 1398 head
@@ -29,11 +29,12 @@ jobs:
       - name: Install dependencies
         run: npm ci --include=dev
       - name: Run exact fixture
-        shell: pwsh
+        shell: bash
         run: |
           git config user.name 'fixture-smoke'
           git config user.email 'fixture-smoke@example.invalid'
+          set +e
           node scripts/lib/vitest-runtime-history-merge.fixture.mjs
-          $code = $LASTEXITCODE
-          Write-Host "fixture_exit=$code"
-          exit $code
+          code=$?
+          echo "fixture_exit=${code}"
+          exit "${code}"
