@@ -8,9 +8,7 @@
       "sourceCommand": "ao status --json",
       "kind": "structured",
       "path": "captures/ao-0-10-cli/daemon-status.raw.json",
-      "contentHash": "sha256:8ea233c60df13d65c497f74452b45645179d188bcc7e50db46358667d1a0dbf2",
-      "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "contentHash": "sha256:8ea233c60df13d65c497f74452b45645179d188bcc7e50db46358667d1a0dbf2"
     },
     "ao-0-10-cli/events-list-removed": {
       "id": "ao-0-10-cli/events-list-removed",
@@ -21,7 +19,7 @@
       "contentHash": "sha256:99811ac3d8b416157f64fddee67b3926871d09cd034cd915037d0943dff6efc7",
       "exitStatus": 1,
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-events-removed"
     },
     "ao-0-10-cli/orchestrator-ls": {
       "id": "ao-0-10-cli/orchestrator-ls",
@@ -40,7 +38,7 @@
       "contentHash": "sha256:35437703250d87cb5b8787ba0d68e4b289ee3569acfc74c8e8b8d2aac017bd86",
       "exitStatus": 1,
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-report-removed"
     },
     "ao-0-10-cli/send-help": {
       "id": "ao-0-10-cli/send-help",
@@ -48,9 +46,7 @@
       "sourceCommand": "ao send --help",
       "kind": "unstructured",
       "path": "captures/ao-0-10-cli/send-help.raw.txt",
-      "contentHash": "sha256:615ccc8fa729d038d41e449b76927b01e145ccbb12c7a6cb022e78597130b59e",
-      "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "contentHash": "sha256:615ccc8fa729d038d41e449b76927b01e145ccbb12c7a6cb022e78597130b59e"
     },
     "ao-0-10-cli/session-get-numeric-displayname": {
       "id": "ao-0-10-cli/session-get-numeric-displayname",
@@ -58,9 +54,7 @@
       "sourceCommand": "ao session get orchestrator-pack-45 --json -p orchestrator-pack",
       "kind": "structured",
       "path": "captures/ao-0-10-cli/session-get-numeric-displayname.raw.json",
-      "contentHash": "sha256:fa065d82f482319517a225faba9f968cef3faeda4e6dc62a85c47f56fc19a287",
-      "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "contentHash": "sha256:fa065d82f482319517a225faba9f968cef3faeda4e6dc62a85c47f56fc19a287"
     },
     "ao-0-10-cli/session-get-terminated": {
       "id": "ao-0-10-cli/session-get-terminated",
@@ -68,9 +62,7 @@
       "sourceCommand": "ao session get orchestrator-pack-2 --json -p orchestrator-pack",
       "kind": "structured",
       "path": "captures/ao-0-10-cli/session-get-terminated.raw.json",
-      "contentHash": "sha256:f5f97c7a6da74513bd735a22b703e82dea0b874adfd1e7f596f76cd367405e64",
-      "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "contentHash": "sha256:f5f97c7a6da74513bd735a22b703e82dea0b874adfd1e7f596f76cd367405e64"
     },
     "ao-0-10-cli/session-get-worker": {
       "id": "ao-0-10-cli/session-get-worker",
@@ -78,9 +70,7 @@
       "sourceCommand": "ao session get orchestrator-pack-7 --json -p orchestrator-pack",
       "kind": "structured",
       "path": "captures/ao-0-10-cli/session-get-worker.raw.json",
-      "contentHash": "sha256:5ce6f86872eec9086d67581cf3f40311529144b5fe8925bcf812d235e9b1e11d",
-      "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "contentHash": "sha256:5ce6f86872eec9086d67581cf3f40311529144b5fe8925bcf812d235e9b1e11d"
     },
     "ao-0-10-cli/session-ls": {
       "id": "ao-0-10-cli/session-ls",
@@ -88,9 +78,7 @@
       "sourceCommand": "ao session ls --json -p orchestrator-pack",
       "kind": "structured",
       "path": "captures/ao-0-10-cli/session-ls.raw.json",
-      "contentHash": "sha256:7d72c7b6a70cabb92d34829ecf310da6f26a8004b4da719282ede49334615c8d",
-      "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "contentHash": "sha256:7d72c7b6a70cabb92d34829ecf310da6f26a8004b4da719282ede49334615c8d"
     },
     "ao-0-10-cli/session-ls-issue-only-post-claim": {
       "id": "ao-0-10-cli/session-ls-issue-only-post-claim",
@@ -98,9 +86,7 @@
       "sourceCommand": "ao session ls --json -p orchestrator-pack",
       "kind": "structured",
       "path": "captures/ao-0-10-cli/session-ls-issue-only-post-claim.raw.json",
-      "contentHash": "sha256:9f2b7d02a08cd57cc5c0c281fb21826424faf8623eb9a194bded1392a262dfcb",
-      "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "contentHash": "sha256:9f2b7d02a08cd57cc5c0c281fb21826424faf8623eb9a194bded1392a262dfcb"
     },
     "ao-0-10-cli/session-ls-terminated": {
       "id": "ao-0-10-cli/session-ls-terminated",
@@ -108,9 +94,7 @@
       "sourceCommand": "ao session ls --json -p orchestrator-pack --include-terminated",
       "kind": "structured",
       "path": "captures/ao-0-10-cli/session-ls-terminated.raw.json",
-      "contentHash": "sha256:e38539d727a53c467573b8cbf5bf3a4b987a34a295c506e33638cb3a1ef64a3c",
-      "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "contentHash": "sha256:e38539d727a53c467573b8cbf5bf3a4b987a34a295c506e33638cb3a1ef64a3c"
     },
     "ao-0-10-cli/status-reports-flag-removed": {
       "id": "ao-0-10-cli/status-reports-flag-removed",
@@ -121,7 +105,7 @@
       "contentHash": "sha256:7d055db0f4f5058e9a0e3411d41319747435cfb9be0a7271b8b9cc296f5fb53a",
       "exitStatus": 2,
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-status-reports-flag-removed"
     },
     "ao-0-10-daemon/per-session-reviews-delivered-status": {
       "id": "ao-0-10-daemon/per-session-reviews-delivered-status",
@@ -129,9 +113,7 @@
       "sourceCommand": "GET /api/v1/sessions/{id}/reviews + live ao.db review_run crosswalk",
       "kind": "structured",
       "path": "captures/ao-0-10-daemon/per-session-reviews-delivered-status.raw.json",
-      "contentHash": "sha256:1fa25250f6d2abc4a704919b24678542e7a339aefd271d1e2e130b6b6a350a47",
-      "status": "historical",
-      "retiredSurface": "legacy-daemon-http"
+      "contentHash": "sha256:1fa25250f6d2abc4a704919b24678542e7a339aefd271d1e2e130b6b6a350a47"
     },
     "ao-0-10-daemon/per-session-reviews-empty": {
       "id": "ao-0-10-daemon/per-session-reviews-empty",
@@ -139,9 +121,7 @@
       "sourceCommand": "GET /api/v1/sessions/{id}/reviews",
       "kind": "structured",
       "path": "captures/ao-0-10-daemon/per-session-reviews-empty.raw.json",
-      "contentHash": "sha256:1a989a1b51f9ae9abf3ac15a9814678ab03a16c8981c46a980bf1e3cc11802d7",
-      "status": "historical",
-      "retiredSurface": "legacy-daemon-http"
+      "contentHash": "sha256:1a989a1b51f9ae9abf3ac15a9814678ab03a16c8981c46a980bf1e3cc11802d7"
     },
     "ao-0-10-daemon/per-session-reviews-latestRun-status": {
       "id": "ao-0-10-daemon/per-session-reviews-latestRun-status",
@@ -149,9 +129,7 @@
       "sourceCommand": "GET /api/v1/sessions/orchestrator-pack-23/reviews",
       "kind": "structured",
       "path": "captures/ao-0-10-daemon/per-session-reviews-latestRun-status.raw.json",
-      "contentHash": "sha256:5808e2bf35caa523af35b653c0853b4d3534cc0c30549d9217abde2ffebe615f",
-      "status": "historical",
-      "retiredSurface": "legacy-daemon-http"
+      "contentHash": "sha256:5808e2bf35caa523af35b653c0853b4d3534cc0c30549d9217abde2ffebe615f"
     },
     "ao-0-10-daemon/per-session-reviews-populated": {
       "id": "ao-0-10-daemon/per-session-reviews-populated",
@@ -159,9 +137,7 @@
       "sourceCommand": "GET /api/v1/sessions/{id}/reviews",
       "kind": "structured",
       "path": "captures/ao-0-10-daemon/per-session-reviews-populated.raw.json",
-      "contentHash": "sha256:59f9e7f1a6aeca931a8167a23d02d03978105a86c9e006506b18af45ef6c3b9e",
-      "status": "historical",
-      "retiredSurface": "legacy-daemon-http"
+      "contentHash": "sha256:59f9e7f1a6aeca931a8167a23d02d03978105a86c9e006506b18af45ef6c3b9e"
     },
     "ao-0-10-daemon/project-config-get-405": {
       "id": "ao-0-10-daemon/project-config-get-405",
@@ -170,9 +146,7 @@
       "kind": "structured",
       "path": "captures/ao-0-10-daemon/project-config-get-405.raw.json",
       "contentHash": "sha256:1bc80a54a5379e203f88df35ef7729a04fa4a3793a339379ce660771bb2e2257",
-      "exitStatus": 405,
-      "status": "historical",
-      "retiredSurface": "legacy-daemon-http"
+      "exitStatus": 405
     },
     "ao-0-10-daemon/project-single-reviewers": {
       "id": "ao-0-10-daemon/project-single-reviewers",
@@ -180,9 +154,7 @@
       "sourceCommand": "GET /api/v1/projects/orchestrator-pack",
       "kind": "structured",
       "path": "captures/ao-0-10-daemon/project-single-reviewers.raw.json",
-      "contentHash": "sha256:037cbe9d059351b6cf86294573eb5f83c79a66a2fc2dd2f341deb5ae594c1305",
-      "status": "historical",
-      "retiredSurface": "legacy-daemon-http"
+      "contentHash": "sha256:037cbe9d059351b6cf86294573eb5f83c79a66a2fc2dd2f341deb5ae594c1305"
     },
     "ao-0-10-daemon/projects-list": {
       "id": "ao-0-10-daemon/projects-list",
@@ -190,9 +162,7 @@
       "sourceCommand": "GET /api/v1/projects",
       "kind": "structured",
       "path": "captures/ao-0-10-daemon/projects-list.raw.json",
-      "contentHash": "sha256:81a0251f20221e57e40342a0984c7d55509e74a43ed0482a17d5a2461a080318",
-      "status": "historical",
-      "retiredSurface": "legacy-daemon-http"
+      "contentHash": "sha256:81a0251f20221e57e40342a0984c7d55509e74a43ed0482a17d5a2461a080318"
     },
     "ao-0-10-daemon/sessions-list": {
       "id": "ao-0-10-daemon/sessions-list",
@@ -200,9 +170,7 @@
       "sourceCommand": "GET /api/v1/sessions",
       "kind": "structured",
       "path": "captures/ao-0-10-daemon/sessions-list.raw.json",
-      "contentHash": "sha256:c2f16defecb38e07648d450ad81e42051a83ec28bf4aa160ed5332ee414ff239",
-      "status": "historical",
-      "retiredSurface": "legacy-daemon-http"
+      "contentHash": "sha256:c2f16defecb38e07648d450ad81e42051a83ec28bf4aa160ed5332ee414ff239"
     },
     "ao-0-10-review-api/project-config": {
       "id": "ao-0-10-review-api/project-config",
@@ -252,7 +220,7 @@
       "path": "captures/ao-review-run/cancelled.raw.json",
       "contentHash": "sha256:db5dce45ca167f11ef791220024560c65684b3361b616f1d5213a4b607f49064",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-review-list-project-removed"
     },
     "ao-review-run/changes_requested": {
       "id": "ao-review-run/changes_requested",
@@ -270,7 +238,7 @@
       "path": "captures/ao-review-run/clean.raw.json",
       "contentHash": "sha256:12e4e5718f8d5403097ada15ac0694369c2e67b6349a4b3c6461a75a7263844a",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-review-list-project-removed"
     },
     "ao-review-run/failed": {
       "id": "ao-review-run/failed",
@@ -280,7 +248,7 @@
       "path": "captures/ao-review-run/failed.raw.json",
       "contentHash": "sha256:771ca6627c06ea3897d745b9af63c6e7c2c81c5083a421115a20a1dfbdce9ad7",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-review-list-project-removed"
     },
     "ao-review-run/needs_triage": {
       "id": "ao-review-run/needs_triage",
@@ -290,7 +258,7 @@
       "path": "captures/ao-review-run/needs_triage.raw.json",
       "contentHash": "sha256:9904eabdd7cacbfdb02fb1b9ec9f78d31d70b763fe1a17c48435111fb256eb8d",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-review-list-project-removed"
     },
     "ao-review-run/outdated": {
       "id": "ao-review-run/outdated",
@@ -300,7 +268,7 @@
       "path": "captures/ao-review-run/outdated.raw.json",
       "contentHash": "sha256:f805fc4c198cd9754d1a1833a3dd691a34d403b6de1126d73584da1277ec9d4c",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-review-list-project-removed"
     },
     "ao-review-run/queued": {
       "id": "ao-review-run/queued",
@@ -310,7 +278,7 @@
       "path": "captures/ao-review-run/queued.raw.json",
       "contentHash": "sha256:991329ea2ed79ff69e243a21b072aa8fcf7e9287e9479dafbd44c6a2e54ca668",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-review-list-project-removed"
     },
     "ao-review-run/running": {
       "id": "ao-review-run/running",
@@ -320,7 +288,7 @@
       "path": "captures/ao-review-run/running.raw.json",
       "contentHash": "sha256:49664a5263aaaa28f2d9bc156208b9b78096a5ed4f43a5b7100d10da17c4d665",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-review-list-project-removed"
     },
     "ao-review-run/sent_to_agent": {
       "id": "ao-review-run/sent_to_agent",
@@ -330,7 +298,7 @@
       "path": "captures/ao-review-run/sent_to_agent.raw.json",
       "contentHash": "sha256:7e820e058d8abf3c1433430dea42917a64c3588da0e8c4732184ed57a4b895f4",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-review-list-project-removed"
     },
     "ao-review-run/up_to_date": {
       "id": "ao-review-run/up_to_date",
@@ -348,7 +316,7 @@
       "path": "captures/ao-review-run/waiting_update.raw.json",
       "contentHash": "sha256:197f6ac9ada374e31408c51e7e0acd18771f0655b8a19901e075a73e09ad1f32",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-review-list-project-removed"
     },
     "ao-session-id-role-injection/ao-session-id-orchestrator-role-present": {
       "id": "ao-session-id-role-injection/ao-session-id-orchestrator-role-present",
@@ -382,7 +350,7 @@
       "path": "captures/ao-status-session/issue-with-pr-facet.raw.json",
       "contentHash": "sha256:0b3a0e160318490397e15a4ee7532cc111fad867b37374a628d2a3db09fc827a",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-status-reports-flag-removed"
     },
     "ao-status-session/runtime-alive": {
       "id": "ao-status-session/runtime-alive",
@@ -392,7 +360,7 @@
       "path": "captures/ao-status-session/runtime-alive.raw.json",
       "contentHash": "sha256:1a1953ad60cdee0d6552260b5b243c8c5214543121f6d7906a5b8cf2c1843856",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-status-reports-flag-removed"
     },
     "ao-status-session/runtime-exited": {
       "id": "ao-status-session/runtime-exited",
@@ -402,7 +370,7 @@
       "path": "captures/ao-status-session/runtime-exited.raw.json",
       "contentHash": "sha256:49b86abe0fe22792109505802a1e93bfaf36e93143f1adddd64b0b1daeae7c52",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-status-reports-flag-removed"
     },
     "ao-status-session/runtime-present-unknown": {
       "id": "ao-status-session/runtime-present-unknown",
@@ -412,7 +380,7 @@
       "path": "captures/ao-status-session/runtime-present-unknown.raw.json",
       "contentHash": "sha256:96eaf08b253cd3aec74f8b8c77f0f36fd4c32c0571971e13a247605aa242fb91",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-status-reports-flag-removed"
     },
     "ao-status-session/runtime-process_missing": {
       "id": "ao-status-session/runtime-process_missing",
@@ -422,7 +390,7 @@
       "path": "captures/ao-status-session/runtime-process_missing.raw.json",
       "contentHash": "sha256:30d2caa437de4dfd8741e19402e91c36ac7cbc8683646a615725f9b70e06cea6",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-status-reports-flag-removed"
     },
     "ao-status-session/working-no-runtime": {
       "id": "ao-status-session/working-no-runtime",
@@ -432,7 +400,7 @@
       "path": "captures/ao-status-session/working-no-runtime.raw.json",
       "contentHash": "sha256:019be58ae0c067efda08366b012a9429943550c8dffc9063204fbe2f48473fe6",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-status-reports-flag-removed"
     },
     "ao-status-sessions/ready_for_review_on_head": {
       "id": "ao-status-sessions/ready_for_review_on_head",
@@ -442,7 +410,7 @@
       "path": "captures/ao-status-sessions/ready_for_review_on_head.raw.json",
       "contentHash": "sha256:36dfe8cafca898fc95483d9b1bab0644b3fe876214c4604438216ba315458cd6",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-status-reports-flag-removed"
     },
     "ao-webhook-notification/ready_for_review": {
       "id": "ao-webhook-notification/ready_for_review",
@@ -476,7 +444,7 @@
       "path": "captures/ao-worker-report/addressing_reviews.raw.json",
       "contentHash": "sha256:4d66125f4245f59b265b9c502d8a22a0abe85b36670154b6bad642d51e960118",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-report-removed"
     },
     "ao-worker-report/completed": {
       "id": "ao-worker-report/completed",
@@ -486,7 +454,7 @@
       "path": "captures/ao-worker-report/completed.raw.json",
       "contentHash": "sha256:711f21246d1a0d5c180d10e62e6905eea41a4633ff04bb64e33960a078444453",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-report-removed"
     },
     "ao-worker-report/fixing_ci": {
       "id": "ao-worker-report/fixing_ci",
@@ -496,7 +464,7 @@
       "path": "captures/ao-worker-report/fixing_ci.raw.json",
       "contentHash": "sha256:7209254592c12171af683821b45b65095303fb4edb4bdaa606f1755640dc728b",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-report-removed"
     },
     "ao-worker-report/pr_created": {
       "id": "ao-worker-report/pr_created",
@@ -506,7 +474,7 @@
       "path": "captures/ao-worker-report/pr_created.raw.json",
       "contentHash": "sha256:7534128d55cf54bd8640c4df2ca86c60e7fb1251e4c0039afe9cbfa3fad0bfcb",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-report-removed"
     },
     "ao-worker-report/ready_for_review": {
       "id": "ao-worker-report/ready_for_review",
@@ -516,7 +484,7 @@
       "path": "captures/ao-worker-report/ready_for_review.raw.json",
       "contentHash": "sha256:358c6e865a5144873d8ee911eced51616e3bca8c5fa26d41cd0ac3d928ffeeb8",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-report-removed"
     },
     "ao-worker-report/started": {
       "id": "ao-worker-report/started",
@@ -526,7 +494,7 @@
       "path": "captures/ao-worker-report/started.raw.json",
       "contentHash": "sha256:19d33125856caa8963d1636ecde3aaae6d91c236268c890b2f617939910f5b94",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-report-removed"
     },
     "ao-worker-report/working": {
       "id": "ao-worker-report/working",
@@ -536,7 +504,7 @@
       "path": "captures/ao-worker-report/working.raw.json",
       "contentHash": "sha256:8f97b7e395f0c2abe53cfb8ab24a2109e47267f7ef836d8512e0ed0cc8dd9710",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-report-removed"
     },
     "dead-worker-reconciler/clean-exit-terminal": {
       "id": "dead-worker-reconciler/clean-exit-terminal",
@@ -554,7 +522,7 @@
       "path": "captures/dead-worker-reconciler/operator-manual-kill.raw.json",
       "contentHash": "sha256:170e718fcbef858d7c72d365a27690fcd45aae9253cdfe2893d072d50b377719",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-events-removed"
     },
     "dead-worker-reconciler/project-shutdown": {
       "id": "dead-worker-reconciler/project-shutdown",
@@ -580,7 +548,7 @@
       "path": "captures/dead-worker-reconciler/recoverable-crash.raw.json",
       "contentHash": "sha256:1cd50a2634416523adbc0d2f0c0926c7e33577871358375182f707962556c88e",
       "status": "historical",
-      "retiredSurface": "legacy-runtime-command"
+      "retiredSurface": "ao-events-removed"
     },
     "gh-issue-view-closedAt/closed-issue": {
       "id": "gh-issue-view-closedAt/closed-issue",
