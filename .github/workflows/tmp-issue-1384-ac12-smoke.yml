@@ -6,44 +6,35 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  patch-target:
-    name: Normalize PowerShell refusal evidence
+  fixture:
+    name: PR1398 exact fixture
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
-      - name: Checkout target branch
+      - name: Checkout PR 1398 head
         uses: actions/checkout@v4
         with:
-          ref: agent/issue-1384-runtime-history-refresh
+          repository: chetwerikoff/orchestrator-pack
+          ref: 90aaf5d0e1c0c896fab3824931b4ea3eed872fd6
           fetch-depth: 0
-          persist-credentials: true
-      - name: Patch and push
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Run exact fixture
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('scripts/lib/vitest-runtime-history-merge.fixture.mjs')
-          s = p.read_text()
-          old = """    const output = `${result.stdout ?? ''}\\n${result.stderr ?? ''}`;
-              assert(result.exitCode !== 0, `partial supplemental tuple mask ${mask} must fail`);
-              assert(output.includes(SUPPLEMENTAL_TUPLE_ERROR), `partial supplemental tuple mask ${mask} must emit exact refusal`);
-              assert(readFileSync(historyPath, 'utf8') === sentinel, `partial supplemental tuple mask ${mask} must preserve history bytes`);
-          """
-          # Locate without depending on indentation width.
-          anchor = "    const output = `${result.stdout ?? ''}\\n${result.stderr ?? ''}`;\n    assert(result.exitCode !== 0, `partial supplemental tuple mask ${mask} must fail`);\n    assert(output.includes(SUPPLEMENTAL_TUPLE_ERROR), `partial supplemental tuple mask ${mask} must emit exact refusal`);\n    assert(readFileSync(historyPath, 'utf8') === sentinel, `partial supplemental tuple mask ${mask} must preserve history bytes`);\n"
-          replacement = "    const output = `${result.stdout ?? ''}\\n${result.stderr ?? ''}`;\n    const normalizedOutput = output.replace(/\\u001b\\[[0-9;]*m/g, '').replace(/\\s+/g, ' ');\n    assert(result.exitCode !== 0, `partial supplemental tuple mask ${mask} must fail`);\n    assert(normalizedOutput.includes(SUPPLEMENTAL_TUPLE_ERROR), `partial supplemental tuple mask ${mask} must emit exact refusal`);\n    assert(readFileSync(historyPath, 'utf8') === sentinel, `partial supplemental tuple mask ${mask} must preserve history bytes`);\n"
-          if anchor not in s:
-            raise SystemExit('partial tuple assertion anchor not found')
-          s = s.replace(anchor, replacement, 1)
-          p.write_text(s)
-          PY
-          git diff --check
-          node --check scripts/lib/vitest-runtime-history-merge.fixture.mjs
-          git config user.name 'chatgpt-ac12-fix'
-          git config user.email 'chatgpt-ac12-fix@example.invalid'
-          git add scripts/lib/vitest-runtime-history-merge.fixture.mjs
-          git commit -m 'Normalize PowerShell tuple refusal evidence'
-          git push origin HEAD:agent/issue-1384-runtime-history-refresh
+          git config user.name fixture-smoke
+          git config user.email fixture-smoke@example.invalid
+          set +e
+          node scripts/lib/vitest-runtime-history-merge.fixture.mjs
+          code=$?
+          echo "fixture_exit=$code"
+          exit "$code"
