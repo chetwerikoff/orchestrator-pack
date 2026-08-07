@@ -24,13 +24,17 @@ jobs:
           cache: npm
       - name: Install from frozen lockfile
         run: npm ci --include=dev
-      - name: Regenerate canonical declaration and remove this temporary workflow
+      - name: Integrate main, restore excluded bytes, regenerate scope, and self-delete
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git fetch origin main
+          git merge --no-edit origin/main
+          git checkout origin/main -- .gitignore tests/external-output-references/capture-manifest.json
           git rm -- .github/workflows/issue-1352-scope-regenerate.yml
           gh issue view 1352 --repo "$GITHUB_REPOSITORY" --json body -q .body > "$RUNNER_TEMP/issue-1352.md"
           git diff --name-only origin/main -- . > "$RUNNER_TEMP/changed-paths.txt"
@@ -40,8 +44,6 @@ jobs:
             --declared-paths "$declared" \
             --issue-body-file "$RUNNER_TEMP/issue-1352.md" \
             --output docs/declarations/1352.pr-scope.json
-          git add docs/declarations/1352.pr-scope.json
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "chore(scope): regenerate issue 1352 declaration"
+          git add .gitignore tests/external-output-references/capture-manifest.json docs/declarations/1352.pr-scope.json
+          git commit -m "chore(scope): finalize issue 1352 declaration"
           git push origin "HEAD:${GITHUB_HEAD_REF}"
