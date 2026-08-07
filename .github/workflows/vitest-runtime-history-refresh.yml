@@ -422,19 +422,43 @@ jobs:
           set -euo pipefail
           remote_sha=""
           should_push="true"
+          pending_history=""
+          status_history=""
+          actions_run=""
+          trusted_main_root="$(mktemp -d)"
+          inventory_probe="$(mktemp)"
+          cleanup() {
+            git worktree remove --force "${trusted_main_root}" >/dev/null 2>&1 || true
+            rm -f "${inventory_probe}"
+            [ -z "${pending_history}" ] || rm -f "${pending_history}"
+            [ -z "${status_history}" ] || rm -f "${status_history}"
+            [ -z "${actions_run}" ] || rm -f "${actions_run}"
+          }
+          trap cleanup EXIT
+
+          git fetch origin main
+          trusted_main_sha="$(git rev-parse origin/main)"
+          git worktree add --detach "${trusted_main_root}" "${trusted_main_sha}" >/dev/null
+          node scripts/refresh-vitest-runtime-history.mjs reconcile \
+            --remote scripts/vitest-runtime-history.json \
+            --proposed scripts/vitest-runtime-history.json \
+            --output "${inventory_probe}" \
+            --repo-root "${trusted_main_root}" \
+            --require-equal-inventory
+          echo "runtime-history delivery inventory guard: trusted main ${trusted_main_sha} matches prepared membership"
+
           if git ls-remote --exit-code origin "refs/heads/${DELIVERY_BRANCH}" >/dev/null 2>&1; then
-            git fetch origin main "refs/heads/${DELIVERY_BRANCH}:refs/remotes/origin/${DELIVERY_BRANCH}"
+            git fetch origin "refs/heads/${DELIVERY_BRANCH}:refs/remotes/origin/${DELIVERY_BRANCH}"
             remote_sha="$(git rev-parse "origin/${DELIVERY_BRANCH}")"
             pending_history="$(mktemp)"
             status_history="$(mktemp)"
             actions_run="$(mktemp)"
-            trap 'rm -f "${pending_history}" "${status_history}" "${actions_run}"' EXIT
             git show "origin/${DELIVERY_BRANCH}:scripts/vitest-runtime-history.json" > "${pending_history}"
             node scripts/refresh-vitest-runtime-history.mjs reconcile \
               --remote "${pending_history}" \
               --proposed scripts/vitest-runtime-history.json \
               --output scripts/vitest-runtime-history.json \
-              --repo-root "${GITHUB_WORKSPACE}" \
+              --repo-root "${trusted_main_root}" \
               --require-equal-inventory
             git add -- scripts/vitest-runtime-history.json
             if ! git diff --cached --quiet HEAD -- scripts/vitest-runtime-history.json; then
@@ -481,8 +505,6 @@ jobs:
                 fi
               fi
             fi
-          else
-            git fetch origin main
           fi
           echo "remote_sha=${remote_sha}" >> "$GITHUB_OUTPUT"
           echo "should_push=${should_push}" >> "$GITHUB_OUTPUT"
@@ -497,6 +519,24 @@ jobs:
           REMOTE_SHA: ${{ steps.delivery_branch.outputs.remote_sha }}
         run: |
           set -euo pipefail
+          trusted_main_root="$(mktemp -d)"
+          inventory_probe="$(mktemp)"
+          cleanup() {
+            git worktree remove --force "${trusted_main_root}" >/dev/null 2>&1 || true
+            rm -f "${inventory_probe}"
+          }
+          trap cleanup EXIT
+          git fetch origin main
+          trusted_main_sha="$(git rev-parse origin/main)"
+          git worktree add --detach "${trusted_main_root}" "${trusted_main_sha}" >/dev/null
+          node scripts/refresh-vitest-runtime-history.mjs reconcile \
+            --remote scripts/vitest-runtime-history.json \
+            --proposed scripts/vitest-runtime-history.json \
+            --output "${inventory_probe}" \
+            --repo-root "${trusted_main_root}" \
+            --require-equal-inventory
+          echo "runtime-history pre-delivery inventory guard: trusted main ${trusted_main_sha} matches prepared membership"
+
           git remote set-url origin "https://x-access-token:${DELIVERY_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           if [ -n "${REMOTE_SHA}" ]; then
             git push --force-with-lease="refs/heads/${DELIVERY_BRANCH}:${REMOTE_SHA}" origin "HEAD:refs/heads/${DELIVERY_BRANCH}"
