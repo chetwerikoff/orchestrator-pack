@@ -28,11 +28,25 @@ jobs:
           import sys
           p = Path(sys.argv[1])
           text = p.read_text(encoding='utf-8')
-          old = """replace_exact(path, \"\"\"  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\", \"\"\"  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessionId?: string;\n  repoSlug?: string;\n  projectId?: string;\n  issueNumber?: number;\n  headSha?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\", 1)"""
-          new = """replace_exact(path, \"\"\"export declare function tryPushRegisterFromPrCreate(input: {\n  argv: string[];\n  status: number;\n  stdout: string;\n  stderr: string;\n  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\", \"\"\"export declare function tryPushRegisterFromPrCreate(input: {\n  argv: string[];\n  status: number;\n  stdout: string;\n  stderr: string;\n  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessionId?: string;\n  repoSlug?: string;\n  projectId?: string;\n  issueNumber?: number;\n  headSha?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\")"""
-          if text.count(old) != 1:
-              raise SystemExit(f'helper declaration patch drifted: {text.count(old)}')
-          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+          replacements = [
+            (
+              """replace_exact(path, \"\"\"  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\", \"\"\"  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessionId?: string;\n  repoSlug?: string;\n  projectId?: string;\n  issueNumber?: number;\n  headSha?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\", 1)""",
+              """replace_exact(path, \"\"\"export declare function tryPushRegisterFromPrCreate(input: {\n  argv: string[];\n  status: number;\n  stdout: string;\n  stderr: string;\n  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\", \"\"\"export declare function tryPushRegisterFromPrCreate(input: {\n  argv: string[];\n  status: number;\n  stdout: string;\n  stderr: string;\n  env?: NodeJS.ProcessEnv;\n  cwd?: string;\n  sessionId?: string;\n  repoSlug?: string;\n  projectId?: string;\n  issueNumber?: number;\n  headSha?: string;\n  sessions?: Array<Record<string, unknown>>;\n\"\"\")""",
+            ),
+            (
+              """marker = \"\"\"    const sessions = [liveWorker('opk-rebind', 719)];\n    const store = seedStore({ sessionId: 'opk-rebind', prNumber: 11, headSha: 'old11' });\n\"\"\"""",
+              """marker = \"\"\"    const sessions = [liveWorker('opk-rebind', 719)];\n\"\"\"""",
+            ),
+            (
+              """marker = \"\"\"    const sessions = [liveWorker('opk-rebind-terminal', 719)];\n    const store = seedStore({ sessionId: 'opk-rebind-terminal', prNumber: 11, headSha: 'old11' });\n\"\"\"""",
+              """marker = \"\"\"    const sessions = [liveWorker('opk-rebind-terminal', 719)];\n\"\"\"""",
+            ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'helper patch drifted: {old[:80]!r} count={text.count(old)}')
+              text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
           PY
           git fetch origin agent/issue-1352-hard-cut
           git checkout -B agent/issue-1352-hard-cut origin/agent/issue-1352-hard-cut
