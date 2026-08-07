@@ -652,7 +652,14 @@
     "scripts/run-vitest-with-harness.mjs",
     "scripts/verify.ps1",
     "docs/review-start-claim-run-binding.mjs",
-    "scripts/toolchain/powershell-child-tests.json"
+    "scripts/toolchain/powershell-child-tests.json",
+    "scripts/gate-runner/census.test.ts",
+    "scripts/gate-runner/census.ts",
+    "scripts/gate-runner/census/generation.json",
+    "scripts/gate-runner/declarative.ts",
+    "scripts/gate-runner/wave-3b-migration-inventory.ts",
+    "scripts/launch-argv-validators.manifest.json",
+    "tests/external-output-references/capture-manifest.json"
   ],
   "denylist": [
     ".orca/",

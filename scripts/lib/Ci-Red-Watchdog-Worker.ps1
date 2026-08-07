@@ -161,7 +161,7 @@ function Resolve-CiRedWatchdogWorkerBinding {
         if (-not $sessionId) { continue }
         try {
             $target = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $PrNumber -SessionId $sessionId `
-                -HeadSha $HeadSha -ProjectId $ProjectId -OpenPrs $OpenPrs
+                -HeadSha $HeadSha -ProjectId $ProjectId -Sessions $Sessions -OpenPrs $OpenPrs
         }
         catch { continue }
         if (-not $target.ok) { continue }
@@ -202,7 +202,7 @@ function Resolve-CiRedWatchdogCurrentAttemptWorker {
     if (Get-Command Resolve-WorkerNudgeTargetFromPrClaim -ErrorAction SilentlyContinue) {
         try {
             $target = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $PrNumber -SessionId $ExpectedSessionId `
-                -HeadSha $HeadSha -ProjectId $ProjectId -OpenPrs $OpenPrs
+                -HeadSha $HeadSha -ProjectId $ProjectId -Sessions $Sessions -OpenPrs $OpenPrs
             if (-not $target.ok) { return @{ ok = $false; reason = [string]$target.reason } }
             $ownerSessionId = [string]$target.ownerSessionId
             if ($ownerSessionId -and $ownerSessionId -ne $ExpectedSessionId) {

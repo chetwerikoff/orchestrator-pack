@@ -106,10 +106,10 @@
       }
     },
     {
-      "id": "verify-inline:contract-marker:plugins/codex-pr-reviewer/README.md",
+      "id": "verify-inline:contract-marker:plugins/ao-codex-pr-reviewer/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "Test-ContractMarkers 'plugins/codex-pr-reviewer/README.md'",
+      "marker": "Test-ContractMarkers 'plugins/ao-codex-pr-reviewer/README.md'",
       "classification": "ported-custom",
       "gateIds": [
         "verify-structure-contract"
@@ -129,10 +129,10 @@
       }
     },
     {
-      "id": "verify-inline:contract-marker:plugins/scope-guard/README.md",
+      "id": "verify-inline:contract-marker:plugins/ao-scope-guard/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "Test-ContractMarkers 'plugins/scope-guard/README.md'",
+      "marker": "Test-ContractMarkers 'plugins/ao-scope-guard/README.md'",
       "classification": "ported-custom",
       "gateIds": [
         "verify-structure-contract"
@@ -153,10 +153,10 @@
       }
     },
     {
-      "id": "verify-inline:contract-marker:plugins/task-declaration/README.md",
+      "id": "verify-inline:contract-marker:plugins/ao-task-declaration/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "Test-ContractMarkers 'plugins/task-declaration/README.md'",
+      "marker": "Test-ContractMarkers 'plugins/ao-task-declaration/README.md'",
       "classification": "ported-custom",
       "gateIds": [
         "verify-structure-contract"
@@ -177,10 +177,10 @@
       }
     },
     {
-      "id": "verify-inline:contract-marker:plugins/token-chain-ledger/README.md",
+      "id": "verify-inline:contract-marker:plugins/ao-token-chain-ledger/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "Test-ContractMarkers 'plugins/token-chain-ledger/README.md'",
+      "marker": "Test-ContractMarkers 'plugins/ao-token-chain-ledger/README.md'",
       "classification": "ported-custom",
       "gateIds": [
         "verify-structure-contract"
@@ -291,7 +291,7 @@
       ],
       "portedInWave": "3.b",
       "replacement": {
-        "kind": "required-file-rule",
+        "kind": "absent-file-rule",
         "gateId": "verify-required-files",
         "path": "agent-orchestrator.yaml.example"
       }
@@ -377,10 +377,10 @@
       }
     },
     {
-      "id": "verify-inline:required-file:plugins/codex-pr-reviewer/README.md",
+      "id": "verify-inline:required-file:plugins/ao-codex-pr-reviewer/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "plugins/codex-pr-reviewer/README.md",
+      "marker": "plugins/ao-codex-pr-reviewer/README.md",
       "classification": "ported-declarative",
       "gateIds": [
         "verify-required-files"
@@ -393,10 +393,10 @@
       }
     },
     {
-      "id": "verify-inline:required-file:plugins/scope-guard/README.md",
+      "id": "verify-inline:required-file:plugins/ao-scope-guard/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "plugins/scope-guard/README.md",
+      "marker": "plugins/ao-scope-guard/README.md",
       "classification": "ported-declarative",
       "gateIds": [
         "verify-required-files"
@@ -409,10 +409,10 @@
       }
     },
     {
-      "id": "verify-inline:required-file:plugins/task-declaration/README.md",
+      "id": "verify-inline:required-file:plugins/ao-task-declaration/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "plugins/task-declaration/README.md",
+      "marker": "plugins/ao-task-declaration/README.md",
       "classification": "ported-declarative",
       "gateIds": [
         "verify-required-files"
@@ -425,10 +425,10 @@
       }
     },
     {
-      "id": "verify-inline:required-file:plugins/token-chain-ledger/README.md",
+      "id": "verify-inline:required-file:plugins/ao-token-chain-ledger/README.md",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
-      "marker": "plugins/token-chain-ledger/README.md",
+      "marker": "plugins/ao-token-chain-ledger/README.md",
       "classification": "ported-declarative",
       "gateIds": [
         "verify-required-files"

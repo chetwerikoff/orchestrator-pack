@@ -190,7 +190,6 @@ $requiredFiles = @(
     'scripts/runtime-retirement/retired-surface-guard.ts',
     'scripts/runtime-retirement/retired-surface-selftest.ts',
     'scripts/json-producers/retired-runtime-surfaces.json',
-    'scripts/gate-runner/runner.ts',
     'scripts/check-reusable.ps1'
 )
 foreach ($path in $requiredFiles) { [void](Test-RequiredPath -Path $path) }
@@ -221,8 +220,6 @@ Write-Host '== Static repository checks =='
 Invoke-RepositoryCheck -Name 'review delivery stdout guard' -Path 'scripts/check-review-delivery-no-visibility-poll.ps1'
 Invoke-RepositoryCheck -Name 'strict review fixtures' -Path 'scripts/invoke-pack-review-strict-gate.ps1'
 Invoke-RepositoryCheck -Name 'GitHub inventory guard' -Path 'scripts/check-gh-inventory-static.ps1'
-Invoke-RepositoryCheck -Name 'CI timeout guard' -Path 'scripts/check-ci-job-timeouts.ps1' -Optional
-Invoke-RepositoryCheck -Name 'verify runtime structure' -Path 'scripts/check-verify-runtime.ps1'
 
 if ($node) {
     Write-Host ''

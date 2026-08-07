@@ -1,6 +1,8 @@
 import { evaluateDeclarativeGate, type DeclarativeGateDefinition } from './declarative.ts';
 import type { GateRegistration } from './registry.ts';
 
+export const VERIFY_RETIRED_FILES = ['agent-orchestrator.yaml.example'] as const;
+
 export const VERIFY_REQUIRED_FILES = [
   'README.md',
   '.gitignore',
@@ -30,7 +32,10 @@ export const bulkDeclarativeGateDefinitions: readonly DeclarativeGateDefinition[
     gateId: 'verify-required-files',
     legacyScript: 'scripts/verify.ps1',
     summary: 'Pack required-file inventory',
-    rules: [{ kind: 'file-presence', paths: VERIFY_REQUIRED_FILES }],
+    rules: [
+      { kind: 'file-presence', paths: VERIFY_REQUIRED_FILES },
+      { kind: 'file-absence', paths: VERIFY_RETIRED_FILES },
+    ],
     passStdout: '[PASS] verify required-file inventory\n',
     failHeading: 'Missing required pack files:',
   },

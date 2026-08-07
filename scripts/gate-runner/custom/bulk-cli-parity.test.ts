@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { runProcessSync, type ProcessResult } from '#opk-kernel/subprocess';
 import { afterAll, describe, expect, it } from 'vitest';
-import { bulkDeclarativeGateDefinitions, VERIFY_REQUIRED_FILES } from '../bulk-declarative-gates.ts';
+import { bulkDeclarativeGateDefinitions, VERIFY_REQUIRED_FILES, VERIFY_RETIRED_FILES } from '../bulk-declarative-gates.ts';
 import { evaluateDeclarativeGate } from '../declarative.ts';
 import { loadCensus } from '../census.ts';
 import { aggregateLane, type GateResult, type GateStatus } from '../contracts.ts';
@@ -105,7 +105,7 @@ function capturesByScript(captures: readonly Capture[]): Map<string, Capture[]> 
 }
 
 function replacementSurface(overrides: Partial<Wave3bReplacementSurface> = {}): Wave3bReplacementSurface {
-  return { requiredFiles: VERIFY_REQUIRED_FILES, contractMarkers: VERIFY_CONTRACT_MARKERS, promptGlob: VERIFY_PROMPT_GLOB, ...overrides };
+  return { requiredFiles: VERIFY_REQUIRED_FILES, absentFiles: VERIFY_RETIRED_FILES, contractMarkers: VERIFY_CONTRACT_MARKERS, promptGlob: VERIFY_PROMPT_GLOB, ...overrides };
 }
 
 function wave3bParityCompletenessFailures(captures: readonly Capture[], surface: Wave3bReplacementSurface = replacementSurface()): string[] {
@@ -268,7 +268,7 @@ function createReplayRoot(capture: Capture): { root: string; script: string; arg
       writeFixture(join(root, 'docs/.keep'), 'fixture\n');
       return { root, script, args: [] };
     case 'review-command-ao-path':
-      writeFixture(join(root, 'agent-orchestrator.yaml.example'), 'NAMED REVIEW_COMMAND\n  pwsh .orchestrator-pack/review.ps1\n  RUNTIME\n');
+      writeFixture(join(root, 'agent-orchestrator.yaml.example'), 'NAMED REVIEW_COMMAND\n  pwsh .ao/review.ps1\n  RUNTIME\n');
       writeFixture(join(root, 'scripts/lib/Get-PackReviewCommand.ps1'), [
         "function Get-PackReviewCommandFromYaml {",
         "  param([Parameter(Mandatory)][string]$YamlPath)",
@@ -285,12 +285,12 @@ function createReplayRoot(capture: Capture): { root: string; script: string; arg
       writeFixture(join(root, 'AGENTS.md'), 'fixture\n');
       return { root, script, args: ['-Scenario', 'required-file', '-RepoRoot', root] };
     case 'verify-contract-markers-present':
-      writeFixture(join(root, 'plugins/scope-guard/README.md'), 'DD-024 runtime guard git add commit PR-level CI second line\n');
+      writeFixture(join(root, 'plugins/ao-scope-guard/README.md'), 'DD-024 runtime guard git add commit PR-level CI second line\n');
       return { root, script, args: ['-Scenario', 'contract-marker', '-RepoRoot', root] };
     case 'verify-missing-required-file':
       return { root, script, args: ['-Scenario', 'required-file', '-RepoRoot', root] };
     case 'verify-missing-contract-marker':
-      writeFixture(join(root, 'plugins/scope-guard/README.md'), 'DD-024 git add commit PR-level CI second line\n');
+      writeFixture(join(root, 'plugins/ao-scope-guard/README.md'), 'DD-024 git add commit PR-level CI second line\n');
       return { root, script, args: ['-Scenario', 'contract-marker', '-RepoRoot', root] };
     default:
       throw new Error(`unknown replay scenario: ${capture.scenario ?? '<missing>'}`);
@@ -386,7 +386,7 @@ describe('Wave 3.b per-entrypoint CLI parity', () => {
     const captures = wave3b.captures.filter((capture) => capture.exitCode === 0);
     const report = runGateRunner(repoRoot, captures.map((capture) => capture.gateId));
     const formatted = formatGateRunnerReport(report);
-    expect(report.aggregate.exitCode).toBe(0);
+    expect(report.aggregate.exitCode, JSON.stringify(report.aggregate, null, 2)).toBe(0);
     for (const capture of captures) {
       expect(capture.argv.slice(0, 4)).toEqual(['pwsh', '-NoProfile', '-File', capture.legacyScript]);
       expect(capture.sourceBlobSha).toMatch(/^[0-9a-f]{40}$/u);

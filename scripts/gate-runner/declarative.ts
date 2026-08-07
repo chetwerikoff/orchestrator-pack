@@ -1,7 +1,7 @@
 import { failGate, passGate, skipGate, type EvidenceObservation, type GateResult } from './contracts.ts';
 import type { SourceSnapshot } from './source-snapshot.ts';
 
-export type DeclarativeRuleKind = 'grep-inventory' | 'line-byte-budget' | 'file-presence' | 'static-source';
+export type DeclarativeRuleKind = 'grep-inventory' | 'line-byte-budget' | 'file-presence' | 'file-absence' | 'static-source';
 
 export interface GrepInventoryRule {
   readonly kind: 'grep-inventory';
@@ -23,6 +23,11 @@ export interface FilePresenceRule {
   readonly paths: readonly string[];
 }
 
+export interface FileAbsenceRule {
+  readonly kind: 'file-absence';
+  readonly paths: readonly string[];
+}
+
 export interface SourceAssertion {
   readonly path: string;
   readonly contains?: readonly string[];
@@ -35,7 +40,7 @@ export interface StaticSourceRule {
   readonly assertions: readonly SourceAssertion[];
 }
 
-export type DeclarativeRule = GrepInventoryRule | LineByteBudgetRule | FilePresenceRule | StaticSourceRule;
+export type DeclarativeRule = GrepInventoryRule | LineByteBudgetRule | FilePresenceRule | FileAbsenceRule | StaticSourceRule;
 
 export interface DeclarativeGateDefinition {
   readonly gateId: string;
@@ -109,6 +114,14 @@ function evaluatePresence(rule: FilePresenceRule, snapshot: SourceSnapshot): Rul
   return { failures, unavailable };
 }
 
+function evaluateAbsence(rule: FileAbsenceRule, snapshot: SourceSnapshot): RuleEvaluation {
+  const failures = rule.paths
+    .map(normalizePath)
+    .filter((path) => snapshot.paths.includes(path))
+    .map((path) => `retired file must be absent: ${path}`);
+  return { failures, unavailable: [] };
+}
+
 function evaluateStatic(rule: StaticSourceRule, snapshot: SourceSnapshot): RuleEvaluation {
   const failures: string[] = [];
   const unavailable: string[] = [];
@@ -139,6 +152,7 @@ export function evaluateRule(rule: DeclarativeRule, snapshot: SourceSnapshot): R
     case 'grep-inventory': return evaluateGrep(rule, snapshot);
     case 'line-byte-budget': return evaluateBudget(rule, snapshot);
     case 'file-presence': return evaluatePresence(rule, snapshot);
+    case 'file-absence': return evaluateAbsence(rule, snapshot);
     case 'static-source': return evaluateStatic(rule, snapshot);
   }
 }

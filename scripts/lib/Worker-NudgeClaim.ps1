@@ -1214,11 +1214,10 @@ function Resolve-WorkerNudgeTargetFromPrClaim {
     )
 
     $libDir = $PSScriptRoot
-    . (Join-Path $libDir 'Invoke-RuntimeCliJson.ps1')
     . (Join-Path $libDir 'Worker-AutonomousNudgeGate.ps1')
 
     if (-not $Sessions -or $Sessions.Count -eq 0) {
-        $Sessions = @(Get-RuntimeStatusSessions)
+        return @{ ok = $false; reason = 'runtime_worker_corpus_required' }
     }
     if (-not $SessionsDir) {
         $SessionsDir = Get-WorkerPrOwnershipSessionsDir -ProjectId $ProjectId
@@ -1375,11 +1374,10 @@ function Resolve-WorkerNudgeTargetFromIssueClaim {
     )
 
     $libDir = $PSScriptRoot
-    . (Join-Path $libDir 'Invoke-RuntimeCliJson.ps1')
     . (Join-Path $libDir 'Worker-AutonomousNudgeGate.ps1')
 
     if (-not $Sessions -or $Sessions.Count -eq 0) {
-        $Sessions = @(Get-RuntimeStatusSessions)
+        return @{ ok = $false; reason = 'runtime_worker_corpus_required' }
     }
     if (-not $SessionsDir) {
         $SessionsDir = Get-WorkerPrOwnershipSessionsDir -ProjectId $ProjectId

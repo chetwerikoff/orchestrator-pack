@@ -122,33 +122,9 @@ export const LAUNCH_IDIOM_PATTERNS = [
 
 const REQUIRED_SHIPPED_VALIDATORS = [
   'side-process-launch-contract',
-  'ao-spawn-shape',
-  'ao-cli-argv-shape',
-  'ao-dead-argv-bypass',
   'gh-inventory-static',
 ];
 
-const DEAD_ARGV_BYPASS_FILES = [
-  'scripts/lib/Invoke-RuntimeCliJson.ps1',
-  'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
-  'scripts/orchestrator-wake-supervisor.ps1',
-  'scripts/wait-orchestrator-launch.ps1',
-  'scripts/lib/Autonomous-ClaimPrResumeGate.ps1',
-  'scripts/orchestrator-wake-listener.ps1',
-  'scripts/lib/Worker-Recovery.ps1',
-  'scripts/dead-worker-reconcile.ps1',
-  'scripts/lib/Worker-NudgeClaim.ps1',
-  'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1',
-  'scripts/invoke-gated-worker-nudge.ps1',
-  'scripts/lib/Invoke-ReviewWakeTrigger.ps1',
-  'scripts/ci-failure-notification-reaction.ps1',
-  'scripts/ci-failure-notification-reconcile.ps1',
-  'scripts/ci-green-wake-reconcile.ps1',
-  'scripts/check-ci-failure-notification-adoption.ps1',
-  'scripts/journaled-worker-send.ps1',
-  'scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1',
-  'scripts/worker-message-send-adoption-preflight.ps1',
-];
 
 const GH_INVENTORY_SCAN_FILES = [
   'scripts/lib/Gh-PrChecks.ps1',
@@ -626,36 +602,11 @@ function validatorBackedForHit(hit, repoRoot) {
       callee: { kind: 'pack-ps1', identity: 'registry child scripts' },
     };
   }
-  if (hit.file === 'scripts/lib/Worker-Recovery.ps1' && hit.patternId === 'ps-call-op') {
-    return {
-      validatorId: 'ao-spawn-shape',
-      calleeContractSourceClass: 'captured-external-help',
-      callee: { kind: 'ao', identity: 'ao spawn' },
-    };
-  }
-  const deadArgvFiles = new Set(DEAD_ARGV_BYPASS_FILES);
-  if (deadArgvFiles.has(hit.file) && ['ps-call-op', 'pwsh-file', 'pwsh-noprofile', 'call-pwsh'].includes(hit.patternId)) {
-    return {
-      validatorId: 'ao-dead-argv-bypass',
-      calleeContractSourceClass: 'captured-external-help',
-      callee: { kind: 'ao', identity: 'ao CLI session/status/send' },
-    };
-  }
   if (hit.file === 'docs/pr-session-binding-cache.mjs' && hit.patternId === 'spawnSync') {
-    const full = path.join(repoRoot, hit.file);
-    const source = readFileSync(full, 'utf8');
-    const span = source.split('\n').slice(Math.max(0, hit.line - 3), hit.line + 2).join('\n');
-    if (span.includes('ghCommand')) {
-      return {
-        validatorId: null,
-        calleeContractSourceClass: 'allowlist-only',
-        callee: { kind: 'gh', identity: 'gh pr view (push-register prior-pr lookup)' },
-      };
-    }
     return {
-      validatorId: 'ao-cli-argv-shape',
-      calleeContractSourceClass: 'captured-external-help',
-      callee: { kind: 'ao', identity: 'ao session get' },
+      validatorId: null,
+      calleeContractSourceClass: 'allowlist-only',
+      callee: { kind: 'gh', identity: 'gh pr view (push-register prior-pr lookup)' },
     };
   }
   const ghFiles = new Set(GH_INVENTORY_SCAN_FILES);
@@ -679,30 +630,6 @@ export function buildDefaultInventoryRows(repoRoot) {
       calleeContractSourceClass: 'pack-ps1-param-block',
       coverageKind: 'validator-backed',
       validatorId: 'side-process-launch-contract',
-    },
-    {
-      rowId: 'validator-ref-ao-spawn-shape',
-      caller: { file: 'scripts/lib/Worker-Recovery.ps1', anchor: 'Invoke-WorkerRecoverySpawn' },
-      callee: { kind: 'ao', identity: 'ao spawn' },
-      calleeContractSourceClass: 'captured-external-help',
-      coverageKind: 'validator-backed',
-      validatorId: 'ao-spawn-shape',
-    },
-    {
-      rowId: 'validator-ref-ao-cli-argv-shape',
-      caller: { file: 'scripts/lib/Invoke-RuntimeCliJson.ps1', anchor: 'Invoke-RuntimeCliJson' },
-      callee: { kind: 'ao', identity: 'ao session/status CLI' },
-      calleeContractSourceClass: 'captured-external-help',
-      coverageKind: 'validator-backed',
-      validatorId: 'ao-cli-argv-shape',
-    },
-    {
-      rowId: 'validator-ref-ao-dead-argv-bypass',
-      caller: { file: 'scripts/check-ao-dead-argv-bypass.ps1', anchor: 'in-scope file lists' },
-      callee: { kind: 'ao', identity: 'ao session/status/send transport' },
-      calleeContractSourceClass: 'captured-external-help',
-      coverageKind: 'validator-backed',
-      validatorId: 'ao-dead-argv-bypass',
     },
     {
       rowId: 'validator-ref-gh-inventory-static',
@@ -804,12 +731,7 @@ function cli() {
     const payload = {
       schemaVersion: 1,
       description: 'Pack-wide production caller→callee launch inventory (Issue #661).',
-      absorbedCoverage: [
-        {
-          validatorId: 'ao-cli-argv-shape',
-          note: 'Capture-backed AO session/status argv probes cover Invoke-RuntimeCliJson adoption surfaces referenced by dead-argv-bypass file list.',
-        },
-      ],
+      absorbedCoverage: [],
       hashPinnedAllowlist: [],
       rows,
     };

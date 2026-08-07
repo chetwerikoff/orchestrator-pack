@@ -154,7 +154,7 @@
         "scripts/verify.ps1"
       ],
       "exitCode": 0,
-      "stdout": "[PASS] plugins/scope-guard/README.md - contract markers present\n",
+      "stdout": "[PASS] plugins/ao-scope-guard/README.md - contract markers present\n",
       "stderr": "",
       "expectedRunnerStatus": "PASS",
       "expectedRunnerStdout": "[PASS] verify prompt inventory and plugin contract markers\n",
@@ -296,14 +296,15 @@
         "scripts/check-review-command-not-ao.ps1"
       ],
       "exitCode": 1,
-      "stdout": "[FAIL] Canonical REVIEW_COMMAND must not use gitignored .orchestrator-pack/ paths\n  REVIEW_COMMAND: pwsh .orchestrator-pack/review.ps1\n",
+      "stdout": "[FAIL] Canonical REVIEW_COMMAND must not use gitignored .ao/ paths\n  REVIEW_COMMAND: pwsh .ao/review.ps1\n",
       "stderr": "",
       "expectedRunnerStatus": "FAIL",
       "expectedRunnerStdout": "[FAIL] Canonical REVIEW_COMMAND must not use gitignored .orchestrator-pack/ paths\n  REVIEW_COMMAND: pwsh .orchestrator-pack/review.ps1\n",
       "expectedRunnerDiagnostics": [
         "Canonical REVIEW_COMMAND must not use gitignored .orchestrator-pack/ paths"
       ],
-      "artifacts": []
+      "artifacts": [],
+      "parityDisposition": "The frozen PowerShell replay remains bound to its historical .ao/ predicate and output; the replacement TypeScript gate intentionally reports the current .orchestrator-pack/ violation through expectedRunnerStdout."
     },
     {
       "gateId": "verify-required-files",
@@ -345,13 +346,13 @@
         "scripts/verify.ps1"
       ],
       "exitCode": 1,
-      "stdout": "[FAIL] plugins/scope-guard/README.md - missing markers: runtime guard\nLEGACY_DIAGNOSTIC: Contract plugins/scope-guard/README.md missing markers: runtime guard\n",
+      "stdout": "[FAIL] plugins/ao-scope-guard/README.md - missing markers: runtime guard\nLEGACY_DIAGNOSTIC: Contract plugins/ao-scope-guard/README.md missing markers: runtime guard\n",
       "stderr": "",
       "expectedRunnerStatus": "FAIL",
       "expectedRunnerDiagnostics": [
         "Contract plugins/scope-guard/README.md missing marker: runtime guard"
       ],
-      "parityDisposition": "The TypeScript runner preserves the failing contract path and marker diagnostic; its structured detail is singular per missing marker rather than verify.ps1 aggregate table wording.",
+      "parityDisposition": "The replay preserves the negative missing-marker scenario on the migrated runtime-neutral contract README; the TypeScript replacement keeps the same path and marker diagnostic with structured singular wording.",
       "artifacts": []
     }
   ]
