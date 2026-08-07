@@ -1,15 +1,15 @@
 name: issue-1352-target-export
 
 on:
-  push:
-    branches:
-      - agent/issue-1352-regression-carrier
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
 
 jobs:
   export-target:
+    if: github.event.pull_request.head.ref == 'agent/issue-1352-regression-carrier' && github.event.pull_request.base.ref == 'agent/issue-1352-hard-cut'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
