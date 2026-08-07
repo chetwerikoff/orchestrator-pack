@@ -6,49 +6,226 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  diagnose:
-    name: Diagnose repaired current replay
+  patch-target:
+    name: Patch PR 1398 AC12 replay
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
-      - name: Checkout PR 1398 head
+      - name: Checkout target branch
         uses: actions/checkout@v4
         with:
-          repository: chetwerikoff/orchestrator-pack
-          ref: 22ab2edfd24a737c72a42f8df141bb8cbab36222
+          ref: agent/issue-1384-runtime-history-refresh
           fetch-depth: 0
-          persist-credentials: false
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install dependencies
-        run: npm ci --include=dev
-      - name: Diagnose current replay
+          persist-credentials: true
+      - name: Patch and push
         shell: bash
         run: |
-          node --input-type=module <<'NODE'
-          import { buildHeavyTopology } from './scripts/lib/vitest-heavy-topology.mjs';
-          import { resolvePreTopologyMeasurementPlan } from './scripts/lib/vitest-pre-topology-measurement.mjs';
-          const changedFiles = [
-            '.cursor/rules/flow-manager-browser-turn-monitoring.mdc',
-            'docs/declarations/1266.pr-scope.json',
-            'package.json',
-            'scripts/browser-gpt-post-settlement-close-proof.ts',
-            'scripts/browser-gpt-post-settlement-close.test.ts',
-            'scripts/browser-gpt-post-settlement-close.ts',
-            'scripts/chatgpt-browser-turn/contracts.ts',
-            'scripts/vitest-ci-lanes.config.json',
-          ].sort();
-          for (const mode of ['none','actual']) {
-            const topology = buildHeavyTopology(process.cwd(), mode === 'actual' ? {changedFiles} : {});
-            if (!topology.ok) throw new Error(topology.errors.join('; '));
-            const plan = resolvePreTopologyMeasurementPlan(topology, {maxFiles:Number.MAX_SAFE_INTEGER});
-            console.log(mode + '_raw_unresolved=' + topology.topology.unresolvedGuardWeights.length);
-            console.log(mode + '_targets=' + plan.targets.length);
-            console.log(mode + '_target_files=' + JSON.stringify(plan.targets));
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/lib/vitest-runtime-history-merge.fixture.mjs')
+          s = p.read_text()
+          start = s.index('function runGeneratedCandidateInventoryAndBoundFixture() {')
+          end = s.index('\nfunction runCommitBackNoOpOrderingFixture()', start)
+          replacement = r'''function runGeneratedCandidateInventoryAndBoundFixture() {
+            const dir = join(tmpdir(), `vhr-fixture-${Date.now()}-pr1376-replay`);
+            const sourceRoot = join(dir, 'source');
+            const reportsDir = join(dir, 'reports');
+            mkdirSync(dir, { recursive: true });
+            let worktreeAdded = false;
+
+            try {
+              const addWorktree = runProcessSync({
+                command: 'git',
+                args: [
+                  '-C', defaultRepoRoot,
+                  'worktree', 'add', '--detach', sourceRoot, PR_1376_REPLAY_BASE_SHA,
+                ],
+                encoding: 'utf8',
+                inheritParentEnv: true,
+                timeoutMs: 30_000,
+              });
+              assert(
+                addWorktree.exitCode === 0,
+                `PR #1376 replay must materialize historical base ${PR_1376_REPLAY_BASE_SHA}: ${addWorktree.stderr ?? ''}`,
+              );
+              if (addWorktree.exitCode !== 0) return;
+              worktreeAdded = true;
+
+              const mergeWorktree = runProcessSync({
+                command: 'git',
+                args: [
+                  '-C', sourceRoot,
+                  'merge', '--no-commit', '--no-ff', PR_1376_REPLAY_HEAD_SHA,
+                ],
+                encoding: 'utf8',
+                inheritParentEnv: true,
+                timeoutMs: 30_000,
+              });
+              assert(
+                mergeWorktree.exitCode === 0,
+                `PR #1376 replay must reconstruct the reviewed merge tree: ${mergeWorktree.stderr ?? ''}`,
+              );
+              if (mergeWorktree.exitCode !== 0) return;
+
+              const changedFilesResult = runProcessSync({
+                command: 'git',
+                args: [
+                  '-C', sourceRoot,
+                  'diff', '--name-only', `${PR_1376_REPLAY_BASE_SHA}...${PR_1376_REPLAY_HEAD_SHA}`, '--',
+                ],
+                encoding: 'utf8',
+                inheritParentEnv: true,
+                timeoutMs: 30_000,
+              });
+              assert(
+                changedFilesResult.exitCode === 0,
+                `PR #1376 replay must resolve the declared base/head changed-file set: ${changedFilesResult.stderr ?? ''}`,
+              );
+              if (changedFilesResult.exitCode !== 0) return;
+              const replayChangedFiles = String(changedFilesResult.stdout ?? '')
+                .split(/\r?\n/)
+                .map((entry) => entry.trim())
+                .filter(Boolean)
+                .sort();
+              assert(
+                JSON.stringify(replayChangedFiles) === JSON.stringify(PR_1376_CHANGED_FILES),
+                `PR #1376 replay changed-file identity drifted: expected ${JSON.stringify(PR_1376_CHANGED_FILES)}, got ${JSON.stringify(replayChangedFiles)}`,
+              );
+
+              const historicalTopology = buildHeavyTopology(sourceRoot, {
+                changedFiles: replayChangedFiles,
+              });
+              assert(historicalTopology.ok, 'PR #1376 historical topology must be available');
+              if (!historicalTopology.ok) return;
+              const historicalMeasurementPlan = resolvePreTopologyMeasurementPlan(
+                historicalTopology,
+                { maxFiles: Number.MAX_SAFE_INTEGER },
+              );
+              assert(
+                historicalMeasurementPlan.targets.length === 33,
+                `PR #1376 historical replay must reproduce exactly 33 pre-topology targets before repair (got ${historicalMeasurementPlan.targets.length})`,
+              );
+              assertThrows(
+                () => resolvePreTopologyMeasurementPlan(historicalTopology),
+                '33 files > 32',
+                'PR #1376 historical replay must reproduce the exact 33 > 32 bound refusal',
+              );
+
+              const currentHead = runProcessSync({
+                command: 'git',
+                args: ['-C', defaultRepoRoot, 'rev-parse', 'HEAD'],
+                encoding: 'utf8',
+                inheritParentEnv: true,
+                timeoutMs: 30_000,
+              });
+              assert(currentHead.exitCode === 0, `repaired replay must resolve current head: ${currentHead.stderr ?? ''}`);
+              if (currentHead.exitCode !== 0) return;
+              const currentHeadSha = String(currentHead.stdout ?? '').trim();
+              const currentTopology = buildHeavyTopology(defaultRepoRoot, {
+                changedFiles: replayChangedFiles,
+              });
+              assert(currentTopology.ok, 'repaired replay current topology must be available');
+              if (!currentTopology.ok) return;
+
+              mkdirSync(reportsDir, { recursive: true });
+              const committed = JSON.parse(
+                readFileSync(join(defaultRepoRoot, 'scripts/vitest-runtime-history.json'), 'utf8'),
+              );
+              const candidate = refreshRuntimeHistory({
+                baseHistory: committed,
+                shardReports: buildLanePlanShardReports(
+                  reportsDir,
+                  currentHeadSha,
+                  defaultRepoRoot,
+                ),
+                expectedCommitSha: currentHeadSha,
+                repoRoot: defaultRepoRoot,
+              });
+              const currentInventory = discoverVitestFiles(defaultRepoRoot);
+              assert(
+                candidate.ok && !candidate.rejected,
+                'PR #1376 replay candidate must be generated by accepted repaired-producer evidence',
+              );
+              assert(
+                JSON.stringify(runtimeHistoryInventory(candidate.history)) === JSON.stringify([...currentInventory].sort()),
+                'PR #1376 replay candidate membership must exactly match the repaired canonical source inventory',
+              );
+
+              const candidateArtifact = {
+                source: candidate.history.source,
+                files: candidate.history.files,
+                provenance: candidate.history.provenance,
+                dataChangedAt: candidate.history.dataChangedAt,
+              };
+              const candidateUnresolved = findOversizedFiles(
+                currentInventory,
+                candidateArtifact,
+                currentTopology.policy,
+                defaultRepoRoot,
+                {
+                  classification: currentTopology.lanesConfig.classification,
+                  changedFiles: replayChangedFiles,
+                },
+              ).unresolved;
+              let candidatePlan = null;
+              try {
+                candidatePlan = resolvePreTopologyMeasurementPlan({
+                  topology: { unresolvedGuardWeights: candidateUnresolved },
+                  lanesConfig: currentTopology.lanesConfig,
+                });
+              } catch (error) {
+                fail(`repaired producer must bring PR #1376 replay within unchanged bound: ${String(error?.message ?? error)}`);
+              }
+
+              assert(PRE_TOPOLOGY_MAX_FILES === 32, `PRE_TOPOLOGY_MAX_FILES must remain exactly 32 (got ${PRE_TOPOLOGY_MAX_FILES})`);
+              if (candidatePlan) {
+                assert(
+                  candidatePlan.targets.length <= PRE_TOPOLOGY_MAX_FILES,
+                  `repaired producer must turn PR #1376 replay from 33 > 32 into <= 32 (${candidatePlan.targets.length} > ${PRE_TOPOLOGY_MAX_FILES})`,
+                );
+                console.log(`runtime-history-issue-1384-pr1376-replay ${JSON.stringify({
+                  baseSha: PR_1376_REPLAY_BASE_SHA,
+                  headSha: PR_1376_REPLAY_HEAD_SHA,
+                  changedFiles: replayChangedFiles,
+                  historicalTargets: historicalMeasurementPlan.targets.length,
+                  repairedCandidateTargets: candidatePlan.targets.length,
+                  bound: PRE_TOPOLOGY_MAX_FILES,
+                })}`);
+              }
+            } finally {
+              if (worktreeAdded) {
+                runProcessSync({
+                  command: 'git',
+                  args: ['-C', sourceRoot, 'merge', '--abort'],
+                  encoding: 'utf8',
+                  inheritParentEnv: true,
+                  timeoutMs: 30_000,
+                });
+                runProcessSync({
+                  command: 'git',
+                  args: ['-C', defaultRepoRoot, 'worktree', 'remove', '--force', sourceRoot],
+                  encoding: 'utf8',
+                  inheritParentEnv: true,
+                  timeoutMs: 30_000,
+                });
+              }
+              rmSync(dir, { recursive: true, force: true });
+            }
           }
-          NODE
+          '''
+          # Strip the Python indentation introduced by the workflow literal.
+          import textwrap
+          replacement = textwrap.dedent(replacement)
+          s = s[:start] + replacement.rstrip() + s[end:]
+          p.write_text(s)
+          PY
+          git diff --check
+          node --check scripts/lib/vitest-runtime-history-merge.fixture.mjs
+          git config user.name 'chatgpt-ac12-fix'
+          git config user.email 'chatgpt-ac12-fix@example.invalid'
+          git add scripts/lib/vitest-runtime-history-merge.fixture.mjs
+          git commit -m 'Bind PR 1376 replay to repaired producer'
+          git push origin HEAD:agent/issue-1384-runtime-history-refresh
