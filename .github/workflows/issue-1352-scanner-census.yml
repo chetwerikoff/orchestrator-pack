@@ -29,11 +29,15 @@ jobs:
           from pathlib import Path
           path = Path('scripts/runtime-retirement/retired-surface-guard.ts')
           text = path.read_text(encoding='utf-8')
-          old = "new RegExp(pattern.sourceCommandPattern, 'gmi')"
-          new = "new RegExp(pattern.sourceCommandPattern, 'gm')"
+          old = "new RegExp(definition.sourceCommandPattern, 'gmi')"
           if text.count(old) != 1:
-              raise SystemExit(f'unexpected scanner regex compiler count: {text.count(old)}')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+              raise SystemExit(f'unexpected definition regex compiler count: {text.count(old)}')
+          text = text.replace(old, "new RegExp(definition.sourceCommandPattern, 'gm')", 1)
+          old = "new RegExp(surface.sourceCommandPattern, 'gmi')"
+          if text.count(old) != 1:
+              raise SystemExit(f'unexpected scan regex compiler count: {text.count(old)}')
+          text = text.replace(old, "new RegExp(surface.sourceCommandPattern, 'gm')", 1)
+          path.write_text(text, encoding='utf-8')
           PY
           node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts > "$RUNNER_TEMP/runtime-retirement-census.json" || true
           node --input-type=module - "$RUNNER_TEMP/runtime-retirement-census.json" "$scanned_head" <<'NODE'
