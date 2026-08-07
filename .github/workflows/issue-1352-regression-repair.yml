@@ -40,6 +40,64 @@ jobs:
             exit 90
           fi
           python "$RUNNER_TEMP/issue-1352-regression-repair-v2.py"
+          python - <<'PY'
+          from pathlib import Path
+
+          runner_path = Path('scripts/pack-review-runner.ts')
+          runner = runner_path.read_text(encoding='utf-8')
+          old_env = """  const retiredRuntimePrefixes = [
+            ['A', 'O', '_'].join(''),
+            ['O', 'R', 'C', 'A', '_'].join(''),
+          ];
+          const retiredRuntimeEnv = Object.fromEntries(
+            Object.keys(process.env)
+              .filter((key) => retiredRuntimePrefixes.some((prefix) => key.startsWith(prefix)))
+              .map((key) => [key, undefined]),
+          ) as NodeJS.ProcessEnv;
+          const env: NodeJS.ProcessEnv = {
+            ...retiredRuntimeEnv,
+            ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),"""
+          new_env = """  const retiredRuntimePrefixes = [
+            ['A', 'O', '_'].join(''),
+            ['O', 'R', 'C', 'A', '_'].join(''),
+          ];
+          const sanitizedParentEnv = Object.fromEntries(
+            Object.entries(process.env)
+              .filter(([key]) => !retiredRuntimePrefixes.some((prefix) => key.startsWith(prefix))),
+          ) as NodeJS.ProcessEnv;
+          const env: NodeJS.ProcessEnv = {
+            ...sanitizedParentEnv,
+            ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),"""
+          if runner.count(old_env) != 1:
+              raise SystemExit(f'unexpected generated reviewer env block count: {runner.count(old_env)}')
+          runner = runner.replace(old_env, new_env, 1)
+          inherit_old = "    inheritParentEnv: true,\n    env,\n    allowEmptyStdout: true,"
+          inherit_new = "    inheritParentEnv: false,\n    env,\n    allowEmptyStdout: true,"
+          if runner.count(inherit_old) != 1:
+              raise SystemExit(f'unexpected reviewer inheritance block count: {runner.count(inherit_old)}')
+          runner_path.write_text(runner.replace(inherit_old, inherit_new, 1), encoding='utf-8')
+
+          foundation_path = Path('scripts/pr2-foundation/foundation.test.ts')
+          foundation = foundation_path.read_text(encoding='utf-8')
+          start_marker = "    for (const file of FOUNDATION_DOC_ROWS) {\n"
+          if foundation.count(start_marker) != 1:
+              raise SystemExit(f'unexpected foundation loop count: {foundation.count(start_marker)}')
+          start = foundation.index(start_marker)
+          end_marker = "    }\n"
+          end = foundation.index(end_marker, start) + len(end_marker)
+          final_block = """    for (const file of FOUNDATION_DOC_ROWS) {
+            const terminalizedName = file.endsWith('.d.mts')
+              ? `${path.basename(file, '.d.mts')}.d.ts`
+              : `${path.basename(file, '.mjs')}.ts`;
+            const terminalized = path.join(repoRoot, 'scripts/pr2-foundation/terminalized', terminalizedName);
+            const source = existsSync(terminalized) ? terminalized : path.join(repoRoot, file);
+            expect(existsSync(source), file).toBe(true);
+            expect(readFileSync(source, 'utf8'), file)
+              .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
+          }
+          """
+          foundation_path.write_text(foundation[:start] + final_block + foundation[end:], encoding='utf-8')
+          PY
       - name: Verify repairs
         shell: bash
         run: |
