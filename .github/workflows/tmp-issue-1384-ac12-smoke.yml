@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   diagnose:
-    name: Diagnose PR1376 AC12 target
+    name: Diagnose PR1376 AC12 lane coverage
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -38,14 +38,17 @@ jobs:
           node --input-type=module <<'NODE'
           import { buildLanePlan } from './scripts/lib/vitest-ci-lanes.mjs';
           import { resolvePreTopologyMeasurementPlan } from './scripts/lib/vitest-pre-topology-measurement.mjs';
-          import { SUPPLEMENTAL_TARGET } from './scripts/lib/vitest-runtime-history-merge.mjs';
           const plan = buildLanePlan('/tmp/pr1376');
           if (!plan.ok) throw new Error(plan.errors.join('; '));
           const pre = resolvePreTopologyMeasurementPlan(plan, { maxFiles: Number.MAX_SAFE_INTEGER });
-          console.log('pre_targets=' + JSON.stringify(pre.targets));
-          console.log('supplemental_target=' + SUPPLEMENTAL_TARGET);
-          console.log('supplemental_in_pre=' + pre.targets.includes(SUPPLEMENTAL_TARGET));
-          console.log('supplemental_lane=' + (plan.heavy.includes(SUPPLEMENTAL_TARGET) ? 'heavy' : plan.light.includes(SUPPLEMENTAL_TARGET) ? 'light' : 'unknown'));
+          const heavy = pre.targets.filter((f) => plan.heavy.includes(f));
+          const light = pre.targets.filter((f) => plan.light.includes(f));
+          console.log('pre_count=' + pre.targets.length);
+          console.log('heavy_count=' + heavy.length);
+          console.log('light_count=' + light.length);
+          console.log('pre_heavy=' + JSON.stringify(heavy));
+          console.log('pre_light=' + JSON.stringify(light));
+          console.log('heavy_shard_files=' + JSON.stringify(plan.heavyShards.flatMap((s) => s.files)));
           NODE
           git -C /tmp/pr1376 merge --abort || true
           git worktree remove --force /tmp/pr1376
