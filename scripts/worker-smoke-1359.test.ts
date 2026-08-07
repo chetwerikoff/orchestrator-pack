@@ -93,6 +93,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-production-dispatch-'));
     let sendCalls = 0;
     let showCalls = 0;
+    let probeCalls = 0;
     const calls: string[][] = [];
     const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
       calls.push([...args]);
@@ -133,15 +134,18 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       };
     };
     const restore = installStableWorkerSmokeSpawnPatch({
-      probe: () => ok({
-        terminal: {
-          handle: 'terminal-1',
-          title: 'renamed-smoke-1359',
-          incarnationId: 'stable-generation',
-          worktreePath: root,
-          status: 'running',
-        },
-      }),
+      probe: () => {
+        probeCalls += 1;
+        return ok({
+          terminal: {
+            handle: 'terminal-1',
+            title: 'renamed-smoke-1359',
+            incarnationId: 'stable-generation',
+            worktreePath: root,
+            status: 'running',
+          },
+        });
+      },
     });
 
     try {
@@ -172,12 +176,11 @@ describe('Issue #1359 production worker-smoke reachability', () => {
         now: () => 1,
         sleepMs: () => undefined,
       })).toMatchObject({ ok: true });
+      expect(probeCalls).toBeGreaterThanOrEqual(2);
       expect(sendCalls).toBe(1);
       expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'create')).toBe(true);
       expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'list')).toBe(false);
       expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'send')).toBe(true);
-      const operations = calls.map((args) => `${args[0] ?? ''} ${args[1] ?? ''}`);
-      expect(operations.slice(-2)).toEqual(['terminal show', 'terminal send']);
     } finally {
       restore();
       rmSync(root, { recursive: true, force: true });
@@ -302,6 +305,9 @@ describe('Issue #1359 production worker-smoke reachability', () => {
         error: { code: 'unexpected_test_operation', message: args.join(' ') },
       };
     };
+    const restore = installStableWorkerSmokeSpawnPatch({
+      probe: () => ok({ terminal }),
+    });
 
     try {
       const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
@@ -320,6 +326,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       expect(outcome).toContain(`handle=${handle}`);
       expect(outcome).toContain(`generation=${generation}`);
     } finally {
+      restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -327,6 +334,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
   it('refuses a post-freeze replacement before the original dispatcher can send', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-no-send-'));
     let sendCalls = 0;
+    let probeCalls = 0;
     const stable: OrcaTerminalSummary = {
       handle: 'terminal-2',
       title: 'smoke-1359',
@@ -360,9 +368,14 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       };
     };
     const restore = installStableWorkerSmokeSpawnPatch({
-      probe: () => ok({
-        terminal: { ...stable, incarnationId: 'replacement-generation' },
-      }),
+      probe: () => {
+        probeCalls += 1;
+        return ok({
+          terminal: probeCalls === 1
+            ? stable
+            : { ...stable, incarnationId: 'replacement-generation' },
+        });
+      },
     });
 
     try {
@@ -388,6 +401,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
         expect(dispatched.reason).toContain('identity_source=orca_terminal_show(terminal-2)');
         expect(dispatched.reason).toContain('resolution=');
       }
+      expect(probeCalls).toBeGreaterThanOrEqual(2);
       expect(spawned.value.identity.generation).toBe('stable-generation');
       expect(sendCalls).toBe(0);
     } finally {
@@ -435,6 +449,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
     const restore = installStableWorkerSmokeSpawnPatch({
       probe: () => {
         probeCalls += 1;
+        if (probeCalls === 1) return ok({ terminal: stable });
         return {
           ok: false,
           operation: 'terminal_show',
@@ -468,7 +483,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
         expect(dispatched.reason).toContain('lookup_failure=terminal_show%3Aterminal_not_found');
         expect(dispatched.reason).toContain('resolution=');
       }
-      expect(probeCalls).toBe(1);
+      expect(probeCalls).toBe(2);
       expect(sendCalls).toBe(0);
     } finally {
       restore();
@@ -479,6 +494,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
   it('fails a wrong-worktree observation before payload send', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-worktree-mismatch-'));
     let sendCalls = 0;
+    let probeCalls = 0;
     const stable: OrcaTerminalSummary = {
       handle: 'terminal-worktree',
       title: 'smoke-1359',
@@ -501,7 +517,14 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       return { ok: false, error: { code: 'unexpected_test_operation', message: args.join(' ') } };
     };
     const restore = installStableWorkerSmokeSpawnPatch({
-      probe: () => ok({ terminal: { ...stable, worktreePath: join(root, 'foreign') } }),
+      probe: () => {
+        probeCalls += 1;
+        return ok({
+          terminal: probeCalls === 1
+            ? stable
+            : { ...stable, worktreePath: join(root, 'foreign') },
+        });
+      },
     });
 
     try {
@@ -524,6 +547,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
         expect(dispatched.reason).toContain('expected_workspace=');
         expect(dispatched.reason).toContain('observed_workspace=');
       }
+      expect(probeCalls).toBeGreaterThanOrEqual(2);
       expect(sendCalls).toBe(0);
     } finally {
       restore();
