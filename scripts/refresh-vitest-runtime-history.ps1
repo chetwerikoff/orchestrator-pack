@@ -31,6 +31,18 @@ $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $historyFile = if ($HistoryPath) { $HistoryPath } else { Join-Path $RepoRoot 'scripts/vitest-runtime-history.json' }
 $refreshScript = Join-Path $PSScriptRoot 'refresh-vitest-runtime-history.mjs'
 
+$supplementalTuple = [ordered]@{
+    SupplementalReportsDir = -not [string]::IsNullOrWhiteSpace($SupplementalReportsDir)
+    SupplementalSourceSha = -not [string]::IsNullOrWhiteSpace($SupplementalSourceSha)
+    SupplementalRunId = -not [string]::IsNullOrWhiteSpace($SupplementalRunId)
+    SupplementalRunAttempt = -not [string]::IsNullOrWhiteSpace($SupplementalRunAttempt)
+}
+$supplementalCount = @($supplementalTuple.Values | Where-Object { $_ }).Count
+if ($supplementalCount -ne 0 -and $supplementalCount -ne 4) {
+    throw 'SupplementalReportsDir, SupplementalSourceSha, SupplementalRunId, and SupplementalRunAttempt must be supplied together'
+}
+$hasSupplemental = $supplementalCount -eq 4
+
 function Sync-RemoteRuntimeHistoryBase {
     git -C $RepoRoot fetch origin main | Out-Host
     if ($LASTEXITCODE -ne 0) {
@@ -55,10 +67,7 @@ function Invoke-RuntimeHistoryRefresh {
         '--repo-root', $RepoRoot,
         '--history-path', $historyFile
     )
-    if ($SupplementalReportsDir -or $SupplementalSourceSha) {
-        if (-not $SupplementalReportsDir -or -not $SupplementalSourceSha -or -not $SupplementalRunId -or -not $SupplementalRunAttempt) {
-            throw 'SupplementalReportsDir, SupplementalSourceSha, SupplementalRunId, and SupplementalRunAttempt must be supplied together'
-        }
+    if ($hasSupplemental) {
         $args += @(
             '--supplemental-reports-dir', $SupplementalReportsDir,
             '--supplemental-source-sha', $SupplementalSourceSha,
@@ -91,7 +100,9 @@ function Invoke-RuntimeHistoryStaleReconcile {
     & node $refreshScript reconcile `
         --remote $RemoteHistoryFile `
         --proposed $ProposedHistoryFile `
-        --output $historyFile
+        --output $historyFile `
+        --repo-root $RepoRoot `
+        --require-equal-inventory
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
@@ -152,6 +163,15 @@ try {
             continue
         }
 
+        $remoteHead = (git -C $RepoRoot rev-parse origin/main).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($remoteHead)) {
+            if ($attempt -eq $maxAttempts) {
+                Write-Host '[FAIL] runtime-history commit-back failed to resolve origin/main head'
+                exit 1
+            }
+            continue
+        }
+
         git -C $RepoRoot show origin/main:scripts/vitest-runtime-history.json | Set-Content -LiteralPath $remoteSnapshot -Encoding utf8
         if ($LASTEXITCODE -ne 0) {
             if ($attempt -eq $maxAttempts) {
@@ -161,7 +181,13 @@ try {
             continue
         }
 
-        Invoke-RuntimeHistoryStaleReconcile -RemoteHistoryFile $remoteSnapshot -ProposedHistoryFile $proposedSnapshot
+        if ($remoteHead -ieq $CommitSha.Trim()) {
+            Copy-Item -LiteralPath $proposedSnapshot -Destination $historyFile -Force
+            Write-Host '[INFO] runtime-history commit-back source head unchanged; preserving proposed canonical inventory'
+        } else {
+            Write-Host "[INFO] runtime-history commit-back detected advanced origin/main head $remoteHead; requiring equal canonical inventory"
+            Invoke-RuntimeHistoryStaleReconcile -RemoteHistoryFile $remoteSnapshot -ProposedHistoryFile $proposedSnapshot
+        }
 
         git -C $RepoRoot add -- 'scripts/vitest-runtime-history.json'
         $status = git -C $RepoRoot status --porcelain -- 'scripts/vitest-runtime-history.json'
