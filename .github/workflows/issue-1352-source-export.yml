@@ -16,16 +16,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 1
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - name: Install exact dependencies
         run: npm ci --include=dev
-      - name: Archive exact PR head with dependencies
+      - name: Archive exact PR head, repository history, and dependencies
         shell: bash
-        run: tar --exclude=.git -czf "$RUNNER_TEMP/pr-1378-source.tgz" .
+        run: tar -czf "$RUNNER_TEMP/pr-1378-source.tgz" .
       - uses: actions/upload-artifact@v4
         with:
           name: pr-1378-source-${{ github.event.pull_request.head.sha }}
