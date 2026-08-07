@@ -62,11 +62,41 @@ jobs:
               diff -u "$RUNNER_TEMP/expected-conflicts.txt" "$artifact/conflicts.txt" || true
               exit 86
             fi
+
+            # Issue #1352 permits selector neutralization but requires preservation of
+            # active observable behavior. The branch had deleted the runtime-neutral
+            # browser recovery/cancellation machinery wholesale, while current main
+            # only hardens that machinery. Preserve current main and reapply only the
+            # exact AO selector removals authorized by AO-11.
+            git checkout --theirs -- scripts/chatgpt-browser-turn/state-light-turn.ts
+            python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/chatgpt-browser-turn/state-light-turn.ts')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              "const issue = String(env.CREATE_ISSUE_DRAFT_ISSUE ?? env.AO_ISSUE_NUMBER ?? '').trim();":
+                  "const issue = String(env.CREATE_ISSUE_DRAFT_ISSUE ?? '').trim();",
+              "const pr = String(env.PACK_REVIEW_PR_NUMBER ?? env.AO_PR_NUMBER ?? '').trim();":
+                  "const pr = String(env.PACK_REVIEW_PR_NUMBER ?? '').trim();",
+              "const agent = String(env.AO_AGENT ?? env.PACK_FLOW_MANAGER ?? process.title ?? 'node').trim();":
+                  "const agent = String(env.OPK_AGENT ?? env.PACK_FLOW_MANAGER ?? process.title ?? 'node').trim();",
+          }
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'unexpected selector occurrence count {count}: {old}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+            # The remaining two conflicts are narrow #1377 behavior additions. Keep
+            # all non-conflicting #1352 changes and select current-main only inside
+            # the reviewed conflict blocks.
             python - <<'PY'
           from pathlib import Path
 
           paths = [
-              Path('scripts/chatgpt-browser-turn/state-light-turn.ts'),
               Path('scripts/flow-manager-long-running-child.test.ts'),
               Path('scripts/flow-manager-long-running-child.ts'),
           ]
