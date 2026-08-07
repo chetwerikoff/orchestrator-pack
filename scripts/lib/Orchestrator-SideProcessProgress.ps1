@@ -128,33 +128,6 @@ function Get-OrchestratorSideProcessPendingTimeoutMessage {
     throw "side-process liveness timeout consume failed (exit $($result.exitCode)): $($result.output)"
 }
 
-function Install-OrchestratorSideProcessAoLivenessShim {
-    if (-not $env:OPK_SIDE_PROCESS_CHILD_ID) { return }
-    if (-not (Get-OrchestratorSideProcessProgressDir)) { return }
-    if ($env:OPK_SIDE_PROCESS_LIVENESS_SHIM_DISABLED -eq '1') { return }
-
-    if (-not $env:OPK_SIDE_PROCESS_OWNER_PID) {
-        $env:OPK_SIDE_PROCESS_OWNER_PID = [string]$PID
-    }
-    $env:OPK_SIDE_PROCESS_LIVENESS_CLI = $Script:OrchestratorSideProcessLivenessCli
-    function global:ao {
-        $forwardArgs = @($args | ForEach-Object { [string]$_ })
-        $callParts = @($forwardArgs | Select-Object -First 2)
-        $callName = if ($callParts.Count -gt 0) {
-            'ao:' + ($callParts -join ':')
-        }
-        else {
-            'ao:command'
-        }
-        & node --no-warnings --experimental-strip-types $env:OPK_SIDE_PROCESS_LIVENESS_CLI call `
-            --call-name $callName `
-            --child-id $env:OPK_SIDE_PROCESS_CHILD_ID `
-            --owner-pid $env:OPK_SIDE_PROCESS_OWNER_PID `
-            --progress-dir $env:OPK_SIDE_PROCESS_PROGRESS_DIR `
-            -- ao @forwardArgs
-    }
-}
-
 function Write-OrchestratorSideProcessProgress {
     param(
         [Parameter(Mandatory = $true)]
@@ -328,5 +301,3 @@ function Read-OrchestratorSideProcessProgress {
         return $null
     }
 }
-
-Install-OrchestratorSideProcessAoLivenessShim
