@@ -22,9 +22,15 @@
     "vendor/"
   ],
   "allowed_roots": [
+    "docs/declarations/1393.pr-scope.json",
+    "plugins/ao-codex-pr-reviewer/lib/parse_output.ts",
+    "plugins/ao-codex-pr-reviewer/tests/review.test.ts",
     "scripts/lib/pack-gpt-reviewer.ts",
+    "scripts/lib/pack-review-delivery.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/pack-review-delivery.cases.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts"
   ],
   "source_revision": "10a20804a8dfd73cd49b8744f9a149ec884e0c5b"
