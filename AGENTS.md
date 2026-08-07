@@ -159,7 +159,7 @@ The final status states the delegation outcome or the exact closed-list reason i
 was not invoked. The primary agent remains responsible for scope, correctness,
 commits, and verification.
 
-## RTK read exploration
+## RTK read-exploration
 
 Prefer dedicated file and repository tools for reads. Use shell wrappers only when
 raw shell behavior is genuinely required. Never compact secrets, private logs,
@@ -315,7 +315,7 @@ Use the named skill on a matching direct request:
 | `publish-issue-draft` | publish an existing tracked draft | use only the governed historical publishing flow |
 | `switch-pack-reviewer` | change the configured reviewer | update and verify the pack reviewer selection |
 
-## RCA discipline
+## RCA spec discipline
 
 Root-cause work must identify a recurrence-diagnostic mechanism and stop only at a
 cause whose removal prevents the observed class. Distinguish action-producing from
