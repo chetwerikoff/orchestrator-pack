@@ -1,5 +1,5 @@
 ---
-description: AO 0.10 codex harness reviewer must run pack JSONL bridge before submit (Issue #658)
+description: Pack codex harness reviewer must run the JSONL bridge before submit (Issue #658)
 globs:
   - code-reviews/workspaces/**
 alwaysApply: false
@@ -7,14 +7,11 @@ alwaysApply: false
 
 # Harness review bridge (Issue #658)
 
-When AO spawns you as the **codex harness reviewer** for a worker PR, you MUST NOT
-improvise prose review findings or call `ao review submit` with markdown headings like
-`Finding:` / `BLOCKING:`.
+When you are the **codex harness reviewer** for a worker PR, you MUST NOT improvise prose review findings or bypass the pack-owned review submission path with an ad-hoc runtime command or markdown headings such as `Finding:` / `BLOCKING:`.
 
 ## Mandatory pre-submit pipeline
 
-Before `ao review submit`, run the pack-owned harness bridge from the **trusted pack
-root** (never a worker-worktree copy of `scripts/**`):
+Before the pack review runner submits the review result, run the pack-owned harness bridge from the **trusted pack root** (never a worker-worktree copy of `scripts/**`):
 
 ```powershell
 pwsh -NoProfile -File scripts/harness-review-bridge.ps1 `
@@ -24,12 +21,10 @@ pwsh -NoProfile -File scripts/harness-review-bridge.ps1 `
   -TrustedBaseRoot <trusted-pack-root>
 ```
 
-`<trusted-pack-root>` is `OPK_TRUSTED_PACK_ROOT`, an origin/main pack worktree, or the
-operator's live pack checkout — **not** the PR head worktree under review.
+`<trusted-pack-root>` is `OPK_TRUSTED_PACK_ROOT`, an origin/main pack worktree, or the operator's live pack checkout — **not** the PR head worktree under review.
 
 Set `PACK_HARNESS_BRIDGE_DISABLED=1` to abort before submit (classified failure).
 
 ## Clean reviews
 
-Zero-finding reviews must submit the shipped clean contract (`verdict: clean`,
-`findingCount: 0`) — never an empty body or prose `LGTM`.
+Zero-finding reviews must submit the shipped clean contract (`verdict: clean`, `findingCount: 0`) — never an empty body or prose `LGTM`.
