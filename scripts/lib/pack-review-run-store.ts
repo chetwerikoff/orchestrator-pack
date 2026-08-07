@@ -811,6 +811,15 @@ function deriveCompleteGptRoundAggregate(
   };
 }
 
+function hasNonHarvestIncompleteGptSource(round: PackReviewGptRoundRecord): boolean {
+  return round.sourceSlots.some((slot) => {
+    const terminalClass = slot.terminalClass ?? '';
+    return slot.lifecycle === 'terminal'
+      && !COMPLETE_GPT_TERMINAL_CLASSES.has(terminalClass)
+      && !HARVEST_GPT_TERMINAL_CLASSES.has(terminalClass);
+  });
+}
+
 function assertGptRoundAggregate(
   round: PackReviewGptRoundRecord,
   aggregate: {
@@ -1086,6 +1095,11 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
   if (reviewRound && (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(status)
     || reviewVerdict !== undefined
     || journalOutcome?.state === 'persisted')) {
+    if (hasNonHarvestIncompleteGptSource(reviewRound)) {
+      throw new Error(
+        `corrupt pack review run record at ${path || '<record>'}: reviewVerdict does not match terminal source census`,
+      );
+    }
     assertGptRoundAggregate(reviewRound, {
       reviewVerdict: raw.reviewVerdict,
       findingCount: raw.findingCount,
