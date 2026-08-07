@@ -117,7 +117,7 @@ function findVersion(value: unknown, depth = 0): string | null {
 }
 
 function stateBaseDir(): string {
-  return process.env.OPK_BASE_DIR?.trim() || path.join(homedir(), '.agent-orchestrator');
+  return process.env.OPK_BASE_DIR?.trim() || path.join(homedir(), '.orchestrator-pack');
 }
 
 function projectRoot(projectId: string): string {
@@ -182,7 +182,7 @@ export async function resolveVerifiedWorkerNotificationTarget(input: {
 }): Promise<VerifiedWorkerNotificationTarget> {
   const dependencies = input.dependencies ?? {};
   const loadRuntimeVersion = dependencies.loadRuntimeVersion ?? (async () => {
-    const appStatePath = process.env.AO_APP_STATE_PATH?.trim()
+    const appStatePath = process.env.OPK_APP_STATE_PATH?.trim()
       || path.join(homedir(), '.orchestrator-pack', 'app-state.json');
     const state = readRecord(appStatePath);
     const version = findVersion(state);
@@ -198,8 +198,8 @@ export async function resolveVerifiedWorkerNotificationTarget(input: {
       allowEmptyStdout: false,
       timeoutMs: input.config.timeoutMs,
     });
-    if (!result.ok) throw new Error('ao_session_list_failed');
-    const rows = sessionsFromPayload(parsePrefixedJson(result.stdout, 'ao_session_list'));
+    if (!result.ok) throw new Error('runtime_worker_list_failed');
+    const rows = sessionsFromPayload(parsePrefixedJson(result.stdout, 'runtime_worker_list'));
     if (rows.length === 0) throw new Error('preflight_empty_fleet');
     const normalized = rows.map(normalizeRuntimeWorkerRow);
     if (normalized.some((row) => row === null)) throw new Error('preflight_schema_mismatch');

@@ -136,7 +136,7 @@ function claimKey(input: {
 }
 
 export function workerNudgeClaimProjectNamespace(projectId = 'orchestrator-pack'): string {
-  const base = process.env.OPK_BASE_DIR?.trim() || path.join(homedir(), '.agent-orchestrator');
+  const base = process.env.OPK_BASE_DIR?.trim() || path.join(homedir(), '.orchestrator-pack');
   return path.join(base, 'projects', projectId.trim() || 'orchestrator-pack', 'worker-nudge-claims');
 }
 

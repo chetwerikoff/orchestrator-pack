@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { getAoProjectDir } from '../../docs/review-run-liveness.mjs';
 import { hashIssueBodySnapshot } from './reviewer-contract-mapping.ts';
 
 export const BOUND_ISSUE_SNAPSHOT_SCHEMA_VERSION = 1;
@@ -88,8 +88,8 @@ function metadataMatchesRequestedBinding(
     && normalizeSha(metadata.prHeadSha) === normalizeSha(requested.prHeadSha);
 }
 
-export function resolveDefaultAoProjectId(env: NodeJS.ProcessEnv = process.env): string {
-  return (env.AO_PROJECT_ID ?? env.AO_PROJECT ?? 'orchestrator-pack').trim() || 'orchestrator-pack';
+export function resolveDefaultProjectId(env: NodeJS.ProcessEnv = process.env): string {
+  return (env.OPK_PROJECT_ID ?? 'orchestrator-pack').trim() || 'orchestrator-pack';
 }
 
 export function resolveBoundIssueSnapshotStoreDir(
@@ -100,7 +100,8 @@ export function resolveBoundIssueSnapshotStoreDir(
   if (override) {
     return override;
   }
-  return join(getAoProjectDir(projectId, options.stateBaseDir), BOUND_ISSUE_SNAPSHOT_STORE_REL);
+  const baseDir = options.stateBaseDir ?? process.env.OPK_BASE_DIR?.trim() ?? join(homedir(), '.orchestrator-pack');
+  return join(baseDir, 'projects', projectId.trim() || 'orchestrator-pack', BOUND_ISSUE_SNAPSHOT_STORE_REL);
 }
 
 export function boundIssueSnapshotArtifactPaths(input: {

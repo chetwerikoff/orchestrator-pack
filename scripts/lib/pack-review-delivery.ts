@@ -451,7 +451,7 @@ function firstNotificationText(...values: unknown[]): string {
 function sessionMetadataRoot(projectId: string): string {
   const explicit = process.env.PACK_REVIEW_SESSION_METADATA_ROOT?.trim();
   if (explicit) return resolve(explicit);
-  const base = process.env.OPK_BASE_DIR?.trim() || join(homedir(), '.agent-orchestrator');
+  const base = process.env.OPK_BASE_DIR?.trim() || join(homedir(), '.orchestrator-pack');
   return join(base, 'projects', projectId, 'sessions');
 }
 
