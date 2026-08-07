@@ -276,7 +276,6 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       worktreePath: root,
       status: 'running',
     };
-    let showCalls = 0;
     const calls: string[][] = [];
     const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
       calls.push([...args]);
@@ -285,8 +284,6 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
       if (args[0] === 'terminal' && args[1] === 'show') {
-        showCalls += 1;
-        if (showCalls === 1) return ok({ terminal: owned } as T);
         return {
           ok: false,
           outcomeCategory: 'supported_operation_failure',
@@ -294,11 +291,21 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         };
       }
       if (args[0] === 'terminal' && args[1] === 'list') return ok({ terminals: [foreign] } as T);
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(`unexpected owned-absence fixture operation: ${args.join(' ')}`);
     };
+    let probeCalls = 0;
+    const restore = installStableWorkerSmokeSpawnPatch({
+      probe: () => {
+        probeCalls += 1;
+        if (probeCalls === 1) return ok({ terminal: owned });
+        return {
+          ok: false,
+          operation: 'terminal_show',
+          outcomeCategory: 'supported_operation_failure',
+          error: { code: 'terminal_not_found', message: 'terminal is no longer alive' },
+        };
+      },
+    });
 
     try {
       const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
@@ -311,12 +318,14 @@ if (args[0] === 'worktree' && args[1] === 'current') {
 
       const outcome = runtimeClose(adapter, spawned.value.identity, { cwd: root });
       expect(outcome).toContain('close_failed:unproven_already_absent');
-      expect(outcome).toContain('inventory_error=find_worker_by_id:failed:runtime_operation_failed');
+      expect(outcome).toContain('worker_generation_unresolved');
       expect(outcome).toContain('presence=unproven');
       expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'list')).toHaveLength(0);
       expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'close')).toBe(false);
       expect(calls.some((args) => args.includes(foreign.handle!))).toBe(false);
+      expect(probeCalls).toBeGreaterThanOrEqual(2);
     } finally {
+      restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -330,7 +339,6 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       worktreePath: root,
       status: 'running',
     };
-    let showCalls = 0;
     const calls: string[][] = [];
     const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
       calls.push([...args]);
@@ -339,8 +347,6 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
       if (args[0] === 'terminal' && args[1] === 'show') {
-        showCalls += 1;
-        if (showCalls === 1) return ok({ terminal: owned } as T);
         return {
           ok: false,
           outcomeCategory: 'supported_operation_failure',
@@ -349,9 +355,22 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       }
       return {
         ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
+        error: { code: 'unexpected_inventory_fixture_operation', message: args.join(' ') },
       };
     };
+    let probeCalls = 0;
+    const restore = installStableWorkerSmokeSpawnPatch({
+      probe: () => {
+        probeCalls += 1;
+        if (probeCalls === 1) return ok({ terminal: owned });
+        return {
+          ok: false,
+          operation: 'terminal_show',
+          outcomeCategory: 'supported_operation_failure',
+          error: { code: 'inventory_unavailable', message: 'runtime inventory unavailable' },
+        };
+      },
+    });
 
     try {
       const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
@@ -364,11 +383,12 @@ if (args[0] === 'worktree' && args[1] === 'current') {
 
       const outcome = runtimeClose(adapter, spawned.value.identity, { cwd: root });
       expect(outcome).toContain('close_failed:unproven_already_absent');
-      expect(outcome).toContain('inventory_error=find_worker_by_id:failed:runtime_operation_failed');
+      expect(outcome).toContain('worker_generation_unresolved');
       expect(outcome).toContain('presence=unproven');
-      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'show')).toHaveLength(2);
       expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'close')).toBe(false);
+      expect(probeCalls).toBeGreaterThanOrEqual(2);
     } finally {
+      restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -611,7 +631,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     const restore = installStableWorkerSmokeSpawnPatch({
       probe: () => {
         probeCalls += 1;
-        return ok({});
+        return probeCalls === 1 ? ok({ terminal }) : ok({});
       },
     });
 
@@ -637,7 +657,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         expect(read.reason).toContain('resolution=');
       }
       expect(readCalls).toBe(0);
-      expect(probeCalls).toBe(1);
+      expect(probeCalls).toBe(2);
     } finally {
       restore();
       rmSync(root, { recursive: true, force: true });
