@@ -5,6 +5,7 @@
     "scripts/lib/pack-gpt-reviewer.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts"
   ],
   "denylist": [
@@ -33,5 +34,5 @@
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts"
   ],
-  "source_revision": "10a20804a8dfd73cd49b8744f9a149ec884e0c5b"
+  "source_revision": "01e33faa3d6621c8e7f1b1e3d186203244d4d3f4"
 }
