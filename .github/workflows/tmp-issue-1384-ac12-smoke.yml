@@ -6,106 +6,34 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  patch-target:
-    name: Patch PR 1398 target branch
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  fixture:
+    name: AC12 fixture exact head
+    runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - name: Checkout target branch
+      - name: Checkout PR 1398 head
         uses: actions/checkout@v4
         with:
-          ref: agent/issue-1384-runtime-history-refresh
+          repository: chetwerikoff/orchestrator-pack
+          ref: 22ab2edfd24a737c72a42f8df141bb8cbab36222
           fetch-depth: 0
-          persist-credentials: true
-      - name: Apply focused AC12 repair
-        shell: bash
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Run exact fixture
+        shell: pwsh
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('scripts/lib/vitest-runtime-history-merge.fixture.mjs')
-          s = p.read_text()
-
-          replacements = [
-            ("  'scripts/chatgpt-browser-turn/browser-session.ts',\n", "  'scripts/browser-gpt-post-settlement-close.test.ts',\n"),
-            ("  'scripts/chatgpt-browser-turn/tab-lifecycle.test.ts',\n", "  'scripts/vitest-ci-lanes.config.json',\n"),
-            ("function writeReport(dir, shard, files, commitSha) {\n", "function writeReport(dir, shard, files, commitSha, repoRoot = defaultRepoRoot) {\n"),
-            ("  writeFileSync(reportPath, stableStringify(buildSyntheticVitestReport(files)), 'utf8');\n", "  writeFileSync(reportPath, stableStringify(buildSyntheticVitestReport(files, repoRoot)), 'utf8');\n"),
-            ("function buildCompleteShardSet(dir, commitSha, fileAssignments) {\n", "function buildCompleteShardSet(dir, commitSha, fileAssignments, repoRoot = defaultRepoRoot) {\n"),
-            ("    writeReport(dir, shard, files, commitSha);\n", "    writeReport(dir, shard, files, commitSha, repoRoot);\n"),
-            ("  return buildCompleteShardSet(dir, commitSha, assignments);\n", "  return buildCompleteShardSet(dir, commitSha, assignments, repoRoot);\n"),
-          ]
-          for old, new in replacements:
-            if old not in s:
-              raise SystemExit(f'missing replacement anchor: {old!r}')
-            s = s.replace(old, new, 1)
-
-          start = s.index("    const historicalTopology = buildHeavyTopology(sourceRoot, {")
-          end = s.index("\n\n    mkdirSync(reportsDir", start)
-          new_block = """    const changedFilesResult = runProcessSync({
-              command: 'git',
-              args: [
-                '-C', sourceRoot,
-                'diff', '--name-only', `${PR_1376_REPLAY_BASE_SHA}...${PR_1376_REPLAY_HEAD_SHA}`, '--',
-              ],
-              encoding: 'utf8',
-              inheritParentEnv: true,
-              timeoutMs: 30_000,
-            });
-            assert(
-              changedFilesResult.exitCode === 0,
-              `PR #1376 replay must resolve the declared base/head changed-file set: ${changedFilesResult.stderr ?? ''}`,
-            );
-            if (changedFilesResult.exitCode !== 0) return;
-            const replayChangedFiles = String(changedFilesResult.stdout ?? '')
-              .split(/\\r?\\n/)
-              .map((entry) => entry.trim())
-              .filter(Boolean)
-              .sort();
-            assert(
-              JSON.stringify(replayChangedFiles) === JSON.stringify(PR_1376_CHANGED_FILES),
-              `PR #1376 replay changed-file identity drifted: expected ${JSON.stringify(PR_1376_CHANGED_FILES)}, got ${JSON.stringify(replayChangedFiles)}`,
-            );
-
-            const historicalTopology = buildHeavyTopology(sourceRoot);
-            assert(historicalTopology.ok, 'PR #1376 historical topology must be available');
-            if (!historicalTopology.ok) return;
-            const historicalLanePlan = buildLanePlan(sourceRoot);
-            assert(historicalLanePlan.ok, 'PR #1376 historical lane plan must be available');
-            if (!historicalLanePlan.ok) return;
-            const historicalMeasurementPlan = resolvePreTopologyMeasurementPlan(
-              historicalLanePlan,
-              { maxFiles: Number.MAX_SAFE_INTEGER },
-            );
-            assert(
-              historicalMeasurementPlan.targets.length === 33,
-              `PR #1376 historical replay must reproduce exactly 33 pre-topology targets before repair (got ${historicalMeasurementPlan.targets.length})`,
-            );
-            assertThrows(
-              () => resolvePreTopologyMeasurementPlan(historicalLanePlan),
-              '33 files > 32',
-              'PR #1376 historical replay must reproduce the exact 33 > 32 bound refusal',
-            );"""
-          s = s[:start] + new_block + s[end:]
-
-          candidate_changed = "        classification: historicalTopology.lanesConfig.classification,\n        changedFiles: PR_1376_CHANGED_FILES,\n"
-          if candidate_changed not in s:
-            raise SystemExit('missing candidate changedFiles anchor')
-          s = s.replace(candidate_changed, "        classification: historicalTopology.lanesConfig.classification,\n", 1)
-
-          log_old = "        historicalTargets: historicalUnresolved.length,\n"
-          if log_old not in s:
-            raise SystemExit('missing historicalTargets log anchor')
-          s = s.replace(log_old, "        historicalTargets: historicalMeasurementPlan.targets.length,\n", 1)
-
-          p.write_text(s)
-          PY
-          git diff --check
-          git diff -- scripts/lib/vitest-runtime-history-merge.fixture.mjs
-          git config user.name 'chatgpt-ac12-fix'
-          git config user.email 'chatgpt-ac12-fix@example.invalid'
-          git add scripts/lib/vitest-runtime-history-merge.fixture.mjs
-          git commit -m 'Fix historical runtime-history replay fixture'
-          git push origin HEAD:agent/issue-1384-runtime-history-refresh
+          git config user.name 'fixture-smoke'
+          git config user.email 'fixture-smoke@example.invalid'
+          node scripts/lib/vitest-runtime-history-merge.fixture.mjs
+          $code = $LASTEXITCODE
+          Write-Host "fixture_exit=$code"
+          exit $code
