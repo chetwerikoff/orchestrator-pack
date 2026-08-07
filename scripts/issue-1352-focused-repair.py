@@ -77,8 +77,8 @@ replace_exact(
 # Add an explicit, harness-only Issue identity. Production still resolves only operator/session authority.
 replace_exact(
     "scripts/pack-review-runner.ts",
-    "  fixtureIssueBody?: string;\n  fixtureCurrentPrHeadSha?: string;",
-    "  fixtureIssueBody?: string;\n  fixtureIssueNumber?: number;\n  fixtureCurrentPrHeadSha?: string;",
+    "  fixtureIssueBody?: string;\n  fixtureChangedPaths?: string[];",
+    "  fixtureIssueBody?: string;\n  fixtureIssueNumber?: number;\n  fixtureChangedPaths?: string[];",
 )
 replace_exact(
     "scripts/pack-review-runner.ts",
