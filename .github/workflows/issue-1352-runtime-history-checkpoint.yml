@@ -1,3 +1,4 @@
+# Trigger after workflow registration.
 name: issue-1352-runtime-history-checkpoint
 
 on:
