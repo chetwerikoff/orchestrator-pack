@@ -230,7 +230,11 @@ describe('Issue #1341 operator-only pack-review start', () => {
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD_A,
       fixtureIssueBody: issueBody,
-      fixtureReviewStdout: cleanTerminalPayload(),
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-1341-source-01') }],
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-1341-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-1341-source-03') }],
+      },
       fixtureRequiredStatusWriter: async () => {},
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
       ...overrides,
@@ -1824,7 +1828,7 @@ describe('Issue #1393 legacy aggregate compatibility and runner harvest matrix',
     expect(captured.actions.filter((action) => action.kind === 'post' && action.event === 'COMMENT')).toHaveLength(1);
   }
 
-  it('reads the exact legacy schema-v1 synthetic aggregate as historical while rejecting it on current writes', async () => {
+  it('rejects the legacy schema-v1 synthetic aggregate instead of reading it as findings', async () => {
     const storeRoot = tempRoot('opk-1393-legacy-synthetic-read-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1878,18 +1882,9 @@ describe('Issue #1393 legacy aggregate compatibility and runner harvest matrix',
     });
     writeFileSync(recordPath, `${JSON.stringify(raw)}\n`, 'utf8');
 
-    const listed = listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot });
-    const historical = listed.find((record) => record.id === legacy.id);
-    expect(historical).toMatchObject({ status: 'changes_requested' });
-    expect(historical?.reviewVerdict).toBeUndefined();
-    expect(historical?.findingCount).toBeUndefined();
-    expect(historical?.findings).toEqual([]);
-    expect(historical?.reviewRound?.sourceSlots[1]?.terminalClass).toBe('reviewer_output_malformed');
-    expect(() => updatePackReviewRun(
-      legacy.id,
-      { surface: 'current-write-must-not-repersist-synthetic-aggregate' },
-      { projectId: 'orchestrator-pack', storeRoot },
-    )).toThrow(/reviewVerdict does not match terminal source census/);
+    expect(() => listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot }))
+      .toThrow(/reviewVerdict does not match terminal source census/);
+    rmSync(recordPath);
 
     const result = await startPackReview(issue1393Start(storeRoot, {
       fixtureReviewBySourceSlot: {
@@ -1899,7 +1894,7 @@ describe('Issue #1393 legacy aggregate compatibility and runner harvest matrix',
       },
     }));
     expect(result.ok).toBe(true);
-    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(2);
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
   });
 
   it.each([
