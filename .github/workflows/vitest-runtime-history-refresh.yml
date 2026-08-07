@@ -398,6 +398,7 @@ jobs:
             echo "VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN is required for protected-branch delivery" >&2
             exit 1
           fi
+          git remote set-url origin "https://x-access-token:${DELIVERY_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
       - name: Detect prepared delivery commit
         id: delivery
