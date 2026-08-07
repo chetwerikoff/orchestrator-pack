@@ -40,6 +40,8 @@ jobs:
             exit 90
           fi
           python - <<'PY'
+          import json
+          import os
           import re
           from pathlib import Path
 
@@ -54,7 +56,9 @@ jobs:
               r"\s*\}\n",
           )
           final_block = r'''    for (const file of FOUNDATION_DOC_ROWS) {
-              const terminalizedName = path.basename(file).replace(/(?:\.d\.mts|\.mjs)$/, '.ts');
+              const terminalizedName = path.basename(file)
+                .replace(/\.d\.mts$/, '.d.ts')
+                .replace(/\.mjs$/, '.ts');
               const terminalized = path.join(repoRoot, 'scripts/pr2-foundation/terminalized', terminalizedName);
               const source = existsSync(terminalized) ? terminalized : path.join(repoRoot, file);
               expect(existsSync(source), file).toBe(true);
@@ -67,7 +71,7 @@ jobs:
               raise SystemExit(f'unexpected foundation fixture count: {count}')
           foundation_path.write_text(foundation, encoding='utf-8')
 
-          helper_path = Path(__import__('os').environ['RUNNER_TEMP']) / 'issue-1352-regression-repair-v2.py'
+          helper_path = Path(os.environ['RUNNER_TEMP']) / 'issue-1352-regression-repair-v2.py'
           helper = helper_path.read_text(encoding='utf-8')
           helper, count = re.subn(
               r"foundation_path = Path\(\"scripts/pr2-foundation/foundation\.test\.ts\"\).*?(?=reeval_path = Path)",
@@ -78,9 +82,61 @@ jobs:
           )
           if count != 1:
               raise SystemExit(f'unexpected helper foundation transform count: {count}')
+          old_regex = """const RETIRED_RUNTIME_COMMAND_PATTERN = new RegExp(
+            `\\b${['a', 'o'].join('')}\\s+(?:send|report)\\b`,
+            'i',
+          );"""
+          new_regex = """const RETIRED_RUNTIME_COMMAND_PATTERN = new RegExp(
+            String.raw`\\b${['a', 'o'].join('')}\\s+(?:send|report)\\b`,
+            'i',
+          );"""
+          if helper.count(old_regex) != 1:
+              raise SystemExit(f'unexpected helper retired-command regex count: {helper.count(old_regex)}')
+          helper = helper.replace(old_regex, new_regex, 1)
           helper_path.write_text(helper, encoding='utf-8')
           PY
           python "$RUNNER_TEMP/issue-1352-regression-repair-v2.py"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          assembly_path = Path('scripts/estate-cut/task-311-tests/task-311-assembly.test.ts')
+          assembly = assembly_path.read_text(encoding='utf-8')
+          import_old = """import {
+            getPackReviewRun,
+            updatePackReviewRun,
+          } from '../../lib/pack-review-run-store.js';"""
+          import_new = """import {
+            getPackReviewRun,
+            packReviewLogsDir,
+            updatePackReviewRun,
+          } from '../../lib/pack-review-run-store.js';"""
+          if assembly.count(import_old) != 1:
+              raise SystemExit('unexpected task-311 run-store import block count')
+          assembly = assembly.replace(import_old, import_new, 1)
+          invariant_old = """  invariant(result.ok === true && result.created === true, `real runner subject failed: ${String(result.reason)}`);"""
+          invariant_new = """  const failedRunId = String(result.runId ?? '');
+            const reviewerStderrPath = failedRunId
+              ? path.join(packReviewLogsDir(storeRoot), `${failedRunId}.stderr.log`)
+              : '';
+            const reviewerStderr = reviewerStderrPath && existsSync(reviewerStderrPath)
+              ? readFileSync(reviewerStderrPath, 'utf8').trim()
+              : '';
+            invariant(
+              result.ok === true && result.created === true,
+              `real runner subject failed: ${String(result.reason)}${reviewerStderr ? `\\nREVIEWER STDERR:\\n${reviewerStderr}` : ''}`,
+            );"""
+          if assembly.count(invariant_old) != 1:
+              raise SystemExit('unexpected task-311 runner invariant count')
+          assembly_path.write_text(assembly.replace(invariant_old, invariant_new, 1), encoding='utf-8')
+
+          declaration_path = Path('docs/declarations/1352.pr-scope.json')
+          declaration = json.loads(declaration_path.read_text(encoding='utf-8'))
+          declaration['declared_paths'] = sorted(set(declaration.get('declared_paths', [])) | {
+              'scripts/estate-cut/task-311-tests/task-311-assembly.test.ts',
+          })
+          declaration_path.write_text(json.dumps(declaration, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+          PY
       - name: Verify repairs
         shell: bash
         run: |
@@ -107,6 +163,7 @@ jobs:
             docs/ci-green-wake-reconcile.mjs \
             docs/declarations/1352.pr-scope.json \
             scripts/ci-green-wake-reconcile.test.ts \
+            scripts/estate-cut/task-311-tests/task-311-assembly.test.ts \
             scripts/estate-cut/task-311-tests/task-311-common.test-support.ts \
             scripts/lib/Review-PostRunRetry.ps1 \
             scripts/pack-review-runner.ts \
