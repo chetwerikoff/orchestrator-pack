@@ -12,7 +12,7 @@ function Get-AutonomousClaimPrResumeNamespace {
 
     $project = ([string]$ProjectId).Trim()
     if (-not $project) { $project = 'orchestrator-pack' }
-    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.orchestrator-pack' }
     return (Join-Path (Join-Path (Join-Path $base 'projects') $project) 'claim-pr-resume-claims')
 }
 
@@ -226,7 +226,7 @@ function Test-AutonomousGateSessionStatusIsTerminal {
 function Get-AutonomousClaimPrProjectPaths {
     param([string]$ProjectId = 'orchestrator-pack')
 
-    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.orchestrator-pack' }
     $projectRoot = Join-Path (Join-Path $base 'projects') $ProjectId
     return @{
         ProjectRoot          = $projectRoot

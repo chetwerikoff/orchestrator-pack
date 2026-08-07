@@ -40,7 +40,6 @@ export const PROTECTED_RUNTIME_PATHS = Object.freeze([
 
 export const EXACT_EXISTING_SCOPE_PATHS = Object.freeze([
   'scripts/estate-cut/issue-906.manifest.json',
-  'agent-orchestrator.yaml.example',
   'scripts/lib/pack-review-worker-notification.ts',
   'scripts/lib/pack-review-delivery.ts',
   'scripts/lib/pack-review-delivery.js',

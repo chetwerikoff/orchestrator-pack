@@ -19,7 +19,6 @@ const LEGACY_LIST_GUARD_SURFACE = [
 
 const KEEP_CORE_PATHS = [
   ...LEGACY_LIST_GUARD_SURFACE,
-  'agent-orchestrator.yaml.example',
   'scripts/pack-review-runner.ts',
   'scripts/pack-review-runner.js',
   'scripts/invoke-pack-review.ps1',

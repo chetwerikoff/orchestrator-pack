@@ -632,7 +632,6 @@ function validateManifest(manifest) {
   }
   for (const violation of manifest.deletedPathReferenceSweep.violations) failures.push(`${violation.source}:${violation.line}: surviving executable reference to deleted path ${violation.target}`);
   if (manifest.producerContract.importerCount !== 12 || manifest.producerContract.importers.length !== 12) failures.push('producer-contract importer classification is not exactly 12 rows');
-  if (!currentSet.has('agent-orchestrator.yaml.example')) failures.push('agent-orchestrator.yaml.example is missing');
   if ([...currentSet].some((rel) => rel.startsWith(BOARD_PREFIX) || BOARD_FILES.has(rel))) failures.push('Reviews Board runtime/tests survived the cut');
   for (const [source, destination] of ARCHIVE_MOVES) {
     if (currentSet.has(source)) failures.push(`${source}: archived source still present`);

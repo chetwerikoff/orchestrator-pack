@@ -56,7 +56,6 @@ export const REPOSITORY_ALLOWED_ROOTS = [
   'README.md',
   'package.json',
   'package-lock.json',
-  'agent-orchestrator.yaml.example',
 ] as const;
 
 export type CanonicalEntry = {

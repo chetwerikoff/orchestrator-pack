@@ -1,8 +1,5 @@
-# Local AO config generated from the reusable example.
-# Commit agent-orchestrator.yaml.example, not real target-repo configs.
-agent-orchestrator.yaml
-agent-orchestrator.*.yaml
-!agent-orchestrator.yaml.example
+# Operator-local pack state. Repository behavior is config-file independent.
+.orchestrator-pack/
 
 # Secrets and credentials.
 .env
@@ -20,10 +17,6 @@ id_ed25519
 id_ed25519.*
 secrets/
 private/
-
-# AO runtime/session state. Keep committed material reusable only.
-.ao/
-.agent-orchestrator/
 
 # Upstream source checkout is disposable/reference-only.
 vendor/

@@ -22,7 +22,5 @@
   "commandEntrypoints": [
     "scripts/journaled-worker-send.ps1"
   ],
-  "orchestratorRulesBindings": [
-    "agent-orchestrator.yaml.example"
-  ]
+  "orchestratorRulesBindings": []
 }

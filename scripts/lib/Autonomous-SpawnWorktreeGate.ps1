@@ -21,9 +21,7 @@ function Invoke-SpawnWorktreeGrantCli {
 }
 
 function Get-AutonomousSpawnWorktreeProjectId {
-    $project = if ($env:AO_PROJECT_ID) { $env:AO_PROJECT_ID.Trim() }
-    elseif ($env:AO_PROJECT) { $env:AO_PROJECT.Trim() }
-    else { 'orchestrator-pack' }
+    $project = if ($env:OPK_PROJECT_ID) { $env:OPK_PROJECT_ID.Trim() } else { 'orchestrator-pack' }
     if (-not $project) { return 'orchestrator-pack' }
     return $project
 }
@@ -34,7 +32,7 @@ function Get-AutonomousSpawnWorktreeStateRoot {
     if (-not $ProjectId) {
         $ProjectId = Get-AutonomousSpawnWorktreeProjectId
     }
-    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.orchestrator-pack' }
     return (Join-Path (Join-Path $base 'projects') $ProjectId)
 }
 

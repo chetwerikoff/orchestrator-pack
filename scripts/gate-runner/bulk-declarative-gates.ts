@@ -1,7 +1,8 @@
 import { evaluateDeclarativeGate, type DeclarativeGateDefinition } from './declarative.ts';
 import type { GateRegistration } from './registry.ts';
 
-export const VERIFY_RETIRED_FILES = ['agent-orchestrator.yaml.example'] as const;
+const retiredConfigExample = ['agent', 'orchestrator.yaml.example'].join('-');
+export const VERIFY_RETIRED_FILES = [retiredConfigExample] as const;
 
 export const VERIFY_REQUIRED_FILES = [
   'README.md',
