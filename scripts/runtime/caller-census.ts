@@ -197,7 +197,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   },
   {
     surface: 'scripts/json-producers/worker-status-report.ts',
-    operations: ['list'],
+    operations: ['runtime-composition', 'list'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
     note: 'Builds the live worker-status report from RuntimeAdapter.listWorkers without retired CLI discovery.',
