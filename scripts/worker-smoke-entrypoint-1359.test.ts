@@ -246,12 +246,19 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       const sendIndexes = operations
         .map((value, index) => value === 'terminal send' ? index : -1)
         .filter((index) => index >= 0);
+      const readIndexes = operations
+        .map((value, index) => value === 'terminal read' ? index : -1)
+        .filter((index) => index >= 0);
       expect(createIndex).toBeGreaterThanOrEqual(0);
       expect(showIndexes.length).toBeGreaterThanOrEqual(3);
       expect(sendIndexes).toHaveLength(2);
       expect(calls[sendIndexes[0]!] ?? []).toContain('--text');
       expect(calls[sendIndexes[1]!] ?? []).not.toContain('--text');
       expect(calls[sendIndexes[1]!] ?? []).toContain('--enter');
+      expect(readIndexes.some((index) => index > sendIndexes[0]! && index < sendIndexes[1]!)).toBe(true);
+      const postSubmitReadIndex = readIndexes.find((index) => index > sendIndexes[1]!);
+      expect(postSubmitReadIndex).toBeDefined();
+      expect(calls[postSubmitReadIndex!] ?? []).toContain('--cursor');
       expect(operations.filter((value) => value === 'terminal close')).toHaveLength(1);
       expect(operations.filter((value) => value === 'terminal list')).toHaveLength(0);
       expect(createHash('sha256').update(readFileSync(wrapper), 'utf8').digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
@@ -400,6 +407,17 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       }
       if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal } as T);
       if (args[0] === 'terminal' && args[1] === 'send') return ok({ sent: true } as T);
+      if (args[0] === 'terminal' && args[1] === 'read') {
+        return ok({
+          terminal: {
+            handle: terminal.handle,
+            status: 'running',
+            tail: ['prompt remains in composer'],
+            nextCursor: '1',
+          },
+        } as T);
+      }
+      if (args[0] === 'terminal' && args[1] === 'close') return ok({ closed: true } as T);
       return {
         ok: false,
         error: { code: 'unexpected_test_operation', message: args.join(' ') },
@@ -431,17 +449,29 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(dispatched.status).toBe('send_failed');
       if (dispatched.status === 'send_failed') {
         expect(dispatched.reason).toContain('prompt_submission_unconfirmed');
-        expect(dispatched.reason).toContain('submit_attempts=2');
-        expect(dispatched.reason).toContain('initial_submit=dispatched');
-        expect(dispatched.reason).toContain('retry_submit=dispatched');
+        expect(dispatched.reason).toContain('runtime_prompt_write=dispatched');
+        expect(dispatched.reason).toContain('runtime_submit_write=dispatched');
+        expect(dispatched.reason).toContain('pane_observation=unchanged_after_submit');
+        expect(dispatched.reason).toContain('child_delivery=unconfirmed');
         expect(dispatched.reason).toContain('delivery_evidence=');
+        expect(dispatched.reason).toContain('preservation=owned_child_panel_preserved');
         expect(dispatched.reason).toContain('resolution=');
+        expect(dispatched.reason).not.toContain('initial_submit=');
+        expect(dispatched.reason).not.toContain('retry_submit=');
       }
       const sends = calls.filter((args) => args[0] === 'terminal' && args[1] === 'send');
+      const reads = calls.filter((args) => args[0] === 'terminal' && args[1] === 'read');
       expect(sends).toHaveLength(2);
       expect(sends[0]).toContain('--text');
       expect(sends[1]).not.toContain('--text');
       expect(sends[1]).toContain('--enter');
+      expect(reads).toHaveLength(2);
+      expect(reads[1]).toContain('--cursor');
+
+      const closeOutcome = runtimeClose(adapter, spawned.value.identity, { cwd: root });
+      expect(closeOutcome).toContain('close_failed:delivery_failure_evidence_preserved');
+      expect(closeOutcome).toContain('presence=present');
+      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'close')).toHaveLength(0);
     } finally {
       restore();
       rmSync(root, { recursive: true, force: true });
