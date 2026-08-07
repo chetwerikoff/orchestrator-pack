@@ -898,6 +898,7 @@ export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[],
       expectedReceiptIds.push(receipt.stageReceiptId);
       if (receipt.receiptCensus.length !== expectedReceiptIds.length || receipt.receiptCensus.some((id, censusIndex) => id !== expectedReceiptIds[censusIndex])) errors.push(`stage receipt ${receipt.stageReceiptId} receiptCensus does not prove the complete no-overwrite chain`);
     }
+    if (receipts[0]!.sourceRevision !== receipts[0]!.episodeFirstRevision) errors.push('first stage receipt sourceRevision must equal episodeFirstRevision');
     const latestCensus = receipts.at(-1)!.receiptCensus;
     if (latestCensus.length !== receipts.length || latestCensus.some((id, index) => id !== receipts[index]!.stageReceiptId)) errors.push('latest stage receipt census omits or replaces earlier authoritative receipts');
   }
