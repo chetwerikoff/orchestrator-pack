@@ -141,8 +141,12 @@ jobs:
 
           reeval_path = Path('scripts/review-trigger-reeval.test.ts')
           reeval = reeval_path.read_text(encoding='utf-8')
-          old_reeval = "findForbiddenReviewReevalCommands(['ao-review run opk-1']),\n              ).toHaveLength(0);"
-          new_reeval = "findForbiddenReviewReevalCommands(['ao-review run opk-1']),\n              ).toHaveLength(1);"
+          old_reeval = """    expect(
+              findForbiddenReviewReevalCommands(['ao-review run opk-1']),
+            ).toHaveLength(0);"""
+          new_reeval = """    expect(
+              findForbiddenReviewReevalCommands(['ao-review run opk-1']),
+            ).toHaveLength(1);"""
           if reeval.count(old_reeval) != 1:
               raise SystemExit('unexpected ao-review allowance assertion count')
           reeval_path.write_text(reeval.replace(old_reeval, new_reeval, 1), encoding='utf-8')
