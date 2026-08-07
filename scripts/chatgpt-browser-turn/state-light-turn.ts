@@ -3043,10 +3043,23 @@ async function runTurn(
       }
 
       const ownedReplyWindow = resolveOwnedReplyWindow(messages, baselineCount, marker);
-      const pageTurnStatus = pageTurnEvidence
+      // The sanctioned observedAssistantNodes value is conversation-global. Bind
+      // it to this owned turn by subtracting the strict pre-send atomic baseline;
+      // if the baseline was lost (for example after recovery) or counts regress,
+      // fail closed instead of inventing current-turn assistant evidence.
+      const baselineAssistantNodes = baselineSnapshot?.complete
+        ? baselineSnapshot.carriers.filter((carrier) => carrier.role === 'assistant').length
+        : undefined;
+      const currentTurnAssistantNodes = pageTurnEvidence
+        && baselineAssistantNodes !== undefined
+        && Number.isSafeInteger(pageTurnEvidence.observedAssistantNodes)
+        && pageTurnEvidence.observedAssistantNodes >= baselineAssistantNodes
+        ? pageTurnEvidence.observedAssistantNodes - baselineAssistantNodes
+        : undefined;
+      const pageTurnStatus = pageTurnEvidence && currentTurnAssistantNodes !== undefined
         ? classifyBrowserGptPageTurnStatus(
           pageTurnEvidence.generationInProgress,
-          pageTurnEvidence.observedAssistantNodes,
+          currentTurnAssistantNodes,
         )
         : 'unknown';
       const deadEvidenceEligible = Boolean(
