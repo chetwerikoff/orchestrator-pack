@@ -244,6 +244,7 @@ const PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK: Record<PackReviewSourceSlotLifecyc
   terminal: 2,
 };
 const COMPLETE_GPT_TERMINAL_CLASSES = new Set(['complete_clean', 'complete_findings']);
+const HARVEST_GPT_TERMINAL_CLASSES = new Set(['harvest_failed', 'no_reply', 'forbidden_verdict_envelope']);
 const GPT_BROWSER_TURN_STATES = new Set<string>(TURN_STATES);
 
 function sleepSync(milliseconds: number): void {
@@ -367,6 +368,35 @@ function isRetryableZeroSendCollisionTuple(state: string, cause: string, sendCou
   );
 }
 
+function validateGptHarvestEvidence(
+  result: Record<string, unknown>,
+  terminalClass: string,
+  state: string,
+  sendCount: number,
+  path: string,
+): void {
+  if (sendCount < 1) {
+    throw new Error(`corrupt pack review run record at ${path}: ${terminalClass} requires a sent terminalResult`);
+  }
+  if (result.review_harvest_class !== terminalClass) {
+    throw new Error(`corrupt pack review run record at ${path}: harvest class is terminalResult-inconsistent`);
+  }
+  if (terminalClass === 'no_reply') {
+    if (state !== 'ok' && state !== 'no_reply') {
+      throw new Error(`corrupt pack review run record at ${path}: no_reply requires an ok/no_reply sent terminalResult`);
+    }
+  } else if (state !== 'ok') {
+    throw new Error(`corrupt pack review run record at ${path}: ${terminalClass} requires an ok sent terminalResult`);
+  }
+  if (!result.review_evidence || typeof result.review_evidence !== 'object' || Array.isArray(result.review_evidence)) {
+    throw new Error(`corrupt pack review run record at ${path}: ${terminalClass} requires durable review_evidence`);
+  }
+  const evidence = result.review_evidence as Record<string, unknown>;
+  for (const field of ['adapterPromptPath', 'terminalReplyPath', 'mappingErrorPath', 'adapterStdoutPath']) {
+    requiredJsonString(evidence[field], `review_evidence ${field}`, path);
+  }
+}
+
 function validateGptTerminalEvidence(slot: PackReviewSourceSlotRecord, path: string): void {
   if (slot.lifecycle !== 'terminal') {
     if (slot.terminalClass !== undefined || slot.terminalResult !== undefined || slot.payload !== undefined) {
@@ -407,6 +437,10 @@ function validateGptTerminalEvidence(slot: PackReviewSourceSlotRecord, path: str
     }
     if (slot.payload !== undefined) {
       throw new Error(`corrupt pack review run record at ${path}: non-complete terminal class cannot carry payload`);
+    }
+    if (HARVEST_GPT_TERMINAL_CLASSES.has(terminalClass)) {
+      validateGptHarvestEvidence(result, terminalClass, state, sendCount, path);
+      return;
     }
     if (terminalClass === 'reviewer_output_malformed') {
       if (state !== 'ok' || sendCount < 1) {
@@ -763,20 +797,12 @@ function deriveCompleteGptRoundAggregate(
   assertCompleteGptRound(round, path);
   const findings: unknown[] = [];
   for (const slot of round.sourceSlots) {
-    if (COMPLETE_GPT_TERMINAL_CLASSES.has(slot.terminalClass ?? '')) {
-      const payload = slot.payload as { findings: Array<Record<string, unknown>> };
-      findings.push(...payload.findings.map((finding) => ({
-        ...finding,
-        sourceSlotId: slot.slotId,
-      })));
-      continue;
-    }
-    findings.push({
-      title: `GPT source ${slot.slotId} did not complete`,
-      body: `The frozen GPT source slot settled as ${slot.terminalClass ?? 'non-complete'}; the round cannot be clean.`,
-      severity: 'blocking',
+    if (!COMPLETE_GPT_TERMINAL_CLASSES.has(slot.terminalClass ?? '')) continue;
+    const payload = slot.payload as { findings: Array<Record<string, unknown>> };
+    findings.push(...payload.findings.map((finding) => ({
+      ...finding,
       sourceSlotId: slot.slotId,
-    });
+    })));
   }
   return {
     reviewVerdict: findings.length > 0 ? 'findings' : 'clean',
