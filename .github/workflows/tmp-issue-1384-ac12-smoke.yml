@@ -29,61 +29,22 @@ jobs:
           s = p.read_text()
 
           replacements = [
-            (
-              "  'scripts/chatgpt-browser-turn/browser-session.ts',\n",
-              "  'scripts/browser-gpt-post-settlement-close.test.ts',\n",
-            ),
-            (
-              "  'scripts/chatgpt-browser-turn/tab-lifecycle.test.ts',\n",
-              "  'scripts/vitest-ci-lanes.config.json',\n",
-            ),
-            (
-              "function writeReport(dir, shard, files, commitSha) {\n",
-              "function writeReport(dir, shard, files, commitSha, repoRoot = defaultRepoRoot) {\n",
-            ),
-            (
-              "  writeFileSync(reportPath, stableStringify(buildSyntheticVitestReport(files)), 'utf8');\n",
-              "  writeFileSync(reportPath, stableStringify(buildSyntheticVitestReport(files, repoRoot)), 'utf8');\n",
-            ),
-            (
-              "function buildCompleteShardSet(dir, commitSha, fileAssignments) {\n",
-              "function buildCompleteShardSet(dir, commitSha, fileAssignments, repoRoot = defaultRepoRoot) {\n",
-            ),
-            (
-              "    writeReport(dir, shard, files, commitSha);\n",
-              "    writeReport(dir, shard, files, commitSha, repoRoot);\n",
-            ),
-            (
-              "  return buildCompleteShardSet(dir, commitSha, assignments);\n",
-              "  return buildCompleteShardSet(dir, commitSha, assignments, repoRoot);\n",
-            ),
+            ("  'scripts/chatgpt-browser-turn/browser-session.ts',\n", "  'scripts/browser-gpt-post-settlement-close.test.ts',\n"),
+            ("  'scripts/chatgpt-browser-turn/tab-lifecycle.test.ts',\n", "  'scripts/vitest-ci-lanes.config.json',\n"),
+            ("function writeReport(dir, shard, files, commitSha) {\n", "function writeReport(dir, shard, files, commitSha, repoRoot = defaultRepoRoot) {\n"),
+            ("  writeFileSync(reportPath, stableStringify(buildSyntheticVitestReport(files)), 'utf8');\n", "  writeFileSync(reportPath, stableStringify(buildSyntheticVitestReport(files, repoRoot)), 'utf8');\n"),
+            ("function buildCompleteShardSet(dir, commitSha, fileAssignments) {\n", "function buildCompleteShardSet(dir, commitSha, fileAssignments, repoRoot = defaultRepoRoot) {\n"),
+            ("    writeReport(dir, shard, files, commitSha);\n", "    writeReport(dir, shard, files, commitSha, repoRoot);\n"),
+            ("  return buildCompleteShardSet(dir, commitSha, assignments);\n", "  return buildCompleteShardSet(dir, commitSha, assignments, repoRoot);\n"),
           ]
           for old, new in replacements:
             if old not in s:
               raise SystemExit(f'missing replacement anchor: {old!r}')
             s = s.replace(old, new, 1)
 
-          old = """    const historicalTopology = buildHeavyTopology(sourceRoot, {
-              changedFiles: PR_1376_CHANGED_FILES,
-            });
-            assert(historicalTopology.ok, 'PR #1376 historical topology must be available');
-            if (!historicalTopology.ok) return;
-
-            const historicalUnresolved = historicalTopology.topology.unresolvedGuardWeights;
-            assert(
-              historicalUnresolved.length === 33,
-              `PR #1376 historical replay must reproduce exactly 33 pre-topology targets before repair (got ${historicalUnresolved.length})`,
-            );
-            assertThrows(
-              () => resolvePreTopologyMeasurementPlan({
-                topology: historicalTopology.topology,
-                lanesConfig: historicalTopology.lanesConfig,
-              }),
-              '33 files > 32',
-              'PR #1376 historical replay must reproduce the exact 33 > 32 bound refusal',
-            );
-          """
-          new = """    const changedFilesResult = runProcessSync({
+          start = s.index("    const historicalTopology = buildHeavyTopology(sourceRoot, {")
+          end = s.index("\n\n    mkdirSync(reportsDir", start)
+          new_block = """    const changedFilesResult = runProcessSync({
               command: 'git',
               args: [
                 '-C', sourceRoot,
@@ -126,30 +87,18 @@ jobs:
               () => resolvePreTopologyMeasurementPlan(historicalLanePlan),
               '33 files > 32',
               'PR #1376 historical replay must reproduce the exact 33 > 32 bound refusal',
-            );
-          """
-          if old not in s:
-            raise SystemExit('missing historical replay block')
-          s = s.replace(old, new, 1)
+            );"""
+          s = s[:start] + new_block + s[end:]
 
-          old = """      {
-                classification: historicalTopology.lanesConfig.classification,
-                changedFiles: PR_1376_CHANGED_FILES,
-              },
-          """
-          new = """      {
-                classification: historicalTopology.lanesConfig.classification,
-              },
-          """
-          if old not in s:
-            raise SystemExit('missing candidate changedFiles block')
-          s = s.replace(old, new, 1)
+          candidate_changed = "        classification: historicalTopology.lanesConfig.classification,\n        changedFiles: PR_1376_CHANGED_FILES,\n"
+          if candidate_changed not in s:
+            raise SystemExit('missing candidate changedFiles anchor')
+          s = s.replace(candidate_changed, "        classification: historicalTopology.lanesConfig.classification,\n", 1)
 
-          old = "        historicalTargets: historicalUnresolved.length,\n"
-          new = "        historicalTargets: historicalMeasurementPlan.targets.length,\n"
-          if old not in s:
+          log_old = "        historicalTargets: historicalUnresolved.length,\n"
+          if log_old not in s:
             raise SystemExit('missing historicalTargets log anchor')
-          s = s.replace(old, new, 1)
+          s = s.replace(log_old, "        historicalTargets: historicalMeasurementPlan.targets.length,\n", 1)
 
           p.write_text(s)
           PY
