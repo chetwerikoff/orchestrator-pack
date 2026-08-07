@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import '../toolchain/native-entrypoint-preflight.ts';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,6 +8,13 @@ export interface RetiredSurfaceDefinition {
   readonly id: string;
   readonly sourceCommandPattern: string;
   readonly pathPattern: string;
+  readonly reason: string;
+  readonly owningReference: string;
+}
+
+export interface HistoricalDisposition {
+  readonly path: string;
+  readonly class: string;
   readonly reason: string;
   readonly owningReference: string;
 }
@@ -28,8 +35,10 @@ export interface GuardResult {
 }
 
 const CANONICAL_PATTERN_SOURCE = 'scripts/json-producers/retired-runtime-surfaces.json';
+const HISTORICAL_DISPOSITION_SOURCE = 'docs/investigations/runtime-hard-cut/historical-dispositions.json';
 const SELF_AUTHORITY_PATHS = new Set([
   CANONICAL_PATTERN_SOURCE,
+  HISTORICAL_DISPOSITION_SOURCE,
   'scripts/runtime-retirement/retired-surface-guard.ts',
   'scripts/runtime-retirement/retired-surface-guard.test.ts',
   'scripts/runtime-retirement/retired-surface-selftest.ts',
@@ -72,20 +81,59 @@ function normalizePath(path: string): string {
   return path.replaceAll('\\', '/').replace(/^\.\//, '');
 }
 
-export function isHistoricalOrDeniedPath(path: string): boolean {
+export function loadHistoricalDispositionPaths(repoRoot: string): ReadonlySet<string> {
+  const source = join(repoRoot, HISTORICAL_DISPOSITION_SOURCE);
+  if (!existsSync(source)) return new Set<string>();
+  const raw = JSON.parse(readFileSync(source, 'utf8')) as {
+    version?: unknown;
+    dispositions?: unknown;
+  };
+  if (raw.version !== 1 || !Array.isArray(raw.dispositions)) {
+    throw new Error('historical disposition source must be version 1 with a dispositions array');
+  }
+  const result = new Set<string>();
+  for (const [index, candidate] of raw.dispositions.entries()) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new Error(`historical disposition ${index} must be an object`);
+    }
+    const value = candidate as Record<string, unknown>;
+    for (const field of ['path', 'class', 'reason', 'owningReference'] as const) {
+      if (typeof value[field] !== 'string' || String(value[field]).trim() === '') {
+        throw new Error(`historical disposition ${index} ${field} must be non-empty`);
+      }
+    }
+    const path = normalizePath(String(value.path));
+    if (path.endsWith('/') || path.includes('*')) {
+      throw new Error(`historical disposition ${index} must name one exact file: ${path}`);
+    }
+    if (result.has(path)) throw new Error(`duplicate historical disposition: ${path}`);
+    result.add(path);
+  }
+  return result;
+}
+
+export function isHistoricalOrDeniedPath(
+  path: string,
+  historicalExact: ReadonlySet<string> = EXCLUDED_EXACT,
+): boolean {
   const normalized = normalizePath(path);
-  return EXCLUDED_EXACT.has(normalized)
+  return historicalExact.has(normalized)
+    || EXCLUDED_EXACT.has(normalized)
     || SELF_AUTHORITY_PATHS.has(normalized)
     || EXCLUDED_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
-function walk(root: string, current = root): string[] {
+function walk(
+  root: string,
+  current = root,
+  historicalExact: ReadonlySet<string> = EXCLUDED_EXACT,
+): string[] {
   const result: string[] = [];
   for (const entry of readdirSync(current, { withFileTypes: true })) {
     const absolute = join(current, entry.name);
     const repoPath = normalizePath(relative(root, absolute));
-    if (isHistoricalOrDeniedPath(repoPath)) continue;
-    if (entry.isDirectory()) result.push(...walk(root, absolute));
+    if (isHistoricalOrDeniedPath(repoPath, historicalExact)) continue;
+    if (entry.isDirectory()) result.push(...walk(root, absolute, historicalExact));
     else if (entry.isFile()) result.push(repoPath);
   }
   return result.sort((a, b) => a.localeCompare(b));
@@ -135,9 +183,10 @@ export function scanRetiredRuntimeSurfaces(input: {
 }): GuardResult {
   const repoRoot = resolve(input.repoRoot);
   const surfaces = loadRetiredSurfaces(repoRoot);
-  const requested = input.paths?.map(normalizePath) ?? walk(repoRoot);
-  const excludedPaths = requested.filter(isHistoricalOrDeniedPath).sort();
-  const scannedPaths = requested.filter((path) => !isHistoricalOrDeniedPath(path)).sort();
+  const historicalExact = new Set([...EXCLUDED_EXACT, ...loadHistoricalDispositionPaths(repoRoot)]);
+  const requested = input.paths?.map(normalizePath) ?? walk(repoRoot, repoRoot, historicalExact);
+  const excludedPaths = requested.filter((path) => isHistoricalOrDeniedPath(path, historicalExact)).sort();
+  const scannedPaths = requested.filter((path) => !isHistoricalOrDeniedPath(path, historicalExact)).sort();
   const violations: GuardViolation[] = [];
 
   for (const path of scannedPaths) {
