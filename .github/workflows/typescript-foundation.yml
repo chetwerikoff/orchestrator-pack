@@ -173,11 +173,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$(git log -1 --pretty=%s)" != "chore(ci): apply curated retirement passes" ]; then
+          if [ "$(git log -1 --pretty=%s)" != "chore(ci): retry curated retirement passes" ]; then
             echo "one-shot curated pass already consumed"
             exit 0
           fi
-          test "$(git rev-parse HEAD^)" = "cbb0cf638674ca80aec13fa26099ce5f04969266"
+          test "$(git rev-parse HEAD^)" = "d49ae0057b5b891fb5e2961478834fbed01aafba"
           base64 -d .github/issue-1352-curated-witness.patch.gz.b64 | gzip -dc > /tmp/issue-1352-witness.patch
           base64 -d .github/issue-1352-curated-env.patch.gz.b64 | gzip -dc > /tmp/issue-1352-env.patch
           git apply --check /tmp/issue-1352-witness.patch
