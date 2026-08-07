@@ -7,7 +7,10 @@ import {
 } from './contracts.ts';
 
 const runtimeSources = FOUNDATION_DOC_ROWS.filter((file) => !file.endsWith('.d.mts'));
-const runtimeNeutralFoundationSource = 'docs/review-bulk-send-diagnose.mjs';
+const runtimeNeutralFoundationSources = new Set([
+  'docs/review-bulk-send-diagnose.mjs',
+  'docs/worker-report-store.mjs',
+]);
 
 function targetFor(source: string): string {
   const basename = path.posix.basename(source)
@@ -21,9 +24,15 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     for (const source of FOUNDATION_DOC_ROWS) {
       expect(existsSync(path.resolve(source)), source).toBe(true);
       const text = readFileSync(path.resolve(source), 'utf8');
-      if (source === runtimeNeutralFoundationSource) {
-        expect(text, source).toContain('The pack review producer/store is the only active authority.');
-        expect(text, source).not.toContain('ao-0-10-review-api');
+      if (runtimeNeutralFoundationSources.has(source)) {
+        if (source === 'docs/review-bulk-send-diagnose.mjs') {
+          expect(text, source).toContain('The pack review producer/store is the only active authority.');
+          expect(text, source).not.toContain('ao-0-10-review-api');
+        } else {
+          expect(text, source).toContain('export const WORKER_REPORT_STORE_SCHEMA_VERSION = 3;');
+          expect(text, source).toContain('OPK_WORKER_REPORT_STORE');
+          expect(text, source).not.toContain('AO_WORKER_REPORT_STORE');
+        }
       } else {
         expect(text, source).toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
       }
@@ -32,7 +41,12 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
       const target = targetFor(source);
       expect(existsSync(path.resolve(target)), target).toBe(true);
       const text = readFileSync(path.resolve(target), 'utf8');
-      expect(text, target).toContain(`Ported from ${source} blob `);
+      if (source === 'docs/review-bulk-send-diagnose.mjs') {
+        expect(text, target).toContain('The pack review producer/store is the only active authority.');
+        expect(text, target).not.toContain('ao-0-10-review-api');
+      } else {
+        expect(text, target).toContain(`Ported from ${source} blob `);
+      }
       expect(text, target).not.toContain(`from './${path.basename(source)}'`);
     }
     const declarationTarget = path.resolve(

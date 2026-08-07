@@ -49,7 +49,7 @@ const TEXT_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     replacement: 'return true;',
   },
   'AC2:preflight-missing': {
-    anchor: "if (input.command !== 'a\u006f session ls --json') return { ok: false, reason: 'preflight_command_mismatch' };",
+    anchor: "if (input.command !== 'a\\u006f session ls --json') return { ok: false, reason: 'preflight_command_mismatch' };",
     replacement: "if (false) return { ok: false, reason: 'preflight_command_mismatch' };",
   },
   'AC2:preflight-empty-fleet-accepted': {
@@ -226,8 +226,8 @@ const TEXT_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     replacement: '',
   },
   'AC9:modification-outside-independent-union': {
-    anchor: '  const changedPaths = rows.map((row) => row.path);',
-    replacement: "  const changedPaths = [...rows.map((row) => row.path), 'README.md'];",
+    anchor: '  const changedPaths = survivingRows.map((row) => row.path);',
+    replacement: "  const changedPaths = [...survivingRows.map((row) => row.path), 'README.md'];",
   },
   'AC9:declaration-snapshot-missing': {
     anchor: '  const resolved = resolveLatestCommittedSnapshotAtCommit(repoRoot, declarationCommitSha);',
