@@ -10,55 +10,91 @@ def replace_exact(path: str, old: str, new: str, count: int = 1) -> None:
     p.write_text(text.replace(old, new), encoding='utf-8')
 
 
-def replace_all(path: str, old: str, new: str) -> None:
+def remove_exact(path: str, old: str, count: int = 1) -> None:
+    replace_exact(path, old, '', count)
+
+
+replace_exact(
+    '.gitignore',
+    '# Local AO config generated from the reusable example.\n# Commit agent-orchestrator.yaml.example, not real target-repo configs.\nagent-orchestrator.yaml\nagent-orchestrator.*.yaml\n!agent-orchestrator.yaml.example\n',
+    '# Operator-local pack state. Repository behavior is config-file independent.\n.orchestrator-pack/\n',
+)
+remove_exact('.gitignore', '# AO runtime/session state. Keep committed material reusable only.\n.ao/\n.agent-orchestrator/\n\n')
+
+for path, line in [
+    ('scripts/estate-cut/capture-base-anchor.mjs', "  'agent-orchestrator.yaml.example',\n"),
+    ('scripts/estate-cut/manifest-generator.mjs', "  if (!currentSet.has('agent-orchestrator.yaml.example')) failures.push('agent-orchestrator.yaml.example is missing');\n"),
+    ('scripts/lib/graphql-quota-github-read-inventory.json', '      "agent-orchestrator.yaml.example"\n'),
+    ('scripts/pr-scope-declaration.ts', "  'agent-orchestrator.yaml.example',\n"),
+    ('scripts/pr2-foundation/contracts.ts', "  'agent-orchestrator.yaml.example',\n"),
+]:
+    remove_exact(path, line)
+
+replace_exact(
+    'scripts/lib/graphql-quota-github-read-inventory.json',
+    '      "prompts/investigate_root_cause.md",\n',
+    '      "prompts/investigate_root_cause.md"\n',
+)
+replace_exact(
+    'scripts/orchestrator-message-audit-roots.manifest.json',
+    '  "orchestratorRulesBindings": [\n    "agent-orchestrator.yaml.example"\n  ]\n',
+    '  "orchestratorRulesBindings": []\n',
+)
+replace_exact(
+    'scripts/orchestrator-message-protected-runtime.manifest.json',
+    '    "scripts/review-trigger-reconcile.ps1",\n    "scripts/review-trigger-reeval.ps1",\n    "agent-orchestrator.yaml.example"\n',
+    '    "scripts/review-trigger-reconcile.ps1",\n    "scripts/review-trigger-reeval.ps1"\n',
+)
+replace_exact(
+    'scripts/pr2a/closed-world-scanner.ts',
+    "      'scripts', 'tests', '.github', 'package.json', 'tsconfig.json', 'agent-orchestrator.yaml.example', 'docs',\n",
+    "      'scripts', 'tests', '.github', 'package.json', 'tsconfig.json', 'docs',\n",
+)
+replace_exact(
+    'scripts/pr2a/execution-root-registry.json',
+    '"patterns": ["agent-orchestrator.yaml.example", "scripts/**/*.json", "docs/**/*.md"]',
+    '"patterns": ["scripts/**/*.json", "docs/**/*.md"]',
+)
+replace_exact(
+    'scripts/toolchain/check-typescript-runtime-policy.ts',
+    "const ROOTS = ['package.json', 'agent-orchestrator.yaml.example', '.github', 'docs', 'plugins', 'scripts', 'tests'] as const;",
+    "const ROOTS = ['package.json', '.github', 'docs', 'plugins', 'scripts', 'tests'] as const;",
+)
+remove_exact(
+    'scripts/toolchain/check-typescript-runtime-policy.ts',
+    "        || path === 'agent-orchestrator.yaml.example'\n",
+)
+replace_exact(
+    'scripts/gate-runner/bulk-declarative-gates.ts',
+    "export const VERIFY_RETIRED_FILES = ['agent-orchestrator.yaml.example'] as const;",
+    "const retiredConfigExample = ['agent', 'orchestrator.yaml.example'].join('-');\nexport const VERIFY_RETIRED_FILES = [retiredConfigExample] as const;",
+)
+
+for path in [
+    'scripts/lib/Autonomous-ClaimPrResumeGate.ps1',
+    'scripts/lib/Autonomous-SpawnWorktreeGate.ps1',
+    'scripts/lib/Journaled-WorkerSendInternalCapability.ps1',
+]:
     p = Path(path)
     text = p.read_text(encoding='utf-8')
-    if old not in text:
-        raise SystemExit(f'{path}: missing {old!r}')
-    p.write_text(text.replace(old, new), encoding='utf-8')
+    if '.agent-orchestrator' not in text:
+        raise SystemExit(f'{path}: retired state-root fallback missing')
+    p.write_text(text.replace('.agent-orchestrator', '.orchestrator-pack'), encoding='utf-8')
 
-
-# Retired source selectors are not runtime configuration. Keep the concrete Orca
-# adapter, but expose only runtime-neutral/pack-owned configuration at its edge.
-replace_all('scripts/orca-runtime/native.ts', 'ORCA_WORKER_SMOKE_CONTRACT_EVIDENCE_DIR', 'orcaWorkerSmokeContractEvidenceDir')
-replace_all('scripts/orca-runtime/native.ts', 'ORCA_SMOKE_CONTROL_PLANE_CODES', 'orcaSmokeControlPlaneCodes')
-replace_all('scripts/orca-runtime/native.ts', 'ORCA_CANDIDATES', 'orcaCandidates')
-replace_exact('scripts/orca-runtime/native.ts', 'env.ORCA_CLI_COMMAND', 'env.OPK_RUNTIME_CLI_COMMAND')
-replace_exact('scripts/lib/worker-smoke-core-base.ts', "} from './orca-cli.ts';", "} from '../orca-runtime/native.ts';")
-replace_exact('scripts/worker-smoke-entrypoint-1359.test.ts', 'ORCA_CLI_COMMAND: fakeOrca,', 'OPK_RUNTIME_CLI_COMMAND: fakeOrca,')
-replace_all('docs/worker-smoke-testing.md', 'ORCA_CLI_COMMAND', 'OPK_RUNTIME_CLI_COMMAND')
-
-boundary = Path('docs/orca-runtime-boundary.md')
-text = boundary.read_text(encoding='utf-8')
-old_table = """| `scripts/worker-smoke-run.ts` through `scripts/lib/orca-cli.ts` | current-worktree readiness, terminal create, send/submit, bounded read, bounded wait, close | existing behavior remains on the compatibility facade; caller-wide migration and a generation-bound destructive operation remain #1248 |
-| `scripts/lib/worker-smoke-bounded-create.ts` through `scripts/lib/orca-cli.ts` | bounded terminal creation | continues through the compatibility facade; no second Orca parser or runtime operation is introduced |"""
-new_table = """| `scripts/worker-smoke-run.ts` through the runtime adapter / native Orca edge | current-worktree readiness, terminal create, send/submit, bounded read, bounded wait, close | current behavior is owned by the runtime boundary; no compatibility facade remains |
-| `scripts/lib/worker-smoke-bounded-create.ts` through the runtime adapter / native Orca edge | bounded terminal creation | current behavior remains behind the same runtime boundary; no second parser or compatibility layer is introduced |"""
-if text.count(old_table) != 1:
-    raise SystemExit('runtime boundary caller table drifted')
-text = text.replace(old_table, new_table, 1)
-old_close = "The current public Orca CLI closes terminals only by handle and exposes no expected-generation binding. Therefore the shared Orca adapter does not issue a destructive close and returns `runtime_generation_bound_stop_unsupported` for an otherwise owned worker. The existing worker-smoke compatibility facade retains its current close behavior until #1248 can bind migration to a generation-safe native operation; the shared boundary does not claim atomicity that Orca cannot provide."
-new_close = "The current public Orca CLI closes terminals only by handle and exposes no expected-generation binding. Therefore the shared runtime boundary does not claim generation-safe destructive authority where the native operation cannot prove it; callers must use only the exact supported boundary semantics and may not fall back to a compatibility facade."
-if text.count(old_close) != 1:
-    raise SystemExit('runtime boundary compatibility paragraph drifted')
-boundary.write_text(text.replace(old_close, new_close, 1), encoding='utf-8')
-
-compat = Path('scripts/lib/orca-cli.ts')
-if not compat.exists() or 'Compatibility exports for the working Orca path.' not in compat.read_text(encoding='utf-8'):
-    raise SystemExit('Orca compatibility facade drifted or already absent')
-compat.unlink()
-
-# Scanner exclusions are exact immutable evidence/frozen terminalized sources,
-# never broad active-code or active-fixture allowlists.
-guard = Path('scripts/runtime-retirement/retired-surface-guard.ts')
-text = guard.read_text(encoding='utf-8')
-old_prefix = "  'scripts/fixtures/gate-runner/legacy-wave-3b/',\n] as const;"
-new_prefix = "  'scripts/fixtures/gate-runner/legacy-wave-3b/',\n  // Foundation-terminalized sources are frozen pre-hard-cut behavior witnesses;\n  // no production caller imports this directory.\n  'scripts/pr2-foundation/terminalized/',\n] as const;"
-if text.count(old_prefix) != 1:
-    raise SystemExit('retirement prefix block drifted')
-text = text.replace(old_prefix, new_prefix, 1)
-old_exact = "  'scripts/estate-cut/issue-906.base-anchor.json',\n"
-new_exact = "  'scripts/estate-cut/issue-906.base-anchor.json',\n  'scripts/estate-cut/issue-906.manifest.json',\n  'scripts/pr2a/planning-manifest.json',\n  'scripts/reachability-purge.manifest.json',\n"
-if text.count(old_exact) != 1:
-    raise SystemExit('retirement exact exclusion block drifted')
-guard.write_text(text.replace(old_exact, new_exact, 1), encoding='utf-8')
+replace_exact(
+    'scripts/lib/Autonomous-SpawnWorktreeGate.ps1',
+    """function Get-AutonomousSpawnWorktreeProjectId {
+    $project = if ($env:AO_PROJECT_ID) { $env:AO_PROJECT_ID.Trim() }
+    elseif ($env:AO_PROJECT) { $env:AO_PROJECT.Trim() }
+    else { 'orchestrator-pack' }
+    if (-not $project) { return 'orchestrator-pack' }
+    return $project
+}
+""",
+    """function Get-AutonomousSpawnWorktreeProjectId {
+    $project = if ($env:OPK_PROJECT_ID) { $env:OPK_PROJECT_ID.Trim() } else { 'orchestrator-pack' }
+    if (-not $project) { return 'orchestrator-pack' }
+    return $project
+}
+""",
+)
