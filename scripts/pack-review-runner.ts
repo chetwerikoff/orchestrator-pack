@@ -185,6 +185,7 @@ interface StartInput {
   fixtureCarryoverSourceCleanRunId?: string;
   fixtureFocusedResolutionBundleDigest?: string;
   fixtureIssueBody?: string;
+  fixtureIssueNumber?: number;
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
 }
@@ -512,6 +513,7 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
   const operatorStart = resolveOperatorPackReviewStart(input, sessionId);
   const fixtureCurrentHead = trim(input.fixtureCurrentPrHeadSha).toLowerCase();
   const harness = process.env.OPK_VITEST_HARNESS === '1';
+  const fixtureIssueNumber = harness ? positiveInteger(input.fixtureIssueNumber, 'fixtureIssueNumber') : undefined;
   const harnessExplicit = harness && Boolean(input.prNumber && (input.headSha || fixtureCurrentHead));
   const binding = sessionId && !harnessExplicit && !operatorStart ? resolveBindingFromCache(sessionId) : undefined;
   if (!harnessExplicit && !binding && !operatorStart) {
@@ -554,7 +556,7 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
     prNumber,
     headSha: liveHead,
     sessionId,
-    issueNumber: operatorStart?.issueNumber ?? (binding?.issueNumber ? Number(binding.issueNumber) : undefined),
+    issueNumber: operatorStart?.issueNumber ?? fixtureIssueNumber ?? (binding?.issueNumber ? Number(binding.issueNumber) : undefined),
     repoSlug,
     sourceRepoRoot,
     ...(operatorStart ? { operatorStart } : {}),

@@ -49,7 +49,7 @@ import {
 } from '../lib/review_jsonl.js';
 import { selectReviewVerdict } from '../lib/verdict.js';
 
-const SCOPED_ISSUE_NUMBER = 6;
+const SCOPED_ISSUE_NUMBER = 1117;
 const FIXTURES_DIR = join(fileURLToPath(new URL('.', import.meta.url)), 'fixtures');
 
 function readFixture(name: string): string {
@@ -1713,8 +1713,8 @@ describe('terminal verdict stdout contract', () => {
       'utf8',
     );
     expect(readme).not.toMatch(/\|\s*0,\s*empty stdout\s*\|/);
-    expect(readme).toContain('exit 0 + parseable clean verdict = terminal success');
-    expect(readme).toContain('do not re-invoke review');
+    expect(readme).toContain('exit 0 always writes one non-empty parseable verdict JSON to stdout');
+    expect(readme).toContain('one clean result for the same PR head is terminal and is not re-invoked');
   });
 });
 
