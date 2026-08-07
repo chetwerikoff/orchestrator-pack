@@ -3,8 +3,6 @@
   "issue_number": 1399,
   "declared_paths": [
     "scripts/lib/worker-smoke-bounded-create.ts",
-    "scripts/orca-runtime/adapter.ts",
-    "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/worker-smoke-1359.test.ts",
     "scripts/worker-smoke-entrypoint-1359.test.ts"
   ],
