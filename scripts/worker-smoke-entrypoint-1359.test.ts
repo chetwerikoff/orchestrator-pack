@@ -283,13 +283,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'show') {
-        return {
-          ok: false,
-          outcomeCategory: 'supported_operation_failure',
-          error: { code: 'terminal_not_found', message: 'terminal is no longer alive' },
-        };
-      }
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal: owned } as T);
       if (args[0] === 'terminal' && args[1] === 'list') return ok({ terminals: [foreign] } as T);
       throw new Error(`unexpected owned-absence fixture operation: ${args.join(' ')}`);
     };
@@ -347,13 +341,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'show') {
-        return {
-          ok: false,
-          outcomeCategory: 'supported_operation_failure',
-          error: { code: 'inventory_unavailable', message: 'runtime inventory unavailable' },
-        };
-      }
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal: owned } as T);
       return {
         ok: false,
         error: { code: 'unexpected_inventory_fixture_operation', message: args.join(' ') },
