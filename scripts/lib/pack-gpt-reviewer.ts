@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   emitTerminalVerdictPayload,
   toAoFindings,
@@ -23,7 +23,7 @@ export type GptReviewHarvestClass = 'harvest_failed' | 'no_reply' | 'forbidden_v
 
 export interface GptReviewEvidencePaths {
   adapterPromptPath: string;
-  terminalReplyPath?: string;
+  terminalReplyPath: string;
   mappingErrorPath?: string;
   adapterStdoutPath: string;
 }
@@ -153,11 +153,11 @@ function persistGptEvidence(options: {
   writeFileSync(adapterPromptPath, readFileSync(options.inputPath));
 
   const replyBytes = existsSync(options.outputPath) ? readFileSync(options.outputPath) : null;
-  if (replyBytes !== null) writeFileSync(terminalReplyPath, replyBytes);
+  writeFileSync(terminalReplyPath, replyBytes ?? Buffer.alloc(0));
   return {
     paths: {
       adapterPromptPath,
-      ...(replyBytes === null ? {} : { terminalReplyPath }),
+      terminalReplyPath,
       adapterStdoutPath,
     },
     replyBytes,
@@ -165,7 +165,7 @@ function persistGptEvidence(options: {
 }
 
 function persistMappingError(paths: GptReviewEvidencePaths, message: string): GptReviewEvidencePaths {
-  const mappingErrorPath = join(resolve(paths.adapterPromptPath, '..'), 'mapping-error.txt');
+  const mappingErrorPath = join(dirname(paths.adapterPromptPath), 'mapping-error.txt');
   writeFileSync(mappingErrorPath, message, 'utf8');
   return { ...paths, mappingErrorPath };
 }
