@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -260,6 +260,19 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     });
   });
 
+  it('requires GitHub artifact authority for complete calls even with an opaque reviewerSource', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      reviewerSource: 'opaque-reviewer-source',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    const result = produce(input, transport({ census: [] }));
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
+    expect(existsSync(join(input.outputDir, 'acceptance-artifacts.json'))).toBe(false);
+  });
+
   it('bridges realistic direct_publication_owned_parent_missing without inventing transport success', () => {
     const input = fixture({ transportClassification: 'incident', withTurnResult: true, withCapture: false });
     const result = produce(input);
@@ -286,6 +299,65 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(receipt.invocations[0].sendCount).toBe(1);
   });
 
+  it('preserves a proven zero-send first attempt and credentials its one legal retry from GitHub', () => {
+    const input = fixture({ transportClassification: 'incident', withTurnResult: false, withCapture: false });
+    const reviewerSource = 'browser-gpt#capture=final-node/v1';
+    const first = {
+      ...input.invocation,
+      invocationId: 'invocation-zero-send',
+      terminalResultIdentity: 'terminal-zero-send',
+      reviewerSource,
+      attemptOrdinal: 1,
+      retryAttempt: false,
+      terminalClassification: 'quota',
+      sendCount: 0,
+      retryClass: 'eligible-zero-send',
+    };
+    delete first.capturePath;
+    delete first.turnResultPath;
+    const retry = {
+      ...input.invocation,
+      invocationId: 'invocation-retry',
+      reviewerSource,
+      attemptOrdinal: 2,
+      retryAttempt: true,
+      terminalClassification: 'incident',
+      sendCount: 1,
+      retryClass: 'retry-forbidden',
+    };
+    delete retry.capturePath;
+    delete retry.turnResultPath;
+    delete retry.terminalResultIdentity;
+    input.evidence.invocations = [first, retry];
+    input.evidence.outcome = 'incident';
+    input.evidence.settlement.retryState = 'exhausted';
+    writeFileSync(input.evidencePath, JSON.stringify(input.evidence));
+    const live = canonicalVerdict(REVISION, 'invocation-retry');
+    const source = transport({ census: [comment(live)] });
+
+    const result = produce(input, source);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+    expect(receipt.outcome).toBe('complete');
+    expect(receipt.settlement.retryState).toBe('exhausted');
+    expect(receipt.invocations).toHaveLength(2);
+    expect(receipt.invocations[0]).toMatchObject({
+      invocationId: 'invocation-zero-send',
+      sendCount: 0,
+      retryClass: 'eligible-zero-send',
+      terminalClassification: 'quota',
+    });
+    expect(receipt.invocations[0].artifactAuthority).toBeUndefined();
+    expect(receipt.invocations[0].capture).toBeUndefined();
+    expect(receipt.invocations[1]).toMatchObject({
+      invocationId: 'invocation-retry',
+      sendCount: 1,
+      retryClass: 'retry-forbidden',
+      artifactAuthority: { kind: 'authoritative-github-artifact' },
+    });
+    expect(readFileSync(input.capturePath, 'utf8')).toBe(live);
+  });
+
   it('treats a proven-complete zero-match census as absence, not unknown', () => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport({ census: [] }));
@@ -297,7 +369,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
 
   it.each([
     ['foreign target', comment(canonicalVerdict(), { issue_url: `https://api.github.com/repos/${REPOSITORY}/issues/1193` }), /absent after complete census/],
-    ['wrong revision', comment(canonicalVerdict('r02')), /absent after complete census/],
+    ['wrong revision', comment(canonicalVerdict('r02')), /revision mismatch:.*expected=r01.*observed=r02/],
     ['wrong publisher', comment(canonicalVerdict(), { user: { login: 'someone-else' } }), /provenance-mismatch/],
     ['edited artifact', comment(canonicalVerdict(), { updated_at: '2026-08-07T04:01:00Z' }), /was edited/],
   ])('rejects %s', (_name, liveComment, expected) => {
@@ -305,6 +377,24 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const result = produce(input, transport({ census: [liveComment as Record<string, unknown>] }));
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toMatch(expected as RegExp);
+  });
+
+  it('filters provenance before uniqueness and compares GitHub logins case-insensitively', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const principalComment = comment(input.body);
+    const foreignComment = comment(input.body, {
+      id: COMMENT_ID + 1,
+      html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}`,
+      user: { login: 'someone-else' },
+    });
+    const result = produce(input, transport({
+      principal: PUBLISHER.toUpperCase(),
+      census: [foreignComment, principalComment],
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+    expect(receipt.invocations[0].artifactAuthority.commentId).toBe(COMMENT_ID);
+    expect(receipt.invocations[0].artifactAuthority.publisherLogin).toBe(PUBLISHER);
   });
 
   it('classifies unavailable authenticated principal as TEMPORARY provenance-unresolved', () => {
@@ -344,6 +434,14 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.ok).toBe(false);
     expect(result.temporary).toBe('observation-lost');
     expect(result.errors.join('\n')).toContain('TEMPORARY observation-lost');
+  });
+
+  it('materializes exact authoritative bytes without leaving staging artifacts', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const result = produce(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(readFileSync(input.capturePath, 'utf8')).toBe(input.body);
+    expect(readdirSync(input.dir).filter((name) => name.startsWith('.pass-01-architectural.capture.txt.tmp-'))).toEqual([]);
   });
 
   it('rejects an existing canonical capture conflict and never overwrites it', () => {
@@ -392,15 +490,12 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(manifest.operatorAdjudication).toBeUndefined();
   });
 
-  it('accepts intake r03 with a terminal artifact bound to r04', () => {
+  it('rejects a first stage receipt that re-roots the intake revision', () => {
     const input = fixture({ intakeRevision: 'r03', sourceRevision: 'r04', transportClassification: 'incident' });
     const live = canonicalVerdict('r04');
     const result = produce(input, transport({ census: [comment(live)], reread: comment(live) }));
-    expect(result.ok, result.errors.join('\n')).toBe(true);
-    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
-    expect(receipt.episodeFirstRevision).toBe('r03');
-    expect(receipt.sourceRevision).toBe('r04');
-    expect(receipt.invocations[0].sourceRevision).toBe('r04');
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('first stage receipt sourceRevision must equal episodeFirstRevision');
   });
 
   it('contributes the authoritative capture exactly once to governance, relay, and ledger', () => {
