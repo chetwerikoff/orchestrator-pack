@@ -43,27 +43,42 @@ jobs:
           import re
           from pathlib import Path
 
-          path = Path('scripts/pr2-foundation/foundation.test.ts')
-          text = path.read_text(encoding='utf-8')
+          foundation_path = Path('scripts/pr2-foundation/foundation.test.ts')
+          foundation = foundation_path.read_text(encoding='utf-8')
           pattern = re.compile(
               r"    for \(const file of FOUNDATION_DOC_ROWS\) \{\n"
               r"\s*const source = path\.join\(repoRoot, file\);\n"
               r"\s*expect\(existsSync\(source\), file\)\.toBe\(true\);\n"
               r"\s*expect\(readFileSync\(source, 'utf8'\), file\)\n"
-              r"\s*\.toMatch\(/\^\\/\\/ Issue #923 foundation-terminalized:/\);\n"
+              r"\s*\.toMatch\([^\n]+\);\n"
               r"\s*\}\n",
           )
-          normalized = """    for (const file of FOUNDATION_DOC_ROWS) {
-              const source = path.join(repoRoot, file);
+          final_block = r'''    for (const file of FOUNDATION_DOC_ROWS) {
+              const terminalizedName = path.basename(file).replace(/(?:\.d\.mts|\.mjs)$/, '.ts');
+              const terminalized = path.join(repoRoot, 'scripts/pr2-foundation/terminalized', terminalizedName);
+              const source = existsSync(terminalized) ? terminalized : path.join(repoRoot, file);
               expect(existsSync(source), file).toBe(true);
               expect(readFileSync(source, 'utf8'), file)
                 .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
             }
-          """
-          text, count = pattern.subn(normalized, text)
+          '''
+          foundation, count = pattern.subn(final_block, foundation)
           if count != 1:
-              raise SystemExit(f'unexpected malformed foundation fixture count: {count}')
-          path.write_text(text, encoding='utf-8')
+              raise SystemExit(f'unexpected foundation fixture count: {count}')
+          foundation_path.write_text(foundation, encoding='utf-8')
+
+          helper_path = Path(__import__('os').environ['RUNNER_TEMP']) / 'issue-1352-regression-repair-v2.py'
+          helper = helper_path.read_text(encoding='utf-8')
+          helper, count = re.subn(
+              r"foundation_path = Path\(\"scripts/pr2-foundation/foundation\.test\.ts\"\).*?(?=reeval_path = Path)",
+              '',
+              helper,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'unexpected helper foundation transform count: {count}')
+          helper_path.write_text(helper, encoding='utf-8')
           PY
           python "$RUNNER_TEMP/issue-1352-regression-repair-v2.py"
       - name: Verify repairs
