@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
@@ -154,43 +154,3 @@ jobs:
           node-version: '22'
       - name: Run full retired-surface scanner
         run: node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts
-
-  issue-1352-curated-retirement-pass:
-    name: Apply curated runtime retirement passes (one-shot)
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/issue-1352-hard-cut
-          fetch-depth: 2
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Apply curated patches and verify
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "$(git log -1 --pretty=%s)" != "chore(ci): retry curated retirement passes" ]; then
-            echo "one-shot curated pass already consumed"
-            exit 0
-          fi
-          test "$(git rev-parse HEAD^)" = "d49ae0057b5b891fb5e2961478834fbed01aafba"
-          base64 -d .github/issue-1352-curated-witness.patch.gz.b64 | gzip -dc > /tmp/issue-1352-witness.patch
-          base64 -d .github/issue-1352-curated-env.patch.gz.b64 | gzip -dc > /tmp/issue-1352-env.patch
-          git apply --check /tmp/issue-1352-witness.patch
-          git apply /tmp/issue-1352-witness.patch
-          git apply --check /tmp/issue-1352-env.patch
-          git apply /tmp/issue-1352-env.patch
-          rm .github/issue-1352-curated-witness.patch.gz.b64 .github/issue-1352-curated-env.patch.gz.b64
-          git diff --check
-          npm ci --include=dev
-          npm run typecheck:foundation
-          npm run test:foundation
-          git add -A
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "fix(runtime): preserve witnesses and port runtime selectors"
-          git push origin HEAD:agent/issue-1352-hard-cut
