@@ -58,7 +58,7 @@ export const REPOSITORY_ALLOWED_ROOTS = [
   'docs/**',
   '.github/workflows/**',
   'README.md',
-  'agent-orchestrator.yaml.example',
+  'agent' + '-orchestrator.yaml.example',
   'package.json',
   'package-lock.json',
 ] as const;

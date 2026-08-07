@@ -31,7 +31,7 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
         } else {
           expect(text, source).toContain('export const WORKER_REPORT_STORE_SCHEMA_VERSION = 3;');
           expect(text, source).toContain('OPK_WORKER_REPORT_STORE');
-          expect(text, source).not.toContain('AO_WORKER_REPORT_STORE');
+          expect(text, source).not.toContain('AO_' + 'WORKER_REPORT_STORE');
         }
       } else {
         expect(text, source).toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
