@@ -127,7 +127,7 @@ function safeEvidenceSegment(value: string, fallback: string): string {
 
 function resolveGptEvidenceDir(request: GptReviewRequest, env: NodeJS.ProcessEnv): string {
   const explicit = trim(env.PACK_GPT_BROWSER_EVIDENCE_DIR);
-  const runId = trim(env.PACK_REVIEW_RUN_ID || env.AO_REVIEW_RUN_ID);
+  const runId = trim(env.PACK_REVIEW_RUN_ID);
   const sourceSlot = trim(env.PACK_REVIEW_GPT_SOURCE_SLOT);
   if (explicit && !runId && !sourceSlot) return resolve(explicit);
 
