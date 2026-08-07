@@ -225,7 +225,7 @@ export interface TurnRunOutcome {
   /** Process-local publication fact; not part of turn-result/v1. */
   readonly publicationState?: StateLightPublicationResult['state'];
   readonly cleanupAction?: PageCleanupAction;
-  /** Exact invocation-created page authorized for one Stop attempt. */
+  /** Exact owned page observation; never cancellation authority by itself. */
   readonly stopAuthorityPage?: any;
   readonly ownedConversationUrl?: string;
   readonly profileKey?: string;
@@ -247,7 +247,6 @@ interface StateLightPublicationHooks {
 export type PageCleanupAction = 'close' | 'preserve' | 'skip';
 
 const cleanupAuthorityUnprovenPages = new WeakSet<object>();
-const stopAuthorityPages = new WeakSet<object>();
 
 export interface StateLightRecoveryHooks {
   readonly observer?: (event: RecoveryObserverEvent) => void;
@@ -2003,12 +2002,12 @@ async function runTurn(
       if (mutationFailure) return returnComposerMutationFailure(mutationFailure);
       const insertionDeadlineMs = insertionContext.insertionDeadlineMs ?? invocationDeadlineMs;
       let remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-      if (remainingMs <= 0) return returnComposerMutationFailure("composer_mutation_budget_exhausted");
+      if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
-        return returnComposerMutationFailure("composer_mutation_budget_exhausted");
+        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-      if (remainingMs <= 0) return returnComposerMutationFailure("composer_mutation_budget_exhausted");
+      if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       const composer = page.locator(COMPOSER_SELECTOR);
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
       const hasSendButton = await locatorCount(sendButton) > 0;
@@ -2026,7 +2025,6 @@ async function runTurn(
       }
       sendCount += 1;
       afterSend = true;
-      if (page && typeof page === 'object') stopAuthorityPages.add(page);
       if (!config.newChat && config.chatUrl) {
         emitCancellationReceipt(normalizeConversationUrl(config.chatUrl));
       }
@@ -2644,9 +2642,6 @@ async function runTurn(
       page = recovered.page;
       if (!recovered.cleanupOwned && page && typeof page === 'object') {
         cleanupAuthorityUnprovenPages.add(page);
-      }
-      if (recovered.stopAuthorityPage === page && page && typeof page === 'object') {
-        stopAuthorityPages.add(page);
       }
       recoveryState.immutableConversationUrl = recovered.conversationUrl;
       if (config.directPublication) installDirectPublicationObserver(page, directObservation);
@@ -3430,24 +3425,12 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let journalWriteFailed = outcome.result.journal_write_failed === true;
   const incidents = [...outcome.result.incidents];
   const pageLost = browserOrPageDefinitelyLost(outcome.page, outcome.browser);
-  const implicitStopAuthority = Boolean(
-    outcome.page
-    && typeof outcome.page === 'object'
-    && stopAuthorityPages.has(outcome.page),
-  ) ? outcome.page : undefined;
-  const stopAuthorityPage = !outcome.ownershipForfeited
-    ? outcome.stopAuthorityPage ?? implicitStopAuthority
-    : undefined;
 
   if (outcome.result.send_count >= 1 && outcome.result.state !== 'ok') {
-    const stopOutcome: StopOwnedGenerationOutcome = stopAuthorityPage
-      && !browserOrPageDefinitelyLost(stopAuthorityPage, outcome.browser)
-      ? await stopOwnedGeneration(stopAuthorityPage)
-      : 'unavailable';
     const stopIncident: BrowserIncident = {
-      eventClass: `owned_generation_stop_${stopOutcome}`,
+      eventClass: 'owned_generation_stop_not_attempted_authority_absent',
       symptom: `${outcome.result.state}:${outcome.result.cause}`,
-      action: 'defer_exact_target_close_to_issue_1266',
+      action: 'preserve_live_generation_no_stop',
     };
     incidents.push(stopIncident.eventClass);
     if (!appendIncident(stopIncident, outcome.result.invocation_id)) journalWriteFailed = true;
@@ -3464,11 +3447,9 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     pagePresent: cleanupAuthorityProven,
     pageLost,
   });
-  // Issue #1266 owns abandonment close. This change may Stop only the exact
-  // proven target and must preserve every post-send non-ok tab.
-  const pageAction = outcome.result.send_count >= 1
-    && outcome.result.state !== 'ok'
-    && !pageLost
+  // Issue #1266 owns abandonment close. Local observation loss has no Stop
+  // authority, and every post-send non-ok tab remains preserved.
+  const pageAction = outcome.result.send_count >= 1 && outcome.result.state !== 'ok'
     ? 'preserve'
     : requestedPageAction;
   if (pageAction === 'close') {

@@ -132,6 +132,41 @@ function makeParsedTurnResult(
   return { ...base, resolved_send_count };
 }
 
+async function launchReceiptScenario(input: {
+  id: string;
+  receipt: object;
+  cdp: string;
+  profile: string;
+  invocation: string;
+  childProfile?: string;
+  childInvocation?: string;
+}): Promise<ReturnType<typeof readTerminalEnvelope>> {
+  const root = tempDir(`opk-1377-${input.id}-`);
+  const paths = launchPaths(root, input.id);
+  const fixture = nodeFixture(`
+    process.stdout.write(JSON.stringify(${JSON.stringify(input.receipt)}) + '\\n', () => process.exit(0));
+  `);
+  process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
+  const code = await runLaunch({
+    runIdentity: `run-${input.id}`,
+    attemptIdentity: `attempt-${input.id}`,
+    handoffReceiptPath: paths.receipt,
+    terminalEnvelopePath: paths.envelope,
+    browserOutputPath: paths.output,
+    cwd: repoRoot,
+    childCommand: fixture.command,
+    childArgs: [
+      ...fixture.args,
+      '--',
+      '--cdp', input.cdp,
+      '--profile', input.childProfile ?? input.profile,
+      '--invocation-id', input.childInvocation ?? input.invocation,
+    ],
+  });
+  expect(code).toBe(1);
+  return readTerminalEnvelope(paths.envelope);
+}
+
 describe('flow-manager long-running child (#1164)', () => {
   it('static adoption references package commands and policy surfaces', () => {
     const packageJson = readFileSync(packageJsonPath, 'utf8');
@@ -352,6 +387,39 @@ describe('flow-manager long-running child (#1164)', () => {
     });
     expect(code).toBe(1);
     expect(readTerminalEnvelope(paths.envelope)?.incident).toBe('child_stdout_eof_timeout');
+  });
+
+  it('preserves POSSIBLY_DELIVERED when a started new-chat child times out before its cancellation receipt', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'new-chat-before-receipt');
+    const fixture = nodeFixture('setInterval(() => {}, 1000);');
+    process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
+    const code = await runLaunch({
+      runIdentity: 'run-new-chat-before-receipt',
+      attemptIdentity: 'attempt-new-chat-before-receipt',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: [
+        ...fixture.args,
+        '--',
+        '--new-chat',
+        '--cdp', 'http://127.0.0.1:9222',
+        '--profile', join(root, 'profile'),
+        '--invocation-id', 'invocation-before-receipt',
+      ],
+    });
+    expect(code).toBe(1);
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope).toMatchObject({
+      incident: 'child_stdout_eof_timeout',
+      delivery: 'POSSIBLY_DELIVERED',
+      recovery_available: false,
+    });
+    expect(envelope).not.toHaveProperty('send_count');
+    expect(envelope).not.toHaveProperty('conversation_locator');
   });
 
   it('waiter is non-terminal before envelope exists', async () => {
@@ -724,13 +792,13 @@ describe('flow-manager long-running child (#1164)', () => {
 });
 
 
-describe('Issue #1283 long-running child EOF cancellation', () => {
-  it('attempts proven Stop before process termination and records an honest terminal result', async () => {
-    const root = tempDir('opk-1283-eof-');
-    const paths = launchPaths(root, 'receipt-stop');
+describe('Issue #1377 long-running child abandonment proof', () => {
+  it('preserves a valid exact-owned receipt without using it as Stop authority', async () => {
+    const root = tempDir('opk-1377-eof-');
+    const paths = launchPaths(root, 'receipt-preserve');
     const cdp = 'http://127.0.0.1:9222';
     const profile = join(root, 'profile');
-    const invocation = 'invocation-1283-eof';
+    const invocation = 'invocation-1377-eof';
     const marker = `OPKTURNV1${'34'.repeat(16)}`;
     const conversationUrl = 'https://chatgpt.com/c/33333333-3333-4333-8333-333333333333';
     const receipt = buildBrowserTurnCancellationReceipt({
@@ -750,14 +818,19 @@ describe('Issue #1283 long-running child EOF cancellation', () => {
       url: () => 'https://chatgpt.com/c/44444444-4444-4444-8444-444444444444',
       close: vi.fn(),
     };
-    const stop = vi.fn(async (page: unknown) => {
-      expect(page).toBe(owned);
-      return 'confirmed' as const;
-    });
+    const connect = vi.fn(async () => ({}));
+    const enumeratePages = vi.fn(async () => [sibling, owned]);
+    const readUserMessages = vi.fn(async (page: unknown) => ({
+      messages: page === owned
+        ? [{ role: 'user' as const, text: `${marker}\n\nprompt` }]
+        : [{ role: 'user' as const, text: 'foreign' }],
+      incomplete: false,
+    }));
+    const stop = vi.fn(async () => 'confirmed' as const);
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
     const code = await runLaunch({
-      runIdentity: 'run-1283',
-      attemptIdentity: 'attempt-1283',
+      runIdentity: 'run-1377',
+      attemptIdentity: 'attempt-1377',
       handoffReceiptPath: paths.receipt,
       terminalEnvelopePath: paths.envelope,
       browserOutputPath: paths.output,
@@ -771,37 +844,141 @@ describe('Issue #1283 long-running child EOF cancellation', () => {
         '--invocation-id', invocation,
       ],
       cancellationDependencies: {
-        connect: vi.fn(async () => ({})),
+        connect,
         releaseBrowser: vi.fn(async () => undefined),
-        enumeratePages: vi.fn(async () => [sibling, owned]),
-        readUserMessages: vi.fn(async (page) => ({
-          messages: page === owned
-            ? [{ role: 'user' as const, text: `${marker}\n\nprompt` }]
-            : [{ role: 'user' as const, text: 'foreign' }],
-          incomplete: false,
-        })),
+        enumeratePages,
+        readUserMessages,
         stop,
       },
     });
     expect(code).toBe(1);
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(owned.close).not.toHaveBeenCalled();
-    expect(sibling.close).not.toHaveBeenCalled();
+    expect(connect).toHaveBeenCalledTimes(0);
+    expect(enumeratePages).toHaveBeenCalledTimes(0);
+    expect(readUserMessages).toHaveBeenCalledTimes(0);
+    expect(stop).toHaveBeenCalledTimes(0);
+    expect(owned.close).toHaveBeenCalledTimes(0);
+    expect(sibling.close).toHaveBeenCalledTimes(0);
     const envelope = readTerminalEnvelope(paths.envelope);
     expect(envelope).toMatchObject({
       incident: 'child_stdout_eof_timeout',
       delivery: 'POSSIBLY_DELIVERED',
-      turn_result_state: 'no_reply',
-      turn_result_cause: 'child_stdout_eof_timeout_generation_stopped',
+      turn_result_state: 'driver_error',
+      turn_result_cause: 'child_stdout_eof_timeout_cancellation_authority_absent',
       send_count: 1,
       recovery_available: true,
       conversation_locator: conversationUrl,
     });
     expect(envelope?.diagnostics).toMatchObject({
       cancellation: {
-        stop_outcome: 'confirmed',
-        identity_proven: true,
+        stop_outcome: 'not_attempted_authority_absent',
+        identity_proven: false,
       },
     });
   });
+
+  it('preserves a bound receipt when the child exits immediately before a turn-result', async () => {
+    const cdp = 'http://127.0.0.1:9222';
+    const profile = join(tempDir('opk-1377-bound-profile-'), 'profile');
+    const invocation = 'invocation-1377-bound';
+    const conversationUrl = 'https://chatgpt.com/c/55555555-5555-4555-8555-555555555555';
+    const receipt = buildBrowserTurnCancellationReceipt({
+      invocationId: invocation,
+      profileKey: configuredProfileKey(profile, cdp),
+      conversationUrl,
+      marker: `OPKTURNV1${'56'.repeat(16)}`,
+      sendCount: 1,
+    });
+    expect(receipt).not.toBeNull();
+    const envelope = await launchReceiptScenario({
+      id: 'bound-immediate-exit',
+      receipt: receipt!,
+      cdp,
+      profile,
+      invocation,
+    });
+    expect(envelope).toMatchObject({
+      incident: 'child_stdout_eof_timeout',
+      delivery: 'POSSIBLY_DELIVERED',
+      turn_result_cause: 'child_stdout_eof_timeout_cancellation_authority_absent',
+      send_count: 1,
+      recovery_available: true,
+      conversation_locator: conversationUrl,
+    });
+    expect(envelope?.diagnostics).toMatchObject({
+      cancellation: { stop_outcome: 'not_attempted_authority_absent' },
+    });
+  });
+
+  it('does not treat a receipt with a foreign invocation as delivery evidence', async () => {
+    const cdp = 'http://127.0.0.1:9222';
+    const profile = join(tempDir('opk-1377-invocation-profile-'), 'profile');
+    const receiptInvocation = 'invocation-1377-receipt';
+    const childInvocation = 'invocation-1377-foreign';
+    const receipt = buildBrowserTurnCancellationReceipt({
+      invocationId: receiptInvocation,
+      profileKey: configuredProfileKey(profile, cdp),
+      conversationUrl: 'https://chatgpt.com/c/66666666-6666-4666-8666-666666666666',
+      marker: `OPKTURNV1${'67'.repeat(16)}`,
+      sendCount: 1,
+    });
+    expect(receipt).not.toBeNull();
+    const envelope = await launchReceiptScenario({
+      id: 'foreign-invocation',
+      receipt: receipt!,
+      cdp,
+      profile,
+      invocation: receiptInvocation,
+      childInvocation,
+    });
+    expect(envelope).toMatchObject({
+      delivery: 'POSSIBLY_DELIVERED',
+      recovery_available: false,
+      turn_result_cause: 'child_stdout_eof_timeout_cancellation_receipt_identity_unproven',
+    });
+    expect(envelope).not.toHaveProperty('send_count');
+    expect(envelope).not.toHaveProperty('conversation_locator');
+    expect(envelope?.diagnostics).toMatchObject({
+      cancellation: {
+        stop_outcome: 'not_attempted_identity_unproven',
+        identity_proven: false,
+      },
+    });
+  });
+
+  it('does not treat a receipt with a foreign configured profile as delivery evidence', async () => {
+    const cdp = 'http://127.0.0.1:9222';
+    const profile = join(tempDir('opk-1377-profile-profile-'), 'profile');
+    const foreignProfile = join(tempDir('opk-1377-foreign-profile-'), 'profile');
+    const invocation = 'invocation-1377-profile';
+    const receipt = buildBrowserTurnCancellationReceipt({
+      invocationId: invocation,
+      profileKey: configuredProfileKey(profile, cdp),
+      conversationUrl: 'https://chatgpt.com/c/77777777-7777-4777-8777-777777777777',
+      marker: `OPKTURNV1${'78'.repeat(16)}`,
+      sendCount: 1,
+    });
+    expect(receipt).not.toBeNull();
+    const envelope = await launchReceiptScenario({
+      id: 'foreign-profile',
+      receipt: receipt!,
+      cdp,
+      profile,
+      invocation,
+      childProfile: foreignProfile,
+    });
+    expect(envelope).toMatchObject({
+      delivery: 'POSSIBLY_DELIVERED',
+      recovery_available: false,
+      turn_result_cause: 'child_stdout_eof_timeout_cancellation_receipt_identity_unproven',
+    });
+    expect(envelope).not.toHaveProperty('send_count');
+    expect(envelope).not.toHaveProperty('conversation_locator');
+    expect(envelope?.diagnostics).toMatchObject({
+      cancellation: {
+        stop_outcome: 'not_attempted_identity_unproven',
+        identity_proven: false,
+      },
+    });
+  });
+
 });
