@@ -14,6 +14,7 @@ import {
 } from './product-page-selectors.ts';
 import {
   buildObservationHeartbeat,
+  classifyBrowserGptPageTurnStatus,
   classifyPageObservation,
   ownedPromptMatches,
   readPageObservation,
@@ -142,6 +143,21 @@ async function runCollapsedDuplicateFixture() {
     published: true,
   } as const;
 }
+
+describe('browser turn page evidence classification', () => {
+  it('distinguishes dead, long-running, and completed turns from the existing probe fields', () => {
+    expect(classifyBrowserGptPageTurnStatus(false, 0)).toBe('dead');
+    expect(classifyBrowserGptPageTurnStatus(true, 0)).toBe('long_running');
+    expect(classifyBrowserGptPageTurnStatus(false, 1)).toBe('completed');
+    expect(classifyBrowserGptPageTurnStatus(false, 3)).toBe('completed');
+  });
+
+  it('fails closed when generation evidence is unknown and never calls active generation dead', () => {
+    expect(classifyBrowserGptPageTurnStatus('unknown', 0)).toBe('unknown');
+    expect(classifyBrowserGptPageTurnStatus('unknown', 2)).toBe('unknown');
+    expect(classifyBrowserGptPageTurnStatus(true, 2)).toBe('long_running');
+  });
+});
 
 describe('state-light completion probes', () => {
   function makeTurnContainerPage(actionButtons: boolean, generating = false) {
