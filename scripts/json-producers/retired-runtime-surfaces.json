@@ -45,9 +45,9 @@
     },
     {
       "id": "legacy-adapter-symbol",
-      "sourceCommandPattern": "\\b(?:Invoke|Get|Write|Resolve|Test)-Ao[A-Za-z0-9_-]*\\b|\\b[Aa]o(?:Session|Review|Worker|Project|Command|Status|Event|Transport|Adapter|Runtime|State|Config)[A-Za-z0-9_]*\\b",
+      "sourceCommandPattern": "\\b(?:Invoke|Get|Write|Resolve|Test|Install)-Ao[A-Za-z0-9_-]*\\b|\\b[Aa]o(?:Session|Review|Worker|Project|Command|Status|Event|Transport|Adapter|Runtime|State|Config)[A-Za-z0-9_]*\\b|\\bfunction\\s+(?:global:)?ao\\b",
       "pathPattern": "(^|/)(?:scripts/ao-retirement|scripts/runtime/ao-absent|scripts/gate-runner/custom/ao-capture-redaction)(?:/|\\.|$)",
-      "reason": "No retired adapter symbol or old retirement identity remains reachable.",
+      "reason": "No retired adapter symbol, AO command shim, or old retirement identity remains reachable.",
       "owningReference": "Issue #1352 AO-01..AO-05/AO-13/AO-14"
     },
     {
