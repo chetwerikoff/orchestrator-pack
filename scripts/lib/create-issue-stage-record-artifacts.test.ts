@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -72,6 +72,7 @@ interface TransportOptions {
   reread?: Record<string, unknown> | null;
   rereadFailure?: boolean;
   secondPageFailure?: boolean;
+  beforeReread?: () => void;
 }
 
 function transport(options: TransportOptions = {}) {
@@ -92,6 +93,7 @@ function transport(options: TransportOptions = {}) {
       return { exitCode: 0, stdout: '[]', stderr: '' };
     }
     if (target.includes('/issues/comments/')) {
+      options.beforeReread?.();
       if (options.rereadFailure) return { exitCode: 1, stdout: '', stderr: 'reread unavailable' };
       const id = Number(target.split('/').at(-1));
       const fallback = census.find((item) => Number(item.id) === id) ?? comment(undefined, { id });
@@ -333,12 +335,12 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.errors.join('\n')).toContain('TEMPORARY identity-unresolved');
   });
 
-  it('classifies local observation loss before authoritative reread completes', () => {
+  it('classifies local observation loss after the authoritative reread but before capture materialization', () => {
     const input = fixture({ transportClassification: 'incident' });
-    const result = produce(input, transport({ census: [comment(input.body)], reread: {
-      ...comment(input.body),
-      body: undefined,
-    } }));
+    const result = produce(input, transport({
+      census: [comment(input.body)],
+      beforeReread: () => symlinkSync(join(input.dir, 'missing-target'), input.capturePath),
+    }));
     expect(result.ok).toBe(false);
     expect(result.temporary).toBe('observation-lost');
     expect(result.errors.join('\n')).toContain('TEMPORARY observation-lost');
