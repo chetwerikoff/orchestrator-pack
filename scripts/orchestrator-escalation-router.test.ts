@@ -1,8 +1,35 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcessSync } from './kernel/subprocess.ts';
+
+interface TestProcessOptions {
+  readonly cwd?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly encoding?: BufferEncoding;
+}
+
+function runTestProcessSync(
+  command: string,
+  args: readonly string[],
+  options: TestProcessOptions = {},
+) {
+  const result = runProcessSync({
+    command,
+    args,
+    cwd: options.cwd,
+    env: options.env,
+    inheritParentEnv: options.env === undefined,
+    encoding: options.encoding ?? 'utf8',
+  });
+  return {
+    status: result.exitCode,
+    signal: result.signal,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
 
 const repoRoot = join(import.meta.dirname, '..');
 
@@ -11,7 +38,7 @@ function ps(value: string) {
 }
 
 function runPwsh(script: string, env: Record<string, string> = {}) {
-  return spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+  return runTestProcessSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
     cwd: repoRoot,
     encoding: 'utf8',
     env: { ...process.env, ...env },
@@ -96,7 +123,7 @@ describe('orchestrator escalation router', () => {
     );
     expect(prepareFixture.status, `${prepareFixture.stdout}\n${prepareFixture.stderr}`).toBe(0);
 
-    const router = spawnSync(
+    const router = runTestProcessSync(
       'pwsh',
       [
         '-NoProfile',
@@ -185,7 +212,7 @@ describe('orchestrator escalation router', () => {
     );
     expect(seed.status, `${seed.stdout}\n${seed.stderr}`).toBe(0);
 
-    const router = spawnSync(
+    const router = runTestProcessSync(
       'pwsh',
       [
         '-NoProfile',
@@ -312,7 +339,7 @@ describe('orchestrator escalation router', () => {
     expect(seeded.status, `${seeded.stdout}\n${seeded.stderr}`).toBe(0);
     const ids = JSON.parse(seeded.stdout.trim().split('\n').at(-1) ?? '{}') as { foreignId: string; unknownId: string };
 
-    const router = spawnSync(
+    const router = runTestProcessSync(
       'pwsh',
       [
         '-NoProfile',
@@ -413,7 +440,7 @@ describe('orchestrator escalation router', () => {
     );
     expect(seed.status, `${seed.stdout}\n${seed.stderr}`).toBe(0);
 
-    const router = spawnSync(
+    const router = runTestProcessSync(
       'pwsh',
       [
         '-NoProfile',

@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +21,34 @@ import {
   TIMEOUT_NO_VERDICT_MESSAGE,
 } from '../lib/reviewer_failure.js';
 import { executeReview } from '../lib/review_core.js';
+import { runProcessSync } from '../../../scripts/kernel/subprocess.ts';
+
+interface TestProcessOptions {
+  readonly cwd?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly encoding?: BufferEncoding;
+}
+
+function runTestProcessSync(
+  command: string,
+  args: readonly string[],
+  options: TestProcessOptions = {},
+) {
+  const result = runProcessSync({
+    command,
+    args,
+    cwd: options.cwd,
+    env: options.env,
+    inheritParentEnv: options.env === undefined,
+    encoding: options.encoding ?? 'utf8',
+  });
+  return {
+    status: result.exitCode,
+    signal: result.signal,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
 
 const SCOPED_ISSUE_NUMBER = 6;
 const GUARD_DIR = join(
@@ -157,7 +184,7 @@ describe('reviewer test budget guard (AC#2)', () => {
     });
     const startedMs = String(ledger.startedAtMs);
     const guardNpm = join(GUARD_DIR, 'npm');
-    const result = spawnSync(
+    const result = runTestProcessSync(
       'sh',
       [guardNpm, 'test', '--', 'scripts/orchestrator-wake-supervisor.test.ts'],
       {
@@ -182,7 +209,7 @@ describe('reviewer test budget guard (AC#2)', () => {
       OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS: '600000',
     });
     const guardNpm = join(GUARD_DIR, 'npm');
-    const result = spawnSync('sh', [guardNpm, 'test'], {
+    const result = runTestProcessSync('sh', [guardNpm, 'test'], {
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -199,63 +226,63 @@ describe('reviewer test budget guard (AC#2)', () => {
 
   it('exec-level PATH guard classifies bare npm test as full_suite', () => {
     const guardLib = join(GUARD_DIR, 'guard-lib.sh');
-    const fullSuite = spawnSync(
+    const fullSuite = runTestProcessSync(
       'sh',
       ['-c', `. "${guardLib}"; classify_command npm test`],
       { encoding: 'utf8' },
     );
     expect(fullSuite.stdout.trim()).toBe('full_suite');
 
-    const targeted = spawnSync(
+    const targeted = runTestProcessSync(
       'sh',
       ['-c', `. "${guardLib}"; classify_command npm test -- reviewer-budget.test.ts`],
       { encoding: 'utf8' },
     );
     expect(targeted.stdout.trim()).toBe('cheap_targeted');
 
-    const optionOnly = spawnSync(
+    const optionOnly = runTestProcessSync(
       'sh',
       ['-c', `. "${guardLib}"; classify_command npx vitest run --coverage`],
       { encoding: 'utf8' },
     );
     expect(optionOnly.stdout.trim()).toBe('full_suite');
 
-    const npmOptionOnly = spawnSync(
+    const npmOptionOnly = runTestProcessSync(
       'sh',
       ['-c', `. "${guardLib}"; classify_command npm test -- --coverage`],
       { encoding: 'utf8' },
     );
     expect(npmOptionOnly.stdout.trim()).toBe('full_suite');
 
-    const configOnly = spawnSync(
+    const configOnly = runTestProcessSync(
       'sh',
       ['-c', `. "${guardLib}"; classify_command npx vitest run --config vitest.config.ts`],
       { encoding: 'utf8' },
     );
     expect(configOnly.stdout.trim()).toBe('full_suite');
 
-    const reporterOnly = spawnSync(
+    const reporterOnly = runTestProcessSync(
       'sh',
       ['-c', `. "${guardLib}"; classify_command npm test -- --reporter verbose`],
       { encoding: 'utf8' },
     );
     expect(reporterOnly.stdout.trim()).toBe('full_suite');
 
-    const yarnFullSuite = spawnSync(
+    const yarnFullSuite = runTestProcessSync(
       'sh',
       ['-c', `. "${guardLib}"; classify_command yarn test`],
       { encoding: 'utf8' },
     );
     expect(yarnFullSuite.stdout.trim()).toBe('full_suite');
 
-    const yarnRunTest = spawnSync(
+    const yarnRunTest = runTestProcessSync(
       'sh',
       ['-c', `. "${guardLib}"; classify_command yarn run test`],
       { encoding: 'utf8' },
     );
     expect(yarnRunTest.stdout.trim()).toBe('full_suite');
 
-    const directVitest = spawnSync(
+    const directVitest = runTestProcessSync(
       'sh',
       [
         '-c',
@@ -265,36 +292,36 @@ describe('reviewer test budget guard (AC#2)', () => {
     );
     expect(directVitest.stdout.trim()).toBe('cheap_targeted');
 
-    const bareVitest = spawnSync('sh', ['-c', `. "${guardLib}"; classify_command vitest`], {
+    const bareVitest = runTestProcessSync('sh', ['-c', `. "${guardLib}"; classify_command vitest`], {
       encoding: 'utf8',
     });
     expect(bareVitest.stdout.trim()).toBe('full_suite');
 
-    const npxVitest = spawnSync('sh', ['-c', `. "${guardLib}"; classify_command npx vitest`], {
+    const npxVitest = runTestProcessSync('sh', ['-c', `. "${guardLib}"; classify_command npx vitest`], {
       encoding: 'utf8',
     });
     expect(npxVitest.stdout.trim()).toBe('full_suite');
 
-    const npxYesVitest = spawnSync(
+    const npxYesVitest = runTestProcessSync(
       'sh',
       ['-c', `. "${guardLib}"; classify_command npx --yes vitest`],
       { encoding: 'utf8' },
     );
     expect(npxYesVitest.stdout.trim()).toBe('full_suite');
 
-    const pnpmExecVitest = spawnSync(
+    const pnpmExecVitest = runTestProcessSync(
       'sh',
       ['-c', `. "${guardLib}"; classify_command pnpm exec vitest`],
       { encoding: 'utf8' },
     );
     expect(pnpmExecVitest.stdout.trim()).toBe('full_suite');
 
-    const yarnVitest = spawnSync('sh', ['-c', `. "${guardLib}"; classify_command yarn vitest`], {
+    const yarnVitest = runTestProcessSync('sh', ['-c', `. "${guardLib}"; classify_command yarn vitest`], {
       encoding: 'utf8',
     });
     expect(yarnVitest.stdout.trim()).toBe('full_suite');
 
-    const vitestRunSeparator = spawnSync(
+    const vitestRunSeparator = runTestProcessSync(
       'sh',
       [
         '-c',
@@ -310,7 +337,7 @@ describe('reviewer test budget guard (AC#2)', () => {
       OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS: '600000',
     });
     const guardYarn = join(GUARD_DIR, 'yarn');
-    const result = spawnSync('sh', [guardYarn, 'test'], {
+    const result = runTestProcessSync('sh', [guardYarn, 'test'], {
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -329,7 +356,7 @@ describe('reviewer test budget guard (AC#2)', () => {
     const guardLib = join(GUARD_DIR, 'guard-lib.sh');
     const startedMs = String(Date.now());
     const hardDeadlineMs = String(Date.now() + 600_000);
-    const remaining = spawnSync(
+    const remaining = runTestProcessSync(
       'sh',
       ['-c', `. "${guardLib}"; remaining_review_ms`],
       {

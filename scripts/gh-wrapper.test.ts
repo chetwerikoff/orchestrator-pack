@@ -40,6 +40,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { runProcessSync } from './kernel/subprocess.ts';
 
 describe('gh inventory matcher', () => {
   it('routes open pr list with listed json fields', () => {
@@ -381,7 +382,9 @@ describe('gh wrapper audit telemetry', () => {
   it('logs successful completions with status and child id', () => {
     const root = mkdtempSync(join(tmpdir(), 'gh-wrapper-audit-'));
     const auditPath = join(root, 'audit.jsonl');
-    const result = spawnSync(join(import.meta.dirname, 'gh'), ['auth', 'status'], {
+    const result = runProcessSync({
+      command: join(import.meta.dirname, 'gh'),
+      args: ['auth', 'status'],
       env: {
         ...process.env,
         GH_REAL_BINARY: '/bin/true',
@@ -392,7 +395,7 @@ describe('gh wrapper audit telemetry', () => {
       encoding: 'utf8',
     });
 
-    expect(result.status).toBe(0);
+    expect(result.exitCode).toBe(0);
     expect(result.stderr).toContain('gh-wrapper-audit: entry child=review-trigger-reconcile');
     expect(result.stderr).toMatch(/gh-wrapper-audit: complete .*child=review-trigger-reconcile .*kind=passthrough route=passthrough status=0/);
     const rows = readFileSync(auditPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
