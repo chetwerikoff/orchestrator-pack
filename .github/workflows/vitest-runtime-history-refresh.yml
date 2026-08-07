@@ -291,7 +291,7 @@ jobs:
           merge-multiple: true
 
       - name: Download fixed supplemental report
-        if: inputs.supplemental_source_sha != ''
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != ''
         uses: actions/download-artifact@v4
         with:
           name: vitest-supplemental-report-pack-reviewer-preference
@@ -319,7 +319,7 @@ jobs:
           }
 
       - name: Stage fixed supplemental report for refresh
-        if: inputs.supplemental_source_sha != ''
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != ''
         shell: pwsh
         run: |
           $source = Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports'
@@ -336,25 +336,57 @@ jobs:
       - name: Refresh committed runtime-history
         shell: pwsh
         env:
-          COMMIT_SHA: ${{ github.sha }}
-          SUPPLEMENTAL_SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
+          REFRESH_EVENT_NAME: ${{ github.event_name }}
+          REFRESH_REF: ${{ github.ref }}
+          TRUSTED_REFRESH_SHA: ${{ github.sha }}
+          REFRESH_WORKFLOW_REF: ${{ github.workflow_ref }}
+          REFRESH_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          SUPPLEMENTAL_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha || '' }}
           SUPPLEMENTAL_RUN_ID: ${{ github.run_id }}
           SUPPLEMENTAL_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          $args = @(
-            '-ReportsDir', (Join-Path $env:GITHUB_WORKSPACE 'vitest-heavy-reports-staged'),
-            '-CommitSha', $env:COMMIT_SHA,
-            '-CommitBack'
-          )
-          if ($env:SUPPLEMENTAL_SOURCE_SHA) {
-            $args += @(
-              '-SupplementalReportsDir', (Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports-staged'),
-              '-SupplementalSourceSha', $env:SUPPLEMENTAL_SOURCE_SHA,
-              '-SupplementalRunId', $env:SUPPLEMENTAL_RUN_ID,
-              '-SupplementalRunAttempt', $env:SUPPLEMENTAL_RUN_ATTEMPT
-            )
+          $refreshArgs = @{
+            ReportsDir = (Join-Path $env:GITHUB_WORKSPACE 'vitest-heavy-reports-staged')
+            CommitSha = $env:TRUSTED_REFRESH_SHA
+            CommitBack = $true
           }
-          ./scripts/refresh-vitest-runtime-history.ps1 @args
+          if (-not [string]::IsNullOrWhiteSpace($env:SUPPLEMENTAL_SOURCE_SHA)) {
+            $refreshArgs['SupplementalReportsDir'] = (Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports-staged')
+            $refreshArgs['SupplementalSourceSha'] = $env:SUPPLEMENTAL_SOURCE_SHA
+            $refreshArgs['SupplementalRunId'] = $env:SUPPLEMENTAL_RUN_ID
+            $refreshArgs['SupplementalRunAttempt'] = $env:SUPPLEMENTAL_RUN_ATTEMPT
+          }
+
+          $resolvedArguments = [ordered]@{}
+          foreach ($name in @(
+            'ReportsDir',
+            'CommitSha',
+            'CommitBack',
+            'SupplementalReportsDir',
+            'SupplementalSourceSha',
+            'SupplementalRunId',
+            'SupplementalRunAttempt'
+          )) {
+            if ($refreshArgs.ContainsKey($name)) {
+              $resolvedArguments[$name] = $refreshArgs[$name]
+            }
+          }
+          $boundarySignal = [ordered]@{
+            event = $env:REFRESH_EVENT_NAME
+            ref = $env:REFRESH_REF
+            trustedSha = $env:TRUSTED_REFRESH_SHA
+            workflowRef = $env:REFRESH_WORKFLOW_REF
+            workflowSha = $env:REFRESH_WORKFLOW_SHA
+            supplementalTuple = [ordered]@{
+              SupplementalReportsDir = $refreshArgs.ContainsKey('SupplementalReportsDir')
+              SupplementalSourceSha = $refreshArgs.ContainsKey('SupplementalSourceSha')
+              SupplementalRunId = $refreshArgs.ContainsKey('SupplementalRunId')
+              SupplementalRunAttempt = $refreshArgs.ContainsKey('SupplementalRunAttempt')
+            }
+            arguments = $resolvedArguments
+          }
+          Write-Host ('runtime-history-refresh-boundary ' + ($boundarySignal | ConvertTo-Json -Compress -Depth 5))
+          ./scripts/refresh-vitest-runtime-history.ps1 @refreshArgs
 
       - name: Require delivery credential
         shell: bash
@@ -401,7 +433,9 @@ jobs:
             node scripts/refresh-vitest-runtime-history.mjs reconcile \
               --remote "${pending_history}" \
               --proposed scripts/vitest-runtime-history.json \
-              --output scripts/vitest-runtime-history.json
+              --output scripts/vitest-runtime-history.json \
+              --repo-root "${GITHUB_WORKSPACE}" \
+              --require-equal-inventory
             git add -- scripts/vitest-runtime-history.json
             if ! git diff --cached --quiet HEAD -- scripts/vitest-runtime-history.json; then
               git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
