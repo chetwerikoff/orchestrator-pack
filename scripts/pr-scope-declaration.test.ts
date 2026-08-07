@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import {
   PR_SCOPE_DECLARATION_SCHEMA,
+  REPOSITORY_ALLOWED_ROOTS,
   producePrScopeDeclaration,
   selectDeclarationArtifact,
   selectLiveIssueScope,
@@ -78,6 +79,13 @@ const firstPartySurfaceIssueBody = [
   'prompts/**',
   '```',
 ].join('\n');
+
+const issue1352PowerShellPaths = [
+  'tests/powershell/Issue748.RefreshConcurrency.Tests.ps1',
+  'tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1',
+  'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1',
+  'tests/powershell/Lint-SelfArchitect.Tests.ps1',
+];
 
 const bootstrapAllowedPaths = [
   'scripts/pr-scope-check.ts',
@@ -222,6 +230,51 @@ describe('AO-free PR scope declaration contract', () => {
         allowed_roots: ['README.md'],
       }),
     ).toMatchObject({ ok: false, kind: 'policy-violation' });
+  });
+
+  it('admits only the four Issue 1352 PowerShell test surfaces', () => {
+    expect(REPOSITORY_ALLOWED_ROOTS).toEqual(
+      expect.arrayContaining(issue1352PowerShellPaths),
+    );
+    expect(REPOSITORY_ALLOWED_ROOTS).not.toContain('tests/powershell/**');
+    expect(REPOSITORY_ALLOWED_ROOTS).not.toContain('tests/**');
+
+    const exactDeclaration = {
+      ...declaration(1352),
+      declared_paths: [...issue1352PowerShellPaths],
+      allowed_roots: [...issue1352PowerShellPaths],
+    };
+    expect(validatePrScopeDeclaration(exactDeclaration, 1352)).toMatchObject({
+      ok: true,
+    });
+
+    const unrelatedPaths = [
+      ...issue1352PowerShellPaths,
+      'tests/powershell/Unrelated.Tests.ps1',
+    ].sort((left, right) => left.localeCompare(right));
+    expect(
+      validatePrScopeDeclaration(
+        {
+          ...declaration(1352),
+          declared_paths: unrelatedPaths,
+          allowed_roots: unrelatedPaths,
+        },
+        1352,
+      ),
+    ).toMatchObject({ ok: false, kind: 'policy-violation' });
+
+    for (const broadRoot of ['tests/powershell/', 'tests/']) {
+      expect(
+        validatePrScopeDeclaration(
+          {
+            ...declaration(1352),
+            declared_paths: [issue1352PowerShellPaths[0]!],
+            allowed_roots: [broadRoot],
+          },
+          1352,
+        ),
+      ).toMatchObject({ ok: false, kind: 'policy-violation' });
+    }
   });
 
   it('produces and verifies skills-fenced first-party declarations', () => {
