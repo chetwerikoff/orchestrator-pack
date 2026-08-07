@@ -287,33 +287,19 @@ function observeSmokeWorker(input: {
   };
 }
 
-/** Establish the exact Orca generation once from terminal-show after create. */
+/** Confirm the adapter-established exact generation without ever rebinding it. */
 export function stabilizeSpawnedSmokeWorkerIdentity(input: {
   worker: RuntimeWorker;
   cwd: string;
   timeoutMs: number;
   probe?: SmokeGenerationProbe;
 }): StableSpawnIdentityResult {
-  if (input.worker.identity.runtime !== 'orca') return { ok: true, worker: input.worker };
-  const observed = observeSmokeWorker({
+  return confirmSpawnedSmokeWorkerIdentity({
     worker: input.worker,
     cwd: input.cwd,
     timeoutMs: input.timeoutMs,
     probe: input.probe ?? defaultGenerationProbe,
   });
-  if (!observed.ok) return observed;
-  return {
-    ok: true,
-    worker: {
-      ...input.worker,
-      identity: {
-        runtime: 'orca',
-        id: input.worker.identity.id,
-        generation: observed.generation,
-      },
-    },
-    ...(observed.diagnostic ? { diagnostic: observed.diagnostic } : {}),
-  };
 }
 
 function confirmSpawnedSmokeWorkerIdentity(input: {
@@ -364,9 +350,8 @@ function refreshTrackedSmokeWorker(input: {
 
 /**
  * Install the narrow worker-smoke compatibility repair on the production task
- * adapter. The exact handle observation establishes one immutable generation;
- * tracked lookups bypass workspace-list discovery while unrelated callers keep
- * the ordinary adapter behavior. Delivery still permits only one full payload.
+ * adapter. The adapter-established exact generation is immutable; tracked
+ * observations can only confirm it. Delivery still permits only one full payload.
  */
 export function installStableWorkerSmokeSpawnPatch(
   options: StableWorkerSmokeSpawnPatchOptions = {},
