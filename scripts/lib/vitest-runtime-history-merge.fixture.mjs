@@ -49,10 +49,10 @@ const PR_1376_CHANGED_FILES = [
   'docs/declarations/1266.pr-scope.json',
   'package.json',
   'scripts/browser-gpt-post-settlement-close-proof.ts',
-  'scripts/browser-gpt-post-settlement-close.test.ts',
   'scripts/browser-gpt-post-settlement-close.ts',
+  'scripts/chatgpt-browser-turn/browser-session.ts',
   'scripts/chatgpt-browser-turn/contracts.ts',
-  'scripts/vitest-ci-lanes.config.json',
+  'scripts/chatgpt-browser-turn/tab-lifecycle.test.ts',
 ].sort();
 
 function fail(message) {
