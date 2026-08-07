@@ -296,14 +296,15 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     let probeCalls = 0;
     const restore = installStableWorkerSmokeSpawnPatch({
       probe: () => {
-        probeCalls += 1;
-        if (probeCalls === 1) return ok({ terminal: owned });
-        return {
+        const attempt = ++probeCalls;
+        if (attempt === 1) return ok({ terminal: owned });
+        const unresolved: OrcaJsonResponse<{ terminal?: OrcaTerminalSummary }> = {
           ok: false,
           operation: 'terminal_show',
           outcomeCategory: 'supported_operation_failure',
           error: { code: 'terminal_not_found', message: 'terminal is no longer alive' },
         };
+        return unresolved;
       },
     });
 
