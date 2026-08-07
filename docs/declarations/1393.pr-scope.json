@@ -34,5 +34,5 @@
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts"
   ],
-  "source_revision": "b871ea0bf4b9dd43042deef6610f86caeb721112"
+  "source_revision": "1f2fde3246907ac72eec91bced05a305b97521a3"
 }
