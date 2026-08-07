@@ -100,7 +100,9 @@ function Invoke-RuntimeHistoryStaleReconcile {
     & node $refreshScript reconcile `
         --remote $RemoteHistoryFile `
         --proposed $ProposedHistoryFile `
-        --output $historyFile
+        --output $historyFile `
+        --repo-root $RepoRoot `
+        --require-equal-inventory
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
@@ -161,6 +163,15 @@ try {
             continue
         }
 
+        $remoteHead = (git -C $RepoRoot rev-parse origin/main).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($remoteHead)) {
+            if ($attempt -eq $maxAttempts) {
+                Write-Host '[FAIL] runtime-history commit-back failed to resolve origin/main head'
+                exit 1
+            }
+            continue
+        }
+
         git -C $RepoRoot show origin/main:scripts/vitest-runtime-history.json | Set-Content -LiteralPath $remoteSnapshot -Encoding utf8
         if ($LASTEXITCODE -ne 0) {
             if ($attempt -eq $maxAttempts) {
@@ -170,7 +181,13 @@ try {
             continue
         }
 
-        Invoke-RuntimeHistoryStaleReconcile -RemoteHistoryFile $remoteSnapshot -ProposedHistoryFile $proposedSnapshot
+        if ($remoteHead -ieq $CommitSha.Trim()) {
+            Copy-Item -LiteralPath $proposedSnapshot -Destination $historyFile -Force
+            Write-Host '[INFO] runtime-history commit-back source head unchanged; preserving proposed canonical inventory'
+        } else {
+            Write-Host "[INFO] runtime-history commit-back detected advanced origin/main head $remoteHead; requiring equal canonical inventory"
+            Invoke-RuntimeHistoryStaleReconcile -RemoteHistoryFile $remoteSnapshot -ProposedHistoryFile $proposedSnapshot
+        }
 
         git -C $RepoRoot add -- 'scripts/vitest-runtime-history.json'
         $status = git -C $RepoRoot status --porcelain -- 'scripts/vitest-runtime-history.json'
