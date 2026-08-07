@@ -28,6 +28,12 @@ describe('runtime retirement closed-world scanner', () => {
   it('accepts neutral active code', () => {
     expect(scanRetiredRuntimeSurfaces({ repoRoot: fixture('pack review list') }).violations).toEqual([]);
   });
+
+  it('keeps exact source identities case-sensitive', () => {
+    const root = fixture('const status = "orca_smoke_control_plane_codes";\nAO STATUS is descriptive prose');
+    expect(scanRetiredRuntimeSurfaces({ repoRoot: root }).violations).toEqual([]);
+  });
+
   it.each([
     ['selector', 'const value = process.env.AO_SESSION_ID;'],
     ['command', 'ao status --json'],
@@ -35,16 +41,26 @@ describe('runtime retirement closed-world scanner', () => {
   ])('rejects injected %s surface', (_name, text, path = 'scripts/active.ts') => {
     expect(scanRetiredRuntimeSurfaces({ repoRoot: fixture(text, path) }).violations).toHaveLength(1);
   });
+
   it('excludes immutable history but not active fixtures', () => {
     const root = fixture('neutral');
     const historical = join(root, 'docs/issues_drafts/old.md');
     mkdirSync(dirname(historical), { recursive: true });
     writeFileSync(historical, 'AO_SESSION_ID');
+    const frozenGate = join(root, 'scripts/gate-runner/census/pre-change-baseline.json');
+    mkdirSync(dirname(frozenGate), { recursive: true });
+    writeFileSync(frozenGate, 'AO_SESSION_ID');
     const activeFixture = join(root, 'scripts/fixtures/current.txt');
     mkdirSync(dirname(activeFixture), { recursive: true });
     writeFileSync(activeFixture, 'AO_SESSION_ID');
-    const result = scanRetiredRuntimeSurfaces({ repoRoot: root, paths: ['scripts/active.ts', 'docs/issues_drafts/old.md', 'scripts/fixtures/current.txt'] });
+    const result = scanRetiredRuntimeSurfaces({ repoRoot: root, paths: [
+      'scripts/active.ts',
+      'docs/issues_drafts/old.md',
+      'scripts/gate-runner/census/pre-change-baseline.json',
+      'scripts/fixtures/current.txt',
+    ] });
     expect(result.excludedPaths).toContain('docs/issues_drafts/old.md');
+    expect(result.excludedPaths).toContain('scripts/gate-runner/census/pre-change-baseline.json');
     expect(result.violations.map((entry) => entry.path)).toContain('scripts/fixtures/current.txt');
   });
 });
