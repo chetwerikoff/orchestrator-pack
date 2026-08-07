@@ -35,13 +35,22 @@ jobs:
           git apply "$RUNNER_TEMP/checkpoint.patch"
           python - <<'PY'
           from pathlib import Path
-          path = Path('scripts/gate-runner/custom/bulk-cli-parity.test.ts')
-          text = path.read_text(encoding='utf-8')
-          old = "writeFixture(join(root, 'plugins/scope-guard/README.md'), 'DD-024 runtime guard git add commit PR-level CI second line\\n');"
-          new = "writeFixture(join(root, 'plugins/ao-scope-guard/README.md'), 'DD-024 runtime guard git add commit PR-level CI second line\\n');"
-          if text.count(old) != 1:
-              raise SystemExit(f'unexpected frozen replay fixture count: {text.count(old)}')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          fixture_path = Path('scripts/gate-runner/custom/bulk-cli-parity.test.ts')
+          fixture = fixture_path.read_text(encoding='utf-8')
+          fixture_old = "writeFixture(join(root, 'plugins/scope-guard/README.md'), 'DD-024 runtime guard git add commit PR-level CI second line\\n');"
+          fixture_new = "writeFixture(join(root, 'plugins/ao-scope-guard/README.md'), 'DD-024 runtime guard git add commit PR-level CI second line\\n');"
+          if fixture.count(fixture_old) != 1:
+              raise SystemExit(f'unexpected frozen replay fixture count: {fixture.count(fixture_old)}')
+          fixture_path.write_text(fixture.replace(fixture_old, fixture_new, 1), encoding='utf-8')
+
+          capture_path = Path('scripts/gate-runner/goldens/wave-3b-pre-delete-captures.json')
+          capture = capture_path.read_text(encoding='utf-8')
+          capture_old = '[PASS] plugins/scope-guard/README.md - contract markers present\\n'
+          capture_new = '[PASS] plugins/ao-scope-guard/README.md - contract markers present\\n'
+          if capture.count(capture_old) != 1:
+              raise SystemExit(f'unexpected frozen replay output count: {capture.count(capture_old)}')
+          capture_path.write_text(capture.replace(capture_old, capture_new, 1), encoding='utf-8')
           PY
           npm ci --include=dev
           npm run typecheck:foundation
@@ -65,6 +74,7 @@ jobs:
             scripts/gate-runner/census/wave-3b-migration-inventory.json \
             scripts/gate-runner/custom/bulk-cli-parity.test.ts \
             scripts/gate-runner/declarative.ts \
+            scripts/gate-runner/goldens/wave-3b-pre-delete-captures.json \
             scripts/gate-runner/wave-3b-migration-inventory.ts \
             scripts/launch-argv-inventory.json \
             scripts/launch-argv-validators.manifest.json \
