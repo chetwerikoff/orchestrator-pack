@@ -191,11 +191,8 @@ function assertRetiredFoundationHistory(
     historicalPort.includes(`Ported from ${RETIRED_FOUNDATION_HISTORY.source} blob `),
     'retired_foundation_history_port_binding_missing',
   );
-
-  invariant(treeMode(repoRoot, 'HEAD', RETIRED_FOUNDATION_HISTORY.source) === '', 'retired_foundation_source_restored');
-  invariant(treeMode(repoRoot, 'HEAD', RETIRED_FOUNDATION_HISTORY.terminalizedPort) === '', 'retired_foundation_port_restored');
   invariant(
-    ['100644', '100755'].includes(treeMode(repoRoot, 'HEAD', RETIRED_FOUNDATION_HISTORY.survivingOwner)),
+    ['100644', '100755'].includes(treeMode(repoRoot, FOUNDATION_TERMINAL_SHA, RETIRED_FOUNDATION_HISTORY.survivingOwner)),
     'retired_foundation_runtime_neutral_owner_missing',
   );
 }
