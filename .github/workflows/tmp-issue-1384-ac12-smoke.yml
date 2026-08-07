@@ -1,0 +1,33 @@
+name: tmp-issue-1384-ac12-smoke
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    name: AC12 fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run fixture
+        shell: bash
+        run: |
+          set +e
+          node scripts/lib/vitest-runtime-history-merge.fixture.mjs
+          code=$?
+          echo "fixture_exit=${code}"
+          exit "${code}"
