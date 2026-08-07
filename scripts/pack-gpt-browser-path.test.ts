@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,7 +34,7 @@ const runnerSmokeRecord = JSON.parse(readFileSync(
   harnessIntegrationOnly: string;
 };
 
-function successfulTurnResult(): string {
+function successfulTurnResult(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     schema: 'turn-result/v1',
     state: 'ok',
@@ -49,7 +49,45 @@ function successfulTurnResult(): string {
     navigation_count: 1,
     incidents: [],
     cleanup: 'confirmed',
+    ...overrides,
   });
+}
+
+function structuredFinding(source?: string): string {
+  return JSON.stringify({
+    findings: [{
+      type: 'bug',
+      code: 'GPT-1',
+      severity: 'blocking',
+      path: 'scripts/example.ts',
+      summary: 'Example structured finding',
+      ...(source === undefined ? {} : { source }),
+    }],
+  });
+}
+
+function successfulReviewDeps(reply: string): GptReviewDependencies {
+  return {
+    resolveBrowserConfig: () => ({
+      profile: '/tmp/profile',
+      cdpUrl: 'http://127.0.0.1:9222',
+      chatUrl: 'https://chatgpt.com/c/test',
+    }),
+    runBrowserTurn: async ({ outputPath }) => {
+      writeFileSync(outputPath, reply, 'utf8');
+      return {
+        outcome: 'exit' as const,
+        ok: true,
+        exitCode: 0,
+        signal: null,
+        stdout: successfulTurnResult(),
+        stderr: '',
+        timedOut: false,
+        cancelled: false,
+      };
+    },
+    resolvePrUrl: () => 'https://github.com/example/repo/pull/99',
+  };
 }
 
 const originalEnv = { ...process.env };
@@ -233,27 +271,7 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
 
   it('writes adapter prompt, terminal reply, and mapped stdout when evidence dir is set', async () => {
     const evidenceDir = mkdtempSync(join(tmpdir(), 'opk-gpt-evidence-'));
-    const deps: GptReviewDependencies = {
-      resolveBrowserConfig: () => ({
-        profile: '/tmp/profile',
-        cdpUrl: 'http://127.0.0.1:9222',
-        chatUrl: 'https://chatgpt.com/c/test',
-      }),
-      runBrowserTurn: async ({ outputPath }) => {
-        writeFileSync(outputPath, 'NO_FINDINGS', 'utf8');
-        return {
-          outcome: 'exit' as const,
-          ok: true,
-          exitCode: 0,
-          signal: null,
-          stdout: successfulTurnResult(),
-          stderr: '',
-          timedOut: false,
-          cancelled: false,
-        };
-      },
-      resolvePrUrl: () => 'https://github.com/example/repo/pull/99',
-    };
+    const deps = successfulReviewDeps('NO_FINDINGS');
 
     const result = await runGptPackReview({
       repoRoot: process.cwd(),
@@ -315,5 +333,91 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
     } finally {
       runProcess.mockRestore();
     }
+  });
+});
+
+describe('Browser-GPT harvest boundary (Issue #1393)', () => {
+  it('defaults only an absent finding source to gpt-browser', () => {
+    const mapped = JSON.parse(mapGptReplyToTerminalStdout(structuredFinding())) as {
+      verdict: string;
+      findings: Array<{ body?: string }>;
+    };
+    expect(mapped.verdict).toBe('findings');
+    expect(mapped.findings[0]?.body).toContain('source: gpt-browser');
+
+    expect(() => mapGptReplyToTerminalStdout(structuredFinding('codex'))).toThrow(/source must be gpt-browser/);
+    expect(() => mapGptReplyToTerminalStdout(structuredFinding(''))).toThrow(/missing mandatory structured fields/);
+  });
+
+  it.each([
+    ['harvest_failed', 'not structured review output', /not NO_FINDINGS or structured JSON findings/],
+    ['no_reply', '', /empty output/],
+    ['forbidden_verdict_envelope', '{"verdict":"clean","findings":[]}', /must not return pre-mapped terminal verdict JSON/],
+  ])('classifies %s without fabricating a code finding and persists raw evidence', async (classification, reply, errorPattern) => {
+    const stateRoot = mkdtempSync(join(tmpdir(), `opk-gpt-${classification}-`));
+    const env = {
+      PACK_GPT_BROWSER_PROFILE: '/tmp/profile',
+      PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
+      PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/test',
+      ORCHESTRATOR_PACK_STATE_ROOT: stateRoot,
+      PACK_REVIEW_RUN_ID: 'prr-issue-1393',
+      PACK_REVIEW_GPT_SOURCE_SLOT: 'source-02',
+    };
+
+    const result = await runGptPackReview({
+      repoRoot: process.cwd(),
+      repoSlug: 'example/repo',
+      prNumber: 1393,
+      headSha: '1'.repeat(40),
+    }, successfulReviewDeps(reply), env);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(errorPattern);
+    const terminal = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(terminal.review_harvest_class).toBe(classification);
+    const evidence = terminal.review_evidence as Record<string, string>;
+    expect(readFileSync(evidence.adapterPromptPath, 'utf8')).toContain('pull/99');
+    expect(readFileSync(evidence.terminalReplyPath, 'utf8')).toBe(reply);
+    expect(readFileSync(evidence.mappingErrorPath, 'utf8')).toBe(result.stderr);
+    expect(readFileSync(evidence.adapterStdoutPath, 'utf8').trim()).toBe(result.stdout.trim());
+    rmSync(stateRoot, { recursive: true, force: true });
+  });
+
+  it('isolates durable evidence for sibling source slots without an export override', async () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), 'opk-gpt-sibling-evidence-'));
+    const baseEnv = {
+      PACK_GPT_BROWSER_PROFILE: '/tmp/profile',
+      PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
+      PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/test',
+      ORCHESTRATOR_PACK_STATE_ROOT: stateRoot,
+      PACK_REVIEW_RUN_ID: 'prr-sibling-evidence',
+    };
+    const request = {
+      repoRoot: process.cwd(),
+      repoSlug: 'example/repo',
+      prNumber: 1393,
+      headSha: '2'.repeat(40),
+    };
+
+    const first = await runGptPackReview(request, successfulReviewDeps('NO_FINDINGS'), {
+      ...baseEnv,
+      PACK_REVIEW_GPT_SOURCE_SLOT: 'source-01',
+    });
+    const second = await runGptPackReview(request, successfulReviewDeps('NO_FINDINGS'), {
+      ...baseEnv,
+      PACK_REVIEW_GPT_SOURCE_SLOT: 'source-02',
+    });
+    const firstEvidence = (JSON.parse(first.stdout.split(/\r?\n/)[0]!) as Record<string, unknown>)
+      .review_evidence as Record<string, string>;
+    const secondEvidence = (JSON.parse(second.stdout.split(/\r?\n/)[0]!) as Record<string, unknown>)
+      .review_evidence as Record<string, string>;
+
+    expect(firstEvidence.adapterPromptPath).not.toBe(secondEvidence.adapterPromptPath);
+    expect(firstEvidence.terminalReplyPath).not.toBe(secondEvidence.terminalReplyPath);
+    expect(existsSync(firstEvidence.adapterPromptPath)).toBe(true);
+    expect(existsSync(secondEvidence.adapterPromptPath)).toBe(true);
+    expect(readFileSync(firstEvidence.terminalReplyPath, 'utf8')).toBe('NO_FINDINGS');
+    expect(readFileSync(secondEvidence.terminalReplyPath, 'utf8')).toBe('NO_FINDINGS');
+    rmSync(stateRoot, { recursive: true, force: true });
   });
 });

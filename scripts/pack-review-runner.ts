@@ -84,6 +84,7 @@ import {
 } from './lib/github-review-reconciliation.ts';
 import {
   classifyPackReviewFailureReason,
+  classifyPackReviewPayload,
   deliverPackReviewVerdict,
   packReviewDeliveryNeedsResume,
   packReviewJournaledPayload,
@@ -232,11 +233,25 @@ interface ReviewPayloadFinding {
   sourceSlotId?: string;
 }
 
+interface GptHarvestIncident {
+  sourceSlotId: string;
+  classification: 'harvest_failed' | 'no_reply' | 'forbidden_verdict_envelope';
+  evidencePaths: Record<string, string>;
+}
+
+interface GptIncompleteSource {
+  sourceSlotId: string;
+  classification: string;
+  timedOut: boolean;
+  cancelled: boolean;
+}
+
 interface ReviewPayload {
   verdict: 'clean' | 'findings';
   findingCount: number;
   findings: ReviewPayloadFinding[];
   bundleDigest?: string;
+  harvestIncidents?: GptHarvestIncident[];
 }
 
 interface ClaimLease {
@@ -259,6 +274,7 @@ const CLAIM_RELATIVE_PATH = 'scripts/lib/review-start-claim-store.ts';
 const DEFAULT_PROJECT_ID = 'orchestrator-pack';
 const DEFAULT_BASE_REF = 'origin/main';
 const HEARTBEAT_INTERVAL_MS = 30_000;
+const GPT_HARVEST_CLASSES = new Set(['harvest_failed', 'no_reply', 'forbidden_verdict_envelope']);
 
 function trim(value: unknown): string {
   return String(value ?? '').trim();
@@ -661,6 +677,45 @@ function parseReviewPayload(stdout: string): ReviewPayload {
   throw new Error('reviewer produced no valid terminal verdict payload');
 }
 
+function gptRoundDiagnostics(round: PackReviewGptRoundRecord | undefined): {
+  harvestIncidents: GptHarvestIncident[];
+  nonHarvestIncompleteSources: GptIncompleteSource[];
+} {
+  const harvestIncidents: GptHarvestIncident[] = [];
+  const nonHarvestIncompleteSources: GptIncompleteSource[] = [];
+  for (const slot of round?.sourceSlots ?? []) {
+    const classification = trim(slot.terminalClass);
+    if (!classification || classification === 'complete_clean' || classification === 'complete_findings') continue;
+    const terminal = slot.terminalResult && typeof slot.terminalResult === 'object' && !Array.isArray(slot.terminalResult)
+      ? slot.terminalResult as Record<string, unknown>
+      : {};
+    if (GPT_HARVEST_CLASSES.has(classification)) {
+      const rawEvidence = terminal.review_evidence && typeof terminal.review_evidence === 'object'
+        && !Array.isArray(terminal.review_evidence)
+        ? terminal.review_evidence as Record<string, unknown>
+        : {};
+      const evidencePaths = Object.fromEntries(
+        Object.entries(rawEvidence)
+          .filter(([, value]) => typeof value === 'string' && value.trim())
+          .map(([key, value]) => [key, String(value)]),
+      );
+      harvestIncidents.push({
+        sourceSlotId: slot.slotId,
+        classification: classification as GptHarvestIncident['classification'],
+        evidencePaths,
+      });
+      continue;
+    }
+    nonHarvestIncompleteSources.push({
+      sourceSlotId: slot.slotId,
+      classification,
+      timedOut: terminal.process_timed_out === true || terminal.process_exit_code === 124,
+      cancelled: terminal.process_cancelled === true,
+    });
+  }
+  return { harvestIncidents, nonHarvestIncompleteSources };
+}
+
 function validatePersistedGptReviewPayload(
   runId: string,
   payload: ReviewPayload,
@@ -671,10 +726,13 @@ function validatePersistedGptReviewPayload(
     findingCount: payload.findingCount,
     findings: payload.findings,
   }, options);
+  const persisted = getPackReviewRun(runId, options);
+  const diagnostics = gptRoundDiagnostics(persisted?.reviewRound);
   return {
     verdict: aggregate.reviewVerdict,
     findingCount: aggregate.findingCount,
     findings: aggregate.findings as ReviewPayloadFinding[],
+    ...(diagnostics.harvestIncidents.length > 0 ? { harvestIncidents: diagnostics.harvestIncidents } : {}),
   };
 }
 
@@ -705,15 +763,18 @@ function selectGithubReviewEvent(_payload: ReviewPayload): 'COMMENT' {
 }
 
 function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload): string {
+  const hasHarvestIncident = (payload.harvestIncidents?.length ?? 0) > 0;
   const lines = [
-    `## Pack review — ${payload.verdict === 'clean' && payload.findingCount === 0 ? 'no findings' : 'findings'}`,
+    `## Pack review — ${hasHarvestIncident && payload.findingCount === 0
+      ? 'review harvest failed'
+      : payload.verdict === 'clean' && payload.findingCount === 0 ? 'no findings' : 'findings'}`,
     '',
     `Run: \`${run.id}\``,
     `Head: \`${run.targetSha}\``,
     '',
   ];
   if (payload.findings.length === 0) {
-    lines.push('No findings.', '');
+    lines.push(hasHarvestIncident ? 'No accepted review findings.' : 'No findings.', '');
   } else {
     payload.findings.forEach((value, index) => {
       const finding = asReviewPayloadFinding(value);
@@ -726,6 +787,16 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
       if (finding.body) lines.push(finding.body, '');
       if (finding.filePath) lines.push(`Path: \`${finding.filePath}\``, '');
     });
+  }
+  if (hasHarvestIncident) {
+    lines.push('## Review harvest incidents', '');
+    for (const incident of payload.harvestIncidents ?? []) {
+      lines.push(`### ${incident.sourceSlotId}: ${incident.classification}`, '');
+      for (const [label, path] of Object.entries(incident.evidencePaths)) {
+        lines.push(`${label}: \`${path}\``);
+      }
+      lines.push('');
+    }
   }
   lines.push('---', '_Automated review by orchestrator-pack pack-owned runner_');
   return lines.join('\n');
@@ -985,6 +1056,8 @@ const env: NodeJS.ProcessEnv = {
     ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),
     OPK_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_RUN_ID: options.runId,
+    PACK_REVIEW_PROJECT_ID: options.projectId,
+    PACK_REVIEW_RUN_STORE_ROOT: options.storeRoot,
     PACK_REVIEW_TARGET_HEAD_SHA: options.headSha,
     ...(options.frozenScope ? { PACK_REVIEW_FROZEN_SCOPE_JSON: JSON.stringify(options.frozenScope) } : {}),
     ...(options.sourceSlotId ? { PACK_REVIEW_GPT_SOURCE_SLOT: options.sourceSlotId } : {}),
@@ -1080,20 +1153,15 @@ function updateGptRoundSlot(
 }
 
 function terminalClassForGptResult(result: ProcessResult, terminal: GptTerminalTurnResult | null): string {
+  const harvestClass = trim(terminal?.review_harvest_class);
+  if (terminal && terminal.send_count >= 1 && GPT_HARVEST_CLASSES.has(harvestClass)) {
+    return harvestClass;
+  }
   if (terminal?.send_count !== undefined && terminal.send_count >= 1) {
     return terminal.state === 'ok' ? 'reviewer_output_malformed' : 'possible_delivery';
   }
   if (terminal) return `${terminal.state}:${terminal.cause}`;
   return 'possible_delivery/missing_result';
-}
-
-function incompleteGptFinding(slot: PackReviewSourceSlotRecord): ReviewPayloadFinding {
-  return {
-    title: `GPT source ${slot.slotId} did not complete`,
-    body: `The frozen GPT source slot settled as ${slot.terminalClass ?? 'non-complete'}; the round cannot be clean.`,
-    severity: 'blocking',
-    sourceSlotId: slot.slotId,
-  };
 }
 
 async function runGptSourceBatch(options: {
@@ -1214,12 +1282,26 @@ async function runGptSourceBatch(options: {
       }
     }
     const currentSlot = round.sourceSlots.find((slot) => slot.slotId === slotId)!;
+    const terminalResult = terminal
+      ? {
+          ...terminal,
+          process_exit_code: invocation.result.exitCode,
+          process_timed_out: invocation.result.timedOut,
+          process_cancelled: invocation.result.cancelled,
+        }
+      : {
+          exitCode: invocation.result.exitCode,
+          stderr: invocation.result.stderr,
+          process_exit_code: invocation.result.exitCode,
+          process_timed_out: invocation.result.timedOut,
+          process_cancelled: invocation.result.cancelled,
+        };
     round = updateGptRoundSlot(options.run.id, round, slotId, {
       lifecycle: 'terminal',
       attemptOrdinal,
       invocationId: terminal?.invocation_id,
       terminalClass,
-      terminalResult: terminal ?? { exitCode: invocation.result.exitCode, stderr: invocation.result.stderr },
+      terminalResult,
       ...(payload ? { payload } : {}),
     }, { projectId: options.projectId, storeRoot: options.storeRoot });
     if (options.input.fixtureAfterGptSourceSlotTerminal) {
@@ -1230,14 +1312,11 @@ async function runGptSourceBatch(options: {
 
   const findings: ReviewPayloadFinding[] = [];
   for (const outcome of outcomes) {
-    if (outcome.payload) {
-      findings.push(...outcome.payload.findings.map((finding) => ({
-        ...finding,
-        sourceSlotId: outcome.slot.slotId,
-      })));
-    } else {
-      findings.push(incompleteGptFinding(outcome.slot));
-    }
+    if (!outcome.payload) continue;
+    findings.push(...outcome.payload.findings.map((finding) => ({
+      ...finding,
+      sourceSlotId: outcome.slot.slotId,
+    })));
   }
   return {
     verdict: findings.length > 0 ? 'findings' : 'clean',
@@ -2461,6 +2540,88 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       const persistedRun = getPackReviewRun(run.id, { projectId, storeRoot });
       if (!persistedRun) throw new Error(`pack review run ${run.id} disappeared before GPT settlement`);
       run = persistedRun;
+
+      const diagnostics = gptRoundDiagnostics(run.reviewRound);
+      const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+        repoRoot: target.sourceRepoRoot,
+        repoSlug: target.repoSlug,
+        headSha: target.headSha,
+        request,
+      }));
+      if (diagnostics.nonHarvestIncompleteSources.length > 0) {
+        const first = diagnostics.nonHarvestIncompleteSources[0]!;
+        const status: Extract<PackReviewRunStatus, 'failed' | 'timed_out' | 'cancelled'> = diagnostics.nonHarvestIncompleteSources.some((item) => item.cancelled)
+          ? 'cancelled'
+          : diagnostics.nonHarvestIncompleteSources.some((item) => item.timedOut)
+            ? 'timed_out'
+            : 'failed';
+        const failureReason = `gpt_source_non_complete:${first.sourceSlotId}:${first.classification}`;
+        await recordUnfinishedTerminal({
+          run,
+          status,
+          failureReason,
+          projectId,
+          storeRoot,
+          writeRequiredStatus,
+        });
+        terminal = true;
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: false,
+          created: true,
+          reused: false,
+          reason: failureReason,
+          runId: run.id,
+          status,
+          httpStatus: status === 'timed_out' ? 504 : 422,
+        };
+      }
+
+      if (diagnostics.harvestIncidents.length > 0 && !classifyPackReviewPayload(payload).blocking) {
+        payload = { ...payload, harvestIncidents: diagnostics.harvestIncidents };
+        const posted = await postGithubReview({
+          repoRoot: target.sourceRepoRoot,
+          repoSlug: target.repoSlug,
+          prNumber: target.prNumber,
+          headSha: target.headSha,
+          run,
+          payload,
+          projectId,
+          storeRoot,
+          transport: githubReviewTransport,
+        });
+        run = updatePackReviewRun(run.id, {
+          githubReviewId: posted.id,
+          githubReviewUrl: posted.url,
+          githubReviewEvent: 'COMMENT',
+        }, { projectId, storeRoot });
+        await recordUnfinishedTerminal({
+          run,
+          status: 'failed',
+          failureReason: 'harvest_failed',
+          projectId,
+          storeRoot,
+          writeRequiredStatus,
+        });
+        terminal = true;
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: false,
+          created: true,
+          reused: false,
+          reason: 'harvest_failed',
+          runId: run.id,
+          status: 'failed',
+          httpStatus: 422,
+          githubReviewId: posted.id,
+          githubReviewUrl: posted.url,
+        };
+      }
+      if (diagnostics.harvestIncidents.length > 0) {
+        payload = { ...payload, harvestIncidents: diagnostics.harvestIncidents };
+      }
     }
 
     authority = commitPackReviewTerminal({

@@ -57,12 +57,11 @@ function ok<T>(result: T): OrcaJsonResponse<T> {
 }
 
 describe('Issue #1359 real worker-smoke entrypoint', () => {
-  it('submits a pasted prompt, confirms first-ordinal evidence, and proves owned-handle absence', () => {
+  it('submits a pasted prompt, confirms first-ordinal evidence, and closes the frozen owned handle', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-entrypoint-1359-'));
     const bin = join(root, 'bin');
     const callsPath = join(root, 'orca-calls.jsonl');
     const promptPath = join(root, 'pasted-prompt.txt');
-    const absencePath = join(root, 'terminal-absent');
     const issueBodyPath = join(root, 'issue.md');
     mkdirSync(bin, { recursive: true });
 
@@ -96,23 +95,12 @@ const path = require('node:path');
 const args = process.argv.slice(2).filter((value) => value !== '--json');
 appendFileSync(process.env.FAKE_ORCA_CALLS, JSON.stringify(args) + '\\n', 'utf8');
 const root = process.env.FAKE_ORCA_ROOT;
+const startupPath = path.join(root, 'agent-started');
 const head = process.env.FAKE_ORCA_HEAD;
-const calls = readFileSync(process.env.FAKE_ORCA_CALLS, 'utf8')
-  .split(/\\r?\\n/u)
-  .filter((line) => line.trim())
-  .map((line) => JSON.parse(line));
-const showCallCount = calls
-  .filter((entry) => entry[0] === 'terminal' && entry[1] === 'show')
-  .length;
-const listCallCount = calls
-  .filter((entry) => entry[0] === 'terminal' && entry[1] === 'list')
-  .length;
 const terminal = {
   handle: 'terminal-1359',
-  title: 'smoke-1359',
-  incarnationId: showCallCount >= 2
-    ? 'dispatch-generation-1359'
-    : 'spawn-generation-1359',
+  title: 'smoke-1359-renamed',
+  incarnationId: 'stable-generation-1359',
   worktreePath: root,
   status: 'running',
 };
@@ -125,26 +113,21 @@ const fail = (code, message) => {
 if (args[0] === 'worktree' && args[1] === 'current') {
   ok({ worktree: { path: root, head, linkedIssue: 1359 } });
 } else if (args[0] === 'terminal' && args[1] === 'create') {
-  ok({ terminal: { ...terminal, incarnationId: 'create-generation-1359' } });
+  ok({ terminal: { ...terminal, title: 'smoke-1359', incarnationId: 'create-generation-1359' } });
 } else if (args[0] === 'terminal' && args[1] === 'show') {
-  if (existsSync(process.env.FAKE_ORCA_ABSENCE)) {
-    fail('terminal_not_found', 'terminal is no longer alive');
-  } else {
-    ok({ terminal });
-  }
+  ok({ terminal });
 } else if (args[0] === 'terminal' && args[1] === 'list') {
-  if (listCallCount >= 3) {
-    writeFileSync(process.env.FAKE_ORCA_ABSENCE, 'absent\\n', 'utf8');
-    ok({ terminals: [] });
-  } else {
-    ok({ terminals: [terminal] });
-  }
+  ok({ terminals: [] });
 } else if (args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')) {
   const text = args[args.indexOf('--text') + 1] || '';
   writeFileSync(process.env.FAKE_ORCA_PROMPT, text, 'utf8');
   ok({ sent: true });
 } else if (args[0] === 'terminal' && args[1] === 'send' && args.includes('--enter')) {
-  const text = readFileSync(process.env.FAKE_ORCA_PROMPT, 'utf8');
+  if (!existsSync(process.env.FAKE_ORCA_PROMPT)) {
+    writeFileSync(startupPath, 'started', 'utf8');
+    ok({ sent: true, startup: true });
+  } else {
+    const text = readFileSync(process.env.FAKE_ORCA_PROMPT, 'utf8');
   const runId = /run-id:\\s*([^\\r\\n]+)/u.exec(text)?.[1]?.trim();
   const artifactDir = /artifact-dir:\\s*([^\\r\\n]+)/u.exec(text)?.[1]?.trim();
   const progressPath = /Progress file:\\s*([^\\r\\n]+)/u.exec(text)?.[1]?.trim();
@@ -176,10 +159,17 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     );
     ok({ sent: true });
   }
+  }
 } else if (args[0] === 'terminal' && args[1] === 'close') {
-  fail('unexpected_close', 'owned terminal was already absent and must not be closed by handle');
+  ok({ closed: true });
 } else if (args[0] === 'terminal' && args[1] === 'read') {
-  ok({ terminal: { handle: terminal.handle, status: 'running', tail: [], nextCursor: '1' } });
+  const started = existsSync(startupPath);
+  ok({ terminal: {
+    handle: terminal.handle,
+    status: 'running',
+    tail: started ? ['Cursor Agent', 'v2026.08.04-test'] : ['$ cursor-agent'],
+    nextCursor: started ? '2' : '1',
+  } });
 } else if (args[0] === 'terminal' && args[1] === 'wait') {
   ok({ wait: { handle: terminal.handle, condition: 'tui-idle', satisfied: true, status: 'running' } });
 } else {
@@ -207,7 +197,6 @@ if (args[0] === 'worktree' && args[1] === 'current') {
           FAKE_ORCA_ROOT: root,
           FAKE_ORCA_HEAD: head,
           FAKE_ORCA_PROMPT: promptPath,
-          FAKE_ORCA_ABSENCE: absencePath,
           WORKER_SMOKE_SUBMIT_CONFIRMATION_TIMEOUT_MS: '20',
         },
       });
@@ -269,21 +258,33 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       const sendIndexes = operations
         .map((value, index) => value === 'terminal send' ? index : -1)
         .filter((index) => index >= 0);
+      const readIndexes = operations
+        .map((value, index) => value === 'terminal read' ? index : -1)
+        .filter((index) => index >= 0);
       expect(createIndex).toBeGreaterThanOrEqual(0);
-      expect(showIndexes.length).toBeGreaterThanOrEqual(2);
-      expect(sendIndexes).toHaveLength(2);
-      expect(calls[sendIndexes[0]!] ?? []).toContain('--text');
-      expect(calls[sendIndexes[1]!] ?? []).not.toContain('--text');
-      expect(calls[sendIndexes[1]!] ?? []).toContain('--enter');
-      expect(operations.filter((value) => value === 'terminal close')).toHaveLength(0);
-      expect(operations.filter((value) => value === 'terminal list').length).toBeGreaterThanOrEqual(3);
+      expect(showIndexes.length).toBeGreaterThanOrEqual(3);
+      expect(sendIndexes).toHaveLength(3);
+      expect(calls[sendIndexes[0]!] ?? []).not.toContain('--text');
+      expect(calls[sendIndexes[0]!] ?? []).toContain('--enter');
+      expect(calls[sendIndexes[1]!] ?? []).toContain('--text');
+      expect(calls[sendIndexes[1]!] ?? []).not.toContain('--enter');
+      expect(calls[sendIndexes[2]!] ?? []).not.toContain('--text');
+      expect(calls[sendIndexes[2]!] ?? []).toContain('--enter');
+      expect(readIndexes.some((index) => index > createIndex && index < sendIndexes[0]!)).toBe(true);
+      expect(readIndexes.some((index) => index > sendIndexes[0]! && index < sendIndexes[1]!)).toBe(true);
+      expect(readIndexes.some((index) => index > sendIndexes[1]! && index < sendIndexes[2]!)).toBe(true);
+      const postSubmitReadIndex = readIndexes.find((index) => index > sendIndexes[2]!);
+      expect(postSubmitReadIndex).toBeDefined();
+      expect(calls[postSubmitReadIndex!] ?? []).toContain('--cursor');
+      expect(operations.filter((value) => value === 'terminal close')).toHaveLength(1);
+      expect(operations.filter((value) => value === 'terminal list')).toHaveLength(0);
       expect(createHash('sha256').update(readFileSync(wrapper), 'utf8').digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('treats exact owned-handle absence as closed without consulting a foreign sibling', () => {
+  it('keeps a missing-handle-like close observation unproven without consulting a foreign sibling', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-owned-absent-'));
     const owned: OrcaTerminalSummary = {
       handle: 'terminal-owned',
@@ -306,14 +307,25 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
-        return ok({ terminals: [foreign] } as T);
-      }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal: owned } as T);
+      if (args[0] === 'terminal' && args[1] === 'list') return ok({ terminals: [foreign] } as T);
+      throw new Error(`unexpected owned-absence fixture operation: ${args.join(' ')}`);
     };
+    let probeCalls = 0;
+    const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
+      probe: () => {
+        const attempt = ++probeCalls;
+        if (attempt === 1) return ok({ terminal: owned });
+        const unresolved: OrcaJsonResponse<{ terminal?: OrcaTerminalSummary }> = {
+          ok: false,
+          operation: 'terminal_show',
+          outcomeCategory: 'supported_operation_failure',
+          error: { code: 'terminal_not_found', message: 'terminal is no longer alive' },
+        };
+        return unresolved;
+      },
+    });
 
     try {
       const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
@@ -324,14 +336,16 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(spawned.status).toBe('ok');
       if (spawned.status !== 'ok') return;
 
-      expect(runtimeClose(adapter, spawned.value.identity, { cwd: root }))
-        .toBe('closed_owned_handle');
-      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'list'))
-        .toHaveLength(1);
-      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'close'))
-        .toBe(false);
+      const outcome = runtimeClose(adapter, spawned.value.identity, { cwd: root });
+      expect(outcome).toContain('close_failed:unproven_already_absent');
+      expect(outcome).toContain('worker_generation_unresolved');
+      expect(outcome).toContain('presence=unproven');
+      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'list')).toHaveLength(0);
+      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'close')).toBe(false);
       expect(calls.some((args) => args.includes(foreign.handle!))).toBe(false);
+      expect(probeCalls).toBeGreaterThanOrEqual(2);
     } finally {
+      restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -352,20 +366,24 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal: owned } as T);
+      throw new Error(args.join(' '));
+    };
+    let probeCalls = 0;
+    const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
+      probe: () => {
+        probeCalls += 1;
+        if (probeCalls === 1) return ok({ terminal: owned });
         return {
           ok: false,
+          operation: 'terminal_show',
           outcomeCategory: 'supported_operation_failure',
           error: { code: 'inventory_unavailable', message: 'runtime inventory unavailable' },
         };
-      }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
-    };
+      },
+    });
 
-    // Keep this negative-path fixture visibly distinct from the close-failure fixture.
     try {
       const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
       const spawned = adapter.spawnWorker(
@@ -377,13 +395,12 @@ if (args[0] === 'worktree' && args[1] === 'current') {
 
       const outcome = runtimeClose(adapter, spawned.value.identity, { cwd: root });
       expect(outcome).toContain('close_failed:unproven_already_absent');
-      expect(outcome).toContain('inventory_error=list_workers:failed:runtime_operation_failed');
+      expect(outcome).toContain('worker_generation_unresolved');
       expect(outcome).toContain('presence=unproven');
-      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'list'))
-        .toHaveLength(1);
-      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'close'))
-        .toBe(false);
+      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'close')).toBe(false);
+      expect(probeCalls).toBeGreaterThanOrEqual(2);
     } finally {
+      restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -400,25 +417,28 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     const calls: string[][] = [];
     const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
       calls.push([...args]);
-      if (args[0] === 'terminal' && args[1] === 'create') {
-        return ok({ terminal } as T);
-      }
+      if (args[0] === 'terminal' && args[1] === 'create') return ok({ terminal } as T);
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
-        return ok({ terminals: [terminal] } as T);
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal } as T);
+      if (args[0] === 'terminal' && args[1] === 'send') return ok({ sent: true } as T);
+      if (args[0] === 'terminal' && args[1] === 'read') {
+        return ok({
+          terminal: {
+            handle: terminal.handle,
+            status: 'running',
+            tail: ['prompt remains in composer'],
+            nextCursor: '1',
+          },
+        } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'send') {
-        return ok({ sent: true } as T);
-      }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      if (args[0] === 'terminal' && args[1] === 'close') return ok({ closed: true } as T);
+      throw new Error(args.join(' '));
     };
     let clock = 0;
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => ok({ terminal }),
       deliveryProbe: () => false,
       deliveryConfirmationTimeoutMs: 4,
@@ -443,37 +463,49 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(dispatched.status).toBe('send_failed');
       if (dispatched.status === 'send_failed') {
         expect(dispatched.reason).toContain('prompt_submission_unconfirmed');
-        expect(dispatched.reason).toContain('submit_attempts=2');
-        expect(dispatched.reason).toContain('initial_submit=dispatched');
-        expect(dispatched.reason).toContain('retry_submit=dispatched');
+        expect(dispatched.reason).toContain('runtime_prompt_write=dispatched');
+        expect(dispatched.reason).toContain('runtime_submit_write=dispatched');
+        expect(dispatched.reason).toContain('pane_observation=unchanged_after_submit');
+        expect(dispatched.reason).toContain('child_delivery=unconfirmed');
         expect(dispatched.reason).toContain('delivery_evidence=');
+        expect(dispatched.reason).toContain('preservation=owned_child_panel_preserved');
         expect(dispatched.reason).toContain('resolution=');
+        expect(dispatched.reason).not.toContain('initial_submit=');
+        expect(dispatched.reason).not.toContain('retry_submit=');
       }
       const sends = calls.filter((args) => args[0] === 'terminal' && args[1] === 'send');
+      const reads = calls.filter((args) => args[0] === 'terminal' && args[1] === 'read');
       expect(sends).toHaveLength(2);
       expect(sends[0]).toContain('--text');
       expect(sends[1]).not.toContain('--text');
       expect(sends[1]).toContain('--enter');
+      expect(reads).toHaveLength(2);
+      expect(reads[1]).toContain('--cursor');
+
+      const closeOutcome = runtimeClose(adapter, spawned.value.identity, { cwd: root });
+      expect(closeOutcome).toContain('close_failed:delivery_failure_evidence_preserved');
+      expect(closeOutcome).toContain('presence=present');
+      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'close')).toHaveLength(0);
     } finally {
       restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('resolves the current generation before read and reaches plan_complete with a sealed report', () => {
+  it('keeps the established generation frozen while read reaches plan_complete', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-read-generation-'));
     const artifactDir = join(root, 'run-read-generation');
     const runId = 'run-read-generation';
     const handle = 'terminal-read-generation';
     const title = 'smoke-read-generation-1359';
-    let currentGeneration = 'create-generation';
+    const frozenGeneration = 'frozen-generation';
     let probeCalls = 0;
     let readCalls = 0;
     let waitCalls = 0;
     const terminal = (): OrcaTerminalSummary => ({
       handle,
       title,
-      incarnationId: currentGeneration,
+      incarnationId: frozenGeneration,
       worktreePath: root,
       status: 'running',
     });
@@ -484,12 +516,8 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
-        return ok({ terminals: [terminal()] } as T);
-      }
-      if (args[0] === 'terminal' && args[1] === 'send') {
-        return ok({ sent: true } as T);
-      }
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal: terminal() } as T);
+      if (args[0] === 'terminal' && args[1] === 'send') return ok({ sent: true } as T);
       if (args[0] === 'terminal' && args[1] === 'read') {
         readCalls += 1;
         return ok({
@@ -512,19 +540,12 @@ if (args[0] === 'worktree' && args[1] === 'current') {
           },
         } as T);
       }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => {
         probeCalls += 1;
-        currentGeneration = probeCalls === 1
-          ? 'spawn-generation'
-          : probeCalls === 2
-            ? 'dispatch-generation'
-            : 'read-generation';
         return ok({ terminal: terminal() });
       },
     });
@@ -563,14 +584,14 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       );
       expect(spawned.status).toBe('ok');
       if (spawned.status !== 'ok') return;
-      expect(spawned.value.identity.generation).toBe('spawn-generation');
+      expect(spawned.value.identity.generation).toBe(frozenGeneration);
 
       const dispatched = adapter.dispatchInput({
         worker: spawned.value.identity,
         text: 'execute the sealed-report scenario',
       }, { cwd: root });
       expect(dispatched.status).toBe('dispatched');
-      expect(spawned.value.identity.generation).toBe('dispatch-generation');
+      expect(spawned.value.identity.generation).toBe(frozenGeneration);
 
       ensureSmokeRunArtifactDir(artifactDir);
       const completion = waitForRuntimeSmokeCompletion({
@@ -595,8 +616,8 @@ if (args[0] === 'worktree' && args[1] === 'current') {
 
       expect(readCalls).toBeGreaterThan(0);
       expect(waitCalls).toBeGreaterThan(0);
-      expect(probeCalls).toBeGreaterThanOrEqual(4);
-      expect(spawned.value.identity.generation).toBe('read-generation');
+      expect(probeCalls).toBeGreaterThan(0);
+      expect(spawned.value.identity.generation).toBe(frozenGeneration);
       expect(completion).toMatchObject({
         ok: true,
         partial: { result: 'PASS' },
@@ -608,7 +629,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     }
   });
 
-  it('refuses bounded output actionably when the exact handle is truly absent', () => {
+  it('refuses bounded output when exact-handle observation is unresolved', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-read-handle-absent-'));
     const handle = 'terminal-read-absent';
     const title = 'smoke-read-absent-1359';
@@ -628,16 +649,15 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
       }
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal } as T);
       if (args[0] === 'terminal' && args[1] === 'read') {
         readCalls += 1;
         return ok({ terminal: { handle, status: 'running', tail: [], nextCursor: '1' } } as T);
       }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => {
         probeCalls += 1;
         return probeCalls === 1 ? ok({ terminal }) : ok({});
@@ -660,7 +680,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(read.status).toBe('failed');
       if (read.status === 'failed') {
         expect(read.operation).toBe('read_bounded_output');
-        expect(read.reason).toContain('worker_generation_not_found');
+        expect(read.reason).toContain('worker_generation_unresolved');
         expect(read.reason).toContain(`expected_handle=${handle}`);
         expect(read.reason).toContain('lookup_failure=terminal_show%3Amissing_terminal');
         expect(read.reason).toContain('resolution=');
@@ -708,6 +728,61 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(receipt.cause?.detail).toContain('"scenarioOrdinal":1');
       expect(receipt.cause?.detail).toContain('"kind":"non_error_object"');
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies a missing Cursor Agent banner as a transport startup failure', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-agent-start-'));
+    const terminal: OrcaTerminalSummary = {
+      handle: 'terminal-agent-start',
+      title: 'agent-start',
+      incarnationId: 'generation-agent-start',
+      worktreePath: root,
+      status: 'running',
+    };
+    const calls: string[][] = [];
+    const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      calls.push([...args]);
+      if (args[0] === 'terminal' && args[1] === 'create') return ok({ terminal } as T);
+      if (args[0] === 'worktree' && args[1] === 'current') {
+        return ok({ worktree: { path: root, head: '1'.repeat(40) } } as T);
+      }
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal } as T);
+      if (args[0] === 'terminal' && args[1] === 'send') return ok({ sent: true } as T);
+      if (args[0] === 'terminal' && args[1] === 'read') {
+        return ok({ terminal: {
+          handle: terminal.handle,
+          status: 'running',
+          tail: ['$ cursor-agent'],
+          nextCursor: '1',
+        } } as T);
+      }
+      return { ok: false, error: { code: 'unexpected_test_operation', message: args.join(' ') } };
+    };
+    const restore = installStableWorkerSmokeSpawnPatch({
+      probe: () => ok({ terminal }),
+    });
+
+    try {
+      const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
+      const spawned = adapter.spawnWorker(
+        { title: 'agent-start', command: 'cursor-agent', workspace: 'active' },
+        { cwd: root, timeoutMs: 20 },
+      );
+
+      expect(spawned.status).toBe('failed');
+      if (spawned.status === 'failed') {
+        expect(spawned.reason).toContain('worker_agent_not_started');
+        expect(spawned.reason).toContain('agent_banner=missing');
+        expect(spawned.reason).not.toContain('prompt_delivery_unconfirmed');
+      }
+      const sends = calls.filter((args) => args[0] === 'terminal' && args[1] === 'send');
+      expect(sends).toHaveLength(1);
+      expect(sends[0]).not.toContain('--text');
+      expect(sends[0]).toContain('--enter');
+    } finally {
+      restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
