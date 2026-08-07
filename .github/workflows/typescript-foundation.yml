@@ -172,11 +172,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$(git log -1 --pretty=%s)" != "chore(ci): retry PN smoke census reconcile" ]; then
+          if [ "$(git log -1 --pretty=%s)" != "chore(ci): finalize PN smoke census reconcile" ]; then
             echo "one-shot census reconciliation already consumed"
             exit 0
           fi
-          test "$(git rev-parse HEAD^)" = "77eddc7a58fdcce991496c75ea1887b39d468459"
+          test "$(git rev-parse HEAD^)" = "1e58d3a5daf32cf62c35e0df25fe29498f9d6b63"
           node <<'NODE'
           const fs = require('node:fs');
           const crypto = require('node:crypto');
@@ -221,10 +221,9 @@ jobs:
           fs.writeFileSync(generationPath, `${JSON.stringify(generation, null, 2)}\n`);
 
           let census = fs.readFileSync(censusPath, 'utf8');
-          const oldLiteral = `const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '${oldDigest}' as const;`;
-          const newLiteral = `const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '${digest}' as const;`;
-          if (census.split(oldLiteral).length !== 2) throw new Error('expected exactly one census digest literal');
-          census = census.replace(oldLiteral, newLiteral);
+          const matches = [...census.matchAll(/const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '[0-9a-f]{64}';/g)];
+          if (matches.length !== 1) throw new Error(`expected exactly one census digest literal; found ${matches.length}`);
+          census = census.replace(matches[0][0], `const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '${digest}';`);
           fs.writeFileSync(censusPath, census);
 
           let manifestGenerator = fs.readFileSync(manifestGeneratorPath, 'utf8');
