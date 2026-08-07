@@ -74,6 +74,7 @@ export interface HistoricalSmokeQuarantine {
 interface TrackedSmokeWorkerRecord {
   readonly worker: RuntimeWorker;
   readonly originalIdentity: RuntimeWorkerIdentity;
+  preserveOwnedPanelOnDeliveryFailure: boolean;
 }
 
 type TrackedSmokeWorkerRefresh =
@@ -439,6 +440,7 @@ export function installStableWorkerSmokeSpawnPatch(
       const tracked: TrackedSmokeWorkerRecord = {
         worker: stabilized.worker,
         originalIdentity: result.value.identity,
+        preserveOwnedPanelOnDeliveryFailure: false,
       };
       spawnedSmokeWorkers.set(stabilized.worker.identity, tracked);
       spawnedSmokeWorkers.set(result.value.identity, tracked);
@@ -454,6 +456,7 @@ export function installStableWorkerSmokeSpawnPatch(
       input: Parameters<OrcaTaskRuntimeAdapter['dispatchInput']>[0],
       callOptions: RuntimeCallOptions = {},
     ): RuntimeDispatchResult {
+      const tracked = spawnedSmokeWorkers.get(input.worker);
       const refreshed = refreshTrackedSmokeWorker({
         identity: input.worker,
         cwd: callOptions.cwd ?? process.cwd(),
@@ -484,10 +487,31 @@ export function installStableWorkerSmokeSpawnPatch(
 
       if (deliveryProbe(binding)) return { status: 'dispatched' };
 
+      const baseline = originalReadBoundedOutput.call(this, {
+        worker: input.worker,
+        limit: 200,
+      }, callOptions);
       const retried = originalDispatch.call(this, {
         worker: input.worker,
         submitOnly: true,
       }, callOptions);
+      const postSubmitRead = originalReadBoundedOutput.call(this, {
+        worker: input.worker,
+        ...(baseline.status === 'ok'
+          ? { previousToken: baseline.value.observationToken }
+          : {}),
+        limit: 200,
+      }, callOptions);
+      const paneObservation = baseline.status !== 'ok'
+        ? postSubmitRead.status === 'ok'
+          ? `baseline_${baseline.status}_post_submit_unbound`
+          : `baseline_${baseline.status}_post_submit_${postSubmitRead.status}`
+        : postSubmitRead.status !== 'ok'
+          ? `post_submit_${postSubmitRead.status}`
+          : postSubmitRead.value.changed
+            ? 'changed_after_submit'
+            : 'unchanged_after_submit';
+
       if (waitForDeliveryConfirmation({
         binding,
         deadline: finalDeadline,
@@ -496,15 +520,19 @@ export function installStableWorkerSmokeSpawnPatch(
         sleepMs,
       })) return { status: 'dispatched' };
 
+      if (tracked) tracked.preserveOwnedPanelOnDeliveryFailure = true;
+      const submissionObserved = paneObservation === 'changed_after_submit';
       return {
         status: 'send_failed',
         reason: [
-          'prompt_submission_unconfirmed',
-          'submit_attempts=2',
-          `initial_submit=${safeToken(dispatchDiagnostic(result))}`,
-          `retry_submit=${safeToken(dispatchDiagnostic(retried))}`,
+          submissionObserved ? 'prompt_delivery_unconfirmed' : 'prompt_submission_unconfirmed',
+          `runtime_prompt_write=${safeToken(dispatchDiagnostic(result))}`,
+          `runtime_submit_write=${safeToken(dispatchDiagnostic(retried))}`,
+          `pane_observation=${safeToken(paneObservation)}`,
+          'child_delivery=unconfirmed',
           `delivery_evidence=${safeToken(binding.sealPath)}:missing`,
-          'resolution=inspect_the_child_delivery_seal_and_terminal_submit_transport_then_retry_from_the_exact_pr_head',
+          'preservation=owned_child_panel_preserved',
+          'resolution=inspect_the_preserved_child_panel_and_delivery_seal_then_retry_from_the_exact_pr_head',
         ].join(';'),
       };
     },
@@ -566,6 +594,13 @@ export function installStableWorkerSmokeSpawnPatch(
     ): ReturnType<OrcaTaskRuntimeAdapter['stopWorker']> {
       const tracked = spawnedSmokeWorkers.get(worker);
       if (!tracked) return originalStop.call(this, worker, callOptions);
+      if (tracked.preserveOwnedPanelOnDeliveryFailure) {
+        return {
+          status: 'failed',
+          operation: 'stop_worker',
+          reason: 'delivery_failure_evidence_preserved',
+        };
+      }
       return originalStop.call(this, tracked.originalIdentity, callOptions);
     },
   });
@@ -673,7 +708,8 @@ export function quarantineUnsupportedHistoricalSmokeRuns(
         source: `.orca-worker-smoke/runs/${runId}`,
         quarantine: `.orca-worker-smoke/quarantine/${runId}`,
         quarantinedAt: new Date().toISOString(),
-      })}\n`, 'utf8');
+      })}\
+`, 'utf8');
       mkdirSync(join(repoRoot, '.orca-worker-smoke', 'quarantine'), { recursive: true });
       renameSync(sourcePath, quarantinePath);
       quarantined.push({ runId, sourcePath, quarantinePath, cause });
