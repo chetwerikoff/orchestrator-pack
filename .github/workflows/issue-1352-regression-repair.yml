@@ -34,6 +34,7 @@ jobs:
           fi
           python - <<'PY'
           import json
+          import re
           from pathlib import Path
 
           def replace_exact(path: str, old: str, new: str, count: int = 1) -> None:
@@ -141,15 +142,13 @@ jobs:
 
           reeval_path = Path('scripts/review-trigger-reeval.test.ts')
           reeval = reeval_path.read_text(encoding='utf-8')
-          old_reeval = """    expect(
-              findForbiddenReviewReevalCommands(['ao-review run opk-1']),
-            ).toHaveLength(0);"""
-          new_reeval = """    expect(
-              findForbiddenReviewReevalCommands(['ao-review run opk-1']),
-            ).toHaveLength(1);"""
-          if reeval.count(old_reeval) != 1:
-              raise SystemExit('unexpected ao-review allowance assertion count')
-          reeval_path.write_text(reeval.replace(old_reeval, new_reeval, 1), encoding='utf-8')
+          pattern = re.compile(
+              r"(findForbiddenReviewReevalCommands\(\['ao-review run opk-1'\]\),\s*\)\.toHaveLength\()0(\);)",
+          )
+          reeval, count = pattern.subn(lambda match: f'{match.group(1)}1{match.group(2)}', reeval)
+          if count != 1:
+              raise SystemExit(f'unexpected ao-review allowance assertion count: {count}')
+          reeval_path.write_text(reeval, encoding='utf-8')
 
           declaration_path = Path('docs/declarations/1352.pr-scope.json')
           declaration = json.loads(declaration_path.read_text(encoding='utf-8'))
