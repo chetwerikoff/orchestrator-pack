@@ -92,7 +92,12 @@ export function extractLastGptTurnResult(stdout: string): GptTurnResultV1 | null
         || typeof parsed.cause !== 'string'
         || typeof parsed.invocation_id !== 'string'
         || !Number.isInteger(parsed.send_count)) continue;
-      return parsed as GptTurnResultV1;
+      const {
+        review_evidence: _reviewEvidence,
+        review_harvest_class: _reviewHarvestClass,
+        ...terminal
+      } = parsed as GptTurnResultV1;
+      return terminal as GptTurnResultV1;
     } catch {
       // Heartbeats and diagnostic text are not terminal turn results.
     }
