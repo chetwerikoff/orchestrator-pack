@@ -24,11 +24,27 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Run fixture
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Diagnose historical replay
         shell: bash
         run: |
           git config user.name 'fixture-smoke'
           git config user.email 'fixture-smoke@example.invalid'
+          echo '--- three-dot changed paths ---'
+          git diff --name-only 6e9614d0c9ce0c34b41a731059df4398b770c162...de03343f3f71f0c673157e055bf47f62700a576b --
+          rm -rf /tmp/pr1376-merge
+          git worktree add --detach /tmp/pr1376-merge 46577050ac1725f689ee067a399ae7855852a0e2
+          node --input-type=module <<'NODE'
+          import { buildHeavyTopology } from './scripts/lib/vitest-heavy-topology.mjs';
+          const exact = buildHeavyTopology('/tmp/pr1376-merge');
+          console.log('exact-merge-full', JSON.stringify({ok: exact.ok, unresolved: exact.ok ? exact.topology.unresolvedGuardWeights.length : null, discovered: exact.ok ? exact.discovered.length : null, errors: exact.errors ?? null}));
+          NODE
+          git worktree remove --force /tmp/pr1376-merge
+      - name: Run fixture
+        shell: bash
+        run: |
           set +e
           node scripts/lib/vitest-runtime-history-merge.fixture.mjs
           code=$?
