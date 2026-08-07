@@ -77,7 +77,29 @@ function terminalTurnPayload(input: {
   });
 }
 
-function findingsPayload(title: string): string {
+function harvestTerminalPayload(
+  invocationId: string,
+  harvestClass: 'harvest_failed' | 'no_reply' | 'forbidden_verdict_envelope' = 'harvest_failed',
+): string {
+  const evidenceRoot = `/fixture/gpt-evidence/${invocationId}`;
+  return JSON.stringify({
+    schema: 'turn-result/v1',
+    state: harvestClass === 'no_reply' ? 'no_reply' : 'ok',
+    scope: 'invocation',
+    cause: harvestClass === 'no_reply' ? 'no_reply' : 'completed_page_only',
+    invocation_id: invocationId,
+    send_count: 1,
+    review_harvest_class: harvestClass,
+    review_evidence: {
+      adapterPromptPath: `${evidenceRoot}/adapter-prompt.txt`,
+      terminalReplyPath: `${evidenceRoot}/terminal-reply.txt`,
+      mappingErrorPath: `${evidenceRoot}/mapping-error.txt`,
+      adapterStdoutPath: `${evidenceRoot}/adapter-stdout.json`,
+    },
+  });
+}
+
+function findingsPayload(title: string, severity = 'blocking'): string {
   return terminalTurnPayload({
     state: 'ok',
     cause: 'completed_page_only',
@@ -86,7 +108,7 @@ function findingsPayload(title: string): string {
   }) + String.fromCharCode(10) + JSON.stringify({
     verdict: 'findings',
     findingCount: 1,
-    findings: [{ title, body: 'body-' + title, severity: 'blocking' }],
+    findings: [{ title, body: 'body-' + title, severity }],
   });
 }
 
@@ -954,7 +976,7 @@ describe('GPT plural source round (Issue #1276)', () => {
       fixturePrState: 'OPEN',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD_A,
-      fixtureReviewStdout: cleanTerminalPayload(),
+      fixtureReviewStdout: successfulCleanReviewPayload('inv-plural-clean'),
       fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
       claimMode: 'preacquired',
     });
@@ -1093,7 +1115,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(readFileSync(capture, 'utf8')).toContain('finding-03');
   });
 
-  it('exhausts one zero-send collision retry without publishing clean', async () => {
+  it('exhausts one zero-send collision retry without publishing a verdict', async () => {
     const storeRoot = tempRoot('opk-gpt-zero-send-exhausted-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1119,11 +1141,16 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       attemptOrdinal: 2,
       terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
     });
-    expect(run?.reviewVerdict).toBe('findings');
-    expect(readFileSync(capture, 'utf8')).toContain('zero_send_collision_exhausted');
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'failed',
+      reason: 'gpt_source_non_complete:source-02:explicit_refusal:zero_send_collision_exhausted',
+    });
+    expect(run?.reviewVerdict).toBeUndefined();
+    expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
-  it('keeps a possible-delivery source non-retryable and non-clean', async () => {
+  it('keeps a possible-delivery source non-retryable and outside normal verdict publication', async () => {
     const storeRoot = tempRoot('opk-gpt-possible-delivery-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1143,7 +1170,76 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const uncertain = run?.reviewRound?.sourceSlots.find((slot) => slot.slotId === 'source-02');
     expect(uncertain?.terminalClass).toBe('possible_delivery');
     expect(uncertain?.attemptOrdinal).toBe(1);
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'failed',
+      reason: 'gpt_source_non_complete:source-02:possible_delivery',
+    });
+    expect(run?.reviewVerdict).toBeUndefined();
+    expect(() => readFileSync(capture, 'utf8')).toThrow();
+  });
+
+  it.each([
+    ['harvest_failed', successfulCleanReviewPayload('inv-source-01')],
+    ['harvest_failed with non-blocking finding', findingsPayload('non-blocking-real', 'non-blocking')],
+  ])('publishes diagnostic COMMENT and terminal error for %s without synthetic code findings', async (_name, sourceOne) => {
+    const storeRoot = tempRoot('opk-gpt-harvest-incident-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const statusStates: string[] = [];
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureRequiredStatusWriter: async (request) => {
+        statusStates.push(request.state);
+      },
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: sourceOne }],
+        'source-02': [{ stdout: harvestTerminalPayload('inv-source-02'), exitCode: 1 }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
+    }));
+
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(result).toMatchObject({ ok: false, status: 'failed', reason: 'harvest_failed' });
+    expect(run?.reviewVerdict).toBeUndefined();
+    expect(statusStates).toEqual(['pending', 'error']);
+    const posted = readFileSync(capture, 'utf8');
+    expect(posted).toContain('Review harvest incidents');
+    expect(posted).toContain('source-02');
+    expect(posted).toContain('harvest_failed');
+    expect(posted).toContain('/fixture/gpt-evidence/inv-source-02/adapter-prompt.txt');
+    expect(posted).not.toContain('GPT source source-02 did not complete');
+  });
+
+  it('keeps real blocking findings authoritative while reporting harvest incidents separately', async () => {
+    const storeRoot = tempRoot('opk-gpt-harvest-blocking-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: findingsPayload('real-blocker') }],
+        'source-02': [{ stdout: harvestTerminalPayload('inv-source-02'), exitCode: 1 }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
+    }));
+
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(result).toMatchObject({ ok: true, status: 'changes_requested' });
     expect(run?.reviewVerdict).toBe('findings');
+    expect(run?.findingCount).toBe(1);
+    expect(run?.findings).toHaveLength(1);
+    const posted = readFileSync(capture, 'utf8');
+    expect(posted).toContain('real-blocker');
+    expect(posted).toContain('Review harvest incidents');
+    expect(posted).toContain('harvest_failed');
+    expect(posted).not.toContain('GPT source source-02 did not complete');
   });
 
   it('terminalizes launched slots as possible-delivery evidence on stale recovery', () => {
