@@ -38,11 +38,11 @@ replace_exact(
     "    expect(callerSource).toContain(\n      '[System.IO.File]::WriteAllText($issueBodyFile.FullName, $issueBody, [System.Text.UTF8Encoding]::new($false))',\n    );",
 )
 
-# Use a committed runtime-neutral declaration fixture that still exists on current main.
+# Use a committed declaration fixture that validates against the current declaration schema.
 replace_exact(
     "plugins/codex-pr-reviewer/tests/review.test.ts",
     "const SCOPED_ISSUE_NUMBER = 6;",
-    "const SCOPED_ISSUE_NUMBER = 1228;",
+    "const SCOPED_ISSUE_NUMBER = 1117;",
 )
 replace_exact(
     "plugins/codex-pr-reviewer/tests/review.test.ts",
@@ -65,6 +65,14 @@ replace_exact(
     "scripts/pack-review-runner.ts",
     "    issueNumber: operatorStart?.issueNumber ?? (binding?.issueNumber ? Number(binding.issueNumber) : undefined),",
     "    issueNumber: operatorStart?.issueNumber ?? fixtureIssueNumber ?? (binding?.issueNumber ? Number(binding.issueNumber) : undefined),",
+)
+
+# Every GPT test gets its own runtime-neutral claim store. OPK_BASE_DIR alone is not enough
+# because the global Vitest harness also publishes the more-specific OPK_REVIEW_CLAIM_DIR.
+replace_exact(
+    "scripts/pack-review-runner-gpt.test.ts",
+    "  process.env.OPK_BASE_DIR = path.join(storeRoot, 'ao-base');\n}",
+    "  process.env.OPK_BASE_DIR = path.join(storeRoot, 'ao-base');\n  process.env.OPK_REVIEW_CLAIM_DIR = path.join(\n    storeRoot,\n    'ao-base',\n    'projects',\n    'orchestrator-pack',\n    'review-start-claims',\n  );\n}",
 )
 
 # Bind plural GPT fixtures explicitly and remove retired AO_* test authority.
