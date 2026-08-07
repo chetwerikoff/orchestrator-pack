@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
 import {
   runtimeFailure,
   runtimeUnsupported,
@@ -92,6 +93,14 @@ function nativeGeneration(terminal: OrcaTerminalSummary | OrcaTerminalHandle): s
 
 function identityKey(identity: RuntimeWorkerIdentity): string {
   return `${identity.runtime}\u0000${identity.id}\u0000${identity.generation}`;
+}
+
+function sameWorkspacePath(left: string, right: string): boolean {
+  const canonical = (value: string): string => {
+    const path = resolve(value).replaceAll('\\', '/');
+    return process.platform === 'win32' ? path.toLowerCase() : path;
+  };
+  return canonical(left) === canonical(right);
 }
 
 function normalizeTerminalRead(
@@ -350,22 +359,19 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const known = this.#knownWorkspace.get(identityKey(identity));
     const owned = this.#owned.get(identity.id);
-    const workspace = known?.workspaceSelector ?? owned?.workspaceSelector;
-    if (workspace) {
-      const listed = this.listWorkers({ workspace }, options);
-      if (listed.status !== 'ok') return listed;
-      return {
-        status: 'ok',
-        value: listed.value.find((worker) => sameRuntimeWorker(worker.identity, identity)) ?? null,
-      };
-    }
+    const expectedWorkspacePath = known?.workspacePath
+      ?? (owned && sameRuntimeWorker(owned.identity, identity) ? owned.workspacePath : null);
     const current = this.findWorkerById(identity.id, options);
     if (current.status !== 'ok') return current;
+    if (current.value === null) return current;
+    if (expectedWorkspacePath
+      && !sameWorkspacePath(current.value.workspacePath, expectedWorkspacePath)) {
+      if (known) this.#knownWorkspace.set(identityKey(identity), known);
+      return runtimeFailure('find_worker', 'worker_workspace_mismatch');
+    }
     return {
       status: 'ok',
-      value: current.value && sameRuntimeWorker(current.value.identity, identity)
-        ? current.value
-        : null,
+      value: sameRuntimeWorker(current.value.identity, identity) ? current.value : null,
     };
   }
 
@@ -391,30 +397,25 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       return runtimeUnsupported('spawn_worker', 'runtime_worker_create_shape_unsupported');
     }
 
-    let generation = nativeGeneration(terminal);
-    let discoveredWorkspacePath: string | null = null;
-    if (!generation) {
-      const listed = this.listWorkers({ workspace }, options);
-      if (listed.status !== 'ok') return listed;
-      const discovered = listed.value.find((candidate) => candidate.identity.id === handle);
-      if (!discovered) {
-        return runtimeUnsupported('spawn_worker', 'runtime_worker_generation_unresolved');
-      }
-      generation = discovered.identity.generation;
-      discoveredWorkspacePath = discovered.workspacePath;
-    }
-
     const readiness = workspace === 'active' ? this.readiness(options) : null;
-    const workspacePath = workspace === 'active'
+    const expectedWorkspacePath = workspace === 'active'
       ? readiness?.status === 'ok'
         ? readiness.value.workspacePath
         : options.cwd ?? this.#options.cwd ?? process.cwd()
       : workspace;
-    const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: handle, generation };
+    const established = this.findWorkerById(handle, options);
+    if (established.status !== 'ok' || established.value === null) {
+      return runtimeFailure('spawn_worker', 'worker_generation_unresolved');
+    }
+    if (!sameWorkspacePath(established.value.workspacePath, expectedWorkspacePath)) {
+      return runtimeFailure('spawn_worker', 'worker_workspace_mismatch');
+    }
+
+    const identity = established.value.identity;
     const worker: RuntimeWorker = {
       identity,
-      workspacePath: discoveredWorkspacePath ?? workspacePath,
-      title: terminal.title ?? input.title,
+      workspacePath: established.value.workspacePath,
+      title: established.value.title ?? terminal.title ?? input.title,
       provenance: 'internal',
     };
     this.#owned.set(handle, {
@@ -438,12 +439,21 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (input.worker.runtime !== 'orca') {
       return { status: 'send_failed', reason: 'runtime_identity_mismatch' };
     }
-    const current = this.findWorker(input.worker, options);
-    if (current.status !== 'ok') {
-      return { status: 'send_failed', reason: current.reason };
+    const known = this.#knownWorkspace.get(identityKey(input.worker));
+    const owned = this.#owned.get(input.worker.id);
+    const expectedWorkspacePath = known?.workspacePath
+      ?? (owned && sameRuntimeWorker(owned.identity, input.worker) ? owned.workspacePath : null);
+    const current = this.findWorkerById(input.worker.id, options);
+    if (current.status !== 'ok' || current.value === null) {
+      return { status: 'send_failed', reason: 'worker_generation_unresolved' };
     }
-    if (current.value === null) {
-      return { status: 'send_failed', reason: 'worker_generation_not_found' };
+    if (expectedWorkspacePath
+      && !sameWorkspacePath(current.value.workspacePath, expectedWorkspacePath)) {
+      if (known) this.#knownWorkspace.set(identityKey(input.worker), known);
+      return { status: 'send_failed', reason: 'worker_workspace_mismatch' };
+    }
+    if (!sameRuntimeWorker(current.value.identity, input.worker)) {
+      return { status: 'send_failed', reason: 'worker_generation_mismatch' };
     }
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');
