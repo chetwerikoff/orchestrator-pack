@@ -152,11 +152,31 @@ replace_exact(
 )
 
 pr_test = "scripts/pr-session-binding-cache.test.ts"
-for old, new in (
-    ("push_register_missing_session_identity", "push_register_session_verification_required"),
-    ("rejects env-only spoof without verified AO session corpus", "rejects env-only spoof without a caller-verified runtime worker corpus"),
-    ("push_register_session_verify_failed", "push_register_session_verification_required"),
-    ("/definitely/not/a/dir/cache.json", "/dev/null/cache.json"),
-    ("parses ao session get payload into worker row", "parses a captured legacy worker payload into a runtime-neutral row"),
-):
-    replace_exact(pr_test, old, new)
+replace_exact(
+    pr_test,
+    """    expect(register.registered).toBe(false);
+    expect(register.reason).toBe('push_register_missing_session_identity');
+  });
+
+  it('rejects env-only spoof without verified AO session corpus', () => {""",
+    """    expect(register.registered).toBe(false);
+    expect(register.reason).toBe('push_register_session_verification_required');
+  });
+
+  it('rejects env-only spoof without a caller-verified runtime worker corpus', () => {""",
+)
+replace_exact(
+    pr_test,
+    """    expect(register.registered).toBe(false);
+    expect(register.reason).toBe('push_register_session_verify_failed');
+  });""",
+    """    expect(register.registered).toBe(false);
+    expect(register.reason).toBe('push_register_session_verification_required');
+  });""",
+)
+replace_exact(pr_test, "/definitely/not/a/dir/cache.json", "/dev/null/cache.json")
+replace_exact(
+    pr_test,
+    "parses ao session get payload into worker row",
+    "parses a captured legacy worker payload into a runtime-neutral row",
+)
