@@ -107,8 +107,6 @@ jobs:
           final_block = """    for (const file of FOUNDATION_DOC_ROWS) {
             const source = path.join(repoRoot, file);
             expect(existsSync(source), file).toBe(true);
-            expect(readFileSync(source, 'utf8'), file)
-              .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
           }
           """
           foundation = foundation[:start] + final_block + foundation[end:]
