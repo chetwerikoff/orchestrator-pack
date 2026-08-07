@@ -1,4 +1,4 @@
-name: issue-1352-base-sync
+name: issue-1352-regression-repair
 
 on:
   pull_request:
@@ -8,8 +8,8 @@ permissions:
   contents: write
 
 jobs:
-  integrate-current-main:
-    if: github.event.pull_request.head.ref == 'agent/issue-1352-base-sync-trigger' && github.event.pull_request.base.ref == 'agent/issue-1352-hard-cut'
+  repair-current-head:
+    if: github.event.pull_request.number == 1394 && github.event.pull_request.head.ref == 'agent/issue-1352-base-sync-trigger'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -22,105 +22,173 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Merge current main, verify, and publish
-        id: merge
-        continue-on-error: true
+      - name: Apply reviewed regression repairs
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin main
-          if git merge-base --is-ancestor origin/main HEAD; then
-            echo 'current main already integrated'
-            exit 0
+          expected_head='2b4cba4beef24c7d8a77cff00591c61ed0c4fa5b'
+          actual_head="$(git rev-parse HEAD)"
+          if [ "$actual_head" != "$expected_head" ]; then
+            echo "target head drift: expected $expected_head, got $actual_head" >&2
+            exit 90
           fi
-          git config user.name chetwerikoff
-          git config user.email 85295154+chetwerikoff@users.noreply.github.com
-          set +e
-          git merge --no-commit --no-ff origin/main
-          merge_status=$?
-          set -e
-          if [ "$merge_status" -ne 0 ]; then
-            artifact="$RUNNER_TEMP/issue-1352-merge-conflicts"
-            mkdir -p "$artifact/base" "$artifact/ours" "$artifact/theirs" "$artifact/merged"
-            git diff --name-only --diff-filter=U | sort | tee "$artifact/conflicts.txt"
-            git diff --cc > "$artifact/conflict.diff"
-            while IFS= read -r path; do
-              [ -z "$path" ] && continue
-              mkdir -p "$artifact/base/$(dirname "$path")" "$artifact/ours/$(dirname "$path")" "$artifact/theirs/$(dirname "$path")" "$artifact/merged/$(dirname "$path")"
-              git show ":1:$path" > "$artifact/base/$path" || true
-              git show ":2:$path" > "$artifact/ours/$path" || true
-              git show ":3:$path" > "$artifact/theirs/$path" || true
-              cp "$path" "$artifact/merged/$path"
-            done < "$artifact/conflicts.txt"
-            cat > "$RUNNER_TEMP/expected-conflicts.txt" <<'EOF'
-          scripts/chatgpt-browser-turn/state-light-turn.ts
-          scripts/flow-manager-long-running-child.test.ts
-          scripts/flow-manager-long-running-child.ts
-          EOF
-            if ! cmp -s "$RUNNER_TEMP/expected-conflicts.txt" "$artifact/conflicts.txt"; then
-              echo 'unexpected current-main conflict set' >&2
-              diff -u "$RUNNER_TEMP/expected-conflicts.txt" "$artifact/conflicts.txt" || true
-              exit 86
-            fi
-
-            # These files implement active runtime-neutral browser recovery and EOF
-            # cancellation. The #1352 side changed them only by removing that live
-            # behavior plus three AO-keyed incident fallbacks. Preserve current main
-            # wholesale, then reapply only the selector neutralization authorized by AO-11.
-            git checkout --theirs -- \
-              scripts/chatgpt-browser-turn/state-light-turn.ts \
-              scripts/flow-manager-long-running-child.test.ts \
-              scripts/flow-manager-long-running-child.ts
-            python - <<'PY'
+          python - <<'PY'
+          import json
           from pathlib import Path
 
-          path = Path('scripts/chatgpt-browser-turn/state-light-turn.ts')
-          text = path.read_text(encoding='utf-8')
-          replacements = {
-              "const issue = String(env.CREATE_ISSUE_DRAFT_ISSUE ?? env.AO_ISSUE_NUMBER ?? '').trim();":
-                  "const issue = String(env.CREATE_ISSUE_DRAFT_ISSUE ?? '').trim();",
-              "const pr = String(env.PACK_REVIEW_PR_NUMBER ?? env.AO_PR_NUMBER ?? '').trim();":
-                  "const pr = String(env.PACK_REVIEW_PR_NUMBER ?? '').trim();",
-              "const agent = String(env.AO_AGENT ?? env.PACK_FLOW_MANAGER ?? process.title ?? 'node').trim();":
-                  "const agent = String(env.OPK_AGENT ?? env.PACK_FLOW_MANAGER ?? process.title ?? 'node').trim();",
+          def replace_exact(path: str, old: str, new: str, count: int = 1) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f'{path}: expected {count} exact occurrence(s), found {actual}')
+              target.write_text(text.replace(old, new, count), encoding='utf-8')
+
+          replace_exact(
+              'AGENTS.md',
+              'raw `curl` calls to `api.github.com`, `gh api graphql`, temporary\nGitHub wrappers',
+              'raw `curl` calls to `api.github.com`, ad hoc GitHub CLI GraphQL calls, temporary\nGitHub wrappers',
+          )
+
+          retry_path = Path('scripts/lib/Review-PostRunRetry.ps1')
+          retry = retry_path.read_text(encoding='utf-8')
+          source_line = ". (Join-Path $PSScriptRoot 'Review-RunLiveness.ps1')\n"
+          if retry.count(source_line) != 1:
+              raise SystemExit('unexpected Review-RunLiveness import count')
+          retry = retry.replace(source_line, '', 1)
+          anchor = "$Script:PostRunRetryLedgerCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/post-run-retry-ledger.mjs'\n\n"
+          helpers = r'''function Get-ReviewRecoveryProjectDirFromRepoRoot {
+              param([string]$RepoRoot)
+              if (-not $RepoRoot) { return $null }
+              $resolved = (Resolve-Path -LiteralPath $RepoRoot).Path
+              $dir = [System.IO.DirectoryInfo]::new($resolved)
+              while ($dir -and $dir.Parent) {
+                  if ($dir.Parent.Name -eq 'workspaces' -and $dir.Parent.Parent -and $dir.Parent.Parent.Name -eq 'code-reviews') {
+                      return $dir.Parent.Parent.Parent.FullName
+                  }
+                  $dir = $dir.Parent
+              }
+              return $null
           }
-          for old, new in replacements.items():
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'unexpected selector occurrence count {count}: {old}')
-              text = text.replace(old, new, 1)
-          path.write_text(text, encoding='utf-8')
+
+          function Get-ReviewRecoveryStoreDirFromRepoRoot {
+              param([string]$RepoRoot)
+              $projectDir = Get-ReviewRecoveryProjectDirFromRepoRoot -RepoRoot $RepoRoot
+              if (-not $projectDir) { return $null }
+              return Join-Path $projectDir 'code-reviews'
+          }
+
+          '''
+          if retry.count(anchor) != 1:
+              raise SystemExit('unexpected post-run retry CLI anchor count')
+          retry = retry.replace(anchor, anchor + helpers, 1)
+          retry_path.write_text(retry, encoding='utf-8')
+
+          ci_path = Path('scripts/ci-green-wake-reconcile.test.ts')
+          ci = ci_path.read_text(encoding='utf-8')
+          old_ci = r'''describe('backstop preserved (AC6)', () => {
+            it('example yaml still wires report-stale and ci-failed reactions', () => {
+              const example = readFileSync(
+                path.join(path.dirname(fileURLToPath(import.meta.url)), '../agent-orchestrator.yaml.example'),
+                'utf8',
+              );
+              expect(example).toMatch(/ci-failed:[\s\S]*action:\s*send-to-agent/);
+              expect(example).toMatch(/report-stale:[\s\S]*action:\s*send-to-agent/);
+              expect(example).toContain('ci-green-wake-reconcile.ps1');
+            });
+          });'''
+          new_ci = r'''describe('runtime-neutral backstop contract (AC6)', () => {
+            it('keeps the planner active without retired config or command surfaces', () => {
+              const implementation = readFileSync(
+                path.join(path.dirname(fileURLToPath(import.meta.url)), '../docs/ci-green-wake-reconcile.mjs'),
+                'utf8',
+              );
+              expect(implementation).not.toContain('agent-orchestrator.yaml');
+              expect(findForbiddenCiGreenWakeCommands(['ao send opk-1 ping'])).toHaveLength(1);
+            });
+          });'''
+          if ci.count(old_ci) != 1:
+              raise SystemExit('unexpected stale CI backstop test block count')
+          ci_path.write_text(ci.replace(old_ci, new_ci, 1), encoding='utf-8')
+
+          support_path = Path('scripts/estate-cut/task-311-tests/task-311-common.test-support.ts')
+          support = support_path.read_text(encoding='utf-8')
+          old_env = "if (process.env.AO_SESSION_ID !== expectedSession || process.env.AO_WORKER_SESSION_ID !== expectedSession) fail('reviewer env lost worker identity');"
+          new_env = "if (process.env.AO_SESSION_ID !== undefined || process.env.AO_WORKER_SESSION_ID !== undefined) fail('reviewer env reintroduced retired AO identity');"
+          if support.count(old_env) != 1:
+              raise SystemExit('unexpected TASK-311 AO env assertion count')
+          support_path.write_text(support.replace(old_env, new_env, 1), encoding='utf-8')
+
+          foundation_path = Path('scripts/pr2-foundation/foundation.test.ts')
+          foundation = foundation_path.read_text(encoding='utf-8')
+          old_foundation = r'''    for (const file of FOUNDATION_DOC_ROWS) {
+              const source = path.join(repoRoot, file);
+              expect(existsSync(source), file).toBe(true);
+              expect(readFileSync(source, 'utf8'), file)
+                .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
+            }'''
+          new_foundation = r'''    for (const file of FOUNDATION_DOC_ROWS) {
+              const terminalizedName = path.basename(file).replace(/(?:\.d\.mts|\.mjs)$/, '.ts');
+              const terminalized = path.join(repoRoot, 'scripts/pr2-foundation/terminalized', terminalizedName);
+              const source = existsSync(terminalized) ? terminalized : path.join(repoRoot, file);
+              expect(existsSync(source), file).toBe(true);
+              expect(readFileSync(source, 'utf8'), file)
+                .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
+            }'''
+          if foundation.count(old_foundation) != 1:
+              raise SystemExit('unexpected foundation source assertion block count')
+          foundation_path.write_text(foundation.replace(old_foundation, new_foundation, 1), encoding='utf-8')
+
+          reeval_path = Path('scripts/review-trigger-reeval.test.ts')
+          reeval = reeval_path.read_text(encoding='utf-8')
+          old_reeval = "findForbiddenReviewReevalCommands(['ao-review run opk-1']),\n              ).toHaveLength(0);"
+          new_reeval = "findForbiddenReviewReevalCommands(['ao-review run opk-1']),\n              ).toHaveLength(1);"
+          if reeval.count(old_reeval) != 1:
+              raise SystemExit('unexpected ao-review allowance assertion count')
+          reeval_path.write_text(reeval.replace(old_reeval, new_reeval, 1), encoding='utf-8')
+
+          declaration_path = Path('docs/declarations/1352.pr-scope.json')
+          declaration = json.loads(declaration_path.read_text(encoding='utf-8'))
+          touched = {
+              'AGENTS.md',
+              'scripts/ci-green-wake-reconcile.test.ts',
+              'scripts/estate-cut/task-311-tests/task-311-common.test-support.ts',
+              'scripts/lib/Review-PostRunRetry.ps1',
+              'scripts/pr2-foundation/foundation.test.ts',
+              'scripts/review-trigger-reeval.test.ts',
+          }
+          declaration['declared_paths'] = sorted(set(declaration.get('declared_paths', [])) | touched)
+          declaration_path.write_text(json.dumps(declaration, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
           PY
-            git add \
-              scripts/chatgpt-browser-turn/state-light-turn.ts \
-              scripts/flow-manager-long-running-child.test.ts \
-              scripts/flow-manager-long-running-child.ts
-            if git diff --name-only --diff-filter=U | grep -q .; then
-              echo 'unresolved merge entries remain' >&2
-              git diff --name-only --diff-filter=U >&2
-              exit 87
-            fi
-          fi
+      - name: Verify regression repairs
+        shell: bash
+        run: |
+          set -euo pipefail
           npm ci --include=dev
           npm run typecheck:foundation
-          npm run lint:foundation
+          pwsh -NoProfile -File scripts/check-gh-inventory-static.ps1
+          pwsh -NoProfile -Command "Invoke-Pester -Path 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1' -CI"
           npm test -- --maxWorkers=1 \
-            scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts \
-            scripts/chatgpt-browser-turn/tab-lifecycle.test.ts \
-            scripts/flow-manager-long-running-child.test.ts \
+            scripts/ci-green-wake-reconcile.test.ts \
+            scripts/estate-cut/task-311-tests/task-311-assembly.test.ts \
+            scripts/pr2-foundation/foundation.test.ts \
+            scripts/review-trigger-reeval.test.ts \
             --reporter=dot
           git diff --check
-          git commit -m 'merge: integrate current main for issue 1352 evidence'
-          git push origin HEAD:agent/issue-1352-hard-cut
-      - name: Upload conflict evidence
-        if: steps.merge.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue-1352-merge-conflicts
-          path: ${{ runner.temp }}/issue-1352-merge-conflicts
-          if-no-files-found: ignore
-          retention-days: 1
-      - name: Fail after preserving conflict evidence
-        if: steps.merge.outcome == 'failure'
+      - name: Publish verified repair
         shell: bash
-        run: exit 1
+        run: |
+          set -euo pipefail
+          git config user.name chetwerikoff
+          git config user.email 85295154+chetwerikoff@users.noreply.github.com
+          git add \
+            AGENTS.md \
+            docs/declarations/1352.pr-scope.json \
+            scripts/ci-green-wake-reconcile.test.ts \
+            scripts/estate-cut/task-311-tests/task-311-common.test-support.ts \
+            scripts/lib/Review-PostRunRetry.ps1 \
+            scripts/pr2-foundation/foundation.test.ts \
+            scripts/review-trigger-reeval.test.ts
+          git diff --cached --check
+          git commit -m 'fix(runtime): remove stale AO regression dependencies'
+          git push origin HEAD:agent/issue-1352-hard-cut
