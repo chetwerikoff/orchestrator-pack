@@ -45,19 +45,15 @@ jobs:
 
           runner_path = Path('scripts/pack-review-runner.ts')
           runner = runner_path.read_text(encoding='utf-8')
-          old_env = """  const retiredRuntimePrefixes = [
-            ['A', 'O', '_'].join(''),
-            ['O', 'R', 'C', 'A', '_'].join(''),
-          ];
-          const retiredRuntimeEnv = Object.fromEntries(
-            Object.keys(process.env)
-              .filter((key) => retiredRuntimePrefixes.some((prefix) => key.startsWith(prefix)))
-              .map((key) => [key, undefined]),
-          ) as NodeJS.ProcessEnv;
-          const env: NodeJS.ProcessEnv = {
-            ...retiredRuntimeEnv,
-            ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),"""
-          new_env = """  const retiredRuntimePrefixes = [
+          start_marker = "  const retiredRuntimePrefixes = [\n"
+          budget_marker = "    ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),"
+          if runner.count(start_marker) != 1 or runner.count(budget_marker) != 1:
+              raise SystemExit(
+                  f'unexpected reviewer env markers: start={runner.count(start_marker)} budget={runner.count(budget_marker)}'
+              )
+          start = runner.index(start_marker)
+          budget = runner.index(budget_marker, start)
+          new_prefix = """  const retiredRuntimePrefixes = [
             ['A', 'O', '_'].join(''),
             ['O', 'R', 'C', 'A', '_'].join(''),
           ];
@@ -66,11 +62,8 @@ jobs:
               .filter(([key]) => !retiredRuntimePrefixes.some((prefix) => key.startsWith(prefix))),
           ) as NodeJS.ProcessEnv;
           const env: NodeJS.ProcessEnv = {
-            ...sanitizedParentEnv,
-            ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),"""
-          if runner.count(old_env) != 1:
-              raise SystemExit(f'unexpected generated reviewer env block count: {runner.count(old_env)}')
-          runner = runner.replace(old_env, new_env, 1)
+          """
+          runner = runner[:start] + new_prefix + runner[budget:]
           inherit_old = "    inheritParentEnv: true,\n    env,\n    allowEmptyStdout: true,"
           inherit_new = "    inheritParentEnv: false,\n    env,\n    allowEmptyStdout: true,"
           if runner.count(inherit_old) != 1:
