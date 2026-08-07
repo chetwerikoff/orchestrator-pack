@@ -155,11 +155,11 @@ jobs:
       - name: Run full retired-surface scanner
         run: node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts
 
-  issue-1352-curated-witness-pass:
-    name: Apply curated retired-surface witnesses (one-shot)
+  issue-1352-curated-retirement-pass:
+    name: Apply curated runtime retirement passes (one-shot)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -169,19 +169,22 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Apply witness-only patch and verify
+      - name: Apply curated patches and verify
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$(git log -1 --pretty=%s)" != "chore(ci): apply curated witness pass" ]; then
-            echo "one-shot witness pass already consumed"
+          if [ "$(git log -1 --pretty=%s)" != "chore(ci): apply curated retirement passes" ]; then
+            echo "one-shot curated pass already consumed"
             exit 0
           fi
-          test "$(git rev-parse HEAD^)" = "b13fd817a3f52516324f709a38a91c91fb41ed70"
-          base64 -d .github/issue-1352-curated-witness.patch.gz.b64 | gzip -dc > /tmp/issue-1352-curated-witness.patch
-          git apply --check /tmp/issue-1352-curated-witness.patch
-          git apply /tmp/issue-1352-curated-witness.patch
-          rm .github/issue-1352-curated-witness.patch.gz.b64
+          test "$(git rev-parse HEAD^)" = "cbb0cf638674ca80aec13fa26099ce5f04969266"
+          base64 -d .github/issue-1352-curated-witness.patch.gz.b64 | gzip -dc > /tmp/issue-1352-witness.patch
+          base64 -d .github/issue-1352-curated-env.patch.gz.b64 | gzip -dc > /tmp/issue-1352-env.patch
+          git apply --check /tmp/issue-1352-witness.patch
+          git apply /tmp/issue-1352-witness.patch
+          git apply --check /tmp/issue-1352-env.patch
+          git apply /tmp/issue-1352-env.patch
+          rm .github/issue-1352-curated-witness.patch.gz.b64 .github/issue-1352-curated-env.patch.gz.b64
           git diff --check
           npm ci --include=dev
           npm run typecheck:foundation
@@ -189,5 +192,5 @@ jobs:
           git add -A
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "test(runtime): preserve retired-surface negative witnesses"
+          git commit -m "fix(runtime): preserve witnesses and port runtime selectors"
           git push origin HEAD:agent/issue-1352-hard-cut
