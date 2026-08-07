@@ -6,71 +6,157 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  fixture:
-    name: AC12 fixture
+  patch-target:
+    name: Patch PR 1398 target branch
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
-      - name: Checkout exact head
+      - name: Checkout target branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: agent/issue-1384-runtime-history-refresh
           fetch-depth: 0
-          persist-credentials: false
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Install dependencies
-        run: npm ci --include=dev
-      - name: Diagnose historical replay
+          persist-credentials: true
+      - name: Apply focused AC12 repair
         shell: bash
         run: |
-          git config user.name 'fixture-smoke'
-          git config user.email 'fixture-smoke@example.invalid'
-          echo '--- three-dot changed paths ---'
-          git diff --name-only 6e9614d0c9ce0c34b41a731059df4398b770c162...de03343f3f71f0c673157e055bf47f62700a576b --
-          git fetch origin 46577050ac1725f689ee067a399ae7855852a0e2
-          rm -rf /tmp/pr1376-merge
-          git worktree add --detach /tmp/pr1376-merge 46577050ac1725f689ee067a399ae7855852a0e2
-          rm -rf /tmp/pr1376-rebuilt
-          git worktree add --detach /tmp/pr1376-rebuilt 6e9614d0c9ce0c34b41a731059df4398b770c162
-          git -C /tmp/pr1376-rebuilt merge --no-commit --no-ff de03343f3f71f0c673157e055bf47f62700a576b
-          echo "exact_tree=$(git -C /tmp/pr1376-merge rev-parse HEAD^{tree})"
-          echo "rebuilt_tree=$(git -C /tmp/pr1376-rebuilt write-tree)"
-          node --input-type=module <<'NODE'
-          import { buildHeavyTopology } from './scripts/lib/vitest-heavy-topology.mjs';
-          const variants = [
-            ['exact-full', '/tmp/pr1376-merge', {}],
-            ['rebuilt-full', '/tmp/pr1376-rebuilt', {}],
-            ['rebuilt-actual-changed', '/tmp/pr1376-rebuilt', {changedFiles:[
-              '.cursor/rules/flow-manager-browser-turn-monitoring.mdc',
-              'docs/declarations/1266.pr-scope.json',
-              'package.json',
-              'scripts/browser-gpt-post-settlement-close-proof.ts',
-              'scripts/browser-gpt-post-settlement-close.test.ts',
-              'scripts/browser-gpt-post-settlement-close.ts',
-              'scripts/chatgpt-browser-turn/contracts.ts',
-              'scripts/vitest-ci-lanes.config.json',
-            ]}],
-          ];
-          for (const [name, root, opts] of variants) {
-            const result = buildHeavyTopology(root, opts);
-            console.log(name, JSON.stringify({ok:result.ok, unresolved:result.ok?result.topology.unresolvedGuardWeights.length:null, discovered:result.ok?result.discovered.length:null, errors:result.errors??null}));
-          }
-          NODE
-          git worktree remove --force /tmp/pr1376-merge
-          git -C /tmp/pr1376-rebuilt merge --abort || true
-          git worktree remove --force /tmp/pr1376-rebuilt
-      - name: Run fixture
-        shell: bash
-        run: |
-          set +e
-          node scripts/lib/vitest-runtime-history-merge.fixture.mjs
-          code=$?
-          echo "fixture_exit=${code}"
-          exit "${code}"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/lib/vitest-runtime-history-merge.fixture.mjs')
+          s = p.read_text()
+
+          replacements = [
+            (
+              "  'scripts/chatgpt-browser-turn/browser-session.ts',\n",
+              "  'scripts/browser-gpt-post-settlement-close.test.ts',\n",
+            ),
+            (
+              "  'scripts/chatgpt-browser-turn/tab-lifecycle.test.ts',\n",
+              "  'scripts/vitest-ci-lanes.config.json',\n",
+            ),
+            (
+              "function writeReport(dir, shard, files, commitSha) {\n",
+              "function writeReport(dir, shard, files, commitSha, repoRoot = defaultRepoRoot) {\n",
+            ),
+            (
+              "  writeFileSync(reportPath, stableStringify(buildSyntheticVitestReport(files)), 'utf8');\n",
+              "  writeFileSync(reportPath, stableStringify(buildSyntheticVitestReport(files, repoRoot)), 'utf8');\n",
+            ),
+            (
+              "function buildCompleteShardSet(dir, commitSha, fileAssignments) {\n",
+              "function buildCompleteShardSet(dir, commitSha, fileAssignments, repoRoot = defaultRepoRoot) {\n",
+            ),
+            (
+              "    writeReport(dir, shard, files, commitSha);\n",
+              "    writeReport(dir, shard, files, commitSha, repoRoot);\n",
+            ),
+            (
+              "  return buildCompleteShardSet(dir, commitSha, assignments);\n",
+              "  return buildCompleteShardSet(dir, commitSha, assignments, repoRoot);\n",
+            ),
+          ]
+          for old, new in replacements:
+            if old not in s:
+              raise SystemExit(f'missing replacement anchor: {old!r}')
+            s = s.replace(old, new, 1)
+
+          old = """    const historicalTopology = buildHeavyTopology(sourceRoot, {
+              changedFiles: PR_1376_CHANGED_FILES,
+            });
+            assert(historicalTopology.ok, 'PR #1376 historical topology must be available');
+            if (!historicalTopology.ok) return;
+
+            const historicalUnresolved = historicalTopology.topology.unresolvedGuardWeights;
+            assert(
+              historicalUnresolved.length === 33,
+              `PR #1376 historical replay must reproduce exactly 33 pre-topology targets before repair (got ${historicalUnresolved.length})`,
+            );
+            assertThrows(
+              () => resolvePreTopologyMeasurementPlan({
+                topology: historicalTopology.topology,
+                lanesConfig: historicalTopology.lanesConfig,
+              }),
+              '33 files > 32',
+              'PR #1376 historical replay must reproduce the exact 33 > 32 bound refusal',
+            );
+          """
+          new = """    const changedFilesResult = runProcessSync({
+              command: 'git',
+              args: [
+                '-C', sourceRoot,
+                'diff', '--name-only', `${PR_1376_REPLAY_BASE_SHA}...${PR_1376_REPLAY_HEAD_SHA}`, '--',
+              ],
+              encoding: 'utf8',
+              inheritParentEnv: true,
+              timeoutMs: 30_000,
+            });
+            assert(
+              changedFilesResult.exitCode === 0,
+              `PR #1376 replay must resolve the declared base/head changed-file set: ${changedFilesResult.stderr ?? ''}`,
+            );
+            if (changedFilesResult.exitCode !== 0) return;
+            const replayChangedFiles = String(changedFilesResult.stdout ?? '')
+              .split(/\\r?\\n/)
+              .map((entry) => entry.trim())
+              .filter(Boolean)
+              .sort();
+            assert(
+              JSON.stringify(replayChangedFiles) === JSON.stringify(PR_1376_CHANGED_FILES),
+              `PR #1376 replay changed-file identity drifted: expected ${JSON.stringify(PR_1376_CHANGED_FILES)}, got ${JSON.stringify(replayChangedFiles)}`,
+            );
+
+            const historicalTopology = buildHeavyTopology(sourceRoot);
+            assert(historicalTopology.ok, 'PR #1376 historical topology must be available');
+            if (!historicalTopology.ok) return;
+            const historicalLanePlan = buildLanePlan(sourceRoot);
+            assert(historicalLanePlan.ok, 'PR #1376 historical lane plan must be available');
+            if (!historicalLanePlan.ok) return;
+            const historicalMeasurementPlan = resolvePreTopologyMeasurementPlan(
+              historicalLanePlan,
+              { maxFiles: Number.MAX_SAFE_INTEGER },
+            );
+            assert(
+              historicalMeasurementPlan.targets.length === 33,
+              `PR #1376 historical replay must reproduce exactly 33 pre-topology targets before repair (got ${historicalMeasurementPlan.targets.length})`,
+            );
+            assertThrows(
+              () => resolvePreTopologyMeasurementPlan(historicalLanePlan),
+              '33 files > 32',
+              'PR #1376 historical replay must reproduce the exact 33 > 32 bound refusal',
+            );
+          """
+          if old not in s:
+            raise SystemExit('missing historical replay block')
+          s = s.replace(old, new, 1)
+
+          old = """      {
+                classification: historicalTopology.lanesConfig.classification,
+                changedFiles: PR_1376_CHANGED_FILES,
+              },
+          """
+          new = """      {
+                classification: historicalTopology.lanesConfig.classification,
+              },
+          """
+          if old not in s:
+            raise SystemExit('missing candidate changedFiles block')
+          s = s.replace(old, new, 1)
+
+          old = "        historicalTargets: historicalUnresolved.length,\n"
+          new = "        historicalTargets: historicalMeasurementPlan.targets.length,\n"
+          if old not in s:
+            raise SystemExit('missing historicalTargets log anchor')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- scripts/lib/vitest-runtime-history-merge.fixture.mjs
+          git config user.name 'chatgpt-ac12-fix'
+          git config user.email 'chatgpt-ac12-fix@example.invalid'
+          git add scripts/lib/vitest-runtime-history-merge.fixture.mjs
+          git commit -m 'Fix historical runtime-history replay fixture'
+          git push origin HEAD:agent/issue-1384-runtime-history-refresh
