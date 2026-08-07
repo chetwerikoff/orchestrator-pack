@@ -1,0 +1,43 @@
+name: Issue 1352 focused repair
+
+on:
+  push:
+    branches:
+      - agent/issue-1352-hard-cut
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: startsWith(github.event.head_commit.message, 'Run issue 1352 focused repair')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-1352-hard-cut
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Apply exact focused repairs
+        run: python .github/issue-1352-focused-repair.py
+      - name: Typecheck repaired sources
+        run: npm run typecheck
+      - name: Focused Vitest
+        run: >-
+          npm test --
+          plugins/codex-pr-reviewer/tests/review.test.ts
+          scripts/worker-smoke.test.ts
+          scripts/runtime/caller-census.test.ts
+          scripts/pack-review-runner-gpt.test.ts
+      - name: Commit repaired files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/pr-scope-declaration.ts scripts/worker-smoke.test.ts scripts/runtime/caller-census.ts docs/orca-runtime-caller-census.md plugins/codex-pr-reviewer/tests/review.test.ts scripts/pack-review-runner.ts scripts/pack-review-runner-gpt.test.ts
+          git diff --cached --check
+          git commit -m 'Repair runtime-neutral review fixtures'
+          git push origin HEAD:agent/issue-1352-hard-cut
