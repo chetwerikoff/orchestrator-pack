@@ -1,6 +1,6 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   emitTerminalVerdictPayload,
   toAoFindings,
@@ -13,9 +13,20 @@ import {
 import { parseCodexOutput } from '../../plugins/ao-codex-pr-reviewer/lib/parse_output.ts';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { buildGptReviewPrompt, resolvePackRepoRoot } from './pack-pr-review-contract.ts';
+import { packReviewLogsDir, resolvePackReviewRunStoreRoot } from './pack-review-run-store.ts';
 
 const GPT_BROWSER_SOURCE = 'gpt-browser';
 const VALID_GPT_SEVERITIES = new Set(['blocking', 'non-blocking']);
+const FORBIDDEN_VERDICT_ERROR = 'GPT must not return pre-mapped terminal verdict JSON';
+
+export type GptReviewHarvestClass = 'harvest_failed' | 'no_reply' | 'forbidden_verdict_envelope';
+
+export interface GptReviewEvidencePaths {
+  adapterPromptPath: string;
+  terminalReplyPath?: string;
+  mappingErrorPath?: string;
+  adapterStdoutPath: string;
+}
 
 export function assertGptHarnessFixtureAllowed(env: NodeJS.ProcessEnv = process.env): void {
   if (env.OPK_VITEST_HARNESS === '1') {
@@ -104,6 +115,102 @@ function trim(value: unknown): string {
   return String(value ?? '').trim();
 }
 
+function safeEvidenceSegment(value: string, fallback: string): string {
+  const normalized = value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return normalized || fallback;
+}
+
+function resolveGptEvidenceDir(request: GptReviewRequest, env: NodeJS.ProcessEnv): string {
+  const explicit = trim(env.PACK_GPT_BROWSER_EVIDENCE_DIR);
+  const runId = trim(env.PACK_REVIEW_RUN_ID || env.AO_REVIEW_RUN_ID);
+  const sourceSlot = trim(env.PACK_REVIEW_GPT_SOURCE_SLOT);
+  if (explicit && !runId && !sourceSlot) return resolve(explicit);
+
+  const root = explicit
+    ? resolve(explicit)
+    : join(packReviewLogsDir(resolvePackReviewRunStoreRoot({
+        projectId: trim(env.PACK_REVIEW_PROJECT_ID) || undefined,
+      })), 'gpt-evidence');
+  const runSegment = safeEvidenceSegment(
+    runId,
+    `standalone-pr-${request.prNumber}-${request.headSha.toLowerCase()}`,
+  );
+  const slotSegment = safeEvidenceSegment(sourceSlot, 'source-01');
+  return join(root, runSegment, slotSegment);
+}
+
+function persistGptEvidence(options: {
+  request: GptReviewRequest;
+  env: NodeJS.ProcessEnv;
+  inputPath: string;
+  outputPath: string;
+}): { paths: GptReviewEvidencePaths; replyBytes: Buffer | null } {
+  const evidenceDir = resolveGptEvidenceDir(options.request, options.env);
+  mkdirSync(evidenceDir, { recursive: true });
+  const adapterPromptPath = join(evidenceDir, 'adapter-prompt.txt');
+  const terminalReplyPath = join(evidenceDir, 'terminal-reply.txt');
+  const adapterStdoutPath = join(evidenceDir, 'adapter-stdout.json');
+  writeFileSync(adapterPromptPath, readFileSync(options.inputPath));
+
+  const replyBytes = existsSync(options.outputPath) ? readFileSync(options.outputPath) : null;
+  if (replyBytes !== null) writeFileSync(terminalReplyPath, replyBytes);
+  return {
+    paths: {
+      adapterPromptPath,
+      ...(replyBytes === null ? {} : { terminalReplyPath }),
+      adapterStdoutPath,
+    },
+    replyBytes,
+  };
+}
+
+function persistMappingError(paths: GptReviewEvidencePaths, message: string): GptReviewEvidencePaths {
+  const mappingErrorPath = join(resolve(paths.adapterPromptPath, '..'), 'mapping-error.txt');
+  writeFileSync(mappingErrorPath, message, 'utf8');
+  return { ...paths, mappingErrorPath };
+}
+
+function terminalWithEvidence(
+  terminal: GptTurnResultV1,
+  paths: GptReviewEvidencePaths,
+  harvestClass?: GptReviewHarvestClass,
+): GptTurnResultV1 {
+  return {
+    ...terminal,
+    review_evidence: paths,
+    ...(harvestClass ? { review_harvest_class: harvestClass } : {}),
+  };
+}
+
+function classifyHarvestFailure(replyText: string, message: string): GptReviewHarvestClass {
+  if (!replyText.trim()) return 'no_reply';
+  if (message === FORBIDDEN_VERDICT_ERROR) return 'forbidden_verdict_envelope';
+  return 'harvest_failed';
+}
+
+function normalizeMissingGptSources(replyText: string): string {
+  const trimmed = replyText.trim();
+  if (!trimmed.startsWith('{')) return replyText;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return replyText;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return replyText;
+  const record = parsed as Record<string, unknown>;
+  if (!Array.isArray(record.findings)) return replyText;
+  let changed = false;
+  const findings = record.findings.map((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const finding = value as Record<string, unknown>;
+    if (Object.prototype.hasOwnProperty.call(finding, 'source')) return value;
+    changed = true;
+    return { ...finding, source: GPT_BROWSER_SOURCE };
+  });
+  return changed ? JSON.stringify({ ...record, findings }) : replyText;
+}
+
 export function resolveGptBrowserConfig(env: NodeJS.ProcessEnv = process.env): GptBrowserTurnConfig {
   const profile = trim(env.PACK_GPT_BROWSER_PROFILE);
   const cdpUrl = trim(env.PACK_GPT_BROWSER_CDP) || 'http://127.0.0.1:9222';
@@ -176,10 +283,10 @@ function validateGptStructuredFindings(findings: ReturnType<typeof parseCodexOut
 export function mapGptReplyToTerminalStdout(replyText: string): string {
   const trimmed = replyText.trim();
   if (/^\{[\s\S]*"verdict"\s*:/.test(trimmed)) {
-    throw new Error('GPT must not return pre-mapped terminal verdict JSON');
+    throw new Error(FORBIDDEN_VERDICT_ERROR);
   }
 
-  const parsed = parseCodexOutput(replyText);
+  const parsed = parseCodexOutput(normalizeMissingGptSources(replyText));
   if (parsed.kind === 'clean') {
     return emitTerminalVerdictPayload({ verdict: 'clean', findings: [] });
   }
@@ -257,26 +364,43 @@ export async function runGptPackReview(
       outputPath,
       config: browserConfig,
     });
+    const terminal = extractLastGptTurnResult(turn.stdout);
+
     if (turn.timedOut) {
-      const terminal = extractLastGptTurnResult(turn.stdout);
+      let timedOutTerminal = terminal;
+      if (terminal && terminal.send_count >= 1) {
+        const evidence = persistGptEvidence({ request, env, inputPath, outputPath });
+        timedOutTerminal = terminalWithEvidence(terminal, evidence.paths);
+      }
       return {
-        stdout: terminal ? `${JSON.stringify(terminal)}\n` : '',
+        stdout: timedOutTerminal ? `${JSON.stringify(timedOutTerminal)}\n` : '',
         stderr: 'GPT browser turn timed out',
         exitCode: 124,
       };
     }
     if (!turn.ok) {
-      const terminal = extractLastGptTurnResult(turn.stdout);
-      const detail = trim(turn.stderr || turn.error)
+      let failedTerminal = terminal;
+      let detail = trim(turn.stderr || turn.error)
         || (terminal ? `${terminal.state}:${terminal.cause}` : trim(turn.stdout))
         || 'GPT browser turn failed';
+      if (terminal && terminal.send_count >= 1) {
+        const evidence = persistGptEvidence({ request, env, inputPath, outputPath });
+        if (terminal.state === 'no_reply') {
+          detail = 'GPT browser turn completed without a reviewer reply';
+          const paths = persistMappingError(evidence.paths, detail);
+          failedTerminal = terminalWithEvidence(terminal, paths, 'no_reply');
+          writeFileSync(paths.adapterStdoutPath, `${JSON.stringify(failedTerminal)}\n`, 'utf8');
+        } else {
+          failedTerminal = terminalWithEvidence(terminal, evidence.paths);
+          writeFileSync(evidence.paths.adapterStdoutPath, `${JSON.stringify(failedTerminal)}\n`, 'utf8');
+        }
+      }
       return {
-        stdout: terminal ? `${JSON.stringify(terminal)}\n` : '',
+        stdout: failedTerminal ? `${JSON.stringify(failedTerminal)}\n` : '',
         stderr: detail,
         exitCode: turn.exitCode ?? 1,
       };
     }
-    const terminal = extractLastGptTurnResult(turn.stdout);
     if (!terminal) {
       return {
         stdout: '',
@@ -291,22 +415,23 @@ export async function runGptPackReview(
         exitCode: 1,
       };
     }
-    const reply = readFileSync(outputPath, 'utf8');
-    const evidenceDir = trim(env.PACK_GPT_BROWSER_EVIDENCE_DIR);
-    if (evidenceDir) {
-      mkdirSync(evidenceDir, { recursive: true });
-      copyFileSync(inputPath, join(evidenceDir, 'adapter-prompt.txt'));
-      writeFileSync(join(evidenceDir, 'terminal-reply.txt'), reply, 'utf8');
-    }
+
+    const evidence = persistGptEvidence({ request, env, inputPath, outputPath });
+    const reply = evidence.replyBytes?.toString('utf8') ?? '';
     try {
-      const stdout = `${JSON.stringify(terminal)}\n${mapGptReplyToTerminalStdout(reply)}`;
-      if (evidenceDir) {
-        writeFileSync(join(evidenceDir, 'adapter-stdout.json'), `${stdout}\n`, 'utf8');
-      }
+      const mapped = mapGptReplyToTerminalStdout(reply);
+      const terminalEvidence = terminalWithEvidence(terminal, evidence.paths);
+      const stdout = `${JSON.stringify(terminalEvidence)}\n${mapped}`;
+      writeFileSync(evidence.paths.adapterStdoutPath, `${stdout}\n`, 'utf8');
       return { stdout, stderr: '', exitCode: 0 };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return { stdout: `${JSON.stringify(terminal)}\n`, stderr: message, exitCode: 1 };
+      const harvestClass = classifyHarvestFailure(reply, message);
+      const paths = persistMappingError(evidence.paths, message);
+      const terminalEvidence = terminalWithEvidence(terminal, paths, harvestClass);
+      const stdout = `${JSON.stringify(terminalEvidence)}\n`;
+      writeFileSync(paths.adapterStdoutPath, stdout, 'utf8');
+      return { stdout, stderr: message, exitCode: 1 };
     }
   } finally {
     rmSync(workDir, { recursive: true, force: true });
