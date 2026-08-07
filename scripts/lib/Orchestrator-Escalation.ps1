@@ -453,7 +453,7 @@ function Invoke-OrchestratorEscalationLlmDelivery {
         [string]$RuntimePath = 'ao',
         [switch]$DryRun
     )
-    $session = if ($OrchestratorSessionId) { $OrchestratorSessionId } elseif ($env:AO_ORCHESTRATOR_SESSION_ID) { $env:AO_ORCHESTRATOR_SESSION_ID } else { '' }
+    $session = if ($OrchestratorSessionId) { $OrchestratorSessionId } else { '' }
     if (-not $session) { throw 'missing orchestrator session id' }
     if ($env:OPK_ESCALATION_FORCE_SEND_FAILURE -eq '1') { throw 'forced llm delivery failure' }
     $json = $Envelope | ConvertTo-Json -Depth 30 -Compress

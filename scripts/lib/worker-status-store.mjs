@@ -326,7 +326,6 @@ function resolveWorkerStatusBindingRepoSlug(input, session, openPrs, env) {
   const explicit = normalizeRepoSlug(
     input.repoSlug
       ?? session.repoSlug
-      ?? env.AO_REPO_SLUG
       ?? env.GITHUB_REPOSITORY,
   );
   const openPrRepos = new Set(

@@ -131,7 +131,7 @@ function Get-OrchestratorSideProcessPendingTimeoutMessage {
 function Install-OrchestratorSideProcessAoLivenessShim {
     if (-not $env:OPK_SIDE_PROCESS_CHILD_ID) { return }
     if (-not (Get-OrchestratorSideProcessProgressDir)) { return }
-    if ($env:AO_SIDE_PROCESS_AO_LIVENESS_SHIM_DISABLED -eq '1') { return }
+    if ($env:OPK_SIDE_PROCESS_LIVENESS_SHIM_DISABLED -eq '1') { return }
 
     if (-not $env:OPK_SIDE_PROCESS_OWNER_PID) {
         $env:OPK_SIDE_PROCESS_OWNER_PID = [string]$PID

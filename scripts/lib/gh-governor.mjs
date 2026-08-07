@@ -149,9 +149,6 @@ export function resolveCallerLane(env = process.env, argv = []) {
   if (/preflight/i.test(child)) {
     return 'interactive-preflight';
   }
-  if (env.AO_SESSION_ID && !child) {
-    return 'interactive';
-  }
   const joined = argv.join(' ');
   if (/pr view/.test(joined) && /headRefOid|headRefName/.test(joined)) {
     return 'interactive-preflight';

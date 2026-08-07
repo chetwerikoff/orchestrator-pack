@@ -35,7 +35,7 @@ function New-WorkerMessageAdoptionProbePayload {
     return "OPK_WORKER_MESSAGE_ADOPTION_PROBE_V1`nbranch=$Branch`nruntimeEpochHash=$EpochHash`nconfigPathHash=$ConfigHash`nadoptionProbeRunIdHash=$RunIdHash`n$filler"
 }
 
-function Invoke-AoSendProbeViaMessage {
+function Invoke-WorkerMessageSendProbe {
     param(
         [string]$RuntimePath,
         [string]$SessionId,
@@ -83,7 +83,7 @@ function Invoke-WorkerMessageAdoptionProbeGeneration {
             [System.Environment]::SetEnvironmentVariable('OPK_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH', $ProbeRunIdHash.Value, 'Process')
             [System.Environment]::SetEnvironmentVariable('OPK_WORKER_MESSAGE_DISPATCH_JOURNAL', $EffectiveJournalPath, 'Process')
             $probePayload = New-WorkerMessageAdoptionProbePayload -Branch $branch -EpochHash $epochHash -ConfigHash $configHash -RunIdHash $ProbeRunIdHash.Value
-            $sendResult = Invoke-AoSendProbeViaMessage -RuntimePath $RuntimePath -SessionId 'synthetic-adoption-probe' -Payload $probePayload
+            $sendResult = Invoke-WorkerMessageSendProbe -RuntimePath $RuntimePath -SessionId 'synthetic-adoption-probe' -Payload $probePayload
             $probeOutput = $sendResult.output
             $probeExit = [int]$sendResult.exitCode
         }

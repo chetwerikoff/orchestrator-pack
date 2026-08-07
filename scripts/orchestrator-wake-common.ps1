@@ -12,9 +12,7 @@ $Script:OrchestratorWakeCancelHandler = $null
 function Get-OrchestratorSessionId {
     param([string]$CliValue)
     if ($CliValue) { return $CliValue.Trim() }
-    $fromEnv = $env:AO_ORCHESTRATOR_SESSION_ID
-    if ($fromEnv) { return $fromEnv.Trim() }
-    throw 'Orchestrator session id required: -OrchestratorSessionId or AO_ORCHESTRATOR_SESSION_ID'
+    throw 'Orchestrator session id required: pass -OrchestratorSessionId explicitly'
 }
 
 function Get-OrchestratorWakeDedupStatePath {

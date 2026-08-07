@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-  Process-bound journaled-worker-send internal ao send capabilities (Issue #384).
+  Process-bound journaled-worker-send internal runtime send capabilities (Issue #384).
   Caller-forgeable environment flags are not trusted; only registered one-time
   tokens issued by journaled-worker-send and consumed by descendant ao guard
   processes are accepted.
@@ -105,7 +105,7 @@ function Test-ProcessIsDescendantOf {
 
 function Test-JournaledWorkerSendCapabilityRegistrationAllowed {
     if ($env:OPK_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE -eq '1') { return $true }
-    $allowedCommands = @('Invoke-AoSendViaMessage', 'Test-AoSendMessageContract', 'New-JournaledWorkerSendInternalCapability')
+    $allowedCommands = @('Invoke-WorkerMessageViaCatalog', 'Test-WorkerMessageSendContract', 'New-JournaledWorkerSendInternalCapability')
     foreach ($frame in Get-PSCallStack) {
         if ($frame.Command -notin $allowedCommands) { continue }
         if (Test-TrustedJournaledWorkerSendScriptPath -CandidatePath ([string]$frame.ScriptName)) {

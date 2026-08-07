@@ -21,7 +21,7 @@ $ErrorActionPreference = 'Stop'
 
 $orchId = $OrchestratorSessionId
 if (-not $orchId) {
-    $orchId = if ($env:AO_ORCHESTRATOR_SESSION_ID) { $env:AO_ORCHESTRATOR_SESSION_ID.Trim() } else { 'op-orchestrator' }
+    $orchId = 'op-orchestrator'
 }
 
 function Get-OrchestratorFromAdapter {
