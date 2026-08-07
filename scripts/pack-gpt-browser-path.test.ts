@@ -340,10 +340,10 @@ describe('Browser-GPT harvest boundary (Issue #1393)', () => {
   it('defaults only an absent finding source to gpt-browser', () => {
     const mapped = JSON.parse(mapGptReplyToTerminalStdout(structuredFinding())) as {
       verdict: string;
-      findings: Array<{ source?: string }>;
+      findings: Array<{ body?: string }>;
     };
     expect(mapped.verdict).toBe('findings');
-    expect(mapped.findings[0]?.source).toBe('gpt-browser');
+    expect(mapped.findings[0]?.body).toContain('source: gpt-browser');
 
     expect(() => mapGptReplyToTerminalStdout(structuredFinding('codex'))).toThrow(/source must be gpt-browser/);
     expect(() => mapGptReplyToTerminalStdout(structuredFinding(''))).toThrow(/missing mandatory structured fields/);
