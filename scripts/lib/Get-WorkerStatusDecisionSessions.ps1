@@ -70,7 +70,7 @@ function Get-WorkerStatusRefreshSourceSessions {
         $WorkerListPayload = $null,
         $OrchestratorListPayload = $null,
         $ReportFullPayload = $null,
-        [string]$RuntimeCommand = 'ao',
+        [string]$RuntimeAdapter = '',
         [switch]$IncludeTerminated
     )
 
@@ -83,13 +83,12 @@ function Get-WorkerStatusRefreshSourceSessions {
 
     $sessions = if ($IncludeTerminated) {
         @(Get-RuntimeStatusSessionsIncludingTerminated -Project $Project `
-                -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
-                -RuntimeCommand $RuntimeCommand)
+                -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload)
     }
     else {
         @(Get-RuntimeStatusSessions -Project $Project `
                 -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
-                -RuntimeCommand $RuntimeCommand)
+                -Adapter $RuntimeAdapter)
     }
 
     $resolvedRepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug
@@ -566,102 +565,54 @@ function Write-WorkerStatusRefreshDetailHeartbeat {
     }
 }
 
-function ConvertTo-WorkerStatusRefreshProcessArgument {
-    param([string]$Value)
-
-    $part = [string]$Value
-    if ($part -notmatch '[\s"]') { return $part }
-    return '"' + $part.Replace('"', '\"') + '"'
-}
-
 function Invoke-WorkerStatusRefreshSessionDetailLookup {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$SessionId,
+        $Session,
         [string]$Project = 'orchestrator-pack',
-        [string]$RuntimeCommand = 'ao',
+        [string]$RuntimeAdapter = '',
         [int]$TimeoutMs,
         [int]$DrainTimeoutMs = 250
     )
 
-    $sessionArgs = @('session', 'get', $SessionId, '--json')
-    if ($Project) { $sessionArgs += @('-p', $Project) }
-    $command = $RuntimeCommand
-    $processArgs = @($sessionArgs)
-    if ($RuntimeCommand -match '(?i)\.ps1$') {
-        $command = 'pwsh'
-        $literalArgs = @($RuntimeCommand) + $sessionArgs | ForEach-Object {
-            "'" + ([string]$_).Replace("'", "''") + "'"
-        }
-        $invocation = '& ' + ($literalArgs -join ' ')
-        $encodedInvocation = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($invocation))
-        $processArgs = @('-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedInvocation)
+    $identity = Get-RuntimeStatusSessionIdentity -Row $Session
+    if (-not $identity) {
+        return @{ ok = $false; timedOut = $false; reason = 'session_detail_lookup_failed'; displayName = ''; detail = 'missing_composite_identity' }
     }
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $command
-    $psi.Arguments = ($processArgs | ForEach-Object {
-            ConvertTo-WorkerStatusRefreshProcessArgument -Value ([string]$_)
-        }) -join ' '
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    if (Get-Command Set-OpkVitestProcessStartInfoEnvironment -ErrorAction SilentlyContinue) {
-        Set-OpkVitestProcessStartInfoEnvironment -ProcessStartInfo $psi
-    }
-
-    $proc = $null
+    $lookup = $null
     try {
-        try { $proc = [System.Diagnostics.Process]::Start($psi) }
-        catch {
-            return @{ ok = $false; timedOut = $false; reason = 'session_detail_lookup_failed'; displayName = ''; detail = 'lookup_exception' }
-        }
-
-        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
-        $stderrTask = $proc.StandardError.ReadToEndAsync()
-        $timedOut = -not $proc.WaitForExit([Math]::Max(1, $TimeoutMs))
-        if ($timedOut) {
-            try { $proc.Kill($true) }
-            catch { try { $proc.Kill() } catch { } }
-            try { [void]$proc.WaitForExit([Math]::Max(1, $DrainTimeoutMs)) } catch { }
-        }
-        try { [void]$stdoutTask.Wait([Math]::Max(1, $DrainTimeoutMs)) } catch { }
-        try { [void]$stderrTask.Wait([Math]::Max(1, $DrainTimeoutMs)) } catch { }
-        $stdout = if ($stdoutTask.IsCompleted) { [string]$stdoutTask.Result } else { '' }
-        $stderr = if ($stderrTask.IsCompleted) { [string]$stderrTask.Result } else { '' }
-
-        if ($timedOut) {
-            return @{ ok = $false; timedOut = $true; reason = 'session_detail_lookup_timeout'; displayName = ''; detail = "timeout_ms=$TimeoutMs" }
-        }
-        if ($proc.ExitCode -ne 0) {
-            return @{ ok = $false; timedOut = $false; reason = 'session_detail_lookup_failed'; displayName = ''; detail = "exit_code=$($proc.ExitCode)" }
-        }
-
-        $payload = $null
-        try { $payload = ConvertFrom-RuntimeCliPrefixedOutput -Text $stdout -FailureLabel 'ao session get' }
-        catch {
-            try { $payload = ConvertFrom-RuntimeCliPrefixedOutput -Text (@($stdout, $stderr) -join "`n") -FailureLabel 'ao session get' }
-            catch {
-                return @{ ok = $false; timedOut = $false; reason = 'session_detail_lookup_failed'; displayName = ''; detail = 'lookup_exception' }
-            }
-        }
-        $displayName = ConvertTo-WorkerStatusRefreshAcceptedDisplayName -Value ([string]$payload.session.displayName)
-        if (-not $displayName) {
-            return @{ ok = $false; timedOut = $false; reason = 'session_detail_lookup_failed'; displayName = ''; detail = 'invalid_display_name' }
-        }
-        return @{ ok = $true; timedOut = $false; reason = ''; displayName = $displayName; detail = '' }
+        $lookup = Find-RuntimeWorker -Runtime ([string]$identity.runtime) -Id ([string]$identity.id) `
+            -Generation ([string]$identity.generation) -Adapter $RuntimeAdapter -TimeoutMs ([Math]::Max(1, $TimeoutMs))
     }
-    finally {
-        if ($proc) { $proc.Dispose() }
+    catch {
+        return @{ ok = $false; timedOut = $false; reason = 'session_detail_lookup_failed'; displayName = ''; detail = 'lookup_exception' }
     }
+
+    if (-not $lookup -or [string]$lookup.status -ne 'ok' -or $null -eq $lookup.value) {
+        return @{ ok = $false; timedOut = $false; reason = 'session_detail_lookup_failed'; displayName = ''; detail = 'worker_not_found_or_unavailable' }
+    }
+
+    $resolvedIdentity = Get-RuntimeStatusSessionIdentity -Row $lookup.value
+    if (-not $resolvedIdentity -or
+        [string]$resolvedIdentity.runtime -ne [string]$identity.runtime -or
+        [string]$resolvedIdentity.id -ne [string]$identity.id -or
+        [string]$resolvedIdentity.generation -ne [string]$identity.generation) {
+        return @{ ok = $false; timedOut = $false; reason = 'session_detail_lookup_failed'; displayName = ''; detail = 'runtime_identity_mismatch' }
+    }
+
+    $displayName = ConvertTo-WorkerStatusRefreshAcceptedDisplayName -Value ([string]$lookup.value.title)
+    if (-not $displayName) {
+        return @{ ok = $false; timedOut = $false; reason = 'session_detail_lookup_failed'; displayName = ''; detail = 'display_metadata_unavailable' }
+    }
+    return @{ ok = $true; timedOut = $false; reason = ''; displayName = $displayName; detail = '' }
 }
 
 function Add-WorkerStatusRefreshSessionDetails {
     param(
         [object[]]$Sessions,
         [string]$Project = 'orchestrator-pack',
-        [string]$RuntimeCommand = 'ao',
+        [string]$RuntimeAdapter = '',
         [string]$StorePath = '',
         [string]$CursorPath = '',
         [System.Collections.IDictionary]$Diagnostic,
@@ -764,11 +715,11 @@ function Add-WorkerStatusRefreshSessionDetails {
         $attemptedRows++
         $callTimeoutMs = [int][Math]::Max(1, [Math]::Min([long]$policy.perCallTimeoutMs, $remaining))
         $lookup = if ($DetailLookup) {
-            & $DetailLookup $sessionId $Project $RuntimeCommand $callTimeoutMs ([int]$policy.postKillDrainMs)
+            & $DetailLookup $sessionId $Project $RuntimeAdapter $callTimeoutMs ([int]$policy.postKillDrainMs)
         }
         else {
-            Invoke-WorkerStatusRefreshSessionDetailLookup -SessionId $sessionId -Project $Project `
-                -RuntimeCommand $RuntimeCommand -TimeoutMs $callTimeoutMs -DrainTimeoutMs ([int]$policy.postKillDrainMs)
+            Invoke-WorkerStatusRefreshSessionDetailLookup -Session $session -Project $Project `
+                -RuntimeAdapter $RuntimeAdapter -TimeoutMs $callTimeoutMs -DrainTimeoutMs ([int]$policy.postKillDrainMs)
         }
         Write-WorkerStatusRefreshDetailHeartbeat -ProgressWriter $ProgressWriter `
             -Step 'worker_status_detail_done' -Cursor ($ordinal * 2) -Total $heartbeatTotal
@@ -927,7 +878,7 @@ function Invoke-WorkerStatusRefresh {
         $WorkerListPayload = $null,
         $OrchestratorListPayload = $null,
         $ReportFullPayload = $null,
-        [string]$RuntimeCommand = 'ao',
+        [string]$RuntimeAdapter = '',
         [switch]$IncludeTerminated,
         [object[]]$Sessions = $null,
         $GithubSnapshot = $null,
@@ -952,7 +903,7 @@ function Invoke-WorkerStatusRefresh {
     else {
         @(Get-WorkerStatusRefreshSourceSessions -Project $Project -RepoSlug $RepoSlug `
                 -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
-                -ReportFullPayload $ReportFullPayload -RuntimeCommand $RuntimeCommand -IncludeTerminated:$IncludeTerminated)
+                -ReportFullPayload $ReportFullPayload -RuntimeAdapter $RuntimeAdapter -IncludeTerminated:$IncludeTerminated)
     }
     $diagnostic = New-WorkerStatusRefreshDiagnostic -Owner $Owner -SessionCount (@($sourceSessions).Count) -NowMs $NowMs
 
@@ -994,7 +945,7 @@ function Invoke-WorkerStatusRefresh {
         $null -eq $ReportFullPayload)
     if ($isLiveRefresh) {
         $sourceSessions = @(Add-WorkerStatusRefreshSessionDetails -Sessions $sourceSessions `
-                -Project $Project -RuntimeCommand $RuntimeCommand -StorePath $StorePath -CursorPath $DetailCursorPath `
+                -Project $Project -RuntimeAdapter $RuntimeAdapter -StorePath $StorePath -CursorPath $DetailCursorPath `
                 -Diagnostic $diagnostic -PolicyOverride $DetailPolicy -ProgressWriter $ProgressWriter `
                 -DetailLookup $DetailLookup -NowProvider $DetailNowProvider `
                 -CursorPersistenceHook $DetailCursorPersistenceHook)
@@ -1146,14 +1097,14 @@ function Get-WorkerStatusDecisionSessionsCore {
         $WorkerListPayload = $null,
         $OrchestratorListPayload = $null,
         $ReportFullPayload = $null,
-        [string]$RuntimeCommand = 'ao',
+        [string]$RuntimeAdapter = '',
         [switch]$IncludeTerminated,
         [long]$RepoTickGeneration = 0
     )
 
     $sessions = @(Get-WorkerStatusRefreshSourceSessions -Project $Project -RepoSlug $RepoSlug `
             -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
-            -ReportFullPayload $ReportFullPayload -RuntimeCommand $RuntimeCommand -IncludeTerminated:$IncludeTerminated)
+            -ReportFullPayload $ReportFullPayload -RuntimeAdapter $RuntimeAdapter -IncludeTerminated:$IncludeTerminated)
 
     if (Test-WorkerStatusKillSwitchActive) {
         return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'kill_switch_active')
@@ -1170,11 +1121,11 @@ function Get-WorkerStatusReadOnlyProjection {
     param(
         [string]$Project = 'orchestrator-pack',
         [string]$RepoSlug = '',
-        [string]$RuntimeCommand = 'ao',
+        [string]$RuntimeAdapter = '',
         [long]$RepoTickGeneration = 0
     )
 
-    $sessions = @(Get-RuntimeStatusSessions -Project $Project -RuntimeCommand $RuntimeCommand)
+    $sessions = @(Get-RuntimeStatusSessions -Project $Project -Adapter $RuntimeAdapter)
     if (Test-WorkerStatusKillSwitchActive) {
         return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'kill_switch_active')
     }
@@ -1192,13 +1143,13 @@ function Get-WorkerStatusDecisionSessions {
         $WorkerListPayload = $null,
         $OrchestratorListPayload = $null,
         $ReportFullPayload = $null,
-        [string]$RuntimeCommand = 'ao',
+        [string]$RuntimeAdapter = '',
         [long]$RepoTickGeneration = 0
     )
 
     return @(Get-WorkerStatusDecisionSessionsCore -Project $Project -RepoSlug $RepoSlug `
             -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
-            -ReportFullPayload $ReportFullPayload -RuntimeCommand $RuntimeCommand `
+            -ReportFullPayload $ReportFullPayload -RuntimeAdapter $RuntimeAdapter `
             -RepoTickGeneration $RepoTickGeneration)
 }
 
@@ -1209,13 +1160,13 @@ function Get-WorkerStatusDecisionSessionsIncludingTerminated {
         $WorkerListPayload = $null,
         $OrchestratorListPayload = $null,
         $ReportFullPayload = $null,
-        [string]$RuntimeCommand = 'ao',
+        [string]$RuntimeAdapter = '',
         [long]$RepoTickGeneration = 0
     )
 
     return @(Get-WorkerStatusDecisionSessionsCore -Project $Project -RepoSlug $RepoSlug `
             -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
-            -ReportFullPayload $ReportFullPayload -RuntimeCommand $RuntimeCommand -IncludeTerminated `
+            -ReportFullPayload $ReportFullPayload -RuntimeAdapter $RuntimeAdapter -IncludeTerminated `
             -RepoTickGeneration $RepoTickGeneration)
 }
 
