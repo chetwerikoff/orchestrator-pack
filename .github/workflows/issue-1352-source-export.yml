@@ -26,6 +26,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          expected=(
+            20412c663d0c418233f74e75930515439a84835483b1d654aeb9b96fcde3b006
+            a4259fa4c7c4b0d534062c4fa1e19f9ffd7d247ffadb05233171cbb29cab1451
+            a5f23e14a379a003d7c114ff1f9b96fda59ec61bdf79d322e36d90a9dfd4fcd6
+            db0fd84013b45f0d6d7ada2294a390e2af1850c883da174b0b7de9482d276d0b
+            def9b8e56b71689c1c678c3c7366bceb068cf1a2496aa51646bba4785637bcfa
+            e571ced4eac570a3b08f1a74f0c1dc8f3574300cca7b2f59996ff110565b98ac
+            a6fe5b17d386c662ed3b66aebbf46b6198f35fa53a1b8c19ac8bc4146d5773e8
+          )
+          for index in {0..6}; do
+            part=".github/issue-1352-checkpoint2.part0${index}"
+            actual="$(tr -d '[:space:]' < "$part" | sha256sum | cut -d' ' -f1)"
+            echo "part0${index} actual=$actual expected=${expected[$index]}"
+            test "$actual" = "${expected[$index]}"
+          done
           cat .github/issue-1352-checkpoint2.part* | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/checkpoint.patch"
           echo '4276d77dea3331b4d0abee5d76d22239a746c3e6fb20c5496f3ab40db86685e1  '"$RUNNER_TEMP/checkpoint.patch" | sha256sum -c -
           if git apply --reverse --check "$RUNNER_TEMP/checkpoint.patch"; then
