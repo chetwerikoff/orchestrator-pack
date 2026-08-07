@@ -9,12 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  fixture:
-    name: PR1398 exact fixture
+  diagnose:
+    name: Diagnose tuple refusal bytes
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      COLUMNS: '400'
+    timeout-minutes: 10
     steps:
       - name: Checkout PR 1398 head
         uses: actions/checkout@v4
@@ -27,16 +25,24 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-      - name: Install dependencies
-        run: npm ci --include=dev
-      - name: Run exact fixture
+      - name: Diagnose subprocess output
         shell: bash
         run: |
-          git config user.name fixture-smoke
-          git config user.email fixture-smoke@example.invalid
-          set +e
-          node scripts/lib/vitest-runtime-history-merge.fixture.mjs
-          code=$?
-          echo "fixture_exit=$code"
-          exit "$code"
+          node --input-type=module <<'NODE'
+          import { mkdirSync, writeFileSync } from 'node:fs';
+          import { tmpdir } from 'node:os';
+          import { join } from 'node:path';
+          import { runProcessSync } from './scripts/kernel/subprocess.ts';
+          const dir = join(tmpdir(), 'tuple-diagnostic');
+          mkdirSync(dir, {recursive:true});
+          const history = join(dir, 'history.json');
+          writeFileSync(history, '{"sentinel":"unchanged"}\n');
+          const result = runProcessSync({
+            command:'pwsh',
+            args:['-NoProfile','-NonInteractive','-File',join(process.cwd(),'scripts/refresh-vitest-runtime-history.ps1'),'-ReportsDir',join(dir,'heavy'),'-CommitSha','deadbeef','-RepoRoot',dir,'-HistoryPath',history,'-CommitBack','-SupplementalReportsDir',join(dir,'supplemental')],
+            encoding:'utf8', inheritParentEnv:true, timeoutMs:30000,
+          });
+          console.log('exit=' + result.exitCode);
+          console.log('stdout_json=' + JSON.stringify(result.stdout));
+          console.log('stderr_json=' + JSON.stringify(result.stderr));
+          NODE
