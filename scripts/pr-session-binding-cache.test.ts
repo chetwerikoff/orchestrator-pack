@@ -160,17 +160,18 @@ describe('pr-session-binding-cache push-register', () => {
   });
 
   it('rejects env-only spoof without a caller-verified runtime worker corpus', () => {
+    const retiredSessionKey = ['AO', 'WORKER', 'SESSION', 'ID'].join('_');
+    const retiredRepoKey = ['AO', 'REPO', 'SLUG'].join('_');
     const env = {
-      AO_WORKER_SESSION_ID: 'opk-spoof',
-      AO_REPO_SLUG: repoSlug,
-      AO_PROJECT_ID: 'orchestrator-pack',
+      [retiredSessionKey]: 'opk-spoof',
+      [retiredRepoKey]: repoSlug,
     };
     const verified = loadPushRegisterVerifiedSessions({ env, sessions: [] });
     expect(verified.ok).toBe(false);
 
     const proof = provePushRegisterWorkerIdentity(env, { cwd: process.cwd() });
     expect(proof.ok).toBe(false);
-    expect(proof.reason).toBe('push_register_session_verification_required');
+    expect(proof.reason).toBe('push_register_missing_session_identity');
 
     const register = tryPushRegisterFromPrCreate({
       argv: ['pr', 'create', '--title', 'x', '--body', 'y'],
@@ -187,9 +188,6 @@ describe('pr-session-binding-cache push-register', () => {
   it('Codex: push-register runs for gh --repo pr create argv shape', () => {
     const cachePath = tempCachePath();
     const env = {
-      AO_WORKER_SESSION_ID: 'opk-verified',
-      AO_REPO_SLUG: repoSlug,
-      AO_PROJECT_ID: 'orchestrator-pack',
       OPK_PR_SESSION_BINDING_CACHE: cachePath,
     };
     const sessions = [liveWorker('opk-verified', 719)];
@@ -199,6 +197,9 @@ describe('pr-session-binding-cache push-register', () => {
       stdout: 'https://github.com/org/orchestrator-pack/pull/89\n',
       stderr: '',
       env,
+      sessionId: 'opk-verified',
+      repoSlug,
+      projectId: 'orchestrator-pack',
       sessions,
     });
     expect(register.registered).toBe(true);
@@ -208,13 +209,10 @@ describe('pr-session-binding-cache push-register', () => {
   it('accepts push-register only with verified session corpus', () => {
     const cachePath = tempCachePath();
     const env = {
-      AO_WORKER_SESSION_ID: 'opk-verified',
-      AO_REPO_SLUG: repoSlug,
-      AO_PROJECT_ID: 'orchestrator-pack',
       OPK_PR_SESSION_BINDING_CACHE: cachePath,
     };
     const sessions = [liveWorker('opk-verified', 719)];
-    const proof = provePushRegisterWorkerIdentity(env, { sessions });
+    const proof = provePushRegisterWorkerIdentity(env, { sessionId: 'opk-verified', repoSlug, projectId: 'orchestrator-pack', sessions });
     expect(proof.ok).toBe(true);
 
     const register = tryPushRegisterFromPrCreate({
@@ -223,6 +221,9 @@ describe('pr-session-binding-cache push-register', () => {
       stdout: 'https://github.com/org/orchestrator-pack/pull/88\n',
       stderr: '',
       env,
+      sessionId: 'opk-verified',
+      repoSlug,
+      projectId: 'orchestrator-pack',
       sessions,
     });
     expect(register.registered).toBe(true);
@@ -232,9 +233,6 @@ describe('pr-session-binding-cache push-register', () => {
   it('push-register treats indeterminate same-session rebind as collision', () => {
     const cachePath = tempCachePath();
     const env = {
-      AO_WORKER_SESSION_ID: 'opk-rebind',
-      AO_REPO_SLUG: repoSlug,
-      AO_PROJECT_ID: 'orchestrator-pack',
       OPK_PR_SESSION_BINDING_CACHE: cachePath,
     };
     const sessions = [liveWorker('opk-rebind', 719)];
@@ -247,6 +245,9 @@ describe('pr-session-binding-cache push-register', () => {
       stdout: 'https://github.com/org/orchestrator-pack/pull/12\n',
       stderr: '',
       env,
+      sessionId: 'opk-rebind',
+      repoSlug,
+      projectId: 'orchestrator-pack',
       sessions,
     });
     expect(register.registered).toBe(false);
@@ -257,9 +258,6 @@ describe('pr-session-binding-cache push-register', () => {
   it('push-register supersedes same-session rebind when prior PR is terminal in openPrs', () => {
     const cachePath = tempCachePath();
     const env = {
-      AO_WORKER_SESSION_ID: 'opk-rebind',
-      AO_REPO_SLUG: repoSlug,
-      AO_PROJECT_ID: 'orchestrator-pack',
       OPK_PR_SESSION_BINDING_CACHE: cachePath,
     };
     const sessions = [liveWorker('opk-rebind', 719)];
@@ -286,9 +284,6 @@ describe('pr-session-binding-cache push-register', () => {
   it('push-register supersedes terminal same-session rebind via prior-pr lookup', () => {
     const cachePath = tempCachePath();
     const env = {
-      AO_WORKER_SESSION_ID: 'opk-rebind-terminal',
-      AO_REPO_SLUG: repoSlug,
-      AO_PROJECT_ID: 'orchestrator-pack',
       OPK_PR_SESSION_BINDING_CACHE: cachePath,
     };
     const sessions = [liveWorker('opk-rebind-terminal', 719)];
@@ -301,6 +296,9 @@ describe('pr-session-binding-cache push-register', () => {
       stdout: 'https://github.com/org/orchestrator-pack/pull/12\n',
       stderr: '',
       env,
+      sessionId: 'opk-rebind-terminal',
+      repoSlug,
+      projectId: 'orchestrator-pack',
       sessions,
       fetchPriorPrOpenRow: (_slug, pr) => openPr(pr, pr === 11 ? 'old11' : 'new12', pr === 11 ? 'MERGED' : 'OPEN'),
     });
@@ -310,9 +308,6 @@ describe('pr-session-binding-cache push-register', () => {
 
   it('isolates corrupt cache IO from successful gh pr create registration path', () => {
     const env = {
-      AO_WORKER_SESSION_ID: 'opk-io',
-      AO_REPO_SLUG: repoSlug,
-      AO_PROJECT_ID: 'orchestrator-pack',
       OPK_PR_SESSION_BINDING_CACHE: '/dev/null/cache.json',
     };
     const sessions = [liveWorker('opk-io', 719)];
@@ -322,6 +317,9 @@ describe('pr-session-binding-cache push-register', () => {
       stdout: 'https://github.com/org/orchestrator-pack/pull/90\n',
       stderr: '',
       env,
+      sessionId: 'opk-io',
+      repoSlug,
+      projectId: 'orchestrator-pack',
       sessions,
     });
     expect(register.registered).toBe(false);

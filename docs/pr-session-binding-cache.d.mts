@@ -98,7 +98,11 @@ export declare function loadPushRegisterVerifiedSessions(options?: {
 export declare function provePushRegisterWorkerIdentity(
   env?: NodeJS.ProcessEnv,
   options?: {
+    sessionId?: string;
     claimedSessionId?: string;
+    repoSlug?: string;
+    projectId?: string;
+    issueNumber?: number;
     cwd?: string;
     sessions?: Array<Record<string, unknown>>;
   },
@@ -187,6 +191,11 @@ export declare function tryPushRegisterFromPrCreate(input: {
   stderr: string;
   env?: NodeJS.ProcessEnv;
   cwd?: string;
+  sessionId?: string;
+  repoSlug?: string;
+  projectId?: string;
+  issueNumber?: number;
+  headSha?: string;
   sessions?: Array<Record<string, unknown>>;
   fetchPriorPrOpenRow?: (
     repoSlug: string,

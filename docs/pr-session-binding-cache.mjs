@@ -125,37 +125,6 @@ function findSessionById(sessions, sessionId) {
   return toArray(sessions).find((session) => getSessionIdentifier(session) === target) ?? null;
 }
 
-function parseIssueNumberFromEnv(env = process.env) {
-  for (const key of ['AO_ISSUE_NUMBER', 'GITHUB_ISSUE_NUMBER']) {
-    const parsed = asFiniteNumber(env[key]);
-    if (parsed > 0) {
-      return parsed;
-    }
-  }
-  const issueRef = trimText(env.AO_ISSUE_ID ?? env.GITHUB_ISSUE);
-  if (issueRef) {
-    const bare = issueRef.replace(/^#/, '');
-    const parsed = asFiniteNumber(bare);
-    if (parsed > 0) {
-      return parsed;
-    }
-  }
-  return 0;
-}
-
-
-function resolveProjectIdFromEnv(env = process.env, repoSlug = '') {
-  const explicit = trimText(env.AO_PROJECT_ID ?? env.AO_PROJECT);
-  if (explicit) {
-    return explicit;
-  }
-  const slug = trimText(repoSlug);
-  if (slug.includes('/')) {
-    return slug.split('/').pop() ?? '';
-  }
-  return slug;
-}
-
 /**
  * @param {unknown} payload
  */
@@ -199,7 +168,7 @@ export function loadPushRegisterVerifiedSessions(options = {}) {
 }
 
 function resolveRepoSlugFromEnvOrCwd(env = process.env, cwd = process.cwd()) {
-  const explicit = normalizeRepoSlug(env.AO_REPO_SLUG ?? env.GITHUB_REPOSITORY);
+  const explicit = normalizeRepoSlug(env.GITHUB_REPOSITORY);
   if (explicit) {
     return explicit;
   }
@@ -434,10 +403,10 @@ function enforceRecordCap(store, maxRecords, nowMs) {
 
 /**
  * @param {Record<string, unknown>} [env]
- * @param {{ claimedSessionId?: string, cwd?: string, sessions?: Array<Record<string, unknown>> }} [options]
+ * @param {{ sessionId?: string, claimedSessionId?: string, repoSlug?: string, projectId?: string, issueNumber?: number, cwd?: string, sessions?: Array<Record<string, unknown>> }} [options]
  */
 export function provePushRegisterWorkerIdentity(env = process.env, options = {}) {
-  const sessionId = trimText(env.AO_WORKER_SESSION_ID ?? env.AO_SESSION_ID);
+  const sessionId = trimText(options.sessionId);
   if (!sessionId) {
     return { ok: false, reason: 'push_register_missing_session_identity' };
   }
@@ -450,7 +419,7 @@ export function provePushRegisterWorkerIdentity(env = process.env, options = {})
   if (child && !/worker|interactive|orchestrator/i.test(consumer) && env.GH_GOVERNOR_LANE !== 'interactive') {
     return { ok: false, reason: 'push_register_non_worker_context' };
   }
-  const repoSlug = resolveRepoSlugFromEnvOrCwd(env, options.cwd ?? process.cwd());
+  const repoSlug = normalizeRepoSlug(options.repoSlug) || resolveRepoSlugFromEnvOrCwd(env, options.cwd ?? process.cwd());
   if (!repoSlug) {
     return { ok: false, reason: 'push_register_missing_repo_identity' };
   }
@@ -469,12 +438,13 @@ export function provePushRegisterWorkerIdentity(env = process.env, options = {})
   if (session.isTerminated === true) {
     return { ok: false, reason: 'push_register_session_terminated' };
   }
-  const projectId = resolveProjectIdFromEnv(env, repoSlug);
+  const projectId = trimText(options.projectId) || (repoSlug.includes('/') ? repoSlug.split('/').pop() ?? '' : repoSlug);
   const sessionProject = trimText(session.projectId);
   if (projectId && sessionProject && projectId.toLowerCase() !== sessionProject.toLowerCase()) {
     return { ok: false, reason: 'push_register_session_project_mismatch' };
   }
-  const issueNumber = parseIssueNumberFromEnv(env) || getSessionIssueNumber(session);
+  const explicitIssueNumber = asFiniteNumber(options.issueNumber);
+  const issueNumber = explicitIssueNumber > 0 ? explicitIssueNumber : getSessionIssueNumber(session);
   return { ok: true, sessionId, repoSlug, issueNumber: issueNumber > 0 ? issueNumber : undefined };
 }
 
@@ -973,7 +943,7 @@ export function isGhPrCreateArgv(argv = []) {
 }
 
 /**
- * @param {{ argv: string[], status: number, stdout: string, stderr: string, env?: NodeJS.ProcessEnv, cwd?: string, sessions?: Array<Record<string, unknown>>, fetchPriorPrOpenRow?: typeof fetchPriorPrOpenRowForPushRegister }} input
+ * @param {{ argv: string[], status: number, stdout: string, stderr: string, env?: NodeJS.ProcessEnv, cwd?: string, sessionId?: string, repoSlug?: string, projectId?: string, issueNumber?: number, headSha?: string, sessions?: Array<Record<string, unknown>>, fetchPriorPrOpenRow?: typeof fetchPriorPrOpenRowForPushRegister }} input
  */
 export function tryPushRegisterFromPrCreate({
   argv,
@@ -982,6 +952,11 @@ export function tryPushRegisterFromPrCreate({
   stderr,
   env = process.env,
   cwd = process.cwd(),
+  sessionId,
+  repoSlug,
+  projectId,
+  issueNumber,
+  headSha: explicitHeadSha,
   sessions,
   fetchPriorPrOpenRow,
 }) {
@@ -1003,7 +978,7 @@ export function tryPushRegisterFromPrCreate({
     };
   }
 
-  const identity = provePushRegisterWorkerIdentity(env, { cwd, sessions: verified.sessions });
+  const identity = provePushRegisterWorkerIdentity(env, { sessionId, repoSlug, projectId, issueNumber, cwd, sessions: verified.sessions });
   if (!identity.ok) {
     return {
       registered: false,
@@ -1012,7 +987,7 @@ export function tryPushRegisterFromPrCreate({
     };
   }
 
-  let headSha = normalizeSha(env.AO_HEAD_SHA ?? env.GITHUB_SHA);
+  let headSha = normalizeSha(explicitHeadSha ?? env.GITHUB_SHA);
   if (!headSha) {
     try {
       headSha = normalizeSha(
