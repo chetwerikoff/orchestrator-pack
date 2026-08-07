@@ -10,7 +10,14 @@ import {
   inspectAcceptanceArtifacts,
   produceAcceptanceArtifacts,
 } from './create-issue-stage-record-artifacts.ts';
-import { deriveReviewEpisodeId } from './stage-completeness-core.ts';
+import {
+  deriveReviewEpisodeId,
+  deriveReviewEpisodeState,
+  validateReviewEpisodeTopology,
+  type CaptureIdentityV1,
+  type StageCompletenessReceiptV1,
+  type VerifiedRelayEvidenceV1,
+} from './stage-completeness-core.ts';
 
 vi.mock('../finding-ledger-guard.mjs', () => ({
   checkFindingLedgerGuard: vi.fn(() => ({ ok: true, errors: [] })),
@@ -235,6 +242,17 @@ function validOperatorHint(body: string, revision = REVISION) {
   };
 }
 
+function inspect(input: ReturnType<typeof fixture>) {
+  return inspectAcceptanceArtifacts({
+    reviewDir: input.dir,
+    outputDir: input.outputDir,
+    tierIntakePath: input.intakePath,
+    stageEvidencePaths: [input.evidencePath],
+    authorDispositionsPath: input.authorPath,
+    phase: 'final-acceptance',
+  });
+}
+
 describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
   it('accepts receipt-ok/artifact-ok only after census, principal proof, and reread', () => {
     const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
@@ -379,6 +397,28 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.errors.join('\n')).toMatch(expected as RegExp);
   });
 
+  it('ignores an unrelated authorless comment while preserving the complete census', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const authorlessNoiseId = COMMENT_ID + 90;
+    const authorlessNoise = comment('unrelated historical note\n', {
+      id: authorlessNoiseId,
+      html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${authorlessNoiseId}`,
+      user: null,
+    });
+    const result = produce(input, transport({ census: [authorlessNoise, comment(input.body)] }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+    expect(receipt.invocations[0].artifactAuthority.commentId).toBe(COMMENT_ID);
+  });
+
+  it('fails closed when the canonical invocation candidate itself has no author', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const result = produce(input, transport({ census: [comment(input.body, { user: null })] }));
+    expect(result.ok).toBe(false);
+    expect(result.temporary).toBe('provenance-unresolved');
+    expect(result.errors.join('\n')).toContain('canonical artifact candidate has no authoritative comment-author login');
+  });
+
   it('filters provenance before uniqueness and compares GitHub logins case-insensitively', () => {
     const input = fixture({ transportClassification: 'incident' });
     const principalComment = comment(input.body);
@@ -473,12 +513,37 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     ['duplicate identity', { census: [comment(), comment(canonicalVerdict(), { id: COMMENT_ID + 1, html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}` })] }],
     ['wrong publisher', { census: [comment(canonicalVerdict(), { user: { login: 'someone-else' } })] }],
     ['edited artifact', { census: [comment(canonicalVerdict(), { updated_at: '2026-08-07T04:01:00Z' })] }],
+    ['wrong revision', { census: [comment(canonicalVerdict('r02'))] }],
+    ['reread byte mismatch', { census: [comment()], reread: comment(`${canonicalVerdict()}changed\n`) }],
     ['source unavailable', { censusFailure: true }],
     ['principal unavailable', { principal: null }],
   ])('does not let the operator URL override %s', (_name, transportOptions) => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport(transportOptions as TransportOptions), validOperatorHint(input.body));
     expect(result.ok).toBe(false);
+  });
+
+  it('does not let the operator URL override observation loss', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const result = produce(input, transport({
+      census: [comment(input.body)],
+      beforeReread: () => symlinkSync(join(input.dir, 'missing-target'), input.capturePath),
+    }), validOperatorHint(input.body));
+    expect(result.ok).toBe(false);
+    expect(result.temporary).toBe('observation-lost');
+  });
+
+  it('does not let the operator URL override an existing-capture conflict', () => {
+    const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: 'foreign local bytes\n' });
+    const live = canonicalVerdict();
+    const result = produce(
+      input,
+      transport({ census: [comment(live)], reread: comment(live) }),
+      validOperatorHint(live),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('conflicts with existing canonical capture');
+    expect(readFileSync(input.capturePath, 'utf8')).toBe('foreign local bytes\n');
   });
 
   it('uses the operator URL only as a narrowing hint after unique canonical resolution', () => {
@@ -534,14 +599,212 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input);
     expect(result.ok, result.errors.join('\n')).toBe(true);
-    const status = inspectAcceptanceArtifacts({
-      reviewDir: input.dir,
-      outputDir: input.outputDir,
-      tierIntakePath: input.intakePath,
-      stageEvidencePaths: [input.evidencePath],
-      authorDispositionsPath: input.authorPath,
-      phase: 'final-acceptance',
-    });
+    const status = inspect(input);
     expect(status.ok, status.missing.map((item) => item.reason).join('\n')).toBe(true);
+  });
+
+  it('check-artifacts still requires capture and turn-result evidence for successful transport', () => {
+    const missingTurnResult = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
+    const producedTurnResult = produce(missingTurnResult);
+    expect(producedTurnResult.ok, producedTurnResult.errors.join('\n')).toBe(true);
+    expect(inspect(missingTurnResult).ok).toBe(true);
+    rmSync(missingTurnResult.turnResultPath);
+    const turnStatus = inspect(missingTurnResult);
+    expect(turnStatus.ok).toBe(false);
+    expect(turnStatus.missing.map((item) => item.reason).join('\n')).toContain('missing turn-result/v1 artifact');
+
+    const missingCapture = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
+    const producedCapture = produce(missingCapture);
+    expect(producedCapture.ok, producedCapture.errors.join('\n')).toBe(true);
+    expect(inspect(missingCapture).ok).toBe(true);
+    rmSync(missingCapture.capturePath);
+    const captureStatus = inspect(missingCapture);
+    expect(captureStatus.ok).toBe(false);
+    expect(captureStatus.missing.map((item) => item.reason).join('\n')).toContain('missing capture file');
+  });
+});
+
+describe('Issue #1385 round-two receipt regressions', () => {
+  function outputAuthority(input: ReturnType<typeof fixture>) {
+    return {
+      tierIntake: JSON.parse(readFileSync(input.intakePath, 'utf8')),
+      receiptInventory: JSON.parse(readFileSync(join(input.outputDir, 'review-episode-inventory.json'), 'utf8')),
+      claudeProducerEvidence: [],
+    };
+  }
+
+  it('rejects zero-send, malformed, mismatched, and captureless artifactAuthority branches', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const produced = produce(input);
+    expect(produced.ok, produced.errors.join('\n')).toBe(true);
+    const accepted = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8')) as StageCompletenessReceiptV1;
+    const relayEvidence = JSON.parse(readFileSync(join(input.outputDir, 'verified-relay-evidence.json'), 'utf8')) as VerifiedRelayEvidenceV1[];
+    const episodeAuthority = outputAuthority(input);
+
+    const zeroSend = structuredClone(accepted);
+    zeroSend.invocations![0]!.sendCount = 0;
+    expect(deriveReviewEpisodeState([zeroSend], relayEvidence, episodeAuthority).errors.join('\n'))
+      .toContain('artifactAuthority requires sendCount 1');
+
+    const malformed = structuredClone(accepted);
+    malformed.invocations![0]!.artifactAuthority!.commentUrl = `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}`;
+    expect(deriveReviewEpisodeState([malformed], relayEvidence, episodeAuthority).errors.join('\n'))
+      .toContain('artifactAuthority.commentUrl is not canonical');
+
+    const mismatched = structuredClone(accepted);
+    mismatched.invocations![0]!.artifactAuthority!.issueNumber = ISSUE + 1;
+    mismatched.invocations![0]!.artifactAuthority!.commentUrl = `https://github.com/${REPOSITORY}/issues/${ISSUE + 1}#issuecomment-${COMMENT_ID}`;
+    expect(deriveReviewEpisodeState([mismatched], relayEvidence, episodeAuthority).errors.join('\n'))
+      .toContain('artifactAuthority.issueNumber does not match receipt taskIdentity');
+
+    const captureless = structuredClone(accepted);
+    delete captureless.invocations![0]!.capture;
+    expect(deriveReviewEpisodeState([captureless], relayEvidence, episodeAuthority).errors.join('\n'))
+      .toContain('artifactAuthority requires capture');
+  });
+
+  it('accepts the full r03 preterminal to r04 terminal chain and rejects terminal revision drift', () => {
+    const taskIdentity = `issue:${ISSUE}`;
+    const episodeFirstRevision = 'r03';
+    const reviewEpisodeId = `${taskIdentity}@${episodeFirstRevision}`;
+    const receiptId = (sequence: number) => `${reviewEpisodeId}:stage-receipt:${String(sequence).padStart(4, '0')}`;
+    const makeCapture = (name: string, seed: string): CaptureIdentityV1 => {
+      const digest = createHash('sha256').update(seed).digest('hex');
+      return {
+        captureIdentity: `sha256:${digest}:${name}`,
+        name,
+        byteLength: Buffer.byteLength(seed),
+        sha256: digest,
+        rawFindingCount: 0,
+      };
+    };
+    const makeBrowserReceipt = (
+      stage: 'competitive' | 'architectural-review' | 'architectural',
+      sequence: number,
+      sourceRevision: string,
+    ): StageCompletenessReceiptV1 => {
+      const attemptId = `${stage}-attempt`;
+      const policyVersion = stage === 'architectural' ? 'single-source/v1' as const : 'triple-source/v1' as const;
+      const name = stage === 'architectural'
+        ? `pass-${String(sequence).padStart(2, '0')}-architectural.capture.txt`
+        : `pass-${String(sequence).padStart(2, '0')}-${stage}-01.capture.txt`;
+      const item = makeCapture(name, `${stage}:${sourceRevision}`);
+      return {
+        schema: 'stage-completeness-receipt/v1',
+        tier: 'T3',
+        taskIdentity,
+        episodeFirstRevision,
+        reviewEpisodeId,
+        stageReceiptId: receiptId(sequence),
+        previousStageReceiptId: sequence === 1 ? null : receiptId(sequence - 1),
+        receiptCensus: Array.from({ length: sequence }, (_, index) => receiptId(index + 1)),
+        stageAttemptId: attemptId,
+        stageSequence: sequence,
+        stage,
+        policyVersion,
+        reviewerCardinality: 1,
+        cardinalityConfigIdentity: CONFIG,
+        sourceRevision,
+        outcome: 'complete',
+        revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+        settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+        invocations: [{
+          schema: 'reviewer-invocation-envelope/v1',
+          reviewEpisodeId,
+          stageAttemptId: attemptId,
+          policyVersion,
+          reviewerCardinality: 1,
+          cardinalityConfigIdentity: CONFIG,
+          stage,
+          sourceRevision,
+          invocationId: `${stage}-${sourceRevision}-invocation`,
+          terminalResultIdentity: `${stage}-${sourceRevision}-terminal`,
+          reviewerSource: `${stage}-${sourceRevision}-source`,
+          reviewerSlot: '01',
+          reviewerOrdinal: 1,
+          attemptOrdinal: 1,
+          retryAttempt: false,
+          terminal: true,
+          terminalClassification: 'complete',
+          sendCount: 1,
+          retryClass: 'none',
+          revisionCheck: 'matched',
+          capacityOutcome: 'admitted',
+          capacityWaitMs: 0,
+          capture: item,
+        }],
+        credentialingCaptures: [item],
+        relayEligibleCaptures: [item],
+      };
+    };
+
+    const competitive = makeBrowserReceipt('competitive', 1, 'r03');
+    const preterminal = makeBrowserReceipt('architectural-review', 2, 'r03');
+    const lens: StageCompletenessReceiptV1 = {
+      schema: 'stage-completeness-receipt/v1',
+      tier: 'T3',
+      taskIdentity,
+      episodeFirstRevision,
+      reviewEpisodeId,
+      stageReceiptId: receiptId(3),
+      previousStageReceiptId: receiptId(2),
+      receiptCensus: [receiptId(1), receiptId(2), receiptId(3)],
+      stageAttemptId: 'architectural-lens-attempt',
+      stageSequence: 3,
+      stage: 'architectural-lens',
+      policyVersion: 'single-source/v1',
+      reviewerCardinality: 1,
+      cardinalityConfigIdentity: CONFIG,
+      sourceRevision: 'r04',
+      outcome: 'complete',
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+      settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+      claude: {
+        kind: 'waiver',
+        waiver: { reason: 'claude-unavailable', unavailability: 'provider-unavailable', evidenceIdentity: 'r04-lens-waiver' },
+      },
+      credentialingCaptures: [],
+      relayEligibleCaptures: [],
+    };
+    const terminal = makeBrowserReceipt('architectural', 4, 'r04');
+    const receipts = [competitive, preterminal, lens, terminal];
+    const captures = receipts.flatMap((item) => item.relayEligibleCaptures);
+    const relays: VerifiedRelayEvidenceV1[] = captures.map((item, index) => ({
+      relayAttemptId: `r03-r04-relay-${index + 1}`,
+      captureIdentity: item.captureIdentity,
+      sourceLabel: `${item.name}|${item.captureIdentity}`,
+      name: item.name,
+      byteLength: item.byteLength,
+      sha256: item.sha256,
+      verified: true,
+    }));
+    const episodeAuthority = {
+      tierIntake: {
+        schema: 'tier-intake/v1' as const,
+        producer: 'flow-manager',
+        taskIdentity,
+        kind: 'fresh' as const,
+        priorTier: 'T3' as const,
+        firstRevision: episodeFirstRevision,
+      },
+      receiptInventory: {
+        source: 'canonical-review-directory' as const,
+        taskIdentity,
+        episodeFirstRevision,
+        reviewEpisodeId,
+        stageReceiptIds: receipts.map((item) => item.stageReceiptId),
+      },
+      claudeProducerEvidence: [],
+    };
+
+    const state = deriveReviewEpisodeState(receipts, relays, episodeAuthority);
+    expect(state.errors, state.errors.join('\n')).toEqual([]);
+    expect(validateReviewEpisodeTopology(state, 'final-acceptance')).toEqual([]);
+    expect(state.receipts.map((item) => item.sourceRevision)).toEqual(['r03', 'r03', 'r04', 'r04']);
+
+    const drifted = structuredClone(receipts);
+    drifted[3]!.invocations![0]!.sourceRevision = 'r05';
+    const driftedState = deriveReviewEpisodeState(drifted, relays, episodeAuthority);
+    expect(driftedState.errors.join('\n')).toContain('sourceRevision mismatch');
   });
 });
