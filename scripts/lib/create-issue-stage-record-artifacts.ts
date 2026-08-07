@@ -98,9 +98,8 @@ export interface ProduceAcceptanceArtifactsOptions {
   outputDir?: string;
   phase?: 'pre-lens' | 'final-acceptance';
   operatorAdjudication?: OperatorAcceptanceAdjudication;
-  /** Backward-compatible injection point; now used by the single authoritative artifact path. */
+  /** Backward-compatible injection point; it is only a transport seam, never an authority seam. */
   operatorReferenceTransport?: GhTransport;
-  /** Preferred test/integration injection point for the existing GitHub transport. */
   artifactSourceTransport?: GhTransport;
   repositoryFullName?: string;
 }
@@ -132,6 +131,7 @@ interface AuthoritativeIssueCensus {
 }
 
 interface ArtifactAuthorityContext {
+  transport: GhTransport;
   census: AuthoritativeIssueCensus;
   operatorHint?: OperatorNarrowingHint;
 }
@@ -503,13 +503,14 @@ function normalizeOperatorNarrowingHint(
   const verdictUrl = String(value.verdictUrl ?? '').trim();
   const reason = String(value.reason ?? '').trim();
   const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)$/.exec(verdictUrl);
+  const errorCountBefore = errors.length;
   if (!match) errors.push('operator verdict URL hint must be a canonical published Issue comment URL');
   if (Number(value.issueNumber) !== issueNumber) errors.push('operator verdict URL hint Issue does not match tier-intake Issue');
   if (!/^r[0-9]+$/.test(sourceRevision)) errors.push('operator verdict URL hint sourceRevision must be rNN');
   if (!reason) errors.push('operator verdict URL hint reason must be non-empty');
   if (match && match[1]!.toLowerCase() !== repositoryFullName.toLowerCase()) errors.push('operator verdict URL hint repository mismatch');
   if (match && Number(match[2]) !== issueNumber) errors.push('operator verdict URL hint Issue mismatch');
-  if (!match || errors.length > 0) return undefined;
+  if (!match || errors.length !== errorCountBefore) return undefined;
   return {
     repositoryFullName,
     issueNumber,
@@ -543,6 +544,35 @@ function authenticatedGithubPrincipal(
     return null;
   }
   return login;
+}
+
+function parseAuthoritativeIssueComment(
+  raw: unknown,
+  label: string,
+  errors: string[],
+  unavailableClassification: AcceptanceArtifactTemporaryClassification = 'source-unavailable',
+): AuthoritativeIssueComment | null {
+  if (!isRecord(raw)) {
+    errors.push(temporaryError(unavailableClassification, `${label} is malformed`));
+    return null;
+  }
+  const user = isRecord(raw.user) ? raw.user : null;
+  const id = Number(raw.id);
+  const body = typeof raw.body === 'string' ? raw.body : null;
+  const createdAt = typeof raw.created_at === 'string' ? raw.created_at : null;
+  const updatedAt = typeof raw.updated_at === 'string' ? raw.updated_at : null;
+  const userLogin = typeof user?.login === 'string' && user.login.trim() !== '' ? user.login.trim() : null;
+  const htmlUrl = typeof raw.html_url === 'string' ? raw.html_url : null;
+  const issueUrl = typeof raw.issue_url === 'string' ? raw.issue_url : null;
+  if (!userLogin) {
+    errors.push(temporaryError('provenance-unresolved', `${label} has no comment-author login`));
+    return null;
+  }
+  if (!Number.isSafeInteger(id) || id < 1 || body === null || !createdAt || !updatedAt || !htmlUrl || !issueUrl) {
+    errors.push(temporaryError(unavailableClassification, `${label} lacks authoritative identity/source fields`));
+    return null;
+  }
+  return { id, body, createdAt, updatedAt, userLogin, htmlUrl, issueUrl };
 }
 
 function authoritativeIssueCommentCensus(
@@ -580,23 +610,9 @@ function authoritativeIssueCommentCensus(
       return null;
     }
     for (const [index, raw] of rawPage.entries()) {
-      if (!isRecord(raw)) {
-        errors.push(temporaryError('source-unavailable', `Issue comment census page ${page} item ${index} is malformed`));
-        return null;
-      }
-      const user = isRecord(raw.user) ? raw.user : null;
-      const id = Number(raw.id);
-      const body = typeof raw.body === 'string' ? raw.body : null;
-      const createdAt = typeof raw.created_at === 'string' ? raw.created_at : null;
-      const updatedAt = typeof raw.updated_at === 'string' ? raw.updated_at : null;
-      const userLogin = typeof user?.login === 'string' ? user.login : null;
-      const htmlUrl = typeof raw.html_url === 'string' ? raw.html_url : null;
-      const issueUrl = typeof raw.issue_url === 'string' ? raw.issue_url : null;
-      if (!Number.isSafeInteger(id) || id < 1 || body === null || !createdAt || !updatedAt || !userLogin || !htmlUrl || !issueUrl) {
-        errors.push(temporaryError('provenance-unresolved', `Issue comment census page ${page} item ${index} lacks authoritative identity/provenance fields`));
-        return null;
-      }
-      comments.push({ id, body, createdAt, updatedAt, userLogin, htmlUrl, issueUrl });
+      const parsed = parseAuthoritativeIssueComment(raw, `Issue comment census page ${page} item ${index}`, errors);
+      if (!parsed) return null;
+      comments.push(parsed);
     }
     if (rawPage.length < pageSize) {
       return { repositoryFullName: parsedRepo.fullName, issueNumber, publisherLogin, comments };
@@ -607,8 +623,8 @@ function authoritativeIssueCommentCensus(
 }
 
 function invocationRequiresAuthoritativeArtifact(invocation: JsonRecord): boolean {
-  const frozenPolicy = parseReviewerSourcePolicy(optionalString(invocation.reviewerSource) ?? '')?.capturePolicy;
-  return frozenPolicy === 'direct-publication/v1' || invocation.terminalClassification !== 'complete';
+  return parseReviewerSourcePolicy(optionalString(invocation.reviewerSource) ?? '') !== null
+    || invocation.terminalClassification !== 'complete';
 }
 
 function expectedCaptureName(
@@ -709,6 +725,86 @@ function materializeAuthoritativeCapture(
   return { capture, path: target };
 }
 
+function expectedCommentUrl(repositoryFullName: string, issueNumber: number, commentId: number): string {
+  return `https://github.com/${repositoryFullName}/issues/${issueNumber}#issuecomment-${commentId}`;
+}
+
+function expectedIssueApiUrl(repositoryFullName: string, issueNumber: number): string {
+  return `https://api.github.com/repos/${repositoryFullName}/issues/${issueNumber}`;
+}
+
+function commentTargetsExpectedIssue(
+  comment: AuthoritativeIssueComment,
+  repositoryFullName: string,
+  issueNumber: number,
+): boolean {
+  return comment.htmlUrl === expectedCommentUrl(repositoryFullName, issueNumber, comment.id)
+    && comment.issueUrl === expectedIssueApiUrl(repositoryFullName, issueNumber);
+}
+
+function rereadAuthoritativeIssueComment(
+  context: ArtifactAuthorityContext,
+  censusComment: AuthoritativeIssueComment,
+  stage: Exclude<ReviewStage, 'architectural-lens'>,
+  sourceRevision: string,
+  invocationId: string,
+  errors: string[],
+): AuthoritativeIssueComment | null {
+  const response = context.transport.runGh([
+    'gh',
+    'api',
+    `repos/${context.census.repositoryFullName}/issues/comments/${censusComment.id}`,
+  ]);
+  if (response.exitCode !== 0) {
+    errors.push(temporaryError('source-unavailable', `authoritative reread failed for comment ${censusComment.id}`));
+    return null;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(response.stdout) as unknown;
+  } catch {
+    errors.push(temporaryError('source-unavailable', `authoritative reread for comment ${censusComment.id} is malformed JSON`));
+    return null;
+  }
+  const reread = parseAuthoritativeIssueComment(raw, `authoritative reread comment ${censusComment.id}`, errors);
+  if (!reread) return null;
+  if (!commentTargetsExpectedIssue(reread, context.census.repositoryFullName, context.census.issueNumber)) {
+    errors.push(`authoritative GitHub artifact target mismatch on reread: comment ${censusComment.id}`);
+    return null;
+  }
+  if (reread.userLogin !== context.census.publisherLogin) {
+    errors.push(`provenance-mismatch: authoritative comment ${reread.id} author ${reread.userLogin} does not equal authenticated principal ${context.census.publisherLogin}`);
+    return null;
+  }
+  if (reread.createdAt !== reread.updatedAt) {
+    errors.push(`authoritative GitHub artifact was edited: ${reread.htmlUrl}`);
+    return null;
+  }
+  if (!isCanonicalReviewerArtifact(
+    reread.body,
+    stage,
+    context.census.issueNumber,
+    sourceRevision,
+    invocationId,
+  )) {
+    errors.push(`authoritative GitHub artifact is malformed or revision/invocation-mismatched on reread: ${reread.htmlUrl}`);
+    return null;
+  }
+  if (
+    reread.id !== censusComment.id
+    || reread.body !== censusComment.body
+    || reread.createdAt !== censusComment.createdAt
+    || reread.updatedAt !== censusComment.updatedAt
+    || reread.userLogin !== censusComment.userLogin
+    || reread.htmlUrl !== censusComment.htmlUrl
+    || reread.issueUrl !== censusComment.issueUrl
+  ) {
+    errors.push(`authoritative GitHub artifact changed between complete census and reread: ${censusComment.htmlUrl}`);
+    return null;
+  }
+  return reread;
+}
+
 function resolveAuthoritativeArtifact(
   context: ArtifactAuthorityContext,
   reviewDir: string,
@@ -723,44 +819,59 @@ function resolveAuthoritativeArtifact(
   const sourceRevision = optionalString(invocation.sourceRevision) ?? '';
   const reviewerSlot = optionalString(invocation.reviewerSlot) ?? '';
   if (!invocationId || !sourceRevision || !reviewerSlot) return null;
-  let matches = context.census.comments.filter((comment) => isCanonicalReviewerArtifact(
-    comment.body,
-    stage,
-    context.census.issueNumber,
-    sourceRevision,
-    invocationId,
+  const matches = context.census.comments.filter((comment) => (
+    commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)
+    && isCanonicalReviewerArtifact(
+      comment.body,
+      stage,
+      context.census.issueNumber,
+      sourceRevision,
+      invocationId,
+    )
   ));
-  const hint = context.operatorHint;
-  if (hint && stage === 'architectural' && hint.sourceRevision === sourceRevision) {
-    matches = matches.filter((comment) => comment.id === hint.commentId);
-  }
   if (matches.length === 0) {
-    errors.push(`authoritative GitHub artifact absent for invocation ${invocationId} at ${sourceRevision}`);
+    errors.push(
+      `authoritative GitHub artifact absent after complete census: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} sourceRevision=${sourceRevision} invocationId=${invocationId} source=GitHub-Issue-comments`,
+    );
     return null;
   }
   if (matches.length !== 1) {
-    errors.push(temporaryError('identity-unresolved', `invocation ${invocationId} resolved to ${matches.length} canonical Issue comments`));
+    const identities = matches.map((comment) => `${comment.id}:${comment.htmlUrl}`).join(', ');
+    errors.push(temporaryError(
+      'identity-unresolved',
+      `invocation ${invocationId} resolved to ${matches.length} canonical Issue comments: ${identities}`,
+    ));
     return null;
   }
-  const comment = matches[0]!;
-  if (comment.userLogin !== context.census.publisherLogin) {
-    errors.push(`provenance-mismatch: authoritative comment ${comment.id} author ${comment.userLogin} does not equal authenticated principal ${context.census.publisherLogin}`);
+  const censusComment = matches[0]!;
+  if (censusComment.userLogin !== context.census.publisherLogin) {
+    errors.push(`provenance-mismatch: authoritative comment ${censusComment.id} author ${censusComment.userLogin} does not equal authenticated principal ${context.census.publisherLogin}`);
     return null;
   }
-  if (comment.createdAt !== comment.updatedAt) {
-    errors.push(`authoritative GitHub artifact was edited: ${comment.htmlUrl}`);
+  if (censusComment.createdAt !== censusComment.updatedAt) {
+    errors.push(`authoritative GitHub artifact was edited: ${censusComment.htmlUrl}`);
     return null;
   }
-  const expectedUrl = `https://github.com/${context.census.repositoryFullName}/issues/${context.census.issueNumber}#issuecomment-${comment.id}`;
-  const expectedIssueUrl = `https://api.github.com/repos/${context.census.repositoryFullName}/issues/${context.census.issueNumber}`;
-  if (comment.htmlUrl !== expectedUrl || comment.issueUrl !== expectedIssueUrl) {
-    errors.push(`authoritative GitHub artifact identity mismatch for comment ${comment.id}`);
-    return null;
+  const hint = context.operatorHint;
+  if (hint && stage === 'architectural') {
+    if (
+      hint.sourceRevision !== sourceRevision
+      || hint.commentId !== censusComment.id
+      || hint.commentUrl !== censusComment.htmlUrl
+    ) {
+      errors.push('operator verdict URL hint does not identify the uniquely resolved canonical invocation artifact');
+      return null;
+    }
   }
-  if (hint && stage === 'architectural' && hint.sourceRevision === sourceRevision && hint.commentUrl !== expectedUrl) {
-    errors.push(temporaryError('identity-unresolved', 'operator verdict URL hint does not narrow to the canonical invocation artifact'));
-    return null;
-  }
+  const comment = rereadAuthoritativeIssueComment(
+    context,
+    censusComment,
+    stage,
+    sourceRevision,
+    invocationId,
+    errors,
+  );
+  if (!comment) return null;
   const name = expectedCaptureName(stage, stageSequence, reviewerSlot);
   const materialized = materializeAuthoritativeCapture(
     reviewDir,
@@ -1098,7 +1209,7 @@ function buildReceipt(
         } else {
           artifactResolution = resolveAuthoritativeArtifact(
             artifactContext,
-            optionsReviewDirForEvidence(evidencePath, artifactContext, raw),
+            dirname(evidencePath),
             browserStage,
             sequence,
             value,
@@ -1200,23 +1311,9 @@ function buildReceipt(
     ...(claude ? { claude: claude as unknown as StageCompletenessReceiptV1['claude'] } : {}),
     credentialingCaptures,
     relayEligibleCaptures: captures,
-    ...(isRecord(raw.reviewLane) ? { reviewLane: raw.reviewLane as StageCompletenessReceiptV1['reviewLane'] } : {}),
+    ...(isRecord(raw.reviewLane) ? { reviewLane: raw.reviewLane as unknown as StageCompletenessReceiptV1['reviewLane'] } : {}),
   };
   return receipt;
-}
-
-/*
- * The authoritative target is always the canonical review directory. The helper
- * is intentionally tiny so buildReceipt cannot infer a sibling store from
- * transport state. Stage evidence files are already required to live there by
- * resolveCanonicalStageEvidencePaths().
- */
-function optionsReviewDirForEvidence(
-  evidencePath: string,
-  _context: ArtifactAuthorityContext,
-  _raw: JsonRecord,
-): string {
-  return dirname(evidencePath);
 }
 
 function isValidSettlement(
@@ -1434,12 +1531,13 @@ export function produceAcceptanceArtifacts(
       const census = errors.length === 0
         ? authoritativeIssueCommentCensus(transport, repositoryFullName, issueNumber, errors)
         : null;
-      if (census) artifactContext = { census, ...(operatorHint ? { operatorHint } : {}) };
+      if (census) artifactContext = { transport, census, ...(operatorHint ? { operatorHint } : {}) };
     }
   } else if (options.operatorAdjudication) {
     errors.push('operator verdict URL hint cannot create an acceptance path when no invocation requires authoritative artifact resolution');
   }
   if (errors.length > 0) {
+    const temporary = temporaryClassification(errors);
     return {
       ok: false,
       outputDir,
@@ -1447,7 +1545,7 @@ export function produceAcceptanceArtifacts(
       missing: [],
       errors: [...new Set(errors)],
       reviewEpisodeId: episodeId,
-      ...(temporaryClassification(errors) ? { temporary: temporaryClassification(errors) } : {}),
+      ...(temporary ? { temporary } : {}),
     };
   }
 
@@ -1546,6 +1644,7 @@ export function produceAcceptanceArtifacts(
     }
   }
   if (errors.length > 0 || !ledger || !tier) {
+    const temporary = temporaryClassification(errors);
     return {
       ok: false,
       outputDir,
@@ -1553,7 +1652,7 @@ export function produceAcceptanceArtifacts(
       missing: [],
       errors: [...new Set(errors)],
       reviewEpisodeId: episodeId,
-      ...(temporaryClassification(errors) ? { temporary: temporaryClassification(errors) } : {}),
+      ...(temporary ? { temporary } : {}),
     };
   }
 
