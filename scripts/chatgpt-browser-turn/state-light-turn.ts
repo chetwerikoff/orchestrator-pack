@@ -3447,9 +3447,15 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     pagePresent: cleanupAuthorityProven,
     pageLost,
   });
+  // Direct-publication successes use the existing #1266 post-settlement
+  // exact-target close: emit the terminal result while the target is retained.
+  const postSettlementCloseEligible = outcome.result.state === 'ok'
+    && outcome.publicationState === 'committed_ok'
+    && outcome.result.reviewer_source !== undefined;
   // Issue #1266 owns abandonment close. Local observation loss has no Stop
   // authority, and every post-send non-ok tab remains preserved.
-  const pageAction = outcome.result.send_count >= 1 && outcome.result.state !== 'ok'
+  const pageAction = postSettlementCloseEligible
+    || (outcome.result.send_count >= 1 && outcome.result.state !== 'ok')
     ? 'preserve'
     : requestedPageAction;
   if (pageAction === 'close') {
