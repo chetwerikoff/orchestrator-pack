@@ -89,9 +89,11 @@ function sealedPassBody(): string {
 }
 
 describe('Issue #1359 production worker-smoke reachability', () => {
-  it('runs production spawn, generation lookup, and exactly one dispatch', () => {
+  it('uses exact show despite list miss and title drift, then dispatches exactly once', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-production-dispatch-'));
     let sendCalls = 0;
+    let showCalls = 0;
+    let probeCalls = 0;
     const calls: string[][] = [];
     const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
       calls.push([...args]);
@@ -107,36 +109,41 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: HEAD } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
+      if (args[0] === 'terminal' && args[1] === 'show') {
+        showCalls += 1;
         return ok({
-          terminals: [{
+          terminal: {
             handle: 'terminal-1',
-            title: 'smoke-1359',
+            title: showCalls === 1 ? 'smoke-1359' : 'renamed-smoke-1359',
             incarnationId: 'stable-generation',
             worktreePath: root,
             status: 'running',
-          }],
+          },
         } as T);
+      }
+      if (args[0] === 'terminal' && args[1] === 'list') {
+        return ok({ terminals: [] } as T);
       }
       if (args[0] === 'terminal' && args[1] === 'send') {
         sendCalls += 1;
         return ok({ sent: true } as T);
       }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     const restore = installStableWorkerSmokeSpawnPatch({
-      probe: () => ok({
-        terminal: {
-          handle: 'terminal-1',
-          title: 'smoke-1359',
-          incarnationId: 'stable-generation',
-          worktreePath: root,
-          status: 'running',
-        },
-      }),
+      agentStartupProbe: () => true,
+      probe: () => {
+        probeCalls += 1;
+        return ok({
+          terminal: {
+            handle: 'terminal-1',
+            title: 'renamed-smoke-1359',
+            incarnationId: 'stable-generation',
+            worktreePath: root,
+            status: 'running',
+          },
+        });
+      },
     });
 
     try {
@@ -167,9 +174,10 @@ describe('Issue #1359 production worker-smoke reachability', () => {
         now: () => 1,
         sleepMs: () => undefined,
       })).toMatchObject({ ok: true });
+      expect(probeCalls).toBeGreaterThanOrEqual(2);
       expect(sendCalls).toBe(1);
       expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'create')).toBe(true);
-      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'list')).toBe(true);
+      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'list')).toBe(false);
       expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'send')).toBe(true);
     } finally {
       restore();
@@ -266,6 +274,13 @@ describe('Issue #1359 production worker-smoke reachability', () => {
     const handle = 'terminal-close-failure';
     const generation = 'generation-close-failure';
     const message = 'close denied by runtime verbatim';
+    const terminal: OrcaTerminalSummary = {
+      handle,
+      incarnationId: generation,
+      title: 'close-failure',
+      worktreePath: root,
+      status: 'running',
+    };
     const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
       if (args[0] === 'terminal' && args[1] === 'create') {
         return ok({ terminal: { handle, incarnationId: generation, title: 'close-failure' } } as T);
@@ -273,16 +288,8 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: HEAD } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
-        return ok({
-          terminals: [{
-            handle,
-            incarnationId: generation,
-            title: 'close-failure',
-            worktreePath: root,
-            status: 'running',
-          }],
-        } as T);
+      if (args[0] === 'terminal' && args[1] === 'show') {
+        return ok({ terminal } as T);
       }
       if (args[0] === 'terminal' && args[1] === 'close') {
         return {
@@ -291,11 +298,12 @@ describe('Issue #1359 production worker-smoke reachability', () => {
           error: { code: 'runtime_error', message },
         };
       }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
+    const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
+      probe: () => ok({ terminal }),
+    });
 
     try {
       const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
@@ -314,20 +322,28 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       expect(outcome).toContain(`handle=${handle}`);
       expect(outcome).toContain(`generation=${generation}`);
     } finally {
+      restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('refuses failed identity stabilization before the original dispatcher can send', () => {
+  it('refuses a post-freeze replacement before the original dispatcher can send', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-no-send-'));
-    let lookupCalls = 0;
     let sendCalls = 0;
+    let probeCalls = 0;
+    const stable: OrcaTerminalSummary = {
+      handle: 'terminal-2',
+      title: 'smoke-1359',
+      incarnationId: 'stable-generation',
+      worktreePath: root,
+      status: 'running',
+    };
     const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
       if (args[0] === 'terminal' && args[1] === 'create') {
         return ok({
           terminal: {
-            handle: 'terminal-2',
-            title: 'smoke-1359',
+            handle: stable.handle,
+            title: stable.title,
             incarnationId: 'create-generation',
           },
         } as T);
@@ -335,26 +351,25 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: HEAD } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
-        lookupCalls += 1;
-        return ok({ terminals: [] } as T);
+      if (args[0] === 'terminal' && args[1] === 'show') {
+        return ok({ terminal: stable } as T);
       }
       if (args[0] === 'terminal' && args[1] === 'send') {
         sendCalls += 1;
         return ok({ sent: true } as T);
       }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     const restore = installStableWorkerSmokeSpawnPatch({
-      probe: () => ({
-        ok: false,
-        operation: 'terminal_show',
-        outcomeCategory: 'supported_operation_failure',
-        error: { code: 'terminal_generation_missing', message: 'generation missing' },
-      }),
+      agentStartupProbe: () => true,
+      probe: () => {
+        probeCalls += 1;
+        return ok({
+          terminal: probeCalls === 1
+            ? stable
+            : { ...stable, incarnationId: 'replacement-generation' },
+        });
+      },
     });
 
     try {
@@ -366,6 +381,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       }, { cwd: root });
       expect(spawned.status).toBe('ok');
       if (spawned.status !== 'ok') return;
+      expect(spawned.value.identity.generation).toBe('stable-generation');
 
       const dispatched = adapter.dispatchInput({
         worker: spawned.value.identity,
@@ -373,12 +389,14 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       }, { cwd: root });
       expect(dispatched.status).toBe('send_failed');
       if (dispatched.status === 'send_failed') {
-        expect(dispatched.reason).toContain('worker_generation_not_found');
-        expect(dispatched.reason).toContain('expected_generation=create-generation');
+        expect(dispatched.reason).toContain('worker_generation_mismatch');
+        expect(dispatched.reason).toContain('expected_generation=stable-generation');
+        expect(dispatched.reason).toContain('observed_generation=replacement-generation');
         expect(dispatched.reason).toContain('identity_source=orca_terminal_show(terminal-2)');
         expect(dispatched.reason).toContain('resolution=');
       }
-      expect(lookupCalls).toBe(0);
+      expect(probeCalls).toBeGreaterThanOrEqual(2);
+      expect(spawned.value.identity.generation).toBe('stable-generation');
       expect(sendCalls).toBe(0);
     } finally {
       restore();
@@ -386,17 +404,23 @@ describe('Issue #1359 production worker-smoke reachability', () => {
     }
   });
 
-  it('refuses actionably before send when the created handle disappears before dispatch', () => {
+  it('keeps a missing-handle-like show failure unresolved and sends zero payload bytes', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-handle-disappeared-'));
     let probeCalls = 0;
-    let lookupCalls = 0;
     let sendCalls = 0;
+    const stable: OrcaTerminalSummary = {
+      handle: 'terminal-dead',
+      title: 'smoke-1359',
+      incarnationId: 'stable-generation',
+      worktreePath: root,
+      status: 'running',
+    };
     const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
       if (args[0] === 'terminal' && args[1] === 'create') {
         return ok({
           terminal: {
-            handle: 'terminal-dead',
-            title: 'smoke-1359',
+            handle: stable.handle,
+            title: stable.title,
             incarnationId: 'create-generation',
           },
         } as T);
@@ -404,33 +428,20 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       if (args[0] === 'worktree' && args[1] === 'current') {
         return ok({ worktree: { path: root, head: HEAD } } as T);
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
-        lookupCalls += 1;
-        return ok({ terminals: [] } as T);
+      if (args[0] === 'terminal' && args[1] === 'show') {
+        return ok({ terminal: stable } as T);
       }
       if (args[0] === 'terminal' && args[1] === 'send') {
         sendCalls += 1;
         return ok({ sent: true } as T);
       }
-      return {
-        ok: false,
-        error: { code: 'unexpected_test_operation', message: args.join(' ') },
-      };
+      throw new Error(args.join(' '));
     };
     const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
       probe: () => {
         probeCalls += 1;
-        if (probeCalls === 1) {
-          return ok({
-            terminal: {
-              handle: 'terminal-dead',
-              title: 'smoke-1359',
-              incarnationId: 'stable-generation',
-              worktreePath: root,
-              status: 'running',
-            },
-          });
-        }
+        if (probeCalls === 1) return ok({ terminal: stable });
         return {
           ok: false,
           operation: 'terminal_show',
@@ -457,15 +468,79 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       }, { cwd: root });
       expect(dispatched.status).toBe('send_failed');
       if (dispatched.status === 'send_failed') {
-        expect(dispatched.reason).toContain('worker_generation_not_found');
+        expect(dispatched.reason).toContain('worker_generation_unresolved');
         expect(dispatched.reason).toContain('expected_handle=terminal-dead');
         expect(dispatched.reason).toContain('expected_generation=stable-generation');
-        expect(dispatched.reason).toContain('observed_generation=not_found');
+        expect(dispatched.reason).toContain('observed_generation=unresolved');
         expect(dispatched.reason).toContain('lookup_failure=terminal_show%3Aterminal_not_found');
         expect(dispatched.reason).toContain('resolution=');
       }
       expect(probeCalls).toBe(2);
-      expect(lookupCalls).toBe(0);
+      expect(sendCalls).toBe(0);
+    } finally {
+      restore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails a wrong-worktree observation before payload send', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-worktree-mismatch-'));
+    let sendCalls = 0;
+    let probeCalls = 0;
+    const stable: OrcaTerminalSummary = {
+      handle: 'terminal-worktree',
+      title: 'smoke-1359',
+      incarnationId: 'stable-generation',
+      worktreePath: root,
+      status: 'running',
+    };
+    const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      if (args[0] === 'terminal' && args[1] === 'create') {
+        return ok({ terminal: { ...stable, worktreePath: undefined } } as T);
+      }
+      if (args[0] === 'worktree' && args[1] === 'current') {
+        return ok({ worktree: { path: root, head: HEAD } } as T);
+      }
+      if (args[0] === 'terminal' && args[1] === 'show') return ok({ terminal: stable } as T);
+      if (args[0] === 'terminal' && args[1] === 'send') {
+        sendCalls += 1;
+        return ok({ sent: true } as T);
+      }
+      return { ok: false, error: { code: 'unexpected_test_operation', message: args.join(' ') } };
+    };
+    const restore = installStableWorkerSmokeSpawnPatch({
+      agentStartupProbe: () => true,
+      probe: () => {
+        probeCalls += 1;
+        return ok({
+          terminal: probeCalls === 1
+            ? stable
+            : { ...stable, worktreePath: join(root, 'foreign') },
+        });
+      },
+    });
+
+    try {
+      const adapter = new OrcaTaskRuntimeAdapter({ cwd: root, runJson });
+      const spawned = adapter.spawnWorker({
+        title: stable.title ?? 'smoke-1359',
+        command: 'cursor-agent',
+        workspace: 'active',
+      }, { cwd: root });
+      expect(spawned.status).toBe('ok');
+      if (spawned.status !== 'ok') return;
+
+      const dispatched = adapter.dispatchInput({
+        worker: spawned.value.identity,
+        text: 'must never be sent',
+      }, { cwd: root });
+      expect(dispatched.status).toBe('send_failed');
+      if (dispatched.status === 'send_failed') {
+        expect(dispatched.reason).toContain('worker_workspace_mismatch');
+        expect(dispatched.reason).toContain('expected_workspace=');
+        expect(dispatched.reason).toContain('observed_workspace=');
+      }
+      expect(probeCalls).toBeGreaterThanOrEqual(2);
       expect(sendCalls).toBe(0);
     } finally {
       restore();
