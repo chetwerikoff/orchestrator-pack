@@ -71,6 +71,17 @@ jobs:
               raise SystemExit(f'unexpected reviewer inheritance block count: {runner.count(inherit_old)}')
           runner_path.write_text(runner.replace(inherit_old, inherit_new, 1), encoding='utf-8')
 
+          delivery_path = Path('scripts/estate-cut/task-311-tests/task-311-delivery.test-support.ts')
+          delivery = delivery_path.read_text(encoding='utf-8')
+          for legacy_line in [
+              "        AO_SESSION_ID: M1Run.linkedSessionId,\n",
+              "        AO_WORKER_SESSION_ID: M1Run.linkedSessionId,\n",
+          ]:
+              if delivery.count(legacy_line) != 1:
+                  raise SystemExit(f'unexpected TASK-311 injected env occurrence count for {legacy_line!r}: {delivery.count(legacy_line)}')
+              delivery = delivery.replace(legacy_line, '', 1)
+          delivery_path.write_text(delivery, encoding='utf-8')
+
           contracts_path = Path('scripts/pr2-foundation/contracts.ts')
           contracts = contracts_path.read_text(encoding='utf-8')
           replacements = [
@@ -94,11 +105,7 @@ jobs:
           end_marker = "    }\n"
           end = foundation.index(end_marker, start) + len(end_marker)
           final_block = """    for (const file of FOUNDATION_DOC_ROWS) {
-            const terminalizedName = file.endsWith('.d.mts')
-              ? `${path.basename(file, '.d.mts')}.d.ts`
-              : `${path.basename(file, '.mjs')}.ts`;
-            const terminalized = path.join(repoRoot, 'scripts/pr2-foundation/terminalized', terminalizedName);
-            const source = existsSync(terminalized) ? terminalized : path.join(repoRoot, file);
+            const source = path.join(repoRoot, file);
             expect(existsSync(source), file).toBe(true);
             expect(readFileSync(source, 'utf8'), file)
               .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
@@ -160,6 +167,7 @@ jobs:
             scripts/cutover/issue-928.test.ts \
             scripts/estate-cut/task-311-tests/task-311-assembly.test.ts \
             scripts/estate-cut/task-311-tests/task-311-common.test-support.ts \
+            scripts/estate-cut/task-311-tests/task-311-delivery.test-support.ts \
             scripts/lib/Review-FailureEvidence.ps1 \
             scripts/lib/Review-PostRunRetry.ps1 \
             scripts/lib/Review-RecoveryPaths.ps1 \
