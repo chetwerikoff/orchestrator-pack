@@ -9,10 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  fixture:
-    name: AC12 fixture exact head
+  diagnose:
+    name: Diagnose PR1376 AC12 target
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Checkout PR 1398 head
         uses: actions/checkout@v4
@@ -25,16 +25,27 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - name: Install dependencies
         run: npm ci --include=dev
-      - name: Run exact fixture
+      - name: Diagnose historical plan
         shell: bash
         run: |
-          git config user.name 'fixture-smoke'
-          git config user.email 'fixture-smoke@example.invalid'
-          set +e
-          node scripts/lib/vitest-runtime-history-merge.fixture.mjs
-          code=$?
-          echo "fixture_exit=${code}"
-          exit "${code}"
+          git config user.name fixture-smoke
+          git config user.email fixture-smoke@example.invalid
+          rm -rf /tmp/pr1376
+          git worktree add --detach /tmp/pr1376 6e9614d0c9ce0c34b41a731059df4398b770c162
+          git -C /tmp/pr1376 merge --no-commit --no-ff de03343f3f71f0c673157e055bf47f62700a576b
+          node --input-type=module <<'NODE'
+          import { buildLanePlan } from './scripts/lib/vitest-ci-lanes.mjs';
+          import { resolvePreTopologyMeasurementPlan } from './scripts/lib/vitest-pre-topology-measurement.mjs';
+          import { SUPPLEMENTAL_TARGET } from './scripts/lib/vitest-runtime-history-merge.mjs';
+          const plan = buildLanePlan('/tmp/pr1376');
+          if (!plan.ok) throw new Error(plan.errors.join('; '));
+          const pre = resolvePreTopologyMeasurementPlan(plan, { maxFiles: Number.MAX_SAFE_INTEGER });
+          console.log('pre_targets=' + JSON.stringify(pre.targets));
+          console.log('supplemental_target=' + SUPPLEMENTAL_TARGET);
+          console.log('supplemental_in_pre=' + pre.targets.includes(SUPPLEMENTAL_TARGET));
+          console.log('supplemental_lane=' + (plan.heavy.includes(SUPPLEMENTAL_TARGET) ? 'heavy' : plan.light.includes(SUPPLEMENTAL_TARGET) ? 'light' : 'unknown'));
+          NODE
+          git -C /tmp/pr1376 merge --abort || true
+          git worktree remove --force /tmp/pr1376
