@@ -1164,6 +1164,11 @@ function parseRecord(
       authoritativeFindingCount = undefined;
       authoritativeFindings = [];
     } else {
+      if (hasNonHarvestIncompleteGptSource(reviewRound)) {
+        throw new Error(
+          `corrupt pack review run record at ${path || '<record>'}: reviewVerdict does not match terminal source census`,
+        );
+      }
       assertGptRoundAggregate(reviewRound, aggregate, path || '<record>');
     }
   }
