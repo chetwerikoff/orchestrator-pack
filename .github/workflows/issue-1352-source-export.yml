@@ -33,6 +33,16 @@ jobs:
           echo '561fa59be719e3b3a6a4af9e48bd486e111a32d7e23579be3e23946e106f9fab  '"$RUNNER_TEMP/checkpoint.patch" | sha256sum -c -
           git apply --check "$RUNNER_TEMP/checkpoint.patch"
           git apply "$RUNNER_TEMP/checkpoint.patch"
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/gate-runner/custom/bulk-cli-parity.test.ts')
+          text = path.read_text(encoding='utf-8')
+          old = "writeFixture(join(root, 'plugins/scope-guard/README.md'), 'DD-024 runtime guard git add commit PR-level CI second line\\n');"
+          new = "writeFixture(join(root, 'plugins/ao-scope-guard/README.md'), 'DD-024 runtime guard git add commit PR-level CI second line\\n');"
+          if text.count(old) != 1:
+              raise SystemExit(f'unexpected frozen replay fixture count: {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           npm ci --include=dev
           npm run typecheck:foundation
           npm run lint:foundation
