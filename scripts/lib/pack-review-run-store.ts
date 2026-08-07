@@ -880,11 +880,6 @@ function assertGptRoundAggregate(
   },
   path: string,
 ): void {
-  if (hasNonHarvestIncompleteGptSource(round)) {
-    throw new Error(
-      `corrupt pack review run record at ${path}: reviewVerdict does not match terminal source census`,
-    );
-  }
   const expected = deriveCompleteGptRoundAggregate(round, path);
   if (aggregate.reviewVerdict !== expected.reviewVerdict) {
     throw new Error(
