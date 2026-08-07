@@ -50,9 +50,9 @@ const PR_1376_CHANGED_FILES = [
   'package.json',
   'scripts/browser-gpt-post-settlement-close-proof.ts',
   'scripts/browser-gpt-post-settlement-close.ts',
-  'scripts/chatgpt-browser-turn/browser-session.ts',
+  'scripts/browser-gpt-post-settlement-close.test.ts',
   'scripts/chatgpt-browser-turn/contracts.ts',
-  'scripts/chatgpt-browser-turn/tab-lifecycle.test.ts',
+  'scripts/vitest-ci-lanes.config.json',
 ].sort();
 
 function fail(message) {
@@ -76,10 +76,10 @@ function assertThrows(fn, needle, message) {
   }
 }
 
-function writeReport(dir, shard, files, commitSha) {
+function writeReport(dir, shard, files, commitSha, repoRoot = defaultRepoRoot) {
   const reportPath = join(dir, `shard-${shard}.json`);
   const metaPath = join(dir, `shard-${shard}.meta.json`);
-  writeFileSync(reportPath, stableStringify(buildSyntheticVitestReport(files)), 'utf8');
+  writeFileSync(reportPath, stableStringify(buildSyntheticVitestReport(files, repoRoot)), 'utf8');
   writeFileSync(
     metaPath,
     stableStringify({
@@ -111,10 +111,10 @@ function seededHistory() {
   });
 }
 
-function buildCompleteShardSet(dir, commitSha, fileAssignments) {
+function buildCompleteShardSet(dir, commitSha, fileAssignments, repoRoot = defaultRepoRoot) {
   const shardReports = new Map();
   for (const [shard, files] of fileAssignments.entries()) {
-    writeReport(dir, shard, files, commitSha);
+    writeReport(dir, shard, files, commitSha, repoRoot);
     shardReports.set(shard, {
       reportPath: join(dir, `shard-${shard}.json`),
       meta: { commitSha, shard, success: true },
@@ -139,7 +139,7 @@ function buildLanePlanShardReports(dir, commitSha, repoRoot, durationForFile = (
       })),
     );
   }
-  return buildCompleteShardSet(dir, commitSha, assignments);
+  return buildCompleteShardSet(dir, commitSha, assignments, repoRoot);
 }
 
 function writeCanonicalSupplementalReport(dir, sourceSha, durationMs = 321) {
@@ -1051,25 +1051,50 @@ function runGeneratedCandidateInventoryAndBoundFixture() {
     );
     if (mergeWorktree.exitCode !== 0) return;
 
-    const historicalTopology = buildHeavyTopology(sourceRoot, {
-      changedFiles: PR_1376_CHANGED_FILES,
-    });
-    assert(historicalTopology.ok, 'PR #1376 historical topology must be available');
-    if (!historicalTopology.ok) return;
+    const changedFilesResult = runProcessSync({
+    command: 'git',
+    args: [
+      '-C', sourceRoot,
+      'diff', '--name-only', `${PR_1376_REPLAY_BASE_SHA}...${PR_1376_REPLAY_HEAD_SHA}`, '--',
+    ],
+    encoding: 'utf8',
+    inheritParentEnv: true,
+    timeoutMs: 30_000,
+  });
+  assert(
+    changedFilesResult.exitCode === 0,
+    `PR #1376 replay must resolve the declared base/head changed-file set: ${changedFilesResult.stderr ?? ''}`,
+  );
+  if (changedFilesResult.exitCode !== 0) return;
+  const replayChangedFiles = String(changedFilesResult.stdout ?? '')
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .sort();
+  assert(
+    JSON.stringify(replayChangedFiles) === JSON.stringify(PR_1376_CHANGED_FILES),
+    `PR #1376 replay changed-file identity drifted: expected ${JSON.stringify(PR_1376_CHANGED_FILES)}, got ${JSON.stringify(replayChangedFiles)}`,
+  );
 
-    const historicalUnresolved = historicalTopology.topology.unresolvedGuardWeights;
-    assert(
-      historicalUnresolved.length === 33,
-      `PR #1376 historical replay must reproduce exactly 33 pre-topology targets before repair (got ${historicalUnresolved.length})`,
-    );
-    assertThrows(
-      () => resolvePreTopologyMeasurementPlan({
-        topology: historicalTopology.topology,
-        lanesConfig: historicalTopology.lanesConfig,
-      }),
-      '33 files > 32',
-      'PR #1376 historical replay must reproduce the exact 33 > 32 bound refusal',
-    );
+  const historicalTopology = buildHeavyTopology(sourceRoot);
+  assert(historicalTopology.ok, 'PR #1376 historical topology must be available');
+  if (!historicalTopology.ok) return;
+  const historicalLanePlan = buildLanePlan(sourceRoot);
+  assert(historicalLanePlan.ok, 'PR #1376 historical lane plan must be available');
+  if (!historicalLanePlan.ok) return;
+  const historicalMeasurementPlan = resolvePreTopologyMeasurementPlan(
+    historicalLanePlan,
+    { maxFiles: Number.MAX_SAFE_INTEGER },
+  );
+  assert(
+    historicalMeasurementPlan.targets.length === 33,
+    `PR #1376 historical replay must reproduce exactly 33 pre-topology targets before repair (got ${historicalMeasurementPlan.targets.length})`,
+  );
+  assertThrows(
+    () => resolvePreTopologyMeasurementPlan(historicalLanePlan),
+    '33 files > 32',
+    'PR #1376 historical replay must reproduce the exact 33 > 32 bound refusal',
+  );
 
     mkdirSync(reportsDir, { recursive: true });
     const committed = JSON.parse(
@@ -1108,7 +1133,6 @@ function runGeneratedCandidateInventoryAndBoundFixture() {
       sourceRoot,
       {
         classification: historicalTopology.lanesConfig.classification,
-        changedFiles: PR_1376_CHANGED_FILES,
       },
     ).unresolved;
     let candidatePlan = null;
@@ -1131,7 +1155,7 @@ function runGeneratedCandidateInventoryAndBoundFixture() {
         baseSha: PR_1376_REPLAY_BASE_SHA,
         headSha: PR_1376_REPLAY_HEAD_SHA,
         changedFiles: PR_1376_CHANGED_FILES,
-        historicalTargets: historicalUnresolved.length,
+        historicalTargets: historicalMeasurementPlan.targets.length,
         repairedCandidateTargets: candidatePlan.targets.length,
         bound: PRE_TOPOLOGY_MAX_FILES,
       })}`);
