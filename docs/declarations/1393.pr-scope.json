@@ -1,0 +1,39 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1393,
+  "declared_paths": [
+    "docs/declarations/1393.pr-scope.json",
+    "scripts/lib/pack-gpt-reviewer.ts",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/pack-review-delivery.cases.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts"
+  ],
+  "denylist": [
+    "prompts/gpt_pack_review_prompt.md",
+    ".github/workflows/",
+    "packages/core/",
+    "vendor/",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/browser-gpt-post-settlement-close.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "docs/issues_drafts/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/pack-gpt-reviewer.ts",
+    "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/pack-review-delivery.cases.ts",
+    "plugins/ao-codex-pr-reviewer/lib/parse_output.ts",
+    "plugins/ao-codex-pr-reviewer/tests/review.test.ts",
+    "docs/declarations/1393.pr-scope.json"
+  ],
+  "source_revision": "10a20804a8dfd73cd49b8744f9a149ec884e0c5b"
+}
