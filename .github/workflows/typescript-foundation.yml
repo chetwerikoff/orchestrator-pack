@@ -155,11 +155,11 @@ jobs:
       - name: Run full retired-surface scanner
         run: node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts
 
-  issue-1352-reconcile-pn-census:
-    name: Reconcile retired PN smoke census (one-shot)
+  issue-1352-curated-witness-pass:
+    name: Apply curated retired-surface witnesses (one-shot)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -168,74 +168,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Apply bounded census disposition
+          cache: npm
+      - name: Apply witness-only patch and verify
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$(git log -1 --pretty=%s)" != "chore(ci): finalize PN smoke census reconcile" ]; then
-            echo "one-shot census reconciliation already consumed"
+          if [ "$(git log -1 --pretty=%s)" != "chore(ci): apply curated witness pass" ]; then
+            echo "one-shot witness pass already consumed"
             exit 0
           fi
-          test "$(git rev-parse HEAD^)" = "1e58d3a5daf32cf62c35e0df25fe29498f9d6b63"
-          node <<'NODE'
-          const fs = require('node:fs');
-          const crypto = require('node:crypto');
-          const baselinePath = 'scripts/gate-runner/census/pre-change-baseline.json';
-          const generationPath = 'scripts/gate-runner/census/generation.json';
-          const censusPath = 'scripts/gate-runner/census.ts';
-          const manifestGeneratorPath = 'scripts/estate-cut/manifest-generator.mjs';
-          const targetId = 'check-script:scripts/check-harness-post-submit-pn-live-smoke.ps1';
-          const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
-          const rows = baseline.entries.filter((entry) => entry.id === targetId);
-          if (rows.length !== 1) throw new Error(`expected exactly one PN smoke census row; found ${rows.length}`);
-          const row = rows[0];
-          if (row.classification !== 'kept-in-pr1' || row.keepCategory !== 'D') {
-            throw new Error(`unexpected PN smoke census disposition: ${JSON.stringify(row)}`);
-          }
-          delete row.keepCategory;
-          row.classification = 'retired-with-reason';
-          row.retirementJustification = {
-            reasonCode: 'superseded-contract',
-            behavior: 'Issue #1352 retires the daemon-only harness post-submit PN smoke after live inspection confirmed that it installs the retired runtime CLI, requires the retired daemon URL, and has no surviving runtime-neutral caller contract.',
-            replacement: 'Pack-owned review acceptance and RuntimeAdapter-backed runtime tests cover the surviving behavior; no retired daemon/API smoke is retained.',
-          };
-          fs.writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
-
-          const compareOrdinal = (a, b) => a < b ? -1 : a > b ? 1 : 0;
-          const payload = baseline.entries
-            .map(({ id, classification, gateIds, portedInWave }) => ({
-              id,
-              classification: classification ?? null,
-              gateIds: [...(gateIds ?? [])].sort(compareOrdinal),
-              portedInWave: portedInWave ?? null,
-            }))
-            .sort((left, right) => compareOrdinal(left.id, right.id))
-            .map((entry) => JSON.stringify(entry))
-            .join('\n');
-          const digest = crypto.createHash('sha256').update(`${payload}\n`, 'utf8').digest('hex');
-
-          const generation = JSON.parse(fs.readFileSync(generationPath, 'utf8'));
-          const oldDigest = generation.migrationOwnershipDigest;
-          if (!/^[0-9a-f]{64}$/.test(oldDigest)) throw new Error('invalid prior migration ownership digest');
-          generation.migrationOwnershipDigest = digest;
-          fs.writeFileSync(generationPath, `${JSON.stringify(generation, null, 2)}\n`);
-
-          let census = fs.readFileSync(censusPath, 'utf8');
-          const matches = [...census.matchAll(/const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '[0-9a-f]{64}';/g)];
-          if (matches.length !== 1) throw new Error(`expected exactly one census digest literal; found ${matches.length}`);
-          census = census.replace(matches[0][0], `const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '${digest}';`);
-          fs.writeFileSync(censusPath, census);
-
-          let manifestGenerator = fs.readFileSync(manifestGeneratorPath, 'utf8');
-          const pin = "  'scripts/check-harness-post-submit-pn-live-smoke.ps1',\n";
-          if (manifestGenerator.split(pin).length !== 2) throw new Error('expected exactly one stale PN smoke pin');
-          manifestGenerator = manifestGenerator.replace(pin, '');
-          fs.writeFileSync(manifestGeneratorPath, manifestGenerator);
-          console.log(`migrationOwnershipDigest=${digest}`);
-          NODE
+          test "$(git rev-parse HEAD^)" = "b13fd817a3f52516324f709a38a91c91fb41ed70"
+          base64 -d .github/issue-1352-curated-witness.patch.gz.b64 | gzip -dc > /tmp/issue-1352-curated-witness.patch
+          git apply --check /tmp/issue-1352-curated-witness.patch
+          git apply /tmp/issue-1352-curated-witness.patch
+          rm .github/issue-1352-curated-witness.patch.gz.b64
           git diff --check
-          git add scripts/gate-runner/census/pre-change-baseline.json scripts/gate-runner/census/generation.json scripts/gate-runner/census.ts scripts/estate-cut/manifest-generator.mjs
+          npm ci --include=dev
+          npm run typecheck:foundation
+          npm run test:foundation
+          git add -A
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "fix(gates): terminalize retired PN smoke disposition"
+          git commit -m "test(runtime): preserve retired-surface negative witnesses"
           git push origin HEAD:agent/issue-1352-hard-cut
