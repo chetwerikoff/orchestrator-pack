@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --experimental-strip-types
+import '../toolchain/native-entrypoint-preflight.ts';
 import assert from 'node:assert/strict';
 import { scanRetiredRuntimeSurfaces } from './retired-surface-guard.ts';
 const result = scanRetiredRuntimeSurfaces({ repoRoot: process.cwd() });

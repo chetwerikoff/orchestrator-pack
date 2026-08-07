@@ -41,6 +41,8 @@ boundaries and remains binding unless the direct user explicitly overrides it.
 
 ## Portable contracts
 
+**Node 22-only TypeScript runtime:** direct native TypeScript entrypoints must use the Node major declared in `scripts/toolchain/node-version.json`; `package.json.engines.node` and every `actions/setup-node` declaration must mirror that authority. Entrypoints must run the canonical declaration preflight before importing business modules.
+
 Prefer runtime-neutral behavior in this order:
 
 1. prompt or tracked policy;
