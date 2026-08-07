@@ -42,7 +42,7 @@ jobs:
           if [ "$merge_status" -ne 0 ]; then
             artifact="$RUNNER_TEMP/issue-1352-merge-conflicts"
             mkdir -p "$artifact/base" "$artifact/ours" "$artifact/theirs" "$artifact/merged"
-            git diff --name-only --diff-filter=U | tee "$artifact/conflicts.txt"
+            git diff --name-only --diff-filter=U | sort | tee "$artifact/conflicts.txt"
             git diff --cc > "$artifact/conflict.diff"
             while IFS= read -r path; do
               [ -z "$path" ] && continue
@@ -52,11 +52,73 @@ jobs:
               git show ":3:$path" > "$artifact/theirs/$path" || true
               cp "$path" "$artifact/merged/$path"
             done < "$artifact/conflicts.txt"
-            exit 86
+            cat > "$RUNNER_TEMP/expected-conflicts.txt" <<'EOF'
+          scripts/chatgpt-browser-turn/state-light-turn.ts
+          scripts/flow-manager-long-running-child.test.ts
+          scripts/flow-manager-long-running-child.ts
+          EOF
+            if ! cmp -s "$RUNNER_TEMP/expected-conflicts.txt" "$artifact/conflicts.txt"; then
+              echo 'unexpected current-main conflict set' >&2
+              diff -u "$RUNNER_TEMP/expected-conflicts.txt" "$artifact/conflicts.txt" || true
+              exit 86
+            fi
+            python - <<'PY'
+          from pathlib import Path
+
+          paths = [
+              Path('scripts/chatgpt-browser-turn/state-light-turn.ts'),
+              Path('scripts/flow-manager-long-running-child.test.ts'),
+              Path('scripts/flow-manager-long-running-child.ts'),
+          ]
+          for path in paths:
+              lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
+              output: list[str] = []
+              state = 'normal'
+              saw_conflict = False
+              for line in lines:
+                  if line.startswith('<<<<<<< '):
+                      if state != 'normal':
+                          raise SystemExit(f'nested conflict marker in {path}')
+                      state = 'ours'
+                      saw_conflict = True
+                      continue
+                  if line.startswith('======='):
+                      if state != 'ours':
+                          raise SystemExit(f'unexpected separator in {path}')
+                      state = 'theirs'
+                      continue
+                  if line.startswith('>>>>>>> '):
+                      if state != 'theirs':
+                          raise SystemExit(f'unexpected closing marker in {path}')
+                      state = 'normal'
+                      continue
+                  if state in ('normal', 'theirs'):
+                      output.append(line)
+              if state != 'normal' or not saw_conflict:
+                  raise SystemExit(f'incomplete or absent conflict markers in {path}')
+              resolved = ''.join(output)
+              if any(marker in resolved for marker in ('<<<<<<< ', '=======', '>>>>>>> ')):
+                  raise SystemExit(f'residual conflict marker in {path}')
+              path.write_text(resolved, encoding='utf-8')
+          PY
+            git add \
+              scripts/chatgpt-browser-turn/state-light-turn.ts \
+              scripts/flow-manager-long-running-child.test.ts \
+              scripts/flow-manager-long-running-child.ts
+            if git diff --name-only --diff-filter=U | grep -q .; then
+              echo 'unresolved merge entries remain' >&2
+              git diff --name-only --diff-filter=U >&2
+              exit 87
+            fi
           fi
           npm ci --include=dev
           npm run typecheck:foundation
           npm run lint:foundation
+          npm test -- --maxWorkers=1 \
+            scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts \
+            scripts/chatgpt-browser-turn/tab-lifecycle.test.ts \
+            scripts/flow-manager-long-running-child.test.ts \
+            --reporter=dot
           git diff --check
           git commit -m 'merge: integrate current main for issue 1352 evidence'
           git push origin HEAD:agent/issue-1352-hard-cut
@@ -66,7 +128,7 @@ jobs:
         with:
           name: issue-1352-merge-conflicts
           path: ${{ runner.temp }}/issue-1352-merge-conflicts
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 1
       - name: Fail after preserving conflict evidence
         if: steps.merge.outcome == 'failure'
