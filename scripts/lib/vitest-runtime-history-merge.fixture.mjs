@@ -1052,72 +1052,87 @@ function runGeneratedCandidateInventoryAndBoundFixture() {
     if (mergeWorktree.exitCode !== 0) return;
 
     const changedFilesResult = runProcessSync({
-    command: 'git',
-    args: [
-      '-C', sourceRoot,
-      'diff', '--name-only', `${PR_1376_REPLAY_BASE_SHA}...${PR_1376_REPLAY_HEAD_SHA}`, '--',
-    ],
-    encoding: 'utf8',
-    inheritParentEnv: true,
-    timeoutMs: 30_000,
-  });
-  assert(
-    changedFilesResult.exitCode === 0,
-    `PR #1376 replay must resolve the declared base/head changed-file set: ${changedFilesResult.stderr ?? ''}`,
-  );
-  if (changedFilesResult.exitCode !== 0) return;
-  const replayChangedFiles = String(changedFilesResult.stdout ?? '')
-    .split(/\r?\n/)
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .sort();
-  assert(
-    JSON.stringify(replayChangedFiles) === JSON.stringify(PR_1376_CHANGED_FILES),
-    `PR #1376 replay changed-file identity drifted: expected ${JSON.stringify(PR_1376_CHANGED_FILES)}, got ${JSON.stringify(replayChangedFiles)}`,
-  );
+      command: 'git',
+      args: [
+        '-C', sourceRoot,
+        'diff', '--name-only', `${PR_1376_REPLAY_BASE_SHA}...${PR_1376_REPLAY_HEAD_SHA}`, '--',
+      ],
+      encoding: 'utf8',
+      inheritParentEnv: true,
+      timeoutMs: 30_000,
+    });
+    assert(
+      changedFilesResult.exitCode === 0,
+      `PR #1376 replay must resolve the declared base/head changed-file set: ${changedFilesResult.stderr ?? ''}`,
+    );
+    if (changedFilesResult.exitCode !== 0) return;
+    const replayChangedFiles = String(changedFilesResult.stdout ?? '')
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .sort();
+    assert(
+      JSON.stringify(replayChangedFiles) === JSON.stringify(PR_1376_CHANGED_FILES),
+      `PR #1376 replay changed-file identity drifted: expected ${JSON.stringify(PR_1376_CHANGED_FILES)}, got ${JSON.stringify(replayChangedFiles)}`,
+    );
 
-  const historicalTopology = buildHeavyTopology(sourceRoot);
-  assert(historicalTopology.ok, 'PR #1376 historical topology must be available');
-  if (!historicalTopology.ok) return;
-  const historicalLanePlan = buildLanePlan(sourceRoot);
-  assert(historicalLanePlan.ok, 'PR #1376 historical lane plan must be available');
-  if (!historicalLanePlan.ok) return;
-  const historicalMeasurementPlan = resolvePreTopologyMeasurementPlan(
-    historicalLanePlan,
-    { maxFiles: Number.MAX_SAFE_INTEGER },
-  );
-  assert(
-    historicalMeasurementPlan.targets.length === 33,
-    `PR #1376 historical replay must reproduce exactly 33 pre-topology targets before repair (got ${historicalMeasurementPlan.targets.length})`,
-  );
-  assertThrows(
-    () => resolvePreTopologyMeasurementPlan(historicalLanePlan),
-    '33 files > 32',
-    'PR #1376 historical replay must reproduce the exact 33 > 32 bound refusal',
-  );
+    const historicalTopology = buildHeavyTopology(sourceRoot, {
+      changedFiles: replayChangedFiles,
+    });
+    assert(historicalTopology.ok, 'PR #1376 historical topology must be available');
+    if (!historicalTopology.ok) return;
+    const historicalMeasurementPlan = resolvePreTopologyMeasurementPlan(
+      historicalTopology,
+      { maxFiles: Number.MAX_SAFE_INTEGER },
+    );
+    assert(
+      historicalMeasurementPlan.targets.length === 33,
+      `PR #1376 historical replay must reproduce exactly 33 pre-topology targets before repair (got ${historicalMeasurementPlan.targets.length})`,
+    );
+    assertThrows(
+      () => resolvePreTopologyMeasurementPlan(historicalTopology),
+      '33 files > 32',
+      'PR #1376 historical replay must reproduce the exact 33 > 32 bound refusal',
+    );
+
+    const currentHead = runProcessSync({
+      command: 'git',
+      args: ['-C', defaultRepoRoot, 'rev-parse', 'HEAD'],
+      encoding: 'utf8',
+      inheritParentEnv: true,
+      timeoutMs: 30_000,
+    });
+    assert(currentHead.exitCode === 0, `repaired replay must resolve current head: ${currentHead.stderr ?? ''}`);
+    if (currentHead.exitCode !== 0) return;
+    const currentHeadSha = String(currentHead.stdout ?? '').trim();
+    const currentTopology = buildHeavyTopology(defaultRepoRoot, {
+      changedFiles: replayChangedFiles,
+    });
+    assert(currentTopology.ok, 'repaired replay current topology must be available');
+    if (!currentTopology.ok) return;
 
     mkdirSync(reportsDir, { recursive: true });
     const committed = JSON.parse(
-      readFileSync(join(sourceRoot, 'scripts/vitest-runtime-history.json'), 'utf8'),
+      readFileSync(join(defaultRepoRoot, 'scripts/vitest-runtime-history.json'), 'utf8'),
     );
     const candidate = refreshRuntimeHistory({
       baseHistory: committed,
       shardReports: buildLanePlanShardReports(
         reportsDir,
-        PR_1376_REPLAY_HEAD_SHA,
-        sourceRoot,
+        currentHeadSha,
+        defaultRepoRoot,
       ),
-      expectedCommitSha: PR_1376_REPLAY_HEAD_SHA,
-      repoRoot: sourceRoot,
+      expectedCommitSha: currentHeadSha,
+      repoRoot: defaultRepoRoot,
     });
-    const historicalCurrent = discoverVitestFiles(sourceRoot);
+    const currentInventory = discoverVitestFiles(defaultRepoRoot);
     assert(
       candidate.ok && !candidate.rejected,
       'PR #1376 replay candidate must be generated by accepted repaired-producer evidence',
     );
     assert(
-      JSON.stringify(runtimeHistoryInventory(candidate.history)) === JSON.stringify([...historicalCurrent].sort()),
-      'PR #1376 replay candidate membership must exactly match its historical canonical source inventory',
+      JSON.stringify(runtimeHistoryInventory(candidate.history)) === JSON.stringify([...currentInventory].sort()),
+      'PR #1376 replay candidate membership must exactly match the repaired canonical source inventory',
     );
 
     const candidateArtifact = {
@@ -1127,19 +1142,20 @@ function runGeneratedCandidateInventoryAndBoundFixture() {
       dataChangedAt: candidate.history.dataChangedAt,
     };
     const candidateUnresolved = findOversizedFiles(
-      historicalCurrent,
+      currentInventory,
       candidateArtifact,
-      historicalTopology.policy,
-      sourceRoot,
+      currentTopology.policy,
+      defaultRepoRoot,
       {
-        classification: historicalTopology.lanesConfig.classification,
+        classification: currentTopology.lanesConfig.classification,
+        changedFiles: replayChangedFiles,
       },
     ).unresolved;
     let candidatePlan = null;
     try {
       candidatePlan = resolvePreTopologyMeasurementPlan({
         topology: { unresolvedGuardWeights: candidateUnresolved },
-        lanesConfig: historicalTopology.lanesConfig,
+        lanesConfig: currentTopology.lanesConfig,
       });
     } catch (error) {
       fail(`repaired producer must bring PR #1376 replay within unchanged bound: ${String(error?.message ?? error)}`);
@@ -1154,7 +1170,7 @@ function runGeneratedCandidateInventoryAndBoundFixture() {
       console.log(`runtime-history-issue-1384-pr1376-replay ${JSON.stringify({
         baseSha: PR_1376_REPLAY_BASE_SHA,
         headSha: PR_1376_REPLAY_HEAD_SHA,
-        changedFiles: PR_1376_CHANGED_FILES,
+        changedFiles: replayChangedFiles,
         historicalTargets: historicalMeasurementPlan.targets.length,
         repairedCandidateTargets: candidatePlan.targets.length,
         bound: PRE_TOPOLOGY_MAX_FILES,
@@ -1180,7 +1196,6 @@ function runGeneratedCandidateInventoryAndBoundFixture() {
     rmSync(dir, { recursive: true, force: true });
   }
 }
-
 function runCommitBackNoOpOrderingFixture() {
   const source = readFileSync(join(defaultRepoRoot, 'scripts/refresh-vitest-runtime-history.ps1'), 'utf8');
   const statusIndex = source.indexOf("$status = git -C $RepoRoot status --porcelain -- 'scripts/vitest-runtime-history.json'");
