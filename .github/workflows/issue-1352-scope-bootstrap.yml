@@ -1,0 +1,65 @@
+name: issue-1352-scope-bootstrap
+
+on:
+  push:
+    branches:
+      - agent/issue-1352-hard-cut
+    paths:
+      - .github/workflows/issue-1352-scope-bootstrap.yml
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-1352-hard-cut
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Apply exact PR bootstrap and regenerate declaration
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch origin main
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/scope-guard.yml')
+          text = path.read_text()
+          needle = """          $issue1276Bootstrap = $env:PR_NUMBER -eq '1305' `\n            -and $env:PR_HEAD_REF -eq 'chetwerikoff/issue-1276' `\n            -and $env:PR_HEAD_REPO_SAME -eq 'true'\n          $trustedLiveIssueScope ="""
+          replacement = """          $issue1276Bootstrap = $env:PR_NUMBER -eq '1305' `\n            -and $env:PR_HEAD_REF -eq 'chetwerikoff/issue-1276' `\n            -and $env:PR_HEAD_REPO_SAME -eq 'true'\n          $issue1352Bootstrap = $env:PR_NUMBER -eq '1378' `\n            -and $env:PR_HEAD_REF -eq 'agent/issue-1352-hard-cut' `\n            -and $env:PR_HEAD_REPO_SAME -eq 'true'\n          $trustedLiveIssueScope ="""
+          if needle not in text:
+              raise SystemExit('bootstrap declaration insertion point not found')
+          text = text.replace(needle, replacement, 1)
+          needle = """          if ($issue1276Bootstrap) {\n            Write-Warning 'scope guard bootstrap: PR 1305 uses the PR-head checker for the Issue 1276 producer-ceiling migration'\n            $guardScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'\n          }"""
+          replacement = """          if ($issue1276Bootstrap -or $issue1352Bootstrap) {\n            if ($issue1352Bootstrap) {\n              Write-Warning 'scope guard bootstrap: PR 1378 uses the PR-head checker for the Issue 1352 runtime-retirement producer-ceiling migration'\n            } else {\n              Write-Warning 'scope guard bootstrap: PR 1305 uses the PR-head checker for the Issue 1276 producer-ceiling migration'\n            }\n            $guardScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'\n          }"""
+          if needle not in text:
+              raise SystemExit('bootstrap dispatch insertion point not found')
+          path.write_text(text.replace(needle, replacement, 1))
+          PY
+          rm .github/workflows/issue-1352-scope-bootstrap.yml
+          npm ci --include=dev
+          mapfile -t paths < <(git diff --name-only origin/main -- . ':(exclude)docs/declarations/1352.pr-scope.json')
+          if [ "${#paths[@]}" -eq 0 ]; then
+            echo 'no implementation paths found' >&2
+            exit 1
+          fi
+          joined=$(IFS=,; echo "${paths[*]}")
+          node --experimental-strip-types scripts/pr-scope-declaration.ts \
+            --issue 1352 \
+            --declared-paths "$joined" \
+            --output docs/declarations/1352.pr-scope.json
+          node --experimental-strip-types -e "import('./scripts/pr-scope-declaration.ts').then(m=>{const fs=require('node:fs');const v=m.validatePrScopeDeclaration(JSON.parse(fs.readFileSync('docs/declarations/1352.pr-scope.json','utf8')),1352);if(!v.ok){console.error(v);process.exit(1)}})"
+          git add -A
+          git commit -m 'fix(scope): bootstrap Issue 1352 migration guard'
+          git push origin HEAD:agent/issue-1352-hard-cut
