@@ -17,6 +17,7 @@ function fixture(text: string, path = 'scripts/active.ts'): string {
   writeFileSync(patterns, JSON.stringify({ version: 1, surfaces: [
     { id: 'selector', sourceCommandPattern: '\\b(?:AO|ORCA)_[A-Z0-9_]+\\b', pathPattern: '$a', reason: 'retired', owningReference: '#1352' },
     { id: 'command', sourceCommandPattern: '(?:^|\\s)ao\\s+(?:status|send)(?=\\s|$)', pathPattern: '(^|/)scripts/ao(?:$|[-./])', reason: 'retired', owningReference: '#1352' },
+    { id: 'adapter', sourceCommandPattern: '\\b(?:Invoke|Get|Write|Resolve|Test|Install)-Ao[A-Za-z0-9_-]*\\b|\\bfunction\\s+(?:global:)?ao\\b', pathPattern: '$a', reason: 'retired', owningReference: '#1352' },
   ] }));
   const target = join(root, path);
   mkdirSync(dirname(target), { recursive: true });
@@ -38,6 +39,8 @@ describe('runtime retirement closed-world scanner', () => {
     ['selector', 'const value = process.env.AO_SESSION_ID;'],
     ['command', 'ao status --json'],
     ['path', 'neutral', 'scripts/ao-review.ts'],
+    ['named adapter shim', 'function Install-AoLivenessShim {}'],
+    ['global command shim', 'function global:ao { "retired" }'],
   ])('rejects injected %s surface', (_name, text, path = 'scripts/active.ts') => {
     expect(scanRetiredRuntimeSurfaces({ repoRoot: fixture(text, path) }).violations).toHaveLength(1);
   });
