@@ -24,6 +24,13 @@ def replace_all(path: str, old: str, new: str) -> None:
         raise SystemExit(f"missing expected text in {path}: {old!r}")
 
 
+def replace_optional(path: str, old: str, new: str) -> None:
+    target = Path(path)
+    text = target.read_text(encoding="utf-8")
+    if old in text:
+        target.write_text(text.replace(old, new), encoding="utf-8")
+
+
 snapshot = "scripts/lib/reverify-bound-issue-snapshot.ts"
 replace_once(
     snapshot,
@@ -49,12 +56,12 @@ for path in (
     "scripts/invoke-reviewer-contract-mapping.ts",
 ):
     replace_all(path, "resolveDefaultAoProjectId", "resolveDefaultProjectId")
-    replace_all(
+    replace_optional(
         path,
         "AO project id (default: AO_PROJECT_ID or orchestrator-pack)",
         "pack project id (default: OPK_PROJECT_ID or orchestrator-pack)",
     )
-    replace_all(
+    replace_optional(
         path,
         "AO project id for bound issue snapshot store",
         "pack project id for bound issue snapshot store",
