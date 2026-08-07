@@ -287,19 +287,37 @@ function observeSmokeWorker(input: {
   };
 }
 
-/** Confirm the adapter-established exact generation without ever rebinding it. */
+/** Establish and freeze the exact generation from one bounded exact-handle observation. */
 export function stabilizeSpawnedSmokeWorkerIdentity(input: {
   worker: RuntimeWorker;
   cwd: string;
   timeoutMs: number;
   probe?: SmokeGenerationProbe;
 }): StableSpawnIdentityResult {
-  return confirmSpawnedSmokeWorkerIdentity({
+  if (input.worker.identity.runtime !== 'orca') return { ok: true, worker: input.worker };
+  const observed = observeSmokeWorker({
     worker: input.worker,
     cwd: input.cwd,
     timeoutMs: input.timeoutMs,
     probe: input.probe ?? defaultGenerationProbe,
   });
+  if (!observed.ok) return observed;
+
+  const identity: RuntimeWorkerIdentity = observed.generation === input.worker.identity.generation
+    ? input.worker.identity
+    : {
+        runtime: input.worker.identity.runtime,
+        id: input.worker.identity.id,
+        generation: observed.generation,
+      };
+  const worker: RuntimeWorker = identity === input.worker.identity
+    ? input.worker
+    : { ...input.worker, identity };
+  return {
+    ok: true,
+    worker,
+    ...(observed.diagnostic ? { diagnostic: observed.diagnostic } : {}),
+  };
 }
 
 function confirmSpawnedSmokeWorkerIdentity(input: {
@@ -350,8 +368,9 @@ function refreshTrackedSmokeWorker(input: {
 
 /**
  * Install the narrow worker-smoke compatibility repair on the production task
- * adapter. The adapter-established exact generation is immutable; tracked
- * observations can only confirm it. Delivery still permits only one full payload.
+ * adapter. The first exact-handle observation establishes an immutable exact
+ * identity; later observations only confirm it. Delivery permits one full
+ * payload plus the already-bounded submit-only Enter and trusts only child seal evidence.
  */
 export function installStableWorkerSmokeSpawnPatch(
   options: StableWorkerSmokeSpawnPatchOptions = {},
@@ -461,15 +480,9 @@ export function installStableWorkerSmokeSpawnPatch(
         Math.min(callOptions.timeoutMs ?? 30_000, configuredTimeoutMs),
       );
       const startedAt = now();
-      const firstDeadline = startedAt + Math.max(1, Math.floor(timeoutMs / 2));
       const finalDeadline = startedAt + timeoutMs;
-      if (waitForDeliveryConfirmation({
-        binding,
-        deadline: firstDeadline,
-        deliveryProbe,
-        now,
-        sleepMs,
-      })) return { status: 'dispatched' };
+
+      if (deliveryProbe(binding)) return { status: 'dispatched' };
 
       const retried = originalDispatch.call(this, {
         worker: input.worker,

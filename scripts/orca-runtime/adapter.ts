@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
 import {
   runtimeFailure,
   runtimeUnsupported,
@@ -58,11 +57,6 @@ interface DecodedObservation {
   readonly nativeCursor: string;
 }
 
-type ExactIdentityFailureCode =
-  | 'worker_generation_mismatch'
-  | 'worker_workspace_mismatch'
-  | 'worker_generation_unresolved';
-
 const OBSERVATION_TOKEN_PREFIX = 'opk-orca-output-v3.';
 
 function isNativeTimeout(response: OrcaJsonResponse): boolean {
@@ -98,40 +92,6 @@ function nativeGeneration(terminal: OrcaTerminalSummary | OrcaTerminalHandle): s
 
 function identityKey(identity: RuntimeWorkerIdentity): string {
   return `${identity.runtime}\u0000${identity.id}\u0000${identity.generation}`;
-}
-
-function sameWorkspacePath(left: string, right: string): boolean {
-  const canonical = (value: string): string => {
-    const path = resolve(value).replaceAll('\\', '/');
-    return process.platform === 'win32' ? path.toLowerCase() : path;
-  };
-  return canonical(left) === canonical(right);
-}
-
-function safeIdentityToken(value: string): string {
-  return encodeURIComponent(value.trim() || 'unresolved');
-}
-
-function exactIdentityFailureReason(input: {
-  code: ExactIdentityFailureCode;
-  expected: RuntimeWorkerIdentity;
-  expectedWorkspace?: string | null;
-  observed?: RuntimeWorker | null;
-  lookupFailure?: string;
-}): string {
-  return [
-    input.code,
-    `expected_runtime=${safeIdentityToken(input.expected.runtime)}`,
-    `expected_handle=${safeIdentityToken(input.expected.id)}`,
-    `expected_generation=${safeIdentityToken(input.expected.generation)}`,
-    `expected_workspace=${safeIdentityToken(input.expectedWorkspace ?? 'unresolved')}`,
-    `observed_handle=${safeIdentityToken(input.observed?.identity.id ?? 'unresolved')}`,
-    `observed_generation=${safeIdentityToken(input.observed?.identity.generation ?? 'unresolved')}`,
-    `observed_workspace=${safeIdentityToken(input.observed?.workspacePath ?? 'unresolved')}`,
-    `identity_source=orca_terminal_show(${safeIdentityToken(input.expected.id)})`,
-    ...(input.lookupFailure ? [`lookup_failure=${safeIdentityToken(input.lookupFailure)}`] : []),
-    'resolution=rerun_from_the_exact_pr_head_after_the_created_handle_identity_is_resolved',
-  ].join(';');
 }
 
 function normalizeTerminalRead(
@@ -211,17 +171,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     workspaceSelector: 'active' | string,
     workspacePath: string,
   ): void {
-    const key = identityKey(identity);
-    if (!this.#knownWorkspace.has(key)) {
-      this.#knownWorkspace.set(key, { workspaceSelector, workspacePath });
-    }
-  }
-
-  #expectedWorkspace(identity: RuntimeWorkerIdentity): string | null {
-    const known = this.#knownWorkspace.get(identityKey(identity));
-    const owned = this.#owned.get(identity.id);
-    return known?.workspacePath
-      ?? (owned && sameRuntimeWorker(owned.identity, identity) ? owned.workspacePath : null);
+    this.#knownWorkspace.set(identityKey(identity), { workspaceSelector, workspacePath });
   }
 
   #remaining(deadline: number): number {
@@ -398,19 +348,24 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (identity.runtime !== 'orca') {
       return runtimeFailure('find_worker', 'runtime_identity_mismatch');
     }
-    const expectedWorkspace = this.#expectedWorkspace(identity);
+    const known = this.#knownWorkspace.get(identityKey(identity));
+    const owned = this.#owned.get(identity.id);
+    const workspace = known?.workspaceSelector ?? owned?.workspaceSelector;
+    if (workspace) {
+      const listed = this.listWorkers({ workspace }, options);
+      if (listed.status !== 'ok') return listed;
+      return {
+        status: 'ok',
+        value: listed.value.find((worker) => sameRuntimeWorker(worker.identity, identity)) ?? null,
+      };
+    }
     const current = this.findWorkerById(identity.id, options);
     if (current.status !== 'ok') return current;
-    if (current.value === null) return current;
-    if (current.value.identity.id !== identity.id) {
-      return runtimeFailure('find_worker', 'worker_generation_unresolved');
-    }
-    if (expectedWorkspace && !sameWorkspacePath(current.value.workspacePath, expectedWorkspace)) {
-      return runtimeFailure('find_worker', 'worker_workspace_mismatch');
-    }
     return {
       status: 'ok',
-      value: sameRuntimeWorker(current.value.identity, identity) ? current.value : null,
+      value: current.value && sameRuntimeWorker(current.value.identity, identity)
+        ? current.value
+        : null,
     };
   }
 
@@ -436,58 +391,30 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       return runtimeUnsupported('spawn_worker', 'runtime_worker_create_shape_unsupported');
     }
 
+    let generation = nativeGeneration(terminal);
+    let discoveredWorkspacePath: string | null = null;
+    if (!generation) {
+      const listed = this.listWorkers({ workspace }, options);
+      if (listed.status !== 'ok') return listed;
+      const discovered = listed.value.find((candidate) => candidate.identity.id === handle);
+      if (!discovered) {
+        return runtimeUnsupported('spawn_worker', 'runtime_worker_generation_unresolved');
+      }
+      generation = discovered.identity.generation;
+      discoveredWorkspacePath = discovered.workspacePath;
+    }
+
     const readiness = workspace === 'active' ? this.readiness(options) : null;
-    const expectedWorkspacePath = workspace === 'active'
+    const workspacePath = workspace === 'active'
       ? readiness?.status === 'ok'
         ? readiness.value.workspacePath
         : options.cwd ?? this.#options.cwd ?? process.cwd()
       : workspace;
-    const established = this.findWorkerById(handle, options);
-    if (established.status !== 'ok' || established.value === null) {
-      return runtimeFailure('spawn_worker', exactIdentityFailureReason({
-        code: 'worker_generation_unresolved',
-        expected: {
-          runtime: 'orca',
-          id: handle,
-          generation: nativeGeneration(terminal) ?? 'unresolved',
-        },
-        expectedWorkspace: expectedWorkspacePath,
-        lookupFailure: established.status === 'ok'
-          ? 'terminal_show:missing_terminal'
-          : `terminal_show:${established.reason}`,
-      }));
-    }
-    if (established.value.identity.id !== handle) {
-      return runtimeFailure('spawn_worker', exactIdentityFailureReason({
-        code: 'worker_generation_unresolved',
-        expected: {
-          runtime: 'orca',
-          id: handle,
-          generation: nativeGeneration(terminal) ?? 'unresolved',
-        },
-        expectedWorkspace: expectedWorkspacePath,
-        observed: established.value,
-        lookupFailure: 'terminal_show:handle_mismatch',
-      }));
-    }
-    if (!sameWorkspacePath(established.value.workspacePath, expectedWorkspacePath)) {
-      return runtimeFailure('spawn_worker', exactIdentityFailureReason({
-        code: 'worker_workspace_mismatch',
-        expected: {
-          runtime: 'orca',
-          id: handle,
-          generation: established.value.identity.generation,
-        },
-        expectedWorkspace: expectedWorkspacePath,
-        observed: established.value,
-      }));
-    }
-
-    const identity = established.value.identity;
+    const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: handle, generation };
     const worker: RuntimeWorker = {
       identity,
-      workspacePath: expectedWorkspacePath,
-      title: established.value.title ?? terminal.title ?? input.title,
+      workspacePath: discoveredWorkspacePath ?? workspacePath,
+      title: terminal.title ?? input.title,
       provenance: 'internal',
     };
     this.#owned.set(handle, {
@@ -511,56 +438,13 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (input.worker.runtime !== 'orca') {
       return { status: 'send_failed', reason: 'runtime_identity_mismatch' };
     }
-    const expectedWorkspace = this.#expectedWorkspace(input.worker);
-    const current = this.findWorkerById(input.worker.id, options);
-    if (current.status !== 'ok' || current.value === null) {
-      return {
-        status: 'send_failed',
-        reason: exactIdentityFailureReason({
-          code: 'worker_generation_unresolved',
-          expected: input.worker,
-          expectedWorkspace,
-          lookupFailure: current.status === 'ok'
-            ? 'terminal_show:missing_terminal'
-            : `terminal_show:${current.reason}`,
-        }),
-      };
+    const current = this.findWorker(input.worker, options);
+    if (current.status !== 'ok') {
+      return { status: 'send_failed', reason: current.reason };
     }
-    if (current.value.identity.id !== input.worker.id) {
-      return {
-        status: 'send_failed',
-        reason: exactIdentityFailureReason({
-          code: 'worker_generation_unresolved',
-          expected: input.worker,
-          expectedWorkspace,
-          observed: current.value,
-          lookupFailure: 'terminal_show:handle_mismatch',
-        }),
-      };
+    if (current.value === null) {
+      return { status: 'send_failed', reason: 'worker_generation_not_found' };
     }
-    if (expectedWorkspace && !sameWorkspacePath(current.value.workspacePath, expectedWorkspace)) {
-      return {
-        status: 'send_failed',
-        reason: exactIdentityFailureReason({
-          code: 'worker_workspace_mismatch',
-          expected: input.worker,
-          expectedWorkspace,
-          observed: current.value,
-        }),
-      };
-    }
-    if (!sameRuntimeWorker(current.value.identity, input.worker)) {
-      return {
-        status: 'send_failed',
-        reason: exactIdentityFailureReason({
-          code: 'worker_generation_mismatch',
-          expected: input.worker,
-          expectedWorkspace,
-          observed: current.value,
-        }),
-      };
-    }
-
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');
     args.push('--enter');
