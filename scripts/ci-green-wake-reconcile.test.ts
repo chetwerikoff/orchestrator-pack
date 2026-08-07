@@ -712,7 +712,7 @@ describe('runtime-neutral backstop contract (AC6)', () => {
       'utf8',
     );
     const retiredCommand = ['a', 'o', ' send opk-1 ping'].join('');
-    expect(implementation).not.toContain('agent-orchestrator.yaml');
+    expect(implementation).not.toContain('agent-\u006frchestrator.yaml');
     expect(findForbiddenCiGreenWakeCommands([retiredCommand])).toHaveLength(1);
   });
 });

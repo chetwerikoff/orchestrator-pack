@@ -12,7 +12,7 @@ $Script:AutonomousSpawnPolicyRelativePath = 'docs/autonomous-spawn-policy.json'
 $Script:AutonomousSpawnBoundaryCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/autonomous-orchestrator-boundary.mjs'
 
 function Test-OrchestratorAutonomousSurfaceActiveForSpawnGate {
-    return -not [string]::IsNullOrEmpty([string]$env:AO_SESSION_ID)
+    return [string]$env:OPK_AUTONOMOUS_SURFACE -eq '1'
 }
 
 function Get-AutonomousSpawnPolicyPath {

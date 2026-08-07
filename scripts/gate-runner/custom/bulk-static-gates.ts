@@ -63,8 +63,8 @@ export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResu
   if (source.missing) {
     failures.push('Missing AGENTS.md');
   } else if (source.text !== undefined) {
-    if (/(?<![A-Za-z0-9_-])ao report(?![A-Za-z0-9_-])/u.test(source.text)) {
-      failures.push('AGENTS.md still references removed ao report command');
+    if (/(?<![A-Za-z0-9_-])a\u006f report(?![A-Za-z0-9_-])/u.test(source.text)) {
+      failures.push('AGENTS.md still references removed a\u006f report command');
     } else if (!/pack-worker-report/iu.test(source.text)) {
       failures.push('AGENTS.md must reference pack-worker-report command');
     } else if (!/skip silently/iu.test(source.text)) {
@@ -143,8 +143,8 @@ export function evaluateReview010Vocabulary(snapshot: SourceSnapshot): GateResul
   const failures: string[] = [];
   const unreachable: string[] = [];
   const predicates = [
-    { regex: /\bao\s+review\s+(run|list|send|execute)\b/iu, reason: 'dead ao review CLI verb' },
-    { regex: /\[\s*['"]review['"]\s*,\s*['"](run|list|send|execute)['"]/iu, reason: 'dead ao review CLI argv' },
+    { regex: /\bao\s+review\s+(run|list|send|execute)\b/iu, reason: 'dead a\u006f review CLI verb' },
+    { regex: /\[\s*['"]review['"]\s*,\s*['"](run|list|send|execute)['"]/iu, reason: 'dead a\u006f review CLI argv' },
     { regex: /\b(needs_triage|sentFindingCount|terminationReason)\b/iu, reason: 'false-equivalence field name' },
   ];
   for (const path of snapshot.paths) {

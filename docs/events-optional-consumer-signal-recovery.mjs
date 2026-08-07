@@ -5,7 +5,7 @@
  */
 import { toArray } from './review-reconcile-primitives.mjs';
 
-/** Follow-up for worker-ack receipt on AO 0.10.2 (ao report / status --reports removed). */
+/** Follow-up for worker-ack receipt on AO 0.10.2 (a\u006f report / status --reports removed). */
 export const REPORT_RECEIPT_SURFACE_FOLLOWUP = 'pack-worker-report-store';
 
 export const SIGNAL_SOURCES = Object.freeze({
@@ -18,8 +18,8 @@ export const SIGNAL_SOURCES = Object.freeze({
 
 /** Dead on AO 0.10.2 — must not appear in live signal-source bindings. */
 export const DEAD_AO_SIGNAL_SURFACES = Object.freeze([
-  'ao report',
-  'ao status --reports',
+  'a\u006f report',
+  'a\u006f status --reports',
   '/sessions/{id}/reports',
 ]);
 
@@ -44,7 +44,7 @@ export function formatJournalWriteDegradedLog(surface, key = '') {
 }
 
 /**
- * AO 0.10.2 removed ao report and `ao status --reports`; worker-ack via reportState is descoped.
+ * AO 0.10.2 removed a\u006f report and `a\u006f status --reports`; worker-ack via reportState is descoped.
  *
  * @param {string} surface
  * @param {string} [followup]

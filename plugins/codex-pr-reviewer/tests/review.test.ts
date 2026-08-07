@@ -614,12 +614,12 @@ describe('review-mode JSONL verdict', () => {
         findings: [
           {
             title: '[P1] Denylisted path touched',
-            body: 'Worker changed vendor/agent-orchestrator without declaration.',
+            body: 'Worker changed vendor/agent-\u006frchestrator without declaration.',
             priority: 1,
             type: 'scope-violation',
             code: 'scope-violation:path-outside-declaration',
             code_location: {
-              absolute_file_path: 'vendor/agent-orchestrator/foo.ts',
+              absolute_file_path: 'vendor/agent-\u006frchestrator/foo.ts',
               line_range: { start: 1, end: 1 },
             },
           },

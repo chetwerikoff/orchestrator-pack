@@ -1,7 +1,7 @@
 # Shared pwsh resolver for pack bash entry points (Issues #406/#821).
 resolve_pwsh() {
   local trusted_only=0
-  [[ -n "${AO_SESSION_ID:-}" ]] && trusted_only=1
+  [[ "${OPK_AUTONOMOUS_SURFACE:-}" == "1" ]] && trusted_only=1
 
   if [[ "${trusted_only}" -eq 0 ]]; then
     if [[ -n "${OPK_PWSH_BINARY:-}" && -x "${OPK_PWSH_BINARY}" ]]; then

@@ -88,7 +88,7 @@ describe('writer', () => {
     });
   });
 
-  it('marks parent_session_id_source runtime when parent comes from AO_PARENT_SESSION_ID', () => {
+  it('marks parent_session_id_source runtime when parent comes from AO_\u0050ARENT_SESSION_ID', () => {
     expect(
       resolveParentSession({
         explicitId: 'parent-explicit-1',

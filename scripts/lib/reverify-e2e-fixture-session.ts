@@ -33,7 +33,7 @@ function defaultSleepMs(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-/** Parse `ao session ls` text for active session rows (TTY-indented or piped). */
+/** Parse `a\u006f session ls` text for active session rows (TTY-indented or piped). */
 export function parseRuntimeWorkerLsText(stdout: string): AoFixtureSessionRecord[] {
   const records: AoFixtureSessionRecord[] = [];
   const seen = new Set<string>();

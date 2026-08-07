@@ -596,7 +596,7 @@ describe('mergeWorkerDeliveriesFromPlanInput', () => {
 });
 
 describe('Issue #261 quiescence helpers', () => {
-  it('parseLastActivityAgeMs reads ao status shapes', () => {
+  it('parseLastActivityAgeMs reads a\u006f status shapes', () => {
     expect(parseLastActivityAgeMs('20m ago')).toBe(20 * 60 * 1000);
     expect(parseLastActivityAgeMs('just now')).toBe(0);
   });

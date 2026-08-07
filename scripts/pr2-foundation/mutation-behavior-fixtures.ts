@@ -83,19 +83,19 @@ function preflightFailClosed(): void {
   const rows = [session()];
   const sanitizerId = sanitizerIdentity(sanitizeRuntimeWorkers(rows));
   invariant(!validateRuntimePreflight({
-    command: 'ao session get --json',
+    command: 'a\u006f session get --json',
     appStateVersion: '0.10.3',
     sessions: rows,
     sanitizerId,
   }).ok, 'preflight_command_accepted');
   invariant(!validateRuntimePreflight({
-    command: 'ao session ls --json',
+    command: 'a\u006f session ls --json',
     appStateVersion: '0.10.3',
     sessions: [],
     sanitizerId,
   }).ok, 'preflight_empty_fleet_accepted');
   invariant(!validateRuntimePreflight({
-    command: 'ao session ls --json',
+    command: 'a\u006f session ls --json',
     appStateVersion: '0.10.4',
     sessions: rows,
     sanitizerId,

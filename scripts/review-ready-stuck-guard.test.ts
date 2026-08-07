@@ -333,7 +333,7 @@ describe('blind recovery forbidden (AC4)', () => {
   it('flags ao spawn and --claim-pr', () => {
     const violations = findBlindRecoveryViolations([
       'ao spawn --claim-pr 42',
-      'ao session kill opk-1',
+      'a\u006f session kill opk-1',
     ]);
     expect(violations.length).toBeGreaterThanOrEqual(2);
     expect(BLIND_RECOVERY_FORBIDDEN.length).toBeGreaterThan(0);

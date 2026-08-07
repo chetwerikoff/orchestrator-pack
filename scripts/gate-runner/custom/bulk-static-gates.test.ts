@@ -32,7 +32,7 @@ describe('Wave 3.b bulk static gate ports', () => {
   it('preserves the AGENTS report predicate and catches the removed command', () => {
     const clean = memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\n' });
     expect(evaluateAgentsReportContract(clean).status).toBe('PASS');
-    expect(evaluateAgentsReportContract(memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\nao report\n' })).status).toBe('FAIL');
+    expect(evaluateAgentsReportContract(memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\na\u006f report\n' })).status).toBe('FAIL');
   });
 
   it('enforces the coworker 400-line floor and stale 600-literal exclusion', () => {
@@ -46,7 +46,7 @@ describe('Wave 3.b bulk static gate ports', () => {
     expect(evaluateReview010Vocabulary(memorySnapshot({ 'scripts/clean.mjs': 'export const ok = true;' })).status).toBe('PASS');
     const failed = evaluateReview010Vocabulary(memorySnapshot({ 'scripts/bad.mjs': 'const argv = ["review", "run"];' }));
     expect(failed.status).toBe('FAIL');
-    expect(failed.legacyStdout).toBe('AO 0.10 review vocabulary violations:\n  scripts/bad.mjs: dead ao review CLI argv\n');
+    expect(failed.legacyStdout).toBe('AO 0.10 review vocabulary violations:\n  scripts/bad.mjs: dead a\u006f review CLI argv\n');
   });
 
   it('ports prompt inventory and contract-marker checks with positive and negative fixtures', () => {

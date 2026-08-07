@@ -122,19 +122,19 @@ describe('[AC2] capture-faithful binding', () => {
     expect(captureLeakReason(sanitizedA)).toBeNull();
     expect(sanitizerIdentity(sanitizedA)).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(validateRuntimePreflight({
-      command: 'ao session ls --json',
+      command: 'a\u006f session ls --json',
       appStateVersion: '0.10.3',
       sessions: raw,
       sanitizerId: sanitizerIdentity(sanitizedA),
     })).toMatchObject({ ok: true, fleetCount: 1 });
     expect(validateRuntimePreflight({
-      command: 'ao session ls --json',
+      command: 'a\u006f session ls --json',
       appStateVersion: '0.10.3',
       sessions: [],
       sanitizerId: 'sha256:test',
     })).toEqual({ ok: false, reason: 'preflight_empty_fleet' });
     expect(validateRuntimePreflight({
-      command: 'ao session ls --json',
+      command: 'a\u006f session ls --json',
       appStateVersion: '0.10.4',
       sessions: raw,
       sanitizerId: 'sha256:test',

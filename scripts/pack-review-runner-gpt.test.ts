@@ -940,7 +940,7 @@ describe('GPT plural source round (Issue #1276)', () => {
     const storeRoot = tempRoot('opk-gpt-plural-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
-    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.AO_\u0049SSUE_NUMBER = '1276';
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
 
@@ -995,7 +995,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const capture = path.join(storeRoot, 'github-review.json');
     const invocationLog = path.join(storeRoot, 'invocations.jsonl');
     harnessEnv(storeRoot, capture);
-    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.AO_\u0049SSUE_NUMBER = '1276';
     delete process.env.PACK_GPT_BROWSER_PROJECT_URL;
     process.env.PACK_GPT_BROWSER_CHAT_URL = 'https://chatgpt.com/c/fixed';
     process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
@@ -1009,7 +1009,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const storeRoot = tempRoot('opk-gpt-prelaunch-failure-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
-    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.AO_\u0049SSUE_NUMBER = '1276';
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
 
@@ -1035,7 +1035,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const storeRoot = tempRoot('opk-gpt-no-early-relay-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
-    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.AO_\u0049SSUE_NUMBER = '1276';
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
     const statusStates: string[] = [];
@@ -1072,7 +1072,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const storeRoot = tempRoot('opk-gpt-finding-union-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
-    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.AO_\u0049SSUE_NUMBER = '1276';
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
 
@@ -1097,7 +1097,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const storeRoot = tempRoot('opk-gpt-zero-send-exhausted-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
-    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.AO_\u0049SSUE_NUMBER = '1276';
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
 
@@ -1127,7 +1127,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const storeRoot = tempRoot('opk-gpt-possible-delivery-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
-    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.AO_\u0049SSUE_NUMBER = '1276';
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
 

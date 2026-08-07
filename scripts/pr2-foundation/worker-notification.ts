@@ -190,7 +190,7 @@ async function admitNotification(input: {
       return { duplicate: false, deliveryId, journalPath, deliveryPath };
     }
 
-    const shape = deriveMessageShape(input.message, trim(process.env.AO_SESSION_ID));
+    const shape = deriveMessageShape(input.message, trim(input.sessionId));
     const nowMs = Date.now();
     const record: DispatchJournalRecord = {
       deliveryId,

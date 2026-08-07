@@ -962,8 +962,8 @@ export function buildSpawnWorktreeGrantRecord(input) {
 export function evaluateBoundaryEscapeSignal(input) {
   const env = input.env ?? {};
   const orchestratorTmux = /\borchestrator\b/i.test(String(env.OPK_TMUX_NAME ?? ''));
-  const surfaceArmed = String(env.AO_SESSION_ID ?? '').trim() !== '';
-  const bootstrapSeen = String(env.__AO_AUTONOMOUS_SURFACE_BOOTSTRAP ?? '') === '1';
+  const surfaceArmed = String(env.OPK_AUTONOMOUS_SURFACE ?? '').trim() === '1';
+  const bootstrapSeen = String(env.OPK_AUTONOMOUS_SURFACE_BOOTSTRAP ?? '') === '1';
   const pathValue = String(env.PATH ?? '');
   const packScripts = String(input.packScriptsDir ?? '');
   const packOnPath = packScripts ? pathValue.split(':').includes(packScripts) : true;

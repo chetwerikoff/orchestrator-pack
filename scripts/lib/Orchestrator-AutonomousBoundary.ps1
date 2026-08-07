@@ -22,7 +22,7 @@ function Get-PackRootFromBoundaryLib {
 }
 
 function Test-OrchestratorAutonomousSurfaceActiveForBoundary {
-    return -not [string]::IsNullOrEmpty([string]$env:AO_SESSION_ID)
+    return [string]$env:OPK_AUTONOMOUS_SURFACE -eq '1'
 }
 
 function Get-LinuxParentProcessId {

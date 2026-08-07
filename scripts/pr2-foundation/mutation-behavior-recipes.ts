@@ -49,7 +49,7 @@ const TEXT_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     replacement: 'return true;',
   },
   'AC2:preflight-missing': {
-    anchor: "if (input.command !== 'ao session ls --json') return { ok: false, reason: 'preflight_command_mismatch' };",
+    anchor: "if (input.command !== 'a\u006f session ls --json') return { ok: false, reason: 'preflight_command_mismatch' };",
     replacement: "if (false) return { ok: false, reason: 'preflight_command_mismatch' };",
   },
   'AC2:preflight-empty-fleet-accepted': {

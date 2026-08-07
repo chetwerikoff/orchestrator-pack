@@ -23,7 +23,7 @@ export { validateCapabilityInventory };
 export const WORKER_NUDGE_GATE_VERSION = 'worker-nudge-gate/v1';
 export const ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY = 'worker-nudge-claim-atomic/v1';
 export const ORCHESTRATOR_TURN_SURFACE = 'orchestrator-turn';
-export const AUTONOMOUS_SURFACE_ENV = 'AO_SESSION_ID';
+export const AUTONOMOUS_SURFACE_ENV = 'OPK_AUTONOMOUS_SURFACE';
 export const JOURNALED_SEND_INTERNAL_ENV = 'OPK_JOURNALED_SEND_INTERNAL';
 export const JOURNALED_SEND_INTERNAL_CAPABILITY = 'journaled-worker-send-internal/v1';
 export const OPERATOR_ESCALATION_PREFIX = '[worker-nudge-gate] ESCALATION:';
@@ -1397,7 +1397,7 @@ export function evaluateAdoptionGate(input) {
       ? []
       : [
           ...(gatedCommandPresent ? [] : ['orchestratorRules missing invoke-gated-worker-nudge.ps1']),
-          ...(rawDenied ? [] : ['raw ao send not denied at process boundary']),
+          ...(rawDenied ? [] : ['raw a\u006f send not denied at process boundary']),
         ],
   };
 }

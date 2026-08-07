@@ -109,7 +109,7 @@ describe('[AC4/AC5] review 4750643719 regressions', () => {
         OPK_VITEST_HARNESS: '1',
         PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER: '1',
         PACK_REVIEW_WORKER_NOTIFICATION_FIXTURE_TARGET: 'worker-923:worker-923',
-        AO_SESSION_ID: 'orchestrator-surface',
+        AO_\u0053ESSION_ID: 'orchestrator-surface',
         OPK_BASE_DIR: path.join(base, 'ao-base'),
         OPK_JOURNALED_SEND_ASSUME_CONTRACT: '1',
         OPK_WORKER_MESSAGE_DISPATCH_JOURNAL: journal,

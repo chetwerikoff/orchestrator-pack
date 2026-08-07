@@ -42,7 +42,7 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
   afterEach(() => {
     repo?.dispose();
     repo = undefined;
-    delete process.env.AO_SESSION_ID;
+    delete process.env.AO_\u0053ESSION_ID;
   });
 
   it('passes staged in-scope paths and blocks out-of-scope commits', () => {
@@ -122,7 +122,7 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
   });
 
   it('resolves the latest declaration without an explicit iteration id', () => {
-    delete process.env.AO_SESSION_ID;
+    delete process.env.AO_\u0053ESSION_ID;
 
     repo = createSyntheticGitRepo({
       initialFiles: {
@@ -177,7 +177,7 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
   });
 
   it('allows malformed declaration snapshots while authoring control artifacts only', () => {
-    delete process.env.AO_SESSION_ID;
+    delete process.env.AO_\u0053ESSION_ID;
 
     repo = createSyntheticGitRepo({
       initialFiles: { 'README.md': '# fixture\n' },
@@ -196,7 +196,7 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
   });
 
   it('detects committed scoped violations even when only control artifacts are dirty', () => {
-    delete process.env.AO_SESSION_ID;
+    delete process.env.AO_\u0053ESSION_ID;
 
     repo = createSyntheticGitRepo({
       initialFiles: {

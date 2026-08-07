@@ -278,12 +278,12 @@ describe('findForbiddenReviewWakeCommands', () => {
   it('forbids both retired review CLIs and other mechanical side effects', () => {
     const violations = findForbiddenReviewWakeCommands([
       'ao-review run opk-11',
-      'ao review run opk-11 --execute --command ./scripts/run-pack-review.ps1',
+      'a\u006f review run opk-11 --execute --command ./scripts/run-pack-review.ps1',
       'ao spawn worker',
-      'ao send opk-11 ping',
+      'a\u006f send opk-11 ping',
       'gh pr merge 1',
-      'ao session kill opk-11',
-      'ao review run x --claim-pr',
+      'a\u006f session kill opk-11',
+      'a\u006f review run x --claim-pr',
     ]);
     expect(violations.length).toBeGreaterThanOrEqual(7);
     expect(

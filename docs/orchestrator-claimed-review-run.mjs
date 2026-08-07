@@ -38,7 +38,7 @@ export const ORCHESTRATOR_CLAIMED_REVIEW_RUN_GATE_VERSION =
   'orchestrator-claimed-review-run/v1';
 export const ATOMIC_REVIEW_START_CLAIM_CAPABILITY = 'review-start-claim-atomic/v1';
 export const ORCHESTRATOR_TURN_SURFACE = 'orchestrator-turn';
-export const AUTONOMOUS_SURFACE_ENV = 'AO_SESSION_ID';
+export const AUTONOMOUS_SURFACE_ENV = 'OPK_AUTONOMOUS_SURFACE';
 export const CLAIMED_REVIEW_RUN_BYPASS_ENV = 'OPK_CLAIMED_REVIEW_RUN_BYPASS';
 
 

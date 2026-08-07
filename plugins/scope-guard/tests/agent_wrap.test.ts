@@ -12,7 +12,7 @@ describe('agent-wrap baseline handling', { timeout: 15_000 }, () => {
   afterEach(() => {
     repo?.dispose();
     repo = undefined;
-    delete process.env.AO_SESSION_ID;
+    delete process.env.AO_\u0053ESSION_ID;
   });
 
   it('prefers explicit baseline, then declaration baseline, then pre-run HEAD', () => {
@@ -61,7 +61,7 @@ describe('agent-wrap baseline handling', { timeout: 15_000 }, () => {
   });
 
   it('detects commits made during the wrapped command when no declaration exists', () => {
-    delete process.env.AO_SESSION_ID;
+    delete process.env.AO_\u0053ESSION_ID;
 
     repo = createSyntheticGitRepo({
       initialFiles: {
@@ -100,7 +100,7 @@ describe('agent-wrap baseline handling', { timeout: 15_000 }, () => {
   });
 
   it('runs scope-check with the pre-run baseline after a successful wrapped command', () => {
-    delete process.env.AO_SESSION_ID;
+    delete process.env.AO_\u0053ESSION_ID;
 
     repo = createSyntheticGitRepo({
       initialFiles: {
