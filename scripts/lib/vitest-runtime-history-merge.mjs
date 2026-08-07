@@ -29,6 +29,7 @@ export const TARGET_REPOSITORY = 'chetwerikoff/orchestrator-pack';
 export const MAX_SUPPLEMENTAL_REPORT_BYTES = 1024 * 1024;
 
 const PROVENANCE_VALUES = new Set(['measured', 'seeded', 'fallback']);
+const HISTORY_MEMBERSHIP_FIELDS = ['files', 'provenance', 'recentSamples', 'fileChangedAt'];
 const FULL_SHA_RE = /^[0-9a-f]{40}$/i;
 
 export function medianMs(samples) {
@@ -84,14 +85,72 @@ export function normalizeHistory(raw) {
   history.recentSamples = { ...(raw.recentSamples ?? {}) };
   history.fileChangedAt = { ...(raw.fileChangedAt ?? {}) };
 
-  for (const [file, ms] of Object.entries(history.files)) {
+  for (const file of Object.keys(history.files)) {
     if (!history.provenance[file]) {
-      history.provenance[file] =
-        history.source === MEASURED_SOURCE ? 'measured' : 'seeded';
+      history.provenance[file] = 'seeded';
     }
   }
 
   return history;
+}
+
+function normalizeInventory(paths) {
+  return [...new Set((paths ?? []).map((entry) => String(entry).replace(/\\/g, '/')))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+export function runtimeHistoryInventory(history) {
+  return Object.keys(normalizeHistory(history).provenance).sort((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
+export function diffRuntimeHistoryInventories(leftPaths, rightPaths) {
+  const left = normalizeInventory(leftPaths);
+  const right = normalizeInventory(rightPaths);
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  const leftOnly = left.filter((file) => !rightSet.has(file));
+  const rightOnly = right.filter((file) => !leftSet.has(file));
+  return {
+    equal: leftOnly.length === 0 && rightOnly.length === 0,
+    leftOnly,
+    rightOnly,
+  };
+}
+
+export function reconcileTrustedInventory(history, currentFiles) {
+  const normalized = normalizeHistory(history);
+  const currentInventory = normalizeInventory(currentFiles);
+  const currentSet = new Set(currentInventory);
+
+  for (const field of HISTORY_MEMBERSHIP_FIELDS) {
+    for (const file of Object.keys(normalized[field] ?? {})) {
+      if (!currentSet.has(file)) {
+        delete normalized[field][file];
+      }
+    }
+  }
+
+  for (const file of currentInventory) {
+    const weight = Number(normalized.files[file]);
+    const hasWeight = Number.isFinite(weight) && weight > 0;
+    const provenance = normalized.provenance[file];
+
+    if (provenance === 'fallback' || !hasWeight) {
+      delete normalized.files[file];
+      delete normalized.recentSamples[file];
+      delete normalized.fileChangedAt[file];
+      normalized.provenance[file] = 'fallback';
+      continue;
+    }
+
+    if (!PROVENANCE_VALUES.has(provenance)) {
+      normalized.provenance[file] = 'seeded';
+    }
+  }
+
+  return normalized;
 }
 
 export function loadHistoryFromFile(path) {
@@ -421,6 +480,10 @@ export function mergeValidatedDurations(baseHistory, durations, heavyFiles) {
       priorSamples.length > 0 &&
       priorSamples[priorSamples.length - 1] === durationMs
     ) {
+      if (history.provenance[file] !== 'measured') {
+        history.provenance[file] = 'measured';
+        anyMeasuredAccepted = true;
+      }
       continue;
     }
     const samples = [...priorSamples, durationMs].slice(-MAX_RECENT_SAMPLES);
@@ -453,7 +516,7 @@ export function mergeValidatedDurations(baseHistory, durations, heavyFiles) {
   for (const file of heavyFiles) {
     if (!history.provenance[file]) {
       if (history.files[file] != null) {
-        history.provenance[file] = history.source === MEASURED_SOURCE ? 'measured' : 'seeded';
+        history.provenance[file] = 'seeded';
       } else {
         history.provenance[file] = 'fallback';
       }
@@ -487,6 +550,7 @@ export function refreshRuntimeHistory({
   const normalizedBase = normalizeHistory(baseHistory);
   const baseBytes = historyBytes(normalizedBase);
   const validation = validateReportSet(shardReports, expectedCommitSha, repoRoot);
+  const currentInventory = discoverVitestFiles(repoRoot);
   const supplementalValidation = supplementalReports
     ? validateSupplementalReportSet(
         supplementalReports,
@@ -498,8 +562,15 @@ export function refreshRuntimeHistory({
       )
     : { ok: true, errors: [], durations: new Map() };
   const errors = [...validation.errors, ...supplementalValidation.errors];
+  if (
+    supplementalReports &&
+    supplementalValidation.ok &&
+    !currentInventory.includes(SUPPLEMENTAL_TARGET)
+  ) {
+    errors.push(`supplemental target is absent from trusted workflow inventory: ${SUPPLEMENTAL_TARGET}`);
+  }
 
-  if (!validation.ok || !supplementalValidation.ok) {
+  if (!validation.ok || !supplementalValidation.ok || errors.length > 0) {
     return {
       ok: false,
       changed: false,
@@ -518,21 +589,56 @@ export function refreshRuntimeHistory({
     durations.set(file, durationMs);
   }
   const merged = mergeValidatedDurations(normalizedBase, durations, validation.heavy);
+  const beforeInventoryBytes = historyBytes(merged.history);
+  const inventoriedHistory = reconcileTrustedInventory(merged.history, currentInventory);
+  const membershipChanged = historyBytes(inventoriedHistory) !== beforeInventoryBytes;
+  if (membershipChanged) {
+    inventoriedHistory.source = MEASURED_SOURCE;
+    inventoriedHistory.dataChangedAt = new Date().toISOString();
+  }
+  const outputBytes = historyBytes(inventoriedHistory);
+  const changed = outputBytes !== baseBytes;
   return {
     ok: true,
-    changed: merged.changed,
-    idempotent: merged.idempotent,
-    history: merged.history,
+    changed,
+    idempotent: !changed,
+    history: inventoriedHistory,
     baseBytes,
-    outputBytes: historyBytes(merged.history),
+    outputBytes,
     errors: [],
-    coverage: merged.coverage,
+    coverage: computeCoverageSignal(inventoriedHistory, validation.heavy),
     rejected: false,
   };
 }
 
-export function reconcileProposedHistoryAgainstRemote(proposedHistory, remoteHistory) {
-  return mergeConcurrentRefreshes(remoteHistory, [proposedHistory]);
+export function reconcileProposedHistoryAgainstRemote(
+  proposedHistory,
+  remoteHistory,
+  options = {},
+) {
+  const proposed = normalizeHistory(proposedHistory);
+  const remote = normalizeHistory(remoteHistory);
+  const currentInventory = Array.isArray(options.currentInventory)
+    ? normalizeInventory(options.currentInventory)
+    : null;
+
+  if (options.requireEqualInventory) {
+    if (!currentInventory) {
+      throw new Error('trusted current inventory is required for stale-base reconcile');
+    }
+    const proposedInventory = runtimeHistoryInventory(proposed);
+    const diff = diffRuntimeHistoryInventories(proposedInventory, currentInventory);
+    if (!diff.equal) {
+      throw new Error(
+        `inventory drift: proposed-only=${JSON.stringify(diff.leftOnly)} trusted-only=${JSON.stringify(diff.rightOnly)}`,
+      );
+    }
+  }
+
+  const merged = mergeConcurrentRefreshes(remote, [proposed]);
+  return currentInventory
+    ? reconcileTrustedInventory(merged, currentInventory)
+    : merged;
 }
 
 export function mergeConcurrentRefreshes(baseHistory, updates) {
