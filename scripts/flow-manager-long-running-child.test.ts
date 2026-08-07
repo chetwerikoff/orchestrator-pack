@@ -132,6 +132,41 @@ function makeParsedTurnResult(
   return { ...base, resolved_send_count };
 }
 
+async function launchReceiptScenario(input: {
+  id: string;
+  receipt: object;
+  cdp: string;
+  profile: string;
+  invocation: string;
+  childProfile?: string;
+  childInvocation?: string;
+}): Promise<ReturnType<typeof readTerminalEnvelope>> {
+  const root = tempDir(`opk-1377-${input.id}-`);
+  const paths = launchPaths(root, input.id);
+  const fixture = nodeFixture(`
+    process.stdout.write(JSON.stringify(${JSON.stringify(input.receipt)}) + '\\n', () => process.exit(0));
+  `);
+  process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
+  const code = await runLaunch({
+    runIdentity: `run-${input.id}`,
+    attemptIdentity: `attempt-${input.id}`,
+    handoffReceiptPath: paths.receipt,
+    terminalEnvelopePath: paths.envelope,
+    browserOutputPath: paths.output,
+    cwd: repoRoot,
+    childCommand: fixture.command,
+    childArgs: [
+      ...fixture.args,
+      '--',
+      '--cdp', input.cdp,
+      '--profile', input.childProfile ?? input.profile,
+      '--invocation-id', input.childInvocation ?? input.invocation,
+    ],
+  });
+  expect(code).toBe(1);
+  return readTerminalEnvelope(paths.envelope);
+}
+
 describe('flow-manager long-running child (#1164)', () => {
   it('static adoption references package commands and policy surfaces', () => {
     const packageJson = readFileSync(packageJsonPath, 'utf8');
@@ -807,4 +842,110 @@ describe('Issue #1377 long-running child abandonment proof', () => {
       },
     });
   });
+
+  it('preserves a bound receipt when the child exits immediately before a turn-result', async () => {
+    const cdp = 'http://127.0.0.1:9222';
+    const profile = join(tempDir('opk-1377-bound-profile-'), 'profile');
+    const invocation = 'invocation-1377-bound';
+    const conversationUrl = 'https://chatgpt.com/c/55555555-5555-4555-8555-555555555555';
+    const receipt = buildBrowserTurnCancellationReceipt({
+      invocationId: invocation,
+      profileKey: configuredProfileKey(profile, cdp),
+      conversationUrl,
+      marker: `OPKTURNV1${'56'.repeat(16)}`,
+      sendCount: 1,
+    });
+    expect(receipt).not.toBeNull();
+    const envelope = await launchReceiptScenario({
+      id: 'bound-immediate-exit',
+      receipt: receipt!,
+      cdp,
+      profile,
+      invocation,
+    });
+    expect(envelope).toMatchObject({
+      incident: 'child_stdout_eof_timeout',
+      delivery: 'POSSIBLY_DELIVERED',
+      turn_result_cause: 'child_stdout_eof_timeout_cancellation_authority_absent',
+      send_count: 1,
+      recovery_available: true,
+      conversation_locator: conversationUrl,
+    });
+    expect(envelope?.diagnostics).toMatchObject({
+      cancellation: { stop_outcome: 'not_attempted_authority_absent' },
+    });
+  });
+
+  it('does not treat a receipt with a foreign invocation as delivery evidence', async () => {
+    const cdp = 'http://127.0.0.1:9222';
+    const profile = join(tempDir('opk-1377-invocation-profile-'), 'profile');
+    const receiptInvocation = 'invocation-1377-receipt';
+    const childInvocation = 'invocation-1377-foreign';
+    const receipt = buildBrowserTurnCancellationReceipt({
+      invocationId: receiptInvocation,
+      profileKey: configuredProfileKey(profile, cdp),
+      conversationUrl: 'https://chatgpt.com/c/66666666-6666-4666-8666-666666666666',
+      marker: `OPKTURNV1${'67'.repeat(16)}`,
+      sendCount: 1,
+    });
+    expect(receipt).not.toBeNull();
+    const envelope = await launchReceiptScenario({
+      id: 'foreign-invocation',
+      receipt: receipt!,
+      cdp,
+      profile,
+      invocation: receiptInvocation,
+      childInvocation,
+    });
+    expect(envelope).toMatchObject({
+      delivery: 'not-sent',
+      recovery_available: false,
+      turn_result_cause: 'child_stdout_eof_timeout_cancellation_receipt_identity_unproven',
+    });
+    expect(envelope).not.toHaveProperty('send_count');
+    expect(envelope).not.toHaveProperty('conversation_locator');
+    expect(envelope?.diagnostics).toMatchObject({
+      cancellation: {
+        stop_outcome: 'not_attempted_identity_unproven',
+        identity_proven: false,
+      },
+    });
+  });
+
+  it('does not treat a receipt with a foreign configured profile as delivery evidence', async () => {
+    const cdp = 'http://127.0.0.1:9222';
+    const profile = join(tempDir('opk-1377-profile-profile-'), 'profile');
+    const foreignProfile = join(tempDir('opk-1377-foreign-profile-'), 'profile');
+    const invocation = 'invocation-1377-profile';
+    const receipt = buildBrowserTurnCancellationReceipt({
+      invocationId: invocation,
+      profileKey: configuredProfileKey(profile, cdp),
+      conversationUrl: 'https://chatgpt.com/c/77777777-7777-4777-8777-777777777777',
+      marker: `OPKTURNV1${'78'.repeat(16)}`,
+      sendCount: 1,
+    });
+    expect(receipt).not.toBeNull();
+    const envelope = await launchReceiptScenario({
+      id: 'foreign-profile',
+      receipt: receipt!,
+      cdp,
+      profile,
+      invocation,
+      childProfile: foreignProfile,
+    });
+    expect(envelope).toMatchObject({
+      delivery: 'not-sent',
+      recovery_available: false,
+      turn_result_cause: 'child_stdout_eof_timeout_cancellation_receipt_identity_unproven',
+    });
+    expect(envelope).not.toHaveProperty('send_count');
+    expect(envelope).not.toHaveProperty('conversation_locator');
+    expect(envelope?.diagnostics).toMatchObject({
+      cancellation: {
+        stop_outcome: 'not_attempted_identity_unproven',
+        identity_proven: false,
+      },
+    });
+  });
+
 });
