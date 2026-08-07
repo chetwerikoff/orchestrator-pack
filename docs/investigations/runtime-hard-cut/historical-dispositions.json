@@ -117,6 +117,12 @@
       "class": "fixture-documentation",
       "reason": "Fixture-local documentation preserves the historical state-root shape needed to interpret the captured fixture; production code does not read it.",
       "owningReference": "Issue #1352 r07"
+    },
+    {
+      "path": "scripts/fixtures/create-issue-parked-migration-1188.json",
+      "class": "byte-bound-migration-evidence",
+      "reason": "Pinned Issue #1188 migration manifest preserves exact historical Issue bytes and digest; it is validated as immutable evidence and is not current runtime authority.",
+      "owningReference": "Issue #1352 AO-15; scripts/create-issue-parked-migration.ts"
     }
   ]
 }
