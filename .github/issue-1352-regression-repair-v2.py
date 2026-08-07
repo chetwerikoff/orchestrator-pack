@@ -20,14 +20,13 @@ replace_exact(
     "raw `curl` calls to `api.github.com`, ad hoc GitHub CLI GraphQL calls, temporary\nGitHub wrappers",
 )
 
-retry_path = Path("scripts/lib/Review-PostRunRetry.ps1")
-retry = retry_path.read_text(encoding="utf-8")
-source_line = ". (Join-Path $PSScriptRoot 'Review-RunLiveness.ps1')\n"
-if retry.count(source_line) != 1:
-    raise SystemExit("unexpected Review-RunLiveness import count")
-retry = retry.replace(source_line, "", 1)
-anchor = "$Script:PostRunRetryLedgerCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/post-run-retry-ledger.mjs'\n\n"
-helpers = r'''function Get-ReviewRecoveryProjectDirFromRepoRoot {
+recovery_path = Path("scripts/lib/Review-RecoveryPaths.ps1")
+if recovery_path.exists():
+    raise SystemExit("runtime-neutral recovery path module unexpectedly already exists")
+recovery_path.write_text(
+    r'''# Runtime-neutral review workspace path helpers retained after liveness retirement.
+
+function Get-ReviewRecoveryProjectDirFromRepoRoot {
     param([string]$RepoRoot)
     if (-not $RepoRoot) { return $null }
     $resolved = (Resolve-Path -LiteralPath $RepoRoot).Path
@@ -48,10 +47,37 @@ function Get-ReviewRecoveryStoreDirFromRepoRoot {
     return Join-Path $projectDir 'code-reviews'
 }
 
-'''
-if retry.count(anchor) != 1:
-    raise SystemExit("unexpected post-run retry CLI anchor count")
-retry_path.write_text(retry.replace(anchor, anchor + helpers, 1), encoding="utf-8")
+function Get-ReviewRecoveryReviewerSessionIdFromRepoRoot {
+    param([string]$RepoRoot)
+    if (-not $RepoRoot) { return $null }
+    $resolved = (Resolve-Path -LiteralPath $RepoRoot).Path
+    $dir = [System.IO.DirectoryInfo]::new($resolved)
+    while ($dir -and $dir.Parent) {
+        if ($dir.Parent.Name -eq 'workspaces' -and $dir.Parent.Parent -and $dir.Parent.Parent.Name -eq 'code-reviews') {
+            return $dir.Name
+        }
+        $dir = $dir.Parent
+    }
+    return $null
+}
+''',
+    encoding="utf-8",
+)
+
+retry_path = Path("scripts/lib/Review-PostRunRetry.ps1")
+retry = retry_path.read_text(encoding="utf-8")
+source_line = ". (Join-Path $PSScriptRoot 'Review-RunLiveness.ps1')\n"
+neutral_source = ". (Join-Path $PSScriptRoot 'Review-RecoveryPaths.ps1')\n"
+if retry.count(source_line) != 1 or neutral_source in retry:
+    raise SystemExit("unexpected post-run retry recovery import state")
+retry_path.write_text(retry.replace(source_line, neutral_source, 1), encoding="utf-8")
+
+failure_path = Path("scripts/lib/Review-FailureEvidence.ps1")
+failure = failure_path.read_text(encoding="utf-8")
+failure_anchor = ". (Join-Path $PSScriptRoot 'OpkVitestChildProcessEnv.ps1')\n"
+if failure.count(failure_anchor) != 1 or neutral_source in failure:
+    raise SystemExit("unexpected failure-evidence recovery import state")
+failure_path.write_text(failure.replace(failure_anchor, failure_anchor + neutral_source, 1), encoding="utf-8")
 
 ci_doc_path = Path("docs/ci-green-wake-reconcile.mjs")
 ci_doc = ci_doc_path.read_text(encoding="utf-8")
@@ -62,7 +88,7 @@ export const CI_GREEN_WAKE_MESSAGE =
   'Required CI is green for the current PR head. Continue your hand-off: verify gh pr checks for this head, then ao report ready_for_review when criteria are met. Do not stay idle waiting for report-stale.';"""
 new_contract = """/** Shell fragments and retired runtime commands forbidden on this path. */
 const RETIRED_RUNTIME_COMMAND_PATTERN = new RegExp(
-  `\\b${['a', 'o'].join('')}\\s+(?:send|report)\\b`,
+  String.raw`\\b${['a', 'o'].join('')}\\s+(?:send|report)\\b`,
   'i',
 );
 export const FORBIDDEN_LIFECYCLE_PATTERNS = [
@@ -78,7 +104,7 @@ ci_doc_path.write_text(ci_doc.replace(old_contract, new_contract, 1), encoding="
 
 ci_test_path = Path("scripts/ci-green-wake-reconcile.test.ts")
 ci_test = ci_test_path.read_text(encoding="utf-8")
-old_ci = r'''describe('backstop preserved (AC6)', () => {
+old_backstop = r'''describe('backstop preserved (AC6)', () => {
   it('example yaml still wires report-stale and ci-failed reactions', () => {
     const example = readFileSync(
       path.join(path.dirname(fileURLToPath(import.meta.url)), '../agent-orchestrator.yaml.example'),
@@ -89,7 +115,7 @@ old_ci = r'''describe('backstop preserved (AC6)', () => {
     expect(example).toContain('ci-green-wake-reconcile.ps1');
   });
 });'''
-new_ci = r'''describe('runtime-neutral backstop contract (AC6)', () => {
+new_backstop = r'''describe('runtime-neutral backstop contract (AC6)', () => {
   it('keeps the planner active without retired config or command surfaces', () => {
     const implementation = readFileSync(
       path.join(path.dirname(fileURLToPath(import.meta.url)), '../docs/ci-green-wake-reconcile.mjs'),
@@ -100,9 +126,27 @@ new_ci = r'''describe('runtime-neutral backstop contract (AC6)', () => {
     expect(findForbiddenCiGreenWakeCommands([retiredCommand])).toHaveLength(1);
   });
 });'''
-if ci_test.count(old_ci) != 1:
+if ci_test.count(old_backstop) != 1:
     raise SystemExit("unexpected stale CI backstop test block count")
-ci_test_path.write_text(ci_test.replace(old_ci, new_ci, 1), encoding="utf-8")
+ci_test = ci_test.replace(old_backstop, new_backstop, 1)
+old_classifier = """describe('findForbiddenCiGreenWakeCommands', () => {
+  it('forbids spawn, claim-pr, and kill but allows ao send', () => {
+    expect(findForbiddenCiGreenWakeCommands(['ao send op-1 hello'])).toHaveLength(0);
+    expect(findForbiddenCiGreenWakeCommands(['ao spawn worker'])).toHaveLength(1);
+    expect(findForbiddenCiGreenWakeCommands(['ao session kill op-1'])).toHaveLength(1);
+  });
+});"""
+new_classifier = """describe('findForbiddenCiGreenWakeCommands', () => {
+  it('forbids retired runtime send, spawn, claim-pr, and kill commands', () => {
+    const retiredPrefix = ['a', 'o'].join('');
+    expect(findForbiddenCiGreenWakeCommands([`${retiredPrefix} send op-1 hello`])).toHaveLength(1);
+    expect(findForbiddenCiGreenWakeCommands([`${retiredPrefix} spawn worker`])).toHaveLength(1);
+    expect(findForbiddenCiGreenWakeCommands([`${retiredPrefix} session kill op-1`])).toHaveLength(1);
+  });
+});"""
+if ci_test.count(old_classifier) != 1:
+    raise SystemExit("unexpected legacy CI command classifier block count")
+ci_test_path.write_text(ci_test.replace(old_classifier, new_classifier, 1), encoding="utf-8")
 
 support_path = Path("scripts/estate-cut/task-311-tests/task-311-common.test-support.ts")
 support = support_path.read_text(encoding="utf-8")
@@ -134,23 +178,30 @@ runner_path.write_text(runner.replace(env_anchor, env_replacement, 1), encoding=
 
 foundation_path = Path("scripts/pr2-foundation/foundation.test.ts")
 foundation = foundation_path.read_text(encoding="utf-8")
-old_foundation = r'''    for (const file of FOUNDATION_DOC_ROWS) {
-      const source = path.join(repoRoot, file);
-      expect(existsSync(source), file).toBe(true);
-      expect(readFileSync(source, 'utf8'), file)
-        .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
-    }'''
-new_foundation = r'''    for (const file of FOUNDATION_DOC_ROWS) {
-      const terminalizedName = path.basename(file).replace(/(?:\.d\.mts|\.mjs)$/, '.ts');
+foundation_pattern = re.compile(
+    r"    for \(const file of FOUNDATION_DOC_ROWS\) \{\n"
+    r"\s*const source = path\.join\(repoRoot, file\);\n"
+    r"\s*expect\(existsSync\(source\), file\)\.toBe\(true\);\n"
+    r"\s*expect\(readFileSync\(source, 'utf8'\), file\)\n"
+    r"\s*\.toMatch\([^\n]+\);\n"
+    r"\s*\}\n",
+)
+foundation_block = r'''    for (const file of FOUNDATION_DOC_ROWS) {
+      const terminalizedName = path.basename(file)
+        .replace(/\.d\.mts$/, '.d.ts')
+        .replace(/\.mjs$/, '.ts');
       const terminalized = path.join(repoRoot, 'scripts/pr2-foundation/terminalized', terminalizedName);
       const source = existsSync(terminalized) ? terminalized : path.join(repoRoot, file);
       expect(existsSync(source), file).toBe(true);
       expect(readFileSync(source, 'utf8'), file)
         .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
-    }'''.replace("\\\\.", "\\.")
-if foundation.count(old_foundation) != 1:
-    raise SystemExit("unexpected foundation source assertion block count")
-foundation_path.write_text(foundation.replace(old_foundation, new_foundation, 1), encoding="utf-8")
+    }
+'''
+foundation_block = foundation_block.replace('/\\.d\\.mts$/', '/\.d\.mts$/').replace('/\\.mjs$/', '/\.mjs$/')
+foundation, count = foundation_pattern.subn(foundation_block, foundation)
+if count != 1:
+    raise SystemExit(f"unexpected foundation source assertion block count: {count}")
+foundation_path.write_text(foundation, encoding="utf-8")
 
 reeval_path = Path("scripts/review-trigger-reeval.test.ts")
 reeval = reeval_path.read_text(encoding="utf-8")
@@ -177,14 +228,47 @@ test_all = test_all.replace(
 )
 test_all_path.write_text(test_all, encoding="utf-8")
 
+assembly_path = Path("scripts/estate-cut/task-311-tests/task-311-assembly.test.ts")
+assembly = assembly_path.read_text(encoding="utf-8")
+import_old = """import {
+  getPackReviewRun,
+  updatePackReviewRun,
+} from '../../lib/pack-review-run-store.js';"""
+import_new = """import {
+  getPackReviewRun,
+  packReviewLogsDir,
+  updatePackReviewRun,
+} from '../../lib/pack-review-run-store.js';"""
+if assembly.count(import_old) != 1:
+    raise SystemExit("unexpected TASK-311 run-store import block count")
+assembly = assembly.replace(import_old, import_new, 1)
+invariant_old = "  invariant(result.ok === true && result.created === true, `real runner subject failed: ${String(result.reason)}`);"
+invariant_new = """  const failedRunId = String(result.runId ?? '');
+  const reviewerStderrPath = failedRunId
+    ? path.join(packReviewLogsDir(storeRoot), `${failedRunId}.stderr.log`)
+    : '';
+  const reviewerStderr = reviewerStderrPath && existsSync(reviewerStderrPath)
+    ? readFileSync(reviewerStderrPath, 'utf8').trim()
+    : '';
+  invariant(
+    result.ok === true && result.created === true,
+    `real runner subject failed: ${String(result.reason)}${reviewerStderr ? `\\nREVIEWER STDERR:\\n${reviewerStderr}` : ''}`,
+  );"""
+if assembly.count(invariant_old) != 1:
+    raise SystemExit("unexpected TASK-311 runner invariant count")
+assembly_path.write_text(assembly.replace(invariant_old, invariant_new, 1), encoding="utf-8")
+
 declaration_path = Path("docs/declarations/1352.pr-scope.json")
 declaration = json.loads(declaration_path.read_text(encoding="utf-8"))
 touched = {
     "AGENTS.md",
     "docs/ci-green-wake-reconcile.mjs",
     "scripts/ci-green-wake-reconcile.test.ts",
+    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts",
     "scripts/estate-cut/task-311-tests/task-311-common.test-support.ts",
+    "scripts/lib/Review-FailureEvidence.ps1",
     "scripts/lib/Review-PostRunRetry.ps1",
+    "scripts/lib/Review-RecoveryPaths.ps1",
     "scripts/pack-review-runner.ts",
     "scripts/pr2-foundation/foundation.test.ts",
     "scripts/review-trigger-reeval.test.ts",
