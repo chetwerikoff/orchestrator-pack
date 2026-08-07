@@ -70,7 +70,7 @@ export function createMonotonicClock(startMs = 0) {
  * @param {NodeJS.ProcessEnv} [env]
  */
 export function readInjectedMonotonicNowMs(env = process.env) {
-  const raw = String(env.AO_REVIEW_START_MONOTONIC_NOW_MS ?? '').trim();
+  const raw = String(env.OPK_REVIEW_START_MONOTONIC_NOW_MS ?? '').trim();
   if (!raw) return null;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;

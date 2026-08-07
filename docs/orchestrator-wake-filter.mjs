@@ -245,7 +245,7 @@ export function evaluateHeartbeatTick({
  * @param {object} [admissionContext]
  * @param {string} [admissionContext.supervisedProjectId]
  * @param {string} [admissionContext.supervisedRepoSlug]
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [admissionContext.supervisedSessions]
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker[]} [admissionContext.supervisedSessions]
  * @param {boolean} [admissionContext.sessionLookupFailed]
  * @param {boolean} [admissionContext.supervisedRepoLookupFailed]
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [admissionContext.openPrs]

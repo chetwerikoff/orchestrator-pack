@@ -4,8 +4,8 @@ resolve_pwsh() {
   [[ -n "${AO_SESSION_ID:-}" ]] && trusted_only=1
 
   if [[ "${trusted_only}" -eq 0 ]]; then
-    if [[ -n "${AO_PWSH_BINARY:-}" && -x "${AO_PWSH_BINARY}" ]]; then
-      printf '%s\n' "${AO_PWSH_BINARY}"
+    if [[ -n "${OPK_PWSH_BINARY:-}" && -x "${OPK_PWSH_BINARY}" ]]; then
+      printf '%s\n' "${OPK_PWSH_BINARY}"
       return 0
     fi
     if command -v pwsh >/dev/null 2>&1; then

@@ -14,7 +14,7 @@ import {
   buildReviewerBudgetSpawnEnv,
   createReviewerBudgetLedger,
   type ReviewerBudgetLedger,
-} from '../plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts';
+} from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import {
   deriveMergeTriageEvidenceTuple,
@@ -116,7 +116,7 @@ import {
 } from './lib/reverify-bound-issue-snapshot.ts';
 import { parseComplexityTierFromIssueBody } from '../docs/review-cycle-cap.mjs';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
-import type { ResolvedScopeContext } from '../plugins/ao-codex-pr-reviewer/lib/scope_context.ts';
+import type { ResolvedScopeContext } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 export { resolveRepositorySlug };
 
 interface FixtureReviewOutcome {
@@ -287,7 +287,7 @@ export function resolveTrustedRunnerPaths(env: NodeJS.ProcessEnv = process.env):
 } {
   const ownPath = resolve(fileURLToPath(import.meta.url));
   const ownRoot = resolve(dirname(ownPath), '..');
-  const configured = trim(env.AO_TRUSTED_PACK_ROOT || env.OPK_TRUSTED_PACK_ROOT);
+  const configured = trim(env.OPK_TRUSTED_PACK_ROOT || env.OPK_TRUSTED_PACK_ROOT);
   const trustedPackRoot = configured ? resolve(configured) : ownRoot;
   const runnerPath = resolve(trustedPackRoot, RUNNER_RELATIVE_PATH);
   const reviewerPath = resolve(trustedPackRoot, REVIEWER_RELATIVE_PATH);
@@ -305,9 +305,9 @@ export function resolveTrustedRunnerPaths(env: NodeJS.ProcessEnv = process.env):
 }
 
 function bindingCachePath(env: NodeJS.ProcessEnv = process.env): string {
-  const explicit = trim(env.AO_PR_SESSION_BINDING_CACHE);
+  const explicit = trim(env.OPK_PR_SESSION_BINDING_CACHE);
   if (explicit) return resolve(explicit);
-  const seed = trim(env.AO_REPORT_STATE_SEED_STATE);
+  const seed = trim(env.OPK_REPORT_STATE_SEED_STATE);
   if (seed) return join(dirname(resolve(seed)), 'pr-session-binding-cache.json');
   return join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', 'pr-session-binding-cache.json');
 }
@@ -562,7 +562,7 @@ function resolveAuthoritativeReviewContext(input: StartInput, target: {
   let body: string | undefined = input.fixtureIssueBody;
   let snapshotDigest = '';
   const issueNumber = target.issueNumber
-    ?? (process.env.OPK_VITEST_HARNESS === '1' ? Number(process.env.AO_ISSUE_NUMBER ?? 0) : 0);
+    ?? 0;
 
   if (body !== undefined) {
     snapshotDigest = computeBoundIssueSnapshotHash(body);
@@ -972,11 +972,18 @@ async function invokeReviewer(options: {
   }
 
   const args = reviewerArgs;
-  const env: NodeJS.ProcessEnv = {
+  const retiredRuntimePrefixes = [
+  ['A', 'O', '_'].join(''),
+  ['O', 'R', 'C', 'A', '_'].join(''),
+];
+const sanitizedParentEnv = Object.fromEntries(
+  Object.entries(process.env)
+    .filter(([key]) => !retiredRuntimePrefixes.some((prefix) => key.startsWith(prefix))),
+) as NodeJS.ProcessEnv;
+const env: NodeJS.ProcessEnv = {
+  ...sanitizedParentEnv,
     ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),
-    AO_PR_NUMBER: String(options.prNumber),
-    GITHUB_PR_NUMBER: String(options.prNumber),
-    AO_REVIEW_RUN_ID: options.runId,
+    OPK_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_TARGET_HEAD_SHA: options.headSha,
     ...(options.frozenScope ? { PACK_REVIEW_FROZEN_SCOPE_JSON: JSON.stringify(options.frozenScope) } : {}),
@@ -986,10 +993,6 @@ async function invokeReviewer(options: {
   if (resolvedReviewer) {
     env.PACK_REVIEWER = resolvedReviewer;
     env[PACK_REVIEW_BOUND_REVIEWER_ENV] = resolvedReviewer;
-  }
-  if (options.sessionId) {
-    env.AO_SESSION_ID = options.sessionId;
-    env.AO_WORKER_SESSION_ID = options.sessionId;
   }
   if (options.carryoverBundlePath) {
     env.PACK_REVIEW_CARRYOVER_BUNDLE_PATH = options.carryoverBundlePath;
@@ -1001,7 +1004,7 @@ async function invokeReviewer(options: {
     command: 'pwsh',
     args,
     cwd: options.trustedPackRoot,
-    inheritParentEnv: true,
+    inheritParentEnv: false,
     env,
     allowEmptyStdout: true,
     timeoutMs: options.budgetLedger.runnerTimeoutMs,

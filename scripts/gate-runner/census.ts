@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { failGate, passGate, type EvidenceObservation, type GateResult } from './contracts.ts';
 import { migrationOwnershipDigest, populationDigest } from './census-generator.ts';
-import { VERIFY_REQUIRED_FILES } from './bulk-declarative-gates.ts';
+import { VERIFY_REQUIRED_FILES, VERIFY_RETIRED_FILES } from './bulk-declarative-gates.ts';
 import { VERIFY_CONTRACT_MARKERS, VERIFY_PROMPT_GLOB } from './custom/bulk-static-gates.ts';
 import {
   WAVE_3B_MIGRATION_INVENTORY_PATH,
@@ -101,6 +101,7 @@ export interface GateCensus {
     readonly baseCommitSha: string;
     readonly populationDigest: string;
     readonly migrationOwnershipDigest: string;
+    readonly currentSourceHashes?: Readonly<Record<string, string>>;
   };
   readonly populationCount: number;
   readonly counts: Readonly<Record<string, number>>;
@@ -121,7 +122,7 @@ export const CENSUS_PATH = 'scripts/gate-runner/census/pre-change-baseline.json'
 export const CENSUS_GENERATION_PATH = 'scripts/gate-runner/census/generation.json';
 
 const EXPECTED_BASE_COMMIT = 'b7394065b9ee1b046abb4cf29aff456df1935571';
-const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '1402734b0cb3c1a65f8b51fccba71c2b2baef958616c5a45ecae7dbe1acd6117';
+const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = 'b0fdea6198a2f886c30fef17fc37ebed4425806e43f26ba3f5c99359a06f2e58';
 const EXPECTED_SOURCE_HASHES = {
   'scripts/verify.ps1': '6bf8b3459885d603fa112d56c1a5afff6e472c2676c71eeb3e1510f0553562c9',
   'scripts/check-reusable.ps1': 'dafb1766d1d7b60181527dbb24593051270d21814291909000355541da26e0eb',
@@ -848,6 +849,7 @@ export function evaluateCensus(
         registeredGateIds,
         {
           requiredFiles: VERIFY_REQUIRED_FILES,
+          absentFiles: VERIFY_RETIRED_FILES,
           contractMarkers: VERIFY_CONTRACT_MARKERS,
           promptGlob: VERIFY_PROMPT_GLOB,
         },
@@ -904,8 +906,14 @@ export function evaluateCensus(
   const allReusableRowsRetained = reusableRows.length > 0 && reusableRows.every(isLegacyRetained);
   if (allReusableRowsRetained) {
     if (checkReusable === undefined) failures.push('scripts/check-reusable.ps1 is missing while its behaviors remain legacy-enforced');
-    else if (sha256(checkReusable) !== census.sourceHashes['scripts/check-reusable.ps1']) {
-      failures.push('scripts/check-reusable.ps1 behavior surface drifted without census reclassification');
+    else {
+      const expectedCurrentHash = census.generation.currentSourceHashes?.['scripts/check-reusable.ps1']
+        ?? census.sourceHashes['scripts/check-reusable.ps1'];
+      if (!/^[0-9a-f]{64}$/u.test(expectedCurrentHash ?? '')) {
+        failures.push('scripts/check-reusable.ps1 current source hash is missing or invalid');
+      } else if (sha256(checkReusable) !== expectedCurrentHash) {
+        failures.push('scripts/check-reusable.ps1 behavior surface drifted without a reviewed current-source hash');
+      }
     }
   } else {
     for (const entry of reusableRows) {

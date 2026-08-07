@@ -70,30 +70,30 @@ function Get-WorkerStatusRefreshSourceSessions {
         $WorkerListPayload = $null,
         $OrchestratorListPayload = $null,
         $ReportFullPayload = $null,
-        [string]$AoCommand = 'ao',
+        [string]$RuntimeCommand = 'ao',
         [switch]$IncludeTerminated
     )
 
     if ($ReportFullPayload) {
         if ($IncludeTerminated) {
-            return @(Get-AoStatusSessionsWithReportsIncludingTerminated -ReportFullPayload $ReportFullPayload)
+            return @(Get-RuntimeStatusSessionsWithReportsIncludingTerminated -ReportFullPayload $ReportFullPayload)
         }
-        return @(Get-AoStatusSessionsWithReports -ReportFullPayload $ReportFullPayload)
+        return @(Get-RuntimeStatusSessionsWithReports -ReportFullPayload $ReportFullPayload)
     }
 
     $sessions = if ($IncludeTerminated) {
-        @(Get-AoStatusSessionsIncludingTerminated -Project $Project `
+        @(Get-RuntimeStatusSessionsIncludingTerminated -Project $Project `
                 -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
-                -AoCommand $AoCommand)
+                -RuntimeCommand $RuntimeCommand)
     }
     else {
-        @(Get-AoStatusSessions -Project $Project `
+        @(Get-RuntimeStatusSessions -Project $Project `
                 -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
-                -AoCommand $AoCommand)
+                -RuntimeCommand $RuntimeCommand)
     }
 
     $resolvedRepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug
-    return @(Merge-AoSessionRowsWithWorkerReportStore -Sessions $sessions -RepoSlug $resolvedRepoSlug)
+    return @(Merge-RuntimeWorkerRowsWithWorkerReportStore -Sessions $sessions -RepoSlug $resolvedRepoSlug)
 }
 
 function New-WorkerStatusRefreshDiagnostic {
@@ -272,7 +272,7 @@ function Test-WorkerStatusRefreshSessionDetailEligible {
     param($Session)
 
     if (-not $Session) { return $false }
-    if (-not (Test-AoSessionRowNeedsSessionGetDetail -Row $Session)) { return $false }
+    if (-not (Test-RuntimeWorkerRowNeedsSessionGetDetail -Row $Session)) { return $false }
     $role = [string]$Session.role
     if ($role.ToLowerInvariant() -ne 'worker') { return $false }
     if ($Session.PSObject.Properties.Name -contains 'isTerminated' -and [bool]$Session.isTerminated) {
@@ -579,18 +579,18 @@ function Invoke-WorkerStatusRefreshSessionDetailLookup {
         [Parameter(Mandatory = $true)]
         [string]$SessionId,
         [string]$Project = 'orchestrator-pack',
-        [string]$AoCommand = 'ao',
+        [string]$RuntimeCommand = 'ao',
         [int]$TimeoutMs,
         [int]$DrainTimeoutMs = 250
     )
 
     $sessionArgs = @('session', 'get', $SessionId, '--json')
     if ($Project) { $sessionArgs += @('-p', $Project) }
-    $command = $AoCommand
+    $command = $RuntimeCommand
     $processArgs = @($sessionArgs)
-    if ($AoCommand -match '(?i)\.ps1$') {
+    if ($RuntimeCommand -match '(?i)\.ps1$') {
         $command = 'pwsh'
-        $literalArgs = @($AoCommand) + $sessionArgs | ForEach-Object {
+        $literalArgs = @($RuntimeCommand) + $sessionArgs | ForEach-Object {
             "'" + ([string]$_).Replace("'", "''") + "'"
         }
         $invocation = '& ' + ($literalArgs -join ' ')
@@ -639,9 +639,9 @@ function Invoke-WorkerStatusRefreshSessionDetailLookup {
         }
 
         $payload = $null
-        try { $payload = ConvertFrom-AoCliPrefixedOutput -Text $stdout -FailureLabel 'ao session get' }
+        try { $payload = ConvertFrom-RuntimeCliPrefixedOutput -Text $stdout -FailureLabel 'ao session get' }
         catch {
-            try { $payload = ConvertFrom-AoCliPrefixedOutput -Text (@($stdout, $stderr) -join "`n") -FailureLabel 'ao session get' }
+            try { $payload = ConvertFrom-RuntimeCliPrefixedOutput -Text (@($stdout, $stderr) -join "`n") -FailureLabel 'ao session get' }
             catch {
                 return @{ ok = $false; timedOut = $false; reason = 'session_detail_lookup_failed'; displayName = ''; detail = 'lookup_exception' }
             }
@@ -661,7 +661,7 @@ function Add-WorkerStatusRefreshSessionDetails {
     param(
         [object[]]$Sessions,
         [string]$Project = 'orchestrator-pack',
-        [string]$AoCommand = 'ao',
+        [string]$RuntimeCommand = 'ao',
         [string]$StorePath = '',
         [string]$CursorPath = '',
         [System.Collections.IDictionary]$Diagnostic,
@@ -764,11 +764,11 @@ function Add-WorkerStatusRefreshSessionDetails {
         $attemptedRows++
         $callTimeoutMs = [int][Math]::Max(1, [Math]::Min([long]$policy.perCallTimeoutMs, $remaining))
         $lookup = if ($DetailLookup) {
-            & $DetailLookup $sessionId $Project $AoCommand $callTimeoutMs ([int]$policy.postKillDrainMs)
+            & $DetailLookup $sessionId $Project $RuntimeCommand $callTimeoutMs ([int]$policy.postKillDrainMs)
         }
         else {
             Invoke-WorkerStatusRefreshSessionDetailLookup -SessionId $sessionId -Project $Project `
-                -AoCommand $AoCommand -TimeoutMs $callTimeoutMs -DrainTimeoutMs ([int]$policy.postKillDrainMs)
+                -RuntimeCommand $RuntimeCommand -TimeoutMs $callTimeoutMs -DrainTimeoutMs ([int]$policy.postKillDrainMs)
         }
         Write-WorkerStatusRefreshDetailHeartbeat -ProgressWriter $ProgressWriter `
             -Step 'worker_status_detail_done' -Cursor ($ordinal * 2) -Total $heartbeatTotal
@@ -927,7 +927,7 @@ function Invoke-WorkerStatusRefresh {
         $WorkerListPayload = $null,
         $OrchestratorListPayload = $null,
         $ReportFullPayload = $null,
-        [string]$AoCommand = 'ao',
+        [string]$RuntimeCommand = 'ao',
         [switch]$IncludeTerminated,
         [object[]]$Sessions = $null,
         $GithubSnapshot = $null,
@@ -952,7 +952,7 @@ function Invoke-WorkerStatusRefresh {
     else {
         @(Get-WorkerStatusRefreshSourceSessions -Project $Project -RepoSlug $RepoSlug `
                 -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
-                -ReportFullPayload $ReportFullPayload -AoCommand $AoCommand -IncludeTerminated:$IncludeTerminated)
+                -ReportFullPayload $ReportFullPayload -RuntimeCommand $RuntimeCommand -IncludeTerminated:$IncludeTerminated)
     }
     $diagnostic = New-WorkerStatusRefreshDiagnostic -Owner $Owner -SessionCount (@($sourceSessions).Count) -NowMs $NowMs
 
@@ -994,7 +994,7 @@ function Invoke-WorkerStatusRefresh {
         $null -eq $ReportFullPayload)
     if ($isLiveRefresh) {
         $sourceSessions = @(Add-WorkerStatusRefreshSessionDetails -Sessions $sourceSessions `
-                -Project $Project -AoCommand $AoCommand -StorePath $StorePath -CursorPath $DetailCursorPath `
+                -Project $Project -RuntimeCommand $RuntimeCommand -StorePath $StorePath -CursorPath $DetailCursorPath `
                 -Diagnostic $diagnostic -PolicyOverride $DetailPolicy -ProgressWriter $ProgressWriter `
                 -DetailLookup $DetailLookup -NowProvider $DetailNowProvider `
                 -CursorPersistenceHook $DetailCursorPersistenceHook)
@@ -1146,14 +1146,14 @@ function Get-WorkerStatusDecisionSessionsCore {
         $WorkerListPayload = $null,
         $OrchestratorListPayload = $null,
         $ReportFullPayload = $null,
-        [string]$AoCommand = 'ao',
+        [string]$RuntimeCommand = 'ao',
         [switch]$IncludeTerminated,
         [long]$RepoTickGeneration = 0
     )
 
     $sessions = @(Get-WorkerStatusRefreshSourceSessions -Project $Project -RepoSlug $RepoSlug `
             -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
-            -ReportFullPayload $ReportFullPayload -AoCommand $AoCommand -IncludeTerminated:$IncludeTerminated)
+            -ReportFullPayload $ReportFullPayload -RuntimeCommand $RuntimeCommand -IncludeTerminated:$IncludeTerminated)
 
     if (Test-WorkerStatusKillSwitchActive) {
         return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'kill_switch_active')
@@ -1163,18 +1163,18 @@ function Get-WorkerStatusDecisionSessionsCore {
         return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'sibling_not_ready')
     }
 
-    return @(Merge-AoSessionRowsWithWorkerStatusStore -Sessions $sessions -RepoTickGeneration $RepoTickGeneration)
+    return @(Merge-RuntimeWorkerRowsWithWorkerStatusStore -Sessions $sessions -RepoTickGeneration $RepoTickGeneration)
 }
 
 function Get-WorkerStatusReadOnlyProjection {
     param(
         [string]$Project = 'orchestrator-pack',
         [string]$RepoSlug = '',
-        [string]$AoCommand = 'ao',
+        [string]$RuntimeCommand = 'ao',
         [long]$RepoTickGeneration = 0
     )
 
-    $sessions = @(Get-AoStatusSessions -Project $Project -AoCommand $AoCommand)
+    $sessions = @(Get-RuntimeStatusSessions -Project $Project -RuntimeCommand $RuntimeCommand)
     if (Test-WorkerStatusKillSwitchActive) {
         return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'kill_switch_active')
     }
@@ -1182,7 +1182,7 @@ function Get-WorkerStatusReadOnlyProjection {
     if (-not $readiness.ok) {
         return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'sibling_not_ready')
     }
-    return @(Merge-AoSessionRowsWithWorkerStatusStore -Sessions $sessions -RepoTickGeneration $RepoTickGeneration)
+    return @(Merge-RuntimeWorkerRowsWithWorkerStatusStore -Sessions $sessions -RepoTickGeneration $RepoTickGeneration)
 }
 
 function Get-WorkerStatusDecisionSessions {
@@ -1192,13 +1192,13 @@ function Get-WorkerStatusDecisionSessions {
         $WorkerListPayload = $null,
         $OrchestratorListPayload = $null,
         $ReportFullPayload = $null,
-        [string]$AoCommand = 'ao',
+        [string]$RuntimeCommand = 'ao',
         [long]$RepoTickGeneration = 0
     )
 
     return @(Get-WorkerStatusDecisionSessionsCore -Project $Project -RepoSlug $RepoSlug `
             -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
-            -ReportFullPayload $ReportFullPayload -AoCommand $AoCommand `
+            -ReportFullPayload $ReportFullPayload -RuntimeCommand $RuntimeCommand `
             -RepoTickGeneration $RepoTickGeneration)
 }
 
@@ -1209,13 +1209,13 @@ function Get-WorkerStatusDecisionSessionsIncludingTerminated {
         $WorkerListPayload = $null,
         $OrchestratorListPayload = $null,
         $ReportFullPayload = $null,
-        [string]$AoCommand = 'ao',
+        [string]$RuntimeCommand = 'ao',
         [long]$RepoTickGeneration = 0
     )
 
     return @(Get-WorkerStatusDecisionSessionsCore -Project $Project -RepoSlug $RepoSlug `
             -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
-            -ReportFullPayload $ReportFullPayload -AoCommand $AoCommand -IncludeTerminated `
+            -ReportFullPayload $ReportFullPayload -RuntimeCommand $RuntimeCommand -IncludeTerminated `
             -RepoTickGeneration $RepoTickGeneration)
 }
 
@@ -1229,8 +1229,8 @@ function Assert-WorkerStatusDecisionReadAllowed {
     if (-not $text -and $ScriptPath -and (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
         $text = Get-Content -LiteralPath $ScriptPath -Raw
     }
-    if ($text -match 'Get-AoStatusSessionsWithReports') {
-        throw 'worker status decision reads must use Get-WorkerStatusDecisionSessions* instead of Get-AoStatusSessionsWithReports*'
+    if ($text -match 'Get-RuntimeStatusSessionsWithReports') {
+        throw 'worker status decision reads must use Get-WorkerStatusDecisionSessions* instead of Get-RuntimeStatusSessionsWithReports*'
     }
     return $true
 }

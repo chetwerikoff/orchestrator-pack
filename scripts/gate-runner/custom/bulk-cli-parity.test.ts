@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { runProcessSync, type ProcessResult } from '#opk-kernel/subprocess';
 import { afterAll, describe, expect, it } from 'vitest';
-import { bulkDeclarativeGateDefinitions, VERIFY_REQUIRED_FILES } from '../bulk-declarative-gates.ts';
+import { bulkDeclarativeGateDefinitions, VERIFY_REQUIRED_FILES, VERIFY_RETIRED_FILES } from '../bulk-declarative-gates.ts';
 import { evaluateDeclarativeGate } from '../declarative.ts';
 import { loadCensus } from '../census.ts';
 import { aggregateLane, type GateResult, type GateStatus } from '../contracts.ts';
@@ -105,7 +105,7 @@ function capturesByScript(captures: readonly Capture[]): Map<string, Capture[]> 
 }
 
 function replacementSurface(overrides: Partial<Wave3bReplacementSurface> = {}): Wave3bReplacementSurface {
-  return { requiredFiles: VERIFY_REQUIRED_FILES, contractMarkers: VERIFY_CONTRACT_MARKERS, promptGlob: VERIFY_PROMPT_GLOB, ...overrides };
+  return { requiredFiles: VERIFY_REQUIRED_FILES, absentFiles: VERIFY_RETIRED_FILES, contractMarkers: VERIFY_CONTRACT_MARKERS, promptGlob: VERIFY_PROMPT_GLOB, ...overrides };
 }
 
 function wave3bParityCompletenessFailures(captures: readonly Capture[], surface: Wave3bReplacementSurface = replacementSurface()): string[] {
@@ -201,14 +201,14 @@ function evaluateNegativeCapture(capture: Capture): GateResult {
       return evaluateReview010Vocabulary(memorySnapshot({ 'scripts/bad.mjs': 'const argv = ["review", "run"];\n' }));
     case 'review-command-ao-path':
       return evaluateReviewCommandNotAo(memorySnapshot({
-        'agent-orchestrator.yaml.example': 'NAMED REVIEW_COMMAND\n  pwsh .ao/review.ps1\n  RUNTIME\n',
+        'agent-orchestrator.yaml.example': 'NAMED REVIEW_COMMAND\n  pwsh .orchestrator-pack/review.ps1\n  RUNTIME\n',
       }));
     case 'verify-missing-required-file': {
       const definition = bulkDeclarativeGateDefinitions.find((candidate) => candidate.gateId === capture.gateId)!;
       return evaluateDeclarativeGate(definition, overlaySnapshot({}, ['AGENTS.md']));
     }
     case 'verify-missing-contract-marker': {
-      const path = 'plugins/ao-scope-guard/README.md';
+      const path = 'plugins/scope-guard/README.md';
       const original = liveSnapshot.files.get(path) ?? '';
       return evaluateVerifyStructureContract(overlaySnapshot({ [path]: original.replaceAll(/runtime guard/giu, 'runtime_guard_removed') }));
     }
@@ -386,7 +386,7 @@ describe('Wave 3.b per-entrypoint CLI parity', () => {
     const captures = wave3b.captures.filter((capture) => capture.exitCode === 0);
     const report = runGateRunner(repoRoot, captures.map((capture) => capture.gateId));
     const formatted = formatGateRunnerReport(report);
-    expect(report.aggregate.exitCode).toBe(0);
+    expect(report.aggregate.exitCode, JSON.stringify(report.aggregate, null, 2)).toBe(0);
     for (const capture of captures) {
       expect(capture.argv.slice(0, 4)).toEqual(['pwsh', '-NoProfile', '-File', capture.legacyScript]);
       expect(capture.sourceBlobSha).toMatch(/^[0-9a-f]{40}$/u);

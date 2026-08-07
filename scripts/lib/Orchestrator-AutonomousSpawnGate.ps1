@@ -139,10 +139,10 @@ function Test-AutonomousSpawnDenied {
     }
 
     if ($FixtureMode) {
-        $env:AO_SPAWN_WORKTREE_FIXTURE_MODE = '1'
+        $env:OPK_SPAWN_WORKTREE_FIXTURE_MODE = '1'
     }
 
-    $sub = Get-AoArgvSubcommand -Argv $Argv
+    $sub = Get-RuntimeArgvSubcommand -Argv $Argv
     if ($sub -notmatch '^(?i)spawn$') {
         return @{ denied = $false; reason = 'not_spawn'; auditLine = '' }
     }

@@ -6,8 +6,8 @@
 $Script:OrchestratorSideProcessLivenessCli = Join-Path (Split-Path -Parent $PSScriptRoot) 'kernel/side-process-liveness.ts'
 
 function Get-OrchestratorSideProcessProgressDir {
-    if ($env:AO_SIDE_PROCESS_PROGRESS_DIR) {
-        return $env:AO_SIDE_PROCESS_PROGRESS_DIR.Trim()
+    if ($env:OPK_SIDE_PROCESS_PROGRESS_DIR) {
+        return $env:OPK_SIDE_PROCESS_PROGRESS_DIR.Trim()
     }
     return ''
 }
@@ -129,14 +129,14 @@ function Get-OrchestratorSideProcessPendingTimeoutMessage {
 }
 
 function Install-OrchestratorSideProcessAoLivenessShim {
-    if (-not $env:AO_SIDE_PROCESS_CHILD_ID) { return }
+    if (-not $env:OPK_SIDE_PROCESS_CHILD_ID) { return }
     if (-not (Get-OrchestratorSideProcessProgressDir)) { return }
-    if ($env:AO_SIDE_PROCESS_AO_LIVENESS_SHIM_DISABLED -eq '1') { return }
+    if ($env:OPK_SIDE_PROCESS_LIVENESS_SHIM_DISABLED -eq '1') { return }
 
-    if (-not $env:AO_SIDE_PROCESS_OWNER_PID) {
-        $env:AO_SIDE_PROCESS_OWNER_PID = [string]$PID
+    if (-not $env:OPK_SIDE_PROCESS_OWNER_PID) {
+        $env:OPK_SIDE_PROCESS_OWNER_PID = [string]$PID
     }
-    $env:AO_SIDE_PROCESS_LIVENESS_CLI = $Script:OrchestratorSideProcessLivenessCli
+    $env:OPK_SIDE_PROCESS_LIVENESS_CLI = $Script:OrchestratorSideProcessLivenessCli
     function global:ao {
         $forwardArgs = @($args | ForEach-Object { [string]$_ })
         $callParts = @($forwardArgs | Select-Object -First 2)
@@ -146,11 +146,11 @@ function Install-OrchestratorSideProcessAoLivenessShim {
         else {
             'ao:command'
         }
-        & node --no-warnings --experimental-strip-types $env:AO_SIDE_PROCESS_LIVENESS_CLI call `
+        & node --no-warnings --experimental-strip-types $env:OPK_SIDE_PROCESS_LIVENESS_CLI call `
             --call-name $callName `
-            --child-id $env:AO_SIDE_PROCESS_CHILD_ID `
-            --owner-pid $env:AO_SIDE_PROCESS_OWNER_PID `
-            --progress-dir $env:AO_SIDE_PROCESS_PROGRESS_DIR `
+            --child-id $env:OPK_SIDE_PROCESS_CHILD_ID `
+            --owner-pid $env:OPK_SIDE_PROCESS_OWNER_PID `
+            --progress-dir $env:OPK_SIDE_PROCESS_PROGRESS_DIR `
             -- ao @forwardArgs
     }
 }
@@ -203,8 +203,8 @@ function Write-OrchestratorSideProcessProgress {
         }
     }
 
-    $nowMs = if ($env:AO_SIDE_PROCESS_NOW_MS -and [long]::TryParse($env:AO_SIDE_PROCESS_NOW_MS, [ref]$null)) {
-        [long]$env:AO_SIDE_PROCESS_NOW_MS
+    $nowMs = if ($env:OPK_SIDE_PROCESS_NOW_MS -and [long]::TryParse($env:OPK_SIDE_PROCESS_NOW_MS, [ref]$null)) {
+        [long]$env:OPK_SIDE_PROCESS_NOW_MS
     }
     else {
         [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()

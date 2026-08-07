@@ -10,8 +10,8 @@
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
-. (Join-Path $PSScriptRoot 'lib/Invoke-AoReviewApi.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-RuntimeCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-PackReviewApi.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 
 $ContentShapeCli = Join-Path $Root 'docs/harness-post-submit-pn-content-shape.mjs'
@@ -55,7 +55,7 @@ if (-not $sessionId) {
     exit 1
 }
 
-$reviews = Get-AoSessionReviewsJson -SessionId $sessionId -BaseUrl $baseUrl -HealthPayload $null
+$reviews = Get-RuntimeWorkerReviewsJson -SessionId $sessionId -BaseUrl $baseUrl -HealthPayload $null
 $harnessRows = @($reviews.reviews | Where-Object {
         $lr = $_.latestRun
         $lr -and [string]$lr.harness -and @('complete', 'delivered') -contains [string]$lr.status

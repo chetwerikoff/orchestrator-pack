@@ -13,7 +13,7 @@ describe('real gate runner dispatch', () => {
       'agent-rules-live-reference',
       'agent-rules-size-budget',
       'agent-rules-moved-content',
-      'ao-capture-redaction',
+      'capture-redaction',
       'verify-required-files',
       'agents-report-contract',
       'coworker-delegation-threshold-drift',

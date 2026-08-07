@@ -1,6 +1,6 @@
 import type { CiCheck } from './ci-green-wake-reconcile.d.mts';
 import type {
-  AoSession as ReconcileAoSession,
+  RuntimeWorker as ReconcileRuntimeWorker,
   ReviewRun as ReconcileReviewRun,
 } from './review-trigger-reconcile.d.mts';
 
@@ -14,7 +14,7 @@ export interface ReviewRun extends ReconcileReviewRun {
   prReviewStatus?: string;
 }
 
-export type AoSession = ReconcileAoSession;
+export type RuntimeWorker = ReconcileRuntimeWorker;
 
 export {
   evaluateHeadReadyForReview,
@@ -47,7 +47,7 @@ export declare function shouldStartReviewRun(input: {
   reviewRuns: ReviewRun[];
   prNumber: number;
   headSha: string;
-  session?: AoSession | null;
+  session?: RuntimeWorker | null;
   ciChecks?: CiCheck[];
   requiredCheckNames?: string[];
   requiredCheckLookupFailed?: boolean;
@@ -64,7 +64,7 @@ export declare function evaluateReviewRunWithRecheck(input: {
   runsImmediatelyBeforeRun: ReviewRun[];
   prNumber: number;
   headSha: string;
-  session?: AoSession | null;
+  session?: RuntimeWorker | null;
   ciChecksAtStart?: CiCheck[];
   ciChecksBeforeRun?: CiCheck[];
   requiredCheckNamesAtStart?: string[];
@@ -76,19 +76,19 @@ export declare function evaluateReviewRunWithRecheck(input: {
 export declare function getRunLinkedSessionId(run: ReviewRun): string;
 
 export declare function resolveSessionPrNumber(
-  session: AoSession,
+  session: RuntimeWorker,
 ): { resolved: true; prNumber: number } | { resolved: false; reason: string };
 
 export declare function resolveRunPrViaLinkedSession(
   run: ReviewRun,
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
 ):
-  | { resolved: true; prNumber: number; session: AoSession; linkedId: string }
+  | { resolved: true; prNumber: number; session: RuntimeWorker; linkedId: string }
   | { resolved: false; reason: string };
 
 export declare function hasRestoredSessionIdMismatch(
   run: ReviewRun,
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
 ): boolean;
 
 export declare function isPrMergedOnGitHub(
@@ -105,12 +105,12 @@ export interface PrNumberLessMergedDecision {
 
 export declare function evaluatePrNumberLessMergedRun(
   run: ReviewRun,
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
   mergedPrNumbers: Set<number> | number[] | Record<string, boolean>,
 ): PrNumberLessMergedDecision;
 
 export declare function shouldOrchestratorActOnRun(
   run: ReviewRun,
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
   mergedPrNumbers: Set<number> | number[] | Record<string, boolean>,
 ): { act: boolean; terminal?: boolean; action: string; prNumber?: number; reason?: string };

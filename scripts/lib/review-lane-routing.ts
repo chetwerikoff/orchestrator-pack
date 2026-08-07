@@ -28,12 +28,11 @@ const ALLOWED_ROOTS = [
   'scripts/lib/create-issue-stage-record*.test.ts', 'scripts/create-issue-stage-finalize.ts',
   'scripts/lib/review-lane-*.ts', 'scripts/review-lane-*.ts',
   'scripts/vitest-ci-lanes.config.json', 'scripts/lib/vitest-pre-topology-measurement.mjs',
-  'scripts/vitest-runtime-history.json', 'agent-orchestrator.yaml.example', 'docs/migration_notes.md',
+  'scripts/vitest-runtime-history.json', 'docs/migration_notes.md',
   'scripts/lib/**', 'scripts/chatgpt-browser-turn/**',
 ] as const;
 const DENYLIST = [
-  'vendor/**', 'packages/core/**', '.ao/**', '.github/workflows/**', 'prompts/**',
-  'agent-orchestrator.yaml', 'agent-orchestrator.*.yaml',
+  'vendor/**', 'packages/core/**', '.orchestrator-pack/**', '.github/workflows/**', 'prompts/**',
   '**/.env*', '**/*credential*', '**/*secret*',
 ] as const;
 const SECURITY_TOKENS = new Set([
@@ -194,9 +193,7 @@ function matches(path: string, pattern: string): boolean {
   return glob(pattern).test(path);
 }
 function securityByPath(path: string): boolean {
-  const lower = path.toLowerCase();
-  return lower.startsWith('scripts/chatgpt-browser-turn/')
-    || lower === 'agent-orchestrator.yaml' || /^agent-orchestrator\..+\.yaml$/i.test(path);
+  return path.toLowerCase().startsWith('scripts/chatgpt-browser-turn/');
 }
 function normalizedPath(value: string): { path: string; relative: boolean } {
   const path = value.trim().replaceAll('\\', '/').replace(/^\.\/+/, '');

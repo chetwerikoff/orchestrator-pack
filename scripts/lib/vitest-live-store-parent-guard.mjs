@@ -268,7 +268,7 @@ export function validatePowerShellHarnessEnvironment(env = process.env) {
     harnessRootValue,
     String(env.OPK_VITEST_PRODUCTION_HOME ?? ''),
     String(env.OPK_VITEST_PRODUCTION_TMP ?? ''),
-    String(env.OPK_VITEST_PRODUCTION_AO_BASE ?? ''),
+    String(env.OPK_VITEST_PRODUCTION_OPK_BASE ?? ''),
     String(env.OPK_VITEST_PRODUCTION_WAKE_ROOT ?? ''),
     ...POWERSHELL_ENV_OVERRIDES.map((name) => [name, String(env[name] ?? '')]),
   ]);

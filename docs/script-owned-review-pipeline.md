@@ -27,9 +27,9 @@ AO 0.10 auto-delivers on submit. Report `addressing_reviews` when
 
 ## Review-status reader contract
 
-Pack scripts read session/report state via `Get-AoStatusSessionsWithReports` (and
-`Get-AoStatusSessionsWithReportsIncludingTerminated` where terminated rows matter)
-from `scripts/lib/Invoke-AoCliJson.ps1`. Live worker report rows come from the pack-owned
+Pack scripts read session/report state via `Get-RuntimeStatusSessionsWithReports` (and
+`Get-RuntimeStatusSessionsWithReportsIncludingTerminated` where terminated rows matter)
+from `scripts/lib/Invoke-RuntimeCliJson.ps1`. Live worker report rows come from the pack-owned
 `pack-worker-report-store`; removed AO report receipt surfaces are not fallback readers.
 
 ## Report-state review-start seed
@@ -54,13 +54,13 @@ recover dead sessions.
 ## Orchestrator review-run coverage
 
 **Issue #189.** Before automated `ao-review run`, starters apply covered-head
-predicate via `Get-AoReviewRuns` fan-out. A head is **covered** with **same PR
+predicate via `Get-PackReviewRuns` fan-out. A head is **covered** with **same PR
 linkage** (`prNumber`) and **exact normalized head SHA** (`targetSha`) when
 in-flight or covered terminal (`up_to_date` / `changes_requested`). Different PR
 or SHA does **not** count. `failed` / `cancelled` on current head: read failure
 detail, retry once, escalate (EMPTY REVIEW TRAP).
 
-**PRE-RUN COVERAGE RE-CHECK:** after claim, re-read `Get-AoReviewRuns` and
+**PRE-RUN COVERAGE RE-CHECK:** after claim, re-read `Get-PackReviewRuns` and
 re-apply predicate. **prNumber-less** runs: terminal when linked session's PR is
 merged; ambiguous metadata → **fail closed to** inaction.
 

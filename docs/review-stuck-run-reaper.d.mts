@@ -1,6 +1,6 @@
 export declare const DEFAULT_STUCK_AGE_FLOOR_SECONDS: number;
 export declare const FAIL_STALE_UPSTREAM_ISSUE: string;
-export declare const AO_REVIEW_FAIL_STALE_PATH: string;
+export declare const OPK_REVIEW_FAIL_STALE_PATH: string;
 
 export type PaneLiveness = 'healthy' | 'absent' | 'unknown';
 

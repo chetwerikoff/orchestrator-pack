@@ -12,7 +12,7 @@ $Script:WrapperName = 'run-pack-review-claude.ps1'
 $cli = Split-PackReviewCliArgs -Argv $args
 $resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
 $packRoot = Split-Path -Parent $PSScriptRoot
-$reviewTs = Join-Path $packRoot 'plugins/ao-codex-pr-reviewer/bin/review.ts'
+$reviewTs = Join-Path $packRoot 'plugins/codex-pr-reviewer/bin/review.ts'
 $fixtureRunner = Join-Path $packRoot 'scripts/run-pack-review-fixture.mjs'
 $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $node) { throw 'OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required to run TypeScript entrypoints.' }
@@ -35,7 +35,7 @@ foreach ($arg in $cli.ForwardArgs) {
 
 Add-PackReviewAutoForwardArgs -ForwardArgs $forwardArgs -RepoRoot $resolvedRoot | Out-Null
 
-$env:AO_CODEX_REVIEW_PROMPT_FILE = Join-Path $packRoot 'prompts/codex_review_prompt.md'
+$env:OPK_CODEX_REVIEW_PROMPT_FILE = Join-Path $packRoot 'prompts/codex_review_prompt.md'
 
 Push-Location -LiteralPath $resolvedRoot
 try {

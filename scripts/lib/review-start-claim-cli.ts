@@ -208,10 +208,10 @@ export function normalizeHeadSha(headSha: string): string {
 export function resolveReviewStartClaimNamespace(input: { projectId?: string; namespace?: string } = {}): string {
   const explicit = asString(input.namespace);
   if (explicit) return resolve(explicit);
-  const env = asString(process.env.AO_REVIEW_CLAIM_DIR);
+  const env = asString(process.env.OPK_REVIEW_CLAIM_DIR);
   if (env) return resolve(env);
   const projectId = asString(input.projectId) || DEFAULT_PROJECT_ID;
-  const base = asString(process.env.AO_BASE_DIR) || join(homedir(), '.agent-orchestrator');
+  const base = asString(process.env.OPK_BASE_DIR) || join(homedir(), '.local', 'state', 'orchestrator-pack');
   return resolve(base, 'projects', projectId, 'review-start-claims');
 }
 
@@ -340,7 +340,7 @@ function newHolder(surface: string, context: UnknownRecord = {}): ClaimHolder {
     surface: asString(surface),
     pid: holderPid,
     host: asString(context.host) || hostname() || 'unknown-host',
-    generation: asString(context.generation) || asString(process.env.AO_CHILD_GENERATION || process.env.AO_SESSION_ID),
+    generation: asString(context.generation),
     processGuid: asString(context.processGuid) || randomUUID().replace(/-/g, ''),
   };
   const startTimeTicks = readLinuxProcessStartTicks(holderPid);
@@ -381,7 +381,7 @@ function mutexAbandoned(lockDir: string): boolean {
   if (owner) return !processIdentityAlive(owner);
   try {
     const ageSeconds = (Date.now() - statSync(lockDir).mtimeMs) / 1000;
-    return ageSeconds >= positiveInteger(process.env.AO_REVIEW_CLAIM_MUTEX_STALE_SECONDS, DEFAULT_MUTEX_STALE_SECONDS);
+    return ageSeconds >= positiveInteger(process.env.OPK_REVIEW_CLAIM_MUTEX_STALE_SECONDS, DEFAULT_MUTEX_STALE_SECONDS);
   } catch {
     return false;
   }
@@ -435,7 +435,7 @@ function monotonicNow(): number {
 }
 
 function staleMinutes(): number {
-  const raw = asString(process.env.AO_REVIEW_CLAIM_STALE_MINUTES || process.env.AO_REVIEW_START_CLAIM_STALE_MINUTES);
+  const raw = asString(process.env.OPK_REVIEW_CLAIM_STALE_MINUTES || process.env.OPK_REVIEW_START_CLAIM_STALE_MINUTES);
   const parsed = raw ? Number(raw) : DEFAULT_STALE_MINUTES;
   const resolved = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STALE_MINUTES;
   return Math.max(2, resolved);
@@ -502,7 +502,7 @@ function formatHolder(holder: unknown): string {
 }
 
 function pruneTerminal(namespace: string): void {
-  const keep = positiveInteger(process.env.AO_REVIEW_CLAIM_TERMINAL_COUNT || process.env.AO_REVIEW_CLAIM_TERMINAL_RETENTION, DEFAULT_TERMINAL_RETENTION);
+  const keep = positiveInteger(process.env.OPK_REVIEW_CLAIM_TERMINAL_COUNT || process.env.OPK_REVIEW_CLAIM_TERMINAL_RETENTION, DEFAULT_TERMINAL_RETENTION);
   if (!existsSync(terminalDir(namespace))) return;
   const files = readdirSync(terminalDir(namespace))
     .filter((name) => name.endsWith('.json'))
@@ -1235,7 +1235,7 @@ export function dispatchReviewStartClaimOperation(operation: string, payload: Un
     case 'Format-ReviewStartClaimHolder': return formatHolder(payload.holder ?? payload.Holder);
     case 'Get-ReviewStartClaimStaleMinutes': {
       const value = staleMinutes();
-      const raw = asString(process.env.AO_REVIEW_CLAIM_STALE_MINUTES || process.env.AO_REVIEW_START_CLAIM_STALE_MINUTES);
+      const raw = asString(process.env.OPK_REVIEW_CLAIM_STALE_MINUTES || process.env.OPK_REVIEW_START_CLAIM_STALE_MINUTES);
       const warnings = raw && Number(raw) < 2 ? [`review-start-claim: WARN stale interval ${raw}m below safe floor 2m; clamped`] : [];
       return payload.includeDiagnostics ?? payload.IncludeDiagnostics ? { value, warnings } : value;
     }

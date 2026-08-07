@@ -8,7 +8,7 @@
 
 $Script:SpawnWorktreeGrantCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/spawn-worktree-grant.mjs'
 $Script:SpawnWorktreeGrantSchemaVersion = 1
-$Script:SpawnWorktreeGrantEnvVar = 'AO_SPAWN_WORKTREE_GRANT_ID'
+$Script:SpawnWorktreeGrantEnvVar = 'OPK_SPAWN_WORKTREE_GRANT_ID'
 $Script:AutonomousSpawnWorktreeActiveGrant = $null
 
 function Invoke-SpawnWorktreeGrantCli {
@@ -21,9 +21,7 @@ function Invoke-SpawnWorktreeGrantCli {
 }
 
 function Get-AutonomousSpawnWorktreeProjectId {
-    $project = if ($env:AO_PROJECT_ID) { $env:AO_PROJECT_ID.Trim() }
-    elseif ($env:AO_PROJECT) { $env:AO_PROJECT.Trim() }
-    else { 'orchestrator-pack' }
+    $project = if ($env:OPK_PROJECT_ID) { $env:OPK_PROJECT_ID.Trim() } else { 'orchestrator-pack' }
     if (-not $project) { return 'orchestrator-pack' }
     return $project
 }
@@ -34,7 +32,7 @@ function Get-AutonomousSpawnWorktreeStateRoot {
     if (-not $ProjectId) {
         $ProjectId = Get-AutonomousSpawnWorktreeProjectId
     }
-    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.orchestrator-pack' }
     return (Join-Path (Join-Path $base 'projects') $ProjectId)
 }
 
@@ -197,7 +195,7 @@ function Resolve-AutonomousSpawnWorktreeDefaultBranchBaseRef {
     return Invoke-SpawnWorktreeGrantCli -Subcommand 'resolveDefaultBranchBaseRef' -Payload @{
         repoRoot       = [string]$RepoRoot
         defaultBranch  = [string]$DefaultBranch
-        fixtureMode    = [bool]$env:AO_SPAWN_WORKTREE_FIXTURE_MODE
+        fixtureMode    = [bool]$env:OPK_SPAWN_WORKTREE_FIXTURE_MODE
     }
 }
 
@@ -208,13 +206,13 @@ function Resolve-AutonomousSpawnClaimPrHead {
         [switch]$FixtureMode
     )
 
-    if ($env:AO_SPAWN_FIXTURE_PR_HEAD_OID) {
-        $fixtureOid = [string]$env:AO_SPAWN_FIXTURE_PR_HEAD_OID
+    if ($env:OPK_SPAWN_FIXTURE_PR_HEAD_OID) {
+        $fixtureOid = [string]$env:OPK_SPAWN_FIXTURE_PR_HEAD_OID
         if ($fixtureOid) {
             return @{
                 ok          = $true
                 headRefOid  = $fixtureOid.Trim().ToLower()
-                prRefToken  = if ($env:AO_SPAWN_FIXTURE_PR_REF_TOKEN) { [string]$env:AO_SPAWN_FIXTURE_PR_REF_TOKEN } else { "pr-$PrNumber" }
+                prRefToken  = if ($env:OPK_SPAWN_FIXTURE_PR_REF_TOKEN) { [string]$env:OPK_SPAWN_FIXTURE_PR_REF_TOKEN } else { "pr-$PrNumber" }
             }
         }
     }
@@ -409,7 +407,7 @@ function Mint-AutonomousSpawnWorktreeGrant {
         sourceGitWorktreeRoot        = [string]$sourceWorktree.path
     }
     if ([string]$parsed.action -eq 'claim-pr-resume') {
-        $prHead = Resolve-AutonomousSpawnClaimPrHead -PrNumber $prNumber -SourceRepositoryRoot ([string]$sourceWorktree.path) -FixtureMode:([bool]$env:AO_SPAWN_WORKTREE_FIXTURE_MODE)
+        $prHead = Resolve-AutonomousSpawnClaimPrHead -PrNumber $prNumber -SourceRepositoryRoot ([string]$sourceWorktree.path) -FixtureMode:([bool]$env:OPK_SPAWN_WORKTREE_FIXTURE_MODE)
         if (-not $prHead.ok) {
             Release-AutonomousSpawnWorktreeTargetLock -Lock $lock
             return @{ ok = $false; reason = [string]$prHead.reason }
@@ -424,7 +422,7 @@ function Mint-AutonomousSpawnWorktreeGrant {
     }
 
     $grantPath = Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $Namespace -GrantId $grantId -Record $built.grant
-    $env:AO_SPAWN_WORKTREE_GRANT_ID = $grantId
+    $env:OPK_SPAWN_WORKTREE_GRANT_ID = $grantId
     $script:AutonomousSpawnWorktreeActiveGrant = @{
         grantId   = $grantId
         grantPath = $grantPath
@@ -860,7 +858,7 @@ function Rewrite-AutonomousSpawnWorktreeAddCommitArgv {
 function Test-AutonomousSpawnWorktreeGrantBoundAllow {
     param([string[]]$Argv)
 
-    $grantId = [string]$env:AO_SPAWN_WORKTREE_GRANT_ID
+    $grantId = [string]$env:OPK_SPAWN_WORKTREE_GRANT_ID
     if (-not $grantId) {
         return @{ allowed = $false; reason = 'grant_env_missing' }
     }
@@ -931,6 +929,6 @@ function Clear-AutonomousSpawnWorktreeActiveGrant {
         Release-AutonomousSpawnWorktreeTargetLock -Lock $active.lock
     }
 
-    Remove-Item Env:\AO_SPAWN_WORKTREE_GRANT_ID -ErrorAction SilentlyContinue
+    Remove-Item Env:\OPK_SPAWN_WORKTREE_GRANT_ID -ErrorAction SilentlyContinue
     $script:AutonomousSpawnWorktreeActiveGrant = $null
 }

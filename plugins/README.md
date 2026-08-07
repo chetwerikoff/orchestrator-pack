@@ -1,25 +1,24 @@
 # Plugins and extension contracts
 
-This directory contains contracts for future external AO extensions. It does not
-contain AO core patches.
+This directory contains runtime-neutral pack plugins. It contains no core patch and
+no concrete runtime implementation.
 
-Contract directories:
+Active plugins:
 
-- `ao-task-declaration` — DD-026/DD-027 equivalent for declared task scope,
-  denylist validation, amendments, and baseline state.
-- `ao-scope-guard` — DD-024 equivalent runtime guard plus PR-level CI backup.
-- `ao-token-chain-ledger` — cross-session `chain_id` cost/token accounting.
-- `ao-codex-pr-reviewer` — Codex `gpt-5.5` PR-review contract while planner and
-  worker roles remain on Cursor CLI.
+- `task-declaration` — DD-026/DD-027 task scope, denylist, amendment, and baseline evidence;
+- `scope-guard` — DD-024 runtime guard plus PR-level CI second line;
+- `token-chain-ledger` — explicit `chain_id`, token, cost, finding, and convergence accounting;
+- `codex-pr-reviewer` — bounded Codex `gpt-5.5` review for GitHub Issues-linked PRs.
 
 Implementation rules:
 
-- Bind through AO plugin slots, agent wrappers, workspace hooks, pre-commit hooks,
-  CI, or external state files.
-- Do not modify `packages/core/` in Composio AO.
-- Prefer AO session metadata when available.
-- Keep workspace-local `.ao/` state gitignored.
-- Never commit tokens, API keys, or private credentials.
+- depend on public pack contracts and explicit inputs;
+- use `RuntimeAdapter` only when a runtime operation is required;
+- never import a concrete adapter into business logic;
+- keep `.orchestrator-pack/` generated state gitignored;
+- do not patch `packages/core/**` or vendor an upstream implementation;
+- do not add compatibility aliases, dual execution, hidden retry, or fallback transport;
+- never commit credentials or private runtime state.
 
-The README in each plugin directory is the source contract until an implementation
-exists.
+Each plugin README defines its observable contract. Code and tests implement that
+contract; historical plugin identities are not aliases.

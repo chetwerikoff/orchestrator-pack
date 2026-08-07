@@ -82,7 +82,7 @@ export function parseAoPrefixedJson(text: string, label: string): unknown {
   }
 }
 
-function normalizeAoSessionRow(row: AnyRow): AnyRow {
+function normalizeRuntimeWorkerRow(row: AnyRow): AnyRow {
   const id = nonEmpty(row.id) || nonEmpty(row.name) || nonEmpty(row.sessionId);
   const projectId = nonEmpty(row.projectId) || nonEmpty(row.project);
   const normalized: Record<string, unknown> = { ...row };
@@ -111,14 +111,14 @@ function assertSessionRow(row: AnyRow): void {
   if (Object.hasOwn(row, 'reports')) throw new Error(`ao session adapter: session row ${id} must not carry reports field on AO 0.10`);
 }
 
-export function mergeAoStatusSessionRows(
+export function mergeRuntimeStatusSessionRows(
   workerPayload: unknown,
   orchestratorPayload: unknown,
   project: string,
 ): AnyRow[] {
   const merged = new Map<string, AnyRow>();
   for (const row of [...dataRows(workerPayload, 'ao session ls'), ...dataRows(orchestratorPayload, 'ao orchestrator ls')]) {
-    const normalized = normalizeAoSessionRow(row);
+    const normalized = normalizeRuntimeWorkerRow(row);
     if (project && nonEmpty(normalized.projectId) !== project) continue;
     if (normalized.isTerminated === true) continue;
     assertSessionRow(normalized);
@@ -190,8 +190,8 @@ export const WORKER_STATUS_REPORT_CONTRACT: JsonArtifactContract<WorkerStatusRep
   format: PRETTY_JSON_WITH_NEWLINE,
 };
 
-async function invokeAo(args: readonly string[], label: string, aoCommand: string): Promise<unknown> {
-  const result = await runProcess({ command: aoCommand, args, inheritParentEnv: true, timeoutMs: 60_000 });
+async function invokeAo(args: readonly string[], label: string, runtimeCommand: string): Promise<unknown> {
+  const result = await runProcess({ command: runtimeCommand, args, inheritParentEnv: true, timeoutMs: 60_000 });
   if (!result.ok) throw new Error(`${label} failed (exit ${result.exitCode ?? result.outcome}): ${result.stderr || result.error || result.stdout}`);
   return parseAoPrefixedJson(result.stdout, label);
 }
@@ -201,16 +201,16 @@ async function loadSessions(args: ReturnType<typeof parseArguments>, project: st
   if (fixture) {
     const payload = JSON.parse(readFileSync(fixture, 'utf8')) as unknown;
     if (!isRecord(payload)) throw new Error('session-lists fixture must be an object');
-    return mergeAoStatusSessionRows(payload.workerList, payload.orchestratorList, project);
+    return mergeRuntimeStatusSessionRows(payload.workerList, payload.orchestratorList, project);
   }
-  const aoCommand = argumentValue(args, 'ao-command', 'ao');
+  const runtimeCommand = argumentValue(args, 'ao-command', 'ao');
   const workerArgs = ['session', 'ls', '--json'];
   if (project) workerArgs.push('-p', project);
   const [workerList, orchestratorList] = await Promise.all([
-    invokeAo(workerArgs, 'ao session ls', aoCommand),
-    invokeAo(['orchestrator', 'ls', '--json'], 'ao orchestrator ls', aoCommand),
+    invokeAo(workerArgs, 'ao session ls', runtimeCommand),
+    invokeAo(['orchestrator', 'ls', '--json'], 'ao orchestrator ls', runtimeCommand),
   ]);
-  return mergeAoStatusSessionRows(workerList, orchestratorList, project);
+  return mergeRuntimeStatusSessionRows(workerList, orchestratorList, project);
 }
 
 export function renderWorkerStatusText(report: WorkerStatusReportArtifact): string {

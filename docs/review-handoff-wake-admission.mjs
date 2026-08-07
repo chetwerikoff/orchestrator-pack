@@ -195,7 +195,7 @@ export function parsePrNumberFromPrUrl(prUrl) {
  * @param {Record<string, unknown>} input.event
  * @param {string} [input.supervisedProjectId]
  * @param {string} [input.supervisedRepoSlug]
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [input.supervisedSessions]
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker[]} [input.supervisedSessions]
  * @param {boolean} [input.sessionLookupFailed]
  * @param {boolean} [input.supervisedRepoLookupFailed]
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]

@@ -27,8 +27,8 @@ function Get-MechanicalPersistedStoreCeilingBytes {
 }
 
 function Get-MechanicalTransportTempRoot {
-    if ($env:AO_MECHANICAL_TRANSPORT_TEMP) {
-        return $env:AO_MECHANICAL_TRANSPORT_TEMP
+    if ($env:OPK_MECHANICAL_TRANSPORT_TEMP) {
+        return $env:OPK_MECHANICAL_TRANSPORT_TEMP
     }
     if ($IsLinux -or $IsMacOS) {
         $homeRoot = if ($env:HOME) { $env:HOME } else { [System.IO.Path]::GetTempPath() }
@@ -298,7 +298,7 @@ function Remove-MechanicalTransportTempPaths {
 }
 
 function Get-MechanicalTransportMaxAgeSeconds {
-    $raw = $env:AO_MECHANICAL_TRANSPORT_MAX_AGE_SECONDS
+    $raw = $env:OPK_MECHANICAL_TRANSPORT_MAX_AGE_SECONDS
     if ($raw -and [int]::TryParse($raw, [ref]$null)) {
         return [Math]::Max(60, [int]$raw)
     }
@@ -424,8 +424,8 @@ function Merge-MechanicalFixtureDeliveryFields {
     if ($Fixture.workerDeliveries) {
         $Payload.workerDeliveries = @($Fixture.workerDeliveries)
     }
-    if ($Fixture.aoEvents) {
-        $Payload.aoEvents = @($Fixture.aoEvents)
+    if ($Fixture.runtimeEvents) {
+        $Payload.runtimeEvents = @($Fixture.runtimeEvents)
     }
     if ($Fixture.dispatchJournal) {
         $Payload.dispatchJournal = ConvertTo-MechanicalJsonMap -Value $Fixture.dispatchJournal

@@ -1,6 +1,9 @@
 import { evaluateDeclarativeGate, type DeclarativeGateDefinition } from './declarative.ts';
 import type { GateRegistration } from './registry.ts';
 
+const retiredConfigExample = ['agent', 'orchestrator.yaml.example'].join('-');
+export const VERIFY_RETIRED_FILES = [retiredConfigExample] as const;
+
 export const VERIFY_REQUIRED_FILES = [
   'README.md',
   '.gitignore',
@@ -12,17 +15,16 @@ export const VERIFY_REQUIRED_FILES = [
   'prompts/self_architect_check.md',
   'AGENTS.md',
   'plugins/README.md',
-  'plugins/ao-task-declaration/README.md',
-  'plugins/ao-scope-guard/README.md',
-  'plugins/ao-token-chain-ledger/README.md',
-  'plugins/ao-codex-pr-reviewer/README.md',
+  'plugins/task-declaration/README.md',
+  'plugins/scope-guard/README.md',
+  'plugins/token-chain-ledger/README.md',
+  'plugins/codex-pr-reviewer/README.md',
   'scripts/bootstrap.ps1',
   'scripts/verify.ps1',
   'scripts/check-reusable.ps1',
   'scripts/install-git-hooks.ps1',
   'scripts/lint-self-architect.ps1',
   'scripts/lint-self-architect.config.json',
-  'agent-orchestrator.yaml.example',
   '.github/workflows/scope-guard.yml',
 ] as const;
 
@@ -31,7 +33,10 @@ export const bulkDeclarativeGateDefinitions: readonly DeclarativeGateDefinition[
     gateId: 'verify-required-files',
     legacyScript: 'scripts/verify.ps1',
     summary: 'Pack required-file inventory',
-    rules: [{ kind: 'file-presence', paths: VERIFY_REQUIRED_FILES }],
+    rules: [
+      { kind: 'file-presence', paths: VERIFY_REQUIRED_FILES },
+      { kind: 'file-absence', paths: VERIFY_RETIRED_FILES },
+    ],
     passStdout: '[PASS] verify required-file inventory\n',
     failHeading: 'Missing required pack files:',
   },

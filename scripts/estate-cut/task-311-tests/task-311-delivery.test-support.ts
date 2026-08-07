@@ -676,10 +676,8 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       cwd: repoRoot,
       env: {
         ...process.env,
-        AO_REVIEW_RUN_ID: M1Run.id,
+        OPK_REVIEW_RUN_ID: M1Run.id,
         PACK_REVIEW_RUN_ID: M1Run.id,
-        AO_SESSION_ID: M1Run.linkedSessionId,
-        AO_WORKER_SESSION_ID: M1Run.linkedSessionId,
       },
       inheritParentEnv: false,
       encoding: 'utf8',

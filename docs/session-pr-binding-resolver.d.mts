@@ -12,7 +12,7 @@ export interface OpenPr {
   state?: string;
 }
 
-export interface AoSession {
+export interface RuntimeWorker {
   name?: string;
   sessionId?: string;
   id?: string;
@@ -46,49 +46,49 @@ export interface PrSessionBindingResolution {
   deferReason?: string;
 }
 
-export declare function getSessionIssueNumber(session: AoSession | null | undefined): number;
-export declare function getExplicitSessionPrNumber(session: AoSession | null | undefined): number;
+export declare function getSessionIssueNumber(session: RuntimeWorker | null | undefined): number;
+export declare function getExplicitSessionPrNumber(session: RuntimeWorker | null | undefined): number;
 export declare function sessionDetailFromSessionGetPayload(
   payload: unknown,
 ): { displayName?: string } | null;
-export declare function shouldEnrichSessionDetailFromGet(session: AoSession | null | undefined): boolean;
+export declare function shouldEnrichSessionDetailFromGet(session: RuntimeWorker | null | undefined): boolean;
 export declare function buildSessionDetailsById(
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
   sessionGetsById?: Record<string, unknown>,
 ): Record<string, { displayName?: string }>;
 export declare function issueLinkedWorkerBranchLiterals(issueNumber: number): string[];
 export declare function headRefCorrelatesToIssue(
   headRefName: string,
   issueNumber: number,
-  session?: AoSession | null,
+  session?: RuntimeWorker | null,
 ): boolean;
 export declare function listIssueCorrelatedOpenPrs(
   issueNumber: number,
   openPrs?: OpenPr[],
-  session?: AoSession | null,
+  session?: RuntimeWorker | null,
   options?: { headSha?: string },
 ): OpenPr[];
 export declare function resolveSessionPrBinding(
-  session: AoSession | null | undefined,
+  session: RuntimeWorker | null | undefined,
   openPrs?: OpenPr[],
   options?: { headSha?: string; sessionDetail?: { displayName?: string } | null },
 ): SessionPrBinding;
 export declare function isEnrichedPrBinding(binding: SessionPrBinding): boolean;
 export declare function sessionMatchesPrBound(
-  session: AoSession | null | undefined,
+  session: RuntimeWorker | null | undefined,
   prNumber: number,
   openPrs?: OpenPr[],
   options?: { headSha?: string; sessionDetail?: { displayName?: string } | null },
 ): boolean;
 export declare function resolvePrOwningWorkerSessionBinding(
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
   prNumber: number,
   openPrs?: OpenPr[],
   options?: {
     headSha?: string;
     requireLive?: boolean;
     sessionDetailsById?: Record<string, { displayName?: string }>;
-    isLive?: (session: AoSession) => boolean;
-    getSessionId?: (session: AoSession) => string | null;
+    isLive?: (session: RuntimeWorker) => boolean;
+    getSessionId?: (session: RuntimeWorker) => string | null;
   },
 ): PrSessionBindingResolution;

@@ -5,7 +5,6 @@ import {
   evaluateAgentsReportContract,
   evaluateCoworkerDelegationThreshold,
   evaluateReview010Vocabulary,
-  evaluateReviewCommandNotAo,
   evaluateVerifyStructureContract,
 } from './bulk-static-gates.ts';
 
@@ -14,10 +13,10 @@ const repoRoot = process.cwd();
 function verifyFixture(overrides: Readonly<Record<string, string>> = {}) {
   const files: Record<string, string> = {};
   files['prompts/self_architect_check.md'] = 'prompt';
-  files['plugins/ao-task-declaration/README.md'] = 'DD-026 DD-027 declared_files denylist one amendment baseline';
-  files['plugins/ao-scope-guard/README.md'] = 'DD-024 runtime guard git add commit PR-level CI second line';
-  files['plugins/ao-token-chain-ledger/README.md'] = 'chain_id planner reviewer worker per-session cost estimated_cost_usd';
-  files['plugins/ao-codex-pr-reviewer/README.md'] = 'Codex gpt-5.5 PR review GitHub Issues no core patch';
+  files['plugins/task-declaration/README.md'] = 'DD-026 DD-027 declared_files denylist one amendment baseline';
+  files['plugins/scope-guard/README.md'] = 'DD-024 runtime guard git add commit PR-level CI second line';
+  files['plugins/token-chain-ledger/README.md'] = 'chain_id planner reviewer worker per-session cost estimated_cost_usd';
+  files['plugins/codex-pr-reviewer/README.md'] = 'Codex gpt-5.5 PR review GitHub Issues no core patch';
   return memorySnapshot({ ...files, ...overrides });
 }
 
@@ -50,16 +49,9 @@ describe('Wave 3.b bulk static gate ports', () => {
     expect(failed.legacyStdout).toBe('AO 0.10 review vocabulary violations:\n  scripts/bad.mjs: dead ao review CLI argv\n');
   });
 
-  it('parses the named review command and rejects .ao paths', () => {
-    const clean = 'NAMED REVIEW_COMMAND\n  pwsh scripts/invoke-pack-review.ps1\n  RUNTIME';
-    expect(evaluateReviewCommandNotAo(memorySnapshot({ 'agent-orchestrator.yaml.example': clean })).status).toBe('PASS');
-    const bad = 'NAMED REVIEW_COMMAND\n  pwsh .ao/review.ps1\n  RUNTIME';
-    expect(evaluateReviewCommandNotAo(memorySnapshot({ 'agent-orchestrator.yaml.example': bad })).status).toBe('FAIL');
-  });
-
   it('ports prompt inventory and contract-marker checks with positive and negative fixtures', () => {
     expect(evaluateVerifyStructureContract(verifyFixture()).status).toBe('PASS');
-    const missing = evaluateVerifyStructureContract(verifyFixture({ 'plugins/ao-scope-guard/README.md': 'DD-024' }));
+    const missing = evaluateVerifyStructureContract(verifyFixture({ 'plugins/scope-guard/README.md': 'DD-024' }));
     expect(missing.status).toBe('FAIL');
     expect(missing.details?.join('\n')).toContain('runtime guard');
   });

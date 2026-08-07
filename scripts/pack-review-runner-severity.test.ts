@@ -9,13 +9,13 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import './pack-review-delivery.cases.js';
 import {
-  emitAoReviewPayload,
+  emitPackReviewPayload,
   emitTerminalVerdictPayload,
-  toAoFindings,
-} from '../plugins/ao-codex-pr-reviewer/lib/emit.js';
-import { parseCodexReviewOutput } from '../plugins/ao-codex-pr-reviewer/lib/review_jsonl.js';
-import { scopeUnavailableWarningFinding } from '../plugins/ao-codex-pr-reviewer/lib/scope_context.js';
-import type { StructuredFinding } from '../plugins/ao-codex-pr-reviewer/lib/types.js';
+  toRuntimeFindings,
+} from '../plugins/codex-pr-reviewer/lib/emit.js';
+import { parseCodexReviewOutput } from '../plugins/codex-pr-reviewer/lib/review_jsonl.js';
+import { scopeUnavailableWarningFinding } from '../plugins/codex-pr-reviewer/lib/scope_context.js';
+import type { StructuredFinding } from '../plugins/codex-pr-reviewer/lib/types.js';
 import { startPackReview } from './pack-review-runner.js';
 import { PACK_REVIEW_REQUIRED_STATUS_CONTEXT } from './lib/pack-review-delivery.js';
 import {
@@ -277,7 +277,7 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
   });
 
   it('uses the real producer shape for ordinary non-blocking findings', async () => {
-    const stdout = emitAoReviewPayload(toAoFindings([
+    const stdout = emitPackReviewPayload(toRuntimeFindings([
       structuredFinding('non-blocking', 'Ordinary observation'),
     ]));
     const posted = await captureReview(stdout);
@@ -286,7 +286,7 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
   });
 
   it('uses the real producer shape for ordinary blocking findings', async () => {
-    const stdout = emitAoReviewPayload(toAoFindings([
+    const stdout = emitPackReviewPayload(toRuntimeFindings([
       structuredFinding('blocking', 'Action required'),
     ]));
     const posted = await captureReview(stdout);
@@ -296,7 +296,7 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
   it('posts a clean verdict with the real scope-unavailable warning shape as COMMENT', async () => {
     const stdout = emitTerminalVerdictPayload({
       verdict: 'clean',
-      findings: toAoFindings([
+      findings: toRuntimeFindings([
         scopeUnavailableWarningFinding('codex-local'),
       ]),
     });
@@ -532,7 +532,7 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
     const writeRequiredStatus = vi.fn(async () => undefined);
     const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'fixture_dispatched' }));
     process.env.OPK_VITEST_HARNESS = '1';
-    process.env.AO_BASE_DIR = path.join(storeRoot, 'ao-base');
+    process.env.OPK_BASE_DIR = path.join(storeRoot, 'ao-base');
 
     const result = await startPackReview({
       projectId: 'orchestrator-pack',
@@ -575,11 +575,11 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
   });
 
   it('maps an unrecognized reviewer severity to error and a blocking status', async () => {
-    const findings = toAoFindings([
+    const findings = toRuntimeFindings([
       structuredFinding('unexpected-severity', 'Unknown reviewer severity'),
     ]);
     expect(findings[0]?.severity).toBe('error');
-    const posted = await captureReview(emitAoReviewPayload(findings));
+    const posted = await captureReview(emitPackReviewPayload(findings));
     expect(posted.event).toBe('COMMENT');
   });
 
@@ -594,9 +594,9 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
     expect(parsed.kind).toBe('findings');
     if (parsed.kind !== 'findings') throw new Error('expected parsed findings');
     expect(parsed.findings[0]?.severity).toBe('blocking');
-    const wireFindings = toAoFindings(parsed.findings);
+    const wireFindings = toRuntimeFindings(parsed.findings);
     expect(wireFindings[0]?.severity).toBe('error');
-    const posted = await captureReview(emitAoReviewPayload(wireFindings));
+    const posted = await captureReview(emitPackReviewPayload(wireFindings));
     expect(posted.event).toBe('COMMENT');
   });
 });

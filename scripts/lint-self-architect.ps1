@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 function Get-DefaultConfig {
     return [ordered]@{
         scanPaths               = @('prompts/**', 'scripts/**', 'plugins/**', 'docs/**', '.github/**')
-        excludePaths            = @('tests/fixtures/**', 'vendor/**', 'packages/core/**', '.ao/**', 'node_modules/**')
+        excludePaths            = @('tests/fixtures/**', 'vendor/**', 'packages/core/**', '.orchestrator-pack/**', 'node_modules/**')
         scriptExtensions        = @('.ps1', '.sh', '.bash', '.js', '.ts', '.mjs', '.cjs')
         templateExtensions      = @('.md', '.yaml', '.yml', '.json', '.example', '.template', '.tpl')
         duplicateLiteralMinLines = 10

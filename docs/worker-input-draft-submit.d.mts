@@ -28,11 +28,11 @@ export declare function isSessionFloodActive(
 
 export declare function evaluateSubmitEligibility(input: {
   run: import('./review-finding-delivery-confirm.d.mts').ReviewRun;
-  sessions: import('./review-trigger-reconcile.d.mts').AoSession[];
+  sessions: import('./review-trigger-reconcile.d.mts').RuntimeWorker[];
   tracking: import('./review-finding-delivery-confirm.d.mts').DeliveryTrackingState;
   allRuns: import('./review-finding-delivery-confirm.d.mts').ReviewRun[];
   openPrs?: import('./review-trigger-reconcile.d.mts').OpenPr[];
-  aoEvents?: Array<Record<string, unknown>>;
+  runtimeEvents?: Array<Record<string, unknown>>;
   floodActiveSessions?: Record<string, boolean>;
   nowMs: number;
   config?: { maxSubmits?: number };

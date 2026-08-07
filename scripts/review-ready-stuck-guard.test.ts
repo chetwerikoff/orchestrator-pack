@@ -100,7 +100,7 @@ describe('resolveGraceMs', () => {
     expect(resolveGraceMs({})).toBe(DEFAULT_GRACE_MS);
   });
 
-  it('honors AO_REVIEW_READY_STUCK_GRACE_MINUTES', () => {
+  it('honors OPK_REVIEW_READY_STUCK_GRACE_MINUTES', () => {
     process.env[GRACE_MINUTES_ENV_VAR] = '30';
     expect(resolveGraceMs({})).toBe(30 * 60 * 1000);
   });

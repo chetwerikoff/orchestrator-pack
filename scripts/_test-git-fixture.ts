@@ -24,7 +24,7 @@ function sanitizeFixturePath(pathValue: string | undefined): string {
 export function gitFixtureEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const {
     AO_SESSION_ID: _surface,
-    AO_TMUX_NAME: _tmux,
+    OPK_TMUX_NAME: _tmux,
     BASH_ENV: _bashEnv,
     AO_REAL_BINARY: _aoReal,
     GIT_REAL_BINARY: _gitReal,

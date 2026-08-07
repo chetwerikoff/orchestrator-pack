@@ -46,7 +46,7 @@ export function resolveRecoverySpawnProjectId(input) {
   if (record?.projectId && String(record.projectId).trim()) {
     return { ok: true, projectId: String(record.projectId).trim() };
   }
-  const aoRow = asRecord(input.aoSessionRow);
+  const aoRow = asRecord(input.runtimeWorkerRow);
   if (aoRow?.projectId && String(aoRow.projectId).trim()) {
     return { ok: true, projectId: String(aoRow.projectId).trim() };
   }

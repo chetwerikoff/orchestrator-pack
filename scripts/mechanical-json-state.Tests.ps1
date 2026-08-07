@@ -204,8 +204,8 @@ Describe 'side process progress pid rollover' {
 
     It 'discards prior process recentOutcomes when pid changes' {
         $dir = New-TempProgressDir
-        $previous = $env:AO_SIDE_PROCESS_PROGRESS_DIR
-        $env:AO_SIDE_PROCESS_PROGRESS_DIR = $dir
+        $previous = $env:OPK_SIDE_PROCESS_PROGRESS_DIR
+        $env:OPK_SIDE_PROCESS_PROGRESS_DIR = $dir
         try {
             $path = Join-Path $dir 'test-child.progress.json'
             @{
@@ -223,10 +223,10 @@ Describe 'side process progress pid rollover' {
         }
         finally {
             if ($null -eq $previous) {
-                Remove-Item Env:AO_SIDE_PROCESS_PROGRESS_DIR -ErrorAction SilentlyContinue
+                Remove-Item Env:OPK_SIDE_PROCESS_PROGRESS_DIR -ErrorAction SilentlyContinue
             }
             else {
-                $env:AO_SIDE_PROCESS_PROGRESS_DIR = $previous
+                $env:OPK_SIDE_PROCESS_PROGRESS_DIR = $previous
             }
             Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -234,8 +234,8 @@ Describe 'side process progress pid rollover' {
 
     It 'does not copy recentOutcomes on poll when pid changes' {
         $dir = New-TempProgressDir
-        $previous = $env:AO_SIDE_PROCESS_PROGRESS_DIR
-        $env:AO_SIDE_PROCESS_PROGRESS_DIR = $dir
+        $previous = $env:OPK_SIDE_PROCESS_PROGRESS_DIR
+        $env:OPK_SIDE_PROCESS_PROGRESS_DIR = $dir
         try {
             $path = Join-Path $dir 'test-child.progress.json'
             @{
@@ -255,10 +255,10 @@ Describe 'side process progress pid rollover' {
         }
         finally {
             if ($null -eq $previous) {
-                Remove-Item Env:AO_SIDE_PROCESS_PROGRESS_DIR -ErrorAction SilentlyContinue
+                Remove-Item Env:OPK_SIDE_PROCESS_PROGRESS_DIR -ErrorAction SilentlyContinue
             }
             else {
-                $env:AO_SIDE_PROCESS_PROGRESS_DIR = $previous
+                $env:OPK_SIDE_PROCESS_PROGRESS_DIR = $previous
             }
             Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -266,8 +266,8 @@ Describe 'side process progress pid rollover' {
 
     It 'preserves recentOutcomes for the same pid' {
         $dir = New-TempProgressDir
-        $previous = $env:AO_SIDE_PROCESS_PROGRESS_DIR
-        $env:AO_SIDE_PROCESS_PROGRESS_DIR = $dir
+        $previous = $env:OPK_SIDE_PROCESS_PROGRESS_DIR
+        $env:OPK_SIDE_PROCESS_PROGRESS_DIR = $dir
         try {
             $path = Join-Path $dir 'test-child.progress.json'
             @{
@@ -284,10 +284,10 @@ Describe 'side process progress pid rollover' {
         }
         finally {
             if ($null -eq $previous) {
-                Remove-Item Env:AO_SIDE_PROCESS_PROGRESS_DIR -ErrorAction SilentlyContinue
+                Remove-Item Env:OPK_SIDE_PROCESS_PROGRESS_DIR -ErrorAction SilentlyContinue
             }
             else {
-                $env:AO_SIDE_PROCESS_PROGRESS_DIR = $previous
+                $env:OPK_SIDE_PROCESS_PROGRESS_DIR = $previous
             }
             Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
         }

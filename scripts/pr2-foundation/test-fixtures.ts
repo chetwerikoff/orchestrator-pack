@@ -1,4 +1,4 @@
-import type { AoSessionRow } from './binding.ts';
+import type { RuntimeWorkerRow } from './binding.ts';
 
 const SESSION_TIMESTAMPS = Object.freeze({
   createdAt: '2026-07-20T00:00:00.000Z',
@@ -6,7 +6,7 @@ const SESSION_TIMESTAMPS = Object.freeze({
   updatedAt: '2026-07-20T00:10:00.000Z',
 });
 
-export function fixtureAoSession(overrides: Partial<AoSessionRow> = {}): AoSessionRow {
+export function fixtureRuntimeWorker(overrides: Partial<RuntimeWorkerRow> = {}): RuntimeWorkerRow {
   return {
     ...SESSION_TIMESTAMPS,
     harness: 'cursor',

@@ -1,6 +1,6 @@
 import type { CiCheck } from './ci-green-wake-reconcile.d.mts';
 import type {
-  AoSession,
+  RuntimeWorker,
   OpenPr,
   ReviewRun,
 } from './review-trigger-reconcile.d.mts';
@@ -75,7 +75,7 @@ export declare function evaluateOrchestratorTurnGate(input: {
   eventHeadSha?: string;
   openPrs?: OpenPr[];
   reviewRuns?: ReviewRun[];
-  sessions?: AoSession[];
+  sessions?: RuntimeWorker[];
   ciChecks?: CiCheck[];
   requiredCheckNames?: string[];
   requiredCheckLookupFailed?: boolean;
@@ -91,7 +91,7 @@ export declare function evaluateOrchestratorTurnGate(input: {
 }): TurnGateResult;
 export declare function containsRawReviewRunInvocation(commandLine: string): boolean;
 export declare function isClaimedReviewRunParentCommandLine(commandLine: string): boolean;
-export declare function isAoReviewRunGitWorktreeSetupCommandLine(commandLine: string): boolean;
+export declare function isPackReviewRunGitWorktreeSetupCommandLine(commandLine: string): boolean;
 export declare function isRawReviewRunInvocation(commandLine: string): boolean;
 export declare function evaluateAutonomousReviewRunBoundary(input: {
   commandLine?: string;

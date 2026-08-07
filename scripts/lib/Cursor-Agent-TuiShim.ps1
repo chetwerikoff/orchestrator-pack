@@ -152,8 +152,8 @@ function Write-CursorAgentTuiShimAlert {
     } | ConvertTo-Json -Compress
 
     $dest = $AlertDestination
-    if ([string]::IsNullOrWhiteSpace($dest) -and $env:AO_FLEET_HYGIENE_ALERT_FILE) {
-        $dest = $env:AO_FLEET_HYGIENE_ALERT_FILE
+    if ([string]::IsNullOrWhiteSpace($dest) -and $env:OPK_FLEET_HYGIENE_ALERT_FILE) {
+        $dest = $env:OPK_FLEET_HYGIENE_ALERT_FILE
     }
     if ($dest) {
         $parent = Split-Path -Parent $dest

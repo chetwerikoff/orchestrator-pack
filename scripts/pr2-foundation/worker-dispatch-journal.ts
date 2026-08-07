@@ -15,7 +15,7 @@ import path from 'node:path';
 import { reclaimStaleJournalLock } from './journal-lock.ts';
 import { buildS2EpisodeKey, hashNudgeMessageContent } from './worker-nudge-gate.ts';
 import {
-  AO_PASTE_CHAR_THRESHOLD,
+  OPK_PASTE_CHAR_THRESHOLD,
   admitDispatchJournalRecord as canonicalAdmitDispatchJournalRecord,
   classifyDeliveryPath,
   DELIVERY_PATH_PENDING_DRAFT,
@@ -31,7 +31,7 @@ import {
 } from './terminalized/worker-message-dispatch-observe.ts';
 
 export {
-  AO_PASTE_CHAR_THRESHOLD,
+  OPK_PASTE_CHAR_THRESHOLD,
   classifyDeliveryPath,
   DELIVERY_PATH_PENDING_DRAFT,
   DELIVERY_PATH_SELF_SUBMITTED,

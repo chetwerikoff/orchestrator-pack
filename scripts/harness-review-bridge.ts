@@ -2,10 +2,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { executeReview, type ReviewOptions } from '../plugins/ao-codex-pr-reviewer/lib/review_core.ts';
+import { executeReview, type ReviewOptions } from '../plugins/codex-pr-reviewer/lib/review_core.ts';
 import {
   type TerminalVerdictPayload,
-} from '../plugins/ao-codex-pr-reviewer/lib/emit.ts';
+} from '../plugins/codex-pr-reviewer/lib/emit.ts';
 import {
   HARNESS_NESTED_BUDGET_ENV,
   validateMapperSubmitPayload,
@@ -53,11 +53,11 @@ export function resolveHarnessTrustedPaths(packRoot = resolve(join(dirname(fileU
   const root = resolve(packRoot);
   const prompt = resolve(root, 'prompts/codex_review_prompt.md');
   const bridge = resolve(root, 'scripts/harness-review-bridge.ts');
-  const mapper = resolve(root, 'plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts');
+  const mapper = resolve(root, 'plugins/codex-pr-reviewer/lib/review_jsonl.ts');
   const expected = {
     prompt: 'prompts/codex_review_prompt.md',
     bridge: 'scripts/harness-review-bridge.ts',
-    mapper: 'plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts',
+    mapper: 'plugins/codex-pr-reviewer/lib/review_jsonl.ts',
   };
   const actual = {
     prompt: repoRelative(root, prompt),
@@ -76,8 +76,8 @@ function isEnabledEnv(value: string | undefined): boolean {
   return /^(1|true|yes|on)$/i.test(String(value ?? '').trim());
 }
 
-export function buildHarnessSubmitPayload(aoStdout: string): TerminalVerdictPayload {
-  const result = validateMapperSubmitPayload(aoStdout);
+export function buildHarnessSubmitPayload(reviewStdout: string): TerminalVerdictPayload {
+  const result = validateMapperSubmitPayload(reviewStdout);
   if (!result.ok) {
     throw new Error(result.reason ?? 'invalid_terminal_verdict_payload');
   }
@@ -89,7 +89,7 @@ function submitReview(
   sessionId: string,
   payload: TerminalVerdictPayload,
 ): { status: number | null } {
-  const captureFile = process.env.AO_HARNESS_REVIEW_SUBMIT_CAPTURE_FILE;
+  const captureFile = process.env.OPK_HARNESS_REVIEW_SUBMIT_CAPTURE_FILE;
   const body = `${JSON.stringify(payload, null, 2)}\n`;
   if (captureFile) {
     writeFileSync(captureFile, JSON.stringify({ runId, sessionId, payload }, null, 2), 'utf8');
@@ -97,7 +97,7 @@ function submitReview(
   }
 
   const verdict = payload.verdict === 'clean' && payload.findingCount === 0 ? 'approved' : 'changes_requested';
-  const command = process.env.AO_HARNESS_REVIEW_SUBMIT_BIN || 'ao';
+  const command = process.env.OPK_HARNESS_REVIEW_SUBMIT_BIN || 'ao';
   const result = spawnSync(
     command,
     ['review', 'submit', sessionId, '--run', runId, '--session', sessionId, '--verdict', verdict, '--body', '-'],
@@ -125,7 +125,7 @@ export function runHarnessReviewBridge(options: HarnessBridgeOptions): HarnessBr
     };
   }
 
-  process.env.AO_CODEX_REVIEW_PROMPT_FILE = trustedPaths.prompt;
+  process.env.OPK_CODEX_REVIEW_PROMPT_FILE = trustedPaths.prompt;
   process.env[HARNESS_NESTED_BUDGET_ENV] = '1';
 
   const reviewOptions: ReviewOptions = {
@@ -163,7 +163,7 @@ export function runHarnessReviewBridge(options: HarnessBridgeOptions): HarnessBr
     };
   }
 
-  const validation = validateMapperSubmitPayload(review.aoStdout);
+  const validation = validateMapperSubmitPayload(review.reviewStdout);
   if (!validation.ok) {
     return {
       ok: false,

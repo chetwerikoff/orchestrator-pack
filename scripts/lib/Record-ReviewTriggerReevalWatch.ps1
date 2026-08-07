@@ -21,8 +21,8 @@ function Get-ReviewTriggerReevalWatchPath {
     if ($StateRoot) {
         return Join-Path $StateRoot 'review-trigger-reeval-watch.json'
     }
-    if ($env:AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE) {
-        return $env:AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE
+    if ($env:OPK_REVIEW_TRIGGER_REEVAL_WATCH_STATE) {
+        return $env:OPK_REVIEW_TRIGGER_REEVAL_WATCH_STATE
     }
     return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-review-trigger-reeval-watch.json'
 }

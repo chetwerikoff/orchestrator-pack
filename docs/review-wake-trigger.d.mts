@@ -1,9 +1,9 @@
 export declare const COMPLETION_MERGE_INTENT_WAKE_KINDS: ReadonlySet<string>;
 export declare const WAKE_TO_RUN_DECISION_MAX_MS: 5000;
 
-import type { AoSession, OpenPr, ReviewRun } from './review-trigger-reconcile.d.mts';
+import type { RuntimeWorker, OpenPr, ReviewRun } from './review-trigger-reconcile.d.mts';
 
-export type { AoSession, OpenPr, ReviewRun };
+export type { RuntimeWorker, OpenPr, ReviewRun };
 
 export declare const HANDOFF_REVIEW_TRIGGER_WAKE_KINDS: ReadonlySet<string>;
 export declare const EVENT_REVIEW_TRIGGER_WAKE_KINDS: ReadonlySet<string>;
@@ -61,7 +61,7 @@ export declare function evaluateWakeReviewTrigger(input: {
   nowMs?: number;
   openPrs?: OpenPr[];
   reviewRuns?: ReviewRun[];
-  sessions?: AoSession[];
+  sessions?: RuntimeWorker[];
   ciChecks?: Array<{ name?: string; state?: string; conclusion?: string; status?: string }>;
   requiredCheckNames?: string[];
   requiredCheckLookupFailed?: boolean;

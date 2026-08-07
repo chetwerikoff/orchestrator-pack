@@ -17,8 +17,7 @@
     ],
     "rules": [
       "AGENTS.md",
-      "prompts/investigate_root_cause.md",
-      "agent-orchestrator.yaml.example"
+      "prompts/investigate_root_cause.md"
     ]
   },
   "rows": [

@@ -17,9 +17,9 @@ function Test-TestModeFleetProcessIdentityReadable {
         return $true
     }
 
-    $stateDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_SIDE_PROCESS_STATE_DIR'
+    $stateDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'OPK_SIDE_PROCESS_STATE_DIR'
     if ($stateDir) { return $true }
-    $markerDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
+    $markerDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'OPK_WAKE_SUPERVISOR_TEST_MARKER_DIR'
     if ($markerDir) { return $true }
 
     return $false
@@ -32,8 +32,8 @@ function Get-TestModeFleetProcessClassification {
     $stateDir = ''
     $markerDir = ''
 
-    $stateDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_SIDE_PROCESS_STATE_DIR'
-    $markerDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
+    $stateDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'OPK_SIDE_PROCESS_STATE_DIR'
+    $markerDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'OPK_WAKE_SUPERVISOR_TEST_MARKER_DIR'
 
     $tokens = @(Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $ProcessId)
     if (-not $stateDir -and $tokens.Count -gt 0) {
@@ -155,8 +155,8 @@ function Get-TestModeFleetReaperCandidateProcesses {
             continue
         }
 
-        $marker = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
-        $state = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_SIDE_PROCESS_STATE_DIR'
+        $marker = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'OPK_WAKE_SUPERVISOR_TEST_MARKER_DIR'
+        $state = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'OPK_SIDE_PROCESS_STATE_DIR'
         if ($marker -or $state) {
             $candidates.Add($proc.Id) | Out-Null
         }
@@ -200,7 +200,7 @@ function Get-TestModeFleetReaperCandidatesForStateRoots {
             continue
         }
 
-        $state = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_SIDE_PROCESS_STATE_DIR'
+        $state = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'OPK_SIDE_PROCESS_STATE_DIR'
         if (-not $state) { continue }
         $normalized = Normalize-OrchestratorWakeSupervisorPath -PathValue $state
         if ($targets.Contains($normalized)) {

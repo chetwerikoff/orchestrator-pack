@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 
 export const FOUNDATION_DOC_ROWS = Object.freeze([
-  'docs/ao-0-10-review-api.mjs',
   'docs/autonomous-review-retry.mjs',
   'docs/events-optional-consumer-signal-recovery.d.mts',
   'docs/events-optional-consumer-signal-recovery.mjs',
@@ -41,7 +40,6 @@ export const PROTECTED_RUNTIME_PATHS = Object.freeze([
 
 export const EXACT_EXISTING_SCOPE_PATHS = Object.freeze([
   'scripts/estate-cut/issue-906.manifest.json',
-  'agent-orchestrator.yaml.example',
   'scripts/lib/pack-review-worker-notification.ts',
   'scripts/lib/pack-review-delivery.ts',
   'scripts/lib/pack-review-delivery.js',
@@ -125,12 +123,12 @@ export interface EstateDenominatorRow {
 
 export function validateEstateSplit(
   rows: EstateDenominatorRow[],
-): { ok: true; result: 'foundation-16-cutover-6' } | { ok: false; reason: string } {
+): { ok: true; result: 'foundation-15-cutover-6' } | { ok: false; reason: string } {
   const expected = new Set<string>([...FOUNDATION_DOC_ROWS, ...CUTOVER_ROWS]);
   const relevant = rows.filter((row) => expected.has(row.path));
   const byPath = new Map(relevant.map((row) => [row.path, row]));
   if (relevant.length !== expected.size || byPath.size !== expected.size) {
-    return { ok: false, reason: 'denominator_not_exactly_twenty_two_rows' };
+    return { ok: false, reason: 'denominator_not_exactly_twenty_one_rows' };
   }
   for (const path of FOUNDATION_DOC_ROWS) {
     const row = byPath.get(path);
@@ -148,7 +146,7 @@ export function validateEstateSplit(
       return { ok: false, reason: `cutover_row_invalid:${path}` };
     }
   }
-  return { ok: true, result: 'foundation-16-cutover-6' };
+  return { ok: true, result: 'foundation-15-cutover-6' };
 }
 
 function normalize(path: string): string {

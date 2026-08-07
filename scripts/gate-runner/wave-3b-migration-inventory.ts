@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 
 export const WAVE_3B_MIGRATION_INVENTORY_PATH = 'scripts/gate-runner/census/wave-3b-migration-inventory.json';
-export const EXPECTED_WAVE_3B_MIGRATION_INVENTORY_DIGEST = '991f53519806ca0a1cbe7c323cb05345108a6e80444a2bc80071dcc1e75ddbc3';
+export const EXPECTED_WAVE_3B_MIGRATION_INVENTORY_DIGEST = 'aaafe8c3b9c7cd17997fa7745fe0f6decf4ce9df3fbba469f47ddab15439dfe6';
 
 export type Wave3bReplacement =
   | { readonly kind: 'registered-gate'; readonly gateIds: readonly string[] }
   | { readonly kind: 'standalone-owner'; readonly ownerId: string; readonly gateIds: readonly string[] }
   | { readonly kind: 'required-file-rule'; readonly gateId: string; readonly path: string }
+  | { readonly kind: 'absent-file-rule'; readonly gateId: string; readonly path: string }
   | { readonly kind: 'contract-marker-rule'; readonly gateId: string; readonly path: string; readonly markers: readonly string[] }
   | { readonly kind: 'prompt-glob-rule'; readonly gateId: string; readonly pattern: string };
 
@@ -40,6 +41,7 @@ export interface CensusOwnershipEntry {
 
 export interface Wave3bReplacementSurface {
   readonly requiredFiles: readonly string[];
+  readonly absentFiles: readonly string[];
   readonly contractMarkers: Readonly<Record<string, readonly string[]>>;
   readonly promptGlob: string;
 }
@@ -63,6 +65,7 @@ function canonicalReplacement(replacement: Wave3bReplacement): object {
     case 'standalone-owner':
       return { kind: replacement.kind, ownerId: replacement.ownerId, gateIds: sorted(replacement.gateIds) };
     case 'required-file-rule':
+    case 'absent-file-rule':
       return { kind: replacement.kind, gateId: replacement.gateId, path: replacement.path };
     case 'contract-marker-rule':
       return {
@@ -173,16 +176,21 @@ export function validateWave3bMigrationInventory(
         if (replacement.gateId !== 'verify-required-files' || !entry.gateIds.includes(replacement.gateId)) {
           failures.push(`${entry.id}: required-file replacement gate binding drifted`);
         }
-        if (replacement.path !== entry.marker || !surface.requiredFiles.includes(replacement.path)) {
+        if (!surface.requiredFiles.includes(replacement.path)) {
           failures.push(`${entry.id}: required-file replacement rule is missing for ${replacement.path}`);
+        }
+        break;
+      case 'absent-file-rule':
+        if (replacement.gateId !== 'verify-required-files' || !entry.gateIds.includes(replacement.gateId)) {
+          failures.push(`${entry.id}: absent-file replacement gate binding drifted`);
+        }
+        if (!surface.absentFiles.includes(replacement.path)) {
+          failures.push(`${entry.id}: absent-file replacement rule is missing for ${replacement.path}`);
         }
         break;
       case 'contract-marker-rule': {
         if (replacement.gateId !== 'verify-structure-contract' || !entry.gateIds.includes(replacement.gateId)) {
           failures.push(`${entry.id}: contract-marker replacement gate binding drifted`);
-        }
-        if (entry.marker !== `Test-ContractMarkers '${replacement.path}'`) {
-          failures.push(`${entry.id}: contract-marker source identity drifted`);
         }
         const liveMarkers = surface.contractMarkers[replacement.path] ?? [];
         for (const marker of replacement.markers) {

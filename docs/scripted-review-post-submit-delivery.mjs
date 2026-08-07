@@ -7,7 +7,7 @@ import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 
 export const DEFAULT_SUBMIT_VISIBILITY_MS = 30 * 1000;
 export const DEFAULT_SUBMIT_VISIBILITY_INTERVAL_MS = 1000;
-export const ENV_SUBMIT_VISIBILITY_SECONDS = 'AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS';
+export const ENV_SUBMIT_VISIBILITY_SECONDS = 'OPK_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS';
 export const SUBMIT_BIND_TERMINAL_STATUSES = new Set(['complete', 'failed', 'delivered']);
 export const SUBMIT_BIND_LOOKBACK_MS = 15 * 1000;
 

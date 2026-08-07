@@ -36,7 +36,7 @@ export const DEFAULT_GRACE_MINUTES = 15;
 export const DEFAULT_GRACE_MS = DEFAULT_GRACE_MINUTES * 60 * 1000;
 
 /** Operator override documented in orchestratorRules / runbook. */
-export const GRACE_MINUTES_ENV_VAR = 'AO_REVIEW_READY_STUCK_GRACE_MINUTES';
+export const GRACE_MINUTES_ENV_VAR = 'OPK_REVIEW_READY_STUCK_GRACE_MINUTES';
 
 /** Pack merge-contract check names (fallback when branch protection is unset). */
 export const PACK_MERGE_CONTRACT_CHECK_NAMES = [
@@ -55,7 +55,7 @@ export const BLIND_RECOVERY_FORBIDDEN = [/\bao\s+spawn\b/i, /--claim-pr\b/i];
 /** @typedef {{ name?: string, state?: string, conclusion?: string, status?: string }} CiCheck */
 /** @typedef {{ number?: number, headRefOid?: string }} OpenPr */
 /** @typedef {{ id?: string, prNumber?: number, targetSha?: string, status?: string, findingCount?: number, linkedSessionId?: string }} ReviewRun */
-/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, runtime?: string, reports?: Array<Record<string, unknown>> }} AoSession */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, runtime?: string, reports?: Array<Record<string, unknown>> }} RuntimeWorker */
 /** @typedef {{ firstFalseStuckAtMs?: number }} GraceRecord */
 /** @typedef {{ snapshots?: Record<string, GraceRecord> }} GraceTrackingState */
 /** @typedef {{ reachabilityFailed?: boolean, deliveryEscalated?: boolean, floodNotCleared?: boolean }} UnreachabilityEvidence */
@@ -228,7 +228,7 @@ export function classifyRequiredCiLevel(checks, options = {}) {
 /**
  * Latest worker report for a PR head, optionally filtered by reportState.
  *
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  * @param {string} headSha
  * @param {{ matchStates?: Set<string>, headCommittedAtMs?: number }} [options]
  */
@@ -262,7 +262,7 @@ export function findLatestReportForHead(session, headSha, options = {}) {
 }
 
 /**
- * @param {AoSession} session
+ * @param {RuntimeWorker} session
  * @param {string} headSha
  * @param {{ headCommittedAtMs?: number }} [options]
  */
@@ -307,7 +307,7 @@ export function isCoveringCleanRun(run, prNumber, headSha, sessionId) {
  * @param {number} prNumber
  * @param {string} headSha
  * @param {string} sessionId
- * @param {AoSession[]} sessions
+ * @param {RuntimeWorker[]} sessions
  */
 export function findCoveringCleanRun(runs, prNumber, headSha, sessionId, sessions) {
   const session = findSessionById(sessions, sessionId);
@@ -379,11 +379,11 @@ export function hasAffirmativeUnreachability(evidence) {
 
 /**
  * @param {object} input
- * @param {AoSession} input.session
+ * @param {RuntimeWorker} input.session
  * @param {OpenPr} input.openPr
  * @param {ReviewRun[]} input.reviewRuns
  * @param {CiCheck[]} input.ciChecks
- * @param {AoSession[]} [input.sessions]
+ * @param {RuntimeWorker[]} [input.sessions]
  */
 export function classifyReviewReadySnapshot({
   session,
@@ -487,11 +487,11 @@ export function findBlindRecoveryViolations(commandLines) {
 
 /**
  * @param {object} input
- * @param {AoSession} input.session
+ * @param {RuntimeWorker} input.session
  * @param {OpenPr} input.openPr
  * @param {ReviewRun[]} input.reviewRuns
  * @param {CiCheck[]} input.ciChecks
- * @param {AoSession[]} [input.sessions]
+ * @param {RuntimeWorker[]} [input.sessions]
  * @param {GraceTrackingState} [input.tracking]
  * @param {UnreachabilityEvidence} [input.unreachability]
  * @param {number} input.nowMs
@@ -610,7 +610,7 @@ export function planStuckGuardReaction({
  * @param {number} planned.prNumber
  * @param {string} planned.headSha
  * @param {object} fresh
- * @param {AoSession[]} fresh.sessions
+ * @param {RuntimeWorker[]} fresh.sessions
  * @param {OpenPr[]} fresh.openPrs
  * @param {ReviewRun[]} fresh.reviewRuns
  * @param {CiCheck[]} fresh.ciChecks

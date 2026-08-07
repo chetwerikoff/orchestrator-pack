@@ -8,10 +8,10 @@ BeforeAll {
 Describe 'CI-red watchdog lookup retention reconcile integration' {
     It 'runs retention for an authoritative empty open-PR snapshot without a checks bundle' {
         $storeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ci-red-empty-open-prs-{0}" -f [guid]::NewGuid().ToString('n'))
-        $previousStateDir = $env:AO_CI_RED_WATCHDOG_STATE_DIR
+        $previousStateDir = $env:OPK_CI_RED_WATCHDOG_STATE_DIR
         try {
             New-Item -ItemType Directory -Path $storeDir -Force | Out-Null
-            $env:AO_CI_RED_WATCHDOG_STATE_DIR = $storeDir
+            $env:OPK_CI_RED_WATCHDOG_STATE_DIR = $storeDir
             $headSha = 'a' * 40
             $record = Invoke-CiRedWatchdogCli -Command 'record-lookup-failure' -Payload @{
                 storeDir = $storeDir
@@ -50,10 +50,10 @@ Describe 'CI-red watchdog lookup retention reconcile integration' {
         }
         finally {
             if ($null -eq $previousStateDir) {
-                Remove-Item Env:AO_CI_RED_WATCHDOG_STATE_DIR -ErrorAction SilentlyContinue
+                Remove-Item Env:OPK_CI_RED_WATCHDOG_STATE_DIR -ErrorAction SilentlyContinue
             }
             else {
-                $env:AO_CI_RED_WATCHDOG_STATE_DIR = $previousStateDir
+                $env:OPK_CI_RED_WATCHDOG_STATE_DIR = $previousStateDir
             }
             Remove-Item -LiteralPath $storeDir -Recurse -Force -ErrorAction SilentlyContinue
         }

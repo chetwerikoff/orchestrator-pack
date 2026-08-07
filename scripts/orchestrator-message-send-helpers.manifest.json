@@ -26,7 +26,7 @@
       ]
     },
     {
-      "name": "Invoke-AoSendViaMessage",
+      "name": "Invoke-WorkerMessageViaCatalog",
       "file": "scripts/journaled-worker-send.ps1",
       "mechanisms": [
         "ao-send"

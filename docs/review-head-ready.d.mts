@@ -1,4 +1,4 @@
-import type { AoSession, ReviewRun, WorkerReport } from './review-trigger-reconcile.d.mts';
+import type { RuntimeWorker, ReviewRun, WorkerReport } from './review-trigger-reconcile.d.mts';
 import type { CiCheck } from './ci-green-wake-reconcile.d.mts';
 
 export declare const DEFAULT_DEGRADED_CI_MAX_ATTEMPTS: number;
@@ -20,7 +20,7 @@ export declare function isWorkerDegradedCiHandoff(
 ): boolean;
 
 export declare function findLatestAcceptedReportForHead(
-  session: AoSession,
+  session: RuntimeWorker,
   headSha: string,
   options?: { headCommittedAtMs?: number },
 ): Record<string, unknown> | null;
@@ -37,11 +37,11 @@ export declare const FRESHNESS_BASIS_NO_REPORT: 'no-report';
 export declare const FRESHNESS_BASIS_AMBIGUOUS: 'ambiguous/incomplete-fail-closed';
 
 export declare function enumerateReportsInEmissionOrder(
-  session: AoSession | null | undefined,
+  session: RuntimeWorker | null | undefined,
 ): Array<{ report: Record<string, unknown>; emissionIndex: number }>;
 
 export declare function classifyReadyForReviewFreshness(
-  session: AoSession | null | undefined,
+  session: RuntimeWorker | null | undefined,
   headSha: string,
   options?: { headCommittedAtMs?: number },
 ): {
@@ -51,13 +51,13 @@ export declare function classifyReadyForReviewFreshness(
 };
 
 export declare function findFreshReadyForReviewHandoff(
-  session: AoSession,
+  session: RuntimeWorker,
   headSha: string,
   options?: { headCommittedAtMs?: number },
 ): Record<string, unknown> | null;
 
 export declare function hasReadyForReviewForHead(
-  session: AoSession,
+  session: RuntimeWorker,
   headSha: string,
   options?: { headCommittedAtMs?: number },
 ): boolean;
@@ -75,7 +75,7 @@ export declare function parseLastActivityAgeMs(
 
 export declare function mergeWorkerDeliveriesFromPlanInput(input?: {
   workerDeliveries?: Array<Record<string, unknown>>;
-  aoEvents?: Array<Record<string, unknown>>;
+  runtimeEvents?: Array<Record<string, unknown>>;
   dispatchJournal?: Record<string, Record<string, unknown>>;
   reviewRuns?: ReviewRun[];
   reactionMessages?: Record<string, string>;
@@ -83,13 +83,13 @@ export declare function mergeWorkerDeliveriesFromPlanInput(input?: {
 }): Array<Record<string, unknown>>;
 
 export declare function hasPendingUnconsumedDelivery(
-  session: AoSession,
+  session: RuntimeWorker,
   sessionId: string,
   workerDeliveries?: Array<Record<string, unknown>>,
 ): boolean;
 
 export declare function isWorkerActivelyWorking(
-  session: AoSession,
+  session: RuntimeWorker,
   headSha: string,
   nowMs: number,
   options?: {
@@ -100,7 +100,7 @@ export declare function isWorkerActivelyWorking(
 ): boolean;
 
 export declare function evaluateWorkerQuiescenceBasis(
-  session: AoSession,
+  session: RuntimeWorker,
   headSha: string,
   nowMs: number,
   options?: {
@@ -117,7 +117,7 @@ export interface OwnerResolution {
 }
 
 export declare function evaluateQuiescentHandoffFallback(input: {
-  session: AoSession | null;
+  session: RuntimeWorker | null;
   headSha: string;
   nowMs: number;
   headCommittedAtMs?: number;
@@ -143,7 +143,7 @@ export declare function evaluateHeadReadyForReview(input: {
   reviewRuns: ReviewRun[];
   prNumber: number;
   headSha: string;
-  session?: AoSession | null;
+  session?: RuntimeWorker | null;
   ciChecks?: CiCheck[];
   requiredCheckNames?: string[];
   requiredCheckLookupFailed?: boolean;
@@ -177,7 +177,7 @@ export declare function preRunHeadReadyRecheck(
   fresh: {
     openPrs?: import('./review-trigger-reconcile.d.mts').OpenPr[];
     reviewRuns?: ReviewRun[];
-    sessions?: AoSession[];
+    sessions?: RuntimeWorker[];
     ciChecks?: CiCheck[];
     requiredCheckNames?: string[];
     requiredCheckLookupFailed?: boolean;
@@ -186,7 +186,7 @@ export declare function preRunHeadReadyRecheck(
     nowMs?: number;
     workerDeliveries?: Array<Record<string, unknown>>;
     ownerResolution?: OwnerResolution | null;
-    aoEvents?: Array<Record<string, unknown>>;
+    runtimeEvents?: Array<Record<string, unknown>>;
     dispatchJournal?: Record<string, Record<string, unknown>>;
     reactionMessages?: Record<string, string>;
     cycleState?: Record<string, unknown>;
@@ -197,7 +197,7 @@ export declare function preRunHeadReadyRecheck(
 ): PreRunHeadReadyRecheckResult;
 
 export declare function hasStaleReadyForReviewOnOlderHead(
-  session: AoSession,
+  session: RuntimeWorker,
   currentHeadSha: string,
   options?: { headCommittedAtMs?: number },
 ): boolean;
@@ -211,13 +211,13 @@ export declare function resolveReportRoute(
 ): string;
 
 export declare function findLatestStaleReadyForReviewReport(
-  session: AoSession,
+  session: RuntimeWorker,
   currentHeadSha: string,
   options?: { headCommittedAtMs?: number },
 ): Record<string, unknown> | null;
 
 export declare function collectFailedNotReadyComponents(input: {
-  session: AoSession | null;
+  session: RuntimeWorker | null;
   headSha: string;
   ciChecks?: CiCheck[];
   requiredCheckNames?: string[];
@@ -230,7 +230,7 @@ export declare function collectFailedNotReadyComponents(input: {
 export declare function buildReportCiObserved(input: {
   prNumber: number;
   headSha: string;
-  session?: AoSession | null;
+  session?: RuntimeWorker | null;
   ciChecks?: CiCheck[];
   requiredCheckNames?: string[];
   requiredCheckLookupFailed?: boolean;
@@ -263,7 +263,7 @@ export declare function buildNoStartDecisionRecord(input: {
   prNumber: number;
   headSha: string;
   reviewRuns: ReviewRun[];
-  session?: AoSession | null;
+  session?: RuntimeWorker | null;
   ciChecks?: CiCheck[];
   requiredCheckNames?: string[];
   requiredCheckLookupFailed?: boolean;

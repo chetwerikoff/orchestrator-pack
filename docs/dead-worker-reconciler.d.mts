@@ -67,7 +67,7 @@ export interface PlanDeadWorkerReconcileInput {
   sessions?: Array<Record<string, unknown>>;
   absentSessions?: Array<Record<string, unknown>>;
   livenessContext?: Record<string, unknown>;
-  aoEvents?: Array<Record<string, unknown>>;
+  runtimeEvents?: Array<Record<string, unknown>>;
   respawnPolicy?: Record<string, unknown>;
   recoveryChecks?: {
     workerRecoveryAvailable?: boolean;
@@ -113,7 +113,7 @@ export declare function loadAutonomousRespawnPolicy(
 
 export declare function classifyWorkerDeathEvidence(
   session: Record<string, unknown>,
-  aoEvents?: Array<Record<string, unknown>>,
+  runtimeEvents?: Array<Record<string, unknown>>,
   nowMs?: number,
   options?: { respawnPolicy?: Record<string, unknown> },
 ): DeathEvidence;
@@ -139,7 +139,7 @@ export declare function buildDeadWorkerReconcileKey(candidate: Record<string, un
 
 export declare function issueLinkedWorkerBranches(issueNumber: number): string[];
 
-export declare const AO_WORKER_ITERATION_BRANCH_PATTERN: RegExp;
+export declare const OPK_WORKER_ITERATION_BRANCH_PATTERN: RegExp;
 
 export declare function isAoWorkerIterationBranch(branch: unknown): boolean;
 

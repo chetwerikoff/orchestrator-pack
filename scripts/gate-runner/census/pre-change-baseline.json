@@ -138,7 +138,7 @@
       "marker": "check-ao-0-10-cli-capture-redaction.ps1",
       "classification": "ported-custom",
       "gateIds": [
-        "ao-capture-redaction"
+        "capture-redaction"
       ],
       "portedInWave": "3.a"
     },
@@ -161,7 +161,7 @@
       "marker": "check-ao-capture-redaction-selftest.ps1",
       "classification": "ported-custom",
       "gateIds": [
-        "ao-capture-redaction"
+        "capture-redaction"
       ],
       "portedInWave": "3.a"
     },
@@ -170,16 +170,24 @@
       "sourceKind": "check-script",
       "sourcePath": "scripts/check-ao-cli-argv-shape.ps1",
       "marker": "check-ao-cli-argv-shape.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The AO-specific argv bypass guard and its verify aggregation encoded the executable name and bypass vocabulary of the removed runtime, which must not remain reachable after the hard cut.",
+        "replacement": "scripts/runtime-retirement/retired-surface-guard.ts rejects retired commands and aliases, while RuntimeAdapter and runtime registry contracts own current invocation shape."
+      }
     },
     {
       "id": "check-script:scripts/check-ao-dead-argv-bypass.ps1",
       "sourceKind": "check-script",
       "sourcePath": "scripts/check-ao-dead-argv-bypass.ps1",
       "marker": "check-ao-dead-argv-bypass.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The AO-specific argv bypass guard and its verify aggregation encoded the executable name and bypass vocabulary of the removed runtime, which must not remain reachable after the hard cut.",
+        "replacement": "scripts/runtime-retirement/retired-surface-guard.ts rejects retired commands and aliases, while RuntimeAdapter and runtime registry contracts own current invocation shape."
+      }
     },
     {
       "id": "check-script:scripts/check-ao-operator-upgrade-preflight.ps1",
@@ -1433,56 +1441,84 @@
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "ao",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The monolithic verify preflight for 'ao' belonged to the retired shell-oriented runtime bootstrap and no longer represents the authority or execution boundary of the Node 22 pack.",
+        "replacement": "Node 22 native-entrypoint preflight, frozen npm installation, workflow setup actions, and task-specific adapters now prove executable prerequisites at their actual authority boundaries."
+      }
     },
     {
       "id": "verify-inline:command-version:codex",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "codex",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The monolithic verify preflight for 'codex' belonged to the retired shell-oriented runtime bootstrap and no longer represents the authority or execution boundary of the Node 22 pack.",
+        "replacement": "Node 22 native-entrypoint preflight, frozen npm installation, workflow setup actions, and task-specific adapters now prove executable prerequisites at their actual authority boundaries."
+      }
     },
     {
       "id": "verify-inline:command-version:cursor",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "cursor",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The monolithic verify preflight for 'cursor' belonged to the retired shell-oriented runtime bootstrap and no longer represents the authority or execution boundary of the Node 22 pack.",
+        "replacement": "Node 22 native-entrypoint preflight, frozen npm installation, workflow setup actions, and task-specific adapters now prove executable prerequisites at their actual authority boundaries."
+      }
     },
     {
       "id": "verify-inline:command-version:gh",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "gh",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The monolithic verify preflight for 'gh' belonged to the retired shell-oriented runtime bootstrap and no longer represents the authority or execution boundary of the Node 22 pack.",
+        "replacement": "Node 22 native-entrypoint preflight, frozen npm installation, workflow setup actions, and task-specific adapters now prove executable prerequisites at their actual authority boundaries."
+      }
     },
     {
       "id": "verify-inline:command-version:git",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "git",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The monolithic verify preflight for 'git' belonged to the retired shell-oriented runtime bootstrap and no longer represents the authority or execution boundary of the Node 22 pack.",
+        "replacement": "Node 22 native-entrypoint preflight, frozen npm installation, workflow setup actions, and task-specific adapters now prove executable prerequisites at their actual authority boundaries."
+      }
     },
     {
       "id": "verify-inline:command-version:node",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "node",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The monolithic verify preflight for 'node' belonged to the retired shell-oriented runtime bootstrap and no longer represents the authority or execution boundary of the Node 22 pack.",
+        "replacement": "Node 22 native-entrypoint preflight, frozen npm installation, workflow setup actions, and task-specific adapters now prove executable prerequisites at their actual authority boundaries."
+      }
     },
     {
       "id": "verify-inline:command-version:npm",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "npm",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The monolithic verify preflight for 'npm' belonged to the retired shell-oriented runtime bootstrap and no longer represents the authority or execution boundary of the Node 22 pack.",
+        "replacement": "Node 22 native-entrypoint preflight, frozen npm installation, workflow setup actions, and task-specific adapters now prove executable prerequisites at their actual authority boundaries."
+      }
     },
     {
       "id": "verify-inline:contract-marker:plugins/ao-codex-pr-reviewer/README.md",
@@ -1799,40 +1835,60 @@
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "gh auth status",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The monolithic verify preflight for 'gh auth status' belonged to the retired shell-oriented runtime bootstrap and no longer represents the authority or execution boundary of the Node 22 pack.",
+        "replacement": "Node 22 native-entrypoint preflight, frozen npm installation, workflow setup actions, and task-specific adapters now prove executable prerequisites at their actual authority boundaries."
+      }
     },
     {
       "id": "verify-inline:write-check:operator-adoption/missing-pairing",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "operator-adoption/missing-pairing",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The legacy operator-adoption fixture and its aggregate status lines required the removed configuration example and therefore would reintroduce a prohibited compatibility prescription after the Issue #1352 hard cut.",
+        "replacement": "docs/migration_notes.md now defines current runtime-neutral adoption, host-cleanup boundaries, verification commands, and source-control-only rollback without restoring the retired config."
+      }
     },
     {
       "id": "verify-inline:write-check:operator-adoption/paired-migration-notes",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "operator-adoption/paired-migration-notes",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The legacy operator-adoption fixture and its aggregate status lines required the removed configuration example and therefore would reintroduce a prohibited compatibility prescription after the Issue #1352 hard cut.",
+        "replacement": "docs/migration_notes.md now defines current runtime-neutral adoption, host-cleanup boundaries, verification commands, and source-control-only rollback without restoring the retired config."
+      }
     },
     {
       "id": "verify-inline:write-check:operator-adoption/skip-no-example",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "operator-adoption/skip-no-example",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The legacy operator-adoption fixture and its aggregate status lines required the removed configuration example and therefore would reintroduce a prohibited compatibility prescription after the Issue #1352 hard cut.",
+        "replacement": "docs/migration_notes.md now defines current runtime-neutral adoption, host-cleanup boundaries, verification commands, and source-control-only rollback without restoring the retired config."
+      }
     },
     {
       "id": "verify-inline:write-check:operator-adoption/waiver-line",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "operator-adoption/waiver-line",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The legacy operator-adoption fixture and its aggregate status lines required the removed configuration example and therefore would reintroduce a prohibited compatibility prescription after the Issue #1352 hard cut.",
+        "replacement": "docs/migration_notes.md now defines current runtime-neutral adoption, host-cleanup boundaries, verification commands, and source-control-only rollback without restoring the retired config."
+      }
     },
     {
       "id": "verify-inline:write-check:prompts/*.md",
@@ -1850,16 +1906,24 @@
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "scripts/check-ci-job-timeouts.mjs",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The legacy inline mjs timeout status aggregation was coupled to the prior monolithic verify implementation and is not the current authority for workflow timeout enforcement.",
+        "replacement": "Workflow timeout policy is enforced by the dedicated CI and static-policy checks rather than by preserving a stale verify output label or retired mjs invocation."
+      }
     },
     {
       "id": "verify-inline:write-check:scripts/invoke-pack-review-strict-gate.ps1",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "scripts/invoke-pack-review-strict-gate.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The legacy inline Write-Check aggregation for strict review fixtures was superseded when verification moved to the bounded repository-check invocation and the registered foundation test/gate surfaces.",
+        "replacement": "scripts/invoke-pack-review-strict-gate.ps1 remains invoked through Invoke-RepositoryCheck, while its fixtures and current behavior are covered by the foundation verification lanes."
+      }
     },
     {
       "id": "verify-inline:write-check:scripts/orchestrator-command-runtime-preflight.ps1",
@@ -1902,8 +1966,12 @@
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "strict review gate scripts",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The legacy inline Write-Check aggregation for strict review fixtures was superseded when verification moved to the bounded repository-check invocation and the registered foundation test/gate surfaces.",
+        "replacement": "scripts/invoke-pack-review-strict-gate.ps1 remains invoked through Invoke-RepositoryCheck, while its fixtures and current behavior are covered by the foundation verification lanes."
+      }
     },
     {
       "id": "verify-inline:write-check:verify-runtime/ao-spawn-shape-vitest",
@@ -2030,8 +2098,12 @@
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "verify-runtime/test-backed-smoke",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The old verify-runtime/test-backed-smoke status label was an aggregation detail of the previous verify implementation rather than an independent acceptance contract.",
+        "replacement": "The optional test-backed smoke remains available through scripts/invoke-verify-test-backed-smoke.ps1 and reports its current bounded result directly."
+      }
     },
     {
       "id": "verify-inline:write-check:worker-launch-failure/quote-dense-body",
@@ -2096,7 +2168,7 @@
       "marker": "scripts/check-ao-0-10-cli-capture-redaction.ps1",
       "classification": "ported-custom",
       "gateIds": [
-        "ao-capture-redaction"
+        "capture-redaction"
       ],
       "portedInWave": "3.a"
     },
@@ -2119,7 +2191,7 @@
       "marker": "scripts/check-ao-capture-redaction-selftest.ps1",
       "classification": "ported-custom",
       "gateIds": [
-        "ao-capture-redaction"
+        "capture-redaction"
       ],
       "portedInWave": "3.a"
     },
@@ -2128,16 +2200,24 @@
       "sourceKind": "verify-script-member",
       "sourcePath": "scripts/verify.ps1",
       "marker": "scripts/check-ao-cli-argv-shape.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The AO-specific argv bypass guard and its verify aggregation encoded the executable name and bypass vocabulary of the removed runtime, which must not remain reachable after the hard cut.",
+        "replacement": "scripts/runtime-retirement/retired-surface-guard.ts rejects retired commands and aliases, while RuntimeAdapter and runtime registry contracts own current invocation shape."
+      }
     },
     {
       "id": "verify-script:scripts/check-ao-dead-argv-bypass.ps1",
       "sourceKind": "verify-script-member",
       "sourcePath": "scripts/verify.ps1",
       "marker": "scripts/check-ao-dead-argv-bypass.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The AO-specific argv bypass guard and its verify aggregation encoded the executable name and bypass vocabulary of the removed runtime, which must not remain reachable after the hard cut.",
+        "replacement": "scripts/runtime-retirement/retired-surface-guard.ts rejects retired commands and aliases, while RuntimeAdapter and runtime registry contracts own current invocation shape."
+      }
     },
     {
       "id": "verify-script:scripts/check-ao-session-adapter-project-filter.ps1",
@@ -2533,8 +2613,12 @@
       "sourceKind": "verify-script-member",
       "sourcePath": "scripts/verify.ps1",
       "marker": "scripts/check-operator-adoption-example.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "The legacy operator-adoption fixture and its aggregate status lines required the removed configuration example and therefore would reintroduce a prohibited compatibility prescription after the Issue #1352 hard cut.",
+        "replacement": "docs/migration_notes.md now defines current runtime-neutral adoption, host-cleanup boundaries, verification commands, and source-control-only rollback without restoring the retired config."
+      }
     },
     {
       "id": "verify-script:scripts/check-orchestrator-claimed-review-run.ps1",

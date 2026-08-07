@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
-export const VERIFIED_AO_VERSION = '0.10.3';
-export const VERIFIED_AO_SESSION_KEYS = Object.freeze([
+export const VERIFIED_RUNTIME_VERSION = '0.10.3';
+export const VERIFIED_RUNTIME_SESSION_KEYS = Object.freeze([
   'createdAt',
   'harness',
   'id',
@@ -14,7 +14,7 @@ export const VERIFIED_AO_SESSION_KEYS = Object.freeze([
   'updatedAt',
 ] as const);
 
-export interface AoSessionRow {
+export interface RuntimeWorkerRow {
   createdAt: string;
   harness: string;
   id: string;
@@ -120,10 +120,10 @@ function normalizedIssueId(value: unknown): number | null {
   return Number.isInteger(normalized) && normalized > 0 ? normalized : null;
 }
 
-export function normalizeAoSessionRow(value: unknown): AoSessionRow | null {
+export function normalizeRuntimeWorkerRow(value: unknown): RuntimeWorkerRow | null {
   if (!isRecord(value)) return null;
   const keys = Object.keys(value).sort();
-  if (keys.join('\n') !== [...VERIFIED_AO_SESSION_KEYS].sort().join('\n')) return null;
+  if (keys.join('\n') !== [...VERIFIED_RUNTIME_SESSION_KEYS].sort().join('\n')) return null;
   const issueId = normalizedIssueId(value.issueId);
   if (!isIso(value.createdAt)
     || typeof value.harness !== 'string'
@@ -153,23 +153,23 @@ export function normalizeAoSessionRow(value: unknown): AoSessionRow | null {
   };
 }
 
-export function validateAoSessionRow(value: unknown): boolean {
-  return normalizeAoSessionRow(value) !== null;
+export function validateRuntimeWorkerRow(value: unknown): boolean {
+  return normalizeRuntimeWorkerRow(value) !== null;
 }
 
-export function validateAoPreflight(input: AoPreflightInput): AoPreflightResult {
+export function validateRuntimePreflight(input: AoPreflightInput): AoPreflightResult {
   if (input.command !== 'ao session ls --json') return { ok: false, reason: 'preflight_command_mismatch' };
-  if (input.appStateVersion !== VERIFIED_AO_VERSION) return { ok: false, reason: 'preflight_version_unverifiable' };
+  if (input.appStateVersion !== VERIFIED_RUNTIME_VERSION) return { ok: false, reason: 'preflight_version_unverifiable' };
   if (!input.sanitizerId.trim()) return { ok: false, reason: 'preflight_sanitizer_missing' };
   if (!Array.isArray(input.sessions) || input.sessions.length === 0) {
     return { ok: false, reason: 'preflight_empty_fleet' };
   }
-  if (!input.sessions.every(validateAoSessionRow)) return { ok: false, reason: 'preflight_schema_mismatch' };
+  if (!input.sessions.every(validateRuntimeWorkerRow)) return { ok: false, reason: 'preflight_schema_mismatch' };
   return {
     ok: true,
     command: 'ao session ls --json',
-    appStateVersion: VERIFIED_AO_VERSION,
-    normalizedKeys: VERIFIED_AO_SESSION_KEYS,
+    appStateVersion: VERIFIED_RUNTIME_VERSION,
+    normalizedKeys: VERIFIED_RUNTIME_SESSION_KEYS,
     fleetCount: input.sessions.length,
     sanitizerId: input.sanitizerId,
   };
@@ -179,11 +179,11 @@ function stableTimestamp(index: number, offsetMinutes: number): string {
   return new Date(Date.UTC(2026, 0, 1, 0, index * 10 + offsetMinutes, 0)).toISOString();
 }
 
-export function sanitizeAoSessions(rows: unknown[]): AoSessionRow[] {
+export function sanitizeRuntimeWorkers(rows: unknown[]): RuntimeWorkerRow[] {
   if (!Array.isArray(rows)) throw new Error('preflight_schema_mismatch');
-  const normalized = rows.map(normalizeAoSessionRow);
+  const normalized = rows.map(normalizeRuntimeWorkerRow);
   if (normalized.some((row) => row === null)) throw new Error('preflight_schema_mismatch');
-  return (normalized as AoSessionRow[]).map((row, index) => ({
+  return (normalized as RuntimeWorkerRow[]).map((row, index) => ({
     createdAt: stableTimestamp(index, 0),
     harness: row.harness,
     id: `session-${String(index + 1).padStart(3, '0')}`,
@@ -197,7 +197,7 @@ export function sanitizeAoSessions(rows: unknown[]): AoSessionRow[] {
   }));
 }
 
-export function sanitizerIdentity(rows: AoSessionRow[]): string {
+export function sanitizerIdentity(rows: RuntimeWorkerRow[]): string {
   return `sha256:${createHash('sha256').update(JSON.stringify(rows)).digest('hex')}`;
 }
 
@@ -258,7 +258,7 @@ export function branchMatchesIssue(branch: string, issueId: number, iterationBra
 }
 
 function eligibleLiveRows(
-  session: AoSessionRow,
+  session: RuntimeWorkerRow,
   rows: OpenPrSnapshotRow[],
   configuredRepo: string,
   iterationBranch: string,
@@ -314,7 +314,7 @@ export function validateBindingCacheRecord(
 }
 
 export function resolveFoundationBinding(input: {
-  session: AoSessionRow;
+  session: RuntimeWorkerRow;
   configuredRepo: string;
   openPrs: OpenPrSnapshotRow[];
   cache?: BindingCacheRecord | null;

@@ -136,7 +136,7 @@ async function startTerminalFailureFixture(options: {
   fixtureReviewStdout: string;
 }) {
   process.env.OPK_VITEST_HARNESS = '1';
-  process.env.AO_BASE_DIR = path.join(options.storeRoot, 'ao-base');
+  process.env.OPK_BASE_DIR = path.join(options.storeRoot, 'ao-base');
   return startPackReview({
     projectId: 'orchestrator-pack',
     storeRoot: options.storeRoot,

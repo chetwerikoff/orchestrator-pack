@@ -8,7 +8,7 @@
       "useCaptureMetadata": true,
       "reads": [
         {
-          "path": "plugins/ao-scope-guard/lib/check.ts",
+          "path": "plugins/scope-guard/lib/check.ts",
           "lines": 900,
           "kind": "file"
         },
