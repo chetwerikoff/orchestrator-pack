@@ -1152,7 +1152,7 @@ function parseRecord(
   const deliveryOutcomes = raw.deliveryOutcomes && typeof raw.deliveryOutcomes === 'object' && !Array.isArray(raw.deliveryOutcomes)
     ? raw.deliveryOutcomes as Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>
     : {};
-  let authoritativeReviewVerdict = reviewVerdict;
+  let authoritativeReviewVerdict: PackReviewRunRecord['reviewVerdict'] = reviewVerdict;
   let authoritativeFindingCount = findingCount;
   let authoritativeFindings = findings;
   if (reviewRound && (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(status)
