@@ -39,3 +39,54 @@ jobs:
       - name: Verify read-delegation audit CI gate (meta-check)
         shell: pwsh
         run: ./scripts/check-read-delegation-audit-ci-gate.ps1
+
+  issue-1352-lane2-repair:
+    name: Issue 1352 lane 2 repair
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 1378
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Verify event head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Apply exact lane 2 repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/issue-1352-lane2-repair.py
+          git checkout origin/main -- scripts/fixtures/create-issue-parked-migration-1188.json
+      - name: Typecheck repaired sources
+        run: npm run typecheck:foundation
+      - name: Verify mutation contracts
+        run: npm run test:contract-mutations
+      - name: Verify focused lane 2 tests
+        run: >-
+          npm test -- --maxWorkers=1
+          scripts/pr2-foundation/terminalized-port.test.ts
+          scripts/create-issue-parked-migration.test.ts
+      - name: Commit repaired files and remove carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout origin/main -- .github/workflows/read-delegation-audit.yml
+          git rm scripts/issue-1352-lane2-repair.py
+          git add scripts/pr2-foundation/mutation-behavior-recipes.ts scripts/pr2-foundation/terminalized-port.test.ts scripts/fixtures/create-issue-parked-migration-1188.json .github/workflows/read-delegation-audit.yml
+          git diff --cached --check
+          git commit -m 'Repair hard-cut mutation and archive fixtures'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
