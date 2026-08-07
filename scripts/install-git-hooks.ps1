@@ -86,7 +86,7 @@ if ($InstallScopeGuard) {
     }
 
     Write-Host "Installed scope-guard pre-commit hook: $scopeGuardHookPath"
-    Write-Host 'Set AO_ISSUE_NUMBER in the environment before committing.'
+    Write-Host 'Issue identity is derived from the branch name by the installed scope-guard hook.'
     Write-Host 'Re-run with -UninstallScopeGuard to remove the hook.'
 }
 

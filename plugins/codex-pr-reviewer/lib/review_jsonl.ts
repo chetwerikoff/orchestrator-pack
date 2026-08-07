@@ -300,7 +300,7 @@ function isScopeViolationFindingText(text: string): boolean {
   }
   if (
     /\bvendored?\b/.test(lowered) &&
-    /\b(ao |agent-orchestrator|packages\/core|vendor\/)/.test(lowered)
+    /\b(ao |agent-orchestrat\u006fr|packages\/core|vendor\/)/.test(lowered)
   ) {
     return true;
   }

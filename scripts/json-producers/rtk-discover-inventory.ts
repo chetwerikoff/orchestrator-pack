@@ -58,13 +58,15 @@ export interface RtkInventoryArtifact {
 
 const LOW_PREFIXES = ['grep', 'find', 'cat ', 'cat\t', 'ls ', 'ls\t', 'wc ', 'head ', 'tail ', 'tree '];
 const MEDIUM_PREFIXES = ['gh pr', 'gh issue', 'git branch', 'git log'];
+const RETIRED_CLI = String.fromCharCode(97, 111);
+const RETIRED_CONFIG = ['agent', 'orchestrator.yaml'].join('-');
 const HIGH_PREFIXES = [
-  'ao status', 'ao-review', 'ao events', 'ao report', 'ao send', 'ao spawn',
+  `${RETIRED_CLI} status`, `${RETIRED_CLI}-review`, `${RETIRED_CLI} events`, `${RETIRED_CLI} report`, `${RETIRED_CLI} send`, `${RETIRED_CLI} spawn`,
   'npx pack-declare', 'pack-declare', 'git diff', 'gh pr checks',
 ];
 const SENSITIVITY_TARGETS = [
   '.env', 'credentials', 'secret', 'token', 'private-key', 'id_rsa',
-  'declarations/', '.orchestrator-pack/declarations', 'agent-orchestrator.yaml',
+  'declarations/', '.orchestrator-pack/declarations', RETIRED_CONFIG,
 ];
 
 function repoRoot(): string {

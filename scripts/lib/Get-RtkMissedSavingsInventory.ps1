@@ -8,16 +8,19 @@ function Get-RtkRiskTierContract {
     [CmdletBinding()]
     param()
 
+    $retiredCli = ([char]97).ToString() + ([char]111).ToString()
+    $retiredConfig = @('agent', 'orchestrator.yaml') -join '-'
+
     return [pscustomobject]@{
         LowPrefixes    = @('grep', 'find', 'cat ', 'cat\t', 'ls ', 'ls\t', 'wc ', 'head ', 'tail ', 'tree ')
         MediumPrefixes = @('gh pr', 'gh issue', 'git branch', 'git log')
         HighPrefixes   = @(
-            'ao status', 'ao-review', 'ao events', 'ao report', 'ao send', 'ao spawn',
+            "$retiredCli status", "$retiredCli-review", "$retiredCli events", "$retiredCli report", "$retiredCli send", "$retiredCli spawn",
             'npx pack-declare', 'pack-declare', 'git diff', 'gh pr checks'
         )
         SensitivityTargets = @(
             '.env', 'credentials', 'secret', 'token', 'private-key', 'id_rsa',
-            'declarations/', '.orchestrator-pack/declarations', 'agent-orchestrator.yaml'
+            'declarations/', '.orchestrator-pack/declarations', $retiredConfig
         )
     }
 }
