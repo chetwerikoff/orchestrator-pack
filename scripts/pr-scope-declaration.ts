@@ -46,6 +46,10 @@ export const REPOSITORY_ALLOWED_ROOTS = [
   'scripts/**',
   'tests/external-output-references/**',
   'tests/fixtures/pack-gpt-browser-turn-harness.mjs',
+  'tests/powershell/Issue748.RefreshConcurrency.Tests.ps1',
+  'tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1',
+  'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1',
+  'tests/powershell/Lint-SelfArchitect.Tests.ps1',
   'plugins/**',
   'prompts/**',
   'docs/declarations/**',
@@ -54,6 +58,7 @@ export const REPOSITORY_ALLOWED_ROOTS = [
   'docs/**',
   '.github/workflows/**',
   'README.md',
+  'agent-orchestrator.yaml.example',
   'package.json',
   'package-lock.json',
 ] as const;
