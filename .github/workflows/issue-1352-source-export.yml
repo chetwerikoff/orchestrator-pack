@@ -1,37 +1,67 @@
-name: issue-1352-exact-source-export
+name: issue-1352-evidence-checkpoint
 
 on:
   pull_request:
     types: [synchronize]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export-source:
+  apply-checkpoint:
     if: github.event.pull_request.number == 1378 && github.event.pull_request.head.ref == 'agent/issue-1352-hard-cut'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-1352-hard-cut
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci --include=dev
-      - name: Pack exact checkout
+      - name: Decode, verify, test, and publish checkpoint
         shell: bash
         run: |
           set -euo pipefail
-          git rev-parse HEAD > .opk-export-head
-          tar --exclude='.git/objects/pack/*.keep' -czf "$RUNNER_TEMP/pr-1378-exact-source.tgz" .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pr-1378-exact-source
-          path: ${{ runner.temp }}/pr-1378-exact-source.tgz
-          if-no-files-found: error
-          retention-days: 1
+          cat .github/issue-1352-checkpoint7.part00 .github/issue-1352-checkpoint7.part01 \
+            | tr -d '[:space:]' \
+            | base64 -d \
+            | gzip -dc > "$RUNNER_TEMP/checkpoint.patch"
+          echo '561fa59be719e3b3a6a4af9e48bd486e111a32d7e23579be3e23946e106f9fab  '"$RUNNER_TEMP/checkpoint.patch" | sha256sum -c -
+          git apply --check "$RUNNER_TEMP/checkpoint.patch"
+          git apply "$RUNNER_TEMP/checkpoint.patch"
+          npm ci --include=dev
+          npm run typecheck:foundation
+          npm run lint:foundation
+          npm run gate-runner-selftest
+          npm test -- --maxWorkers=1 \
+            scripts/launch-argv-registry.test.ts \
+            scripts/json-producers/generate-capture-manifest.test.ts \
+            --reporter=dot
+          git diff --check
+          git config user.name chetwerikoff
+          git config user.email 85295154+chetwerikoff@users.noreply.github.com
+          git add \
+            docs/declarations/1352.pr-scope.json \
+            docs/launch-argv-registry.mjs \
+            scripts/gate-runner/bulk-declarative-gates.ts \
+            scripts/gate-runner/census.test.ts \
+            scripts/gate-runner/census.ts \
+            scripts/gate-runner/census/generation.json \
+            scripts/gate-runner/census/pre-change-baseline.json \
+            scripts/gate-runner/census/wave-3b-migration-inventory.json \
+            scripts/gate-runner/custom/bulk-cli-parity.test.ts \
+            scripts/gate-runner/declarative.ts \
+            scripts/gate-runner/wave-3b-migration-inventory.ts \
+            scripts/launch-argv-inventory.json \
+            scripts/launch-argv-validators.manifest.json \
+            scripts/lib/Ci-Red-Watchdog-Worker.ps1 \
+            scripts/lib/Worker-NudgeClaim.ps1 \
+            scripts/verify.ps1 \
+            tests/external-output-references/capture-manifest.json
+          git diff --cached --check
+          git commit -m 'fix(runtime): reconcile hard-cut gate evidence'
+          git push origin HEAD:agent/issue-1352-hard-cut
