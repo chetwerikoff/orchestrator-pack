@@ -3,6 +3,7 @@
   "issue_number": 1386,
   "declared_paths": [
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts"
   ],
   "denylist": [
