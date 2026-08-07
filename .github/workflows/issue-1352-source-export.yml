@@ -31,7 +31,7 @@ jobs:
           node --experimental-strip-types scripts/toolchain/check-ts-policy.ts --write-baseline
           npm run typecheck:foundation
           node --experimental-strip-types scripts/toolchain/check-ts-policy.ts
-          npx vitest run --maxWorkers=1 plugins/codex-pr-reviewer/tests/reviewer-budget.test.ts scripts/pr-session-binding-cache.test.ts --reporter=dot
+          npm test -- --maxWorkers=1 plugins/codex-pr-reviewer/tests/reviewer-budget.test.ts scripts/pr-session-binding-cache.test.ts --reporter=dot
           git diff --check
           git config user.name chetwerikoff
           git config user.email 85295154+chetwerikoff@users.noreply.github.com
