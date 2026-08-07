@@ -11,31 +11,147 @@ jobs:
   apply-checkpoint:
     if: github.event.pull_request.number == 1378 && github.event.pull_request.head.ref == 'agent/issue-1352-hard-cut'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-1352-hard-cut
           fetch-depth: 0
           persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
       - name: Apply verified runtime cutover checkpoint
         shell: bash
         run: |
           set -euo pipefail
-          if grep -q 'resolveDefaultProjectId' scripts/lib/reverify-bound-issue-snapshot.ts; then
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              if old in text:
+                  target.write_text(text.replace(old, new, 1), encoding='utf-8')
+                  return
+              if new not in text:
+                  raise SystemExit(f'missing expected text in {path}: {old!r}')
+
+          def replace_all(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              if old in text:
+                  target.write_text(text.replace(old, new), encoding='utf-8')
+                  return
+              if new not in text:
+                  raise SystemExit(f'missing expected text in {path}: {old!r}')
+
+          snapshot = 'scripts/lib/reverify-bound-issue-snapshot.ts'
+          replace_once(snapshot,
+              "import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';\nimport { dirname, join, resolve } from 'node:path';",
+              "import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';\nimport { homedir } from 'node:os';\nimport { dirname, join, resolve } from 'node:path';")
+          replace_once(snapshot, "import { getAoProjectDir } from '../../docs/review-run-liveness.mjs';\n", '')
+          replace_all(snapshot, 'resolveDefaultAoProjectId', 'resolveDefaultProjectId')
+          replace_once(snapshot,
+              "  return (env.AO_PROJECT_ID ?? env.AO_PROJECT ?? 'orchestrator-pack').trim() || 'orchestrator-pack';",
+              "  return (env.OPK_PROJECT_ID ?? 'orchestrator-pack').trim() || 'orchestrator-pack';")
+          replace_once(snapshot,
+              "  return join(getAoProjectDir(projectId, options.stateBaseDir), BOUND_ISSUE_SNAPSHOT_STORE_REL);",
+              "  const baseDir = options.stateBaseDir ?? process.env.OPK_BASE_DIR?.trim() ?? join(homedir(), '.orchestrator-pack');\n  return join(baseDir, 'projects', projectId.trim() || 'orchestrator-pack', BOUND_ISSUE_SNAPSHOT_STORE_REL);")
+
+          for path in (
+              'scripts/bound-issue-snapshot-cli.ts',
+              'scripts/invoke-contract-evidence-reverify.ts',
+              'scripts/invoke-reviewer-contract-mapping.ts',
+          ):
+              replace_all(path, 'resolveDefaultAoProjectId', 'resolveDefaultProjectId')
+              replace_all(path, 'AO project id (default: AO_PROJECT_ID or orchestrator-pack)', 'pack project id (default: OPK_PROJECT_ID or orchestrator-pack)')
+              replace_all(path, 'AO project id for bound issue snapshot store', 'pack project id for bound issue snapshot store')
+
+          for path in (
+              'scripts/lib/pack-review-delivery.ts',
+              'scripts/pr2-foundation/worker-notification-target.ts',
+              'scripts/pr2-foundation/worker-nudge-claim-store.ts',
+          ):
+              replace_all(path, "'.agent-orchestrator'", "'.orchestrator-pack'")
+
+          target = 'scripts/pr2-foundation/worker-notification-target.ts'
+          replace_all(target, 'process.env.AO_APP_STATE_PATH', 'process.env.OPK_APP_STATE_PATH')
+          replace_all(target, "'ao_session_list_failed'", "'runtime_worker_list_failed'")
+          replace_all(target, "'ao_session_list'", "'runtime_worker_list'")
+
+          declaration_path = Path('docs/declarations/1352.pr-scope.json')
+          declaration = json.loads(declaration_path.read_text(encoding='utf-8'))
+          additions = [
+              '.cursor/skills/change-orchestrator-runtime/SKILL.md',
+              'CLAUDE.md',
+              'docs/orchestrator-wake-runbook.md',
+              'docs/review-bulk-send-diagnose.mjs',
+              'docs/review-mechanical-cli.mjs',
+              'docs/review-run-liveness.d.mts',
+              'docs/ubuntu-setup-runbook.md',
+              'scripts/bootstrap.ps1',
+              'scripts/bound-issue-snapshot-cli.ts',
+              'scripts/check-gh-inventory-static.ps1',
+              'scripts/check-operator-adoption-example.ps1',
+              'scripts/invoke-contract-evidence-reverify.ts',
+              'scripts/invoke-reviewer-contract-mapping.ts',
+              'scripts/lib/Get-OrchestratorWorktreeHygiene.ps1',
+              'scripts/lib/Get-OrchestratorYamlRules.ps1',
+              'scripts/lib/Get-PackReviewCommand.ps1',
+              'scripts/lib/Get-ReactionMessagesFromYaml.ps1',
+              'scripts/lib/OpkVitestChildProcessEnv.ps1',
+              'scripts/lib/Review-RunLiveness.ps1',
+              'scripts/pr-scope-check.ps1',
+              'scripts/pr2-foundation/terminalized/review-bulk-send-diagnose.ts',
+              'scripts/review-wake-trigger.test.ts',
+              'scripts/run-vitest-with-harness.mjs',
+              'scripts/verify.ps1',
+          ]
+          declared = declaration['declared_paths']
+          for path in additions:
+              if path not in declared:
+                  declared.append(path)
+          declaration_path.write_text(json.dumps(declaration, indent=2) + '\n', encoding='utf-8')
+          PY
+
+          npm ci --include=dev
+          npm run typecheck:foundation
+          node --experimental-strip-types scripts/runtime-retirement/retired-surface-guard.ts > "$RUNNER_TEMP/retired-scan.json" || true
+          node - <<'NODE'
+          const report = require(process.env.RUNNER_TEMP + '/retired-scan.json');
+          const changed = new Set([
+            'scripts/bound-issue-snapshot-cli.ts',
+            'scripts/invoke-contract-evidence-reverify.ts',
+            'scripts/invoke-reviewer-contract-mapping.ts',
+            'scripts/lib/pack-review-delivery.ts',
+            'scripts/lib/reverify-bound-issue-snapshot.ts',
+            'scripts/pr2-foundation/worker-notification-target.ts',
+            'scripts/pr2-foundation/worker-nudge-claim-store.ts',
+          ]);
+          const violations = report.violations.filter((row) => changed.has(row.path));
+          if (violations.length) {
+            console.error(JSON.stringify(violations, null, 2));
+            process.exit(1);
+          }
+          NODE
+
+          git config user.name chetwerikoff
+          git config user.email 85295154+chetwerikoff@users.noreply.github.com
+          git add docs/declarations/1352.pr-scope.json \
+            scripts/bound-issue-snapshot-cli.ts \
+            scripts/invoke-contract-evidence-reverify.ts \
+            scripts/invoke-reviewer-contract-mapping.ts \
+            scripts/lib/pack-review-delivery.ts \
+            scripts/lib/reverify-bound-issue-snapshot.ts \
+            scripts/pr2-foundation/worker-notification-target.ts \
+            scripts/pr2-foundation/worker-nudge-claim-store.ts
+          git diff --cached --check
+          if git diff --cached --quiet; then
             echo 'checkpoint already applied'
             exit 0
           fi
-          awk '/checkpoint\.b64.*PATCH/{capture=1; next} capture && /^[[:space:]]*PATCH[[:space:]]*$/{exit} capture{print}' .github/workflows/issue-1352-source-export.yml \
-            | tr -d '[:space:]' \
-            | base64 -d > "$RUNNER_TEMP/checkpoint.patch"
-          git apply --check "$RUNNER_TEMP/checkpoint.patch"
-          git apply "$RUNNER_TEMP/checkpoint.patch"
-          npm ci --include=dev
-          npm run typecheck:foundation
-          git config user.name chetwerikoff
-          git config user.email 85295154+chetwerikoff@users.noreply.github.com
-          git add docs/declarations/1352.pr-scope.json scripts/bound-issue-snapshot-cli.ts scripts/invoke-contract-evidence-reverify.ts scripts/invoke-reviewer-contract-mapping.ts scripts/lib/pack-review-delivery.ts scripts/lib/reverify-bound-issue-snapshot.ts scripts/pr2-foundation/worker-notification-target.ts scripts/pr2-foundation/worker-nudge-claim-store.ts
-          git diff --cached --check
           git commit -m 'fix(runtime): finish pack-owned state cutover'
           git push origin HEAD:agent/issue-1352-hard-cut
