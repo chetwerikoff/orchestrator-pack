@@ -44,3 +44,12 @@ replace_exact(
     "      if (source === runtimeNeutralFoundationSource) {\n        expect(text, source).toContain('The pack review producer/store is the only active authority.');\n        expect(text, source).not.toContain('ao-0-10-review-api');\n      } else {\n        expect(text, source).toMatch(/^\\/\\/ Issue #923 foundation-terminalized:/);\n      }",
     "      if (runtimeNeutralFoundationSources.has(source)) {\n        if (source === 'docs/review-bulk-send-diagnose.mjs') {\n          expect(text, source).toContain('The pack review producer/store is the only active authority.');\n          expect(text, source).not.toContain('ao-0-10-review-api');\n        } else {\n          expect(text, source).toContain('export const WORKER_REPORT_STORE_SCHEMA_VERSION = 3;');\n          expect(text, source).toContain('OPK_WORKER_REPORT_STORE');\n          expect(text, source).not.toContain('AO_WORKER_REPORT_STORE');\n        }\n      } else {\n        expect(text, source).toMatch(/^\\/\\/ Issue #923 foundation-terminalized:/);\n      }",
 )
+
+# review-bulk-send-diagnose.ts itself is no longer a dormant historical port;
+# it is the surviving runtime-neutral TS owner. Other terminalized targets keep
+# the exact historical blob-binding assertion.
+replace_exact(
+    "scripts/pr2-foundation/terminalized-port.test.ts",
+    "      const text = readFileSync(path.resolve(target), 'utf8');\n      expect(text, target).toContain(`Ported from ${source} blob `);\n      expect(text, target).not.toContain(`from './${path.basename(source)}'`);",
+    "      const text = readFileSync(path.resolve(target), 'utf8');\n      if (source === 'docs/review-bulk-send-diagnose.mjs') {\n        expect(text, target).toContain('The pack review producer/store is the only active authority.');\n        expect(text, target).not.toContain('ao-0-10-review-api');\n      } else {\n        expect(text, target).toContain(`Ported from ${source} blob `);\n      }\n      expect(text, target).not.toContain(`from './${path.basename(source)}'`);",
+)
