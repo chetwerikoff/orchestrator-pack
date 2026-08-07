@@ -155,6 +155,10 @@ export interface PackReviewStoreOptions {
   now?: Date;
 }
 
+interface ParsePackReviewRecordOptions {
+  allowHistoricalSyntheticAggregate?: boolean;
+}
+
 export function hasValidPackReviewJournalOutcome(record: PackReviewRunRecord): boolean {
   const journal = record.journalOutcome;
   return Boolean(
@@ -820,6 +824,53 @@ function hasNonHarvestIncompleteGptSource(round: PackReviewGptRoundRecord): bool
   });
 }
 
+function deriveLegacySyntheticGptRoundAggregate(
+  round: PackReviewGptRoundRecord,
+  path: string,
+): PackReviewGptAggregate {
+  assertCompleteGptRound(round, path);
+  const findings: unknown[] = [];
+  for (const slot of round.sourceSlots) {
+    if (COMPLETE_GPT_TERMINAL_CLASSES.has(slot.terminalClass ?? '')) {
+      const payload = slot.payload as { findings: Array<Record<string, unknown>> };
+      findings.push(...payload.findings.map((finding) => ({
+        ...finding,
+        sourceSlotId: slot.slotId,
+      })));
+      continue;
+    }
+    findings.push({
+      title: `GPT source ${slot.slotId} did not complete`,
+      body: `The frozen GPT source slot settled as ${slot.terminalClass ?? 'non-complete'}; the round cannot be clean.`,
+      severity: 'blocking',
+      sourceSlotId: slot.slotId,
+    });
+  }
+  return {
+    reviewVerdict: findings.length > 0 ? 'findings' : 'clean',
+    findingCount: findings.length,
+    findings,
+  };
+}
+
+function isHistoricalSyntheticGptAggregate(
+  round: PackReviewGptRoundRecord,
+  aggregate: {
+    reviewVerdict: unknown;
+    findingCount: unknown;
+    findings: unknown;
+  },
+  path: string,
+): boolean {
+  if (!hasNonHarvestIncompleteGptSource(round)) return false;
+  if (round.sourceSlots.some((slot) => HARVEST_GPT_TERMINAL_CLASSES.has(slot.terminalClass ?? ''))) return false;
+  const expected = deriveLegacySyntheticGptRoundAggregate(round, path);
+  return aggregate.reviewVerdict === expected.reviewVerdict
+    && aggregate.findingCount === expected.findingCount
+    && Array.isArray(aggregate.findings)
+    && isDeepStrictEqual(aggregate.findings, expected.findings);
+}
+
 function assertGptRoundAggregate(
   round: PackReviewGptRoundRecord,
   aggregate: {
@@ -829,6 +880,11 @@ function assertGptRoundAggregate(
   },
   path: string,
 ): void {
+  if (hasNonHarvestIncompleteGptSource(round)) {
+    throw new Error(
+      `corrupt pack review run record at ${path}: reviewVerdict does not match terminal source census`,
+    );
+  }
   const expected = deriveCompleteGptRoundAggregate(round, path);
   if (aggregate.reviewVerdict !== expected.reviewVerdict) {
     throw new Error(
@@ -1051,7 +1107,11 @@ function recordPath(storeRoot: string, runId: string): string {
   return join(recordsDir(storeRoot), `${runId}.json`);
 }
 
-function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
+function parseRecord(
+  value: unknown,
+  path = '',
+  options: ParsePackReviewRecordOptions = {},
+): PackReviewRunRecord {
   const raw = asObject(value);
   const schemaVersion = Number(raw.schemaVersion);
   if (schemaVersion !== PACK_REVIEW_RUN_STORE_SCHEMA_VERSION) {
@@ -1092,19 +1152,25 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
   const deliveryOutcomes = raw.deliveryOutcomes && typeof raw.deliveryOutcomes === 'object' && !Array.isArray(raw.deliveryOutcomes)
     ? raw.deliveryOutcomes as Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>
     : {};
+  let authoritativeReviewVerdict = reviewVerdict;
+  let authoritativeFindingCount = findingCount;
+  let authoritativeFindings = findings;
   if (reviewRound && (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(status)
     || reviewVerdict !== undefined
     || journalOutcome?.state === 'persisted')) {
-    if (hasNonHarvestIncompleteGptSource(reviewRound)) {
-      throw new Error(
-        `corrupt pack review run record at ${path || '<record>'}: reviewVerdict does not match terminal source census`,
-      );
-    }
-    assertGptRoundAggregate(reviewRound, {
+    const aggregate = {
       reviewVerdict: raw.reviewVerdict,
       findingCount: raw.findingCount,
       findings: raw.findings,
-    }, path || '<record>');
+    };
+    if (options.allowHistoricalSyntheticAggregate
+      && isHistoricalSyntheticGptAggregate(reviewRound, aggregate, path || '<record>')) {
+      authoritativeReviewVerdict = undefined;
+      authoritativeFindingCount = undefined;
+      authoritativeFindings = [];
+    } else {
+      assertGptRoundAggregate(reviewRound, aggregate, path || '<record>');
+    }
   }
   return {
     ...(raw as unknown as PackReviewRunRecord),
@@ -1131,13 +1197,17 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
     sameKeyOrder: raw.sameKeyOrder === undefined
       ? undefined
       : requiredPositiveInteger(raw.sameKeyOrder, 'sameKeyOrder', path),
-    reviewVerdict,
-    findingCount,
-    findings,
+    reviewVerdict: authoritativeReviewVerdict,
+    findingCount: authoritativeFindingCount,
+    findings: authoritativeFindings,
     journalOutcome,
     deliveryOutcomes,
     canonicalRepository,
   };
+}
+
+function parsePersistedRecord(value: unknown, path: string): PackReviewRunRecord {
+  return parseRecord(value, path, { allowHistoricalSyntheticAggregate: true });
 }
 
 function readRecordsUnlocked(storeRoot: string): PackReviewRunRecord[] {
@@ -1152,7 +1222,7 @@ function readRecordsUnlocked(storeRoot: string): PackReviewRunRecord[] {
     } catch (error) {
       throw new Error(`corrupt pack review run record at ${path}: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const record = parseRecord(parsed, path);
+    const record = parsePersistedRecord(parsed, path);
     if (basename(path, '.json') !== record.id) throw new Error(`corrupt pack review run record at ${path}: filename/id mismatch`);
     if (ids.has(record.id)) throw new Error(`ambiguous pack review run store: duplicate run id '${record.id}'`);
     ids.add(record.id);
@@ -1211,7 +1281,7 @@ export function terminalizePackReviewStaleRun(
   const storeRoot = resolvePackReviewRunStoreRoot(options);
   const recordPathValue = recordPath(storeRoot, runId);
   if (!existsSync(recordPathValue)) throw new Error(`pack review run not found: ${runId}`);
-  const existing = parseRecord(JSON.parse(readFileSync(recordPathValue, 'utf8')), recordPathValue);
+  const existing = parsePersistedRecord(JSON.parse(readFileSync(recordPathValue, 'utf8')), recordPathValue);
   if (isPackReviewStaleTerminalRun(existing)) {
     return { changed: false, run: existing };
   }
@@ -1390,7 +1460,7 @@ export function getPackReviewRun(runId: string, options: PackReviewStoreOptions 
   return withStoreLock(storeRoot, () => {
     const path = recordPath(storeRoot, runId);
     if (!existsSync(path)) return null;
-    return parseRecord(JSON.parse(readFileSync(path, 'utf8')), path);
+    return parsePersistedRecord(JSON.parse(readFileSync(path, 'utf8')), path);
   });
 }
 
@@ -1407,7 +1477,7 @@ export function validatePersistedPackReviewGptAggregate(
   return withStoreLock(storeRoot, () => {
     const path = recordPath(storeRoot, runId);
     if (!existsSync(path)) throw new Error(`pack review run not found: ${runId}`);
-    const record = parseRecord(JSON.parse(readFileSync(path, 'utf8')), path);
+    const record = parsePersistedRecord(JSON.parse(readFileSync(path, 'utf8')), path);
     if (!record.reviewRound) {
       throw new Error(`pack review run ${runId} has no persisted GPT round`);
     }
@@ -1580,7 +1650,7 @@ export function updatePackReviewRun(
   return withStoreLock(storeRoot, () => {
     const path = recordPath(storeRoot, runId);
     if (!existsSync(path)) throw new Error(`pack review run not found: ${runId}`);
-    const existing = parseRecord(JSON.parse(readFileSync(path, 'utf8')), path);
+    const existing = parsePersistedRecord(JSON.parse(readFileSync(path, 'utf8')), path);
     const updatedAt = (options.now ?? new Date()).toISOString();
     const next = buildUpdatedPackReviewRun(existing, fields, path, updatedAt);
     writeRecordUnlocked(storeRoot, next);
@@ -1600,7 +1670,7 @@ export function updatePackReviewRunIf(
     if (!predicate(records)) return null;
     const path = recordPath(storeRoot, runId);
     if (!existsSync(path)) throw new Error(`pack review run not found: ${runId}`);
-    const existing = parseRecord(JSON.parse(readFileSync(path, 'utf8')), path);
+    const existing = parsePersistedRecord(JSON.parse(readFileSync(path, 'utf8')), path);
     const updatedAt = (options.now ?? new Date()).toISOString();
     const nextFields = typeof fields === 'function' ? fields(existing) : fields;
     const next = buildUpdatedPackReviewRun(existing, nextFields, path, updatedAt);
