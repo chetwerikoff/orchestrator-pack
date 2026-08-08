@@ -1,12 +1,17 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadHistoricalDispositionPaths, scanRetiredRuntimeSurfaces } from './retired-surface-guard.ts';
 
 const roots: string[] = [];
+const canonicalPatterns = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), '../json-producers/retired-runtime-surfaces.json'),
+  'utf8',
+);
 afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
 
 function fixture(text: string, path = 'scripts/active.ts'): string {
@@ -14,11 +19,7 @@ function fixture(text: string, path = 'scripts/active.ts'): string {
   roots.push(root);
   const patterns = join(root, 'scripts/json-producers/retired-runtime-surfaces.json');
   mkdirSync(dirname(patterns), { recursive: true });
-  writeFileSync(patterns, JSON.stringify({ version: 1, surfaces: [
-    { id: 'selector', sourceCommandPattern: '\\b(?:AO|ORCA)_[A-Z0-9_]+\\b', pathPattern: '$a', reason: 'retired', owningReference: '#1352' },
-    { id: 'command', sourceCommandPattern: '(?:^|\\s)ao\\s+(?:status|send)(?=\\s|$)', pathPattern: '(^|/)scripts/ao(?:$|[-./])', reason: 'retired', owningReference: '#1352' },
-    { id: 'adapter', sourceCommandPattern: '\\b(?:Invoke|Get|Write|Resolve|Test|Install)-Ao[A-Za-z0-9_-]*\\b|\\bfunction\\s+(?:global:)?ao\\b', pathPattern: '$a', reason: 'retired', owningReference: '#1352' },
-  ] }));
+  writeFileSync(patterns, canonicalPatterns);
   const target = join(root, path);
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, text);
@@ -36,13 +37,25 @@ describe('runtime retirement closed-world scanner', () => {
   });
 
   it.each([
-    ['selector', 'const value = process.env.AO_SESSION_ID;'],
-    ['command', 'ao status --json'],
-    ['path', 'neutral', 'scripts/ao-review.ts'],
-    ['named adapter shim', 'function Install-AoLivenessShim {}'],
-    ['global command shim', 'function global:ao { "retired" }'],
-  ])('rejects injected %s surface', (_name, text, path = 'scripts/active.ts') => {
-    expect(scanRetiredRuntimeSurfaces({ repoRoot: fixture(text, path) }).violations).toHaveLength(1);
+    ['env authority', 'const value = process.env.AO_SESSION_ID;', 'scripts/active.ts', 'legacy-runtime-selector'],
+    ['status command', 'ao status --json', 'scripts/active.ts', 'legacy-runtime-command'],
+    ['spawn command', 'ao spawn worker --json', 'scripts/active.ts', 'legacy-runtime-command'],
+    ['orchestrator command', 'ao orchestrator ls --json', 'scripts/active.ts', 'legacy-runtime-command'],
+    ['top-level option', 'ao --version', 'scripts/active.ts', 'legacy-runtime-command'],
+    ['active markdown prescription', 'Run `ao start --json` before continuing.', 'docs/runbook.md', 'legacy-runtime-command'],
+    ['daemon route', 'fetch("http://localhost:3000/api/v1/sessions/current")', 'scripts/active.ts', 'legacy-daemon-http'],
+    ['legacy package', 'import "@orchestrator-pack/ao-scope-guard";', 'scripts/active.ts', 'legacy-plugin-identity'],
+    ['legacy bin', 'const cmd = "ao-codex-review";', 'scripts/active.ts', 'legacy-plugin-identity'],
+    ['legacy plugin path', 'neutral', 'plugins/ao-scope-guard/README.md', 'legacy-plugin-identity'],
+    ['legacy config', 'const config = "agent-orchestrator.yaml";', 'scripts/active.ts', 'legacy-config-state-root'],
+    ['legacy state root', 'const state = ".ao/state.json";', 'scripts/active.ts', 'legacy-config-state-root'],
+    ['compatibility alias', 'const alias = "OPK_REAL_RUNTIME";', 'scripts/active.ts', 'compatibility-alias'],
+    ['named adapter shim', 'function Install-AoLivenessShim {}', 'scripts/active.ts', 'legacy-adapter-symbol'],
+    ['global command shim', 'function global:ao { "retired" }', 'scripts/active.ts', 'legacy-adapter-symbol'],
+    ['retired script path', 'neutral', 'scripts/ao-review.ts', 'legacy-runtime-command'],
+  ])('rejects injected %s surface', (_name, text, path, surfaceId) => {
+    const result = scanRetiredRuntimeSurfaces({ repoRoot: fixture(text, path) });
+    expect(result.violations.some((entry) => entry.surfaceId === surfaceId)).toBe(true);
   });
 
   it('excludes immutable history but not active fixtures', () => {
