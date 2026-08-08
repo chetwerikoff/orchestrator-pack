@@ -17,7 +17,7 @@
     },
     {
       "id": "legacy-runtime-command",
-      "sourceCommandPattern": "(?:^|[\\s`\\\"'])ao\\s+(?:--?[A-Za-z0-9][A-Za-z0-9-]*|[A-Za-z][A-Za-z0-9-]*)(?=\\s|$)",
+      "sourceCommandPattern": "(?:^|[\\s`\\\"'])ao\\s+(?:status|session|events|project|start|stop|send|review|report|acknowledge|spawn|orchestrator)(?=\\s|$)|['\\\"]ao['\\\"]\\s*,\\s*\\[\\s*['\\\"](?:status|session|events|project|start|stop|send|review|report|acknowledge|spawn|orchestrator)['\\\"]",
       "pathPattern": "(^|/)scripts/ao(?:$|[-./])",
       "reason": "No executable retired-runtime command remains.",
       "owningReference": "Issue #1352 AO-01..AO-05"
