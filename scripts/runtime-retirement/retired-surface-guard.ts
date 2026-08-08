@@ -51,7 +51,7 @@ const EXCLUDED_PREFIXES = [
   'node_modules/',
   'vendor/',
   'packages/core/',
-  'tests/',
+  'tests/external-output-references/',
   'docs/issues_drafts/',
   'docs/declarations/',
   'docs/archive/',
@@ -217,12 +217,3 @@ export function scanRetiredRuntimeSurfaces(input: {
     || left.line - right.line || left.surfaceId.localeCompare(right.surfaceId) || left.match.localeCompare(right.match));
   return { scannedFileCount: scannedPaths.length, scannedPaths, excludedPaths, violations };
 }
-
-function main(): void {
-  const repoRoot = resolve(process.cwd());
-  const result = scanRetiredRuntimeSurfaces({ repoRoot });
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  if (result.violations.length > 0) process.exitCode = 1;
-}
-
-if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) main();
