@@ -95,8 +95,8 @@ function runnerEnv(root: string, overrides: NodeJS.ProcessEnv = {}): NodeJS.Proc
     PR_NUMBER: String(PR_NUMBER),
     GITHUB_REPOSITORY: REPOSITORY,
     PR_SCOPE_REPO_ROOT: root,
-    PR_BASE_SHA: 'base',
-    PR_HEAD_SHA: 'head',
+    PR_BASE_SHA: '0'.repeat(40),
+    PR_HEAD_SHA: '1'.repeat(40),
     PR_HEAD_REPO_FORK: 'false',
     PR_HEAD_REF: 'feature/test',
     PR_HEAD_REPO_SAME: 'true',
@@ -243,6 +243,33 @@ describe('trusted PR scope runner', () => {
       expect(fixture.issueReads()).toBe(0);
     },
   );
+
+  it('fails closed on malformed repository binding before decision reads', () => {
+    const root = makeRepo();
+    const comments: string[] = [];
+    const deps: PrScopeRunnerDependencies = {
+      readPrBody: () => {
+        throw new Error('malformed binding must fail before PR read');
+      },
+      readIssueBody: () => {
+        throw new Error('malformed binding must fail before Issue read');
+      },
+      publishComment: (_repo, _pr, body) => {
+        comments.push(body);
+        return { ok: true };
+      },
+      acquireDiff: () => {
+        throw new Error('malformed binding must fail before diff acquisition');
+      },
+    };
+    const outcome = runPrScopeRunner(
+      runnerEnv(root, { PR_HEAD_REPO_FORK: 'not-a-boolean' }),
+      deps,
+    );
+    expect(outcome.result).toMatchObject({ ok: false, reason: 'runner_configuration' });
+    expect(outcome.exitCode).toBe(2);
+    expect(comments).toHaveLength(1);
+  });
 
   it('keeps linked Issue read failure fail-closed and degraded input inert', () => {
     const root = makeRepo(true);
