@@ -1,0 +1,34 @@
+name: Issue 1352 test scan diagnostic
+
+on:
+  push:
+    branches:
+      - agent/issue-1352-hard-cut
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-1352-hard-cut
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - name: Scan retired runtime surfaces including active tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --experimental-strip-types --input-type=module <<'NODE'
+          import { scanRetiredRuntimeSurfaces } from './scripts/runtime-retirement/retired-surface-guard.ts';
+          const result = scanRetiredRuntimeSurfaces({ repoRoot: process.cwd() });
+          console.log(JSON.stringify({
+            scannedFileCount: result.scannedFileCount,
+            violationCount: result.violations.length,
+            violations: result.violations,
+          }, null, 2));
+          if (result.violations.length > 0) process.exit(1);
+          NODE
