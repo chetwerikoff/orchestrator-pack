@@ -1,0 +1,70 @@
+name: Issue 1352 scope declaration regenerate
+
+on:
+  push:
+    branches:
+      - agent/issue-1352-hard-cut
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/issue-1352-hard-cut
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Regenerate exact declaration and push
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin main
+          $paths = @(
+            git diff --name-only --no-renames origin/main...HEAD |
+              ForEach-Object { [string]$_ } |
+              Where-Object { $_ -ne '' } |
+              Sort-Object -Unique
+          )
+          if ($paths.Count -eq 0) {
+            throw 'Issue 1352 scope regeneration found an empty diff'
+          }
+          $joined = $paths -join ','
+          node --experimental-strip-types scripts/pr-scope-declaration.ts `
+            --issue 1352 `
+            --declared-paths $joined `
+            --output docs/declarations/1352.pr-scope.json
+          if ($LASTEXITCODE -ne 0) {
+            throw 'scope declaration producer failed'
+          }
+
+          git add -- docs/declarations/1352.pr-scope.json
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) {
+            throw 'generated declaration failed git diff --check'
+          }
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host 'Scope declaration already exact; no commit needed.'
+            exit 0
+          }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'GH-1352: regenerate exact scope declaration'
+          git push origin HEAD:agent/issue-1352-hard-cut
