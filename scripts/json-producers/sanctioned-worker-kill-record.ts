@@ -146,7 +146,7 @@ export function appendSanctionedWorkerKillRecord(
 }
 
 export function defaultSanctionedWorkerKillPath(env: NodeJS.ProcessEnv = process.env): string {
-  if (env.AO_SANCTIONED_WORKER_KILL_RECORD_PATH) return env.AO_SANCTIONED_WORKER_KILL_RECORD_PATH;
+  if (env.OPK_SANCTIONED_WORKER_KILL_RECORD_PATH) return env.OPK_SANCTIONED_WORKER_KILL_RECORD_PATH;
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
   return join(repoRoot, 'docs', 'state', 'sanctioned-worker-kills.json');
 }

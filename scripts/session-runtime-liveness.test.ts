@@ -274,7 +274,7 @@ describe('worker message submit (isSessionAlive)', () => {
       },
       session,
       tracking: { deliveries: {}, audit: [] },
-      aoEvents: [],
+      runtimeEvents: [],
       floodActiveSessions: {},
       nowMs: 2_000,
     });

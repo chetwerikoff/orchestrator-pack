@@ -116,11 +116,9 @@ describe('review-lane declaration and blast-radius routing', () => {
     for (const path of [
       'vendor/example.ts',
       'packages/core/example.ts',
-      '.ao/state.json',
+      '.orchestrator-pack/state.json',
       '.github/workflows/check.yml',
       'prompts/example.md',
-      'agent-orchestrator.yaml',
-      'agent-orchestrator.local.yaml',
     ]) {
       expect(normalizeReviewLaneDeclaration(declaration([
         { kind: 'exact', path, behaviors: ['documentation-only'] },
@@ -156,7 +154,6 @@ describe('review-lane declaration and blast-radius routing', () => {
       'scripts/vitest-ci-lanes.config.json',
       'scripts/lib/vitest-pre-topology-measurement.mjs',
       'scripts/vitest-runtime-history.json',
-      'agent-orchestrator.yaml.example',
       'docs/migration_notes.md',
       'scripts/lib/any-new-helper.ts',
     ];

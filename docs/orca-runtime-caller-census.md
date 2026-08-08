@@ -1,41 +1,47 @@
-# Orca runtime caller census (#1248)
+# Orca runtime caller census
 
-Source revision: `#1248-r14`, 2026-08-05. Machine-readable authority: `scripts/runtime/caller-census.ts`.
+Machine-readable authority: `scripts/runtime/caller-census.ts`.
 
 ## Classification rule
 
-A call belongs on `RuntimeAdapter` or the runtime-owner census when it controls, composes, or observes worker/runtime lifecycle: runtime selection, fleet observation, readiness, workspace selection, spawn, input dispatch, bounded output, liveness, stop, workspace removal, recovery, recovery claims, review-start claims, supervisor ownership, singleton leases, side-effect fences, or crash backoff. AO review transport, review reports, config/plugin reads, and operator daemon lifecycle remain #1250 service work.
+A call belongs on `RuntimeAdapter` or the runtime-owner census when it controls, composes, or observes worker/runtime lifecycle: runtime selection, fleet observation, readiness, workspace selection, spawn, input dispatch, bounded output, liveness, stop, workspace removal, recovery, recovery claims, review-start claims, supervisor ownership, singleton leases, side-effect fences, or crash backoff.
 
-Compatibility with AO-era callers, PowerShell bridges, old result envelopes, and fixture-only identities is not preserved. Active runtime rows finish as `use-runtime-interface` or `already-runtime-neutral`; replaced files finish as `delete-dead`. The focused test derives both direct adapter-method calls and lifecycle-owner calls from tracked production TypeScript files and rejects missing rows or operations; test-support modules and static conformance scanners that only mention owner symbols as fixture text are excluded.
+The #1352 hard cut has no deferred retired-runtime service class. Review start/list/status is owned by the pack review runner/store and TypeScript claim authority; deleted daemon/config transports are not census entries. Active runtime rows finish as `use-runtime-interface` or `already-runtime-neutral`; replaced files finish as `delete-dead`.
+
+Worktree lifecycle remains the deliberate narrower exception documented in `docs/orca-runtime-boundary.md`: Git and Orca inventory reconciliation is owned by `scripts/worktree-lifecycle/**` rather than widening `RuntimeAdapter`. Runtime-specific worktree commands and response parsing stay at that exact edge.
 
 ## Active runtime surfaces
 
 | Surface | Operations | Disposition | Result |
 |---|---|---|---|
 | `scripts/launch-watch/watch.ts` | runtime composition, readiness, list/find, read, liveness | `already-runtime-neutral` | Reference observation caller from #1245. |
-| `scripts/worker-smoke-run.ts` | runtime composition, readiness, spawn, send, read, liveness, stop, find | `use-runtime-interface` | Selected adapter, composite identity, exactly one dispatch attempt, exact-generation stop, and exact post-close presence proof. |
+| `scripts/worker-smoke-run.ts` | runtime composition, readiness, spawn, send, read, liveness, stop, find | `use-runtime-interface` | Selected adapter, exact composite identity, one delivery path, and exact post-close presence proof. |
+| `scripts/lib/worker-smoke-bounded-create.ts` | spawn, send, read, liveness, stop, find | `use-runtime-interface` | Current generation-establishment support; #1399 owns the exact Orca observation edge while worker-smoke orchestration remains RuntimeAdapter-based. |
 | `scripts/runtime/task-lifecycle.ts` | spawn, send, read, liveness, stop | `already-runtime-neutral` | Direct lifecycle caller retains exact spawned identity after ambiguous dispatch and never resends. |
 | `scripts/pr2-foundation/fleet-observer.ts` | list/find, read, liveness | `already-runtime-neutral` | Observer-only fleet census through `RuntimeAdapter`; no actuation or compatibility bridge. |
-| `scripts/pr2-foundation/scheduler.ts` | runtime composition, fleet observer | `use-runtime-interface` | Production scheduler composes the selected runtime and observer and is included in the repository-derived owner census. |
+| `scripts/pr2-foundation/scheduler.ts` | runtime composition, fleet observer | `use-runtime-interface` | Production scheduler composes the selected runtime and observer. |
 | `scripts/invoke-gated-worker-nudge.ts` | find, send | `use-runtime-interface` | Issue/PR keyed claim and journal admission before one dispatch. |
-| `scripts/lib/pack-review-worker-notification.ts` | runtime composition, find, send, side-effect fence | `use-runtime-interface` | Loads the persisted exact runtime + id + generation binding before normal or resumed delivery; `dispatch_unknown` is terminal and never resent. |
-| `scripts/pack-review-worker-notification.cases.ts` | spawn, find, send | `already-runtime-neutral` | Focused review-delivery coverage exercises exact lookup and one closed dispatch attempt. |
-| `scripts/invoke-worker-recovery.ts` | runtime composition, recovery, recovery claim, workspace remove, spawn | `use-runtime-interface` | Public entrypoint loads pre-existing pack session `runtimeHandle` authority; flags are comparison inputs and cannot mint cleanup ownership. |
-| `scripts/runtime/worker-recovery.ts` | list/find, liveness, workspace remove, spawn | `use-runtime-interface` | Revalidates exact id + generation + provenance after claim; live, unknown, or mismatched ownership blocks cleanup. |
+| `scripts/lib/pack-review-worker-notification.ts` | runtime composition, find, send, side-effect fence | `use-runtime-interface` | Loads persisted exact runtime identity; ambiguous delivery is terminal. |
+| `scripts/pack-review-worker-notification.cases.ts` | spawn, find, send | `already-runtime-neutral` | Focused review-delivery coverage. |
+| `scripts/invoke-worker-recovery.ts` | runtime composition, recovery, recovery claim, workspace remove, spawn | `use-runtime-interface` | Loads durable runtime-handle authority before cleanup/spawn. |
+| `scripts/runtime/worker-recovery.ts` | list/find, liveness, workspace remove, spawn | `use-runtime-interface` | Revalidates exact id + generation + provenance before cleanup. |
 | `scripts/orchestrator-wake-supervisor.ts` | supervisor startup | `already-runtime-neutral` | Node-only supervisor entrypoint. |
-| `scripts/lib/orchestrator-side-process-supervisor.ts` | singleton lease, crash backoff, terminal circuit | `already-runtime-neutral` | Uses TypeScript invariants and launches only the Node scheduler. |
-| `scripts/runtime/side-effect-fence.ts` | side-effect fence | `already-runtime-neutral` | Stable kernel-held lock serializes stale replacement and binds ownership to PID plus process start ticks, so PID reuse cannot wedge the fence. |
-| `scripts/runtime/crash-backoff.ts` | crash backoff, degraded rearm | `already-runtime-neutral` | Pure transition; no AO-health authority or retry scheduler. |
-| `scripts/runtime/single-instance-lease.ts` | singleton lease | `already-runtime-neutral` | Stable kernel-held lock with PID + process start ticks + generation payload. |
+| `scripts/lib/orchestrator-side-process-supervisor.ts` | singleton lease, crash backoff, terminal circuit | `already-runtime-neutral` | TypeScript invariants only; launches the Node scheduler. |
+| `scripts/runtime/side-effect-fence.ts` | side-effect fence | `already-runtime-neutral` | Kernel-held exact-owner lock. |
+| `scripts/runtime/crash-backoff.ts` | crash backoff, degraded rearm | `already-runtime-neutral` | Pure transition; no retired-runtime health authority. |
+| `scripts/runtime/single-instance-lease.ts` | singleton lease | `already-runtime-neutral` | PID/start-ticks/generation singleton ownership. |
 | `scripts/lib/review-start-claim-store.ts` | claim TOCTOU | `already-runtime-neutral` | Sole TypeScript claim lifecycle authority. |
-| `scripts/pack-review-runner.ts` | review trigger/list, claim TOCTOU | `use-runtime-interface` | Owns review-start claim lifecycle through the TypeScript authority; the non-runtime review transport itself remains #1250 work. |
-| `scripts/orchestrator-side-process-registry.json` | child selection | `already-runtime-neutral` | Contains only `pr2-scheduler` with Node runtime. |
+| `scripts/orchestrator-side-process-registry.json` | child selection | `already-runtime-neutral` | Contains only the Node scheduler child. |
+| `scripts/json-producers/worker-status-report.ts` | runtime composition, list | `use-runtime-interface` | Builds live worker status from `RuntimeAdapter.listWorkers`. |
+| `scripts/lib/operator-publication.ts` | send | `already-runtime-neutral` | Exact zero-or-one operator publication through `RuntimeAdapter.dispatchInput`. |
+| `scripts/lib/worker-degraded-ci-handoff.ts` | find, send | `already-runtime-neutral` | One exact freshness lookup before bounded publication. |
+| `scripts/runtime/runtime-cli.ts` | runtime composition, readiness, list, find | `already-runtime-neutral` | PowerShell-facing facade exposes only registered runtime operations. |
+| `scripts/pack-review-runner.ts` | review trigger/list, claim TOCTOU | `use-runtime-interface` | Pack runner/store and TypeScript claim authority own review start/list/status; no retired review service remains. |
 
 ## Deleted runtime surfaces
 
 | Deleted surface | Replacement |
 |---|---|
-| `scripts/lib/worker-smoke-bounded-create.ts` | `worker-smoke-run.ts` through `RuntimeAdapter.spawnWorker` |
 | `scripts/invoke-gated-worker-nudge.ps1` | `scripts/invoke-gated-worker-nudge.ts` |
 | `scripts/journaled-worker-send.ps1` | `scripts/lib/pack-review-worker-notification.ts` |
 | `scripts/invoke-worker-recovery.ps1` | `scripts/invoke-worker-recovery.ts` |
@@ -47,29 +53,15 @@ Compatibility with AO-era callers, PowerShell bridges, old result envelopes, and
 | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | `scripts/runtime/crash-backoff.ts` explicit healthy-replacement rearm |
 | `scripts/lib/Review-StartClaimLifecycle.ps1` | `scripts/lib/review-start-claim-store.ts` |
 
-The old worker-smoke compatibility/regression seams were also deleted rather than adapted to synthetic generations.
-
-## Non-runtime AO service usage deferred to #1250
-
-| Surface | Operations | Disposition |
-|---|---|---|
-| `scripts/lib/Invoke-AoReviewApi.ps1` | review trigger/list/report | `defer-1250` |
-| `scripts/lib/Invoke-AoCliJson.ps1` service branches | config, status, plugin hooks, operator daemon lifecycle | `defer-1250` |
-
-The review transport still used by `scripts/pack-review-runner.ts` is #1250 service work, but the runner itself stays in the active runtime-owner census because it owns review-start claim admission and settlement.
-
 ## Safety properties
 
 - Claims are acquired before workspace or terminal side effects and stay kernel-locked through settlement.
-- Runtime-reported linkage such as Orca `linkedPR` is never claim authority.
+- Runtime-reported linkage is never claim authority.
 - Worker identities are composite `runtime + id + generation`; destructive recovery also requires the expected workspace head.
-- Recovery cleanup authority comes from pre-existing pack-owned session metadata and must match every CLI comparison field exactly.
-- Review delivery reloads the persisted runtime binding and rejects same-id generation recreation for both normal and resumed delivery.
+- Review delivery reloads the persisted runtime binding and rejects same-id generation recreation.
 - Cleanup and spawn selectors must differ before runtime calls or claim acquisition.
-- Stop, workspace removal, and dispatch are attempted once; ambiguous transport never creates a retry authority.
-- `dispatch_unknown` retains the exact spawned identity for explicit recovery and is never automatically resent.
+- Stop, workspace removal, and dispatch are attempted once; ambiguous transport never creates retry authority.
 - Worker-smoke output heuristics are observation-only and cannot trigger a second submit.
-- Worker-smoke close settlement verifies the exact runtime identity is absent or present before reporting lifecycle cleanliness.
+- Worker-smoke close settlement verifies the exact runtime identity before reporting lifecycle cleanliness.
 - Side-effect fence ownership includes process start ticks, preventing a reused PID from impersonating the prior owner.
-- The same direct lifecycle caller runs with Orca and deterministic adapters without adapter-type branches.
 - Canonical side-process topology is Node supervisor → Node `pr2-scheduler`; no PowerShell child remains in the registry.

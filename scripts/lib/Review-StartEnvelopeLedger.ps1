@@ -30,7 +30,7 @@ function Get-ReviewStartEnvelopeLedgerLockPath {
 }
 
 function Get-ReviewStartEnvelopeLedgerEscalationThreshold {
-    $raw = [string]$env:AO_REVIEW_START_CONSECUTIVE_FAILURE_ESCALATE_THRESHOLD
+    $raw = [string]$env:OPK_REVIEW_START_CONSECUTIVE_FAILURE_ESCALATE_THRESHOLD
     if ($raw) {
         $parsed = 0
         if ([int]::TryParse($raw, [ref]$parsed) -and $parsed -gt 0) { return $parsed }

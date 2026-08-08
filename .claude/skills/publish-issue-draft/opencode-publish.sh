@@ -34,7 +34,7 @@
 #   opencode-publish.sh --reap                   # ONLY reap orphaned opencode procs/scratch
 #
 # ORPHAN REAP (safe): kills only opencode reparented to init (ppid==1 = launcher
-#   died) AND older than 60s. NEVER an AO-managed session (AO_SESSION_ID) and never
+#   died) AND older than 60s. NEVER a pack-managed process (OPK_AUTONOMOUS_SURFACE=1) and never
 #   a fresh run (age guard) — cannot kill the orchestrator or a concurrent publish.
 set -uo pipefail
 
@@ -50,7 +50,7 @@ reap_orphans() {
   local p ppid age killed=0
   for p in $(pgrep -f "opencode" 2>/dev/null); do
     [ "$p" = "$$" ] && continue
-    if grep -qaz "AO_SESSION_ID" "/proc/$p/environ" 2>/dev/null; then continue; fi
+    if grep -qaz "OPK_AUTONOMOUS_SURFACE=1" "/proc/$p/environ" 2>/dev/null; then continue; fi
     ppid=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
     [ "$ppid" = "1" ] || continue
     age=$(ps -o etimes= -p "$p" 2>/dev/null | tr -d ' ')

@@ -23,7 +23,7 @@
       "messageShape": { "charLength": 72, "lineCount": 1 }
     }
   },
-  "aoEvents": [],
+  "runtimeEvents": [],
   "reviewRuns": [
     {
       "id": "run-journal-pending",

@@ -38,8 +38,8 @@
     ],
     "safety-plugins": [
       ".github/workflows/contract-evidence-legacy-list-guard.yml",
-      "plugins/ao-codex-pr-reviewer",
-      "plugins/ao-scope-guard",
+      "plugins/codex-pr-reviewer",
+      "plugins/scope-guard",
       "scripts/contract-evidence-legacy-list-guard.test.ts",
       "scripts/run-contract-evidence-legacy-list-guard.mjs"
     ]
@@ -98,7 +98,7 @@
       "sha256": "7aa357f5afb5f2a451761ada6d2095f4537c80fa00e55d1b230044ba8ff431fc"
     },
     {
-      "path": "scripts/gate-runner/custom/ao-capture-redaction.test.ts",
+      "path": "scripts/gate-runner/custom/capture-redaction.test.ts",
       "sha256": "233bd604c781d0a0ee2291ad75dbeae5dba612a0effef17b56b21985efb795a6"
     },
     {
@@ -294,7 +294,7 @@
     "scripts/gate-runner/bulk-declarative-gates.test.ts",
     "scripts/gate-runner/census-generator.test.ts",
     "scripts/gate-runner/contracts.test.ts",
-    "scripts/gate-runner/custom/ao-capture-redaction.test.ts",
+    "scripts/gate-runner/custom/capture-redaction.test.ts",
     "scripts/gate-runner/custom/bulk-cli-parity.test.ts",
     "scripts/gate-runner/custom/bulk-static-gates.test.ts",
     "scripts/gate-runner/custom/node-backed-gates.test.ts",

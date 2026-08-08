@@ -6,7 +6,7 @@
  * Usage: node scripts/run-pack-review-fixture.mjs --fixture-file <path> [review.ts flags]
  */
 import { readFileSync } from 'node:fs';
-import { executeReview } from '../plugins/ao-codex-pr-reviewer/lib/review_core.ts';
+import { executeReview } from '../plugins/codex-pr-reviewer/lib/review_core.ts';
 
 function usage() {
   return [
@@ -88,8 +88,8 @@ try {
   for (const line of result.logLines) {
     console.error(line);
   }
-  if (result.aoStdout) {
-    const out = result.aoStdout.endsWith('\n') ? result.aoStdout : `${result.aoStdout}\n`;
+  if (result.reviewStdout) {
+    const out = result.reviewStdout.endsWith('\n') ? result.reviewStdout : `${result.reviewStdout}\n`;
     process.stdout.write(out);
   }
   process.exit(result.exitCode);

@@ -17,22 +17,22 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Get-OrchestratorLaunchHealth.ps1')
-. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-RuntimeCliJson.ps1')
 
 $orchId = $OrchestratorSessionId
 if (-not $orchId) {
-    $orchId = if ($env:AO_ORCHESTRATOR_SESSION_ID) { $env:AO_ORCHESTRATOR_SESSION_ID.Trim() } else { 'op-orchestrator' }
+    $orchId = 'op-orchestrator'
 }
 
 function Get-OrchestratorFromAdapter {
     param([string]$Id, [string]$Proj)
 
     if ($Id) {
-        $rows = @(Get-AoOrchestratorSessions -Project $Proj -IncludeTerminated)
+        $rows = @(Get-RuntimeControllerSessions -Project $Proj -IncludeTerminated)
         $orch = $rows | Where-Object { $_.id -eq $Id -or $_.name -eq $Id -or $_.sessionId -eq $Id } | Select-Object -First 1
         if ($orch) { return $orch }
     }
-    return @(Get-AoOrchestratorSessions -Project $Proj) | Select-Object -First 1
+    return @(Get-RuntimeControllerSessions -Project $Proj) | Select-Object -First 1
 }
 
 for ($i = 1; $i -le $PollCount; $i++) {

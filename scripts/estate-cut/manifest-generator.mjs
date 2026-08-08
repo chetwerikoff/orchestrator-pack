@@ -31,7 +31,6 @@ const PINNED_LEGACY_SUBJECTS = new Set([
   'scripts/check-ci-cheap-wins.ps1',
   'scripts/check-ci-pipeline-split.ps1',
   'scripts/check-gh-inventory-static.ps1',
-  'scripts/check-harness-post-submit-pn-live-smoke.ps1',
   'scripts/check-operator-adoption-example.ps1',
   'scripts/check-read-delegation-audit-ci-gate.ps1',
   'scripts/check-read-delegation-policy-consistency.ps1',
@@ -71,7 +70,7 @@ const PR2_OWNED = new Set([
 ]);
 const EXPLICIT_DELETE = new Set([
   'scripts/review-send-reconcile.ps1',
-  'scripts/json-producers/retired-surfaces.json',
+  'scripts/json-producers/retired-runtime-surfaces.json',
   'docs/ao-reviews-board-runbook.md',
   'tests/fixtures/reviews-board-seven-columns.json',
   'docs/github-fleet-cache-measurement.md',
@@ -162,7 +161,7 @@ async function buildReachabilityWithoutGeneratedManifest() {
 function pathCategory(rel, rootClosure, dynamicHeld) {
   if (LEGACY_LIST_GUARD_SURFACE.has(rel)) return 'D';
   if (anchor.keepCoreTests.includes(rel) || rel.startsWith('scripts/gate-runner/') || rel.startsWith('scripts/kernel/')) return 'G';
-  if (rel.startsWith('plugins/ao-scope-guard/') || rel.startsWith('plugins/ao-codex-pr-reviewer/') || rel.startsWith('.github/workflows/')) return 'D';
+  if (rel.startsWith('plugins/scope-guard/') || rel.startsWith('plugins/codex-pr-reviewer/') || rel.startsWith('.github/workflows/')) return 'D';
   if (dynamicHeld.has(rel)) return 'D';
   if (rootClosure.has(rel)) return 'C';
   return 'G';
@@ -632,7 +631,6 @@ function validateManifest(manifest) {
   }
   for (const violation of manifest.deletedPathReferenceSweep.violations) failures.push(`${violation.source}:${violation.line}: surviving executable reference to deleted path ${violation.target}`);
   if (manifest.producerContract.importerCount !== 12 || manifest.producerContract.importers.length !== 12) failures.push('producer-contract importer classification is not exactly 12 rows');
-  if (!currentSet.has('agent-orchestrator.yaml.example')) failures.push('agent-orchestrator.yaml.example is missing');
   if ([...currentSet].some((rel) => rel.startsWith(BOARD_PREFIX) || BOARD_FILES.has(rel))) failures.push('Reviews Board runtime/tests survived the cut');
   for (const [source, destination] of ARCHIVE_MOVES) {
     if (currentSet.has(source)) failures.push(`${source}: archived source still present`);

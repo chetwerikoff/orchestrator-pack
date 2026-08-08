@@ -1,5 +1,5 @@
 import type { DeliveryRecord } from './worker-message-dispatch-observe.d.mts';
-import type { AoSession } from './review-trigger-reconcile.d.mts';
+import type { RuntimeWorker } from './review-trigger-reconcile.d.mts';
 
 export declare const DEFAULT_SUBMIT_RECONCILE_INTERVAL_MS: number;
 export declare const DEFAULT_MAX_SUBMIT_ATTEMPTS: number;
@@ -301,9 +301,9 @@ export declare function isSubmitEnterAuthorizedByAdoption(
 
 export declare function evaluateSubmitDecision(input: {
   delivery: DeliveryRecord;
-  session?: AoSession | Record<string, unknown>;
+  session?: RuntimeWorker | Record<string, unknown>;
   tracking: SubmitTrackingState;
-  aoEvents?: Array<Record<string, unknown>>;
+  runtimeEvents?: Array<Record<string, unknown>>;
   floodActiveSessions?: Record<string, boolean>;
   nowMs: number;
   config?: Record<string, unknown>;
@@ -323,9 +323,9 @@ export declare function evaluateWorktreeDriftVanishSuppression(input: {
 }): { suppress: boolean; reason: string };
 
 export declare function planWorkerMessageSubmitActions(input: {
-  sessions: Array<AoSession | Record<string, unknown>>;
+  sessions: Array<RuntimeWorker | Record<string, unknown>>;
   dispatchJournal?: Record<string, Record<string, unknown>>;
-  aoEvents?: Array<Record<string, unknown>>;
+  runtimeEvents?: Array<Record<string, unknown>>;
   reviewRuns?: Array<Record<string, unknown>>;
   tracking?: SubmitTrackingState;
   floodActiveSessions?: Record<string, boolean>;

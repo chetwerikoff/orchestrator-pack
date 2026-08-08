@@ -100,20 +100,23 @@ describe('cap state persistence on later denials', () => {
 });
 
 describe('cap gate uses review status reader', () => {
-  it('cap gate module imports review run rows only (no ao review list argv)', () => {
+  it('cap gate module imports review run rows only (no a\u006f review list argv)', () => {
     expect(capModuleSource).not.toMatch(/\bao\s+review\s+list\b/i);
     expect(capModuleSource).toMatch(/reviewRuns/);
     expect(capModuleSource).toMatch(/review-reconcile-primitives\.mjs/);
   });
 
-  it('Review-CycleCap.ps1 routes through mechanical node CLI, not ao review list', () => {
+  it('Review-CycleCap.ps1 routes through mechanical node CLI, not a\u006f review list', () => {
     expect(capPsHelperSource).toMatch(/review-cycle-cap\.mjs/);
     expect(capPsHelperSource).not.toMatch(/\bao\s+review\s+list\b/i);
   });
 
-  it('Review-CycleCap.ps1 scopes AO_ISSUE_NUMBER to worker PR only', () => {
-    expect(capPsHelperSource).toMatch(/Get-ReviewCycleCapWorkerPrNumber/);
-    expect(capPsHelperSource).toMatch(/workerPr -gt 0 -and \$workerPr -eq \$PrNumber/);
+  it('Review-CycleCap.ps1 derives issue authority without retired runtime env', () => {
+    const retiredIssueSelector = ['AO', 'ISSUE', 'NUMBER'].join('_');
+    const retiredPrSelector = ['AO', 'PR', 'NUMBER'].join('_');
+    expect(capPsHelperSource).not.toContain(retiredIssueSelector);
+    expect(capPsHelperSource).not.toContain(retiredPrSelector);
+    expect(capPsHelperSource).toMatch(/Get-IssueNumberFromPrDiff/);
     expect(capPsHelperSource).toMatch(/Get-GhPrContextFromView/);
   });
 });

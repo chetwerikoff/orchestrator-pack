@@ -38,7 +38,7 @@ Shell read-arounds (`head`, chunked `sed`/`grep`, python chunking) do not satisf
 - When an ask trigger **is** met and the corpus is fence-clean and the work is not an excepted reasoning step: on **Claude and Codex**, delegation is **mandatory** — do not inline the read on the reasoning model; on the **Cursor seat** for advisory corpus (out-of-index / tracked non-code bulk, not index- or diff-exempt), follow the **SHOULD** ladder above — delegation is recommended, not required.
 - Your final status **states the delegation outcome**: either that `coworker` was used for the bulk repo/log read, or the closed-list reason it was not (below the floor / excepted reasoning step / corpus not fence-cleanable / `coworker` missing, unavailable, or rate-limited). Silence is non-compliant.
 
-You remain responsible for verifying coworker output, scope, commits, and AO transitions. `coworker` must not run `ao-declare`, `ao report`, or open PRs.
+You remain responsible for verifying coworker output, scope, commits, and AO transitions. `coworker` must not run `pack-declare`, `ao report`, or open PRs.
 
 ## Cost framework pointer
 

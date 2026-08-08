@@ -7,7 +7,7 @@ import {
 } from './lib/contract-evidence-reverify.ts';
 import {
   loadValidatedBoundSnapshotBody,
-  resolveDefaultAoProjectId,
+  resolveDefaultProjectId,
 } from './lib/reverify-bound-issue-snapshot.ts';
 import { readLines, readText, resolveHeadSha } from './lib/reviewer-cli-io.ts';
 import { dispatchDefaultCliArg, isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.ts';
@@ -22,7 +22,7 @@ function usage(): string {
     '  --snapshot-file <path>        Resolver-validated bound snapshot artifact path',
     '  --bound-snapshot-pr-number <n> PR number for snapshot provenance (required)',
     '  --bound-snapshot-issue-number <n> Linked issue number (or --explicit-issue/--expected-issue)',
-    '  --project-id <id>             AO project id (default: AO_PROJECT_ID or orchestrator-pack)',
+    '  --project-id <id>             pack project id (default: OPK_PROJECT_ID or orchestrator-pack)',
     '  --current-issue-file <path>   Optional live issue body for drift detection',
     '  --pr-body-file <path>',
     '  --explicit-issue <n>',
@@ -45,7 +45,7 @@ function parseArgs(argv: string[]) {
     manifestPath: DEFAULT_REVERIFY_MANIFEST_PATH,
     summary: false,
     json: true,
-    projectId: resolveDefaultAoProjectId(),
+    projectId: resolveDefaultProjectId(),
   };
 
   for (let i = 0; i < argv.length; i += 1) {

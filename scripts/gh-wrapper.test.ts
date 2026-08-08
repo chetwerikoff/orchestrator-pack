@@ -40,6 +40,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { runProcessSync } from './kernel/subprocess.ts';
 
 describe('gh inventory matcher', () => {
   it('routes open pr list with listed json fields', () => {
@@ -359,7 +360,7 @@ describe('gh recursion guard', () => {
   });
 });
 
-const AO_WRAPPER_SCRIPT = `#!/usr/bin/env bash
+const OPK_WRAPPER_SCRIPT = `#!/usr/bin/env bash
 set -euo pipefail
 ao_bin_dir="$(cd "$(dirname "$0")" && pwd)"
 clean_path="$(echo "$PATH" | tr ':' '\\n' | grep -Fxv "$ao_bin_dir" | grep . | tr '\\n' ':')"
@@ -381,18 +382,20 @@ describe('gh wrapper audit telemetry', () => {
   it('logs successful completions with status and child id', () => {
     const root = mkdtempSync(join(tmpdir(), 'gh-wrapper-audit-'));
     const auditPath = join(root, 'audit.jsonl');
-    const result = spawnSync(join(import.meta.dirname, 'gh'), ['auth', 'status'], {
+    const result = runProcessSync({
+      command: join(import.meta.dirname, 'gh'),
+      args: ['auth', 'status'],
       env: {
         ...process.env,
         GH_REAL_BINARY: '/bin/true',
         GH_WRAPPER_AUDIT: '1',
         GH_WRAPPER_AUDIT_FILE: auditPath,
-        AO_SIDE_PROCESS_CHILD_ID: 'review-trigger-reconcile',
+        OPK_SIDE_PROCESS_CHILD_ID: 'review-trigger-reconcile',
       },
       encoding: 'utf8',
     });
 
-    expect(result.status).toBe(0);
+    expect(result.exitCode).toBe(0);
     expect(result.stderr).toContain('gh-wrapper-audit: entry child=review-trigger-reconcile');
     expect(result.stderr).toMatch(/gh-wrapper-audit: complete .*child=review-trigger-reconcile .*kind=passthrough route=passthrough status=0/);
     const rows = readFileSync(auditPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
@@ -641,7 +644,7 @@ function twoWrapperPathFixture(order: 'ao-first' | 'pack-first') {
   const packScripts = join(import.meta.dirname);
   const packGh = join(packScripts, 'gh');
   mkdirSync(aoDir, { recursive: true });
-  writeExecutable(join(aoDir, 'gh'), AO_WRAPPER_SCRIPT);
+  writeExecutable(join(aoDir, 'gh'), OPK_WRAPPER_SCRIPT);
 
   const pathParts = order === 'ao-first'
     ? [aoDir, packScripts]
@@ -780,8 +783,8 @@ describe('gh mutual-recursion terminality (Issue #442)', () => {
     const shimB = join(root, 'b');
     mkdirSync(shimA, { recursive: true });
     mkdirSync(shimB, { recursive: true });
-    writeExecutable(join(shimA, 'gh'), AO_WRAPPER_SCRIPT);
-    writeExecutable(join(shimB, 'gh'), AO_WRAPPER_SCRIPT);
+    writeExecutable(join(shimA, 'gh'), OPK_WRAPPER_SCRIPT);
+    writeExecutable(join(shimB, 'gh'), OPK_WRAPPER_SCRIPT);
     const prevPath = process.env.PATH;
     const prevReal = process.env.GH_REAL_BINARY;
     const prevMax = process.env.GH_RESOLVE_MAX_NON_NATIVE;

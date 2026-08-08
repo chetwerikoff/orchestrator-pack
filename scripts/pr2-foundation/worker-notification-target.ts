@@ -16,9 +16,9 @@ import {
 import { runProcess } from '../kernel/subprocess.ts';
 import {
   collectOpenPrSnapshot,
-  normalizeAoSessionRow,
-  VERIFIED_AO_VERSION,
-  type AoSessionRow,
+  normalizeRuntimeWorkerRow,
+  VERIFIED_RUNTIME_VERSION,
+  type RuntimeWorkerRow,
   type OpenPrSnapshotRow,
 } from './binding.ts';
 import type { FoundationNotificationConfig } from './config.ts';
@@ -33,8 +33,8 @@ export interface VerifiedWorkerNotificationTarget {
 }
 
 export interface WorkerNotificationTargetDependencies {
-  loadAoVersion?: () => Promise<string>;
-  loadSessions?: () => Promise<AoSessionRow[]>;
+  loadRuntimeVersion?: () => Promise<string>;
+  loadSessions?: () => Promise<RuntimeWorkerRow[]>;
   loadOpenPrs?: (repoSlug: string) => Promise<OpenPrSnapshotRow[]>;
   resolveRepoSlug?: () => Promise<string>;
 }
@@ -116,12 +116,12 @@ function findVersion(value: unknown, depth = 0): string | null {
   return null;
 }
 
-function aoBaseDir(): string {
-  return process.env.AO_BASE_DIR?.trim() || path.join(homedir(), '.agent-orchestrator');
+function stateBaseDir(): string {
+  return process.env.OPK_BASE_DIR?.trim() || path.join(homedir(), '.orchestrator-pack');
 }
 
 function projectRoot(projectId: string): string {
-  return path.join(aoBaseDir(), 'projects', projectId);
+  return path.join(stateBaseDir(), 'projects', projectId);
 }
 
 function readRecord(file: string): Record<string, unknown> | null {
@@ -181,9 +181,9 @@ export async function resolveVerifiedWorkerNotificationTarget(input: {
   dependencies?: WorkerNotificationTargetDependencies;
 }): Promise<VerifiedWorkerNotificationTarget> {
   const dependencies = input.dependencies ?? {};
-  const loadAoVersion = dependencies.loadAoVersion ?? (async () => {
-    const appStatePath = process.env.AO_APP_STATE_PATH?.trim()
-      || path.join(homedir(), '.ao', 'app-state.json');
+  const loadRuntimeVersion = dependencies.loadRuntimeVersion ?? (async () => {
+    const appStatePath = process.env.OPK_APP_STATE_PATH?.trim()
+      || path.join(homedir(), '.orchestrator-pack', 'app-state.json');
     const state = readRecord(appStatePath);
     const version = findVersion(state);
     if (!version) throw new Error('preflight_version_unverifiable');
@@ -191,19 +191,19 @@ export async function resolveVerifiedWorkerNotificationTarget(input: {
   });
   const loadSessions = dependencies.loadSessions ?? (async () => {
     const result = await runProcess({
-      command: input.config.aoPath,
+      command: input.config.runtimePath,
       args: ['session', 'ls', '--json'],
       cwd: input.repoRoot,
       inheritParentEnv: true,
       allowEmptyStdout: false,
       timeoutMs: input.config.timeoutMs,
     });
-    if (!result.ok) throw new Error('ao_session_list_failed');
-    const rows = sessionsFromPayload(parsePrefixedJson(result.stdout, 'ao_session_list'));
+    if (!result.ok) throw new Error('runtime_worker_list_failed');
+    const rows = sessionsFromPayload(parsePrefixedJson(result.stdout, 'runtime_worker_list'));
     if (rows.length === 0) throw new Error('preflight_empty_fleet');
-    const normalized = rows.map(normalizeAoSessionRow);
+    const normalized = rows.map(normalizeRuntimeWorkerRow);
     if (normalized.some((row) => row === null)) throw new Error('preflight_schema_mismatch');
-    return normalized as AoSessionRow[];
+    return normalized as RuntimeWorkerRow[];
   });
   const resolveRepoSlug = dependencies.resolveRepoSlug ?? (async () => {
     const result = await runProcess({
@@ -243,11 +243,11 @@ export async function resolveVerifiedWorkerNotificationTarget(input: {
   });
 
   const [appStateVersion, sessions, repoSlug] = await Promise.all([
-    loadAoVersion(),
+    loadRuntimeVersion(),
     loadSessions(),
     resolveRepoSlug(),
   ]);
-  if (appStateVersion !== VERIFIED_AO_VERSION) throw new Error('preflight_version_unverifiable');
+  if (appStateVersion !== VERIFIED_RUNTIME_VERSION) throw new Error('preflight_version_unverifiable');
   const openPrs = await loadOpenPrs(repoSlug);
   // Resolve the current exact-head owner independently. requestedSessionId is
   // diagnostic lineage context from the review run and may legitimately be a

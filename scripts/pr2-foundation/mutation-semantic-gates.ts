@@ -204,9 +204,9 @@ const GATES: Record<string, TextGate> = {
 
   'AC2:raw-live-capture-committed': absentGate('tests/external-output-references/captures/issue-923/raw-live.json'),
   'AC2:capture-metadata-secret-scan-omitted': textGate('scripts/pr2-foundation/binding.ts', ['capture_metadata_secret_scan_failed']),
-  'AC2:schema-shape-changed': textGate('scripts/pr2-foundation/binding.ts', ['VERIFIED_AO_SESSION_KEYS']),
+  'AC2:schema-shape-changed': textGate('scripts/pr2-foundation/binding.ts', ['VERIFIED_RUNTIME_SESSION_KEYS']),
   'AC2:hypothetical-prs-or-branch-trust': textGate('scripts/pr2-foundation/binding.ts', ['branchMatchesIssue']),
-  'AC2:preflight-missing': textGate('scripts/pr2-foundation/binding.ts', ['validateAoPreflight']),
+  'AC2:preflight-missing': textGate('scripts/pr2-foundation/binding.ts', ['validateRuntimePreflight']),
   'AC2:preflight-empty-fleet-accepted': textGate('scripts/pr2-foundation/binding.ts', ['preflight_empty_fleet']),
   'AC2:preflight-version-unverifiable-accepted': textGate('scripts/pr2-foundation/binding.ts', ['preflight_version_unverifiable']),
   'AC2:ambiguous-live-issue-index-zero': textGate('scripts/pr2-foundation/binding.ts', ['issue_correlation_ambiguous']),

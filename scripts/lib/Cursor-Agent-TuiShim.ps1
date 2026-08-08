@@ -152,8 +152,8 @@ function Write-CursorAgentTuiShimAlert {
     } | ConvertTo-Json -Compress
 
     $dest = $AlertDestination
-    if ([string]::IsNullOrWhiteSpace($dest) -and $env:AO_FLEET_HYGIENE_ALERT_FILE) {
-        $dest = $env:AO_FLEET_HYGIENE_ALERT_FILE
+    if ([string]::IsNullOrWhiteSpace($dest) -and $env:OPK_FLEET_HYGIENE_ALERT_FILE) {
+        $dest = $env:OPK_FLEET_HYGIENE_ALERT_FILE
     }
     if ($dest) {
         $parent = Split-Path -Parent $dest
@@ -336,7 +336,7 @@ function Invoke-CursorAgentTuiShimPtyProbe {
     $envPairs = @(
         "HOME='$((Get-CursorAgentTuiShimUserHome) -replace "'", "'\\''")'"
         "OPK_CURSOR_AGENT_HOME='$((Get-CursorAgentTuiShimUserHome) -replace "'", "'\\''")'"
-        'AO_SESSION_ID='
+        'OPK_CURSOR_AGENT_TRANSLATE='
     )
     foreach ($key in $ProbeEnv.Keys) {
         if ($key -eq 'CURSOR_AGENT_BIN') { continue }
@@ -457,7 +457,7 @@ function Invoke-CursorAgentTuiShimOfflineVerification {
         })
 
     $translate = Invoke-CursorAgentTuiShimPtyProbe -ProbeEnv @{
-            AO_SESSION_ID = 'orchestrator-pack-93'
+            OPK_CURSOR_AGENT_TRANSLATE = '1'
         } -Argv @('-p', 'stream-json') -ExpectMode 'translate'
     Add-Result 'translate-pty' $translate
 
@@ -465,7 +465,7 @@ function Invoke-CursorAgentTuiShimOfflineVerification {
     Add-Result 'passthrough-pty' $passthrough
 
     $review = Invoke-CursorAgentTuiShimPtyProbe -ProbeEnv @{
-            AO_SESSION_ID = 'review-orchestrator-pack-93'
+            OPK_CURSOR_AGENT_TRANSLATE = '0'
         } -Argv @('-p', 'stream-json') -ExpectMode 'passthrough'
     Add-Result 'review-passthrough' $review
 

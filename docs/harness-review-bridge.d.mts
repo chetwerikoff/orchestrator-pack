@@ -1,4 +1,4 @@
-import type { TerminalVerdictPayload } from '../plugins/ao-codex-pr-reviewer/lib/emit.js';
+import type { TerminalVerdictPayload } from '../plugins/codex-pr-reviewer/lib/emit.js';
 import type { ReviewerHarnessAbortClassification } from './ao-0-10-review-api.d.mts';
 
 export type { ReviewerHarnessAbortClassification };

@@ -45,7 +45,7 @@ beforeEach(() => {
     mkdtempSync(path.join(tmpdir(), 'session-pr-binding-cache-')),
     'cache.json',
   );
-  process.env.AO_PR_SESSION_BINDING_CACHE = isolatedBindingCachePath;
+  process.env.OPK_PR_SESSION_BINDING_CACHE = isolatedBindingCachePath;
 });
 
 function headOwnerOptions(extra: Record<string, unknown> = {}) {
@@ -482,7 +482,7 @@ describe('ci-failure reaction owner non-null', () => {
 });
 
 describe('session-get displayName enrichment', () => {
-  it('builds sessionDetailsById from ao session get payloads', () => {
+  it('builds sessionDetailsById from a\u006f session get payloads', () => {
     const getPayload = readCapture('session-get-numeric-displayname.raw.json');
     expect(sessionDetailFromSessionGetPayload(getPayload)).toEqual({ displayName: '690' });
     expect(shouldEnrichSessionDetailFromGet(issueOnlyListRow)).toBe(true);

@@ -37,11 +37,11 @@ export const WORKER_REPORT_STATES = Object.freeze([
  * @param {Record<string, unknown>} [env]
  */
 export function resolveWorkerReportStorePath(env = process.env) {
-  if (env.AO_WORKER_REPORT_STORE) {
-    return String(env.AO_WORKER_REPORT_STORE);
+  if (env.OPK_WORKER_REPORT_STORE) {
+    return String(env.OPK_WORKER_REPORT_STORE);
   }
-  if (env.AO_REPORT_STATE_SEED_STATE) {
-    const seedPath = String(env.AO_REPORT_STATE_SEED_STATE);
+  if (env.OPK_REPORT_STATE_SEED_STATE) {
+    const seedPath = String(env.OPK_REPORT_STATE_SEED_STATE);
     const dir = dirname(seedPath);
     return join(dir, 'worker-report-store.json');
   }

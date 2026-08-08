@@ -1,6 +1,6 @@
 /**
  * Resolve static send-to-agent reaction message text from operator YAML.
- * Runtime truth is live agent-orchestrator.yaml — never in-code stub maps.
+ * Runtime truth is caller-supplied pack-owned reaction configuration — never in-code stub maps.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

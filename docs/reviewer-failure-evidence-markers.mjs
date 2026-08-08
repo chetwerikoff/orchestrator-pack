@@ -36,7 +36,7 @@ export function resolveRunFailureText(run) {
 }
 
 export function resolveTimeoutRetryMax(env = process.env) {
-  return parseNonNegativeInt(env.AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX, DEFAULT_TIMEOUT_RETRY_MAX);
+  return parseNonNegativeInt(env.OPK_CODEX_REVIEW_TIMEOUT_RETRY_MAX, DEFAULT_TIMEOUT_RETRY_MAX);
 }
 
 /**

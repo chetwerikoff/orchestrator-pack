@@ -12,7 +12,7 @@ export declare function classifySpawnWorktreeGrantFailureDiagnosis(input: {
   githubReadsSucceeded?: boolean;
   stderr?: string;
 }): { kind: string; reason: string; misclassifiedAsGhAuth?: boolean };
-export declare const AO_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN: RegExp;
+export declare const OPK_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN: RegExp;
 export declare const SPAWN_ARGV_OPTIONS_WITH_VALUE: string[];
 export declare const GIT_SOURCE_SELECTING_GLOBAL_FLAGS: ReadonlySet<string>;
 

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { evaluateAoCaptureRedaction, CAPTURE_DIRECTORY, type CaptureReader } from './custom/ao-capture-redaction.ts';
+import { evaluateAoCaptureRedaction, CAPTURE_DIRECTORY, type CaptureReader } from './custom/capture-redaction.ts';
 import { evaluateDeclarativeGate } from './declarative.ts';
 import { agentRulesBudgetGate, agentRulesGrepGate, agentRulesMovedContentGate } from './representative-gates.ts';
 import { runGateRunner } from './runner.ts';
@@ -54,7 +54,7 @@ describe('pre-delete legacy captures', () => {
       'scripts/check-agent-rules-line-budget.ps1',
       'scripts/check-agent-rules-moved-content.ps1',
       'scripts/check-ao-0-10-cli-capture-redaction.ps1',
-      'scripts/check-ao-capture-redaction-selftest.ps1',
+      'scripts/check-capture-redaction-selftest.ps1',
     ]));
     for (const item of golden.captures) {
       expect(item.argv.length).toBeGreaterThan(3);
@@ -103,6 +103,6 @@ describe('pre-delete legacy captures', () => {
       [path]: JSON.stringify({ repo: 'https://user:secret@example.test/path' }),
     }));
     expect(result.status).toBe('FAIL');
-    expect(result.legacyStdout).toBe(capture('ao-capture-redaction', 'credential-url-fixture').stdout);
+    expect(result.legacyStdout).toBe(capture('capture-redaction', 'credential-url-fixture').stdout);
   });
 });

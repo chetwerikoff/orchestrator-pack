@@ -182,7 +182,7 @@ function run() {
         headRefOid: conflictHead,
         headRefName: 'agent/issue-88',
       }],
-      env: { AO_PR_SESSION_BINDING_CACHE: cachePath },
+      env: {},
       cwd: REPO_ROOT,
       bindingCachePath: cachePath,
       nowMs: NOW_MS,

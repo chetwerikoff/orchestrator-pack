@@ -263,7 +263,7 @@ export function mergeWatchState(existing, incoming, nowMs = Date.now()) {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null | undefined} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null | undefined} session
  * @param {string} headSha
  * @param {{ headCommittedAtMs?: number }} [options]
  */
@@ -301,7 +301,7 @@ export function hasInProgressReportForHead(session, headSha, options = {}) {
  * @param {object} input
  * @param {number} input.prNumber
  * @param {string} input.headSha
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} [input.session]
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null} [input.session]
  * @param {boolean} [input.hadCompletionWake]
  */
 export function evaluateBackstopOnlyZeroSignal(input) {
@@ -332,7 +332,7 @@ export function evaluateBackstopOnlyZeroSignal(input) {
 
 /**
  * @param {object} input
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} input.session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null} input.session
  * @param {string} input.headSha
  * @param {number | null | undefined} input.priorReadyMs
  * @param {{ headCommittedAtMs?: number }} [input.bindingOptions]
@@ -382,7 +382,7 @@ export function detectReadinessTransition(input) {
  * @param {boolean} [input.snapshotError]
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [input.sessions]
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker[]} [input.sessions]
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
  * @param {string[]} [input.requiredCheckNames]
  * @param {boolean} [input.requiredCheckLookupFailed]
@@ -470,7 +470,7 @@ export function evaluateHeadReviewTriggerDecision(input) {
  * @param {number} input.nowMs
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} input.openPrs
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} input.sessions
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker[]} input.sessions
  * @param {Record<string, Array<{ name?: string, state?: string, conclusion?: string, status?: string }>> | Array<{ prNumber?: number, checks?: unknown[] }>} [input.ciChecksByPr]
  * @param {Record<string, string[]> | Array<{ prNumber?: number, requiredCheckNames?: string[] }>} [input.requiredCheckNamesByPr]
  * @param {Record<string, boolean> | Array<{ prNumber?: number, failed?: boolean }>} [input.requiredCheckLookupFailedByPr]
@@ -567,7 +567,7 @@ export function evaluateDeferredWatchEntry(input) {
  * @param {Record<string, object>} [input.watchEntries]
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [input.sessions]
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker[]} [input.sessions]
  * @param {number} [input.nowMs]
  * @param {Record<string, boolean>} [input.snapshotErrorsByKey]
  */
@@ -757,7 +757,7 @@ export function revertTriggeredWatchOnAbort(entries, watchKey, nowMs = Date.now(
  * @param {object} input
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} input.openPrs
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} input.sessions
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker[]} input.sessions
  * @param {Record<string, object>} [input.existingWatches]
  * @param {number} [input.nowMs]
  */

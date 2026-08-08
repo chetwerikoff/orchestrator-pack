@@ -28,8 +28,8 @@ function freshLedger() {
 export function resolveCiRedWatchdogStoreDir(input = '') {
   const explicit = String(input ?? '').trim();
   if (explicit) return explicit;
-  if (process.env.AO_CI_RED_WATCHDOG_STATE_DIR) return process.env.AO_CI_RED_WATCHDOG_STATE_DIR.trim();
-  if (process.env.AO_SIDE_PROCESS_STATE_DIR) return path.join(process.env.AO_SIDE_PROCESS_STATE_DIR.trim(), 'ci-red-watchdog');
+  if (process.env.OPK_CI_RED_WATCHDOG_STATE_DIR) return process.env.OPK_CI_RED_WATCHDOG_STATE_DIR.trim();
+  if (process.env.OPK_SIDE_PROCESS_STATE_DIR) return path.join(process.env.OPK_SIDE_PROCESS_STATE_DIR.trim(), 'ci-red-watchdog');
   return path.join(process.env.TEMP || process.env.TMPDIR || '/tmp', 'orchestrator-ci-red-watchdog');
 }
 

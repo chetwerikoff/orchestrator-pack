@@ -7,6 +7,10 @@ import {
 } from './contracts.ts';
 
 const runtimeSources = FOUNDATION_DOC_ROWS.filter((file) => !file.endsWith('.d.mts'));
+const runtimeNeutralFoundationSources = new Set([
+  'docs/review-bulk-send-diagnose.mjs',
+  'docs/worker-report-store.mjs',
+]);
 
 function targetFor(source: string): string {
   const basename = path.posix.basename(source)
@@ -16,17 +20,33 @@ function targetFor(source: string): string {
 }
 
 describe('[AC7] terminalized executable docs TypeScript ports', () => {
-  it('terminalizes ownership while preserving legacy live compatibility until cutover', () => {
+  it('preserves the surviving foundation rows without restoring the retired AO API owner', () => {
     for (const source of FOUNDATION_DOC_ROWS) {
       expect(existsSync(path.resolve(source)), source).toBe(true);
-      expect(readFileSync(path.resolve(source), 'utf8'), source)
-        .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
+      const text = readFileSync(path.resolve(source), 'utf8');
+      if (runtimeNeutralFoundationSources.has(source)) {
+        if (source === 'docs/review-bulk-send-diagnose.mjs') {
+          expect(text, source).toContain('The pack review producer/store is the only active authority.');
+          expect(text, source).not.toContain('ao-0-10-review-api');
+        } else {
+          expect(text, source).toContain('export const WORKER_REPORT_STORE_SCHEMA_VERSION = 3;');
+          expect(text, source).toContain('OPK_WORKER_REPORT_STORE');
+          expect(text, source).not.toContain('AO_' + 'WORKER_REPORT_STORE');
+        }
+      } else {
+        expect(text, source).toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
+      }
     }
     for (const source of runtimeSources) {
       const target = targetFor(source);
       expect(existsSync(path.resolve(target)), target).toBe(true);
       const text = readFileSync(path.resolve(target), 'utf8');
-      expect(text, target).toContain(`Ported from ${source} blob `);
+      if (source === 'docs/review-bulk-send-diagnose.mjs') {
+        expect(text, target).toContain('The pack review producer/store is the only active authority.');
+        expect(text, target).not.toContain('ao-0-10-review-api');
+      } else {
+        expect(text, target).toContain(`Ported from ${source} blob `);
+      }
       expect(text, target).not.toContain(`from './${path.basename(source)}'`);
     }
     const declarationTarget = path.resolve(
@@ -38,7 +58,7 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     );
   });
 
-  it('limits duplicate-literal suppressions to sixteen Issue #923 pairs and one Issue #948 pair', () => {
+  it('limits duplicate-literal suppressions to fifteen Issue #923 pairs and one Issue #948 pair', () => {
     const config = JSON.parse(readFileSync(
       path.resolve(FOUNDATION_LINT_SUPPRESSION_CONFIG_PATH),
       'utf8',
@@ -64,10 +84,10 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
       .map((suppression) => suppression.files.join('|'))
       .sort();
 
-    expect(FOUNDATION_DOC_ROWS).toHaveLength(16);
+    expect(FOUNDATION_DOC_ROWS).toHaveLength(15);
     expect(config.suppressions).toHaveLength(duplicateSuppressions.length);
-    expect(duplicateSuppressions).toHaveLength(17);
-    expect(issue923Suppressions).toHaveLength(16);
+    expect(duplicateSuppressions).toHaveLength(16);
+    expect(issue923Suppressions).toHaveLength(15);
     expect(actual923Pairs).toEqual(expected923Pairs);
     expect(issue948Suppressions).toHaveLength(1);
     expect([...issue948Suppressions[0].files].sort()).toEqual([

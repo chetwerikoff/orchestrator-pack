@@ -1,101 +1,80 @@
 import {
-  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
-  realpathSync,
+  readdirSync,
   rmSync,
   statSync,
   watch,
 } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
-import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir, tmpdir } from 'node:os';
 
-export const OPK_VITEST_HARNESS_MARKER = 'OPK_VITEST_HARNESS';
-export const OPK_VITEST_HARNESS_ROOT = 'OPK_VITEST_HARNESS_ROOT';
-
-const moduleDir = dirname(fileURLToPath(import.meta.url));
-export const repoRoot = resolve(moduleDir, '..', '..');
+export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const inventoryPath = join(repoRoot, 'scripts', 'vitest-live-store-inventory.json');
-const STALE_ROOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const STALE_ROOT_MAX_REMOVALS = 16;
+export const liveStoreInventory = JSON.parse(readFileSync(inventoryPath, 'utf8'));
+
 const MAX_WATCHED_DIRECTORIES = 512;
 
-function readInventory() {
-  const parsed = JSON.parse(readFileSync(inventoryPath, 'utf8'));
-  if (parsed?.schemaVersion !== 1 || !Array.isArray(parsed.stores)) {
-    throw new Error('invalid vitest live-store inventory');
-  }
-  return parsed;
+function envValue(env, name, fallback = '') {
+  const value = String(env?.[name] ?? '').trim();
+  return value || fallback;
 }
 
-export const liveStoreInventory = readInventory();
-
-function resolveProductionHome(env) {
-  return env.OPK_VITEST_PRODUCTION_HOME || env.HOME || homedir();
+function productionHome(env = process.env) {
+  return resolve(envValue(env, 'OPK_VITEST_PRODUCTION_HOME', envValue(env, 'HOME', homedir())));
 }
 
-function resolveProductionTmp(env) {
-  return env.OPK_VITEST_PRODUCTION_TMP || env.TMPDIR || env.TEMP || env.TMP || tmpdir();
+function productionTmp(env = process.env) {
+  return resolve(envValue(env, 'OPK_VITEST_PRODUCTION_TMP', envValue(env, 'TMPDIR', tmpdir())));
 }
 
-function resolveProductionAoBase(env) {
-  return env.OPK_VITEST_PRODUCTION_AO_BASE
-    || env.AO_BASE_DIR
-    || join(resolveProductionHome(env), '.agent-orchestrator');
+function productionWakeRoot(env = process.env) {
+  const explicit = envValue(
+    env,
+    'OPK_VITEST_PRODUCTION_WAKE_ROOT',
+    envValue(env, 'OPK_WAKE_SUPERVISOR_STATE_DIR', envValue(env, 'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR')),
+  );
+  if (explicit) return resolve(explicit);
+  const xdg = envValue(env, 'XDG_STATE_HOME', join(productionHome(env), '.local', 'state'));
+  return resolve(xdg, 'orchestrator-pack-wake-supervisor');
 }
 
-function resolveProductionWakeRoot(env) {
-  if (env.OPK_VITEST_PRODUCTION_WAKE_ROOT) return env.OPK_VITEST_PRODUCTION_WAKE_ROOT;
-  if (env.AO_WAKE_SUPERVISOR_STATE_DIR) return env.AO_WAKE_SUPERVISOR_STATE_DIR;
-  if (env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
-    return env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR;
-  }
-  if (env.XDG_STATE_HOME) return join(env.XDG_STATE_HOME, 'orchestrator-pack-wake-supervisor');
-  if (env.LOCALAPPDATA) return join(env.LOCALAPPDATA, 'orchestrator-pack-wake-supervisor');
-  return join(resolveProductionHome(env), '.local', 'state', 'orchestrator-pack-wake-supervisor');
+function productionPackBase(env = process.env) {
+  const explicit = envValue(
+    env,
+    'OPK_VITEST_PRODUCTION_OPK_BASE',
+    envValue(env, 'OPK_BASE_DIR'),
+  );
+  return resolve(explicit || join(productionHome(env), '.orchestrator-pack'));
 }
 
-export function expandInventoryTemplate(value, env = process.env) {
-  return String(value ?? '')
-    .replaceAll('${HOME}', resolveProductionHome(env))
-    .replaceAll('${TMP}', resolveProductionTmp(env))
-    .replaceAll('${AO_BASE}', resolveProductionAoBase(env))
-    .replaceAll('${WAKE_STATE}', resolveProductionWakeRoot(env));
+export function expandInventoryTemplate(template, env = process.env) {
+  const values = {
+    HOME: productionHome(env),
+    TMP: productionTmp(env),
+    WAKE_STATE: productionWakeRoot(env),
+    OPK_BASE: productionPackBase(env),
+  };
+  return String(template ?? '').replace(/\$\{([A-Z_]+)\}/g, (_match, key) => values[key] ?? '');
 }
 
-function normalizeCase(value) {
-  return process.platform === 'win32' ? value.toLowerCase() : value;
-}
-
-function nearestExistingAncestor(candidate) {
-  let cursor = candidate;
-  const suffix = [];
-  while (true) {
-    try {
-      let canonical = realpathSync.native(cursor);
-      for (const part of suffix) canonical = join(canonical, part);
-      return canonical;
-    } catch (error) {
-      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error;
-      const parent = dirname(cursor);
-      if (parent === cursor) return resolve(candidate);
-      suffix.unshift(basename(cursor));
-      cursor = parent;
-    }
-  }
-}
-
-export function canonicalizeStorePath(candidate) {
-  if (candidate === undefined || candidate === null || String(candidate).trim() === '') return '';
-  const text = String(candidate).trim().replace(/^~(?=$|[\\/])/, homedir());
-  const absolute = isAbsolute(text) ? resolve(text) : resolve(process.cwd(), text);
-  return normalizeCase(nearestExistingAncestor(absolute));
+export function canonicalizeStorePath(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  return resolve(text.replace(/^~(?=$|[\\/])/, homedir()));
 }
 
 function pathIsSameOrWithin(candidate, root) {
@@ -103,544 +82,272 @@ function pathIsSameOrWithin(candidate, root) {
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
 }
 
-function globToRegExp(glob) {
-  const escaped = glob
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replaceAll('**', '\u0000')
-    .replaceAll('*', '[^/\\\\]*')
-    .replaceAll('\u0000', '.*');
-  return new RegExp(`^${escaped}$`, process.platform === 'win32' ? 'i' : '');
+function wildcardToRegExp(pattern) {
+  const normalized = String(pattern ?? '').replaceAll('\\', '/');
+  const escaped = normalized.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped.replaceAll('**', '.*').replaceAll('*', '[^/]*')}$`, 'i');
 }
 
-function storeResolved(store, env = process.env) {
+function resolveStore(store, env) {
   const defaultPath = canonicalizeStorePath(expandInventoryTemplate(store.canonicalDefault, env));
+  const parentPath = store.kind === 'directory' ? dirname(defaultPath) : dirname(defaultPath);
+  const sidecarMatchers = (store.sidecars ?? []).map(wildcardToRegExp);
   return {
     ...store,
     defaultPath,
-    parentPath: store.kind === 'pattern' ? defaultPath : canonicalizeStorePath(dirname(defaultPath)),
-    basename: store.kind === 'pattern' ? '' : basename(defaultPath),
-    basenameMatcher: store.kind === 'pattern' ? globToRegExp(String(store.basenamePattern)) : null,
-    sidecarMatchers: (store.sidecars ?? []).map((pattern) =>
-      globToRegExp(String(pattern).replaceAll('\\', '/'))),
-  };
-}
-
-function classFenceResolved(fence, env = process.env) {
-  return {
-    ...fence,
-    rootPath: canonicalizeStorePath(expandInventoryTemplate(fence.rootTemplate, env)),
-    matchers: (fence.basenamePatterns ?? []).map((pattern) =>
-      globToRegExp(String(pattern).replaceAll('\\', '/'))),
+    parentPath,
+    sidecarMatchers,
   };
 }
 
 export function resolvedLiveStores(env = process.env) {
-  const rank = (kind) => (kind === 'directory' ? 1 : 0);
-  return liveStoreInventory.stores
+  return (liveStoreInventory.stores ?? [])
     .filter((store) => !store.excluded)
-    .map((store) => storeResolved(store, env))
-    .sort((left, right) =>
-      rank(left.kind) - rank(right.kind)
-      || right.defaultPath.length - left.defaultPath.length
-      || left.id.localeCompare(right.id));
+    .map((store) => resolveStore(store, env))
+    .sort((left, right) => Number(left.kind === 'directory') - Number(right.kind === 'directory'));
 }
 
 export function resolvedClassFences(env = process.env) {
-  return (liveStoreInventory.classFences ?? []).map((fence) => classFenceResolved(fence, env));
+  return (liveStoreInventory.classFences ?? []).map((fence) => ({
+    ...fence,
+    rootPath: canonicalizeStorePath(expandInventoryTemplate(fence.rootTemplate, env)),
+    matchers: (fence.basenamePatterns ?? []).map(wildcardToRegExp),
+  }));
 }
 
-function patternMatchesPath(candidate, rootPath, mainMatcher, sidecarMatchers = []) {
-  if (dirname(candidate) !== rootPath) return false;
-  const leaf = basename(candidate).replaceAll('\\', '/');
-  return Boolean(mainMatcher?.test(leaf) || sidecarMatchers.some((matcher) => matcher.test(leaf)));
+function relativeNormalized(root, candidate) {
+  return relative(root, candidate).replaceAll('\\', '/');
 }
 
-export function classifyLiveStorePath(candidate, env = process.env) {
-  const canonical = canonicalizeStorePath(candidate);
-  if (!canonical) return null;
+export function classifyLiveStorePath(candidatePath, env = process.env) {
+  const candidate = canonicalizeStorePath(candidatePath);
+  if (!candidate) return null;
 
   for (const store of resolvedLiveStores(env)) {
-    if (store.kind === 'directory') {
-      if (pathIsSameOrWithin(canonical, store.defaultPath)) {
-        return { storeId: store.id, reason: 'live_store_directory' };
-      }
-      continue;
+    if (store.kind === 'directory' && pathIsSameOrWithin(candidate, store.defaultPath)) {
+      return { storeId: store.id, store, candidate, relativePath: relativeNormalized(store.defaultPath, candidate) };
     }
-    if (store.kind === 'pattern'
-      && patternMatchesPath(canonical, store.defaultPath, store.basenameMatcher, store.sidecarMatchers)) {
-      return { storeId: store.id, reason: 'live_store_pattern' };
+    if (store.kind !== 'directory' && candidate === store.defaultPath) {
+      return { storeId: store.id, store, candidate, relativePath: '' };
     }
-    if (canonical === store.defaultPath) {
-      return { storeId: store.id, reason: 'live_store_default' };
-    }
-    if (dirname(canonical) === store.parentPath) {
-      const leaf = basename(canonical).replaceAll('\\', '/');
-      if (store.sidecarMatchers.some((matcher) => matcher.test(leaf))) {
-        return { storeId: store.id, reason: 'live_store_sidecar' };
+    if (store.sidecarMatchers.length > 0 && pathIsSameOrWithin(candidate, store.parentPath)) {
+      const rel = relativeNormalized(store.parentPath, candidate);
+      if (store.sidecarMatchers.some((matcher) => matcher.test(rel))) {
+        return { storeId: store.id, store, candidate, relativePath: rel, sidecar: true };
       }
     }
   }
 
   for (const fence of resolvedClassFences(env)) {
-    if (patternMatchesPath(canonical, fence.rootPath, null, fence.matchers)) {
-      return { storeId: fence.id, reason: 'live_store_class_fence' };
-    }
-  }
-
-  for (const root of liveStoreInventory.liveRoots ?? []) {
-    const rootPath = canonicalizeStorePath(expandInventoryTemplate(root.defaultTemplate, env));
-    if (rootPath && pathIsSameOrWithin(canonical, rootPath)) {
-      return { storeId: root.id, reason: 'live_store_root' };
+    if (!pathIsSameOrWithin(candidate, fence.rootPath)) continue;
+    const rel = relativeNormalized(fence.rootPath, candidate);
+    if (fence.matchers.some((matcher) => matcher.test(rel))) {
+      return { storeId: fence.id, fence, candidate, relativePath: rel, classFence: true };
     }
   }
   return null;
 }
 
-function resolveHarnessScopedPath(baseRoot, candidate, sourceRoot) {
-  if (!baseRoot || !sourceRoot) return '';
-  return normalizeCase(resolve(baseRoot, relative(sourceRoot, candidate)));
+function harnessRoot(env = process.env) {
+  const value = envValue(env, 'OPK_VITEST_HARNESS_ROOT');
+  return value ? canonicalizeStorePath(value) : '';
 }
 
-function unclassifiedLiveRootRedirects(env, harnessRoot) {
-  const seen = new Set();
-  const redirects = [];
-  const add = (id, template) => {
-    if (template === '${HOME}') return;
-    if (template === '${TMP}') return;
-    const rootPath = canonicalizeStorePath(expandInventoryTemplate(template, env));
-    if (!rootPath || seen.has(rootPath)) return;
-    seen.add(rootPath);
-    const safeId = String(id || createHash('sha256').update(template, 'utf8').digest('hex').slice(0, 16))
-      .replace(/[^A-Za-z0-9._-]/g, '-');
-    redirects.push({
-      rootPath,
-      harnessPath: join(harnessRoot, 'unclassified-live-root', safeId),
-    });
-  };
-  for (const root of liveStoreInventory.liveRoots ?? []) add(root.id, root.defaultTemplate);
-  for (const store of liveStoreInventory.stores ?? []) add(store.id, store.liveRoot);
-  return redirects;
+function harnessStorePath(match, env) {
+  const root = harnessRoot(env);
+  if (!root) return '';
+  if (match.store) {
+    const base = resolve(root, match.store.harnessPath || join('state', match.store.id));
+    if (match.store.kind === 'directory') return match.relativePath ? resolve(base, match.relativePath) : base;
+    if (match.sidecar) return resolve(dirname(base), match.relativePath);
+    return base;
+  }
+  return resolve(root, 'state', 'class-fences', match.storeId, match.relativePath || basename(match.candidate));
 }
 
-export function redirectHarnessWritePath(candidate, env = process.env) {
-  if (env[OPK_VITEST_HARNESS_MARKER] !== '1') return '';
-  const canonical = canonicalizeStorePath(candidate);
-  if (!canonical) return '';
-  const harnessRoot = canonicalizeStorePath(env[OPK_VITEST_HARNESS_ROOT]);
-  if (!harnessRoot) return '';
-  if (pathIsSameOrWithin(canonical, harnessRoot)) return canonical;
-
-  for (const store of resolvedLiveStores(env)) {
-    if (store.kind === 'directory' && pathIsSameOrWithin(canonical, store.defaultPath)) {
-      return resolveHarnessScopedPath(join(harnessRoot, store.harnessPath), canonical, store.defaultPath);
-    }
-    if (store.kind === 'pattern'
-      && patternMatchesPath(canonical, store.defaultPath, store.basenameMatcher, store.sidecarMatchers)) {
-      return resolveHarnessScopedPath(join(harnessRoot, store.harnessPath), canonical, store.defaultPath);
-    }
-    if (canonical === store.defaultPath) {
-      return normalizeCase(resolve(harnessRoot, store.harnessPath));
-    }
-    if (dirname(canonical) === store.parentPath) {
-      const leaf = basename(canonical).replaceAll('\\', '/');
-      if (store.sidecarMatchers.some((matcher) => matcher.test(leaf))) {
-        return normalizeCase(resolve(dirname(join(harnessRoot, store.harnessPath)), leaf));
-      }
-    }
+export function redirectHarnessWritePath(candidatePath, operation = 'write', env = process.env) {
+  if (env.OPK_VITEST_HARNESS !== '1') return candidatePath;
+  const match = classifyLiveStorePath(candidatePath, env);
+  if (!match) return candidatePath;
+  const redirected = harnessStorePath(match, env);
+  if (!redirected) {
+    const error = new Error(`OPK_VITEST_LIVE_STORE_BLOCKED ${operation}: missing harness root`);
+    error.code = 'OPK_VITEST_LIVE_STORE_BLOCKED';
+    throw error;
   }
-
-  for (const fence of resolvedClassFences(env)) {
-    if (patternMatchesPath(canonical, fence.rootPath, null, fence.matchers)) {
-      const tmpRoot = canonicalizeStorePath(env.TMPDIR || env.TEMP || env.TMP || join(harnessRoot, 'tmp'));
-      return resolveHarnessScopedPath(tmpRoot, canonical, fence.rootPath);
-    }
-  }
-
-  for (const root of liveStoreInventory.liveRoots ?? []) {
-    const rootPath = canonicalizeStorePath(expandInventoryTemplate(root.defaultTemplate, env));
-    const harnessPath = canonicalizeStorePath(env[root.harnessEnv] || join(harnessRoot, root.kind === 'directory' ? root.id : ''));
-    if (rootPath && harnessPath && pathIsSameOrWithin(canonical, rootPath)) {
-      return resolveHarnessScopedPath(harnessPath, canonical, rootPath);
-    }
-  }
-
-  for (const fallback of unclassifiedLiveRootRedirects(env, harnessRoot)) {
-    if (pathIsSameOrWithin(canonical, fallback.rootPath)) {
-      return resolveHarnessScopedPath(fallback.harnessPath, canonical, fallback.rootPath);
-    }
-  }
-  return '';
+  mkdirSync(dirname(redirected), { recursive: true, mode: 0o700 });
+  return redirected;
 }
 
-export function assertHarnessWritePathSafe(candidate, operation = 'write', env = process.env) {
-  if (env[OPK_VITEST_HARNESS_MARKER] !== '1') return;
+export function assertHarnessWritePathSafe(candidatePath, operation = 'write', env = process.env) {
+  if (env.OPK_VITEST_HARNESS !== '1') return candidatePath;
+  const candidate = canonicalizeStorePath(candidatePath);
+  const root = harnessRoot(env);
+  if (root && pathIsSameOrWithin(candidate, root)) return candidatePath;
   const match = classifyLiveStorePath(candidate, env);
-  if (!match) return;
-  const error = new Error(
-    `OPK_VITEST_LIVE_STORE_BLOCKED operation=${operation} store=${match.storeId}`,
-  );
+  if (!match) return candidatePath;
+  const error = new Error(`OPK_VITEST_LIVE_STORE_BLOCKED ${operation}: ${candidate}`);
   error.code = 'OPK_VITEST_LIVE_STORE_BLOCKED';
   error.storeId = match.storeId;
+  error.path = candidate;
   throw error;
 }
 
-function removeStaleHarnessRoots(baseRoot) {
-  let removed = 0;
-  const now = Date.now();
-  let entries = [];
-  try {
-    entries = readdirSync(baseRoot, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (removed >= STALE_ROOT_MAX_REMOVALS) break;
-    if (!entry.isDirectory() || !entry.name.startsWith('opk-vitest-')) continue;
-    const candidate = join(baseRoot, entry.name);
-    try {
-      const age = now - statSync(candidate).mtimeMs;
-      if (age < STALE_ROOT_MAX_AGE_MS) continue;
-      rmSync(candidate, { recursive: true, force: true });
-      removed += 1;
-    } catch {
-      // Bounded best-effort scavenging must not hide the test result.
-    }
-  }
-}
-
-export function createHarnessRoot(baseRoot = tmpdir()) {
-  removeStaleHarnessRoots(baseRoot);
-  const root = mkdtempSync(join(baseRoot, 'opk-vitest-'));
-  chmodSync(root, 0o700);
+export function createHarnessRoot() {
+  const root = mkdtempSync(join(tmpdir(), 'opk-vitest-'));
+  mkdirSync(root, { recursive: true, mode: 0o700 });
   return root;
 }
 
-function ensurePrivateDirectory(path) {
-  mkdirSync(path, { recursive: true, mode: 0o700 });
-  chmodSync(path, 0o700);
+function setStoreOverrides(root, env) {
+  for (const store of liveStoreInventory.stores ?? []) {
+    const target = resolve(root, store.harnessPath || join('state', store.id));
+    if (store.kind === 'directory') mkdirSync(target, { recursive: true, mode: 0o700 });
+    else mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+    for (const name of store.envOverrides ?? []) env[name] = target;
+  }
 }
 
-export function applyOpkVitestHarnessEnv(rootDir, env = process.env) {
-  const hasExplicitProductionWakeRoot = String(env.OPK_VITEST_PRODUCTION_WAKE_ROOT ?? '').trim() !== '';
-  const productionWakeRoot = hasExplicitProductionWakeRoot
-    ? env.OPK_VITEST_PRODUCTION_WAKE_ROOT
-    : resolveProductionWakeRoot(env);
-  env.OPK_VITEST_PRODUCTION_HOME ||= env.HOME || homedir();
-  if (!Object.prototype.hasOwnProperty.call(env, 'OPK_VITEST_PRODUCTION_XDG_STATE_HOME')) {
-    env.OPK_VITEST_PRODUCTION_XDG_STATE_HOME = env.XDG_STATE_HOME || '';
-  }
-  env.OPK_VITEST_PRODUCTION_TMP ||= env.TMPDIR || env.TEMP || env.TMP || tmpdir();
-  env.OPK_VITEST_PRODUCTION_AO_BASE ||= env.AO_BASE_DIR
-    || join(env.OPK_VITEST_PRODUCTION_HOME, '.agent-orchestrator');
+export function applyOpkVitestHarnessEnv(rootPath, env = process.env) {
+  const root = canonicalizeStorePath(rootPath);
+  if (!root) throw new Error('harness root is required');
 
-  const root = resolve(rootDir || createHarnessRoot());
-  ensurePrivateDirectory(root);
-  const wake = join(root, 'wake');
+  const originalHome = productionHome(env);
+  const originalTmp = productionTmp(env);
+  const originalWake = productionWakeRoot(env);
+  const originalPackBase = productionPackBase(env);
+  const home = join(root, 'home');
   const state = join(root, 'state');
-  const isolatedTmp = join(root, 'tmp');
-  const inbox = join(root, 'operator-inbox');
-  const health = join(root, 'health-spool');
-  const aoBase = join(root, 'ao-base');
+  const tmp = join(root, 'tmp');
+  const wake = join(root, 'wake');
+  const packState = join(root, 'pack-state');
   const transport = join(root, 'transport');
-  const reviewStartClaims = join(aoBase, 'projects', 'orchestrator-pack', 'review-start-claims');
-  const workerNudgeClaims = join(aoBase, 'projects', 'orchestrator-pack', 'worker-nudge-claims');
-  for (const dir of [
-    wake,
-    state,
-    isolatedTmp,
-    inbox,
-    health,
-    aoBase,
-    transport,
-    reviewStartClaims,
-    workerNudgeClaims,
-  ]) {
-    ensurePrivateDirectory(dir);
+  const operatorInbox = join(root, 'operator-inbox');
+  const healthSpool = join(root, 'health-spool');
+
+  for (const path of [root, home, state, tmp, wake, packState, transport, operatorInbox, healthSpool]) {
+    mkdirSync(path, { recursive: true, mode: 0o700 });
   }
 
-  const paths = {
-    root,
-    wake,
-    state,
-    tmp: isolatedTmp,
-    operatorInbox: inbox,
-    healthSpool: health,
-    aoBase,
-    transport,
-  };
   Object.assign(env, {
     OPK_VITEST_HARNESS: '1',
     OPK_VITEST_HARNESS_ROOT: root,
     OPK_VITEST_HARNESS_INVENTORY: inventoryPath,
-    OPK_VITEST_HARNESS_AO_BASE_DIR: aoBase,
-    OPK_VITEST_PRODUCTION_WAKE_ROOT: productionWakeRoot,
+    OPK_VITEST_PRODUCTION_HOME: originalHome,
+    OPK_VITEST_PRODUCTION_TMP: originalTmp,
+    OPK_VITEST_PRODUCTION_WAKE_ROOT: originalWake,
+    OPK_VITEST_PRODUCTION_OPK_BASE: originalPackBase,
+    HOME: home,
+    USERPROFILE: home,
     XDG_STATE_HOME: state,
-    TMPDIR: isolatedTmp,
-    TEMP: isolatedTmp,
-    TMP: isolatedTmp,
-    AO_WAKE_SUPERVISOR_STATE_DIR: wake,
+    TMPDIR: tmp,
+    TEMP: tmp,
+    TMP: tmp,
+    OPK_BASE_DIR: packState,
+    OPK_WAKE_SUPERVISOR_STATE_DIR: wake,
     ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR: wake,
-    AO_SIDE_PROCESS_STATE_DIR: wake,
-    AO_BASE_DIR: aoBase,
-    AO_MECHANICAL_TRANSPORT_TEMP: transport,
-    AO_ORCHESTRATOR_ESCALATION_STATE: join(state, 'orchestrator-escalation-state.json'),
-    AO_OPERATOR_ESCALATION_INBOX: inbox,
-    AO_ESCALATION_HEALTH_SPOOL: health,
-    AO_WORKER_MESSAGE_DISPATCH_JOURNAL: join(wake, 'worker-message-dispatch-journal.json'),
-    AO_WORKER_MESSAGE_SUBMIT_STATE: join(state, 'orchestrator-worker-message-submit-state.json'),
-    AO_WORKER_STATUS_STORE: join(wake, 'worker-status-store.json'),
-    AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE: join(
-      state,
-      'orchestrator-review-handoff-wake-admission.json',
-    ),
-    AO_REPORT_STATE_SEED_STATE: join(
-      state,
-      'orchestrator-review-ready-report-state-seed-state.json',
-    ),
-    AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE: join(
-      state,
-      'orchestrator-review-trigger-reeval-watch.json',
-    ),
-    AO_WORKER_REPORT_STORE: join(wake, 'worker-report-store.json'),
-    AO_PR_SESSION_BINDING_CACHE: join(wake, 'pr-session-binding-cache.json'),
-    AO_CI_GREEN_WAKE_RECONCILE_STATE: join(state, 'orchestrator-ci-green-wake-state.json'),
-    AO_DEAD_WORKER_RECONCILE_STATE: join(
-      wake,
-      'orchestrator-dead-worker-reconcile-state.json',
-    ),
-    AO_REVIEW_TRIGGER_RECONCILE_STATE: join(state, 'orchestrator-review-reconcile-state.json'),
-    AO_WAKE_DEDUP_STATE: join(state, 'orchestrator-wake-dedup.json'),
-    AO_WAKE_LISTENER_SIDE_EFFECT_LOCK: join(
-      state,
-      'orchestrator-wake-listener-side-effect.lock',
-    ),
-    AO_REVIEW_CLAIM_DIR: reviewStartClaims,
-    AO_WORKER_NUDGE_CLAIM_DIR: workerNudgeClaims,
-    AO_WORKER_MESSAGE_ADOPTION_STATE: join(
-      state,
-      'orchestrator-worker-message-send-adoption.json',
-    ),
+    OPK_SIDE_PROCESS_STATE_DIR: wake,
+    OPK_MECHANICAL_TRANSPORT_TEMP: transport,
+    OPK_OPERATOR_ESCALATION_INBOX: operatorInbox,
+    OPK_ESCALATION_HEALTH_SPOOL: healthSpool,
+    OPK_ORCHESTRATOR_ESCALATION_STATE: join(state, 'orchestrator-escalation-state.json'),
+    OPK_WORKER_MESSAGE_DISPATCH_JOURNAL: join(wake, 'worker-message-dispatch-journal.json'),
+    OPK_WORKER_MESSAGE_SUBMIT_STATE: join(state, 'orchestrator-worker-message-submit-state.json'),
+    OPK_WORKER_STATUS_STORE: join(wake, 'worker-status-store.json'),
+    OPK_WORKER_REPORT_STORE: join(wake, 'worker-report-store.json'),
+    OPK_PR_SESSION_BINDING_CACHE: join(wake, 'pr-session-binding-cache.json'),
+    OPK_REVIEW_CLAIM_DIR: join(packState, 'projects', 'orchestrator-pack', 'review-start-claims'),
+    OPK_WORKER_NUDGE_CLAIM_DIR: join(packState, 'projects', 'orchestrator-pack', 'worker-nudge-claims'),
+    OPK_REPORT_STATE_SEED_STATE: join(state, 'orchestrator-review-ready-report-state-seed-state.json'),
+    OPK_REVIEW_TRIGGER_REEVAL_WATCH_STATE: join(state, 'orchestrator-review-trigger-reeval-watch.json'),
+    OPK_CI_GREEN_WAKE_RECONCILE_STATE: join(state, 'orchestrator-ci-green-wake-state.json'),
+    OPK_DEAD_WORKER_RECONCILE_STATE: join(wake, 'orchestrator-dead-worker-reconcile-state.json'),
+    OPK_REVIEW_TRIGGER_RECONCILE_STATE: join(state, 'orchestrator-review-reconcile-state.json'),
+    OPK_WAKE_DEDUP_STATE: join(state, 'orchestrator-wake-dedup.json'),
   });
-  return paths;
+  setStoreOverrides(root, env);
+  return { root, home, state, tmp, wake, packState, transport, operatorInbox, healthSpool };
 }
 
-function hashFile(path) {
-  const hash = createHash('sha256');
-  hash.update(readFileSync(path));
+function hashPath(path) {
+  if (!existsSync(path)) return { exists: false };
   const stat = lstatSync(path);
-  return {
-    type: 'file',
-    hash: hash.digest('hex'),
-    size: stat.size,
-    mtimeNs: String(stat.mtimeNs ?? BigInt(Math.round(stat.mtimeMs * 1e6))),
-  };
-}
-
-function hashDirectory(path) {
   const hash = createHash('sha256');
-  const walk = (dir, prefix = '') => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })
-      .sort((a, b) => a.name.localeCompare(b.name))) {
-      const full = join(dir, entry.name);
-      const rel = join(prefix, entry.name).replaceAll('\\', '/');
-      try {
-        hash.update(entry.isDirectory() ? `d:${rel}\n` : `f:${rel}\n`);
-        if (entry.isDirectory()) walk(full, rel);
-        else if (entry.isFile()) hash.update(readFileSync(full));
-        else hash.update(`other:${entry.name}\n`);
-      } catch (error) {
-        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') continue;
-        throw error;
+  const walk = (candidate, prefix = '') => {
+    const current = lstatSync(candidate);
+    if (current.isDirectory()) {
+      for (const entry of readdirSync(candidate, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        const child = join(candidate, entry.name);
+        const rel = join(prefix, entry.name).replaceAll('\\', '/');
+        hash.update(`${entry.isDirectory() ? 'd' : 'f'}:${rel}\n`);
+        walk(child, rel);
       }
+    } else if (current.isFile()) {
+      hash.update(readFileSync(candidate));
     }
   };
   walk(path);
-  const stat = lstatSync(path);
   return {
-    type: 'directory',
+    exists: true,
+    type: stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other',
     hash: hash.digest('hex'),
-    mtimeNs: String(stat.mtimeNs ?? BigInt(Math.round(stat.mtimeMs * 1e6))),
+    size: stat.isFile() ? statSync(path).size : undefined,
   };
 }
 
-function snapshotPath(path) {
-  try {
-    if (!existsSync(path)) return { exists: false };
-    const stat = lstatSync(path);
-    if (stat.isDirectory()) return { exists: true, ...hashDirectory(path) };
-    if (stat.isFile()) return { exists: true, ...hashFile(path) };
-    return {
-      exists: true,
-      type: 'other',
-      size: stat.size,
-      mtimeNs: String(stat.mtimeNs ?? BigInt(Math.round(stat.mtimeMs * 1e6))),
-    };
-  } catch (error) {
-    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return { exists: false };
-    throw error;
-  }
-}
-
-function listPatternPaths(rootPath, matchers) {
-  const paths = [];
-  if (!existsSync(rootPath)) return paths;
-  try {
-    for (const name of readdirSync(rootPath)) {
-      const normalized = name.replaceAll('\\', '/');
-      if (matchers.some((matcher) => matcher.test(normalized))) {
-        paths.push(join(rootPath, name));
-      }
-    }
-  } catch {
-    // Caller still retains a root existence snapshot.
-  }
-  return paths.sort();
-}
-
-function listCoveredPaths(store) {
-  if (store.kind === 'pattern') {
-    return listPatternPaths(
-      store.defaultPath,
-      [store.basenameMatcher, ...store.sidecarMatchers].filter(Boolean),
-    );
-  }
+function snapshotStore(store) {
   const paths = new Set([store.defaultPath]);
-  if (!existsSync(store.parentPath)) return [...paths];
-  try {
+  if (existsSync(store.parentPath)) {
     for (const name of readdirSync(store.parentPath)) {
-      const normalized = name.replaceAll('\\', '/');
-      if (store.sidecarMatchers.some((matcher) => matcher.test(normalized))) {
+      if (store.sidecarMatchers.some((matcher) => matcher.test(name.replaceAll('\\', '/')))) {
         paths.add(join(store.parentPath, name));
       }
     }
-  } catch {
-    // Snapshot remains fail-safe for the primary path.
   }
-  return [...paths].sort();
-}
-
-function storeSnapshot(store) {
-  const items = {};
-  for (const path of listCoveredPaths(store)) {
-    const key = createHash('sha256').update(path).digest('hex');
-    items[key] = snapshotPath(path);
-  }
-  return items;
-}
-
-function classFenceSnapshot(fence) {
-  const items = {};
-  for (const path of listPatternPaths(fence.rootPath, fence.matchers)) {
-    const key = createHash('sha256').update(path).digest('hex');
-    items[key] = snapshotPath(path);
-  }
-  return items;
-}
-
-function snapshotsEqual(a, b) {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return [...paths].sort().map((path) => [path, hashPath(path)]);
 }
 
 export function startLiveStoreGuard(env = process.env) {
   const stores = resolvedLiveStores(env);
-  const classFences = resolvedClassFences(env);
-  const before = new Map(stores.map((store) => [store.id, storeSnapshot(store)]));
-  const fenceBefore = new Map(
-    classFences.map((fence) => [fence.id, classFenceSnapshot(fence)]),
-  );
+  const before = new Map(stores.map((store) => [store.id, snapshotStore(store)]));
   const touched = new Set();
   const watchers = [];
-  const watchedDirs = new Set();
+  const watched = new Set();
 
-  const watchDir = (requestedDir) => {
-    let dir = requestedDir;
-    while (dir && !existsSync(dir)) {
-      const parent = dirname(dir);
-      if (parent === dir) return;
-      dir = parent;
+  const arm = (path) => {
+    let anchor = path;
+    while (anchor && !existsSync(anchor)) {
+      const parent = dirname(anchor);
+      if (parent === anchor) return;
+      anchor = parent;
     }
-    if (!dir || watchedDirs.has(dir) || watchedDirs.size >= MAX_WATCHED_DIRECTORIES) return;
-    watchedDirs.add(dir);
+    if (!anchor || watched.has(anchor) || watched.size >= MAX_WATCHED_DIRECTORIES) return;
+    watched.add(anchor);
     try {
-      const watcher = watch(dir, { persistent: false }, (_eventType, filename) => {
+      const handle = watch(anchor, { persistent: false }, (_event, filename) => {
         if (!filename) return;
-        const candidate = canonicalizeStorePath(join(dir, String(filename)));
+        const candidate = canonicalizeStorePath(join(anchor, String(filename)));
         const match = classifyLiveStorePath(candidate, env);
         if (match) touched.add(match.storeId);
-        // If a not-yet-existing store is created and deleted below a missing
-        // ancestor, fs.watch reports the ancestor name. Attribute that event to
-        // every inventoried descendant so create-then-delete cannot escape.
-        for (const store of stores) {
-          if (candidate && pathIsSameOrWithin(store.defaultPath, candidate)) {
-            touched.add(store.id);
-          }
-        }
       });
-      watchers.push(watcher);
+      watchers.push(handle);
     } catch {
-      // Post-run snapshots remain authoritative if a platform cannot watch a path.
+      // Snapshot comparison remains authoritative when watch is unavailable.
     }
   };
 
-  const watchTree = (requestedRoot) => {
-    watchDir(requestedRoot);
-    if (!existsSync(requestedRoot)) return;
-    const visit = (dir) => {
-      if (watchedDirs.size >= MAX_WATCHED_DIRECTORIES) return;
-      watchDir(dir);
-      let entries = [];
-      try {
-        entries = readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        if (entry.isDirectory()) visit(join(dir, entry.name));
-      }
-    };
-    visit(requestedRoot);
-  };
-
-  for (const store of stores) {
-    if (store.kind === 'directory') {
-      watchDir(store.parentPath);
-      watchTree(store.defaultPath);
-    } else if (store.kind === 'pattern') {
-      watchDir(store.defaultPath);
-    } else {
-      watchDir(store.parentPath);
-    }
-  }
-  for (const fence of classFences) {
-    if (fence.watchTransient !== false) watchDir(fence.rootPath);
-  }
-  for (const root of liveStoreInventory.liveRoots ?? []) {
-    if (root.watchTransient === false) continue;
-    watchTree(canonicalizeStorePath(expandInventoryTemplate(root.defaultTemplate, env)));
-  }
+  for (const store of stores) arm(store.kind === 'directory' ? store.defaultPath : store.parentPath);
+  for (const fence of resolvedClassFences(env)) arm(fence.rootPath);
 
   return {
     stop() {
-      for (const watcher of watchers) watcher.close();
+      for (const handle of watchers) handle.close();
       const failures = [];
       for (const store of stores) {
-        const after = storeSnapshot(store);
-        if (!snapshotsEqual(before.get(store.id), after)) {
+        if (JSON.stringify(before.get(store.id)) !== JSON.stringify(snapshotStore(store))) {
           failures.push(`${store.id}:snapshot_changed`);
         }
         if (touched.has(store.id)) failures.push(`${store.id}:transient_write_observed`);
-      }
-      for (const fence of classFences) {
-        const after = classFenceSnapshot(fence);
-        if (!snapshotsEqual(fenceBefore.get(fence.id), after)) {
-          failures.push(`${fence.id}:snapshot_changed`);
-        }
-        if (touched.has(fence.id)) failures.push(`${fence.id}:transient_write_observed`);
-      }
-      for (const root of liveStoreInventory.liveRoots ?? []) {
-        if (root.watchTransient !== false && touched.has(root.id)) {
-          failures.push(`${root.id}:transient_write_observed`);
-        }
       }
       if (failures.length > 0) {
         const error = new Error(`OPK_VITEST_LIVE_STORE_GUARD_FAILED ${failures.join(',')}`);
@@ -652,15 +359,14 @@ export function startLiveStoreGuard(env = process.env) {
   };
 }
 
-export function cleanupHarnessRoot(root) {
-  if (!root) return;
-  const canonical = canonicalizeStorePath(root);
-  const tempCanonical = canonicalizeStorePath(tmpdir());
-  if (!pathIsSameOrWithin(canonical, tempCanonical)
-    || !basename(canonical).startsWith('opk-vitest-')) {
+export function cleanupHarnessRoot(rootPath) {
+  if (!rootPath) return;
+  const root = canonicalizeStorePath(rootPath);
+  const temp = canonicalizeStorePath(tmpdir());
+  if (!pathIsSameOrWithin(root, temp) || !basename(root).startsWith('opk-vitest-')) {
     throw new Error('refusing to cleanup non-harness root');
   }
-  rmSync(canonical, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true });
 }
 
 export function makeInvocationToken() {

@@ -14,7 +14,7 @@ export const TARGET_LIBRARIES = Object.freeze([
 ] as const);
 export const LIFECYCLE_LIBRARY = 'scripts/lib/Review-StartClaimLifecycle.ps1';
 export const DENYLIST = Object.freeze([
-  'vendor/', 'packages/core/', '.ao/', 'plugins/', 'prompts/', 'docs/issues_drafts/',
+  'vendor/', 'packages/core/', '.orchestrator-pack/', 'plugins/', 'prompts/', 'docs/issues_drafts/',
   'docs/declarations/', 'tests/external-output-references/', 'scripts/gh',
   'scripts/lib/gh-wrapper.mjs', 'scripts/lib/gh-governor.mjs', 'scripts/lib/gh-rest-routes.mjs',
   ...D928,

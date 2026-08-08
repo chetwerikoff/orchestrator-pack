@@ -22,7 +22,7 @@ function Get-CiFailureNotificationStoreDir {
     )
 
     if ($StateDir) { return Join-Path $StateDir 'ci-failure-notification' }
-    if ($env:AO_CI_FAILURE_NOTIFICATION_STORE) { return $env:AO_CI_FAILURE_NOTIFICATION_STORE.Trim() }
+    if ($env:OPK_CI_FAILURE_NOTIFICATION_STORE) { return $env:OPK_CI_FAILURE_NOTIFICATION_STORE.Trim() }
 
     $resolvedProjectId = if ($ProjectIdOverride) {
         $ProjectIdOverride

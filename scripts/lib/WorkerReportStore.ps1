@@ -1,316 +1,202 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Pack-owned worker report store read/write helpers (Issue #717).
+  Pack-owned worker report store read/write helpers.
+.DESCRIPTION
+  Report authority is an exact adapter-produced runtime worker identity plus an
+  exact GitHub PR/head binding. Pre-v3 session-keyed records are ignored by the
+  mechanical store and are never migrated into authority.
 #>
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Gh-FleetInventoryCache.ps1')
+. (Join-Path $PSScriptRoot 'Get-RuntimeWorkers.ps1')
+. (Join-Path $PSScriptRoot 'Get-PackReviewRuns.ps1')
 
 $Script:WorkerReportStoreCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/worker-report-store.mjs'
 $Script:PackWorkerReportStoreSurface = 'pack-worker-report-store'
 
 function Get-WorkerReportStorePath {
-    if ($env:AO_WORKER_REPORT_STORE) {
-        return $env:AO_WORKER_REPORT_STORE
-    }
+    if ($env:OPK_WORKER_REPORT_STORE) { return [string]$env:OPK_WORKER_REPORT_STORE }
     if ($env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
         return Join-Path $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR 'worker-report-store.json'
     }
-    if ($env:AO_REPORT_STATE_SEED_STATE) {
-        $dir = Split-Path -Parent $env:AO_REPORT_STATE_SEED_STATE
-        if ($dir) {
-            return Join-Path $dir 'worker-report-store.json'
-        }
+    if ($env:OPK_REPORT_STATE_SEED_STATE) {
+        $dir = Split-Path -Parent $env:OPK_REPORT_STATE_SEED_STATE
+        if ($dir) { return Join-Path $dir 'worker-report-store.json' }
     }
-    $stateRoot = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.local/state/orchestrator-pack-wake-supervisor'
-    return Join-Path $stateRoot 'worker-report-store.json'
+    return Join-Path ([Environment]::GetFolderPath('UserProfile')) '.local/state/orchestrator-pack-wake-supervisor/worker-report-store.json'
 }
 
 function Get-WorkerReportStoreLockPath {
     param([string]$StorePath = '')
-
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
     $dir = Split-Path -Parent $path
-    if (-not $dir) {
-        return Join-Path ([System.IO.Path]::GetTempPath()) 'worker-report-store.lock'
-    }
+    if (-not $dir) { return Join-Path ([System.IO.Path]::GetTempPath()) 'worker-report-store.lock' }
     return Join-Path $dir 'worker-report-store.lock'
 }
 
 function Invoke-WorkerReportStoreCli {
-    param(
-        [string]$Subcommand,
-        [hashtable]$Payload
-    )
-
+    param([Parameter(Mandatory = $true)][string]$Subcommand, [hashtable]$Payload)
     return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerReportStoreCli `
         -Subcommand $Subcommand -Payload $Payload -Label 'worker-report-store' -JsonDepth 30
 }
 
 function Get-WorkerReportStoreState {
     param([string]$Path = '')
-
     $storePath = if ($Path) { $Path } else { Get-WorkerReportStorePath }
     if (-not (Test-Path -LiteralPath $storePath -PathType Leaf)) {
-        return Invoke-WorkerReportStoreCli -Subcommand 'migrate' -Payload @{}
+        return Invoke-WorkerReportStoreCli -Subcommand 'normalize' -Payload @{}
     }
     $raw = Get-Content -LiteralPath $storePath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $payload = ConvertTo-MechanicalJsonStateHashtable -Value $raw
-    return Invoke-WorkerReportStoreCli -Subcommand 'migrate' -Payload $payload
+    return Invoke-WorkerReportStoreCli -Subcommand 'normalize' -Payload (ConvertTo-MechanicalJsonStateHashtable -Value $raw)
 }
 
 function Set-WorkerReportStoreState {
-    param(
-        [string]$Path,
-        [object]$State
-    )
-
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][object]$State)
     $default = @{
-        schemaVersion   = 2
-        lastUpdatedMs   = $null
-        generation      = 0
-        sourceRecords   = @{}
-        bindingByKey    = @{}
-        seededKeys      = @()
-        deferredScanKeys = @()
-        githubSnapshot  = $null
+        schemaVersion = 3; lastUpdatedMs = $null; generation = 0; sourceRecords = @{};
+        bindingByKey = @{}; seededKeys = @(); deferredScanKeys = @(); githubSnapshot = $null
     }
     Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $default -JsonDepth 30
 }
 
 function Update-WorkerReportStoreStateLocked {
     param(
-        [string]$Path,
-        [scriptblock]$Mutator,
-        [long]$NowMs
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][scriptblock]$Mutator,
+        [Parameter(Mandatory = $true)][long]$NowMs
     )
-
-    $lockPath = Get-WorkerReportStoreLockPath -StorePath $Path
-    return Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{
-        purpose = 'worker-report-store'
-    } -Action {
-        $current = Get-WorkerReportStoreState -Path $Path
-        $next = & $Mutator $current
-        if (-not $next.lastUpdatedMs) {
-            $next.lastUpdatedMs = $NowMs
+    return Invoke-OrchestratorSideEffectFenced -LockPath (Get-WorkerReportStoreLockPath -StorePath $Path) `
+        -Metadata @{ purpose = 'worker-report-store' } -Action {
+            $current = Get-WorkerReportStoreState -Path $Path
+            $next = & $Mutator $current
+            if (-not $next.lastUpdatedMs) { $next.lastUpdatedMs = $NowMs }
+            Set-WorkerReportStoreState -Path $Path -State $next
+            return $next
         }
-        Set-WorkerReportStoreState -Path $Path -State $next
-        return $next
-    }
 }
 
-
-function Resolve-PackWorkerReportCallerSessionId {
-    if ($env:AO_WORKER_SESSION_ID) {
-        return [string]$env:AO_WORKER_SESSION_ID
+function ConvertTo-PackRuntimeWorkerIdentity {
+    param([Parameter(Mandatory = $true)][object]$Worker)
+    $identity = if ($Worker.PSObject.Properties.Name -contains 'identity') { $Worker.identity } else { $Worker }
+    $runtime = [string]$identity.runtime
+    $id = [string]$identity.id
+    $generation = [string]$identity.generation
+    if ([string]::IsNullOrWhiteSpace($runtime) -or [string]::IsNullOrWhiteSpace($id) -or [string]::IsNullOrWhiteSpace($generation)) {
+        return $null
     }
-    if ($env:AO_SESSION_ID) {
-        return [string]$env:AO_SESSION_ID
-    }
-    return ''
+    return @{ runtime = $runtime; id = $id; generation = $generation }
 }
 
-
-function Resolve-PackWorkerReportWorktreeHeadSha {
+function Resolve-PackWorkerReportRuntimeWorker {
     param(
         [string]$RepoRoot = '',
-        [string]$HeadSha = ''
+        [string]$Runtime = '',
+        [string]$WorkerId = '',
+        [string]$Generation = '',
+        [string]$Adapter = '',
+        [int]$TimeoutMs = 5000
     )
-
-    if (-not [string]::IsNullOrWhiteSpace($HeadSha)) {
-        return [string]$HeadSha
+    $hasAny = $Runtime -or $WorkerId -or $Generation
+    if ($hasAny -and (-not $Runtime -or -not $WorkerId -or -not $Generation)) {
+        return @{ ok = $false; reason = 'incomplete_runtime_worker_identity' }
     }
-    if ($env:AO_HEAD_SHA) { return [string]$env:AO_HEAD_SHA }
+    try {
+        if ($hasAny) {
+            $result = Find-RuntimeWorker -Runtime $Runtime -Id $WorkerId -Generation $Generation `
+                -Adapter $Adapter -Cwd $RepoRoot -TimeoutMs $TimeoutMs
+            if ([string]$result.status -ne 'ok' -or -not $result.value) {
+                return @{ ok = $false; reason = 'runtime_worker_not_current' }
+            }
+            $identity = ConvertTo-PackRuntimeWorkerIdentity -Worker $result.value
+            if (-not $identity -or $identity.runtime -ne $Runtime -or $identity.id -ne $WorkerId -or $identity.generation -ne $Generation) {
+                return @{ ok = $false; reason = 'runtime_worker_identity_mismatch' }
+            }
+            return @{ ok = $true; worker = $identity }
+        }
+
+        $result = Get-RuntimeWorkers -Adapter $Adapter -Cwd $RepoRoot -TimeoutMs $TimeoutMs `
+            -Workspace ($(if ($RepoRoot) { $RepoRoot } else { 'active' }))
+        if ([string]$result.status -ne 'ok') { return @{ ok = $false; reason = 'runtime_worker_list_failed' } }
+        $workers = @($result.value)
+        if ($workers.Count -ne 1) { return @{ ok = $false; reason = 'runtime_worker_not_unique' } }
+        $identity = ConvertTo-PackRuntimeWorkerIdentity -Worker $workers[0]
+        if (-not $identity) { return @{ ok = $false; reason = 'runtime_worker_identity_malformed' } }
+        return @{ ok = $true; worker = $identity }
+    }
+    catch {
+        return @{ ok = $false; reason = 'runtime_worker_resolution_failed'; detail = $_.Exception.Message }
+    }
+}
+
+function Resolve-PackWorkerReportWorktreeHeadSha {
+    param([string]$RepoRoot = '', [string]$HeadSha = '')
+    if (-not [string]::IsNullOrWhiteSpace($HeadSha)) { return [string]$HeadSha }
     if ($env:GITHUB_SHA) { return [string]$env:GITHUB_SHA }
-
-    $headCwd = if ($RepoRoot -and (Test-Path -LiteralPath $RepoRoot -PathType Container)) {
-        $RepoRoot
-    }
-    else {
-        (Get-Location).Path
-    }
+    $cwd = if ($RepoRoot) { $RepoRoot } else { (Get-Location).Path }
     $previous = Get-Location
     try {
-        Set-Location $headCwd
+        Set-Location $cwd
         return [string]((& git rev-parse HEAD 2>$null | Select-Object -First 1))
     }
-    finally {
-        Set-Location $previous
-    }
+    finally { Set-Location $previous }
 }
 
 function Resolve-PackWorkerReportTrustedBinding {
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$SessionId,
+        [Parameter(Mandatory = $true)][object]$Worker,
         [string]$RepoRoot = '',
-        [string]$RepoSlug = '',
-        [string]$WorktreeHeadSha = ''
+        [string]$WorktreeHeadSha = '',
+        [int]$PrNumber = 0
     )
-
+    $identity = ConvertTo-PackRuntimeWorkerIdentity -Worker $Worker
+    if (-not $identity) { return @{ ok = $false; reason = 'missing_runtime_worker_identity' } }
     $headSha = Resolve-PackWorkerReportWorktreeHeadSha -RepoRoot $RepoRoot -HeadSha $WorktreeHeadSha
-    $session = $null
-    $sessionGetPayload = $null
-    $openPrs = @()
-
-    $aoCli = Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1'
-    if (Test-Path -LiteralPath $aoCli) {
-        . $aoCli
-        try {
-            $sessions = @(Get-AoStatusSessionsIncludingTerminated)
-            foreach ($row in $sessions) {
-                $id = Get-AoSessionRowIdentifier -Row $row
-                if ($id -eq $SessionId) {
-                    $session = $row
-                    break
-                }
-            }
-            if ($session -and (Get-Command Test-AoSessionRowNeedsSessionGetDetail -ErrorAction SilentlyContinue)) {
-                if (Test-AoSessionRowNeedsSessionGetDetail -Row $session) {
-                    try {
-                        $sessionGetPayload = Get-AoSessionGetJson -SessionId $SessionId
-                    }
-                    catch {
-                        $sessionGetPayload = $null
-                    }
-                }
-            }
-        }
-        catch {
-            $session = $null
-        }
-    }
-
-    if (-not $session) {
-        $envPr = 0
-        if ($env:AO_PR_NUMBER) {
-            [void][int]::TryParse([string]$env:AO_PR_NUMBER, [ref]$envPr)
-        }
-        if ($envPr -gt 0) {
-            $session = @{
-                id        = $SessionId
-                name      = $SessionId
-                sessionId = $SessionId
-                prNumber  = $envPr
-            }
-        }
-    }
-
-    if (-not $session) {
-        return @{ ok = $false; reason = 'trust_boundary_binding_unresolved' }
-    }
-
+    if ([string]::IsNullOrWhiteSpace($headSha)) { return @{ ok = $false; reason = 'missing_head_sha' } }
     try {
         $ghPrChecks = Join-Path $PSScriptRoot 'Gh-PrChecks.ps1'
-        if (Test-Path -LiteralPath $ghPrChecks) {
-            . $ghPrChecks
-        }
+        if (Test-Path -LiteralPath $ghPrChecks) { . $ghPrChecks }
         $openPrs = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'pack-worker-report-trusted-binding')
     }
-    catch {
-        $openPrs = @()
-    }
-
-    if ($openPrs.Count -eq 0 -and $headSha) {
-        $fallbackPr = 0
-        if ($null -ne $session.prNumber) {
-            [void][int]::TryParse([string]$session.prNumber, [ref]$fallbackPr)
-        }
-        if ($fallbackPr -le 0 -and $env:AO_PR_NUMBER) {
-            [void][int]::TryParse([string]$env:AO_PR_NUMBER, [ref]$fallbackPr)
-        }
-        if ($fallbackPr -gt 0) {
-            $openPrs = @(@{ number = $fallbackPr; headRefOid = $headSha; state = 'open' })
-        }
-    }
-
-    $sessionPayload = ConvertTo-MechanicalJsonStateHashtable -Value $session
-    $sessionGetHashtable = $null
-    if ($sessionGetPayload) {
-        $sessionGetHashtable = ConvertTo-MechanicalJsonStateHashtable -Value $sessionGetPayload
-    }
-    $openPrPayload = @()
-    foreach ($pr in $openPrs) {
-        $openPrPayload += (ConvertTo-MechanicalJsonStateHashtable -Value $pr)
-    }
-
+    catch { return @{ ok = $false; reason = 'github_pr_binding_unavailable' } }
+    $payloadPrs = @($openPrs | ForEach-Object { ConvertTo-MechanicalJsonStateHashtable -Value $_ })
     return Invoke-WorkerReportStoreCli -Subcommand 'resolveTrustedBinding' -Payload @{
-        session           = $sessionPayload
-        openPrs           = $openPrPayload
-        worktreeHeadSha   = $headSha
-        sessionGetPayload = $sessionGetHashtable
+        worker = $identity; openPrs = $payloadPrs; worktreeHeadSha = $headSha; prNumber = $PrNumber
     }
 }
-
-
 
 function Resolve-PackWorkerReportDeliveryRunId {
     param(
         [string]$ReportState = '',
-        [string]$SessionId = '',
         [int]$PrNumber = 0,
         [string]$HeadSha = '',
         [string]$DeliveryRunId = '',
-        [string]$ProjectId = ''
+        [string]$ProjectId = 'orchestrator-pack'
     )
-
-    if ([string]::IsNullOrWhiteSpace($ReportState) -or $ReportState -ne 'addressing_reviews') {
-        return ''
+    if ($ReportState -ne 'addressing_reviews') { return '' }
+    if (-not [string]::IsNullOrWhiteSpace($DeliveryRunId)) { return [string]$DeliveryRunId }
+    foreach ($name in @('OPK_DELIVERY_RUN_ID', 'OPK_REVIEW_RUN_ID', 'OPK_REVIEW_START_RUN_ID')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($value)) { return [string]$value }
     }
-    if (-not [string]::IsNullOrWhiteSpace($DeliveryRunId)) {
-        return [string]$DeliveryRunId
+    if ($PrNumber -le 0 -or [string]::IsNullOrWhiteSpace($HeadSha)) { return '' }
+    try {
+        $payload = Get-PackReviewRuns -Project $ProjectId
+        $runs = @(Get-PackReviewRunsFromPayload -Payload $payload -Project $ProjectId)
     }
-    foreach ($envName in @('AO_DELIVERY_RUN_ID', 'AO_REVIEW_RUN_ID', 'AO_REVIEW_START_RUN_ID')) {
-        $fromEnv = [Environment]::GetEnvironmentVariable($envName)
-        if (-not [string]::IsNullOrWhiteSpace($fromEnv)) {
-            return [string]$fromEnv
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($SessionId) -or $PrNumber -le 0) {
-        return ''
-    }
-
-    $reviewRuns = @()
-    $aoCli = Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1'
-    if (Test-Path -LiteralPath $aoCli) {
-        . $aoCli
-        $project = $ProjectId
-        if ([string]::IsNullOrWhiteSpace($project)) {
-            if ($env:AO_PROJECT_ID) { $project = [string]$env:AO_PROJECT_ID }
-            else { $project = 'orchestrator-pack' }
-        }
-        try {
-            $reviewRuns = @(Get-AoReviewRuns -Project $project)
-        }
-        catch {
-            $reviewRuns = @()
-        }
-    }
-
-    $runPayload = @()
-    foreach ($run in $reviewRuns) {
-        if ($null -eq $run) { continue }
-        $runPayload += (ConvertTo-MechanicalJsonStateHashtable -Value $run)
-    }
+    catch { $runs = @() }
     $resolved = Invoke-WorkerReportStoreCli -Subcommand 'resolveDeliveryRunId' -Payload @{
-        reportState   = [string]$ReportState
-        sessionId     = [string]$SessionId
-        prNumber      = [int]$PrNumber
-        headSha       = [string]$HeadSha
-        deliveryRunId = ''
-        reviewRuns    = $runPayload
+        reportState = $ReportState; prNumber = $PrNumber; headSha = $HeadSha;
+        deliveryRunId = ''; reviewRuns = @($runs | ForEach-Object { ConvertTo-MechanicalJsonStateHashtable -Value $_ })
     }
-    if ($resolved -and $resolved.deliveryRunId) {
-        return [string]$resolved.deliveryRunId
-    }
-    return ''
+    return $(if ($resolved.deliveryRunId) { [string]$resolved.deliveryRunId } else { '' })
 }
 
 function Write-PackWorkerReportRecord {
     param(
-        [string]$ReportState,
-        [string]$SessionId,
+        [Parameter(Mandatory = $true)][string]$ReportState,
+        [Parameter(Mandatory = $true)][object]$Worker,
         [string]$RepoSlug,
         [int]$PrNumber,
         [string]$HeadSha,
@@ -321,263 +207,124 @@ function Write-PackWorkerReportRecord {
         [bool]$DegradedCiEscalation = $false,
         [string]$StorePath = '',
         [long]$NowMs = 0,
-        [string]$CallerSessionId = '',
         [string]$RepoRoot = '',
         [object]$TrustedBinding = $null,
         [string]$DeliveryRunId = ''
     )
-
-    if (-not $NowMs) {
-        $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    if (-not $NowMs) { $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+    $identity = ConvertTo-PackRuntimeWorkerIdentity -Worker $Worker
+    if (-not $identity) { throw 'worker-report-store upsert failed: missing_runtime_worker_identity' }
+    if (-not $TrustedBinding) {
+        $TrustedBinding = Resolve-PackWorkerReportTrustedBinding -Worker $identity -RepoRoot $RepoRoot `
+            -WorktreeHeadSha $HeadSha -PrNumber $PrNumber
     }
-    $callerSessionId = $CallerSessionId
-    if ([string]::IsNullOrWhiteSpace($callerSessionId)) {
-        $callerSessionId = Resolve-PackWorkerReportCallerSessionId
+    if ($TrustedBinding -is [pscustomobject]) { $TrustedBinding = ConvertTo-MechanicalJsonStateHashtable -Value $TrustedBinding }
+    if (-not $TrustedBinding -or -not $TrustedBinding.ok) {
+        throw "worker-report-store upsert failed: $([string]$TrustedBinding.reason)"
     }
-    if ([string]::IsNullOrWhiteSpace($callerSessionId)) {
-        throw 'worker-report-store upsert failed: trust_boundary_session_mismatch'
+    $PrNumber = [int]$TrustedBinding.prNumber
+    $HeadSha = [string]$TrustedBinding.headSha
+    $RepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
+    if (-not $RepoSlug) { throw 'worker-report-store upsert failed: missing_repo_slug' }
+    $resolvedRunId = Resolve-PackWorkerReportDeliveryRunId -ReportState $ReportState -PrNumber $PrNumber `
+        -HeadSha $HeadSha -DeliveryRunId $DeliveryRunId
+    $record = @{
+        reportState = $ReportState; accepted = $Accepted; worker = $identity; repoSlug = $RepoSlug;
+        prNumber = $PrNumber; headSha = $HeadSha; reportedAtMs = $NowMs; lastObservedMs = $NowMs
     }
-    if (-not [string]::IsNullOrWhiteSpace($SessionId) -and $SessionId -ne $callerSessionId) {
-        throw 'worker-report-store upsert failed: trust_boundary_session_mismatch'
-    }
-    $trustedBinding = $TrustedBinding
-    if (-not $trustedBinding) {
-        $trustedBinding = Resolve-PackWorkerReportTrustedBinding -SessionId $callerSessionId `
-            -RepoRoot $RepoRoot -RepoSlug $RepoSlug -WorktreeHeadSha $HeadSha
-    }
-    if ($trustedBinding -is [pscustomobject]) {
-        $trustedBinding = ConvertTo-MechanicalJsonStateHashtable -Value $trustedBinding
-    }
-    if (-not $trustedBinding -or -not $trustedBinding.ok) {
-        $reason = if ($trustedBinding.reason) { [string]$trustedBinding.reason } else { 'trust_boundary_binding_unresolved' }
-        throw "worker-report-store upsert failed: $reason"
-    }
-    $SessionId = [string]$callerSessionId
-    $PrNumber = [int]$trustedBinding.prNumber
-    $HeadSha = [string]$trustedBinding.headSha
-    if ([string]::IsNullOrWhiteSpace($RepoSlug)) {
-        $RepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug '' -RepoRoot $RepoRoot
-    }
+    if ($resolvedRunId) { $record.deliveryRunId = $resolvedRunId }
+    if ($Note) { $record.note = $Note }
+    if ($Reason) { $record.reason = $Reason }
+    if ($HandoffKind) { $record.handoffKind = $HandoffKind }
+    if ($DegradedCiEscalation) { $record.degradedCiEscalation = $true }
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
-    $resolvedDeliveryRunId = Resolve-PackWorkerReportDeliveryRunId -ReportState $ReportState `
-        -SessionId $SessionId -PrNumber $PrNumber -HeadSha $HeadSha -DeliveryRunId $DeliveryRunId
-    $recordPayload = @{
-        reportState    = $ReportState
-        accepted       = $Accepted
-        sessionId      = $SessionId
-        repoSlug       = $RepoSlug
-        prNumber       = $PrNumber
-        headSha        = $HeadSha
-        reportedAtMs   = $NowMs
-        lastObservedMs = $NowMs
-    }
-    if ($resolvedDeliveryRunId) {
-        $recordPayload.deliveryRunId = $resolvedDeliveryRunId
-    }
-    if (-not [string]::IsNullOrWhiteSpace($Note)) {
-        $recordPayload.note = [string]$Note
-    }
-    if (-not [string]::IsNullOrWhiteSpace($Reason)) {
-        $recordPayload.reason = [string]$Reason
-    }
-    if (-not [string]::IsNullOrWhiteSpace($HandoffKind)) {
-        $recordPayload.handoffKind = [string]$HandoffKind
-    }
-    if ($DegradedCiEscalation) {
-        $recordPayload.degradedCiEscalation = $true
-    }
-    $writeResult = $null
     $captured = @{}
     Update-WorkerReportStoreStateLocked -Path $path -NowMs $NowMs -Mutator {
         param($current)
         $applied = Invoke-WorkerReportStoreCli -Subcommand 'upsertRecord' -Payload @{
-            store           = $current
-            callerSessionId = $callerSessionId
-            nowMs           = $NowMs
-            record          = $recordPayload
-            trustedBinding  = $trustedBinding
+            store = $current; nowMs = $NowMs; record = $record; trustedBinding = $TrustedBinding
         }
-        if (-not $applied.ok) {
-            throw "worker-report-store upsert failed: $($applied.reason)"
-        }
+        if (-not $applied.ok) { throw "worker-report-store upsert failed: $($applied.reason)" }
         $captured.result = $applied
         return $applied.store
     } | Out-Null
-    $writeResult = $captured.result
-    return @{
-        ok         = $true
-        key        = $writeResult.key
-        record     = $writeResult.record
-        generation = $writeResult.generation
-    }
+    return @{ ok = $true; key = $captured.result.key; record = $captured.result.record; generation = $captured.result.generation }
 }
 
 function Build-WorkerReportStoreCurrentHeadByPr {
-    param(
-        [object[]]$OpenPrs = @(),
-        [string]$RepoSlug = '',
-        [string]$RepoRoot = ''
-    )
-
-    $slug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
-    $repoKey = [string]$slug
-    if ($repoKey) {
-        $repoKey = $repoKey.Trim().ToLowerInvariant()
-    }
+    param([object[]]$OpenPrs = @(), [string]$RepoSlug = '', [string]$RepoRoot = '')
+    $slug = [string](Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot)
+    $repoKey = $slug.Trim().ToLowerInvariant()
     $map = @{}
     foreach ($pr in @($OpenPrs)) {
-        if ($null -eq $pr) { continue }
-        $num = [int]$pr.number
+        if (-not $pr) { continue }
+        $number = [int]$pr.number
         $head = [string]$pr.headRefOid
-        if ($num -le 0 -or [string]::IsNullOrWhiteSpace($head)) { continue }
-        $map[[string]$num] = $head
-        if ($repoKey) {
-            $map["$repoKey|$num"] = $head
-        }
+        if ($number -le 0 -or -not $head) { continue }
+        $map[[string]$number] = $head
+        if ($repoKey) { $map["$repoKey|$number"] = $head }
     }
     return $map
 }
 
 function Resolve-WorkerReportStoreRepoSlug {
-    param(
-        [string]$RepoSlug = '',
-        [string]$RepoRoot = ''
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($RepoSlug)) {
-        return $RepoSlug
-    }
-    if ($env:AO_REPO_SLUG) {
-        return [string]$env:AO_REPO_SLUG
-    }
-    if ($env:GITHUB_REPOSITORY) {
-        return [string]$env:GITHUB_REPOSITORY
-    }
-
-    $root = $RepoRoot
-    if (-not $root) {
-        $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    }
+    param([string]$RepoSlug = '', [string]$RepoRoot = '')
+    if ($RepoSlug) { return $RepoSlug }
+    if ($env:GITHUB_REPOSITORY) { return [string]$env:GITHUB_REPOSITORY }
+    $root = if ($RepoRoot) { $RepoRoot } else { Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }
     return Resolve-GhFleetRepoSlug -RepoRoot $root
 }
 
-function Merge-AoSessionRowsWithWorkerReportStore {
-    param(
-        [object[]]$Sessions,
-        [string]$RepoRoot = '',
-        [string]$RepoSlug = '',
-        [string]$StorePath = ''
-    )
-
-    return Merge-AoSessionRowsWithPackWorkerReports -Sessions $Sessions -RepoRoot $RepoRoot `
-        -RepoSlug $RepoSlug -StorePath $StorePath
+function Merge-RuntimeWorkerRowsWithWorkerReportStore {
+    param([object[]]$Sessions, [string]$RepoRoot = '', [string]$RepoSlug = '', [string]$StorePath = '')
+    return Merge-RuntimeWorkerRowsWithPackWorkerReports -Workers $Sessions -RepoRoot $RepoRoot -RepoSlug $RepoSlug -StorePath $StorePath
 }
 
-function Merge-AoSessionRowsWithPackWorkerReports {
-    param(
-        [object[]]$Sessions,
-        [string]$RepoRoot = '',
-        [string]$RepoSlug = '',
-        [string]$StorePath = ''
-    )
-
+function Merge-RuntimeWorkerRowsWithPackWorkerReports {
+    param([object[]]$Workers, [string]$RepoRoot = '', [string]$RepoSlug = '', [string]$StorePath = '')
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
-    $root = $RepoRoot
-    if (-not $root) {
-        $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    }
-    $slug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $root
-    $store = Get-WorkerReportStoreState -Path $path
-    $merged = Invoke-WorkerReportStoreCli -Subcommand 'mergeIntoSessions' -Payload @{
-        sessions = @($Sessions)
-        store    = $store
-        repoSlug = $slug
-    }
-    return @($merged)
+    $slug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
+    return @(Invoke-WorkerReportStoreCli -Subcommand 'mergeIntoWorkers' -Payload @{
+        workers = @($Workers); store = (Get-WorkerReportStoreState -Path $path); repoSlug = $slug
+    })
 }
 
 function Invoke-WorkerReportStoreEviction {
     param(
-        [object[]]$OpenPrs = @(),
-        [hashtable]$CurrentHeadByPr = @{},
-        [string]$StorePath = '',
-        [long]$NowMs = 0,
-        [long]$MaxAgeMs = 0,
-        [long]$NonterminalMaxAgeMs = 0,
-        [switch]$OpenListAuthoritative,
-        [string]$RepoSlug = '',
-        [string]$RepoRoot = ''
+        [object[]]$OpenPrs = @(), [hashtable]$CurrentHeadByPr = @{}, [string]$StorePath = '',
+        [long]$NowMs = 0, [long]$MaxAgeMs = 0, [long]$NonterminalMaxAgeMs = 0,
+        [switch]$OpenListAuthoritative, [string]$RepoSlug = '', [string]$RepoRoot = ''
     )
-
-    if (-not $NowMs) {
-        $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    }
+    if (-not $NowMs) { $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
     $slug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
-    $evictSummary = @{}
     $captured = @{}
     Update-WorkerReportStoreStateLocked -Path $path -NowMs $NowMs -Mutator {
         param($current)
-        $payload = @{
-            store           = $current
-            openPrs         = @($OpenPrs)
-            currentHeadByPr = $CurrentHeadByPr
-            nowMs           = $NowMs
-        }
+        $payload = @{ store = $current; openPrs = @($OpenPrs); currentHeadByPr = $CurrentHeadByPr; nowMs = $NowMs }
         if ($MaxAgeMs -gt 0) { $payload.maxAgeMs = $MaxAgeMs }
         if ($NonterminalMaxAgeMs -gt 0) { $payload.nonterminalMaxAgeMs = $NonterminalMaxAgeMs }
         if ($OpenListAuthoritative) { $payload.openListAuthoritative = $true }
-        if ($slug) { $payload.repoSlug = [string]$slug }
+        if ($slug) { $payload.repoSlug = $slug }
         $result = Invoke-WorkerReportStoreCli -Subcommand 'evict' -Payload $payload
-        $captured.summary = @{
-            removed     = [int]$result.removed
-            recordCount = [int]$result.recordCount
-        }
+        $captured.summary = @{ removed = [int]$result.removed; recordCount = [int]$result.recordCount }
         return $result.store
     } | Out-Null
-    if ($captured.summary) {
-        $evictSummary = $captured.summary
-    }
-    return @{
-        removed     = [int]$evictSummary.removed
-        recordCount = [int]$evictSummary.recordCount
-    }
+    return $captured.summary
 }
 
 function Get-PackWorkerReportDiscoveryCandidates {
-    param(
-        [string]$StorePath = '',
-        [string]$RepoRoot = '',
-        [string]$RepoSlug = ''
-    )
-
+    param([string]$StorePath = '', [string]$RepoRoot = '', [string]$RepoSlug = '')
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
     $store = Get-WorkerReportStoreState -Path $path
-    $repoKey = ''
-    if ($RepoSlug -or $RepoRoot) {
-        $repoKey = [string](Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot)
-        if ($repoKey) {
-            $repoKey = $repoKey.Trim().ToLowerInvariant()
-        }
-    }
-    $records = @($store.sourceRecords.PSObject.Properties | ForEach-Object { $_.Value })
+    $repoKey = [string](Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot)
+    $repoKey = $repoKey.Trim().ToLowerInvariant()
     $candidates = @()
-    foreach ($record in $records) {
+    foreach ($property in @($store.sourceRecords.PSObject.Properties)) {
+        $record = $property.Value
         if (-not $record) { continue }
-        if ($repoKey) {
-            $recordSlug = [string]$record.repoSlug
-            if ($recordSlug) {
-                $recordSlug = $recordSlug.Trim().ToLowerInvariant()
-            }
-            if ($recordSlug -and $recordSlug -ne $repoKey) {
-                continue
-            }
-        }
-        $candidates += @{
-            sessionId   = [string]$record.sessionId
-            issueNumber = 0
-            prNumber    = [int]$record.prNumber
-        }
+        if ($repoKey -and ([string]$record.repoSlug).Trim().ToLowerInvariant() -ne $repoKey) { continue }
+        $candidates += @{ worker = $record.worker; issueNumber = 0; prNumber = [int]$record.prNumber }
     }
     return @($candidates)
 }

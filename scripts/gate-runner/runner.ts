@@ -6,7 +6,7 @@ import { evaluateCensus, loadCensus } from './census.ts';
 import { evaluateDeclarativeGate } from './declarative.ts';
 import { representativeDeclarativeGates } from './representative-gates.ts';
 import { captureSourceSnapshot } from './source-snapshot.ts';
-import { evaluateAoCaptureRedaction, fileCaptureReader } from './custom/ao-capture-redaction.ts';
+import { evaluateAoCaptureRedaction, fileCaptureReader } from './custom/capture-redaction.ts';
 import { extensionGateRegistrations } from './extensions.ts';
 import {
   selectGateRegistrations,
@@ -35,7 +35,7 @@ const builtInGateRegistrations: readonly GateRegistration[] = [
     evaluate: ({ snapshot }) => withDynamicLegacyOutput(evaluateDeclarativeGate(definition, snapshot), snapshot.files),
   })),
   {
-    gateId: 'ao-capture-redaction',
+    gateId: 'capture-redaction',
     evaluate: ({ repoRoot }) => evaluateAoCaptureRedaction(fileCaptureReader(repoRoot)),
   },
 ];

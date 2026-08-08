@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "surfaces": [
+    {
+      "id": "legacy-runtime-name",
+      "sourceCommandPattern": "\\bAgent Orchestrator\\b|\\bagent-orchestrator\\b",
+      "pathPattern": "(^|/)(?:ao(?:-|\\.|$)|agent-orchestrator)",
+      "reason": "The retired runtime name is not an active identity or prescription.",
+      "owningReference": "Issue #1352 AO-01..AO-06"
+    },
+    {
+      "id": "legacy-runtime-selector",
+      "sourceCommandPattern": "\\b(?:AO|ORCA)_[A-Z0-9_]+\\b",
+      "pathPattern": "$a",
+      "reason": "Runtime identity and task bindings are explicit; pack tuning uses only approved pack selectors.",
+      "owningReference": "Issue #1352 AO-11"
+    },
+    {
+      "id": "legacy-runtime-command",
+      "sourceCommandPattern": "(?:^|[\\s`\\\"'])ao\\s+(?:status|session|events|project|start|stop|send|review|report|acknowledge|spawn|orchestrator)(?=\\s|$)|['\\\"]ao['\\\"]\\s*,\\s*\\[\\s*['\\\"](?:status|session|events|project|start|stop|send|review|report|acknowledge|spawn|orchestrator)['\\\"]",
+      "pathPattern": "(^|/)scripts/ao(?:$|[-./])",
+      "reason": "No executable retired-runtime command remains.",
+      "owningReference": "Issue #1352 AO-01..AO-05"
+    },
+    {
+      "id": "legacy-daemon-http",
+      "sourceCommandPattern": "/api/v1/(?:projects|sessions)(?:/|\\b)|localhost:3000",
+      "pathPattern": "$a",
+      "reason": "Review and worker behavior do not call the retired daemon API.",
+      "owningReference": "Issue #1352 AO-02"
+    },
+    {
+      "id": "legacy-plugin-identity",
+      "sourceCommandPattern": "plugins/ao-(?:task-declaration|scope-guard|token-chain-ledger|codex-pr-reviewer)|@orchestrator-pack/ao-(?:task-declaration|scope-guard|token-chain-ledger|codex-pr-reviewer)|\\b(?:ao-declare|ao-ledger|ao-codex-review)\\b",
+      "pathPattern": "(^|/)plugins/ao-(?:task-declaration|scope-guard|token-chain-ledger|codex-pr-reviewer)(?:/|$)",
+      "reason": "Only runtime-neutral plugin identities remain.",
+      "owningReference": "Issue #1352 AO-07..AO-10"
+    },
+    {
+      "id": "legacy-config-state-root",
+      "sourceCommandPattern": "agent-orchestrator\\.ya?ml|\\.agent-orchestrator(?:/|\\\\|\\b)|(?:^|[\\s'\\\"`])\\.ao(?:/|\\\\|\\b)",
+      "pathPattern": "(^|/)agent-orchestrator\\.ya?ml$",
+      "reason": "Retired runtime config and state are neither read nor migrated.",
+      "owningReference": "Issue #1352 AO-04/AO-12"
+    },
+    {
+      "id": "legacy-adapter-symbol",
+      "sourceCommandPattern": "\\b(?:Invoke|Get|Write|Resolve|Test|Install)-Ao[A-Za-z0-9_-]*\\b|\\b[Aa]o(?:Session|Review|Worker|Project|Command|Status|Event|Transport|Adapter|Runtime|State|Config)[A-Za-z0-9_]*\\b|\\bfunction\\s+(?:global:)?ao\\b",
+      "pathPattern": "(^|/)(?:scripts/ao-retirement|scripts/runtime/ao-absent|scripts/gate-runner/custom/ao-capture-redaction)(?:/|\\.|$)",
+      "reason": "No retired adapter symbol, AO command shim, or old retirement identity remains reachable.",
+      "owningReference": "Issue #1352 AO-01..AO-05/AO-13/AO-14"
+    },
+    {
+      "id": "compatibility-alias",
+      "sourceCommandPattern": "\\b(?:OPK_REAL_RUNTIME|runtime-controller\\.ya?ml|legacy runtime|retired runtime compatibility|runtime compatibility alias)\\b",
+      "pathPattern": "$a",
+      "reason": "The hard cut has no disguised compatibility selector or config alias.",
+      "owningReference": "Issue #1352 closed disposition model"
+    }
+  ]
+}

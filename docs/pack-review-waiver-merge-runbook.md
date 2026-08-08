@@ -219,7 +219,7 @@ Do not hand-edit review-run JSON on disk.
 - Assume waiver clears findings for merge policy helpers (`evaluateMergePolicy`, triage
   gates) on **future** heads.
 - Use `git push --force` to `main` as a workaround.
-- Run blanket `ao session cleanup` during merge adoption (merge skill Step 9c).
+- Run blanket retired-runtime session cleanup during merge adoption; use the exact owned-identity cleanup in the canonical merge skill.
 
 ## Related docs
 

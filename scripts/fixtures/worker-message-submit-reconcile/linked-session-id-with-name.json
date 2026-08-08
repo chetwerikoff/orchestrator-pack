@@ -24,7 +24,7 @@
       "messageShape": { "charLength": 420, "lineCount": 6 }
     }
   },
-  "aoEvents": [],
+  "runtimeEvents": [],
   "reviewRuns": [],
   "tracking": { "deliveries": {}, "audit": [] }
 }

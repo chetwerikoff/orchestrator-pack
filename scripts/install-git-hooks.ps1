@@ -34,9 +34,9 @@ $hooksDir = Join-Path $gitDir 'hooks'
 New-Item -ItemType Directory -Force -Path $hooksDir | Out-Null
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-$scopeGuardMarker = '# orchestrator-pack ao-scope-guard pre-commit'
+$scopeGuardMarker = '# orchestrator-pack scope-guard pre-commit'
 $scopeGuardHookPath = Join-Path $hooksDir 'pre-commit'
-$scopeGuardSource = Join-Path $Root 'plugins/ao-scope-guard/hooks/pre-commit'
+$scopeGuardSource = Join-Path $Root 'plugins/scope-guard/hooks/pre-commit'
 
 if ($UninstallScopeGuard) {
     if (Test-Path -LiteralPath $scopeGuardHookPath -PathType Leaf) {
@@ -75,7 +75,7 @@ if ($InstallScopeGuard) {
         'set -eu'
         $scopeGuardMarker
         'ROOT="$(git rev-parse --show-toplevel)"'
-        'exec "$ROOT/plugins/ao-scope-guard/hooks/pre-commit"'
+        'exec "$ROOT/plugins/scope-guard/hooks/pre-commit"'
     ) -join "`n"
 
     [System.IO.File]::WriteAllText($scopeGuardHookPath, $scopeHook.Replace("`r`n", "`n"), $utf8NoBom)
@@ -86,7 +86,7 @@ if ($InstallScopeGuard) {
     }
 
     Write-Host "Installed scope-guard pre-commit hook: $scopeGuardHookPath"
-    Write-Host 'Set AO_ISSUE_NUMBER in the environment before committing.'
+    Write-Host 'Issue identity is derived from the branch name by the installed scope-guard hook.'
     Write-Host 'Re-run with -UninstallScopeGuard to remove the hook.'
 }
 
@@ -114,5 +114,5 @@ if (Get-Command chmod -ErrorAction SilentlyContinue) {
 Write-Host "Installed pre-push hook: $hookPath"
 Write-Host 'The hook runs scripts/verify.ps1 and scripts/check-reusable.ps1 before every push.'
 if (-not $InstallScopeGuard) {
-    Write-Host 'Pass -InstallScopeGuard to also install the ao-scope-guard pre-commit hook.'
+    Write-Host 'Pass -InstallScopeGuard to also install the scope-guard pre-commit hook.'
 }

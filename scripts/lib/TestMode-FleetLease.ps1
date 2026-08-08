@@ -54,17 +54,17 @@ function Get-TestModeFleetLeaseRecordPath {
 
 function Get-TestModeFleetLeaseTtlSeconds {
     $parsed = 0
-    if ($env:AO_TESTMODE_FLEET_LEASE_TTL_SECONDS -and [int]::TryParse($env:AO_TESTMODE_FLEET_LEASE_TTL_SECONDS, [ref]$parsed) -and $parsed -gt 0) { return $parsed }
+    if ($env:OPK_TESTMODE_FLEET_LEASE_TTL_SECONDS -and [int]::TryParse($env:OPK_TESTMODE_FLEET_LEASE_TTL_SECONDS, [ref]$parsed) -and $parsed -gt 0) { return $parsed }
     return 120
 }
 function Get-TestModeFleetLeaseHeartbeatGraceSeconds {
     $parsed = 0
-    if ($env:AO_TESTMODE_FLEET_HEARTBEAT_GRACE_SECONDS -and [int]::TryParse($env:AO_TESTMODE_FLEET_HEARTBEAT_GRACE_SECONDS, [ref]$parsed) -and $parsed -gt 0) { return $parsed }
+    if ($env:OPK_TESTMODE_FLEET_HEARTBEAT_GRACE_SECONDS -and [int]::TryParse($env:OPK_TESTMODE_FLEET_HEARTBEAT_GRACE_SECONDS, [ref]$parsed) -and $parsed -gt 0) { return $parsed }
     return 20
 }
 function Get-TestModeFleetLeaseNoProgressSeconds {
     $parsed = 0
-    if ($env:AO_TESTMODE_FLEET_NO_PROGRESS_SECONDS -and [int]::TryParse($env:AO_TESTMODE_FLEET_NO_PROGRESS_SECONDS, [ref]$parsed) -and $parsed -gt 0) { return $parsed }
+    if ($env:OPK_TESTMODE_FLEET_NO_PROGRESS_SECONDS -and [int]::TryParse($env:OPK_TESTMODE_FLEET_NO_PROGRESS_SECONDS, [ref]$parsed) -and $parsed -gt 0) { return $parsed }
     return 150
 }
 
@@ -332,7 +332,7 @@ function Import-TestModeVitestLaneLeaseContext {
     }
 
     if ($ctx.leaseRoot) { $env:OPK_TESTMODE_LEASE_ROOT = [string]$ctx.leaseRoot }
-    if ($ctx.leaseId) { $env:AO_TESTMODE_FLEET_LANE_LEASE_ID = [string]$ctx.leaseId }
+    if ($ctx.leaseId) { $env:OPK_TESTMODE_FLEET_LANE_LEASE_ID = [string]$ctx.leaseId }
     return $ctx
 }
 
@@ -431,7 +431,7 @@ function Test-TestModeFleetSupervisorLeaseExpired {
 function Register-TestModeFleetSupervisorStart {
     param([string]$StateRoot)
 
-    $leaseId = $env:AO_TESTMODE_FLEET_LANE_LEASE_ID
+    $leaseId = $env:OPK_TESTMODE_FLEET_LANE_LEASE_ID
     if (-not $leaseId) { return }
     Write-TestModeFleetLaneLeaseLink -StateRoot $StateRoot -LeaseId $leaseId
     Add-TestModeFleetLeaseStateRoot -LeaseId $leaseId -StateRoot $StateRoot | Out-Null

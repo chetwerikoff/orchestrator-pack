@@ -64,40 +64,17 @@ function Get-IssueNumberFromBranchDeclarationDiff {
 }
 
 function Get-IssueNumberFromDeclarationSnapshots {
-    param(
-        [string]$RepoRoot,
-        [string]$SessionId
-    )
+    param([string]$RepoRoot)
 
     $fromBranch = Get-IssueNumberFromBranchDeclarationDiff -RepoRoot $RepoRoot
     if ($fromBranch) {
         return $fromBranch
     }
 
-    $declDir = Join-Path $RepoRoot 'docs/declarations'
-    if (-not (Test-Path -LiteralPath $declDir -PathType Container)) {
-        return $null
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($SessionId)) {
-        $sessionFiles = @(Get-ChildItem -LiteralPath $declDir -Filter "*.$SessionId.json" -File -ErrorAction SilentlyContinue)
-        if ($sessionFiles.Count -gt 0) {
-            try {
-                $json = Get-Content -LiteralPath $sessionFiles[0].FullName -Raw | ConvertFrom-Json
-                $n = [int]$json.issue_number
-                if ($n -gt 0) {
-                    return $n
-                }
-            }
-            catch {
-                return $null
-            }
-        }
-    }
-
     # Do not scan the entire declarations directory: review worktrees and long-lived
     # branches accumulate many issue snapshots and yield ambiguous issue numbers.
-    # Branch-diff and session-specific files are the only authoritative fallbacks.
+    # The current branch diff is the only declaration fallback. Runtime/session
+    # identity is deliberately not accepted as GitHub issue authority.
     return $null
 }
 
@@ -266,22 +243,6 @@ function Get-AutoReviewPrContext {
         IssueNumber = $null
     }
 
-    $sessionId = $null
-    if ($env:AO_SESSION_ID) {
-        $sessionId = $env:AO_SESSION_ID.Trim()
-    }
-
-    $fromEnvIssue = 0
-    if ($env:AO_ISSUE_NUMBER) {
-        $fromEnvIssue = [int]$env:AO_ISSUE_NUMBER
-    }
-    elseif ($env:AO_ISSUE_ID) {
-        $fromEnvIssue = [int]$env:AO_ISSUE_ID
-    }
-    if ($fromEnvIssue -gt 0) {
-        $result.IssueNumber = $fromEnvIssue
-    }
-
     $branch = $null
     $headSha = $null
     Push-Location -LiteralPath $RepoRoot
@@ -294,10 +255,7 @@ function Get-AutoReviewPrContext {
     }
 
     $prFromEnv = 0
-    if ($env:AO_PR_NUMBER) {
-        $prFromEnv = [int]$env:AO_PR_NUMBER
-    }
-    elseif ($env:GITHUB_PULL_REQUEST_NUMBER) {
+    if ($env:GITHUB_PULL_REQUEST_NUMBER) {
         $prFromEnv = [int]$env:GITHUB_PULL_REQUEST_NUMBER
     }
     elseif ($env:GITHUB_PR_NUMBER) {
@@ -305,7 +263,7 @@ function Get-AutoReviewPrContext {
     }
 
     if (Get-Command gh -ErrorAction SilentlyContinue) {
-        # Never call bare `gh pr view` — AO review workspaces use detached HEAD.
+        # Never call bare `gh pr view` from a detached review checkout.
         if ($prFromEnv -gt 0) {
             $prView = Get-GhPrContextFromView -RepoRoot $RepoRoot -PrNumber $prFromEnv
             Set-AutoReviewResultFromPrView -Result $result -PrView $prView
@@ -335,7 +293,7 @@ function Get-AutoReviewPrContext {
     }
 
     if (-not $result.IssueNumber) {
-        $fromDeclarations = Get-IssueNumberFromDeclarationSnapshots -RepoRoot $RepoRoot -SessionId $sessionId
+        $fromDeclarations = Get-IssueNumberFromDeclarationSnapshots -RepoRoot $RepoRoot
         if ($fromDeclarations) {
             $result.IssueNumber = $fromDeclarations
         }
@@ -358,13 +316,10 @@ function Add-PackReviewAutoForwardArgs {
     if ($autoCtx.IssueNumber -and $ForwardArgs -notcontains '--issue') {
         $ForwardArgs.Add('--issue') | Out-Null
         $ForwardArgs.Add([string]$autoCtx.IssueNumber) | Out-Null
-        if (-not $env:AO_ISSUE_NUMBER) {
-            $env:AO_ISSUE_NUMBER = [string]$autoCtx.IssueNumber
-        }
     }
 
-  # Trusted local AO review: pass explicit --source codex-local (fail-closed sandbox
-  # in the wrapper rejects env-derived defaults). CI callers must pass their own source.
+    # Trusted local pack review: pass explicit --source codex-local. CI callers
+    # provide their own source; no runtime/session environment may supply identity.
     if ($ForwardArgs -notcontains '--source' -and $env:GITHUB_ACTIONS -ne 'true') {
         $ForwardArgs.Add('--source') | Out-Null
         $ForwardArgs.Add('codex-local') | Out-Null

@@ -39,8 +39,8 @@ function Resolve-TrustedPackRoot {
         }
     }
 
-    if ($env:AO_TRUSTED_PACK_ROOT) {
-        $trustedRoot = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
+    if ($env:OPK_TRUSTED_PACK_ROOT) {
+        $trustedRoot = (Resolve-Path -LiteralPath $env:OPK_TRUSTED_PACK_ROOT).Path
         if (Test-PathInsideReviewTarget -CandidatePath $trustedRoot -ReviewTargetRoot $ReviewTargetRoot) {
             throw 'refusing trusted-root override: trusted base equals or lies inside review target'
         }

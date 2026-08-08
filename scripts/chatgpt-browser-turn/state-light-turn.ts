@@ -1254,9 +1254,9 @@ function appendIncident(
 ): boolean {
   try {
     mkdirSync(dirname(BROWSER_TURN_RECURRENCE_PATH), { recursive: true });
-    const issue = String(env.CREATE_ISSUE_DRAFT_ISSUE ?? env.AO_ISSUE_NUMBER ?? '').trim();
-    const pr = String(env.PACK_REVIEW_PR_NUMBER ?? env.AO_PR_NUMBER ?? '').trim();
-    const agent = String(env.AO_AGENT ?? env.PACK_FLOW_MANAGER ?? process.title ?? 'node').trim();
+    const issue = String(env.CREATE_ISSUE_DRAFT_ISSUE ?? '').trim();
+    const pr = String(env.PACK_REVIEW_PR_NUMBER ?? '').trim();
+    const agent = String(env.OPK_AGENT ?? env.PACK_FLOW_MANAGER ?? process.title ?? 'node').trim();
     appendFileSync(BROWSER_TURN_RECURRENCE_PATH, `${JSON.stringify({
       timestamp: new Date().toISOString(),
       ...(issue ? { issue } : {}),

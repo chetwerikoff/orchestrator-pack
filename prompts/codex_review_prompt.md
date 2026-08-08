@@ -1,6 +1,6 @@
 # Codex PR review contract
 
-You are reviewing a pull request in an Agent Orchestrator managed repository.
+You are reviewing a pull request in an orchestrator-pack managed repository.
 
 ## Your task
 
@@ -129,16 +129,16 @@ IDs/snapshot hashes when resolved, and current usability.
 For every PR with a linked issue, run checkpoint-2 re-verification against the
 **immutable bound issue snapshot** (content-addressed; not a live re-fetch). The
 snapshot is captured during contract-mapping preflight (`-PrNumber` + `-PrHeadSha`)
-into the AO project `code-reviews/bound-issue-snapshots/` store. Resolve the
+into the pack project `code-reviews/bound-issue-snapshots/` store. Resolve the
 persisted artifact with `scripts/resolve-bound-issue-snapshot.ps1` — never pass a
 live re-fetch as `-SnapshotFile`. Use `scripts/launch-contract-evidence-reverify.ps1`
-from **trusted pack root** (origin/main worktree, `AO_TRUSTED_PACK_ROOT`, or
+from **trusted pack root** (origin/main worktree, `OPK_TRUSTED_PACK_ROOT`, or
 origin/main archive — never the PR checkout) — the helper owns row evaluation,
 `verification-mode` / `reason` vocabulary, and reviewer summary formatting.
 
 ```powershell
 $SnapshotFile = pwsh -NoProfile -File <trusted-pack-root>/scripts/resolve-bound-issue-snapshot.ps1 `
-  -ProjectId <ao-project-id> `
+  -ProjectId <project-id> `
   -PrNumber <n> `
   -PrHeadSha <sha> `
   -IssueNumber <n> `
@@ -200,8 +200,8 @@ When scope context is present, flag any changed file that falls outside
 `declared_paths` / `declared_globs`, intersects `denylist`, or (when
 `allowed_roots` is set) lies outside allowed roots.
 
-**Control-artifact carve-out:** Do **not** report scope violations for AO
-control artifacts — paths under `docs/declarations/**` or `.ao/**`
+**Control-artifact carve-out:** Do **not** report scope violations for pack
+control artifacts — paths under `docs/declarations/**` or `.orchestrator-pack/**`
 (committed declaration snapshots and runtime mirrors). Scope guard and runtime
 guards exclude these by convention (#3.C); they are expected in worker PRs even
 when absent from `declared_paths` or outside `allowed_roots`. Still report

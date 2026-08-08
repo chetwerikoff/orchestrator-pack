@@ -23,9 +23,9 @@ export interface ReviewRun {
   updatedAt?: string;
 }
 
-import type { AoSession, OpenPr } from './review-trigger-reconcile.d.mts';
+import type { RuntimeWorker, OpenPr } from './review-trigger-reconcile.d.mts';
 
-export type { AoSession, OpenPr };
+export type { RuntimeWorker, OpenPr };
 
 export interface RunDeliveryRecord {
   deliveryState?: string;
@@ -85,14 +85,14 @@ export declare function isPendingSentDeliveryRun(run: ReviewRun): boolean;
 export declare function parseIsoMs(iso: string | undefined): number | null;
 export declare function resolveSendObservedAtMs(run: ReviewRun, fallbackMs: number): number;
 export declare function sessionOwnsRunHead(
-  session: AoSession,
+  session: RuntimeWorker,
   prNumber: number,
   targetHeadSha: string,
   openPrs?: OpenPr[],
 ): boolean;
 export declare function isLinkedSessionLiveOwner(
   run: ReviewRun,
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
   openPrs?: OpenPr[],
   options?: {
     cachePath?: string;
@@ -102,7 +102,7 @@ export declare function isLinkedSessionLiveOwner(
   },
 ): boolean;
 export declare function linkedRunSessionsMatch(
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
   linkedA: string,
   linkedB: string,
 ): boolean;
@@ -110,11 +110,11 @@ export declare function countAmbiguousUnconfirmedPeers(
   runs: ReviewRun[],
   tracking: DeliveryTrackingState,
   target: ReviewRun,
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
 ): number;
 export declare function isDeliveryConfirmed(
   run: ReviewRun,
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
   sendObservedAtMs: number,
   allRuns: ReviewRun[],
   tracking: DeliveryTrackingState,
@@ -122,7 +122,7 @@ export declare function isDeliveryConfirmed(
 ): boolean;
 export declare function pendingDeliveredRunsLackReportReceiptSurface(
   reviewRuns: ReviewRun[],
-  sessions: AoSession[],
+  sessions: RuntimeWorker[],
 ): boolean;
 export declare function evaluateDeliveryTickInterval(input: {
   nowMs: number;
@@ -140,12 +140,12 @@ export declare function resolveDeliveryConfig(config?: {
 }): { confirmationWindowMs: number; maxRedeliveries: number };
 export declare function planDeliveryConfirmActions(input: {
   reviewRuns: ReviewRun[];
-  sessions: AoSession[];
+  sessions: RuntimeWorker[];
   openPrs?: OpenPr[];
   tracking: DeliveryTrackingState;
   nowMs: number;
   config?: { confirmationWindowMs?: number; maxRedeliveries?: number };
-  aoEvents?: Array<Record<string, unknown>>;
+  runtimeEvents?: Array<Record<string, unknown>>;
   floodActiveSessions?: Record<string, boolean>;
 }): { actions: DeliveryConfirmAction[]; tracking: DeliveryTrackingState };
 export declare function buildEscalationMessage(input: {

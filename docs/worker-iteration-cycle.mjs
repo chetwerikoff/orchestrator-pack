@@ -265,7 +265,7 @@ export const ACTIVELY_WORKING_REPORT_STATES = new Set([
 ]);
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker} session
  * @param {string} headSha
  * @param {{ headCommittedAtMs?: number }} [options]
  */
@@ -279,7 +279,7 @@ function hasReadyForReviewForHeadLocal(session, headSha, options = {}) {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker} session
  * @param {string} headSha
  * @param {number} nowMs
  * @param {{ headCommittedAtMs?: number, workerDeliveries?: Array<Record<string, unknown>>, pendingDeliveryFirstSeenAtMs?: number }} [options]
@@ -338,7 +338,7 @@ function isWorkerActivelyWorkingLocal(session, headSha, nowMs, options = {}) {
 
 /**
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun} run
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null} session
  * @param {Array<Record<string, unknown>>} workerDeliveries
  * @param {string} currentHeadSha
  * @param {{ headCommittedAtMs?: number, nowMs?: number }} [options]
@@ -399,7 +399,7 @@ export function isRevisionDrained(run, session, workerDeliveries, currentHeadSha
  * @param {object} input
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
  * @param {number} input.prNumber
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} [input.session]
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null} [input.session]
  * @param {Array<Record<string, unknown>>} [input.workerDeliveries]
  * @param {string} [input.currentHeadSha]
  * @param {number} [input.nowMs]
@@ -472,7 +472,7 @@ export function evaluateOpenReviewRevision({
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null} session
  * @param {string} sessionId
  * @param {Array<Record<string, unknown>>} workerDeliveries
  * @param {number} nowMs
@@ -1165,7 +1165,7 @@ export function bootstrapLegacyNudgedCycle(cycleState, legacyNudged, prNumber, o
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} session
+ * @param {import('./review-trigger-reconcile.mjs').RuntimeWorker | null} session
  * @param {string} headSha
  * @param {number} nowMs
  * @param {object} [options]

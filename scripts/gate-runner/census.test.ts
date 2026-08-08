@@ -32,8 +32,8 @@ describe('terminal gate population census after Issue #906', () => {
     expect(validateCensusSchema(census).join('\n')).toBe('');
     expect(census.entries.some((entry) => entry.classification === 'deferred-to-named-wave')).toBe(false);
     expect(census.entries.filter((entry) => entry.classification === 'retired-in-bulk')).toHaveLength(186);
-    expect(census.entries.filter((entry) => entry.classification === 'kept-in-pr1')).toHaveLength(44);
-    expect(census.entries.filter((entry) => entry.classification === 'retired-with-reason')).toHaveLength(4);
+    expect(census.entries.filter((entry) => entry.classification === 'kept-in-pr1')).toHaveLength(22);
+    expect(census.entries.filter((entry) => entry.classification === 'retired-with-reason')).toHaveLength(26);
   });
 
   it('requires every kept-in-pr1 row to cite C, D, or G', () => {
@@ -92,14 +92,14 @@ describe('terminal gate population census after Issue #906', () => {
     expect(result.details?.join('\n')).toContain(`${row!.id}: migrated/retired PowerShell gate still exists`);
   });
 
-  it('fails when a retained inline verify member disappears', () => {
+  it('fails when a retained verify member disappears', () => {
     const census = loadCensus(repoRoot);
-    const row = census.entries.find((entry) => entry.classification === 'kept-in-pr1' && entry.sourceKind === 'verify-inline');
+    const row = census.entries.find((entry) => entry.classification === 'kept-in-pr1' && entry.sourceKind === 'verify-script-member');
     expect(row).toBeDefined();
     const files = currentFiles();
     files['scripts/verify.ps1'] = (files['scripts/verify.ps1'] ?? '').replaceAll(row!.marker, 'removed-marker');
     const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
-    expect(result.details?.join('\n')).toContain(`${row!.id}: retained verify inline aggregation member was dropped`);
+    expect(result.details?.join('\n')).toContain(`${row!.id}: retained verify invocation was dropped`);
   });
 
   it('fails when a new check script bypasses the frozen population', () => {

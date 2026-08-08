@@ -2,462 +2,218 @@
 
 ## Principle
 
-`orchestrator-pack` is a thin, upgrade-safe layer around upstream Composio AO.
-The AO lifecycle remains upstream-owned. Local behavior is expressed as:
+`orchestrator-pack` is a runtime-neutral governance and execution pack. Business
+logic depends on tracked contracts, explicit configuration inputs, GitHub state,
+and `RuntimeAdapter`; it does not patch or depend on a concrete orchestration core.
 
-- YAML config examples;
-- prompt templates;
-- external plugin contracts;
-- read-only verification scripts;
-- GitHub Actions checks.
+The current concrete runtime implementation is selected only through
+`scripts/runtime/registry.ts`. A runtime effect requires an adapter-produced exact
+identity:
 
-No local code should modify upstream AO core.
+```text
+{ runtime, id, generation }
+```
 
-## Task queue
+Names, titles, branches, paths, process IDs, short identifiers, stale records, and
+accounting fields are never effect authority.
 
-For every newly authored task, the GitHub Issue is the sole live task
-specification, source of truth, and queue entry. The mirrorless new-task flow
-adds no tracked or in-repository live draft or queue-index artifact. Its
-out-of-repository working anchor, immutable pulled revisions, reviewer captures,
-finding-disposition ledger, chat references, and related audit state are
-permitted and expected; they are working/audit artifacts, not a second task
-specification or queue entry.
+## Sources of truth
 
-Pre-existing `docs/issues_drafts/**` and `docs/issue_queue_index.md` content
-remains readable legacy history and prior art. The sanctioned
-`publish-issue-draft` path is legacy-only and may maintain, re-synchronize, or
-batch-publish those pre-existing artifacts. Newly authored tasks do not create,
-update, synchronize, or identify themselves through that corpus.
+1. Published GitHub Issue — live task specification, tier, scope, and acceptance.
+2. Current default branch and current PR head — code and policy identity.
+3. GitHub PR review and required current-head checks — delivery verdict.
+4. Pack review runner/store — operational review state.
+5. Tracked active documentation and policy.
+6. Historical drafts, captures, and Git history — non-authoritative audit evidence.
 
-### Mirrorless GPT-chat task authoring (2026-07-23; topology aligned by Issues #1027 / #1088)
-
-Browser GPT is the default task-spec author and the **only** review engine in
-create-issue-draft. One persistent task chat owns spec content, every content fix,
-direct Issue edits, and finding dispositions. The flow-manager drives the full
-fixed per-tier cycle through acceptance or a bounded blocked outcome — Issue
-pulls, tier/stage mechanics, captures, ledger bookkeeping, pass accounting, chat
-topology, and browser-turn execution — but does not author or judge the spec.
-OpenCode is the default flow-manager when no runtime is explicitly selected; the
-operator may select another capable runtime, including Cursor or Codex, without a
-tracked manager-name allowlist. The tier-provenance `producer` value is a required
-non-empty audit label, not runtime authentication or admission. Flow-manager
-authority transfers only by an explicit recorded predecessor/operator handoff; no
-lease or new ownership service is introduced.
-
-**T1/T2:** exactly one independent terminal browser-GPT `architectural` lens (fresh
-chat; not the task chat) — sole reviewer stage, M5 anchor, and aggregate cut
-authority. No competitive create-flow stage on T2; no Claude lens.
-
-**T3:** selected pre-lens stages (e.g. competitive when selected, fresh chat per
-pass) → pre-lens #975 guard → exactly one Claude `architectural-lens` (or a valid
-`claude-unavailable` skip) → author dispositions/fixes → exactly one terminal
-independent browser-GPT `architectural` lens. Claude owns pre-terminal aggregate
-cut and the only sanctioned tier downgrade (`T3→T2` only) when the lens runs;
-terminal GPT remains mandatory after a valid skip. Terminal GPT owns final
-aggregate cut and M5 anchor.
-
-There is **no** create-flow `architectural-final` stage and **no** Codex
-create-flow reviewer or substitution role. Codex may be the operator-selected
-flow-manager; standalone `adversarial-draft-review` and worker **PACK_REVIEWER**
-Codex PR review are unchanged. The durable tier, accounting, and role contract
-lives in [`tiering.md`](tiering.md); exact browser mechanics, workdir layout,
-captures, ledger operations, and execution sequence remain owned by
-[the `create-issue-draft` skill](../.claude/skills/create-issue-draft/SKILL.md).
-
-Local Codex PR review **is active** and **pack-owned**: it is launched by pack
-scripts (`scripts/invoke-pack-review.ps1` under
-`scripts/orchestrator-wake-supervisor.ps1`), with trigger/discovery via the pack
-wrapper `scripts/ao-review.ps1` — not by AO's CLI or YAML reactions. See
-[Review paths](#review-paths) and
-[`script-owned-review-pipeline.md`](script-owned-review-pipeline.md).
+New tasks do not create a tracked draft or queue-index row. Pre-existing
+`docs/issues_drafts/**` and `docs/issue_queue_index.md` remain historical publishing
+inputs only.
 
 ## Layout
 
 ```text
 orchestrator-pack/
+  AGENTS.md
+  CLAUDE.md
   README.md
-  agent-orchestrator.yaml.example
   docs/
   prompts/
   plugins/
   scripts/
+  tests/
+  .claude/skills/
+  .cursor/skills/
+  .cursor/rules/
   .github/workflows/
 ```
 
-Optional upstream reference checkout:
-
-```text
-vendor/agent-orchestrator/
-```
-
-Rules for `vendor/agent-orchestrator`:
-
-- disposable reference only;
-- no local modifications;
-- never used as `packages/core`;
-- may be removed and recloned at any time.
+`packages/core/**` is outside the pack edit boundary. `vendor/**` is disposable
+read-only reference material and is excluded from active runtime authority.
 
 ## Extension layers
 
-### Worker rule delivery (AO 0.10.2+)
+### Policy and prompt layer
 
-AO workers receive normative policy from tracked [`AGENTS.md`](../AGENTS.md) in the worktree —
-native pickup for Cursor and Codex workers. There is no `agentRulesFile` injection channel on
-AO 0.10.2. After merge, **recycle live worker AO sessions** so worktrees pick up the new file;
-AO restart alone is not required for worker rule delivery.
+`AGENTS.md` is the universal worker rulebook. `CLAUDE.md` adds architect-specific
+rules without duplicating universal policy. Prompts define reusable bounded
+instructions; they do not carry hidden runtime state or authorization.
 
-### TS-first script authoring freeze (Issue #837)
+Canonical skills live under `.claude/skills/**`. Cursor skill files are generated
+pointers to the canonical source.
 
-Decision adopted 2026-07-15: every **net-new script file** under `scripts/**` defaults to
-**TypeScript/Node**, and PowerShell is frozen for the duration of the PowerShell→TypeScript
-migration. A net-new `.ps1` is an exception only when the task specification gives an explicit
-written justification for why TypeScript/Node is unsuitable for that specific file. This records
-the forward-looking rule that was missing when PR #835 added six new `.ps1` files while migration
-waves were deleting existing PowerShell.
+### Plugin layer
 
-The scope is net-new files only. Existing `.ps1` files, plus migration wrappers or shims, remain
-owned by Wave A (Issue #830), Wave B (Issue #831), and their child PRs; this decision does not
-authorize opportunistic hand-porting, renaming, or deletion. It adds worker/planner guidance only,
-not a runtime or CI diff guard.
+- `task-declaration` generates auditable scope and baseline evidence from a live
+  GitHub Issue.
+- `scope-guard` enforces the declaration locally and in PR-level CI.
+- `token-chain-ledger` records explicit token, cost, finding, and convergence
+  observations.
+- `codex-pr-reviewer` maps bounded Codex review into the pack finding contract.
 
-The freeze does not expire implicitly. Review it only when **both** migration waves and their child
-PRs are closed as completed/merged **and** `git ls-files 'scripts/*.ps1' 'scripts/**/*.ps1'` reports
-no tracked PowerShell scripts. The named follow-up task **“Lift or relax the PowerShell authoring
-freeze after migration completion”** must then remove or relax the rule in `AGENTS.md`, the Cursor
-rule, and this decision record. Until that follow-up lands, the freeze remains binding.
+Plugins are implementations of public pack contracts. They do not import a
+concrete runtime, patch a core package, or invent a second authority.
 
-### Config layer
+### Runtime adapter layer
 
-`agent-orchestrator.yaml.example` demonstrates stock AO settings:
+`scripts/runtime/contracts.ts` defines runtime identities and operations.
+`scripts/runtime/registry.ts` owns concrete adapter registration.
+`scripts/runtime/runtime-cli.ts` is the tracked runtime-neutral command surface.
 
-- Windows `process` runtime;
-- Cursor CLI as the default agent;
-- role overrides so the planner/orchestrator and coder/worker both use Cursor CLI;
-- worktree isolation;
-- desktop notifications;
-- explicit GitHub Issues tracker and GitHub SCM config;
-- worktree isolation and native worker rule pickup via tracked `AGENTS.md`;
-- safe reactions that do not auto-merge.
+Callers validate all inputs before resolving an adapter. Missing, malformed, stale,
+reused, or mismatched identity yields a typed non-effect outcome. No implicit
+discovery, compatibility alias, dual execution, state conversion, or fallback
+transport is permitted.
 
-Local Codex review is **script-owned** (see [Review paths](#review-paths));
-reviewer harness selection on AO 0.10 lives in typed `ProjectConfig.reviewers`
-([`ao-0-10-review-harness-adoption.md`](ao-0-10-review-harness-adoption.md)),
-not in YAML — a `reviewer:` YAML block is silently ignored. The upstream AO
-schema supports `orchestrator` and `worker` role overrides; never patch AO core
-to add reviewer routing.
+### Side-process layer
 
-### Prompt layer
+The pack-owned wake supervisor manages the exact child roster in
+`scripts/orchestrator-side-process-registry.json`. Each child has one bounded
+responsibility and explicit state, cadence, timeout, and identity inputs.
 
-[`AGENTS.md`](../AGENTS.md) is the single worker/agent rulebook — native pickup in AO
-0.10.2+ worktrees (Cursor and Codex workers). Script-owned orchestrator review
-documentation lives in [`script-owned-review-pipeline.md`](script-owned-review-pipeline.md).
+The listener, heartbeat, worktree-trust watcher, legacy review sender, and retired
+fleet children are absent. Silence is never sufficient death evidence; cleanup and
+restart require identity and lifecycle proof.
 
-`prompts/self_architect_check.md` is a small reusable review block to reduce
-unnecessary subsystems, duplicate prompt literals, and broad scope declarations.
+## Task authoring
 
-### Plugin-contract layer
+The canonical `create-issue-draft` skill owns the task-authoring flow. Browser GPT
+is the spec author and terminal architectural reviewer according to the task tier.
+A flow-manager may coordinate pulls, captures, dispositions, and stage progression,
+but it does not become the specification author or acceptance judge.
 
-The plugin directories are contracts, not implementations:
+Task Issues define observable outcomes, constraints, scenario classes, acceptance,
+smoke, denylist, and allowed roots while preserving implementation freedom. Internal
+names and layouts are prescribed only when they are existing public surfaces or are
+the behavior under change.
 
-- `ao-task-declaration` declares active scope and baseline state.
-- `ao-scope-guard` enforces active scope at runtime and defines the PR CI backup.
-- `ao-token-chain-ledger` aggregates cost/tokens by chain across sessions.
-- `ao-codex-pr-reviewer` defines Codex `gpt-5.5` review contracts for the local AO primary path and optional GitHub Actions path.
+## Scope and declaration
 
-Future implementations should bind to AO plugin slots, wrappers, hooks, or
-external state files. They must not patch AO core.
+The declaration producer reads the linked Issue, captures a clean baseline, writes
+`docs/declarations/<issue>.<iteration>.json`, and mirrors it under the gitignored
+pack state root. Only one amendment is allowed per iteration.
 
-### Review paths
+The runtime guard validates worktree or index changes before commit. PR-level CI
+validates the authoritative merge-base diff as the second line. The denylist always
+wins over broad allow globs. A missing authoritative declaration fails closed except
+for a pure control-artifact case.
 
-**Wake-supervisor fleet reference (Issue #702).** Per-child triggers, verify commands,
-known-broken flags, and fleet scenarios F1/F1b/F2:
-[`wake-supervisor-fleet-operator-reference.md`](wake-supervisor-fleet-operator-reference.md).
+## Review paths
 
-**Event-driven first review (Issue #381).** The orchestrator wake listener admits
-`ready_for_review` hand-off notifications on the **hand-off semantic envelope**
-(`notification` + `session.working` + `ready_for_review` + PR subject), not on
-transport priority. An `info`-priority hand-off is promoted out of the priority
-drop, identity-bound to the supervised project/repo/open PR, then evaluated through
-the shared #195/#352 readiness predicate and started via the #267/#308 claim and
-#332 per-cycle gate. `merge.ready` completion wakes remain a separate fast path
-(Issue #207). The 10-minute reconcile backstop is unchanged.
+### Pack-owned local review
 
-The primary review path is **pack-owned** local Codex review — not AO's CLI or YAML
-reactions. On AO 0.10.2 the loop is workspace-visible prompts plus side-process scripts
-supervised by `scripts/orchestrator-wake-supervisor.ps1`; trigger/discover via the pack
-wrapper `scripts/ao-review.ps1` (`run`/`list`, backed directly by AO's HTTP API
-`/api/v1/sessions/{id}/reviews`). The real `ao review` CLI subcommand has only `submit`
-(records an already-computed verdict back to AO for tracking; `send`/`execute`/`list` are
-removed on AO 0.10.2). Local Codex review findings are delivered to Cursor/Codex workers
-through pack-side scripted delivery (`scripts/review-finding-delivery-confirm.ps1` and the
-reconcile backstops below), not AO reactions — `orchestratorRules` in
-`agent-orchestrator.yaml` is **legacy-import-only** on AO 0.10.2 and does not drive live
-orchestration. The AO Reviews dashboard board was removed in 0.10.2 (no cross-session
-reviews screen).
+`scripts/pack-review-runner.ts` is the review start/list/status authority. It owns
+exact PR-head binding, start claims, duplicate suppression, cycle caps, run-store
+state, and handoff to the single publication owner.
 
-The periodic `review-trigger-reconcile` backstop still requires
-`ready_for_review` on the current head while a worker is actively working
-(Issue #195). When a live owner has gone quiescent — idle, no pending
-unconsumed delivery, stable green head past the stuck-grace debounce — without
-ever handing off, the reconciler may start review against that live session
-(Issue #261). Not-live or ambiguous owners fail closed (`no_live_review_target`,
-`ambiguous_head_owner`).
+The selected reviewer is resolved through `PACK_REVIEWER`. Codex, Claude, or GPT
+wrappers may implement the review computation, but no wrapper becomes an
+independent lifecycle or publication authority.
 
-GitHub Actions Codex review remains an optional path for PR comments, reusable
-workflow consumers, and external visibility. It must use the same prompt, scope
-context, and structured finding format as the local path; it must not define an
-independent review schema.
+A terminal result must be non-empty, structured, and bound to the exact PR head.
+Clean on the same head is terminal. Findings remain open until addressed or
+explicitly dispositioned. Failed, cancelled, timed-out, malformed, contradictory,
+or empty output remains non-clean.
 
-The common finding format and signature rules are defined in
-`docs/issues_drafts/00-architecture-decisions.md` section F.
+### Optional GitHub Actions review
 
-Operators may temporarily point **REVIEW_COMMAND** at a local Claude Sonnet
-bridge (gitignored `.ao/` scripts) instead of Codex; see
-[`reviewer-switch-runbook.md`](reviewer-switch-runbook.md). Operator override when
-pack-review is the sole failing required check:
-[`pack-review-waiver-merge-runbook.md`](pack-review-waiver-merge-runbook.md).
+The reusable Actions review invokes the same reviewer wrapper and finding mapper in
+read-only CI. It may provide external visibility, but it does not define a second
+schema, retry policy, or publication authority.
 
-**Post-merge lifecycle (AO 0.9.x).** PR merge triggers AO **worker** session and
-worktree cleanup; it does **not** lifecycle-couple existing `code-reviews/` runs
-(observed: runs persist in `needs_triage` / `waiting_update` until a new review
-targets a different SHA or upstream adds cancel/outdate-on-merge). Pack policy
-until upstream enhancement: `orchestratorRules` **MERGED PR — REVIEW LOOP
-TERMINAL** (Issue #54) — verify merge via GitHub, then orchestrator inaction on
-stale runs plus operator runbooks; not hand-editing review-run JSON.
+### Reconciliation
 
-### Finding-routing enactment — Gate 0 (AO 0.9.2, 2026-06-02)
+Pack-owned reconciliation children consume current GitHub and pack state, apply the
+shared eligibility predicate, and start at most one claimed review when required.
+They do not recover through a removed runtime command or infer liveness from silence.
 
-Spike for draft `docs/issues_drafts/50-finding-routing-selective-send-enactment.md`
-(pack finding router: `forward` / `backlog` / `drop`). Environment: `ao` **0.9.2**
-(`@aoagents/ao`), project `orchestrator-pack`, store under
-`~/.agent-orchestrator/projects/orchestrator-pack/code-reviews/`.
+## Finding contract
 
-| Capability | Question | Result |
-|------------|----------|--------|
-| **A — selective send** | Can orchestration send a subset of open findings on a run? | **No.** `ao review send <run>` has no per-finding filter. `@aoagents/ao-core` `sendCodeReviewFindingsToAgent` loads **all** `status: "open"` findings, one worker message, bulk `sent_to_agent`. CLI: `run \| execute \| send \| list` only. |
-| **A′ — terminal non-forward** | Can backlog/drop clear `openFindingCount > 0` without send? | **No for automated enactment.** Finding statuses: `open` \| `dismissed` \| `sent_to_agent` \| `resolved` (`code-review-store.d.ts`). `openFindingCount` counts only `open`. No `backlogged` / `dropped`. `dismissed` would clear the predicate, but **no** `ao review dismiss` (or equivalent) — UI dismiss only (recovery runbook). Classifier backlog/drop that leaves findings `open` **re-triggers** pack rules (`needs_triage` + `openFindingCount > 0` → send). Same upstream class as #122. |
-| **B — `prior_sent`** | Is send history visible at the routing decision point? | **No.** `ao review list --json` exposes run aggregates only. Per-finding JSON on disk (`fingerprint`, `status`, `linkedSessionId`, `sentToAgentAt`) is **not** an orchestrator/CLI contract. `ao-token-chain-ledger` finding signatures require explicit append — **not** wired to `ao review send`. |
+A normalized finding contains:
 
-**Verdict:** Per-finding routing **enactment** in production is **upstream-blocked**
-(A + A′). Pack read-hook over `code-reviews/findings/` can compute B offline but
-cannot enact routes without supported AO transitions; hand-editing `code-reviews/`
-is forbidden. **Offline** trilogy (drafts 47–49) remains unblocked.
-
-**Upstream tracking (pack [#140](https://github.com/chetwerikoff/orchestrator-pack/issues/140)) — two tracks:**
-
-| Track | Issues | Role |
-|-------|--------|------|
-| **Pipeline (preferred)** | [#1631](https://github.com/ComposioHQ/agent-orchestrator/issues/1631) router, [#1346](https://github.com/ComposioHQ/agent-orchestrator/issues/1346) `ao artifact dismiss\|send`, [#1345](https://github.com/ComposioHQ/agent-orchestrator/issues/1345) | Native classifier domain: command stage (findings JSON) + router + A′ |
-| **Legacy fallback** | [#2088](https://github.com/ComposioHQ/agent-orchestrator/issues/2088) | `ao review` 0.9.x per-finding send + dismiss CLI |
-| **Delivery trust** | [#1943](https://github.com/ComposioHQ/agent-orchestrator/issues/1943), [#614](https://github.com/ComposioHQ/agent-orchestrator/issues/614) | `forward` ≠ delivered; need skipped-reason observability |
-| **Backlog sink candidate** | [#1494](https://github.com/ComposioHQ/agent-orchestrator/issues/1494) | Native `ao backlog` vs pack `docs/` file (#139) |
-
-Classifier defaults to **pipeline command / findings JSON**, not legacy-only. Pack: tracking
-+ docs (#122 discipline); no prod wiring until A + A′ on chosen track. Queue: §Q —
-**#139 + #140 now**; **#141/#142 deferred**.
-
-**Read-only diagnostic (legacy path):** `scripts/review-bulk-send-diagnose.ps1` surfaces
-runs where bulk `ao review send` would ship all open findings or `openFindingCount` stays
-stuck after partial send — no mutation; fixture mode for offline checks.
-
-Operator usage (Gate 0 — `active-blocked-upstream`, pack #140):
-
-```powershell
-pwsh -NoProfile -File scripts/review-bulk-send-diagnose.ps1
-pwsh -NoProfile -File scripts/review-bulk-send-diagnose.ps1 -ProjectId orchestrator-pack -Json
-pwsh -NoProfile -File scripts/review-bulk-send-diagnose.ps1 -FixturePath scripts/fixtures/review-bulk-send-diagnose/needs-triage-multi-open.json
+```json
+{
+  "type": "correctness|scope-violation|ci|security|architecture|other",
+  "code": "stable-machine-code",
+  "severity": "blocking|major|minor|info",
+  "path": "repo/relative/path-or-null",
+  "summary": "bounded explanation",
+  "source": "reviewer-or-guard",
+  "signature": "stable-sha256"
+}
 ```
 
-Flagged kinds: `bulk_send_trap`, `stuck_open`, `multi_open_awaiting_dispatch`. Use when
-`needs_triage` / `waiting_update` runs keep `openFindingCount > 0` but per-finding routing
-is expected — bulk send ships all open findings; partial send can leave remainder stuck
-without CLI dismiss/backlog (**A′** blocked). **Do not** hand-edit `code-reviews/findings/`
-(#122 class). Until upstream **A + A′** land (pipeline #1631/#1346 preferred, legacy #2088),
-treat flagged runs as upstream-blocked, not worker defects. Delivery trust still requires
-#1943 / #614 before prod `forward` acceptance (shared invariant #1).
+Signatures derive from normalized type, code, and path. Human prose is not parsed
+as authority when a structured channel exists. Temporary unknown outcomes remain
+typed and retryable only by the explicit caller-owned policy.
 
-### CI layer
+## Publication
 
-`.github/workflows/scope-guard.yml` runs the read-only verifier and, on
-`pull_request` events, `scripts/pr-scope-check.ps1` — the third guard layer from
-#3.C. The check reads the PR body via `gh pr view` (not workflow `env` injection
-of `pull_request.body`, which truncates multiline text with colons), the linked
-issue body, the latest committed declaration snapshot on the PR head, and
-`gh pr diff --name-only`, then enforces the #3.A validation formula (with fork
-fail-closed policy and opt-in degraded mode).
+`scripts/lib/operator-publication.ts` validates its complete input before one
+bounded dispatch attempt. `scripts/lib/worker-degraded-ci-handoff.ts` uses exact
+composite identity for degraded-CI handoff.
 
-On pull requests whose diff is **markdown-only** under the workflow allowlist
-(`docs/**`, skill/rule trees, top-level `*.md` / `AGENTS.md`, each path ending
-in `.md`/`.mdc`), the heavy advisory jobs (contract tests, self-architect lint)
-are skipped; the required verifier and PR scope guard still run (#155).
+Publication has one owner. There is no hidden resend, acknowledgement loop, queue,
+fallback transport, or independent success branch. A transport failure remains a
+failure even when an operator URL exists.
 
-CI is the third line of defense. Runtime scope guard and the pre-commit hook
-remain mandatory because an agent can mutate the working tree and index before a
-PR exists.
+## Worker lifecycle
 
-## Data boundaries
+Workers continue after implementation through current-head CI, review findings,
+smoke, and durable handoff. `pack-worker-report` may record lifecycle state only
+after proving repository, worker, PR, and head binding. If that binding cannot be
+proved, the report write is skipped without weakening the remaining obligations.
 
-Allowed local state locations for future implementations:
+Required CI and smoke must bind to the same current head. A previous-head pass,
+missing check, stale review, or unverifiable receipt does not satisfy acceptance.
 
-- AO session metadata when exposed by upstream AO;
-- workspace-local `.ao/` state that is gitignored;
-- external JSONL/SQLite ledgers outside committed source;
-- CI artifacts for audit output.
+## TypeScript and PowerShell policy
 
-Disallowed:
+Net-new scripts default to TypeScript on Node 22. New PowerShell requires a specific
+written justification. Existing PowerShell wrappers may remain while their owned
+behavior is migrated, but they must not preserve a retired runtime dependency.
 
-- committed secrets;
-- local patches in `packages/core`;
-- hidden changes under `vendor/agent-orchestrator`;
-- mandatory migration of the old `.ai-loop/` layout.
+No Node 20, emitted JavaScript build, `tsx`, `ts-node`, or loader fallback is part of
+the execution contract.
 
-### CI-failure notification dedup predicate (Issue #283)
+## Operator adoption
 
-The turn-driven orchestrator CI-failure ping is gated by a repo-side deterministic helper,
-`docs/ci-failure-notification.mjs`, invoked through the tracked PowerShell wrapper
-`scripts/ci-failure-notification.ps1` under the supported operator runtime (pwsh 7+ / WSL2).
-The predicate's terminal action is a closed enum: `SEND` or `SUPPRESS`. Reaction bindability,
-self-fix bindability, helper errors, and token state are diagnostics recorded in the audit,
-never third actions.
+A change to runtime registration, supervised processes, operator-owned inputs, or
+tracked policy delivery documents exact post-merge adoption in
+`docs/migration_notes.md` and the PR body. Managed workers do not mutate the
+operator host unless directly ordered.
 
-The episode identity is `{repo, PR number, head SHA, aggregate red-period discriminator,
-active notification target}`. Suppression is exact-key only: a `reaction.action_succeeded`
-/ `reactionKey=ci-failed` event, `fixing_ci` report, or write-ahead intent token for a
-superseded session, earlier SHA, earlier red period, or sibling PR cannot suppress the active
-session's only ping. The helper uses an atomic create-if-absent intent token before any
-orchestrator send; an ambiguous post-crash token resolves to at-most-once suppression, while
-an observable `ao send` failure must release the token for bounded retry or mark it
-failed-owned with visible operator escalation.
+Host cleanup of removed software, configuration, caches, or state is optional
+operator work after merge. It is neither repository acceptance nor rollback.
 
-This closes the dominant reaction-first duplicate path. It deliberately does not close the
-reverse ordering where the orchestrator sends before AO's unconditional built-in `ci-failed`
-reaction, because the daemon reaction cannot consult repo-side state.
+## Upgrade safety
 
-### Native AO CI-nudge suppression (operator-local `tmux` shim, 2026-07-15)
-
-AO 0.10.2's daemon (closed-source; no source, no CLI/config toggle) pastes its own
-unconditional CI-failure nudge directly into the worker's tmux pane whenever a PR check
-turns red, independent of the pack's own predicate above. It has three problems the pack
-cannot fix at the daemon: it fires regardless of whether the worker is already mid-fix for
-that exact failure (dedup is per `{PR, check, head SHA}` only —
-`pr.last_nudge_signature` — with no notion of worker busy-state); the paired `Enter` that
-is supposed to submit the pasted text is unreliable for at least the Codex/cursor-agent
-worker harness, leaving an unconsumed bracket-pasted draft sitting in the pane input (same
-failure class as §H decisions 4/5, `#216`/`#293`, whose submit-only-Enter narrow exception
-is scoped only to review-finding pastes, not this channel); and the content is a raw log
-tail with no diagnosis. Draft `#755` (`docs/issues_drafts/269-ci-red-delivery-watchdog.md`)
-already commits this channel to read-only/no-disable-hooks — the pack must not write to
-`pr.last_nudge_signature` or otherwise mutate AO's own ledger.
-
-The daemon's tmux adapter (`internal/adapters/runtime/tmux.execRunner.Run`,
-confirmed from the binary's own embedded Go symbol table) shells out to the real `tmux`
-CLI rather than talking to a control socket, and the daemon process's `PATH` places
-`~/.local/bin` ahead of `/usr/bin`. An operator-local shim at `~/.local/bin/tmux`
-therefore sees every `tmux` invocation the daemon makes: it pattern-matches literal
-`send-keys -l` payloads against the fixed AO nudge string
-(`"CI is failing on your PR. Review the output below and push a fix."`), drops only
-that exact call plus the immediately-following paired `Enter` to the same target (a
-short-lived per-target marker prevents a bare `Enter` firing into whatever the worker is
-mid-typing once the nudge text itself never lands), and passes every other invocation
-(session lifecycle, review-finding pastes, ordinary worker key sends) straight through to
-the real binary unchanged.
-
-This is deliberately **not** a binary patch to the AO daemon: a byte patch cannot survive
-an update by construction (dpkg overwrites `/usr/lib/agent-orchestrator` in place; the
-self-updating copy under `~/.local/lib/agent-orchestrator-<version>` is a new file in a new
-version-numbered directory) and risks corrupting the binary's GC/stack metadata. The PATH
-shim survives updates instead, because it depends only on AO continuing to invoke the
-external `tmux` CLI — a far more stable contract than any internal offset. It would stop
-working only if AO ever switched to a raw control-socket protocol, which is self-detecting
-(the shim's audit log goes quiet while nudges resume reaching the pane).
-
-**Status: operator-machine-local only**, not a pack-owned/tracked artifact — no install
-script, no PR, no Issue. See `docs/issues_drafts/00-architecture-decisions.md` §W for
-install/verify/rollback steps on a given host. Formalizing this for multi-operator
-distribution (mirroring the `cursor-agent` TUI shim, Issue #725) would need its own draft.
-
-### Graphify structural code graph adoption (code-only build/refresh/query, 2026-07-15)
-
-Adopted the third-party tool Graphify (PyPI `graphifyy`, upstream `safishamsi/graphify`, MIT
-license) as a worker-facing, opt-in structural code graph for this repo (Issue #833) — call/import
-relationships, hub files, community/domain clusters, import cycles — via its free, local,
-deterministic tree-sitter AST extraction path only. This is the pack's first Python runtime
-dependency; previously only PowerShell and Node/TypeScript.
-
-Graphify's own installer (`graphify install` / `graphify <platform> install`) writes
-unconditionally into `CLAUDE.md`, `AGENTS.md`, or `.cursor/rules/**` depending on platform —
-independently re-verified live against the packaged installer output in a scratch directory during
-implementation, confirming the exact per-platform write targets the issue's constraint was
-grounded in. The pack therefore never invokes the installer family; `scripts/graphify/lib/Resolve-GraphifyEnv.ps1`
-is the single point that shells out to the real `graphify` executable and hard-restricts the
-allowed subcommand set to `extract`/`update`, with `scripts/graphify/check-graphify-no-installer.ps1`
-guarding this statically in CI-independent tests. The guidance text in `AGENTS.md` and the new
-`.cursor/rules/graphify-graph-check.mdc` is architect-authored prose, deliberately distinct in
-tone from Graphify's own packaged section (which reads as a near-mandatory directive; this repo's
-version states the practice as recommended, not required).
-
-The isolated Python environment lives at `.graphify/venv` (gitignored), bootstrapped from a
-committed, fully-resolved `pip freeze` lock (`scripts/graphify/requirements.lock.txt`, 30 pinned
-packages) via `pip install --no-deps`, never the operator's global Python. The built graph itself
-is an untracked working artifact under `.graphify/graph/` — not a committed snapshot — matching
-this doc's existing preference (see `docs/declarations/**` machine-generated-diff-noise precedent)
-for keeping regenerable, low-value-diff machine output out of git history. Nothing here is wired
-into CI, a required status check, or worker session/report status transitions; build, refresh, and
-query are each a plain foreground, on-demand invocation with no new background process.
-
-**Status: pack-owned, tracked, and opt-in** — see `scripts/graphify/README.md` for usage and
-`docs/migration_notes.md` for the one-time per-machine bootstrap step.
-
-### Vitest topology planning is execution-free (Issue #872)
-
-Decision adopted 2026-07-16: `plan-vitest-ci-topology` is a topology-only job. Its emitter step
-sets `OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT=1` and passes `--skip-oversized-guard`; the job may read
-committed runtime history and topology policy, classify changed paths, derive the heavy shard
-count/matrix, and publish the plan artifact, but it must not execute Vitest. The legacy
-pre-topology oversized guard remains available to other consumers, but it is advisory in this
-workflow rather than a merge gate.
-
-Merge-blocking runtime protection lives after real execution in the heavy shard runner through
-`scripts/enforce-vitest-runtime-budget.mjs`. The prerequisite in Issue #875 aggregates repeated
-assertion durations for a normalized file across per-test-isolated reports, while preserving
-single-entry file-wall enforcement and a fail-closed wall-time fallback when assertion data is
-missing. This keeps the relocated guard effective without multiplying repeated Vitest process
-startup time into the file test-duration budget.
-
-This decision does not change LPT assignment, `targetShardSeconds`, `heavyShardCount`, lane
-classification, committed runtime history, or the runtime-history refresh workflow. The separate
-`scripts/check-ci-pipeline-split.ps1` consumer retains its same-run measurement behavior. Content
-hash/history-freshness work and any future shard-count policy changes remain owned by a separate
-follow-up, not this relocation.
-
-### Shared-store writeback must preserve terminal-state precedence (Issue #889)
-
-Decision adopted 2026-07-17: atomic JSON replacement protects file integrity, but it is not a
-concurrency policy. Writeback-merge of any shared store must preserve terminal-state precedence
-and explicit one-way writer markers; a stale in-memory snapshot must not resurrect a deleted key,
-reverse a terminal transition, or erase an acknowledged action merely because it is dirty.
-
-This PR applies the class-level rule to the escalation router. It resolves every dirty record
-against a fresh disk reread at both replay reconciliation and final tick writeback. The tick
-captures one `snapshotLoadedAtMs` token immediately before its initial state read and carries that
-token through both merge points.
-
-The escalation-store per-record conflict order is:
-
-- a record deleted by an out-of-band writer stays deleted; stale memory cannot recreate it;
-- a disk terminal state beats a non-terminal memory state regardless of `updatedAtMs`;
-- two different terminal states use strict last-writer-wins: memory wins only when its
-  `updatedAtMs` is greater, and an equal timestamp keeps disk;
-- a quarantined memory record may reopen only when disk is `open` and carries an explicit
-  `quarantineReleasedAtMs >= snapshotLoadedAtMs`; a newer generic `updatedAtMs` is not release
-  authority, while an equal release/snapshot millisecond is valid;
-- two non-terminal records use strict last-writer-wins in the opposite tie direction: newer disk
-  wins, while equal timestamps preserve the router's in-memory bookkeeping;
-- `operatorAckedAtMs` is a one-way writer marker. When the disk marker differs, disk
-  `operatorStatus` and `operatorAckedAtMs` are overlaid even on a timestamp tie, and the writer
-  advances `updatedAtMs`.
-
-The replay merge delegates to the same record resolver as final writeback so an ACK, release, or
-delete observed at either reread cannot be undone later in the same tick. No lock or schema change
-is introduced. The sibling stores audited in the PR body remain out of scope for code changes and
-require separate tasks before this class-level rule is implemented there.
+- one source of truth per contract;
+- no core patch;
+- no concrete runtime import in business logic;
+- no compatibility alias or dual path;
+- exact identity before effects;
+- bounded caller-owned retry;
+- current-head evidence;
+- immutable GitHub and audit history;
+- planner freedom inside observable constraints.

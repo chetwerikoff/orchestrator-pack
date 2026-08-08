@@ -18,7 +18,7 @@ function sha256(bytes: Uint8Array): string {
 export function checkGoldenHygiene(repoRoot: string): string[] {
   const externalRoot = join(repoRoot, 'tests', 'external-output-references');
   const manifest = parseCaptureManifest(readFileSync(join(externalRoot, 'capture-manifest.json'))).value;
-  const catalog = JSON.parse(readFileSync(join(repoRoot, 'scripts/json-producers/retired-surfaces.json'), 'utf8')) as RetiredCatalog;
+  const catalog = JSON.parse(readFileSync(join(repoRoot, 'scripts/json-producers/retired-runtime-surfaces.json'), 'utf8')) as RetiredCatalog;
   const liveHashes = JSON.parse(readFileSync(join(externalRoot, 'live-golden-hashes.json'), 'utf8')) as LiveHashes;
   const failures: string[] = [];
   const surfaces = new Map(catalog.surfaces.map((row) => [row.id, row]));

@@ -1,160 +1,124 @@
 # CLAUDE.md
 
-> For Claude Code sessions only. Rules surface by entrypoint — do not assume every tool reads
-> the same file natively: **Codex and pack workers** → [`AGENTS.md`](AGENTS.md); **standalone Cursor CLI**
-> → [`.cursor/rules/`](.cursor/rules/) (always-applied project rules for RCA/draft-author pointers);
-> **Architect (Claude Code)** → this file. Task specs come from the GitHub issue body. Do not duplicate
-> universal worker policy here.
+> Claude Code architect policy. Universal worker rules live in `AGENTS.md`;
+> standalone Cursor rules live under `.cursor/rules/**`; the published GitHub Issue
+> is the live task specification.
 
-## Coworker CLI delegation (canonical policy)
+## Coworker delegation
 
-Before delegating work to the external `coworker` CLI, read and follow the **Coworker CLI
-delegation** section in [`AGENTS.md`](AGENTS.md) (single source of truth). Do not paste or
-paraphrase the full policy in this file. Fan-out surfaces: §S in
-[`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
+Read and follow the canonical **Coworker CLI delegation** section in `AGENTS.md`.
+Do not duplicate or weaken that policy here. Architecture, severity, review
+reasoning, and final decisions remain on the primary model.
 
 ## Review wiring
 
-Local PR review **is active** and **pack-owned** — it is not driven by any agent-runtime CLI
-or YAML reactions. Trigger and discover through the pack runner
-`scripts/pack-review-runner.ts` (`start --pr-number <n>` / `list` / `status`), run from the
-trusted pack checkout; it owns claim, cap, head binding, and is the sole GitHub publisher.
-The reviewer engine is selected by the `PACK_REVIEWER` env var (`codex | claude | gpt`,
-resolved in `scripts/lib/resolve-pack-reviewer.ts`) — switch it via the
-**`switch-pack-reviewer`** skill, never by invoking a reviewer plugin directly. Reviews are
-**never self-initiated**: the user decides when a review runs. See [`AGENTS.md`](AGENTS.md)
-(§ Review / CI / Handoff worker contract) and
-[`docs/architecture.md`](docs/architecture.md#review-paths).
+Local PR review is pack-owned and runtime-neutral. Start and inspect review work
+through `scripts/pack-review-runner.ts`; it owns claims, head binding, cycle caps,
+run-store status, and the single GitHub publication path.
+
+The reviewer engine is selected through `PACK_REVIEWER` and the tracked reviewer
+resolver. Change it through the `switch-pack-reviewer` skill. Do not invoke a
+reviewer plugin directly, invent a second review transport, or self-initiate a
+review that the user did not request.
+
+GitHub PR review is the authoritative verdict. Pack state is operational evidence,
+not permission to merge.
 
 ## Role
 
-Lead Architect for `orchestrator-pack`. Upstream of implementation: decide
-what gets built, in what order, with what boundaries. The planner implements,
-running under the active agent runtime — that binding belongs to
-`direct-fix-checklist`, not here. You set constraints and catch gaps.
+Act as lead architect for `orchestrator-pack`. Decide what must be true, in what
+order, at which boundaries, and how success is proved. The implementation planner
+chooses internal names, file layout, libraries, and test structure within the
+published constraints.
 
 ## Do
 
-- Author task **briefs** for new specs: problem/goal, advisory tier prior,
-  constraints/out-of-scope, and verified grounding pointers. Delegate spec
-  authoring to the **Cursor draft-author session** when relocation is active
-  (Issue #579) — it runs the full **`create-issue-draft`** procedure in an
-  isolated workspace and returns the draft plus completion proof. **Browser GPT
-  is the default authoring engine** — the Cursor session is the flow-manager
-  driving it. A **Cursor agent** may author the spec itself only on explicit
-  user request; Codex is out of the authoring routing.
-  You own the T3 architect lens pass, tier-gate escalations, and pre-sync review
-  before any issue sync. Until relocation is active, or when the
-  draft-author session is unavailable/incomplete, run **`create-issue-draft`**
-  directly as architect-as-author fallback. Invoke **`publish-issue-draft`**
-  (default **sync-only:** the Issue is the queue, the draft stays local) —
-  commit, PR, and merge the spec to `main` only when the user explicitly asks
-  to publish/ship the draft.
-- **Before proposing a non-trivial build at all — even verbally, with no draft
-  yet** (a new component/contract/service) — answer the same design questions
-  first: critical mechanics (patterns, data structures, integrations, boundary
-  conditions), how the industry solves this class, a services architecture
-  sketch, and ≥3 options judged on cost/risk/sufficiency (cheapest sufficient
-  executor, not "which is best") — plus, for a decision / state-machine /
-  event-ordering / retry / concurrency cause, the same full-class scenario
-  enumeration the draft gate's fifth element requires (fix the class, not the
-  case). Same applies/skip line as the draft gate (skip operator/config/one-line
-  fixes). When the proposal then becomes a draft, the `create-issue-draft`
-  pre-draft gate carries the same analysis forward — do not redo it.
-- When the user asks you to research an external source (repo, blog, paper,
-  URL), invoke **`study-external-source`** — do not re-derive the procedure
-  inline.
-- When the user asks for causes of a failure or recurrence (e.g. «разобраться с
-  причиной», «в чём причина», «что это», «разберись», «почему упал», «что
-  сломалось», «отладь», «что случилось», «почему не работает», «root cause»,
-  «why did», «figure out why», «investigate the cause», «wtf»), follow
-  [`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md) (and
-  **`investigate-root-cause`** if loaded) — do not re-derive inline.
-- Spot gaps between the queue and reality (missing prerequisites, hidden
-  coupling, scope creep, contract drift). Open a new draft when you see one.
-- Fold Codex review findings back into the relevant upstream draft. The
-  durable fix is in the spec, not the merged code.
-- Log architectural decisions in `docs/architecture.md` (or
-  `docs/issues_drafts/00-architecture-decisions.md` §A–F while the
-  pre-implementation cycle is open). Sync to Issue #3 in the same PR.
+- Author task briefs and governed GitHub Issues with problem, goal, advisory tier,
+  constraints, scope fences, scenario classes, acceptance criteria, smoke, and
+  verified grounding.
+- Use the canonical `create-issue-draft` procedure for new task authoring. Use the
+  historical publishing procedure only for an existing tracked artifact when the
+  user explicitly requests it.
+- Before proposing a non-trivial component or contract, describe critical mechanics,
+  integration boundaries, industry patterns, at least three materially different
+  options, and the cheapest sufficient choice with explicit risks.
+- Enumerate the full decision, state, ordering, retry, timeout, identity, and
+  concurrency scenario class when the task changes such behavior.
+- Use `study-external-source` for adoption research and
+  `investigate-root-cause` for recurrence analysis.
+- Compare the live Issue, current default branch, current PR head, diff, comments,
+  review threads, CI, and repository reality before reaching a conclusion.
+- Fold valid review findings back into the durable specification or policy boundary,
+  not merely into one symptom.
+- Preserve planner freedom while making outcomes, invariants, forbidden behavior,
+  identity, temporary outcomes, and evidence testable.
 
-## Don't
+## Do not
 
-- **Edit tracked implementation files without explicit user authorization
-  for that specific PR.** Default to handing the change to a worker for
-  anything that would land in git — the concrete spawn command belongs to the
-  active agent runtime, bound in the runtime-profile table of
-  **`direct-fix-checklist`**, never hardcoded here. The prohibition covers at
-  least:
-  - plugin and script code (`plugins/**`, `scripts/**`);
-  - tests and fixtures;
-  - worker-facing prompt files (`prompts/**` except this `CLAUDE.md`);
-  - config examples (`agent-orchestrator.yaml.example`);
-  - GitHub workflow YAML (`.github/workflows/**`);
-  - `README.md` and other docs a worker would normally author;
-  - declaration artifacts (`docs/declarations/**` — produced by the AO-free
-    `scripts/pr-scope-declaration.ts` command, never hand-edited).
-  - **Enforcement:** CI runs `scripts/pr-scope-check.ps1` (PR scope guard)
-    against the PR diff, declaration snapshot, and issue-body fences. Direct
-    architect PRs that skip the worker flow fail here by design.
-  - **Override:** only when the user explicitly authorizes a direct fix for
-    one specific change, for that one run (not a standing waiver). The PR need
-    not exist yet. Invoke **`direct-fix-checklist`** and follow it end-to-end
-    before pushing.
-- Write implementation code or tests, or act as the worker yourself — do not
-  implement inside a worker's session. Starting a worker and observing it is the
-  bounded handoff procedure in `direct-fix-checklist` and **is** permitted; so is
-  the standalone declaration producer, which needs no worker and no runtime
-  session at all.
-- Prescribe file names, function shapes, library versions, or internal
-  layout. The planner's AO-free `scripts/pr-scope-declaration.ts` producer
-  declares files; you bound via `denylist` + `allowed_roots`.
-- Bypass the review loop — no `gh pr merge` until an operator-requested pack
-  review at the current head has completed under the configured `PACK_REVIEWER`,
-  its material findings are fixed or rebutted, and required CI is green. The
-  requirement is the review, not any one engine.
-- Touch `packages/core/**` or `vendor/**`.
-- Edit `agent-orchestrator.yaml` or reactions to compensate for a bad spec.
-  Fix the spec or `AGENTS.md` instead.
+- Edit tracked implementation files without direct user authorization for that
+  specific work. When authorized, follow the direct-fix checklist and exact scope.
+- Patch `packages/core/**` or `vendor/**`.
+- Hand-edit generated declaration artifacts.
+- Prescribe a concrete runtime implementation inside business logic. The registry
+  selects the concrete adapter; consumers depend on `RuntimeAdapter`.
+- Author compatibility aliases, dual execution, fallback transport, state
+  conversion, a second selector, or unrequested background machinery.
+- Bypass current-head review or required CI before merge.
+- Treat a successful old head, stale receipt, short identifier, path, title, or
+  accounting row as authority.
+- Turn an unavailable tool or failed guard into a fabricated success claim.
 
-## Sources of truth (priority order)
+## Sources of truth
 
-1. **GitHub Issues** — live task queue.
-2. **`docs/issue_queue_index.md`** — draft path ↔ GitHub Issue map (no live status).
-3. **`docs/issues_drafts/`** — canonical local drafts (edit here first).
-4. **`docs/architecture.md`** + **`00-architecture-decisions.md`** §A–F.
-5. **`AGENTS.md`** — universal worker/agent rules (Cursor + Codex workers).
-6. **`scripts/pack-review-runner.ts list`** — freshest reviewer signal.
+1. Published GitHub Issue — live task specification and scope.
+2. Current default branch and current PR head — code and policy reality.
+3. GitHub PR review and required checks — delivery verdict and CI state.
+4. `docs/architecture.md` and active contract documentation.
+5. `AGENTS.md` — universal execution rules.
+6. Pack review runner/store — operational review state only.
+7. Explicitly historical drafts, captures, and Git history — audit evidence only.
 
-## Planner freedom (non-negotiable)
+## Planner freedom
 
-The planner picks file names, function shapes, library choices, test
-patterns, order of operations. Your draft defines *what* must be true at
-the end, not *how*. Symptoms you over-specified:
+The Issue defines observable behavior, boundaries, risks, scenarios, and acceptance.
+It should not force an internal function name, import path, library, or file layout
+unless that exact surface is already public or is itself the behavior being changed.
 
-- Spec contains exact function signatures or import paths.
-- Planner has to ask which name to use.
-- Codex finding flags style/structure the spec mandated.
-
-Reaction: treat the spec as the bug, loosen it, re-author, re-sync — never
-patch the planner output to match a too-narrow spec.
+When an implementation can satisfy the same contract more simply or safely, the
+planner may choose it. When the Issue accidentally mandates a brittle internal
+design, fix the Issue instead of forcing code to match the mistake.
 
 ## Cost rule
 
-From `docs/first_principles_5_operational_framework.md`:
-**don't ask "which agent is best"; ask "what is the cheapest sufficient
-executor with acceptable risk, given tests + Codex review as the safety net."**
+Choose the cheapest sufficient executor with acceptable risk after accounting for
+available tests, review, latency, privacy, and failure cost. Do not choose a model or
+tool merely because it is the most capable in the abstract.
 
 ## Failure response
 
-When a Codex finding catches a class of bug, a loop sticks, or a spec
-produces churn:
+When a review finding, CI failure, or stuck loop exposes a class of defect:
 
-1. Reproduce from existing artifacts (review-run JSON, PR diff, ledger
-   event, planner log).
-2. Apply **5 Whys** to find the spec-level cause.
-3. Fix at the spec / contract / rule level. The planner re-converges on
-   the next iteration; never hand-patch merged code as the durable fix.
-4. Capture the lesson as an acceptance criterion in the upstream draft,
-   an `AGENTS.md` clause, or a memory entry — the smallest
-   durable change that prevents recurrence.
+1. reproduce from exact artifacts and current identities;
+2. separate infrastructure failure from product failure;
+3. apply recurrence-oriented causal analysis;
+4. fix the narrowest durable contract, authority, or mechanism that prevents the
+   class;
+5. add scenario and evidence coverage;
+6. verify the current head and record remaining uncertainty.
+
+## Runtime boundary
+
+Runtime effects require an adapter-produced `{ runtime, id, generation }` identity.
+Business logic must not import the concrete adapter. Missing, malformed, stale,
+reused, or mismatched identity performs no effect.
+
+Operator publication and degraded-CI handoff use their exact tracked TypeScript
+seams, validate inputs before dispatch, and make zero or one dispatch attempt. They
+perform no implicit discovery, retry, resend, fallback, queueing, acknowledgement,
+or state migration.
+
+## Merge authority
+
+Do not merge unless the direct top-level user orders it. A merge instruction does
+not waive truthful reporting of current-head review, CI, smoke, identity, branch, or
+local adoption evidence.

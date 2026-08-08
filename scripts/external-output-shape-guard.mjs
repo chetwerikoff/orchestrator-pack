@@ -489,7 +489,7 @@ export function expandFixtureGlob(repoRoot, glob) {
 /**
  * @param {Record<string, unknown>} record
  */
-export function resolveAoStatusSessionVariant(record) {
+export function resolveRuntimeStatusSessionVariant(record) {
   if (!Object.prototype.hasOwnProperty.call(record, 'runtime')) {
     const status = String(record.status ?? '').trim().toLowerCase();
     if (status === 'stuck') {
@@ -519,7 +519,7 @@ export function resolveAoStatusSessionVariant(record) {
  */
 export function resolveShapeVariantKey(record, shape) {
   if (shape.variantResolver === 'ao-status-session') {
-    return resolveAoStatusSessionVariant(record);
+    return resolveRuntimeStatusSessionVariant(record);
   }
   if (shape.variantFrom) {
     const raw = String(record[shape.variantFrom] ?? '').trim();

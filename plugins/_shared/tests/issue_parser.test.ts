@@ -13,7 +13,7 @@ function loadFixture(name: string): string {
 describe('parseIssueBody', () => {
   it('extracts mandatory denylist from issue body fixtures', () => {
     const constraints = parseIssueBody(loadFixture('minimal-denylist.md'));
-    expect(constraints.denylist).toEqual(['vendor/**', 'packages/core/**', '.ao/**']);
+    expect(constraints.denylist).toEqual(['vendor/**', 'packages/core/**', '.orchestrator-pack/**']);
     expect(constraints.allowed_roots).toBeUndefined();
   });
 

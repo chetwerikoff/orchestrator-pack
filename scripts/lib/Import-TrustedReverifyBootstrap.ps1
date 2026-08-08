@@ -43,8 +43,8 @@ function Get-TrustedBootstrapScriptRoot {
         }
     }
 
-    if ($env:AO_TRUSTED_PACK_ROOT) {
-        $resolved = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
+    if ($env:OPK_TRUSTED_PACK_ROOT) {
+        $resolved = (Resolve-Path -LiteralPath $env:OPK_TRUSTED_PACK_ROOT).Path
         if (Test-PathInsideReviewTarget -CandidatePath $resolved -ReviewTargetRoot $ReviewTargetRoot) {
             throw 'refusing trusted-root override: trusted base equals or lies inside review target'
         }

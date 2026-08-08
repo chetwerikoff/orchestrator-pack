@@ -41,5 +41,5 @@
   "floodActiveSessions": {
     "opk-flood-worker": true
   },
-  "aoEvents": []
+  "runtimeEvents": []
 }

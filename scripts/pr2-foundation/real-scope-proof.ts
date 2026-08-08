@@ -20,6 +20,17 @@ const FOUNDATION_IMPLEMENTATION_BASE_SHA = 'd9f6b60acc17fa56c0c29a45950e14f7b2b8
 const FOUNDATION_TERMINAL_SHA = '1c040b1f75e4553af7cfbe992264eea9afd5f95e';
 const FOUNDATION_MERGE_SHA = 'b967dfe156838039e1d6d137e7064dc9d1b10b4d';
 
+/**
+ * Issue #1352 removed this historical Issue #923 source and its terminalized port.
+ * Keep the old modification provable without putting either path back into the
+ * surviving foundation union. The current replacement owner is runtime-neutral.
+ */
+const RETIRED_FOUNDATION_HISTORY = Object.freeze({
+  source: 'docs/ao-0-10-review-api.mjs',
+  terminalizedPort: 'scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts',
+  survivingOwner: 'docs/review-bulk-send-diagnose.mjs',
+});
+
 export interface RealScopeProofResult {
   ok: true;
   result: 'foundation-bounded-regular-single-revert';
@@ -160,6 +171,32 @@ function derivedConsumerRewrites(
   return derived;
 }
 
+function assertRetiredFoundationHistory(
+  repoRoot: string,
+  rows: Array<{ status: string; path: string }>,
+): void {
+  const historicalRows = rows.filter((row) => row.path === RETIRED_FOUNDATION_HISTORY.source);
+  invariant(historicalRows.length === 1, `retired_foundation_history_count:${historicalRows.length}`);
+  invariant(historicalRows[0]?.status === 'M', `retired_foundation_history_status:${historicalRows[0]?.status ?? ''}`);
+  invariant(
+    treeMode(repoRoot, FOUNDATION_TERMINAL_SHA, RETIRED_FOUNDATION_HISTORY.source) === '100644',
+    'retired_foundation_history_source_mode',
+  );
+  invariant(
+    treeMode(repoRoot, FOUNDATION_TERMINAL_SHA, RETIRED_FOUNDATION_HISTORY.terminalizedPort) === '100644',
+    'retired_foundation_history_port_mode',
+  );
+  const historicalPort = git(repoRoot, ['show', `${FOUNDATION_TERMINAL_SHA}:${RETIRED_FOUNDATION_HISTORY.terminalizedPort}`]);
+  invariant(
+    historicalPort.includes(`Ported from ${RETIRED_FOUNDATION_HISTORY.source} blob `),
+    'retired_foundation_history_port_binding_missing',
+  );
+  invariant(
+    ['100644', '100755'].includes(treeMode(repoRoot, FOUNDATION_TERMINAL_SHA, RETIRED_FOUNDATION_HISTORY.survivingOwner)),
+    'retired_foundation_runtime_neutral_owner_missing',
+  );
+}
+
 export function runRealFoundationScopeProof(repoRoot = path.resolve('.')): RealScopeProofResult {
   const currentBaseSha = git(repoRoot, ['rev-parse', 'origin/main']);
   git(repoRoot, ['merge-base', '--is-ancestor', DECLARATION_BASE_SHA, FOUNDATION_IMPLEMENTATION_BASE_SHA]);
@@ -201,13 +238,19 @@ export function runRealFoundationScopeProof(repoRoot = path.resolve('.')): RealS
 
   const rows = changedRows(repoRoot, FOUNDATION_IMPLEMENTATION_BASE_SHA, FOUNDATION_TERMINAL_SHA);
   invariant(!rows.some((row) => row.path === DECLARATION_PATH), 'declaration_in_implementation_delta');
-  const changedPaths = rows.map((row) => row.path);
-  const addedPaths = rows.filter((row) => row.status === 'A').map((row) => row.path);
+  assertRetiredFoundationHistory(repoRoot, rows);
+
+  // The retired row is proved above against its historical source/port and the
+  // surviving runtime-neutral owner. It is intentionally not reintroduced into
+  // the current independent union consumed by validateFoundationScope.
+  const survivingRows = rows.filter((row) => row.path !== RETIRED_FOUNDATION_HISTORY.source);
+  const changedPaths = survivingRows.map((row) => row.path);
+  const addedPaths = survivingRows.filter((row) => row.status === 'A').map((row) => row.path);
   const derivedRewritePaths = derivedConsumerRewrites(
     repoRoot,
     FOUNDATION_IMPLEMENTATION_BASE_SHA,
     FOUNDATION_TERMINAL_SHA,
-    rows,
+    survivingRows,
   );
   const modes = Object.fromEntries(
     changedPaths.map((file) => [file, treeMode(repoRoot, FOUNDATION_TERMINAL_SHA, file)]),

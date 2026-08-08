@@ -1,8 +1,8 @@
 #requires -Version 5.1
 <#
-  Process-bound journaled-worker-send internal ao send capabilities (Issue #384).
+  Process-bound journaled-worker-send internal runtime send capabilities (Issue #384).
   Caller-forgeable environment flags are not trusted; only registered one-time
-  tokens issued by journaled-worker-send and consumed by descendant ao guard
+  tokens issued by journaled-worker-send and consumed by descendant runtime guard
   processes are accepted.
 #>
 
@@ -61,7 +61,7 @@ function Get-JournaledWorkerSendInternalCapabilityDir {
 
     $project = ([string]$ProjectId).Trim()
     if (-not $project) { $project = 'orchestrator-pack' }
-    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $base = if ($env:OPK_BASE_DIR) { $env:OPK_BASE_DIR.Trim() } else { Join-Path $HOME '.orchestrator-pack' }
     return (Join-Path (Join-Path (Join-Path $base 'projects') $project) 'journaled-send-capabilities')
 }
 
@@ -104,8 +104,8 @@ function Test-ProcessIsDescendantOf {
 }
 
 function Test-JournaledWorkerSendCapabilityRegistrationAllowed {
-    if ($env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE -eq '1') { return $true }
-    $allowedCommands = @('Invoke-AoSendViaMessage', 'Test-AoSendMessageContract', 'New-JournaledWorkerSendInternalCapability')
+    if ($env:OPK_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE -eq '1') { return $true }
+    $allowedCommands = @('Invoke-WorkerMessageViaCatalog', 'Test-WorkerMessageSendContract', 'New-JournaledWorkerSendInternalCapability')
     foreach ($frame in Get-PSCallStack) {
         if ($frame.Command -notin $allowedCommands) { continue }
         if (Test-TrustedJournaledWorkerSendScriptPath -CandidatePath ([string]$frame.ScriptName)) {
@@ -116,7 +116,7 @@ function Test-JournaledWorkerSendCapabilityRegistrationAllowed {
 }
 
 function Test-JournaledWorkerSendParentChainTrusted {
-    if ($env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE -eq '1') { return $true }
+    if ($env:OPK_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE -eq '1') { return $true }
     foreach ($line in @(Get-ProcessParentChainCommandLines)) {
         foreach ($scriptPath in @(Get-ScriptPathsFromProcessCommandLine -CommandLine $line)) {
             if (Test-TrustedJournaledWorkerSendScriptPath -CandidatePath $scriptPath) {
@@ -185,7 +185,7 @@ function Register-JournaledWorkerSendInternalCapability {
 }
 
 function Test-ConsumeJournaledWorkerSendInternalCapability {
-    param([string]$Capability = [string]$env:AO_JOURNALED_SEND_INTERNAL)
+    param([string]$Capability = [string]$env:OPK_JOURNALED_SEND_INTERNAL)
 
     $parsed = ConvertFrom-JournaledWorkerSendInternalCapability -Capability $Capability
     if (-not $parsed.ok) { return $false }

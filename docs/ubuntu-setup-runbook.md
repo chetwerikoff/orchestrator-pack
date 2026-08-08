@@ -1,182 +1,151 @@
 # Ubuntu / WSL2 setup runbook
 
-Operator guide for standing up **orchestrator-pack** on Ubuntu 22.04+ or WSL2
-Ubuntu from scratch. Pack scripts stay **PowerShell** — run them with **pwsh 7+**
-on Linux (`defaults.runtime: process` or `tmux` per your AO install).
+This guide prepares a Linux environment for `orchestrator-pack` without installing
+or configuring a concrete orchestration platform.
 
 ## Supported platform boundary
 
-| Environment | Supported? | Notes |
-|-------------|------------|-------|
-| Native Ubuntu / Debian on ext4 | Yes | Primary target |
-| WSL2 Ubuntu | Yes | **Only** supported path on Windows |
-| Native Windows (PowerShell 5.1, `C:\` repos) | No | Retired — use WSL2 |
+| Environment | Supported | Notes |
+|---|---:|---|
+| Ubuntu 22.04+ on a Linux filesystem | Yes | Primary target |
+| WSL2 Ubuntu with repositories under `/home` | Yes | Supported Windows path |
+| Native Windows repositories and Windows PowerShell 5.1 | No | Use WSL2 and PowerShell 7 |
 
-**Invariant (decision §P.3):** Clone this pack, target repos, and AO worktrees on
-the **Linux filesystem** (`/home/<user>/...`, ext4). Never keep the repo or
-`~/.agent-orchestrator` state under **`/mnt/c`** — 9P is slow, breaks inotify,
-and reintroduces Windows file-lock behaviour.
+Keep the pack and target repositories on the Linux filesystem. Avoid `/mnt/c` for
+active worktrees because cross-filesystem metadata and file-watch behavior is less
+predictable.
 
-On WSL2, set in `/etc/wsl.conf` (then `wsl --shutdown` from Windows):
+For WSL2, a minimal `/etc/wsl.conf` may disable Windows `PATH` injection when it
+causes Linux tools to resolve to Windows executables:
 
 ```ini
 [interop]
 appendWindowsPath=false
 ```
 
-A clean `PATH` avoids Windows `node`/`npm` shadowing Linux tools. Re-open the
-distro after shutdown.
+Apply a WSL configuration change by shutting down the distribution from Windows
+and starting it again.
 
-## 1. Base packages
+## Base packages
 
 ```bash
 sudo apt update
 sudo apt install -y git curl build-essential
 ```
 
-Install **PowerShell 7** (required for all pack scripts). On a clean Ubuntu/WSL2
-image the `powershell` package is not in the default apt indexes — register the
-Microsoft repository first ([install guide](https://learn.microsoft.com/powershell/scripting/install/install-ubuntu)):
+Install PowerShell 7 using Microsoft's current Ubuntu package instructions, then
+verify:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y wget apt-transport-https software-properties-common
-
-# Register packages.microsoft.com for this Ubuntu release
-source /etc/os-release
-wget -q "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb"
-sudo dpkg -i packages-microsoft-prod.deb
-rm packages-microsoft-prod.deb
-sudo apt-get update
-
-sudo apt-get install -y powershell
-pwsh -Version
+pwsh --version
 ```
 
-Install **Node.js 20+** — prefer **nvm** or **NodeSource** over snap for AO/npm
-workloads. If you use **snap** for `node`, read §2 before running `npm install -g`.
-
-## 2. Snap `node` and npm prefix (gotcha)
-
-Ubuntu’s snap-packaged `node` often forces a global npm prefix under
-`/usr/local`, which is not user-writable without `sudo`.
-
-**Symptom:** `npm install -g @aoagents/ao` fails with `EACCES` on `/usr/local/lib`.
-
-**Fix:** use a user-owned prefix (add to `~/.profile` or `~/.bashrc`):
+Install GitHub CLI from its official package source and authenticate using the
+normal device or browser flow:
 
 ```bash
-mkdir -p "$HOME/.npm-global"
-npm config set prefix "$HOME/.npm-global"
-export PATH="$HOME/.npm-global/bin:$PATH"
+gh --version
+gh auth status
 ```
 
-Log out and back in (or `source ~/.profile`), then:
+Do not place tokens in repository files, shell history, tracked configuration, or
+Issue/PR text.
+
+## Node.js 22 and npm 10
+
+Use a Linux-native Node.js 22.x installation. Verify both tools before installing
+workspace dependencies:
 
 ```bash
-npm install -g @aoagents/ao
-ao --version
+node --version
+npm --version
 ```
 
-Prefer **nvm** or distro packages from NodeSource if you want to avoid snap
-prefix quirks entirely.
-
-## 3. `/snap/bin` on `PATH` (gotcha)
-
-When `node` (or other tools) are installed via snap, binaries live under
-`/snap/bin`. That directory is **not** always on `PATH` in non-login shells
-(SSH, some IDEs, cron).
-
-**Symptom:** `node: command not found` in a session where `snap list` shows node.
-
-**Fix:** ensure `/snap/bin` is exported:
+The repository contract is Node 22.x and npm 10.x. From the pack root:
 
 ```bash
-export PATH="/snap/bin:$PATH"
+npm ci --include=dev
+npm run check:node-major
+npm run check:npm-major
 ```
 
-Persist in `~/.profile` if you rely on snap-provided tools.
+Do not introduce a second TypeScript launcher, emitted JavaScript build, `tsx`,
+`ts-node`, or Node 20 fallback.
 
-## 4. GitHub CLI and pack clone
+## Agent and reviewer CLIs
+
+Install only the CLIs required by the selected workflow and expose them on the
+Linux `PATH`. Validate each executable directly from the shell inherited by the
+pack process. Keep credentials in the provider's normal secure store.
+
+The pack review engine is selected through the tracked reviewer configuration and
+pack-owned runner. Do not invoke a reviewer plugin directly as a substitute for the
+runner's claim, head, cap, and publication authority.
+
+## Clone and verify
 
 ```bash
-type -p curl >/dev/null || sudo apt install -y curl
-curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | \
-  sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | \
-  sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-sudo apt update && sudo apt install -y gh
-gh auth login
-```
-
-Clone the pack **on ext4** (example):
-
-```bash
-git clone https://github.com/chetwerikoff/orchestrator-pack.git \
-  "$HOME/projects/orchestrator-pack"
-cd "$HOME/projects/orchestrator-pack"
-```
-
-## 5. Agent CLIs: `cursor-agent` and `codex`
-
-AO’s Cursor worker plugin expects **`cursor-agent`** (or `agent`) on `PATH`.
-Local Codex review expects the **`codex`** CLI.
-
-Install per vendor docs for Linux (versions change — verify with `command -v`):
-
-```bash
-# Cursor CLI — follow https://cursor.com/docs/cli (native Linux install)
-# Typical check after install:
-cursor-agent --version 2>/dev/null || agent --version
-
-# After orchestrator-pack merge for Issue #725 — pack TUI shim (optional but required for AO worker panes):
-# pwsh -NoProfile -File scripts/install-cursor-agent-tui-shim.ps1
-# pwsh -NoProfile -File scripts/verify-cursor-agent-tui-shim.ps1
-
-# OpenAI Codex CLI — follow current Codex install docs for Linux
-codex --version
-```
-
-Set **`PACK_REVIEWER`** (`codex` or `claude`) in the shell profile or systemd
-unit that starts `ao` — see
-[`docs/reviewer-switch-runbook.md`](reviewer-switch-runbook.md).
-
-## 6. Verify the pack
-
-From the pack root on Linux:
-
-```powershell
-pwsh -NoProfile -File scripts/verify.ps1
-pwsh -NoProfile -File scripts/check-reusable.ps1
-```
-
-With strict prerequisites:
-
-```powershell
+mkdir -p ~/projects
+cd ~/projects
+git clone https://github.com/chetwerikoff/orchestrator-pack.git
+cd orchestrator-pack
+npm ci --include=dev
 pwsh -NoProfile -File scripts/verify.ps1 -StrictPrereqs
+pwsh -NoProfile -File scripts/check-reusable.ps1
+npm run typecheck:foundation
+npm run lint:foundation
+npm run test:foundation
 ```
 
-## 7. Configure AO
+Use `scripts/bootstrap.ps1 -InstallDependencies -StrictPrereqs` as a convenience
+wrapper. It never starts a runtime, creates target-side state, or mutates user
+configuration.
 
-```powershell
-Copy-Item agent-orchestrator.yaml.example agent-orchestrator.yaml
-# edit projects.*.path to your target repo on ext4, e.g. /home/you/projects/your-repo
+## Runtime registration
+
+Runtime operations flow through `RuntimeAdapter` and the registry in
+`scripts/runtime/registry.ts`. Before an effect, resolve an adapter-produced exact
+identity:
+
+```text
+{ runtime, id, generation }
 ```
 
-Merge **Operator adoption** steps after pack PRs land — see
-[`docs/migration_notes.md`](migration_notes.md) (Issue #117 and related sections).
+Do not authorize effects from a title, process ID, path, branch, display name,
+short identifier, stale record, or accounting field. Operator-owned configuration
+for a concrete adapter stays outside the repository unless the task explicitly
+adds a reusable example.
 
-Start AO against a target repo explicitly:
+## Target repository workflow
+
+1. Clone the target repository under the Linux filesystem.
+2. Create or select a published GitHub Issue with exact denylist and allowed roots.
+3. Create a linked branch and PR.
+4. Use pack scripts from the trusted pack checkout.
+5. Run target tests plus pack scope, review, and current-head CI checks.
+6. Merge only under direct operator authority.
+
+No target-side action is performed merely by cloning or verifying this pack.
+
+## Diagnostics
+
+Run these from the pack root:
 
 ```bash
-cd "$HOME/projects/your-target-repo"
-ao start
+pwsh -NoProfile -File scripts/verify.ps1 -StrictPrereqs
+npm run gate-runner-selftest
+node --experimental-strip-types scripts/runtime-retirement/retired-surface-selftest.ts
+npm run typecheck:foundation
+npm run lint:foundation
 ```
 
-## Related docs
+When a command fails, preserve the exact stderr/stdout, current commit SHA, runtime
+identity, and affected path. Do not replace a missing prerequisite with a temporary
+wrapper or claim that an unrun check passed.
 
-- [`README.md`](../README.md) — pack overview and Linux baseline
-- [`docs/migration_notes.md`](migration_notes.md) — live yaml merge and adoption
-- [`docs/ao-0-10-operator-upgrade-runbook.md`](ao-0-10-operator-upgrade-runbook.md) — live AO 0.10.x upgrade (GitHub assets when npm lags)
-- [`docs/target_repo_setup.md`](target_repo_setup.md) — target repo checklist
-- [`docs/issues_drafts/00-architecture-decisions.md`](issues_drafts/00-architecture-decisions.md) §P — port decision
+## Updating the pack
+
+Before updating, record the current branch and commit. Pull the intended branch,
+install from the frozen lockfile, rerun verification, and recycle only managed
+processes that must load changed tracked files. Host cleanup for removed software
+or state is separate optional operator work and never authorizes fallback behavior.

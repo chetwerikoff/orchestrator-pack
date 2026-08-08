@@ -9,7 +9,7 @@ import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 
 export const REVIEW_DELIVERY_LIFECYCLE_SCHEMA_VERSION = 1;
 export const DEFAULT_TERMINAL_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-export const ENV_TERMINAL_RETENTION_DAYS = 'AO_REVIEW_DELIVERY_TERMINAL_RETENTION_DAYS';
+export const ENV_TERMINAL_RETENTION_DAYS = 'OPK_REVIEW_DELIVERY_TERMINAL_RETENTION_DAYS';
 
 export const LIFECYCLE_STARTED = 'started';
 export const LIFECYCLE_VERDICT_RECORDED = 'verdict_recorded';

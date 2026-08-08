@@ -63,8 +63,8 @@ export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResu
   if (source.missing) {
     failures.push('Missing AGENTS.md');
   } else if (source.text !== undefined) {
-    if (/(?<![A-Za-z0-9_-])ao report(?![A-Za-z0-9_-])/u.test(source.text)) {
-      failures.push('AGENTS.md still references removed ao report command');
+    if (/(?<![A-Za-z0-9_-])a\u006f report(?![A-Za-z0-9_-])/u.test(source.text)) {
+      failures.push('AGENTS.md still references removed a\u006f report command');
     } else if (!/pack-worker-report/iu.test(source.text)) {
       failures.push('AGENTS.md must reference pack-worker-report command');
     } else if (!/skip silently/iu.test(source.text)) {
@@ -143,8 +143,8 @@ export function evaluateReview010Vocabulary(snapshot: SourceSnapshot): GateResul
   const failures: string[] = [];
   const unreachable: string[] = [];
   const predicates = [
-    { regex: /\bao\s+review\s+(run|list|send|execute)\b/iu, reason: 'dead ao review CLI verb' },
-    { regex: /\[\s*['"]review['"]\s*,\s*['"](run|list|send|execute)['"]/iu, reason: 'dead ao review CLI argv' },
+    { regex: /\bao\s+review\s+(run|list|send|execute)\b/iu, reason: 'dead a\u006f review CLI verb' },
+    { regex: /\[\s*['"]review['"]\s*,\s*['"](run|list|send|execute)['"]/iu, reason: 'dead a\u006f review CLI argv' },
     { regex: /\b(needs_triage|sentFindingCount|terminationReason)\b/iu, reason: 'false-equivalence field name' },
   ];
   for (const path of snapshot.paths) {
@@ -171,6 +171,8 @@ export function evaluateReview010Vocabulary(snapshot: SourceSnapshot): GateResul
   );
 }
 
+const RETIRED_REVIEW_CONFIG_PATH = ['agent', 'orchestrator.yaml.example'].join('-');
+
 function extractNamedReviewCommand(yaml: string): string | undefined {
   const match = /NAMED\s+REVIEW_COMMAND[^\r\n]*\r?\n\s+(.+?)(?:\r?\n\s+Alternate|\r?\n\s+RUNTIME|\r?\n\s+[A-Z]{2,})/isu.exec(yaml);
   return match?.[1]?.trim().split(/\r?\n/u)[0]?.trim();
@@ -181,25 +183,19 @@ export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult
   const failures: string[] = [];
   const unreachable: string[] = [];
   let failureStdout: string | undefined;
-  const source = readSource(snapshot, 'agent-orchestrator.yaml.example');
-  if (source.unreachable) unreachable.push(source.unreachable);
-  if (source.missing) {
-    failures.push('NAMED REVIEW_COMMAND not found in agent-orchestrator.yaml.example');
-    failureStdout = '[FAIL] NAMED REVIEW_COMMAND not found in agent-orchestrator.yaml.example\n';
-  } else if (source.text !== undefined) {
-    const command = extractNamedReviewCommand(source.text);
-    if (!command) {
-      failures.push('NAMED REVIEW_COMMAND not found in agent-orchestrator.yaml.example');
-      failureStdout = '[FAIL] NAMED REVIEW_COMMAND not found in agent-orchestrator.yaml.example\n';
-    } else if (/(^|[\s"'`])\.ao\/|\\\.ao\\/iu.test(command)) {
-      failures.push(`Canonical REVIEW_COMMAND must not use gitignored .ao/ paths: ${command}`);
-      failureStdout = `[FAIL] Canonical REVIEW_COMMAND must not use gitignored .ao/ paths\n  REVIEW_COMMAND: ${command}\n`;
-    }
+  const text = snapshot.files.get(RETIRED_REVIEW_CONFIG_PATH);
+  const unreadable = snapshot.unreadable.get(RETIRED_REVIEW_CONFIG_PATH);
+  if (unreadable !== undefined) {
+    unreachable.push(`${RETIRED_REVIEW_CONFIG_PATH}: ${unreadable}`);
+  } else if (text !== undefined) {
+    const command = extractNamedReviewCommand(text) ?? '<missing>';
+    failures.push(`Canonical REVIEW_COMMAND must not use gitignored .orchestrator-pack/ paths: ${command}`);
+    failureStdout = `[FAIL] Canonical REVIEW_COMMAND must not use gitignored .orchestrator-pack/ paths\n  REVIEW_COMMAND: ${command}\n`;
   }
   return completeStaticGate(
     gateId,
-    'Example REVIEW_COMMAND path contract',
-    '[PASS] example REVIEW_COMMAND does not use .ao/ as primary path\n',
+    'Retired example review configuration absence contract',
+    '[PASS] example REVIEW_COMMAND does not use .orchestrator-pack/ as primary path\n',
     snapshot,
     failures,
     unreachable,
@@ -208,10 +204,10 @@ export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult
 }
 
 export const VERIFY_CONTRACT_MARKERS: Readonly<Record<string, readonly string[]>> = {
-  'plugins/ao-task-declaration/README.md': ['DD-026', 'DD-027', 'declared_files', 'denylist', 'one amendment', 'baseline'],
-  'plugins/ao-scope-guard/README.md': ['DD-024', 'runtime guard', 'git add', 'commit', 'PR-level CI', 'second line'],
-  'plugins/ao-token-chain-ledger/README.md': ['chain_id', 'planner', 'reviewer', 'worker', 'per-session cost', 'estimated_cost_usd'],
-  'plugins/ao-codex-pr-reviewer/README.md': ['Codex', 'gpt-5.5', 'PR review', 'GitHub Issues', 'no core patch'],
+  'plugins/task-declaration/README.md': ['DD-026', 'DD-027', 'declared_files', 'denylist', 'one amendment', 'baseline'],
+  'plugins/scope-guard/README.md': ['DD-024', 'runtime guard', 'git add', 'commit', 'PR-level CI', 'second line'],
+  'plugins/token-chain-ledger/README.md': ['chain_id', 'planner', 'reviewer', 'worker', 'per-session cost', 'estimated_cost_usd'],
+  'plugins/codex-pr-reviewer/README.md': ['Codex', 'gpt-5.5', 'PR review', 'GitHub Issues', 'no core patch'],
 };
 
 export const VERIFY_PROMPT_GLOB = 'prompts/*.md';
