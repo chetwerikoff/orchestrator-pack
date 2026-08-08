@@ -99,6 +99,7 @@
     "scripts/pack-review-runner-severity.test.ts": "light",
     "scripts/pack-review-state.test.ts": "light",
     "scripts/pr-scope-declaration.test.ts": "light",
+    "scripts/pr-scope-runner.test.ts": "light",
     "scripts/pr-session-binding-cache.test.ts": "light",
     "scripts/pr2-foundation/binding-cache.test.ts": "light",
     "scripts/pr2-foundation/foundation.test.ts": "heavy",
