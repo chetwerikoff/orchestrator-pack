@@ -124,6 +124,15 @@ export interface PrScopeCheckInput {
   headSha?: string;
 }
 
+export interface PrScopeVerifiedDiff {
+  scopePaths: string[];
+  operatorAdoptionPaths: string[];
+}
+
+export type PrScopeDiffResult =
+  | { ok: true; diff: PrScopeVerifiedDiff }
+  | { ok: false; message: string };
+
 export type PrScopeCheckResult =
   | {
       ok: true;
@@ -897,13 +906,19 @@ export function checkRuntimeHistoryDeliveryPrScope(
   };
 }
 
-function acquireRequiredDiff(input: PrScopeCheckInput):
-  | { ok: true; paths: string[] }
-  | { ok: false; message: string } {
+export function acquirePrScopeDiff(input: PrScopeCheckInput): PrScopeDiffResult {
   const base = input.baseSha?.trim();
   const head = input.headSha?.trim();
   if (!base && !head) {
-    if (input.prPaths.length > 0) return { ok: true, paths: input.prPaths };
+    if (input.prPaths.length > 0) {
+      return {
+        ok: true,
+        diff: {
+          scopePaths: [...input.prPaths],
+          operatorAdoptionPaths: [...input.prPaths],
+        },
+      };
+    }
     return {
       ok: false,
       message: 'diff-incomplete: merge-base and PR head are unavailable; retry command',
@@ -954,9 +969,15 @@ function acquireRequiredDiff(input: PrScopeCheckInput):
       mergeBase,
       head,
     ]).trim();
-    if (!output) return { ok: true, paths: [] };
+    if (!output) {
+      return {
+        ok: true,
+        diff: { scopePaths: [], operatorAdoptionPaths: [] },
+      };
+    }
 
-    const paths: string[] = [];
+    const scopePaths: string[] = [];
+    const operatorAdoptionPaths: string[] = [];
     for (const line of output.split(/\r?\n/)) {
       const fields = line.split('\t');
       const status = fields[0] ?? '';
@@ -964,22 +985,28 @@ function acquireRequiredDiff(input: PrScopeCheckInput):
         if (fields.length !== 3) {
           return { ok: false, message: `diff-incomplete: ambiguous rename row "${line}"; retry command` };
         }
-        paths.push(fields[1]!, fields[2]!);
+        scopePaths.push(fields[1]!, fields[2]!);
+        operatorAdoptionPaths.push(fields[2]!);
       } else if (/^[Cc]\d+$/.test(status)) {
         if (fields.length !== 3) {
           return { ok: false, message: `diff-incomplete: ambiguous copy row "${line}"; retry command` };
         }
-        paths.push(fields[2]!);
+        scopePaths.push(fields[2]!);
+        operatorAdoptionPaths.push(fields[2]!);
       } else if (/^[AMD]$/.test(status)) {
         if (fields.length !== 2 || !fields[1]) {
           return { ok: false, message: `diff-incomplete: malformed status row "${line}"; retry command` };
         }
-        paths.push(fields[1]);
+        scopePaths.push(fields[1]);
+        operatorAdoptionPaths.push(fields[1]);
       } else {
         return { ok: false, message: `diff-incomplete: unsupported status row "${line}"; retry command` };
       }
     }
-    return { ok: true, paths };
+    return {
+      ok: true,
+      diff: { scopePaths, operatorAdoptionPaths },
+    };
   } catch (error) {
     return {
       ok: false,
@@ -988,26 +1015,20 @@ function acquireRequiredDiff(input: PrScopeCheckInput):
   }
 }
 
-export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
-  const diff = acquireRequiredDiff(input);
-  if (!diff.ok) {
-    return { ok: false, reason: 'diff-incomplete', message: diff.message };
-  }
-  const effectiveInput = { ...input, prPaths: diff.paths };
-
+export function evaluatePrScope(input: PrScopeCheckInput): PrScopeCheckResult {
   // Path-based no-ceremony wins over the spec-only signal: a markdown-only union diff
   // must reject issue links even when the body also carries <!-- pr-type: spec-only --> and Refs #N.
-  if (isNoCeremonyPr(effectiveInput.prPaths)) {
-    return checkNoCeremonyPrScope(effectiveInput);
+  if (isNoCeremonyPr(input.prPaths)) {
+    return checkNoCeremonyPrScope(input);
   }
 
-  if (hasSpecOnlySignal(effectiveInput.prBody)) {
-    return checkSpecOnlyPrScope(effectiveInput);
+  if (hasSpecOnlySignal(input.prBody)) {
+    return checkSpecOnlyPrScope(input);
   }
 
-  const issueNumber = extractClosingIssueNumber(effectiveInput.prBody);
+  const issueNumber = extractClosingIssueNumber(input.prBody);
   if (issueNumber === null) {
-    const runtimeHistoryDeliveryResult = checkRuntimeHistoryDeliveryPrScope(effectiveInput);
+    const runtimeHistoryDeliveryResult = checkRuntimeHistoryDeliveryPrScope(input);
     if (runtimeHistoryDeliveryResult !== null) {
       return runtimeHistoryDeliveryResult;
     }
@@ -1019,7 +1040,15 @@ export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
     };
   }
 
-  return checkImplementationPrScope(effectiveInput, issueNumber);
+  return checkImplementationPrScope(input, issueNumber);
+}
+
+export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
+  const diff = acquirePrScopeDiff(input);
+  if (!diff.ok) {
+    return { ok: false, reason: 'diff-incomplete', message: diff.message };
+  }
+  return evaluatePrScope({ ...input, prPaths: diff.diff.scopePaths });
 }
 
 export function formatScopeCheckComment(result: PrScopeCheckResult): string {
