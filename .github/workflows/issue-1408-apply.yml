@@ -1,0 +1,150 @@
+name: Issue 1408 scope prerequisite apply
+
+on:
+  push:
+    branches:
+      - agent/issue-1408-scope-ceiling-active-tests
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: agent/issue-1408-scope-ceiling-active-tests
+      - name: Apply exact trusted-ceiling change
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('scripts/pr-scope-declaration.ts')
+          text = source.read_text()
+          old = """  'tests/external-output-references/**',
+  'tests/fixtures/pack-gpt-browser-turn-harness.mjs',
+  'tests/powershell/Issue748.RefreshConcurrency.Tests.ps1',
+  'tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1',
+  'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1',
+  'tests/powershell/Lint-SelfArchitect.Tests.ps1',
+"""
+          new = """  'tests/README.md',
+  'tests/external-output-references/**',
+  'tests/fixtures/pack-gpt-browser-turn-harness.mjs',
+  'tests/issue854-worker-status-binding-cache.mjs',
+  'tests/powershell/Issue748.RefreshConcurrency.Tests.ps1',
+  'tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1',
+  'tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1',
+  'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1',
+  'tests/powershell/Lint-SelfArchitect.Tests.ps1',
+  'tests/worker-status-store-live-rca.ts',
+"""
+          if old not in text:
+              raise SystemExit('trusted-ceiling source anchor not found')
+          source.write_text(text.replace(old, new, 1))
+
+          tests = Path('scripts/pr-scope-declaration.test.ts')
+          text = tests.read_text()
+          constant_anchor = """const bootstrapAllowedPaths = [
+"""
+          constant = """const issue1352ActiveTestPaths = [
+  'tests/README.md',
+  'tests/issue854-worker-status-binding-cache.mjs',
+  ...issue1352PowerShellPaths,
+  'tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1',
+  'tests/worker-status-store-live-rca.ts',
+].sort((left, right) => left.localeCompare(right));
+
+"""
+          if constant_anchor not in text:
+              raise SystemExit('test constant anchor not found')
+          text = text.replace(constant_anchor, constant + constant_anchor, 1)
+
+          test_anchor = """  it('produces and verifies skills-fenced first-party declarations', () => {
+"""
+          test_case = """  it('admits only the exact Issue 1352 active test surfaces', () => {
+    expect(REPOSITORY_ALLOWED_ROOTS).toEqual(
+      expect.arrayContaining(issue1352ActiveTestPaths),
+    );
+    expect(REPOSITORY_ALLOWED_ROOTS).not.toContain('tests/powershell/**');
+    expect(REPOSITORY_ALLOWED_ROOTS).not.toContain('tests/**');
+
+    const exactDeclaration = {
+      ...declaration(1352),
+      declared_paths: [...issue1352ActiveTestPaths],
+      allowed_roots: [...issue1352ActiveTestPaths],
+    };
+    expect(validatePrScopeDeclaration(exactDeclaration, 1352)).toMatchObject({
+      ok: true,
+    });
+
+    for (const unrelatedPath of [
+      'tests/Unrelated.test.ts',
+      'tests/powershell/Unrelated.Tests.ps1',
+    ]) {
+      const unrelatedPaths = [
+        ...issue1352ActiveTestPaths,
+        unrelatedPath,
+      ].sort((left, right) => left.localeCompare(right));
+      expect(
+        validatePrScopeDeclaration(
+          {
+            ...declaration(1352),
+            declared_paths: unrelatedPaths,
+            allowed_roots: unrelatedPaths,
+          },
+          1352,
+        ),
+      ).toMatchObject({ ok: false, kind: 'policy-violation' });
+    }
+  });
+
+"""
+          if test_anchor not in text:
+              raise SystemExit('test insertion anchor not found')
+          tests.write_text(text.replace(test_anchor, test_case + test_anchor, 1))
+          PY
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/issue-1408-apply.yml
+          git add scripts/pr-scope-declaration.ts scripts/pr-scope-declaration.test.ts
+          git commit -m "fix(scope): admit remaining Issue 1352 active test paths"
+          SOURCE_REVISION=$(git rev-parse HEAD)
+          mkdir -p docs/declarations
+          cat > docs/declarations/1408.pr-scope.json <<EOF
+          {
+            "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+            "issue_number": 1408,
+            "declared_paths": [
+              "docs/declarations/1408.pr-scope.json",
+              "scripts/pr-scope-declaration.test.ts",
+              "scripts/pr-scope-declaration.ts"
+            ],
+            "denylist": [
+              ".github/workflows/",
+              "AGENTS.md",
+              "CLAUDE.md",
+              "credentials/",
+              "packages/core/",
+              "plugins/",
+              "prompts/",
+              "secrets/",
+              "tests/",
+              "vendor/"
+            ],
+            "allowed_roots": [
+              "docs/declarations/",
+              "scripts/pr-scope-declaration.test.ts",
+              "scripts/pr-scope-declaration.ts"
+            ],
+            "source_revision": "${SOURCE_REVISION}"
+          }
+          EOF
+          git add docs/declarations/1408.pr-scope.json
+          git commit -m "chore(scope): declare Issue 1408 change"
+          git push origin HEAD:${GITHUB_REF_NAME}
