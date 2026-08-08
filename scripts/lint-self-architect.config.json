@@ -17,6 +17,7 @@
     "packages/core/**",
     ".orchestrator-pack/**",
     "docs/declarations/**",
+    "docs/investigations/runtime-hard-cut/historical-dispositions.json",
     "node_modules/**",
     "scripts/vitest-heavy-topology.plan.json",
     "scripts/contract-evidence-validator.mjs",
