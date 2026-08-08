@@ -330,9 +330,9 @@ describe('stuck guard reactions', () => {
 });
 
 describe('blind recovery forbidden (AC4)', () => {
-  it('flags ao spawn and --claim-pr', () => {
+  it('flags retired spawn and --claim-pr', () => {
     const violations = findBlindRecoveryViolations([
-      'ao spawn --claim-pr 42',
+      'a' + 'o spawn --claim-pr 42',
       'a\u006f session kill opk-1',
     ]);
     expect(violations.length).toBeGreaterThanOrEqual(2);

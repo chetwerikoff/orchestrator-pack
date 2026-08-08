@@ -58,7 +58,7 @@ export const OPK_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN = /^opk-\d+$/i;
 /** Git globals that select a repository other than the process cwd. */
 export const GIT_SOURCE_SELECTING_GLOBAL_FLAGS = new Set(['-C', '--git-dir', '--work-tree']);
 
-/** `ao spawn` flags that consume the next argv token (see `ao spawn --help`, AO 0.10.2). */
+/** Spawn command flags that consume the next argv token. */
 export const SPAWN_ARGV_OPTIONS_WITH_VALUE = [
   '--agent',
   '--claim-pr',

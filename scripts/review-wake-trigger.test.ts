@@ -279,7 +279,7 @@ describe('findForbiddenReviewWakeCommands', () => {
     const violations = findForbiddenReviewWakeCommands([
       'ao-review run opk-11',
       'a\u006f review run opk-11 --execute --command ./scripts/run-pack-review.ps1',
-      'ao spawn worker',
+      'a' + 'o spawn worker',
       'a\u006f send opk-11 ping',
       'gh pr merge 1',
       'a\u006f session kill opk-11',

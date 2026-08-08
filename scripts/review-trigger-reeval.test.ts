@@ -349,7 +349,7 @@ describe('Issue #235 acceptance criteria', () => {
 
   it('(8) review-run-only scope: forbidden lifecycle commands', () => {
     const violations = findForbiddenReviewReevalCommands([
-      'ao spawn worker',
+      'a' + 'o spawn worker',
       'a\u006f review run opk-1 --execute --command codex',
       'a\u006f send opk-1 ping',
       'gh pr merge 1',

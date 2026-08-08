@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-  Spawn-owned worktree grant mint/consume for autonomous ao spawn (Issue #470).
+  Spawn-owned worktree grant mint/consume for autonomous worker spawn (Issue #470).
 #>
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')

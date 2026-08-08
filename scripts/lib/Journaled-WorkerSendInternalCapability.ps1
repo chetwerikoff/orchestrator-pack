@@ -2,7 +2,7 @@
 <#
   Process-bound journaled-worker-send internal runtime send capabilities (Issue #384).
   Caller-forgeable environment flags are not trusted; only registered one-time
-  tokens issued by journaled-worker-send and consumed by descendant ao guard
+  tokens issued by journaled-worker-send and consumed by descendant runtime guard
   processes are accepted.
 #>
 
