@@ -172,7 +172,8 @@ doc.declared_paths.sort((a, b) => a.localeCompare(b));
 writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`);
 NODE
 
-git add docs/investigations/runtime-hard-cut/baseline.json docs/declarations/1352.pr-scope.json
+git add -f docs/investigations/runtime-hard-cut/baseline.json
+git add docs/declarations/1352.pr-scope.json
 git commit -m "docs(issue-1352): bind base-current retirement baseline"
 
 # Remove every evidence carrier and restore the real CI workflow before the code head is frozen.
@@ -231,7 +232,7 @@ const finalEvidence = {
 writeFileSync('docs/investigations/runtime-hard-cut/final.json', `${JSON.stringify(finalEvidence, null, 2)}\n`);
 NODE
 
-git add docs/investigations/runtime-hard-cut/final.json
+git add -f docs/investigations/runtime-hard-cut/final.json
 changed="$(git diff --cached --name-only)"
 test "$changed" = "docs/investigations/runtime-hard-cut/final.json"
 git commit -m "docs(issue-1352): publish final runtime hard-cut evidence"
