@@ -10,6 +10,9 @@
   "excludePaths": [
     "tests/fixtures/**",
     "scripts/fixtures/**",
+    "scripts/graphify/__fixtures__/**",
+    "plugins/**/tests/fixtures/**",
+    "scripts/reachability-purge.manifest.json",
     "vendor/**",
     "packages/core/**",
     ".orchestrator-pack/**",

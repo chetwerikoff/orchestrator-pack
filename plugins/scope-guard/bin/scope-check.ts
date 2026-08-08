@@ -2,6 +2,10 @@
 
 import '../../../scripts/toolchain/native-entrypoint-preflight.ts';
 import { resolve } from 'node:path';
+import {
+  missingCliArgumentError,
+  unknownCliArgumentError,
+} from '@orchestrator-pack/shared/lib/cli_argument_errors.js';
 import { isDirectCliExecution } from '@orchestrator-pack/shared/lib/cli_direct_execution.js';
 import {
   checkScope,
@@ -53,6 +57,10 @@ export function parseScopeCheckArgs(argv: string[]): ScopeCheckOptions {
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === '--help' || arg === '-h') {
+      throw new Error(usage());
+    }
+
     switch (arg) {
       case '--issue':
         issueNumber = parseIssueNumber(argv[++index]);
@@ -74,16 +82,13 @@ export function parseScopeCheckArgs(argv: string[]): ScopeCheckOptions {
       case '--baseline':
         baselineCommitSha = argv[++index];
         break;
-      case '--help':
-      case '-h':
-        throw new Error(usage());
       default:
-        throw new Error(`unknown argument: ${arg}\n${usage()}`);
+        throw unknownCliArgumentError(arg, usage());
     }
   }
 
   if (issueNumber === undefined) {
-    throw new Error(`--issue is required\n${usage()}`);
+    throw missingCliArgumentError('--issue', usage());
   }
 
   if (!mode) {

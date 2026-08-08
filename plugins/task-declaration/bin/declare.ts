@@ -2,6 +2,10 @@
 
 import '../../../scripts/toolchain/native-entrypoint-preflight.ts';
 import { execFileSync } from 'node:child_process';
+import {
+  missingCliArgumentError,
+  unknownCliArgumentError,
+} from '@orchestrator-pack/shared/lib/cli_argument_errors.js';
 import { isDirectCliExecution } from '@orchestrator-pack/shared/lib/cli_direct_execution.js';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import { validateDeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
@@ -98,12 +102,12 @@ function parseArgs(argv: string[]): CliOptions {
       case '-h':
         throw new Error(usage());
       default:
-        throw new Error(`unknown argument: ${arg}\n${usage()}`);
+        throw unknownCliArgumentError(arg, usage());
     }
   }
 
   if (issueNumber === undefined) {
-    throw new Error(`--issue is required\n${usage()}`);
+    throw missingCliArgumentError('--issue', usage());
   }
 
   if (declaredPaths.length === 0 && declaredGlobs.length === 0) {

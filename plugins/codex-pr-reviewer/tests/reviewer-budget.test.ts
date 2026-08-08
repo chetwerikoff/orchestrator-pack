@@ -21,34 +21,7 @@ import {
   TIMEOUT_NO_VERDICT_MESSAGE,
 } from '../lib/reviewer_failure.js';
 import { executeReview } from '../lib/review_core.js';
-import { runProcessSync } from '../../../scripts/kernel/subprocess.ts';
-
-interface TestProcessOptions {
-  readonly cwd?: string;
-  readonly env?: NodeJS.ProcessEnv;
-  readonly encoding?: BufferEncoding;
-}
-
-function runTestProcessSync(
-  command: string,
-  args: readonly string[],
-  options: TestProcessOptions = {},
-) {
-  const result = runProcessSync({
-    command,
-    args,
-    cwd: options.cwd,
-    env: options.env,
-    inheritParentEnv: options.env === undefined,
-    encoding: options.encoding ?? 'utf8',
-  });
-  return {
-    status: result.exitCode,
-    signal: result.signal,
-    stdout: result.stdout,
-    stderr: result.stderr,
-  };
-}
+import { runTestProcessSync } from '../../../scripts/kernel/test-process.ts';
 
 const SCOPED_ISSUE_NUMBER = 6;
 const GUARD_DIR = join(

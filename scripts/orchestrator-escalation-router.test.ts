@@ -2,34 +2,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { runProcessSync } from './kernel/subprocess.ts';
-
-interface TestProcessOptions {
-  readonly cwd?: string;
-  readonly env?: NodeJS.ProcessEnv;
-  readonly encoding?: BufferEncoding;
-}
-
-function runTestProcessSync(
-  command: string,
-  args: readonly string[],
-  options: TestProcessOptions = {},
-) {
-  const result = runProcessSync({
-    command,
-    args,
-    cwd: options.cwd,
-    env: options.env,
-    inheritParentEnv: options.env === undefined,
-    encoding: options.encoding ?? 'utf8',
-  });
-  return {
-    status: result.exitCode,
-    signal: result.signal,
-    stdout: result.stdout,
-    stderr: result.stderr,
-  };
-}
+import { runTestProcessSync } from './kernel/test-process.ts';
 
 const repoRoot = join(import.meta.dirname, '..');
 
