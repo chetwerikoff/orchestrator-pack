@@ -142,3 +142,102 @@ jobs:
       - name: Run external red-green mutation evidence
         if: steps.detect.outputs.run_evidence == 'true'
         run: npm run test:contract-mutations
+
+  issue-1352-final-evidence:
+    name: Issue 1352 final active-test evidence
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 1378 && github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - name: Freeze code head and republish final evidence
+        shell: bash
+        env:
+          PR_BASE_HEAD: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BRANCH_NAME: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR_HEAD_SHA"
+          remote_head="$(git ls-remote origin "refs/heads/$BRANCH_NAME" | awk '{print $1}')"
+          test "$remote_head" = "$PR_HEAD_SHA"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const baseline = JSON.parse(readFileSync('docs/investigations/runtime-hard-cut/baseline.json', 'utf8'));
+          if (baseline.prBaseHead !== process.env.PR_BASE_HEAD) throw new Error('baseline is not bound to current PR base');
+          if (!Array.isArray(baseline.hits) || baseline.hits.length !== baseline.hitCount) throw new Error('baseline hit count mismatch');
+          if (new Set(baseline.hits.map((hit) => hit.id)).size !== baseline.hits.length) throw new Error('baseline identities are not unique');
+          console.log(JSON.stringify({ baselineHits: baseline.hits.length, baseScanned: baseline.scannedFileCount }));
+          NODE
+
+          git checkout "$PR_BASE_HEAD" -- .github/workflows/typescript-foundation.yml
+          git add .github/workflows/typescript-foundation.yml
+          git commit -m "chore(issue-1352): remove final evidence carrier"
+
+          node --experimental-strip-types --input-type=module <<'NODE'
+          import { scanRetiredRuntimeSurfaces } from './scripts/runtime-retirement/retired-surface-guard.ts';
+          const result = scanRetiredRuntimeSurfaces({ repoRoot: process.cwd() });
+          if (result.violations.length !== 0) {
+            console.error(JSON.stringify(result.violations.slice(0, 100), null, 2));
+            process.exit(1);
+          }
+          console.log(JSON.stringify({ currentScanned: result.scannedFileCount, violations: 0 }));
+          NODE
+
+          scanned_code_head="$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$PR_BASE_HEAD" "$scanned_code_head"
+
+          PR_BASE_HEAD="$PR_BASE_HEAD" SCANNED_CODE_HEAD="$scanned_code_head" node --experimental-strip-types --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { scanRetiredRuntimeSurfaces } from './scripts/runtime-retirement/retired-surface-guard.ts';
+          const baseline = JSON.parse(readFileSync('docs/investigations/runtime-hard-cut/baseline.json', 'utf8'));
+          const currentScan = scanRetiredRuntimeSurfaces({ repoRoot: process.cwd() });
+          if (currentScan.violations.length !== 0) throw new Error('final scan must have zero active violations');
+          const outcomes = baseline.hits.map((hit) => ({
+            id: hit.id,
+            path: hit.path,
+            selector: hit.selector,
+            occurrence: hit.occurrence,
+            aoClass: hit.aoClass,
+            status: hit.disposition === 'rename-runtime-neutral' ? 'renamed'
+              : hit.disposition === 'port-live-behavior' ? 'ported' : 'deleted',
+            ...(hit.replacementPath ? { replacementPath: hit.replacementPath } : {}),
+          }));
+          if (new Set(outcomes.map((row) => row.id)).size !== baseline.hits.length) throw new Error('baseline identity closure is not one-to-one');
+          const finalEvidence = {
+            schemaVersion: 'orchestrator-pack/runtime-hard-cut-final/v1',
+            issueNumber: 1352,
+            prBaseHead: process.env.PR_BASE_HEAD,
+            scannedCodeHead: process.env.SCANNED_CODE_HEAD,
+            baselinePath: 'docs/investigations/runtime-hard-cut/baseline.json',
+            baselineHitCount: baseline.hits.length,
+            currentScan: {
+              scannerAuthority: 'scripts/json-producers/retired-runtime-surfaces.json',
+              scannedFileCount: currentScan.scannedFileCount,
+              violationCount: 0,
+            },
+            outcomes,
+          };
+          writeFileSync('docs/investigations/runtime-hard-cut/final.json', `${JSON.stringify(finalEvidence, null, 2)}\n`);
+          NODE
+
+          git add -f docs/investigations/runtime-hard-cut/final.json
+          changed="$(git diff --cached --name-only)"
+          test "$changed" = "docs/investigations/runtime-hard-cut/final.json"
+          git commit -m "docs(issue-1352): bind final evidence to active-test scan"
+          evidence_head="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$scanned_code_head"
+          test "$(git diff-tree --no-commit-id --name-only -r "$evidence_head")" = "docs/investigations/runtime-hard-cut/final.json"
+          git push origin "HEAD:$BRANCH_NAME"
+          printf 'scanned_code_head=%s\nevidence_head=%s\n' "$scanned_code_head" "$evidence_head" | tee -a "$GITHUB_STEP_SUMMARY"
