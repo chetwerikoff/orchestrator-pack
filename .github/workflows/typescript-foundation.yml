@@ -266,7 +266,7 @@ jobs:
           console.log(JSON.stringify({ baseScanned: baseScan.scannedFileCount, baselineHits: hits.length }));
           NODE
 
-          git add docs/investigations/runtime-hard-cut/baseline.json
+          git add -f docs/investigations/runtime-hard-cut/baseline.json
           git commit -m "docs(issue-1352): refresh active-test retirement baseline"
 
           git rm -f .github/workflows/issue-1352-evidence-regenerate.yml \
@@ -327,7 +327,7 @@ jobs:
           writeFileSync('docs/investigations/runtime-hard-cut/final.json', `${JSON.stringify(finalEvidence, null, 2)}\n`);
           NODE
 
-          git add docs/investigations/runtime-hard-cut/final.json
+          git add -f docs/investigations/runtime-hard-cut/final.json
           changed="$(git diff --cached --name-only)"
           test "$changed" = "docs/investigations/runtime-hard-cut/final.json"
           git commit -m "docs(issue-1352): republish active-test final evidence"
