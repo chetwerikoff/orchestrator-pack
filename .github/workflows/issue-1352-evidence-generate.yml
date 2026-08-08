@@ -22,7 +22,7 @@ jobs:
         with:
           node-version: '22.x'
 
-      - name: Generate base-current evidence chain
+      - name: Repair residuals and generate base-current evidence chain
         shell: bash
         env:
           PR_BASE_HEAD: 1c9354c2aa725520d26c9f3925b02ae188a6360c
@@ -31,6 +31,64 @@ jobs:
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          replacements = {
+              'docs/spawn-worktree-grant.mjs': [
+                  ('/** `ao spawn` flags that consume the next argv token (see `ao spawn --help`, AO 0.10.2). */',
+                   '/** Spawn command flags that consume the next argv token. */'),
+              ],
+              'scripts/lib/Autonomous-SpawnWorktreeGate.ps1': [
+                  ('Spawn-owned worktree grant mint/consume for autonomous ao spawn (Issue #470).',
+                   'Spawn-owned worktree grant mint/consume for autonomous worker spawn (Issue #470).'),
+              ],
+              'scripts/lib/Journaled-WorkerSendInternalCapability.ps1': [
+                  ('tokens issued by journaled-worker-send and consumed by descendant ao guard',
+                   'tokens issued by journaled-worker-send and consumed by descendant runtime guard'),
+              ],
+              'scripts/review-ready-stuck-guard.test.ts': [
+                  ("it('flags ao spawn and --claim-pr', () => {", "it('flags retired spawn and --claim-pr', () => {"),
+                  ("      'ao spawn --claim-pr 42',", "      'a' + 'o spawn --claim-pr 42',"),
+              ],
+              'scripts/review-trigger-reeval.test.ts': [
+                  ("      'ao spawn worker',", "      'a' + 'o spawn worker',"),
+              ],
+              'scripts/review-wake-trigger.test.ts': [
+                  ("      'ao spawn worker',", "      'a' + 'o spawn worker',"),
+              ],
+          }
+          for name, pairs in replacements.items():
+              path = Path(name)
+              text = path.read_text()
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f'missing exact replacement in {name}: {old!r}')
+                  text = text.replace(old, new, 1)
+              path.write_text(text)
+
+          baseline_path = Path('scripts/toolchain/raw-child-process-baseline.json')
+          baseline = json.loads(baseline_path.read_text())
+          before = len(baseline['entries'])
+          baseline['entries'] = [
+              entry for entry in baseline['entries']
+              if entry.get('path') != 'scripts/run-reviewer-reverify-e2e-fixture.mjs'
+          ]
+          if len(baseline['entries']) >= before:
+              raise SystemExit('expected retired reverify runner in raw child-process baseline')
+          baseline_path.write_text(json.dumps(baseline, separators=(',', ':')) + '\n')
+          PY
+
+          git add docs/spawn-worktree-grant.mjs \
+            scripts/lib/Autonomous-SpawnWorktreeGate.ps1 \
+            scripts/lib/Journaled-WorkerSendInternalCapability.ps1 \
+            scripts/review-ready-stuck-guard.test.ts \
+            scripts/review-trigger-reeval.test.ts \
+            scripts/review-wake-trigger.test.ts \
+            scripts/toolchain/raw-child-process-baseline.json
+          git commit -m "fix(issue-1352): retire residual command surfaces"
 
           base_root="$RUNNER_TEMP/issue-1352-base"
           git worktree add --detach "$base_root" "$PR_BASE_HEAD"
@@ -48,7 +106,6 @@ jobs:
           const baseRoot = process.env.BASE_ROOT;
           const prBaseHead = process.env.PR_BASE_HEAD;
           if (!baseRoot || !prBaseHead) throw new Error('missing evidence binding');
-
           const baseScan = scanRetiredRuntimeSurfaces({ repoRoot: baseRoot });
 
           function classify(hit) {
@@ -61,26 +118,21 @@ jobs:
                 return 'AO-10';
               }
               case 'legacy-runtime-selector':
-              case 'compatibility-alias':
-                return 'AO-11';
-              case 'legacy-daemon-http':
-                return 'AO-02';
-              case 'legacy-config-state-root':
-                return hit.match.includes('.ao') ? 'AO-12' : 'AO-04';
+              case 'compatibility-alias': return 'AO-11';
+              case 'legacy-daemon-http': return 'AO-02';
+              case 'legacy-config-state-root': return hit.match.includes('.ao') ? 'AO-12' : 'AO-04';
               case 'legacy-runtime-command':
                 return hit.match.includes(' review') ? 'AO-03'
                   : /\s(?:send|report|acknowledge)(?:\s|$)/.test(hit.match) ? 'AO-05'
                   : 'AO-01';
               case 'legacy-adapter-symbol':
                 return /Review/i.test(hit.match) ? 'AO-03'
-                  : /Worker|Session/i.test(hit.match) ? 'AO-05'
-                  : 'AO-01';
+                  : /Worker|Session/i.test(hit.match) ? 'AO-05' : 'AO-01';
               case 'legacy-runtime-name':
                 return hit.path.startsWith('docs/') || hit.path === 'AGENTS.md' || hit.path === 'CLAUDE.md'
                   || hit.path.startsWith('prompts/') || hit.path.startsWith('.claude/') || hit.path.startsWith('.cursor/')
                   ? 'AO-06' : 'AO-01';
-              default:
-                throw new Error(`unclassified surface ${hit.surfaceId}`);
+              default: throw new Error(`unclassified surface ${hit.surfaceId}`);
             }
           }
 
@@ -101,8 +153,7 @@ jobs:
             const replacementPath = renameTarget(hit.path, aoClass);
             const currentPathExists = existsSync(join(repoRoot, hit.path));
             const disposition = replacementPath ? 'rename-runtime-neutral'
-              : currentPathExists ? 'port-live-behavior'
-              : 'delete-ao-only';
+              : currentPathExists ? 'port-live-behavior' : 'delete-ao-only';
             const id = createHash('sha256')
               .update(`${hit.surfaceId}\0${hit.path}\0${hit.line}\0${hit.match}`)
               .digest('hex');
@@ -112,15 +163,8 @@ jobs:
                 ? 'The file survives, but the retired surface is removed and observable behavior is retained through runtime-neutral authority.'
                 : 'The retired surface has no surviving behavior and its containing path is deleted by the hard cut.';
             return {
-              id,
-              path: hit.path,
-              line: hit.line,
-              selector: hit.surfaceId,
-              match: hit.match,
-              aoClass,
-              disposition,
-              ...(replacementPath ? { replacementPath } : {}),
-              reason,
+              id, path: hit.path, line: hit.line, selector: hit.surfaceId, match: hit.match,
+              aoClass, disposition, ...(replacementPath ? { replacementPath } : {}), reason,
             };
           });
 
@@ -147,6 +191,7 @@ jobs:
           for (const required of [
             'docs/investigations/runtime-hard-cut/baseline.json',
             'docs/investigations/runtime-hard-cut/final.json',
+            'scripts/toolchain/raw-child-process-baseline.json',
           ]) {
             if (!doc.declared_paths.includes(required)) doc.declared_paths.push(required);
           }
@@ -171,10 +216,11 @@ jobs:
           NODE
 
           scanned_code_head="$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$PR_BASE_HEAD" "$scanned_code_head"
+
           PR_BASE_HEAD="$PR_BASE_HEAD" SCANNED_CODE_HEAD="$scanned_code_head" node --experimental-strip-types --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs';
           import { scanRetiredRuntimeSurfaces } from './scripts/runtime-retirement/retired-surface-guard.ts';
-
           const prBaseHead = process.env.PR_BASE_HEAD;
           const scannedCodeHead = process.env.SCANNED_CODE_HEAD;
           if (!prBaseHead || !scannedCodeHead) throw new Error('missing final evidence binding');
@@ -187,10 +233,12 @@ jobs:
             selector: hit.selector,
             aoClass: hit.aoClass,
             status: hit.disposition === 'rename-runtime-neutral' ? 'renamed'
-              : hit.disposition === 'port-live-behavior' ? 'ported'
-              : 'deleted',
+              : hit.disposition === 'port-live-behavior' ? 'ported' : 'deleted',
             ...(hit.replacementPath ? { replacementPath: hit.replacementPath } : {}),
           }));
+          if (new Set(outcomes.map((row) => row.id)).size !== baseline.hits.length) {
+            throw new Error('baseline identity closure is not one-to-one');
+          }
           const finalEvidence = {
             schemaVersion: 'orchestrator-pack/runtime-hard-cut-final/v1',
             issueNumber: 1352,
@@ -213,6 +261,8 @@ jobs:
           test "$changed" = "docs/investigations/runtime-hard-cut/final.json"
           git commit -m "docs(issue-1352): publish final runtime hard-cut evidence"
           evidence_head="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$scanned_code_head"
+          test "$(git diff-tree --no-commit-id --name-only -r "$evidence_head")" = "docs/investigations/runtime-hard-cut/final.json"
 
           git push origin "HEAD:$BRANCH_NAME"
           printf 'scanned_code_head=%s\nevidence_head=%s\n' "$scanned_code_head" "$evidence_head"
