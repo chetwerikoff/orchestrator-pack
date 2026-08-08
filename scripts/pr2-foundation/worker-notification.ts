@@ -190,7 +190,7 @@ async function admitNotification(input: {
       return { duplicate: false, deliveryId, journalPath, deliveryPath };
     }
 
-    const shape = deriveMessageShape(input.message, trim(process.env.AO_SESSION_ID));
+    const shape = deriveMessageShape(input.message, trim(input.sessionId));
     const nowMs = Date.now();
     const record: DispatchJournalRecord = {
       deliveryId,
@@ -209,7 +209,7 @@ async function admitNotification(input: {
         : DRAFT_STATE_DRAFT_PRESENT,
       restoreRetry: false,
       adoptionProbe: false,
-      aoEpochHash: '',
+      runtimeEpochHash: '',
       configPathHash: '',
       adoptionProbeRunIdHash: '',
       deterministicKey: input.deliveryKey,
@@ -247,8 +247,8 @@ function argvLength(command: string, args: readonly string[]): number {
   return [command, ...args].reduce((total, value) => total + value.length + 3, 0);
 }
 
-async function validateAoSendContract(command: string, timeoutMs: number): Promise<boolean> {
-  if (process.env.AO_JOURNALED_SEND_ASSUME_CONTRACT === '1') return true;
+async function validateRuntimeSendContract(command: string, timeoutMs: number): Promise<boolean> {
+  if (process.env.OPK_JOURNALED_SEND_ASSUME_CONTRACT === '1') return true;
   const help = await runProcess({
     command,
     args: ['send', '--help'],
@@ -373,10 +373,10 @@ export async function sendPackReviewWorkerNotification(
   }
 
   const args = ['send', '--message', options.request.message, '--session', verifiedTarget.sessionId] as const;
-  if (argvLength(config.aoPath, args) > config.argvCeilingChars - 64) {
+  if (argvLength(config.runtimePath, args) > config.argvCeilingChars - 64) {
     return { state: 'escalated', reason: 'inline_message_too_large' };
   }
-  if (!await validateAoSendContract(config.aoPath, config.timeoutMs)) {
+  if (!await validateRuntimeSendContract(config.runtimePath, config.timeoutMs)) {
     return { state: 'escalated', reason: 'ao_send_contract_missing' };
   }
 
@@ -445,7 +445,7 @@ export async function sendPackReviewWorkerNotification(
       const marked = await markWorkerNudgeSendAttempted(claim);
       if (!marked.ok) return { marked: false as const, reason: marked.reason ?? 'send_attempt_mark_failed' };
       const result = await runProcess({
-        command: config.aoPath,
+        command: config.runtimePath,
         args,
         cwd: resolve(options.repoRoot || options.trustedPackRoot),
         inheritParentEnv: true,

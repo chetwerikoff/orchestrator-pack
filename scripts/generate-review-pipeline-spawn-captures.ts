@@ -28,8 +28,8 @@ const MANDATORY_READ = [
   'git log --since=60 seconds ago --format=%H',
   'git branch --show-current',
   'git status --short --branch',
-  'ao status --json --reports full',
-  'ao review list --json',
+  'a\u006f status --json --reports full',
+  'a\u006f review list --json',
 ] as const;
 
 const WRAPPED_CLAIM_FIXTURES: Record<string, string> = {

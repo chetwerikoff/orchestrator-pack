@@ -1,7 +1,7 @@
 export const FOUNDATION_CONFIG_SCHEMA_VERSION = 1 as const;
 
 export interface FoundationNotificationConfig {
-  aoPath: string;
+  runtimePath: string;
   timeoutMs: number;
   maxJournalAttempts: number;
   argvCeilingChars: number;
@@ -38,7 +38,7 @@ export type FoundationConfigResult =
   | { ok: false; reason: 'invalid_config' | 'unknown_config_key'; path: string };
 
 const ROOT_KEYS = new Set(['schemaVersion', 'notification', 'scheduler', 'migration', 'actuator']);
-const NOTIFICATION_KEYS = new Set(['aoPath', 'timeoutMs', 'maxJournalAttempts', 'argvCeilingChars']);
+const NOTIFICATION_KEYS = new Set(['runtimePath', 'timeoutMs', 'maxJournalAttempts', 'argvCeilingChars']);
 const SCHEDULER_KEYS = new Set(['pollIntervalMs', 'leaseMs']);
 const MIGRATION_KEYS = new Set(['destructiveCleanupEnabled']);
 const ACTUATOR_KEYS = new Set([
@@ -53,7 +53,7 @@ const ACTUATOR_KEYS = new Set([
 export const DEFAULT_FOUNDATION_CONFIG: FoundationConfig = Object.freeze({
   schemaVersion: FOUNDATION_CONFIG_SCHEMA_VERSION,
   notification: Object.freeze({
-    aoPath: 'ao',
+    runtimePath: 'ao',
     timeoutMs: 30_000,
     maxJournalAttempts: 3,
     argvCeilingChars: 32_767,
@@ -169,7 +169,7 @@ export function parseFoundationConfig(input: unknown = {}): FoundationConfigResu
   const m = migration as Record<string, unknown>;
   const a = actuator as Record<string, unknown>;
   const values = {
-    aoPath: stringValue(n.aoPath, DEFAULT_FOUNDATION_CONFIG.notification.aoPath, 'notification.aoPath'),
+    runtimePath: stringValue(n.runtimePath, DEFAULT_FOUNDATION_CONFIG.notification.runtimePath, 'notification.runtimePath'),
     timeoutMs: positiveInteger(n.timeoutMs, DEFAULT_FOUNDATION_CONFIG.notification.timeoutMs, 'notification.timeoutMs'),
     maxJournalAttempts: positiveInteger(n.maxJournalAttempts, DEFAULT_FOUNDATION_CONFIG.notification.maxJournalAttempts, 'notification.maxJournalAttempts'),
     argvCeilingChars: positiveInteger(n.argvCeilingChars, DEFAULT_FOUNDATION_CONFIG.notification.argvCeilingChars, 'notification.argvCeilingChars'),
@@ -191,7 +191,7 @@ export function parseFoundationConfig(input: unknown = {}): FoundationConfigResu
     config: {
       schemaVersion: FOUNDATION_CONFIG_SCHEMA_VERSION,
       notification: {
-        aoPath: values.aoPath as string,
+        runtimePath: values.runtimePath as string,
         timeoutMs: values.timeoutMs as number,
         maxJournalAttempts: values.maxJournalAttempts as number,
         argvCeilingChars: values.argvCeilingChars as number,

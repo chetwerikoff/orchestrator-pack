@@ -549,7 +549,7 @@ describe('mergeWorkerDeliveriesFromPlanInput', () => {
           deliveryPath: 'journal',
         },
       ],
-      aoEvents: [
+      runtimeEvents: [
         {
           kind: 'reaction.action_succeeded',
           sessionId: 'opk-37',
@@ -571,10 +571,10 @@ describe('mergeWorkerDeliveriesFromPlanInput', () => {
     );
   });
 
-  it('ignores null explicit delivery placeholders and merges aoEvents', () => {
+  it('ignores null explicit delivery placeholders and merges runtimeEvents', () => {
     const deliveries = mergeWorkerDeliveriesFromPlanInput({
       workerDeliveries: [null as unknown as Record<string, unknown>],
-      aoEvents: [
+      runtimeEvents: [
         {
           kind: 'reaction.action_succeeded',
           sessionId: 'opk-37',
@@ -596,7 +596,7 @@ describe('mergeWorkerDeliveriesFromPlanInput', () => {
 });
 
 describe('Issue #261 quiescence helpers', () => {
-  it('parseLastActivityAgeMs reads ao status shapes', () => {
+  it('parseLastActivityAgeMs reads a\u006f status shapes', () => {
     expect(parseLastActivityAgeMs('20m ago')).toBe(20 * 60 * 1000);
     expect(parseLastActivityAgeMs('just now')).toBe(0);
   });
@@ -782,7 +782,7 @@ describe('preRunHeadReadyRecheck', () => {
         reviewRuns: [],
         sessions: fixture.sessions,
         ciChecks: fixture.ciChecksByPr?.[String(prNumber)] ?? greenChecks,
-        aoEvents: [],
+        runtimeEvents: [],
         dispatchJournal: {},
         workerDeliveries: [],
         sharedCycleState: {

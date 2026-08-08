@@ -168,8 +168,8 @@ function spawnStaleRecoverer(namespace: string, barrier: string, resultPath: str
     inheritParentEnv: true,
     env: {
       OPK_VITEST_HARNESS: '1',
-      AO_REVIEW_CLAIM_TEST_STALE_BARRIER_DIR: barrier,
-      AO_REVIEW_CLAIM_MUTEX_STALE_SECONDS: '1',
+      OPK_REVIEW_CLAIM_TEST_STALE_BARRIER_DIR: barrier,
+      OPK_REVIEW_CLAIM_MUTEX_STALE_SECONDS: '1',
     },
     signal: controller.signal,
     timeoutMs: 60_000,

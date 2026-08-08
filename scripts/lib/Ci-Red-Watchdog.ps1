@@ -27,11 +27,11 @@ function Write-CiRedWatchdogLog {
 }
 
 function Get-CiRedWatchdogStateDir {
-    if ($env:AO_CI_RED_WATCHDOG_STATE_DIR) {
-        return $env:AO_CI_RED_WATCHDOG_STATE_DIR.Trim()
+    if ($env:OPK_CI_RED_WATCHDOG_STATE_DIR) {
+        return $env:OPK_CI_RED_WATCHDOG_STATE_DIR.Trim()
     }
-    if ($env:AO_SIDE_PROCESS_STATE_DIR) {
-        return Join-Path $env:AO_SIDE_PROCESS_STATE_DIR.Trim() 'ci-red-watchdog'
+    if ($env:OPK_SIDE_PROCESS_STATE_DIR) {
+        return Join-Path $env:OPK_SIDE_PROCESS_STATE_DIR.Trim() 'ci-red-watchdog'
     }
     return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-ci-red-watchdog'
 }
@@ -39,12 +39,12 @@ function Get-CiRedWatchdogStateDir {
 function Get-CiRedWatchdogConfig {
     $inactivityMs = $Script:CiRedWatchdogDefaultInactivityMs
     $parsed = 0L
-    if ($env:AO_CI_RED_WATCHDOG_INACTIVITY_MS -and [long]::TryParse($env:AO_CI_RED_WATCHDOG_INACTIVITY_MS, [ref]$parsed) -and $parsed -ge 30000) {
+    if ($env:OPK_CI_RED_WATCHDOG_INACTIVITY_MS -and [long]::TryParse($env:OPK_CI_RED_WATCHDOG_INACTIVITY_MS, [ref]$parsed) -and $parsed -ge 30000) {
         $inactivityMs = $parsed
     }
     $attempts = 3
     $parsedAttempts = 0
-    if ($env:AO_CI_RED_WATCHDOG_MAX_ATTEMPTS -and [int]::TryParse($env:AO_CI_RED_WATCHDOG_MAX_ATTEMPTS, [ref]$parsedAttempts) -and $parsedAttempts -ge 1) {
+    if ($env:OPK_CI_RED_WATCHDOG_MAX_ATTEMPTS -and [int]::TryParse($env:OPK_CI_RED_WATCHDOG_MAX_ATTEMPTS, [ref]$parsedAttempts) -and $parsedAttempts -ge 1) {
         $attempts = [Math]::Min(20, $parsedAttempts)
     }
     return @{

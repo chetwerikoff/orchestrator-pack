@@ -26,13 +26,13 @@ Checks:
 
 - Topological: `cursor-agent` resolves to the pack shim (symlink **and** regular-file
   clobber shapes).
-- Behavioral translate path: worker `AO_SESSION_ID` + `-p` + `stream-json` through a real
+- Behavioral translate path: worker `OPK_CURSOR_AGENT_TRANSLATE` + `-p` + `stream-json` through a real
   PTY (`script -qec`) → TUI attach, not immediate headless exit.
 - Behavioral passthrough: non-worker signatures → stock headless behavior.
 - Trust-watcher running-state (read-only): distinct signal when
   `orchestrator-worktree-trust-watcher.ps1` is absent.
 
-Failures emit stderr JSON alerts and optionally append to `AO_FLEET_HYGIENE_ALERT_FILE`
+Failures emit stderr JSON alerts and optionally append to `OPK_FLEET_HYGIENE_ALERT_FILE`
 (same sink as fleet hygiene sentinel #711).
 
 **PTY trap:** do not probe via `tmux new-session` + `send-keys` — documented invalid
@@ -92,7 +92,7 @@ See [`docs/migration_notes.md`](migration_notes.md) for operator adoption checkl
 Translation runs only when **all** hold:
 
 1. stdout is a TTY;
-2. `AO_SESSION_ID` matches `^orchestrator-pack-[0-9]+$`;
+2. `OPK_CURSOR_AGENT_TRANSLATE` matches `^orchestrator-pack-[0-9]+$`;
 3. argv contains `-p` or `--print` **and** `stream-json`.
 
 Then the shim drops `-p`, `--print`, `--trust`, and `--output-format <val>` and execs the

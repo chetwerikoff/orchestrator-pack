@@ -245,7 +245,7 @@ function targetReferenceRows(ref: string, byPath: Map<string, TrackedFileRow>): 
       '(Review-StartClaim\\.ps1|Orchestrator-SideProcessSupervisor\\.ps1)',
       ref,
       '--',
-      'scripts', 'tests', '.github', 'package.json', 'tsconfig.json', 'agent-orchestrator.yaml.example', 'docs',
+      'scripts', 'tests', '.github', 'package.json', 'tsconfig.json', 'docs',
       ':(exclude)docs/declarations/**', ':(exclude)docs/issues_drafts/**', ':(exclude)docs/archive/**',
       ':(exclude)scripts/estate-cut/*.json', ':(exclude)scripts/reachability-purge.manifest.json',
       ':(exclude)scripts/gate-runner/census/*.json', ':(exclude)scripts/json-producers/*.json',

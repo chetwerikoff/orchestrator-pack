@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildReviewPrompt } from '../plugins/ao-codex-pr-reviewer/lib/prompt.ts';
+import { buildReviewPrompt } from '../plugins/codex-pr-reviewer/lib/prompt.ts';
 import {
   CANONICAL_CONTRACT_CLAUSE_MARKERS,
   buildGptReviewPrompt,

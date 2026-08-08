@@ -118,7 +118,7 @@
       "replacement": {
         "kind": "contract-marker-rule",
         "gateId": "verify-structure-contract",
-        "path": "plugins/ao-codex-pr-reviewer/README.md",
+        "path": "plugins/codex-pr-reviewer/README.md",
         "markers": [
           "Codex",
           "gpt-5.5",
@@ -141,7 +141,7 @@
       "replacement": {
         "kind": "contract-marker-rule",
         "gateId": "verify-structure-contract",
-        "path": "plugins/ao-scope-guard/README.md",
+        "path": "plugins/scope-guard/README.md",
         "markers": [
           "DD-024",
           "runtime guard",
@@ -165,7 +165,7 @@
       "replacement": {
         "kind": "contract-marker-rule",
         "gateId": "verify-structure-contract",
-        "path": "plugins/ao-task-declaration/README.md",
+        "path": "plugins/task-declaration/README.md",
         "markers": [
           "DD-026",
           "DD-027",
@@ -189,7 +189,7 @@
       "replacement": {
         "kind": "contract-marker-rule",
         "gateId": "verify-structure-contract",
-        "path": "plugins/ao-token-chain-ledger/README.md",
+        "path": "plugins/token-chain-ledger/README.md",
         "markers": [
           "chain_id",
           "planner",
@@ -291,7 +291,7 @@
       ],
       "portedInWave": "3.b",
       "replacement": {
-        "kind": "required-file-rule",
+        "kind": "absent-file-rule",
         "gateId": "verify-required-files",
         "path": "agent-orchestrator.yaml.example"
       }
@@ -389,7 +389,7 @@
       "replacement": {
         "kind": "required-file-rule",
         "gateId": "verify-required-files",
-        "path": "plugins/ao-codex-pr-reviewer/README.md"
+        "path": "plugins/codex-pr-reviewer/README.md"
       }
     },
     {
@@ -405,7 +405,7 @@
       "replacement": {
         "kind": "required-file-rule",
         "gateId": "verify-required-files",
-        "path": "plugins/ao-scope-guard/README.md"
+        "path": "plugins/scope-guard/README.md"
       }
     },
     {
@@ -421,7 +421,7 @@
       "replacement": {
         "kind": "required-file-rule",
         "gateId": "verify-required-files",
-        "path": "plugins/ao-task-declaration/README.md"
+        "path": "plugins/task-declaration/README.md"
       }
     },
     {
@@ -437,7 +437,7 @@
       "replacement": {
         "kind": "required-file-rule",
         "gateId": "verify-required-files",
-        "path": "plugins/ao-token-chain-ledger/README.md"
+        "path": "plugins/token-chain-ledger/README.md"
       }
     },
     {

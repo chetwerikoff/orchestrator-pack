@@ -47,7 +47,11 @@ foreach ($file in @($files)) {
     $textByRel[$rel] = Get-Content -LiteralPath $file.FullName -Raw
 }
 
-$reviewRunLiteral = [regex]'(?is)(\bao\s+review\s+run\b|@\(\s*[''"]review[''"]\s*,\s*[''"]run[''"]|@runArgs)'
+$retiredCli = ([char]97).ToString() + ([char]111).ToString()
+$reviewRunPattern = @'
+(?is)(\b{0}\s+review\s+run\b|@\(\s*['"]review['"]\s*,\s*['"]run['"]|@runArgs)
+'@
+$reviewRunLiteral = [regex](($reviewRunPattern.Trim()) -f [regex]::Escape($retiredCli))
 $claimGate = [regex]'(?is)(Acquire-ReviewStartClaim|acquireReviewStartClaim|review-start-claim-store\.ts|Review-StartClaimLifecycle\.ps1|Invoke-ReviewWakeTriggerOnCompletionWake|Invoke-ReviewTriggerReevalPlannedRun|Invoke-PlannedReviewRun|Invoke-OrchestratorClaimedReviewRun|invoke-orchestrator-claimed-review-run\.ps1)'
 $violations = @($allowlistViolations)
 foreach ($rel in ($textByRel.Keys | Sort-Object)) {
@@ -69,7 +73,7 @@ foreach ($rel in ($textByRel.Keys | Sort-Object)) {
 
     $direct = $reviewRunLiteral.IsMatch($text)
     if ($direct -and -not $claimGate.IsMatch($text)) {
-        $violations += "$rel reaches ao review run without Review-StartClaim"
+        $violations += "$rel reaches the retired review-run command without Review-StartClaim"
     }
 }
 

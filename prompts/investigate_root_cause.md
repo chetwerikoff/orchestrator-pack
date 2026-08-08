@@ -1,7 +1,7 @@
 # Root cause investigation (architect-side)
 
 Canonical procedure for interactive architect-side agents (Cursor CLI, Codex CLI,
-Claude Code). AO worker roles (planner, PR reviewer) are out of scope — they
+Claude Code). Worker roles (planner, PR reviewer) are out of scope — they
 follow issue bodies and JSON contracts instead.
 
 ## Triggers
@@ -39,7 +39,7 @@ doubt and triggers match, follow this file.
 ### Scope the question
 
 - Restate what failed, recurs, or is unclear; bound time and repo (this pack vs
-  upstream AO vs target repo).
+  the selected runtime implementation vs target repo).
 - Note what evidence the user already gave vs what you must find.
 
 ### Gather evidence (bounded)
@@ -47,8 +47,8 @@ doubt and triggers match, follow this file.
 Collect only what answers the scoped question:
 
 - User context, session history, and any artifacts they named.
-- `ao review list` and `code-reviews/findings/` when the topic involves review,
-  CI, or merge loops.
+- `node --experimental-strip-types scripts/pack-review-runner.ts list` and
+  `code-reviews/findings/` when the topic involves review, CI, or merge loops.
 - PR diffs, review-run JSON, planner logs, and relevant `gh` issue/PR comments.
 - Targeted `git log` / `git blame` on touched paths — not full-repo archaeology.
 
@@ -106,9 +106,9 @@ new acceptance criteria:
 
 **Worked example (#212→#218):** review did not auto-start after a worker reported
 `ready_for_review` on green CI. The prior acceptance check was green on a fixture
-whose `ao report` record included `headRefOid`, while live AO 0.9.x reports
-carry **no** head SHA. Pass + reproduce ⇒ the binding/spec pointed at a field the
-real tool never emits — fix the predicate contract, not another defer log.
+whose retired-runtime report record included `headRefOid`, while the live report
+shape carried **no** head SHA. Pass + reproduce ⇒ the binding/spec pointed at a
+field the real tool never emits — fix the predicate contract, not another defer log.
 
 ### 5 Whys (failures and recurrence)
 
@@ -134,8 +134,8 @@ you reach a data/contract/field-level fact:
 - "The decision/defer record is imprecise / missing a subreason."
 
 **Rejecting example:** "Reconcile deferred because `ready_for_review` did not
-match the head" → **continue:** AO 0.9.x `ao report` stores no head SHA, so a
-predicate that requires `report.headRefOid` is **unsatisfiable** — the defect is
+match the head" → **continue:** the observed live report shape stores no head SHA,
+so a predicate that requires `report.headRefOid` is **unsatisfiable** — the defect is
 the binding assumption about external tool output shape, not the defer log text.
 
 Acceptable terminal causes name a **false assumption about real data** (a field
@@ -192,7 +192,7 @@ issue state.
 - Open and closed GitHub Issues (via registry-resolved numbers and `gh issue view`);
   `docs/issues_drafts/`; [`docs/issue_queue_index.md`](../docs/issue_queue_index.md);
   `docs/architecture.md` and `docs/issues_drafts/00-architecture-decisions.md`.
-- Read-only scan of `prompts/`, `AGENTS.md`, `agent-orchestrator.yaml.example`,
+- Read-only scan of `prompts/`, `AGENTS.md`, runtime configuration documentation,
   and relevant plugins/scripts **as evidence** — do not edit them during
   investigation unless the user authorized **`direct-fix-checklist`** for a
   named direct PR.
@@ -211,7 +211,7 @@ Record what was tried, whether it worked, partially worked, or failed / was wron
 
 ### Role boundary
 
-- Durable fixes: **`create-issue-draft`** + worker spawn (`ao spawn`), or amend
+- Durable fixes: **`create-issue-draft`** + worker implementation, or amend
   an existing draft/issue — not hand-patches to merged implementation.
 - Direct edits to tracked implementation files only when the user explicitly
   authorized **`direct-fix-checklist`** for one named PR.
@@ -252,11 +252,11 @@ instead of a fabricated cause chain.
 | 2 | **Причины** | **Causes** | Evidence-backed root cause(s) for **another agent** or a follow-up task: **Fact / Факт** bullets with artifact refs (`gh` #, PR, log path), 5 Whys chain when evidence supports it, and **Hypothesis / Гипотеза** bullets with confirm/refute evidence when not confirmed. If multiple causes are possible, list ranked hypotheses with evidence for/against each. If the root cause is not established, state that and do **not** fabricate a 5-Whys chain; carry the missing evidence into §5/§6 next steps. Structured bullets; precise enough to implement from. |
 | 3 | **Что уже сделано** | **Already done** | Mitigations in the repo; label each: worked / partial / failed or wrong. |
 | 4 | **Что будет сделано** | **Planned** | **Only after ship check:** open GitHub Issues whose acceptance criteria are **not** already on `main`. One line per survivor: `#N` + what **remains** outstanding. **Status only** — no action steps. Empty §4 with an explicit “none” line is valid. Never list closed issues, merged PRs, or work already in **§3**. Do not repeat steps from §5–§6. |
-| 5 | **Что сделать сейчас** | **What to do now** | **Numbered steps** (1., 2., …): everything that should happen **soon** — fix, unblock, verify, operator steps (restart, env, local YAML), and **optional** near-term improvements that are not durable prevention. Skip items already fully covered by §4 unless you add a net-new step. One concrete action per step; say who/what executes (you, architect, `ao spawn`, operator). |
+| 5 | **Что сделать сейчас** | **What to do now** | **Numbered steps** (1., 2., …): everything that should happen **soon** — fix, unblock, verify, operator steps (restart, env, local YAML), and **optional** near-term improvements that are not durable prevention. Skip items already fully covered by §4 unless you add a net-new step. One concrete action per step; say who/what executes (you, architect, worker implementation task, operator). |
 | 6 | **Чтобы не повторялось** / **Чтобы работало стабильно** | **So it does not recur** / **So it stays stable** | **Numbered steps** (1., 2., …): everything **durable** — spec/draft/issue, `AGENTS.md`, CI guard, config contract, follow-up drafts, ranked gaps not covered by §3 and §4; not one-off patches to merged code. Skip items already fully covered by §4 unless you add a net-new step. Pick the heading that matches the ask (recurrence vs steady-state correctness); use both headings only if both apply. |
 
 Sections **5** and **6** must be actionable checklists, not prose summaries. If a step
-belongs in a worker PR, say so (`ao spawn` / open draft) instead of implying a
+belongs in a worker PR, say so (worker implementation / open draft) instead of implying a
 direct architect patch unless **`direct-fix-checklist`** was authorized.
 
 ### Conditional design-analysis block (build-class durable fixes)
@@ -388,5 +388,5 @@ Revise the memo for valid findings; stop after cycle 3 and list open questions.
 - Skip queue, draft, or architecture search when the topic is in-repo behavior.
 - Duplicate **`study-external-source`** for external adoption asks.
 - Patch merged implementation code as the durable fix — fix spec, contract, or
-  rule and spawn a worker.
+  rule and hand the implementation to a worker.
 - Commit transient memos or proposal files to the repo.

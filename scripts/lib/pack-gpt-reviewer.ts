@@ -3,14 +3,14 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import {
   emitTerminalVerdictPayload,
-  toAoFindings,
-} from '../../plugins/ao-codex-pr-reviewer/lib/emit.ts';
+  toRuntimeFindings,
+} from '../../plugins/codex-pr-reviewer/lib/emit.ts';
 import {
   resolveIssueNumber,
   resolveScopeContext,
   type ResolvedScopeContext,
-} from '../../plugins/ao-codex-pr-reviewer/lib/scope_context.ts';
-import { parseCodexOutput } from '../../plugins/ao-codex-pr-reviewer/lib/parse_output.ts';
+} from '../../plugins/codex-pr-reviewer/lib/scope_context.ts';
+import { parseCodexOutput } from '../../plugins/codex-pr-reviewer/lib/parse_output.ts';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { buildGptReviewPrompt, resolvePackRepoRoot } from './pack-pr-review-contract.ts';
 import { packReviewLogsDir, resolvePackReviewRunStoreRoot } from './pack-review-run-store.ts';
@@ -127,7 +127,7 @@ function safeEvidenceSegment(value: string, fallback: string): string {
 
 function resolveGptEvidenceDir(request: GptReviewRequest, env: NodeJS.ProcessEnv): string {
   const explicit = trim(env.PACK_GPT_BROWSER_EVIDENCE_DIR);
-  const runId = trim(env.PACK_REVIEW_RUN_ID || env.AO_REVIEW_RUN_ID);
+  const runId = trim(env.PACK_REVIEW_RUN_ID);
   const sourceSlot = trim(env.PACK_REVIEW_GPT_SOURCE_SLOT);
   if (explicit && !runId && !sourceSlot) return resolve(explicit);
 
@@ -297,7 +297,7 @@ export function mapGptReplyToTerminalStdout(replyText: string): string {
   }
   if (parsed.kind === 'findings') {
     validateGptStructuredFindings(parsed);
-    const findings = toAoFindings(parsed.findings);
+    const findings = toRuntimeFindings(parsed.findings);
     return emitTerminalVerdictPayload({ verdict: 'findings', findings });
   }
   throw new Error(parsed.message);

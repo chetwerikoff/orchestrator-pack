@@ -20,7 +20,7 @@ The surviving supervisor entry point remains `scripts/orchestrator-wake-supervis
 - `review-trigger-reeval`
 - `review-ready-report-state-seed`
 
-No machine-local state is migrated. Existing `.ao/**`, state directories, journals, locks, caches, and process markers are deliberately left untouched on operator machines. They are abandoned historical state for the removed owners; operators may archive or delete them only under their normal local retention procedure.
+No machine-local state is migrated. Existing `.orchestrator-pack/**`, state directories, journals, locks, caches, and process markers are deliberately left untouched on operator machines. They are abandoned historical state for the removed owners; operators may archive or delete them only under their normal local retention procedure.
 
 The former GitHub fleet cache measurement note is preserved as historical evidence at `docs/archive/issue-906/github-fleet-cache-measurement.md`. It is not a migration instruction and does not authorize reactivating the deleted owner.
 

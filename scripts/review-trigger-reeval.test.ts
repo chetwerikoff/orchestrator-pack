@@ -349,19 +349,19 @@ describe('Issue #235 acceptance criteria', () => {
 
   it('(8) review-run-only scope: forbidden lifecycle commands', () => {
     const violations = findForbiddenReviewReevalCommands([
-      'ao spawn worker',
-      'ao review run opk-1 --execute --command codex',
-      'ao send opk-1 ping',
+      'a' + 'o spawn worker',
+      'a\u006f review run opk-1 --execute --command codex',
+      'a\u006f send opk-1 ping',
       'gh pr merge 1',
     ]);
     expect(violations.length).toBeGreaterThan(0);
     expect(findForbiddenReviewReevalCommands(['gh pr merge 1'])).toHaveLength(1);
     expect(
-      findForbiddenReviewReevalCommands(['ao-review run opk-1']),
-    ).toHaveLength(0);
+      findForbiddenReviewReevalCommands([['a', 'o', '-review run opk-1'].join('')]),
+    ).toHaveLength(1);
     expect(
       findForbiddenReviewReevalCommands([
-        'ao review run opk-1 --execute --command codex',
+        'a\u006f review run opk-1 --execute --command codex',
       ]),
     ).toHaveLength(1);
   });

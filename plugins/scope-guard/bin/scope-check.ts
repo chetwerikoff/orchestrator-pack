@@ -1,0 +1,159 @@
+#!/usr/bin/env -S node --experimental-strip-types
+
+import '../../../scripts/toolchain/native-entrypoint-preflight.ts';
+import { resolve } from 'node:path';
+import {
+  missingCliArgumentError,
+  unknownCliArgumentError,
+} from '@orchestrator-pack/shared/lib/cli_argument_errors.js';
+import { isDirectCliExecution } from '@orchestrator-pack/shared/lib/cli_direct_execution.js';
+import {
+  checkScope,
+  formatViolationReport,
+  type ScopeCheckResult,
+} from '../lib/check.ts';
+import { partitionControlArtifacts } from '../lib/control_artifacts.ts';
+import { loadLatestActiveDeclaration } from '../lib/declaration_loader.ts';
+import { resolveIssueDenylist } from '../lib/denylist.ts';
+import { listStagedPaths } from '../lib/diff_index.ts';
+import {
+  listWorktreeChanges,
+  resolveWorktreeBaseline,
+} from '../lib/diff_worktree.ts';
+
+export type ScopeCheckMode = 'index' | 'worktree';
+
+export interface ScopeCheckOptions {
+  repoRoot: string;
+  issueNumber: number;
+  mode: ScopeCheckMode;
+  iterationId?: string;
+  baselineCommitSha?: string;
+}
+
+function usage(): string {
+  return [
+    'Usage: scope-check --issue <n> --mode <index|worktree>',
+    '                 [--repo-root <path>]',
+    '                 [--iteration-id <id>]',
+    '                 [--baseline <commit-sha>]',
+  ].join('\n');
+}
+
+function parseIssueNumber(raw: string | undefined): number {
+  const issueNumber = Number(raw);
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+    throw new Error('--issue must be a positive integer');
+  }
+  return issueNumber;
+}
+
+export function parseScopeCheckArgs(argv: string[]): ScopeCheckOptions {
+  let issueNumber: number | undefined;
+  let mode: ScopeCheckMode | undefined;
+  let repoRoot = process.cwd();
+  let iterationId: string | undefined;
+  let baselineCommitSha: string | undefined;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--help' || arg === '-h') {
+      throw new Error(usage());
+    }
+
+    switch (arg) {
+      case '--issue':
+        issueNumber = parseIssueNumber(argv[++index]);
+        break;
+      case '--mode': {
+        const raw = argv[++index];
+        if (raw !== 'index' && raw !== 'worktree') {
+          throw new Error('--mode must be "index" or "worktree"');
+        }
+        mode = raw;
+        break;
+      }
+      case '--repo-root':
+        repoRoot = resolve(argv[++index] ?? repoRoot);
+        break;
+      case '--iteration-id':
+        iterationId = argv[++index];
+        break;
+      case '--baseline':
+        baselineCommitSha = argv[++index];
+        break;
+      default:
+        throw unknownCliArgumentError(arg, usage());
+    }
+  }
+
+  if (issueNumber === undefined) {
+    throw missingCliArgumentError('--issue', usage());
+  }
+
+  if (!mode) {
+    throw new Error(`--mode is required\n${usage()}`);
+  }
+
+  return {
+    repoRoot,
+    issueNumber,
+    mode,
+    iterationId,
+    baselineCommitSha,
+  };
+}
+
+export function runScopeCheck(options: ScopeCheckOptions): ScopeCheckResult {
+  const denylist = resolveIssueDenylist(options.repoRoot, options.issueNumber);
+
+  if (options.mode === 'index') {
+    const paths = listStagedPaths(options.repoRoot);
+    const { scoped } = partitionControlArtifacts(paths);
+    if (scoped.length === 0) {
+      return checkScope(paths, null, denylist);
+    }
+
+    const declaration = loadLatestActiveDeclaration(
+      options.repoRoot,
+      options.issueNumber,
+      options.iterationId,
+    );
+    return checkScope(paths, declaration, denylist);
+  }
+
+  const declaration = loadLatestActiveDeclaration(
+    options.repoRoot,
+    options.issueNumber,
+    options.iterationId,
+  );
+  const paths = listWorktreeChanges(
+    options.repoRoot,
+    resolveWorktreeBaseline(
+      options.repoRoot,
+      options.baselineCommitSha,
+      declaration,
+    ),
+  );
+  const { scoped } = partitionControlArtifacts(paths);
+  if (scoped.length === 0) {
+    return checkScope(paths, null, denylist);
+  }
+
+  return checkScope(paths, declaration, denylist);
+}
+
+if (isDirectCliExecution(import.meta.url)) {
+  try {
+    const result = runScopeCheck(parseScopeCheckArgs(process.argv.slice(2)));
+    if (!result.ok) {
+      process.stderr.write(`${formatViolationReport(result)}\n`);
+      process.exit(1);
+    }
+    process.exit(0);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`scope-check: ${message}\n`);
+    process.exit(1);
+  }
+}

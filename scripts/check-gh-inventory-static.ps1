@@ -1,7 +1,8 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Static guard: gh read forms in pack scripts and agent-facing rule surfaces are REST-covered (Issues #431, #501, #549).
+  Static guard: GitHub read forms in pack scripts and agent-facing rule surfaces
+  are covered by the tracked REST inventory.
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -15,14 +16,10 @@ function Invoke-GhInventoryGuard {
         [string]$Mode
     )
 
-    if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
-        return @()
-    }
+    if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) { return @() }
 
     $output = & node $GuardScript $FilePath --mode $Mode 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        return @()
-    }
+    if ($LASTEXITCODE -eq 0) { return @() }
 
     try {
         return @($output | ConvertFrom-Json)
@@ -41,8 +38,8 @@ $reconcileRoots = @(
 
 $ruleSurfaceRoots = @(
     (Join-Path $Root 'AGENTS.md'),
-    (Join-Path $Root 'prompts/investigate_root_cause.md'),
-    (Join-Path $Root 'agent-orchestrator.yaml.example')
+    (Join-Path $Root 'CLAUDE.md'),
+    (Join-Path $Root 'prompts/investigate_root_cause.md')
 )
 
 $violations = @()
@@ -54,7 +51,7 @@ foreach ($file in $ruleSurfaceRoots) {
 }
 
 if ($violations.Count -gt 0) {
-    Write-Host '[FAIL] gh read forms not REST-covered by inventory classifier:'
+    Write-Host '[FAIL] GitHub read forms not covered by the inventory classifier:'
     foreach ($item in $violations) {
         if ($item.line) {
             Write-Host "$($item.file): $($item.command) :: $($item.line)"
@@ -68,10 +65,10 @@ if ($violations.Count -gt 0) {
 
 $inventoryOutput = & node $InventoryScript validate $Root 2>&1
 if ($LASTEXITCODE -ne 0) {
-    Write-Host '[FAIL] graphql-quota github read inventory completeness (Issue #549):'
+    Write-Host '[FAIL] GitHub read inventory completeness:'
     Write-Host $inventoryOutput
     exit 1
 }
 
-Write-Host '[PASS] gh inventory static guard (classifier-derived; Issues #431, #501, #549)'
+Write-Host '[PASS] GitHub read inventory static guard'
 exit 0

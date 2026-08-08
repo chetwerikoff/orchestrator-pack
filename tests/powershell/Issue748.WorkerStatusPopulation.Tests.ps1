@@ -2,7 +2,7 @@
 
 BeforeAll {
     $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $InvokeAoPath = Join-Path $RepoRoot 'scripts/lib/Invoke-AoCliJson.ps1'
+    $WorkerStatusReaderPath = Join-Path $RepoRoot 'scripts/lib/Get-WorkerStatusDecisionSessions.ps1'
     $WatchHelperPath = Join-Path $RepoRoot 'scripts/lib/Record-ReviewTriggerReevalWatch.ps1'
     $ReviewReadyEntrypoint = Join-Path $RepoRoot 'scripts/review-ready-report-state-seed.ps1'
     $ReevalEntrypoint = Join-Path $RepoRoot 'scripts/review-trigger-reeval.ps1'
@@ -55,7 +55,7 @@ BeforeAll {
         )
 
         $command = @"
-. $(ConvertTo-Issue748PsLiteral $InvokeAoPath)
+. $(ConvertTo-Issue748PsLiteral $WorkerStatusReaderPath)
 function Test-WorkerStatusKillSwitchActive { return $KillSwitch }
 function Test-WorkerStatusSiblingReadiness { return $Readiness }
 function Resolve-WorkerReportStoreRepoSlug { param([string]`$RepoSlug) return 'owner/repo' }
@@ -440,7 +440,7 @@ Update-ReviewTriggerReevalWatchStateMutation -Path $(ConvertTo-Issue748PsLiteral
     }
 
     It 'keeps a terminal tombstone authoritative over a later-stamped same-key record' {
-        . $InvokeAoPath
+        . $WorkerStatusReaderPath
         . $WatchHelperPath
         $dir = New-Issue748TempDirectory
         try {

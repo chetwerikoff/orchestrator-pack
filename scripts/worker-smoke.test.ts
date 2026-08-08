@@ -611,7 +611,7 @@ describe('worker-smoke consolidated gate regressions', () => {
     expect(exactClosingIssue('```md\nCloses #999\n```\nClose #1343')).toBe(1343);
   });
 
-  it('accepts the existing caller Set-Content newline but evaluates the freshly fetched Issue body', async () => {
+  it('accepts a legacy fixture newline but verifies the caller writes the freshly fetched Issue body without BOM', async () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-caller-gate-'));
     const bin = join(root, 'bin');
     mkdirSync(bin, { recursive: true });
@@ -621,7 +621,7 @@ describe('worker-smoke consolidated gate regressions', () => {
     writeFileSync(sourceBodyFile, body, 'utf8');
     const callerSource = readFileSync(resolve('scripts/pack-worker-report.ps1'), 'utf8');
     expect(callerSource).toContain(
-      'Set-Content -LiteralPath $issueBodyFile.FullName -Value $issueBody -Encoding utf8NoBOM',
+      '[System.IO.File]::WriteAllText($issueBodyFile.FullName, $issueBody, [System.Text.UTF8Encoding]::new($false))',
     );
     const writer = runChild('pwsh', [
       '-NoProfile',

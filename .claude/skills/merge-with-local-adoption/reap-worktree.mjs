@@ -8,7 +8,7 @@
 // Exit codes: 0 = clean (or dry run), 1 = residual processes survived, 2 = refused (unsafe target).
 //
 // WHY CWD AND NOT env/cgroup/pgid (all three were probed on this host, 2026-08-03):
-//   * ORCA_WORKTREE_ID in /proc/<pid>/environ is WRONG on leaked processes — it names the MAIN
+//   * runtime worktree-id selector in /proc/<pid>/environ is WRONG on leaked processes — it names the MAIN
 //     checkout while the process CWD is the deleted issue worktree. Selecting on it would spare
 //     every orphan and target the operator's live checkout. Disqualified.
 //   * /proc/<pid>/cgroup does not discriminate: the operator's own session, every Orca PTY shell,

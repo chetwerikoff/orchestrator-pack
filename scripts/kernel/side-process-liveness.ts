@@ -172,7 +172,7 @@ function resolveTickId(
   existing: Record<string, unknown> | null,
 ): string {
   const candidate = explicitTickId
-    ?? process.env.AO_SIDE_PROCESS_TICK_ID
+    ?? process.env.OPK_SIDE_PROCESS_TICK_ID
     ?? asString(existing?.tickId);
   return candidate ? sanitizeLivenessToken(candidate) : '';
 }
@@ -208,7 +208,7 @@ function carryPendingTimeout(
 }
 
 export function writeLivenessCheckpoint(options: LivenessCheckpointOptions): LivenessProgressRecord | null {
-  const progressDir = options.progressDir ?? process.env.AO_SIDE_PROCESS_PROGRESS_DIR ?? '';
+  const progressDir = options.progressDir ?? process.env.OPK_SIDE_PROCESS_PROGRESS_DIR ?? '';
   if (!progressDir || !options.childId || options.ownerPid <= 0) return null;
 
   const path = resolveLivenessProgressPath(progressDir, options.childId);
@@ -282,7 +282,7 @@ export function consumePendingExternalCallTimeout(options: {
   readonly ownerPid: number;
   readonly progressDir?: string;
 }): string | null {
-  const progressDir = options.progressDir ?? process.env.AO_SIDE_PROCESS_PROGRESS_DIR ?? '';
+  const progressDir = options.progressDir ?? process.env.OPK_SIDE_PROCESS_PROGRESS_DIR ?? '';
   if (!progressDir || !options.childId || options.ownerPid <= 0) return null;
   const path = resolveLivenessProgressPath(progressDir, options.childId);
   const existing = readLivenessProgressRecord(path);
@@ -412,16 +412,16 @@ function resolveCliIdentity(args: readonly string[]): {
 } {
   return {
     childId: sanitizeLivenessToken(
-      parseOption(args, '--child-id') || process.env.AO_SIDE_PROCESS_CHILD_ID,
+      parseOption(args, '--child-id') || process.env.OPK_SIDE_PROCESS_CHILD_ID,
       'unknown',
     ),
     ownerPid: parsePositiveIntegerOption(
       args,
       '--owner-pid',
-      asInteger(process.env.AO_SIDE_PROCESS_OWNER_PID, process.ppid),
+      asInteger(process.env.OPK_SIDE_PROCESS_OWNER_PID, process.ppid),
     ),
-    tickId: parseOption(args, '--tick-id') || process.env.AO_SIDE_PROCESS_TICK_ID || '',
-    progressDir: parseOption(args, '--progress-dir') || process.env.AO_SIDE_PROCESS_PROGRESS_DIR || '',
+    tickId: parseOption(args, '--tick-id') || process.env.OPK_SIDE_PROCESS_TICK_ID || '',
+    progressDir: parseOption(args, '--progress-dir') || process.env.OPK_SIDE_PROCESS_PROGRESS_DIR || '',
   };
 }
 

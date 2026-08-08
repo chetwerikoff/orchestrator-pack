@@ -345,7 +345,7 @@ Describe 'scripts/lint-self-architect.ps1' {
         ([regex]::Matches($body, '\$baseLinesCache\s*=\s*@\{\}')).Count | Should -Be 1
     }
 
-    It 'declares exactly sixteen Issue 923 pairs and one Issue 948 pair without wildcards' {
+    It 'declares exactly fifteen Issue 923 pairs and one Issue 948 pair without wildcards' {
         $configPath = Join-Path $script:RepoRoot 'scripts/lint-self-architect.config.json'
         $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $duplicateSuppressions = @($config.suppressions | Where-Object { $_.rule -eq 'duplicate-literal' })
@@ -357,13 +357,12 @@ Describe 'scripts/lint-self-architect.ps1' {
             $_.reason -ne $issue923Reason -and $_.reason -ne $issue948Reason
         })
 
-        $duplicateSuppressions.Count | Should -Be 17
-        $issue923Suppressions.Count | Should -Be 16
+        $duplicateSuppressions.Count | Should -Be 16
+        $issue923Suppressions.Count | Should -Be 15
         $issue948Suppressions.Count | Should -Be 1
         $unexpectedSuppressions.Count | Should -Be 0
 
         $expectedLegacy = @(
-            'docs/ao-0-10-review-api.mjs',
             'docs/autonomous-review-retry.mjs',
             'docs/events-optional-consumer-signal-recovery.d.mts',
             'docs/events-optional-consumer-signal-recovery.mjs',

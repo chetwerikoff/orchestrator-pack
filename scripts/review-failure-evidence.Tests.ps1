@@ -63,27 +63,27 @@ Describe 'Read-PackReviewProcessStreams' {
 }
 
 Describe 'Get-ReviewFailureEvidenceOutputTailLimit' {
-    It 'reads AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT when set' {
-        $previous = [Environment]::GetEnvironmentVariable('AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT')
+    It 'reads OPK_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT when set' {
+        $previous = [Environment]::GetEnvironmentVariable('OPK_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT')
         try {
-            [Environment]::SetEnvironmentVariable('AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT', '256')
+            [Environment]::SetEnvironmentVariable('OPK_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT', '256')
             Get-ReviewFailureEvidenceOutputTailLimit | Should -Be 256
         }
         finally {
-            [Environment]::SetEnvironmentVariable('AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT', $previous)
+            [Environment]::SetEnvironmentVariable('OPK_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT', $previous)
         }
     }
 }
 
 Describe 'Get-ReviewFailureEvidenceOutputTailLimit' {
-    It 'reads AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT when set' {
-        $previous = [Environment]::GetEnvironmentVariable('AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT')
+    It 'reads OPK_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT when set' {
+        $previous = [Environment]::GetEnvironmentVariable('OPK_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT')
         try {
-            [Environment]::SetEnvironmentVariable('AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT', '256')
+            [Environment]::SetEnvironmentVariable('OPK_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT', '256')
             Get-ReviewFailureEvidenceOutputTailLimit | Should -Be 256
         }
         finally {
-            [Environment]::SetEnvironmentVariable('AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT', $previous)
+            [Environment]::SetEnvironmentVariable('OPK_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT', $previous)
         }
     }
 }

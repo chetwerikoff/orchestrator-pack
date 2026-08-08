@@ -1,0 +1,14 @@
+{
+  "name": "@orchestrator-pack/task-declaration",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "pack-declare": "./bin/declare.ts"
+  },
+  "dependencies": {
+    "@orchestrator-pack/shared": "*"
+  },
+  "scripts": {
+    "test": "npm --prefix ../.. run test -- plugins/task-declaration/tests"
+  }
+}

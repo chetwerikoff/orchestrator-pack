@@ -81,7 +81,7 @@
       },
       "callsite": {
         "file": "scripts/journaled-worker-send.ps1",
-        "function": "Invoke-AoSendViaMessage",
+        "function": "Invoke-WorkerMessageViaCatalog",
         "anchor": "helper-body",
         "predicateBodyHash": "2433763090919942"
       }

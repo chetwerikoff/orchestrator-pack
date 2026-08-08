@@ -45,8 +45,7 @@
     "scripts/ci-failure-notification.ps1",
     "scripts/lib/review-start-claim-store.ts",
     "scripts/review-trigger-reconcile.ps1",
-    "scripts/review-trigger-reeval.ps1",
-    "agent-orchestrator.yaml.example"
+    "scripts/review-trigger-reeval.ps1"
   ],
   "toolPaths": [
     "scripts/orchestrator-message-catalog.json",

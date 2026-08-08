@@ -1,11 +1,11 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  List stale orchestrator/* branches and AO worktrees before ao start (Issue #91).
+  List stale orchestrator/* branches and owned worktrees before runtime start (Issue #91).
 
 .DESCRIPTION
   Read-only by default. With -Apply, removes reported git worktrees/branches and
-  the AO worktree directory (orchestrator namespace only).
+  the owned worktree directory (orchestrator namespace only).
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
@@ -27,7 +27,7 @@ else {
 
 $orchId = $OrchestratorSessionId
 if (-not $orchId) {
-    $orchId = if ($env:AO_ORCHESTRATOR_SESSION_ID) { $env:AO_ORCHESTRATOR_SESSION_ID.Trim() } else { 'op-orchestrator' }
+    $orchId = 'op-orchestrator'
 }
 
 Write-Host "== Orchestrator worktree preflight (session: $orchId) =="
@@ -38,7 +38,7 @@ if ($report.Findings.Count -eq 0) {
     exit 0
 }
 
-Write-Host "[WARN] $($report.Findings.Count) stale item(s) — run cleanup before ao start if spawn shows branch_collision:"
+Write-Host "[WARN] $($report.Findings.Count) stale item(s) — run cleanup before runtime start if spawn shows branch_collision:"
 foreach ($f in $report.Findings) {
     Write-Host ("  [{0}] {1}" -f $f.Kind, $f.Detail)
     Write-Host ("         {0}" -f $f.Command)
@@ -77,5 +77,5 @@ finally {
     Pop-Location
 }
 
-Write-Host '[OK] Apply completed — verify with git worktree list and ao start.'
+Write-Host '[OK] Apply completed — verify with git worktree list and the runtime adapter start path.'
 exit 0

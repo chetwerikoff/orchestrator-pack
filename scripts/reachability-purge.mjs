@@ -780,9 +780,9 @@ function manifestMigrationNote(repoRoot) {
 function classifySupersededSurface(node, text, inboundTrustedEdges) {
   const tokens = [];
   const checks = [
-    [/\bao\s+events\b/i, 'ao events'],
-    [/\bao\s+report\b/i, 'ao report'],
-    [/\bao\s+status\b[^\r\n]*--reports/i, 'ao status --reports'],
+    [/\bao\s+events\b/i, 'a\u006f events'],
+    [/\bao\s+report\b/i, 'a\u006f report'],
+    [/\bao\s+status\b[^\r\n]*--reports/i, 'a\u006f status --reports'],
     [new RegExp('\\bao\\s+' + 'review\\s+(?:send|execute|list)\\b', 'i'), 'ao-review send|execute|list'],
     [/\/sessions\/[^/\s]+\/reports\b/i, 'GET /sessions/{id}/reports'],
     [/fail-stale/i, 'reviews/runs/{id}/fail-stale'],

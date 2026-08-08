@@ -79,8 +79,8 @@ switch ($Action) {
 
     'bootstrap' {
         $current = $LeaseId
-        if (-not $current -and $env:AO_TESTMODE_FLEET_LANE_LEASE_ID) {
-            $current = $env:AO_TESTMODE_FLEET_LANE_LEASE_ID
+        if (-not $current -and $env:OPK_TESTMODE_FLEET_LANE_LEASE_ID) {
+            $current = $env:OPK_TESTMODE_FLEET_LANE_LEASE_ID
         }
         try {
             $stats = Invoke-TestModeFleetReaper -ScopeMode 'bootstrap' -CurrentLeaseId $current -AllowKill
@@ -106,8 +106,8 @@ switch ($Action) {
     }
 
     'teardown' {
-        if (-not $LeaseId -and $env:AO_TESTMODE_FLEET_LANE_LEASE_ID) {
-            $LeaseId = $env:AO_TESTMODE_FLEET_LANE_LEASE_ID
+        if (-not $LeaseId -and $env:OPK_TESTMODE_FLEET_LANE_LEASE_ID) {
+            $LeaseId = $env:OPK_TESTMODE_FLEET_LANE_LEASE_ID
         }
         if (-not $LeaseId) { throw 'LeaseId required for teardown' }
         $stats = Invoke-TestModeFleetReaper -ScopeMode 'teardown' -CurrentLeaseId $LeaseId -AllowKill
@@ -131,8 +131,8 @@ switch ($Action) {
     }
 
     'observe' {
-        if (-not $LeaseId -and $env:AO_TESTMODE_FLEET_LANE_LEASE_ID) {
-            $LeaseId = $env:AO_TESTMODE_FLEET_LANE_LEASE_ID
+        if (-not $LeaseId -and $env:OPK_TESTMODE_FLEET_LANE_LEASE_ID) {
+            $LeaseId = $env:OPK_TESTMODE_FLEET_LANE_LEASE_ID
         }
         $result = Test-TestModeFleetHeavyLaneHygiene -CurrentLeaseId $LeaseId
         $result | ConvertTo-Json -Depth 6 -Compress
@@ -141,8 +141,8 @@ switch ($Action) {
     }
 
     'cleanup' {
-        if (-not $LeaseId -and $env:AO_TESTMODE_FLEET_LANE_LEASE_ID) {
-            $LeaseId = $env:AO_TESTMODE_FLEET_LANE_LEASE_ID
+        if (-not $LeaseId -and $env:OPK_TESTMODE_FLEET_LANE_LEASE_ID) {
+            $LeaseId = $env:OPK_TESTMODE_FLEET_LANE_LEASE_ID
         }
         $observe = Test-TestModeFleetHeavyLaneHygiene -CurrentLeaseId $LeaseId
         if ($observe.ok) {

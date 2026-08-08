@@ -152,7 +152,7 @@ export function dispatchObserverOperation(operation: string, payload: ObserverRe
     case 'script-path': return commandLineScriptPath(payload.tokens ?? payload.Tokens);
     case 'supervisor-command-identity': return supervisorCommandIdentity(payload);
     case 'read-pid': return readPidFile(payload.path ?? payload.Path);
-    case 'default-project-id': return text(process.env.AO_WAKE_SUPERVISOR_PROJECT_ID) || 'orchestrator-pack';
+    case 'default-project-id': return text(process.env.OPK_WAKE_SUPERVISOR_PROJECT_ID) || 'orchestrator-pack';
     default: throw new Error(`unsupported_side_process_observer_operation:${operation}`);
   }
 }

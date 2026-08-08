@@ -1,35 +1,35 @@
 {
-  "schemaVersion": 1,
-  "issue": 1348,
+  "schemaVersion": 2,
+  "issue": 1352,
   "allowedRoots": [
     "scripts/check-vitest-live-store-isolation.mjs",
     "scripts/vitest-live-store-inventory.json",
+    "scripts/vitest-live-store-preload.mjs",
     "scripts/lib/vitest-live-store-harness.mjs",
-    "scripts/pr2-foundation",
-    "scripts/vitest-ci-lanes.config.json",
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/run-vitest-with-harness.mjs",
     ".github/workflows",
-    "package.json",
-    "docs/declarations"
+    "package.json"
   ],
   "liveRoots": [
     {
       "id": "wake-supervisor-state-root",
       "defaultTemplate": "${WAKE_STATE}",
-      "harnessEnv": "AO_WAKE_SUPERVISOR_STATE_DIR",
+      "harnessEnv": "OPK_WAKE_SUPERVISOR_STATE_DIR",
       "kind": "directory",
       "watchTransient": true
     },
     {
-      "id": "ao-base-root",
-      "defaultTemplate": "${AO_BASE}",
-      "harnessEnv": "AO_BASE_DIR",
+      "id": "pack-state-root",
+      "defaultTemplate": "${OPK_BASE}",
+      "harnessEnv": "OPK_BASE_DIR",
       "kind": "directory",
       "watchTransient": false
     }
   ],
   "classFences": [
     {
-      "id": "tmp-orchestrator-json-class",
+      "id": "temporary-orchestrator-json-class",
       "rootTemplate": "${TMP}",
       "basenamePatterns": [
         "orchestrator-*.json",
@@ -40,506 +40,80 @@
       "watchTransient": true
     },
     {
-      "id": "tmp-orchestrator-lock-class",
+      "id": "temporary-orchestrator-lock-class",
       "rootTemplate": "${TMP}",
-      "basenamePatterns": [
-        "orchestrator-*.lock"
-      ],
+      "basenamePatterns": ["orchestrator-*.lock"],
       "watchTransient": true
     }
   ],
   "stores": [
     {
-      "id": "orchestrator-escalation-state",
-      "kind": "file",
-      "resolver": "Get-OrchestratorEscalationStatePath",
-      "writeBoundary": "Publish-OrchestratorEscalation / Set-MechanicalJsonStateFile",
-      "envOverrides": [
-        "AO_ORCHESTRATOR_ESCALATION_STATE"
-      ],
-      "canonicalDefault": "${TMP}/orchestrator-escalation-state.json",
-      "liveRoot": "${TMP}",
-      "sidecars": [
-        "orchestrator-escalation-state.json.tmp",
-        "orchestrator-escalation-state.json.bak",
-        "orchestrator-escalation-state.json.corrupt-*",
-        "orchestrator-escalation-state.json.lock"
-      ],
-      "harnessPath": "state/orchestrator-escalation-state.json",
-      "sourceFiles": [
-        "scripts/lib/Orchestrator-Escalation.ps1"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
-      "id": "orchestrator-operator-inbox",
-      "kind": "directory",
-      "resolver": "Get-OrchestratorEscalationOperatorInboxDir",
-      "writeBoundary": "Publish-OrchestratorEscalation operator route",
-      "envOverrides": [
-        "AO_OPERATOR_ESCALATION_INBOX"
-      ],
-      "canonicalDefault": "${TMP}/orchestrator-operator-inbox",
-      "liveRoot": "${TMP}",
-      "sidecars": [],
-      "harnessPath": "operator-inbox",
-      "sourceFiles": [
-        "scripts/lib/Orchestrator-Escalation.ps1"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
-      "id": "orchestrator-escalation-health-spool",
-      "kind": "directory",
-      "resolver": "Get-OrchestratorEscalationHealthSpoolDir",
-      "writeBoundary": "Publish-OrchestratorEscalation health route",
-      "envOverrides": [
-        "AO_ESCALATION_HEALTH_SPOOL"
-      ],
-      "canonicalDefault": "${TMP}/orchestrator-escalation-health",
-      "liveRoot": "${TMP}",
-      "sidecars": [],
-      "harnessPath": "health-spool",
-      "sourceFiles": [
-        "scripts/lib/Orchestrator-Escalation.ps1"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
       "id": "wake-supervisor-runtime-state",
       "kind": "directory",
-      "resolver": "Get-OrchestratorWakeSupervisorStateRoot",
-      "writeBoundary": "wake-supervisor pid/state/progress/log/lock writers",
       "envOverrides": [
-        "AO_WAKE_SUPERVISOR_STATE_DIR",
+        "OPK_WAKE_SUPERVISOR_STATE_DIR",
         "ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR",
-        "AO_SIDE_PROCESS_STATE_DIR"
+        "OPK_SIDE_PROCESS_STATE_DIR"
       ],
       "canonicalDefault": "${WAKE_STATE}",
-      "liveRoot": "${WAKE_STATE}",
       "sidecars": [],
-      "harnessPath": "wake",
-      "sourceFiles": [
-        "scripts/lib/Orchestrator-WakeSupervisorStateRoot.ps1",
-        "scripts/lib/orchestrator-side-process-observer.ts",
-        "scripts/pr2-foundation/wake-supervisor-state-root.ts"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
-      "id": "worker-message-dispatch-journal",
-      "kind": "file",
-      "resolver": "resolveWorkerMessageDispatchJournalPath",
-      "writeBoundary": "Set-WorkerMessageDispatchJournal / Set-MechanicalJsonStateFile",
-      "envOverrides": [
-        "AO_WORKER_MESSAGE_DISPATCH_JOURNAL",
-        "AO_WAKE_SUPERVISOR_STATE_DIR",
-        "ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR"
-      ],
-      "canonicalDefault": "${WAKE_STATE}/worker-message-dispatch-journal.json",
-      "liveRoot": "${WAKE_STATE}",
-      "sidecars": [
-        "worker-message-dispatch-journal.json.tmp",
-        "worker-message-dispatch-journal.json.bak",
-        "worker-message-dispatch-journal.json.corrupt-*",
-        "worker-message-dispatch-journal.json.lock"
-      ],
-      "harnessPath": "wake/worker-message-dispatch-journal.json",
-      "sourceFiles": [
-        "scripts/pr2-foundation/wake-supervisor-state-root.ts"
-      ],
-      "excluded": false,
-      "exclusionReason": null
+      "harnessPath": "wake"
     },
     {
       "id": "worker-status-store",
       "kind": "file",
-      "resolver": "Get-WorkerStatusStorePath",
-      "writeBoundary": "PowerShell and Node worker-status store writers",
-      "envOverrides": [
-        "AO_WORKER_STATUS_STORE",
-        "ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR",
-        "AO_REPORT_STATE_SEED_STATE"
-      ],
+      "envOverrides": ["OPK_WORKER_STATUS_STORE"],
       "canonicalDefault": "${WAKE_STATE}/worker-status-store.json",
-      "liveRoot": "${WAKE_STATE}",
-      "sidecars": [
-        "worker-status-store.json.tmp",
-        "worker-status-store.json.bak",
-        "worker-status-store.json.corrupt-*",
-        "worker-status-store.lock"
-      ],
-      "harnessPath": "wake/worker-status-store.json",
-      "sourceFiles": [
-        "scripts/lib/WorkerStatusStore.ps1",
-        "scripts/lib/worker-status-store.mjs"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
-      "id": "review-delivery-lifecycle",
-      "kind": "file",
-      "resolver": "Get-ReviewDeliveryLifecycleStorePath",
-      "writeBoundary": "review-delivery-lifecycle.mjs writeJsonAtomic",
-      "envOverrides": [
-        "AO_WAKE_SUPERVISOR_STATE_DIR",
-        "ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR"
-      ],
-      "canonicalDefault": "${WAKE_STATE}/review-delivery-lifecycle.json",
-      "liveRoot": "${WAKE_STATE}",
-      "sidecars": [
-        "review-delivery-lifecycle.json.*.tmp"
-      ],
-      "harnessPath": "wake/review-delivery-lifecycle.json",
-      "sourceFiles": [
-        "scripts/lib/Review-DeliveryLifecycle.ps1",
-        "docs/review-delivery-lifecycle.mjs"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
-      "id": "review-trigger-reeval-watch",
-      "kind": "file",
-      "resolver": "Get-ReviewTriggerReevalWatchPath",
-      "writeBoundary": "Set-ReviewTriggerReevalWatchState / Set-MechanicalJsonStateFile",
-      "envOverrides": [
-        "AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE"
-      ],
-      "canonicalDefault": "${TMP}/orchestrator-review-trigger-reeval-watch.json",
-      "liveRoot": "${TMP}",
-      "sidecars": [
-        "orchestrator-review-trigger-reeval-watch.json.tmp",
-        "orchestrator-review-trigger-reeval-watch.json.bak",
-        "orchestrator-review-trigger-reeval-watch.json.corrupt-*",
-        "review-trigger-reeval-watch.lock"
-      ],
-      "harnessPath": "state/orchestrator-review-trigger-reeval-watch.json",
-      "sourceFiles": [
-        "scripts/lib/Record-ReviewTriggerReevalWatch.ps1"
-      ],
-      "excluded": false,
-      "exclusionReason": null
+      "sidecars": ["worker-status-store*"],
+      "harnessPath": "wake/worker-status-store.json"
     },
     {
       "id": "worker-report-store",
       "kind": "file",
-      "resolver": "resolveWorkerReportStorePath",
-      "writeBoundary": "writeWorkerReportStoreFile",
-      "envOverrides": [
-        "AO_WORKER_REPORT_STORE",
-        "AO_REPORT_STATE_SEED_STATE"
-      ],
+      "envOverrides": ["OPK_WORKER_REPORT_STORE"],
       "canonicalDefault": "${WAKE_STATE}/worker-report-store.json",
-      "liveRoot": "${WAKE_STATE}",
-      "sidecars": [
-        "worker-report-store.json.tmp",
-        "worker-report-store.json.lock"
-      ],
-      "harnessPath": "wake/worker-report-store.json",
-      "sourceFiles": [
-        "docs/worker-report-store.mjs",
-        "scripts/lib/WorkerReportStore.ps1",
-        "scripts/pr2-foundation/terminalized/worker-report-store.ts"
-      ],
-      "excluded": false,
-      "exclusionReason": null
+      "sidecars": ["worker-report-store*"],
+      "harnessPath": "wake/worker-report-store.json"
     },
     {
       "id": "pr-session-binding-cache",
       "kind": "file",
-      "resolver": "resolvePrSessionBindingCachePath",
-      "writeBoundary": "writePrSessionBindingCacheFile / writePrSessionBindingCacheFileWithCas",
-      "envOverrides": [
-        "AO_PR_SESSION_BINDING_CACHE",
-        "AO_REPORT_STATE_SEED_STATE"
-      ],
+      "envOverrides": ["OPK_PR_SESSION_BINDING_CACHE"],
       "canonicalDefault": "${WAKE_STATE}/pr-session-binding-cache.json",
-      "liveRoot": "${WAKE_STATE}",
-      "sidecars": [
-        "pr-session-binding-cache.json.tmp.*",
-        "pr-session-binding-cache.json.lock"
-      ],
-      "harnessPath": "wake/pr-session-binding-cache.json",
-      "sourceFiles": [
-        "docs/pr-session-binding-cache.mjs"
-      ],
-      "excluded": false,
-      "exclusionReason": null
+      "sidecars": ["pr-session-binding-cache*"],
+      "harnessPath": "wake/pr-session-binding-cache.json"
     },
     {
-      "id": "review-start-claim-namespace",
+      "id": "review-start-claims",
       "kind": "directory",
-      "resolver": "resolveReviewStartClaimNamespace",
-      "writeBoundary": "review-start-claim-store.ts atomic claim/terminal writes",
-      "envOverrides": [
-        "AO_BASE_DIR",
-        "AO_REVIEW_CLAIM_DIR"
-      ],
-      "canonicalDefault": "${AO_BASE}/projects/orchestrator-pack/review-start-claims",
-      "liveRoot": "${AO_BASE}",
-      "sidecars": [
-        ".locks/*",
-        "terminal/*",
-        "audit/*"
-      ],
-      "harnessPath": "ao-base/projects/orchestrator-pack/review-start-claims",
-      "sourceFiles": [
-        "scripts/lib/review-start-claim-store.ts",
-        "scripts/lib/review-start-claim-cli.ts"
-      ],
-      "excluded": false,
-      "exclusionReason": null
+      "envOverrides": ["OPK_REVIEW_CLAIM_DIR"],
+      "canonicalDefault": "${OPK_BASE}/projects/orchestrator-pack/review-start-claims",
+      "sidecars": [".locks/*", "terminal/*", "audit/*"],
+      "harnessPath": "pack-state/projects/orchestrator-pack/review-start-claims"
     },
     {
-      "id": "worker-nudge-claim-namespace",
+      "id": "worker-nudge-claims",
       "kind": "directory",
-      "resolver": "Resolve-WorkerNudgeClaimNamespace",
-      "writeBoundary": "Worker-NudgeClaim claim/terminal writes",
-      "envOverrides": [
-        "AO_BASE_DIR",
-        "AO_WORKER_NUDGE_CLAIM_DIR"
-      ],
-      "canonicalDefault": "${AO_BASE}/projects/orchestrator-pack/worker-nudge-claims",
-      "liveRoot": "${AO_BASE}",
-      "sidecars": [
-        ".lock-*",
-        "terminal/*",
-        "by-store-id/*"
-      ],
-      "harnessPath": "ao-base/projects/orchestrator-pack/worker-nudge-claims",
-      "sourceFiles": [
-        "scripts/lib/Worker-NudgeClaim.ps1",
-        "scripts/pr2-foundation/worker-nudge-claim-store.ts"
-      ],
-      "excluded": false,
-      "exclusionReason": null
+      "envOverrides": ["OPK_WORKER_NUDGE_CLAIM_DIR"],
+      "canonicalDefault": "${OPK_BASE}/projects/orchestrator-pack/worker-nudge-claims",
+      "sidecars": [".lock-*", "terminal/*", "by-store-id/*"],
+      "harnessPath": "pack-state/projects/orchestrator-pack/worker-nudge-claims"
+    },
+    {
+      "id": "worker-nudge-audit",
+      "kind": "directory",
+      "envOverrides": [],
+      "canonicalDefault": "${OPK_BASE}/projects/orchestrator-pack/worker-nudge-gate-audit",
+      "sidecars": [],
+      "harnessPath": "pack-state/projects/orchestrator-pack/worker-nudge-gate-audit"
     },
     {
       "id": "mechanical-transport",
       "kind": "directory",
-      "resolver": "Get-MechanicalTransportTempRoot",
-      "writeBoundary": "Write-MechanicalTransportPrivateFile / Write-MechanicalWorkerMessagePayloadFile",
-      "envOverrides": [
-        "AO_MECHANICAL_TRANSPORT_TEMP"
-      ],
+      "envOverrides": ["OPK_MECHANICAL_TRANSPORT_TEMP"],
       "canonicalDefault": "${HOME}/.orchestrator-mechanical-transport",
-      "liveRoot": "${HOME}",
-      "sidecars": [
-        "*.in.json",
-        "*.out.json",
-        "*.payload"
-      ],
-      "harnessPath": "transport",
-      "sourceFiles": [
-        "scripts/lib/MechanicalReconcileNode.ps1"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
-      "id": "orchestrator-wake-dedup-state",
-      "kind": "file",
-      "resolver": "Get-OrchestratorWakeDedupStatePath",
-      "writeBoundary": "orchestrator wake listener dedup state writer",
-      "envOverrides": [
-        "AO_WAKE_DEDUP_STATE"
-      ],
-      "canonicalDefault": "${TMP}/orchestrator-wake-dedup.json",
-      "liveRoot": "${TMP}",
-      "sidecars": [
-        "orchestrator-wake-dedup.json.tmp",
-        "orchestrator-wake-dedup.json.bak",
-        "orchestrator-wake-dedup.json.corrupt-*"
-      ],
-      "harnessPath": "state/orchestrator-wake-dedup.json",
-      "sourceFiles": [
-        "scripts/orchestrator-wake-common.ps1"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
-      "id": "worker-message-adoption-state",
-      "kind": "file",
-      "resolver": "Get-WorkerMessageSendAdoptionPreflightStatePath",
-      "writeBoundary": "Test-WorkerMessageSendAdoptionPreflight persisted state",
-      "envOverrides": [
-        "AO_WORKER_MESSAGE_ADOPTION_STATE"
-      ],
-      "canonicalDefault": "${TMP}/orchestrator-worker-message-send-adoption.json",
-      "liveRoot": "${TMP}",
-      "sidecars": [
-        "orchestrator-worker-message-send-adoption.json.tmp",
-        "orchestrator-worker-message-send-adoption.json.bak",
-        "orchestrator-worker-message-send-adoption.json.corrupt-*"
-      ],
-      "harnessPath": "state/orchestrator-worker-message-send-adoption.json",
-      "sourceFiles": [
-        "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
-      "id": "worker-message-adoption-dryrun",
-      "kind": "pattern",
-      "resolver": "worker-message-send-adoption-dryrun",
-      "writeBoundary": "worker-message adoption -DryRun state and dispatch journal",
-      "envOverrides": [
-        "TMPDIR",
-        "TEMP",
-        "TMP"
-      ],
-      "canonicalDefault": "${TMP}",
-      "liveRoot": "${TMP}",
-      "sidecars": [],
-      "harnessPath": "tmp",
-      "sourceFiles": [
-        "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1"
-      ],
-      "excluded": false,
-      "exclusionReason": null,
-      "basenamePattern": "worker-message-send-adoption-dryrun-*"
-    },
-    {
-      "id": "autonomous-claim-pr-resume-namespace",
-      "kind": "directory",
-      "resolver": "Get-AutonomousClaimPrResumeNamespace",
-      "writeBoundary": "claim-pr resume mutex owner and lock-directory writes",
-      "envOverrides": [
-        "AO_BASE_DIR"
-      ],
-      "canonicalDefault": "${AO_BASE}/projects/orchestrator-pack/claim-pr-resume-claims",
-      "liveRoot": "${AO_BASE}",
-      "sidecars": [
-        ".locks/*"
-      ],
-      "harnessPath": "ao-base/projects/orchestrator-pack/claim-pr-resume-claims",
-      "sourceFiles": [
-        "scripts/lib/Autonomous-ClaimPrResumeGate.ps1"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
-      "id": "orchestrator-review-start-audit",
-      "kind": "directory",
-      "resolver": "Get-OrchestratorReviewStartAuditRoot",
-      "writeBoundary": "review-start denial/preflight/shield audit writers",
-      "envOverrides": [
-        "AO_BASE_DIR"
-      ],
-      "canonicalDefault": "${AO_BASE}/projects/orchestrator-pack/orchestrator-review-start-audit",
-      "liveRoot": "${AO_BASE}",
-      "sidecars": [
-        "denials/*.json",
-        "preflight/*.json",
-        "preflight-shield/*.json"
-      ],
-      "harnessPath": "ao-base/projects/orchestrator-pack/orchestrator-review-start-audit",
-      "sourceFiles": [
-        "scripts/lib/Orchestrator-ReviewStartAudit.ps1"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
-      "id": "worker-nudge-gate-audit",
-      "kind": "directory",
-      "resolver": "Get-WorkerNudgeGateAuditRoot",
-      "writeBoundary": "Write-WorkerNudgeGateAudit",
-      "envOverrides": [
-        "AO_BASE_DIR"
-      ],
-      "canonicalDefault": "${AO_BASE}/projects/orchestrator-pack/worker-nudge-gate-audit",
-      "liveRoot": "${AO_BASE}",
-      "sidecars": [
-        "*.json"
-      ],
-      "harnessPath": "ao-base/projects/orchestrator-pack/worker-nudge-gate-audit",
-      "sourceFiles": [
-        "scripts/lib/Worker-NudgeAudit.ps1"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
-      "id": "review-run-store",
-      "kind": "directory",
-      "resolver": "getCodeReviewStoreDir",
-      "writeBoundary": "review-run liveness state, audit, sidecar, and run-record writers",
-      "envOverrides": [
-        "AO_BASE_DIR"
-      ],
-      "canonicalDefault": "${AO_BASE}/projects/orchestrator-pack/code-reviews",
-      "liveRoot": "${AO_BASE}",
-      "sidecars": [
-        "runs/*.json",
-        "reviewer-liveness/*.json",
-        "review-run-liveness-state.json",
-        "review-run-liveness-audit.json"
-      ],
-      "harnessPath": "ao-base/projects/orchestrator-pack/code-reviews",
-      "sourceFiles": [
-        "docs/review-run-liveness.mjs",
-        "scripts/pack-review-runner.ts",
-        "scripts/pack-review-worker-notification.cases.ts"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    },
-    {
-      "id": "worker-message-submit-state",
-      "kind": "file",
-      "resolver": "Get-CiRedWatchdogSubmitState",
-      "writeBoundary": "CI-red watchdog submit-state reader and state writers",
-      "envOverrides": [
-        "AO_WORKER_MESSAGE_SUBMIT_STATE",
-        "AO_SIDE_PROCESS_STATE_DIR",
-        "AO_WORKER_MESSAGE_DISPATCH_JOURNAL"
-      ],
-      "canonicalDefault": "${TMP}/orchestrator-worker-message-submit-state.json",
-      "liveRoot": "${TMP}",
-      "sidecars": [
-        "orchestrator-worker-message-submit-state.json.tmp",
-        "orchestrator-worker-message-submit-state.json.bak",
-        "orchestrator-worker-message-submit-state.json.corrupt-*",
-        "worker-message-submit-state-root.anchor.json"
-      ],
-      "harnessPath": "state/orchestrator-worker-message-submit-state.json",
-      "sourceFiles": [
-        "scripts/lib/Ci-Red-Watchdog-Worker.ps1"
-      ],
-      "excluded": false,
-      "exclusionReason": null
-    }
-  ],
-  "discoveryExclusions": [
-    {
-      "path": "scripts/check-reusable.ps1",
-      "reason": "Read-only tracked-file policy validator; it only compares git paths against allow/deny patterns and has no filesystem write seam.",
-      "proof": "no-write-api"
-    },
-    {
-      "path": "scripts/pr2a/planning-manifest.json",
-      "reason": "Static PR2A planning manifest; contains only declarative historical paths and no runtime filesystem write seam.",
-      "proof": "no-write-api"
-    }
-  ],
-  "exclusions": [
-    {
-      "id": "repo-fixtures-and-golden-files",
-      "reason": "Tracked test fixtures are immutable repository inputs and have no runtime live-default resolver or write seam."
-    },
-    {
-      "id": "vitest-runtime-reports",
-      "reason": "Repository-local CI artifacts are invocation outputs, not operator live stores; they are scoped to the current checkout and replaced by lane wrappers."
+      "sidecars": ["*.in.json", "*.out.json", "*.payload"],
+      "harnessPath": "transport"
     }
   ]
 }

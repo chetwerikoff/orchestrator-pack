@@ -3,7 +3,7 @@
 BeforeAll {
     $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $WorkerStore = Join-Path $RepoRoot 'scripts/lib/WorkerStatusStore.ps1'
-    $InvokeAo = Join-Path $RepoRoot 'scripts/lib/Invoke-AoCliJson.ps1'
+    $WorkerStatusReader = Join-Path $RepoRoot 'scripts/lib/Get-WorkerStatusDecisionSessions.ps1'
     $WakeTrigger = Join-Path $RepoRoot 'scripts/lib/Invoke-ReviewWakeTrigger.ps1'
 
     function Quote-Issue771([string]$Value) { "'" + $Value.Replace("'", "''") + "'" }
@@ -80,7 +80,6 @@ BeforeAll {
             if ($null -eq $consumerOwner) {
                 return ($DotSource.Extent.StartOffset -lt $Consumer.Extent.StartOffset)
             }
-            # Script-scope imports are visible when a function is invoked after script initialization.
             return $true
         }
         if ($null -eq $consumerOwner) {
@@ -361,7 +360,7 @@ Import-WorkerStatusGithubDependencies
  resolve=[bool](Get-Command Resolve-PackGateRepoRoot -CommandType Function -ErrorAction SilentlyContinue)
  gh=[bool](Get-Command Invoke-GhOpenPrListForNumbers -CommandType Function -ErrorAction SilentlyContinue)
  checks=[bool](Get-Command Get-ReconcileChecksByPr -CommandType Function -ErrorAction SilentlyContinue)
- reviews=[bool](Get-Command Get-EnrichedAoReviewRuns -CommandType Function -ErrorAction SilentlyContinue)
+ reviews=[bool](Get-Command Get-EnrichedPackReviewRuns -CommandType Function -ErrorAction SilentlyContinue)
 } | ConvertTo-Json -Compress
 "@
         $result.loaded | Should -BeTrue
@@ -392,7 +391,7 @@ Import-WorkerStatusGithubDependencies
             Set-Content (Join-Path $dir 'Autonomous-GateCommon.ps1') '$global:Issue771Loads = [int]$global:Issue771Loads + 1'
             Set-Content (Join-Path $dir 'Gh-PrChecks.ps1') "function Invoke-GhOpenPrList { @() }`nfunction Invoke-GhOpenPrListForNumbers { @() }"
             Set-Content (Join-Path $dir 'Get-ReconcileChecksByPr.ps1') 'function Get-ReconcileChecksByPr { @{} }'
-            Set-Content (Join-Path $dir 'Review-PostRunRetry.ps1') 'function Get-EnrichedAoReviewRuns { @() }'
+            Set-Content (Join-Path $dir 'Review-PostRunRetry.ps1') 'function Get-EnrichedPackReviewRuns { @() }'
             $result = Invoke-Issue771Pwsh @"
 . $(Quote-Issue771 (Join-Path $dir 'WorkerStatusStore.ps1'))
 `$first=''; try { Import-WorkerStatusGithubDependencies } catch { `$first=`$_.Exception.Message }
@@ -417,14 +416,14 @@ Describe 'Issue #771 fixture-free worker-status recompute' {
         try {
             $store = Join-Path $dir 'worker-status-store.json'
             $raw = Invoke-Issue771PwshRaw @"
-. $(Quote-Issue771 $InvokeAo)
+. $(Quote-Issue771 $WorkerStatusReader)
 Import-WorkerStatusGithubDependencies
 `$global:Issue771BoundaryCalls=0
 function global:Resolve-PackGateRepoRoot { $(Quote-Issue771 $RepoRoot) }
 function global:Invoke-GhOpenPrList { `$global:Issue771BoundaryCalls++; @([pscustomobject]@{ number=771; state='OPEN'; headRefOid='head771'; headCommittedAt='2026-07-13T00:00:00Z' }) }
 function global:Invoke-GhOpenPrListForNumbers { `$global:Issue771BoundaryCalls++; @([pscustomobject]@{ number=771; state='OPEN'; headRefOid='head771'; headCommittedAt='2026-07-13T00:00:00Z' }) }
 function global:Get-ReconcileChecksByPr { `$global:Issue771BoundaryCalls++; @{ ciChecksByPr=@{ '771'=@([pscustomobject]@{ name='scope-guard'; status='completed'; conclusion='success' }) }; requiredCheckNamesByPr=@{ '771'=@('scope-guard') }; requiredCheckLookupFailedByPr=@{ '771'=`$false } } }
-function global:Get-EnrichedAoReviewRuns { @() }
+function global:Get-EnrichedPackReviewRuns { @() }
 function Test-WorkerStatusKillSwitchActive { `$false }
 function Test-WorkerStatusSiblingReadiness { @{ ok=`$true; workerReportStorePresent=`$true; sessionPrBindingResolverPresent=`$true } }
 function Resolve-WorkerReportStoreRepoSlug { 'owner/repo' }

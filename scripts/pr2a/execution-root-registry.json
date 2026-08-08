@@ -7,7 +7,7 @@
     { "id": "package", "patterns": ["package.json"] },
     { "id": "operator-worker", "patterns": ["scripts/*.ps1", "scripts/*.ts", "scripts/*.mjs", "scripts/*.sh"] },
     { "id": "tests", "patterns": ["scripts/**/*.test.ts", "scripts/**/*.spec.ts", "scripts/**/*Tests.ps1", "tests/**"] },
-    { "id": "command-config", "patterns": ["agent-orchestrator.yaml.example", "scripts/**/*.json", "docs/**/*.md"] }
+    { "id": "command-config", "patterns": ["scripts/**/*.json", "docs/**/*.md"] }
   ],
   "explicitlyUnsupported": [
     "docs/archive/**",

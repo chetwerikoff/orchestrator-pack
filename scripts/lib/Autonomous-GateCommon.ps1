@@ -30,7 +30,7 @@ function Merge-AutonomousSharedCapabilities {
     return $Inventory
 }
 
-function Get-AoArgvSubcommand {
+function Get-RuntimeArgvSubcommand {
     param([string[]]$Argv)
 
     if (-not $Argv -or $Argv.Count -eq 0) {

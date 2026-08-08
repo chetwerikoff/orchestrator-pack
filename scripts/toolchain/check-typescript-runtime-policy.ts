@@ -82,8 +82,8 @@ const AGENTS_PATH = 'AGENTS.md';
 const AGENTS_NODE_22_RULE = '**Node 22-only TypeScript runtime:**';
 const POLICY_PATH = 'scripts/toolchain/check-typescript-runtime-policy.ts';
 const POLICY_TEST_PATH = 'scripts/toolchain/node22-runtime-policy.spec.ts';
-const ROOTS = ['package.json', 'agent-orchestrator.yaml.example', '.github', 'docs', 'plugins', 'scripts', 'tests'] as const;
-const SKIP_DIRS = new Set(['.git', '.ao', 'node_modules', 'vendor']);
+const ROOTS = ['package.json', '.github', 'docs', 'plugins', 'scripts', 'tests'] as const;
+const SKIP_DIRS = new Set(['.git', '.orchestrator-pack', 'node_modules', 'vendor']);
 const TEXT_EXTENSIONS = new Set(['.cjs', '.cts', '.js', '.json', '.md', '.mjs', '.mts', '.ps1', '.sh', '.ts', '.txt', '.yaml', '.yml']);
 const FORBIDDEN_RUNTIME_PACKAGES = ['tsx', 'ts-node'] as const;
 const RETIRED_LOADER = 'scripts/toolchain/typescript-loader.mjs';
@@ -122,7 +122,6 @@ function repositoryFiles(repoRoot: string): string[] {
     .filter((absolute) => {
       const path = normalizePath(relative(repoRoot, absolute));
       return path === 'scripts/gh'
-        || path === 'agent-orchestrator.yaml.example'
         || TEXT_EXTENSIONS.has(extname(path));
     })
     .sort();

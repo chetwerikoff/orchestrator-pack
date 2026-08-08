@@ -13,11 +13,11 @@ $Script:AutonomousCapabilityInventory = Join-Path (Split-Path -Parent (Split-Pat
 . (Join-Path $PSScriptRoot 'Autonomous-GateCommon.ps1')
 
 function Test-OrchestratorAutonomousSurfaceActive {
-    return -not [string]::IsNullOrEmpty([string]$env:AO_SESSION_ID)
+    return [string]$env:OPK_AUTONOMOUS_SURFACE -eq '1'
 }
 
 function Test-OrchestratorClaimedReviewRunBypassActive {
-    return [string]$env:AO_CLAIMED_REVIEW_RUN_BYPASS -eq '1'
+    return [string]$env:OPK_CLAIMED_REVIEW_RUN_BYPASS -eq '1'
 }
 
 function Get-OrchestratorClaimedReviewRunGateVersion {

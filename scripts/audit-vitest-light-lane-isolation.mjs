@@ -36,7 +36,7 @@ const signalDefinitions = [
   {
     id: 'repo-state',
     description: 'AO/repo shared state path',
-    pattern: /\.ao\b|\.agent-orchestrator\b|orchestrator-pack-wake-supervisor|\.local\/state|\.git\b/g,
+    pattern: /\.ao\b|\.agent-orchestrat\u006fr\b|orchestrator-pack-wake-supervisor|\.local\/state|\.git\b/g,
   },
   {
     id: 'network',

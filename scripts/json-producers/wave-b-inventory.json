@@ -404,7 +404,7 @@
       "entrypointMode": "unchanged"
     },
     {
-      "path": "scripts/lib/Invoke-AoReviewApi.ps1",
+      "path": "scripts/lib/Invoke-PackReviewApi.ps1",
       "sourceKind": "powershell-json-producer",
       "taxonomy": "d",
       "ownerWave": "wave-c",

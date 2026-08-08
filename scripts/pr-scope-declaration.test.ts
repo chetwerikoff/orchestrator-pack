@@ -13,7 +13,7 @@ import {
 } from './pr-scope-declaration.ts';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { checkPrScope } from './pr-scope-check.ts';
-import { normalizeIssueConstraints } from '../plugins/ao-task-declaration/lib/validate.ts';
+import { normalizeIssueConstraints } from '../plugins/task-declaration/lib/validate.ts';
 
 const issueBody = [
   '```denylist',
@@ -587,7 +587,7 @@ describe('AO-free PR scope declaration contract', () => {
       forkPr: false,
     };
     const allowedPaths = [
-      'plugins/ao-scope-guard/tests/check.test.ts',
+      'plugins/scope-guard/tests/check.test.ts',
       'plugins/one/two/tests/nested.test.ts',
       'scripts/foo-public.test.ts',
     ];
@@ -613,12 +613,12 @@ describe('AO-free PR scope declaration contract', () => {
 
     const outside = checkPrScope({
       ...base,
-      prPaths: ['plugins/ao-scope-guard/lib/check.test.ts'],
+      prPaths: ['plugins/scope-guard/lib/check.test.ts'],
     });
     expect(outside).toMatchObject({ ok: false, reason: 'scope_violation' });
     if (outside.ok) throw new Error('expected outside path to fail');
     expect(outside.violations?.outOfScope).toEqual([
-      expect.stringContaining('plugins/ao-scope-guard/lib/check.test.ts'),
+      expect.stringContaining('plugins/scope-guard/lib/check.test.ts'),
     ]);
   });
 
@@ -631,7 +631,7 @@ describe('AO-free PR scope declaration contract', () => {
       schema_version: PR_SCOPE_DECLARATION_SCHEMA,
       issue_number: 42,
       declared_paths: [
-        'plugins/ao-scope-guard/tests/check.test.ts',
+        'plugins/scope-guard/tests/check.test.ts',
         'scripts/foo-public.test.ts',
       ],
       denylist: [
@@ -641,7 +641,7 @@ describe('AO-free PR scope declaration contract', () => {
         'vendor/',
       ],
       allowed_roots: [
-        'plugins/ao-scope-guard/tests/check.test.ts',
+        'plugins/scope-guard/tests/check.test.ts',
         'scripts/foo-public.test.ts',
       ],
     };
@@ -660,7 +660,7 @@ describe('AO-free PR scope declaration contract', () => {
         ...base,
         prPaths: [
           declarationPath,
-          'plugins/ao-scope-guard/tests/check.test.ts',
+          'plugins/scope-guard/tests/check.test.ts',
           'scripts/foo-public.test.ts',
         ],
       }),
@@ -680,18 +680,18 @@ describe('AO-free PR scope declaration contract', () => {
 
     const outside = checkPrScope({
       ...base,
-      prPaths: [declarationPath, 'plugins/ao-scope-guard/lib/check.test.ts'],
+      prPaths: [declarationPath, 'plugins/scope-guard/lib/check.test.ts'],
     });
     expect(outside).toMatchObject({ ok: false, reason: 'scope_violation' });
     if (outside.ok) throw new Error('expected declaration outside path to fail');
     expect(outside.violations?.outOfScope).toEqual([
-      expect.stringContaining('plugins/ao-scope-guard/lib/check.test.ts'),
+      expect.stringContaining('plugins/scope-guard/lib/check.test.ts'),
     ]);
 
     const outsideIssuePolicy = {
       ...allowedDeclaration,
-      declared_paths: ['plugins/ao-scope-guard/lib/check.test.ts'],
-      allowed_roots: ['plugins/ao-scope-guard/lib/check.test.ts'],
+      declared_paths: ['plugins/scope-guard/lib/check.test.ts'],
+      allowed_roots: ['plugins/scope-guard/lib/check.test.ts'],
     };
     writeFileSync(
       artifactPath,
@@ -703,7 +703,7 @@ describe('AO-free PR scope declaration contract', () => {
         ...base,
         prPaths: [
           declarationPath,
-          'plugins/ao-scope-guard/lib/check.test.ts',
+          'plugins/scope-guard/lib/check.test.ts',
         ],
       }),
     ).toMatchObject({

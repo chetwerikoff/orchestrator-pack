@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import {
-  isAoReviewRunGitWorktreeSetupCommandLine,
+  isPackReviewRunGitWorktreeSetupCommandLine,
   loadAutonomousReviewStartCapabilities,
   validateCapabilityInventory,
 } from './orchestrator-claimed-review-run.mjs';
@@ -783,7 +783,7 @@ export function classifySanctionedGitProvenance(parentChain, maxDepth) {
     }
   }
   for (const line of chain.slice(0, depthLimit)) {
-    if (isAoReviewRunGitWorktreeSetupCommandLine(line)) {
+    if (isPackReviewRunGitWorktreeSetupCommandLine(line)) {
       return 'review_run_worktree_command';
     }
   }

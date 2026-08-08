@@ -59,23 +59,23 @@
       "classification": "native-node-22"
     },
     {
-      "path": "plugins/ao-codex-pr-reviewer/bin/review.ts",
+      "path": "plugins/codex-pr-reviewer/bin/review.ts",
       "classification": "native-node-22"
     },
     {
-      "path": "plugins/ao-scope-guard/bin/scope-check.ts",
+      "path": "plugins/scope-guard/bin/scope-check.ts",
       "classification": "native-node-22"
     },
     {
-      "path": "plugins/ao-scope-guard/bin/agent-wrap.ts",
+      "path": "plugins/scope-guard/bin/agent-wrap.ts",
       "classification": "native-node-22"
     },
     {
-      "path": "plugins/ao-task-declaration/bin/declare.ts",
+      "path": "plugins/task-declaration/bin/declare.ts",
       "classification": "native-node-22"
     },
     {
-      "path": "plugins/ao-token-chain-ledger/bin/ledger.ts",
+      "path": "plugins/token-chain-ledger/bin/ledger.ts",
       "classification": "native-node-22"
     },
     {

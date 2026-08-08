@@ -8,8 +8,8 @@ function Get-OrchestratorWakeSupervisorStateRoot {
     param([string]$CliOverride = '')
 
     if ($CliOverride) { return $CliOverride }
-    if ($env:AO_WAKE_SUPERVISOR_STATE_DIR) {
-        return $env:AO_WAKE_SUPERVISOR_STATE_DIR.Trim()
+    if ($env:OPK_WAKE_SUPERVISOR_STATE_DIR) {
+        return $env:OPK_WAKE_SUPERVISOR_STATE_DIR.Trim()
     }
 
     $userHome = if (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }

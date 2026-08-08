@@ -10,7 +10,7 @@
 $Script:FleetHygieneAssertionIds = @('H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7')
 
 function Test-FleetHygieneLinuxProcEnvironSupported {
-    if ($env:AO_FLEET_HYGIENE_FORCE_UNSUPPORTED_PLATFORM -eq '1') {
+    if ($env:OPK_FLEET_HYGIENE_FORCE_UNSUPPORTED_PLATFORM -eq '1') {
         return $false
     }
     if (-not $IsLinux) { return $false }
@@ -27,7 +27,7 @@ function Get-FleetHygieneProcessEnvironmentValue {
         [string]$Name
     )
 
-    $fixturePath = $env:AO_FLEET_HYGIENE_PROCESS_ENV_FIXTURE
+    $fixturePath = $env:OPK_FLEET_HYGIENE_PROCESS_ENV_FIXTURE
     if ($fixturePath -and (Test-Path -LiteralPath $fixturePath -PathType Leaf)) {
         try {
             $map = Get-Content -LiteralPath $fixturePath -Raw | ConvertFrom-Json
@@ -53,8 +53,8 @@ function Resolve-FleetHygieneStateRoot {
     if ($CliOverride) {
         return $CliOverride.Trim()
     }
-    if ($env:AO_SIDE_PROCESS_STATE_DIR) {
-        return $env:AO_SIDE_PROCESS_STATE_DIR.Trim()
+    if ($env:OPK_SIDE_PROCESS_STATE_DIR) {
+        return $env:OPK_SIDE_PROCESS_STATE_DIR.Trim()
     }
     return Get-OrchestratorWakeSupervisorStateRoot
 }
@@ -77,28 +77,28 @@ function Get-FleetHygieneConfig {
     }
 
     $kill = $KillEnable.IsPresent
-    if (-not $kill -and $env:AO_FLEET_HYGIENE_KILL_ENABLE -eq '1') {
+    if (-not $kill -and $env:OPK_FLEET_HYGIENE_KILL_ENABLE -eq '1') {
         $kill = $true
     }
 
     $maxPwsh = 200
-    if ($env:AO_FLEET_HYGIENE_MAX_PWSH_COUNT -and [int]::TryParse($env:AO_FLEET_HYGIENE_MAX_PWSH_COUNT, [ref]$null)) {
-        $maxPwsh = [int]$env:AO_FLEET_HYGIENE_MAX_PWSH_COUNT
+    if ($env:OPK_FLEET_HYGIENE_MAX_PWSH_COUNT -and [int]::TryParse($env:OPK_FLEET_HYGIENE_MAX_PWSH_COUNT, [ref]$null)) {
+        $maxPwsh = [int]$env:OPK_FLEET_HYGIENE_MAX_PWSH_COUNT
     }
 
     $maxSupervisorRssKb = 1048576
-    if ($env:AO_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB -and [int]::TryParse($env:AO_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB, [ref]$null)) {
-        $maxSupervisorRssKb = [int]$env:AO_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB
+    if ($env:OPK_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB -and [int]::TryParse($env:OPK_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB, [ref]$null)) {
+        $maxSupervisorRssKb = [int]$env:OPK_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB
     }
 
     $maxLogBytes = 52428800
-    if ($env:AO_FLEET_HYGIENE_MAX_SUPERVISOR_LOG_BYTES -and [int]::TryParse($env:AO_FLEET_HYGIENE_MAX_SUPERVISOR_LOG_BYTES, [ref]$null)) {
-        $maxLogBytes = [int]$env:AO_FLEET_HYGIENE_MAX_SUPERVISOR_LOG_BYTES
+    if ($env:OPK_FLEET_HYGIENE_MAX_SUPERVISOR_LOG_BYTES -and [int]::TryParse($env:OPK_FLEET_HYGIENE_MAX_SUPERVISOR_LOG_BYTES, [ref]$null)) {
+        $maxLogBytes = [int]$env:OPK_FLEET_HYGIENE_MAX_SUPERVISOR_LOG_BYTES
     }
 
     $duplicateStormMin = 5
-    if ($env:AO_FLEET_HYGIENE_DUPLICATE_LOG_STORM_MIN -and [int]::TryParse($env:AO_FLEET_HYGIENE_DUPLICATE_LOG_STORM_MIN, [ref]$null)) {
-        $duplicateStormMin = [int]$env:AO_FLEET_HYGIENE_DUPLICATE_LOG_STORM_MIN
+    if ($env:OPK_FLEET_HYGIENE_DUPLICATE_LOG_STORM_MIN -and [int]::TryParse($env:OPK_FLEET_HYGIENE_DUPLICATE_LOG_STORM_MIN, [ref]$null)) {
+        $duplicateStormMin = [int]$env:OPK_FLEET_HYGIENE_DUPLICATE_LOG_STORM_MIN
     }
 
     return @{
@@ -111,7 +111,7 @@ function Get-FleetHygieneConfig {
         MaxSupervisorRssKb     = $maxSupervisorRssKb
         MaxSupervisorLogBytes  = $maxLogBytes
         DuplicateLogStormMin   = $duplicateStormMin
-        AlertDestination       = if ($env:AO_FLEET_HYGIENE_ALERT_FILE) { $env:AO_FLEET_HYGIENE_ALERT_FILE } else { '' }
+        AlertDestination       = if ($env:OPK_FLEET_HYGIENE_ALERT_FILE) { $env:OPK_FLEET_HYGIENE_ALERT_FILE } else { '' }
         SentinelLogPath        = Join-Path $stateRoot 'fleet-hygiene-sentinel.log'
         SentinelLockPath       = Join-Path $stateRoot 'fleet-hygiene-sentinel.lock'
         SupervisorLockPath     = Join-Path $stateRoot 'supervisor.lock'
@@ -224,9 +224,9 @@ function Test-FleetHygieneProcessAlive {
     param([int]$ProcessId)
 
     if ($ProcessId -le 0) { return $false }
-    if ($env:AO_FLEET_HYGIENE_ALIVE_PIDS_FIXTURE) {
+    if ($env:OPK_FLEET_HYGIENE_ALIVE_PIDS_FIXTURE) {
         try {
-            $alive = @($env:AO_FLEET_HYGIENE_ALIVE_PIDS_FIXTURE | ConvertFrom-Json | ForEach-Object { [int]$_ })
+            $alive = @($env:OPK_FLEET_HYGIENE_ALIVE_PIDS_FIXTURE | ConvertFrom-Json | ForEach-Object { [int]$_ })
             return $alive -contains $ProcessId
         }
         catch {
@@ -285,7 +285,7 @@ function Test-FleetHygieneVitestTestModeProcess {
         return Test-OrchestratorWakeSupervisorVitestTestModeProcess -ProcessId $ProcessId
     }
 
-    $markerDir = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
+    $markerDir = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'OPK_WAKE_SUPERVISOR_TEST_MARKER_DIR'
     if ($markerDir) { return $true }
 
     $tokens = Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $ProcessId
@@ -297,9 +297,9 @@ function Test-FleetHygieneVitestTestModeProcess {
 }
 
 function Get-FleetHygienePwshProcessIds {
-    if ($env:AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE) {
+    if ($env:OPK_FLEET_HYGIENE_PWSH_PIDS_FIXTURE) {
         try {
-            $fixture = $env:AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE | ConvertFrom-Json
+            $fixture = $env:OPK_FLEET_HYGIENE_PWSH_PIDS_FIXTURE | ConvertFrom-Json
             return @($fixture | ForEach-Object { [int]$_ })
         }
         catch {
@@ -345,9 +345,9 @@ function Find-FleetHygieneManagedSupervisorCandidates {
 function Get-FleetHygieneProcessRssKb {
     param([int]$ProcessId)
 
-    if ($env:AO_FLEET_HYGIENE_PROCESS_RSS_FIXTURE) {
+    if ($env:OPK_FLEET_HYGIENE_PROCESS_RSS_FIXTURE) {
         try {
-            $map = $env:AO_FLEET_HYGIENE_PROCESS_RSS_FIXTURE | ConvertFrom-Json
+            $map = $env:OPK_FLEET_HYGIENE_PROCESS_RSS_FIXTURE | ConvertFrom-Json
             $key = [string]$ProcessId
             if ($map.PSObject.Properties.Name -contains $key) {
                 return [long]$map.$key
@@ -400,12 +400,12 @@ function Test-FleetHygieneProcessRoleTaggedForState {
     )
 
     $normalizedExpected = Normalize-OrchestratorWakeSupervisorPath -PathValue $StateRoot
-    $envState = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_SIDE_PROCESS_STATE_DIR'
+    $envState = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'OPK_SIDE_PROCESS_STATE_DIR'
     if ($envState) {
         return (Normalize-OrchestratorWakeSupervisorPath -PathValue $envState) -eq $normalizedExpected
     }
 
-    $childId = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_SIDE_PROCESS_CHILD_ID'
+    $childId = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'OPK_SIDE_PROCESS_CHILD_ID'
     if ($childId) { return $false }
 
     return $false
@@ -423,12 +423,12 @@ function Test-FleetHygieneManagedChildForState {
     }
 
     $normalizedExpected = Normalize-OrchestratorWakeSupervisorPath -PathValue $StateRoot
-    $envState = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_SIDE_PROCESS_STATE_DIR'
+    $envState = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'OPK_SIDE_PROCESS_STATE_DIR'
     if ($envState) {
         return (Normalize-OrchestratorWakeSupervisorPath -PathValue $envState) -eq $normalizedExpected
     }
 
-    $markerDir = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
+    $markerDir = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'OPK_WAKE_SUPERVISOR_TEST_MARKER_DIR'
     if ($markerDir) {
         return Test-FleetHygieneNormalizedPathUnderRoot -PathValue $markerDir -RootValue $normalizedExpected
     }
@@ -581,8 +581,8 @@ function Invoke-FleetHygieneAssertionH4 {
 function Invoke-FleetHygieneAssertionH5 {
     param([hashtable]$Config)
 
-    if ($null -ne $env:AO_FLEET_HYGIENE_STATUS_EXIT_CODE) {
-        $exitCode = [int]$env:AO_FLEET_HYGIENE_STATUS_EXIT_CODE
+    if ($null -ne $env:OPK_FLEET_HYGIENE_STATUS_EXIT_CODE) {
+        $exitCode = [int]$env:OPK_FLEET_HYGIENE_STATUS_EXIT_CODE
         if ($exitCode -eq 0) {
             return New-FleetHygieneAssertionResult -Id 'H5' -Code 'H5_OK' -Pass $true `
                 -Reason 'wake-supervisor Status exit 0 (fixture)'
@@ -627,8 +627,8 @@ function Invoke-FleetHygieneAssertionH6 {
     param([hashtable]$Config)
 
     $pwshIds = Get-FleetHygienePwshProcessIds
-    $totalPwsh = if ($env:AO_FLEET_HYGIENE_PWSH_COUNT_FIXTURE -and [int]::TryParse($env:AO_FLEET_HYGIENE_PWSH_COUNT_FIXTURE, [ref]$null)) {
-        [int]$env:AO_FLEET_HYGIENE_PWSH_COUNT_FIXTURE
+    $totalPwsh = if ($env:OPK_FLEET_HYGIENE_PWSH_COUNT_FIXTURE -and [int]::TryParse($env:OPK_FLEET_HYGIENE_PWSH_COUNT_FIXTURE, [ref]$null)) {
+        [int]$env:OPK_FLEET_HYGIENE_PWSH_COUNT_FIXTURE
     }
     else {
         $pwshIds.Count
@@ -770,7 +770,7 @@ function Write-FleetHygieneAlert {
 function Enter-FleetHygieneSentinelSingleton {
     param([string]$LockPath)
 
-    if ($env:AO_FLEET_HYGIENE_SKIP_SINGLETON -eq '1') {
+    if ($env:OPK_FLEET_HYGIENE_SKIP_SINGLETON -eq '1') {
         return @{
             Acquired = $true
             Release  = { }
@@ -828,7 +828,7 @@ function Enter-FleetHygieneSentinelSingleton {
 function Add-FleetHygieneMockKillRecord {
     param([int]$ProcessId)
 
-    $fixturePath = $env:AO_FLEET_HYGIENE_KILL_LOG_FIXTURE
+    $fixturePath = $env:OPK_FLEET_HYGIENE_KILL_LOG_FIXTURE
     if (-not $fixturePath) { return }
 
     $existing = @()
@@ -862,7 +862,7 @@ function Invoke-FleetHygieneProcessKill {
         [string]$StateRoot = ''
     )
 
-    if ($env:AO_FLEET_HYGIENE_MOCK_KILL -eq '1') {
+    if ($env:OPK_FLEET_HYGIENE_MOCK_KILL -eq '1') {
         Add-FleetHygieneMockKillRecord -ProcessId $ProcessId
         return
     }

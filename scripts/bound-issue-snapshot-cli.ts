@@ -9,7 +9,7 @@ import {
 import {
   captureBoundIssueSnapshot,
   resolveBoundIssueSnapshot,
-  resolveDefaultAoProjectId,
+  resolveDefaultProjectId,
 } from './lib/reverify-bound-issue-snapshot.ts';
 
 type Mode = 'capture' | 'resolve';
@@ -28,7 +28,7 @@ interface SharedOptions {
 
 function usage(mode: Mode): string {
   const common = [
-    '  --project-id <id>             AO project id (default: AO_PROJECT_ID or orchestrator-pack)',
+    '  --project-id <id>             pack project id (default: OPK_PROJECT_ID or orchestrator-pack)',
     '  --pr-number <n>               PR number (required)',
     '  --pr-head-sha <sha>           PR head SHA (required)',
     '  --issue-number <n>            Linked issue number (required)',
@@ -58,7 +58,7 @@ function parseArgs(argv: string[]): SharedOptions {
   const mode = modeToken;
   const opts: SharedOptions = {
     mode,
-    projectId: resolveDefaultAoProjectId(),
+    projectId: resolveDefaultProjectId(),
     prNumber: 0,
     prHeadSha: '',
     issueNumber: 0,

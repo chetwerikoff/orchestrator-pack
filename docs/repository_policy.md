@@ -1,200 +1,129 @@
 # Repository publishing policy
 
-This repository should contain only reusable `orchestrator-pack` material that can
-be applied to other projects.
+This repository contains only reusable `orchestrator-pack` material that can be
+applied to other projects without copying user-machine configuration, generated
+state, credentials, or a concrete orchestration implementation.
 
-## Commit and push
+## Allowed tracked content
 
-Allowed categories:
-
-- `plugins/**` — external plugin implementations/contracts/tests;
-- `prompts/**` — reusable prompt fragments and agent rules;
-- `scripts/**` — reusable setup, verification, guard, and developer scripts;
+- `plugins/**` — reusable plugin implementations, contracts, and tests;
+- `prompts/**` — reusable prompt fragments;
+- `scripts/**` — reusable runtime-neutral commands, guards, tests, and tooling;
 - `.github/workflows/**` — reusable CI checks;
-- `docs/**` — reusable architecture, migration, and usage notes;
-- `.cursor/rules/**` — always-applied Cursor project rules (thin pointers to
-  canonical prompts; see architecture §S);
-- config examples such as `agent-orchestrator.yaml.example`;
-- repository metadata such as `README.md`, `AGENTS.md`, `.gitignore`, and
-  package/tooling config for this pack.
+- `docs/**` — active architecture, runbooks, migration notes, evidence, and
+  explicitly historical artifacts in excluded archive/draft locations;
+- `.claude/skills/**` — canonical skill instructions;
+- `.cursor/skills/**` — generated skill pointers;
+- `.cursor/rules/**` — tracked Cursor rules;
+- root policy and tooling files such as `README.md`, `AGENTS.md`, `CLAUDE.md`,
+  `.gitignore`, `package.json`, and TypeScript configuration.
 
-Do not commit or push:
+## Forbidden tracked content
 
-- real `agent-orchestrator.yaml` files for a target repo;
-- `.env*` secrets, tokens, certificates, SSH keys, or local credential files;
-- AO runtime/session state: `.ao/`, `.agent-orchestrator/`, ledgers/databases;
-- target repository clones, worktrees, scratch directories, or generated logs;
-- `vendor/agent-orchestrator` or any modified upstream AO source;
-- `packages/core/**` patches from Composio AO.
+Do not commit:
 
-## Agent skills (single canonical source)
+- credentials, tokens, certificates, private keys, or secret-bearing `.env` files;
+- user-machine or operator-owned concrete runtime configuration;
+- generated runtime, review, session, queue, cache, database, or worktree state;
+- target repository clones, unrelated worktrees, scratch directories, or logs;
+- modified upstream source under `vendor/**`;
+- patches under `packages/core/**`;
+- compatibility aliases or copied implementations of a removed runtime;
+- personal or third-party private data not explicitly authorized by the task.
 
-Each skill is authored **once** under `.claude/skills/<name>/SKILL.md` (canonical).
-Every other agent surface — today `.cursor/skills/<name>/SKILL.md` — is a **generated
-pointer**: discovery frontmatter (`name`, `description`) is derived from the canonical
-file; the body only directs the agent to read and execute the canonical `SKILL.md`.
+The repository `.gitignore` is a developer aid, not authority. Scope and reusable
+content guards remain binding even when a path is not ignored.
 
-After editing a canonical skill, run `pwsh scripts/generate-skill-pointers.ps1` when you
-add a skill or change frontmatter. Pointer bodies do not need edits when only the
-canonical instruction body changes. CI runs `scripts/check-skill-pointer-drift.ps1` inside
-`scripts/verify.ps1` so hand-edited pointers cannot merge.
+## Task and scope authority
 
-Target surfaces are listed in `scripts/skill-pointer-targets.json` (list-driven; no
-per-skill generator code).
+For new tasks, the published GitHub Issue is the sole live specification and queue
+entry. It must contain a mandatory `denylist` and may contain `allowed-roots`.
+Implementation PRs link exactly one Issue with `Closes #N`, `Fixes #N`, or
+`Resolves #N` near the top of the PR body.
 
-## Local pre-push check
+The committed declaration at
+`docs/declarations/<issue-number>.pr-scope.json` is generated evidence. Do not
+hand-edit it, copy a stale declaration, or broaden it to make an unrelated diff
+pass.
 
-Before pushing, run:
+Pre-existing tracked drafts and indexes are historical publishing inputs only.
+New task authoring does not create them unless the direct user explicitly requests
+the governed publishing flow for an existing artifact.
 
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/check-reusable.ps1
-```
+## Agent skills
 
-Optional local hook, after this directory is a Git repo:
+Each skill is authored once under `.claude/skills/<name>/SKILL.md`. Cursor skill
+files are generated pointers whose frontmatter is derived from the canonical file
+and whose body only directs the agent to read it.
 
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-git-hooks.ps1
-```
-
-The hook is not committed by Git, but the installer script is reusable. It makes
-`git push` run both pack verification and the reusable-content guard locally.
-
-On Windows PowerShell without `pwsh`:
+After adding a skill or changing canonical frontmatter, run:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check-reusable.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-git-hooks.ps1
+pwsh -NoProfile -File scripts/generate-skill-pointers.ps1
+pwsh -NoProfile -File scripts/check-skill-pointer-drift.ps1
 ```
+
+Do not hand-maintain divergent instructions in a pointer.
+
+## Runtime-neutral boundary
+
+Business logic imports `RuntimeAdapter`, not a concrete implementation. Runtime
+effects require an adapter-produced `{ runtime, id, generation }` identity. A title,
+path, process ID, branch, short identifier, stale state record, or accounting value
+never authorizes an effect.
+
+Do not publish a concrete runtime binary, daemon client, configuration database,
+state root, fallback transport, dual execution path, migration converter, or second
+selector as reusable pack content unless a new Issue explicitly establishes a
+runtime-neutral public contract and scope.
+
+## Local verification
+
+From the repository root with PowerShell 7 and Node 22:
+
+```powershell
+pwsh -NoProfile -File scripts/verify.ps1
+pwsh -NoProfile -File scripts/check-reusable.ps1
+npm run typecheck:foundation
+npm run lint:foundation
+npm run gate-runner-selftest
+node --experimental-strip-types scripts/runtime-retirement/retired-surface-selftest.ts
+```
+
+Run affected plugin and focused tests as well. Optional Git hooks may run the same
+checks before push, but hooks never replace server-side CI.
 
 ## GitHub protection
 
-After the GitHub repo exists, protect the default branch so direct pushes cannot
-bypass the guard:
+Protect the default branch so:
 
-1. Require pull requests before merging.
-2. Require the `scope-guard` workflow to pass.
-3. Require `scripts/check-reusable.ps1` to pass in CI.
-4. Disable or restrict direct pushes to `main`.
-5. Keep auto-merge off unless the reusable-content guard is required and green.
+1. changes arrive through pull requests;
+2. required current-head checks must pass;
+3. the scope guard and reusable-content guard cannot be bypassed by a normal merge;
+4. direct pushes are restricted;
+5. merge remains an explicit operator action unless repository policy deliberately
+   enables a governed alternative.
 
-CI is the server-side backstop. The local `.gitignore` and `check-reusable.ps1`
-are the developer-side backstop.
+## Documentation-only PRs
 
-## Spec-only docs PRs
+A documentation-only PR is no-ceremony only when every changed path is Markdown
+under the explicitly allowed documentation or skill surfaces and the PR body does
+not link an implementation Issue. One code, workflow, declaration, root policy, or
+non-Markdown path moves the PR into the implementation flow.
 
-Use this path when landing **spec drafts** or **skill instruction markdown** to
-`main` (for example `docs/issues_drafts/**`, `docs/issue_queue_index.md`, or
-`.claude/skills/**/SKILL.md`) without closing the implementation GitHub Issue
-and without a declaration snapshot.
+A governed historical draft publication may use the explicit spec-only marker and a
+non-closing Issue reference. It must remain within the narrow historical draft,
+architecture, and skill Markdown allowlist and must not close the implementation
+Issue.
 
-### PR body contract
+These lighter paths never authorize runtime effects, generated declaration edits,
+secrets, implementation code, or bypass of skill-pointer drift checks.
 
-1. **Spec-only signal** — include this HTML comment **alone on one line** near the
-   top of the PR description (machine-detectable; does not render in the GitHub UI).
-   Inline mentions, backticks, or fenced examples do not count:
+## Evidence and history
 
-   ```html
-   <!-- pr-type: spec-only -->
-   ```
+Current active runbooks must describe only supported behavior. Historical commands,
+configuration, packages, or state layouts belong in Git history or an explicitly
+excluded archive surface and are non-authoritative.
 
-2. **Non-closing issue reference** — link the implementation issue with a form
-   GitHub will **not** auto-close on merge, for example `Refs #N`. Accepted
-   keywords: `Ref`, `Refs`, `See`, `Related to` (case-insensitive, `#` required).
-
-3. **Do not** use `Closes`, `Fixes`, `Resolves`, or other GitHub closing
-   keywords on spec-only PRs. Scope guard fails if both the spec-only signal and
-   a closing keyword are present.
-
-### Spec-docs allowlist (runtime)
-
-Every changed path in the PR diff must match **one** of:
-
-- `docs/issues_drafts/**`
-- `docs/issue_queue_index.md`
-- `docs/architecture.md`
-- `docs/issues_drafts/00-architecture-decisions.md`
-- **Skill instruction markdown** (markdown only):
-  - `.claude/skills/**/*.md` — canonical skill source
-  - `.cursor/skills/**/*.md` — generated pointer surface
-
-**Markdown-only skill boundary:** only `.md` files under the skill directories
-above qualify. A non-markdown file under `.claude/skills/**` or
-`.cursor/skills/**` (script, binary, or other asset) does **not** match the
-allowlist and must use the implementation PR path.
-
-Paths outside this combined list (including `scripts/**`, `plugins/**`,
-`.github/**`, non-markdown skill assets, `README.md`,
-`agent-orchestrator.yaml.example`, and `docs/declarations/**`) cause scope guard
-to fail. No committed declaration snapshot is required for this PR shape.
-
-The skill-pointer drift check (`scripts/check-skill-pointer-drift.ps1`, run from
-`scripts/verify.ps1`) still applies on spec-only skill PRs — canonical/pointer
-mismatch or a hand-edited pointer fails CI independently of this allowlist.
-
-## No-ceremony markdown PRs (diff-content only)
-
-Use this path when the **entire PR diff** is markdown within the **union** of
-spec-docs surfaces and agent skill instruction markdown — no GitHub Issue, no
-`<!-- pr-type: spec-only -->` signal, and no declaration snapshot. Scope guard
-detects the shape from **diff-content only** (automatic; the author adds no
-PR-body marker).
-
-### Diff-content trigger (union surface)
-
-Every changed path must match **one** of:
-
-**Spec-docs markdown** (markdown-only subset of the spec-only allowlist):
-
-- `docs/issues_drafts/**/*.md`
-- `docs/issue_queue_index.md`
-- `docs/architecture.md`
-- `docs/issues_drafts/00-architecture-decisions.md`
-
-**Skill instruction markdown:**
-
-- `.claude/skills/**/*.md` — canonical skill source
-- `.cursor/skills/**/*.md` — generated pointer surface
-
-The shape is **conjunctive**: if any changed path is outside this union (code,
-workflows, `README.md`, `agent-orchestrator.yaml.example`,
-`docs/declarations/**`, a non-markdown file under `docs/issues_drafts/**` or a
-skill directory, and so on), the PR does **not** qualify and falls through to
-spec-only (when signalled) or implementation handling unchanged.
-
-A PR may mix skill markdown and spec-docs markdown freely when **every** path
-stays within the union.
-
-**Markdown-only boundary:** only `.md` paths within the surfaces above qualify.
-Non-markdown assets force the implementation path.
-
-### What no-ceremony PRs omit
-
-No-ceremony PRs pass scope guard **without**:
-
-- a committed declaration snapshot under `docs/declarations/**`;
-- any issue reference in the PR body (`Closes`, `Refs`, `See`, `Related to`, and
-  so on — absence is never a failure reason for this shape);
-- the spec-only HTML comment signal.
-
-Scope guard **fails** when the PR body links any GitHub issue in any common form:
-closing keywords (`Closes` / `Fixes` / `Resolves`), non-closing forms (`Ref` /
-`Refs` / `See` / `Related to`), bare `#N` autolinks, or
-`https://github.com/<owner>/<repo>/issues/<N>` URLs (fenced-code examples are
-ignored). No-ceremony PRs must not reference an issue in the description.
-
-### Safety gates (unchanged)
-
-- Conjunctive diff boundary — no-ceremony PRs cannot carry code or other surfaces.
-- Skill-pointer drift check (`scripts/check-skill-pointer-drift.ps1`, run from
-  `scripts/verify.ps1`) remains a **separate required gate** when the diff
-  includes skill markdown paths.
-
-### Implementation PRs (unchanged)
-
-Worker and direct-fix PRs still require `Closes #N` / `Fixes #N` /
-`Resolves #N`, exactly one committed AO-free artifact under
-`docs/declarations/<N>.pr-scope.json`, and validation against the issue-body
-fences. AO-era or ambiguous candidates fail closed and require a fresh
-declaration.
+Do not rewrite GitHub Issue, PR, review, CI, or audit history. Do not claim that a
+check ran or a runtime action occurred without exact read-back evidence.

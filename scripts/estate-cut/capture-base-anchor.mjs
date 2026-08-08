@@ -19,7 +19,6 @@ const LEGACY_LIST_GUARD_SURFACE = [
 
 const KEEP_CORE_PATHS = [
   ...LEGACY_LIST_GUARD_SURFACE,
-  'agent-orchestrator.yaml.example',
   'scripts/pack-review-runner.ts',
   'scripts/pack-review-runner.js',
   'scripts/invoke-pack-review.ps1',
@@ -53,7 +52,7 @@ const KEEP_CORE_TESTS = [
   'scripts/gate-runner/bulk-declarative-gates.test.ts',
   'scripts/gate-runner/census-generator.test.ts',
   'scripts/gate-runner/contracts.test.ts',
-  'scripts/gate-runner/custom/ao-capture-redaction.test.ts',
+  'scripts/gate-runner/custom/capture-redaction.test.ts',
   'scripts/gate-runner/custom/bulk-cli-parity.test.ts',
   'scripts/gate-runner/custom/bulk-static-gates.test.ts',
   'scripts/gate-runner/custom/node-backed-gates.test.ts',
@@ -111,8 +110,8 @@ const ROOT_MEMBERSHIP = {
     'docs/wake-supervisor-fleet-operator-reference.md',
   ],
   'safety-plugins': [
-    'plugins/ao-scope-guard',
-    'plugins/ao-codex-pr-reviewer',
+    'plugins/scope-guard',
+    'plugins/codex-pr-reviewer',
     ...LEGACY_LIST_GUARD_SURFACE,
   ],
 };

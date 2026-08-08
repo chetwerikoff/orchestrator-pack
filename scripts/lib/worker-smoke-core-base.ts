@@ -12,7 +12,7 @@ import {
   type OrcaLocalOutcomeCategory,
   type OrcaOperationName,
   type OrcaSmokeControlPlaneCode,
-} from './orca-cli.ts';
+} from '../orca-runtime/native.ts';
 
 export { checkSmokeTestPlan, parseSmokeTestPlan, resolveSmokeRequirement };
 

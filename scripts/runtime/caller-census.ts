@@ -1,7 +1,7 @@
-export const RUNTIME_CALLER_KINDS = ['runtime-port', 'non-runtime-ao-service'] as const;
+export const RUNTIME_CALLER_KINDS = ['runtime-port'] as const;
 export type RuntimeCallerKind = (typeof RUNTIME_CALLER_KINDS)[number];
 
-export const RUNTIME_CALLER_DISPOSITIONS = ['use-runtime-interface', 'already-runtime-neutral', 'delete-dead', 'defer-1250'] as const;
+export const RUNTIME_CALLER_DISPOSITIONS = ['use-runtime-interface', 'already-runtime-neutral', 'delete-dead'] as const;
 export type RuntimeCallerDisposition = (typeof RUNTIME_CALLER_DISPOSITIONS)[number];
 
 export const RUNTIME_ADAPTER_METHOD_OPERATIONS = {
@@ -74,7 +74,7 @@ export interface RuntimeCallerCensusRow {
   readonly note: string;
 }
 
-/** Final #1248 hard-cut census. Keep docs/orca-runtime-caller-census.md in lockstep. */
+/** Current runtime caller census. Keep docs/orca-runtime-caller-census.md in lockstep. */
 export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   {
     surface: 'scripts/launch-watch/watch.ts',
@@ -158,7 +158,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     operations: ['single-instance-lease', 'crash-backoff', 'degraded-terminal'],
     kind: 'runtime-port',
     disposition: 'already-runtime-neutral',
-    note: 'Uses TypeScript process-generation lease and pure crash-backoff transitions without AO health authority.',
+    note: 'Uses TypeScript process-generation lease and pure crash-backoff transitions without retired-runtime health authority.',
   },
   {
     surface: 'scripts/runtime/side-effect-fence.ts',
@@ -196,12 +196,39 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Contains only the Node pr2-scheduler child.',
   },
   {
-    surface: 'scripts/lib/worker-smoke-bounded-create.ts',
-    operations: ['spawn'],
+    surface: 'scripts/json-producers/worker-status-report.ts',
+    operations: ['runtime-composition', 'list'],
     kind: 'runtime-port',
-    disposition: 'delete-dead',
-    replacementSurface: 'scripts/worker-smoke-run.ts + RuntimeAdapter.spawnWorker',
-    note: 'Deleted direct Orca creation seam.',
+    disposition: 'use-runtime-interface',
+    note: 'Builds the live worker-status report from RuntimeAdapter.listWorkers without retired CLI discovery.',
+  },
+  {
+    surface: 'scripts/lib/operator-publication.ts',
+    operations: ['send'],
+    kind: 'runtime-port',
+    disposition: 'already-runtime-neutral',
+    note: 'Publishes one operator-primary message through RuntimeAdapter.dispatchInput and preserves ambiguous delivery.',
+  },
+  {
+    surface: 'scripts/lib/worker-degraded-ci-handoff.ts',
+    operations: ['find', 'send'],
+    kind: 'runtime-port',
+    disposition: 'already-runtime-neutral',
+    note: 'Revalidates exact runtime identity before delegating a single runtime-neutral operator publication.',
+  },
+  {
+    surface: 'scripts/runtime/runtime-cli.ts',
+    operations: ['runtime-composition', 'readiness', 'list', 'find'],
+    kind: 'runtime-port',
+    disposition: 'already-runtime-neutral',
+    note: 'PowerShell-facing runtime-neutral facade exposes only registered RuntimeAdapter readiness/list/find operations.',
+  },
+  {
+    surface: 'scripts/lib/worker-smoke-bounded-create.ts',
+    operations: ['spawn', 'send', 'read', 'liveness', 'stop', 'find'],
+    kind: 'runtime-port',
+    disposition: 'use-runtime-interface',
+    note: 'Current worker-smoke generation establishment support; Issue #1399 owns its exact Orca observation edge while worker-smoke orchestration remains RuntimeAdapter-based.',
   },
   {
     surface: 'scripts/invoke-gated-worker-nudge.ps1',
@@ -217,7 +244,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     kind: 'runtime-port',
     disposition: 'delete-dead',
     replacementSurface: 'scripts/lib/pack-review-worker-notification.ts',
-    note: 'Deleted AO send wrapper; TypeScript journal records the closed dispatch outcome.',
+    note: 'Deleted retired-runtime send wrapper; TypeScript journal records the closed dispatch outcome.',
   },
   {
     surface: 'scripts/invoke-worker-recovery.ps1',
@@ -233,7 +260,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     kind: 'runtime-port',
     disposition: 'delete-dead',
     replacementSurface: 'scripts/runtime/worker-recovery.ts',
-    note: 'Deleted mixed AO/runtime PowerShell recovery implementation.',
+    note: 'Deleted mixed retired/runtime PowerShell recovery implementation.',
   },
   {
     surface: 'scripts/lib/Worker-RecoveryClaim.ps1',
@@ -273,7 +300,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     kind: 'runtime-port',
     disposition: 'delete-dead',
     replacementSurface: 'scripts/runtime/crash-backoff.ts',
-    note: 'AO-status-driven degraded bridge deleted; rearm now requires an explicit healthy replacement witness.',
+    note: 'Retired-status-driven degraded bridge deleted; rearm now requires an explicit healthy replacement witness.',
   },
   {
     surface: 'scripts/lib/Review-StartClaimLifecycle.ps1',
@@ -284,25 +311,11 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Mandatory PowerShell-to-Node bridge deleted.',
   },
   {
-    surface: 'scripts/lib/Invoke-AoReviewApi.ps1',
-    operations: ['review-trigger', 'review-list', 'report'],
-    kind: 'non-runtime-ao-service',
-    disposition: 'defer-1250',
-    note: 'Review service API is not worker/terminal lifecycle and remains outside RuntimeAdapter.',
-  },
-  {
     surface: 'scripts/pack-review-runner.ts',
     operations: ['review-trigger', 'review-list', 'claim-toctou'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
-    note: 'Owns the review-start claim lifecycle through the TypeScript authority; non-runtime review transport remains #1250 work.',
-  },
-  {
-    surface: 'scripts/lib/Invoke-AoCliJson.ps1 (config/status/plugin/daemon operations)',
-    operations: ['config', 'status', 'plugin-hooks', 'daemon-lifecycle'],
-    kind: 'non-runtime-ao-service',
-    disposition: 'defer-1250',
-    note: 'Only genuinely non-runtime service and operator-daemon usage remains #1250 work.',
+    note: 'Owns review start/list/status through the pack runner/store and TypeScript claim authority; no retired review service remains.',
   },
 ] as const;
 
@@ -316,12 +329,6 @@ export function validateRuntimeCallerCensus(
     seen.add(row.surface);
     if (row.disposition === 'delete-dead' && !row.replacementSurface) {
       errors.push(`deleted_replacement_missing:${row.surface}`);
-    }
-    if (row.kind === 'non-runtime-ao-service' && row.disposition !== 'defer-1250') {
-      errors.push(`service_not_deferred:${row.surface}`);
-    }
-    if (row.kind === 'runtime-port' && row.disposition === 'defer-1250') {
-      errors.push(`runtime_port_deferred:${row.surface}`);
     }
   }
   for (const mandatory of [

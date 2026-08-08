@@ -27,7 +27,7 @@ import {
   PROJECTION_LABELS,
 } from './create-issue-stage-record-types.ts';
 
-// Match the existing pack precedent in plugins/ao-codex-pr-reviewer/lib/scope_context.ts.
+// Match the existing pack precedent in plugins/codex-pr-reviewer/lib/scope_context.ts.
 export const GH_TIMEOUT_MS = 10_000;
 
 export class GhTransportError extends Error {

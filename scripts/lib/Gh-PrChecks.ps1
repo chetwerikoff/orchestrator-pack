@@ -76,7 +76,7 @@ function Invoke-CommandRuntimeParseStructuredOutput {
 }
 
 function Resolve-ReviewStartScopedGhCommand {
-    $override = [string]$env:AO_REVIEW_START_SCOPED_GH_COMMAND
+    $override = [string]$env:OPK_REVIEW_START_SCOPED_GH_COMMAND
     if ($override) { return $override }
     $packGh = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'scripts/gh'
     if (Test-Path -LiteralPath $packGh) { return $packGh }

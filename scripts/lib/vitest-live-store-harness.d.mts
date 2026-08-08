@@ -22,7 +22,7 @@ export function applyOpkVitestHarnessEnv(rootDir?: string, env?: NodeJS.ProcessE
   tmp: string;
   operatorInbox: string;
   healthSpool: string;
-  aoBase: string;
+  stateBase: string;
   transport: string;
 };
 export function resolvedLiveStores(env?: NodeJS.ProcessEnv): Array<Record<string, unknown>>;

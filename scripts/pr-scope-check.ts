@@ -13,9 +13,9 @@ import {
   parseIssueBody,
   type IssueConstraints,
 } from '@orchestrator-pack/shared/lib/issue_parser.js';
-import { classifyScopedPaths } from '../plugins/ao-scope-guard/lib/check.ts';
-import { pathMatchesAnyPattern } from '../plugins/ao-task-declaration/lib/glob_match.ts';
-import { partitionControlArtifacts } from '../plugins/ao-scope-guard/lib/control_artifacts.ts';
+import { classifyScopedPaths } from '../plugins/scope-guard/lib/check.ts';
+import { pathMatchesAnyPattern } from '../plugins/task-declaration/lib/glob_match.ts';
+import { partitionControlArtifacts } from '../plugins/scope-guard/lib/control_artifacts.ts';
 import {
   REPOSITORY_DENYLIST,
   normalizeRepositoryPath,
@@ -25,11 +25,11 @@ import {
   selectLiveIssueScope,
   type PrScopeDeclaration,
 } from './pr-scope-declaration.ts';
-import { listIssueSnapshots } from '../plugins/ao-task-declaration/lib/snapshot.ts';
+import { listIssueSnapshots } from '../plugins/task-declaration/lib/snapshot.ts';
 import {
   normalizeIssueConstraints,
   validateDeclaredScope,
-} from '../plugins/ao-task-declaration/lib/validate.ts';
+} from '../plugins/task-declaration/lib/validate.ts';
 import {
   classifyNoCeremonyPaths,
   classifySpecDocsPaths,

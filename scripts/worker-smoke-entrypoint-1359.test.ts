@@ -192,7 +192,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       ], {
         cwd: root,
         env: {
-          ORCA_CLI_COMMAND: fakeOrca,
+          OPK_RUNTIME_CLI_COMMAND: fakeOrca,
           FAKE_ORCA_CALLS: callsPath,
           FAKE_ORCA_ROOT: root,
           FAKE_ORCA_HEAD: head,

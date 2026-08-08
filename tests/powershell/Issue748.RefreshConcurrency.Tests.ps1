@@ -2,7 +2,7 @@
 
 BeforeAll {
     $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $InvokeAoPath = Join-Path $RepoRoot 'scripts/lib/Invoke-AoCliJson.ps1'
+    $WorkerStatusReaderPath = Join-Path $RepoRoot 'scripts/lib/Get-WorkerStatusDecisionSessions.ps1'
     $SeedEntrypoint = Join-Path $RepoRoot 'scripts/review-ready-report-state-seed.ps1'
 
     function New-Issue748ConcurrencyTempDirectory {
@@ -53,7 +53,7 @@ BeforeAll {
         @"
 #requires -Version 5.1
 `$ErrorActionPreference = 'Stop'
-. $(ConvertTo-Issue748ConcurrencyLiteral $InvokeAoPath)
+. $(ConvertTo-Issue748ConcurrencyLiteral $WorkerStatusReaderPath)
 function Invoke-WorkerStatusStoreEviction { param([object[]]`$Sessions,[string]`$StorePath,[long]`$NowMs) return @{ removed = 0; recordCount = @(`$Sessions).Count } }
 `$sessions = @($(ConvertTo-Issue748ConcurrencyLiteral $sessionsJson) | ConvertFrom-Json)
 `$snapshot = @{ openPrs=@(); reviewRuns=@(); ciChecksByPr=@{}; requiredCheckNamesByPr=@{}; requiredCheckLookupFailedByPr=@{}; degraded=`$false; repoRoot=$(ConvertTo-Issue748ConcurrencyLiteral $RepoRoot) }
@@ -139,7 +139,7 @@ if (`$diagnostic.outcome -ne 'success') { exit 7 }
 Describe 'Issue #748 canonical worker-status refresh matrix' {
     It 'W2 publishes the closed-gate reason in the operator progress surface' {
         $dir = New-Issue748ConcurrencyTempDirectory
-        $oldProgressDir = $env:AO_SIDE_PROCESS_PROGRESS_DIR
+        $oldProgressDir = $env:OPK_SIDE_PROCESS_PROGRESS_DIR
         $oldKillSwitch = $env:PACK_WORKER_STATUS_STORE_DISABLED
         try {
             $progressDir = Join-Path $dir 'progress'
@@ -164,7 +164,7 @@ Describe 'Issue #748 canonical worker-status refresh matrix' {
                 watchEntries = @{}
             } | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $fixturePath -Encoding utf8
 
-            $env:AO_SIDE_PROCESS_PROGRESS_DIR = $progressDir
+            $env:OPK_SIDE_PROCESS_PROGRESS_DIR = $progressDir
             $env:PACK_WORKER_STATUS_STORE_DISABLED = '1'
             $output = @(& pwsh -NoProfile -NonInteractive -File $SeedEntrypoint `
                 -FixturePath $fixturePath -StateDir $dir -Once 2>&1)
@@ -179,7 +179,7 @@ Describe 'Issue #748 canonical worker-status refresh matrix' {
             $progress.workerStatusRefresh.writeAttemptCount | Should -Be 0
         }
         finally {
-            $env:AO_SIDE_PROCESS_PROGRESS_DIR = $oldProgressDir
+            $env:OPK_SIDE_PROCESS_PROGRESS_DIR = $oldProgressDir
             $env:PACK_WORKER_STATUS_STORE_DISABLED = $oldKillSwitch
             Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -205,7 +205,7 @@ Describe 'Issue #748 canonical worker-status refresh matrix' {
             }
             $sentinel | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $storePath -Encoding utf8
             $command = @"
-. $(ConvertTo-Issue748ConcurrencyLiteral $InvokeAoPath)
+. $(ConvertTo-Issue748ConcurrencyLiteral $WorkerStatusReaderPath)
 function Test-WorkerStatusKillSwitchActive { return `$false }
 function Test-WorkerStatusSiblingReadiness { return @{ ok=`$true; workerReportStorePresent=`$true; sessionPrBindingResolverPresent=`$true } }
 function Resolve-WorkerReportStoreRepoSlug { param([string]`$RepoSlug) return 'owner/repo' }
