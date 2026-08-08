@@ -1,7 +1,7 @@
 # orchestrator-pack tests
 
 Polyglot contract tests for declaration, scope, parser, and script surfaces.
-No Agent Orchestrator (AO) runtime is required.
+No retired runtime is required.
 
 ## Layout
 
@@ -41,7 +41,7 @@ npx vitest run plugins/_shared/tests/normalize.test.ts
 When a plugin workspace exists (e.g. after #4):
 
 ```powershell
-npm test --workspace=plugins/ao-task-declaration
+npm test --workspace=plugins/task-declaration
 ```
 
 ## Run PowerShell tests only
@@ -79,7 +79,7 @@ Invoke-Pester -Path tests/powershell
   backslashes.
 - **Declaration schema** — validates committed snapshot JSON metadata.
 - **Synthetic git fixtures** — `createSyntheticGitRepo()` for future
-  scope-guard integration tests without AO.
+  scope-guard integration tests without the retired runtime.
 - **Self-architect lint** — Pester runs `scripts/lint-self-architect.ps1` against
   fixtures under `tests/fixtures/lint-self-architect/` (duplicate literal,
   paired script/template divergence, and a negative case).
@@ -88,6 +88,6 @@ Invoke-Pester -Path tests/powershell
 
 ## Out of scope
 
-- AO end-to-end or live `ao` session tests
+- Retired-runtime end-to-end or live session tests
 - Changes under `vendor/**` or `packages/core/**`
 - Real GitHub API calls in unit tests (use fixtures instead)
