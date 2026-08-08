@@ -58,6 +58,23 @@ describe('runtime retirement closed-world scanner', () => {
     expect(result.violations.some((entry) => entry.surfaceId === surfaceId)).toBe(true);
   });
 
+  it('scans ordinary tests but excludes immutable external captures', () => {
+    const root = fixture('neutral');
+    const activeTest = join(root, 'tests/runtime/active.test.ts');
+    mkdirSync(dirname(activeTest), { recursive: true });
+    writeFileSync(activeTest, 'AO_SESSION_ID');
+    const externalCapture = join(root, 'tests/external-output-references/frozen.txt');
+    mkdirSync(dirname(externalCapture), { recursive: true });
+    writeFileSync(externalCapture, 'AO_SESSION_ID');
+
+    const result = scanRetiredRuntimeSurfaces({ repoRoot: root, paths: [
+      'tests/runtime/active.test.ts',
+      'tests/external-output-references/frozen.txt',
+    ] });
+    expect(result.excludedPaths).toEqual(['tests/external-output-references/frozen.txt']);
+    expect(result.violations.map((entry) => entry.path)).toEqual(['tests/runtime/active.test.ts']);
+  });
+
   it('excludes immutable history but not active fixtures', () => {
     const root = fixture('neutral');
     const historical = join(root, 'docs/issues_drafts/old.md');
