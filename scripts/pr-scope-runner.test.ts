@@ -34,31 +34,25 @@ const ISSUE_NUMBER = 42;
 const PR_NUMBER = 77;
 const roots: string[] = [];
 
-const implementationIssueBody = [
-  '```denylist',
-  'vendor/**',
-  'packages/core/**',
-  'secrets/**',
-  'credentials/**',
-  '```',
-  '```allowed-roots',
-  'scripts/**',
-  'docs/declarations/**',
-  '```',
-].join('\n');
+function buildIssueBody(blockDeclarationArtifacts: boolean): string {
+  const denylist = [
+    'credentials/**',
+    'packages/core/**',
+    'secrets/**',
+    'vendor/**',
+  ];
+  if (blockDeclarationArtifacts) denylist.push('docs/declarations/**');
+  const allowedRoots = blockDeclarationArtifacts
+    ? ['scripts/**']
+    : ['docs/declarations/**', 'scripts/**'];
+  return [
+    ['```denylist', ...denylist, '```'].join('\n'),
+    ['```allowed-roots', ...allowedRoots, '```'].join('\n'),
+  ].join('\n');
+}
 
-const declarationFreeIssueBody = [
-  '```denylist',
-  'vendor/**',
-  'packages/core/**',
-  'secrets/**',
-  'credentials/**',
-  'docs/declarations/**',
-  '```',
-  '```allowed-roots',
-  'scripts/**',
-  '```',
-].join('\n');
+const implementationIssueBody = buildIssueBody(false);
+const declarationFreeIssueBody = buildIssueBody(true);
 
 function makeRepo(withDeclaration = false): string {
   const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-runner-'));
@@ -108,10 +102,7 @@ function fixedDiff(
   scopePaths: string[],
   operatorAdoptionPaths: string[] = scopePaths,
 ): PrScopeDiffResult {
-  return {
-    ok: true,
-    diff: { scopePaths, operatorAdoptionPaths },
-  };
+  return { ok: true, diff: { scopePaths, operatorAdoptionPaths } };
 }
 
 function fakeDependencies(options: {
@@ -167,7 +158,6 @@ function renameDiff(fromPath: string, toPath: string): PrScopeDiffResult {
   git(root, ['mv', fromPath, toPath]);
   git(root, ['commit', '--quiet', '-m', 'rename']);
   const headSha = git(root, ['rev-parse', 'HEAD']);
-
   const input: PrScopeCheckInput = {
     repoRoot: root,
     prBody: '',
@@ -204,14 +194,13 @@ describe('trusted PR scope runner', () => {
     expect(declared.comments).toHaveLength(1);
     expect(declared.comments[0]).toContain('## Scope guard — passed');
 
-    const liveRoot = makeRepo(false);
+    const liveRoot = makeRepo();
     const live = fakeDependencies({
       prBody: `Closes #${ISSUE_NUMBER}`,
       issueBody: declarationFreeIssueBody,
       diff: fixedDiff(['scripts/live.ts']),
     });
-    const liveOutcome = runPrScopeRunner(runnerEnv(liveRoot), live.deps);
-    expect(liveOutcome.result).toMatchObject({
+    expect(runPrScopeRunner(runnerEnv(liveRoot), live.deps).result).toMatchObject({
       ok: true,
       mode: 'implementation',
       scopeSource: 'live-issue',
@@ -320,11 +309,12 @@ describe('trusted PR scope runner', () => {
       prBody: '',
       diff: fixedDiff([RUNTIME_HISTORY_DELIVERY_PATH]),
     });
-    const exact = runPrScopeRunner(
-      runnerEnv(root, { PR_HEAD_REF: RUNTIME_HISTORY_DELIVERY_BRANCH }),
-      pass.deps,
-    );
-    expect(exact.result).toMatchObject({ ok: true, mode: 'runtime-history-delivery' });
+    expect(
+      runPrScopeRunner(
+        runnerEnv(root, { PR_HEAD_REF: RUNTIME_HISTORY_DELIVERY_BRANCH }),
+        pass.deps,
+      ).result,
+    ).toMatchObject({ ok: true, mode: 'runtime-history-delivery' });
 
     for (const overrides of [
       { PR_HEAD_REF: 'feature/wrong' },
@@ -337,22 +327,18 @@ describe('trusted PR scope runner', () => {
         prBody: '',
         diff: fixedDiff([RUNTIME_HISTORY_DELIVERY_PATH]),
       });
-      const outcome = runPrScopeRunner(runnerEnv(root, overrides), denied.deps);
-      expect(outcome.result).toMatchObject({ ok: false, reason: 'missing_issue_link' });
+      expect(runPrScopeRunner(runnerEnv(root, overrides), denied.deps).result).toMatchObject({
+        ok: false,
+        reason: 'missing_issue_link',
+      });
     }
   });
 
   it('ports the operator-adoption predicate exactly', () => {
     const trigger = OPERATOR_ADOPTION_TRIGGER_PATHS[0];
-    expect(
-      checkOperatorAdoption([trigger, OPERATOR_ADOPTION_MIGRATION_PATH], ''),
-    ).toEqual({ ok: true });
-    expect(
-      checkOperatorAdoption([trigger], `x\n${OPERATOR_ADOPTION_WAIVER}\ny`),
-    ).toEqual({ ok: true });
-    expect(
-      checkOperatorAdoption([trigger], ` ${OPERATOR_ADOPTION_WAIVER}`),
-    ).toMatchObject({
+    expect(checkOperatorAdoption([trigger, OPERATOR_ADOPTION_MIGRATION_PATH], '')).toEqual({ ok: true });
+    expect(checkOperatorAdoption([trigger], `x\n${OPERATOR_ADOPTION_WAIVER}\ny`)).toEqual({ ok: true });
+    expect(checkOperatorAdoption([trigger], ` ${OPERATOR_ADOPTION_WAIVER}`)).toMatchObject({
       ok: false,
       triggeredPaths: [trigger],
     });
