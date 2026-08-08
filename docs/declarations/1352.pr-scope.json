@@ -59,6 +59,8 @@
     "docs/investigations/ao-orca-consumer-census/zero-consumer-checklist.md",
     "docs/investigations/ci-test-speed-current-baseline.md",
     "docs/investigations/orca-worktree-lifecycle/2026-08-04-executor-observations.md",
+    "docs/investigations/runtime-hard-cut/baseline.json",
+    "docs/investigations/runtime-hard-cut/final.json",
     "docs/investigations/runtime-hard-cut/historical-dispositions.json",
     "docs/issue_template_example.md",
     "docs/issue-906-operator-adoption.md",
