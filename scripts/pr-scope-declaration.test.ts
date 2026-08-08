@@ -87,6 +87,14 @@ const issue1352PowerShellPaths = [
   'tests/powershell/Lint-SelfArchitect.Tests.ps1',
 ];
 
+const issue1352ActiveTestPaths = [
+  'tests/README.md',
+  'tests/issue854-worker-status-binding-cache.mjs',
+  ...issue1352PowerShellPaths,
+  'tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1',
+  'tests/worker-status-store-live-rca.ts',
+].sort((left, right) => left.localeCompare(right));
+
 const bootstrapAllowedPaths = [
   'scripts/pr-scope-check.ts',
   'scripts/pr-scope-check.ps1',
@@ -277,6 +285,43 @@ describe('AO-free PR scope declaration contract', () => {
     }
   });
 
+  it('admits only the exact Issue 1352 active test surfaces', () => {
+    expect(REPOSITORY_ALLOWED_ROOTS).toEqual(
+      expect.arrayContaining(issue1352ActiveTestPaths),
+    );
+    expect(REPOSITORY_ALLOWED_ROOTS).not.toContain('tests/powershell/**');
+    expect(REPOSITORY_ALLOWED_ROOTS).not.toContain('tests/**');
+
+    const exactDeclaration = {
+      ...declaration(1352),
+      declared_paths: [...issue1352ActiveTestPaths],
+      allowed_roots: [...issue1352ActiveTestPaths],
+    };
+    expect(validatePrScopeDeclaration(exactDeclaration, 1352)).toMatchObject({
+      ok: true,
+    });
+
+    for (const unrelatedPath of [
+      'tests/Unrelated.test.ts',
+      'tests/powershell/Unrelated.Tests.ps1',
+    ]) {
+      const unrelatedPaths = [
+        ...issue1352ActiveTestPaths,
+        unrelatedPath,
+      ].sort((left, right) => left.localeCompare(right));
+      expect(
+        validatePrScopeDeclaration(
+          {
+            ...declaration(1352),
+            declared_paths: unrelatedPaths,
+            allowed_roots: unrelatedPaths,
+          },
+          1352,
+        ),
+      ).toMatchObject({ ok: false, kind: 'policy-violation' });
+    }
+  });
+
   it('produces and verifies skills-fenced first-party declarations', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
     roots.push(root);
@@ -405,7 +450,9 @@ describe('AO-free PR scope declaration contract', () => {
       ok: false,
       reason: 'duplicate',
     });
+  });
 
+  it('closes conflicting, wrong-Issue, and discovery-error states', () => {
     const conflicting = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
     roots.push(conflicting);
     mkdirSync(join(conflicting, 'docs', 'declarations'), { recursive: true });
