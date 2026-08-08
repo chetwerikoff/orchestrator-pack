@@ -230,14 +230,18 @@ jobs:
             return undefined;
           }
 
+          const occurrenceByKey = new Map();
           const hits = baseScan.violations.map((hit) => {
             const aoClass = classify(hit);
             const replacementPath = renameTarget(hit.path, aoClass);
             const currentPathExists = existsSync(join(repoRoot, hit.path));
             const disposition = replacementPath ? 'rename-runtime-neutral'
               : currentPathExists ? 'port-live-behavior' : 'delete-ao-only';
+            const identityKey = `${hit.surfaceId}\0${hit.path}\0${hit.line}\0${hit.match}`;
+            const occurrence = occurrenceByKey.get(identityKey) ?? 0;
+            occurrenceByKey.set(identityKey, occurrence + 1);
             const id = createHash('sha256')
-              .update(`${hit.surfaceId}\0${hit.path}\0${hit.line}\0${hit.match}`)
+              .update(`${identityKey}\0${occurrence}`)
               .digest('hex');
             const reason = disposition === 'rename-runtime-neutral'
               ? `Retired identity is replaced by ${replacementPath}.`
@@ -246,9 +250,12 @@ jobs:
                 : 'The retired surface has no surviving behavior and its containing path is deleted by the hard cut.';
             return {
               id, path: hit.path, line: hit.line, selector: hit.surfaceId, match: hit.match,
-              aoClass, disposition, ...(replacementPath ? { replacementPath } : {}), reason,
+              occurrence, aoClass, disposition, ...(replacementPath ? { replacementPath } : {}), reason,
             };
           });
+          if (new Set(hits.map((hit) => hit.id)).size !== hits.length) {
+            throw new Error('generated baseline identities must be unique');
+          }
 
           const baseline = {
             schemaVersion: 'orchestrator-pack/runtime-hard-cut-baseline/v1',
@@ -302,6 +309,7 @@ jobs:
             id: hit.id,
             path: hit.path,
             selector: hit.selector,
+            occurrence: hit.occurrence,
             aoClass: hit.aoClass,
             status: hit.disposition === 'rename-runtime-neutral' ? 'renamed'
               : hit.disposition === 'port-live-behavior' ? 'ported' : 'deleted',
