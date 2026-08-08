@@ -142,27 +142,3 @@ jobs:
       - name: Run external red-green mutation evidence
         if: steps.detect.outputs.run_evidence == 'true'
         run: npm run test:contract-mutations
-
-  issue-1352-evidence-finalizer:
-    name: Issue 1352 evidence finalizer
-    if: github.event_name == 'pull_request' && github.event.pull_request.number == 1378 && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout exact PR branch
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: agent/issue-1352-hard-cut
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Repair residuals and freeze evidence chain
-        shell: bash
-        env:
-          PR_BASE_HEAD: 1c9354c2aa725520d26c9f3925b02ae188a6360c
-          BRANCH_NAME: agent/issue-1352-hard-cut
-          CARRIER_PARENT_SHA: 7c89bdad81965691f1b5feb38df1e9df7171f5df
-        run: bash scripts/issue-1352-finalize.sh
