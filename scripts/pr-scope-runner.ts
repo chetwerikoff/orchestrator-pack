@@ -18,6 +18,8 @@ import {
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const TRUSTED_ROOT = dirname(SCRIPT_DIR);
 const TRACKED_GH = join(TRUSTED_ROOT, 'scripts', 'gh');
+const FULL_GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
+const REPOSITORY_SLUG_PATTERN = /^[^/\s]+\/[^/\s]+$/;
 
 export const OPERATOR_ADOPTION_MIGRATION_PATH = 'docs/migration_notes.md';
 export const OPERATOR_ADOPTION_WAIVER = 'No operator adoption required';
@@ -175,8 +177,17 @@ function parsePositiveInteger(value: string | undefined): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-function parseBoolean(value: string | undefined): boolean {
-  return (value ?? '').trim().toLowerCase() === 'true';
+function parseRequiredBoolean(
+  name: string,
+  value: string | undefined,
+): { ok: true; value: boolean } | { ok: false; message: string } {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'true') return { ok: true, value: true };
+  if (normalized === 'false') return { ok: true, value: false };
+  return {
+    ok: false,
+    message: `${name} must be exactly true or false for pr-scope-runner.ts`,
+  };
 }
 
 function formatRunnerComment(result: PrScopeRunnerResult): string {
@@ -227,20 +238,50 @@ function finishOutcome(
   }
 }
 
+function configurationFailure(
+  message: string,
+  repository: string | null,
+  prNumber: number | null,
+  deps: PrScopeRunnerDependencies,
+): PrScopeRunnerOutcome {
+  return finishOutcome(
+    { ok: false, reason: 'runner_configuration', message },
+    2,
+    repository,
+    prNumber,
+    deps,
+  );
+}
+
 export function runPrScopeRunner(
   env: NodeJS.ProcessEnv,
   deps: PrScopeRunnerDependencies = createDefaultPrScopeRunnerDependencies(),
 ): PrScopeRunnerOutcome {
   const prNumber = parsePositiveInteger(env.PR_NUMBER);
   const repository = env.GITHUB_REPOSITORY?.trim() || null;
-  if (!prNumber || !repository) {
-    return finishOutcome(
-      {
-        ok: false,
-        reason: 'runner_configuration',
-        message: 'PR_NUMBER and GITHUB_REPOSITORY are required for pr-scope-runner.ts',
-      },
-      2,
+  if (!prNumber || !repository || !REPOSITORY_SLUG_PATTERN.test(repository)) {
+    return configurationFailure(
+      'PR_NUMBER and a valid owner/name GITHUB_REPOSITORY are required for pr-scope-runner.ts',
+      repository,
+      prNumber,
+      deps,
+    );
+  }
+
+  const forkBinding = parseRequiredBoolean('PR_HEAD_REPO_FORK', env.PR_HEAD_REPO_FORK);
+  if (!forkBinding.ok) {
+    return configurationFailure(forkBinding.message, repository, prNumber, deps);
+  }
+  const sameRepoBinding = parseRequiredBoolean('PR_HEAD_REPO_SAME', env.PR_HEAD_REPO_SAME);
+  if (!sameRepoBinding.ok) {
+    return configurationFailure(sameRepoBinding.message, repository, prNumber, deps);
+  }
+
+  const baseSha = env.PR_BASE_SHA?.trim() ?? '';
+  const headSha = env.PR_HEAD_SHA?.trim() ?? '';
+  if (!FULL_GIT_SHA_PATTERN.test(baseSha) || !FULL_GIT_SHA_PATTERN.test(headSha)) {
+    return configurationFailure(
+      'PR_BASE_SHA and PR_HEAD_SHA must be full 40-hex commit SHAs for pr-scope-runner.ts',
       repository,
       prNumber,
       deps,
@@ -279,12 +320,12 @@ export function runPrScopeRunner(
     issueBody,
     prPaths: [],
     degradedMode: false,
-    forkPr: parseBoolean(env.PR_HEAD_REPO_FORK),
+    forkPr: forkBinding.value,
     prNumber,
     prHeadRef: env.PR_HEAD_REF ?? '',
-    sameRepo: parseBoolean(env.PR_HEAD_REPO_SAME),
-    baseSha: env.PR_BASE_SHA ?? '',
-    headSha: env.PR_HEAD_SHA ?? '',
+    sameRepo: sameRepoBinding.value,
+    baseSha,
+    headSha,
   };
 
   const diff = deps.acquireDiff(input);
