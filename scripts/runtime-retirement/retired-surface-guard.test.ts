@@ -41,7 +41,7 @@ describe('runtime retirement closed-world scanner', () => {
     ['status command', 'ao status --json', 'scripts/active.ts', 'legacy-runtime-command'],
     ['spawn command', 'ao spawn worker --json', 'scripts/active.ts', 'legacy-runtime-command'],
     ['orchestrator command', 'ao orchestrator ls --json', 'scripts/active.ts', 'legacy-runtime-command'],
-    ['top-level option', 'ao --version', 'scripts/active.ts', 'legacy-runtime-command'],
+    ['split argv spawn command', "spawnSync('ao', ['spawn', '--prompt', 'fixture'])", 'scripts/active.ts', 'legacy-runtime-command'],
     ['active markdown prescription', 'Run `ao start --json` before continuing.', 'docs/runbook.md', 'legacy-runtime-command'],
     ['daemon route', 'fetch("http://localhost:3000/api/v1/sessions/current")', 'scripts/active.ts', 'legacy-daemon-http'],
     ['legacy package', 'import "@orchestrator-pack/ao-scope-guard";', 'scripts/active.ts', 'legacy-plugin-identity'],
