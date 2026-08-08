@@ -142,7 +142,9 @@
     "docs/worker-report-store.mjs",
     "docs/worker-smoke-testing.md",
     "package-lock.json",
+    "plugins/_shared/lib/cli_argument_errors.ts",
     "plugins/_shared/lib/declaration_schema.ts",
+    "plugins/_shared/package.json",
     "plugins/_shared/tests/declaration_schema.test.ts",
     "plugins/_shared/tests/fixtures/declarations/valid-snapshot.json",
     "plugins/_shared/tests/fixtures/issue-bodies/minimal-denylist.md",
@@ -481,6 +483,7 @@
     "scripts/json-producers/wave-b-inventory.json",
     "scripts/json-producers/worker-status-report.ts",
     "scripts/kernel/side-process-liveness.ts",
+    "scripts/kernel/test-process.ts",
     "scripts/launch-argv-inventory.json",
     "scripts/launch-argv-validators.manifest.json",
     "scripts/launch-contract-evidence-reverify.ps1",
@@ -737,5 +740,5 @@
     "tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1",
     "tests/powershell/Lint-SelfArchitect.Tests.ps1"
   ],
-  "source_revision": "cb12c79b96a285d8dc81a49b8d10faeb967cb54d"
+  "source_revision": "a6934c875da6b93ac6b60d06e3a7d55445e3131a"
 }
