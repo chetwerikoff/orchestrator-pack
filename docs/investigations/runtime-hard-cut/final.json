@@ -2,7 +2,7 @@
   "schemaVersion": "orchestrator-pack/runtime-hard-cut-final/v1",
   "issueNumber": 1352,
   "prBaseHead": "1c9354c2aa725520d26c9f3925b02ae188a6360c",
-  "scannedCodeHead": "f9fe6ef846d823288bb2b75a2d04ee69c2e57e26",
+  "scannedCodeHead": "78856c7d467f8a3817c1e5f60e3d7d1918a0b35d",
   "baselinePath": "docs/investigations/runtime-hard-cut/baseline.json",
   "baselineHitCount": 4379,
   "currentScan": {
