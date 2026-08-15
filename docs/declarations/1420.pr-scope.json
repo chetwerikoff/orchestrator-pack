@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1420,
+  "declared_paths": [
+    "docs/declarations/1420.pr-scope.json",
+    "docs/orchestration-runbook.md"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    ".orca/",
+    "credentials/",
+    "docs/issue_queue_index.md",
+    "docs/issues_drafts/",
+    "packages/core/",
+    "scripts/lib/cutover/activation-registry-projection.ts",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/orchestrator-side-process-registry.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1420.pr-scope.json",
+    "docs/orchestration-runbook.md"
+  ]
+}
