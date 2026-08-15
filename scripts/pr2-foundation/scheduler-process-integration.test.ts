@@ -122,6 +122,7 @@ switch (operation) {
     break;
   }
   case 'terminal send': {
+    state.sendCalls = Number(state.sendCalls ?? 0) + 1;
     const worker = state.workers.find((candidate) => candidate.id === get('--terminal') && candidate.liveness !== 'gone');
     if (!worker) {
       out({ ok: false, error: { code: 'terminal_not_found', message: 'terminal not found' } });
@@ -195,6 +196,7 @@ interface FixtureState {
   workers: Array<{ id: string; generation: string; bindingKey: string; lines: string[]; liveness: string }>;
   dispatchOutcome?: string;
   dispatches?: Array<{ workerId: string; message: string }>;
+  sendCalls?: number;
   resolveCalls?: number;
   dropResolutionAtCall?: number;
   corruptJournalAfterSend?: boolean;
@@ -321,6 +323,32 @@ describe('scheduler bounded-child production composition', () => {
     expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
+  it('persists effect_untrusted after send_failed and does not retry the same episode', async () => {
+    const root = makeRoot();
+    const fixturePath = path.join(root, 'fixture.json');
+    const epochPath = path.join(root, 'epoch.json');
+    const configPath = path.join(root, 'fleet-config.json');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+    writeFileSync(fixturePath, JSON.stringify({
+      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }],
+      dispatchOutcome: 'send_failed', dispatches: [], sendCalls: 0,
+    }));
+    writeEpoch(epochPath, 'epoch-send-failed', 'nonce-send-failed');
+    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-send-failed', 'nonce-send-failed');
+    await publishLocal(env);
+    await runTick(env);
+    const second = await runTick(env);
+    const secondOutcomes = (schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>;
+    expect(secondOutcomes.some((row) => row.outcome === 'send_failed')).toBe(true);
+    expect(schedulerResult(second).orchestratorRequired).toBe(true);
+    expect(handoff(env)).toMatchObject({ reason: 'effect_untrusted', decision: 'orchestrator_required' });
+    const third = await runTick(env);
+    expect(fixture(fixturePath).sendCalls).toBe(1);
+    expect(fixture(fixturePath).dispatches).toHaveLength(0);
+    const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>;
+    expect(thirdNudge.sendAttempts).toBe(0);
+  });
+
   it('uses the established default S1 config and snapshot authorities across bounded children', async () => {
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');
@@ -394,13 +422,21 @@ describe('scheduler bounded-child production composition', () => {
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
     writeFileSync(fixturePath, JSON.stringify({
       workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-other', lines: ['unchanged'], liveness: 'idle' }],
-      dispatches: [],
+      dispatches: [], sendCalls: 0,
     }));
     writeEpoch(epochPath, 'epoch-missing-runtime', 'nonce-missing-runtime');
     const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-missing-runtime', 'nonce-missing-runtime');
     await publishLocal(env, 'dispatch-1');
+    const first = await runTick(env);
+    expect(schedulerResult(first).orchestratorRequired).toBe(true);
+    expect(handoff(env)).toMatchObject({
+      reason: 'target_unresolved',
+      decision: 'orchestrator_required',
+      issueNumber: 1420,
+      taskId: 'task-1420',
+    });
     await runTick(env);
-    await runTick(env);
+    expect(fixture(fixturePath).sendCalls).toBe(0);
     expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
@@ -444,7 +480,7 @@ describe('scheduler bounded-child production composition', () => {
     expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
-  it('keeps remote assignments outside local S1/S2 actuation', async () => {
+  it('keeps remote assignments outside local S1/S2 actuation and escalates them durably', async () => {
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');
     const epochPath = path.join(root, 'epoch.json');
@@ -452,7 +488,7 @@ describe('scheduler bounded-child production composition', () => {
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
     writeFileSync(fixturePath, JSON.stringify({
       workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'idle' }],
-      dispatches: [],
+      dispatches: [], sendCalls: 0,
     }));
     writeEpoch(epochPath, 'epoch-remote', 'nonce-remote');
     const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-remote', 'nonce-remote');
@@ -465,8 +501,16 @@ describe('scheduler bounded-child production composition', () => {
       provider: 'orca',
       bindingKey: 'dispatch-1',
     })).ok).toBe(true);
+    const first = await runTick(env);
+    expect(schedulerResult(first).orchestratorRequired).toBe(true);
+    expect(handoff(env)).toMatchObject({
+      reason: 'remote_not_applicable',
+      decision: 'orchestrator_required',
+      issueNumber: 1420,
+      taskId: 'task-remote',
+    });
     await runTick(env);
-    await runTick(env);
+    expect(fixture(fixturePath).sendCalls).toBe(0);
     expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
