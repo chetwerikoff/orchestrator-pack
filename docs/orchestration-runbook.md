@@ -73,10 +73,11 @@ The architect is an expensive one-shot architecture/specification role, not a fl
 
 ## Supervised initial delivery and WorkerAssignment
 
-Initial supervised Task delivery remains Orca-owned. Use the PACK supervised-start boundary:
+Initial supervised Task delivery remains Orca-owned. Use the PACK supervised-start boundary through the canonical TypeScript launcher:
 
 ```text
-node --experimental-strip-types scripts/pr2-foundation/supervised-worker-start.ts \
+node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+  --script scripts/pr2-foundation/supervised-worker-start.ts -- \
   --issue-number <N> \
   --repository <owner/repo> \
   -- \
