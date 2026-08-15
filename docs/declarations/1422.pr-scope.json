@@ -1,0 +1,32 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1422,
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/wake-supervisor-fleet-operator-reference.md",
+    "scripts/cutover/first-time-activation.test.ts",
+    "scripts/cutover/foundation-adoption-producer.ts",
+    "scripts/lib/cutover/activation-cordon.ts",
+    "scripts/lib/cutover/activation-evidence.ts",
+    "scripts/lib/cutover/activation-transaction.ts",
+    "scripts/lib/cutover/types.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "scripts/orchestrator-side-process-registry.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/migration_notes.md",
+    "docs/wake-supervisor-fleet-operator-reference.md",
+    "scripts/cutover/",
+    "scripts/lib/cutover/",
+    "scripts/orchestrator-cutover-activate.ts",
+    "scripts/pr2-foundation/"
+  ],
+  "source_revision": "826d9f74dae9e876c36ef41e97d9093cc28ececd"
+}
