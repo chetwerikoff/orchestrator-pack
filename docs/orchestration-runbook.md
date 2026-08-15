@@ -216,31 +216,60 @@ A Dispatch represents a concrete attempt of a Task. It may span multiple model t
 
 Create a fresh Dispatch only when the boundary is real: a different Task/subtask, an independent reviewer/lens, a correction round after a settled handoff, reassignment, or retry after a proved failed/lost attempt.
 
-### 11. Transport `accepted` is not agent `delivered`
+### 11. Use Orca's supervised delivery path; do not rebuild prompt delivery in PACK
 
-A send/submit return value proves only what that transport contract explicitly proves. It does not by itself prove that the target agent read, acted on, or even visibly received the instruction.
+For supervised Dispatch work, Orca owns initial worker startup and task injection.
 
-For a bounded `continue` effect:
+Preferred path:
 
 ```text
-send once to the exact current target
--> record only the transport outcome it actually proves
--> on later reconciliation, look for an existing authoritative receipt
+orca orchestration worker-start
 ```
 
-An authoritative receipt is a later fact already produced by the normal lifecycle, for example:
+When custom topology/argv requires lower-level composition, use a recognized agent terminal plus:
 
-- positive new output for the exact same runtime generation;
-- a compatible liveness/class transition showing the target resumed;
-- a durable WorkerReport/WorkerStatus change bound to the same assignment/Task;
-- a child Task/Dispatch start/result that the instruction was intended to cause;
-- another task-specific durable fact named by the stage contract.
+```text
+orca orchestration dispatch --inject
+```
 
-A missing receipt does **not** authorize an automatic resend loop. Preserve the S2 one-shot principle: one bounded continuation episode is followed by observation; if the episode remains actionable without a trustworthy receipt, route `orchestrator_required` rather than repeatedly nudging.
+Do **not** use the Orca bare-shell recipe `terminal send --text ... --enter` as the task-delivery mechanism for a supervised Dispatch. That path is valid for bare-shell/lightweight/manual prompting, but it recreates the historical keyboard-injection failure class and does not provide the supervised injected lifecycle contract.
 
-Do not add a parallel ACK/delivery-confirm service merely to implement this law.
+For supervised startup, inspect the structured `worker-start` receipt. `ready` and its `stage/effects/setup/residualResources` fields are the authority for what startup/dispatch work Orca proved. A failed or unknown start is handled from that receipt; do not reduce it to a raw process return code and do not blindly retry.
 
-### 12. The supervisor must prove its own decision paths are reachable
+This removes the historical “PACK created a pane and pasted the task with keystrokes” class from normal supervised startup. PACK must not recreate an alternate startup/prompt-injection transport beside Orca.
+
+### 12. A follow-up accepted by Orca is not proof the worker consumed it
+
+Coordinator guidance to a live supervised worker uses the stable Dispatch address:
+
+```text
+orca orchestration send --to dispatch:<dispatch_id> ...
+```
+
+Current Orca defines this follow-up as **structured inbox mail, not prompt injection**. The worker receives it on its next `orchestration check`.
+
+Therefore distinguish:
+
+- **initial supervised task delivery** — handled by `worker-start` / `dispatch --inject` and its structured startup/dispatch receipt;
+- **follow-up acceptance** — Orca accepted coordinator mail for the Dispatch;
+- **follow-up consumption/action** — later worker behavior proves the mail was checked/acted on.
+
+Coordinator-side `check --ack <delivery_id>` acknowledges the coordinator's own Run delivery batch; it is not a worker-read receipt for a follow-up sent to the worker.
+
+If the current Orca version exposes an authoritative worker-side consumption fact, PACK may consume that fact through the normal adapter/state boundary. Do not assume such a fact exists when the installed contract does not expose it.
+
+Absent a direct worker-consumption witness, use subsequent **existing** lifecycle evidence, for example:
+
+- positive new bounded output for the exact same runtime generation;
+- a durable WorkerReport/WorkerStatus change for the same assignment/Task;
+- a child Task/Dispatch start or authoritative stage result that the follow-up was intended to cause;
+- PR/head or other task-specific authoritative movement that is causally appropriate for the requested continuation.
+
+A missing post-send fact does **not** authorize an automatic resend loop. One bounded continuation episode is followed by observation; if the same actionable state persists without trustworthy evidence that work resumed, route `orchestrator_required`.
+
+Do not add a parallel ACK/delivery-confirm/retry service merely to implement this law.
+
+### 13. The supervisor must prove its own decision paths are reachable
 
 “No event” and “the branch is broken and can never fire” are operationally indistinguishable unless tested.
 
@@ -253,7 +282,7 @@ Every reconciler decision class must be exercised by focused tests/integration e
 
 A new decision branch without reachability evidence is incomplete.
 
-### 13. The orchestrator and reconciler never block on an external condition
+### 14. The orchestrator and reconciler never block on an external condition
 
 Do not sit in a foreground sleep/poll loop waiting for CI, review, a child, browser state, or another external condition.
 
@@ -261,7 +290,7 @@ A wait is represented by current lifecycle state plus a future re-check. The cur
 
 A tool invocation may have its own bounded timeout, but the orchestrator does not turn that into an eight-minute foreground polling loop.
 
-### 14. Admit at most one active attempt for one exact stage artifact
+### 15. Admit at most one active attempt for one exact stage artifact
 
 Before starting a new Dispatch, check the authoritative active-attempt set for the exact stage key.
 
@@ -273,7 +302,7 @@ Typical keys are:
 
 If an active attempt already exists for that key, do not start another one. Observe the current attempt or route ambiguity upward.
 
-### 15. A downstream stage opens on a producer handoff, never a proxy signal alone
+### 16. A downstream stage opens on a producer handoff, never a proxy signal alone
 
 CI green, process idle, PR existence, or another proxy does not by itself open the next stage.
 
@@ -281,7 +310,7 @@ For coding review, admission requires the producing worker's truthful terminal h
 
 For task-authoring review/lens, admission requires the current published Issue revision produced by the preceding stage, not an older cached draft.
 
-### 16. A child-stage result is not delivered until it reaches the authoritative surface
+### 17. A child-stage result is not delivered until it reaches the authoritative surface
 
 Conversation-only output is not a final stage result when the surrounding workflow reads GitHub or another durable source.
 
@@ -295,7 +324,7 @@ The Task must name the result surface. Defaults are:
 
 A child saying “done” in chat while the required authoritative surface is absent is non-delivery.
 
-### 17. Prompt references must exist in the executor's address space
+### 18. Prompt references must exist in the executor's address space
 
 Before dispatch, every referenced artifact must be resolvable by that executor.
 
@@ -303,19 +332,19 @@ Do not hand a remote/browser/chat executor an inaccessible local filesystem path
 
 The receiving executor also confirms the artifact class it actually received before acting: Issue review, PR review, code patch, research brief, etc. A carrier mismatch is a dispatch defect, not permission to review the wrong object.
 
-### 18. A failed attempt must preserve its diagnostic evidence
+### 19. A failed attempt must preserve its diagnostic evidence
 
 Failure handling must not immediately destroy the only surface that explains the failure.
 
 Do not automatically close/remove a failed pane/page/process/workspace or erase its bounded diagnostics before the orchestrator has re-read the relevant evidence and decided the next action. Cleanup follows diagnosis/decision, not the first non-ok return.
 
-### 19. Recovery machinery does not own termination authority
+### 20. Recovery machinery does not own termination authority
 
 A helper, observer, reconciler, recovery wrapper, smoke harness, or nudge actuator must not press Stop/kill/remove a live attempt merely because an outcome is non-ok.
 
 Termination/replacement of a live attempt is an explicit orchestrator/operator decision after authoritative re-read. `unknown` is no-action, and a known non-ok result is still not automatic termination authority.
 
-### 20. False alarms are costly lifecycle defects
+### 21. False alarms are costly lifecycle defects
 
 An alarm/escalation class must use its designated authority, scope itself to the current repository/task, and filter its own generated output from evidence.
 
@@ -530,7 +559,7 @@ continue
 orchestrator_required
 ```
 
-The timer is only a re-check trigger. It never proves failure, progress, or delivery.
+The timer is only a re-check trigger. It never proves failure, progress, task consumption, or follow-up delivery.
 
 ### Manager cases
 
@@ -543,7 +572,7 @@ The timer is only a re-check trigger. It never proves failure, progress, or deli
 | positive idle + helper failed but supported recovery remains | `continue` |
 | all current manager completion gates satisfied | `noop` (manager may complete) |
 | required stage has no registered observation surface | `orchestrator_required` |
-| repeated actionable idle after one bounded continuation without authoritative receipt | `orchestrator_required` |
+| repeated actionable idle after one bounded follow-up without authoritative post-send evidence | `orchestrator_required` |
 | liveness/ownership/recovery facts ambiguous | `orchestrator_required` |
 
 ### Worker cases
@@ -555,18 +584,24 @@ The timer is only a re-check trigger. It never proves failure, progress, or deli
 | positive idle + required pre-review CI red | `continue` |
 | current head is truthfully `ready_for_review` with no worker-owned action left | `noop` (worker may complete) |
 | required stage has no registered observation surface | `orchestrator_required` |
-| repeated actionable idle after one bounded continuation without authoritative receipt | `orchestrator_required` |
+| repeated actionable idle after one bounded follow-up without authoritative post-send evidence | `orchestrator_required` |
 | gone/stopped/identity ambiguity | `orchestrator_required` |
 
-### Bounded continuation and receipt
+### Bounded continuation
 
-A normal continuation goes only to the exact current local Task/Dispatch/runtime target and should be short, for example:
+A normal continuation goes only to the exact current active Dispatch using Orca's Dispatch address, not terminal keystrokes:
+
+```text
+orca orchestration send --to dispatch:<dispatch_id> ...
+```
+
+Keep it short, for example:
 
 > Continue the current assigned Task. Re-read current authoritative facts, execute the next role-owned action from your existing plan, and do not settle the Dispatch while any required stage remains. If a genuine unresolved blocker remains after supported recovery, report the evidence and attempts already made.
 
-The transport return is not the receipt. On later reconciliation, a receipt is a compatible authoritative post-send fact such as positive new output, a lifecycle/report transition, or the task-specific child/stage result the continuation was meant to cause.
+The send result proves mail acceptance only to the extent Orca's contract says so. On later reconciliation, look for subsequent existing worker/lifecycle evidence. Do not broadcast, use `terminal send --enter`, create a new Dispatch, or re-send the same continuation merely because the agent is still idle.
 
-Do not broadcast, create a new Dispatch, or re-send the same continuation merely because the agent returned idle. One bounded continuation episode without later authoritative receipt escalates to `orchestrator_required` rather than becoming an infinite nudge loop.
+One bounded follow-up without later trustworthy evidence that work resumed escalates to `orchestrator_required` rather than becoming an infinite nudge loop.
 
 ### Proving the cadence owner itself
 
@@ -668,7 +703,7 @@ Use this disposition rule for the old Claude-memory/Gist material:
 |---|---|
 | Objective-state supervision lessons | **Keep** in this runbook |
 | `busy != progress`, silence/heartbeat caveats | **Keep** in this runbook |
-| `accepted != delivered` and one-shot receipt lessons | **Keep** in this runbook without a new ACK service |
+| Supervised-start-via-Orca and follow-up-consumption lessons | **Keep** in this runbook without a new ACK service |
 | Exact identity and stale-attempt fencing lessons | **Keep** in this runbook |
 | Re-read-before-retry and helper-fallback lessons | **Keep** in this runbook |
 | One-active-attempt/stage-admission lessons | **Keep** in this runbook |
@@ -678,6 +713,7 @@ Use this disposition rule for the old Claude-memory/Gist material:
 | Long incident diary details | **Drop** unless needed to explain a current invariant |
 | Local resident watcher/watchdog/heartbeat logger machinery | **Retire** when duplicated by current Orca/PACK facts and reconciler |
 | Local broad-pane/global-nudge scripts | **Retire** when exact Task/Dispatch targeting is available |
+| Local keyboard/paste task-delivery wrappers for supervised Dispatches | **Retire** in favor of `worker-start` / `dispatch --inject` |
 | Local retry/ack/delivery-confirm state machines | **Retire** unless a current production requirement proves a unique remaining responsibility |
 | Claude-only private orchestration memory | **Retire as authority** after useful rules are represented in tracked docs |
 
@@ -693,9 +729,10 @@ After this runbook is adopted, the local orchestrator should:
 2. inventory local untracked orchestration helpers/state directories;
 3. classify each `keep | replace | delete` against the current target architecture;
 4. delete local-only watcher/watchdog/heartbeat/global-nudge/retry/ack/state scripts whose responsibility is now covered by Orca, PACK authoritative facts, or the deterministic reconciler;
-5. keep only a helper with a concrete current responsibility that is not otherwise served;
-6. remove obsolete local startup/autostart hooks that would resurrect deleted helpers;
-7. verify the surviving normal flow still works without those local scripts.
+5. delete supervised task-delivery wrappers that create/pick a pane and paste the task via terminal keystrokes when `worker-start` / `dispatch --inject` is available;
+6. keep only a helper with a concrete current responsibility that is not otherwise served;
+7. remove obsolete local startup/autostart hooks that would resurrect deleted helpers;
+8. verify the surviving normal flow still works without those local scripts.
 
 Do not ask an implementation worker to manufacture tracked deletions for files that never existed in git.
 
@@ -716,8 +753,10 @@ Before supervising a new workflow:
 [ ] identify authoritative assignment/report/PR/head/CI/review/smoke facts
 [ ] identify the authoritative result surface for every child/stage being started
 [ ] verify prompt references are resolvable in the target executor's address space
+[ ] for supervised startup use Orca worker-start (preferred) or dispatch --inject; never keyboard/paste task delivery
+[ ] read the structured worker-start/dispatch result rather than infer startup from a raw return code
 [ ] use deterministic reconciliation for routine states
-[ ] use exact identity for effects
+[ ] use exact identity for effects and dispatch:<id> for supervised follow-up
 [ ] use designated authorities for alarms/escalations and keep repository scope exact
 [ ] invoke reasoning only for ambiguity/decision
 ```
@@ -762,7 +801,10 @@ The implementation that claims this runbook must prove at least:
 [ ] manager all-gates-satisfied branch reachable
 [ ] worker ready-for-review completion branch reachable
 [ ] positive idle uses current S1 semantics; contradictory evidence -> unknown
-[ ] one bounded continue has a later authoritative receipt or escalates without resend loop
+[ ] supervised Dispatch startup uses worker-start/dispatch --inject, not terminal send --enter
+[ ] worker-start failed/unknown/ready receipts are interpreted from structured stage/effects/ready evidence
+[ ] one bounded dispatch-addressed follow-up has later authoritative worker/lifecycle evidence or escalates without resend loop
+[ ] coordinator-side check --ack is never treated as a worker-read receipt
 [ ] unregistered lifecycle producer/stage -> orchestrator_required
 [ ] duplicate active stage attempt is refused
 [ ] review does not start on CI-green proxy alone
