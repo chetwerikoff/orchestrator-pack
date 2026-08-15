@@ -76,7 +76,7 @@ The architect is an expensive one-shot architecture/specification role, not a fl
 Initial supervised Task delivery remains Orca-owned. Use the PACK supervised-start boundary:
 
 ```text
-node scripts/pr2-foundation/supervised-worker-start.ts \
+node --experimental-strip-types scripts/pr2-foundation/supervised-worker-start.ts \
   --issue-number <N> \
   --repository <owner/repo> \
   -- \
