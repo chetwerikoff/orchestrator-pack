@@ -348,6 +348,7 @@ function parseSnapshot(rawBytes: string): FleetObserverSnapshot | null {
     || last.schedulerGeneration !== value.schedulerGeneration
     || (value.result === 'complete' && last.type !== 'tick-complete')
     || (value.result === 'failed' && last.type !== 'tick-failed')) return null;
+  if (rawBytes !== serializeFleetSnapshot(value as unknown as FleetObserverSnapshot)) return null;
   return value as unknown as FleetObserverSnapshot;
 }
 

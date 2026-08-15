@@ -207,10 +207,11 @@ function fixture(file: string): FixtureState {
 }
 
 function processEnv(root: string, fixturePath: string, epochPath: string, configPath: string, epochId: string, nonce: string): NodeJS.ProcessEnv {
-  installOrcaFixture(root);
+  const runtimeCli = installOrcaFixture(root);
   return {
     ...process.env,
     PATH: `${root}${path.delimiter}${process.env.PATH ?? ''}`,
+    OPK_RUNTIME_CLI_COMMAND: runtimeCli,
     OPK_PROCESS_FIXTURE_PATH: fixturePath,
     OPK_BASE_DIR: path.join(root, 'opk'),
     OPK_SIDE_PROCESS_STATE_DIR: path.join(root, 'side-state'),
