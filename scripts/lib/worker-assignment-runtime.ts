@@ -49,7 +49,9 @@ export function resolveCurrentWorkerAssignmentBindings(input: {
   for (const assignment of assignments) {
     if (assignment.repository !== repository) continue;
     if (assignment.kind !== 'local') {
-      reconciliations.push({ assignment, reason: 'remote_not_applicable' });
+      if (assignmentStillCurrent(input.file, assignment)) {
+        reconciliations.push({ assignment, reason: 'remote_not_applicable' });
+      }
       continue;
     }
     const resolved = input.adapter.resolveAssignmentWorker(
@@ -57,7 +59,9 @@ export function resolveCurrentWorkerAssignmentBindings(input: {
       { timeoutMs: input.timeoutMs ?? 5_000 },
     );
     if (resolved.status !== 'ok' || resolved.value === null) {
-      reconciliations.push({ assignment, reason: 'target_unresolved' });
+      if (assignmentStillCurrent(input.file, assignment)) {
+        reconciliations.push({ assignment, reason: 'target_unresolved' });
+      }
       continue;
     }
     if (!assignmentStillCurrent(input.file, assignment)) continue;
