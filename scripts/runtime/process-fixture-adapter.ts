@@ -5,6 +5,7 @@ import {
   runtimeFailure,
   runtimeUnsupported,
   sameRuntimeWorker,
+  // The process fixture deliberately implements only the test composition surface.
   type RuntimeAdapter,
   type RuntimeBoundedOutput,
   type RuntimeCallOptions,
