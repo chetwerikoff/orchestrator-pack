@@ -107,8 +107,13 @@ export function schedulerActivationLineage(epoch: { epochId: string; nonce: stri
 
 export function buildDormantScheduler(config: FoundationConfig): DormantSchedulerState {
   return {
-    component: 'pr2-foundation-scheduler', registered: false, running: false, claimAcquirer: false,
-    activationEpochEnforced: false, pollIntervalMs: config.scheduler.pollIntervalMs, leaseMs: config.scheduler.leaseMs,
+    component: 'pr2-foundation-scheduler',
+    registered: false,
+    running: false,
+    claimAcquirer: false,
+    activationEpochEnforced: false,
+    pollIntervalMs: config.scheduler.pollIntervalMs,
+    leaseMs: config.scheduler.leaseMs,
   };
 }
 export function runDormantMergeActuator(_config: FoundationConfig): DormantActuatorResult { return { ok: true, executed: false, reason: 'foundation_inert' }; }
@@ -301,8 +306,9 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   }
   const handoffPath = resolveFleetReconciliationHandoffPath(projectId, env);
   const publishHandoff: NonNullable<SchedulerBoundary['publishHandoff']> = ({ reason, schedulerGeneration, tickSequence, unitRef }) => {
+    if (!repository) return { ok: false, reason: 'repository_identity_unresolved' };
     const binding = unitRef ? fleetBindings.find((candidate) => candidate.unitRef === unitRef) : undefined;
-    const result = publishFleetReconciliationHandoff({ file: handoffPath, projectId, repository: repository || 'unknown/repository', activationLineage, schedulerGeneration, tickSequence, reason, role: binding ? 'worker' : undefined, issueNumber: binding?.issueNumber, taskId: binding?.taskId, assignmentId: binding?.assignmentId, assignmentGeneration: binding?.assignmentGeneration });
+    const result = publishFleetReconciliationHandoff({ file: handoffPath, projectId, repository, activationLineage, schedulerGeneration, tickSequence, reason, role: binding ? 'worker' : undefined, issueNumber: binding?.issueNumber, taskId: binding?.taskId, assignmentId: binding?.assignmentId, assignmentGeneration: binding?.assignmentGeneration });
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   };
   return {
