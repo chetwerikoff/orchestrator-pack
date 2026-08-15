@@ -4,6 +4,7 @@
   "declared_paths": [
     "AGENTS.md",
     "docs/declarations/1420.pr-scope.json",
+    "docs/migration_notes.md",
     "docs/orchestration-runbook.md",
     "scripts/lib/worker-assignment-runtime.ts",
     "scripts/lib/worker-assignment-store.ts",
@@ -40,6 +41,7 @@
   "allowed_roots": [
     "AGENTS.md",
     "docs/declarations/1420.pr-scope.json",
+    "docs/migration_notes.md",
     "docs/orchestration-runbook.md",
     "scripts/lib/worker-assignment-runtime.ts",
     "scripts/lib/worker-assignment-store.ts",
