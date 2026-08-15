@@ -295,31 +295,60 @@ function parseSnapshot(rawBytes: string): FleetObserverSnapshot | null {
     || value.transitions.length > MAX_UNITS || value.progress.length > MAX_UNITS) return null;
   if (value.activationLineage !== undefined && !boundedString(value.activationLineage, LINEAGE_PATTERN)) return null;
   if (value.continuity !== undefined && (!Array.isArray(value.continuity) || value.continuity.length > MAX_UNITS || !value.continuity.every(validContinuity))) return null;
-  const started = Date.parse(value.startedAt as string); const completed = Date.parse(value.completedAt as string);
+  if (Array.isArray(value.continuity)) {
+    const unitRefs = new Set<string>();
+    const assignments = new Set<string>();
+    for (const row of value.continuity as FleetObserverContinuityRow[]) {
+      const assignmentKey = `${row.assignmentId}\u0000${row.assignmentGeneration}`;
+      if (unitRefs.has(row.unitRef) || assignments.has(assignmentKey)) return null;
+      unitRefs.add(row.unitRef);
+      assignments.add(assignmentKey);
+    }
+  }
+  const started = Date.parse(value.startedAt); const completed = Date.parse(value.completedAt);
   if (!Number.isFinite(started) || !Number.isFinite(completed) || completed < started || Number(value.settlementReserveMs) > Number(value.effectiveBudgetMs)) return null;
   const refs = new Set<string>();
   for (const row of value.census) {
     if (!validCensus(row) || refs.has(row.unitRef as string)) return null;
     refs.add(row.unitRef as string);
   }
-  const transitionRefs = new Set<string>();
+  const transitionKeys = new Set<string>();
   for (const raw of value.transitions) {
     if (!isRecord(raw) || !hasOnlyKeys(raw, new Set(['type', 'unitRef', 'tickSequence', 'reason', 'fromClass', 'toClass']))
       || !['unit-appeared', 'unit-disappeared', 'class-changed'].includes(String(raw.type))
       || !boundedString(raw.unitRef, UNIT_REF_PATTERN) || !positiveInteger(raw.tickSequence)
+      || Number(raw.tickSequence) > Number(value.tickSequence)
       || !boundedString(raw.reason, REASON_PATTERN)
       || (raw.fromClass !== undefined && !OBSERVER_CLASSES.includes(raw.fromClass as ObserverClass))
       || (raw.toClass !== undefined && !OBSERVER_CLASSES.includes(raw.toClass as ObserverClass))) return null;
-    const key = `${raw.tickSequence}:${raw.unitRef}:${raw.type}`;
-    if (transitionRefs.has(key)) return null;
-    transitionRefs.add(key);
+    if (raw.type === 'class-changed'
+      ? raw.fromClass === undefined || raw.toClass === undefined || raw.fromClass === raw.toClass
+      : raw.fromClass !== undefined || raw.toClass !== undefined) return null;
+    const key = JSON.stringify([raw.type, raw.unitRef, raw.tickSequence, raw.reason, raw.fromClass ?? null, raw.toClass ?? null]);
+    if (transitionKeys.has(key)) return null;
+    transitionKeys.add(key);
   }
-  for (const raw of value.progress) {
+  const progressKeys = new Set<string>();
+  const progress = value.progress as unknown[];
+  for (const raw of progress) {
     if (!isRecord(raw) || !hasOnlyKeys(raw, new Set(['type', 'schedulerGeneration', 'tickSequence', 'at', 'reason']))
       || (raw.type !== 'tick-complete' && raw.type !== 'tick-failed')
-      || raw.schedulerGeneration !== value.schedulerGeneration || !positiveInteger(raw.tickSequence)
-      || typeof raw.at !== 'string' || !Number.isFinite(Date.parse(raw.at as string))) return null;
+      || raw.schedulerGeneration !== value.schedulerGeneration || !boundedString(raw.schedulerGeneration, GENERATION_PATTERN)
+      || !positiveInteger(raw.tickSequence) || Number(raw.tickSequence) > Number(value.tickSequence)
+      || typeof raw.at !== 'string' || !Number.isFinite(Date.parse(raw.at))
+      || (raw.reason !== undefined && !boundedString(raw.reason, REASON_PATTERN))
+      || (raw.type === 'tick-complete' && raw.reason !== undefined)
+      || (raw.type === 'tick-failed' && raw.reason === undefined)) return null;
+    const key = JSON.stringify([raw.type, raw.schedulerGeneration, raw.tickSequence, raw.reason ?? null]);
+    if (progressKeys.has(key)) return null;
+    progressKeys.add(key);
   }
+  const terminalProgress = progress.filter((raw) => isRecord(raw) && raw.tickSequence === value.tickSequence);
+  const last = progress.at(-1);
+  if (terminalProgress.length !== 1 || !isRecord(last) || last.tickSequence !== value.tickSequence
+    || last.schedulerGeneration !== value.schedulerGeneration
+    || (value.result === 'complete' && last.type !== 'tick-complete')
+    || (value.result === 'failed' && last.type !== 'tick-failed')) return null;
   return value as unknown as FleetObserverSnapshot;
 }
 
@@ -617,12 +646,12 @@ export class FleetObserver {
         const state = states[index]!; const priorClass = state.class;
         const row = await this.#probe(state, config, deadlineMs);
         if (row === null) {
-          transitions.push({ type: 'unit-disappeared', unitRef: state.unitRef, tickSequence: requested, reason: 'positive-gone', ...(priorClass ? { fromClass: priorClass } : {}) });
+          transitions.push({ type: 'unit-disappeared', unitRef: state.unitRef, tickSequence: requested, reason: 'positive-gone' });
           this.#states.delete(this.#identityKey(state.identity));
           continue;
         }
         rows.push(row);
-        if (priorClass === null) transitions.push({ type: 'unit-appeared', unitRef: state.unitRef, tickSequence: requested, reason: 'unit-present', toClass: row.class });
+        if (priorClass === null) transitions.push({ type: 'unit-appeared', unitRef: state.unitRef, tickSequence: requested, reason: 'unit-present' });
         else if (priorClass !== row.class) transitions.push({ type: 'class-changed', unitRef: state.unitRef, tickSequence: requested, reason: row.reason, fromClass: priorClass, toClass: row.class });
         state.class = row.class;
       }
