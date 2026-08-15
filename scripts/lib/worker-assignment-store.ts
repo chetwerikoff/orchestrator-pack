@@ -4,6 +4,7 @@ import {
   existsSync,
   fsyncSync,
   mkdirSync,
+  // Assignment publication is serialized by the shared crash-recoverable lock below.
   openSync,
   readFileSync,
   renameSync,
