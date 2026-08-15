@@ -1,7 +1,10 @@
 import type { RuntimeAdapter } from '../runtime/contracts.ts';
 import { sameRuntimeWorker } from '../runtime/contracts.ts';
 import type { WorkerAssignment } from '../lib/worker-assignment-store.ts';
-import { assignmentStillCurrent } from '../lib/worker-assignment-store.ts';
+import {
+  assignmentStillCurrent,
+  withCurrentWorkerAssignmentFence,
+} from '../lib/worker-assignment-store.ts';
 import type { ResolvedWorkerAssignment } from '../lib/worker-assignment-runtime.ts';
 import {
   acquireS2OneShotWorkerNudgeClaim,
@@ -62,6 +65,22 @@ export function createProductionFleetNudgeEffects(input: {
   const journalPath = resolveWorkerMessageDispatchJournalPath({ env: input.env ?? process.env });
 
   const resolvePair = (unitRef: string): ProductionBinding | null => pairs.get(unitRef) ?? null;
+  const exactRuntimeBindingCurrent = (
+    pair: ProductionBinding,
+    binding: RuntimeFleetNudgeBinding,
+    deadlineMs: number,
+  ): boolean => {
+    const resolveAssignmentWorker = input.adapter.resolveAssignmentWorker;
+    if (typeof resolveAssignmentWorker !== 'function') return false;
+    const current = resolveAssignmentWorker.call(
+      input.adapter,
+      { provider: pair.assignment.provider, bindingKey: pair.assignment.bindingKey },
+      { timeoutMs: Math.max(1, deadlineMs - Date.now()) },
+    );
+    return current.status === 'ok'
+      && current.value !== null
+      && sameRuntimeWorker(current.value.identity, binding.worker);
+  };
 
   return {
     resolveTarget: (episode) => {
@@ -77,18 +96,14 @@ export function createProductionFleetNudgeEffects(input: {
       };
       return { status: 'resolved' as const, binding };
     },
-    revalidate: (binding) => {
+    revalidate: (binding, options) => {
       const pair = resolvePair(binding.unitRef);
       if (!pair || pair.safe.issueNumber !== binding.issueNumber
-        || !assignmentStillCurrent(input.assignmentStorePath, pair.assignment)) {
+        || !assignmentStillCurrent(input.assignmentStorePath, pair.assignment)
+        || !exactRuntimeBindingCurrent(pair, binding, options.deadlineMs)) {
         return { status: 'revalidation_failed' as const };
       }
-      const current = input.adapter.findWorker(binding.worker);
-      return current.status === 'ok'
-        && current.value !== null
-        && sameRuntimeWorker(current.value.identity, binding.worker)
-        ? { status: 'valid' as const }
-        : { status: 'revalidation_failed' as const };
+      return { status: 'valid' as const };
     },
     acquireClaim: async (episode, options) => {
       const result = await acquireS2OneShotWorkerNudgeClaim({
@@ -130,10 +145,28 @@ export function createProductionFleetNudgeEffects(input: {
       }),
     releaseClaim: (handle, options) =>
       releaseS2OneShotWorkerNudgeClaim(claim(handle), { deadlineMs: options.deadlineMs }),
-    dispatch: (binding, message, options) => input.adapter.dispatchInput(
-      { worker: binding.worker, text: message },
-      { timeoutMs: Math.max(1, options.deadlineMs - Date.now()) },
-    ),
+    dispatch: async (binding, message, options) => {
+      const pair = resolvePair(binding.unitRef);
+      if (!pair || pair.safe.issueNumber !== binding.issueNumber) {
+        return { status: 'send_failed' as const, reason: 'assignment_binding_unavailable_before_dispatch' };
+      }
+      const fenced = await withCurrentWorkerAssignmentFence(
+        input.assignmentStorePath,
+        pair.assignment,
+        () => {
+          if (!exactRuntimeBindingCurrent(pair, binding, options.deadlineMs)) {
+            return { status: 'send_failed' as const, reason: 'assignment_runtime_revalidation_failed_before_dispatch' };
+          }
+          return input.adapter.dispatchInput(
+            { worker: binding.worker, text: message },
+            { timeoutMs: Math.max(1, options.deadlineMs - Date.now()) },
+          );
+        },
+      );
+      return fenced.ok
+        ? fenced.value
+        : { status: 'send_failed' as const, reason: `${fenced.reason}_before_dispatch` };
+    },
     finalizeClaim: (handle, phase, options) =>
       finalizeS2OneShotWorkerNudgeClaim(
         claim(handle),
