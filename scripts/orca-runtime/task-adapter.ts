@@ -71,6 +71,7 @@ function attachNativeRuntimeError(
 export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   readonly #options: OrcaRuntimeAdapterOptions;
   readonly #ownedForStop = new Map<string, RuntimeWorkerIdentity>();
+  readonly #assignmentOwned = new Map<string, RuntimeWorkerIdentity>();
   readonly #unprovenOwnedPresence = new Map<string, UnprovenOwnedPresence>();
   readonly #runJson: typeof runOrcaJson;
 
@@ -108,7 +109,11 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (unproven && sameRuntimeWorker(unproven.identity, worker)) {
       return runtimeFailure('find_worker', unproven.reason);
     }
-    return super.findWorker(worker, options);
+    const current = super.findWorker(worker, options);
+    if (current.status !== 'ok' || current.value === null) return current;
+    const assignmentOwned = this.#assignmentOwned.get(worker.id);
+    if (!assignmentOwned || !sameRuntimeWorker(assignmentOwned, worker)) return current;
+    return { status: 'ok', value: { ...current.value, provenance: 'internal' } };
   }
 
   resolveAssignmentWorker(
@@ -139,8 +144,10 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (current.value === null) return { status: 'ok', value: null };
     // A current PACK WorkerAssignment plus Orca's exact Dispatch-to-terminal
     // observation is the durable ownership witness across bounded adapter
-    // processes. Do not broaden generic terminal discovery: only this exact
-    // assignment-resolution path upgrades provenance for S2 actuation.
+    // processes. Retain only the resolved composite identity in memory so later
+    // same-tick freshness checks preserve PACK provenance; generic discovery
+    // remains external and no runtime-private identity becomes durable.
+    this.#assignmentOwned.set(current.value.identity.id, current.value.identity);
     return {
       status: 'ok',
       value: { ...current.value, provenance: 'internal' },
