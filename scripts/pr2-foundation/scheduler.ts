@@ -29,6 +29,7 @@ import {
 import {
   listCurrentWorkerAssignments,
   resolveWorkerAssignmentStorePath,
+  type WorkerAssignment,
 } from '../lib/worker-assignment-store.ts';
 import { resolveCurrentWorkerAssignmentBindings } from '../lib/worker-assignment-runtime.ts';
 import { buildFleetAssignmentBindings, type FleetAssignmentBinding } from './fleet-assignment-binding.ts';
@@ -54,6 +55,10 @@ export interface ActivatedSchedulerCandidate { sessionId: string; repoSlug: stri
 
 type SchedulerFleetObserver = Pick<FleetObserver, 'tick'> & Partial<Pick<FleetObserver, 'getEffectiveBudgetMs' | 'cancel' | 'schedulerGeneration' | 'snapshotPath'>>;
 type SchedulerFleetNudgeActuator = { tick(input: FleetNudgeTickInput): Promise<FleetNudgeResult> };
+interface SchedulerAssignmentReconciliation {
+  readonly reason: FleetReconciliationReason;
+  readonly assignment?: WorkerAssignment;
+}
 
 export interface SchedulerBoundary {
   listCandidates(): ActivatedSchedulerCandidate[];
@@ -67,6 +72,7 @@ export interface SchedulerBoundary {
   activationLineage?: string;
   repository?: string;
   unresolvedReason?: FleetReconciliationReason;
+  assignmentReconciliation?: SchedulerAssignmentReconciliation;
   fleetBindings?: readonly FleetAssignmentBinding[];
   publishHandoff?: (input: {
     reason: FleetReconciliationReason;
@@ -162,7 +168,8 @@ async function ghJson(repoRoot: string, args: string[]): Promise<unknown> {
 export function productionSchedulerBoundary(input: {
   repoRoot: string; projectId?: string; env?: NodeJS.ProcessEnv; fleetObserver?: SchedulerFleetObserver;
   fleetNudgeActuator?: SchedulerFleetNudgeActuator; schedulerIntervalMs?: number; activationLineage?: string;
-  repository?: string; unresolvedReason?: FleetReconciliationReason; fleetBindings?: readonly FleetAssignmentBinding[];
+  repository?: string; unresolvedReason?: FleetReconciliationReason; assignmentReconciliation?: SchedulerAssignmentReconciliation;
+  fleetBindings?: readonly FleetAssignmentBinding[];
   publishHandoff?: SchedulerBoundary['publishHandoff'];
 }): SchedulerBoundary {
   const env = input.env ?? process.env; const projectId = input.projectId ?? 'orchestrator-pack';
@@ -177,6 +184,7 @@ export function productionSchedulerBoundary(input: {
     ...(input.activationLineage ? { activationLineage: input.activationLineage } : {}),
     ...(input.repository ? { repository: input.repository } : {}),
     ...(input.unresolvedReason ? { unresolvedReason: input.unresolvedReason } : {}),
+    ...(input.assignmentReconciliation ? { assignmentReconciliation: input.assignmentReconciliation } : {}),
     ...(input.fleetBindings ? { fleetBindings: input.fleetBindings } : {}),
     ...(input.publishHandoff ? { publishHandoff: input.publishHandoff } : {}),
     start: async (candidate, freshHeadSha) => {
@@ -190,6 +198,7 @@ function reconciliationReason(boundary: SchedulerBoundary, outcome: string): Fle
   if (outcome === 'target_unresolved') return boundary.unresolvedReason ?? 'target_unresolved';
   if (outcome === 'target_stale' || outcome === 'revalidation_failed') return 'target_stale';
   if (outcome === 'dispatch_unknown') return 'dispatch_unknown';
+  if (outcome === 'send_failed') return 'effect_untrusted';
   if (outcome === 'observer_untrusted') return 'observer_untrusted';
   if (outcome === 'claim_untrusted') return 'effect_untrusted';
   return null;
@@ -206,6 +215,8 @@ function publishRequiredHandoff(boundary: SchedulerBoundary, observer: FleetObse
     reason = observer.status === 'failed' || fleetNudge.result === 'observer-untrusted'
       ? 'observer_untrusted'
       : 'effect_untrusted';
+  } else if (boundary.assignmentReconciliation) {
+    reason = boundary.assignmentReconciliation.reason;
   }
   if (!reason) return false;
   if (!boundary.publishHandoff) throw new Error(`scheduler_reconciliation_handoff_unavailable:${reason}`);
@@ -340,17 +351,20 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   const epoch = assertSchedulerEpoch(env); const activationLineage = schedulerActivationLineage(epoch);
   const assignmentStorePath = resolveWorkerAssignmentStorePath(projectId, env); const storedAssignments = listCurrentWorkerAssignments(assignmentStorePath);
   const repository = uniqueRepository(storedAssignments, env);
+  const scopedAssignment = storedAssignments?.find((assignment) => assignment.repository === repository);
   let fleetObserver: FleetObserver; let fleetNudgeActuator: SchedulerFleetNudgeActuator = createTargetUnresolvedFleetNudgeActuator();
   let unresolvedReason: FleetReconciliationReason = storedAssignments === null ? 'assignment_untrusted' : 'target_unresolved';
+  let assignmentReconciliation: SchedulerAssignmentReconciliation | undefined;
   let fleetBindings: readonly FleetAssignmentBinding[] = [];
   try {
     const runtime = await selectRuntimeAdapter({ env });
     const resolution = repository
       ? resolveCurrentWorkerAssignmentBindings({ file: assignmentStorePath, repository, adapter: runtime })
-      : { status: 'assignment_untrusted' as const, bindings: [] as const };
+      : { status: 'assignment_untrusted' as const, bindings: [] as const, reconciliations: [] as const };
     const built = resolution.status === 'ok' ? buildFleetAssignmentBindings(resolution.bindings) : null;
     if (resolution.status === 'ok' && built) {
       fleetBindings = built;
+      assignmentReconciliation = resolution.reconciliations[0];
       fleetObserver = new FleetObserver({
         source: runtime,
         activationLineage,
@@ -363,6 +377,10 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       unresolvedReason = 'target_unresolved';
     } else {
       unresolvedReason = resolution.status === 'runtime_unavailable' ? 'runtime_unavailable' : 'assignment_untrusted';
+      assignmentReconciliation = {
+        reason: unresolvedReason,
+        ...(scopedAssignment ? { assignment: scopedAssignment } : {}),
+      };
       fleetObserver = new FleetObserver({
         source: runtime,
         activationLineage,
@@ -372,17 +390,64 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       });
     }
   } catch {
-    unresolvedReason = 'runtime_unavailable'; fleetObserver = createUnavailableFleetObserver('runtime-adapter-unavailable');
+    unresolvedReason = 'runtime_unavailable';
+    assignmentReconciliation = {
+      reason: 'runtime_unavailable',
+      ...(scopedAssignment ? { assignment: scopedAssignment } : {}),
+    };
+    fleetObserver = createUnavailableFleetObserver('runtime-adapter-unavailable');
   }
   const handoffPath = resolveFleetReconciliationHandoffPath(projectId, env);
   const publishHandoff: NonNullable<SchedulerBoundary['publishHandoff']> = ({ reason, schedulerGeneration, tickSequence, unitRef }) => {
     if (!repository) return { ok: false, reason: 'repository_identity_unresolved' };
     const binding = unitRef ? fleetBindings.find((candidate) => candidate.unitRef === unitRef) : undefined;
-    const result = publishFleetReconciliationHandoff({ file: handoffPath, projectId, repository, activationLineage, schedulerGeneration, tickSequence, reason, role: binding ? 'worker' : undefined, issueNumber: binding?.issueNumber, taskId: binding?.taskId, assignmentId: binding?.assignmentId, assignmentGeneration: binding?.assignmentGeneration });
+    const reconciliationAssignment = !binding && assignmentReconciliation?.reason === reason
+      ? assignmentReconciliation.assignment
+      : undefined;
+    const assignmentMetadata = binding
+      ? {
+          role: 'worker' as const,
+          issueNumber: binding.issueNumber,
+          taskId: binding.taskId,
+          assignmentId: binding.assignmentId,
+          assignmentGeneration: binding.assignmentGeneration,
+        }
+      : reconciliationAssignment
+        ? {
+            role: 'worker' as const,
+            issueNumber: reconciliationAssignment.issueNumber,
+            taskId: reconciliationAssignment.taskId,
+            assignmentId: reconciliationAssignment.assignmentId,
+            assignmentGeneration: reconciliationAssignment.generation,
+          }
+        : {};
+    const result = publishFleetReconciliationHandoff({
+      file: handoffPath,
+      projectId,
+      repository,
+      activationLineage,
+      schedulerGeneration,
+      tickSequence,
+      reason,
+      ...assignmentMetadata,
+    });
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   };
   return {
-    boundary: productionSchedulerBoundary({ repoRoot, projectId, env, fleetObserver: productionObserverBoundary(fleetObserver), fleetNudgeActuator, schedulerIntervalMs: cadence, activationLineage, repository, unresolvedReason, fleetBindings, publishHandoff }),
+    boundary: productionSchedulerBoundary({
+      repoRoot,
+      projectId,
+      env,
+      fleetObserver: productionObserverBoundary(fleetObserver),
+      fleetNudgeActuator,
+      schedulerIntervalMs: cadence,
+      activationLineage,
+      repository,
+      unresolvedReason,
+      ...(assignmentReconciliation ? { assignmentReconciliation } : {}),
+      fleetBindings,
+      publishHandoff,
+    }),
     cadence,
   };
 }
