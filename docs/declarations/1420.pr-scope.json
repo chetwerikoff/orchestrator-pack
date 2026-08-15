@@ -23,7 +23,8 @@
     "scripts/runtime/contracts.ts",
     "scripts/runtime/process-fixture-adapter.ts",
     "scripts/runtime/registry.ts",
-    "scripts/runtime/test-adapter.ts"
+    "scripts/runtime/test-adapter.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     ".github/workflows/",
@@ -60,6 +61,7 @@
     "scripts/runtime/contracts.ts",
     "scripts/runtime/process-fixture-adapter.ts",
     "scripts/runtime/registry.ts",
-    "scripts/runtime/test-adapter.ts"
+    "scripts/runtime/test-adapter.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ]
 }
