@@ -422,7 +422,11 @@ export const productionActivationBoundary: ActivationBoundary = {
     return { baseRef, closure: recomputeClosure(request.repoRoot, baseRef) };
   },
   readLegacySupervisor: (request) => {
-    const identity = readProcessIdentity(request.legacySupervisorPid);
+    const legacySupervisorPid = request.legacySupervisorPid;
+    if (typeof legacySupervisorPid !== 'number' || !Number.isInteger(legacySupervisorPid) || legacySupervisorPid <= 1) {
+      throw new Error('legacy_supervisor_pid_missing');
+    }
+    const identity = readProcessIdentity(legacySupervisorPid);
     assertLegacySupervisor(identity, request.oldInstalledRevisionRoot);
     return identity;
   },
@@ -449,7 +453,8 @@ export async function activateCutover(
   const foundation = boundary.proveFoundationAdoption(request);
   if (request.stores.length !== 3 || new Set(request.stores.map((row) => row.id)).size !== 3) throw new Error('store_roster_invalid');
   const { baseRef, closure } = boundary.resolveBaseAndClosure(request);
-  const legacyClaimed = request.legacySupervisorPid !== undefined && request.legacySupervisorPid > 1;
+  const legacySupervisorPid = request.legacySupervisorPid;
+  const legacyClaimed = typeof legacySupervisorPid === 'number' && Number.isInteger(legacySupervisorPid) && legacySupervisorPid > 1;
   const legacySupervisor = legacyClaimed ? boundary.readLegacySupervisor(request) : null;
 
   const cordon = createCordon({

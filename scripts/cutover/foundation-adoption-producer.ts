@@ -44,7 +44,8 @@ function record(value: unknown): Record<string, unknown> {
 
 function appStateVersion(value: unknown): string {
   const root = record(value);
-  const direct = [root.version, root.appStateVersion, root.appVersion].find((candidate) => typeof candidate === 'string' && candidate.trim());
+  const direct = [root.version, root.appStateVersion, root.appVersion]
+    .find((candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0);
   if (direct) return direct;
   throw new Error('foundation_preflight_version_unobservable');
 }
@@ -105,9 +106,12 @@ function discoverMigrationJournals(stateDir: string): string[] {
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const candidate = path.join(directory, entry.name);
-      if (entry.isDirectory()) visit(candidate);
-      else if (entry.isFile() && entry.name.endsWith('.json') && readMigrationJournal(candidate).ok
-        && readMigrationJournal(candidate).record?.state === 'committed') output.push(candidate);
+      if (entry.isDirectory()) {
+        visit(candidate);
+      } else if (entry.isFile() && entry.name.endsWith('.json')) {
+        const journal = readMigrationJournal(candidate);
+        if (journal.ok && journal.record?.state === 'committed') output.push(candidate);
+      }
     }
   };
   if (existsSync(stateDir)) visit(stateDir);
@@ -119,7 +123,10 @@ function validateCommittedJournals(paths: string[]): string[] {
   if (normalized.length === 0) throw new Error('foundation_migration_journal_unobservable');
   for (const journalPath of normalized) {
     const journal = readMigrationJournal(journalPath);
-    if (!journal.ok || journal.record?.state !== 'committed') {
+    if (!journal.ok) {
+      throw new Error(`foundation_migration_journal_unobservable:${journalPath}`);
+    }
+    if (journal.record?.state !== 'committed') {
       throw new Error(`foundation_migration_journal_unobservable:${journalPath}`);
     }
   }
