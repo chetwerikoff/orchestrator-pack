@@ -20,6 +20,8 @@
     "scripts/pr2-foundation/supervised-worker-start.test.ts",
     "scripts/pr2-foundation/supervised-worker-start.ts",
     "scripts/runtime/contracts.ts",
+    "scripts/runtime/process-fixture-adapter.ts",
+    "scripts/runtime/registry.ts",
     "scripts/runtime/test-adapter.ts"
   ],
   "denylist": [
@@ -54,6 +56,8 @@
     "scripts/pr2-foundation/supervised-worker-start.test.ts",
     "scripts/pr2-foundation/supervised-worker-start.ts",
     "scripts/runtime/contracts.ts",
+    "scripts/runtime/process-fixture-adapter.ts",
+    "scripts/runtime/registry.ts",
     "scripts/runtime/test-adapter.ts"
   ]
 }
