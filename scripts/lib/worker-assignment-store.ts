@@ -12,6 +12,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { withCrashRecoverableFileLock } from '../pr2-foundation/journal-lock.ts';
 
 export const WORKER_ASSIGNMENT_SCHEMA = 'orchestrator-pack/worker-assignment/v1' as const;
 export const WORKER_ASSIGNMENT_STORE_SCHEMA = 'orchestrator-pack/worker-assignment-store/v1' as const;
@@ -40,6 +41,10 @@ export interface WorkerAssignmentStore {
   readonly revision: number;
   readonly assignments: Readonly<Record<string, WorkerAssignment>>;
 }
+
+type PublishWorkerAssignmentResult =
+  | { readonly ok: true; readonly assignment: WorkerAssignment }
+  | { readonly ok: false; readonly reason: string };
 
 function bounded(value: unknown, max: number): string {
   const text = String(value ?? '').trim();
@@ -143,7 +148,7 @@ function atomicReplaceReadBack(file: string, store: WorkerAssignmentStore): bool
   }
 }
 
-export function publishCurrentWorkerAssignment(input: {
+export async function publishCurrentWorkerAssignment(input: {
   readonly file: string;
   readonly projectId?: string;
   readonly repository: string;
@@ -153,7 +158,7 @@ export function publishCurrentWorkerAssignment(input: {
   readonly provider: string;
   readonly bindingKey: string;
   readonly now?: () => Date;
-}): { readonly ok: true; readonly assignment: WorkerAssignment } | { readonly ok: false; readonly reason: string } {
+}): Promise<PublishWorkerAssignmentResult> {
   const projectId = bounded(input.projectId ?? 'orchestrator-pack', 80);
   const repository = bounded(input.repository, 240).toLowerCase();
   const taskId = bounded(input.taskId, 160);
@@ -161,32 +166,44 @@ export function publishCurrentWorkerAssignment(input: {
   const bindingKey = bounded(input.bindingKey, 240);
   if (!projectId || !repository || !Number.isInteger(input.issueNumber) || input.issueNumber <= 0
     || !taskId || !provider || !bindingKey) return { ok: false, reason: 'assignment_input_invalid' };
-  const store = readWorkerAssignmentStore(input.file);
-  if (!store) return { ok: false, reason: 'assignment_store_untrusted' };
-  const key = `issue-${input.issueNumber}`;
-  const previous = store.assignments[key];
-  const generation = (previous?.generation ?? 0) + 1;
-  const assignment: WorkerAssignment = {
-    schema: WORKER_ASSIGNMENT_SCHEMA,
-    projectId,
-    repository,
-    issueNumber: input.issueNumber,
-    taskId,
-    assignmentId: `wa-${randomUUID()}`,
-    generation,
-    kind: input.kind,
-    provider,
-    bindingKey,
-    createdAtUtc: (input.now?.() ?? new Date()).toISOString(),
-  };
-  const next: WorkerAssignmentStore = {
-    schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
-    revision: store.revision + 1,
-    assignments: { ...store.assignments, [key]: assignment },
-  };
-  return atomicReplaceReadBack(input.file, next)
-    ? { ok: true, assignment }
-    : { ok: false, reason: 'assignment_publish_readback_failed' };
+
+  try {
+    return await withCrashRecoverableFileLock(`${input.file}.lock`, 10, () => {
+      const store = readWorkerAssignmentStore(input.file);
+      if (!store) return { ok: false, reason: 'assignment_store_untrusted' } as const;
+      const key = `issue-${input.issueNumber}`;
+      const previous = store.assignments[key];
+      const generation = (previous?.generation ?? 0) + 1;
+      const assignment: WorkerAssignment = {
+        schema: WORKER_ASSIGNMENT_SCHEMA,
+        projectId,
+        repository,
+        issueNumber: input.issueNumber,
+        taskId,
+        assignmentId: `wa-${randomUUID()}`,
+        generation,
+        kind: input.kind,
+        provider,
+        bindingKey,
+        createdAtUtc: (input.now?.() ?? new Date()).toISOString(),
+      };
+      const next: WorkerAssignmentStore = {
+        schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
+        revision: store.revision + 1,
+        assignments: { ...store.assignments, [key]: assignment },
+      };
+      return atomicReplaceReadBack(input.file, next)
+        ? { ok: true, assignment } as const
+        : { ok: false, reason: 'assignment_publish_readback_failed' } as const;
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error && error.message === 'journal_busy'
+        ? 'assignment_store_busy'
+        : 'assignment_publish_failed',
+    };
+  }
 }
 
 export function assignmentStillCurrent(file: string, expected: WorkerAssignment): boolean {
