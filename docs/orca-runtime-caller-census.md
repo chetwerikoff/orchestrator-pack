@@ -19,6 +19,7 @@ Worktree lifecycle remains the deliberate narrower exception documented in `docs
 | `scripts/lib/worker-smoke-bounded-create.ts` | spawn, send, read, liveness, stop, find | `use-runtime-interface` | Current generation-establishment support; #1399 owns the exact Orca observation edge while worker-smoke orchestration remains RuntimeAdapter-based. |
 | `scripts/runtime/task-lifecycle.ts` | spawn, send, read, liveness, stop | `already-runtime-neutral` | Direct lifecycle caller retains exact spawned identity after ambiguous dispatch and never resends. |
 | `scripts/pr2-foundation/fleet-observer.ts` | list/find, read, liveness | `already-runtime-neutral` | Observer-only fleet census through `RuntimeAdapter`; no actuation or compatibility bridge. |
+| `scripts/pr2-foundation/fleet-nudge-production.ts` | find, send | `already-runtime-neutral` | Revalidates the exact current worker and performs the single S2 dispatch attempt through `RuntimeAdapter`. |
 | `scripts/pr2-foundation/scheduler.ts` | runtime composition, fleet observer | `use-runtime-interface` | Production scheduler composes the selected runtime and observer. |
 | `scripts/invoke-gated-worker-nudge.ts` | find, send | `use-runtime-interface` | Issue/PR keyed claim and journal admission before one dispatch. |
 | `scripts/lib/pack-review-worker-notification.ts` | runtime composition, find, send, side-effect fence | `use-runtime-interface` | Loads persisted exact runtime identity; ambiguous delivery is terminal. |
