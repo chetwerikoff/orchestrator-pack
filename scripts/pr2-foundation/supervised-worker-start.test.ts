@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runSupervisedWorkerStart } from './supervised-worker-start.ts';
+import { createProductionFleetNudgeEffects } from './fleet-nudge-production.ts';
+import { buildFleetAssignmentBindings } from './fleet-assignment-binding.ts';
+import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import {
   assignmentStillCurrent,
   currentWorkerAssignment,
@@ -139,6 +142,99 @@ describe('supervised worker start binding', () => {
     });
     expect(fenced).toEqual({ ok: false, reason: 'assignment_stale' });
     expect(effects).toBe(0);
+    expect(assignmentStillCurrent(file, second.assignment)).toBe(true);
+  });
+
+  it('blocks stale S2 dispatch when reassignment lands after initial revalidation', async () => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const first = await publishCurrentWorkerAssignment({
+      file,
+      repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1420,
+      taskId: 'task_1',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'ctx_1',
+    });
+    if (!first.ok) throw new Error(first.reason);
+
+    const worker: RuntimeWorker = {
+      identity: { runtime: 'orca', id: 'worker-1', generation: 'generation-1' },
+      workspacePath: base,
+      title: 'worker-1',
+      provenance: 'internal',
+    };
+    let sends = 0;
+    const adapter: RuntimeAdapter = {
+      id: 'orca',
+      readiness: () => ({ status: 'ok', value: { ready: true, workspacePath: base } }),
+      listWorkers: () => ({ status: 'ok', value: [worker] }),
+      findWorkerById: () => ({ status: 'ok', value: worker }),
+      findWorker: () => ({ status: 'ok', value: worker }),
+      resolveAssignmentWorker: ({ bindingKey }) => ({
+        status: 'ok',
+        value: bindingKey === 'ctx_1' ? worker : null,
+      }),
+      spawnWorker: () => ({ status: 'ok', value: worker }),
+      dispatchInput: () => {
+        sends += 1;
+        return { status: 'dispatched' };
+      },
+      readBoundedOutput: () => ({
+        status: 'ok',
+        value: {
+          worker: worker.identity,
+          lines: [],
+          observationToken: { opaque: 'token-1' },
+          changed: false,
+          terminalState: 'running',
+        },
+      }),
+      liveness: () => ({ status: 'busy', worker: worker.identity }),
+      stopWorker: () => ({ status: 'ok', value: { stopped: true } }),
+    };
+    const resolvedAssignments = [{ assignment: first.assignment, worker }];
+    const fleetBindings = buildFleetAssignmentBindings(resolvedAssignments);
+    if (!fleetBindings || fleetBindings.length !== 1) throw new Error('fixture fleet binding failed');
+    const fleetBinding = fleetBindings[0]!;
+    const effects = createProductionFleetNudgeEffects({
+      projectId: 'orchestrator-pack',
+      assignmentStorePath: file,
+      adapter,
+      resolvedAssignments,
+      fleetBindings,
+      assertEpoch: () => {},
+      env,
+    });
+    const target = await effects.resolveTarget({
+      projectId: 'orchestrator-pack',
+      schedulerGeneration: 'scheduler-generation-1',
+      tickSequence: 1,
+      transitionIdentity: 'transition-1',
+      unitRef: fleetBinding.unitRef,
+      eligibleClass: 'idle',
+      intentClass: 'task-continuation',
+      policyTag: 's2-one-shot-v1',
+    }, { deadlineMs: Date.now() + 5_000 });
+    expect(target.status).toBe('resolved');
+    if (target.status !== 'resolved') throw new Error(target.status);
+    expect(await effects.revalidate(target.binding, { deadlineMs: Date.now() + 5_000 })).toEqual({ status: 'valid' });
+
+    const second = await publishCurrentWorkerAssignment({
+      file,
+      repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1420,
+      taskId: 'task_2',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'ctx_2',
+    });
+    if (!second.ok) throw new Error(second.reason);
+    const dispatch = await effects.dispatch(target.binding, 'continue', { deadlineMs: Date.now() + 5_000 });
+    expect(dispatch).toMatchObject({ status: 'send_failed' });
+    expect(sends).toBe(0);
     expect(assignmentStillCurrent(file, second.assignment)).toBe(true);
   });
 
