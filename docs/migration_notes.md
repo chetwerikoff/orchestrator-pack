@@ -71,6 +71,69 @@ current-head verification for the reverted tree. Do not convert old state, resto
 fallback transport, or reinterpret an old short identifier as runtime authority.
 Existing GitHub review, CI, Issue, PR, and audit history remains immutable evidence.
 
+## Bounded-child S1/S2 supervision (Issue #1420)
+
+### What changed
+
+Issue #1420 makes the existing `pr2-scheduler` cadence production-capable across
+separate bounded `scheduler.ts tick` child processes without adding another daemon
+or scheduler. S1 continuity is restored only from the existing atomic S1 snapshot
+when the current activation lineage, current WorkerAssignment generation, and exact
+RuntimeAdapter-resolved worker still agree. Routine continuation remains the
+existing S2 one-shot path.
+
+A successful supervised local start must go through the PACK
+`scripts/pr2-foundation/supervised-worker-start.ts` boundary so the proven Orca
+Dispatch publishes the current local WorkerAssignment. The persistence-safe binding
+is the Orca `dispatchId`; raw RuntimeWorkerIdentity, terminal handles/generations,
+output and observation tokens are not persisted in assignment or S1 state.
+
+Cases that cannot be safely resolved remain fail-closed. `dispatch_unknown` is not
+retried through another transport, and `orchestrator_required` is published only
+through the bounded atomic `fleet-reconciliation-handoff/v1` latest-state artifact.
+
+### Operator adoption
+
+1. Merge and pull the #1420 pack revision into the operator checkout that owns the
+   existing TypeScript side-process supervisor. Do not change the registered
+   `pr2-scheduler` child shape or add a parallel scheduler/watchdog.
+2. Use the existing supported pack adoption/recycle path so the supervisor and new
+   bounded children load the merged `AGENTS.md`, runtime adapter contract, assignment
+   store, scheduler and runbook. Do not hand-edit generated runtime state.
+3. Start new supervised local manager/worker attempts through
+   `scripts/pr2-foundation/supervised-worker-start.ts`; a failed or unknown Orca
+   startup must not be treated as a current successful assignment.
+4. Read back one successful current local assignment and verify that its durable
+   binding contains the logical assignment generation and Orca `dispatchId`, not a
+   raw runtime id/generation or terminal title/path/PID.
+5. Observe a supervisor-owned `scheduler.ts tick` under the current activation
+   epoch, then observe a later bounded child under the same epoch. Confirm that the
+   accepted S1 `schedulerGeneration` is unchanged while `tickSequence` advances.
+6. For an eligible supervised idle/livelock case with an exact current assignment,
+   verify one S2 attempt settles through the existing claim/gate/journal path and a
+   later child does not recreate the same episode. Do not infer success from worker
+   prose alone.
+7. Verify at least one fail-closed case: stale/missing assignment, runtime mismatch,
+   remote assignment, lineage reset, or `dispatch_unknown` must produce no alternate
+   send/retry.
+8. Read the latest `fleet-reconciliation-handoff/v1` artifact before treating
+   supervision silence as healthy. If a required handoff cannot be committed and
+   read back, the scheduler child must surface non-success through the existing
+   supervisor status rather than silently succeeding.
+
+Repository merge alone is not evidence that the operator machine is active on the
+new supervision contract. Do not claim live adoption until steps 1-8 are observed
+against the current deployed activation epoch.
+
+### Rollback
+
+Rollback is a source-control revert to the prior pack revision followed by the
+normal supported pack adoption/recycle path. Do not preserve a partially adopted
+#1420 assignment/S1/S2 path by adding compatibility aliases, heuristic target
+resolution, dual-send, a fallback runtime selector, or a second scheduler/store.
+Previously written bounded state is evidence only and never authorizes an effect
+when it no longer matches the active code/epoch/assignment contract.
+
 ## Ongoing adoption rule
 
 Keep this file limited to currently actionable operator changes. Historical
