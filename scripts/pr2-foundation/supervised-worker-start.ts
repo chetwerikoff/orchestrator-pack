@@ -39,6 +39,7 @@ export async function runSupervisedWorkerStart(input: {
   if (args.length === 0 || args[0] !== '--task' || !String(args[1] ?? '').trim()) {
     return { ok: false, reason: 'supervised_start_task_must_be_first' };
   }
+  const requestedTaskId = String(args[1]).trim();
   if (!args.includes('--json')) args.push('--json');
   const execute = input.execute ?? (async (workerArgs) => {
     const result = await runProcess({
@@ -66,6 +67,9 @@ export async function runSupervisedWorkerStart(input: {
   const dispatchId = String(receipt.dispatchId ?? '').trim();
   if (!taskId || !dispatchId) {
     return { ok: false, reason: 'supervised_start_identity_missing', receipt };
+  }
+  if (taskId !== requestedTaskId) {
+    return { ok: false, reason: 'supervised_start_task_mismatch', receipt };
   }
   const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
   const published = await publishCurrentWorkerAssignment({
