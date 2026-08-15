@@ -6,10 +6,13 @@
     "docs/wake-supervisor-fleet-operator-reference.md",
     "scripts/cutover/foundation-adoption-producer.ts",
     "scripts/cutover/issue-928.test.ts",
+    "scripts/cutover/mutation-runner.ts",
     "scripts/lib/cutover/activation-cordon.ts",
     "scripts/lib/cutover/activation-evidence.ts",
     "scripts/lib/cutover/activation-transaction.ts",
-    "scripts/lib/cutover/types.ts"
+    "scripts/lib/cutover/foundation-observation.ts",
+    "scripts/lib/cutover/types.ts",
+    "scripts/pr2-foundation/contract-test-runner.ts"
   ],
   "denylist": [
     ".github/workflows/",
@@ -28,5 +31,5 @@
     "scripts/orchestrator-cutover-activate.ts",
     "scripts/pr2-foundation/"
   ],
-  "source_revision": "826d9f74dae9e876c36ef41e97d9093cc28ececd"
+  "source_revision": "5a788d655f0267c4e644974a0a6523ccbdcd25b2"
 }
