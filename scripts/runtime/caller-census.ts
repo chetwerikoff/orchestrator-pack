@@ -105,6 +105,13 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Observer-only runtime-neutral fleet census; no actuation or compatibility bridge.',
   },
   {
+    surface: 'scripts/pr2-foundation/fleet-nudge-production.ts',
+    operations: ['find', 'send'],
+    kind: 'runtime-port',
+    disposition: 'already-runtime-neutral',
+    note: 'Revalidates the exact current RuntimeWorkerIdentity and performs the single S2 dispatch attempt through RuntimeAdapter.',
+  },
+  {
     surface: 'scripts/pr2-foundation/scheduler.ts',
     operations: ['runtime-composition', 'fleet-observer'],
     kind: 'runtime-port',
