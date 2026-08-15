@@ -250,6 +250,17 @@ function uniqueRepository(assignments: ReturnType<typeof listCurrentWorkerAssign
   return values.length === 1 ? values[0]! : '';
 }
 
+function productionObserverBoundary(observer: FleetObserver): SchedulerFleetObserver {
+  return {
+    // The FleetObserver owns the persisted sequence. The scheduler process is
+    // intentionally short-lived, so never overwrite restored continuity with a
+    // fresh process-local sequence of 1.
+    tick: (input) => observer.tick({ ...input, tickSequence: undefined }),
+    getEffectiveBudgetMs: (interval) => observer.getEffectiveBudgetMs(interval),
+    cancel: () => observer.cancel(),
+  };
+}
+
 async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
   const parsed = parseFoundationConfig({}); if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
   const repoRoot = process.cwd(); const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env; const projectId = 'orchestrator-pack';
@@ -260,20 +271,30 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   let unresolvedReason: FleetReconciliationReason = storedAssignments === null ? 'assignment_untrusted' : 'target_unresolved';
   let fleetBindings: readonly FleetAssignmentBinding[] = [];
   try {
-    const runtime = await selectRuntimeAdapter();
+    const runtime = await selectRuntimeAdapter({ env });
     const resolution = repository
       ? resolveCurrentWorkerAssignmentBindings({ file: assignmentStorePath, repository, adapter: runtime })
       : { status: 'assignment_untrusted' as const, bindings: [] as const };
     const built = resolution.status === 'ok' ? buildFleetAssignmentBindings(resolution.bindings) : null;
     if (resolution.status === 'ok' && built) {
       fleetBindings = built;
-      fleetObserver = new FleetObserver({ source: runtime, activationLineage, assignmentBindings: fleetBindings });
+      fleetObserver = new FleetObserver({
+        source: runtime,
+        activationLineage,
+        assignmentBindings: fleetBindings,
+        ...(env.OPK_FLEET_OBSERVER_CONFIG?.trim() ? { configPath: env.OPK_FLEET_OBSERVER_CONFIG.trim() } : {}),
+      });
       const effects = createProductionFleetNudgeEffects({ projectId, assignmentStorePath, adapter: runtime, resolvedAssignments: resolution.bindings, fleetBindings, assertEpoch: () => { assertSchedulerEpoch(env); }, env });
       fleetNudgeActuator = { tick: (input) => runFleetNudgeActuator(input, effects) };
       unresolvedReason = 'target_unresolved';
     } else {
       unresolvedReason = resolution.status === 'runtime_unavailable' ? 'runtime_unavailable' : 'assignment_untrusted';
-      fleetObserver = new FleetObserver({ source: runtime, activationLineage, assignmentBindings: [] });
+      fleetObserver = new FleetObserver({
+        source: runtime,
+        activationLineage,
+        assignmentBindings: [],
+        ...(env.OPK_FLEET_OBSERVER_CONFIG?.trim() ? { configPath: env.OPK_FLEET_OBSERVER_CONFIG.trim() } : {}),
+      });
     }
   } catch {
     unresolvedReason = 'runtime_unavailable'; fleetObserver = createUnavailableFleetObserver('runtime-adapter-unavailable');
@@ -285,7 +306,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   };
   return {
-    boundary: productionSchedulerBoundary({ repoRoot, projectId, env, fleetObserver, fleetNudgeActuator, schedulerIntervalMs: cadence, activationLineage, repository, unresolvedReason, fleetBindings, publishHandoff }),
+    boundary: productionSchedulerBoundary({ repoRoot, projectId, env, fleetObserver: productionObserverBoundary(fleetObserver), fleetNudgeActuator, schedulerIntervalMs: cadence, activationLineage, repository, unresolvedReason, fleetBindings, publishHandoff }),
     cadence,
   };
 }
