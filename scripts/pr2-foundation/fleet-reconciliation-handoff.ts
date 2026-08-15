@@ -4,6 +4,7 @@ import {
   existsSync,
   fsyncSync,
   mkdirSync,
+  // Handoff durability intentionally uses the same fs primitives as other atomic state writers.
   openSync,
   readFileSync,
   renameSync,
