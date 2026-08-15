@@ -52,17 +52,6 @@ function requestedAdapter(options: RuntimeSelectionOptions): string {
     ?? 'orca';
 }
 
-function isVitestHarness(options: RuntimeSelectionOptions): boolean {
-  return (options.env?.OPK_VITEST_HARNESS ?? process.env.OPK_VITEST_HARNESS) === '1';
-}
-
-async function processFixtureFactory(): Promise<LoadedRuntimeAdapterFactory> {
-  // Keep this harness-only module outside the statically auditable production adapter graph.
-  const fixtureModule = './process-fixture-adapter.ts';
-  const module = await import(fixtureModule) as typeof import('./process-fixture-adapter.ts');
-  return (instanceOptions = {}) => new module.ProcessFixtureRuntimeAdapter(instanceOptions.transport?.env ?? process.env);
-}
-
 /**
  * The only composition root for runtime selection.
  * Unknown selections fail before any adapter module or factory is loaded.
@@ -89,11 +78,6 @@ export async function selectRuntimeAdapterFactory(
       }
       return next;
     };
-  }
-
-  if (requested === 'process-fixture') {
-    if (!isVitestHarness(options)) throw new Error('unsupported_runtime_adapter:process-fixture');
-    return processFixtureFactory();
   }
 
   const loader = DEFAULT_LOADERS[requested];
