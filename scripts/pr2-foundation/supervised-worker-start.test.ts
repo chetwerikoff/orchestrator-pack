@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { runSupervisedWorkerStart } from './supervised-worker-start.ts';
 import {
   currentWorkerAssignment,
+  listCurrentWorkerAssignments,
   resolveWorkerAssignmentStorePath,
 } from '../lib/worker-assignment-store.ts';
 
@@ -86,5 +87,28 @@ describe('supervised worker start binding', () => {
     expect(first.assignment?.generation).toBe(1);
     expect(second.assignment?.generation).toBe(2);
     expect(second.assignment?.assignmentId).not.toBe(first.assignment?.assignmentId);
+  });
+
+  it('serializes concurrent ready publications without losing either issue assignment', async () => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const invoke = (issueNumber: number, taskId: string, dispatchId: string) => runSupervisedWorkerStart({
+      issueNumber,
+      repository: 'chetwerikoff/orchestrator-pack',
+      env,
+      orcaArgs: ['--task', taskId, '--agent', 'codex'],
+      execute: async () => ({
+        ok: true,
+        stdout: JSON.stringify({ taskId, dispatchId, state: 'ready' }),
+      }),
+    });
+    const [first, second] = await Promise.all([
+      invoke(1420, 'task_1420', 'ctx_1420'),
+      invoke(1421, 'task_1421', 'ctx_1421'),
+    ]);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    const assignments = listCurrentWorkerAssignments(resolveWorkerAssignmentStorePath('orchestrator-pack', env));
+    expect(assignments?.map((assignment) => assignment.issueNumber).sort((a, b) => a - b)).toEqual([1420, 1421]);
   });
 });
