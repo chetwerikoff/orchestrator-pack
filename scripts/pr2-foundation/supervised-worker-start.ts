@@ -42,7 +42,7 @@ export async function runSupervisedWorkerStart(input: {
   if (!args.includes('--json')) args.push('--json');
   const execute = input.execute ?? (async (workerArgs) => {
     const result = await runProcess({
-      command: input.env?.ORCA_CLI?.trim() || process.env.ORCA_CLI?.trim() || 'orca',
+      command: 'orca',
       args: ['orchestration', 'worker-start', ...workerArgs],
       cwd: input.cwd ?? process.cwd(),
       env: input.env,
