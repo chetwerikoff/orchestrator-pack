@@ -136,7 +136,15 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (current.status !== 'ok') {
       return runtimeFailure('resolve_assignment_worker', current.reason);
     }
-    return current;
+    if (current.value === null) return { status: 'ok', value: null };
+    // A current PACK WorkerAssignment plus Orca's exact Dispatch-to-terminal
+    // observation is the durable ownership witness across bounded adapter
+    // processes. Do not broaden generic terminal discovery: only this exact
+    // assignment-resolution path upgrades provenance for S2 actuation.
+    return {
+      status: 'ok',
+      value: { ...current.value, provenance: 'internal' },
+    };
   }
 
   override spawnWorker(
