@@ -33,6 +33,12 @@ type UnprovenOwnedPresence = Readonly<{
   reason: string;
 }>;
 
+type OrcaWorkerShowResult = Readonly<{
+  worker?: Readonly<{ agent_terminal_handle?: string | null }>;
+  terminal?: Readonly<{ handle?: string | null }> | null;
+  observation?: Readonly<{ exactWorker?: boolean; status?: string }>;
+}>;
+
 function failureDetail(failure: RuntimeOperationFailure): string {
   return `${failure.operation}:${failure.status}:${failure.reason}`;
 }
@@ -103,6 +109,34 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('find_worker', unproven.reason);
     }
     return super.findWorker(worker, options);
+  }
+
+  resolveAssignmentWorker(
+    input: { readonly provider: string; readonly bindingKey: string },
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<RuntimeWorker | null> {
+    if (input.provider.trim().toLowerCase() !== 'orca') {
+      return runtimeUnsupported('resolve_assignment_worker', 'assignment_provider_unsupported');
+    }
+    const dispatchId = input.bindingKey.trim();
+    if (!dispatchId) return runtimeFailure('resolve_assignment_worker', 'assignment_binding_missing');
+    const shown = this.#run<OrcaWorkerShowResult>(
+      ['orchestration', 'worker-show', '--dispatch', dispatchId],
+      options,
+    );
+    if (!shown.ok) return runtimeFailure('resolve_assignment_worker', neutralFailureReason(shown));
+    const exact = shown.result?.observation?.exactWorker === true;
+    const terminalHandle = String(
+      shown.result?.terminal?.handle
+        ?? shown.result?.worker?.agent_terminal_handle
+        ?? '',
+    ).trim();
+    if (!exact || !terminalHandle) return { status: 'ok', value: null };
+    const current = super.findWorkerById(terminalHandle, options);
+    if (current.status !== 'ok') {
+      return runtimeFailure('resolve_assignment_worker', current.reason);
+    }
+    return current;
   }
 
   override spawnWorker(
