@@ -68,7 +68,7 @@ export async function runSupervisedWorkerStart(input: {
     return { ok: false, reason: 'supervised_start_identity_missing', receipt };
   }
   const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
-  const published = publishCurrentWorkerAssignment({
+  const published = await publishCurrentWorkerAssignment({
     file,
     projectId: input.projectId,
     repository,
