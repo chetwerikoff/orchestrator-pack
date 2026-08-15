@@ -9,6 +9,7 @@ import {
   type RuntimeAdapter,
   type RuntimeBoundedOutput,
   type RuntimeCallOptions,
+  // Keep the fixture-only dispatch/liveness imports visibly distinct from the production Orca adapter.
   type RuntimeDispatchResult,
   type RuntimeLivenessResult,
   type RuntimeObservationToken,
