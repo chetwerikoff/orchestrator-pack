@@ -101,6 +101,25 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     return runtimeFailure('stop_worker', reason);
   }
 
+  #assignmentProvenance(worker: RuntimeWorker): RuntimeWorker {
+    const assignmentOwned = this.#assignmentOwned.get(worker.identity.id);
+    return assignmentOwned && sameRuntimeWorker(assignmentOwned, worker.identity)
+      ? { ...worker, provenance: 'internal' }
+      : worker;
+  }
+
+  override listWorkers(
+    input: { readonly workspace?: 'active' | string },
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<readonly RuntimeWorker[]> {
+    const current = super.listWorkers(input, options);
+    if (current.status !== 'ok') return current;
+    return {
+      status: 'ok',
+      value: current.value.map((worker) => this.#assignmentProvenance(worker)),
+    };
+  }
+
   override findWorker(
     worker: RuntimeWorkerIdentity,
     options: RuntimeCallOptions = {},
@@ -111,9 +130,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     }
     const current = super.findWorker(worker, options);
     if (current.status !== 'ok' || current.value === null) return current;
-    const assignmentOwned = this.#assignmentOwned.get(worker.id);
-    if (!assignmentOwned || !sameRuntimeWorker(assignmentOwned, worker)) return current;
-    return { status: 'ok', value: { ...current.value, provenance: 'internal' } };
+    return { status: 'ok', value: this.#assignmentProvenance(current.value) };
   }
 
   resolveAssignmentWorker(
@@ -145,12 +162,12 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     // A current PACK WorkerAssignment plus Orca's exact Dispatch-to-terminal
     // observation is the durable ownership witness across bounded adapter
     // processes. Retain only the resolved composite identity in memory so later
-    // same-tick freshness checks preserve PACK provenance; generic discovery
-    // remains external and no runtime-private identity becomes durable.
+    // same-tick inventory/freshness checks preserve PACK provenance; generic
+    // terminal discovery remains external and no runtime-private identity becomes durable.
     this.#assignmentOwned.set(current.value.identity.id, current.value.identity);
     return {
       status: 'ok',
-      value: { ...current.value, provenance: 'internal' },
+      value: this.#assignmentProvenance(current.value),
     };
   }
 
