@@ -47,6 +47,10 @@ type PublishWorkerAssignmentResult =
   | { readonly ok: true; readonly assignment: WorkerAssignment }
   | { readonly ok: false; readonly reason: string };
 
+export type CurrentWorkerAssignmentFenceResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly reason: 'assignment_stale' | 'assignment_store_busy' | 'assignment_fence_failed' };
+
 function bounded(value: unknown, max: number): string {
   const text = String(value ?? '').trim();
   return text.length > 0 && text.length <= max ? text : '';
@@ -207,13 +211,47 @@ export async function publishCurrentWorkerAssignment(input: {
   }
 }
 
+function sameAssignment(left: WorkerAssignment | null, right: WorkerAssignment): boolean {
+  return Boolean(left
+    && left.assignmentId === right.assignmentId
+    && left.generation === right.generation
+    && left.taskId === right.taskId
+    && left.kind === right.kind
+    && left.provider === right.provider
+    && left.bindingKey === right.bindingKey);
+}
+
 export function assignmentStillCurrent(file: string, expected: WorkerAssignment): boolean {
-  const current = currentWorkerAssignment(file, expected.issueNumber);
-  return Boolean(current
-    && current.assignmentId === expected.assignmentId
-    && current.generation === expected.generation
-    && current.taskId === expected.taskId
-    && current.kind === expected.kind
-    && current.provider === expected.provider
-    && current.bindingKey === expected.bindingKey);
+  return sameAssignment(currentWorkerAssignment(file, expected.issueNumber), expected);
+}
+
+/**
+ * Hold the same serialization lock used by assignment publication while an
+ * exact-current assignment authorizes one bounded side effect. A concurrent
+ * reassignment therefore either wins before this fence (and the effect is
+ * rejected as stale) or waits until the fenced effect has completed.
+ *
+ * The fence never waits for a busy owner: S2 must fail closed within its phase
+ * budget rather than turn assignment-lock contention into an unbounded send.
+ */
+export async function withCurrentWorkerAssignmentFence<T>(
+  file: string,
+  expected: WorkerAssignment,
+  action: () => T | Promise<T>,
+): Promise<CurrentWorkerAssignmentFenceResult<T>> {
+  try {
+    return await withCrashRecoverableFileLock(`${file}.lock`, 1, async () => {
+      if (!assignmentStillCurrent(file, expected)) {
+        return { ok: false, reason: 'assignment_stale' } as const;
+      }
+      return { ok: true, value: await action() } as const;
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error && error.message === 'journal_busy'
+        ? 'assignment_store_busy'
+        : 'assignment_fence_failed',
+    };
+  }
 }
