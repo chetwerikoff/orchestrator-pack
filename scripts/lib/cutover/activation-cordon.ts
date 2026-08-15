@@ -48,6 +48,24 @@ export function readProcessIdentity(pid: number): ProcessIdentity {
   return { pid, startTicks, cmdline };
 }
 
+export function findLegacySupervisorIdentities(oldInstalledRevisionRoot: string): ProcessIdentity[] {
+  const required = path.join(oldInstalledRevisionRoot, D928[0]!);
+  const legacyName = path.basename(D928[0]!);
+  const identities: ProcessIdentity[] = [];
+  for (const entry of readdirSync('/proc')) {
+    if (!/^\d+$/u.test(entry)) continue;
+    try {
+      const identity = readProcessIdentity(Number(entry));
+      if (identity.cmdline.includes(required)
+        || identity.cmdline.some((argument) => argument.endsWith(legacyName))) identities.push(identity);
+    } catch {
+      // Processes may exit while the census is being read; the next admission
+      // observation remains authoritative and will fail closed on ambiguity.
+    }
+  }
+  return identities;
+}
+
 export function assertSameProcess(identity: ProcessIdentity): void {
   const current = readProcessIdentity(identity.pid);
   if (current.startTicks !== identity.startTicks || current.cmdline.join('\0') !== identity.cmdline.join('\0')) {
@@ -305,7 +323,7 @@ function assertPreparedInput(input: {
   repoRoot: string;
   installedCommitSha: string;
   oldInstalledRevisionRoot: string;
-  legacySupervisor: ProcessIdentity;
+  legacySupervisor: ProcessIdentity | null;
   stores: CutoverStoreSpec[];
   paths: ActivationPaths;
 }, prepared: CordonPreparedRecord): void {
@@ -366,7 +384,7 @@ export function createCordon(input: {
   installedCommitSha: string;
   oldInstalledRevisionRoot: string;
   legacyStateRoot: string;
-  legacySupervisor: ProcessIdentity;
+  legacySupervisor: ProcessIdentity | null;
   stores: CutoverStoreSpec[];
   paths: ActivationPaths;
 }): CordonRecord {

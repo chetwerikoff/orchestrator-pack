@@ -1,105 +1,86 @@
 # Wake-supervisor fleet operator reference
 
-Living operator reference for the registry-backed fleet after Issue #745. The loopback listener,
-heartbeat, and four vestigial PR-A children are retired. The supervisor roster is defined only by
+Living operator reference for the TypeScript registry-backed fleet. The
+supervisor roster is defined only by
 `scripts/orchestrator-side-process-registry.json`.
 
 ## Supervisor entry point
 
-```powershell
+```bash
 cd <orchestrator-pack-root>
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
+node --experimental-strip-types scripts/orchestrator-wake-supervisor.ts run \
+  --state-dir <state-dir> \
+  --repo-root <orchestrator-pack-root> \
+  --epoch-authority <state-dir>/epoch-authority.json \
+  --epoch-id <epoch-id> \
+  --nonce <epoch-nonce> \
+  --target-registry scripts/orchestrator-side-process-registry.json \
+  --projected-registry <state-dir>/projected-registry.json \
+  --detach
+node --experimental-strip-types scripts/orchestrator-wake-supervisor.ts status \
+  --state-dir <state-dir>
 ```
 
-Default state root: `%LOCALAPPDATA%/orchestrator-pack-wake-supervisor/` on Windows and
-`$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/` (or `~/.local/state/...`) on Linux.
+Default Linux state root: `$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/`
+or `~/.local/state/orchestrator-pack-wake-supervisor/`.
+
+For a machine with no prior activation, first produce observed foundation
+evidence and then invoke the existing activation transaction:
+
+```bash
+node --experimental-strip-types scripts/cutover/foundation-adoption-producer.ts \
+  --repo-root <orchestrator-pack-root> \
+  --state-dir <state-dir> \
+  --config <observed-foundation-config.json> \
+  --app-state <observed-app-state.json>
+node --experimental-strip-types scripts/orchestrator-cutover-activate.ts \
+  activate <greenfield-activation-request.json>
+```
+
+The greenfield request has no claimed legacy supervisor PID (omit the field or
+use `0`) and must bind an empty epoch authority and a single-host roster. If a
+legacy PID is claimed, or if absence cannot be observed, the transaction
+requires the legacy-handover proof and fails closed when that proof is missing.
 
 ## Registry roster
 
 | `children[].id` | Script | Cadence (s) | Responsibility |
 | --- | --- | ---: | --- |
-| `review-trigger-reconcile` | `review-trigger-reconcile.ps1` | 600 | Periodic open-PR review coverage and degraded-CI reconcile |
-| `review-trigger-reeval` | `review-trigger-reeval.ps1` | 5 | Bounded deferred-head re-evaluation |
-| `review-ready-report-state-seed` | `review-ready-report-state-seed.ps1` | 5 | Seed accepted ready reports into re-evaluation |
-| `ci-green-wake-reconcile` | `ci-green-wake-reconcile.ps1` | 60 | CI-green worker hand-off |
-| `dead-worker-reconcile` | `dead-worker-reconcile.ps1` | 60 | Dead-worker recovery |
-| `worker-message-submit-reconcile` | `worker-message-submit-reconcile.ps1` | 30 | Pending worker-input draft submission |
-| `review-start-claim-reaper` | `review-start-claim-reaper.ps1` | 30 | Review-start claim-store hygiene |
-| `ci-failure-notification-reconcile` | `ci-failure-notification-reconcile.ps1` | 60 | Red-CI worker notification and escalation |
-| `escalation-router` | `orchestrator-escalation-router.ps1` | 30 | Orchestrator-facing escalation delivery |
+| `pr2-scheduler` | `pr2-foundation/scheduler.ts` | 5 | Bounded fleet supervision and review-start scheduling |
 
-### review-trigger-reconcile
+### pr2-scheduler
 
-Provides periodic open-PR review coverage and degraded-CI reconciliation.
-
-### review-trigger-reeval
-
-Re-evaluates deferred heads on a bounded cadence when readiness was not yet established.
-
-### review-ready-report-state-seed
-
-Seeds accepted ready-for-review reports into the deferred re-evaluation flow.
-
-### ci-green-wake-reconcile
-
-Delivers the CI-green worker hand-off using the existing claim and journal contracts.
-
-### dead-worker-reconcile
-
-Detects and recovers dead worker sessions without inheriting listener responsibilities.
-
-### worker-message-submit-reconcile
-
-Submits pending worker-input drafts recorded by the dispatch journal.
-
-### review-start-claim-reaper
-
-Maintains review-start claim-store hygiene and bounded stale-claim cleanup.
-
-### ci-failure-notification-reconcile
-
-Notifies the head-owning worker to fix failing required checks and push, then escalates when needed.
-
-### escalation-router
-
-Routes durable escalation records to the orchestrator or operator according to the catalog.
+Runs one bounded `scheduler.ts tick` child at a time under the committed
+activation epoch. It owns the existing S1/S2 supervision and review-start
+phases; it is not a second scheduler or a daemon loop.
 
 ## Liveness model
 
-- Periodic reconcile children provide work discovery without webhook ingress.
-- `escalation-router` is the only child requiring the orchestrator session id.
-- Supervisor stall detection and restart behavior apply only to registry children.
-- No child binds port 17487 or owns `listener-side-effect.lock`.
-- No survivor inherits the retired listener's webhook admission or
-  `escalation-handoff-envelope` responsibility.
+- The supervisor starts only the registered `pr2-scheduler` child.
+- Child restart preserves the activation lineage and remains bounded by the
+  supervisor's existing restart policy.
+- The scheduler must pass the epoch authority and nonce check before any tick.
+- No listener, webhook child, or alternate supervisor is part of the fleet.
 
 ## Verification
 
-Most reconcile children support `-Once -DryRun`. The escalation router supports `-Once`.
-The authoritative fleet checks are:
+The authoritative fleet check is:
 
-```powershell
-pwsh -NoProfile -File scripts/check-side-process-launch-contract.ps1
-pwsh -NoProfile -File scripts/check-vestigial-fleet-children-retired.ps1 -Json
-pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
+```bash
+node --experimental-strip-types scripts/orchestrator-wake-supervisor.ts status \
+  --state-dir <state-dir>
 ```
 
-A healthy status reports nine registry children. Any appearance of listener, heartbeat,
-review-send-reconcile, or the four PR-A retired child ids is configuration drift.
+A healthy status reports one `pr2-scheduler` registry child. Any other child
+identity or a deleted PowerShell entrypoint is configuration drift.
 
 ## Recovery scenarios
 
 ### F1 — normal operation
 
-All nine children follow their own cadence; `escalation-router` owns orchestrator-facing
-redelivery until acknowledgement.
-
-### F1b — orchestrator session changes
-
-Only `escalation-router` is session-bound. A confirmed orchestrator session-id change re-targets
-that child; all other survivors remain session-independent.
+The supervisor owns one bounded `pr2-scheduler` child at a time. The child
+performs one epoch-gated tick and exits; the supervisor starts the next child
+according to the registered five-second cadence.
 
 ### F2 — child crash or stall
 
@@ -108,9 +89,10 @@ side-effect-lock contracts. It must never revive a retired entrypoint.
 
 ## Operator adoption
 
-After a registry-changing deployment, stop the supervisor, check for identity-matched orphan
-processes from the old generation, restart from the updated checkout, and verify the nine-child
-status roster. See [`migration_notes.md`](migration_notes.md) for the Issue #745 PR-B sequence.
+After a registry-changing deployment, use the supported activation/recovery
+transaction, then verify the current epoch, supervisor status, and one-child
+roster. See [`migration_notes.md`](migration_notes.md) for first-time
+activation and Issue #1420 adoption.
 
 ## When to update this document
 

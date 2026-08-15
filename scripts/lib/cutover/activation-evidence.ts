@@ -2,7 +2,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, re
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sha256Stable, stableStringify } from './stable-stringify.ts';
-import type { FollowupRecord, PhaseOneEnvelope, PhaseRecord } from './types.ts';
+import type { FollowupRecord, FoundationAdmissionEvidence, PhaseOneEnvelope, PhaseRecord } from './types.ts';
 
 export const REQUIRED_FOLLOWUP_STEPS = [
   'committed-registry-reprojected',
@@ -36,6 +36,20 @@ export function writeDurableFile(target: string, bytes: string | Buffer): void {
 
 export function writeDurableJson(target: string, value: unknown): void {
   writeDurableFile(target, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export function foundationEvidenceDigest(evidence: Omit<FoundationAdmissionEvidence, 'observationDigest'>): string {
+  return sha256Stable(evidence);
+}
+
+export function verifyFoundationEvidenceDigest(evidence: FoundationAdmissionEvidence): void {
+  const { observationDigest: _observationDigest, ...unsigned } = evidence;
+  if (evidence.producer !== 'orchestrator-pack:foundation-adoption-producer') {
+    throw new Error('foundation_evidence_producer_invalid');
+  }
+  if (evidence.observationDigest !== foundationEvidenceDigest(unsigned)) {
+    throw new Error('foundation_evidence_observation_digest_invalid');
+  }
 }
 
 function readEnvelope(pathName: string, epochId: string, nonce: string): PhaseOneEnvelope {

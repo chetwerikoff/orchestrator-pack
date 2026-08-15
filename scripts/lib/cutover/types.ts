@@ -94,7 +94,7 @@ export interface CordonPreparedRecord {
   repoRoot: string;
   installedCommitSha: string;
   oldInstalledRevisionRoot: string;
-  legacySupervisor: ProcessIdentity;
+  legacySupervisor: ProcessIdentity | null;
   startedAt: string;
   typescriptSupervisorInert: TypeScriptSupervisorInertProof;
   importBegunAt: null;
@@ -111,7 +111,7 @@ export interface CordonRecord {
   repoRoot: string;
   installedCommitSha: string;
   oldInstalledRevisionRoot: string;
-  legacySupervisor: ProcessIdentity;
+  legacySupervisor: ProcessIdentity | null;
   startedAt: string;
   writersClosed: true;
   noRespawn: true;
@@ -136,6 +136,8 @@ export interface FoundationAdmissionEvidence {
   schemaVersion: 1;
   issue: 923;
   foundationMergeCommitSha: string;
+  producer: 'orchestrator-pack:foundation-adoption-producer';
+  observationDigest: string;
   preflight: {
     command: string;
     appStateVersion: string;
@@ -171,7 +173,7 @@ export interface ActivationRequest {
   repoRoot: string;
   installedCommitSha: string;
   oldInstalledRevisionRoot: string;
-  legacySupervisorPid: number;
+  legacySupervisorPid?: number | null;
   knownMemberRoster: Array<{
     hostId: string;
     quarantined?: boolean;

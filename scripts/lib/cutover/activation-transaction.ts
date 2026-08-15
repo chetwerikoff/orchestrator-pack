@@ -1,13 +1,14 @@
 import { existsSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { runProcessSync, runProcess } from '../../kernel/subprocess.ts';
-import { appendFollowup, appendPhaseOne, finalizePhaseOne, verifyPhaseOneDigest } from './activation-evidence.ts';
+import { appendFollowup, appendPhaseOne, finalizePhaseOne, verifyFoundationEvidenceDigest, verifyPhaseOneDigest } from './activation-evidence.ts';
 import {
   assertCordonRequestBinding,
   assertLegacySupervisor,
   captureLegacyWriters,
   createCordon,
   fileDigestOrAbsent,
+  findLegacySupervisorIdentities,
   markImportBegun,
   processAlive,
   readCordonState,
@@ -29,6 +30,8 @@ import { validateRuntimePreflight } from '../../pr2-foundation/binding.ts';
 import { parseFoundationConfig } from '../../pr2-foundation/config.ts';
 import { readMigrationJournal } from '../../pr2-foundation/migration-journal.ts';
 import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog, type RuntimeSurface } from '../../pr2-foundation/runtime-catalog.ts';
+import { readLiveSingleInstanceLease } from '../../runtime/single-instance-lease.ts';
+import { sha256Stable } from './stable-stringify.ts';
 
 const FOUNDATION_LANDING_COMMIT = 'b967dfe156838039e1d6d137e7064dc9d1b10b4d';
 const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
@@ -187,6 +190,8 @@ export interface FoundationAdmissionProof {
   heartbeatObservedAt: string;
   migrationJournalCount: number;
   preflightSanitizerId: string;
+  activationMode?: 'legacy-handover' | 'greenfield';
+  writerWatermark?: string;
 }
 
 function readFoundationEvidence(request: ActivationRequest): { evidence: FoundationAdmissionEvidence; evidencePath: string } {
@@ -199,7 +204,56 @@ function readFoundationEvidence(request: ActivationRequest): { evidence: Foundat
   const evidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as FoundationAdmissionEvidence;
   if (!evidence || evidence.schemaVersion !== 1 || evidence.issue !== 923) throw new Error('foundation_evidence_schema_invalid');
   if (evidence.foundationMergeCommitSha !== FOUNDATION_LANDING_COMMIT) throw new Error('foundation_evidence_merge_binding_invalid');
+  verifyFoundationEvidenceDigest(evidence);
   return { evidence, evidencePath };
+}
+
+function assertGreenfieldAbsence(
+  request: ActivationRequest,
+  configuredHosts: Map<string, { hostId: string; quarantined?: boolean }>,
+): { writerWatermark: string } {
+  const authority = new FileEpochAuthority(request.paths.epochAuthorityPath).read();
+  if (authority.currentEpochId !== null || authority.records.length !== 0) {
+    throw new Error('greenfield_epoch_authority_not_empty');
+  }
+  if (configuredHosts.size !== 1 || !configuredHosts.has(request.hostId)) {
+    throw new Error('greenfield_roster_not_single_host');
+  }
+
+  const statusPath = path.join(request.paths.supervisorStateDir, 'typescript-supervisor-status.json');
+  try {
+    const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
+    if (status) {
+      if (status.schemaVersion !== 1 || status.childId !== 'pr2-scheduler' || typeof status.restartState !== 'string') {
+        throw new Error('greenfield_registered_child_unknown');
+      }
+      const supervisorAlive = Number.isInteger(status.supervisorPid)
+        && status.supervisorPid > 1
+        && processAlive(status.supervisorPid);
+      const childAlive = Number.isInteger(status.childPid)
+        && status.childPid !== null
+        && status.childPid > 1
+        && processAlive(status.childPid);
+      if (supervisorAlive || childAlive) throw new Error('greenfield_registered_child_alive');
+    }
+    const lease = readLiveSingleInstanceLease(path.join(request.paths.supervisorStateDir, 'typescript-supervisor.lock'));
+    if (lease) throw new Error('greenfield_registered_supervisor_alive');
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('greenfield_')) throw error;
+    throw new Error(`greenfield_control_plane_unknown:${statusPath}`);
+  }
+
+  const writers = captureLegacyWriters(request.oldInstalledRevisionRoot, request.paths.supervisorStateDir);
+  if (writers.length !== 0) throw new Error('greenfield_legacy_writer_present');
+  const legacyCandidates = findLegacySupervisorIdentities(request.oldInstalledRevisionRoot);
+  if (legacyCandidates.length !== 0) throw new Error('greenfield_legacy_supervisor_present');
+  return {
+    writerWatermark: sha256Stable({
+      result: 'greenfield-no-legacy-writers',
+      hostId: request.hostId,
+      observedAt: new Date().toISOString(),
+    }),
+  };
 }
 
 function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissionProof {
@@ -257,6 +311,20 @@ function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissio
   }
   const localHeartbeat = evidence.heartbeats.find((row) => row.hostId === request.hostId);
   if (!localHeartbeat) throw new Error('foundation_local_heartbeat_missing');
+  if (request.legacySupervisorPid === undefined || request.legacySupervisorPid === null || request.legacySupervisorPid === 0) {
+    const absence = assertGreenfieldAbsence(request, configuredHosts);
+    return {
+      result: 'foundation-evidence-verified',
+      evidencePath,
+      localHostId: observedLocalHost,
+      oldInstalledCommitSha,
+      heartbeatObservedAt: localHeartbeat.observedAt,
+      migrationJournalCount: evidence.migrationJournalPaths.length,
+      preflightSanitizerId: preflight.sanitizerId,
+      activationMode: 'greenfield',
+      writerWatermark: absence.writerWatermark,
+    };
+  }
   const legacyIdentity = readProcessIdentity(request.legacySupervisorPid);
   assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);
   if (!processAlive(legacyIdentity.pid)) throw new Error('foundation_legacy_supervisor_not_active');
@@ -268,6 +336,7 @@ function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissio
     heartbeatObservedAt: localHeartbeat.observedAt,
     migrationJournalCount: evidence.migrationJournalPaths.length,
     preflightSanitizerId: preflight.sanitizerId,
+    activationMode: 'legacy-handover',
   };
 }
 
@@ -380,8 +449,8 @@ export async function activateCutover(
   const foundation = boundary.proveFoundationAdoption(request);
   if (request.stores.length !== 3 || new Set(request.stores.map((row) => row.id)).size !== 3) throw new Error('store_roster_invalid');
   const { baseRef, closure } = boundary.resolveBaseAndClosure(request);
-  const legacySupervisor = boundary.readLegacySupervisor(request);
-  const legacyWriters = boundary.captureLegacyWriters(request);
+  const legacyClaimed = request.legacySupervisorPid !== undefined && request.legacySupervisorPid > 1;
+  const legacySupervisor = legacyClaimed ? boundary.readLegacySupervisor(request) : null;
 
   const cordon = createCordon({
     path: request.paths.cordonPath,
@@ -399,11 +468,23 @@ export async function activateCutover(
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { preflight, foundation, closure, baseRef });
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'cordon', { writersClosed: true, noRespawn: true, noTypeScriptStart: true });
 
-  const drain = await boundary.drainLegacyWriters(request, legacyWriters);
+  const legacyWriters = boundary.captureLegacyWriters(request);
+  if (!legacySupervisor && legacyWriters.length !== 0) throw new Error('greenfield_legacy_writer_present');
+  if (!legacySupervisor && findLegacySupervisorIdentities(request.oldInstalledRevisionRoot).length !== 0) {
+    throw new Error('greenfield_legacy_supervisor_present');
+  }
+  const drain = legacySupervisor
+    ? await boundary.drainLegacyWriters(request, legacyWriters)
+    : { writerWatermark: foundation.writerWatermark ?? '', drainedAt: new Date().toISOString() };
+  if (!drain.writerWatermark) throw new Error('writer_watermark_missing');
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain', { writers: legacyWriters, ...drain });
 
-  const terminated = await boundary.terminateLegacyProcesses([...legacyWriters.map((row) => row.identity), legacySupervisor]);
-  const survivors = boundary.verifyLegacyProcessesGone(request, legacySupervisor);
+  const terminated = legacySupervisor
+    ? await boundary.terminateLegacyProcesses([...legacyWriters.map((row) => row.identity), legacySupervisor])
+    : [];
+  const survivors = legacySupervisor
+    ? boundary.verifyLegacyProcessesGone(request, legacySupervisor)
+    : { supervisorAlive: false, writers: [] };
   if (survivors.supervisorAlive || survivors.writers.length !== 0) {
     throw new Error(`legacy_process_survivor:supervisor=${survivors.supervisorAlive};writers=${survivors.writers.map((row) => row.childId).join(',')}`);
   }
