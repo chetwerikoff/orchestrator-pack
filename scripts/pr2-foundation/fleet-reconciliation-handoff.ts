@@ -59,11 +59,16 @@ function canonicalPayload(input: Omit<FleetReconciliationHandoff, 'payloadDigest
   return JSON.stringify(input);
 }
 
+function validRepository(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 240 || value === 'unknown/repository') return false;
+  return /^[^/\s]+\/[^/\s]+$/u.test(value);
+}
+
 function valid(value: unknown): value is FleetReconciliationHandoff {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Partial<FleetReconciliationHandoff>;
   if (row.schema !== FLEET_RECONCILIATION_HANDOFF_SCHEMA
-    || !row.projectId || !row.repository || !row.activationLineage
+    || !row.projectId || !validRepository(row.repository) || !row.activationLineage
     || !row.schedulerGeneration || !Number.isInteger(row.tickSequence) || Number(row.tickSequence) <= 0
     || row.decision !== 'orchestrator_required'
     || !row.reason || !row.recordedAtUtc || !row.payloadDigest) return false;
@@ -114,9 +119,9 @@ export function publishFleetReconciliationHandoff(input: {
     ...(input.assignmentGeneration ? { assignmentGeneration: input.assignmentGeneration } : {}),
     recordedAtUtc: (input.now?.() ?? new Date()).toISOString(),
   };
-  if (!payload.repository || !payload.activationLineage || !payload.schedulerGeneration
+  if (!validRepository(payload.repository) || !payload.activationLineage || !payload.schedulerGeneration
     || !Number.isInteger(payload.tickSequence) || payload.tickSequence <= 0) {
-    return { ok: false, reason: 'handoff_input_invalid' };
+    return { ok: false, reason: validRepository(payload.repository) ? 'handoff_input_invalid' : 'handoff_repository_unresolved' };
   }
   const record: FleetReconciliationHandoff = {
     ...payload,
