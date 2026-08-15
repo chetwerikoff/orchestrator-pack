@@ -1,20 +1,25 @@
 # Orchestration runbook
 
-This document is the shared, model-neutral operating guide for supervised task creation and implementation in `orchestrator-pack`.
+This is the shared, model-neutral operating guide for supervised task creation and implementation in `orchestrator-pack`.
 
-It is intentionally written so the same orchestration behavior is available to Claude, Codex, or another compliant executor. Model memory, historical Gists, local helper scripts, terminal layout, and one model-specific skill are not sources of truth for the lifecycle described here.
+It exists so Claude, Codex, or another compliant executor follows the same lifecycle without relying on private model memory, historical Gists, local helper scripts, terminal layout, or a model-specific skill as the source of truth.
 
-The GitHub Issue remains the live task specification. `AGENTS.md`, current repository policy, current GitHub state, and the version-matched Orca orchestration guide remain authoritative where this runbook points to them.
+The live GitHub Issue remains the task specification. `AGENTS.md`, current repository policy, current GitHub state, the installed version-matched Orca orchestration guide, and the landed S1/S2 runtime contracts remain authoritative where this runbook points to them.
 
-## When to read this runbook
+## Read order
 
-Read this document before acting as an **orchestrator** or **manager**, and whenever a worker lifecycle/recovery decision depends on orchestration semantics rather than implementation details.
+Before acting as an **orchestrator** or **manager**:
 
-Do not use remembered behavior from an older Claude session in place of this document.
+1. read live `AGENTS.md`;
+2. read this runbook;
+3. read the binding live Issue/task;
+4. read the current task-authoring/tiering policy when creating/refining an Issue;
+5. when Orca is used, read the installed version-matched Orca orchestration guide;
+6. read current authoritative runtime/PR/CI/review facts before effects.
+
+Do not substitute remembered Claude behavior for tracked policy.
 
 ## Roles
-
-Use these names consistently.
 
 ### Orchestrator
 
@@ -23,62 +28,61 @@ The orchestrator is the top-level coordinator.
 It:
 
 - manages managers and workers;
-- chooses and starts Tasks/Dispatches;
-- reads authoritative task, PR, CI, review, smoke, assignment, report, and runtime facts;
-- uses deterministic supervision for routine cases;
-- resolves ambiguous recovery/ownership situations;
-- invokes an architect or operator only for a real higher-level decision;
-- does not treat itself as a task-creation manager.
+- creates/binds Tasks and Dispatches;
+- reads authoritative task, runtime, PR, CI, review and smoke facts;
+- uses deterministic reconciliation for routine states;
+- resolves ambiguity, retry/reassignment and recovery decisions;
+- invokes architect/operator reasoning only when facts do not determine a safe next action.
+
+The orchestrator is not a task-authoring manager.
 
 ### Manager
 
-A manager is a cheap process agent that manages **creation of a development task**.
+A manager is a cheap process agent that owns **creation/refinement of a development task**.
 
-Its job is not finished after an Issue is first created. It owns the full task-authoring quality loop required by the task tier, for example:
+A normal parent manager flow is:
 
 ```text
-user goal
-  -> understand scope/tier/prerequisites
-  -> author or revise Issue
-  -> read back current published Issue
-  -> independent review(s)
-  -> findings -> fix/revise -> review current revision again
-  -> required architectural lens
-  -> lens finding/change -> fix/revise -> rerun invalidated gates
-  -> prove current Issue revision passed all required gates
-  -> task_ready
-  -> worker_done
+understand user goal / tier / prerequisites
+-> create or revise Issue
+-> read back current published Issue revision
+-> run required independent task review(s)
+-> findings -> author/fix -> read back new revision -> rerun invalidated review(s)
+-> run required architectural lens
+-> lens finding/change -> author/fix -> rerun invalidated gates
+-> prove CURRENT Issue revision passed all required gates
+-> task_ready
+-> worker_done
 ```
 
-A manager does not supervise coding workers after implementation handoff.
+A child author/reviewer/lens Dispatch may finish its own narrow Task. Child completion never settles the parent manager Task.
+
+Managers do not supervise coding workers.
 
 ### Worker
 
-A worker executes an already-created development Issue.
+A worker implements an already-created Issue.
 
-Its normal bounded completion target is implementation handoff, not merge and not an arbitrary end of an LLM turn:
+The target bounded handoff is:
 
 ```text
-read live Issue and rules
-  -> verify prerequisites/admission
-  -> implement scoped task
-  -> run required local verification
-  -> create/update PR and exact head
-  -> fix required pre-review CI for that head
-  -> publish truthful ready_for_review handoff
-  -> verify no known worker-owned pre-review blocker remains
-  -> worker_done
+read live Issue/rules/prerequisites
+-> implement scoped work
+-> run required local verification
+-> create/update PR and exact head
+-> fix required pre-review CI for that head
+-> publish truthful ready_for_review handoff
+-> verify no known worker-owned pre-review blocker remains
+-> worker_done
 ```
 
-Independent review and smoke are orchestrator-managed stages after that bounded worker handoff. If they later create new actionable implementation work, the orchestrator starts a fresh correction Task/Dispatch.
+Independent review and smoke occur after this bounded implementation handoff. Later review/smoke findings create a fresh correction Task/Dispatch.
 
 ### Reconciler
 
-The reconciler is deterministic code used by the orchestrator for routine supervision.
+The reconciler is deterministic policy/code used by the orchestrator.
 
-It is not an agent and does not reason about architecture.
-
-Its normal decision surface is:
+It is not an agent role. Its logical decision surface is:
 
 ```text
 noop
@@ -86,734 +90,553 @@ continue
 orchestrator_required
 ```
 
-It never emits `worker_done` for an agent and never terminates a live attempt.
+`continue` is **not a new transport or actuator**. In the existing production design it is realized through the existing S2 fleet-nudge path when that path admits the episode.
+
+The reconciler never sends `worker_done` for an agent and never owns termination authority for a live attempt.
 
 ### Architect
 
-The architect is an expensive, one-shot reasoning role for genuine architecture/specification decisions.
+The architect is an expensive one-shot reasoning role for genuine architecture/specification decisions. It is not a fleet monitor, scheduler, retry service, or normal recovery layer.
 
-It is not a monitor, scheduler, retry service, or substitute for normal manager recovery.
+## Binding supervision architecture
 
-## Core operating laws
+Do not rebuild mechanisms that already exist.
 
-These are the durable lessons migrated from the historical orchestration experiments and incident analysis.
+### S1 — observation
 
-### 1. Watch the objective, not the worker story
+Current runtime-neutral observation is owned by:
 
-The primary question is not “does the worker say it is working?” but “what authoritative task/lifecycle fact is true now?”
+```text
+scripts/pr2-foundation/fleet-observer.ts
+```
 
-Useful objective facts include, as applicable:
+S1 classifies current runtime units using the existing `busy | livelock | idle | exempt | unknown` contract.
 
-- current GitHub Issue revision;
-- current prerequisites/blockers;
-- current WorkerAssignment generation;
-- current Task/Dispatch identity;
-- current PR and exact head;
-- required CI state for that head;
-- current review result/findings for that head;
-- current smoke result for that head;
-- current durable WorkerReport/WorkerStatus facts;
-- exact RuntimeAdapter identity and current Orca Dispatch provenance.
-
-Worker prose is context, not sole lifecycle authority.
-
-### 2. `busy` is not `progress`, and `idle` is positive evidence
-
-A live process, active pane, spinner, terminal existence, heartbeat, CPU usage, or unchanged scrollback does not prove useful progress.
-
-Use the existing S1 observer semantics rather than inventing a new model-specific detector:
+Important semantics:
 
 - `busy` requires positive new bounded output after a valid baseline for the same current runtime generation;
-- `idle` requires successful current-generation observation, positive runtime liveness=`idle`, valid bounded output with no new output, and no higher-precedence exemption/unknown condition;
-- `busy` liveness with no positive output is no-progress evidence, not healthy progress;
+- `idle` requires successful current-generation observation, runtime liveness=`idle`, valid bounded output with no new output, and no higher-precedence unknown/exemption condition;
+- busy liveness without new output is no-progress/unknown evidence, not healthy progress;
 - failed, missing, timed-out, stale, contradictory, wrong-generation, or unreadable evidence is `unknown`, never `idle`;
-- positive same-generation `gone` is a liveness fact, not proof that the task result is absent.
+- process/pane/spinner/heartbeat existence alone proves neither progress nor completion;
+- a positive `gone` observation is liveness evidence, not proof that the task result is absent.
 
-The historical “take N pane reads” workaround is not a second idle detector. If the current RuntimeAdapter/S1 observation disagrees or cannot establish a positive class, classify `unknown` and do not act destructively.
+Do not import a second N-read pane debounce or another idle detector beside S1.
 
-### 3. Silence proves nothing by itself
+### S2 — one-shot continuation
 
-No output for ten minutes does not by itself prove:
-
-- failure;
-- health;
-- completion;
-- delivery;
-- a safe retry boundary.
-
-Time is only a checkpoint trigger for re-reading facts.
-
-### 4. Evidence that matters must be re-readable and registered
-
-If a lifecycle decision depends on a fact, prefer evidence that survives outside the process that produced it.
-
-Examples include GitHub state, durable reports, exact-head CI/review/smoke results, Orca Task/Dispatch records, and the existing S1 snapshot/progress surface.
-
-A producer of a lifecycle fact is not complete merely because it wrote somewhere. The deterministic reconciler must explicitly enumerate the authoritative source that supplies each fact it consumes. Adding a new producer without wiring its observation surface into that closed input set is a defect.
-
-If a required stage exists but the reconciler has no authoritative observation channel for it, classify the case `orchestrator_required`; never silently treat “not observed” as healthy, absent, or complete.
-
-Do not make a temporary log, hidden terminal buffer, conversation-only reply, local scratch file, or one model's private memory the only place a required fact exists.
-
-### 5. Re-read before retry
-
-A timeout, disconnected helper, browser automation error, or lost tool response does not prove the operation failed.
-
-Before retrying an operation that may have succeeded:
+Current bounded continuation is owned by:
 
 ```text
-read authoritative current state
--> determine whether the operation already succeeded
--> retry only when evidence says it did not succeed and retry is safe
+scripts/pr2-foundation/fleet-nudge-actuator.ts
 ```
 
-Blind retries create duplicates and false recovery paths.
-
-### 6. Helper failure is not automatically a blocker
-
-A failed helper script or browser wrapper is first a recovery problem.
-
-The agent should inspect the real error and use the shortest legitimate supported alternative available in the environment. If direct browser control, a lower-level supported command, or another normal read/write path exists, use it and continue the original plan.
-
-Escalate only after concrete recovery attempts show that higher-level coordination or a missing external capability/permission is actually required.
-
-### 7. Routine supervision is deterministic
-
-Do not spend an LLM every ten minutes asking whether a worker should continue.
-
-The reconciler reads facts and liveness, classifies the state, performs at most one bounded effect, and returns.
-
-The orchestrator reasons only when deterministic policy cannot safely select the next effect.
-
-### 8. Exact identity before effects
-
-Runtime effects must target the exact current assignment/Dispatch/runtime identity.
-
-Do not authorize effects from:
-
-- terminal title;
-- branch name;
-- path;
-- PID alone;
-- display name;
-- first matching pane;
-- stale worker handle;
-- short identifier that is not the current authority.
-
-Stale/lost/failed attempts are reconciled from exact authoritative facts, not heuristics.
-
-### 9. Do not confuse external waiting with abandonment
-
-Waiting for a child author/reviewer/lens result, CI, review, smoke, or an orchestrator answer can be a normal lifecycle state.
-
-An agent with unfinished role-owned work must remain attached to its current Task/Dispatch until its completion contract is terminal.
-
-### 10. One LLM turn is not one Dispatch
-
-A model returning to its prompt is not a Task boundary.
-
-A Dispatch represents a concrete attempt of a Task. It may span multiple model turns, recoverable substeps, questions, waits, and continuations.
-
-Create a fresh Dispatch only when the boundary is real: a different Task/subtask, an independent reviewer/lens, a correction round after a settled handoff, reassignment, or retry after a proved failed/lost attempt.
-
-### 11. Use Orca's supervised delivery path; do not rebuild prompt delivery in PACK
-
-For supervised Dispatch work, Orca owns initial worker startup and task injection.
-
-Preferred path:
+with its existing supporting surfaces:
 
 ```text
-orca orchestration worker-start
+scripts/pr2-foundation/worker-nudge-claim-store.ts
+scripts/pr2-foundation/worker-nudge-gate.ts
+scripts/pr2-foundation/worker-dispatch-journal.ts
 ```
 
-When custom topology/argv requires lower-level composition, use a recognized agent terminal plus:
+S2 already provides the continuation mechanism. In particular it owns:
+
+- `S2_ONE_SHOT_POLICY = 's2-one-shot-v1'`;
+- bounded idle/livelock continuation text;
+- one attempt per new eligible S1 class-change episode;
+- `not_new_episode` suppression rather than resend loops;
+- exact episode identity and stale/epoch fencing;
+- per-tick effect budgets;
+- the existing claim/gate/journal accounting path;
+- typed dispatch outcomes `dispatched | send_failed | dispatch_unknown`.
+
+Therefore this runbook's `continue` rules specify **policy over existing S2**. They do not authorize a second continuation sender, claim store, journal, ACK path, retry loop, or watchdog.
+
+If exact target resolution is unavailable, existing S2 fail-closed outcomes such as `target_unresolved` remain no-send outcomes. Do not bypass them with a second transport.
+
+### Initial supervised task delivery is Orca-owned
+
+Initial supervised Task/Dispatch startup is a different boundary from S2 continuation.
+
+Preferred Orca path:
 
 ```text
-orca orchestration dispatch --inject
+orca orchestration worker-start --task <task_id> ... --json
 ```
 
-Do **not** use the Orca bare-shell recipe `terminal send --text ... --enter` as the task-delivery mechanism for a supervised Dispatch. That path is valid for bare-shell/lightweight/manual prompting, but it recreates the historical keyboard-injection failure class and does not provide the supervised injected lifecycle contract.
+For supported custom topology/argv, use a recognized agent terminal plus:
 
-For supervised startup, inspect the structured `worker-start` receipt. `ready` and its `stage/effects/setup/residualResources` fields are the authority for what startup/dispatch work Orca proved. A failed or unknown start is handled from that receipt; do not reduce it to a raw process return code and do not blindly retry.
+```text
+orca orchestration dispatch --task <task_id> --to <agent_handle> --inject --json
+```
 
-This removes the historical “PACK created a pane and pasted the task with keystrokes” class from normal supervised startup. PACK must not recreate an alternate startup/prompt-injection transport beside Orca.
+Do not deliver a supervised Task by creating a pane and pasting the task through `terminal send --enter`. Bare-shell/manual terminal prompting remains legitimate for non-supervised/lightweight/full-handoff cases, but it is not the supervised Dispatch path.
 
-### 12. A follow-up accepted by Orca is not proof the worker consumed it
+Read the structured `worker-start` receipt. `ready`, `stage`, `effects`, setup state and `residualResources` are the authority for what startup proved. Failed or unknown start must be diagnosed from the receipt; do not reduce it to a raw exit code and do not blindly retry.
 
-Coordinator guidance to a live supervised worker uses the stable Dispatch address:
+### Routine S2 continuation keeps the RuntimeAdapter transport
+
+Do **not** migrate live S2 continuation to Orca Dispatch-addressed inbox mail as part of this contract merely because Orca also has messaging.
+
+S2's existing effect seam is the runtime-neutral `RuntimeAdapter` dispatch contract. Keep that seam unless a separate explicitly scoped migration proves a reason to replace it.
+
+The no-new-ACK rule does not prohibit S2's existing claim store and dispatch journal. Those are the **existing** one-shot/accounting authority. It prohibits creating a parallel acknowledgement/delivery/retry subsystem.
+
+Interpret S2 outcomes truthfully:
+
+- `dispatched` — the current RuntimeAdapter contract reports the dispatch as dispatched; this is not a claim that the model completed the requested work;
+- `send_failed` — the send is definitively failed under the current contract;
+- `dispatch_unknown` — the send outcome is uncertain and must stay uncertain.
+
+Do not convert `dispatch_unknown` into success and do not automatically resend it through another path.
+
+Subsequent S1/task/PR/report movement is used by later reconciliation to decide what is happening now. It is not a reason to invent a worker-read receipt service.
+
+### Orca follow-up mail is a separate coordinator tool
+
+A coordinator may use Orca's stable Dispatch address for explicit supervised guidance when that is the appropriate coordinator action:
 
 ```text
 orca orchestration send --to dispatch:<dispatch_id> ...
 ```
 
-Current Orca defines this follow-up as **structured inbox mail, not prompt injection**. The worker receives it on its next `orchestration check`.
+Current Orca defines that as structured worker inbox mail consumed on a worker orchestration check. Coordinator `check --ack` acknowledges the coordinator's own Delivery batch; it is not a worker-read receipt.
 
-Therefore distinguish:
+Do not confuse this manual/coordinator messaging surface with routine deterministic S2 continuation, and do not dual-send the same continuation through both paths.
 
-- **initial supervised task delivery** — handled by `worker-start` / `dispatch --inject` and its structured startup/dispatch receipt;
-- **follow-up acceptance** — Orca accepted coordinator mail for the Dispatch;
-- **follow-up consumption/action** — later worker behavior proves the mail was checked/acted on.
+## Scheduler phases and ownership
 
-Coordinator-side `check --ack <delivery_id>` acknowledges the coordinator's own Run delivery batch; it is not a worker-read receipt for a follow-up sent to the worker.
+### Tick logic
 
-If the current Orca version exposes an authoritative worker-side consumption fact, PACK may consume that fact through the normal adapter/state boundary. Do not assume such a fact exists when the installed contract does not expose it.
-
-Absent a direct worker-consumption witness, use subsequent **existing** lifecycle evidence, for example:
-
-- positive new bounded output for the exact same runtime generation;
-- a durable WorkerReport/WorkerStatus change for the same assignment/Task;
-- a child Task/Dispatch start or authoritative stage result that the follow-up was intended to cause;
-- PR/head or other task-specific authoritative movement that is causally appropriate for the requested continuation.
-
-A missing post-send fact does **not** authorize an automatic resend loop. One bounded continuation episode is followed by observation; if the same actionable state persists without trustworthy evidence that work resumed, route `orchestrator_required`.
-
-Do not add a parallel ACK/delivery-confirm/retry service merely to implement this law.
-
-### 13. The supervisor must prove its own decision paths are reachable
-
-“No event” and “the branch is broken and can never fire” are operationally indistinguishable unless tested.
-
-Every reconciler decision class must be exercised by focused tests/integration evidence:
-
-- `noop` on an active/healthy or fully satisfied case;
-- `continue` on a positively actionable case;
-- `orchestrator_required` on an ambiguous/unresolved case;
-- the “all completion gates satisfied” path for manager and worker handoff.
-
-A new decision branch without reachability evidence is incomplete.
-
-### 14. The orchestrator and reconciler never block on an external condition
-
-Do not sit in a foreground sleep/poll loop waiting for CI, review, a child, browser state, or another external condition.
-
-A wait is represented by current lifecycle state plus a future re-check. The current pass returns promptly so other completed work can be observed.
-
-A tool invocation may have its own bounded timeout, but the orchestrator does not turn that into an eight-minute foreground polling loop.
-
-### 15. Admit at most one active attempt for one exact stage artifact
-
-Before starting a new Dispatch, check the authoritative active-attempt set for the exact stage key.
-
-Typical keys are:
-
-- task author/review/lens: `{Task, Issue revision, stage}`;
-- implementation/review/smoke: `{Task, PR, exact head, stage}`;
-- retry/reassignment: prior attempt must be proved terminal/lost before a replacement attempt is admitted.
-
-If an active attempt already exists for that key, do not start another one. Observe the current attempt or route ambiguity upward.
-
-### 16. A downstream stage opens on a producer handoff, never a proxy signal alone
-
-CI green, process idle, PR existence, or another proxy does not by itself open the next stage.
-
-For coding review, admission requires the producing worker's truthful terminal handoff for the exact current PR head, plus the required CI/admission facts for that same head. The reviewer re-reads the head at start and refuses a moved/stale head rather than reviewing a different artifact.
-
-For task-authoring review/lens, admission requires the current published Issue revision produced by the preceding stage, not an older cached draft.
-
-### 17. A child-stage result is not delivered until it reaches the authoritative surface
-
-Conversation-only output is not a final stage result when the surrounding workflow reads GitHub or another durable source.
-
-The Task must name the result surface. Defaults are:
-
-- Issue author/fix: the published GitHub Issue revision;
-- Issue/spec review or architectural lens: a GitHub Issue comment or another explicitly named durable task-review surface;
-- code review: the authoritative GitHub PR review/comment surface plus exact-head review state;
-- worker lifecycle handoff: the accepted PACK report/status surface bound to the exact assignment/PR/head;
-- Orca child Task settlement: exact Task/Dispatch terminal state plus any stage artifact the parent needs to continue.
-
-A child saying “done” in chat while the required authoritative surface is absent is non-delivery.
-
-### 18. Prompt references must exist in the executor's address space
-
-Before dispatch, every referenced artifact must be resolvable by that executor.
-
-Do not hand a remote/browser/chat executor an inaccessible local filesystem path and expect it to infer the contents. If a shared URI/connector/file is unavailable, inline the necessary bounded content or choose a carrier that can read it.
-
-The receiving executor also confirms the artifact class it actually received before acting: Issue review, PR review, code patch, research brief, etc. A carrier mismatch is a dispatch defect, not permission to review the wrong object.
-
-### 19. A failed attempt must preserve its diagnostic evidence
-
-Failure handling must not immediately destroy the only surface that explains the failure.
-
-Do not automatically close/remove a failed pane/page/process/workspace or erase its bounded diagnostics before the orchestrator has re-read the relevant evidence and decided the next action. Cleanup follows diagnosis/decision, not the first non-ok return.
-
-### 20. Recovery machinery does not own termination authority
-
-A helper, observer, reconciler, recovery wrapper, smoke harness, or nudge actuator must not press Stop/kill/remove a live attempt merely because an outcome is non-ok.
-
-Termination/replacement of a live attempt is an explicit orchestrator/operator decision after authoritative re-read. `unknown` is no-action, and a known non-ok result is still not automatic termination authority.
-
-### 21. False alarms are costly lifecycle defects
-
-An alarm/escalation class must use its designated authority, scope itself to the current repository/task, and filter its own generated output from evidence.
-
-Do not infer a provider/platform outage from indirect zombie/queued symptoms when a designated provider status authority is required. Do not read the supervisor's own nudge/echo as a worker verdict. Do not emit repo-global alerts from another repository's state.
-
-Prefer fewer trustworthy alarms to a noisy channel that operators learn to ignore.
-
-## `worker_done` contract
-
-`worker_done` is a strong terminal lifecycle event.
-
-It means:
-
-> The entire completion contract of this Task/Dispatch attempt is terminal. Every required stage owned by this role is satisfied, or the coordinator has explicitly made the Task terminally failed/aborted.
-
-It does **not** mean:
-
-- “my current answer ended”;
-- “I finished one substep”;
-- “I created the Issue”;
-- “I created the PR”;
-- “a helper broke”;
-- “I asked the orchestrator a question”;
-- “I escalated a blocker”;
-- “I am waiting on another stage”;
-- “ten minutes passed”.
-
-Before successful `worker_done`, the agent should re-read the Task and be able to answer yes to every applicable check:
+The scheduler tick logic is:
 
 ```text
-Is this the current Task/Dispatch?
-Did I read the full Task contract and prerequisites?
-Did I execute every required stage for my role?
-Are required child results current and delivered to their authoritative surfaces?
-Did I address or explicitly adjudicate every required finding for the current artifact/head?
-Did I perform required read-back/verification?
-Is there no remaining manager/worker-owned action in this Dispatch?
+scripts/pr2-foundation/scheduler.ts::runSchedulerTick
 ```
 
-If any answer is no, do not send successful `worker_done`.
+It has two structurally different phases.
 
-Use continuation, waiting, `ask`, or `escalation` while keeping the Dispatch active.
+#### Phase 1 — fleet supervision
 
-`worker_done --outcome failed` is for a genuinely terminal failed/aborted Task after allowed recovery/coordination is exhausted, not the first recoverable tool error.
+```text
+fleetObserver.tick(...)
+-> fleet/reconciliation policy
+-> fleetNudgeActuator.tick(...)
+```
+
+Manager/worker routine reconciliation belongs here.
+
+If #1420 adds role/task admission logic, it must gate/extend this fleet/S2 path rather than create a second scheduler or continuation actuator.
+
+#### Phase 2 — review start
+
+The later review-start phase uses `liveCandidates()`, which intentionally selects only `ready_for_review` workers with a PR binding and exact head.
+
+Do **not** widen `liveCandidates()` to include managers or pre-handoff workers. A manager creating an Issue has no PR, and an implementation worker before handoff is not a review candidate.
+
+Review-start remains a separate exact-head actuation path.
+
+### Production cadence / activation owner
+
+Do not treat `scheduler.ts::runLoop()` as proof that production supervision is running.
+
+The current activated side-process path is owned by:
+
+```text
+scripts/lib/orchestrator-side-process-supervisor.ts::runSupervisor
+```
+
+using the registered child:
+
+```text
+scripts/orchestrator-side-process-registry.json
+  id: pr2-scheduler
+  script: pr2-foundation/scheduler.ts
+```
+
+The supervisor launches the scheduler as a bounded `scheduler.ts tick` child and applies the registry cadence between child runs. The registry currently declares a 5-second cadence.
+
+The scheduler/supervisor activation remains epoch/registry gated. Do not add a second launcher, daemon, timer, or watchdog.
+
+Activation on the operator machine is an **operator-adoption step**, not something an implementation worker should mutate silently. Until a post-merge/local adoption read-back proves a supervisor-owned tick under the current epoch, report the code as implemented but do not claim live deterministic supervision is active in that operator environment.
+
+## Existing mutation constraints
+
+The scheduler and supervisor are already guarded by landed cutover contracts.
+
+When editing `scripts/pr2-foundation/scheduler.ts`, preserve the existing mutation-semantic gate invariants, including the required dormant literals around:
+
+- `running: false`;
+- `activationEpochEnforced: false`;
+- `buildDormantScheduler` remaining free of direct `process.env` activation.
+
+The current side-process registry and activation registry projection also pin the `pr2-scheduler` child shape. Do not edit the registry merely to implement #1420. Reuse the existing child and activation path.
+
+A red mutation gate caused by violating one of these invariants is a design error, not a reason to weaken the gate.
+
+## Core operating laws
+
+### 1. Watch objective state, not the worker story
+
+Ask what authoritative lifecycle fact is true now, not merely whether a worker says it is working.
+
+Useful facts include, as applicable:
+
+- current GitHub Issue revision and prerequisites;
+- current Task/Dispatch identity;
+- current assignment/runtime generation;
+- S1 observation;
+- S2 episode/outcome;
+- current PR and exact head;
+- required CI for that head;
+- exact-head review/smoke results;
+- accepted WorkerReport/WorkerStatus facts;
+- authoritative child-stage result surfaces.
+
+Worker prose is context, not sole lifecycle authority.
+
+### 2. `worker_done` means the whole role completion contract
+
+`worker_done` is terminal for the assigned Task/Dispatch attempt.
+
+It does not mean:
+
+- one model turn ended;
+- one substep succeeded;
+- an Issue or PR merely exists;
+- a helper failed;
+- the agent is waiting on a child/CI/review;
+- the agent sent `ask` or `escalation`;
+- a timer elapsed.
+
+Before successful `worker_done`, re-read the Task and verify every applicable role-owned completion criterion. If required work remains, keep the same Dispatch active and continue/wait/ask/escalate instead.
+
+`worker_done --outcome failed` is for a genuinely terminal failed/aborted Task after allowed recovery/coordination is exhausted, not the first recoverable error.
+
+### 3. One LLM turn is not one Dispatch
+
+Keep the same Dispatch across recoverable substeps, prompt returns, child waits, questions/escalations and ordinary continuation of the same Task attempt.
+
+Create a fresh Dispatch only for a real boundary: a different Task/subtask, independent reviewer/lens, correction work after a settled handoff, reassignment, or retry after a proved failed/lost attempt.
+
+### 4. Re-read before retry
+
+A timeout, helper disconnect or lost tool result does not prove an operation failed.
+
+```text
+read authoritative state
+-> determine whether the operation already succeeded
+-> retry only when evidence proves retry is still needed and safe
+```
+
+Blind retry is a defect.
+
+### 5. Helper failure is recovery first
+
+A failed browser/helper/wrapper is not automatically a terminal blocker.
+
+Inspect the actual error, re-read authoritative state and use the shortest legitimate supported fallback. Escalate only when a higher-level decision, missing permission/capability, ownership conflict, destructive operator choice, or genuinely exhausted recovery remains.
+
+An `ask` or `escalation` is pre-completion; the unfinished Dispatch stays active unless explicitly terminated/replaced.
+
+### 6. External waits do not block the orchestrator
+
+CI, review, browser state, child results and other external waits are lifecycle state plus future re-checks.
+
+Do not hold the orchestrator/reconciler in a foreground sleep/poll loop. A scheduler/reconciler pass returns promptly so other completed work can be processed.
+
+### 7. Exact identity before effects
+
+Runtime effects require exact current authoritative identity. Do not authorize an effect from terminal title, branch, path, PID alone, display name, first matching pane, stale worker handle, or another heuristic.
+
+### 8. At most one active attempt per exact stage artifact
+
+Before starting a new stage Dispatch, prove no active attempt already exists for the exact stage key.
+
+Typical keys:
+
+```text
+Task author/review/lens: {Task, Issue revision, stage}
+implementation/review/smoke: {Task, PR, exact head, stage}
+```
+
+Retry/reassignment requires the prior exact attempt to be terminal/lost/replaced by explicit orchestrator decision.
+
+### 9. A stage opens on producer handoff, not a proxy
+
+CI green, process idle or PR existence alone does not open review.
+
+For code review, require the producing worker's truthful current-head handoff plus required CI/admission facts for that same head. The reviewer re-reads the head at start and refuses a moved/stale head.
+
+For task review/lens, use the current published Issue revision from the preceding stage.
+
+### 10. Child results require an authoritative delivery surface
+
+A child result is not delivered merely because it appeared in conversation.
+
+Default surfaces:
+
+- Issue author/fix -> published GitHub Issue revision;
+- Issue/spec review or architectural lens -> GitHub Issue comment or explicitly named durable task-review surface;
+- code review -> authoritative GitHub PR review/comment plus exact-head review state;
+- worker handoff -> accepted PACK report/status bound to current assignment/PR/head;
+- Orca child settlement -> exact Task/Dispatch terminal state plus any artifact the parent Task requires.
+
+If a required stage has no authoritative observation surface, route `orchestrator_required` rather than pretending the stage is absent/healthy/complete.
+
+### 11. Prompt address space must be valid
+
+Every artifact referenced by a prompt must be readable in the receiving executor's address space.
+
+Do not hand a remote/browser/chat executor an inaccessible local path. Inline bounded content or use a shared connector/URI/artifact it can read.
+
+The receiver must also confirm the artifact class it received before substantive work. A PR review request delivered as a draft-review artifact is a carrier mismatch, not permission to review the wrong object.
+
+### 12. Preserve failure evidence
+
+A failed attempt must keep the diagnostic surface needed for the orchestrator to understand the failure until the orchestrator has re-read it and decided the next action.
+
+Do not destroy the only pane/page/output/workspace witness on the first non-ok result.
+
+### 13. Recovery code does not own termination
+
+A helper, observer, reconciler, nudge actuator, smoke harness or recovery wrapper cannot stop/kill/remove a live attempt merely because a result is non-ok.
+
+Termination/replacement is an orchestrator/operator decision after authoritative re-read.
+
+### 14. Alarm quality matters
+
+False alarms are operational defects.
+
+Each alarm/escalation class must use the designated authority for the condition, scope evidence/effects to the current repository/task, and filter supervisor-generated echo from worker evidence. Do not infer a provider/platform outage from indirect symptoms when a designated provider-status authority is required.
 
 ## Manager operating procedure
 
 ### Start
 
-The manager first reads:
+Read the full Task contract, prerequisites and tier policy. Make a short ordered plan for the **whole** author/review/fix/lens workflow before starting child work.
 
-1. live `AGENTS.md`;
-2. this runbook;
-3. live user goal / binding Issue context;
-4. current task-authoring/tiering policy required for the requested task;
-5. explicit prerequisites/blockers and whether they are satisfied.
+### Author/fix
 
-Then it writes a short ordered plan covering the **whole** task-creation workflow before starting child work.
+After any Issue publication or revision, read back the current GitHub Issue. A tool success message is not enough when later gates depend on the result.
 
-A task whose own contract says it is blocked is not dispatched as implementation-ready until that prerequisite is resolved or the direct operator changes the contract.
+### Review and lens
 
-### Authoring
+Run the number/type of independent task reviews and lens steps required by current tiering policy.
 
-The manager starts or reuses the proper authoring path to create/revise the Issue.
+If a finding changes the Issue, previous affected evidence becomes stale. Re-run every invalidated gate against the current revision.
 
-After publication, it reads the current GitHub Issue back. A tool success message without read-back is not enough when the result matters to later gates.
+### Completion
 
-### Review loop
-
-Run the number/type of independent task reviews required by current task-tier policy.
-
-Before starting each review, prove there is no already-active review attempt for the exact current Issue revision/stage.
-
-If a review finds a material issue:
-
-```text
-review finding
--> author/fix current Issue
--> read back new Issue revision
--> previous review is stale for changed content
--> run a fresh required review against current revision
-```
-
-Do not count a clean review of an old Issue revision as evidence for a changed one.
-
-A reviewer/lens result must reach the authoritative task-review surface. A conversation-only verdict is not a completed review stage.
-
-### Lens
-
-Run the required architectural lens for the task tier against the current Issue revision.
-
-If the lens causes a meaningful Issue change, rerun every earlier gate invalidated by that change.
-
-### Manager completion
-
-The manager may report `task_ready` and send its parent `worker_done` only when the **current published Issue revision** has all required authoring/review/lens gates satisfied and all required child results are delivered on their authoritative surfaces.
-
-Child author/reviewer/lens Dispatches can correctly finish their own narrow Tasks without completing the parent manager Task.
-
-## Manager recovery procedure
-
-On ordinary friction:
-
-```text
-inspect actual error/output
--> read authoritative state
--> determine whether the operation may already have succeeded
--> use the shortest supported fallback/lower-level path if available
--> retry only when safe and necessary
--> continue the original plan
-```
-
-Examples of ordinary recoverable friction:
-
-- a helper wrapper fails but direct supported browser control is available;
-- a tool call times out but GitHub/current state can be read back;
-- an expected convenience command is unavailable but a repository-approved lower-level path exists.
-
-Escalate to the orchestrator only for evidence-backed conditions such as:
-
-- missing external permission/capability;
-- unresolved specification contradiction;
-- ownership conflict;
-- destructive operator choice;
-- exact recovery route cannot be determined safely;
-- recovery is genuinely exhausted after concrete attempts.
-
-An escalation is **pre-completion**. The manager Task remains active and resumes after the answer/recovery unless the orchestrator explicitly terminates/replaces it.
+The manager may report `task_ready` and send parent `worker_done` only when the **current published Issue revision** has all required author/review/fix/lens gates satisfied and required child results are present on their authoritative surfaces.
 
 ## Worker operating procedure
 
 ### Start
 
-The worker reads the live Issue and repository rules, checks prerequisites, resolves the exact current assignment/runtime identity, and plans the full implementation handoff.
-
-Before starting a replacement/retry Dispatch, the orchestrator must prove the previous exact attempt is terminal/lost or intentionally reassigned.
+Read the live Issue/rules/prerequisites and resolve the exact current assignment/runtime identity.
 
 ### Implement and verify
 
-The worker implements only scoped changes and runs required local verification.
+Implement scoped changes and run required local verification.
 
 ### Publish and self-fix pre-review CI
 
-The worker creates/updates the PR, records the exact current head, and handles worker-owned required pre-review CI failures for that head.
+Create/update the PR, bind to the exact current head and fix worker-owned required pre-review CI for that head.
 
-A red required head is not ready. A pending required head is not green.
+A pending or red required head is not ready.
 
-CI green alone is not review admission.
+### Completion
 
-### Worker completion and review admission
-
-The worker may send successful `worker_done` only after it has a truthful current-head `ready_for_review` handoff and no known worker-owned pre-review blocker remains.
+Successful worker `worker_done` requires a truthful current-head `ready_for_review` handoff and no known worker-owned pre-review blocker.
 
 A PR existing is not enough. Code merely compiling is not enough.
 
-Only after that producer handoff may the orchestrator admit independent review for the same exact head, subject to required CI/admission rules and the one-active-attempt gate. The reviewer re-reads the current head before work and refuses a moved head.
+Later independent review/smoke findings create a fresh bounded correction Dispatch.
 
-If later independent review or smoke produces implementation findings, that is a **new correction Task/Dispatch** after the previous bounded worker handoff.
+## Deterministic supervision policy over S1/S2
 
-## Deterministic supervision loop
+Routine reconciliation must reuse the existing fleet phase.
 
-### Cadence owner
-
-The existing cadence owner is `scripts/pr2-foundation/scheduler.ts`:
+Conceptually:
 
 ```text
-runLoop()
-  -> runSchedulerTick(...)
+read authoritative role/task facts
++ read trusted S1 snapshot
+-> reconcile next role-owned action
+-> noop | continue | orchestrator_required
 ```
 
-`FoundationConfig.scheduler.pollIntervalMs` supplies the scheduler cadence. #1420 does not create a second timer/loop. A policy threshold such as “re-check within ten minutes” is evaluated on the existing scheduler ticks; it is not another sleeping process.
+Mapping:
 
-The current scheduler runs its phases serially and each phase must stay bounded. External waits are represented as state and future re-checks, not foreground sleeps.
+- `noop` -> no S2 effect is authorized;
+- `continue` -> allow the existing S2 admission/revalidation/one-shot path for the exact eligible episode;
+- `orchestrator_required` -> suppress routine S2 actuation and surface the unresolved case through the existing orchestrator-facing path; do not invent a second scheduler or retry loop.
 
-### Authoritative fact sources
+S2 remains responsible for one-shot admission, claim/journal settlement, exact runtime dispatch and its typed dispatch outcome. The reconciler must not implement those responsibilities again.
 
-The reconciler input contract must enumerate the sources it actually reads. The expected current classes include:
-
-- live GitHub Issue/task/prerequisite state;
-- current WorkerAssignment/Task/Dispatch identity and generation;
-- accepted PACK WorkerReport/WorkerStatus state;
-- current PR/exact head and required CI;
-- current exact-head review/smoke facts;
-- current RuntimeAdapter/S1 liveness/output observation;
-- exact child-stage result surfaces required by the active manager/worker plan.
-
-Implementation may rename/refine these after current architecture inspection, but it may not rely on an unregistered producer.
-
-### Positive idle
-
-For the current S1 implementation, `positive idle` means the existing observer class `idle`: successful same-generation required observations, liveness=`idle`, valid bounded output proving no new output, and no higher-precedence `unknown`/exemption condition.
-
-It does **not** mean “no busy marker happened to be visible.”
-
-### Finite pass
-
-On each admitted reconciliation pass:
-
-```text
-read authoritative lifecycle facts
--> read bounded runtime/liveness observation
--> classify
--> perform at most one allowed effect
--> return
-```
-
-Decision surface:
-
-```text
-noop
-continue
-orchestrator_required
-```
-
-The timer is only a re-check trigger. It never proves failure, progress, task consumption, or follow-up delivery.
-
-### Manager cases
+Representative cases:
 
 | Facts | Decision |
 |---|---|
-| manager active / child author-review-lens work running | `noop` |
-| positive idle + Issue missing required review | `continue` |
-| positive idle + current review findings unresolved | `continue` |
-| positive idle + required lens missing | `continue` |
-| positive idle + helper failed but supported recovery remains | `continue` |
-| all current manager completion gates satisfied | `noop` (manager may complete) |
-| required stage has no registered observation surface | `orchestrator_required` |
-| repeated actionable idle after one bounded follow-up without authoritative post-send evidence | `orchestrator_required` |
-| liveness/ownership/recovery facts ambiguous | `orchestrator_required` |
+| active/new progress | `noop` |
+| trusted S1 idle/livelock + current role-owned work remains + exact target valid | `continue` via S2 |
+| full manager completion contract satisfied | `noop` (manager may complete) |
+| truthful worker `ready_for_review` handoff with no worker-owned action left | `noop` (worker may complete) |
+| missing/ambiguous ownership, unobservable required stage, unresolved S2 target, or unsafe recovery choice | `orchestrator_required` |
 
-### Worker cases
+Do not automatically resend because a previous dispatch was `dispatch_unknown` or because no semantic progress is yet visible. Let the existing S1/S2 episode model and later authoritative facts drive the next reconciliation.
 
-| Facts | Decision |
-|---|---|
-| new output / active progress | `noop` |
-| positive idle + implementation/fix work remains | `continue` |
-| positive idle + required pre-review CI red | `continue` |
-| current head is truthfully `ready_for_review` with no worker-owned action left | `noop` (worker may complete) |
-| required stage has no registered observation surface | `orchestrator_required` |
-| repeated actionable idle after one bounded follow-up without authoritative post-send evidence | `orchestrator_required` |
-| gone/stopped/identity ambiguity | `orchestrator_required` |
+## Review, CI, smoke and readiness
 
-### Bounded continuation
+Keep these separate:
 
-A normal continuation goes only to the exact current active Dispatch using Orca's Dispatch address, not terminal keystrokes:
+- CI is exact-head evidence, not global completion;
+- review is exact-head evidence, not worker self-report;
+- smoke is task-defined exact-head/effect evidence;
+- `ready_for_review` is the worker handoff boundary;
+- PR-level `READY_TO_MERGE`, where used, is derived from authoritative facts and never from worker prose alone;
+- merge remains operator-only unless the direct user explicitly orders it.
 
-```text
-orca orchestration send --to dispatch:<dispatch_id> ...
-```
+Failure, timeout, cancellation, ambiguity or missing evidence never becomes success.
 
-Keep it short, for example:
+## Orca `worker_done` wording
 
-> Continue the current assigned Task. Re-read current authoritative facts, execute the next role-owned action from your existing plan, and do not settle the Dispatch while any required stage remains. If a genuine unresolved blocker remains after supported recovery, report the evidence and attempts already made.
+The generic Orca guide/preamble should state the universal rule: `worker_done` settles the whole assigned Task attempt, not merely the current model turn/substep.
 
-The send result proves mail acceptance only to the extent Orca's contract says so. On later reconciliation, look for subsequent existing worker/lifecycle evidence. Do not broadcast, use `terminal send --enter`, create a new Dispatch, or re-send the same continuation merely because the agent is still idle.
+At implementation time, inspect the installed/version-matched Orca guide and injected preamble:
 
-One bounded follow-up without later trustworthy evidence that work resumed escalates to `orchestrator_required` rather than becoming an infinite nudge loop.
+- if they already express that whole-Task contract, record the exact Orca version/commit and do not open a gratuitous upstream change;
+- if end-of-turn/ambiguous wording remains, use a linked upstream Orca change for guide/preamble/tests;
+- do not hardcode PACK manager/worker stage lists into Orca core.
 
-### Proving the cadence owner itself
+## Model-neutral documentation authority
 
-Do not add a second watchdog for the scheduler.
+This runbook is the shared orchestration authority once landed.
 
-Use the existing durable S1 progress/snapshot evidence (`schedulerGeneration`, `tickSequence`, `completedAt`/progress) as the current checkpoint witness while S1 owns that surface. A stale/missing checkpoint discovered during ordinary orchestrator reads is an orchestration problem requiring diagnosis; it is not proof that all supervised work is healthy.
+`AGENTS.md` must contain a role-triggered reference requiring orchestrator/manager executors to read it.
 
-If the final architecture replaces that S1 surface, preserve the same property: the cadence owner's latest completed checkpoint must be re-readable without creating another resident monitor.
-
-## Orchestrator exception path
-
-`orchestrator_required` means deterministic policy cannot safely choose the next effect.
-
-The orchestrator may:
-
-- answer an `ask`;
-- resolve an ordinary ownership/recovery ambiguity;
-- restore or select a supported recovery route;
-- decide whether an attempt is truly failed/lost and should be retried;
-- decide whether a live attempt should be terminated/replaced;
-- reassign work;
-- invoke an architect or operator for a genuine decision.
-
-The orchestrator should not become a permanent polling LLM and must not block in foreground waits for CI/review/children.
-
-## Architect escalation
-
-Use an architect only for a real decision class, for example:
-
-- specification contradiction;
-- architecture decision;
-- tier/risk-boundary decision;
-- ownership conflict that cannot be resolved from current facts;
-- recovery exhausted;
-- acceptance criteria impossible as written;
-- review-at-cap decision requiring architectural/operator judgment.
-
-Credentials, permissions, destructive operator choices, and direct user ambiguity are operator/user matters, not architect work.
-
-## Review, CI, smoke, and readiness
-
-Keep these concepts separate.
-
-- CI is exact-head evidence, not global task completion.
-- CI green is never sufficient by itself to open review; the producing worker's exact-head handoff is required.
-- Review is exact-head evidence, not a worker self-report.
-- Reviewers verify the exact head at admission and refuse moved/stale heads.
-- Smoke is exact-head/effect evidence defined by the task.
-- `ready_for_review` is a worker handoff boundary after its required pre-review obligations.
-- PR-level `READY_TO_MERGE`, where used, is derived from authoritative lifecycle facts and is never asserted merely because a worker says done.
-- Merge remains operator-only unless the direct user explicitly orders it.
-
-Never convert failure, timeout, cancellation, ambiguity, missing delivery, or missing evidence into success.
-
-## Recovery model
-
-When an attempt appears stale/lost/failed:
-
-```text
-re-read authoritative Task/Dispatch/assignment/PR/head/report/CI/review/smoke state
--> preserve diagnostic evidence
--> determine whether the intended stage already succeeded
--> determine whether the attempt is still active
--> determine whether it is definitely failed/lost
--> determine whether ownership/head/prerequisite changed
--> choose the smallest supported next action
-```
-
-Do not begin with a lock, lease, retry daemon, permanent recovery queue, or new state store unless a real unserved requirement proves one is necessary.
-
-Recovery helpers may observe and report. They do not terminate a live attempt on their own.
+Do not create a second Codex-only copy. `CLAUDE.md` and `.claude/**` may keep Claude-specific invocation/tool details and pointers, but must not uniquely own shared orchestration/lifecycle/task-authoring rules.
 
 ## What not to build again
 
-Historical experiments showed repeated failure modes from adding supervision machinery around supervision machinery.
+Unless a later task proves a unique requirement, do not add:
 
-Do not recreate, unless a current task proves a unique need:
-
-- a second resident monitor/watcher/watchdog;
-- a separate heartbeat monitor that treats heartbeat as proof of useful work;
-- a monitor whose own logger/watcher process becomes the health signal;
-- a durable retry service for ordinary recoverable orchestration;
-- a parallel lease/ack/delivery-confirm state machine;
-- temporary state ledgers that duplicate authoritative GitHub/Orca/PACK facts;
-- broad pane/PID/title/branch/path targeting when exact identity exists;
-- infinite nudge loops;
-- a second scheduler owner;
+- a second scheduler/daemon/watcher/watchdog;
+- a second idle/liveness detector beside S1;
+- a second continuation actuator beside S2;
+- a parallel S2 claim/journal/ACK/retry state machine;
+- heartbeat-as-progress logic;
+- global pane/PID/title/path targeting when exact identity exists;
 - a second task database duplicating GitHub Issues;
 - a second collaboration/GitHub transport abstraction;
-- compatibility layers whose only purpose is keeping retired orchestration machinery alive.
+- compatibility layers whose only purpose is preserving retired orchestration machinery.
 
-The target architecture should have fewer competing authorities and fewer background processes than the historical setup.
+## Local-only legacy cleanup
 
-## Historical lessons kept; mechanisms retired
+Historical Claude orchestration helpers may exist only on the operator machine and never have been committed.
 
-Use this disposition rule for the old Claude-memory/Gist material:
+They are not repository-worker deletion scope.
 
-| Historical material | Disposition |
-|---|---|
-| Objective-state supervision lessons | **Keep** in this runbook |
-| `busy != progress`, silence/heartbeat caveats | **Keep** in this runbook |
-| Supervised-start-via-Orca and follow-up-consumption lessons | **Keep** in this runbook without a new ACK service |
-| Exact identity and stale-attempt fencing lessons | **Keep** in this runbook |
-| Re-read-before-retry and helper-fallback lessons | **Keep** in this runbook |
-| One-active-attempt/stage-admission lessons | **Keep** in this runbook |
-| Authoritative result-surface/address-space lessons | **Keep** in this runbook |
-| Preserve-failure-evidence/termination-authority lessons | **Keep** in this runbook |
-| Manager/worker/orchestrator role distinctions | **Keep** in this runbook |
-| Long incident diary details | **Drop** unless needed to explain a current invariant |
-| Local resident watcher/watchdog/heartbeat logger machinery | **Retire** when duplicated by current Orca/PACK facts and reconciler |
-| Local broad-pane/global-nudge scripts | **Retire** when exact Task/Dispatch targeting is available |
-| Local keyboard/paste task-delivery wrappers for supervised Dispatches | **Retire** in favor of `worker-start` / `dispatch --inject` |
-| Local retry/ack/delivery-confirm state machines | **Retire** unless a current production requirement proves a unique remaining responsibility |
-| Claude-only private orchestration memory | **Retire as authority** after useful rules are represented in tracked docs |
-
-## Local-only legacy script cleanup
-
-Some historical orchestration helpers may exist only on the operator machine and may never have been committed to this repository.
-
-Those files are **not a repository worker deletion task** merely because this runbook deprecates their behavior.
-
-After this runbook is adopted, the local orchestrator should:
+After the final flow is adopted, the local orchestrator/operator should:
 
 1. read this runbook and the current Orca guide;
-2. inventory local untracked orchestration helpers/state directories;
-3. classify each `keep | replace | delete` against the current target architecture;
-4. delete local-only watcher/watchdog/heartbeat/global-nudge/retry/ack/state scripts whose responsibility is now covered by Orca, PACK authoritative facts, or the deterministic reconciler;
-5. delete supervised task-delivery wrappers that create/pick a pane and paste the task via terminal keystrokes when `worker-start` / `dispatch --inject` is available;
-6. keep only a helper with a concrete current responsibility that is not otherwise served;
-7. remove obsolete local startup/autostart hooks that would resurrect deleted helpers;
-8. verify the surviving normal flow still works without those local scripts.
+2. inventory local untracked orchestration helpers/state/autostart hooks;
+3. classify each `keep | replace | delete`;
+4. delete local watcher/watchdog/heartbeat/global-nudge/keyboard-paste/retry/parallel-ACK/state helpers whose responsibility is now covered by Orca, S1/S2, PACK authoritative facts or the deterministic reconciler;
+5. keep only a helper with a concrete current responsibility not otherwise served;
+6. remove obsolete autostart hooks;
+7. verify the normal flow works without retired helpers.
 
-Do not ask an implementation worker to manufacture tracked deletions for files that never existed in git.
+Do not add local files to git merely to delete them.
 
-If local cleanup changes operator-facing configuration or supervised processes, record the exact adoption steps in the relevant PR/runbook handoff.
+## Operator adoption
 
-## Startup checklist for an orchestrator
+Repository implementation does not silently mutate the operator machine.
 
-Before supervising a new workflow:
+If the final change depends on active deterministic supervision, the PR handoff must state the exact activation/read-back procedure for the existing TypeScript side-process supervisor.
+
+After adoption, prove at least one supervisor-owned scheduler tick under the current epoch using the existing supervisor/S1 durable status/progress surfaces. Until that read-back exists, do not claim the operator environment is actively supervised merely because code merged.
+
+## Verification model
+
+Use the right evidence class for the property.
+
+### Code-enforced behavior
+
+Use focused tests/integration evidence for code paths such as:
+
+- S1 classification semantics;
+- S2 one-shot episode admission and `not_new_episode` suppression;
+- S2 `dispatched | send_failed | dispatch_unknown` settlement;
+- exact target/epoch/stale fencing;
+- reconciliation gating of existing S2 rather than a second actuator;
+- fleet-phase hosting without widening review `liveCandidates()`;
+- duplicate active-attempt admission prevention where implemented in code;
+- exact-head review admission/refusal where implemented in code;
+- `noop | continue | orchestrator_required` branch reachability;
+- supervisor/scheduler integration that preserves existing activation/mutation contracts.
+
+### Documentation/prompt contract
+
+Use read-back of `AGENTS.md`, this runbook and the role prompt surfaces for agent-behavior rules such as:
+
+- manager recovery before escalation;
+- whole manager author/review/fix/lens completion;
+- worker whole-handoff completion;
+- authoritative child result publication;
+- prompt address-space/carrier correctness;
+- failed-evidence preservation and termination authority;
+- alarm authority/scoping;
+- prerequisite reading and non-blocking wait behavior.
+
+Do not invent fake code tests whose only assertion is that prose exists.
+
+### Current-head and adoption evidence
+
+Before claiming repository implementation complete, use current-head CI/review required by `AGENTS.md` and the active tier policy.
+
+Operator activation is separate adoption evidence as described above.
+
+## Startup checklist — orchestrator
 
 ```text
-[ ] read live AGENTS.md
-[ ] read this runbook
-[ ] read the binding Issue/task
-[ ] read the version-matched Orca orchestration guide when using Orca
-[ ] verify explicit prerequisites/blockers before dispatch
-[ ] identify current manager/worker Tasks and exact Dispatches
-[ ] prove there is no already-active attempt for the exact stage/artifact before starting another
-[ ] identify authoritative assignment/report/PR/head/CI/review/smoke facts
-[ ] identify the authoritative result surface for every child/stage being started
-[ ] verify prompt references are resolvable in the target executor's address space
-[ ] for supervised startup use Orca worker-start (preferred) or dispatch --inject; never keyboard/paste task delivery
-[ ] read the structured worker-start/dispatch result rather than infer startup from a raw return code
-[ ] use deterministic reconciliation for routine states
-[ ] use exact identity for effects and dispatch:<id> for supervised follow-up
-[ ] use designated authorities for alarms/escalations and keep repository scope exact
-[ ] invoke reasoning only for ambiguity/decision
+[ ] live AGENTS.md read
+[ ] this runbook read
+[ ] binding Issue/Task read
+[ ] current Orca guide read when applicable
+[ ] current S1/S2 and Task/Dispatch identities known
+[ ] current PR/head/CI/review facts read where applicable
+[ ] routine action uses existing S1/S2 path
+[ ] ambiguity goes to orchestrator reasoning, not a new daemon
 ```
 
-## Completion checklist for a manager
+## Manager completion checklist
 
 ```text
-[ ] full authoring plan was made before work
-[ ] prerequisites were satisfied or explicitly changed by operator authority
-[ ] current Issue was published and read back
-[ ] all required reviews apply to the current Issue revision
-[ ] all required findings are fixed/adjudicated
-[ ] required lens applies to the current Issue revision
-[ ] every required child result reached its authoritative surface
-[ ] any gate invalidated by later edits was rerun
-[ ] task_ready is truthful for the current Issue
-[ ] no manager-owned step remains
-[ ] only now may the parent manager Dispatch send worker_done
+[ ] whole authoring plan made
+[ ] current Issue published and read back
+[ ] all required reviews apply to current revision
+[ ] all findings fixed/adjudicated
+[ ] required lens applies to current revision
+[ ] invalidated gates rerun after edits
+[ ] required child results are on authoritative surfaces
+[ ] task_ready is truthful
+[ ] no manager-owned action remains
+[ ] only now worker_done
 ```
 
-## Completion checklist for a worker
+## Worker completion checklist
 
 ```text
-[ ] live Issue/rules/prerequisites were read
-[ ] scoped implementation is complete
-[ ] required local verification was run
-[ ] PR/current exact head is published
-[ ] required pre-review CI is acceptable for that head
-[ ] no known worker-owned pre-review blocker remains
-[ ] ready_for_review handoff is truthful and durable
-[ ] only now may this worker Dispatch send worker_done
-```
-
-## Verification expectations for supervision
-
-The implementation that claims this runbook must prove at least:
-
-```text
-[ ] noop branch reachable
-[ ] continue branch reachable
-[ ] orchestrator_required branch reachable
-[ ] manager all-gates-satisfied branch reachable
-[ ] worker ready-for-review completion branch reachable
-[ ] positive idle uses current S1 semantics; contradictory evidence -> unknown
-[ ] supervised Dispatch startup uses worker-start/dispatch --inject, not terminal send --enter
-[ ] worker-start failed/unknown/ready receipts are interpreted from structured stage/effects/ready evidence
-[ ] one bounded dispatch-addressed follow-up has later authoritative worker/lifecycle evidence or escalates without resend loop
-[ ] coordinator-side check --ack is never treated as a worker-read receipt
-[ ] unregistered lifecycle producer/stage -> orchestrator_required
-[ ] duplicate active stage attempt is refused
-[ ] review does not start on CI-green proxy alone
-[ ] conversation-only child result is non-delivery when an authoritative surface is required
-[ ] inaccessible prompt reference/carrier mismatch is rejected before work
-[ ] failed attempt preserves diagnostic evidence until orchestrator decision
-[ ] recovery helper cannot terminate a live attempt
-[ ] orchestrator/reconciler return instead of blocking on external waits
-[ ] stale cadence checkpoint is observable from existing durable progress evidence
+[ ] live Issue/rules/prerequisites read
+[ ] scoped implementation complete
+[ ] required local verification complete
+[ ] exact PR head published
+[ ] required pre-review CI acceptable for that head
+[ ] no known worker-owned pre-review blocker
+[ ] ready_for_review handoff truthful
+[ ] only now worker_done
 ```
 
 ## Maintenance rule
@@ -821,9 +644,8 @@ The implementation that claims this runbook must prove at least:
 When a new orchestration incident teaches a durable lesson:
 
 1. fix the real mechanism or contract;
-2. update this runbook only if the lesson changes future operating behavior;
-3. prefer one concise invariant over preserving an incident diary;
-4. register any new lifecycle fact producer with the deterministic reader that depends on it;
-5. do not put the new shared rule only into Claude memory, a private Gist, or a model-specific skill.
+2. update this runbook only if future operating behavior changes;
+3. prefer a concise invariant over preserving an incident diary;
+4. never leave a shared orchestration rule only in Claude memory, a private Gist, or a model-specific skill.
 
-If this runbook conflicts with the live GitHub Issue, `AGENTS.md`, or a newer landed contract, follow the newer authoritative source and update this document in the same work so the contradiction does not remain.
+If this runbook conflicts with a newer live Issue, `AGENTS.md`, or landed contract, follow the newer authority and update this document in the same work.
