@@ -1,8 +1,8 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcess } from '../kernel/subprocess.ts';
 import {
   publishCurrentWorkerAssignment,
   resolveWorkerAssignmentStorePath,
@@ -38,13 +38,17 @@ function writeEpoch(file: string, epochId: string, nonce: string): void {
   }));
 }
 
-function runTick(env: NodeJS.ProcessEnv): Record<string, unknown> {
-  const result = spawnSync(
-    process.execPath,
-    [path.resolve('scripts/pr2-foundation/scheduler.ts'), 'tick'],
-    { cwd: process.cwd(), env, encoding: 'utf8', timeout: 30_000 },
-  );
-  expect(result.status, result.stderr || result.stdout).toBe(0);
+async function runTick(env: NodeJS.ProcessEnv): Promise<Record<string, unknown>> {
+  const result = await runProcess({
+    command: process.execPath,
+    args: [path.resolve('scripts/pr2-foundation/scheduler.ts'), 'tick'],
+    cwd: process.cwd(),
+    env,
+    inheritParentEnv: false,
+    allowEmptyStdout: false,
+    timeoutMs: 30_000,
+  });
+  expect(result.ok, result.stderr || result.stdout || result.error).toBe(true);
   const line = result.stdout.trim().split(/\r?\n/u).at(-1) ?? '';
   expect(line).not.toBe('');
   return JSON.parse(line) as Record<string, unknown>;
@@ -62,16 +66,18 @@ function observerResult(value: Record<string, unknown>): Record<string, unknown>
   return observer as Record<string, unknown>;
 }
 
-function fixture(file: string): {
+interface FixtureState {
   workers: Array<{ id: string; generation: string; bindingKey: string; lines: string[]; liveness: string }>;
   dispatchOutcome?: string;
   dispatches?: Array<{ workerId: string; message: string }>;
-} {
-  return JSON.parse(readFileSync(file, 'utf8')) as ReturnType<typeof fixture>;
+}
+
+function fixture(file: string): FixtureState {
+  return JSON.parse(readFileSync(file, 'utf8')) as FixtureState;
 }
 
 describe('scheduler bounded-child production composition', () => {
-  it('restores one S1 lineage across separate child processes and dispatches one existing S2 episode', () => {
+  it('restores one S1 lineage across separate child processes and dispatches one existing S2 episode', async () => {
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');
     const epochPath = path.join(root, 'epoch.json');
@@ -109,13 +115,11 @@ describe('scheduler bounded-child production composition', () => {
     });
     expect(assignment.ok).toBe(true);
 
-    const first = runTick(env);
-    const second = runTick(env);
-    const afterSecond = fixture(fixturePath);
-    expect(afterSecond.dispatches).toHaveLength(1);
-    const third = runTick(env);
-    const afterThird = fixture(fixturePath);
-    expect(afterThird.dispatches).toHaveLength(1);
+    const first = await runTick(env);
+    const second = await runTick(env);
+    expect(fixture(fixturePath).dispatches).toHaveLength(1);
+    const third = await runTick(env);
+    expect(fixture(fixturePath).dispatches).toHaveLength(1);
 
     const firstObserver = observerResult(first);
     const secondObserver = observerResult(second);
@@ -124,15 +128,14 @@ describe('scheduler bounded-child production composition', () => {
     expect(secondObserver.schedulerGeneration).toBe(thirdObserver.schedulerGeneration);
     expect([firstObserver.tickSequence, secondObserver.tickSequence, thirdObserver.tickSequence]).toEqual([1, 2, 3]);
 
-    const secondScheduler = schedulerResult(second);
-    const secondNudge = secondScheduler.fleetNudge as Record<string, unknown>;
+    const secondNudge = schedulerResult(second).fleetNudge as Record<string, unknown>;
     expect(secondNudge.dispatched).toBe(1);
     expect(secondNudge.sendAttempts).toBe(1);
     const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>;
     expect(thirdNudge.dispatched).toBe(0);
   });
 
-  it('starts a fresh baseline after an activation epoch change', () => {
+  it('starts a fresh baseline after an activation epoch change', async () => {
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');
     const epochPath = path.join(root, 'epoch.json');
@@ -155,17 +158,17 @@ describe('scheduler bounded-child production composition', () => {
       file: resolveWorkerAssignmentStorePath('orchestrator-pack', baseEnv), repository: 'chetwerikoff/orchestrator-pack',
       issueNumber: 1420, taskId: 'task-1420', kind: 'local', provider: 'process-fixture', bindingKey: 'dispatch-1',
     }).ok).toBe(true);
-    const first = runTick(baseEnv);
+    const first = await runTick(baseEnv);
 
     writeEpoch(epochPath, 'epoch-b', 'nonce-b');
     const changedEnv = { ...baseEnv, ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-b', ORCHESTRATOR_CUTOVER_NONCE: 'nonce-b' };
-    const second = runTick(changedEnv);
+    const second = await runTick(changedEnv);
     expect(observerResult(second).schedulerGeneration).not.toBe(observerResult(first).schedulerGeneration);
     expect(observerResult(second).tickSequence).toBe(1);
     expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
-  it('preserves dispatch_unknown without automatic retry in a later child', () => {
+  it('preserves dispatch_unknown without automatic retry in a later child', async () => {
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');
     const epochPath = path.join(root, 'epoch.json');
@@ -188,10 +191,10 @@ describe('scheduler bounded-child production composition', () => {
       file: resolveWorkerAssignmentStorePath('orchestrator-pack', env), repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1420,
       taskId: 'task-1420', kind: 'local', provider: 'process-fixture', bindingKey: 'dispatch-1',
     }).ok).toBe(true);
-    runTick(env);
-    const second = runTick(env);
-    const third = runTick(env);
-    const secondOutcomes = ((schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>);
+    await runTick(env);
+    const second = await runTick(env);
+    const third = await runTick(env);
+    const secondOutcomes = (schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>;
     expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true);
     const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>;
     expect(thirdNudge.sendAttempts).toBe(0);
