@@ -301,8 +301,7 @@ function parseSnapshot(rawBytes: string): FleetObserverSnapshot | null {
     for (const row of value.continuity as FleetObserverContinuityRow[]) {
       const assignmentKey = `${row.assignmentId}\u0000${row.assignmentGeneration}`;
       if (unitRefs.has(row.unitRef) || assignments.has(assignmentKey)) return null;
-      unitRefs.add(row.unitRef);
-      assignments.add(assignmentKey);
+      unitRefs.add(row.unitRef); assignments.add(assignmentKey);
     }
   }
   const started = Date.parse(value.startedAt); const completed = Date.parse(value.completedAt);
@@ -371,25 +370,20 @@ function defaultSnapshotPath(): string {
   const base = process.env.OPK_SIDE_PROCESS_STATE_DIR?.trim() || path.join(os.homedir(), '.orchestrator-pack', 'state');
   return path.join(base, 'fleet-observer-snapshot.json');
 }
-
 function generateGeneration(): string { return `sg-${randomBytes(12).toString('hex')}`; }
-
 function configFromFile(file?: string): ConfigResult {
   if (!file || !existsSync(file)) return { ok: true, config: defaultConfig() };
   try { return parseConfigValue(JSON.parse(readFileSync(file, 'utf8')) as unknown); } catch { return { ok: false, reason: 'invalid-config' }; }
 }
-
 function outputShapeValid(value: RuntimeBoundedOutput, expected: RuntimeWorkerIdentity): boolean {
   return sameIdentity(value.worker, expected) && Array.isArray(value.lines) && value.lines.every((line) => typeof line === 'string')
     && isRecord(value.observationToken) && hasOnlyKeys(value.observationToken as unknown as RecordValue, new Set(['opaque']))
     && typeof value.observationToken.opaque === 'string' && typeof value.changed === 'boolean'
     && ['running', 'exited', 'unknown'].includes(value.terminalState);
 }
-
 function livenessShapeValid(value: RuntimeLivenessResult, expected: RuntimeWorkerIdentity): boolean {
   return RUNTIME_LIVENESS_RESULTS.includes(value.status) && sameIdentity(value.worker, expected);
 }
-
 async function beforeDeadline<T>(action: () => MaybePromise<T>, deadlineMs: number, now: () => number): Promise<BoundedCall<T>> {
   const remaining = Math.floor(deadlineMs - now());
   if (remaining <= 0) return { completed: false };
@@ -400,7 +394,6 @@ async function beforeDeadline<T>(action: () => MaybePromise<T>, deadlineMs: numb
   if (timer !== undefined) clearTimeout(timer);
   return result;
 }
-
 function atomicCommit(file: string, snapshot: FleetObserverSnapshot): boolean {
   const bytes = serializeFleetSnapshot(snapshot);
   if (Buffer.byteLength(bytes, 'utf8') > MAX_SNAPSHOT_BYTES) return false;
@@ -413,8 +406,7 @@ function atomicCommit(file: string, snapshot: FleetObserverSnapshot): boolean {
     const readBack = readFileSync(file, 'utf8');
     return readBack === bytes && isAcceptedFleetSnapshot(readBack);
   } catch {
-    rmSync(temporary, { force: true });
-    return false;
+    rmSync(temporary, { force: true }); return false;
   }
 }
 
@@ -481,16 +473,12 @@ export class FleetObserver {
     const parsed = this.#readConfig();
     return effectiveBudget(parsed.ok ? parsed.config : defaultConfig(), schedulerIntervalMs).effectiveBudgetMs;
   }
-
   cancel(): void { this.#cancelVersion += 1; }
-
   #readConfig(): ConfigResult {
     if (this.#inlineConfig !== undefined) return parseConfigValue(this.#inlineConfig);
     return configFromFile(this.#configPath);
   }
-
   #nextUnitRef(): string { this.#unitCounter += 1; return `u-${String(this.#unitCounter).padStart(6, '0')}`; }
-
   #restore(workers: readonly RuntimeWorker[]): boolean {
     if (!this.#activationLineage || this.#restoredContinuity.length === 0 || this.#states.size > 0) return true;
     const used = new Set<string>();
@@ -511,22 +499,17 @@ export class FleetObserver {
     }
     return true;
   }
-
   #identityKey(identity: RuntimeWorkerIdentity): string { return JSON.stringify([identity.runtime, identity.id, identity.generation]); }
-
   #binding(identity: RuntimeWorkerIdentity): FleetAssignmentBinding | null {
     const matches = this.#assignmentBindings.filter((binding) => sameIdentity(binding.worker, identity));
     return matches.length === 1 ? matches[0]! : null;
   }
-
   #ensureState(worker: RuntimeWorker): InMemoryUnit | null {
     const key = this.#identityKey(worker.identity);
     const existing = this.#states.get(key);
     if (existing) { existing.present = true; return existing; }
     for (const [otherKey, other] of this.#states) {
-      if (sameLogicalWorker(other.identity, worker.identity) && !sameIdentity(other.identity, worker.identity)) {
-        this.#states.delete(otherKey);
-      }
+      if (sameLogicalWorker(other.identity, worker.identity) && !sameIdentity(other.identity, worker.identity)) this.#states.delete(otherKey);
     }
     const binding = this.#binding(worker.identity);
     const unitRef = binding?.unitRef ?? this.#nextUnitRef();
@@ -550,7 +533,8 @@ export class FleetObserver {
       return { unitRef: state.unitRef, provenance: state.provenance, class: 'unknown', reason: 'identity-contradiction', probes: { output: 'failed', liveness: 'failed' }, livelockStreak: state.livelockStreak };
     }
     const output = await beforeDeadline(() => this.source.readBoundedOutput({ worker: state.identity, previousToken: state.token, limit: 128 }, { timeoutMs: Math.max(1, deadlineMs - now()) }), deadlineMs, now);
-    const live = await beforeDeadline(() => this.source.liveness({ worker: state.identity, observationWindowMs: 1 }, { timeoutMs: Math.max(1, deadlineMs - now()) }), deadlineMs, now);
+    const livenessWindowMs = Math.max(1, Math.floor(deadlineMs - now()));
+    const live = await beforeDeadline(() => this.source.liveness({ worker: state.identity, observationWindowMs: livenessWindowMs }, { timeoutMs: livenessWindowMs }), deadlineMs, now);
     if (!output.completed || !live.completed) {
       return { unitRef: state.unitRef, provenance: state.provenance, class: 'unknown', reason: 'phase-budget-expired', probes: { output: output.completed ? 'failed' : 'expired', liveness: live.completed ? 'failed' : 'expired' }, livelockStreak: state.livelockStreak };
     }
@@ -568,11 +552,7 @@ export class FleetObserver {
       return { unitRef: state.unitRef, provenance: state.provenance, class: 'unknown', reason: 'liveness-unknown', probes: { output: 'valid', liveness: 'unknown' }, livelockStreak: state.livelockStreak };
     }
     const hadBaseline = state.hasBaseline;
-    const changed = state.token
-      ? out.changed
-      : hadBaseline && state.outputDigest !== null
-        ? state.outputDigest !== digest
-        : false;
+    const changed = state.token ? out.changed : hadBaseline && state.outputDigest !== null ? state.outputDigest !== digest : false;
     state.token = out.observationToken; state.outputDigest = digest; state.hasBaseline = true;
     const exception = config.exceptions.find((entry) => entry.schedulerGeneration === this.schedulerGeneration && entry.unitRef === state.unitRef);
     if (exception && (liveness === 'busy' || liveness === 'idle')) {
@@ -592,9 +572,7 @@ export class FleetObserver {
       return { unitRef: state.unitRef, provenance: state.provenance, class: 'busy', reason: 'busy', probes: { output: 'valid', liveness: 'busy' }, livelockStreak: 0 };
     }
     state.livelockStreak += 1;
-    if (state.livelockStreak >= config.livelockTicks) {
-      return { unitRef: state.unitRef, provenance: state.provenance, class: 'livelock', reason: 'livelock', probes: { output: 'valid', liveness: 'busy' }, livelockStreak: state.livelockStreak };
-    }
+    if (state.livelockStreak >= config.livelockTicks) return { unitRef: state.unitRef, provenance: state.provenance, class: 'livelock', reason: 'livelock', probes: { output: 'valid', liveness: 'busy' }, livelockStreak: state.livelockStreak };
     return { unitRef: state.unitRef, provenance: state.provenance, class: 'unknown', reason: 'busy-without-progress', probes: { output: 'valid', liveness: 'busy' }, livelockStreak: state.livelockStreak };
   }
 
@@ -610,18 +588,13 @@ export class FleetObserver {
   }
 
   async tick(input: FleetObserverTickInput): Promise<FleetObserverResult> {
-    const parsed = this.#readConfig();
-    const config = parsed.ok ? parsed.config : defaultConfig();
+    const parsed = this.#readConfig(); const config = parsed.ok ? parsed.config : defaultConfig();
     const budget = effectiveBudget(config, input.schedulerIntervalMs);
-    const startedAt = input.phaseStartMs ?? this.#now();
-    const deadlineMs = startedAt + budget.effectiveBudgetMs;
-    const requested = input.tickSequence ?? this.#tickSequence + 1;
-    this.#latestRequestedSequence = Math.max(this.#latestRequestedSequence, requested);
-    const cancelVersion = this.#cancelVersion;
-    const previous = readSnapshot(this.snapshotPath).snapshot;
+    const startedAt = input.phaseStartMs ?? this.#now(); const deadlineMs = startedAt + budget.effectiveBudgetMs;
+    const requested = input.tickSequence ?? this.#tickSequence + 1; this.#latestRequestedSequence = Math.max(this.#latestRequestedSequence, requested);
+    const cancelVersion = this.#cancelVersion; const previous = readSnapshot(this.snapshotPath).snapshot;
     if (!parsed.ok) return this.#failure({ reason: parsed.reason, sequence: requested, budget, startedAt, previous });
     this.#exceptionCollisionRejected = config.exceptions.some((entry) => entry.schedulerGeneration !== this.schedulerGeneration && [...this.#states.values()].some((state) => state.unitRef === entry.unitRef));
-
     const listing = await beforeDeadline(() => this.source.listWorkers({ workspace: 'active' }, { timeoutMs: Math.max(1, deadlineMs - this.#now()) }), deadlineMs, this.#now);
     if (requested !== this.#latestRequestedSequence || cancelVersion !== this.#cancelVersion) return this.#failure({ reason: 'stale-completion', sequence: requested, budget, startedAt, previous, stale: true });
     if (!listing.completed || !listing.value || listing.value.status !== 'ok') return this.#failure({ reason: 'list-workers-failed', sequence: requested, budget, startedAt, previous });
@@ -631,25 +604,16 @@ export class FleetObserver {
     for (const state of this.#states.values()) state.present = false;
     const states: InMemoryUnit[] = [];
     for (const worker of workers) {
-      const state = this.#ensureState(worker);
-      if (!state) return this.#failure({ reason: 'assignment-binding-untrusted', sequence: requested, budget, startedAt, previous });
+      const state = this.#ensureState(worker); if (!state) return this.#failure({ reason: 'assignment-binding-untrusted', sequence: requested, budget, startedAt, previous });
       state.present = true; states.push(state);
     }
-
-    const transitions: FleetTransition[] = [];
-    const rows: CensusRow[] = [];
-    let cursor = 0;
+    const transitions: FleetTransition[] = []; const rows: CensusRow[] = []; let cursor = 0;
     const probeWorker = async (): Promise<void> => {
       for (;;) {
         const index = cursor; cursor += 1; if (index >= states.length) return;
         if (this.#now() >= deadlineMs || requested !== this.#latestRequestedSequence || cancelVersion !== this.#cancelVersion) return;
-        const state = states[index]!; const priorClass = state.class;
-        const row = await this.#probe(state, config, deadlineMs);
-        if (row === null) {
-          transitions.push({ type: 'unit-disappeared', unitRef: state.unitRef, tickSequence: requested, reason: 'positive-gone' });
-          this.#states.delete(this.#identityKey(state.identity));
-          continue;
-        }
+        const state = states[index]!; const priorClass = state.class; const row = await this.#probe(state, config, deadlineMs);
+        if (row === null) { transitions.push({ type: 'unit-disappeared', unitRef: state.unitRef, tickSequence: requested, reason: 'positive-gone' }); this.#states.delete(this.#identityKey(state.identity)); continue; }
         rows.push(row);
         if (priorClass === null) transitions.push({ type: 'unit-appeared', unitRef: state.unitRef, tickSequence: requested, reason: 'unit-present' });
         else if (priorClass !== row.class) transitions.push({ type: 'class-changed', unitRef: state.unitRef, tickSequence: requested, reason: row.reason, fromClass: priorClass, toClass: row.class });
@@ -659,14 +623,11 @@ export class FleetObserver {
     await Promise.all(Array.from({ length: Math.min(config.maxConcurrency, Math.max(1, states.length)) }, () => probeWorker()));
     if (requested !== this.#latestRequestedSequence || cancelVersion !== this.#cancelVersion) return this.#failure({ reason: 'stale-completion', sequence: requested, budget, startedAt, previous, stale: true });
     if (this.#now() > deadlineMs || rows.length + transitions.filter((item) => item.type === 'unit-disappeared').length < states.length) return this.#failure({ reason: 'phase-budget-expired', sequence: requested, budget, startedAt, previous });
-
     rows.sort((a, b) => a.unitRef.localeCompare(b.unitRef)); transitions.sort((a, b) => a.unitRef.localeCompare(b.unitRef) || a.type.localeCompare(b.type));
-    const continuity = this.#activationLineage ? [...this.#states.values()]
-      .filter((state) => state.assignmentId && state.assignmentGeneration)
-      .map((state): FleetObserverContinuityRow => ({
-        assignmentId: state.assignmentId!, assignmentGeneration: state.assignmentGeneration!, unitRef: state.unitRef,
-        class: state.class, livelockStreak: state.livelockStreak, hasBaseline: state.hasBaseline, outputDigest: state.outputDigest,
-      })).sort((a, b) => a.unitRef.localeCompare(b.unitRef)) : undefined;
+    const continuity = this.#activationLineage ? [...this.#states.values()].filter((state) => state.assignmentId && state.assignmentGeneration).map((state): FleetObserverContinuityRow => ({
+      assignmentId: state.assignmentId!, assignmentGeneration: state.assignmentGeneration!, unitRef: state.unitRef,
+      class: state.class, livelockStreak: state.livelockStreak, hasBaseline: state.hasBaseline, outputDigest: state.outputDigest,
+    })).sort((a, b) => a.unitRef.localeCompare(b.unitRef)) : undefined;
     const completedAt = this.#now();
     const snapshot: FleetObserverSnapshot = {
       schemaVersion: 1, commitStatus: 'complete', schedulerGeneration: this.schedulerGeneration, tickSequence: requested,
