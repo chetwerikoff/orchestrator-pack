@@ -45,6 +45,20 @@ describe('fleet reconciliation handoff', () => {
     expect(bytes).not.toMatch(/runtimeWorkerIdentity|observationToken|terminalOutput|prompt|reply|workspacePath|pid/i);
   });
 
+  it('rejects an unresolved repository instead of persisting a fabricated identity', () => {
+    const target = file();
+    const published = publishFleetReconciliationHandoff({
+      file: target,
+      repository: 'unknown/repository',
+      activationLineage: 'al-deadbeef',
+      schedulerGeneration: 'sg-generation',
+      tickSequence: 1,
+      reason: 'target_unresolved',
+    });
+    expect(published).toEqual({ ok: false, reason: 'handoff_repository_unresolved' });
+    expect(readFleetReconciliationHandoff(target)).toBeNull();
+  });
+
   it('fails closed when the destination cannot be committed', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'opk-1420-handoff-dir-'));
     roots.push(root);
