@@ -88,10 +88,10 @@ export class ProcessFixtureRuntimeAdapter implements RuntimeAdapter {
     catch { return runtimeFailure('find_worker_by_id', 'process_fixture_unavailable'); }
   }
   findWorker(expected: RuntimeWorkerIdentity): RuntimeResult<RuntimeWorker | null> {
-    const found = this.findWorkerById(expected.id);
-    return found.status === 'ok'
-      ? { status: 'ok', value: found.value && sameRuntimeWorker(found.value.identity, expected) ? found.value : null }
-      : found;
+    try {
+      const row = this.#read().workers.find((worker) => worker.id === expected.id && sameRuntimeWorker(identity(worker), expected));
+      return { status: 'ok', value: row ? runtimeWorker(row) : null };
+    } catch { return runtimeFailure('find_worker', 'process_fixture_unavailable'); }
   }
   resolveAssignmentWorker(input: { provider: string; bindingKey: string }): RuntimeResult<RuntimeWorker | null> {
     if (input.provider !== 'process-fixture') return runtimeUnsupported('resolve_assignment_worker', 'assignment_provider_unsupported');
