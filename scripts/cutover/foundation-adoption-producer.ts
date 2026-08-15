@@ -1,18 +1,23 @@
 import '../toolchain/native-entrypoint-preflight.ts';
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
-import os from 'node:os';
+import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import {
   foundationEvidenceDigest,
   writeDurableJson,
 } from '../lib/cutover/activation-evidence.ts';
-import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
-import { captureLegacyWriters, findLegacySupervisorIdentities, processAlive } from '../lib/cutover/activation-cordon.ts';
+import { captureLegacyWriters, findLegacySupervisorIdentities } from '../lib/cutover/activation-cordon.ts';
 import { runActivationPlatformPreflight } from '../lib/cutover/activation-platform-preflight.ts';
+import {
+  canonicalFoundationPaths,
+  discoverCommittedMigrationJournals,
+  localObservedHostId,
+  observeFoundationInertProof,
+  observedHeartbeat,
+  readObservedAppStateVersion,
+  readObservedHostRoster,
+} from '../lib/cutover/foundation-observation.ts';
 import type { FoundationAdmissionEvidence } from '../lib/cutover/types.ts';
-import { readSupervisorStatus } from '../lib/orchestrator-side-process-supervisor.ts';
-import { readMigrationJournal } from '../pr2-foundation/migration-journal.ts';
 import {
   captureLeakReason,
   sanitizeRuntimeWorkers,
@@ -22,10 +27,7 @@ import {
 } from '../pr2-foundation/binding.ts';
 import { parseFoundationConfig, type FoundationConfig } from '../pr2-foundation/config.ts';
 import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog } from '../pr2-foundation/runtime-catalog.ts';
-import { assertFoundationInert } from '../pr2-foundation/scheduler.ts';
 import { FOUNDATION_COMMIT } from '../pr2a/contracts.ts';
-
-const DEFAULT_EVIDENCE_FILE = 'foundation-923-adoption.json';
 
 export interface FoundationAdoptionProducerInput {
   repoRoot: string;
@@ -34,20 +36,11 @@ export interface FoundationAdoptionProducerInput {
   appStatePath: string;
   migrationJournalPaths?: string[];
   evidencePath?: string;
-  now?: string;
 }
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('foundation_observation_shape_invalid');
   return value as Record<string, unknown>;
-}
-
-function appStateVersion(value: unknown): string {
-  const root = record(value);
-  const direct = [root.version, root.appStateVersion, root.appVersion]
-    .find((candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0);
-  if (direct) return direct;
-  throw new Error('foundation_preflight_version_unobservable');
 }
 
 function parseRuntimeRows(value: unknown): unknown[] {
@@ -101,73 +94,34 @@ function requireObservedConfig(input: unknown): { raw: Record<string, unknown>; 
   return { raw, config: parsed.config };
 }
 
-function discoverMigrationJournals(stateDir: string): string[] {
-  const output: string[] = [];
-  const visit = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const candidate = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        visit(candidate);
-      } else if (entry.isFile() && entry.name.endsWith('.json')) {
-        const journal = readMigrationJournal(candidate);
-        if (journal.ok && journal.record?.state === 'committed') output.push(candidate);
-      }
-    }
-  };
-  if (existsSync(stateDir)) visit(stateDir);
-  return output.sort();
-}
-
-function validateCommittedJournals(paths: string[]): string[] {
-  const normalized = [...new Set(paths.map((value) => path.resolve(value)))];
-  if (normalized.length === 0) throw new Error('foundation_migration_journal_unobservable');
-  for (const journalPath of normalized) {
-    const journal = readMigrationJournal(journalPath);
-    if (!journal.ok) {
-      throw new Error(`foundation_migration_journal_unobservable:${journalPath}`);
-    }
-    if (journal.record?.state !== 'committed') {
-      throw new Error(`foundation_migration_journal_unobservable:${journalPath}`);
-    }
-  }
-  return normalized;
-}
-
-function assertEmptyAuthority(stateDir: string): void {
-  const authority = new FileEpochAuthority(path.join(stateDir, 'epoch-authority.json')).read();
-  if (authority.currentEpochId !== null || authority.records.length !== 0) {
-    throw new Error('greenfield_epoch_authority_not_empty');
-  }
-}
-
-function assertNoRegisteredControlPlane(supervisorStateDir: string): void {
-  const status = readSupervisorStatus({ stateDir: supervisorStateDir });
-  if (status) {
-    if (status.schemaVersion !== 1 || status.childId !== 'pr2-scheduler' || typeof status.restartState !== 'string') {
-      throw new Error('greenfield_registered_child_unknown');
-    }
-    const supervisorAlive = Number.isInteger(status.supervisorPid) && status.supervisorPid > 1 && processAlive(status.supervisorPid);
-    const childAlive = Number.isInteger(status.childPid) && status.childPid !== null && status.childPid > 1 && processAlive(status.childPid);
-    if (supervisorAlive || childAlive) throw new Error('greenfield_registered_child_alive');
-  }
-}
-
 export async function produceFoundationAdoptionEvidence(
   input: FoundationAdoptionProducerInput,
 ): Promise<{ evidencePath: string; evidence: FoundationAdmissionEvidence }> {
   const repoRoot = path.resolve(input.repoRoot);
-  const stateDir = path.resolve(input.stateDir);
-  const supervisorStateDir = path.join(stateDir, 'supervisor');
+  const canonical = canonicalFoundationPaths(repoRoot);
+  if (path.resolve(input.stateDir) !== canonical.stateRoot) throw new Error('foundation_state_root_unobservable');
+  if (path.resolve(input.configPath) !== canonical.configPath) throw new Error('foundation_config_unobservable');
+  if (path.resolve(input.appStatePath) !== canonical.appStatePath) {
+    throw new Error('foundation_preflight_version_unobservable');
+  }
+  const evidencePath = path.resolve(input.evidencePath ?? canonical.evidencePath);
+  if (evidencePath !== canonical.evidencePath) throw new Error('foundation_evidence_path_unobservable');
+  const supervisorStateDir = canonical.supervisorStateDir;
   const targetRegistryPath = path.join(repoRoot, 'scripts', 'orchestrator-side-process-registry.json');
-  const projectedRegistryPath = path.join(supervisorStateDir, 'projected-registry.json');
-  const evidencePath = path.resolve(input.evidencePath ?? path.join(stateDir, DEFAULT_EVIDENCE_FILE));
+  const projectedRegistryPath = canonical.projectedRegistryPath;
   mkdirSync(supervisorStateDir, { recursive: true });
 
-  const observedConfig = requireObservedConfig(JSON.parse(readFileSync(input.configPath, 'utf8')));
+  let observedConfigInput: unknown;
+  try {
+    observedConfigInput = JSON.parse(readFileSync(canonical.configPath, 'utf8')) as unknown;
+  } catch {
+    throw new Error('foundation_config_unobservable');
+  }
+  const observedConfig = requireObservedConfig(observedConfigInput);
   if (observedConfig.config.notification.runtimePath !== 'ao') {
     throw new Error('foundation_preflight_command_unobservable');
   }
-  const version = appStateVersion(JSON.parse(readFileSync(input.appStatePath, 'utf8')));
+  const version = readObservedAppStateVersion(canonical.appStatePath);
   const runtime = await runProcess({
     command: observedConfig.config.notification.runtimePath,
     args: ['session', 'ls', '--json'],
@@ -196,27 +150,25 @@ export async function produceFoundationAdoptionEvidence(
 
   const parsedCatalog = validateRuntimeCatalog(FOUNDATION_RUNTIME_CATALOG, FOUNDATION_RUNTIME_CATALOG);
   if (!parsedCatalog.ok) throw new Error(`foundation_runtime_catalog_unobservable:${parsedCatalog.reason}`);
-  assertEmptyAuthority(stateDir);
-  assertNoRegisteredControlPlane(supervisorStateDir);
   if (captureLegacyWriters(repoRoot, supervisorStateDir).length !== 0) {
     throw new Error('greenfield_legacy_writer_present');
   }
   if (findLegacySupervisorIdentities(repoRoot).length !== 0) throw new Error('greenfield_legacy_supervisor_present');
-  const journals = validateCommittedJournals(input.migrationJournalPaths ?? discoverMigrationJournals(stateDir));
-  const inertProof = assertFoundationInert({
-    registryChanged: false,
-    supervisorChanged: false,
-    schedulerRegistered: false,
-    schedulerRunning: false,
-    schedulerClaimAcquirer: false,
-    activationEpochEnforced: false,
-    liveStoreOpened: false,
-    legacyStarterDisabled: false,
-    nonNotificationRuntimeDelta: false,
-    notificationTypedConfigLive: true,
-    dormantTypedConfigReaderLive: false,
+  const journals = discoverCommittedMigrationJournals(canonical.stateRoot);
+  if (input.migrationJournalPaths !== undefined) {
+    const supplied = [...new Set(input.migrationJournalPaths.map((value) => path.resolve(value)))].sort();
+    if (supplied.length !== journals.length || supplied.some((value, index) => value !== journals[index])) {
+      throw new Error('foundation_migration_journal_unobservable');
+    }
+  }
+  const roster = readObservedHostRoster(canonical.hostRosterPath);
+  const localHostId = localObservedHostId();
+  if (roster.length !== 1 || roster[0]?.hostId !== localHostId) throw new Error('foundation_roster_unobservable');
+  const inertProof = observeFoundationInertProof({
+    repoRoot,
+    paths: canonical,
+    configObserved: true,
   });
-  if (!inertProof.ok) throw new Error(`foundation_inert_proof_unobservable:${inertProof.reason}`);
 
   const installedCommitSha = (await runProcess({
     command: 'git',
@@ -234,9 +186,6 @@ export async function produceFoundationAdoptionEvidence(
     targetRegistryPath,
     projectedRegistryPath,
   });
-  const now = input.now ?? new Date().toISOString();
-  const hostId = os.hostname().trim();
-  if (!hostId) throw new Error('foundation_host_unobservable');
   const unsigned: Omit<FoundationAdmissionEvidence, 'observationDigest'> = {
     schemaVersion: 1,
     issue: 923,
@@ -247,12 +196,7 @@ export async function produceFoundationAdoptionEvidence(
     migrationJournalPaths: journals,
     runtimeCatalog: [...FOUNDATION_RUNTIME_CATALOG],
     inertProof,
-    heartbeats: [{
-      hostId,
-      installedCommitSha,
-      observedAt: now,
-      active: true,
-    }],
+    heartbeats: observedHeartbeat(roster, localHostId, installedCommitSha, new Date().toISOString()),
   };
   const evidence: FoundationAdmissionEvidence = {
     ...unsigned,
@@ -272,17 +216,13 @@ function parseArgs(argv: string[]): FoundationAdoptionProducerInput {
     values.set(flag.slice(2), value);
   }
   const repoRoot = values.get('repo-root') ?? process.cwd();
-  const stateDir = values.get('state-dir') ?? path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), '.local', 'state'), 'orchestrator-pack-wake-supervisor');
-  const configPath = values.get('config') ?? process.env.OPK_FOUNDATION_CONFIG ?? '';
-  const appStatePath = values.get('app-state') ?? process.env.OPK_APP_STATE_PATH ?? '';
-  if (!configPath) throw new Error('foundation_config_unobservable');
-  if (!appStatePath) throw new Error('foundation_preflight_version_unobservable');
+  const canonical = canonicalFoundationPaths(repoRoot);
   return {
     repoRoot,
-    stateDir,
-    configPath,
-    appStatePath,
-    evidencePath: values.get('output'),
+    stateDir: values.get('state-dir') ?? canonical.stateRoot,
+    configPath: values.get('config') ?? canonical.configPath,
+    appStatePath: values.get('app-state') ?? canonical.appStatePath,
+    evidencePath: values.get('output') ?? canonical.evidencePath,
     migrationJournalPaths: values.get('migration-journal')?.split(',').filter(Boolean),
   };
 }

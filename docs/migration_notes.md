@@ -89,15 +89,17 @@ TypeScript command; it must not be hand-written:
 ```bash
 node --experimental-strip-types scripts/cutover/foundation-adoption-producer.ts \
   --repo-root "$PWD" \
-  --state-dir "$HOME/.local/state/orchestrator-pack-wake-supervisor" \
-  --config "$HOME/.config/orchestrator-pack/foundation.json" \
-  --app-state "$HOME/.orchestrator-pack/app-state.json"
+  --state-dir "$HOME/.local/state/orchestrator-pack-wake-supervisor"
 node --experimental-strip-types scripts/orchestrator-cutover-activate.ts \
   activate <greenfield-activation-request.json>
 ```
 
-The request must bind `expectedOldEpochId: null`, the local single-host roster,
-the emitted evidence path, and the existing three cutover stores. A request
+Before running the producer, the canonical state root must contain
+`foundation-config.json`, `app-state.json`, `host-roster.json`, and at least one
+committed migration journal. The producer observes these files and the live
+runtime; it rejects alternate paths and caller-supplied journal rosters.
+The request must bind `expectedOldEpochId: null`, the locally observed
+single-host roster, the emitted evidence path, and the existing three cutover stores. A request
 with a claimed legacy PID still takes the identity, aliveness, old-revision
 ownership, writer capture, drain, and termination path. No flag or environment
 variable bypasses `proveFoundationAdoption`.

@@ -6,9 +6,16 @@ import { runProcessSync } from '../kernel/subprocess.ts';
 import { stableStringify } from '../lib/cutover/stable-stringify.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
 import { activateCutover, type ActivationBoundary } from '../lib/cutover/activation-transaction.ts';
+import { abandonPreImportCordon } from '../lib/cutover/activation-transaction.ts';
 import { isExecutableLegacyReference } from '../lib/cutover/activation-transaction.ts';
-import { createCordon, markImportBegun, readCordonState } from '../lib/cutover/activation-cordon.ts';
-import { appendPhaseOne, foundationEvidenceDigest, verifyFoundationEvidenceDigest } from '../lib/cutover/activation-evidence.ts';
+import { createCordon, findLegacySupervisorIdentities, markImportBegun, readCordonState } from '../lib/cutover/activation-cordon.ts';
+import { assertCanonicalActivationPaths, canonicalFoundationPaths } from '../lib/cutover/foundation-observation.ts';
+import {
+  appendPhaseOne,
+  foundationEvidenceDigest,
+  verifyFoundationEvidenceDigest,
+  verifyFoundationEvidenceObservation,
+} from '../lib/cutover/activation-evidence.ts';
 import { snapshotStores } from '../lib/cutover/activation-import.ts';
 import {
   findCompletedSchedulerDelivery,
@@ -26,6 +33,7 @@ import { D928 } from '../pr2a/contracts.ts';
 import { getPackReviewRun, initializePackReviewRunStore, updatePackReviewRun } from '../lib/pack-review-run-store.ts';
 import { packReviewDeliveryNeedsResume } from '../lib/pack-review-delivery.ts';
 import { startPackReview } from '../pack-review-runner.ts';
+import { produceFoundationAdoptionEvidence } from './foundation-adoption-producer.ts';
 
 const repoRoot = path.resolve(process.cwd());
 const roots: string[] = [];
@@ -876,10 +884,131 @@ describe('Issue 1422 first-time activation', () => {
       typedConfig: {},
       migrationJournalPaths: ['journal.json'],
       runtimeCatalog: [],
-      inertProof: { result: 'live-acquirers-unchanged' },
+      inertProof: {
+        result: 'live-acquirers-unchanged',
+        observations: {
+          registryChanged: false,
+          supervisorChanged: false,
+          schedulerRegistered: false,
+          schedulerRunning: false,
+          schedulerClaimAcquirer: false,
+          activationEpochEnforced: false,
+          liveStoreOpened: false,
+          legacyStarterDisabled: false,
+          nonNotificationRuntimeDelta: false,
+          notificationTypedConfigLive: true,
+        },
+      },
       heartbeats: [],
     } satisfies Omit<FoundationAdmissionEvidence, 'observationDigest'>;
-    const signed = { ...evidence, observationDigest: foundationEvidenceDigest(evidence) };
-    expect(() => verifyFoundationEvidenceDigest({ ...signed, typedConfig: { changed: true } })).toThrow('foundation_evidence_observation_digest_invalid');
+    const editedUnsigned = { ...evidence, typedConfig: { changed: true } };
+    const edited = { ...editedUnsigned, observationDigest: foundationEvidenceDigest(editedUnsigned) };
+    expect(() => verifyFoundationEvidenceObservation(edited, {
+      typedConfig: evidence.typedConfig,
+      appStateVersion: '0.10.3',
+      migrationJournalPaths: evidence.migrationJournalPaths,
+      inertProof: evidence.inertProof,
+      heartbeats: evidence.heartbeats,
+    })).toThrow('foundation_evidence_observation_mismatch');
+  });
+
+  it('binds activation paths to the canonical state root', () => {
+    const { request } = createIssue1422FirstTimeFixture();
+    const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    const stateRoot = mkdtempSync(path.join(os.tmpdir(), 'opk-1422-canonical-'));
+    issue1422FirstTimeRoots.push(stateRoot);
+    process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = stateRoot;
+    try {
+      const canonical = canonicalFoundationPaths(request.repoRoot);
+      const matchingPaths = {
+        ...request.paths,
+        stateDir: canonical.stateRoot,
+        supervisorStateDir: canonical.supervisorStateDir,
+        epochAuthorityPath: canonical.epochAuthorityPath,
+        foundationEvidencePath: canonical.evidencePath,
+        cordonPath: canonical.cordonPath,
+        phaseOnePath: canonical.phaseOnePath,
+        followupPath: canonical.followupPath,
+        projectedRegistryPath: canonical.projectedRegistryPath,
+        snapshotDir: canonical.snapshotDir,
+        targetRegistryPath: path.join(path.resolve(request.repoRoot), 'scripts', 'orchestrator-side-process-registry.json'),
+      };
+      expect(assertCanonicalActivationPaths({ ...request, paths: matchingPaths })).toEqual(canonical);
+
+      const alternateRoot = path.join(stateRoot, 'alternate-empty');
+      mkdirSync(alternateRoot, { recursive: true });
+      expect(() => assertCanonicalActivationPaths({
+        ...request,
+        paths: {
+          ...matchingPaths,
+          stateDir: alternateRoot,
+          supervisorStateDir: path.join(alternateRoot, 'supervisor'),
+          epochAuthorityPath: path.join(alternateRoot, 'epoch-authority.json'),
+          foundationEvidencePath: path.join(alternateRoot, 'foundation-923-adoption.json'),
+        },
+      })).toThrow('foundation_state_root_unobservable');
+      expect(new FileEpochAuthority(canonical.epochAuthorityPath).read().currentEpochId).toBeNull();
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+      else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
+    }
+  });
+
+  it('fails closed on an ambiguous legacy supervisor census', () => {
+    const { request } = createIssue1422FirstTimeFixture();
+    const authority = new FileEpochAuthority(request.paths.epochAuthorityPath);
+    const readIdentity = (): never => {
+      const error = new Error('permission denied') as NodeJS.ErrnoException;
+      error.code = 'EACCES';
+      throw error;
+    };
+    expect(() => findLegacySupervisorIdentities(request.oldInstalledRevisionRoot, {
+      entries: () => ['4242'],
+      readIdentity,
+    })).toThrow('greenfield_legacy_supervisor_unknown:4242');
+    expect(authority.read().currentEpochId).toBeNull();
+  });
+
+  it('refuses unobservable canonical foundation sources before writing evidence', async () => {
+    const { request } = createIssue1422FirstTimeFixture();
+    const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    const stateRoot = mkdtempSync(path.join(os.tmpdir(), 'opk-1422-producer-'));
+    issue1422FirstTimeRoots.push(stateRoot);
+    process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = stateRoot;
+    try {
+      const canonical = canonicalFoundationPaths(request.repoRoot);
+      await expect(produceFoundationAdoptionEvidence({
+        repoRoot: request.repoRoot,
+        stateDir: canonical.stateRoot,
+        configPath: canonical.configPath,
+        appStatePath: canonical.appStatePath,
+        evidencePath: canonical.evidencePath,
+      })).rejects.toThrow(/unobservable/);
+      expect(existsSync(canonical.evidencePath)).toBe(false);
+      expect(existsSync(canonical.epochAuthorityPath)).toBe(false);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+      else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
+    }
+  });
+
+  it('rolls back a greenfield pre-import cordon without epoch mutation', () => {
+    const { request } = createIssue1422FirstTimeFixture();
+    createCordon({
+      path: request.paths.cordonPath,
+      epochId: request.epochId,
+      expectedOldEpochId: request.expectedOldEpochId,
+      hostId: request.hostId,
+      repoRoot: request.repoRoot,
+      installedCommitSha: request.installedCommitSha,
+      oldInstalledRevisionRoot: request.oldInstalledRevisionRoot,
+      legacyStateRoot: request.paths.supervisorStateDir,
+      legacySupervisor: null,
+      stores: request.stores,
+      paths: request.paths,
+    });
+    abandonPreImportCordon({ ...request, legacySupervisorPid: 0 });
+    expect(existsSync(request.paths.cordonPath)).toBe(false);
+    expect(new FileEpochAuthority(request.paths.epochAuthorityPath).read().currentEpochId).toBeNull();
   });
 });

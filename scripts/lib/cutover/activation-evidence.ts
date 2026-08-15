@@ -52,6 +52,36 @@ export function verifyFoundationEvidenceDigest(evidence: FoundationAdmissionEvid
   }
 }
 
+export function verifyFoundationEvidenceObservation(
+  evidence: FoundationAdmissionEvidence,
+  observed: {
+    typedConfig: unknown;
+    appStateVersion: string;
+    migrationJournalPaths: readonly string[];
+    inertProof: FoundationAdmissionEvidence['inertProof'];
+    heartbeats: ReadonlyArray<FoundationAdmissionEvidence['heartbeats'][number]>;
+  },
+): void {
+  verifyFoundationEvidenceDigest(evidence);
+  if (
+    stableStringify(evidence.typedConfig) !== stableStringify(observed.typedConfig)
+    || evidence.preflight.appStateVersion !== observed.appStateVersion
+    || stableStringify(evidence.migrationJournalPaths) !== stableStringify(observed.migrationJournalPaths)
+    || stableStringify(evidence.inertProof) !== stableStringify(observed.inertProof)
+  ) {
+    throw new Error('foundation_evidence_observation_mismatch');
+  }
+  const shape = (row: FoundationAdmissionEvidence['heartbeats'][number]) => ({
+    hostId: row.hostId,
+    installedCommitSha: row.installedCommitSha,
+    active: row.active,
+    ...(row.quarantined === true ? { quarantined: true } : {}),
+  });
+  if (stableStringify(evidence.heartbeats.map(shape)) !== stableStringify(observed.heartbeats.map(shape))) {
+    throw new Error('foundation_evidence_observation_mismatch:heartbeats');
+  }
+}
+
 function readEnvelope(pathName: string, epochId: string, nonce: string): PhaseOneEnvelope {
   if (!existsSync(pathName)) return { schemaVersion: 1, epochId, nonce, records: [] };
   const parsed = JSON.parse(readFileSync(pathName, 'utf8')) as PhaseOneEnvelope;

@@ -30,13 +30,15 @@ evidence and then invoke the existing activation transaction:
 ```bash
 node --experimental-strip-types scripts/cutover/foundation-adoption-producer.ts \
   --repo-root <orchestrator-pack-root> \
-  --state-dir <state-dir> \
-  --config <observed-foundation-config.json> \
-  --app-state <observed-app-state.json>
+  --state-dir <state-dir>
 node --experimental-strip-types scripts/orchestrator-cutover-activate.ts \
   activate <greenfield-activation-request.json>
 ```
 
+The canonical state root must already contain `foundation-config.json`,
+`app-state.json`, `host-roster.json`, and a committed migration journal. The
+producer observes those canonical files and the live runtime; alternate config,
+app-state, state, or journal paths are rejected.
 The greenfield request has no claimed legacy supervisor PID (omit the field or
 use `0`) and must bind an empty epoch authority and a single-host roster. If a
 legacy PID is claimed, or if absence cannot be observed, the transaction

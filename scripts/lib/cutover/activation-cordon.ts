@@ -40,6 +40,17 @@ export function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+export function processAliveStrict(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ESRCH') return false;
+    throw new Error(`process_liveness_unobservable:${pid}`);
+  }
+}
+
 export function readProcessIdentity(pid: number): ProcessIdentity {
   if (!Number.isInteger(pid) || pid <= 1) throw new Error('process_pid_invalid');
   const { startTicks } = procStat(pid);
@@ -48,19 +59,36 @@ export function readProcessIdentity(pid: number): ProcessIdentity {
   return { pid, startTicks, cmdline };
 }
 
-export function findLegacySupervisorIdentities(oldInstalledRevisionRoot: string): ProcessIdentity[] {
+export function findLegacySupervisorIdentities(
+  oldInstalledRevisionRoot: string,
+  options: {
+    entries?: () => string[];
+    readIdentity?: (pid: number) => ProcessIdentity;
+  } = {},
+): ProcessIdentity[] {
   const required = path.join(oldInstalledRevisionRoot, D928[0]!);
   const legacyName = path.basename(D928[0]!);
   const identities: ProcessIdentity[] = [];
-  for (const entry of readdirSync('/proc')) {
+  const entries = options.entries ?? (() => readdirSync('/proc'));
+  const readIdentity = options.readIdentity ?? readProcessIdentity;
+  for (const entry of entries()) {
     if (!/^\d+$/u.test(entry)) continue;
+    if (Number(entry) <= 1) continue;
     try {
-      const identity = readProcessIdentity(Number(entry));
+      const identity = readIdentity(Number(entry));
       if (identity.cmdline.includes(required)
         || identity.cmdline.some((argument) => argument.endsWith(legacyName))) identities.push(identity);
-    } catch {
-      // Processes may exit while the census is being read; the next admission
-      // observation remains authoritative and will fail closed on ambiguity.
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code === 'ENOENT' || code === 'ESRCH') && !processAlive(Number(entry))) continue;
+      if (error instanceof Error && error.message === 'process_identity_unreadable') {
+        try {
+          if (readFileSync(`/proc/${entry}/cmdline`).length === 0) continue;
+        } catch {
+          // Fall through: an unreadable candidate is ambiguous and must fail closed.
+        }
+      }
+      throw new Error(`greenfield_legacy_supervisor_unknown:${entry}:${error instanceof Error ? error.message : 'unknown'}`);
     }
   }
   return identities;

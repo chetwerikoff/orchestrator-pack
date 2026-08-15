@@ -132,6 +132,20 @@ export interface FoundationHeartbeatEvidence {
   quarantined?: boolean;
 }
 
+export interface FoundationInertObservation {
+  registryChanged: boolean;
+  supervisorChanged: boolean;
+  schedulerRegistered: boolean;
+  schedulerRunning: boolean;
+  schedulerClaimAcquirer: boolean;
+  activationEpochEnforced: boolean;
+  liveStoreOpened: boolean;
+  legacyStarterDisabled: boolean;
+  nonNotificationRuntimeDelta: boolean;
+  notificationTypedConfigLive: boolean;
+  dormantTypedConfigReaderLive: boolean;
+}
+
 export interface FoundationAdmissionEvidence {
   schemaVersion: 1;
   issue: 923;
@@ -149,6 +163,7 @@ export interface FoundationAdmissionEvidence {
   runtimeCatalog: unknown[];
   inertProof: {
     result: string;
+    observations: FoundationInertObservation;
   };
   heartbeats: FoundationHeartbeatEvidence[];
 }
