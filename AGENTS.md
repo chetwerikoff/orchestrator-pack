@@ -10,6 +10,20 @@ For new work, the GitHub Issue is the sole live specification and queue entry.
 External drafts and receipts are audit artifacts only; they never replace the
 published Issue, current PR head, or current repository state.
 
+## Shared orchestration runbook
+
+Before acting as an **orchestrator** or **manager**, read and follow
+`docs/orchestration-runbook.md` after this file and before operating the live Task.
+The runbook is the shared Claude/Codex lifecycle authority for role completion,
+supervised Task startup, WorkerAssignment binding, S1 observation continuity, S2
+routine continuation, reconciliation, and durable escalation. Model-specific skills
+may add invocation details only; they must not replace or fork the shared lifecycle.
+
+For supervised local Task startup, use the PACK supervised-start boundary described
+by the runbook so a successful Orca Dispatch publishes the current persistence-safe
+WorkerAssignment. Do not substitute a terminal paste or reconstruct runtime effect
+authority later from PR/session/title/path/pane/PID heuristics.
+
 ## Direct user instruction precedence
 
 A direct instruction from the human user in the current top-level executor session

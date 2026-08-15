@@ -33,6 +33,12 @@ type UnprovenOwnedPresence = Readonly<{
   reason: string;
 }>;
 
+type OrcaWorkerShowResult = Readonly<{
+  worker?: Readonly<{ agent_terminal_handle?: string | null }>;
+  terminal?: Readonly<{ handle?: string | null }> | null;
+  observation?: Readonly<{ exactWorker?: boolean; status?: string }>;
+}>;
+
 function failureDetail(failure: RuntimeOperationFailure): string {
   return `${failure.operation}:${failure.status}:${failure.reason}`;
 }
@@ -65,6 +71,7 @@ function attachNativeRuntimeError(
 export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   readonly #options: OrcaRuntimeAdapterOptions;
   readonly #ownedForStop = new Map<string, RuntimeWorkerIdentity>();
+  readonly #assignmentOwned = new Map<string, RuntimeWorkerIdentity>();
   readonly #unprovenOwnedPresence = new Map<string, UnprovenOwnedPresence>();
   readonly #runJson: typeof runOrcaJson;
 
@@ -94,6 +101,25 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     return runtimeFailure('stop_worker', reason);
   }
 
+  #assignmentProvenance(worker: RuntimeWorker): RuntimeWorker {
+    const assignmentOwned = this.#assignmentOwned.get(worker.identity.id);
+    return assignmentOwned && sameRuntimeWorker(assignmentOwned, worker.identity)
+      ? { ...worker, provenance: 'internal' }
+      : worker;
+  }
+
+  override listWorkers(
+    input: { readonly workspace?: 'active' | string },
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<readonly RuntimeWorker[]> {
+    const current = super.listWorkers(input, options);
+    if (current.status !== 'ok') return current;
+    return {
+      status: 'ok',
+      value: current.value.map((worker) => this.#assignmentProvenance(worker)),
+    };
+  }
+
   override findWorker(
     worker: RuntimeWorkerIdentity,
     options: RuntimeCallOptions = {},
@@ -102,7 +128,47 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (unproven && sameRuntimeWorker(unproven.identity, worker)) {
       return runtimeFailure('find_worker', unproven.reason);
     }
-    return super.findWorker(worker, options);
+    const current = super.findWorker(worker, options);
+    if (current.status !== 'ok' || current.value === null) return current;
+    return { status: 'ok', value: this.#assignmentProvenance(current.value) };
+  }
+
+  resolveAssignmentWorker(
+    input: { readonly provider: string; readonly bindingKey: string },
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<RuntimeWorker | null> {
+    if (input.provider.trim().toLowerCase() !== 'orca') {
+      return runtimeUnsupported('resolve_assignment_worker', 'assignment_provider_unsupported');
+    }
+    const dispatchId = input.bindingKey.trim();
+    if (!dispatchId) return runtimeFailure('resolve_assignment_worker', 'assignment_binding_missing');
+    const shown = this.#run<OrcaWorkerShowResult>(
+      ['orchestration', 'worker-show', '--dispatch', dispatchId],
+      options,
+    );
+    if (!shown.ok) return runtimeFailure('resolve_assignment_worker', neutralFailureReason(shown));
+    const exact = shown.result?.observation?.exactWorker === true;
+    const terminalHandle = String(
+      shown.result?.terminal?.handle
+        ?? shown.result?.worker?.agent_terminal_handle
+        ?? '',
+    ).trim();
+    if (!exact || !terminalHandle) return { status: 'ok', value: null };
+    const current = super.findWorkerById(terminalHandle, options);
+    if (current.status !== 'ok') {
+      return runtimeFailure('resolve_assignment_worker', current.reason);
+    }
+    if (current.value === null) return { status: 'ok', value: null };
+    // A current PACK WorkerAssignment plus Orca's exact Dispatch-to-terminal
+    // observation is the durable ownership witness across bounded adapter
+    // processes. Retain only the resolved composite identity in memory so later
+    // same-tick inventory/freshness checks preserve PACK provenance; generic
+    // terminal discovery remains external and no runtime-private identity becomes durable.
+    this.#assignmentOwned.set(current.value.identity.id, current.value.identity);
+    return {
+      status: 'ok',
+      value: this.#assignmentProvenance(current.value),
+    };
   }
 
   override spawnWorker(

@@ -51,6 +51,7 @@ export type RuntimeOperationName =
   | 'list_workers'
   | 'find_worker_by_id'
   | 'find_worker'
+  | 'resolve_assignment_worker'
   | 'spawn_worker'
   | 'dispatch_input'
   | 'read_bounded_output'
@@ -102,6 +103,19 @@ export interface RuntimeAdapter {
 
   findWorker(
     identity: RuntimeWorkerIdentity,
+    options?: RuntimeCallOptions,
+  ): RuntimeResult<RuntimeWorker | null>;
+
+  /**
+   * Resolve a persistence-safe lifecycle binding into a current exact runtime
+   * worker. The binding key is provider-owned lifecycle identity, never a raw
+   * runtime id/generation. Adapters that cannot prove this mapping omit the seam.
+   */
+  resolveAssignmentWorker?(
+    input: {
+      readonly provider: string;
+      readonly bindingKey: string;
+    },
     options?: RuntimeCallOptions,
   ): RuntimeResult<RuntimeWorker | null>;
 

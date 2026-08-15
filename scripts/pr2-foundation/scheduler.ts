@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { homedir } from 'node:os';
+import path from 'node:path';
 import type { FoundationConfig } from './config.ts';
 import { parseFoundationConfig } from './config.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
@@ -8,6 +11,7 @@ import { startPackReview } from '../pack-review-runner.ts';
 import { createUnavailableFleetObserver, FleetObserver, type FleetObserverResult } from './fleet-observer.ts';
 import {
   createTargetUnresolvedFleetNudgeActuator,
+  runFleetNudgeActuator,
   type FleetNudgeResult,
   type FleetNudgeTickInput,
 } from './fleet-nudge-actuator.ts';
@@ -22,6 +26,19 @@ import {
   readPrSessionBindingCacheFile,
   resolvePrSessionBindingCachePath,
 } from '../../docs/pr-session-binding-cache.mjs';
+import {
+  listCurrentWorkerAssignments,
+  resolveWorkerAssignmentStorePath,
+  type WorkerAssignment,
+} from '../lib/worker-assignment-store.ts';
+import { resolveCurrentWorkerAssignmentBindings } from '../lib/worker-assignment-runtime.ts';
+import { buildFleetAssignmentBindings, type FleetAssignmentBinding } from './fleet-assignment-binding.ts';
+import { createProductionFleetNudgeEffects } from './fleet-nudge-production.ts';
+import {
+  publishFleetReconciliationHandoff,
+  resolveFleetReconciliationHandoffPath,
+  type FleetReconciliationReason,
+} from './fleet-reconciliation-handoff.ts';
 
 export interface DormantSchedulerState {
   component: 'pr2-foundation-scheduler';
@@ -33,25 +50,15 @@ export interface DormantSchedulerState {
   leaseMs: number;
 }
 
-export interface DormantActuatorResult {
-  ok: true;
-  executed: false;
-  reason: 'foundation_inert';
+export interface DormantActuatorResult { ok: true; executed: false; reason: 'foundation_inert' }
+export interface ActivatedSchedulerCandidate { sessionId: string; repoSlug: string; prNumber: number; boundHeadSha: string }
+
+type SchedulerFleetObserver = Pick<FleetObserver, 'tick'> & Partial<Pick<FleetObserver, 'getEffectiveBudgetMs' | 'cancel' | 'schedulerGeneration' | 'snapshotPath'>>;
+type SchedulerFleetNudgeActuator = { tick(input: FleetNudgeTickInput): Promise<FleetNudgeResult> };
+interface SchedulerAssignmentReconciliation {
+  readonly reason: FleetReconciliationReason;
+  readonly assignment?: WorkerAssignment;
 }
-
-export interface ActivatedSchedulerCandidate {
-  sessionId: string;
-  repoSlug: string;
-  prNumber: number;
-  boundHeadSha: string;
-}
-
-type SchedulerFleetObserver = Pick<FleetObserver, 'tick'>
-  & Partial<Pick<FleetObserver, 'getEffectiveBudgetMs' | 'cancel'>>;
-
-type SchedulerFleetNudgeActuator = {
-  tick(input: FleetNudgeTickInput): Promise<FleetNudgeResult>;
-};
 
 export interface SchedulerBoundary {
   listCandidates(): ActivatedSchedulerCandidate[];
@@ -62,21 +69,26 @@ export interface SchedulerBoundary {
   schedulerIntervalMs?: number;
   fleetObserver?: SchedulerFleetObserver;
   fleetNudgeActuator?: SchedulerFleetNudgeActuator;
+  activationLineage?: string;
+  repository?: string;
+  unresolvedReason?: FleetReconciliationReason;
+  assignmentReconciliation?: SchedulerAssignmentReconciliation;
+  fleetBindings?: readonly FleetAssignmentBinding[];
+  publishHandoff?: (input: {
+    reason: FleetReconciliationReason;
+    schedulerGeneration: string;
+    tickSequence: number;
+    unitRef?: string;
+  }) => { ok: boolean; reason?: string };
 }
 
 const schedulerTickSequences = new WeakMap<object, number>();
-
 function nextSchedulerTickSequence(boundary: SchedulerBoundary): number {
   const next = (schedulerTickSequences.get(boundary) ?? 0) + 1;
   schedulerTickSequences.set(boundary, next);
   return next;
 }
-
-function acceptObserverTickSequence(
-  boundary: SchedulerBoundary,
-  requestedTickSequence: number,
-  observer: FleetObserverResult,
-): number {
+function acceptObserverTickSequence(boundary: SchedulerBoundary, requestedTickSequence: number, observer: FleetObserverResult): number {
   const accepted = Number(observer.tickSequence);
   if (!Number.isInteger(accepted) || accepted <= 0) return requestedTickSequence;
   schedulerTickSequences.set(boundary, Math.max(requestedTickSequence, accepted));
@@ -97,6 +109,10 @@ export function assertSchedulerEpoch(env: NodeJS.ProcessEnv = process.env): { ep
   return { epochId, nonce };
 }
 
+export function schedulerActivationLineage(epoch: { epochId: string; nonce: string }): string {
+  return `al-${createHash('sha256').update(`${epoch.epochId}\u0000${epoch.nonce}`, 'utf8').digest('hex').slice(0, 32)}`;
+}
+
 export function buildDormantScheduler(config: FoundationConfig): DormantSchedulerState {
   return {
     component: 'pr2-foundation-scheduler',
@@ -108,48 +124,29 @@ export function buildDormantScheduler(config: FoundationConfig): DormantSchedule
     leaseMs: config.scheduler.leaseMs,
   };
 }
-
-export function runDormantMergeActuator(_config: FoundationConfig): DormantActuatorResult {
-  return { ok: true, executed: false, reason: 'foundation_inert' };
-}
+export function runDormantMergeActuator(_config: FoundationConfig): DormantActuatorResult { return { ok: true, executed: false, reason: 'foundation_inert' }; }
 
 export function assertFoundationInert(input: {
-  registryChanged: boolean;
-  supervisorChanged: boolean;
-  schedulerRegistered: boolean;
-  schedulerRunning: boolean;
-  schedulerClaimAcquirer: boolean;
-  activationEpochEnforced: boolean;
-  liveStoreOpened: boolean;
-  legacyStarterDisabled: boolean;
-  nonNotificationRuntimeDelta: boolean;
-  notificationTypedConfigLive: boolean;
-  dormantTypedConfigReaderLive: boolean;
+  registryChanged: boolean; supervisorChanged: boolean; schedulerRegistered: boolean; schedulerRunning: boolean;
+  schedulerClaimAcquirer: boolean; activationEpochEnforced: boolean; liveStoreOpened: boolean; legacyStarterDisabled: boolean;
+  nonNotificationRuntimeDelta: boolean; notificationTypedConfigLive: boolean; dormantTypedConfigReaderLive: boolean;
 }): { ok: true; result: 'live-acquirers-unchanged' } | { ok: false; reason: string } {
   const failures: Array<[boolean, string]> = [
-    [input.registryChanged, 'registry_changed'],
-    [input.supervisorChanged, 'supervisor_changed'],
-    [input.schedulerRegistered, 'scheduler_registered'],
-    [input.schedulerRunning, 'scheduler_running'],
-    [input.schedulerClaimAcquirer, 'scheduler_claim_acquirer'],
-    [input.activationEpochEnforced, 'activation_epoch_enforced'],
-    [input.liveStoreOpened, 'live_store_opened'],
-    [input.legacyStarterDisabled, 'legacy_starter_disabled'],
-    [input.nonNotificationRuntimeDelta, 'non_notification_runtime_delta'],
-    [!input.notificationTypedConfigLive, 'notification_config_reader_absent'],
+    [input.registryChanged, 'registry_changed'], [input.supervisorChanged, 'supervisor_changed'],
+    [input.schedulerRegistered, 'scheduler_registered'], [input.schedulerRunning, 'scheduler_running'],
+    [input.schedulerClaimAcquirer, 'scheduler_claim_acquirer'], [input.activationEpochEnforced, 'activation_epoch_enforced'],
+    [input.liveStoreOpened, 'live_store_opened'], [input.legacyStarterDisabled, 'legacy_starter_disabled'],
+    [input.nonNotificationRuntimeDelta, 'non_notification_runtime_delta'], [!input.notificationTypedConfigLive, 'notification_config_reader_absent'],
     [input.dormantTypedConfigReaderLive, 'dormant_config_reader_live'],
   ];
   const failure = failures.find(([condition]) => condition);
-  return failure
-    ? { ok: false, reason: failure[1] }
-    : { ok: true, result: 'live-acquirers-unchanged' };
+  return failure ? { ok: false, reason: failure[1] } : { ok: true, result: 'live-acquirers-unchanged' };
 }
 
 function liveCandidates(env: NodeJS.ProcessEnv = process.env): ActivatedSchedulerCandidate[] {
   const workerStore = readWorkerStatusStoreFile(resolveWorkerStatusStorePath(env));
   const bindingStore = readPrSessionBindingCacheFile(resolvePrSessionBindingCachePath(env));
-  const nowMs = Date.now();
-  const candidates: ActivatedSchedulerCandidate[] = [];
+  const nowMs = Date.now(); const candidates: ActivatedSchedulerCandidate[] = [];
   for (const row of Object.values(workerStore.records ?? {})) {
     if ((row.derivedStatus ?? row.status) !== 'ready_for_review' || isRowStale(row, nowMs, Number(workerStore.repoTickGeneration ?? 0))) continue;
     const sessionId = String(row.sessionId ?? '').trim();
@@ -163,205 +160,312 @@ function liveCandidates(env: NodeJS.ProcessEnv = process.env): ActivatedSchedule
 }
 
 async function ghJson(repoRoot: string, args: string[]): Promise<unknown> {
-  const result = await runProcess({
-    command: pathlessGh(repoRoot),
-    args,
-    cwd: repoRoot,
-    inheritParentEnv: true,
-    allowEmptyStdout: false,
-    timeoutMs: 30_000,
-  });
+  const result = await runProcess({ command: `${repoRoot}/scripts/gh`, args, cwd: repoRoot, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30_000 });
   if (!result.ok) throw new Error(`scheduler_gh_failed:${args.join('_')}:${result.stderr || result.error || result.exitCode}`);
   return JSON.parse(result.stdout);
 }
 
-function pathlessGh(repoRoot: string): string {
-  return `${repoRoot}/scripts/gh`;
-}
-
 export function productionSchedulerBoundary(input: {
-  repoRoot: string;
-  projectId?: string;
-  env?: NodeJS.ProcessEnv;
-  fleetObserver?: SchedulerFleetObserver;
-  schedulerIntervalMs?: number;
+  repoRoot: string; projectId?: string; env?: NodeJS.ProcessEnv; fleetObserver?: SchedulerFleetObserver;
+  fleetNudgeActuator?: SchedulerFleetNudgeActuator; schedulerIntervalMs?: number; activationLineage?: string;
+  repository?: string; unresolvedReason?: FleetReconciliationReason; assignmentReconciliation?: SchedulerAssignmentReconciliation;
+  fleetBindings?: readonly FleetAssignmentBinding[];
+  publishHandoff?: SchedulerBoundary['publishHandoff'];
 }): SchedulerBoundary {
-  const env = input.env ?? process.env;
-  const projectId = input.projectId ?? 'orchestrator-pack';
+  const env = input.env ?? process.env; const projectId = input.projectId ?? 'orchestrator-pack';
   return {
     listCandidates: () => liveCandidates(env),
-    readCurrentPr: async (candidate) => ghJson(input.repoRoot, [
-      'pr', 'view', String(candidate.prNumber), '--repo', candidate.repoSlug,
-      '--json', 'number,headRefOid,state,isDraft',
-    ]) as Promise<{ number: number; headRefOid: string; state: string; isDraft: boolean }>,
-    readChecks: async (candidate) => ghJson(input.repoRoot, [
-      'pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug,
-      '--json', 'name,state,conclusion,status',
-    ]) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
+    readCurrentPr: async (candidate) => ghJson(input.repoRoot, ['pr', 'view', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'number,headRefOid,state,isDraft']) as Promise<{ number: number; headRefOid: string; state: string; isDraft: boolean }>,
+    readChecks: async (candidate) => ghJson(input.repoRoot, ['pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'name,state,conclusion,status']) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
     listReviewRuns: () => listPackReviewRuns({ projectId }),
-    fleetNudgeActuator: createTargetUnresolvedFleetNudgeActuator(),
+    fleetNudgeActuator: input.fleetNudgeActuator ?? createTargetUnresolvedFleetNudgeActuator(),
     ...(input.fleetObserver ? { fleetObserver: input.fleetObserver } : {}),
     ...(input.schedulerIntervalMs === undefined ? {} : { schedulerIntervalMs: input.schedulerIntervalMs }),
+    ...(input.activationLineage ? { activationLineage: input.activationLineage } : {}),
+    ...(input.repository ? { repository: input.repository } : {}),
+    ...(input.unresolvedReason ? { unresolvedReason: input.unresolvedReason } : {}),
+    ...(input.assignmentReconciliation ? { assignmentReconciliation: input.assignmentReconciliation } : {}),
+    ...(input.fleetBindings ? { fleetBindings: input.fleetBindings } : {}),
+    ...(input.publishHandoff ? { publishHandoff: input.publishHandoff } : {}),
     start: async (candidate, freshHeadSha) => {
-      const result = await startPackReview({
-        projectId,
-        linkedSessionId: candidate.sessionId,
-        prNumber: candidate.prNumber,
-        headSha: freshHeadSha,
-        sourceRepoRoot: input.repoRoot,
-        startReason: 'scheduler',
-        surface: 'pr2-scheduler',
-        claimMode: 'acquire',
-      });
-      return {
-        ok: result.ok === true,
-        ...(typeof result.reason === 'string' ? { reason: result.reason } : {}),
-      };
+      const result = await startPackReview({ projectId, linkedSessionId: candidate.sessionId, prNumber: candidate.prNumber, headSha: freshHeadSha, sourceRepoRoot: input.repoRoot, startReason: 'scheduler', surface: 'pr2-scheduler', claimMode: 'acquire' });
+      return { ok: result.ok === true, ...(typeof result.reason === 'string' ? { reason: result.reason } : {}) };
     },
   };
 }
 
-export async function runSchedulerTick(
+function reconciliationReason(boundary: SchedulerBoundary, outcome: string): FleetReconciliationReason | null {
+  if (outcome === 'target_unresolved') return boundary.unresolvedReason ?? 'target_unresolved';
+  if (outcome === 'target_stale' || outcome === 'revalidation_failed') return 'target_stale';
+  if (outcome === 'dispatch_unknown') return 'dispatch_unknown';
+  if (outcome === 'send_failed') return 'effect_untrusted';
+  if (outcome === 'observer_untrusted') return 'observer_untrusted';
+  if (outcome === 'claim_untrusted') return 'effect_untrusted';
+  return null;
+}
+
+function publishRequiredHandoff(boundary: SchedulerBoundary, observer: FleetObserverResult, fleetNudge: FleetNudgeResult): boolean {
+  const candidate = fleetNudge.outcomes.find((row) => reconciliationReason(boundary, row.outcome) !== null);
+  let reason: FleetReconciliationReason | null = null;
+  let unitRef: string | undefined;
+  if (candidate) {
+    reason = reconciliationReason(boundary, candidate.outcome)!;
+    unitRef = candidate.unitRef;
+  } else if (fleetNudge.status === 'failed') {
+    reason = observer.status === 'failed' || fleetNudge.result === 'observer-untrusted'
+      ? 'observer_untrusted'
+      : 'effect_untrusted';
+  } else if (boundary.assignmentReconciliation) {
+    reason = boundary.assignmentReconciliation.reason;
+  }
+  if (!reason) return false;
+  if (!boundary.publishHandoff) throw new Error(`scheduler_reconciliation_handoff_unavailable:${reason}`);
+  const result = boundary.publishHandoff({
+    reason,
+    schedulerGeneration: observer.schedulerGeneration,
+    tickSequence: observer.tickSequence,
+    ...(unitRef ? { unitRef } : {}),
+  });
+  if (!result.ok) throw new Error(`scheduler_reconciliation_handoff_failed:${result.reason ?? reason}`);
+  return true;
+}
+
+function failObserverTickWithHandoff(
   boundary: SchedulerBoundary,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<{
-  attempted: number;
-  started: number;
-  skipped: number;
-  observer?: FleetObserverResult;
-  fleetNudge?: FleetNudgeResult;
+  observer: SchedulerFleetObserver,
+  tickSequence: number,
+  reason: 'observer_timeout' | 'observer_threw',
+): never {
+  const schedulerGeneration = String(observer.schedulerGeneration ?? '').trim();
+  if (!schedulerGeneration) throw new Error(`scheduler_observer_identity_unavailable:${reason}`);
+  if (!boundary.publishHandoff) throw new Error('scheduler_reconciliation_handoff_unavailable:observer_untrusted');
+  const handoff = boundary.publishHandoff({
+    reason: 'observer_untrusted',
+    schedulerGeneration,
+    tickSequence,
+  });
+  if (!handoff.ok) throw new Error(`scheduler_reconciliation_handoff_failed:${handoff.reason ?? 'observer_untrusted'}`);
+  throw new Error(`scheduler_observer_untrusted:${reason}`);
+}
+
+export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.ProcessEnv = process.env): Promise<{
+  attempted: number; started: number; skipped: number; observer?: FleetObserverResult; fleetNudge?: FleetNudgeResult; orchestratorRequired?: boolean;
 }> {
   assertSchedulerEpoch(env);
-  let observer: FleetObserverResult | undefined;
-  let fleetNudge: FleetNudgeResult | undefined;
-  const observerBoundary: SchedulerFleetObserver = boundary.fleetObserver ?? {
-    tick: async () => undefined as unknown as FleetObserverResult,
-  };
-  const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000;
-  const requestedTickSequence = nextSchedulerTickSequence(boundary);
-  const observerStartMs = Date.now();
-  const observerBudgetMs = observerBoundary.getEffectiveBudgetMs?.(schedulerIntervalMs)
-    ?? Math.max(1, Math.floor(schedulerIntervalMs / 4));
-  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<null>((resolve) => {
-    deadlineTimer = setTimeout(() => resolve(null), Math.max(1, observerBudgetMs));
-  });
-  const attempt = Promise.resolve().then(() => observerBoundary.tick({
-    schedulerIntervalMs,
-    tickSequence: requestedTickSequence,
-    phaseStartMs: observerStartMs,
-  })).catch(() => undefined);
-  const completed = await Promise.race([attempt, timeout]);
-  if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-  if (completed === null) {
-    observerBoundary.cancel?.();
-  } else if (boundary.fleetObserver) {
-    observer = completed;
+  let observer: FleetObserverResult | undefined; let fleetNudge: FleetNudgeResult | undefined; let orchestratorRequired = false;
+  const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000; const requestedTickSequence = nextSchedulerTickSequence(boundary);
+  if (boundary.fleetObserver) {
+    const observerBoundary = boundary.fleetObserver; const observerStartMs = Date.now();
+    const observerBudgetMs = observerBoundary.getEffectiveBudgetMs?.(schedulerIntervalMs) ?? Math.max(1, Math.floor(schedulerIntervalMs / 4));
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<{ status: 'timeout' }>((resolve) => {
+      deadlineTimer = setTimeout(() => resolve({ status: 'timeout' }), Math.max(1, observerBudgetMs));
+    });
+    const attempt = Promise.resolve()
+      .then(() => observerBoundary.tick({ schedulerIntervalMs, tickSequence: requestedTickSequence, phaseStartMs: observerStartMs }))
+      .then((value) => ({ status: 'complete' as const, value }))
+      .catch(() => ({ status: 'failed' as const }));
+    const completed = await Promise.race([attempt, timeout]);
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+    if (completed.status === 'timeout') {
+      observerBoundary.cancel?.();
+      failObserverTickWithHandoff(boundary, observerBoundary, requestedTickSequence, 'observer_timeout');
+    }
+    if (completed.status === 'failed') {
+      observerBoundary.cancel?.();
+      failObserverTickWithHandoff(boundary, observerBoundary, requestedTickSequence, 'observer_threw');
+    }
+    observer = completed.value;
   }
   if (observer && boundary.fleetNudgeActuator) {
     const acceptedTickSequence = acceptObserverTickSequence(boundary, requestedTickSequence, observer);
     try {
       assertSchedulerEpoch(env);
-      fleetNudge = await boundary.fleetNudgeActuator.tick({
-        observer,
-        schedulerIntervalMs,
-        tickSequence: acceptedTickSequence,
-        phaseStartMs: Date.now(),
-      });
+      fleetNudge = await boundary.fleetNudgeActuator.tick({ observer, schedulerIntervalMs, tickSequence: acceptedTickSequence, phaseStartMs: Date.now() });
     } catch {
-      // S2 is isolated from the existing review-start action and accounting path.
+      fleetNudge = {
+        result: 'observer-untrusted', status: 'failed', schedulerGeneration: observer.schedulerGeneration,
+        tickSequence: acceptedTickSequence, effectiveS2BudgetMs: 1, settlementReserveMs: 1, candidateOrder: [],
+        outcomes: observer.snapshot?.census.map((row) => ({ unitRef: row.unitRef, class: row.class, outcome: 'observer_untrusted' as const })) ?? [],
+        claimStarts: 0, sendAttempts: 0, dispatched: 0, returnedWithinBudget: true, targetBindingAvailable: false,
+      };
+    }
+    orchestratorRequired = publishRequiredHandoff(boundary, observer, fleetNudge);
+    if (fleetNudge.status === 'failed') {
+      throw new Error(`scheduler_fleet_phase_failed:${fleetNudge.result}`);
     }
   }
-  let attempted = 0;
-  let started = 0;
-  let skipped = 0;
+  let attempted = 0; let started = 0; let skipped = 0;
   for (const candidate of boundary.listCandidates()) {
-    attempted += 1;
-    assertSchedulerEpoch(env);
-    const fresh = await boundary.readCurrentPr(candidate);
-    const freshHead = String(fresh.headRefOid ?? '').trim().toLowerCase();
+    attempted += 1; assertSchedulerEpoch(env); const fresh = await boundary.readCurrentPr(candidate); const freshHead = String(fresh.headRefOid ?? '').trim().toLowerCase();
     if (fresh.state !== 'OPEN' && String(fresh.state).toLowerCase() !== 'open') { skipped += 1; continue; }
     if (fresh.isDraft === true || freshHead !== candidate.boundHeadSha.toLowerCase()) { skipped += 1; continue; }
-    const checks = await boundary.readChecks(candidate);
-    const runs = boundary.listReviewRuns();
-    const decision = evaluateHeadReadyForReview({
-      prNumber: candidate.prNumber,
-      headSha: freshHead,
-      session: {
-        id: candidate.sessionId,
-        role: 'worker',
-        status: 'ready_for_review',
-        ownedHeadSha: freshHead,
-        reports: [{ reportState: 'ready_for_review', headRefOid: freshHead, accepted: true }],
-      },
-      ciChecks: checks,
-      reviewRuns: runs,
-    });
+    const checks = await boundary.readChecks(candidate); const runs = boundary.listReviewRuns();
+    const decision = evaluateHeadReadyForReview({ prNumber: candidate.prNumber, headSha: freshHead, session: { id: candidate.sessionId, role: 'worker', status: 'ready_for_review', ownedHeadSha: freshHead, reports: [{ reportState: 'ready_for_review', headRefOid: freshHead, accepted: true }] }, ciChecks: checks, reviewRuns: runs });
     if (!decision.eligible) { skipped += 1; continue; }
-    assertSchedulerEpoch(env);
-    const result = await boundary.start(candidate, freshHead);
-    if (result.ok) started += 1; else skipped += 1;
+    assertSchedulerEpoch(env); const result = await boundary.start(candidate, freshHead); if (result.ok) started += 1; else skipped += 1;
   }
+  return { attempted, started, skipped, ...(observer ? { observer } : {}), ...(fleetNudge ? { fleetNudge } : {}), ...(orchestratorRequired ? { orchestratorRequired: true } : {}) };
+}
+
+function uniqueRepository(assignments: ReturnType<typeof listCurrentWorkerAssignments>, env: NodeJS.ProcessEnv): string {
+  const explicit = String(env.OPK_REPOSITORY ?? env.GITHUB_REPOSITORY ?? '').trim().toLowerCase();
+  if (explicit) return explicit;
+  if (!assignments) return '';
+  const values = [...new Set(assignments.map((assignment) => assignment.repository))];
+  return values.length === 1 ? values[0]! : '';
+}
+
+function productionObserverBoundary(observer: FleetObserver): SchedulerFleetObserver {
   return {
-    attempted,
-    started,
-    skipped,
-    ...(observer ? { observer } : {}),
-    ...(fleetNudge ? { fleetNudge } : {}),
+    // The FleetObserver owns the persisted sequence. The scheduler process is
+    // intentionally short-lived, so never overwrite restored continuity with a
+    // fresh process-local sequence of 1.
+    tick: (input) => observer.tick({ ...input, tickSequence: undefined }),
+    getEffectiveBudgetMs: (interval) => observer.getEffectiveBudgetMs(interval),
+    cancel: () => observer.cancel(),
+    schedulerGeneration: observer.schedulerGeneration,
+    snapshotPath: observer.snapshotPath,
   };
 }
 
+function operatorHome(env: NodeJS.ProcessEnv): string {
+  return String(env.HOME ?? '').trim() || homedir();
+}
+
+function productionFleetObserverConfigPath(env: NodeJS.ProcessEnv): string {
+  const explicit = String(env.OPK_FLEET_OBSERVER_CONFIG ?? '').trim();
+  return explicit || path.join(operatorHome(env), '.config', 'orchestrator-pack', 'fleet-observer.json');
+}
+
+function productionFleetObserverSnapshotPath(env: NodeJS.ProcessEnv): string {
+  const explicitRoot = String(env.OPK_SIDE_PROCESS_STATE_DIR ?? '').trim();
+  return explicitRoot
+    ? path.join(explicitRoot, 'fleet-observer-snapshot.json')
+    : path.join(operatorHome(env), '.local', 'state', 'orchestrator-pack', 'fleet-observer', 'snapshot.json');
+}
+
 async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
-  const parsed = parseFoundationConfig({});
-  if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
-  const repoRoot = process.cwd();
-  const cadence = parsed.config.scheduler.pollIntervalMs;
-  let fleetObserver: FleetObserver;
+  const parsed = parseFoundationConfig({}); if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
+  const repoRoot = process.cwd(); const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env; const projectId = 'orchestrator-pack';
+  const epoch = assertSchedulerEpoch(env); const activationLineage = schedulerActivationLineage(epoch);
+  const assignmentStorePath = resolveWorkerAssignmentStorePath(projectId, env); const storedAssignments = listCurrentWorkerAssignments(assignmentStorePath);
+  const repository = uniqueRepository(storedAssignments, env);
+  const scopedAssignment = storedAssignments?.find((assignment) => assignment.repository === repository);
+  let fleetObserver: FleetObserver; let fleetNudgeActuator: SchedulerFleetNudgeActuator = createTargetUnresolvedFleetNudgeActuator();
+  let unresolvedReason: FleetReconciliationReason = storedAssignments === null ? 'assignment_untrusted' : 'target_unresolved';
+  let assignmentReconciliation: SchedulerAssignmentReconciliation | undefined;
+  let fleetBindings: readonly FleetAssignmentBinding[] = [];
   try {
-    const runtime = await selectRuntimeAdapter();
-    fleetObserver = new FleetObserver({ source: runtime });
+    const runtime = await selectRuntimeAdapter({ env });
+    const resolution = repository
+      ? resolveCurrentWorkerAssignmentBindings({ file: assignmentStorePath, repository, adapter: runtime })
+      : { status: 'assignment_untrusted' as const, bindings: [] as const, reconciliations: [] as const };
+    const built = resolution.status === 'ok' ? buildFleetAssignmentBindings(resolution.bindings) : null;
+    if (resolution.status === 'ok' && built) {
+      fleetBindings = built;
+      assignmentReconciliation = resolution.reconciliations[0];
+      fleetObserver = new FleetObserver({
+        source: runtime,
+        activationLineage,
+        assignmentBindings: fleetBindings,
+        configPath: productionFleetObserverConfigPath(env),
+        snapshotPath: productionFleetObserverSnapshotPath(env),
+      });
+      const effects = createProductionFleetNudgeEffects({ projectId, assignmentStorePath, adapter: runtime, resolvedAssignments: resolution.bindings, fleetBindings, assertEpoch: () => { assertSchedulerEpoch(env); }, env });
+      fleetNudgeActuator = { tick: (input) => runFleetNudgeActuator(input, effects) };
+      unresolvedReason = 'target_unresolved';
+    } else {
+      unresolvedReason = resolution.status === 'runtime_unavailable' ? 'runtime_unavailable' : 'assignment_untrusted';
+      assignmentReconciliation = {
+        reason: unresolvedReason,
+        ...(scopedAssignment ? { assignment: scopedAssignment } : {}),
+      };
+      fleetObserver = new FleetObserver({
+        source: runtime,
+        activationLineage,
+        assignmentBindings: [],
+        configPath: productionFleetObserverConfigPath(env),
+        snapshotPath: productionFleetObserverSnapshotPath(env),
+      });
+    }
   } catch {
+    unresolvedReason = 'runtime_unavailable';
+    assignmentReconciliation = {
+      reason: 'runtime_unavailable',
+      ...(scopedAssignment ? { assignment: scopedAssignment } : {}),
+    };
     fleetObserver = createUnavailableFleetObserver('runtime-adapter-unavailable');
   }
+  const handoffPath = resolveFleetReconciliationHandoffPath(projectId, env);
+  const publishHandoff: NonNullable<SchedulerBoundary['publishHandoff']> = ({ reason, schedulerGeneration, tickSequence, unitRef }) => {
+    if (!repository) return { ok: false, reason: 'repository_identity_unresolved' };
+    const binding = unitRef ? fleetBindings.find((candidate) => candidate.unitRef === unitRef) : undefined;
+    const reconciliationAssignment = !binding && assignmentReconciliation?.reason === reason
+      ? assignmentReconciliation.assignment
+      : undefined;
+    const assignmentMetadata = binding
+      ? {
+          role: 'worker' as const,
+          issueNumber: binding.issueNumber,
+          taskId: binding.taskId,
+          assignmentId: binding.assignmentId,
+          assignmentGeneration: binding.assignmentGeneration,
+        }
+      : reconciliationAssignment
+        ? {
+            role: 'worker' as const,
+            issueNumber: reconciliationAssignment.issueNumber,
+            taskId: reconciliationAssignment.taskId,
+            assignmentId: reconciliationAssignment.assignmentId,
+            assignmentGeneration: reconciliationAssignment.generation,
+          }
+        : {};
+    const result = publishFleetReconciliationHandoff({
+      file: handoffPath,
+      projectId,
+      repository,
+      activationLineage,
+      schedulerGeneration,
+      tickSequence,
+      reason,
+      ...assignmentMetadata,
+    });
+    return result.ok ? { ok: true } : { ok: false, reason: result.reason };
+  };
   return {
     boundary: productionSchedulerBoundary({
       repoRoot,
-      fleetObserver,
+      projectId,
+      env,
+      fleetObserver: productionObserverBoundary(fleetObserver),
+      fleetNudgeActuator,
       schedulerIntervalMs: cadence,
+      activationLineage,
+      repository,
+      unresolvedReason,
+      ...(assignmentReconciliation ? { assignmentReconciliation } : {}),
+      fleetBindings,
+      publishHandoff,
     }),
     cadence,
   };
 }
 
 async function runSingleTick(): Promise<void> {
-  const { boundary } = await loadProductionBoundary();
-  const result = await runSchedulerTick(boundary);
+  const { boundary } = await loadProductionBoundary(); const result = await runSchedulerTick(boundary);
   process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
 }
-
 async function runLoop(): Promise<void> {
   const { boundary, cadence } = await loadProductionBoundary();
   for (;;) {
-    try {
-      const result = await runSchedulerTick(boundary);
-      process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
-    } catch (error) {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    }
+    try { const result = await runSchedulerTick(boundary); process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`); }
+    catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); }
     await new Promise((resolve) => setTimeout(resolve, cadence));
   }
 }
 
 if (process.argv[1]?.endsWith('scheduler.ts')) {
-  if (process.argv[2] === 'run') {
-    runLoop().catch((error) => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-      process.exitCode = 1;
-    });
-  } else if (process.argv[2] === 'tick') {
-    runSingleTick().catch((error) => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-      process.exitCode = 1;
-    });
-  }
+  if (process.argv[2] === 'run') runLoop().catch((error) => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
+  else if (process.argv[2] === 'tick') runSingleTick().catch((error) => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
 }
