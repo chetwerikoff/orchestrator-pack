@@ -104,7 +104,7 @@ describe('scheduler bounded-child production composition', () => {
       ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-1420',
       ORCHESTRATOR_CUTOVER_NONCE: 'nonce-1420',
     };
-    const assignment = publishCurrentWorkerAssignment({
+    const assignment = await publishCurrentWorkerAssignment({
       file: resolveWorkerAssignmentStorePath('orchestrator-pack', env),
       repository: 'chetwerikoff/orchestrator-pack',
       issueNumber: 1420,
@@ -154,10 +154,10 @@ describe('scheduler bounded-child production composition', () => {
       OPK_REPOSITORY: 'chetwerikoff/orchestrator-pack', OPK_FLEET_OBSERVER_CONFIG: configPath,
       ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath, ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-a', ORCHESTRATOR_CUTOVER_NONCE: 'nonce-a',
     };
-    expect(publishCurrentWorkerAssignment({
+    expect((await publishCurrentWorkerAssignment({
       file: resolveWorkerAssignmentStorePath('orchestrator-pack', baseEnv), repository: 'chetwerikoff/orchestrator-pack',
       issueNumber: 1420, taskId: 'task-1420', kind: 'local', provider: 'process-fixture', bindingKey: 'dispatch-1',
-    }).ok).toBe(true);
+    })).ok).toBe(true);
     const first = await runTick(baseEnv);
 
     writeEpoch(epochPath, 'epoch-b', 'nonce-b');
@@ -187,10 +187,10 @@ describe('scheduler bounded-child production composition', () => {
       OPK_REPOSITORY: 'chetwerikoff/orchestrator-pack', OPK_FLEET_OBSERVER_CONFIG: configPath,
       ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath, ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-unknown', ORCHESTRATOR_CUTOVER_NONCE: 'nonce-unknown',
     };
-    expect(publishCurrentWorkerAssignment({
+    expect((await publishCurrentWorkerAssignment({
       file: resolveWorkerAssignmentStorePath('orchestrator-pack', env), repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1420,
       taskId: 'task-1420', kind: 'local', provider: 'process-fixture', bindingKey: 'dispatch-1',
-    }).ok).toBe(true);
+    })).ok).toBe(true);
     await runTick(env);
     const second = await runTick(env);
     const third = await runTick(env);
