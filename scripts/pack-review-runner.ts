@@ -1258,7 +1258,7 @@ function harnessSourceResolution(
     const timestamp = new Date().toISOString();
     return {
       kind: 'credentialed',
-      payload: payload as any,
+      payload: payload as unknown as Extract<PackGptSourceCommentResolution, { kind: 'credentialed' }>['payload'],
       receipt: {
         ...identity,
         commentId: `fixture-${identity.slotId}-${identity.invocationId}`,
@@ -1989,7 +1989,7 @@ async function resolveCarryoverReplay(input: {
     const sourceHeadSha = parents[0]!;
     const configuredBaseSha = await runGit(
       input.target.sourceRepoRoot,
-      ['rev-parse', `${input.baseRef}^{commit`],
+      ['rev-parse', `${input.baseRef}^{commit}`],
       'configured review base',
     );
     if (parents[1]!.toLowerCase() !== configuredBaseSha.toLowerCase()) return null;
