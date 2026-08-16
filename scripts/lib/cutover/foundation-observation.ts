@@ -29,7 +29,7 @@ import {
   type RuntimeWorkerRow,
 } from '../../pr2-foundation/binding.ts';
 import { runProcess } from '../../kernel/subprocess.ts';
-import type { FoundationAdmissionEvidence } from './types.ts';
+import type { FoundationAdmissionEvidence, FoundationArtifactPreflight } from './types.ts';
 import { readLiveSingleInstanceLease } from '../../runtime/single-instance-lease.ts';
 import {
   selectRuntimeAdapterFactory,
@@ -172,7 +172,7 @@ export function validateGreenfieldRuntimeAdapterPreflight(
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return { ok: false, reason: 'preflight_shape_invalid' };
   }
-  const candidate = input as Record<string, unknown>;
+  const candidate = input as unknown as Record<string, unknown>;
   if (candidate.kind !== 'runtime-adapter') return { ok: false, reason: 'preflight_kind_mismatch' };
   if (typeof candidate.adapterId !== 'string' || !candidate.adapterId.trim()) {
     return { ok: false, reason: 'preflight_adapter_missing' };
@@ -242,16 +242,14 @@ export async function observeRuntimePreflight(
   }
   const leak = captureLeakReason(sanitized);
   if (leak) throw new Error(`foundation_runtime_capture_unobservable:${leak}`);
-  const livePreflight: FoundationAdmissionEvidence['preflight'] = {
+  if (appStateVersion === undefined) throw new Error('foundation_runtime_preflight_version_unobservable');
+  const livePreflight: FoundationArtifactPreflight = {
     command: 'a\u006f session ls --json',
     sessions: sanitized,
     sanitizerId: sanitizerIdentity(sanitized),
-    ...(appStateVersion === undefined ? {} : { appStateVersion }),
+    appStateVersion,
   };
-  if (appStateVersion === undefined) throw new Error('foundation_runtime_preflight_version_unobservable');
-  const validatedPreflight = validateRuntimePreflight(
-    livePreflight as FoundationAdmissionEvidence['preflight'] & { appStateVersion: string },
-  );
+  const validatedPreflight = validateRuntimePreflight(livePreflight);
   if (!validatedPreflight.ok) throw new Error(`foundation_runtime_preflight_unobservable:${validatedPreflight.reason}`);
   return livePreflight;
 }

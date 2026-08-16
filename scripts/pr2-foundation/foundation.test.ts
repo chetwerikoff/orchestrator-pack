@@ -436,16 +436,18 @@ describe('[AC2] production foundation admission', () => {
     const sourceStat = statSync(sourcePath);
     const bin = path.join(home, 'bin');
     mkdirSync(bin, { recursive: true });
-    const ao = path.join(bin, 'ao');
-    const liveRow = {
-      ...session(),
-      id: 'greenfield-live-source',
-      issueId: 1422,
-      lastActivityAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    writeFileSync(ao, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify({ sessions: [liveRow] }))});\n`);
-    chmodSync(ao, 0o755);
+    const runtimeCli = path.join(bin, 'orca');
+    writeFileSync(runtimeCli, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify({
+      ok: true,
+      result: {
+        worktree: {
+          path: repoRoot,
+          head: '0'.repeat(40),
+          linkedIssue: 1422,
+        },
+      },
+    }))});\n`);
+    chmodSync(runtimeCli, 0o755);
     process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ''}`;
     delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
     delete process.env.OPK_RUNTIME_ADAPTER;
