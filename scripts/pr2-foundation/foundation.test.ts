@@ -541,6 +541,9 @@ describe('[AC2] production foundation admission', () => {
       expect(proof.result).toBe('greenfield-dormant-layer-not-active');
       expect(proof.observations.supervisorChanged).toBe(false);
       expect(proof.observations.schedulerRegistered).toBe(false);
+      writeJson(canonical.configPath, DEFAULT_FOUNDATION_CONFIG);
+      expect(() => observeFoundationInertProof({ repoRoot, paths: canonical }))
+        .toThrow('foundation_inert_proof_unobservable:supervisor_changed');
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

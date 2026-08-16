@@ -445,11 +445,11 @@ function fileDigestOrAbsent(pathName: string): string {
   }
 }
 
-export function observeFoundationInertInput(input: {
+function observeFoundationInertInputInternal(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
   allowAbsentTypedConfig?: boolean;
-}): ObservedFoundationInertInput {
+}, greenfield: boolean): ObservedFoundationInertInput {
   let configObserved = false;
   if (!existsSync(input.paths.configPath) && input.allowAbsentTypedConfig === true) {
     configObserved = false;
@@ -481,10 +481,13 @@ export function observeFoundationInertInput(input: {
   const registryChanged = projectedExists
     && fileDigestOrAbsent(path.join(input.repoRoot, 'scripts', 'orchestrator-side-process-registry.json'))
       !== fileDigestOrAbsent(input.paths.projectedRegistryPath);
+  const supervisorChanged = greenfield
+    ? supervisorAlive || childAlive || singleInstanceLeasePresent
+    : status !== null;
   return {
     registryChanged,
-    supervisorChanged: supervisorAlive || childAlive || singleInstanceLeasePresent,
-    schedulerRegistered: supervisorAlive || childAlive || singleInstanceLeasePresent,
+    supervisorChanged,
+    schedulerRegistered: supervisorChanged,
     schedulerRunning: supervisorAlive || childAlive,
     schedulerClaimAcquirer: supervisorAlive && status?.restartState === 'running',
     activationEpochEnforced: authority.currentEpochId !== null,
@@ -494,6 +497,14 @@ export function observeFoundationInertInput(input: {
     notificationTypedConfigLive: configObserved,
     dormantTypedConfigReaderLive: existsSync(path.join(input.paths.stateRoot, 'dormant-typed-config-reader.json')),
   };
+}
+
+export function observeFoundationInertInput(input: {
+  repoRoot: string;
+  paths: CanonicalFoundationPaths;
+  allowAbsentTypedConfig?: boolean;
+}): ObservedFoundationInertInput {
+  return observeFoundationInertInputInternal(input, false);
 }
 
 export function observeFoundationInertProof(input: {
@@ -510,10 +521,10 @@ export function observeGreenfieldFoundationInertProof(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
 }): { result: 'greenfield-dormant-layer-not-active'; observations: FoundationInertObservation } {
-  const observed = observeFoundationInertInput({
+  const observed = observeFoundationInertInputInternal({
     ...input,
     allowAbsentTypedConfig: true,
-  });
+  }, true);
   const failures: Array<[boolean, string]> = [
     [observed.registryChanged, 'registry_changed'],
     [observed.supervisorChanged, 'supervisor_changed'],
