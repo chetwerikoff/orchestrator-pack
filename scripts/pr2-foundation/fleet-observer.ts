@@ -395,19 +395,51 @@ async function beforeDeadline<T>(action: () => MaybePromise<T>, deadlineMs: numb
   if (timer !== undefined) clearTimeout(timer);
   return result;
 }
-function atomicCommit(file: string, snapshot: FleetObserverSnapshot): boolean {
+function atomicCommit(
+  file: string,
+  snapshot: FleetObserverSnapshot,
+  isCurrent: () => boolean,
+  previousBytes: string | null,
+): boolean {
   const bytes = serializeFleetSnapshot(snapshot);
-  if (Buffer.byteLength(bytes, 'utf8') > MAX_SNAPSHOT_BYTES) return false;
+  if (Buffer.byteLength(bytes, 'utf8') > MAX_SNAPSHOT_BYTES || !isCurrent()) return false;
   const directory = path.dirname(file); mkdirSync(directory, { recursive: true });
   const temporary = path.join(directory, `.tmp-${process.pid}-${Date.now()}-${randomBytes(4).toString('hex')}`);
+  let replaced = false;
+  const rollback = (): boolean => {
+    try {
+      if (previousBytes === null) {
+        rmSync(file, { force: true });
+        return !existsSync(file);
+      }
+      const restore = path.join(directory, `.restore-${process.pid}-${Date.now()}-${randomBytes(4).toString('hex')}`);
+      writeFileSync(restore, previousBytes, { encoding: 'utf8', mode: 0o600 });
+      const fd = openSync(restore, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); }
+      renameSync(restore, file);
+      return readFileSync(file, 'utf8') === previousBytes;
+    } catch {
+      try { rmSync(file, { force: true }); } catch { /* fail closed if rollback cannot complete */ }
+      return false;
+    }
+  };
   try {
     writeFileSync(temporary, bytes, { encoding: 'utf8', mode: 0o600 });
     const fd = openSync(temporary, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); }
+    if (!isCurrent()) {
+      rmSync(temporary, { force: true });
+      return false;
+    }
     renameSync(temporary, file);
+    replaced = true;
     const readBack = readFileSync(file, 'utf8');
-    return readBack === bytes && isAcceptedFleetSnapshot(readBack);
+    const accepted = isCurrent() && readBack === bytes && isAcceptedFleetSnapshot(readBack);
+    if (accepted) return true;
+    rollback();
+    return false;
   } catch {
-    rmSync(temporary, { force: true }); return false;
+    try { rmSync(temporary, { force: true }); } catch { /* preserve failed publication */ }
+    if (replaced) rollback();
+    return false;
   }
 }
 
@@ -539,8 +571,14 @@ export class FleetObserver {
     if (!output.completed || !live.completed) {
       return { unitRef: state.unitRef, provenance: state.provenance, class: 'unknown', reason: 'phase-budget-expired', probes: { output: output.completed ? 'failed' : 'expired', liveness: live.completed ? 'failed' : 'expired' }, livelockStreak: state.livelockStreak };
     }
-    if (!output.value || output.value.status !== 'ok' || !outputShapeValid(output.value.value, state.identity)
-      || !live.value || !livenessShapeValid(live.value, state.identity)) {
+    if (!live.value || !livenessShapeValid(live.value, state.identity)) {
+      return { unitRef: state.unitRef, provenance: state.provenance, class: 'unknown', reason: 'observation-failed', probes: { output: 'failed', liveness: 'failed' }, livelockStreak: state.livelockStreak };
+    }
+    const outputFailureReason = output.value?.status === 'failed' ? output.value.reason : undefined;
+    const knownDisappearance = output.completed && output.value?.status === 'failed'
+      && ['gone', 'worker_not_found', 'worker_generation_not_found'].includes(outputFailureReason ?? '');
+    if (live.value.status === 'gone' && knownDisappearance) return null;
+    if (!output.value || output.value.status !== 'ok' || !outputShapeValid(output.value.value, state.identity)) {
       return { unitRef: state.unitRef, provenance: state.provenance, class: 'unknown', reason: 'observation-failed', probes: { output: 'failed', liveness: 'failed' }, livelockStreak: state.livelockStreak };
     }
     const out = output.value.value; const liveness = live.value.status; const digest = outputDigest(out.lines);
@@ -593,9 +631,9 @@ export class FleetObserver {
     const budget = effectiveBudget(config, input.schedulerIntervalMs);
     const startedAt = input.phaseStartMs ?? this.#now(); const deadlineMs = startedAt + budget.effectiveBudgetMs;
     const requested = input.tickSequence ?? this.#tickSequence + 1; this.#latestRequestedSequence = Math.max(this.#latestRequestedSequence, requested);
-    const cancelVersion = this.#cancelVersion; const previous = readSnapshot(this.snapshotPath).snapshot;
+    const cancelVersion = this.#cancelVersion; const previousRead = readSnapshot(this.snapshotPath); const previous = previousRead.snapshot;
     if (!parsed.ok) return this.#failure({ reason: parsed.reason, sequence: requested, budget, startedAt, previous });
-    this.#exceptionCollisionRejected = config.exceptions.some((entry) => entry.schedulerGeneration !== this.schedulerGeneration && [...this.#states.values()].some((state) => state.unitRef === entry.unitRef));
+    this.#exceptionCollisionRejected = false;
     const listing = await beforeDeadline(() => this.source.listWorkers({ workspace: 'active' }, { timeoutMs: Math.max(1, deadlineMs - this.#now()) }), deadlineMs, this.#now);
     if (requested !== this.#latestRequestedSequence || cancelVersion !== this.#cancelVersion) return this.#failure({ reason: 'stale-completion', sequence: requested, budget, startedAt, previous, stale: true });
     if (!listing.completed || !listing.value || listing.value.status !== 'ok') return this.#failure({ reason: 'list-workers-failed', sequence: requested, budget, startedAt, previous });
@@ -608,6 +646,8 @@ export class FleetObserver {
       const state = this.#ensureState(worker); if (!state) return this.#failure({ reason: 'assignment-binding-untrusted', sequence: requested, budget, startedAt, previous });
       state.present = true; states.push(state);
     }
+    this.#exceptionCollisionRejected = config.exceptions.some((entry) =>
+      entry.schedulerGeneration !== this.schedulerGeneration && states.some((state) => state.unitRef === entry.unitRef));
     const transitions: FleetTransition[] = []; const rows: CensusRow[] = []; let cursor = 0;
     const probeWorker = async (): Promise<void> => {
       for (;;) {
@@ -639,7 +679,25 @@ export class FleetObserver {
       ...(this.#activationLineage ? { activationLineage: this.#activationLineage } : {}),
       ...(continuity ? { continuity } : {}),
     };
-    if (snapshotByteLength(snapshot) > MAX_SNAPSHOT_BYTES || !atomicCommit(this.snapshotPath, snapshot)) return this.#failure({ reason: 'snapshot-commit-failed', sequence: requested, budget, startedAt, previous });
+    const isCurrent = (): boolean =>
+      requested === this.#latestRequestedSequence
+      && cancelVersion === this.#cancelVersion
+      && this.#now() <= deadlineMs;
+    const previousBytes = previousRead.snapshot ? previousRead.rawBytes : null;
+    const committed = snapshotByteLength(snapshot) <= MAX_SNAPSHOT_BYTES
+      && atomicCommit(this.snapshotPath, snapshot, isCurrent, previousBytes);
+    if (!committed) {
+      const superseded = requested !== this.#latestRequestedSequence || cancelVersion !== this.#cancelVersion;
+      const expired = this.#now() > deadlineMs;
+      return this.#failure({
+        reason: superseded ? 'stale-completion' : expired ? 'phase-budget-expired' : 'snapshot-commit-failed',
+        sequence: requested,
+        budget,
+        startedAt,
+        previous,
+        ...(superseded ? { stale: true } : {}),
+      });
+    }
     this.#tickSequence = Math.max(this.#tickSequence, requested);
     return {
       result: 'census-published-observer-only', status: 'complete', snapshotCommitted: true, snapshotPath: this.snapshotPath,

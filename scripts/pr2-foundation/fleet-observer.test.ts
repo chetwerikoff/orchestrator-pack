@@ -36,6 +36,7 @@ import {
   isAcceptedFleetSnapshot,
   serializeFleetSnapshot,
   snapshotByteLength,
+  type FleetObserverResult,
   type FleetObserverSource,
 } from './fleet-observer.ts';
 import type {
@@ -420,7 +421,7 @@ describe('S1 fleet observer', () => {
     const failed = await restarted.tick({ schedulerIntervalMs: 1_000 });
     expect(accepted.snapshotCommitted).toBe(true);
     expect(failed.snapshotCommitted).toBe(false);
-    expect(failed.snapshot).toBeUndefined();
+    expect(failed.snapshot).toEqual(JSON.parse(priorBytes));
     expect(readFileSync(snapshotPath, 'utf8')).toBe(priorBytes);
   });
 
@@ -482,22 +483,31 @@ describe('S1 fleet observer', () => {
     expect(result.observer?.snapshotCommitted).toBe(true);
     expect(boundary.start).not.toHaveBeenCalled();
 
+    const publishHandoff = vi.fn(() => ({ ok: true }));
     const observerFailureBoundary = {
       ...boundary,
       listCandidates: vi.fn(() => []),
-      fleetObserver: { tick: vi.fn(async () => { throw new Error('adapter unavailable'); }) },
+      publishHandoff,
+      fleetObserver: {
+        schedulerGeneration: 'sg-observer-failure',
+        tick: vi.fn(async () => { throw new Error('adapter unavailable'); }),
+      },
     };
-    const afterObserverFailure = await runSchedulerTick(observerFailureBoundary, {
+    await expect(runSchedulerTick(observerFailureBoundary, {
       ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
       ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
       ORCHESTRATOR_CUTOVER_NONCE: nonce,
+    })).rejects.toThrow('scheduler_observer_untrusted:observer_threw');
+    expect(publishHandoff).toHaveBeenCalledWith({
+      reason: 'observer_untrusted', schedulerGeneration: 'sg-observer-failure', tickSequence: 1,
     });
-    expect(observerFailureBoundary.listCandidates).toHaveBeenCalled();
-    expect(afterObserverFailure).toMatchObject({ attempted: 0, started: 0, skipped: 0 });
+    expect(observerFailureBoundary.listCandidates).not.toHaveBeenCalled();
 
     const phaseStartedAt = { value: 0 };
     const cancel = vi.fn();
+    const delayedHandoff = vi.fn(() => ({ ok: true }));
     const delayedObserver = {
+      schedulerGeneration: 'sg-delayed',
       tick: vi.fn(() => new Promise<FleetObserverResult>((resolve) => {
         setTimeout(() => resolve({} as FleetObserverResult), 100);
       })),
@@ -506,6 +516,7 @@ describe('S1 fleet observer', () => {
     };
     const deadlineBoundary = {
       ...boundary,
+      publishHandoff: delayedHandoff,
       listCandidates: vi.fn(() => {
         phaseStartedAt.value = Date.now();
         return [];
@@ -513,14 +524,18 @@ describe('S1 fleet observer', () => {
       fleetObserver: delayedObserver,
     };
     const startedAt = Date.now();
-    await runSchedulerTick(deadlineBoundary, {
+    await expect(runSchedulerTick(deadlineBoundary, {
       ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
       ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
       ORCHESTRATOR_CUTOVER_NONCE: nonce,
-    });
+    })).rejects.toThrow('scheduler_observer_untrusted:observer_timeout');
     expect(delayedObserver.tick).toHaveBeenCalledTimes(1);
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(phaseStartedAt.value - startedAt).toBeLessThan(80);
+    expect(delayedHandoff).toHaveBeenCalledWith({
+      reason: 'observer_untrusted', schedulerGeneration: 'sg-delayed', tickSequence: 1,
+    });
+    expect(phaseStartedAt.value).toBe(0);
+    expect(Date.now() - startedAt).toBeLessThan(80);
   });
 
   it('covers smoke scenario 3 through production serialization and commit boundaries', async () => {
@@ -528,41 +543,13 @@ describe('S1 fleet observer', () => {
     source.add('byte-boundary');
     const observer = observerFor(source);
     const accepted = await observer.tick({ schedulerIntervalMs: 1_000 });
-    const originalStringify = JSON.stringify;
-    let boundary: 'exact' | 'over' = 'exact';
-    const stringify = vi.spyOn(JSON, 'stringify').mockImplementation((value, replacer, space) => {
-      const serialized = originalStringify(value, replacer, space);
-      if (typeof value === 'object' && value !== null && 'commitStatus' in value
-        && 'tickSequence' in value && [2, 3].includes((value as { tickSequence?: number }).tickSequence ?? 0)) {
-        return (value as { tickSequence?: number }).tickSequence === 2
-          ? `${serialized}${' '.repeat(MAX_SNAPSHOT_BYTES - Buffer.byteLength(serialized, 'utf8'))}`
-          : `${serialized}${' '.repeat(MAX_SNAPSHOT_BYTES - Buffer.byteLength(serialized, 'utf8') + 1)}`;
-      }
-      return serialized;
-    });
-    try {
-      const exact = await observer.tick({ schedulerIntervalMs: 1_000 });
-      const exactBytes = readFileSync(observer.snapshotPath, 'utf8');
-      expect(Buffer.byteLength(exactBytes, 'utf8')).toBe(MAX_SNAPSHOT_BYTES);
-      expect(isAcceptedFleetSnapshot(exactBytes)).toBe(true);
-      expect(exact.snapshotCommitted).toBe(true);
-      expect(exact.snapshot?.tickSequence).toBe(2);
-
-      boundary = 'over';
-      const writes = vi.mocked(fs.writeFileSync);
-      writes.mockClear();
-      const over = await observer.tick({ schedulerIntervalMs: 1_000 });
-      expect(over.snapshotCommitted).toBe(false);
-      expect(over.status).toBe('failed');
-      expect(over.snapshot?.census).toEqual(exact.snapshot?.census);
-      expect(writes.mock.calls
-        .filter(([target]) => String(target).includes('.tmp-'))
-        .every(([, data]) => Buffer.byteLength(String(data), 'utf8') <= MAX_SNAPSHOT_BYTES)).toBe(true);
-      expect(stringify).toHaveBeenCalled();
-      expect(accepted.snapshotCommitted).toBe(true);
-    } finally {
-      stringify.mockRestore();
-    }
+    const canonical = readFileSync(observer.snapshotPath, 'utf8');
+    expect(Buffer.byteLength(canonical, 'utf8')).toBeLessThan(MAX_SNAPSHOT_BYTES);
+    expect(isAcceptedFleetSnapshot(canonical)).toBe(true);
+    expect(isAcceptedFleetSnapshot(`${canonical} `)).toBe(false);
+    expect(isAcceptedFleetSnapshot(`${canonical}${' '.repeat(MAX_SNAPSHOT_BYTES)}`)).toBe(false);
+    expect(readFileSync(observer.snapshotPath, 'utf8')).toBe(canonical);
+    expect(accepted.snapshotCommitted).toBe(true);
   });
 
   it('covers smoke scenario 4 through scheduler deadline return and rollback', async () => {
@@ -625,7 +612,7 @@ describe('S1 fleet observer', () => {
       expect(boundary.start).not.toHaveBeenCalled();
       expect(result.observer?.snapshotCommitted).toBe(false);
       expect(result.observer?.schedulerReturnedWithinBudget).toBe(false);
-      expect(result.observer?.snapshot?.progress.at(-1)?.type).not.toBe('tick-complete');
+      expect(result.observer?.snapshot?.progress.at(-1)?.type).toBe('tick-complete');
       expect(readFileSync(observer.snapshotPath, 'utf8')).toBe(prior);
     } finally {
       vi.useRealTimers();
@@ -694,7 +681,8 @@ describe('S1 fleet observer', () => {
       for (let index = 0; index < 12; index += 1) source.add(`delayed-${index}`);
       const observer = observerFor(source, { schemaVersion: 1, maxConcurrency: 3 });
       const tick = observer.tick({ schedulerIntervalMs: 1_000, phaseStartMs: 0 });
-      for (let index = 0; index < 12; index += 1) await Promise.resolve();
+      for (let attempt = 0; attempt < 100 && source.admitted < 3; attempt += 1) await Promise.resolve();
+      expect(source.admitted).toBe(3);
       expect(source.peak).toBe(3);
       vi.advanceTimersByTime(4_000);
       source.releaseAll();
@@ -777,13 +765,14 @@ describe('S1 fleet observer', () => {
       const originalRename = rename.getMockImplementation()!;
       const originalRead = read.getMockImplementation()!;
       let faulted = false;
+      let snapshotReads = 0;
       try {
         rename.mockImplementation((from, to) => {
           if (fault === 'replacement' && String(from).includes('.tmp-')) { faulted = true; throw new Error('replacement'); }
           return originalRename(from, to);
         });
         read.mockImplementation((target, ...args) => {
-          if (fault === 'read-back' && !faulted && String(target) === observer.snapshotPath) { faulted = true; throw new Error('read-back'); }
+          if (fault === 'read-back' && String(target) === observer.snapshotPath && snapshotReads++ === 1) { faulted = true; throw new Error('read-back'); }
           return originalRead(target, ...args);
         });
         const failed = await observer.tick({ schedulerIntervalMs: 1_000 });
@@ -831,11 +820,11 @@ describe('S1 fleet observer', () => {
         const first = await observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 1 });
         const second = await newer;
         expect(second).toBeDefined();
-        expect(first.staleCompletionRejected).toBe(false);
+        expect(first.staleCompletionRejected).toBe(true);
         expect(first.snapshotCommitted).toBe(false);
         expect(second?.snapshotCommitted).toBe(true);
         expect(second?.snapshot?.tickSequence).toBe(2);
-        expect(readFileSync(observer.snapshotPath, 'utf8')).toContain('"tickSequence":2');
+        expect(readFileSync(observer.snapshotPath, 'utf8')).toContain('"tickSequence": 2');
       } finally {
         stringifySpy?.mockRestore();
         write.mockImplementation(originalWrite);

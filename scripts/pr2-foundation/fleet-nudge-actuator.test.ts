@@ -374,18 +374,26 @@ describe('S2 fleet nudge actuator', () => {
     );
   });
 
-  it('hard-wires the production boundary to target_unresolved and ignores caller override', async () => {
+  it('honors an injected actuator while default remains target_unresolved', async () => {
     const injected = { tick: vi.fn(async () => resultFor('dispatched')) };
-    const boundary = productionSchedulerBoundary({
+    const injectedBoundary = productionSchedulerBoundary({
       repoRoot: '/not-used',
       fleetNudgeActuator: injected,
     } as unknown as Parameters<typeof productionSchedulerBoundary>[0]);
-    const result = await boundary.fleetNudgeActuator!.tick({
+    const injectedResult = await injectedBoundary.fleetNudgeActuator!.tick({
       observer: oneIdleObserver(),
       schedulerIntervalMs: 1_000,
       tickSequence: 2,
     });
-    expect(injected.tick).not.toHaveBeenCalled();
+    expect(injected.tick).toHaveBeenCalledTimes(1);
+    expect(injectedResult).toEqual(resultFor('dispatched'));
+
+    const defaultBoundary = productionSchedulerBoundary({ repoRoot: '/not-used' });
+    const result = await defaultBoundary.fleetNudgeActuator!.tick({
+      observer: oneIdleObserver(),
+      schedulerIntervalMs: 1_000,
+      tickSequence: 2,
+    });
     expect(result).toMatchObject({
       result: 'target-binding-unresolved-fail-closed',
       claimStarts: 0,
@@ -963,6 +971,7 @@ describe('S2 fleet nudge actuator', () => {
     const env = authorityEnv(directory);
     const requested: number[] = [];
     const actuated: number[] = [];
+    const handoffs: string[] = [];
     let invocation = 0;
     const boundary: SchedulerBoundary = {
       listCandidates: () => [],
@@ -991,6 +1000,10 @@ describe('S2 fleet nudge actuator', () => {
           return runFleetNudgeActuator(input);
         },
       },
+      publishHandoff: ({ reason }) => {
+        handoffs.push(reason);
+        return { ok: true };
+      },
     };
 
     const first = await runSchedulerTick(boundary, env);
@@ -1003,6 +1016,7 @@ describe('S2 fleet nudge actuator', () => {
       status: 'complete',
     });
     expect(second.fleetNudge?.outcomes[0]?.outcome).toBe('target_unresolved');
+    expect(handoffs).toEqual(['target_unresolved']);
   });
 
   it.each([
@@ -1012,7 +1026,6 @@ describe('S2 fleet nudge actuator', () => {
     'dispatch_unknown',
     'send_failed',
     'dispatched',
-    'throw',
   ] as const)('keeps review-start accounting identical for S2 outcome %s', async (outcome) => {
     const directory = root(`opk-s2-differential-${outcome}-`);
     const env = authorityEnv(directory);
@@ -1020,6 +1033,7 @@ describe('S2 fleet nudge actuator', () => {
     let starts = 0;
     let prReads = 0;
     let checkReads = 0;
+    const handoffs: string[] = [];
     const boundary: SchedulerBoundary = {
       listCandidates: () => [{
         sessionId: 'worker-1259',
@@ -1048,14 +1062,65 @@ describe('S2 fleet nudge actuator', () => {
       schedulerIntervalMs: 1_000,
       fleetObserver: { tick: async () => oneIdleObserver('u-000001', 1, 'sg-scheduler') },
       fleetNudgeActuator: {
-        tick: async () => {
-          if (outcome === 'throw') throw new Error('injected');
-          return resultFor(outcome);
-        },
+        tick: async () => resultFor(outcome),
+      },
+      publishHandoff: ({ reason }) => {
+        handoffs.push(reason);
+        return { ok: true };
       },
     };
     const result = await runSchedulerTick(boundary, env);
     expect(result).toMatchObject({ attempted: 1, started: 1, skipped: 0 });
     expect({ starts, prReads, checkReads }).toEqual({ starts: 1, prReads: 1, checkReads: 1 });
+  });
+
+  it('fails the fleet phase on an actuator throw without starting review', async () => {
+    const directory = root('opk-s2-actuator-throw-');
+    const env = authorityEnv(directory);
+    const head = 'b'.repeat(40);
+    let starts = 0;
+    let prReads = 0;
+    let checkReads = 0;
+    const handoffs: string[] = [];
+    const boundary: SchedulerBoundary = {
+      listCandidates: () => [{
+        sessionId: 'worker-1259',
+        repoSlug: 'chetwerikoff/orchestrator-pack',
+        prNumber: 1259,
+        boundHeadSha: head,
+      }],
+      readCurrentPr: async () => {
+        prReads += 1;
+        return { number: 1259, headRefOid: head, state: 'OPEN', isDraft: false };
+      },
+      readChecks: async () => {
+        checkReads += 1;
+        return [
+          'verify orchestrator-pack structure',
+          'pr scope guard',
+          'run pack contract tests',
+          'self-architect lint',
+        ].map((name) => ({ name, state: 'SUCCESS' }));
+      },
+      listReviewRuns: () => [],
+      start: async () => {
+        starts += 1;
+        return { ok: true };
+      },
+      schedulerIntervalMs: 1_000,
+      fleetObserver: { tick: async () => oneIdleObserver('u-000001', 1, 'sg-scheduler') },
+      fleetNudgeActuator: {
+        tick: async () => { throw new Error('injected'); },
+      },
+      publishHandoff: ({ reason }) => {
+        handoffs.push(reason);
+        return { ok: true };
+      },
+    };
+
+    await expect(runSchedulerTick(boundary, env))
+      .rejects.toThrow('scheduler_fleet_phase_failed:observer-untrusted');
+    expect(handoffs).toEqual(['observer_untrusted']);
+    expect({ starts, prReads, checkReads }).toEqual({ starts: 0, prReads: 0, checkReads: 0 });
   });
 });
