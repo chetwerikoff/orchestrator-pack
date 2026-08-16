@@ -13,6 +13,7 @@
     "scripts/lib/orchestrator-side-process-observer.ts",
     "scripts/lib/orchestrator-side-process-observer-cli.ts",
     "scripts/pr2a/**/*.ts",
+    "scripts/chatgpt-browser-turn/modal-watcher.ts",
     "scripts/orchestrator-wake-supervisor-orphan-integration.shared.ts"
   ],
   "compilerOptions": {

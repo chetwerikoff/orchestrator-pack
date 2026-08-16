@@ -7,6 +7,10 @@
     "docs/migration_notes.md",
     "docs/orca-runtime-caller-census.md",
     "docs/orchestration-runbook.md",
+    "package.json",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/modal-watcher.test.ts",
+    "scripts/chatgpt-browser-turn/modal-watcher.ts",
     "scripts/lib/create-issue-stage-record-test-helpers.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/lib/worker-assignment-runtime.ts",
@@ -50,7 +54,9 @@
     "docs/migration_notes.md",
     "docs/orca-runtime-caller-census.md",
     "docs/orchestration-runbook.md",
+    "package.json",
     "prompts/",
+    "scripts/chatgpt-browser-turn/",
     "scripts/lib/create-issue-stage-record-test-helpers.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/lib/worker-assignment-runtime.ts",
@@ -60,6 +66,7 @@
     "scripts/pr2-foundation/",
     "scripts/runtime/",
     "scripts/vitest-ci-lanes.config.json",
-    "scripts/vitest-runtime-history.json"
+    "scripts/vitest-runtime-history.json",
+    "tsconfig.json"
   ]
 }

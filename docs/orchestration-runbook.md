@@ -267,6 +267,30 @@ authoritative Task/role/assignment facts
 
 ## Production verification
 
+### Browser-GPT modal capability
+
+Before starting Browser-GPT work, the orchestrator must verify that the
+pack-owned rate-limit modal capability is running against the configured
+automation browser. Verification is a capability check: its startup/attached
+page evidence must be visible, and a recent scan must be observable; a shell
+PID, an old log line, or a waiting turn alone is not proof. If the capability
+is absent, start the repository's documented modal-watcher entrypoint with the
+same browser debugging endpoint, then re-check its startup and page-attachment
+evidence before launching or retrying browser turns. Stop it only through its
+documented signal path, which releases its own CDP sockets and no other tabs.
+
+This is a browser-page overlay watcher, not an agent observer, idle detector,
+terminal monitor, scheduler, retry service, or send authority. The modal is
+usually an ordinary `div` without `role="dialog"`; detection therefore uses
+short rendered text matching the known temporary-limit messages plus an exact
+`Got it` or `OK` button. While it remains visible, the composer is unavailable,
+so browser turns sit in `waiting` with `last_reply_length: 0`, which looks in
+logs like profile overload; five managers were blocked this way before the
+operator inspected the screen. Dismissing the overlay does not clear the
+server-side limit or prove delivery: preserve Browser-GPT `send_count`
+semantics (`0` may be repeated safely; `1` or more requires harvesting and
+must not be resent).
+
 For #1420, same-process component tests are supplementary. Production composition must include real separate Node processes invoking `scheduler.ts tick` against shared production-equivalent state paths and prove at least:
 
 - child N creates trusted baseline;
