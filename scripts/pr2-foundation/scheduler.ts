@@ -37,7 +37,7 @@ import {
   type WorkerAssignment,
 } from '../lib/worker-assignment-store.ts';
 import { resolveCurrentWorkerAssignmentBindings } from '../lib/worker-assignment-runtime.ts';
-import { sameRuntimeWorker } from '../runtime/contracts.ts';
+import { runtimeFailure, sameRuntimeWorker } from '../runtime/contracts.ts';
 import { buildFleetAssignmentBindings, type FleetAssignmentBinding } from './fleet-assignment-binding.ts';
 import { createProductionFleetNudgeEffects } from './fleet-nudge-production.ts';
 import {
@@ -360,17 +360,30 @@ function productionObserverBoundary(observer: FleetObserver): SchedulerFleetObse
   };
 }
 
-function productionFleetObserverSource(
+export function productionFleetObserverSource(
   runtime: FleetObserverSource,
   assignmentBindings: readonly FleetAssignmentBinding[],
 ): FleetObserverSource {
   return {
     listWorkers: async (_input, options) => {
-      const listed = await Promise.all(assignmentBindings.map(async (binding) => (
-        runtime.findWorker(binding.worker, options)
-      )));
-      const failure = listed.find((result) => result.status !== 'ok');
-      if (failure) return failure;
+      const deadlineMs = typeof options?.timeoutMs === 'number'
+        ? Date.now() + Math.max(0, options.timeoutMs)
+        : undefined;
+      const listed = [];
+      for (const binding of assignmentBindings) {
+        const remainingTimeoutMs = deadlineMs === undefined
+          ? undefined
+          : deadlineMs - Date.now();
+        if (remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) {
+          return runtimeFailure('find_worker', 'phase_budget_expired');
+        }
+        const lookupOptions = remainingTimeoutMs === undefined
+          ? options
+          : { ...options, timeoutMs: Math.max(1, Math.floor(remainingTimeoutMs)) };
+        const result = await runtime.findWorker(binding.worker, lookupOptions);
+        if (result.status !== 'ok') return result;
+        listed.push(result);
+      }
       const assigned = assignmentBindings.map((binding) => binding.worker);
       return {
         status: 'ok',

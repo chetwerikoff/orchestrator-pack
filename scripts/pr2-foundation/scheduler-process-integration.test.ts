@@ -11,7 +11,9 @@ import {
   readFleetReconciliationHandoff,
   resolveFleetReconciliationHandoffPath,
 } from './fleet-reconciliation-handoff.ts';
-import { runSchedulerTick, type SchedulerBoundary } from './scheduler.ts';
+import type { FleetObserverSource } from './fleet-observer.ts';
+import type { RuntimeCallOptions, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
+import { productionFleetObserverSource, runSchedulerTick, type SchedulerBoundary } from './scheduler.ts';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -47,6 +49,7 @@ function installOrcaFixture(root: string): string {
   const executable = path.join(root, 'orca');
   const source = `#!${process.execPath}
 import fs from 'node:fs';
+import path from 'node:path';
 const args = process.argv.slice(2).filter((value) => value !== '--json');
 const fixturePath = String(process.env.OPK_PROCESS_FIXTURE_PATH ?? '');
 const state = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
@@ -67,7 +70,16 @@ switch (operation) {
     out({ ok: true, result: { worktree: { path: process.cwd(), head: 'a'.repeat(40), linkedIssue: null } } });
     break;
   case 'terminal list':
-    out({ ok: true, result: { terminals: state.workers.filter((worker) => worker.liveness !== 'gone').map(terminal) } });
+    const requestedWorktree = get('--worktree');
+    const requestedPath = requestedWorktree.startsWith('path:')
+      ? requestedWorktree.slice('path:'.length)
+      : requestedWorktree;
+    state.listWorkerWorktrees = [...(state.listWorkerWorktrees ?? []), requestedPath];
+    const terminals = state.workers
+      .filter((worker) => worker.liveness !== 'gone')
+      .filter((worker) => !requestedPath || path.resolve(worker.worktreePath ?? process.cwd()) === path.resolve(requestedPath))
+      .map(terminal);
+    out({ ok: true, result: { terminals } });
     break;
   case 'terminal show': {
     const worker = state.workers.find((candidate) => candidate.id === get('--terminal') && candidate.liveness !== 'gone');
@@ -196,6 +208,7 @@ interface FixtureState {
   workers: Array<{ id: string; generation: string; bindingKey: string; lines: string[]; liveness: string; worktreePath?: string }>;
   dispatchOutcome?: string;
   dispatches?: Array<{ workerId: string; message: string }>;
+  listWorkerWorktrees?: string[];
   sendCalls?: number;
   resolveCalls?: number;
   dropResolutionAtCall?: number;
@@ -337,6 +350,51 @@ describe('scheduler bounded-child production composition', () => {
     const census = (observer.snapshot as Record<string, unknown>).census as Array<Record<string, unknown>>;
     expect(census).toHaveLength(1);
     expect(census[0]?.provenance).toBe('internal');
+    expect(fixture(fixturePath).listWorkerWorktrees?.[0]).toBe('/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup');
+  });
+
+  it('keeps assignment census lookups inside one shared S1 timeout budget', async () => {
+    const workers: RuntimeWorker[] = [
+      {
+        identity: { runtime: 'orca', id: 'budget-worker-a', generation: 'generation-budget-a' },
+        workspacePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup',
+        title: 'budget-worker-a',
+        provenance: 'internal',
+      },
+      {
+        identity: { runtime: 'orca', id: 'budget-worker-b', generation: 'generation-budget-b' },
+        workspacePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1416-sup',
+        title: 'budget-worker-b',
+        provenance: 'internal',
+      },
+    ];
+    const timeouts: number[] = [];
+    const runtime: FleetObserverSource = {
+      listWorkers: () => ({ status: 'ok', value: [] }),
+      findWorker: (identity: RuntimeWorkerIdentity, options?: RuntimeCallOptions) => {
+        timeouts.push(options?.timeoutMs ?? 0);
+        if (timeouts.length === 1) {
+          const delayDeadline = Date.now() + 20;
+          while (Date.now() < delayDeadline) {}
+        }
+        return { status: 'ok', value: workers.find((worker) => worker.identity.id === identity.id) ?? null };
+      },
+      readBoundedOutput: () => ({ status: 'failed', operation: 'read_bounded_output', reason: 'unused' }),
+      liveness: () => ({ status: 'unknown', worker: workers[0]!.identity }),
+    };
+    const source = productionFleetObserverSource(runtime, workers.map((worker, index) => ({
+      assignmentId: `assignment-budget-${index}`,
+      assignmentGeneration: 1,
+      issueNumber: 1420,
+      taskId: `task-budget-${index}`,
+      unitRef: `u-budget-${index}`,
+      worker: worker.identity,
+    })));
+
+    const result = await source.listWorkers({ workspace: 'active' }, { timeoutMs: 100 });
+    expect(result).toMatchObject({ status: 'ok' });
+    expect(timeouts).toHaveLength(2);
+    expect(timeouts[0]).toBeGreaterThan(timeouts[1]!);
   });
 
   it('restores one S1 lineage across separate child processes and dispatches one existing S2 episode', async () => {
