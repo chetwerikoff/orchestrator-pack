@@ -10,6 +10,15 @@ import { readMigrationJournal } from '../../pr2-foundation/migration-journal.ts'
 import { resolveWakeSupervisorStateRoot } from '../../pr2-foundation/wake-supervisor-state-root.ts';
 import { assertFoundationInert } from '../../pr2-foundation/scheduler.ts';
 import { parseFoundationConfig } from '../../pr2-foundation/config.ts';
+import {
+  captureLeakReason,
+  sanitizeRuntimeWorkers,
+  sanitizerIdentity,
+  validateRuntimePreflight,
+  type RuntimeWorkerRow,
+} from '../../pr2-foundation/binding.ts';
+import { runProcess } from '../../kernel/subprocess.ts';
+import type { FoundationAdmissionEvidence } from './types.ts';
 
 export interface CanonicalFoundationPaths {
   stateRoot: string;
@@ -96,6 +105,84 @@ function readRecord(pathName: string, errorCode: string): Record<string, unknown
     if (error instanceof Error && error.message === errorCode) throw error;
     throw new Error(errorCode);
   }
+}
+
+function parseRuntimeRows(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'object') throw new Error('foundation_runtime_sessions_unobservable');
+  const root = value as Record<string, unknown>;
+  for (const key of ['sessions', 'workers', 'data']) {
+    if (Array.isArray(root[key])) return root[key];
+  }
+  throw new Error('foundation_runtime_sessions_unobservable');
+}
+
+function parseJsonOutput(stdout: string): unknown {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    const line = stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
+    if (!line) throw new Error('foundation_runtime_output_unobservable');
+    try {
+      return JSON.parse(line);
+    } catch {
+      throw new Error('foundation_runtime_output_unobservable');
+    }
+  }
+}
+
+export async function observeRuntimePreflight(
+  repoRoot: string,
+  runtimePath: string,
+  timeoutMs: number,
+  appStateVersion: string,
+): Promise<FoundationAdmissionEvidence['preflight']> {
+  let runtime;
+  try {
+    runtime = await runProcess({
+      command: runtimePath,
+      args: ['session', 'ls', '--json'],
+      cwd: repoRoot,
+      inheritParentEnv: true,
+      allowEmptyStdout: false,
+      timeoutMs,
+    });
+  } catch {
+    throw new Error('foundation_runtime_observation_unobservable');
+  }
+  if (!runtime.ok) throw new Error('foundation_runtime_observation_unobservable');
+  let payload: unknown;
+  try {
+    payload = parseJsonOutput(runtime.stdout);
+  } catch {
+    throw new Error('foundation_runtime_output_unobservable');
+  }
+  let observedRows: unknown[];
+  try {
+    observedRows = parseRuntimeRows(payload);
+  } catch {
+    throw new Error('foundation_runtime_sessions_unobservable');
+  }
+  let sanitized: RuntimeWorkerRow[];
+  try {
+    sanitized = sanitizeRuntimeWorkers(observedRows.map((row) => {
+      if (!row || typeof row !== 'object') throw new Error('invalid_runtime_row');
+      return row as RuntimeWorkerRow;
+    }));
+  } catch {
+    throw new Error('foundation_runtime_sanitizer_unobservable');
+  }
+  const leak = captureLeakReason(sanitized);
+  if (leak) throw new Error(`foundation_runtime_capture_unobservable:${leak}`);
+  const livePreflight: FoundationAdmissionEvidence['preflight'] = {
+    command: 'a\u006f session ls --json',
+    appStateVersion,
+    sessions: sanitized,
+    sanitizerId: sanitizerIdentity(sanitized),
+  };
+  const validatedPreflight = validateRuntimePreflight(livePreflight);
+  if (!validatedPreflight.ok) throw new Error(`foundation_runtime_preflight_unobservable:${validatedPreflight.reason}`);
+  return livePreflight;
 }
 
 export function readObservedAppStateVersion(pathName: string): string {

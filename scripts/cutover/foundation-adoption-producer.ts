@@ -18,16 +18,10 @@ import {
   localObservedHostId,
   observeFoundationInertProof,
   observeLocalHeartbeat,
+  observeRuntimePreflight,
   readObservedAppStateVersion,
 } from '../lib/cutover/foundation-observation.ts';
 import type { FoundationAdmissionEvidence } from '../lib/cutover/types.ts';
-import {
-  captureLeakReason,
-  sanitizeRuntimeWorkers,
-  sanitizerIdentity,
-  validateRuntimePreflight,
-  type RuntimeWorkerRow,
-} from '../pr2-foundation/binding.ts';
 import { parseFoundationConfig, type FoundationConfig } from '../pr2-foundation/config.ts';
 import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog } from '../pr2-foundation/runtime-catalog.ts';
 import { FOUNDATION_COMMIT } from '../pr2a/contracts.ts';
@@ -44,29 +38,6 @@ export interface FoundationAdoptionProducerInput {
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('foundation_observation_shape_invalid');
   return value as Record<string, unknown>;
-}
-
-function parseRuntimeRows(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
-  const root = record(value);
-  for (const key of ['sessions', 'workers', 'data']) {
-    if (Array.isArray(root[key])) return root[key] as unknown[];
-  }
-  throw new Error('foundation_runtime_sessions_unobservable');
-}
-
-function parseJsonOutput(stdout: string): unknown {
-  try {
-    return JSON.parse(stdout);
-  } catch {
-    const line = stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
-    if (!line) throw new Error('foundation_runtime_output_unobservable');
-    try {
-      return JSON.parse(line);
-    } catch {
-      throw new Error('foundation_runtime_output_unobservable');
-    }
-  }
 }
 
 function requireObservedConfig(input: unknown): { raw: Record<string, unknown>; config: FoundationConfig } {
@@ -128,31 +99,12 @@ export async function produceFoundationAdoptionEvidence(
     throw new Error('foundation_preflight_command_unobservable');
   }
   const version = readObservedAppStateVersion(canonical.appStatePath);
-  const runtime = await runProcess({
-    command: observedConfig.config.notification.runtimePath,
-    args: ['session', 'ls', '--json'],
-    cwd: repoRoot,
-    inheritParentEnv: true,
-    allowEmptyStdout: false,
-    timeoutMs: observedConfig.config.notification.timeoutMs,
-  });
-  if (!runtime.ok) throw new Error(`foundation_runtime_observation_failed:${runtime.stderr || runtime.error || runtime.exitCode}`);
-  const observedRows = parseRuntimeRows(parseJsonOutput(runtime.stdout));
-  const normalizedRows = observedRows.map((row) => {
-    if (!row || typeof row !== 'object') throw new Error('foundation_runtime_sessions_unobservable');
-    return row as RuntimeWorkerRow;
-  });
-  const sanitized = sanitizeRuntimeWorkers(normalizedRows);
-  const leak = captureLeakReason(sanitized);
-  if (leak) throw new Error(leak);
-  const preflight = {
-    command: 'a\u006f session ls --json',
-    appStateVersion: version,
-    sessions: sanitized,
-    sanitizerId: sanitizerIdentity(sanitized),
-  };
-  const validatedPreflight = validateRuntimePreflight(preflight);
-  if (!validatedPreflight.ok) throw new Error(`foundation_preflight_unobservable:${validatedPreflight.reason}`);
+  const preflight = await observeRuntimePreflight(
+    repoRoot,
+    observedConfig.config.notification.runtimePath,
+    observedConfig.config.notification.timeoutMs,
+    version,
+  );
 
   const parsedCatalog = validateRuntimeCatalog(FOUNDATION_RUNTIME_CATALOG, FOUNDATION_RUNTIME_CATALOG);
   if (!parsedCatalog.ok) throw new Error(`foundation_runtime_catalog_unobservable:${parsedCatalog.reason}`);
