@@ -146,18 +146,50 @@ export interface FoundationInertObservation {
   dormantTypedConfigReaderLive: boolean;
 }
 
+export interface GreenfieldFoundationObservation {
+  mode: 'greenfield-observed';
+  stateRoot: string;
+  foundationConfigPath: string;
+  foundationConfigPresent: false;
+  appStatePath: string;
+  appStatePresent: false;
+  committedMigrationJournalPaths: [];
+  controlPlane: {
+    epochAuthorityPath: string;
+    epochAuthorityCurrentEpochId: null;
+    epochAuthorityRecordCount: 0;
+    supervisorStatusPath: string;
+    supervisorStatusPresent: boolean;
+    supervisorAlive: false;
+    childAlive: false;
+    singleInstanceLeasePath: string;
+    singleInstanceLeasePresent: false;
+    legacyWriterCount: 0;
+    legacySupervisorCount: 0;
+    typescriptSupervisorCount: 0;
+    observedHostId: string;
+  };
+}
+
+export interface FoundationPreflightBase {
+  command: 'a\u006f session ls --json';
+  sessions: unknown[];
+  sanitizerId: string;
+}
+
+export interface FoundationArtifactPreflight extends FoundationPreflightBase {
+  appStateVersion: string;
+}
+
+export type FoundationPreflight = FoundationArtifactPreflight | FoundationPreflightBase;
+
 export interface FoundationAdmissionEvidence {
   schemaVersion: 1;
   issue: 923;
   foundationMergeCommitSha: string;
   producer: 'orchestrator-pack:foundation-adoption-producer';
   observationDigest: string;
-  preflight: {
-    command: string;
-    appStateVersion: string;
-    sessions: unknown[];
-    sanitizerId: string;
-  };
+  preflight: FoundationPreflight;
   typedConfig: unknown;
   migrationJournalPaths: string[];
   runtimeCatalog: unknown[];
@@ -166,6 +198,7 @@ export interface FoundationAdmissionEvidence {
     observations: FoundationInertObservation;
   };
   heartbeats: FoundationHeartbeatEvidence[];
+  greenfieldObservation?: GreenfieldFoundationObservation;
 }
 
 export interface ActivationPaths {

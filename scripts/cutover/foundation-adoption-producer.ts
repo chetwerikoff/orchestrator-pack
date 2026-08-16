@@ -15,8 +15,16 @@ import { runActivationPlatformPreflight } from '../lib/cutover/activation-platfo
 import {
   canonicalFoundationPaths,
   discoverCommittedMigrationJournals,
+  GREENFIELD_RUNTIME_PATH,
+  GREENFIELD_RUNTIME_TIMEOUT_MS,
   localObservedHostId,
+  observeGreenfieldFoundationInertProof,
+  observeGreenfieldFoundationObservation,
+  observeGreenfieldMigrationJournalAbsence,
+  observeCanonicalFilePresence,
+  observeCommittedMigrationJournals,
   observeFoundationInertProof,
+  observeLiveHeartbeat,
   observeLocalHeartbeat,
   observeRuntimePreflight,
   readObservedAppStateVersion,
@@ -88,43 +96,78 @@ export async function produceFoundationAdoptionEvidence(
   const projectedRegistryPath = canonical.projectedRegistryPath;
   mkdirSync(supervisorStateDir, { recursive: true });
 
-  let observedConfigInput: unknown;
-  try {
-    observedConfigInput = JSON.parse(readFileSync(canonical.configPath, 'utf8')) as unknown;
-  } catch {
-    throw new Error('foundation_config_unobservable');
-  }
-  const observedConfig = requireObservedConfig(observedConfigInput);
-  if (observedConfig.config.notification.runtimePath !== 'ao') {
-    throw new Error('foundation_preflight_command_unobservable');
-  }
-  const version = readObservedAppStateVersion(canonical.appStatePath);
-  const preflight = await observeRuntimePreflight(
-    repoRoot,
-    observedConfig.config.notification.runtimePath,
-    observedConfig.config.notification.timeoutMs,
-    version,
-  );
-
   const parsedCatalog = validateRuntimeCatalog(FOUNDATION_RUNTIME_CATALOG, FOUNDATION_RUNTIME_CATALOG);
   if (!parsedCatalog.ok) throw new Error(`foundation_runtime_catalog_unobservable:${parsedCatalog.reason}`);
-  if (captureLegacyWriters(repoRoot, supervisorStateDir).length !== 0) {
-    throw new Error('greenfield_legacy_writer_present');
+
+  const configPresent = observeCanonicalFilePresence(canonical.configPath, 'config');
+  const appStatePresent = observeCanonicalFilePresence(canonical.appStatePath, 'app_state');
+  observeGreenfieldMigrationJournalAbsence(canonical.stateRoot);
+  const journals = observeCommittedMigrationJournals(canonical.stateRoot);
+  const greenfield = !configPresent && !appStatePresent && journals.length === 0;
+  if (!greenfield && (!configPresent || !appStatePresent || journals.length === 0)) {
+    throw new Error('foundation_greenfield_artifacts_partial');
   }
-  if (findLegacySupervisorIdentities(repoRoot).length !== 0) throw new Error('greenfield_legacy_supervisor_present');
-  if (findTypeScriptSupervisorIdentities().length !== 0) throw new Error('greenfield_typescript_supervisor_present');
-  const journals = discoverCommittedMigrationJournals(canonical.stateRoot);
-  if (input.migrationJournalPaths !== undefined) {
-    const supplied = [...new Set(input.migrationJournalPaths.map((value) => path.resolve(value)))].sort();
-    if (supplied.length !== journals.length || supplied.some((value, index) => value !== journals[index])) {
-      throw new Error('foundation_migration_journal_unobservable');
+
+  let observedConfigRaw: Record<string, unknown> | null = null;
+  let preflight: FoundationAdmissionEvidence['preflight'];
+  let inertProof: FoundationAdmissionEvidence['inertProof'];
+  let greenfieldObservation: FoundationAdmissionEvidence['greenfieldObservation'];
+  let localHostId: string;
+  if (greenfield) {
+    if (input.migrationJournalPaths !== undefined) {
+      throw new Error('foundation_migration_journal_input_forbidden');
     }
+    greenfieldObservation = observeGreenfieldFoundationObservation({
+      repoRoot,
+      paths: canonical,
+    });
+    preflight = await observeRuntimePreflight(
+      repoRoot,
+      GREENFIELD_RUNTIME_PATH,
+      GREENFIELD_RUNTIME_TIMEOUT_MS,
+    );
+    inertProof = observeGreenfieldFoundationInertProof({
+      repoRoot,
+      paths: canonical,
+    });
+    localHostId = greenfieldObservation.controlPlane.observedHostId;
+  } else {
+    let observedConfigInput: unknown;
+    try {
+      observedConfigInput = JSON.parse(readFileSync(canonical.configPath, 'utf8')) as unknown;
+    } catch {
+      throw new Error('foundation_config_unobservable');
+    }
+    const observedConfig = requireObservedConfig(observedConfigInput);
+    if (observedConfig.config.notification.runtimePath !== 'ao') {
+      throw new Error('foundation_preflight_command_unobservable');
+    }
+    const version = readObservedAppStateVersion(canonical.appStatePath);
+    preflight = await observeRuntimePreflight(
+      repoRoot,
+      observedConfig.config.notification.runtimePath,
+      observedConfig.config.notification.timeoutMs,
+      version,
+    );
+    if (captureLegacyWriters(repoRoot, supervisorStateDir).length !== 0) {
+      throw new Error('greenfield_legacy_writer_present');
+    }
+    if (findLegacySupervisorIdentities(repoRoot).length !== 0) throw new Error('greenfield_legacy_supervisor_present');
+    if (findTypeScriptSupervisorIdentities().length !== 0) throw new Error('greenfield_typescript_supervisor_present');
+    const observedJournals = discoverCommittedMigrationJournals(canonical.stateRoot);
+    if (input.migrationJournalPaths !== undefined) {
+      const supplied = [...new Set(input.migrationJournalPaths.map((value) => path.resolve(value)))].sort();
+      if (supplied.length !== observedJournals.length || supplied.some((value, index) => value !== observedJournals[index])) {
+        throw new Error('foundation_migration_journal_unobservable');
+      }
+    }
+    localHostId = localObservedHostId();
+    inertProof = observeFoundationInertProof({
+      repoRoot,
+      paths: canonical,
+    });
+    observedConfigRaw = observedConfig.raw;
   }
-  const localHostId = localObservedHostId();
-  const inertProof = observeFoundationInertProof({
-    repoRoot,
-    paths: canonical,
-  });
 
   const installedCommitSha = (await runProcess({
     command: 'git',
@@ -148,11 +191,14 @@ export async function produceFoundationAdoptionEvidence(
     foundationMergeCommitSha: FOUNDATION_COMMIT,
     producer: 'orchestrator-pack:foundation-adoption-producer',
     preflight,
-    typedConfig: observedConfig.raw,
-    migrationJournalPaths: journals,
+    typedConfig: observedConfigRaw,
+    migrationJournalPaths: greenfield ? [] : journals,
     runtimeCatalog: [...FOUNDATION_RUNTIME_CATALOG],
     inertProof,
-    heartbeats: [observeLocalHeartbeat(localHostId, installedCommitSha, canonical.configPath)],
+    heartbeats: [greenfield
+      ? observeLiveHeartbeat(localHostId, installedCommitSha)
+      : observeLocalHeartbeat(localHostId, installedCommitSha, canonical.configPath)],
+    ...(greenfieldObservation ? { greenfieldObservation } : {}),
   };
   const evidence: FoundationAdmissionEvidence = {
     ...unsigned,

@@ -37,8 +37,14 @@ import {
   assertCanonicalActivationPaths,
   canonicalConfigAndAppStateEqual,
   discoverCommittedMigrationJournals,
+  GREENFIELD_RUNTIME_PATH,
+  GREENFIELD_RUNTIME_TIMEOUT_MS,
   localObservedHostId,
+  observeGreenfieldFoundationInertProof,
+  observeGreenfieldFoundationObservation,
   observeFoundationInertProof,
+  validateGreenfieldRuntimePreflight,
+  observeLiveHeartbeat,
   observeLocalHeartbeat,
   readObservedAppStateVersion,
   observeRuntimePreflight,
@@ -226,6 +232,32 @@ function readFoundationEvidence(request: ActivationRequest): { evidence: Foundat
   if (!evidence || evidence.schemaVersion !== 1 || evidence.issue !== 923) throw new Error('foundation_evidence_schema_invalid');
   if (evidence.foundationMergeCommitSha !== FOUNDATION_LANDING_COMMIT) throw new Error('foundation_evidence_merge_binding_invalid');
   verifyFoundationEvidenceDigest(evidence);
+  if (evidence.greenfieldObservation?.mode === 'greenfield-observed') {
+    let observedGreenfield: FoundationAdmissionEvidence['greenfieldObservation'];
+    try {
+      observedGreenfield = observeGreenfieldFoundationObservation({
+        repoRoot: request.repoRoot,
+        paths: canonical,
+      });
+    } catch {
+      throw new Error('foundation_evidence_observation_mismatch:greenfield_inputs');
+    }
+    if (stableStringify(evidence.greenfieldObservation) !== stableStringify(observedGreenfield)) {
+      throw new Error('foundation_evidence_observation_mismatch:greenfield_inputs');
+    }
+    if (evidence.typedConfig !== null || evidence.migrationJournalPaths.length !== 0
+      || 'appStateVersion' in evidence.preflight) {
+      throw new Error('foundation_greenfield_artifact_claim_invalid');
+    }
+    const inertProof = observeGreenfieldFoundationInertProof({
+      repoRoot: request.repoRoot,
+      paths: canonical,
+    });
+    if (stableStringify(evidence.inertProof) !== stableStringify(inertProof)) {
+      throw new Error('foundation_evidence_observation_mismatch:inert_proof');
+    }
+    return { evidence, evidencePath };
+  }
   let observedConfig: unknown;
   try {
     observedConfig = JSON.parse(readFileSync(canonical.configPath, 'utf8')) as unknown;
@@ -233,6 +265,7 @@ function readFoundationEvidence(request: ActivationRequest): { evidence: Foundat
     throw new Error('foundation_typed_config_unobservable');
   }
   const observedAppStateVersion = readObservedAppStateVersion(canonical.appStatePath);
+  if (!('appStateVersion' in evidence.preflight)) throw new Error('foundation_evidence_schema_invalid');
   if (!canonicalConfigAndAppStateEqual(
     evidence.typedConfig,
     observedConfig,
@@ -305,19 +338,30 @@ function assertGreenfieldAbsence(
 
 async function proveFoundationAdoption(request: ActivationRequest): Promise<FoundationAdmissionProof> {
   const { evidence, evidencePath } = readFoundationEvidence(request);
-  const preflight = validateRuntimePreflight(evidence.preflight);
+  const greenfield = evidence.greenfieldObservation?.mode === 'greenfield-observed';
+  const preflight = greenfield
+    ? validateGreenfieldRuntimePreflight(evidence.preflight)
+    : ('appStateVersion' in evidence.preflight
+      ? validateRuntimePreflight(evidence.preflight)
+      : { ok: false as const, reason: 'preflight_version_unverifiable' });
   if (!preflight.ok) throw new Error(`foundation_preflight_invalid:${preflight.reason}`);
-  const config = parseFoundationConfig(evidence.typedConfig);
-  if (!config.ok) throw new Error(`foundation_typed_config_invalid:${config.reason}:${config.path}`);
+  const config = greenfield ? null : parseFoundationConfig(evidence.typedConfig);
+  if (!greenfield && !config?.ok) throw new Error(`foundation_typed_config_invalid:${config?.reason}:${config?.path}`);
   const catalog = validateRuntimeCatalog(FOUNDATION_RUNTIME_CATALOG, evidence.runtimeCatalog as RuntimeSurface[]);
   if (!catalog.ok) throw new Error(`foundation_runtime_catalog_invalid:${catalog.reason}:${catalog.surface ?? ''}`);
-  if (evidence.inertProof?.result !== 'live-acquirers-unchanged') throw new Error('foundation_inert_proof_missing');
-  if (!Array.isArray(evidence.migrationJournalPaths) || evidence.migrationJournalPaths.length === 0) {
+  const expectedInertProofResult = greenfield ? 'greenfield-dormant-layer-not-active' : 'live-acquirers-unchanged';
+  if (evidence.inertProof?.result !== expectedInertProofResult) throw new Error('foundation_inert_proof_missing');
+  if (!greenfield && (!Array.isArray(evidence.migrationJournalPaths) || evidence.migrationJournalPaths.length === 0)) {
     throw new Error('foundation_migration_journal_missing');
   }
-  for (const journalPath of evidence.migrationJournalPaths) {
-    const journal = readMigrationJournal(journalPath);
-    if (!journal.ok || journal.record?.state !== 'committed') throw new Error(`foundation_migration_journal_invalid:${journalPath}`);
+  if (greenfield && (evidence.typedConfig !== null || evidence.migrationJournalPaths.length !== 0)) {
+    throw new Error('foundation_greenfield_artifact_claim_invalid');
+  }
+  if (!greenfield) {
+    for (const journalPath of evidence.migrationJournalPaths) {
+      const journal = readMigrationJournal(journalPath);
+      if (!journal.ok || journal.record?.state !== 'committed') throw new Error(`foundation_migration_journal_invalid:${journalPath}`);
+    }
   }
 
   const observedLocalHost = localHostId();
@@ -337,44 +381,74 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
     throw new Error('foundation_merge_missing_from_old_install');
   }
   const canonical = assertCanonicalActivationPaths(request);
-  let observedConfig: unknown;
-  try {
-    observedConfig = JSON.parse(readFileSync(canonical.configPath, 'utf8')) as unknown;
-  } catch {
-    throw new Error('foundation_typed_config_unobservable');
-  }
-  const observedAppStateVersion = readObservedAppStateVersion(canonical.appStatePath);
-  const livePreflight = await observeRuntimePreflight(
-    request.repoRoot,
-    config.config.notification.runtimePath,
-    config.config.notification.timeoutMs,
-    observedAppStateVersion,
-  );
-  if (stableStringify(livePreflight) !== stableStringify(evidence.preflight)) {
-    throw new Error('foundation_evidence_observation_mismatch:preflight');
-  }
-  let migrationJournalPaths: string[];
-  try {
-    migrationJournalPaths = discoverCommittedMigrationJournals(canonical.stateRoot);
-  } catch {
-    throw new Error('foundation_migration_journal_unobservable');
-  }
+  let observedConfig: unknown = null;
+  let observedAppStateVersion: string | undefined;
+  let livePreflight: FoundationAdmissionEvidence['preflight'];
+  let migrationJournalPaths: string[] = [];
   let inertProof: FoundationAdmissionEvidence['inertProof'];
-  try {
-    inertProof = observeFoundationInertProof({
+  if (greenfield) {
+    let observedGreenfield: FoundationAdmissionEvidence['greenfieldObservation'];
+    try {
+      observedGreenfield = observeGreenfieldFoundationObservation({
+        repoRoot: request.repoRoot,
+        paths: canonical,
+      });
+    } catch {
+      throw new Error('foundation_evidence_observation_mismatch:greenfield_inputs');
+    }
+    if (stableStringify(evidence.greenfieldObservation) !== stableStringify(observedGreenfield)) {
+      throw new Error('foundation_evidence_observation_mismatch:greenfield_inputs');
+    }
+    inertProof = observeGreenfieldFoundationInertProof({
       repoRoot: request.repoRoot,
       paths: canonical,
     });
-  } catch {
-    throw new Error('foundation_inert_proof_unobservable');
+    livePreflight = await observeRuntimePreflight(
+      request.repoRoot,
+      GREENFIELD_RUNTIME_PATH,
+      GREENFIELD_RUNTIME_TIMEOUT_MS,
+    );
+  } else {
+    if (!config || !config.ok) throw new Error('foundation_typed_config_invalid');
+    try {
+      observedConfig = JSON.parse(readFileSync(canonical.configPath, 'utf8')) as unknown;
+    } catch {
+      throw new Error('foundation_typed_config_unobservable');
+    }
+    observedAppStateVersion = readObservedAppStateVersion(canonical.appStatePath);
+    livePreflight = await observeRuntimePreflight(
+      request.repoRoot,
+      config.config.notification.runtimePath,
+      config!.config.notification.timeoutMs,
+      observedAppStateVersion,
+    );
+    try {
+      migrationJournalPaths = discoverCommittedMigrationJournals(canonical.stateRoot);
+    } catch {
+      throw new Error('foundation_migration_journal_unobservable');
+    }
+    try {
+      inertProof = observeFoundationInertProof({
+        repoRoot: request.repoRoot,
+        paths: canonical,
+      });
+    } catch {
+      throw new Error('foundation_inert_proof_unobservable');
+    }
   }
-  const heartbeat = observeLocalHeartbeat(request.hostId, oldInstalledCommitSha, canonical.configPath);
+  if (stableStringify(livePreflight) !== stableStringify(evidence.preflight)) {
+    throw new Error('foundation_evidence_observation_mismatch:preflight');
+  }
+  const heartbeat = greenfield
+    ? observeLiveHeartbeat(request.hostId, oldInstalledCommitSha)
+    : observeLocalHeartbeat(request.hostId, oldInstalledCommitSha, canonical.configPath);
   verifyFoundationEvidenceObservation(evidence, {
     typedConfig: observedConfig,
     appStateVersion: observedAppStateVersion,
     migrationJournalPaths,
     inertProof,
     heartbeats: [heartbeat],
+    heartbeatTimestampMode: greenfield ? 'fresh' : 'exact',
   });
   if (!Array.isArray(evidence.heartbeats) || evidence.heartbeats.length !== 1) throw new Error('foundation_heartbeat_roster_invalid');
   const heartbeatHosts = new Set<string>();
@@ -387,7 +461,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
       if (configured.quarantined !== true) throw new Error(`foundation_member_not_quarantined:${evidenceHeartbeat.hostId}`);
       continue;
     }
-    const observedMs = Date.parse(heartbeat.observedAt);
+    const observedMs = Date.parse(greenfield ? evidenceHeartbeat.observedAt : heartbeat.observedAt);
     const nowMs = Date.now();
     if (!Number.isFinite(observedMs) || observedMs > nowMs + 30_000 || nowMs - observedMs > FOUNDATION_HEARTBEAT_MAX_AGE_MS) {
       throw new Error('foundation_heartbeat_stale');
@@ -407,7 +481,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
       evidencePath,
       localHostId: observedLocalHost,
       oldInstalledCommitSha,
-      heartbeatObservedAt: heartbeat.observedAt,
+      heartbeatObservedAt: greenfield ? evidence.heartbeats[0]!.observedAt : heartbeat.observedAt,
       migrationJournalCount: evidence.migrationJournalPaths.length,
       preflightSanitizerId: preflight.sanitizerId,
       activationMode: 'greenfield',

@@ -1,10 +1,20 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { FileEpochAuthority } from './activation-epoch-authority.ts';
-import { captureLegacyWriters, processAliveStrict } from './activation-cordon.ts';
+import {
+  captureLegacyWriters,
+  findLegacySupervisorIdentities,
+  findTypeScriptSupervisorIdentities,
+  processAliveStrict,
+} from './activation-cordon.ts';
 import { sha256Bytes, stableStringify } from './stable-stringify.ts';
-import type { ActivationRequest, FoundationHeartbeatEvidence, FoundationInertObservation } from './types.ts';
+import type {
+  ActivationRequest,
+  FoundationHeartbeatEvidence,
+  FoundationInertObservation,
+  GreenfieldFoundationObservation,
+} from './types.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 import { readMigrationJournal } from '../../pr2-foundation/migration-journal.ts';
 import { resolveWakeSupervisorStateRoot } from '../../pr2-foundation/wake-supervisor-state-root.ts';
@@ -15,10 +25,17 @@ import {
   sanitizeRuntimeWorkers,
   sanitizerIdentity,
   validateRuntimePreflight,
+  validateRuntimeWorkerRow,
   type RuntimeWorkerRow,
 } from '../../pr2-foundation/binding.ts';
 import { runProcess } from '../../kernel/subprocess.ts';
 import type { FoundationAdmissionEvidence } from './types.ts';
+import { readLiveSingleInstanceLease } from '../../runtime/single-instance-lease.ts';
+
+export const GREENFIELD_RUNTIME_PATH = 'ao';
+export const GREENFIELD_RUNTIME_TIMEOUT_MS = 30_000;
+export const FOUNDATION_MIGRATION_JOURNAL_DIRECTORY = 'migration-journals';
+export const FOUNDATION_MIGRATION_JOURNAL_SUFFIX = '.migration-journal.json';
 
 export interface CanonicalFoundationPaths {
   stateRoot: string;
@@ -131,11 +148,35 @@ function parseJsonOutput(stdout: string): unknown {
   }
 }
 
+export function observeCanonicalFilePresence(pathName: string, label: 'config' | 'app_state'): boolean {
+  try {
+    const metadata = lstatSync(pathName);
+    if (!metadata.isFile()) throw new Error(`foundation_${label}_unobservable`);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message === `foundation_${label}_unobservable`) throw error;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw new Error(`foundation_${label}_unobservable`);
+  }
+}
+
+export function validateGreenfieldRuntimePreflight(
+  input: FoundationAdmissionEvidence['preflight'],
+): { ok: true; sanitizerId: string } | { ok: false; reason: string } {
+  if (String(input.command) !== 'a\u006f session ls --json') return { ok: false, reason: 'preflight_command_mismatch' };
+  if (!input.sanitizerId.trim()) return { ok: false, reason: 'preflight_sanitizer_missing' };
+  if (!Array.isArray(input.sessions) || input.sessions.length < 1) {
+    return { ok: false, reason: 'preflight_empty_fleet' };
+  }
+  if (!input.sessions.every(validateRuntimeWorkerRow)) return { ok: false, reason: 'preflight_schema_mismatch' };
+  return { ok: true, sanitizerId: input.sanitizerId };
+}
+
 export async function observeRuntimePreflight(
   repoRoot: string,
   runtimePath: string,
   timeoutMs: number,
-  appStateVersion: string,
+  appStateVersion?: string,
 ): Promise<FoundationAdmissionEvidence['preflight']> {
   let runtime;
   try {
@@ -176,11 +217,13 @@ export async function observeRuntimePreflight(
   if (leak) throw new Error(`foundation_runtime_capture_unobservable:${leak}`);
   const livePreflight: FoundationAdmissionEvidence['preflight'] = {
     command: 'a\u006f session ls --json',
-    appStateVersion,
     sessions: sanitized,
     sanitizerId: sanitizerIdentity(sanitized),
+    ...(appStateVersion === undefined ? {} : { appStateVersion }),
   };
-  const validatedPreflight = validateRuntimePreflight(livePreflight);
+  const validatedPreflight = appStateVersion === undefined
+    ? validateGreenfieldRuntimePreflight(livePreflight)
+    : validateRuntimePreflight(livePreflight as FoundationAdmissionEvidence['preflight'] & { appStateVersion: string });
   if (!validatedPreflight.ok) throw new Error(`foundation_runtime_preflight_unobservable:${validatedPreflight.reason}`);
   return livePreflight;
 }
@@ -194,23 +237,136 @@ export function readObservedAppStateVersion(pathName: string): string {
 }
 
 export function discoverCommittedMigrationJournals(stateRoot: string): string[] {
-  if (!existsSync(stateRoot)) throw new Error('foundation_migration_journal_unobservable');
+  const journals = observeCommittedMigrationJournals(stateRoot);
+  if (journals.length === 0) throw new Error('foundation_migration_journal_unobservable');
+  return journals;
+}
+
+export function observeCommittedMigrationJournals(stateRoot: string): string[] {
+  if (!existsSync(stateRoot)) return [];
   const output: string[] = [];
   const visit = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const candidate = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        visit(candidate);
-      } else if (entry.isFile() && entry.name.endsWith('.json')) {
-        const journal = readMigrationJournal(candidate);
-        if (journal.ok && journal.record?.state === 'committed') output.push(path.resolve(candidate));
+    try {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const candidate = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          visit(candidate);
+        } else if (entry.isFile() && entry.name.endsWith('.json')) {
+          const journal = readMigrationJournal(candidate);
+          if (journal.ok && journal.record?.state === 'committed') output.push(path.resolve(candidate));
+        }
       }
+    } catch {
+      throw new Error('foundation_migration_journal_unobservable');
     }
   };
   visit(stateRoot);
   const journals = [...new Set(output)].sort();
-  if (journals.length === 0) throw new Error('foundation_migration_journal_unobservable');
   return journals;
+}
+
+export function observeGreenfieldMigrationJournalAbsence(stateRoot: string): void {
+  const journalDirectory = path.join(stateRoot, FOUNDATION_MIGRATION_JOURNAL_DIRECTORY);
+  let entries;
+  try {
+    entries = readdirSync(journalDirectory, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw new Error('foundation_migration_journal_unobservable');
+  }
+  for (const entry of entries) {
+    if (!entry.name.endsWith(FOUNDATION_MIGRATION_JOURNAL_SUFFIX)) continue;
+    const candidate = path.join(journalDirectory, entry.name);
+    if (!entry.isFile()) throw new Error('foundation_migration_journal_unobservable');
+    const journal = readMigrationJournal(candidate);
+    if (!journal.ok) throw new Error('foundation_migration_journal_unobservable');
+    if (journal.record !== null) throw new Error('greenfield_migration_journal_present');
+  }
+}
+
+export function observeGreenfieldControlPlane(input: {
+  repoRoot: string;
+  paths: CanonicalFoundationPaths;
+}): GreenfieldFoundationObservation['controlPlane'] {
+  const observedHostId = localObservedHostId();
+  const authority = new FileEpochAuthority(input.paths.epochAuthorityPath).read();
+  if (authority.currentEpochId !== null || authority.records.length !== 0) {
+    throw new Error('greenfield_epoch_authority_not_empty');
+  }
+
+  const supervisorStatusPath = path.join(input.paths.supervisorStateDir, 'typescript-supervisor-status.json');
+  let supervisorStatusPresent = false;
+  let supervisorAlive = false;
+  let childAlive = false;
+  try {
+    const status = readSupervisorStatus({ stateDir: input.paths.supervisorStateDir });
+    supervisorStatusPresent = status !== null;
+    if (status) {
+      if (status.schemaVersion !== 1 || status.childId !== 'pr2-scheduler' || typeof status.restartState !== 'string') {
+        throw new Error('greenfield_registered_child_unknown');
+      }
+      supervisorAlive = Number.isInteger(status.supervisorPid)
+        && status.supervisorPid > 1
+        && processAliveStrict(status.supervisorPid);
+      childAlive = Number.isInteger(status.childPid)
+        && status.childPid !== null
+        && status.childPid > 1
+        && processAliveStrict(status.childPid);
+      if (supervisorAlive || childAlive) throw new Error('greenfield_registered_child_alive');
+    }
+    const singleInstanceLeasePath = path.join(input.paths.supervisorStateDir, 'typescript-supervisor.lock');
+    const singleInstanceLeasePresent = readLiveSingleInstanceLease(singleInstanceLeasePath) !== null;
+    if (singleInstanceLeasePresent) throw new Error('greenfield_registered_supervisor_alive');
+
+    const writers = captureLegacyWriters(input.repoRoot, input.paths.supervisorStateDir);
+    if (writers.length !== 0) throw new Error('greenfield_legacy_writer_present');
+    const legacySupervisors = findLegacySupervisorIdentities(input.repoRoot);
+    if (legacySupervisors.length !== 0) throw new Error('greenfield_legacy_supervisor_present');
+    const typescriptSupervisors = findTypeScriptSupervisorIdentities();
+    if (typescriptSupervisors.length !== 0) throw new Error('greenfield_typescript_supervisor_present');
+    return {
+      epochAuthorityPath: input.paths.epochAuthorityPath,
+      epochAuthorityCurrentEpochId: null,
+      epochAuthorityRecordCount: 0,
+      supervisorStatusPath,
+      supervisorStatusPresent,
+      supervisorAlive: false,
+      childAlive: false,
+      singleInstanceLeasePath,
+      singleInstanceLeasePresent: false,
+      legacyWriterCount: 0,
+      legacySupervisorCount: 0,
+      typescriptSupervisorCount: 0,
+      observedHostId,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('greenfield_')) throw error;
+    if (error instanceof Error && error.message.includes('unobservable')) throw error;
+    throw new Error(`foundation_greenfield_control_plane_unobservable:${error instanceof Error ? error.message : 'unknown'}`);
+  }
+}
+
+export function observeGreenfieldFoundationObservation(input: {
+  repoRoot: string;
+  paths: CanonicalFoundationPaths;
+}): GreenfieldFoundationObservation {
+  const configPresent = observeCanonicalFilePresence(input.paths.configPath, 'config');
+  const appStatePresent = observeCanonicalFilePresence(input.paths.appStatePath, 'app_state');
+  if (configPresent) throw new Error('greenfield_foundation_config_present');
+  if (appStatePresent) throw new Error('greenfield_app_state_present');
+  const committedMigrationJournalPaths = observeCommittedMigrationJournals(input.paths.stateRoot);
+  if (committedMigrationJournalPaths.length !== 0) throw new Error('greenfield_migration_journal_present');
+  observeGreenfieldMigrationJournalAbsence(input.paths.stateRoot);
+  return {
+    mode: 'greenfield-observed',
+    stateRoot: input.paths.stateRoot,
+    foundationConfigPath: input.paths.configPath,
+    foundationConfigPresent: false,
+    appStatePath: input.paths.appStatePath,
+    appStatePresent: false,
+    committedMigrationJournalPaths: [],
+    controlPlane: observeGreenfieldControlPlane(input),
+  };
 }
 
 function fileDigestOrAbsent(pathName: string): string {
@@ -225,13 +381,18 @@ function fileDigestOrAbsent(pathName: string): string {
 export function observeFoundationInertInput(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
+  allowAbsentTypedConfig?: boolean;
 }): ObservedFoundationInertInput {
   let configObserved = false;
-  try {
-    const config = parseFoundationConfig(JSON.parse(readFileSync(input.paths.configPath, 'utf8')) as unknown);
-    configObserved = config.ok;
-  } catch {
-    throw new Error('foundation_typed_config_unobservable');
+  if (!existsSync(input.paths.configPath) && input.allowAbsentTypedConfig === true) {
+    configObserved = false;
+  } else {
+    try {
+      const config = parseFoundationConfig(JSON.parse(readFileSync(input.paths.configPath, 'utf8')) as unknown);
+      configObserved = config.ok;
+    } catch {
+      throw new Error('foundation_typed_config_unobservable');
+    }
   }
   const status = readSupervisorStatus({ stateDir: input.paths.supervisorStateDir });
   const supervisorPid = Number(status?.supervisorPid ?? 0);
@@ -276,6 +437,32 @@ export function observeFoundationInertProof(input: {
   return { ...proof, observations: observed };
 }
 
+export function observeGreenfieldFoundationInertProof(input: {
+  repoRoot: string;
+  paths: CanonicalFoundationPaths;
+}): { result: 'greenfield-dormant-layer-not-active'; observations: FoundationInertObservation } {
+  const observed = observeFoundationInertInput({
+    ...input,
+    allowAbsentTypedConfig: true,
+  });
+  const failures: Array<[boolean, string]> = [
+    [observed.registryChanged, 'registry_changed'],
+    [observed.supervisorChanged, 'supervisor_changed'],
+    [observed.schedulerRegistered, 'scheduler_registered'],
+    [observed.schedulerRunning, 'scheduler_running'],
+    [observed.schedulerClaimAcquirer, 'scheduler_claim_acquirer'],
+    [observed.activationEpochEnforced, 'activation_epoch_enforced'],
+    [observed.liveStoreOpened, 'live_store_opened'],
+    [observed.legacyStarterDisabled, 'legacy_starter_enabled'],
+    [observed.nonNotificationRuntimeDelta, 'non_notification_runtime_delta'],
+    [observed.dormantTypedConfigReaderLive, 'dormant_config_reader_live'],
+    [observed.notificationTypedConfigLive, 'notification_config_present'],
+  ];
+  const failure = failures.find(([condition]) => condition);
+  if (failure) throw new Error(`foundation_inert_proof_unobservable:${failure[1]}`);
+  return { result: 'greenfield-dormant-layer-not-active', observations: observed };
+}
+
 export function observeLocalHeartbeat(
   localHostId: string,
   installedCommitSha: string,
@@ -292,6 +479,18 @@ export function observeLocalHeartbeat(
     hostId: localHostId,
     installedCommitSha,
     observedAt,
+    active: processAliveStrict(process.pid),
+  };
+}
+
+export function observeLiveHeartbeat(
+  localHostId: string,
+  installedCommitSha: string,
+): FoundationHeartbeatEvidence {
+  return {
+    hostId: localHostId,
+    installedCommitSha,
+    observedAt: new Date().toISOString(),
     active: processAliveStrict(process.pid),
   };
 }

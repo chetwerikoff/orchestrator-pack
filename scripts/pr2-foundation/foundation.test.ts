@@ -2,9 +2,12 @@ import {
   chmodSync,
   existsSync,
   lstatSync,
+  mkdtempSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
@@ -26,9 +29,17 @@ import {
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
 import { productionActivationBoundary } from '../lib/cutover/activation-transaction.ts';
 import { foundationEvidenceDigest, writeDurableJson } from '../lib/cutover/activation-evidence.ts';
-import { canonicalFoundationPaths, observeFoundationInertProof, observeLocalHeartbeat } from '../lib/cutover/foundation-observation.ts';
+import {
+  canonicalFoundationPaths,
+  FOUNDATION_MIGRATION_JOURNAL_DIRECTORY,
+  FOUNDATION_MIGRATION_JOURNAL_SUFFIX,
+  observeFoundationInertProof,
+  observeGreenfieldMigrationJournalAbsence,
+  observeLocalHeartbeat,
+} from '../lib/cutover/foundation-observation.ts';
 import type { ActivationRequest, FoundationAdmissionEvidence } from '../lib/cutover/types.ts';
 import { FOUNDATION_COMMIT } from '../pr2a/contracts.ts';
+import { produceFoundationAdoptionEvidence } from '../cutover/foundation-adoption-producer.ts';
 import {
   CUTOVER_ROWS,
   FOUNDATION_DOC_ROWS,
@@ -52,6 +63,15 @@ const testRoots = createTestRootRegistry();
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const HEAD_A = 'a'.repeat(40);
 const HEAD_B = 'b'.repeat(40);
+
+vi.mock('../lib/cutover/activation-cordon.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/cutover/activation-cordon.ts')>();
+  return {
+    ...actual,
+    findLegacySupervisorIdentities: () => [],
+    findTypeScriptSupervisorIdentities: () => [],
+  };
+});
 
 function writeJson(file: string, value: unknown): void {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
@@ -299,6 +319,45 @@ describe('[AC5] synthetic migration journal', () => {
       journalKey: 'J-live',
     })).toEqual({ ok: false, reason: 'foundation_live_import_forbidden' });
   });
+
+  it.each(['prepared', 'imported', 'committed'] as const)(
+    'refuses a canonical greenfield migration journal in %s state',
+    (state) => {
+      const root = testRoots.create(`opk-greenfield-journal-${state}-`);
+      const journalDirectory = path.join(root, FOUNDATION_MIGRATION_JOURNAL_DIRECTORY);
+      mkdirSync(journalDirectory, { recursive: true });
+      writeJson(path.join(journalDirectory, `migration${FOUNDATION_MIGRATION_JOURNAL_SUFFIX}`), {
+        schemaVersion: 1,
+        journalKey: `greenfield-${state}`,
+        sourcePath: path.join(root, 'source.json'),
+        targetPath: path.join(root, 'target.json'),
+        sourceDigest: 'sha256:source',
+        ...(state === 'imported' || state === 'committed' ? { importedDigest: 'sha256:target' } : {}),
+        archiveIdentity: 'sha256:archive',
+        state,
+        preparedAt: '2026-08-16T00:00:00.000Z',
+        ...(state === 'imported' || state === 'committed'
+          ? { importedAt: '2026-08-16T00:00:01.000Z' }
+          : {}),
+        ...(state === 'committed' ? { committedAt: '2026-08-16T00:00:02.000Z' } : {}),
+      });
+      expect(() => observeGreenfieldMigrationJournalAbsence(root))
+        .toThrow('greenfield_migration_journal_present');
+    },
+  );
+
+  it('refuses a recognizable but corrupt canonical greenfield migration journal', () => {
+    const root = testRoots.create('opk-greenfield-journal-corrupt-');
+    const journalDirectory = path.join(root, FOUNDATION_MIGRATION_JOURNAL_DIRECTORY);
+    mkdirSync(journalDirectory, { recursive: true });
+    writeFileSync(
+      path.join(journalDirectory, `migration${FOUNDATION_MIGRATION_JOURNAL_SUFFIX}`),
+      '{torn',
+      'utf8',
+    );
+    expect(() => observeGreenfieldMigrationJournalAbsence(root))
+      .toThrow('foundation_migration_journal_unobservable');
+  });
 });
 
 describe('[AC6] trusted runtime catalog and platform guard', () => {
@@ -366,6 +425,96 @@ describe('[AC7] estate split', () => {
 });
 
 describe('[AC2] production foundation admission', () => {
+  it('produces and independently admits clean greenfield evidence with a stale source mtime', async () => {
+    const home = mkdtempSync(path.join(repoRoot, '.opk-1422-greenfield-home-'));
+    const user = os.userInfo();
+    vi.spyOn(os, 'userInfo').mockReturnValue({ ...user, homedir: home });
+    const previousPath = process.env.PATH;
+    const previousOverride = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    const previousAdapter = process.env.OPK_RUNTIME_ADAPTER;
+    const sourcePath = path.join(repoRoot, 'scripts', 'pr2-foundation', 'config.ts');
+    const sourceStat = statSync(sourcePath);
+    const bin = path.join(home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const ao = path.join(bin, 'ao');
+    const liveRow = {
+      ...session(),
+      id: 'greenfield-live-source',
+      issueId: 1422,
+      lastActivityAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    writeFileSync(ao, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify({ sessions: [liveRow] }))});\n`);
+    chmodSync(ao, 0o755);
+    process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ''}`;
+    delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    delete process.env.OPK_RUNTIME_ADAPTER;
+    try {
+      utimesSync(sourcePath, new Date(Date.now() - 24 * 60 * 60_000), new Date(Date.now() - 24 * 60 * 60_000));
+      const canonical = canonicalFoundationPaths(repoRoot);
+      const paths = {
+        stateRoot: canonical.stateRoot,
+        stateDir: canonical.stateRoot,
+        cordonPath: canonical.cordonPath,
+        phaseOnePath: canonical.phaseOnePath,
+        followupPath: canonical.followupPath,
+        epochAuthorityPath: canonical.epochAuthorityPath,
+        targetRegistryPath: path.join(repoRoot, 'scripts', 'orchestrator-side-process-registry.json'),
+        projectedRegistryPath: canonical.projectedRegistryPath,
+        snapshotDir: canonical.snapshotDir,
+        supervisorStateDir: canonical.supervisorStateDir,
+        foundationEvidencePath: canonical.evidencePath,
+        configPath: canonical.configPath,
+        appStatePath: canonical.appStatePath,
+      };
+      const hostId = os.hostname().trim();
+      const result = await produceFoundationAdoptionEvidence({
+        repoRoot,
+        stateDir: canonical.stateRoot,
+        configPath: canonical.configPath,
+        appStatePath: canonical.appStatePath,
+      });
+      expect(result.evidence.greenfieldObservation?.mode).toBe('greenfield-observed');
+      expect('appStateVersion' in result.evidence.preflight).toBe(false);
+      expect(result.evidence.heartbeats[0]?.observedAt).toBeTruthy();
+      const request = {
+        epochId: 'greenfield-test-epoch',
+        expectedOldEpochId: null,
+        installedCommitSha: '0'.repeat(40),
+        oldInstalledRevisionRoot: repoRoot,
+        repoRoot,
+        hostId,
+        knownMemberRoster: [{ hostId }],
+        paths,
+      } as unknown as ActivationRequest;
+      await expect(productionActivationBoundary.proveFoundationAdoption(request)).resolves.toMatchObject({
+        activationMode: 'greenfield',
+      });
+
+      const tampered = {
+        ...result.evidence,
+        preflight: { ...result.evidence.preflight, appStateVersion: '0.10.4' },
+      };
+      const { observationDigest: _observationDigest, ...unsignedTampered } = tampered;
+      writeDurableJson(canonical.evidencePath, {
+        ...unsignedTampered,
+        observationDigest: foundationEvidenceDigest(unsignedTampered),
+      });
+      await expect(productionActivationBoundary.proveFoundationAdoption(request))
+        .rejects.toThrow('foundation_greenfield_artifact_claim_invalid');
+    } finally {
+      utimesSync(sourcePath, sourceStat.atime, sourceStat.mtime);
+      rmSync(home, { recursive: true, force: true });
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousOverride === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+      else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousOverride;
+      if (previousAdapter === undefined) delete process.env.OPK_RUNTIME_ADAPTER;
+      else process.env.OPK_RUNTIME_ADAPTER = previousAdapter;
+      vi.restoreAllMocks();
+    }
+  });
+
   it('rejects fully hand-authored rehashed evidence after live preflight re-observation', async () => {
     const home = testRoots.create('opk-1422-production-home-');
     const user = os.userInfo();
