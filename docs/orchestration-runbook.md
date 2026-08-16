@@ -71,6 +71,54 @@ It never sends `worker_done`, never terminates a live attempt, and never becomes
 
 The architect is an expensive one-shot architecture/specification role, not a fleet monitor, scheduler, retry service, or recovery daemon.
 
+## Executor profiles by role and task tier
+
+Executor selection for new manager/worker work is a stable role/tier-to-profile rule. It does not change tier classification, WorkerAssignment, RuntimeAdapter, browser-chat lifecycle, scheduler, recovery, review, or smoke authorities.
+
+Immediately before starting new work, resolve exactly one profile from the work role/tier:
+
+```text
+manager work -> manager executor profile
+T1 worker    -> T1 executor profile
+T2 worker    -> T2 executor profile
+T3 worker    -> T3 executor profile
+```
+
+Each profile has three operator-local values — `agent`, `model`, and `effort` — under these stable names:
+
+```text
+PACK_EXECUTOR_MANAGER_AGENT
+PACK_EXECUTOR_MANAGER_MODEL
+PACK_EXECUTOR_MANAGER_EFFORT
+
+PACK_EXECUTOR_T1_AGENT
+PACK_EXECUTOR_T1_MODEL
+PACK_EXECUTOR_T1_EFFORT
+
+PACK_EXECUTOR_T2_AGENT
+PACK_EXECUTOR_T2_MODEL
+PACK_EXECUTOR_T2_EFFORT
+
+PACK_EXECUTOR_T3_AGENT
+PACK_EXECUTOR_T3_MODEL
+PACK_EXECUTOR_T3_EFFORT
+```
+
+The variable names and role/tier-to-profile mapping are tracked policy. Their concrete values are machine/operator-local configuration and must not be committed as repository defaults. Resolve the current local values immediately before starting new work. Changing an `agent`, `model`, or `effort` value applies to subsequent work and does not require a repository Issue or PR; changing the stable mapping or variable contract does.
+
+`agent` selects the already-supported invocation path. Cursor uses the existing local Cursor/Orca launch path and passes the configured model/effort. GPT uses the existing chat/Browser-GPT path, including for implementation workers. This profile rule does not add a runtime selector, WorkerAssignment type, provider registry, scheduler, service, store, queue, daemon, fallback transport, or retry mechanism.
+
+Current operator-local example only — these are not repository defaults:
+
+```text
+manager   -> Cursor / Luna / low
+T1 worker -> Cursor / Luna / medium
+T2 worker -> Cursor / Luna / high
+T3 worker -> GPT through chat
+```
+
+For example, switching the local T3 profile from GPT to Cursor makes subsequent T3 work use the existing Cursor/Orca path without a tracked policy edit.
+
 ## Supervised initial delivery and WorkerAssignment
 
 Initial supervised Task delivery remains Orca-owned. Use the PACK supervised-start boundary through the canonical TypeScript launcher:
