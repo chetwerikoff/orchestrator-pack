@@ -362,20 +362,26 @@ function productionObserverBoundary(observer: FleetObserver): SchedulerFleetObse
 
 function productionFleetObserverSource(
   runtime: FleetObserverSource,
-  repoRoot: string,
   assignmentBindings: readonly FleetAssignmentBinding[],
 ): FleetObserverSource {
   return {
     listWorkers: async (_input, options) => {
-      const listed = await runtime.listWorkers({ workspace: `path:${repoRoot}` }, options);
-      if (listed.status !== 'ok') return listed;
+      const listed = await Promise.all(assignmentBindings.map(async (binding) => (
+        runtime.findWorker(binding.worker, options)
+      )));
+      const failure = listed.find((result) => result.status !== 'ok');
+      if (failure) return failure;
       const assigned = assignmentBindings.map((binding) => binding.worker);
       return {
         status: 'ok',
-        value: listed.value.filter((worker) => (
-          worker.provenance !== 'external'
-          || assigned.some((identity) => sameRuntimeWorker(identity, worker.identity))
-        )),
+        value: listed.flatMap((result) => {
+          if (result.status !== 'ok' || result.value === null) return [];
+          const worker = result.value;
+          return worker.provenance !== 'external'
+            || assigned.some((identity) => sameRuntimeWorker(identity, worker.identity))
+            ? [worker]
+            : [];
+        }),
       };
     },
     findWorker: (identity, options) => runtime.findWorker(identity, options),
@@ -421,7 +427,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       fleetBindings = built;
       assignmentReconciliation = resolution.reconciliations[0];
       fleetObserver = new FleetObserver({
-        source: productionFleetObserverSource(runtime, repoRoot, fleetBindings),
+        source: productionFleetObserverSource(runtime, fleetBindings),
         activationLineage,
         assignmentBindings: fleetBindings,
         configPath: productionFleetObserverConfigPath(env),
@@ -437,7 +443,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
         ...(scopedAssignment ? { assignment: scopedAssignment } : {}),
       };
       fleetObserver = new FleetObserver({
-        source: productionFleetObserverSource(runtime, repoRoot, []),
+        source: productionFleetObserverSource(runtime, []),
         activationLineage,
         assignmentBindings: [],
         configPath: productionFleetObserverConfigPath(env),
