@@ -37,7 +37,7 @@ import {
   type WorkerAssignment,
 } from '../lib/worker-assignment-store.ts';
 import { resolveCurrentWorkerAssignmentBindings } from '../lib/worker-assignment-runtime.ts';
-import { sameRuntimeWorker } from '../runtime/contracts.ts';
+import { runtimeFailure, sameRuntimeWorker } from '../runtime/contracts.ts';
 import { buildFleetAssignmentBindings, type FleetAssignmentBinding } from './fleet-assignment-binding.ts';
 import { createProductionFleetNudgeEffects } from './fleet-nudge-production.ts';
 import {
@@ -360,22 +360,41 @@ function productionObserverBoundary(observer: FleetObserver): SchedulerFleetObse
   };
 }
 
-function productionFleetObserverSource(
+export function productionFleetObserverSource(
   runtime: FleetObserverSource,
-  repoRoot: string,
   assignmentBindings: readonly FleetAssignmentBinding[],
 ): FleetObserverSource {
   return {
     listWorkers: async (_input, options) => {
-      const listed = await runtime.listWorkers({ workspace: `path:${repoRoot}` }, options);
-      if (listed.status !== 'ok') return listed;
+      const deadlineMs = typeof options?.timeoutMs === 'number'
+        ? Date.now() + Math.max(0, options.timeoutMs)
+        : undefined;
+      const listed = [];
+      for (const binding of assignmentBindings) {
+        const remainingTimeoutMs = deadlineMs === undefined
+          ? undefined
+          : deadlineMs - Date.now();
+        if (remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) {
+          return runtimeFailure('find_worker', 'phase_budget_expired');
+        }
+        const lookupOptions = remainingTimeoutMs === undefined
+          ? options
+          : { ...options, timeoutMs: Math.max(1, Math.floor(remainingTimeoutMs)) };
+        const result = await runtime.findWorker(binding.worker, lookupOptions);
+        if (result.status !== 'ok') return result;
+        listed.push(result);
+      }
       const assigned = assignmentBindings.map((binding) => binding.worker);
       return {
         status: 'ok',
-        value: listed.value.filter((worker) => (
-          worker.provenance !== 'external'
-          || assigned.some((identity) => sameRuntimeWorker(identity, worker.identity))
-        )),
+        value: listed.flatMap((result) => {
+          if (result.status !== 'ok' || result.value === null) return [];
+          const worker = result.value;
+          return worker.provenance !== 'external'
+            || assigned.some((identity) => sameRuntimeWorker(identity, worker.identity))
+            ? [worker]
+            : [];
+        }),
       };
     },
     findWorker: (identity, options) => runtime.findWorker(identity, options),
@@ -421,7 +440,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       fleetBindings = built;
       assignmentReconciliation = resolution.reconciliations[0];
       fleetObserver = new FleetObserver({
-        source: productionFleetObserverSource(runtime, repoRoot, fleetBindings),
+        source: productionFleetObserverSource(runtime, fleetBindings),
         activationLineage,
         assignmentBindings: fleetBindings,
         configPath: productionFleetObserverConfigPath(env),
@@ -437,7 +456,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
         ...(scopedAssignment ? { assignment: scopedAssignment } : {}),
       };
       fleetObserver = new FleetObserver({
-        source: productionFleetObserverSource(runtime, repoRoot, []),
+        source: productionFleetObserverSource(runtime, []),
         activationLineage,
         assignmentBindings: [],
         configPath: productionFleetObserverConfigPath(env),
