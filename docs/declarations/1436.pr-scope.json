@@ -7,9 +7,11 @@
   ],
   "denylist": [
     ".github/",
+    "credentials/",
     "packages/core/",
     "plugins/",
     "scripts/",
+    "secrets/",
     "vendor/"
   ],
   "allowed_roots": [
