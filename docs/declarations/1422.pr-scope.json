@@ -39,6 +39,7 @@
   "allowed_roots": [
     "docs/declarations/1422.pr-scope.json",
     "docs/migration_notes.md",
+    "docs/orca-runtime-caller-census.md",
     "docs/wake-supervisor-fleet-operator-reference.md",
     "scripts/cutover/",
     "scripts/lib/cutover/",
