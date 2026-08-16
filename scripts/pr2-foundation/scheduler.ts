@@ -114,6 +114,16 @@ export function repositorySlugFromRemote(remote: string): string {
   return `${match[1]}/${match[2]}`.toLowerCase();
 }
 
+export function liveCandidateRepository(
+  row: { readonly repoSlug?: unknown },
+  repository?: string,
+): string {
+  const rowRepository = String(row.repoSlug ?? '').trim().toLowerCase();
+  if (!rowRepository) return '';
+  const localRepository = String(repository ?? '').trim().toLowerCase();
+  return localRepository && rowRepository !== localRepository ? '' : rowRepository;
+}
+
 export async function resolveRepositoryFromRepoRoot(repoRoot: string): Promise<string> {
   const result = await runProcess({
     command: 'git',
@@ -178,7 +188,7 @@ function liveCandidates(env: NodeJS.ProcessEnv = process.env, repository?: strin
   for (const row of Object.values(workerStore.records ?? {})) {
     if ((row.derivedStatus ?? row.status) !== 'ready_for_review' || isRowStale(row, nowMs, Number(workerStore.repoTickGeneration ?? 0))) continue;
     const sessionId = String(row.sessionId ?? '').trim();
-    const repoSlug = String(repository ?? row.repoSlug ?? '').trim().toLowerCase();
+    const repoSlug = liveCandidateRepository(row, repository);
     if (!sessionId || !repoSlug) continue;
     const binding = lookupBindingBySession(bindingStore, repoSlug, sessionId);
     if (!binding || Number(binding.prNumber ?? 0) <= 0 || !String(binding.headSha ?? '').trim()) continue;

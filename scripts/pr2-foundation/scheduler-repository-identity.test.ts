@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  liveCandidateRepository,
   repositorySlugFromRemote,
   resolveRepositoryFromRepoRoot,
 } from './scheduler.ts';
 
 describe('scheduler repository identity', () => {
+  it('never fills or rewrites a live row repository identity', () => {
+    expect(liveCandidateRepository({ repoSlug: '' }, 'chetwerikoff/orchestrator-pack')).toBe('');
+    expect(liveCandidateRepository({ repoSlug: 'other/repository' }, 'chetwerikoff/orchestrator-pack')).toBe('');
+    expect(liveCandidateRepository({ repoSlug: 'chetwerikoff/orchestrator-pack' }, 'chetwerikoff/orchestrator-pack'))
+      .toBe('chetwerikoff/orchestrator-pack');
+  });
+
   it('normalizes observed GitHub remotes', () => {
     expect(repositorySlugFromRemote('git@github.com:chetwerikoff/orchestrator-pack.git'))
       .toBe('chetwerikoff/orchestrator-pack');
