@@ -16,7 +16,6 @@
     "scripts/lib/cutover/foundation-observation.ts",
     "scripts/lib/cutover/types.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
-    "scripts/orchestrator-cutover-activate.ts",
     "scripts/pr2-foundation/contract-test-runner.ts",
     "scripts/pr2-foundation/foundation.test.ts",
     "scripts/pr2-foundation/scheduler-process-integration.test.ts",
