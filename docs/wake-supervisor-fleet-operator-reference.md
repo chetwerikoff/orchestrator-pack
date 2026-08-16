@@ -35,11 +35,15 @@ node --experimental-strip-types scripts/orchestrator-cutover-activate.ts \
   activate <greenfield-activation-request.json>
 ```
 
-The machine-canonical state root must already contain `foundation-config.json`,
-`app-state.json`, and a committed migration journal. The producer observes those
-canonical files and the live runtime; alternate config, app-state, state, or
-journal paths are rejected. `OPK_WAKE_SUPERVISOR_STATE_DIR` is rejected during
-activation and evidence production, so it cannot redirect proof to another root.
+For greenfield activation, the machine-canonical state root must not contain
+`foundation-config.json`, `app-state.json`, or a committed migration journal.
+The producer records their observed absence together with the empty epoch
+authority, registered-child census, legacy-writer census, and live repository.
+It emits no dormant-layer defaults. A partially present set is ambiguous and
+fails closed. A complete artifact set continues through the existing
+artifact-backed foundation proof. Alternate config, app-state, state, or journal
+paths are rejected. `OPK_WAKE_SUPERVISOR_STATE_DIR` is rejected during activation
+and evidence production, so it cannot redirect proof to another root.
 The greenfield request has no claimed legacy supervisor PID (omit the field or
 use `0`) and must bind the locally observed host as its single-host expectation.
 This is a local-only greenfield contract; the writable state tree is not an
