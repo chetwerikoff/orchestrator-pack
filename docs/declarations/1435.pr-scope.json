@@ -1,0 +1,16 @@
+{
+  "issue_number": 1435,
+  "baseline": "origin/main",
+  "declared_paths": [
+    "prompts/gpt_pack_review_prompt.md",
+    "scripts/lib/pack-gpt-reviewer.ts",
+    "scripts/lib/pack-pr-review-contract.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [
+    "scripts/lib/pack-gpt-source-comment*.ts"
+  ],
+  "amendments": []
+}
