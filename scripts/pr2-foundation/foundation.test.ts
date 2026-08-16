@@ -34,6 +34,8 @@ import {
   FOUNDATION_MIGRATION_JOURNAL_DIRECTORY,
   FOUNDATION_MIGRATION_JOURNAL_SUFFIX,
   observeFoundationInertProof,
+  observeGreenfieldFoundationInertProof,
+  observeGreenfieldFoundationObservation,
   observeGreenfieldMigrationJournalAbsence,
   observeLocalHeartbeat,
 } from '../lib/cutover/foundation-observation.ts';
@@ -514,6 +516,33 @@ describe('[AC2] production foundation admission', () => {
       if (previousAdapter === undefined) delete process.env.OPK_RUNTIME_ADAPTER;
       else process.env.OPK_RUNTIME_ADAPTER = previousAdapter;
       vi.restoreAllMocks();
+    }
+  });
+
+  it('admits a stale dead-PID supervisor status in greenfield mode', () => {
+    const home = mkdtempSync(path.join(repoRoot, '.opk-1422-greenfield-stale-status-home-'));
+    try {
+      const canonical = canonicalFoundationPaths(repoRoot, home);
+      mkdirSync(canonical.supervisorStateDir, { recursive: true });
+      writeJson(path.join(canonical.supervisorStateDir, 'typescript-supervisor-status.json'), {
+        schemaVersion: 1,
+        childId: 'pr2-scheduler',
+        restartState: 'waiting-restart',
+        supervisorPid: 2147483647,
+        childPid: 2147483646,
+      });
+
+      const observation = observeGreenfieldFoundationObservation({ repoRoot, paths: canonical });
+      const proof = observeGreenfieldFoundationInertProof({ repoRoot, paths: canonical });
+
+      expect(observation.controlPlane.supervisorStatusPresent).toBe(true);
+      expect(observation.controlPlane.supervisorAlive).toBe(false);
+      expect(observation.controlPlane.childAlive).toBe(false);
+      expect(proof.result).toBe('greenfield-dormant-layer-not-active');
+      expect(proof.observations.supervisorChanged).toBe(false);
+      expect(proof.observations.schedulerRegistered).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 

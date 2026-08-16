@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
@@ -32,7 +32,6 @@ import {
 import { runActivationPlatformPreflight } from '../lib/cutover/activation-platform-preflight.ts';
 import { validateSchedulerRegistry } from '../lib/cutover/activation-registry-projection.ts';
 import type { ActivationRequest, EpochCommitCore, FoundationAdmissionEvidence, ProcessIdentity } from '../lib/cutover/types.ts';
-import type { RuntimeAdapter } from '../runtime/contracts.ts';
 import { runSchedulerTick, type SchedulerBoundary } from '../pr2-foundation/scheduler.ts';
 import { CUTOVER_ROWS, FOUNDATION_DOC_ROWS, validateEstateSplit } from '../pr2-foundation/contracts.ts';
 import { buildPlanningManifest } from '../pr2a/closed-world-scanner.ts';
@@ -42,6 +41,33 @@ import { packReviewDeliveryNeedsResume } from '../lib/pack-review-delivery.ts';
 import { startPackReview } from '../pack-review-runner.ts';
 import { produceFoundationAdoptionEvidence } from './foundation-adoption-producer.ts';
 import { DEFAULT_FOUNDATION_CONFIG } from '../pr2-foundation/config.ts';
+
+const activationCordonTestState = vi.hoisted(() => ({
+  disableGreenfieldProcessCensus: false,
+}));
+
+vi.mock('../lib/cutover/activation-cordon.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/cutover/activation-cordon.ts')>();
+  return {
+    ...actual,
+    findLegacySupervisorIdentities: (
+      oldInstalledRevisionRoot: string,
+      options: Parameters<typeof actual.findLegacySupervisorIdentities>[1] = {},
+    ) => actual.findLegacySupervisorIdentities(
+      oldInstalledRevisionRoot,
+      activationCordonTestState.disableGreenfieldProcessCensus
+        ? { ...options, entries: () => [] }
+        : options,
+    ),
+    findTypeScriptSupervisorIdentities: (
+      options: Parameters<typeof actual.findTypeScriptSupervisorIdentities>[0] = {},
+    ) => actual.findTypeScriptSupervisorIdentities(
+      activationCordonTestState.disableGreenfieldProcessCensus
+        ? { ...options, entries: () => [] }
+        : options,
+    ),
+  };
+});
 
 const repoRoot = path.resolve(process.cwd());
 const roots: string[] = [];
@@ -887,61 +913,74 @@ describe('Issue 1422 first-time activation', () => {
   it('produces greenfield evidence through the runtime adapter without legacy preflight', async () => {
     const homeDir = mkdtempSync(path.join(path.dirname(repoRoot), 'opk-1422-home-'));
     issue1422FirstTimeRoots.push(homeDir);
-    const canonical = canonicalFoundationPaths(repoRoot, homeDir);
-    const readiness = vi.fn(() => ({
-      status: 'ok' as const,
-      value: {
-        ready: true as const,
-        workspacePath: repoRoot,
-        headSha: 'a'.repeat(40),
-        linkedIssue: null,
+    const binDir = path.join(homeDir, 'bin');
+    mkdirSync(binDir, { recursive: true });
+    const runtimeCli = path.join(binDir, 'orca');
+    writeFileSync(runtimeCli, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify({
+      ok: true,
+      result: {
+        worktree: {
+          path: repoRoot,
+          head: 'a'.repeat(40),
+          linkedIssue: null,
+        },
       },
-    }));
-    const adapter = {
-      id: 'orca',
-      readiness,
-    } as unknown as RuntimeAdapter;
-    const selectRuntimeAdapter = vi.fn(async () => adapter);
+    }))});\n`);
+    chmodSync(runtimeCli, 0o755);
 
+    const previousPath = process.env.PATH;
     const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    const previousRuntimeAdapter = process.env.OPK_RUNTIME_ADAPTER;
+    const previousRuntimeCli = process.env.OPK_RUNTIME_CLI_COMMAND;
+    const previousProcessCensusToggle = activationCordonTestState.disableGreenfieldProcessCensus;
+    const user = os.userInfo();
+    vi.spyOn(os, 'userInfo').mockReturnValue({ ...user, homedir: homeDir });
+    process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ''}`;
+    delete process.env.OPK_RUNTIME_ADAPTER;
+    process.env.OPK_RUNTIME_CLI_COMMAND = runtimeCli;
     delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
-    const result = await (async () => {
-      try {
-        return await produceFoundationAdoptionEvidence(
-          {
-            repoRoot,
-            stateDir: canonical.stateRoot,
-            configPath: canonical.configPath,
-            appStatePath: canonical.appStatePath,
-            evidencePath: canonical.evidencePath,
-          },
-          { homeDir, selectRuntimeAdapter, processEntries: () => [] },
-        );
-      } finally {
-        if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
-        else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
-      }
-    })();
+    activationCordonTestState.disableGreenfieldProcessCensus = true;
 
-    expect(existsSync(result.evidencePath)).toBe(true);
-    expect(selectRuntimeAdapter).toHaveBeenCalled();
-    expect(readiness).toHaveBeenCalledWith({ cwd: repoRoot, timeoutMs: expect.any(Number) });
-    const evidence = JSON.parse(readFileSync(result.evidencePath, 'utf8')) as FoundationAdmissionEvidence;
-    expect(evidence.preflight).toMatchObject({
-      kind: 'runtime-adapter',
-      adapterId: 'orca',
-      readiness: {
-        ready: true,
-        workspacePath: repoRoot,
-        headSha: 'a'.repeat(40),
-        linkedIssue: null,
-      },
-    });
-    expect(evidence.preflight).not.toHaveProperty('command');
-    expect(evidence.preflight).not.toHaveProperty('appStateVersion');
-    expect(evidence.preflight).not.toHaveProperty('sessions');
-    expect(evidence.greenfieldObservation).toBeDefined();
-    expect(evidence.typedConfig).toBeNull();
+    try {
+      const canonical = canonicalFoundationPaths(repoRoot);
+      const result = await produceFoundationAdoptionEvidence({
+        repoRoot,
+        stateDir: canonical.stateRoot,
+        configPath: canonical.configPath,
+        appStatePath: canonical.appStatePath,
+        evidencePath: canonical.evidencePath,
+      });
+
+      expect(produceFoundationAdoptionEvidence.length).toBe(1);
+      expect(existsSync(result.evidencePath)).toBe(true);
+      const evidence = JSON.parse(readFileSync(result.evidencePath, 'utf8')) as FoundationAdmissionEvidence;
+      expect(evidence.preflight).toMatchObject({
+        kind: 'runtime-adapter',
+        adapterId: 'orca',
+        readiness: {
+          ready: true,
+          workspacePath: repoRoot,
+          headSha: 'a'.repeat(40),
+          linkedIssue: null,
+        },
+      });
+      expect(evidence.preflight).not.toHaveProperty('command');
+      expect(evidence.preflight).not.toHaveProperty('appStateVersion');
+      expect(evidence.preflight).not.toHaveProperty('sessions');
+      expect(evidence.greenfieldObservation).toBeDefined();
+      expect(evidence.typedConfig).toBeNull();
+    } finally {
+      activationCordonTestState.disableGreenfieldProcessCensus = previousProcessCensusToggle;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+      else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
+      if (previousRuntimeAdapter === undefined) delete process.env.OPK_RUNTIME_ADAPTER;
+      else process.env.OPK_RUNTIME_ADAPTER = previousRuntimeAdapter;
+      if (previousRuntimeCli === undefined) delete process.env.OPK_RUNTIME_CLI_COMMAND;
+      else process.env.OPK_RUNTIME_CLI_COMMAND = previousRuntimeCli;
+      vi.restoreAllMocks();
+    }
   });
 
   it('rejects mutated producer evidence before activation', () => {
