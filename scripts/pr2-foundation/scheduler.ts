@@ -178,7 +178,7 @@ function liveCandidates(env: NodeJS.ProcessEnv = process.env, repository?: strin
   for (const row of Object.values(workerStore.records ?? {})) {
     if ((row.derivedStatus ?? row.status) !== 'ready_for_review' || isRowStale(row, nowMs, Number(workerStore.repoTickGeneration ?? 0))) continue;
     const sessionId = String(row.sessionId ?? '').trim();
-    const repoSlug = String(repository ?? row.repoSlug ?? env.GITHUB_REPOSITORY ?? '').trim().toLowerCase();
+    const repoSlug = String(repository ?? row.repoSlug ?? '').trim().toLowerCase();
     if (!sessionId || !repoSlug) continue;
     const binding = lookupBindingBySession(bindingStore, repoSlug, sessionId);
     if (!binding || Number(binding.prNumber ?? 0) <= 0 || !String(binding.headSha ?? '').trim()) continue;
