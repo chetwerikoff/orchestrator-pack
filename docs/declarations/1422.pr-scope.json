@@ -14,6 +14,7 @@
     "scripts/lib/cutover/foundation-observation.ts",
     "scripts/lib/cutover/types.ts",
     "scripts/pr2-foundation/contract-test-runner.ts",
+    "scripts/pr2-foundation/foundation.test.ts",
     "scripts/pr2a/final-conformance.ts",
     "scripts/runtime/single-instance-lease.ts"
   ],
@@ -37,5 +38,5 @@
     "scripts/pr2a/final-conformance.ts",
     "scripts/runtime/single-instance-lease.ts"
   ],
-  "source_revision": "c7f8b13065d4654faec21f557d8e99469b54abe2"
+  "source_revision": "607cc8c38f347b5a7d5edd62c80a153d2740c0d0"
 }
