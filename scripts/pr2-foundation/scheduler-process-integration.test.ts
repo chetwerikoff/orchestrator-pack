@@ -270,6 +270,71 @@ describe('scheduler bounded-child production composition', () => {
     });
   });
 
+  it('ignores an external operator terminal when no assignments are stored', async () => {
+    const root = makeRoot();
+    const fixturePath = path.join(root, 'fixture.json');
+    const epochPath = path.join(root, 'epoch.json');
+    const configPath = path.join(root, 'fleet-config.json');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+    writeFileSync(fixturePath, JSON.stringify({
+      workers: [{
+        id: 'operator-panel',
+        generation: 'generation-external',
+        bindingKey: 'not-assigned',
+        lines: [],
+        liveness: 'busy',
+      }],
+      dispatches: [],
+      requiredWorktree: `path:${process.cwd()}`,
+    }));
+    writeEpoch(epochPath, 'epoch-external-only', 'nonce-external-only');
+    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-external-only', 'nonce-external-only');
+
+    const observer = observerResult(await runTick(env));
+    expect(observer).toMatchObject({
+      result: 'census-published-observer-only',
+      status: 'complete',
+      snapshotCommitted: true,
+    });
+    expect((observer.snapshot as Record<string, unknown>).census).toEqual([]);
+  });
+
+  it('publishes only the assigned worker when an external terminal shares the worktree', async () => {
+    const root = makeRoot();
+    const fixturePath = path.join(root, 'fixture.json');
+    const epochPath = path.join(root, 'epoch.json');
+    const configPath = path.join(root, 'fleet-config.json');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+    writeFileSync(fixturePath, JSON.stringify({
+      workers: [
+        {
+          id: 'assigned-worker',
+          generation: 'generation-assigned',
+          bindingKey: 'dispatch-1',
+          lines: ['unchanged'],
+          liveness: 'idle',
+        },
+        {
+          id: 'operator-panel',
+          generation: 'generation-external',
+          bindingKey: 'not-assigned',
+          lines: [],
+          liveness: 'busy',
+        },
+      ],
+      dispatches: [],
+      requiredWorktree: `path:${process.cwd()}`,
+    }));
+    writeEpoch(epochPath, 'epoch-shared-worktree', 'nonce-shared-worktree');
+    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-shared-worktree', 'nonce-shared-worktree');
+    await publishLocal(env);
+
+    const observer = observerResult(await runTick(env));
+    const census = (observer.snapshot as Record<string, unknown>).census as Array<Record<string, unknown>>;
+    expect(census).toHaveLength(1);
+    expect(census[0]?.provenance).toBe('internal');
+  });
+
   it('restores one S1 lineage across separate child processes and dispatches one existing S2 episode', async () => {
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');
