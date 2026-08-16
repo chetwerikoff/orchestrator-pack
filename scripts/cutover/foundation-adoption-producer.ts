@@ -15,8 +15,7 @@ import { runActivationPlatformPreflight } from '../lib/cutover/activation-platfo
 import {
   canonicalFoundationPaths,
   discoverCommittedMigrationJournals,
-  GREENFIELD_RUNTIME_PATH,
-  GREENFIELD_RUNTIME_TIMEOUT_MS,
+  RUNTIME_ADAPTER_TIMEOUT_MS,
   localObservedHostId,
   observeGreenfieldFoundationInertProof,
   observeGreenfieldFoundationObservation,
@@ -26,6 +25,8 @@ import {
   observeFoundationInertProof,
   observeLiveHeartbeat,
   observeLocalHeartbeat,
+  observeRuntimeAdapterPreflight,
+  type RuntimeAdapterSelector,
   observeRuntimePreflight,
   readObservedAppStateVersion,
 } from '../lib/cutover/foundation-observation.ts';
@@ -41,6 +42,12 @@ export interface FoundationAdoptionProducerInput {
   appStatePath: string;
   migrationJournalPaths?: string[];
   evidencePath?: string;
+}
+
+export interface FoundationAdoptionProducerDependencies {
+  /** Focused-test seams; the CLI uses the machine-canonical defaults. */
+  selectRuntimeAdapter?: RuntimeAdapterSelector;
+  homeDir?: string;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -78,12 +85,13 @@ function requireObservedConfig(input: unknown): { raw: Record<string, unknown>; 
 
 export async function produceFoundationAdoptionEvidence(
   input: FoundationAdoptionProducerInput,
+  dependencies: FoundationAdoptionProducerDependencies = {},
 ): Promise<{ evidencePath: string; evidence: FoundationAdmissionEvidence }> {
   const repoRoot = path.resolve(input.repoRoot);
   if (String(process.env.OPK_WAKE_SUPERVISOR_STATE_DIR ?? '').trim()) {
     throw new Error('foundation_state_root_override_forbidden');
   }
-  const canonical = canonicalFoundationPaths(repoRoot);
+  const canonical = canonicalFoundationPaths(repoRoot, dependencies.homeDir);
   if (path.resolve(input.stateDir) !== canonical.stateRoot) throw new Error('foundation_state_root_unobservable');
   if (path.resolve(input.configPath) !== canonical.configPath) throw new Error('foundation_config_unobservable');
   if (path.resolve(input.appStatePath) !== canonical.appStatePath) {
@@ -121,10 +129,10 @@ export async function produceFoundationAdoptionEvidence(
       repoRoot,
       paths: canonical,
     });
-    preflight = await observeRuntimePreflight(
+    preflight = await observeRuntimeAdapterPreflight(
       repoRoot,
-      GREENFIELD_RUNTIME_PATH,
-      GREENFIELD_RUNTIME_TIMEOUT_MS,
+      RUNTIME_ADAPTER_TIMEOUT_MS,
+      dependencies.selectRuntimeAdapter,
     );
     inertProof = observeGreenfieldFoundationInertProof({
       repoRoot,

@@ -37,17 +37,17 @@ import {
   assertCanonicalActivationPaths,
   canonicalConfigAndAppStateEqual,
   discoverCommittedMigrationJournals,
-  GREENFIELD_RUNTIME_PATH,
-  GREENFIELD_RUNTIME_TIMEOUT_MS,
+  RUNTIME_ADAPTER_TIMEOUT_MS,
   localObservedHostId,
   observeGreenfieldFoundationInertProof,
   observeGreenfieldFoundationObservation,
   observeFoundationInertProof,
-  validateGreenfieldRuntimePreflight,
+  validateGreenfieldRuntimeAdapterPreflight,
   observeLiveHeartbeat,
   observeLocalHeartbeat,
   readObservedAppStateVersion,
   observeRuntimePreflight,
+  observeRuntimeAdapterPreflight,
 } from './foundation-observation.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 import { D928 as D928_PATHS, TARGET_LIBRARIES as TARGET_LIBRARY_PATHS } from '../../pr2a/contracts.ts';
@@ -340,7 +340,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
   const { evidence, evidencePath } = readFoundationEvidence(request);
   const greenfield = evidence.greenfieldObservation?.mode === 'greenfield-observed';
   const preflight = greenfield
-    ? validateGreenfieldRuntimePreflight(evidence.preflight)
+    ? validateGreenfieldRuntimeAdapterPreflight(evidence.preflight)
     : ('appStateVersion' in evidence.preflight
       ? validateRuntimePreflight(evidence.preflight)
       : { ok: false as const, reason: 'preflight_version_unverifiable' });
@@ -403,10 +403,9 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
       repoRoot: request.repoRoot,
       paths: canonical,
     });
-    livePreflight = await observeRuntimePreflight(
+    livePreflight = await observeRuntimeAdapterPreflight(
       request.repoRoot,
-      GREENFIELD_RUNTIME_PATH,
-      GREENFIELD_RUNTIME_TIMEOUT_MS,
+      RUNTIME_ADAPTER_TIMEOUT_MS,
     );
   } else {
     if (!config || !config.ok) throw new Error('foundation_typed_config_invalid');
@@ -474,6 +473,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
     if (member.quarantined !== true && !heartbeatHosts.has(member.hostId)) throw new Error(`foundation_member_omitted:${member.hostId}`);
   }
   if (heartbeat.hostId !== request.hostId) throw new Error('foundation_local_heartbeat_missing');
+  const preflightObservationId = 'observationId' in preflight ? preflight.observationId : preflight.sanitizerId;
   if (request.legacySupervisorPid === undefined || request.legacySupervisorPid === null || request.legacySupervisorPid === 0) {
     const absence = assertGreenfieldAbsence(request);
     return {
@@ -483,7 +483,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
       oldInstalledCommitSha,
       heartbeatObservedAt: greenfield ? evidence.heartbeats[0]!.observedAt : heartbeat.observedAt,
       migrationJournalCount: evidence.migrationJournalPaths.length,
-      preflightSanitizerId: preflight.sanitizerId,
+      preflightSanitizerId: preflightObservationId,
       activationMode: 'greenfield',
       writerWatermark: absence.writerWatermark,
     };
@@ -498,7 +498,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
     oldInstalledCommitSha,
     heartbeatObservedAt: heartbeat.observedAt,
     migrationJournalCount: evidence.migrationJournalPaths.length,
-    preflightSanitizerId: preflight.sanitizerId,
+    preflightSanitizerId: preflightObservationId,
     activationMode: 'legacy-handover',
   };
 }

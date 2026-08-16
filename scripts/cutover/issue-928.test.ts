@@ -32,6 +32,7 @@ import {
 import { runActivationPlatformPreflight } from '../lib/cutover/activation-platform-preflight.ts';
 import { validateSchedulerRegistry } from '../lib/cutover/activation-registry-projection.ts';
 import type { ActivationRequest, EpochCommitCore, FoundationAdmissionEvidence, ProcessIdentity } from '../lib/cutover/types.ts';
+import type { RuntimeAdapter } from '../runtime/contracts.ts';
 import { runSchedulerTick, type SchedulerBoundary } from '../pr2-foundation/scheduler.ts';
 import { CUTOVER_ROWS, FOUNDATION_DOC_ROWS, validateEstateSplit } from '../pr2-foundation/contracts.ts';
 import { buildPlanningManifest } from '../pr2a/closed-world-scanner.ts';
@@ -881,6 +882,66 @@ describe('Issue 1422 first-time activation', () => {
     expect(new FileEpochAuthority(request.paths.epochAuthorityPath).read().currentEpochId).toBe(request.epochId);
     expect(JSON.parse(readFileSync(request.paths.cordonPath, 'utf8')).legacySupervisor).toBeNull();
     expect(existsSync(request.paths.epochAuthorityPath)).toBe(true);
+  });
+
+  it('produces greenfield evidence through the runtime adapter without legacy preflight', async () => {
+    const homeDir = mkdtempSync(path.join(path.dirname(repoRoot), 'opk-1422-home-'));
+    issue1422FirstTimeRoots.push(homeDir);
+    const canonical = canonicalFoundationPaths(repoRoot, homeDir);
+    const readiness = vi.fn(() => ({
+      status: 'ok' as const,
+      value: {
+        ready: true as const,
+        workspacePath: repoRoot,
+        headSha: 'a'.repeat(40),
+        linkedIssue: null,
+      },
+    }));
+    const adapter = {
+      id: 'orca',
+      readiness,
+    } as unknown as RuntimeAdapter;
+    const selectRuntimeAdapter = vi.fn(async () => adapter);
+
+    const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    const result = await (async () => {
+      try {
+        return await produceFoundationAdoptionEvidence(
+          {
+            repoRoot,
+            stateDir: canonical.stateRoot,
+            configPath: canonical.configPath,
+            appStatePath: canonical.appStatePath,
+            evidencePath: canonical.evidencePath,
+          },
+          { homeDir, selectRuntimeAdapter },
+        );
+      } finally {
+        if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+        else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
+      }
+    })();
+
+    expect(existsSync(result.evidencePath)).toBe(true);
+    expect(selectRuntimeAdapter).toHaveBeenCalled();
+    expect(readiness).toHaveBeenCalledWith({ cwd: repoRoot, timeoutMs: expect.any(Number) });
+    const evidence = JSON.parse(readFileSync(result.evidencePath, 'utf8')) as FoundationAdmissionEvidence;
+    expect(evidence.preflight).toMatchObject({
+      kind: 'runtime-adapter',
+      adapterId: 'orca',
+      readiness: {
+        ready: true,
+        workspacePath: repoRoot,
+        headSha: 'a'.repeat(40),
+        linkedIssue: null,
+      },
+    });
+    expect(evidence.preflight).not.toHaveProperty('command');
+    expect(evidence.preflight).not.toHaveProperty('appStateVersion');
+    expect(evidence.preflight).not.toHaveProperty('sessions');
+    expect(evidence.greenfieldObservation).toBeDefined();
+    expect(evidence.typedConfig).toBeNull();
   });
 
   it('rejects mutated producer evidence before activation', () => {
