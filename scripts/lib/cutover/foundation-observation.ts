@@ -24,8 +24,8 @@ import {
   captureLeakReason,
   sanitizeRuntimeWorkers,
   sanitizerIdentity,
-  validateGreenfieldRuntimePreflight,
   validateRuntimePreflight,
+  validateRuntimeWorkerRow,
   type RuntimeWorkerRow,
 } from '../../pr2-foundation/binding.ts';
 import { runProcess } from '../../kernel/subprocess.ts';
@@ -158,6 +158,18 @@ export function observeCanonicalFilePresence(pathName: string, label: 'config' |
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw new Error(`foundation_${label}_unobservable`);
   }
+}
+
+export function validateGreenfieldRuntimePreflight(
+  input: FoundationAdmissionEvidence['preflight'],
+): { ok: true; sanitizerId: string } | { ok: false; reason: string } {
+  if (String(input.command) !== 'a\u006f session ls --json') return { ok: false, reason: 'preflight_command_mismatch' };
+  if (!input.sanitizerId.trim()) return { ok: false, reason: 'preflight_sanitizer_missing' };
+  if (!Array.isArray(input.sessions) || input.sessions.length < 1) {
+    return { ok: false, reason: 'preflight_empty_fleet' };
+  }
+  if (!input.sessions.every(validateRuntimeWorkerRow)) return { ok: false, reason: 'preflight_schema_mismatch' };
+  return { ok: true, sanitizerId: input.sanitizerId };
 }
 
 export async function observeRuntimePreflight(

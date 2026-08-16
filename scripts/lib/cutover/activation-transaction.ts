@@ -43,6 +43,7 @@ import {
   observeGreenfieldFoundationInertProof,
   observeGreenfieldFoundationObservation,
   observeFoundationInertProof,
+  validateGreenfieldRuntimePreflight,
   observeLiveHeartbeat,
   observeLocalHeartbeat,
   readObservedAppStateVersion,
@@ -50,7 +51,7 @@ import {
 } from './foundation-observation.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 import { D928 as D928_PATHS, TARGET_LIBRARIES as TARGET_LIBRARY_PATHS } from '../../pr2a/contracts.ts';
-import { validateGreenfieldRuntimePreflight, validateRuntimePreflight } from '../../pr2-foundation/binding.ts';
+import { validateRuntimePreflight } from '../../pr2-foundation/binding.ts';
 import { parseFoundationConfig } from '../../pr2-foundation/config.ts';
 import { readMigrationJournal } from '../../pr2-foundation/migration-journal.ts';
 import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog, type RuntimeSurface } from '../../pr2-foundation/runtime-catalog.ts';
@@ -340,7 +341,9 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
   const greenfield = evidence.greenfieldObservation?.mode === 'greenfield-observed';
   const preflight = greenfield
     ? validateGreenfieldRuntimePreflight(evidence.preflight)
-    : validateRuntimePreflight(evidence.preflight);
+    : ('appStateVersion' in evidence.preflight
+      ? validateRuntimePreflight(evidence.preflight)
+      : { ok: false as const, reason: 'preflight_version_unverifiable' });
   if (!preflight.ok) throw new Error(`foundation_preflight_invalid:${preflight.reason}`);
   const config = greenfield ? null : parseFoundationConfig(evidence.typedConfig);
   if (!greenfield && !config?.ok) throw new Error(`foundation_typed_config_invalid:${config?.reason}:${config?.path}`);

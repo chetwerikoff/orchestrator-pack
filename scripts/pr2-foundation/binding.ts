@@ -54,27 +54,11 @@ export interface AoPreflightInput {
   sanitizerId: string;
 }
 
-export interface AoGreenfieldPreflightInput {
-  command: string;
-  sessions: unknown[];
-  sanitizerId: string;
-}
-
 export type AoPreflightResult =
   | {
     ok: true;
     command: 'a\u006f session ls --json';
     appStateVersion: '0.10.3';
-    normalizedKeys: readonly string[];
-    fleetCount: number;
-    sanitizerId: string;
-  }
-  | { ok: false; reason: string };
-
-export type AoGreenfieldPreflightResult =
-  | {
-    ok: true;
-    command: 'a\u006f session ls --json';
     normalizedKeys: readonly string[];
     fleetCount: number;
     sanitizerId: string;
@@ -190,25 +174,6 @@ export function validateRuntimePreflight(input: AoPreflightInput): AoPreflightRe
     appStateVersion: VERIFIED_RUNTIME_VERSION,
     normalizedKeys: VERIFIED_RUNTIME_SESSION_KEYS,
     fleetCount: input.sessions.length,
-    sanitizerId: input.sanitizerId,
-  };
-}
-
-export function validateGreenfieldRuntimePreflight(
-  input: AoGreenfieldPreflightInput,
-): AoGreenfieldPreflightResult {
-  if (String(input.command) !== 'a\u006f session ls --json') return { ok: false, reason: 'preflight_command_mismatch' };
-  if (!input.sanitizerId.trim()) return { ok: false, reason: 'preflight_sanitizer_missing' };
-  const sessions = input.sessions;
-  if (!Array.isArray(sessions) || sessions.length < 1) {
-    return { ok: false, reason: 'preflight_empty_fleet' };
-  }
-  if (!sessions.every(validateRuntimeWorkerRow)) return { ok: false, reason: 'preflight_schema_mismatch' };
-  return {
-    ok: true,
-    command: 'a\u006f session ls --json',
-    normalizedKeys: VERIFIED_RUNTIME_SESSION_KEYS,
-    fleetCount: sessions.length,
     sanitizerId: input.sanitizerId,
   };
 }
