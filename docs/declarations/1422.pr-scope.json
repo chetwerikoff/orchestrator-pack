@@ -4,6 +4,7 @@
   "declared_paths": [
     "docs/declarations/1422.pr-scope.json",
     "docs/migration_notes.md",
+    "docs/orca-runtime-caller-census.md",
     "docs/wake-supervisor-fleet-operator-reference.md",
     "scripts/cutover/foundation-adoption-producer.ts",
     "scripts/cutover/issue-928.test.ts",
@@ -22,6 +23,7 @@
     "scripts/pr2-foundation/scheduler-repository-identity.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/pr2a/final-conformance.ts",
+    "scripts/runtime/caller-census.ts",
     "scripts/runtime/single-instance-lease.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
@@ -44,6 +46,7 @@
     "scripts/orchestrator-cutover-activate.ts",
     "scripts/pr2-foundation/",
     "scripts/pr2a/final-conformance.ts",
+    "scripts/runtime/caller-census.ts",
     "scripts/runtime/single-instance-lease.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
