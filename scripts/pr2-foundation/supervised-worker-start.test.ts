@@ -149,6 +149,27 @@ describe('supervised worker start binding', () => {
     expect(result).toEqual({ ok: false, reason: 'supervised_start_receipt_invalid' });
   });
 
+  it('does not treat a failed Orca envelope as a ready start', async () => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const result = await runSupervisedWorkerStart({
+      issueNumber: 1420,
+      repository: 'chetwerikoff/orchestrator-pack',
+      env,
+      orcaArgs: ['--task', 'task_1', '--agent', 'codex'],
+      execute: async () => ({
+        ok: true,
+        stdout: orcaEnvelope({
+          taskId: 'task_1',
+          dispatchId: 'ctx_1',
+          state: 'ready',
+        }, false),
+      }),
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'supervised_start_envelope_not_ok' });
+    expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack', env), 1420)).toBeNull();
+  });
+
   it('advances generation on reassignment and makes the prior assignment stale', async () => {
     const base = root();
     const env = { ...process.env, OPK_BASE_DIR: base };
