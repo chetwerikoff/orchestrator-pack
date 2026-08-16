@@ -165,9 +165,22 @@ export function candidateLegacyReferenceRows(
   return rows;
 }
 
-export function recomputeClosure(repoRoot: string, baseRef: string): { inputTree: string; referenceCount: number } {
+export function assertNoExternalLegacyReferences(
+  grepOutput: string,
+  denominator: readonly ClosureDenominatorRow[],
+): ClosureReferenceRow[] {
+  const references = candidateLegacyReferenceRows(grepOutput, denominator);
+  const external = references.filter((row) => {
+    const source = String(row.source ?? '').replace(/\\/g, '/');
+    return !D928.has(source) && isExecutableLegacyReference(row);
+  });
+  if (external.length !== 0) throw new Error(`external_legacy_reference:${external.map((row) => row.source).join(',')}`);
+  return references;
+}
+
+export async function recomputeClosure(repoRoot: string, baseRef: string): Promise<{ inputTree: string; referenceCount: number }> {
   const scanner = path.join(repoRoot, 'scripts', 'pr2a', 'closed-world-scanner.ts');
-  const result = runProcessSync({
+  const result = await runProcess({
     command: process.execPath,
     args: ['--experimental-strip-types', scanner, '--ref', baseRef],
     cwd: repoRoot,
@@ -188,7 +201,7 @@ export function recomputeClosure(repoRoot: string, baseRef: string): { inputTree
   }
   if (!Array.isArray(manifest.denominator)) throw new Error('closure_denominator_missing');
 
-  const grep = runProcessSync({
+  const grep = await runProcess({
     command: 'git',
     args: [
       '-C', repoRoot, 'grep', '-n', '-I', '-E',
@@ -199,12 +212,7 @@ export function recomputeClosure(repoRoot: string, baseRef: string): { inputTree
     inheritParentEnv: true,
   });
   if (!grep.ok && grep.exitCode !== 1) throw new Error(`closure_reference_scan_failed:${grep.stderr || grep.error || grep.exitCode}`);
-  const references = candidateLegacyReferenceRows(grep.stdout, manifest.denominator);
-  const external = references.filter((row) => {
-    const source = String(row.source ?? '').replace(/\\/g, '/');
-    return !D928.has(source) && isExecutableLegacyReference(row);
-  });
-  if (external.length !== 0) throw new Error(`external_legacy_reference:${external.map((row) => row.source).join(',')}`);
+  const references = assertNoExternalLegacyReferences(grep.stdout, manifest.denominator);
   return { inputTree: manifest.lineage.planningBaseTreeOid, referenceCount: references.length };
 }
 
@@ -557,7 +565,8 @@ async function startSupervisor(request: ActivationRequest, nonce: string): Promi
 export interface ActivationBoundary {
   preflight(request: ActivationRequest): PlatformPreflightResult;
   proveFoundationAdoption(request: ActivationRequest): FoundationAdmissionProof | Promise<FoundationAdmissionProof>;
-  resolveBaseAndClosure(request: ActivationRequest): { baseRef: string; closure: { inputTree: string; referenceCount: number } };
+  resolveBaseAndClosure(request: ActivationRequest): { baseRef: string; closure: { inputTree: string; referenceCount: number } }
+    | Promise<{ baseRef: string; closure: { inputTree: string; referenceCount: number } }>;
   readLegacySupervisor(request: ActivationRequest): ReturnType<typeof readProcessIdentity>;
   captureLegacyWriters(request: ActivationRequest): LegacyWriterRecord[];
   findLegacySupervisorIdentities?(request: ActivationRequest): ReturnType<typeof findLegacySupervisorIdentities>;
@@ -582,9 +591,9 @@ export const productionActivationBoundary: ActivationBoundary = {
     projectedRegistryPath: request.paths.projectedRegistryPath,
   }),
   proveFoundationAdoption,
-  resolveBaseAndClosure: (request) => {
+  resolveBaseAndClosure: async (request) => {
     const baseRef = assertFoundationAndPr2a(request.repoRoot, request.installedCommitSha);
-    return { baseRef, closure: recomputeClosure(request.repoRoot, baseRef) };
+    return { baseRef, closure: await recomputeClosure(request.repoRoot, baseRef) };
   },
   readLegacySupervisor: (request) => {
     const legacySupervisorPid = request.legacySupervisorPid;
@@ -617,7 +626,7 @@ export async function activateCutover(
   const preflight = boundary.preflight(request);
   const foundation = await boundary.proveFoundationAdoption(request);
   if (request.stores.length !== 3 || new Set(request.stores.map((row) => row.id)).size !== 3) throw new Error('store_roster_invalid');
-  const { baseRef, closure } = boundary.resolveBaseAndClosure(request);
+  const { baseRef, closure } = await boundary.resolveBaseAndClosure(request);
   const legacySupervisorPid = request.legacySupervisorPid;
   const greenfield = foundation.activationMode === 'greenfield';
   const legacyClaimed = !greenfield
@@ -684,7 +693,9 @@ export async function activateCutover(
     reenumeratedEmpty: true,
   });
 
-  const snapshots = snapshotStores(request.stores, request.paths.snapshotDir, drain.writerWatermark);
+  const snapshots = snapshotStores(request.stores, request.paths.snapshotDir, drain.writerWatermark, {
+    allowMissingSourceIds: greenfield ? request.stores.map((store) => store.id) : [],
+  });
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'snapshots', snapshots);
 
   const importBoundary = markImportBegun(request.paths.cordonPath);

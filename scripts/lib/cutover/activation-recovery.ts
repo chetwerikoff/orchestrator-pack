@@ -322,6 +322,7 @@ function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotR
       || Number(row.sourceVersion) <= 0
       || typeof row.writerWatermark !== 'string'
       || !row.writerWatermark.trim()
+      || (row.sourceState !== 'present' && row.sourceState !== 'absent')
     ) {
       throw new Error(`precas_snapshot_evidence_invalid:${spec.id}`);
     }
@@ -333,12 +334,19 @@ function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotR
     if (!Number.isInteger(sourceVersion) || sourceVersion <= 0 || sourceVersion !== row.sourceVersion) {
       throw new Error(`precas_snapshot_version_mismatch:${spec.id}`);
     }
+    if (row.sourceState === 'absent') {
+      const absence = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
+      if (absence.storeId !== spec.id || absence.sourceState !== 'absent') {
+        throw new Error(`precas_snapshot_absence_evidence_invalid:${spec.id}`);
+      }
+    }
     return {
       storeId: spec.id,
       snapshotPath,
       snapshotDigest: row.snapshotDigest,
       sourceVersion,
       writerWatermark: row.writerWatermark,
+      sourceState: row.sourceState,
     };
   });
 }

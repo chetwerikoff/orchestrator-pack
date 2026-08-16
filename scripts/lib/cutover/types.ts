@@ -19,6 +19,7 @@ export interface SnapshotRecord {
   snapshotDigest: string;
   sourceVersion: number;
   writerWatermark: string;
+  sourceState: 'present' | 'absent';
 }
 
 export interface ImportRecord {
@@ -27,6 +28,7 @@ export interface ImportRecord {
   snapshotDigest: string;
   importTargetDigest: string;
   markerPath: string;
+  sourceState: 'present' | 'absent';
 }
 
 export interface PhaseRecord {
