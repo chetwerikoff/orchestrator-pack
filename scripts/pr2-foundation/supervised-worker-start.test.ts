@@ -22,6 +22,14 @@ function root(): string {
   return value;
 }
 
+function orcaEnvelope(result: Record<string, unknown>, ok = true): string {
+  return JSON.stringify({
+    id: 'orca-operation-1',
+    ok,
+    result,
+  });
+}
+
 afterEach(() => {
   for (const value of roots.splice(0)) rmSync(value, { recursive: true, force: true });
 });
@@ -37,13 +45,14 @@ describe('supervised worker start binding', () => {
       orcaArgs: ['--task', 'task_1', '--agent', 'codex'],
       execute: async () => ({
         ok: true,
-        stdout: JSON.stringify({
+        stdout: orcaEnvelope({
           runId: 'run_1', taskId: 'task_1', dispatchId: 'ctx_1', state: 'ready',
           effects: [{ kind: 'terminal', id: 'term_secret_runtime_id' }],
         }),
       }),
     });
     expect(result.ok).toBe(true);
+    expect(result.receipt).toMatchObject({ runId: 'run_1', state: 'ready' });
     const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
     const assignment = currentWorkerAssignment(file, 1420);
     expect(assignment).toMatchObject({
@@ -68,7 +77,7 @@ describe('supervised worker start binding', () => {
       orcaArgs: ['--task', 'task_1', '--agent', 'codex'],
       execute: async () => ({
         ok: false,
-        stdout: JSON.stringify({ taskId: 'task_1', dispatchId: 'ctx_1', state: 'outcome_unknown' }),
+        stdout: orcaEnvelope({ taskId: 'task_1', dispatchId: 'ctx_1', state: 'outcome_unknown' }, false),
       }),
     });
     expect(result.ok).toBe(false);
@@ -85,11 +94,59 @@ describe('supervised worker start binding', () => {
       orcaArgs: ['--task', 'task_expected', '--agent', 'codex'],
       execute: async () => ({
         ok: true,
-        stdout: JSON.stringify({ taskId: 'task_other', dispatchId: 'ctx_other', state: 'ready' }),
+        stdout: orcaEnvelope({ taskId: 'task_other', dispatchId: 'ctx_other', state: 'ready' }),
       }),
     });
     expect(result).toMatchObject({ ok: false, reason: 'supervised_start_task_mismatch' });
     expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack', env), 1420)).toBeNull();
+  });
+
+  it('reports accepted resources when a ready envelope lacks assignment identity', async () => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const effects = [
+      { kind: 'worktree', action: 'created_child', id: '/tmp/worker-child' },
+      { kind: 'terminal', role: 'agent', action: 'reused_agent_terminal', id: 'term-1' },
+      { kind: 'dispatch_input', role: 'agent', state: 'accepted' },
+    ];
+    const result = await runSupervisedWorkerStart({
+      issueNumber: 1420,
+      repository: 'chetwerikoff/orchestrator-pack',
+      env,
+      orcaArgs: ['--task', 'task_1', '--agent', 'codex'],
+      execute: async () => ({
+        ok: true,
+        stdout: orcaEnvelope({ runId: 'run_1', state: 'ready', effects }),
+      }),
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'supervised_start_identity_missing',
+      residualResources: effects,
+    });
+    expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack', env), 1420)).toBeNull();
+  });
+
+  it('rejects a transport envelope without the documented nested result', async () => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const result = await runSupervisedWorkerStart({
+      issueNumber: 1420,
+      repository: 'chetwerikoff/orchestrator-pack',
+      env,
+      orcaArgs: ['--task', 'task_1', '--agent', 'codex'],
+      execute: async () => ({
+        ok: true,
+        stdout: JSON.stringify({
+          id: 'orca-operation-1',
+          ok: true,
+          taskId: 'task_1',
+          dispatchId: 'ctx_1',
+          state: 'ready',
+        }),
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'supervised_start_receipt_invalid' });
   });
 
   it('advances generation on reassignment and makes the prior assignment stale', async () => {
@@ -102,7 +159,7 @@ describe('supervised worker start binding', () => {
       orcaArgs: ['--task', 'task_1', '--agent', 'codex'],
       execute: async () => ({
         ok: true,
-        stdout: JSON.stringify({ taskId: 'task_1', dispatchId, state: 'ready' }),
+        stdout: orcaEnvelope({ taskId: 'task_1', dispatchId, state: 'ready' }),
       }),
     });
     const first = await invoke('ctx_1');
@@ -295,7 +352,7 @@ describe('supervised worker start binding', () => {
       orcaArgs: ['--task', taskId, '--agent', 'codex'],
       execute: async () => ({
         ok: true,
-        stdout: JSON.stringify({ taskId, dispatchId, state: 'ready' }),
+        stdout: orcaEnvelope({ taskId, dispatchId, state: 'ready' }),
       }),
     });
     const [first, second] = await Promise.all([

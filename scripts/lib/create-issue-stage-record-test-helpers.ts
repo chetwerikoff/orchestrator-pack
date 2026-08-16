@@ -95,11 +95,12 @@ export function createMockTransport(state: MockGhState): GhTransport {
             return { exitCode: 0, stdout: '{}', stderr: '' };
           }
           state.commentCreateAttempts.push({ body, succeeded: true });
+          const timestamp = new Date().toISOString();
           const comment: TrustedComment = {
             id: state.nextCommentId,
             body,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
+            createdAt: timestamp,
+            updatedAt: timestamp,
             userLogin: state.ownerLogin,
             authorAssociation: 'OWNER',
           };
