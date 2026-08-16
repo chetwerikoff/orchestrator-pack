@@ -6,7 +6,6 @@
     "docs/migration_notes.md",
     "docs/wake-supervisor-fleet-operator-reference.md",
     "scripts/cutover/foundation-adoption-producer.ts",
-    "scripts/cutover/issue-1422-production.test.ts",
     "scripts/cutover/issue-928.test.ts",
     "scripts/cutover/mutation-runner.ts",
     "scripts/lib/cutover/activation-cordon.ts",
@@ -38,5 +37,5 @@
     "scripts/pr2a/final-conformance.ts",
     "scripts/runtime/single-instance-lease.ts"
   ],
-  "source_revision": "0158ce97ade0aebf856bd7948f8667be06bd4988"
+  "source_revision": "c7f8b13065d4654faec21f557d8e99469b54abe2"
 }
