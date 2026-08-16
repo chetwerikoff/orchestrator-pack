@@ -15,11 +15,39 @@ export interface SupervisedWorkerStartReceipt {
   readonly residualResources?: readonly unknown[];
 }
 
+interface OrcaWorkerStartEnvelope {
+  readonly ok?: boolean;
+  readonly result?: unknown;
+}
+
 export interface SupervisedWorkerStartResult {
   readonly ok: boolean;
   readonly reason: string;
   readonly receipt?: SupervisedWorkerStartReceipt;
+  readonly residualResources?: readonly unknown[];
   readonly assignment?: WorkerAssignment;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function residualResources(receipt: SupervisedWorkerStartReceipt): readonly unknown[] | undefined {
+  if (Array.isArray(receipt.residualResources)) return receipt.residualResources;
+  return Array.isArray(receipt.effects) ? receipt.effects : undefined;
+}
+
+function rejectedStart(
+  reason: string,
+  receipt?: SupervisedWorkerStartReceipt,
+): SupervisedWorkerStartResult {
+  const resources = receipt ? residualResources(receipt) : undefined;
+  return {
+    ok: false,
+    reason,
+    ...(receipt ? { receipt } : {}),
+    ...(resources ? { residualResources: resources } : {}),
+  };
 }
 
 export async function runSupervisedWorkerStart(input: {
@@ -54,22 +82,30 @@ export async function runSupervisedWorkerStart(input: {
     return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error };
   });
   const execution = await execute(args);
-  let receipt: SupervisedWorkerStartReceipt | undefined;
+  let envelope: OrcaWorkerStartEnvelope;
   try {
-    receipt = JSON.parse(execution.stdout) as SupervisedWorkerStartReceipt;
+    const parsed: unknown = JSON.parse(execution.stdout);
+    if (!isRecord(parsed) || !isRecord(parsed.result)) {
+      return rejectedStart('supervised_start_receipt_invalid');
+    }
+    envelope = parsed as OrcaWorkerStartEnvelope;
   } catch {
-    return { ok: false, reason: 'supervised_start_receipt_invalid' };
+    return rejectedStart('supervised_start_receipt_invalid');
+  }
+  const receipt = envelope.result as SupervisedWorkerStartReceipt;
+  if (envelope.ok !== true) {
+    return rejectedStart('supervised_start_envelope_not_ok', receipt);
   }
   if (!execution.ok || receipt.state !== 'ready') {
-    return { ok: false, reason: `supervised_start_${receipt.state || 'failed'}`, receipt };
+    return rejectedStart(`supervised_start_${receipt.state || 'failed'}`, receipt);
   }
   const taskId = String(receipt.taskId ?? '').trim();
   const dispatchId = String(receipt.dispatchId ?? '').trim();
   if (!taskId || !dispatchId) {
-    return { ok: false, reason: 'supervised_start_identity_missing', receipt };
+    return rejectedStart('supervised_start_identity_missing', receipt);
   }
   if (taskId !== requestedTaskId) {
-    return { ok: false, reason: 'supervised_start_task_mismatch', receipt };
+    return rejectedStart('supervised_start_task_mismatch', receipt);
   }
   const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
   const published = await publishCurrentWorkerAssignment({
@@ -83,7 +119,7 @@ export async function runSupervisedWorkerStart(input: {
     bindingKey: dispatchId,
   });
   if (!published.ok) {
-    return { ok: false, reason: published.reason, receipt };
+    return rejectedStart(published.reason, receipt);
   }
   return { ok: true, reason: 'ready_and_assignment_bound', receipt, assignment: published.assignment };
 }
