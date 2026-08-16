@@ -2,13 +2,20 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
 import { writeDurableFile, writeDurableJson } from './activation-evidence.ts';
-import type { CutoverStoreSpec, ImportRecord, SnapshotRecord } from './types.ts';
+import type { CutoverStoreId, CutoverStoreSpec, ImportRecord, SnapshotRecord } from './types.ts';
 
 const REQUIRED_FIELDS: Record<string, readonly string[]> = {
   reconcile: ['lastTickMs', 'degradedCi', 'cycleState'],
   reevaluation: ['watchEntries', 'terminalTombstones', 'lastUpdatedMs'],
   reportStateSeed: ['bindingByKey', 'seededKeys', 'deferredScanKeys', 'githubSnapshot', 'lastUpdatedMs'],
 };
+
+function writeAbsentImportMarker(markerPath: string, record: ImportRecord): void {
+  writeDurableJson(
+    markerPath,
+    record,
+  );
+}
 
 function normalizedPayload(spec: CutoverStoreSpec, raw: Buffer): Record<string, unknown> {
   const value = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
@@ -22,17 +29,34 @@ function normalizedPayload(spec: CutoverStoreSpec, raw: Buffer): Record<string, 
   return Object.fromEntries(required.map((key) => [key, value[key]]));
 }
 
-export function snapshotStores(stores: CutoverStoreSpec[], snapshotDir: string, writerWatermark: string): SnapshotRecord[] {
+export function snapshotStores(
+  stores: CutoverStoreSpec[],
+  snapshotDir: string,
+  writerWatermark: string,
+  options: { allowMissingSourceIds?: readonly CutoverStoreId[] } = {},
+): SnapshotRecord[] {
   if (!writerWatermark.trim()) throw new Error('writer_watermark_missing');
   mkdirSync(snapshotDir, { recursive: true });
+  const allowMissingSourceIds = new Set(options.allowMissingSourceIds ?? []);
   return stores.map((store) => {
-    const bytes = readFileSync(store.sourcePath);
+    let bytes: Buffer;
+    let sourceState: SnapshotRecord['sourceState'] = 'present';
+    try {
+      bytes = readFileSync(store.sourcePath);
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+      if (code !== 'ENOENT' || !allowMissingSourceIds.has(store.id)) {
+        throw new Error(`snapshot_source_unreadable:${store.id}:${code || String(error)}`);
+      }
+      sourceState = 'absent';
+      bytes = Buffer.from(`${JSON.stringify({ schemaVersion: 1, storeId: store.id, sourceState })}\n`, 'utf8');
+    }
     const parsed = JSON.parse(bytes.toString('utf8')) as { schemaVersion?: unknown };
     const sourceVersion = Number(parsed.schemaVersion ?? 1);
     if (!Number.isInteger(sourceVersion) || sourceVersion <= 0) throw new Error(`snapshot_version_missing:${store.id}`);
     const snapshotPath = path.join(snapshotDir, `${store.id}.snapshot.json`);
     writeDurableFile(snapshotPath, bytes);
-    return { storeId: store.id, snapshotPath, snapshotDigest: sha256Bytes(bytes), sourceVersion, writerWatermark };
+    return { storeId: store.id, snapshotPath, snapshotDigest: sha256Bytes(bytes), sourceVersion, writerWatermark, sourceState };
   });
 }
 
@@ -45,24 +69,51 @@ export function importSnapshot(input: {
   if (input.snapshot.storeId !== input.spec.id) throw new Error(`snapshot_store_mismatch:${input.spec.id}`);
   const raw = readFileSync(input.snapshot.snapshotPath);
   if (sha256Bytes(raw) !== input.snapshot.snapshotDigest) throw new Error(`snapshot_digest_mismatch:${input.spec.id}`);
-  const normalized = normalizedPayload(input.spec, raw);
+  if (input.snapshot.sourceState === 'absent') {
+    const observed = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+    if (observed.schemaVersion !== 1 || observed.storeId !== input.spec.id || observed.sourceState !== 'absent') {
+      throw new Error(`snapshot_absence_evidence_invalid:${input.spec.id}`);
+    }
+  }
   const importIdentity = sha256Stable({
     epochId: input.epochId,
     nonce: input.nonce,
     storeId: input.spec.id,
     snapshotDigest: input.snapshot.snapshotDigest,
+    sourceState: input.snapshot.sourceState,
   });
-  const importTargetDigest = sha256Stable(normalized);
+  const importTargetDigest = input.snapshot.sourceState === 'absent' ? 'sha256:absent' : sha256Stable(normalizedPayload(input.spec, raw));
   const markerPath = `${input.spec.targetPath}.cutover-import.json`;
   if (existsSync(markerPath)) {
     const marker = JSON.parse(readFileSync(markerPath, 'utf8')) as ImportRecord;
     if (marker.importIdentity !== importIdentity || marker.importTargetDigest !== importTargetDigest) {
       throw new Error(`import_identity_conflict:${input.spec.id}`);
     }
+    if (marker.sourceState !== input.snapshot.sourceState) {
+      throw new Error(`import_identity_conflict:${input.spec.id}`);
+    }
+    if (input.snapshot.sourceState === 'absent') {
+      if (existsSync(input.spec.targetPath)) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+      return marker;
+    }
     const existing = normalizedPayload(input.spec, readFileSync(input.spec.targetPath));
     if (sha256Stable(existing) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
     return marker;
   }
+  if (input.snapshot.sourceState === 'absent') {
+    if (existsSync(input.spec.targetPath)) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+    const record: ImportRecord = {
+      storeId: input.snapshot.storeId,
+      importIdentity,
+      snapshotDigest: input.snapshot.snapshotDigest,
+      importTargetDigest,
+      markerPath,
+      sourceState: 'absent',
+    };
+    writeAbsentImportMarker(markerPath, record);
+    return record;
+  }
+  const normalized = normalizedPayload(input.spec, raw);
   writeDurableFile(input.spec.targetPath, `${JSON.stringify(normalized, null, 2)}\n`);
   const readBack = normalizedPayload(input.spec, readFileSync(input.spec.targetPath));
   if (sha256Stable(readBack) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
@@ -72,6 +123,7 @@ export function importSnapshot(input: {
     snapshotDigest: input.snapshot.snapshotDigest,
     importTargetDigest,
     markerPath,
+    sourceState: 'present',
   };
   writeDurableJson(markerPath, record);
   return record;

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { stableStringify } from '../lib/cutover/stable-stringify.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
-import { activateCutover, type ActivationBoundary } from '../lib/cutover/activation-transaction.ts';
+import { activateCutover, assertNoExternalLegacyReferences, recomputeClosure, type ActivationBoundary } from '../lib/cutover/activation-transaction.ts';
 import { abandonPreImportCordon } from '../lib/cutover/activation-transaction.ts';
 import { isExecutableLegacyReference } from '../lib/cutover/activation-transaction.ts';
 import { createCordon, findLegacySupervisorIdentities, markImportBegun, readCordonState } from '../lib/cutover/activation-cordon.ts';
@@ -274,6 +274,18 @@ describe('[AC1] admission and closure', () => {
       && isExecutableLegacyReference(row),
     );
     expect(external).toEqual([]);
+  });
+
+  it('streams complete closure output above 1 MiB and still rejects an external executable reference', async () => {
+    const closure = await recomputeClosure(repoRoot, 'HEAD');
+    expect(closure.inputTree).toMatch(/^[0-9a-f]{40}$/iu);
+
+    const denominator = [{ path: 'scripts/external-consumer.ts', executionClass: 'root' as const }];
+    const governanceLines = "HEAD:scripts/external-consumer.ts:1:const historical = 'Review-StartClaim.ps1';\n".repeat(30_000);
+    const externalLine = "HEAD:scripts/external-consumer.ts:2:spawn('pwsh', 'Review-StartClaim.ps1');\n";
+    expect(Buffer.byteLength(governanceLines + externalLine)).toBeGreaterThan(1_048_576);
+    expect(() => assertNoExternalLegacyReferences(governanceLines + externalLine, denominator))
+      .toThrow(/external_legacy_reference:scripts\/external-consumer\.ts/);
   });
 
   it('classifies executable selectors instead of whitelisting governance source paths', () => {
@@ -826,7 +838,7 @@ function createIssue1422FirstTimeFixture(): { request: ActivationRequest; bounda
       : id === 'reevaluation'
         ? { watchEntries: {}, terminalTombstones: {}, lastUpdatedMs: 2 }
         : { bindingByKey: {}, seededKeys: [], deferredScanKeys: [], githubSnapshot: {}, lastUpdatedMs: 3 };
-    writeFileSync(sourcePath, `${JSON.stringify(value)}\n`);
+    if (id !== 'reconcile') writeFileSync(sourcePath, `${JSON.stringify(value)}\n`);
     return {
       id,
       sourcePath,
@@ -908,6 +920,13 @@ describe('Issue 1422 first-time activation', () => {
     expect(new FileEpochAuthority(request.paths.epochAuthorityPath).read().currentEpochId).toBe(request.epochId);
     expect(JSON.parse(readFileSync(request.paths.cordonPath, 'utf8')).legacySupervisor).toBeNull();
     expect(existsSync(request.paths.epochAuthorityPath)).toBe(true);
+    const reconcile = request.stores.find((store) => store.id === 'reconcile')!;
+    expect(existsSync(reconcile.sourcePath)).toBe(false);
+    expect(existsSync(reconcile.targetPath)).toBe(false);
+    expect(JSON.parse(readFileSync(path.join(request.paths.snapshotDir, 'reconcile.snapshot.json'), 'utf8')))
+      .toMatchObject({ schemaVersion: 1, storeId: 'reconcile', sourceState: 'absent' });
+    expect(JSON.parse(readFileSync(`${reconcile.targetPath}.cutover-import.json`, 'utf8')))
+      .toMatchObject({ storeId: 'reconcile', sourceState: 'absent', importTargetDigest: 'sha256:absent' });
   });
 
   it('produces greenfield evidence through the runtime adapter without legacy preflight', async () => {
@@ -1063,6 +1082,10 @@ describe('Issue 1422 first-time activation', () => {
 
   it('refuses unobservable canonical foundation sources before writing evidence', async () => {
     const { request } = createIssue1422FirstTimeFixture();
+    const homeDir = mkdtempSync(path.join(path.dirname(repoRoot), 'opk-1422-unobservable-home-'));
+    issue1422FirstTimeRoots.push(homeDir);
+    const user = os.userInfo();
+    const userInfoSpy = vi.spyOn(os, 'userInfo').mockReturnValue({ ...user, homedir: homeDir });
     const canonical = canonicalFoundationPaths(request.repoRoot);
     const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
     delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
@@ -1075,6 +1098,7 @@ describe('Issue 1422 first-time activation', () => {
         evidencePath: canonical.evidencePath,
       })).rejects.toThrow(/unobservable/);
     } finally {
+      userInfoSpy.mockRestore();
       if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
       else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
     }

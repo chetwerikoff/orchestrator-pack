@@ -184,7 +184,7 @@ function ac1InvariantHolds(key: string): boolean {
   switch (key) {
     case 'AC1:operator-ack-only': return has(M.tx, 'const foundation = await boundary.proveFoundationAdoption(request);');
     case 'AC1:pr2a-merge-missing': return has(M.tx, "if (!isAncestor(repoRoot, PR2A_LANDING_COMMIT, baseRef)) throw new Error('pr2a_merge_missing');");
-    case 'AC1:pr2a-receipt-trusted-without-recompute': return has(M.tx, 'const { baseRef, closure } = boundary.resolveBaseAndClosure(request);');
+    case 'AC1:pr2a-receipt-trusted-without-recompute': return has(M.tx, 'const { baseRef, closure } = await boundary.resolveBaseAndClosure(request);');
     case 'AC1:closure-schema-incompatible': return has(M.tx, "if (manifest.schemaVersion !== 1) throw new Error('closure_schema_incompatible');");
     case 'AC1:external-supervisor-library-reference':
     case 'AC1:external-claim-library-reference': return has(M.tx, 'const TARGET_LIBRARIES = new Set<string>(TARGET_LIBRARY_PATHS);');
@@ -212,7 +212,7 @@ function mutationFailures(key:string, artifact:string):string[]{
   const required: Array<[string, readonly string[]]> = [
     [M.tx,[
       "if (!isAncestor(repoRoot, PR2A_LANDING_COMMIT, baseRef)) throw new Error('pr2a_merge_missing');",
-      'const { baseRef, closure } = boundary.resolveBaseAndClosure(request);',
+      'const { baseRef, closure } = await boundary.resolveBaseAndClosure(request);',
       "if (manifest.schemaVersion !== 1) throw new Error('closure_schema_incompatible');",
       'const TARGET_LIBRARIES = new Set<string>(TARGET_LIBRARY_PATHS);',
       "if (!manifest.lineage?.planningBaseTreeOid) throw new Error('closure_input_tree_unbound');",
