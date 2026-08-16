@@ -1,16 +1,38 @@
 {
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1435,
-  "baseline": "origin/main",
   "declared_paths": [
+    "docs/declarations/1435.pr-scope.json",
     "prompts/gpt_pack_review_prompt.md",
     "scripts/lib/pack-gpt-reviewer.ts",
+    "scripts/lib/pack-gpt-source-comment-contract.ts",
+    "scripts/lib/pack-gpt-source-comment-runner.test.ts",
+    "scripts/lib/pack-gpt-source-comment.test.ts",
+    "scripts/lib/pack-gpt-source-comment.ts",
     "scripts/lib/pack-pr-review-contract.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-review-runner.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "declared_globs": [
-    "scripts/lib/pack-gpt-source-comment*.ts"
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
-  "amendments": []
+  "allowed_roots": [
+    "docs/declarations/1435.pr-scope.json",
+    "prompts/gpt_pack_review_prompt.md",
+    "scripts/lib/pack-gpt-reviewer.ts",
+    "scripts/lib/pack-gpt-source-comment-contract.ts",
+    "scripts/lib/pack-gpt-source-comment-runner.test.ts",
+    "scripts/lib/pack-gpt-source-comment.test.ts",
+    "scripts/lib/pack-gpt-source-comment.ts",
+    "scripts/lib/pack-pr-review-contract.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "r03"
 }
