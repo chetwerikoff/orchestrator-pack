@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1436,
+  "declared_paths": [
+    "docs/declarations/1436.pr-scope.json",
+    "docs/orchestration-runbook.md"
+  ],
+  "denylist": [
+    ".github/",
+    "packages/core/",
+    "plugins/",
+    "scripts/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1436.pr-scope.json",
+    "docs/orchestration-runbook.md"
+  ]
+}
