@@ -83,7 +83,7 @@ export function findLegacySupervisorIdentities(
       if ((code === 'ENOENT' || code === 'ESRCH') && !processAliveStrict(Number(entry))) continue;
       if (error instanceof Error && error.message === 'process_identity_unreadable') {
         try {
-          if (procStat(Number(entry)).state === 'Z') continue;
+          if (['I', 'Z'].includes(procStat(Number(entry)).state)) continue;
           if (!processAliveStrict(Number(entry))) continue;
         } catch {
           // Fall through: an unreadable candidate is ambiguous and must fail closed.
@@ -115,7 +115,7 @@ export function findTypeScriptSupervisorIdentities(
       if ((code === 'ENOENT' || code === 'ESRCH') && !processAliveStrict(Number(entry))) continue;
       if (error instanceof Error && error.message === 'process_identity_unreadable') {
         try {
-          if (procStat(Number(entry)).state === 'Z') continue;
+          if (['I', 'Z'].includes(procStat(Number(entry)).state)) continue;
           if (!processAliveStrict(Number(entry))) continue;
         } catch {
           // Fall through: an unreadable candidate is ambiguous and must fail closed.
