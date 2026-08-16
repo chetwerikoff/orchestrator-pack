@@ -401,6 +401,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
       observedAppStateVersion,
     );
   } else {
+    if (!config || !config.ok) throw new Error('foundation_typed_config_invalid');
     try {
       observedConfig = JSON.parse(readFileSync(canonical.configPath, 'utf8')) as unknown;
     } catch {
