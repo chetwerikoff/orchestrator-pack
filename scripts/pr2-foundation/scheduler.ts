@@ -366,8 +366,8 @@ function productionFleetObserverSource(
   assignmentBindings: readonly FleetAssignmentBinding[],
 ): FleetObserverSource {
   return {
-    listWorkers: (_input, options) => {
-      const listed = runtime.listWorkers({ workspace: `path:${repoRoot}` }, options);
+    listWorkers: async (_input, options) => {
+      const listed = await runtime.listWorkers({ workspace: `path:${repoRoot}` }, options);
       if (listed.status !== 'ok') return listed;
       const assigned = assignmentBindings.map((binding) => binding.worker);
       return {
