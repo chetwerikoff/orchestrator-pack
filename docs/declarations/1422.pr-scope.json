@@ -17,6 +17,9 @@
     "scripts/lib/cutover/types.ts",
     "scripts/pr2-foundation/contract-test-runner.ts",
     "scripts/pr2-foundation/foundation.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
+    "scripts/pr2-foundation/scheduler-repository-identity.test.ts",
+    "scripts/pr2-foundation/scheduler.ts",
     "scripts/pr2a/final-conformance.ts",
     "scripts/runtime/single-instance-lease.ts"
   ],
@@ -40,5 +43,5 @@
     "scripts/pr2a/final-conformance.ts",
     "scripts/runtime/single-instance-lease.ts"
   ],
-  "source_revision": "21b8d3e8cf73b6d427dc42cccb206de43a50503d"
+  "source_revision": "f1d12ec53a84bbee72b2d41a07ed59ba045fbaec"
 }

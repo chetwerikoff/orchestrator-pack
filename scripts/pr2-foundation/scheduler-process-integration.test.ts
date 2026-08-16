@@ -67,6 +67,10 @@ switch (operation) {
     out({ ok: true, result: { worktree: { path: process.cwd(), head: 'a'.repeat(40), linkedIssue: null } } });
     break;
   case 'terminal list':
+    if (state.requiredWorktree && get('--worktree') !== state.requiredWorktree) {
+      out({ ok: false, error: { code: 'wrong_worktree_scope', message: get('--worktree') } });
+      break;
+    }
     out({ ok: true, result: { terminals: state.workers.filter((worker) => worker.liveness !== 'gone').map(terminal) } });
     break;
   case 'terminal show': {
@@ -194,6 +198,7 @@ function observerResult(value: Record<string, unknown>): Record<string, unknown>
 
 interface FixtureState {
   workers: Array<{ id: string; generation: string; bindingKey: string; lines: string[]; liveness: string }>;
+  requiredWorktree?: string;
   dispatchOutcome?: string;
   dispatches?: Array<{ workerId: string; message: string }>;
   sendCalls?: number;
@@ -244,6 +249,27 @@ async function publishLocal(env: NodeJS.ProcessEnv, bindingKey = 'dispatch-1', t
 }
 
 describe('scheduler bounded-child production composition', () => {
+  it('derives repository identity from repoRoot and scopes the observer to that worktree', async () => {
+    const root = makeRoot();
+    const fixturePath = path.join(root, 'fixture.json');
+    const epochPath = path.join(root, 'epoch.json');
+    const configPath = path.join(root, 'fleet-config.json');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+    writeFileSync(fixturePath, JSON.stringify({
+      workers: [], dispatches: [], requiredWorktree: `path:${process.cwd()}`,
+    }));
+    writeEpoch(epochPath, 'epoch-repo-root', 'nonce-repo-root');
+    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-repo-root', 'nonce-repo-root');
+    delete env.OPK_REPOSITORY;
+
+    const result = await runTick(env);
+    expect(observerResult(result)).toMatchObject({
+      result: 'census-published-observer-only',
+      status: 'complete',
+      snapshotCommitted: true,
+    });
+  });
+
   it('restores one S1 lineage across separate child processes and dispatches one existing S2 episode', async () => {
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');

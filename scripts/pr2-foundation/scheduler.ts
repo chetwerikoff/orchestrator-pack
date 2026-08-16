@@ -8,7 +8,12 @@ import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateHeadReadyForReview } from './review-head-ready.ts';
 import { listPackReviewRuns } from '../lib/pack-review-run-store.ts';
 import { startPackReview } from '../pack-review-runner.ts';
-import { createUnavailableFleetObserver, FleetObserver, type FleetObserverResult } from './fleet-observer.ts';
+import {
+  createUnavailableFleetObserver,
+  FleetObserver,
+  type FleetObserverResult,
+  type FleetObserverSource,
+} from './fleet-observer.ts';
 import {
   createTargetUnresolvedFleetNudgeActuator,
   runFleetNudgeActuator,
@@ -101,6 +106,29 @@ function requiredEnv(name: string, env: NodeJS.ProcessEnv): string {
   return value;
 }
 
+const GITHUB_REMOTE_PATTERN = /(?:github\.com[/:])([^/\s]+)\/([^/\s]+?)(?:\.git)?$/iu;
+
+export function repositorySlugFromRemote(remote: string): string {
+  const match = remote.trim().match(GITHUB_REMOTE_PATTERN);
+  if (!match) throw new Error('scheduler_repository_identity_unresolved');
+  return `${match[1]}/${match[2]}`.toLowerCase();
+}
+
+export async function resolveRepositoryFromRepoRoot(repoRoot: string): Promise<string> {
+  const result = await runProcess({
+    command: 'git',
+    args: ['-C', repoRoot, 'remote', 'get-url', 'origin'],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    allowEmptyStdout: false,
+    timeoutMs: 30_000,
+  });
+  if (!result.ok) {
+    throw new Error(`scheduler_repository_identity_unresolved:${result.stderr || result.error || result.exitCode || 'git_remote_failed'}`);
+  }
+  return repositorySlugFromRemote(result.stdout);
+}
+
 export function assertSchedulerEpoch(env: NodeJS.ProcessEnv = process.env): { epochId: string; nonce: string } {
   const authorityPath = requiredEnv('ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY', env);
   const epochId = requiredEnv('ORCHESTRATOR_CUTOVER_EPOCH_ID', env);
@@ -143,14 +171,14 @@ export function assertFoundationInert(input: {
   return failure ? { ok: false, reason: failure[1] } : { ok: true, result: 'live-acquirers-unchanged' };
 }
 
-function liveCandidates(env: NodeJS.ProcessEnv = process.env): ActivatedSchedulerCandidate[] {
+function liveCandidates(env: NodeJS.ProcessEnv = process.env, repository?: string): ActivatedSchedulerCandidate[] {
   const workerStore = readWorkerStatusStoreFile(resolveWorkerStatusStorePath(env));
   const bindingStore = readPrSessionBindingCacheFile(resolvePrSessionBindingCachePath(env));
   const nowMs = Date.now(); const candidates: ActivatedSchedulerCandidate[] = [];
   for (const row of Object.values(workerStore.records ?? {})) {
     if ((row.derivedStatus ?? row.status) !== 'ready_for_review' || isRowStale(row, nowMs, Number(workerStore.repoTickGeneration ?? 0))) continue;
     const sessionId = String(row.sessionId ?? '').trim();
-    const repoSlug = String(row.repoSlug ?? env.GITHUB_REPOSITORY ?? '').trim().toLowerCase();
+    const repoSlug = String(repository ?? row.repoSlug ?? env.GITHUB_REPOSITORY ?? '').trim().toLowerCase();
     if (!sessionId || !repoSlug) continue;
     const binding = lookupBindingBySession(bindingStore, repoSlug, sessionId);
     if (!binding || Number(binding.prNumber ?? 0) <= 0 || !String(binding.headSha ?? '').trim()) continue;
@@ -174,7 +202,7 @@ export function productionSchedulerBoundary(input: {
 }): SchedulerBoundary {
   const env = input.env ?? process.env; const projectId = input.projectId ?? 'orchestrator-pack';
   return {
-    listCandidates: () => liveCandidates(env),
+    listCandidates: () => liveCandidates(env, input.repository),
     readCurrentPr: async (candidate) => ghJson(input.repoRoot, ['pr', 'view', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'number,headRefOid,state,isDraft']) as Promise<{ number: number; headRefOid: string; state: string; isDraft: boolean }>,
     readChecks: async (candidate) => ghJson(input.repoRoot, ['pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'name,state,conclusion,status']) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
     listReviewRuns: () => listPackReviewRuns({ projectId }),
@@ -308,14 +336,6 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
   return { attempted, started, skipped, ...(observer ? { observer } : {}), ...(fleetNudge ? { fleetNudge } : {}), ...(orchestratorRequired ? { orchestratorRequired: true } : {}) };
 }
 
-function uniqueRepository(assignments: ReturnType<typeof listCurrentWorkerAssignments>, env: NodeJS.ProcessEnv): string {
-  const explicit = String(env.OPK_REPOSITORY ?? env.GITHUB_REPOSITORY ?? '').trim().toLowerCase();
-  if (explicit) return explicit;
-  if (!assignments) return '';
-  const values = [...new Set(assignments.map((assignment) => assignment.repository))];
-  return values.length === 1 ? values[0]! : '';
-}
-
 function productionObserverBoundary(observer: FleetObserver): SchedulerFleetObserver {
   return {
     // The FleetObserver owns the persisted sequence. The scheduler process is
@@ -326,6 +346,15 @@ function productionObserverBoundary(observer: FleetObserver): SchedulerFleetObse
     cancel: () => observer.cancel(),
     schedulerGeneration: observer.schedulerGeneration,
     snapshotPath: observer.snapshotPath,
+  };
+}
+
+function productionFleetObserverSource(runtime: FleetObserverSource, repoRoot: string): FleetObserverSource {
+  return {
+    listWorkers: (_input, options) => runtime.listWorkers({ workspace: `path:${repoRoot}` }, options),
+    findWorker: (identity, options) => runtime.findWorker(identity, options),
+    readBoundedOutput: (input, options) => runtime.readBoundedOutput(input, options),
+    liveness: (input, options) => runtime.liveness(input, options),
   };
 }
 
@@ -350,7 +379,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   const repoRoot = process.cwd(); const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env; const projectId = 'orchestrator-pack';
   const epoch = assertSchedulerEpoch(env); const activationLineage = schedulerActivationLineage(epoch);
   const assignmentStorePath = resolveWorkerAssignmentStorePath(projectId, env); const storedAssignments = listCurrentWorkerAssignments(assignmentStorePath);
-  const repository = uniqueRepository(storedAssignments, env);
+  const repository = await resolveRepositoryFromRepoRoot(repoRoot);
   const scopedAssignment = storedAssignments?.find((assignment) => assignment.repository === repository);
   let fleetObserver: FleetObserver; let fleetNudgeActuator: SchedulerFleetNudgeActuator = createTargetUnresolvedFleetNudgeActuator();
   let unresolvedReason: FleetReconciliationReason = storedAssignments === null ? 'assignment_untrusted' : 'target_unresolved';
@@ -366,7 +395,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       fleetBindings = built;
       assignmentReconciliation = resolution.reconciliations[0];
       fleetObserver = new FleetObserver({
-        source: runtime,
+        source: productionFleetObserverSource(runtime, repoRoot),
         activationLineage,
         assignmentBindings: fleetBindings,
         configPath: productionFleetObserverConfigPath(env),
@@ -382,7 +411,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
         ...(scopedAssignment ? { assignment: scopedAssignment } : {}),
       };
       fleetObserver = new FleetObserver({
-        source: runtime,
+        source: productionFleetObserverSource(runtime, repoRoot),
         activationLineage,
         assignmentBindings: [],
         configPath: productionFleetObserverConfigPath(env),
