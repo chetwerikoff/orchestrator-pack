@@ -915,7 +915,7 @@ describe('Issue 1422 first-time activation', () => {
             appStatePath: canonical.appStatePath,
             evidencePath: canonical.evidencePath,
           },
-          { homeDir, selectRuntimeAdapter },
+          { homeDir, selectRuntimeAdapter, processEntries: () => [] },
         );
       } finally {
         if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;

@@ -48,6 +48,7 @@ export interface FoundationAdoptionProducerDependencies {
   /** Focused-test seams; the CLI uses the machine-canonical defaults. */
   selectRuntimeAdapter?: RuntimeAdapterSelector;
   homeDir?: string;
+  processEntries?: () => string[];
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -128,6 +129,7 @@ export async function produceFoundationAdoptionEvidence(
     greenfieldObservation = observeGreenfieldFoundationObservation({
       repoRoot,
       paths: canonical,
+      processEntries: dependencies.processEntries,
     });
     preflight = await observeRuntimeAdapterPreflight(
       repoRoot,

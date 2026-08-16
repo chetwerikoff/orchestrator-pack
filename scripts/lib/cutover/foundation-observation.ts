@@ -354,6 +354,8 @@ export function observeGreenfieldMigrationJournalAbsence(stateRoot: string): voi
 export function observeGreenfieldControlPlane(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
+  /** Focused-test process census seam; production callers scan /proc. */
+  processEntries?: () => string[];
 }): GreenfieldFoundationObservation['controlPlane'] {
   const observedHostId = localObservedHostId();
   const authority = new FileEpochAuthority(input.paths.epochAuthorityPath).read();
@@ -387,9 +389,13 @@ export function observeGreenfieldControlPlane(input: {
 
     const writers = captureLegacyWriters(input.repoRoot, input.paths.supervisorStateDir);
     if (writers.length !== 0) throw new Error('greenfield_legacy_writer_present');
-    const legacySupervisors = findLegacySupervisorIdentities(input.repoRoot);
+    const legacySupervisors = findLegacySupervisorIdentities(input.repoRoot, input.processEntries
+      ? { entries: input.processEntries }
+      : {});
     if (legacySupervisors.length !== 0) throw new Error('greenfield_legacy_supervisor_present');
-    const typescriptSupervisors = findTypeScriptSupervisorIdentities();
+    const typescriptSupervisors = findTypeScriptSupervisorIdentities(input.processEntries
+      ? { entries: input.processEntries }
+      : {});
     if (typescriptSupervisors.length !== 0) throw new Error('greenfield_typescript_supervisor_present');
     return {
       epochAuthorityPath: input.paths.epochAuthorityPath,
@@ -416,6 +422,8 @@ export function observeGreenfieldControlPlane(input: {
 export function observeGreenfieldFoundationObservation(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
+  /** Focused-test process census seam; production callers scan /proc. */
+  processEntries?: () => string[];
 }): GreenfieldFoundationObservation {
   const configPresent = observeCanonicalFilePresence(input.paths.configPath, 'config');
   const appStatePresent = observeCanonicalFilePresence(input.paths.appStatePath, 'app_state');
