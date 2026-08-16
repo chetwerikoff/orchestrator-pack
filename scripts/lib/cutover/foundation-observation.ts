@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { FileEpochAuthority } from './activation-epoch-authority.ts';
@@ -24,6 +24,7 @@ import {
   captureLeakReason,
   sanitizeRuntimeWorkers,
   sanitizerIdentity,
+  validateGreenfieldRuntimePreflight,
   validateRuntimePreflight,
   type RuntimeWorkerRow,
 } from '../../pr2-foundation/binding.ts';
@@ -33,6 +34,8 @@ import { readLiveSingleInstanceLease } from '../../runtime/single-instance-lease
 
 export const GREENFIELD_RUNTIME_PATH = 'ao';
 export const GREENFIELD_RUNTIME_TIMEOUT_MS = 30_000;
+export const FOUNDATION_MIGRATION_JOURNAL_DIRECTORY = 'migration-journals';
+export const FOUNDATION_MIGRATION_JOURNAL_SUFFIX = '.migration-journal.json';
 
 export interface CanonicalFoundationPaths {
   stateRoot: string;
@@ -145,11 +148,23 @@ function parseJsonOutput(stdout: string): unknown {
   }
 }
 
+export function observeCanonicalFilePresence(pathName: string, label: 'config' | 'app_state'): boolean {
+  try {
+    const metadata = lstatSync(pathName);
+    if (!metadata.isFile()) throw new Error(`foundation_${label}_unobservable`);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message === `foundation_${label}_unobservable`) throw error;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw new Error(`foundation_${label}_unobservable`);
+  }
+}
+
 export async function observeRuntimePreflight(
   repoRoot: string,
   runtimePath: string,
   timeoutMs: number,
-  appStateVersion: string,
+  appStateVersion?: string,
 ): Promise<FoundationAdmissionEvidence['preflight']> {
   let runtime;
   try {
@@ -190,11 +205,13 @@ export async function observeRuntimePreflight(
   if (leak) throw new Error(`foundation_runtime_capture_unobservable:${leak}`);
   const livePreflight: FoundationAdmissionEvidence['preflight'] = {
     command: 'a\u006f session ls --json',
-    appStateVersion,
     sessions: sanitized,
     sanitizerId: sanitizerIdentity(sanitized),
+    ...(appStateVersion === undefined ? {} : { appStateVersion }),
   };
-  const validatedPreflight = validateRuntimePreflight(livePreflight);
+  const validatedPreflight = appStateVersion === undefined
+    ? validateGreenfieldRuntimePreflight(livePreflight)
+    : validateRuntimePreflight(livePreflight as FoundationAdmissionEvidence['preflight'] & { appStateVersion: string });
   if (!validatedPreflight.ok) throw new Error(`foundation_runtime_preflight_unobservable:${validatedPreflight.reason}`);
   return livePreflight;
 }
@@ -234,6 +251,25 @@ export function observeCommittedMigrationJournals(stateRoot: string): string[] {
   visit(stateRoot);
   const journals = [...new Set(output)].sort();
   return journals;
+}
+
+export function observeGreenfieldMigrationJournalAbsence(stateRoot: string): void {
+  const journalDirectory = path.join(stateRoot, FOUNDATION_MIGRATION_JOURNAL_DIRECTORY);
+  let entries;
+  try {
+    entries = readdirSync(journalDirectory, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw new Error('foundation_migration_journal_unobservable');
+  }
+  for (const entry of entries) {
+    if (!entry.name.endsWith(FOUNDATION_MIGRATION_JOURNAL_SUFFIX)) continue;
+    const candidate = path.join(journalDirectory, entry.name);
+    if (!entry.isFile()) throw new Error('foundation_migration_journal_unobservable');
+    const journal = readMigrationJournal(candidate);
+    if (!journal.ok) throw new Error('foundation_migration_journal_unobservable');
+    if (journal.record !== null) throw new Error('greenfield_migration_journal_present');
+  }
 }
 
 export function observeGreenfieldControlPlane(input: {
@@ -302,10 +338,13 @@ export function observeGreenfieldFoundationObservation(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
 }): GreenfieldFoundationObservation {
+  const configPresent = observeCanonicalFilePresence(input.paths.configPath, 'config');
+  const appStatePresent = observeCanonicalFilePresence(input.paths.appStatePath, 'app_state');
+  if (configPresent) throw new Error('greenfield_foundation_config_present');
+  if (appStatePresent) throw new Error('greenfield_app_state_present');
   const committedMigrationJournalPaths = observeCommittedMigrationJournals(input.paths.stateRoot);
-  if (existsSync(input.paths.configPath)) throw new Error('greenfield_foundation_config_present');
-  if (existsSync(input.paths.appStatePath)) throw new Error('greenfield_app_state_present');
   if (committedMigrationJournalPaths.length !== 0) throw new Error('greenfield_migration_journal_present');
+  observeGreenfieldMigrationJournalAbsence(input.paths.stateRoot);
   return {
     mode: 'greenfield-observed',
     stateRoot: input.paths.stateRoot,
@@ -334,7 +373,7 @@ export function observeFoundationInertInput(input: {
 }): ObservedFoundationInertInput {
   let configObserved = false;
   if (!existsSync(input.paths.configPath) && input.allowAbsentTypedConfig === true) {
-    configObserved = existsSync(path.join(input.repoRoot, 'scripts', 'pr2-foundation', 'config.ts'));
+    configObserved = false;
   } else {
     try {
       const config = parseFoundationConfig(JSON.parse(readFileSync(input.paths.configPath, 'utf8')) as unknown);
@@ -389,14 +428,27 @@ export function observeFoundationInertProof(input: {
 export function observeGreenfieldFoundationInertProof(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
-}): { result: 'live-acquirers-unchanged'; observations: FoundationInertObservation } {
+}): { result: 'greenfield-dormant-layer-not-active'; observations: FoundationInertObservation } {
   const observed = observeFoundationInertInput({
     ...input,
     allowAbsentTypedConfig: true,
   });
-  const proof = assertFoundationInert(observed);
-  if (!proof.ok) throw new Error(`foundation_inert_proof_unobservable:${proof.reason}`);
-  return { ...proof, observations: observed };
+  const failures: Array<[boolean, string]> = [
+    [observed.registryChanged, 'registry_changed'],
+    [observed.supervisorChanged, 'supervisor_changed'],
+    [observed.schedulerRegistered, 'scheduler_registered'],
+    [observed.schedulerRunning, 'scheduler_running'],
+    [observed.schedulerClaimAcquirer, 'scheduler_claim_acquirer'],
+    [observed.activationEpochEnforced, 'activation_epoch_enforced'],
+    [observed.liveStoreOpened, 'live_store_opened'],
+    [observed.legacyStarterDisabled, 'legacy_starter_enabled'],
+    [observed.nonNotificationRuntimeDelta, 'non_notification_runtime_delta'],
+    [observed.dormantTypedConfigReaderLive, 'dormant_config_reader_live'],
+    [observed.notificationTypedConfigLive, 'notification_config_present'],
+  ];
+  const failure = failures.find(([condition]) => condition);
+  if (failure) throw new Error(`foundation_inert_proof_unobservable:${failure[1]}`);
+  return { result: 'greenfield-dormant-layer-not-active', observations: observed };
 }
 
 export function observeLocalHeartbeat(
@@ -415,6 +467,18 @@ export function observeLocalHeartbeat(
     hostId: localHostId,
     installedCommitSha,
     observedAt,
+    active: processAliveStrict(process.pid),
+  };
+}
+
+export function observeLiveHeartbeat(
+  localHostId: string,
+  installedCommitSha: string,
+): FoundationHeartbeatEvidence {
+  return {
+    hostId: localHostId,
+    installedCommitSha,
+    observedAt: new Date().toISOString(),
     active: processAliveStrict(process.pid),
   };
 }

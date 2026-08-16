@@ -56,29 +56,38 @@ export function verifyFoundationEvidenceObservation(
   evidence: FoundationAdmissionEvidence,
   observed: {
     typedConfig: unknown;
-    appStateVersion: string;
+    appStateVersion?: string;
     migrationJournalPaths: readonly string[];
     inertProof: FoundationAdmissionEvidence['inertProof'];
     heartbeats: ReadonlyArray<FoundationAdmissionEvidence['heartbeats'][number]>;
+    heartbeatTimestampMode?: 'exact' | 'fresh';
   },
 ): void {
   verifyFoundationEvidenceDigest(evidence);
+  const evidenceAppStateVersion = 'appStateVersion' in evidence.preflight
+    ? evidence.preflight.appStateVersion
+    : undefined;
+  const heartbeatShape = (row: FoundationAdmissionEvidence['heartbeats'][number]) => ({
+    hostId: row.hostId,
+    installedCommitSha: row.installedCommitSha,
+    active: row.active,
+    ...(row.quarantined === true ? { quarantined: true } : {}),
+  });
   if (
     stableStringify(evidence.typedConfig) !== stableStringify(observed.typedConfig)
-    || evidence.preflight.appStateVersion !== observed.appStateVersion
+    || evidenceAppStateVersion !== observed.appStateVersion
     || stableStringify(evidence.migrationJournalPaths) !== stableStringify(observed.migrationJournalPaths)
     || stableStringify(evidence.inertProof) !== stableStringify(observed.inertProof)
   ) {
     throw new Error('foundation_evidence_observation_mismatch');
   }
-  const shape = (row: FoundationAdmissionEvidence['heartbeats'][number]) => ({
-    hostId: row.hostId,
-    installedCommitSha: row.installedCommitSha,
-    observedAt: row.observedAt,
-    active: row.active,
-    ...(row.quarantined === true ? { quarantined: true } : {}),
-  });
-  if (stableStringify(evidence.heartbeats.map(shape)) !== stableStringify(observed.heartbeats.map(shape))) {
+  const evidenceHeartbeats = observed.heartbeatTimestampMode === 'fresh'
+    ? evidence.heartbeats.map(heartbeatShape)
+    : evidence.heartbeats.map((row) => ({ ...heartbeatShape(row), observedAt: row.observedAt }));
+  const observedHeartbeats = observed.heartbeatTimestampMode === 'fresh'
+    ? observed.heartbeats.map(heartbeatShape)
+    : observed.heartbeats.map((row) => ({ ...heartbeatShape(row), observedAt: row.observedAt }));
+  if (stableStringify(evidenceHeartbeats) !== stableStringify(observedHeartbeats)) {
     throw new Error('foundation_evidence_observation_mismatch:heartbeats');
   }
 }

@@ -96,8 +96,14 @@ node --experimental-strip-types scripts/orchestrator-cutover-activate.ts \
 
 On a greenfield machine, the machine-canonical state root must not contain
 `foundation-config.json`, `app-state.json`, or a committed migration journal.
+Recognizable migration journals use the canonical
+`migration-journals/*.migration-journal.json` location and name; prepared,
+imported, committed, or corrupt records are refused rather than treated as
+greenfield absence.
 The producer records that absence by observing the canonical paths, empty epoch
 authority, registered-child census, legacy-writer census, and live repository.
+Greenfield preflight has no app-state-version claim, and its heartbeat timestamp
+comes from the live observation at production time rather than source-file mtime.
 It does not synthesize dormant-layer defaults. A partially present set of those
 inputs is ambiguous and fails closed. A machine with the complete artifact set
 continues through the existing artifact-backed foundation proof.

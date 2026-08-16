@@ -37,9 +37,14 @@ node --experimental-strip-types scripts/orchestrator-cutover-activate.ts \
 
 For greenfield activation, the machine-canonical state root must not contain
 `foundation-config.json`, `app-state.json`, or a committed migration journal.
+Recognizable migration journals are canonicalized under
+`migration-journals/*.migration-journal.json`; prepared, imported, committed, or
+corrupt records there refuse greenfield admission.
 The producer records their observed absence together with the empty epoch
 authority, registered-child census, legacy-writer census, and live repository.
-It emits no dormant-layer defaults. A partially present set is ambiguous and
+It emits no dormant-layer defaults or app-state version claim. Its heartbeat is
+timestamped by the live observation performed during production, not by a
+repository source-file mtime. A partially present set is ambiguous and
 fails closed. A complete artifact set continues through the existing
 artifact-backed foundation proof. Alternate config, app-state, state, or journal
 paths are rejected. `OPK_WAKE_SUPERVISOR_STATE_DIR` is rejected during activation

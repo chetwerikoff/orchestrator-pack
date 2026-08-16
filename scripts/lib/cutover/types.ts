@@ -171,18 +171,25 @@ export interface GreenfieldFoundationObservation {
   };
 }
 
+export interface FoundationPreflightBase {
+  command: 'a\u006f session ls --json';
+  sessions: unknown[];
+  sanitizerId: string;
+}
+
+export interface FoundationArtifactPreflight extends FoundationPreflightBase {
+  appStateVersion: string;
+}
+
+export type FoundationPreflight = FoundationArtifactPreflight | FoundationPreflightBase;
+
 export interface FoundationAdmissionEvidence {
   schemaVersion: 1;
   issue: 923;
   foundationMergeCommitSha: string;
   producer: 'orchestrator-pack:foundation-adoption-producer';
   observationDigest: string;
-  preflight: {
-    command: string;
-    appStateVersion: string;
-    sessions: unknown[];
-    sanitizerId: string;
-  };
+  preflight: FoundationPreflight;
   typedConfig: unknown;
   migrationJournalPaths: string[];
   runtimeCatalog: unknown[];

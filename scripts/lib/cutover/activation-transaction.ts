@@ -43,13 +43,14 @@ import {
   observeGreenfieldFoundationInertProof,
   observeGreenfieldFoundationObservation,
   observeFoundationInertProof,
+  observeLiveHeartbeat,
   observeLocalHeartbeat,
   readObservedAppStateVersion,
   observeRuntimePreflight,
 } from './foundation-observation.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 import { D928 as D928_PATHS, TARGET_LIBRARIES as TARGET_LIBRARY_PATHS } from '../../pr2a/contracts.ts';
-import { validateRuntimePreflight } from '../../pr2-foundation/binding.ts';
+import { validateGreenfieldRuntimePreflight, validateRuntimePreflight } from '../../pr2-foundation/binding.ts';
 import { parseFoundationConfig } from '../../pr2-foundation/config.ts';
 import { readMigrationJournal } from '../../pr2-foundation/migration-journal.ts';
 import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog, type RuntimeSurface } from '../../pr2-foundation/runtime-catalog.ts';
@@ -243,7 +244,8 @@ function readFoundationEvidence(request: ActivationRequest): { evidence: Foundat
     if (stableStringify(evidence.greenfieldObservation) !== stableStringify(observedGreenfield)) {
       throw new Error('foundation_evidence_observation_mismatch:greenfield_inputs');
     }
-    if (evidence.typedConfig !== null || evidence.migrationJournalPaths.length !== 0) {
+    if (evidence.typedConfig !== null || evidence.migrationJournalPaths.length !== 0
+      || 'appStateVersion' in evidence.preflight) {
       throw new Error('foundation_greenfield_artifact_claim_invalid');
     }
     const inertProof = observeGreenfieldFoundationInertProof({
@@ -262,6 +264,7 @@ function readFoundationEvidence(request: ActivationRequest): { evidence: Foundat
     throw new Error('foundation_typed_config_unobservable');
   }
   const observedAppStateVersion = readObservedAppStateVersion(canonical.appStatePath);
+  if (!('appStateVersion' in evidence.preflight)) throw new Error('foundation_evidence_schema_invalid');
   if (!canonicalConfigAndAppStateEqual(
     evidence.typedConfig,
     observedConfig,
@@ -335,13 +338,16 @@ function assertGreenfieldAbsence(
 async function proveFoundationAdoption(request: ActivationRequest): Promise<FoundationAdmissionProof> {
   const { evidence, evidencePath } = readFoundationEvidence(request);
   const greenfield = evidence.greenfieldObservation?.mode === 'greenfield-observed';
-  const preflight = validateRuntimePreflight(evidence.preflight);
+  const preflight = greenfield
+    ? validateGreenfieldRuntimePreflight(evidence.preflight)
+    : validateRuntimePreflight(evidence.preflight);
   if (!preflight.ok) throw new Error(`foundation_preflight_invalid:${preflight.reason}`);
   const config = greenfield ? null : parseFoundationConfig(evidence.typedConfig);
   if (!greenfield && !config?.ok) throw new Error(`foundation_typed_config_invalid:${config?.reason}:${config?.path}`);
   const catalog = validateRuntimeCatalog(FOUNDATION_RUNTIME_CATALOG, evidence.runtimeCatalog as RuntimeSurface[]);
   if (!catalog.ok) throw new Error(`foundation_runtime_catalog_invalid:${catalog.reason}:${catalog.surface ?? ''}`);
-  if (evidence.inertProof?.result !== 'live-acquirers-unchanged') throw new Error('foundation_inert_proof_missing');
+  const expectedInertProofResult = greenfield ? 'greenfield-dormant-layer-not-active' : 'live-acquirers-unchanged';
+  if (evidence.inertProof?.result !== expectedInertProofResult) throw new Error('foundation_inert_proof_missing');
   if (!greenfield && (!Array.isArray(evidence.migrationJournalPaths) || evidence.migrationJournalPaths.length === 0)) {
     throw new Error('foundation_migration_journal_missing');
   }
@@ -373,7 +379,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
   }
   const canonical = assertCanonicalActivationPaths(request);
   let observedConfig: unknown = null;
-  let observedAppStateVersion = evidence.preflight.appStateVersion;
+  let observedAppStateVersion: string | undefined;
   let livePreflight: FoundationAdmissionEvidence['preflight'];
   let migrationJournalPaths: string[] = [];
   let inertProof: FoundationAdmissionEvidence['inertProof'];
@@ -398,7 +404,6 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
       request.repoRoot,
       GREENFIELD_RUNTIME_PATH,
       GREENFIELD_RUNTIME_TIMEOUT_MS,
-      observedAppStateVersion,
     );
   } else {
     if (!config || !config.ok) throw new Error('foundation_typed_config_invalid');
@@ -410,7 +415,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
     observedAppStateVersion = readObservedAppStateVersion(canonical.appStatePath);
     livePreflight = await observeRuntimePreflight(
       request.repoRoot,
-      config!.config.notification.runtimePath,
+      config.config.notification.runtimePath,
       config!.config.notification.timeoutMs,
       observedAppStateVersion,
     );
@@ -431,17 +436,16 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
   if (stableStringify(livePreflight) !== stableStringify(evidence.preflight)) {
     throw new Error('foundation_evidence_observation_mismatch:preflight');
   }
-  const heartbeat = observeLocalHeartbeat(
-    request.hostId,
-    oldInstalledCommitSha,
-    greenfield ? path.join(request.repoRoot, 'scripts', 'pr2-foundation', 'config.ts') : canonical.configPath,
-  );
+  const heartbeat = greenfield
+    ? observeLiveHeartbeat(request.hostId, oldInstalledCommitSha)
+    : observeLocalHeartbeat(request.hostId, oldInstalledCommitSha, canonical.configPath);
   verifyFoundationEvidenceObservation(evidence, {
     typedConfig: observedConfig,
     appStateVersion: observedAppStateVersion,
     migrationJournalPaths,
     inertProof,
     heartbeats: [heartbeat],
+    heartbeatTimestampMode: greenfield ? 'fresh' : 'exact',
   });
   if (!Array.isArray(evidence.heartbeats) || evidence.heartbeats.length !== 1) throw new Error('foundation_heartbeat_roster_invalid');
   const heartbeatHosts = new Set<string>();
@@ -454,7 +458,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
       if (configured.quarantined !== true) throw new Error(`foundation_member_not_quarantined:${evidenceHeartbeat.hostId}`);
       continue;
     }
-    const observedMs = Date.parse(heartbeat.observedAt);
+    const observedMs = Date.parse(greenfield ? evidenceHeartbeat.observedAt : heartbeat.observedAt);
     const nowMs = Date.now();
     if (!Number.isFinite(observedMs) || observedMs > nowMs + 30_000 || nowMs - observedMs > FOUNDATION_HEARTBEAT_MAX_AGE_MS) {
       throw new Error('foundation_heartbeat_stale');
@@ -474,7 +478,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
       evidencePath,
       localHostId: observedLocalHost,
       oldInstalledCommitSha,
-      heartbeatObservedAt: heartbeat.observedAt,
+      heartbeatObservedAt: greenfield ? evidence.heartbeats[0]!.observedAt : heartbeat.observedAt,
       migrationJournalCount: evidence.migrationJournalPaths.length,
       preflightSanitizerId: preflight.sanitizerId,
       activationMode: 'greenfield',

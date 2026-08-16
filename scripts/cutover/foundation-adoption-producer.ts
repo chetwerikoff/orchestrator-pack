@@ -1,5 +1,5 @@
 import '../toolchain/native-entrypoint-preflight.ts';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import {
@@ -20,15 +20,17 @@ import {
   localObservedHostId,
   observeGreenfieldFoundationInertProof,
   observeGreenfieldFoundationObservation,
+  observeGreenfieldMigrationJournalAbsence,
+  observeCanonicalFilePresence,
   observeCommittedMigrationJournals,
   observeFoundationInertProof,
+  observeLiveHeartbeat,
   observeLocalHeartbeat,
   observeRuntimePreflight,
   readObservedAppStateVersion,
 } from '../lib/cutover/foundation-observation.ts';
 import type { FoundationAdmissionEvidence } from '../lib/cutover/types.ts';
 import { parseFoundationConfig, type FoundationConfig } from '../pr2-foundation/config.ts';
-import { VERIFIED_RUNTIME_VERSION } from '../pr2-foundation/binding.ts';
 import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog } from '../pr2-foundation/runtime-catalog.ts';
 import { FOUNDATION_COMMIT } from '../pr2a/contracts.ts';
 
@@ -97,8 +99,9 @@ export async function produceFoundationAdoptionEvidence(
   const parsedCatalog = validateRuntimeCatalog(FOUNDATION_RUNTIME_CATALOG, FOUNDATION_RUNTIME_CATALOG);
   if (!parsedCatalog.ok) throw new Error(`foundation_runtime_catalog_unobservable:${parsedCatalog.reason}`);
 
-  const configPresent = existsSync(canonical.configPath);
-  const appStatePresent = existsSync(canonical.appStatePath);
+  const configPresent = observeCanonicalFilePresence(canonical.configPath, 'config');
+  const appStatePresent = observeCanonicalFilePresence(canonical.appStatePath, 'app_state');
+  observeGreenfieldMigrationJournalAbsence(canonical.stateRoot);
   const journals = observeCommittedMigrationJournals(canonical.stateRoot);
   const greenfield = !configPresent && !appStatePresent && journals.length === 0;
   if (!greenfield && (!configPresent || !appStatePresent || journals.length === 0)) {
@@ -122,7 +125,6 @@ export async function produceFoundationAdoptionEvidence(
       repoRoot,
       GREENFIELD_RUNTIME_PATH,
       GREENFIELD_RUNTIME_TIMEOUT_MS,
-      VERIFIED_RUNTIME_VERSION,
     );
     inertProof = observeGreenfieldFoundationInertProof({
       repoRoot,
@@ -193,11 +195,9 @@ export async function produceFoundationAdoptionEvidence(
     migrationJournalPaths: greenfield ? [] : journals,
     runtimeCatalog: [...FOUNDATION_RUNTIME_CATALOG],
     inertProof,
-    heartbeats: [observeLocalHeartbeat(
-      localHostId,
-      installedCommitSha,
-      greenfield ? path.join(repoRoot, 'scripts', 'pr2-foundation', 'config.ts') : canonical.configPath,
-    )],
+    heartbeats: [greenfield
+      ? observeLiveHeartbeat(localHostId, installedCommitSha)
+      : observeLocalHeartbeat(localHostId, installedCommitSha, canonical.configPath)],
     ...(greenfieldObservation ? { greenfieldObservation } : {}),
   };
   const evidence: FoundationAdmissionEvidence = {

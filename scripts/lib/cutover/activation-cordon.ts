@@ -28,12 +28,12 @@ export interface LegacyWriterRecord {
   sideEffectLockPath: string | null;
 }
 
-function procStat(pid: number): { ppid: number; startTicks: string } {
+function procStat(pid: number): { state: string; ppid: number; startTicks: string } {
   const raw = readFileSync(`/proc/${pid}/stat`, 'utf8');
   const close = raw.lastIndexOf(')');
   if (close < 0) throw new Error('process_stat_invalid');
   const fields = raw.slice(close + 2).trim().split(/\s+/);
-  return { ppid: Number(fields[1]), startTicks: fields[19] ?? '' };
+  return { state: fields[0] ?? '', ppid: Number(fields[1]), startTicks: fields[19] ?? '' };
 }
 
 export function processAlive(pid: number): boolean {
@@ -83,6 +83,7 @@ export function findLegacySupervisorIdentities(
       if ((code === 'ENOENT' || code === 'ESRCH') && !processAliveStrict(Number(entry))) continue;
       if (error instanceof Error && error.message === 'process_identity_unreadable') {
         try {
+          if (procStat(Number(entry)).state === 'Z') continue;
           if (!processAliveStrict(Number(entry))) continue;
         } catch {
           // Fall through: an unreadable candidate is ambiguous and must fail closed.
@@ -114,6 +115,7 @@ export function findTypeScriptSupervisorIdentities(
       if ((code === 'ENOENT' || code === 'ESRCH') && !processAliveStrict(Number(entry))) continue;
       if (error instanceof Error && error.message === 'process_identity_unreadable') {
         try {
+          if (procStat(Number(entry)).state === 'Z') continue;
           if (!processAliveStrict(Number(entry))) continue;
         } catch {
           // Fall through: an unreadable candidate is ambiguous and must fail closed.
