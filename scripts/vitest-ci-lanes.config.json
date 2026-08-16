@@ -35,6 +35,7 @@
     "plugins/token-chain-ledger/tests/writer.test.ts": "light",
     "scripts/runtime-retirement/retired-surface-guard.test.ts": "light",
     "scripts/browser-gpt-page-probe.test.ts": "light",
+    "scripts/pr2-foundation/browser-modal-watcher.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-session.test.ts": "light",

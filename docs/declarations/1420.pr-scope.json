@@ -12,6 +12,8 @@
     "scripts/lib/worker-assignment-runtime.ts",
     "scripts/lib/worker-assignment-store.ts",
     "scripts/orca-runtime/task-adapter.ts",
+    "scripts/pr2-foundation/browser-modal-watcher.test.ts",
+    "scripts/pr2-foundation/browser-modal-watcher.ts",
     "scripts/pr2-foundation/fleet-assignment-binding.ts",
     "scripts/pr2-foundation/fleet-nudge-actuator.test.ts",
     "scripts/pr2-foundation/fleet-nudge-production.ts",
