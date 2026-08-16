@@ -78,11 +78,12 @@ Executor selection for new manager/worker work and smoke work is a stable work-c
 Immediately before starting new work, resolve exactly one executor profile from the work class:
 
 ```text
-manager work -> manager executor profile
-T1 worker    -> T1 executor profile
-T2 worker    -> T2 executor profile
-T3 worker    -> T3 executor profile
-smoke work   -> smoke executor profile
+manager work         -> manager executor profile
+T1 worker            -> T1 executor profile
+T2 worker            -> T2 executor profile
+T3 worker            -> T3 executor profile
+routine smoke work   -> routine-smoke executor profile
+complex smoke work   -> complex-smoke executor profile
 ```
 
 Each profile has operator-local `agent`, `model`, and `effort` values under stable names:
@@ -104,28 +105,33 @@ PACK_EXECUTOR_T3_AGENT
 PACK_EXECUTOR_T3_MODEL
 PACK_EXECUTOR_T3_EFFORT
 
-PACK_EXECUTOR_SMOKE_AGENT
-PACK_EXECUTOR_SMOKE_MODEL
-PACK_EXECUTOR_SMOKE_EFFORT
+PACK_EXECUTOR_SMOKE_ROUTINE_AGENT
+PACK_EXECUTOR_SMOKE_ROUTINE_MODEL
+PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT
+
+PACK_EXECUTOR_SMOKE_COMPLEX_AGENT
+PACK_EXECUTOR_SMOKE_COMPLEX_MODEL
+PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT
 ```
 
 The variable names and work-class-to-profile mapping are tracked policy. Their concrete values are machine/operator-local configuration and must not be committed as repository defaults. Resolve the current local values immediately before starting new work. Changing an `agent`, `model`, or `effort` value applies to subsequent work and does not require a repository Issue or PR; changing the stable mapping or variable contract does.
 
-`agent` selects the already-supported invocation path. Cursor uses the existing local Cursor/Orca launch path and passes the configured model/effort. GPT uses the existing chat/Browser-GPT path, including for implementation workers. Smoke work uses the existing smoke workflow and its configured smoke `agent`/`model`; its effort is `medium` for routine smoke and `high` for complex smoke. Complexity here only selects between those two configured effort levels and does not create a new task tier or change smoke admission, evidence, ownership, or lifecycle rules.
+`agent` selects the already-supported invocation path. Cursor uses the existing local Cursor/Orca launch path and passes the configured model/effort. GPT uses the existing chat/Browser-GPT path, including for implementation workers. Smoke complexity selects only between the routine-smoke and complex-smoke executor profiles; it does not create a task tier or change smoke admission, evidence, ownership, or lifecycle rules.
 
 This profile rule does not add a runtime selector, WorkerAssignment type, provider registry, scheduler, service, store, queue, daemon, fallback transport, or retry mechanism.
 
 Current operator-local example only — these are not repository defaults:
 
 ```text
-manager   -> Cursor / Luna / low
-T1 worker -> Cursor / Luna / medium
-T2 worker -> Cursor / Luna / high
-T3 worker -> GPT through chat
-smoke     -> Cursor / Luna / medium or high, depending on smoke complexity
+manager       -> Cursor / Luna / low
+T1 worker     -> Cursor / Luna / medium
+T2 worker     -> Cursor / Luna / high
+T3 worker     -> GPT through chat
+routine smoke -> Cursor / Luna / medium
+complex smoke -> Cursor / Luna / high
 ```
 
-For example, switching the local T3 profile from GPT to Cursor makes subsequent T3 work use the existing Cursor/Orca path without a tracked policy edit. The same local-only rule applies to the smoke agent/model; smoke effort remains selected as `medium` or `high` from the smoke complexity at start time.
+For example, switching the local T3 profile from GPT to Cursor makes subsequent T3 work use the existing Cursor/Orca path without a tracked policy edit. Smoke works the same way: routine versus complex selects the corresponding local smoke profile, whose values can be changed locally without editing tracked policy.
 
 ## Supervised initial delivery and WorkerAssignment
 
