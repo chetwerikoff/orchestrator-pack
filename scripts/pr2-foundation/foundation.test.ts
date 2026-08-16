@@ -34,6 +34,8 @@ import {
   FOUNDATION_MIGRATION_JOURNAL_DIRECTORY,
   FOUNDATION_MIGRATION_JOURNAL_SUFFIX,
   observeFoundationInertProof,
+  observeGreenfieldFoundationInertProof,
+  observeGreenfieldFoundationObservation,
   observeGreenfieldMigrationJournalAbsence,
   observeLocalHeartbeat,
 } from '../lib/cutover/foundation-observation.ts';
@@ -436,16 +438,18 @@ describe('[AC2] production foundation admission', () => {
     const sourceStat = statSync(sourcePath);
     const bin = path.join(home, 'bin');
     mkdirSync(bin, { recursive: true });
-    const ao = path.join(bin, 'ao');
-    const liveRow = {
-      ...session(),
-      id: 'greenfield-live-source',
-      issueId: 1422,
-      lastActivityAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    writeFileSync(ao, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify({ sessions: [liveRow] }))});\n`);
-    chmodSync(ao, 0o755);
+    const runtimeCli = path.join(bin, 'orca');
+    writeFileSync(runtimeCli, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify({
+      ok: true,
+      result: {
+        worktree: {
+          path: repoRoot,
+          head: '0'.repeat(40),
+          linkedIssue: 1422,
+        },
+      },
+    }))});\n`);
+    chmodSync(runtimeCli, 0o755);
     process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ''}`;
     delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
     delete process.env.OPK_RUNTIME_ADAPTER;
@@ -512,6 +516,36 @@ describe('[AC2] production foundation admission', () => {
       if (previousAdapter === undefined) delete process.env.OPK_RUNTIME_ADAPTER;
       else process.env.OPK_RUNTIME_ADAPTER = previousAdapter;
       vi.restoreAllMocks();
+    }
+  });
+
+  it('admits a stale dead-PID supervisor status in greenfield mode', () => {
+    const home = mkdtempSync(path.join(repoRoot, '.opk-1422-greenfield-stale-status-home-'));
+    try {
+      const canonical = canonicalFoundationPaths(repoRoot, home);
+      mkdirSync(canonical.supervisorStateDir, { recursive: true });
+      writeJson(path.join(canonical.supervisorStateDir, 'typescript-supervisor-status.json'), {
+        schemaVersion: 1,
+        childId: 'pr2-scheduler',
+        restartState: 'waiting-restart',
+        supervisorPid: 2147483647,
+        childPid: 2147483646,
+      });
+
+      const observation = observeGreenfieldFoundationObservation({ repoRoot, paths: canonical });
+      const proof = observeGreenfieldFoundationInertProof({ repoRoot, paths: canonical });
+
+      expect(observation.controlPlane.supervisorStatusPresent).toBe(true);
+      expect(observation.controlPlane.supervisorAlive).toBe(false);
+      expect(observation.controlPlane.childAlive).toBe(false);
+      expect(proof.result).toBe('greenfield-dormant-layer-not-active');
+      expect(proof.observations.supervisorChanged).toBe(false);
+      expect(proof.observations.schedulerRegistered).toBe(false);
+      writeJson(canonical.configPath, DEFAULT_FOUNDATION_CONFIG);
+      expect(() => observeFoundationInertProof({ repoRoot, paths: canonical }))
+        .toThrow('foundation_inert_proof_unobservable:supervisor_changed');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 

@@ -181,7 +181,19 @@ export interface FoundationArtifactPreflight extends FoundationPreflightBase {
   appStateVersion: string;
 }
 
-export type FoundationPreflight = FoundationArtifactPreflight | FoundationPreflightBase;
+export interface FoundationRuntimeAdapterPreflight {
+  kind: 'runtime-adapter';
+  adapterId: string;
+  readiness: {
+    ready: true;
+    workspacePath: string;
+    headSha?: string;
+    linkedIssue?: number | null;
+  };
+  observationId: string;
+}
+
+export type FoundationPreflight = FoundationArtifactPreflight | FoundationPreflightBase | FoundationRuntimeAdapterPreflight;
 
 export interface FoundationAdmissionEvidence {
   schemaVersion: 1;

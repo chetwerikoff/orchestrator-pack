@@ -15,8 +15,7 @@ import { runActivationPlatformPreflight } from '../lib/cutover/activation-platfo
 import {
   canonicalFoundationPaths,
   discoverCommittedMigrationJournals,
-  GREENFIELD_RUNTIME_PATH,
-  GREENFIELD_RUNTIME_TIMEOUT_MS,
+  RUNTIME_ADAPTER_TIMEOUT_MS,
   localObservedHostId,
   observeGreenfieldFoundationInertProof,
   observeGreenfieldFoundationObservation,
@@ -26,6 +25,7 @@ import {
   observeFoundationInertProof,
   observeLiveHeartbeat,
   observeLocalHeartbeat,
+  observeRuntimeAdapterPreflight,
   observeRuntimePreflight,
   readObservedAppStateVersion,
 } from '../lib/cutover/foundation-observation.ts';
@@ -121,10 +121,9 @@ export async function produceFoundationAdoptionEvidence(
       repoRoot,
       paths: canonical,
     });
-    preflight = await observeRuntimePreflight(
+    preflight = await observeRuntimeAdapterPreflight(
       repoRoot,
-      GREENFIELD_RUNTIME_PATH,
-      GREENFIELD_RUNTIME_TIMEOUT_MS,
+      RUNTIME_ADAPTER_TIMEOUT_MS,
     );
     inertProof = observeGreenfieldFoundationInertProof({
       repoRoot,

@@ -102,8 +102,10 @@ imported, committed, or corrupt records are refused rather than treated as
 greenfield absence.
 The producer records that absence by observing the canonical paths, empty epoch
 authority, registered-child census, legacy-writer census, and live repository.
-Greenfield preflight has no app-state-version claim, and its heartbeat timestamp
-comes from the live observation at production time rather than source-file mtime.
+Its greenfield evidence includes a readiness observation from the registered
+runtime adapter, rather than a retired preflight or app-state-version claim. The
+heartbeat timestamp comes from the live observation at production time rather
+than source-file mtime.
 It does not synthesize dormant-layer defaults. A partially present set of those
 inputs is ambiguous and fails closed. A machine with the complete artifact set
 continues through the existing artifact-backed foundation proof.

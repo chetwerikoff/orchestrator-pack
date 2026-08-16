@@ -29,11 +29,17 @@ import {
   type RuntimeWorkerRow,
 } from '../../pr2-foundation/binding.ts';
 import { runProcess } from '../../kernel/subprocess.ts';
-import type { FoundationAdmissionEvidence } from './types.ts';
+import type { FoundationAdmissionEvidence, FoundationArtifactPreflight } from './types.ts';
 import { readLiveSingleInstanceLease } from '../../runtime/single-instance-lease.ts';
+import {
+  selectRuntimeAdapterFactory,
+  type RuntimeAdapterInstanceOptions,
+  type RuntimeSelectionOptions,
+} from '../../runtime/registry.ts';
+import type { RuntimeAdapter, RuntimeReadiness } from '../../runtime/contracts.ts';
+import { sha256Stable } from './stable-stringify.ts';
 
-export const GREENFIELD_RUNTIME_PATH = 'ao';
-export const GREENFIELD_RUNTIME_TIMEOUT_MS = 30_000;
+export const RUNTIME_ADAPTER_TIMEOUT_MS = 30_000;
 export const FOUNDATION_MIGRATION_JOURNAL_DIRECTORY = 'migration-journals';
 export const FOUNDATION_MIGRATION_JOURNAL_SUFFIX = '.migration-journal.json';
 
@@ -160,16 +166,37 @@ export function observeCanonicalFilePresence(pathName: string, label: 'config' |
   }
 }
 
-export function validateGreenfieldRuntimePreflight(
+export function validateGreenfieldRuntimeAdapterPreflight(
   input: FoundationAdmissionEvidence['preflight'],
-): { ok: true; sanitizerId: string } | { ok: false; reason: string } {
-  if (String(input.command) !== 'a\u006f session ls --json') return { ok: false, reason: 'preflight_command_mismatch' };
-  if (!input.sanitizerId.trim()) return { ok: false, reason: 'preflight_sanitizer_missing' };
-  if (!Array.isArray(input.sessions) || input.sessions.length < 1) {
-    return { ok: false, reason: 'preflight_empty_fleet' };
+): { ok: true; observationId: string } | { ok: false; reason: string } {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { ok: false, reason: 'preflight_shape_invalid' };
   }
-  if (!input.sessions.every(validateRuntimeWorkerRow)) return { ok: false, reason: 'preflight_schema_mismatch' };
-  return { ok: true, sanitizerId: input.sanitizerId };
+  const candidate = input as unknown as Record<string, unknown>;
+  if (candidate.kind !== 'runtime-adapter') return { ok: false, reason: 'preflight_kind_mismatch' };
+  if (typeof candidate.adapterId !== 'string' || !candidate.adapterId.trim()) {
+    return { ok: false, reason: 'preflight_adapter_missing' };
+  }
+  const readiness = candidate.readiness;
+  if (!readiness || typeof readiness !== 'object' || Array.isArray(readiness)) {
+    return { ok: false, reason: 'preflight_readiness_unobservable' };
+  }
+  const observed = readiness as Record<string, unknown>;
+  if (observed.ready !== true
+    || typeof observed.workspacePath !== 'string'
+    || !observed.workspacePath.trim()
+    || (observed.headSha !== undefined && typeof observed.headSha !== 'string')
+    || (observed.linkedIssue !== undefined
+      && observed.linkedIssue !== null
+      && !Number.isInteger(observed.linkedIssue))) {
+    return { ok: false, reason: 'preflight_readiness_unobservable' };
+  }
+  if (typeof candidate.observationId !== 'string' || !candidate.observationId.trim()) {
+    return { ok: false, reason: 'preflight_observation_id_missing' };
+  }
+  const expected = sha256Stable({ adapterId: candidate.adapterId, readiness });
+  if (candidate.observationId !== expected) return { ok: false, reason: 'preflight_observation_id_mismatch' };
+  return { ok: true, observationId: candidate.observationId };
 }
 
 export async function observeRuntimePreflight(
@@ -215,16 +242,56 @@ export async function observeRuntimePreflight(
   }
   const leak = captureLeakReason(sanitized);
   if (leak) throw new Error(`foundation_runtime_capture_unobservable:${leak}`);
-  const livePreflight: FoundationAdmissionEvidence['preflight'] = {
+  if (appStateVersion === undefined) throw new Error('foundation_runtime_preflight_version_unobservable');
+  const livePreflight: FoundationArtifactPreflight = {
     command: 'a\u006f session ls --json',
     sessions: sanitized,
     sanitizerId: sanitizerIdentity(sanitized),
-    ...(appStateVersion === undefined ? {} : { appStateVersion }),
+    appStateVersion,
   };
-  const validatedPreflight = appStateVersion === undefined
-    ? validateGreenfieldRuntimePreflight(livePreflight)
-    : validateRuntimePreflight(livePreflight as FoundationAdmissionEvidence['preflight'] & { appStateVersion: string });
+  const validatedPreflight = validateRuntimePreflight(livePreflight);
   if (!validatedPreflight.ok) throw new Error(`foundation_runtime_preflight_unobservable:${validatedPreflight.reason}`);
+  return livePreflight;
+}
+
+export type RuntimeAdapterSelector = (
+  options?: RuntimeSelectionOptions,
+  instanceOptions?: RuntimeAdapterInstanceOptions,
+) => Promise<RuntimeAdapter>;
+
+const defaultRuntimeAdapterSelector: RuntimeAdapterSelector = async (options = {}, instanceOptions = {}) => {
+  const factory = await selectRuntimeAdapterFactory(options);
+  return factory(instanceOptions);
+};
+
+export async function observeRuntimeAdapterPreflight(
+  repoRoot: string,
+  timeoutMs: number,
+  selectAdapter: RuntimeAdapterSelector = defaultRuntimeAdapterSelector,
+): Promise<FoundationAdmissionEvidence['preflight']> {
+  let adapter: RuntimeAdapter;
+  try {
+    adapter = await selectAdapter({}, { cwd: repoRoot, timeoutMs });
+  } catch {
+    throw new Error('foundation_runtime_adapter_unobservable');
+  }
+  const readReadiness = adapter.readiness.bind(adapter);
+  const readiness = readReadiness({ cwd: repoRoot, timeoutMs });
+  if (readiness.status !== 'ok') {
+    throw new Error(`foundation_runtime_adapter_unobservable:${readiness.operation}:${readiness.reason}`);
+  }
+  const value: RuntimeReadiness = readiness.value;
+  if (path.resolve(value.workspacePath) !== path.resolve(repoRoot)) {
+    throw new Error('foundation_runtime_adapter_workspace_mismatch');
+  }
+  const livePreflight: FoundationAdmissionEvidence['preflight'] = {
+    kind: 'runtime-adapter',
+    adapterId: adapter.id,
+    readiness: value,
+    observationId: sha256Stable({ adapterId: adapter.id, readiness: value }),
+  };
+  const validated = validateGreenfieldRuntimeAdapterPreflight(livePreflight);
+  if (!validated.ok) throw new Error(`foundation_runtime_adapter_unobservable:${validated.reason}`);
   return livePreflight;
 }
 
@@ -378,11 +445,11 @@ function fileDigestOrAbsent(pathName: string): string {
   }
 }
 
-export function observeFoundationInertInput(input: {
+function observeFoundationInertInputInternal(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
   allowAbsentTypedConfig?: boolean;
-}): ObservedFoundationInertInput {
+}, greenfield: boolean): ObservedFoundationInertInput {
   let configObserved = false;
   if (!existsSync(input.paths.configPath) && input.allowAbsentTypedConfig === true) {
     configObserved = false;
@@ -403,6 +470,8 @@ export function observeFoundationInertInput(input: {
   const childAlive = Number.isInteger(childPid) && childPid > 1
     ? processAliveStrict(childPid)
     : false;
+  const singleInstanceLeasePath = path.join(input.paths.supervisorStateDir, 'typescript-supervisor.lock');
+  const singleInstanceLeasePresent = readLiveSingleInstanceLease(singleInstanceLeasePath) !== null;
   const authority = new FileEpochAuthority(input.paths.epochAuthorityPath).read();
   const writerCount = captureLegacyWriters(
     input.repoRoot,
@@ -412,10 +481,13 @@ export function observeFoundationInertInput(input: {
   const registryChanged = projectedExists
     && fileDigestOrAbsent(path.join(input.repoRoot, 'scripts', 'orchestrator-side-process-registry.json'))
       !== fileDigestOrAbsent(input.paths.projectedRegistryPath);
+  const supervisorChanged = greenfield
+    ? supervisorAlive || childAlive || singleInstanceLeasePresent
+    : status !== null;
   return {
     registryChanged,
-    supervisorChanged: status !== null,
-    schedulerRegistered: status !== null,
+    supervisorChanged,
+    schedulerRegistered: supervisorChanged,
     schedulerRunning: supervisorAlive || childAlive,
     schedulerClaimAcquirer: supervisorAlive && status?.restartState === 'running',
     activationEpochEnforced: authority.currentEpochId !== null,
@@ -425,6 +497,14 @@ export function observeFoundationInertInput(input: {
     notificationTypedConfigLive: configObserved,
     dormantTypedConfigReaderLive: existsSync(path.join(input.paths.stateRoot, 'dormant-typed-config-reader.json')),
   };
+}
+
+export function observeFoundationInertInput(input: {
+  repoRoot: string;
+  paths: CanonicalFoundationPaths;
+  allowAbsentTypedConfig?: boolean;
+}): ObservedFoundationInertInput {
+  return observeFoundationInertInputInternal(input, false);
 }
 
 export function observeFoundationInertProof(input: {
@@ -441,10 +521,10 @@ export function observeGreenfieldFoundationInertProof(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
 }): { result: 'greenfield-dormant-layer-not-active'; observations: FoundationInertObservation } {
-  const observed = observeFoundationInertInput({
+  const observed = observeFoundationInertInputInternal({
     ...input,
     allowAbsentTypedConfig: true,
-  });
+  }, true);
   const failures: Array<[boolean, string]> = [
     [observed.registryChanged, 'registry_changed'],
     [observed.supervisorChanged, 'supervisor_changed'],

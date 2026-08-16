@@ -42,10 +42,11 @@ Recognizable migration journals are canonicalized under
 corrupt records there refuse greenfield admission.
 The producer records their observed absence together with the empty epoch
 authority, registered-child census, legacy-writer census, and live repository.
-It emits no dormant-layer defaults or app-state version claim. Its heartbeat is
-timestamped by the live observation performed during production, not by a
-repository source-file mtime. A partially present set is ambiguous and
-fails closed. A complete artifact set continues through the existing
+Its greenfield evidence includes readiness observed through the registered
+runtime adapter and emits no dormant-layer defaults or app-state version claim.
+Its heartbeat is timestamped by the live observation performed during
+production, not by a repository source-file mtime. A partially present set is
+ambiguous and fails closed. A complete artifact set continues through the existing
 artifact-backed foundation proof. Alternate config, app-state, state, or journal
 paths are rejected. `OPK_WAKE_SUPERVISOR_STATE_DIR` is rejected during activation
 and evidence production, so it cannot redirect proof to another root.
