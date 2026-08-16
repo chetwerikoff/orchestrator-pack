@@ -9,6 +9,7 @@ type ProcessResult = Awaited<ReturnType<typeof runProcess>>;
 
 const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
 const CUTOVER_RUNNER_RELATIVE = 'scripts/cutover/mutation-runner.ts';
+const CUTOVER_PROTECTED_PREFIXES = ['scripts/lib/cutover/', 'scripts/cutover/'] as const;
 
 function parseAc(argv: string[]): AcceptanceId | null {
   const index = argv.indexOf('--ac');
@@ -58,11 +59,14 @@ function cutoverRunnerIsCurrentChange(): boolean {
   const targetBase = baseRef();
   const diff = runProcessSync({
     command: 'git',
-    args: ['diff', '--name-only', `${targetBase}...HEAD`, '--', CUTOVER_RUNNER_RELATIVE],
+    args: ['diff', '--name-only', `${targetBase}...HEAD`, '--', ...CUTOVER_PROTECTED_PREFIXES],
     cwd: resolve('.'),
     inheritParentEnv: true,
   });
-  return diff.ok && diff.stdout.split(/\r?\n/).some((row) => row.trim() === CUTOVER_RUNNER_RELATIVE);
+  return diff.ok && diff.stdout.split(/\r?\n/).some((row) => {
+    const normalized = row.trim().replace(/\\/g, '/');
+    return normalized !== '' && CUTOVER_PROTECTED_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+  });
 }
 
 async function runPr2aMutationMatrix(runner: string, ac: AcceptanceId | null): Promise<boolean> {

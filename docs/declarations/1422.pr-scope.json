@@ -1,0 +1,42 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1422,
+  "declared_paths": [
+    "docs/declarations/1422.pr-scope.json",
+    "docs/migration_notes.md",
+    "docs/wake-supervisor-fleet-operator-reference.md",
+    "scripts/cutover/foundation-adoption-producer.ts",
+    "scripts/cutover/issue-928.test.ts",
+    "scripts/cutover/mutation-runner.ts",
+    "scripts/lib/cutover/activation-cordon.ts",
+    "scripts/lib/cutover/activation-evidence.ts",
+    "scripts/lib/cutover/activation-transaction.ts",
+    "scripts/lib/cutover/foundation-observation.ts",
+    "scripts/lib/cutover/types.ts",
+    "scripts/pr2-foundation/contract-test-runner.ts",
+    "scripts/pr2-foundation/foundation.test.ts",
+    "scripts/pr2a/final-conformance.ts",
+    "scripts/runtime/single-instance-lease.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "scripts/orchestrator-side-process-registry.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1422.pr-scope.json",
+    "docs/migration_notes.md",
+    "docs/wake-supervisor-fleet-operator-reference.md",
+    "scripts/cutover/",
+    "scripts/lib/cutover/",
+    "scripts/orchestrator-cutover-activate.ts",
+    "scripts/pr2-foundation/",
+    "scripts/pr2a/final-conformance.ts",
+    "scripts/runtime/single-instance-lease.ts"
+  ],
+  "source_revision": "607cc8c38f347b5a7d5edd62c80a153d2740c0d0"
+}

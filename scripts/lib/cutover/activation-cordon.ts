@@ -40,12 +40,89 @@ export function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+export function processAliveStrict(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ESRCH') return false;
+    throw new Error(`process_liveness_unobservable:${pid}`);
+  }
+}
+
 export function readProcessIdentity(pid: number): ProcessIdentity {
   if (!Number.isInteger(pid) || pid <= 1) throw new Error('process_pid_invalid');
   const { startTicks } = procStat(pid);
   const cmdline = readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').filter(Boolean);
   if (!startTicks || cmdline.length === 0) throw new Error('process_identity_unreadable');
   return { pid, startTicks, cmdline };
+}
+
+export function findLegacySupervisorIdentities(
+  oldInstalledRevisionRoot: string,
+  options: {
+    entries?: () => string[];
+    readIdentity?: (pid: number) => ProcessIdentity;
+  } = {},
+): ProcessIdentity[] {
+  const required = path.join(oldInstalledRevisionRoot, D928[0]!);
+  const legacyName = path.basename(D928[0]!);
+  const identities: ProcessIdentity[] = [];
+  const entries = options.entries ?? (() => readdirSync('/proc'));
+  const readIdentity = options.readIdentity ?? readProcessIdentity;
+  for (const entry of entries()) {
+    if (!/^\d+$/u.test(entry)) continue;
+    if (Number(entry) <= 1) continue;
+    try {
+      const identity = readIdentity(Number(entry));
+      if (identity.cmdline.includes(required)
+        || identity.cmdline.some((argument) => argument.endsWith(legacyName))) identities.push(identity);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code === 'ENOENT' || code === 'ESRCH') && !processAliveStrict(Number(entry))) continue;
+      if (error instanceof Error && error.message === 'process_identity_unreadable') {
+        try {
+          if (!processAliveStrict(Number(entry))) continue;
+        } catch {
+          // Fall through: an unreadable candidate is ambiguous and must fail closed.
+        }
+      }
+      throw new Error(`greenfield_legacy_supervisor_unknown:${entry}:${error instanceof Error ? error.message : 'unknown'}`);
+    }
+  }
+  return identities;
+}
+
+export function findTypeScriptSupervisorIdentities(
+  options: { entries?: () => string[]; readIdentity?: (pid: number) => ProcessIdentity } = {},
+): ProcessIdentity[] {
+  const identities: ProcessIdentity[] = [];
+  const entries = options.entries ?? (() => readdirSync('/proc'));
+  const readIdentity = options.readIdentity ?? readProcessIdentity;
+  for (const entry of entries()) {
+    if (!/^\d+$/u.test(entry) || Number(entry) <= 1) continue;
+    try {
+      const identity = readIdentity(Number(entry));
+      if (identity.cmdline.some((argument) =>
+        /(?:orchestrator-side-process-supervisor|orchestrator-wake-supervisor)\.(?:ts|mjs)$/u.test(argument)
+        || argument.endsWith('supervisor.ts'))) {
+        identities.push(identity);
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code === 'ENOENT' || code === 'ESRCH') && !processAliveStrict(Number(entry))) continue;
+      if (error instanceof Error && error.message === 'process_identity_unreadable') {
+        try {
+          if (!processAliveStrict(Number(entry))) continue;
+        } catch {
+          // Fall through: an unreadable candidate is ambiguous and must fail closed.
+        }
+      }
+      throw new Error(`typescript_supervisor_unknown:${entry}:${error instanceof Error ? error.message : 'unknown'}`);
+    }
+  }
+  return identities;
 }
 
 export function assertSameProcess(identity: ProcessIdentity): void {
@@ -94,11 +171,12 @@ export async function terminateProcessTree(identity: ProcessIdentity, timeoutMs 
   return targets;
 }
 
-function readPid(pathName: string): number {
-  if (!existsSync(pathName)) return 0;
+function readPid(pathName: string): number | null {
+  if (!existsSync(pathName)) return null;
   const raw = readFileSync(pathName, 'utf8').trim();
   const pid = Number(raw.split(/\r?\n/, 1)[0]);
-  return Number.isInteger(pid) && pid > 1 ? pid : 0;
+  if (!Number.isInteger(pid) || pid <= 1) throw new Error(`legacy_writer_pid_unobservable:${pathName}`);
+  return pid;
 }
 
 export function captureLegacyWriters(oldInstalledRevisionRoot: string, stateRoot: string): LegacyWriterRecord[] {
@@ -109,7 +187,7 @@ export function captureLegacyWriters(oldInstalledRevisionRoot: string, stateRoot
   for (const child of registry.children) {
     if (!child?.id) throw new Error('legacy_registry_child_id_missing');
     const pid = readPid(path.join(stateRoot, `${child.id}.pid`));
-    if (pid <= 1 || !processAlive(pid)) continue;
+    if (pid === null || !processAliveStrict(pid)) continue;
     const identity = readProcessIdentity(pid);
     result.push({
       childId: child.id,
@@ -193,7 +271,7 @@ export async function waitForLegacyWriterDrain(
       const lockPath = writer.sideEffectLockPath;
       if (!lockPath || !existsSync(lockPath)) continue;
       const owner = lockOwner(lockPath);
-      if (owner && owner.pid > 1 && !processAlive(owner.pid)) {
+      if (owner && owner.pid > 1 && !processAliveStrict(owner.pid)) {
         // Legacy fence semantics define a lock owned by a dead PID as stale. Reclaiming that
         // state file is safe only after the recorded owner is provably gone.
         rmSync(lockPath, { force: true });
@@ -212,7 +290,7 @@ export async function waitForLegacyWriterDrain(
     startTicks: writer.identity.startTicks,
     sideEffectLockPath: writer.sideEffectLockPath,
     lockPresent: writer.sideEffectLockPath ? existsSync(writer.sideEffectLockPath) : false,
-    pidAlive: processAlive(writer.identity.pid),
+    pidAlive: processAliveStrict(writer.identity.pid),
     pidFileMtimeMs: (() => {
       try { return statSync(`/proc/${writer.identity.pid}`).mtimeMs; } catch { return 0; }
     })(),
@@ -239,11 +317,11 @@ function proveTypeScriptSupervisorInert(stateRoot: string): TypeScriptSupervisor
   const supervisorPid = Number(status.supervisorPid ?? 0);
   const childPid = Number(status.childPid ?? 0);
   let supervisorAlive = false;
-  if (Number.isInteger(supervisorPid) && supervisorPid > 1 && processAlive(supervisorPid)) {
+  if (Number.isInteger(supervisorPid) && supervisorPid > 1 && processAliveStrict(supervisorPid)) {
     const identity = readProcessIdentity(supervisorPid);
     supervisorAlive = identity.startTicks === String(status.supervisorStartTicks ?? '');
   }
-  const childAlive = Number.isInteger(childPid) && childPid > 1 && processAlive(childPid);
+  const childAlive = Number.isInteger(childPid) && childPid > 1 && processAliveStrict(childPid);
   if (supervisorAlive || childAlive) throw new Error('typescript_supervisor_not_inert');
   return { result: 'typescript-supervisor-inert', statusObserved: true, supervisorAlive: false, childAlive: false };
 }
@@ -305,7 +383,7 @@ function assertPreparedInput(input: {
   repoRoot: string;
   installedCommitSha: string;
   oldInstalledRevisionRoot: string;
-  legacySupervisor: ProcessIdentity;
+  legacySupervisor: ProcessIdentity | null;
   stores: CutoverStoreSpec[];
   paths: ActivationPaths;
 }, prepared: CordonPreparedRecord): void {
@@ -366,7 +444,7 @@ export function createCordon(input: {
   installedCommitSha: string;
   oldInstalledRevisionRoot: string;
   legacyStateRoot: string;
-  legacySupervisor: ProcessIdentity;
+  legacySupervisor: ProcessIdentity | null;
   stores: CutoverStoreSpec[];
   paths: ActivationPaths;
 }): CordonRecord {

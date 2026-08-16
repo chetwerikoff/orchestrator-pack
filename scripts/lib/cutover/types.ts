@@ -94,7 +94,7 @@ export interface CordonPreparedRecord {
   repoRoot: string;
   installedCommitSha: string;
   oldInstalledRevisionRoot: string;
-  legacySupervisor: ProcessIdentity;
+  legacySupervisor: ProcessIdentity | null;
   startedAt: string;
   typescriptSupervisorInert: TypeScriptSupervisorInertProof;
   importBegunAt: null;
@@ -111,7 +111,7 @@ export interface CordonRecord {
   repoRoot: string;
   installedCommitSha: string;
   oldInstalledRevisionRoot: string;
-  legacySupervisor: ProcessIdentity;
+  legacySupervisor: ProcessIdentity | null;
   startedAt: string;
   writersClosed: true;
   noRespawn: true;
@@ -132,10 +132,26 @@ export interface FoundationHeartbeatEvidence {
   quarantined?: boolean;
 }
 
+export interface FoundationInertObservation {
+  registryChanged: boolean;
+  supervisorChanged: boolean;
+  schedulerRegistered: boolean;
+  schedulerRunning: boolean;
+  schedulerClaimAcquirer: boolean;
+  activationEpochEnforced: boolean;
+  liveStoreOpened: boolean;
+  legacyStarterDisabled: boolean;
+  nonNotificationRuntimeDelta: boolean;
+  notificationTypedConfigLive: boolean;
+  dormantTypedConfigReaderLive: boolean;
+}
+
 export interface FoundationAdmissionEvidence {
   schemaVersion: 1;
   issue: 923;
   foundationMergeCommitSha: string;
+  producer: 'orchestrator-pack:foundation-adoption-producer';
+  observationDigest: string;
   preflight: {
     command: string;
     appStateVersion: string;
@@ -147,6 +163,7 @@ export interface FoundationAdmissionEvidence {
   runtimeCatalog: unknown[];
   inertProof: {
     result: string;
+    observations: FoundationInertObservation;
   };
   heartbeats: FoundationHeartbeatEvidence[];
 }
@@ -171,7 +188,7 @@ export interface ActivationRequest {
   repoRoot: string;
   installedCommitSha: string;
   oldInstalledRevisionRoot: string;
-  legacySupervisorPid: number;
+  legacySupervisorPid?: number | null;
   knownMemberRoster: Array<{
     hostId: string;
     quarantined?: boolean;

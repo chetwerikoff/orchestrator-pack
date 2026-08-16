@@ -1,14 +1,27 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { stableStringify } from '../lib/cutover/stable-stringify.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
 import { activateCutover, type ActivationBoundary } from '../lib/cutover/activation-transaction.ts';
+import { abandonPreImportCordon } from '../lib/cutover/activation-transaction.ts';
 import { isExecutableLegacyReference } from '../lib/cutover/activation-transaction.ts';
-import { createCordon, markImportBegun, readCordonState } from '../lib/cutover/activation-cordon.ts';
-import { appendPhaseOne } from '../lib/cutover/activation-evidence.ts';
+import { createCordon, findLegacySupervisorIdentities, markImportBegun, readCordonState } from '../lib/cutover/activation-cordon.ts';
+import {
+  assertCanonicalActivationPaths,
+  canonicalFoundationPaths,
+  observeFoundationInertProof,
+  observeLocalHeartbeat,
+} from '../lib/cutover/foundation-observation.ts';
+import {
+  appendPhaseOne,
+  foundationEvidenceDigest,
+  writeDurableJson,
+  verifyFoundationEvidenceDigest,
+  verifyFoundationEvidenceObservation,
+} from '../lib/cutover/activation-evidence.ts';
 import { snapshotStores } from '../lib/cutover/activation-import.ts';
 import {
   findCompletedSchedulerDelivery,
@@ -18,7 +31,7 @@ import {
 } from '../lib/cutover/activation-recovery.ts';
 import { runActivationPlatformPreflight } from '../lib/cutover/activation-platform-preflight.ts';
 import { validateSchedulerRegistry } from '../lib/cutover/activation-registry-projection.ts';
-import type { ActivationRequest, EpochCommitCore, ProcessIdentity } from '../lib/cutover/types.ts';
+import type { ActivationRequest, EpochCommitCore, FoundationAdmissionEvidence, ProcessIdentity } from '../lib/cutover/types.ts';
 import { runSchedulerTick, type SchedulerBoundary } from '../pr2-foundation/scheduler.ts';
 import { CUTOVER_ROWS, FOUNDATION_DOC_ROWS, validateEstateSplit } from '../pr2-foundation/contracts.ts';
 import { buildPlanningManifest } from '../pr2a/closed-world-scanner.ts';
@@ -26,6 +39,8 @@ import { D928 } from '../pr2a/contracts.ts';
 import { getPackReviewRun, initializePackReviewRunStore, updatePackReviewRun } from '../lib/pack-review-run-store.ts';
 import { packReviewDeliveryNeedsResume } from '../lib/pack-review-delivery.ts';
 import { startPackReview } from '../pack-review-runner.ts';
+import { produceFoundationAdoptionEvidence } from './foundation-adoption-producer.ts';
+import { DEFAULT_FOUNDATION_CONFIG } from '../pr2-foundation/config.ts';
 
 const repoRoot = path.resolve(process.cwd());
 const roots: string[] = [];
@@ -276,7 +291,7 @@ describe('[AC1] admission and closure', () => {
       "if (manifest.schemaVersion !== 1) throw new Error('closure_schema_incompatible');",
       "throw new Error('closure_unresolved_set_nonempty');",
       'if (external.length !== 0) throw new Error(`external_legacy_reference:',
-      'const foundation = boundary.proveFoundationAdoption(request);',
+      'const foundation = await boundary.proveFoundationAdoption(request);',
       "if (!request.hostId || request.hostId !== observedLocalHost) throw new Error('foundation_host_unbound');",
       "throw new Error('foundation_heartbeat_stale');",
       "throw new Error('foundation_member_not_adopted');",
@@ -758,5 +773,232 @@ describe('[pack-review-4] regression coverage', () => {
     await delayedDelivery;
     expect(observation.supervisor.restartState).toBe('waiting-restart');
     expect(observation.delivery.headSha).toBe(headSha);
+  });
+});
+
+
+const issue1422FirstTimeRoots: string[] = [];
+
+function createIssue1422FirstTimeFixture(): { request: ActivationRequest; boundary: ActivationBoundary } {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'opk-1422-'));
+  issue1422FirstTimeRoots.push(root);
+  const stateDir = path.join(root, 'state');
+  const supervisorStateDir = path.join(stateDir, 'supervisor');
+  mkdirSync(supervisorStateDir, { recursive: true });
+  const targetRegistryPath = path.join(root, 'registry.json');
+  writeFileSync(targetRegistryPath, JSON.stringify({
+    schemaVersion: 2,
+    requiredChildIds: ['pr2-scheduler'],
+    children: [{ id: 'pr2-scheduler', runtime: 'node', script: 'pr2-foundation/scheduler.ts', sideEffecting: true, cadenceSeconds: 5 }],
+  }));
+  const stores = (['reconcile', 'reevaluation', 'reportStateSeed'] as const).map((id) => {
+    const sourcePath = path.join(root, `${id}-source.json`);
+    const targetPath = path.join(root, `${id}-target.json`);
+    const value = id === 'reconcile'
+      ? { lastTickMs: 1, degradedCi: {}, cycleState: {} }
+      : id === 'reevaluation'
+        ? { watchEntries: {}, terminalTombstones: {}, lastUpdatedMs: 2 }
+        : { bindingByKey: {}, seededKeys: [], deferredScanKeys: [], githubSnapshot: {}, lastUpdatedMs: 3 };
+    writeFileSync(sourcePath, `${JSON.stringify(value)}\n`);
+    return {
+      id,
+      sourcePath,
+      targetPath,
+      coveredFields: id === 'reconcile'
+        ? ['lastTickMs', 'degradedCi', 'cycleState']
+        : id === 'reevaluation'
+          ? ['watchEntries', 'terminalTombstones', 'lastUpdatedMs']
+          : ['bindingByKey', 'seededKeys', 'deferredScanKeys', 'githubSnapshot', 'lastUpdatedMs'],
+    };
+  });
+  const request: ActivationRequest = {
+    epochId: 'greenfield-1422',
+    expectedOldEpochId: null,
+    hostId: 'test-host',
+    repoRoot: root,
+    installedCommitSha: 'a'.repeat(40),
+    oldInstalledRevisionRoot: root,
+    legacySupervisorPid: 0,
+    knownMemberRoster: [{ hostId: 'test-host' }],
+    stores,
+    paths: {
+      stateDir,
+      cordonPath: path.join(stateDir, 'cordon.json'),
+      phaseOnePath: path.join(stateDir, 'phase-one.json'),
+      followupPath: path.join(stateDir, 'followups.json'),
+      epochAuthorityPath: path.join(stateDir, 'epoch-authority.json'),
+      targetRegistryPath,
+      projectedRegistryPath: path.join(stateDir, 'projected-registry.json'),
+      snapshotDir: path.join(root, 'snapshots'),
+      supervisorStateDir,
+      foundationEvidencePath: path.join(stateDir, 'foundation-923-adoption.json'),
+    },
+  };
+  const boundary: ActivationBoundary = {
+    preflight: () => ({ result: 'node22-linux-wsl2-preflight-pass', repoRoot: root, oldInstalledRevisionRoot: root, platform: 'linux', nodeMajor: 22 }),
+    proveFoundationAdoption: () => ({
+      result: 'foundation-evidence-verified',
+      evidencePath: request.paths.foundationEvidencePath,
+      localHostId: request.hostId,
+      oldInstalledCommitSha: request.installedCommitSha,
+      heartbeatObservedAt: new Date().toISOString(),
+      migrationJournalCount: 1,
+      preflightSanitizerId: 'sha256:test',
+      activationMode: 'greenfield',
+      writerWatermark: 'sha256:observed-empty-writer-set',
+    }),
+    resolveBaseAndClosure: () => ({ baseRef: 'base', closure: { inputTree: 'tree', referenceCount: 0 } }),
+    findLegacySupervisorIdentities: () => [],
+    findTypeScriptSupervisorIdentities: () => [],
+    readLegacySupervisor: () => { throw new Error('legacy_path_should_not_run'); },
+    captureLegacyWriters: () => [],
+    drainLegacyWriters: async () => { throw new Error('legacy_path_should_not_run'); },
+    terminateLegacyProcesses: async () => { throw new Error('legacy_path_should_not_run'); },
+    verifyLegacyProcessesGone: () => { throw new Error('legacy_path_should_not_run'); },
+    startTypeScriptSupervisor: async () => ({ supervisorPid: 1422, childGeneration: 1 }),
+    observeFinalHealthAndDelivery: async () => ({
+      result: 'scheduler-health-delivery-observed',
+      epochId: request.epochId,
+      nonce: 'nonce',
+      installedCommitSha: request.installedCommitSha,
+      observedAt: new Date().toISOString(),
+      supervisor: { pid: 1422, childGeneration: 1, childPid: 1423, registryHash: 'sha256:registry', restartState: 'running' },
+      delivery: { result: 'scheduler-durable-delivery-observed', runId: 'run', prNumber: 1422, headSha: 'b'.repeat(40), status: 'ok', journalState: 'persisted', deliveryOutcomes: {} },
+    }),
+  };
+  return { request, boundary };
+}
+
+afterEach(() => {
+  for (const root of issue1422FirstTimeRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe('Issue 1422 first-time activation', () => {
+  it('commits through the existing transaction without entering legacy handover', async () => {
+    const { request, boundary } = createIssue1422FirstTimeFixture();
+    const result = await activateCutover(request, boundary);
+    expect((result as { cutover: { admission: { result: string } } }).cutover.admission.result).toBe('foundation-single-host-adopted');
+    expect(new FileEpochAuthority(request.paths.epochAuthorityPath).read().currentEpochId).toBe(request.epochId);
+    expect(JSON.parse(readFileSync(request.paths.cordonPath, 'utf8')).legacySupervisor).toBeNull();
+    expect(existsSync(request.paths.epochAuthorityPath)).toBe(true);
+  });
+
+  it('rejects mutated producer evidence before activation', () => {
+    const evidence = {
+      schemaVersion: 1,
+      issue: 923,
+      foundationMergeCommitSha: 'b'.repeat(40),
+      producer: 'orchestrator-pack:foundation-adoption-producer',
+      preflight: { command: 'a\u006f session ls --json', appStateVersion: '0.10.3', sessions: [], sanitizerId: 'sha256:test' },
+      typedConfig: {},
+      migrationJournalPaths: ['journal.json'],
+      runtimeCatalog: [],
+      inertProof: {
+        result: 'live-acquirers-unchanged',
+        observations: {
+          registryChanged: false,
+          supervisorChanged: false,
+          schedulerRegistered: false,
+          schedulerRunning: false,
+          schedulerClaimAcquirer: false,
+          activationEpochEnforced: false,
+          liveStoreOpened: false,
+          legacyStarterDisabled: false,
+          nonNotificationRuntimeDelta: false,
+          dormantTypedConfigReaderLive: false,
+          notificationTypedConfigLive: true,
+        },
+      },
+      heartbeats: [],
+    } satisfies Omit<FoundationAdmissionEvidence, 'observationDigest'>;
+    const editedUnsigned = { ...evidence, typedConfig: { changed: true } };
+    const edited = { ...editedUnsigned, observationDigest: foundationEvidenceDigest(editedUnsigned) };
+    expect(() => verifyFoundationEvidenceObservation(edited, {
+      typedConfig: evidence.typedConfig,
+      appStateVersion: '0.10.3',
+      migrationJournalPaths: evidence.migrationJournalPaths,
+      inertProof: evidence.inertProof,
+      heartbeats: evidence.heartbeats,
+    })).toThrow('foundation_evidence_observation_mismatch');
+  });
+
+  it('binds activation paths to the canonical state root', async () => {
+    const { request } = createIssue1422FirstTimeFixture();
+    const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    const alternateRoot = mkdtempSync(path.join(os.tmpdir(), 'opk-1422-canonical-'));
+    issue1422FirstTimeRoots.push(alternateRoot);
+    process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = alternateRoot;
+    try {
+      const canonical = canonicalFoundationPaths(request.repoRoot);
+      expect(() => assertCanonicalActivationPaths(request)).toThrow('foundation_state_root_override_forbidden');
+      await expect(produceFoundationAdoptionEvidence({
+        repoRoot: request.repoRoot,
+        stateDir: canonical.stateRoot,
+        configPath: canonical.configPath,
+        appStatePath: canonical.appStatePath,
+        evidencePath: canonical.evidencePath,
+      })).rejects.toThrow('foundation_state_root_override_forbidden');
+      expect(canonical.stateRoot).not.toBe(alternateRoot);
+      expect(new FileEpochAuthority(canonical.epochAuthorityPath).read().currentEpochId).toBeNull();
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+      else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
+    }
+  });
+
+  it('fails closed on an ambiguous legacy supervisor census', () => {
+    const { request } = createIssue1422FirstTimeFixture();
+    const authority = new FileEpochAuthority(request.paths.epochAuthorityPath);
+    const readIdentity = (): never => {
+      const error = new Error('permission denied') as NodeJS.ErrnoException;
+      error.code = 'EACCES';
+      throw error;
+    };
+    expect(() => findLegacySupervisorIdentities(request.oldInstalledRevisionRoot, {
+      entries: () => ['4242'],
+      readIdentity,
+    })).toThrow('greenfield_legacy_supervisor_unknown:4242');
+    expect(authority.read().currentEpochId).toBeNull();
+  });
+
+  it('refuses unobservable canonical foundation sources before writing evidence', async () => {
+    const { request } = createIssue1422FirstTimeFixture();
+    const canonical = canonicalFoundationPaths(request.repoRoot);
+    const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    try {
+      await expect(produceFoundationAdoptionEvidence({
+        repoRoot: request.repoRoot,
+        stateDir: canonical.stateRoot,
+        configPath: canonical.configPath,
+        appStatePath: canonical.appStatePath,
+        evidencePath: canonical.evidencePath,
+      })).rejects.toThrow(/unobservable/);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+      else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
+    }
+    expect(existsSync(canonical.evidencePath)).toBe(false);
+    expect(existsSync(canonical.epochAuthorityPath)).toBe(false);
+  });
+
+  it('rolls back a greenfield pre-import cordon without epoch mutation', () => {
+    const { request } = createIssue1422FirstTimeFixture();
+    createCordon({
+      path: request.paths.cordonPath,
+      epochId: request.epochId,
+      expectedOldEpochId: request.expectedOldEpochId,
+      hostId: request.hostId,
+      repoRoot: request.repoRoot,
+      installedCommitSha: request.installedCommitSha,
+      oldInstalledRevisionRoot: request.oldInstalledRevisionRoot,
+      legacyStateRoot: request.paths.supervisorStateDir,
+      legacySupervisor: null,
+      stores: request.stores,
+      paths: request.paths,
+    });
+    abandonPreImportCordon({ ...request, legacySupervisorPid: 0 });
+    expect(existsSync(request.paths.cordonPath)).toBe(false);
+    expect(new FileEpochAuthority(request.paths.epochAuthorityPath).read().currentEpochId).toBeNull();
   });
 });
