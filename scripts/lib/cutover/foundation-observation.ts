@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { FileEpochAuthority } from './activation-epoch-authority.ts';
@@ -9,6 +9,7 @@ import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts
 import { readMigrationJournal } from '../../pr2-foundation/migration-journal.ts';
 import { resolveWakeSupervisorStateRoot } from '../../pr2-foundation/wake-supervisor-state-root.ts';
 import { assertFoundationInert } from '../../pr2-foundation/scheduler.ts';
+import { parseFoundationConfig } from '../../pr2-foundation/config.ts';
 
 export interface CanonicalFoundationPaths {
   stateRoot: string;
@@ -17,17 +18,11 @@ export interface CanonicalFoundationPaths {
   evidencePath: string;
   configPath: string;
   appStatePath: string;
-  hostRosterPath: string;
   cordonPath: string;
   phaseOnePath: string;
   followupPath: string;
   projectedRegistryPath: string;
   snapshotDir: string;
-}
-
-export interface ObservedHostRosterMember {
-  hostId: string;
-  quarantined?: boolean;
 }
 
 export type ObservedFoundationInertInput = FoundationInertObservation;
@@ -40,11 +35,18 @@ function requirePath(actual: string, expected: string, label: string): void {
   if (!samePath(actual, expected)) throw new Error(`foundation_${label}_unobservable`);
 }
 
-export function canonicalFoundationPaths(
-  repoRoot: string,
-  env: Readonly<NodeJS.ProcessEnv> = process.env,
-): CanonicalFoundationPaths {
-  const stateRoot = path.resolve(resolveWakeSupervisorStateRoot({ env }));
+function machineHomeDir(): string {
+  const homeDir = os.userInfo().homedir.trim();
+  if (!homeDir) throw new Error('foundation_state_root_unobservable');
+  return homeDir;
+}
+
+export function canonicalFoundationPaths(_repoRoot: string, homeDir = machineHomeDir()): CanonicalFoundationPaths {
+  const stateRoot = path.resolve(resolveWakeSupervisorStateRoot({
+    env: {},
+    homeDir,
+    platform: process.platform,
+  }));
   const supervisorStateDir = path.join(stateRoot, 'supervisor');
   return {
     stateRoot,
@@ -53,7 +55,6 @@ export function canonicalFoundationPaths(
     evidencePath: path.join(stateRoot, 'foundation-923-adoption.json'),
     configPath: path.join(stateRoot, 'foundation-config.json'),
     appStatePath: path.join(stateRoot, 'app-state.json'),
-    hostRosterPath: path.join(stateRoot, 'host-roster.json'),
     cordonPath: path.join(stateRoot, 'cordon.json'),
     phaseOnePath: path.join(stateRoot, 'phase-one.json'),
     followupPath: path.join(stateRoot, 'followups.json'),
@@ -64,9 +65,11 @@ export function canonicalFoundationPaths(
 
 export function assertCanonicalActivationPaths(
   request: ActivationRequest,
-  env: Readonly<NodeJS.ProcessEnv> = process.env,
 ): CanonicalFoundationPaths {
-  const canonical = canonicalFoundationPaths(request.repoRoot, env);
+  if (String(process.env.OPK_WAKE_SUPERVISOR_STATE_DIR ?? '').trim()) {
+    throw new Error('foundation_state_root_override_forbidden');
+  }
+  const canonical = canonicalFoundationPaths(request.repoRoot);
   requirePath(request.paths.stateDir, canonical.stateRoot, 'state_root');
   requirePath(request.paths.supervisorStateDir, canonical.supervisorStateDir, 'supervisor_state_root');
   requirePath(request.paths.epochAuthorityPath, canonical.epochAuthorityPath, 'epoch_authority');
@@ -93,24 +96,6 @@ function readRecord(pathName: string, errorCode: string): Record<string, unknown
     if (error instanceof Error && error.message === errorCode) throw error;
     throw new Error(errorCode);
   }
-}
-
-export function readObservedHostRoster(pathName: string): ObservedHostRosterMember[] {
-  const root = readRecord(pathName, 'foundation_roster_unobservable');
-  if (root.schemaVersion !== 1 || !Array.isArray(root.hosts) || root.hosts.length === 0) {
-    throw new Error('foundation_roster_unobservable');
-  }
-  const seen = new Set<string>();
-  return root.hosts.map((value) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('foundation_roster_unobservable');
-    const row = value as Record<string, unknown>;
-    const hostId = typeof row.hostId === 'string' ? row.hostId.trim() : '';
-    if (!hostId || seen.has(hostId) || (row.quarantined !== undefined && row.quarantined !== true)) {
-      throw new Error('foundation_roster_unobservable');
-    }
-    seen.add(hostId);
-    return row.quarantined === true ? { hostId, quarantined: true } : { hostId };
-  });
 }
 
 export function readObservedAppStateVersion(pathName: string): string {
@@ -153,10 +138,14 @@ function fileDigestOrAbsent(pathName: string): string {
 export function observeFoundationInertInput(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
-  configObserved: boolean;
-  env?: Readonly<NodeJS.ProcessEnv>;
 }): ObservedFoundationInertInput {
-  const env = input.env ?? process.env;
+  let configObserved = false;
+  try {
+    const config = parseFoundationConfig(JSON.parse(readFileSync(input.paths.configPath, 'utf8')) as unknown);
+    configObserved = config.ok;
+  } catch {
+    throw new Error('foundation_typed_config_unobservable');
+  }
   const status = readSupervisorStatus({ stateDir: input.paths.supervisorStateDir });
   const supervisorPid = Number(status?.supervisorPid ?? 0);
   const childPid = Number(status?.childPid ?? 0);
@@ -184,8 +173,8 @@ export function observeFoundationInertInput(input: {
     activationEpochEnforced: authority.currentEpochId !== null,
     liveStoreOpened: writerCount !== 0,
     legacyStarterDisabled: existsSync(path.join(input.repoRoot, 'scripts', 'orchestrator-wake-supervisor.ps1')),
-    nonNotificationRuntimeDelta: Boolean(String(env.OPK_RUNTIME_ADAPTER ?? '').trim()),
-    notificationTypedConfigLive: input.configObserved,
+    nonNotificationRuntimeDelta: Boolean(String(process.env.OPK_RUNTIME_ADAPTER ?? '').trim()),
+    notificationTypedConfigLive: configObserved,
     dormantTypedConfigReaderLive: existsSync(path.join(input.paths.stateRoot, 'dormant-typed-config-reader.json')),
   };
 }
@@ -193,8 +182,6 @@ export function observeFoundationInertInput(input: {
 export function observeFoundationInertProof(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
-  configObserved: boolean;
-  env?: Readonly<NodeJS.ProcessEnv>;
 }): { result: 'live-acquirers-unchanged'; observations: FoundationInertObservation } {
   const observed = observeFoundationInertInput(input);
   const proof = assertFoundationInert(observed);
@@ -202,26 +189,24 @@ export function observeFoundationInertProof(input: {
   return { ...proof, observations: observed };
 }
 
-export function observedHeartbeat(
-  roster: readonly ObservedHostRosterMember[],
+export function observeLocalHeartbeat(
   localHostId: string,
   installedCommitSha: string,
-  observedAt: string,
-): FoundationHeartbeatEvidence[] {
-  return roster.map((member) => ({
-    hostId: member.hostId,
+  observedSourcePath: string,
+): FoundationHeartbeatEvidence {
+  let observedAt: string;
+  try {
+    const mtimeMs = statSync(observedSourcePath).mtimeMs;
+    observedAt = new Date(mtimeMs).toISOString();
+  } catch {
+    throw new Error('foundation_heartbeat_unobservable');
+  }
+  return {
+    hostId: localHostId,
     installedCommitSha,
     observedAt,
-    active: member.hostId === localHostId,
-    ...(member.quarantined === true ? { quarantined: true } : {}),
-  }));
-}
-
-export function rosterBindingEqual(
-  expected: readonly ObservedHostRosterMember[],
-  observed: readonly ObservedHostRosterMember[],
-): boolean {
-  return stableStringify(expected) === stableStringify(observed);
+    active: processAliveStrict(process.pid),
+  };
 }
 
 export function localObservedHostId(): string {

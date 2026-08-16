@@ -16,6 +16,7 @@ import {
   createCordon,
   fileDigestOrAbsent,
   findLegacySupervisorIdentities,
+  findTypeScriptSupervisorIdentities,
   markImportBegun,
   processAlive,
   processAliveStrict,
@@ -38,14 +39,18 @@ import {
   discoverCommittedMigrationJournals,
   localObservedHostId,
   observeFoundationInertProof,
-  observedHeartbeat,
+  observeLocalHeartbeat,
   readObservedAppStateVersion,
-  readObservedHostRoster,
-  rosterBindingEqual,
 } from './foundation-observation.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 import { D928 as D928_PATHS, TARGET_LIBRARIES as TARGET_LIBRARY_PATHS } from '../../pr2a/contracts.ts';
-import { validateRuntimePreflight } from '../../pr2-foundation/binding.ts';
+import {
+  captureLeakReason,
+  sanitizeRuntimeWorkers,
+  sanitizerIdentity,
+  validateRuntimePreflight,
+  type RuntimeWorkerRow,
+} from '../../pr2-foundation/binding.ts';
 import { parseFoundationConfig } from '../../pr2-foundation/config.ts';
 import { readMigrationJournal } from '../../pr2-foundation/migration-journal.ts';
 import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog, type RuntimeSurface } from '../../pr2-foundation/runtime-catalog.ts';
@@ -59,6 +64,85 @@ const D928 = new Set<string>(D928_PATHS);
 const TARGET_LIBRARIES = new Set<string>(TARGET_LIBRARY_PATHS);
 
 type ClosureExecutionClass = 'root' | 'reachable-helper' | 'explicitly-unsupported' | 'dead';
+
+function parseRuntimeRows(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'object') throw new Error('foundation_runtime_sessions_unobservable');
+  const root = value as Record<string, unknown>;
+  for (const key of ['sessions', 'workers', 'data']) {
+    if (Array.isArray(root[key])) return root[key];
+  }
+  throw new Error('foundation_runtime_sessions_unobservable');
+}
+
+function parseJsonOutput(stdout: string): unknown {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    const line = stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
+    if (!line) throw new Error('foundation_runtime_output_unobservable');
+    try {
+      return JSON.parse(line);
+    } catch {
+      throw new Error('foundation_runtime_output_unobservable');
+    }
+  }
+}
+
+async function observeRuntimePreflight(
+  repoRoot: string,
+  runtimePath: string,
+  timeoutMs: number,
+  appStateVersion: string,
+): Promise<FoundationAdmissionEvidence['preflight']> {
+  let runtime;
+  try {
+    runtime = await runProcess({
+      command: runtimePath,
+      args: ['session', 'ls', '--json'],
+      cwd: repoRoot,
+      inheritParentEnv: true,
+      allowEmptyStdout: false,
+      timeoutMs,
+    });
+  } catch {
+    throw new Error('foundation_runtime_observation_unobservable');
+  }
+  if (!runtime.ok) throw new Error('foundation_runtime_observation_unobservable');
+
+  let payload: unknown;
+  try {
+    payload = parseJsonOutput(runtime.stdout);
+  } catch {
+    throw new Error('foundation_runtime_output_unobservable');
+  }
+  let observedRows: unknown[];
+  try {
+    observedRows = parseRuntimeRows(payload);
+  } catch {
+    throw new Error('foundation_runtime_sessions_unobservable');
+  }
+  let sanitized: RuntimeWorkerRow[];
+  try {
+    sanitized = sanitizeRuntimeWorkers(observedRows.map((row) => {
+      if (!row || typeof row !== 'object') throw new Error('invalid_runtime_row');
+      return row as RuntimeWorkerRow;
+    }));
+  } catch {
+    throw new Error('foundation_runtime_sanitizer_unobservable');
+  }
+  const leak = captureLeakReason(sanitized);
+  if (leak) throw new Error(`foundation_runtime_capture_unobservable:${leak}`);
+  const livePreflight: FoundationAdmissionEvidence['preflight'] = {
+    command: 'a\u006f session ls --json',
+    appStateVersion,
+    sessions: sanitized,
+    sanitizerId: sanitizerIdentity(sanitized),
+  };
+  const validatedPreflight = validateRuntimePreflight(livePreflight);
+  if (!validatedPreflight.ok) throw new Error(`foundation_runtime_preflight_unobservable:${validatedPreflight.reason}`);
+  return livePreflight;
+}
 export interface ClosureReferenceRow {
   source?: string;
   target?: string;
@@ -247,7 +331,6 @@ function readFoundationEvidence(request: ActivationRequest): { evidence: Foundat
   const inertProof = observeFoundationInertProof({
     repoRoot: request.repoRoot,
     paths: canonical,
-    configObserved: true,
   });
   if (stableStringify(evidence.inertProof) !== stableStringify(inertProof)) {
     throw new Error('foundation_evidence_observation_mismatch:inert_proof');
@@ -259,10 +342,8 @@ function assertGreenfieldAbsence(
   request: ActivationRequest,
 ): { writerWatermark: string } {
   const canonical = assertCanonicalActivationPaths(request);
-  const observedRoster = readObservedHostRoster(canonical.hostRosterPath);
-  if (observedRoster.length !== 1 || observedRoster[0]?.hostId !== request.hostId) {
-    throw new Error('greenfield_roster_not_single_host');
-  }
+  const observedLocalHost = localObservedHostId();
+  if (request.hostId !== observedLocalHost) throw new Error('greenfield_host_unbound');
   const authority = new FileEpochAuthority(canonical.epochAuthorityPath).read();
   if (authority.currentEpochId !== null || authority.records.length !== 0) {
     throw new Error('greenfield_epoch_authority_not_empty');
@@ -294,6 +375,8 @@ function assertGreenfieldAbsence(
   if (writers.length !== 0) throw new Error('greenfield_legacy_writer_present');
   const legacyCandidates = findLegacySupervisorIdentities(request.oldInstalledRevisionRoot);
   if (legacyCandidates.length !== 0) throw new Error('greenfield_legacy_supervisor_present');
+  const typescriptCandidates = findTypeScriptSupervisorIdentities(request);
+  if (typescriptCandidates.length !== 0) throw new Error('greenfield_typescript_supervisor_present');
   return {
     writerWatermark: sha256Stable({
       result: 'greenfield-no-legacy-writers',
@@ -303,7 +386,7 @@ function assertGreenfieldAbsence(
   };
 }
 
-function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissionProof {
+async function proveFoundationAdoption(request: ActivationRequest): Promise<FoundationAdmissionProof> {
   const { evidence, evidencePath } = readFoundationEvidence(request);
   const preflight = validateRuntimePreflight(evidence.preflight);
   if (!preflight.ok) throw new Error(`foundation_preflight_invalid:${preflight.reason}`);
@@ -322,12 +405,21 @@ function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissio
 
   const observedLocalHost = localHostId();
   if (!request.hostId || request.hostId !== observedLocalHost) throw new Error('foundation_host_unbound');
+  const configuredHosts = new Map(request.knownMemberRoster.map((row) => [row.hostId, row]));
+  if (configuredHosts.size !== request.knownMemberRoster.length
+    || configuredHosts.size === 0
+    || !configuredHosts.has(request.hostId)
+    || !configuredHosts.has(observedLocalHost)) {
+    throw new Error('foundation_roster_invalid');
+  }
+  for (const member of request.knownMemberRoster) {
+    if (member.hostId !== request.hostId && member.quarantined !== true) throw new Error('second_control_plane_host');
+  }
   const oldInstalledCommitSha = git(request.oldInstalledRevisionRoot, ['rev-parse', 'HEAD']);
   if (!isAncestor(request.oldInstalledRevisionRoot, FOUNDATION_LANDING_COMMIT, oldInstalledCommitSha)) {
     throw new Error('foundation_merge_missing_from_old_install');
   }
   const canonical = assertCanonicalActivationPaths(request);
-  const observedRoster = readObservedHostRoster(canonical.hostRosterPath);
   let observedConfig: unknown;
   try {
     observedConfig = JSON.parse(readFileSync(canonical.configPath, 'utf8')) as unknown;
@@ -335,6 +427,15 @@ function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissio
     throw new Error('foundation_typed_config_unobservable');
   }
   const observedAppStateVersion = readObservedAppStateVersion(canonical.appStatePath);
+  const livePreflight = await observeRuntimePreflight(
+    request.repoRoot,
+    config.config.notification.runtimePath,
+    config.config.notification.timeoutMs,
+    observedAppStateVersion,
+  );
+  if (stableStringify(livePreflight) !== stableStringify(evidence.preflight)) {
+    throw new Error('foundation_evidence_observation_mismatch:preflight');
+  }
   let migrationJournalPaths: string[];
   try {
     migrationJournalPaths = discoverCommittedMigrationJournals(canonical.stateRoot);
@@ -346,46 +447,27 @@ function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissio
     inertProof = observeFoundationInertProof({
       repoRoot: request.repoRoot,
       paths: canonical,
-      configObserved: true,
     });
   } catch {
     throw new Error('foundation_inert_proof_unobservable');
   }
-  const currentHeartbeat = Array.isArray(evidence.heartbeats)
-    ? evidence.heartbeats.find((row) => row?.hostId === request.hostId)
-    : undefined;
-  const heartbeats = observedHeartbeat(
-    observedRoster,
-    request.hostId,
-    oldInstalledCommitSha,
-    currentHeartbeat?.observedAt ?? new Date().toISOString(),
-  );
+  const heartbeat = observeLocalHeartbeat(request.hostId, oldInstalledCommitSha, canonical.configPath);
   verifyFoundationEvidenceObservation(evidence, {
     typedConfig: observedConfig,
     appStateVersion: observedAppStateVersion,
     migrationJournalPaths,
     inertProof,
-    heartbeats,
+    heartbeats: [heartbeat],
   });
-  if (!rosterBindingEqual(request.knownMemberRoster, observedRoster)) {
-    throw new Error('foundation_roster_observation_mismatch');
-  }
-  const configuredHosts = new Map(observedRoster.map((row) => [row.hostId, row]));
-  if (configuredHosts.size !== observedRoster.length || !configuredHosts.has(request.hostId)) {
-    throw new Error('foundation_roster_invalid');
-  }
-  for (const member of observedRoster) {
-    if (member.hostId !== request.hostId && member.quarantined !== true) throw new Error('second_control_plane_host');
-  }
-  if (!Array.isArray(evidence.heartbeats) || evidence.heartbeats.length === 0) throw new Error('foundation_heartbeat_missing');
+  if (!Array.isArray(evidence.heartbeats) || evidence.heartbeats.length !== 1) throw new Error('foundation_heartbeat_roster_invalid');
   const heartbeatHosts = new Set<string>();
-  for (const heartbeat of evidence.heartbeats) {
-    if (!heartbeat?.hostId || heartbeatHosts.has(heartbeat.hostId)) throw new Error('foundation_heartbeat_roster_invalid');
-    heartbeatHosts.add(heartbeat.hostId);
-    const configured = configuredHosts.get(heartbeat.hostId);
-    if (!configured) throw new Error(`foundation_unknown_member:${heartbeat.hostId}`);
-    if (heartbeat.hostId !== request.hostId) {
-      if (configured.quarantined !== true) throw new Error(`foundation_member_not_quarantined:${heartbeat.hostId}`);
+  for (const evidenceHeartbeat of evidence.heartbeats) {
+    if (!evidenceHeartbeat?.hostId || heartbeatHosts.has(evidenceHeartbeat.hostId)) throw new Error('foundation_heartbeat_roster_invalid');
+    heartbeatHosts.add(evidenceHeartbeat.hostId);
+    const configured = configuredHosts.get(evidenceHeartbeat.hostId);
+    if (!configured) throw new Error(`foundation_unknown_member:${evidenceHeartbeat.hostId}`);
+    if (evidenceHeartbeat.hostId !== request.hostId) {
+      if (configured.quarantined !== true) throw new Error(`foundation_member_not_quarantined:${evidenceHeartbeat.hostId}`);
       continue;
     }
     const observedMs = Date.parse(heartbeat.observedAt);
@@ -397,11 +479,10 @@ function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissio
       throw new Error('foundation_member_not_adopted');
     }
   }
-  for (const member of observedRoster) {
+  for (const member of request.knownMemberRoster) {
     if (member.quarantined !== true && !heartbeatHosts.has(member.hostId)) throw new Error(`foundation_member_omitted:${member.hostId}`);
   }
-  const localHeartbeat = evidence.heartbeats.find((row) => row.hostId === request.hostId);
-  if (!localHeartbeat) throw new Error('foundation_local_heartbeat_missing');
+  if (heartbeat.hostId !== request.hostId) throw new Error('foundation_local_heartbeat_missing');
   if (request.legacySupervisorPid === undefined || request.legacySupervisorPid === null || request.legacySupervisorPid === 0) {
     const absence = assertGreenfieldAbsence(request);
     return {
@@ -409,7 +490,7 @@ function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissio
       evidencePath,
       localHostId: observedLocalHost,
       oldInstalledCommitSha,
-      heartbeatObservedAt: localHeartbeat.observedAt,
+      heartbeatObservedAt: heartbeat.observedAt,
       migrationJournalCount: evidence.migrationJournalPaths.length,
       preflightSanitizerId: preflight.sanitizerId,
       activationMode: 'greenfield',
@@ -424,7 +505,7 @@ function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissio
     evidencePath,
     localHostId: observedLocalHost,
     oldInstalledCommitSha,
-    heartbeatObservedAt: localHeartbeat.observedAt,
+    heartbeatObservedAt: heartbeat.observedAt,
     migrationJournalCount: evidence.migrationJournalPaths.length,
     preflightSanitizerId: preflight.sanitizerId,
     activationMode: 'legacy-handover',
@@ -484,10 +565,12 @@ async function startSupervisor(request: ActivationRequest, nonce: string): Promi
 
 export interface ActivationBoundary {
   preflight(request: ActivationRequest): PlatformPreflightResult;
-  proveFoundationAdoption(request: ActivationRequest): FoundationAdmissionProof;
+  proveFoundationAdoption(request: ActivationRequest): FoundationAdmissionProof | Promise<FoundationAdmissionProof>;
   resolveBaseAndClosure(request: ActivationRequest): { baseRef: string; closure: { inputTree: string; referenceCount: number } };
   readLegacySupervisor(request: ActivationRequest): ReturnType<typeof readProcessIdentity>;
   captureLegacyWriters(request: ActivationRequest): LegacyWriterRecord[];
+  findLegacySupervisorIdentities?(request: ActivationRequest): ReturnType<typeof findLegacySupervisorIdentities>;
+  findTypeScriptSupervisorIdentities?(request: ActivationRequest): ReturnType<typeof findTypeScriptSupervisorIdentities>;
   drainLegacyWriters(request: ActivationRequest, writers: LegacyWriterRecord[]): Promise<{ writerWatermark: string; drainedAt: string }>;
   terminateLegacyProcesses(identities: ReturnType<typeof readProcessIdentity>[]): Promise<number[]>;
   verifyLegacyProcessesGone(request: ActivationRequest, legacySupervisor: ReturnType<typeof readProcessIdentity>): { supervisorAlive: boolean; writers: LegacyWriterRecord[] };
@@ -541,7 +624,7 @@ export async function activateCutover(
   boundary: ActivationBoundary = productionActivationBoundary,
 ): Promise<Record<string, unknown>> {
   const preflight = boundary.preflight(request);
-  const foundation = boundary.proveFoundationAdoption(request);
+  const foundation = await boundary.proveFoundationAdoption(request);
   if (request.stores.length !== 3 || new Set(request.stores.map((row) => row.id)).size !== 3) throw new Error('store_roster_invalid');
   const { baseRef, closure } = boundary.resolveBaseAndClosure(request);
   const legacySupervisorPid = request.legacySupervisorPid;
@@ -572,8 +655,17 @@ export async function activateCutover(
   if (greenfield) {
     const writers = boundary.captureLegacyWriters(request);
     if (writers.length !== 0) throw new Error('greenfield_legacy_writer_present');
-    if (findLegacySupervisorIdentities(request.oldInstalledRevisionRoot).length !== 0) {
+    const legacyCandidates = boundary.findLegacySupervisorIdentities
+      ? boundary.findLegacySupervisorIdentities(request)
+      : findLegacySupervisorIdentities(request.oldInstalledRevisionRoot);
+    if (legacyCandidates.length !== 0) {
       throw new Error('greenfield_legacy_supervisor_present');
+    }
+    const typescriptCandidates = boundary.findTypeScriptSupervisorIdentities
+      ? boundary.findTypeScriptSupervisorIdentities(request)
+      : findTypeScriptSupervisorIdentities(request);
+    if (typescriptCandidates.length !== 0) {
+      throw new Error('greenfield_typescript_supervisor_present');
     }
   }
   const drain = legacySupervisor

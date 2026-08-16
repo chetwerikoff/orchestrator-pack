@@ -94,12 +94,15 @@ node --experimental-strip-types scripts/orchestrator-cutover-activate.ts \
   activate <greenfield-activation-request.json>
 ```
 
-Before running the producer, the canonical state root must contain
-`foundation-config.json`, `app-state.json`, `host-roster.json`, and at least one
-committed migration journal. The producer observes these files and the live
-runtime; it rejects alternate paths and caller-supplied journal rosters.
+Before running the producer, the machine-canonical state root must contain
+`foundation-config.json`, `app-state.json`, and at least one committed migration
+journal. The producer observes these files and the live runtime; it rejects
+alternate paths and caller-supplied journal rosters. `OPK_WAKE_SUPERVISOR_STATE_DIR`
+is rejected on this production path, so it cannot select a second authority root.
+This greenfield contract proves only the local host's absence of a predecessor; it
+does not claim a global fleet-membership roster from writable JSON.
 The request must bind `expectedOldEpochId: null`, the locally observed
-single-host roster, the emitted evidence path, and the existing three cutover stores. A request
+single-host expectation, the emitted evidence path, and the existing three cutover stores. A request
 with a claimed legacy PID still takes the identity, aliveness, old-revision
 ownership, writer capture, drain, and termination path. No flag or environment
 variable bypasses `proveFoundationAdoption`.

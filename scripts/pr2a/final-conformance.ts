@@ -182,7 +182,7 @@ function guardOk(key:string, artifact:string):boolean {
 
 function ac1InvariantHolds(key: string): boolean {
   switch (key) {
-    case 'AC1:operator-ack-only': return has(M.tx, 'const foundation = boundary.proveFoundationAdoption(request);');
+    case 'AC1:operator-ack-only': return has(M.tx, 'const foundation = await boundary.proveFoundationAdoption(request);');
     case 'AC1:pr2a-merge-missing': return has(M.tx, "if (!isAncestor(repoRoot, PR2A_LANDING_COMMIT, baseRef)) throw new Error('pr2a_merge_missing');");
     case 'AC1:pr2a-receipt-trusted-without-recompute': return has(M.tx, 'const { baseRef, closure } = boundary.resolveBaseAndClosure(request);');
     case 'AC1:closure-schema-incompatible': return has(M.tx, "if (manifest.schemaVersion !== 1) throw new Error('closure_schema_incompatible');");
@@ -192,7 +192,7 @@ function ac1InvariantHolds(key: string): boolean {
     case 'AC1:closure-input-tree-unbound': return has(M.tx, "if (!manifest.lineage?.planningBaseTreeOid) throw new Error('closure_input_tree_unbound');");
     case 'AC1:fleet-member-omitted': return has(M.tx, 'if (member.quarantined !== true && !heartbeatHosts.has(member.hostId)) throw new Error(`foundation_member_omitted:${member.hostId}`);');
     case 'AC1:stale-member-accepted': return has(M.tx, 'if (!Number.isFinite(observedMs) || observedMs > nowMs + 30_000 || nowMs - observedMs > FOUNDATION_HEARTBEAT_MAX_AGE_MS) {');
-    case 'AC1:rejoining-member-unquarantined': return has(M.tx, 'if (configured.quarantined !== true) throw new Error(`foundation_member_not_quarantined:${heartbeat.hostId}`);');
+    case 'AC1:rejoining-member-unquarantined': return has(M.tx, 'if (configured.quarantined !== true) throw new Error(`foundation_member_not_quarantined:${evidenceHeartbeat.hostId}`);');
     case 'AC1:diverged-revision-accepted': return has(M.tx, 'if (heartbeat.active !== true || heartbeat.installedCommitSha !== oldInstalledCommitSha) {');
     case 'AC1:second-control-plane-host': return has(M.tx, "if (member.hostId !== request.hostId && member.quarantined !== true) throw new Error('second_control_plane_host');");
     case 'AC1:host-or-repo-unbound': return has(M.tx, "if (!request.hostId || request.hostId !== observedLocalHost) throw new Error('foundation_host_unbound');");
@@ -210,7 +210,24 @@ function ac1InvariantHolds(key: string): boolean {
 function mutationFailures(key:string, artifact:string):string[]{
   const out:string[]=[]; const need=(ok:boolean,id:string)=>{if(!ok)out.push(id);};
   const required: Array<[string, readonly string[]]> = [
-    [M.tx,['const foundation = boundary.proveFoundationAdoption(request);',"if (!isAncestor(repoRoot, PR2A_LANDING_COMMIT, baseRef)) throw new Error('pr2a_merge_missing');",'const { baseRef, closure } = boundary.resolveBaseAndClosure(request);',"if (manifest.schemaVersion !== 1) throw new Error('closure_schema_incompatible');",'const TARGET_LIBRARIES = new Set<string>(TARGET_LIBRARY_PATHS);',"if (!manifest.lineage?.planningBaseTreeOid) throw new Error('closure_input_tree_unbound');",'if ((manifest.unknown ?? []).length !== 0 || (manifest.dynamicUnsupported ?? []).length !== 0) {','if (member.quarantined !== true && !heartbeatHosts.has(member.hostId)) throw new Error(`foundation_member_omitted:${member.hostId}`);','if (!Number.isFinite(observedMs) || observedMs > nowMs + 30_000 || nowMs - observedMs > FOUNDATION_HEARTBEAT_MAX_AGE_MS) {','if (configured.quarantined !== true) throw new Error(`foundation_member_not_quarantined:${heartbeat.hostId}`);','if (heartbeat.active !== true || heartbeat.installedCommitSha !== oldInstalledCommitSha) {',"if (member.hostId !== request.hostId && member.quarantined !== true) throw new Error('second_control_plane_host');","if (!request.hostId || request.hostId !== observedLocalHost) throw new Error('foundation_host_unbound');",'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);',"appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { preflight, foundation, closure, baseRef });","appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'legacy-supervisor-and-writers-terminated', {",'    preCommitLogDigest: phaseOne.digest,','verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, committed.preCommitLogDigest);']],
+    [M.tx,[
+      "if (!isAncestor(repoRoot, PR2A_LANDING_COMMIT, baseRef)) throw new Error('pr2a_merge_missing');",
+      'const { baseRef, closure } = boundary.resolveBaseAndClosure(request);',
+      "if (manifest.schemaVersion !== 1) throw new Error('closure_schema_incompatible');",
+      'const TARGET_LIBRARIES = new Set<string>(TARGET_LIBRARY_PATHS);',
+      "if (!manifest.lineage?.planningBaseTreeOid) throw new Error('closure_input_tree_unbound');",
+      'if ((manifest.unknown ?? []).length !== 0 || (manifest.dynamicUnsupported ?? []).length !== 0) {',
+      'if (member.quarantined !== true && !heartbeatHosts.has(member.hostId)) throw new Error(`foundation_member_omitted:${member.hostId}`);',
+      'if (!Number.isFinite(observedMs) || observedMs > nowMs + 30_000 || nowMs - observedMs > FOUNDATION_HEARTBEAT_MAX_AGE_MS) {',
+      'if (heartbeat.active !== true || heartbeat.installedCommitSha !== oldInstalledCommitSha) {',
+      "if (member.hostId !== request.hostId && member.quarantined !== true) throw new Error('second_control_plane_host');",
+      "if (!request.hostId || request.hostId !== observedLocalHost) throw new Error('foundation_host_unbound');",
+      'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);',
+      "appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { preflight, foundation, closure, baseRef });",
+      "appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'legacy-supervisor-and-writers-terminated', {",
+      '    preCommitLogDigest: phaseOne.digest,',
+      'verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, committed.preCommitLogDigest);',
+    ]],
     [M.preflight,["if (platform !== 'linux') throw new Error('unsupported_platform');","if (major !== 22) throw new Error('node22_required');","if (actualHead.toLowerCase() !== input.installedCommitSha.toLowerCase()) throw new Error('installed_commit_unbound');","if (!existsSync(input.repoRoot) || !existsSync(input.oldInstalledRevisionRoot)) throw new Error('installed_revision_missing');",'if (value !== lexical || lexical !== canonical) throw new Error(`${label}_not_canonical`);',"if (statSync(targetParent).dev !== statSync(projectionParent).dev) throw new Error('registry_cross_device_projection');"]],
     [M.cordon,["if (existsSync(input.path)) throw new Error('competing_transaction_admitted');",'    writersClosed: true,','    noRespawn: true,','    noTypeScriptStart: true,',"nonce: randomBytes(32).toString('hex'),",'assertSameProcess(identity);','if (survivors.length) throw new Error(`legacy_process_survivor:${survivors.join(\',\')}`);','    oldInstalledRevisionRoot: input.oldInstalledRevisionRoot,']],
     [M.imports,["if (!writerWatermark.trim()) throw new Error('writer_watermark_missing');",'snapshotDigest: sha256Bytes(bytes)','if (!Number.isInteger(sourceVersion) || sourceVersion <= 0)','if (!required || JSON.stringify([...spec.coveredFields]) !== JSON.stringify(required)) throw new Error(`store_covered_fields_invalid:${spec.id}`);',"if (unknown.length) throw new Error(`store_unknown_field:${spec.id}:${unknown.join(',')}`);",'    nonce: input.nonce,','    storeId: input.spec.id,','  writeDurableJson(markerPath, record);','  writeDurableFile(input.spec.targetPath, `${JSON.stringify(normalized, null, 2)}\\n`);','if (sha256Stable(existing) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);','if (sha256Stable(readBack) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);']],

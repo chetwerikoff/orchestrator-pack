@@ -284,7 +284,7 @@ describe('[AC1] admission and closure', () => {
       "if (manifest.schemaVersion !== 1) throw new Error('closure_schema_incompatible');",
       "throw new Error('closure_unresolved_set_nonempty');",
       'if (external.length !== 0) throw new Error(`external_legacy_reference:',
-      'const foundation = boundary.proveFoundationAdoption(request);',
+      'const foundation = await boundary.proveFoundationAdoption(request);',
       "if (!request.hostId || request.hostId !== observedLocalHost) throw new Error('foundation_host_unbound');",
       "throw new Error('foundation_heartbeat_stale');",
       "throw new Error('foundation_member_not_adopted');",
@@ -841,6 +841,8 @@ function createIssue1422FirstTimeFixture(): { request: ActivationRequest; bounda
       writerWatermark: 'sha256:observed-empty-writer-set',
     }),
     resolveBaseAndClosure: () => ({ baseRef: 'base', closure: { inputTree: 'tree', referenceCount: 0 } }),
+    findLegacySupervisorIdentities: () => [],
+    findTypeScriptSupervisorIdentities: () => [],
     readLegacySupervisor: () => { throw new Error('legacy_path_should_not_run'); },
     captureLegacyWriters: () => [],
     drainLegacyWriters: async () => { throw new Error('legacy_path_should_not_run'); },
@@ -896,6 +898,7 @@ describe('Issue 1422 first-time activation', () => {
           liveStoreOpened: false,
           legacyStarterDisabled: false,
           nonNotificationRuntimeDelta: false,
+          dormantTypedConfigReaderLive: false,
           notificationTypedConfigLive: true,
         },
       },
@@ -912,41 +915,23 @@ describe('Issue 1422 first-time activation', () => {
     })).toThrow('foundation_evidence_observation_mismatch');
   });
 
-  it('binds activation paths to the canonical state root', () => {
+  it('binds activation paths to the canonical state root', async () => {
     const { request } = createIssue1422FirstTimeFixture();
     const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
-    const stateRoot = mkdtempSync(path.join(os.tmpdir(), 'opk-1422-canonical-'));
-    issue1422FirstTimeRoots.push(stateRoot);
-    process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = stateRoot;
+    const alternateRoot = mkdtempSync(path.join(os.tmpdir(), 'opk-1422-canonical-'));
+    issue1422FirstTimeRoots.push(alternateRoot);
+    process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = alternateRoot;
     try {
       const canonical = canonicalFoundationPaths(request.repoRoot);
-      const matchingPaths = {
-        ...request.paths,
+      expect(() => assertCanonicalActivationPaths(request)).toThrow('foundation_state_root_override_forbidden');
+      await expect(produceFoundationAdoptionEvidence({
+        repoRoot: request.repoRoot,
         stateDir: canonical.stateRoot,
-        supervisorStateDir: canonical.supervisorStateDir,
-        epochAuthorityPath: canonical.epochAuthorityPath,
-        foundationEvidencePath: canonical.evidencePath,
-        cordonPath: canonical.cordonPath,
-        phaseOnePath: canonical.phaseOnePath,
-        followupPath: canonical.followupPath,
-        projectedRegistryPath: canonical.projectedRegistryPath,
-        snapshotDir: canonical.snapshotDir,
-        targetRegistryPath: path.join(path.resolve(request.repoRoot), 'scripts', 'orchestrator-side-process-registry.json'),
-      };
-      expect(assertCanonicalActivationPaths({ ...request, paths: matchingPaths })).toEqual(canonical);
-
-      const alternateRoot = path.join(stateRoot, 'alternate-empty');
-      mkdirSync(alternateRoot, { recursive: true });
-      expect(() => assertCanonicalActivationPaths({
-        ...request,
-        paths: {
-          ...matchingPaths,
-          stateDir: alternateRoot,
-          supervisorStateDir: path.join(alternateRoot, 'supervisor'),
-          epochAuthorityPath: path.join(alternateRoot, 'epoch-authority.json'),
-          foundationEvidencePath: path.join(alternateRoot, 'foundation-923-adoption.json'),
-        },
-      })).toThrow('foundation_state_root_unobservable');
+        configPath: canonical.configPath,
+        appStatePath: canonical.appStatePath,
+        evidencePath: canonical.evidencePath,
+      })).rejects.toThrow('foundation_state_root_override_forbidden');
+      expect(canonical.stateRoot).not.toBe(alternateRoot);
       expect(new FileEpochAuthority(canonical.epochAuthorityPath).read().currentEpochId).toBeNull();
     } finally {
       if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
@@ -971,12 +956,10 @@ describe('Issue 1422 first-time activation', () => {
 
   it('refuses unobservable canonical foundation sources before writing evidence', async () => {
     const { request } = createIssue1422FirstTimeFixture();
+    const canonical = canonicalFoundationPaths(request.repoRoot);
     const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
-    const stateRoot = mkdtempSync(path.join(os.tmpdir(), 'opk-1422-producer-'));
-    issue1422FirstTimeRoots.push(stateRoot);
-    process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = stateRoot;
+    delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
     try {
-      const canonical = canonicalFoundationPaths(request.repoRoot);
       await expect(produceFoundationAdoptionEvidence({
         repoRoot: request.repoRoot,
         stateDir: canonical.stateRoot,
@@ -984,12 +967,12 @@ describe('Issue 1422 first-time activation', () => {
         appStatePath: canonical.appStatePath,
         evidencePath: canonical.evidencePath,
       })).rejects.toThrow(/unobservable/);
-      expect(existsSync(canonical.evidencePath)).toBe(false);
-      expect(existsSync(canonical.epochAuthorityPath)).toBe(false);
     } finally {
       if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
       else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
     }
+    expect(existsSync(canonical.evidencePath)).toBe(false);
+    expect(existsSync(canonical.epochAuthorityPath)).toBe(false);
   });
 
   it('rolls back a greenfield pre-import cordon without epoch mutation', () => {

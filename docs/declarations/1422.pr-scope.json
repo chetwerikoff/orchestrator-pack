@@ -12,7 +12,9 @@
     "scripts/lib/cutover/activation-transaction.ts",
     "scripts/lib/cutover/foundation-observation.ts",
     "scripts/lib/cutover/types.ts",
-    "scripts/pr2-foundation/contract-test-runner.ts"
+    "scripts/pr2-foundation/contract-test-runner.ts",
+    "scripts/runtime/single-instance-lease.ts",
+    "scripts/pr2a/final-conformance.ts"
   ],
   "denylist": [
     ".github/workflows/",
@@ -29,7 +31,9 @@
     "scripts/cutover/",
     "scripts/lib/cutover/",
     "scripts/orchestrator-cutover-activate.ts",
-    "scripts/pr2-foundation/"
+    "scripts/pr2-foundation/",
+    "scripts/runtime/single-instance-lease.ts",
+    "scripts/pr2a/final-conformance.ts"
   ],
   "source_revision": "5a788d655f0267c4e644974a0a6523ccbdcd25b2"
 }

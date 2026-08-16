@@ -74,6 +74,7 @@ export function verifyFoundationEvidenceObservation(
   const shape = (row: FoundationAdmissionEvidence['heartbeats'][number]) => ({
     hostId: row.hostId,
     installedCommitSha: row.installedCommitSha,
+    observedAt: row.observedAt,
     active: row.active,
     ...(row.quarantined === true ? { quarantined: true } : {}),
   });

@@ -14,7 +14,7 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { processAlive, readProcessIdentity } from '../lib/cutover/activation-cordon.ts';
+import { processAlive, processAliveStrict, readProcessIdentity } from '../lib/cutover/activation-cordon.ts';
 
 export interface SingleInstanceLeaseOwner {
   readonly schemaVersion: 1;
@@ -117,7 +117,7 @@ function parseOwner(raw: string): SingleInstanceLeaseOwner {
 }
 
 function liveOwner(owner: SingleInstanceLeaseOwner): boolean {
-  if (!processAlive(owner.pid)) return false;
+  if (!processAliveStrict(owner.pid)) return false;
   const identity = readProcessIdentity(owner.pid);
   return identity?.startTicks === owner.startTicks;
 }

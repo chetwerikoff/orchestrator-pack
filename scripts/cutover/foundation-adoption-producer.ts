@@ -6,16 +6,19 @@ import {
   foundationEvidenceDigest,
   writeDurableJson,
 } from '../lib/cutover/activation-evidence.ts';
-import { captureLegacyWriters, findLegacySupervisorIdentities } from '../lib/cutover/activation-cordon.ts';
+import {
+  captureLegacyWriters,
+  findLegacySupervisorIdentities,
+  findTypeScriptSupervisorIdentities,
+} from '../lib/cutover/activation-cordon.ts';
 import { runActivationPlatformPreflight } from '../lib/cutover/activation-platform-preflight.ts';
 import {
   canonicalFoundationPaths,
   discoverCommittedMigrationJournals,
   localObservedHostId,
   observeFoundationInertProof,
-  observedHeartbeat,
+  observeLocalHeartbeat,
   readObservedAppStateVersion,
-  readObservedHostRoster,
 } from '../lib/cutover/foundation-observation.ts';
 import type { FoundationAdmissionEvidence } from '../lib/cutover/types.ts';
 import {
@@ -98,6 +101,9 @@ export async function produceFoundationAdoptionEvidence(
   input: FoundationAdoptionProducerInput,
 ): Promise<{ evidencePath: string; evidence: FoundationAdmissionEvidence }> {
   const repoRoot = path.resolve(input.repoRoot);
+  if (String(process.env.OPK_WAKE_SUPERVISOR_STATE_DIR ?? '').trim()) {
+    throw new Error('foundation_state_root_override_forbidden');
+  }
   const canonical = canonicalFoundationPaths(repoRoot);
   if (path.resolve(input.stateDir) !== canonical.stateRoot) throw new Error('foundation_state_root_unobservable');
   if (path.resolve(input.configPath) !== canonical.configPath) throw new Error('foundation_config_unobservable');
@@ -154,6 +160,7 @@ export async function produceFoundationAdoptionEvidence(
     throw new Error('greenfield_legacy_writer_present');
   }
   if (findLegacySupervisorIdentities(repoRoot).length !== 0) throw new Error('greenfield_legacy_supervisor_present');
+  if (findTypeScriptSupervisorIdentities().length !== 0) throw new Error('greenfield_typescript_supervisor_present');
   const journals = discoverCommittedMigrationJournals(canonical.stateRoot);
   if (input.migrationJournalPaths !== undefined) {
     const supplied = [...new Set(input.migrationJournalPaths.map((value) => path.resolve(value)))].sort();
@@ -161,13 +168,10 @@ export async function produceFoundationAdoptionEvidence(
       throw new Error('foundation_migration_journal_unobservable');
     }
   }
-  const roster = readObservedHostRoster(canonical.hostRosterPath);
   const localHostId = localObservedHostId();
-  if (roster.length !== 1 || roster[0]?.hostId !== localHostId) throw new Error('foundation_roster_unobservable');
   const inertProof = observeFoundationInertProof({
     repoRoot,
     paths: canonical,
-    configObserved: true,
   });
 
   const installedCommitSha = (await runProcess({
@@ -196,7 +200,7 @@ export async function produceFoundationAdoptionEvidence(
     migrationJournalPaths: journals,
     runtimeCatalog: [...FOUNDATION_RUNTIME_CATALOG],
     inertProof,
-    heartbeats: observedHeartbeat(roster, localHostId, installedCommitSha, new Date().toISOString()),
+    heartbeats: [observeLocalHeartbeat(localHostId, installedCommitSha, canonical.configPath)],
   };
   const evidence: FoundationAdmissionEvidence = {
     ...unsigned,
