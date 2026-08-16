@@ -64,6 +64,15 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const HEAD_A = 'a'.repeat(40);
 const HEAD_B = 'b'.repeat(40);
 
+vi.mock('../lib/cutover/activation-cordon.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/cutover/activation-cordon.ts')>();
+  return {
+    ...actual,
+    findLegacySupervisorIdentities: () => [],
+    findTypeScriptSupervisorIdentities: () => [],
+  };
+});
+
 function writeJson(file: string, value: unknown): void {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
