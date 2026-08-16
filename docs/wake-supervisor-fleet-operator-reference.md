@@ -68,6 +68,10 @@ proof and fails closed when that proof is missing.
 Runs one bounded `scheduler.ts tick` child at a time under the committed
 activation epoch. It owns the existing S1/S2 supervision and review-start
 phases; it is not a second scheduler or a daemon loop.
+The child derives the canonical repository slug from the `origin` remote under
+its checked-out repository root; it does not require `OPK_REPOSITORY` or
+`GITHUB_REPOSITORY`. Its observer census is scoped to that exact worktree,
+rather than the process owner's unrelated active-worktree selector.
 
 ## Liveness model
 

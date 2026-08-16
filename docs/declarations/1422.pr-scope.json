@@ -4,6 +4,7 @@
   "declared_paths": [
     "docs/declarations/1422.pr-scope.json",
     "docs/migration_notes.md",
+    "docs/orca-runtime-caller-census.md",
     "docs/wake-supervisor-fleet-operator-reference.md",
     "scripts/cutover/foundation-adoption-producer.ts",
     "scripts/cutover/issue-928.test.ts",
@@ -15,10 +16,16 @@
     "scripts/lib/cutover/activation-transaction.ts",
     "scripts/lib/cutover/foundation-observation.ts",
     "scripts/lib/cutover/types.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/pr2-foundation/contract-test-runner.ts",
     "scripts/pr2-foundation/foundation.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
+    "scripts/pr2-foundation/scheduler-repository-identity.test.ts",
+    "scripts/pr2-foundation/scheduler.ts",
     "scripts/pr2a/final-conformance.ts",
-    "scripts/runtime/single-instance-lease.ts"
+    "scripts/runtime/caller-census.ts",
+    "scripts/runtime/single-instance-lease.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     ".github/workflows/",
@@ -32,13 +39,17 @@
   "allowed_roots": [
     "docs/declarations/1422.pr-scope.json",
     "docs/migration_notes.md",
+    "docs/orca-runtime-caller-census.md",
     "docs/wake-supervisor-fleet-operator-reference.md",
     "scripts/cutover/",
     "scripts/lib/cutover/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/orchestrator-cutover-activate.ts",
     "scripts/pr2-foundation/",
     "scripts/pr2a/final-conformance.ts",
-    "scripts/runtime/single-instance-lease.ts"
+    "scripts/runtime/caller-census.ts",
+    "scripts/runtime/single-instance-lease.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "21b8d3e8cf73b6d427dc42cccb206de43a50503d"
+  "source_revision": "f1d12ec53a84bbee72b2d41a07ed59ba045fbaec"
 }

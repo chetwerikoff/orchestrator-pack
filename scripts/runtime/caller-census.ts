@@ -113,7 +113,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   },
   {
     surface: 'scripts/pr2-foundation/scheduler.ts',
-    operations: ['runtime-composition', 'fleet-observer'],
+    operations: ['runtime-composition', 'fleet-observer', 'list', 'find', 'read', 'liveness'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
     note: 'Production scheduler composes the selected runtime and FleetObserver and is census-checked as an owner surface.',
