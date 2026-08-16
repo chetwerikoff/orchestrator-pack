@@ -72,6 +72,7 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // pre-topology producer stable until runtime-history harvest records them.
   'scripts/pr2-foundation/fleet-reconciliation-handoff.test.ts': 120,
   'scripts/pr2-foundation/supervised-worker-start.test.ts': 120,
+  'scripts/pr2-foundation/scheduler-repository-identity.test.ts': 120,
   // Issue #1298 worktree lifecycle tests are deterministic fixture coverage.
   // Keep the pre-topology plan bounded until runtime-history harvest records them.
   'scripts/worktree-lifecycle/create-continuation.test.ts': 120,

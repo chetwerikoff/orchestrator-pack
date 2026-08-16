@@ -20,6 +20,8 @@
     "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/scheduler-repository-identity.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
     "scripts/pr2a/final-conformance.ts",
     "scripts/runtime/single-instance-lease.ts"
   ],
@@ -39,7 +41,9 @@
     "scripts/cutover/",
     "scripts/lib/cutover/",
     "scripts/orchestrator-cutover-activate.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/pr2-foundation/",
+    "scripts/vitest-ci-lanes.config.json",
     "scripts/pr2a/final-conformance.ts",
     "scripts/runtime/single-instance-lease.ts"
   ],
