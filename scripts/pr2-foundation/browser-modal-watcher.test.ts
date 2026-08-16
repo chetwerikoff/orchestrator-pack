@@ -1,6 +1,6 @@
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
-import { MODAL_PROBE_EXPRESSION } from './modal-watcher.ts';
+import { MODAL_PROBE_EXPRESSION } from './browser-modal-watcher.ts';
 
 type FakeElement = {
   readonly innerText: string;

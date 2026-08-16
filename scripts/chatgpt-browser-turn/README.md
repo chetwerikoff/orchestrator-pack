@@ -420,28 +420,3 @@ returns `ui_contract_mismatch` with the corresponding marker cause, publishes no
 reply, and keeps `send_count` at one. It never falls back to prompt text, product
 identity, or a second send.
 This marker contract is shared by future per-payload session adoption.
-
-## Rate-limit modal capability (#1420)
-
-The pack-owned modal watcher keeps one CDP WebSocket per matching ChatGPT page
-and refreshes the page list every 700 ms. It scans ordinary `div` elements by
-their rendered text, not by `role="dialog"`: a candidate is shorter than 600
-characters, matches the known temporary-limit text, and contains a button whose
-text is exactly `Got it` or `OK`. It clicks only that button.
-
-Start it from the repository package so the Node-major preflight and the
-pack-owned Node 22 runtime are used:
-
-```bash
-npm run browser-gpt-modal-watcher -- --cdp http://127.0.0.1:9222
-```
-
-The watcher emits `modal_watcher_started`, `modal_watcher_scan`,
-`modal_watcher_page_attached`, and `modal_dismissed` JSON lines on stdout.
-Stop it with `SIGINT` or `SIGTERM`; it closes only its own CDP sockets. There
-is no state file or scratchpad log.
-
-Dismissal only removes the blocking page overlay. It does not clear a
-server-side request limit, does not prove that a turn was delivered, and does
-not change `send_count`: `0` permits a safe repeat, while `1` or more forbids
-resend and requires harvesting the reachable answer.

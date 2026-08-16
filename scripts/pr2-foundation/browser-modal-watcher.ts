@@ -228,7 +228,7 @@ function argumentValue(name: string): string | undefined {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-if (process.argv[1]?.endsWith('modal-watcher.ts')) {
+if (process.argv[1]?.endsWith('browser-modal-watcher.ts')) {
   const watcher = new ModalWatcher(argumentValue('--cdp') ?? process.env.OPK_BROWSER_CDP ?? DEFAULT_CDP);
   const shutdown = () => void watcher.stop().finally(() => process.exit(0));
   process.once('SIGINT', shutdown);
