@@ -269,7 +269,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       const createArgs = calls[createIndex!] ?? [];
       const commandIndex = createArgs.indexOf('--command');
       expect(commandIndex).toBeGreaterThanOrEqual(0);
-      expect(createArgs[commandIndex! + 1]).toBe("agent --model 'fixture-routine-model[effort=fixture-routine-effort]'");
+      expect(createArgs[commandIndex! + 1]).toBe("agent --model 'fixture-routine-model' --effort 'fixture-routine-effort'");
       expect(showIndexes.length).toBeGreaterThanOrEqual(3);
       expect(sendIndexes).toHaveLength(3);
       expect(calls[sendIndexes[0]!] ?? []).not.toContain('--text');

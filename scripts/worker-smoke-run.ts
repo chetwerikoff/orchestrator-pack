@@ -155,7 +155,7 @@ export function resolveSmokeExecutorProfile(
     agent: launchAgent,
     model,
     effort,
-    command: `${launchAgent} --model ${shellQuoteProfileValue(`${model}[effort=${effort}]`)}`,
+    command: `${launchAgent} --model ${shellQuoteProfileValue(model)} --effort ${shellQuoteProfileValue(effort)}`,
   };
 }
 
