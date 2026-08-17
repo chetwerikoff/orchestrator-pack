@@ -64,6 +64,31 @@ export type RuntimeInboxCheckResult =
   | { readonly status: 'delivery'; readonly delivery: RuntimeInboxDelivery }
   | { readonly status: 'failed' | 'unsupported' | 'unknown'; readonly reason: string };
 
+export type RuntimeInboxDrainResult =
+  | { readonly status: 'empty'; readonly runId: string }
+  | {
+      readonly status: 'blocked';
+      readonly runId: string;
+      readonly reason: string;
+      readonly pendingDeliveryId?: string;
+    }
+  | {
+      readonly status: 'boundary_busy';
+      readonly runId: string;
+      readonly reason: 'runtime_inbox_budget_exhausted';
+      readonly pendingDeliveryId?: string;
+    };
+
+export interface RuntimeInboxDrainRequest {
+  readonly runId: string;
+  readonly processMessage: (
+    message: RuntimeInboxMessage,
+    delivery: RuntimeInboxDelivery,
+  ) => void | Promise<void>;
+  /** Test seam only; production callers inherit the lifecycle/turn clock. */
+  readonly now?: () => number;
+}
+
 export type RuntimeOperationName =
   | 'readiness'
   | 'list_workers'
@@ -204,6 +229,105 @@ export interface RuntimeAdapter {
     },
     options?: RuntimeCallOptions,
   ): RuntimeResult<{ readonly removed: true }>;
+}
+
+/**
+ * Drain one exact Run inbox inside the caller-owned lifecycle/turn budget.
+ * Every Delivery is processed completely before one ack is attempted. Any
+ * malformed/foreign/runtime/processing/ack uncertainty fails closed; an ack is
+ * never retried because its outcome would be ambiguous.
+ */
+export async function drainRuntimeInbox(
+  adapter: Pick<RuntimeAdapter, 'checkInbox'>,
+  request: RuntimeInboxDrainRequest,
+  options: RuntimeCallOptions,
+): Promise<RuntimeInboxDrainResult> {
+  const runId = request.runId.trim();
+  if (!runId) {
+    return { status: 'blocked', runId, reason: 'runtime_inbox_run_id_missing' };
+  }
+  if (!adapter.checkInbox) {
+    return { status: 'blocked', runId, reason: 'runtime_inbox_unsupported' };
+  }
+  const timeoutMs = options.timeoutMs;
+  if (!Number.isFinite(timeoutMs) || Number(timeoutMs) <= 0) {
+    return { status: 'boundary_busy', runId, reason: 'runtime_inbox_budget_exhausted' };
+  }
+
+  const now = request.now ?? Date.now;
+  const deadlineMs = now() + Number(timeoutMs);
+  let pendingAckDeliveryId: string | undefined;
+
+  while (true) {
+    const remainingMs = Math.floor(deadlineMs - now());
+    if (remainingMs <= 0) {
+      return {
+        status: 'boundary_busy',
+        runId,
+        reason: 'runtime_inbox_budget_exhausted',
+        ...(pendingAckDeliveryId ? { pendingDeliveryId: pendingAckDeliveryId } : {}),
+      };
+    }
+
+    const ackDeliveryId = pendingAckDeliveryId;
+    pendingAckDeliveryId = undefined;
+    let checked: RuntimeInboxCheckResult;
+    try {
+      checked = adapter.checkInbox(
+        {
+          runId,
+          ...(ackDeliveryId ? { ackDeliveryId } : {}),
+        },
+        { ...options, timeoutMs: remainingMs },
+      );
+    } catch (error) {
+      return {
+        status: 'blocked',
+        runId,
+        reason: `runtime_inbox_check_threw:${error instanceof Error ? error.message : String(error)}`,
+        ...(ackDeliveryId ? { pendingDeliveryId: ackDeliveryId } : {}),
+      };
+    }
+
+    if (checked.status === 'empty') {
+      if (checked.runId !== runId) {
+        return { status: 'blocked', runId, reason: 'runtime_inbox_foreign_empty_run' };
+      }
+      return { status: 'empty', runId };
+    }
+    if (checked.status !== 'delivery') {
+      return {
+        status: 'blocked',
+        runId,
+        reason: `runtime_inbox_${checked.status}:${checked.reason}`,
+        ...(ackDeliveryId ? { pendingDeliveryId: ackDeliveryId } : {}),
+      };
+    }
+
+    const delivery = checked.delivery;
+    if (!delivery
+      || delivery.runId !== runId
+      || typeof delivery.deliveryId !== 'string'
+      || !delivery.deliveryId.trim()
+      || !Array.isArray(delivery.messages)) {
+      return { status: 'blocked', runId, reason: 'runtime_inbox_delivery_malformed' };
+    }
+
+    for (const message of delivery.messages) {
+      try {
+        await request.processMessage(message, delivery);
+      } catch (error) {
+        return {
+          status: 'blocked',
+          runId,
+          reason: `runtime_inbox_message_processing_failed:${error instanceof Error ? error.message : String(error)}`,
+          pendingDeliveryId: delivery.deliveryId,
+        };
+      }
+    }
+
+    pendingAckDeliveryId = delivery.deliveryId;
+  }
 }
 
 export function runtimeFailure(
