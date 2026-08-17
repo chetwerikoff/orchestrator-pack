@@ -142,7 +142,7 @@ function fixture(input: {
     producer: 'flow-manager',
     taskIdentity: TASK,
     kind: 'fresh',
-    priorTier: 'T2',
+    priorTier: 'T1',
     firstRevision: intakeRevision,
   }));
   writeFileSync(authorPath, JSON.stringify({ schema: AUTHOR_DISPOSITIONS_SCHEMA, findings: [] }));
@@ -194,7 +194,7 @@ function fixture(input: {
 
   const evidence = {
     schema: STAGE_EVIDENCE_SCHEMA,
-    tier: 'T2',
+    tier: 'T1',
     stage: 'architectural',
     stageAttemptId: 'attempt-001',
     stageSequence: 1,
