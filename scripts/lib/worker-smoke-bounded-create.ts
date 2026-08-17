@@ -155,21 +155,6 @@ export function smokeDeliveryBindingFromPrompt(prompt: string): SmokeDeliveryBin
   };
 }
 
-function waitForDeliveryConfirmation(input: {
-  binding: SmokeDeliveryBinding;
-  deadline: number;
-  deliveryProbe: SmokeDeliveryProbe;
-  now: () => number;
-  sleepMs: (milliseconds: number) => void;
-}): boolean {
-  while (true) {
-    if (input.deliveryProbe(input.binding)) return true;
-    const remaining = input.deadline - input.now();
-    if (remaining <= 0) return false;
-    input.sleepMs(Math.min(250, Math.max(1, remaining)));
-  }
-}
-
 function dispatchDiagnostic(result: RuntimeDispatchResult): string {
   return result.status === 'dispatched'
     ? 'dispatched'
@@ -373,11 +358,17 @@ function refreshTrackedSmokeWorker(input: {
   return { status: 'ok', worker: tracked.worker };
 }
 
+export function markTrackedSmokeWorkerDeliveryConfirmed(identity: RuntimeWorkerIdentity): void {
+  const tracked = spawnedSmokeWorkers.get(identity);
+  if (tracked) tracked.preserveOwnedPanelOnDeliveryFailure = false;
+}
+
 /**
  * Install the narrow worker-smoke compatibility repair on the production task
  * adapter. The first exact-handle observation establishes an immutable exact
- * identity; later observations only confirm it. Delivery permits one full
- * payload plus the already-bounded submit-only Enter and trusts only child seal evidence.
+ * identity; later observations only confirm it. Dispatch remains one actuation:
+ * adapter ambiguity is preserved and child seal evidence is higher-level smoke
+ * evidence only, never authority to rewrite the adapter dispatch result.
  */
 export function installStableWorkerSmokeSpawnPatch(
   options: StableWorkerSmokeSpawnPatchOptions = {},
@@ -503,7 +494,7 @@ export function installStableWorkerSmokeSpawnPatch(
             Math.min(callOptions.timeoutMs ?? startupTimeoutMs, startupDeadline - now()),
           ),
         });
-        if (startupSubmit.status !== 'dispatched') {
+        if (startupSubmit.status === 'send_failed') {
           tracked.preserveOwnedPanelOnDeliveryFailure = true;
           return {
             status: 'failed',
@@ -589,80 +580,12 @@ export function installStableWorkerSmokeSpawnPatch(
         return { status: 'send_failed', reason: refreshed.reason };
       }
 
-      const binding = smokeDeliveryBindingFromPrompt(input.text ?? '');
-      if (input.submitOnly || !binding) {
-        return originalDispatch.call(this, input, callOptions);
+      const result = originalDispatch.call(this, input, callOptions);
+      if (tracked && result.status === 'dispatch_unknown') {
+        const binding = smokeDeliveryBindingFromPrompt(input.text ?? '');
+        tracked.preserveOwnedPanelOnDeliveryFailure = !(binding && deliveryProbe(binding));
       }
-
-      const result = originalDispatch.call(this, {
-        ...input,
-        writeOnly: true,
-      }, callOptions);
-      if (result.status === 'send_failed') return result;
-      const envTimeoutMs = Number.parseInt(
-        process.env.WORKER_SMOKE_SUBMIT_CONFIRMATION_TIMEOUT_MS ?? '',
-        10,
-      );
-      const configuredTimeoutMs = options.deliveryConfirmationTimeoutMs
-        ?? (Number.isSafeInteger(envTimeoutMs) && envTimeoutMs > 0 ? envTimeoutMs : 30_000);
-      const timeoutMs = Math.max(
-        2,
-        Math.min(callOptions.timeoutMs ?? 30_000, configuredTimeoutMs),
-      );
-      const startedAt = now();
-      const finalDeadline = startedAt + timeoutMs;
-
-      if (deliveryProbe(binding)) return { status: 'dispatched' };
-
-      const baseline = originalReadBoundedOutput.call(this, {
-        worker: input.worker,
-        limit: 200,
-      }, callOptions);
-      sleepMs(50);
-      const retried = originalDispatch.call(this, {
-        worker: input.worker,
-        submitOnly: true,
-      }, callOptions);
-      const postSubmitRead = originalReadBoundedOutput.call(this, {
-        worker: input.worker,
-        ...(baseline.status === 'ok'
-          ? { previousToken: baseline.value.observationToken }
-          : {}),
-        limit: 200,
-      }, callOptions);
-      const paneObservation = baseline.status !== 'ok'
-        ? postSubmitRead.status === 'ok'
-          ? `baseline_${baseline.status}_post_submit_unbound`
-          : `baseline_${baseline.status}_post_submit_${postSubmitRead.status}`
-        : postSubmitRead.status !== 'ok'
-          ? `post_submit_${postSubmitRead.status}`
-          : postSubmitRead.value.changed
-            ? 'changed_after_submit'
-            : 'unchanged_after_submit';
-
-      if (waitForDeliveryConfirmation({
-        binding,
-        deadline: finalDeadline,
-        deliveryProbe,
-        now,
-        sleepMs,
-      })) return { status: 'dispatched' };
-
-      if (tracked) tracked.preserveOwnedPanelOnDeliveryFailure = true;
-      const submissionObserved = paneObservation === 'changed_after_submit';
-      return {
-        status: 'send_failed',
-        reason: [
-          submissionObserved ? 'prompt_delivery_unconfirmed' : 'prompt_submission_unconfirmed',
-          `runtime_prompt_write=${safeToken(dispatchDiagnostic(result))}`,
-          `runtime_submit_write=${safeToken(dispatchDiagnostic(retried))}`,
-          `pane_observation=${safeToken(paneObservation)}`,
-          'child_delivery=unconfirmed',
-          `delivery_evidence=${safeToken(binding.sealPath)}:missing`,
-          'preservation=owned_child_panel_preserved',
-          'resolution=inspect_the_preserved_child_panel_and_delivery_seal_then_retry_from_the_exact_pr_head',
-        ].join(';'),
-      };
+      return result;
     },
   });
 
@@ -836,8 +759,7 @@ export function quarantineUnsupportedHistoricalSmokeRuns(
         source: `.orca-worker-smoke/runs/${runId}`,
         quarantine: `.orca-worker-smoke/quarantine/${runId}`,
         quarantinedAt: new Date().toISOString(),
-      })}\
-`, 'utf8');
+      })}\n`, 'utf8');
       mkdirSync(join(repoRoot, '.orca-worker-smoke', 'quarantine'), { recursive: true });
       renameSync(sourcePath, quarantinePath);
       quarantined.push({ runId, sourcePath, quarantinePath, cause });
