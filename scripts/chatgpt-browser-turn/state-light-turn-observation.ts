@@ -78,7 +78,7 @@ const LEGAL_NEXT: Readonly<Record<StateLightTurnObservationPhase, ReadonlySet<St
   prepared: new Set(['prepared', 'dispatching', 'not_sent']),
   dispatching: new Set(['dispatching', 'not_sent', 'sent_unbound', 'sent_unharvested']),
   not_sent: new Set(['not_sent']),
-  sent_unbound: new Set(['sent_unbound', 'sent_unharvested']),
+  sent_unbound: new Set(['sent_unbound', 'sent_unharvested', 'harvested']),
   sent_unharvested: new Set(['sent_unharvested', 'harvested']),
   harvested: new Set(['harvested']),
 };
@@ -424,7 +424,7 @@ export function bindPrimaryPublication(input: {
 }): StateLightTurnObservationRecord {
   const binding = bindingFor(input.target, input.bytes);
   return mutateStateLightTurnObservation(input.profileKey, input.invocationId, (current) => {
-    if (current.phase !== 'sent_unharvested' && current.phase !== 'harvested') {
+    if (current.phase !== 'sent_unbound' && current.phase !== 'sent_unharvested' && current.phase !== 'harvested') {
       throw new Error('observation_primary_binding_phase_invalid');
     }
     if (current.primary && !sameBinding(current.primary, binding)) {
@@ -499,7 +499,7 @@ export async function finalizeStateLightPrimaryPublication(input: {
   };
   try {
     let current = readStateLightTurnObservation(input.profileKey, input.invocationId);
-    if (current.phase !== 'sent_unharvested' && current.phase !== 'harvested') {
+    if (current.phase !== 'sent_unbound' && current.phase !== 'sent_unharvested' && current.phase !== 'harvested') {
       throw new Error('observation_primary_finalization_phase_invalid');
     }
     if (current.primary && !sameBinding(current.primary, binding)) {
