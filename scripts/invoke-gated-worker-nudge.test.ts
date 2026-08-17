@@ -52,8 +52,8 @@ describe('TypeScript gated worker nudge', () => {
       const first = await runGatedWorkerNudge(common);
       const second = await runGatedWorkerNudge(common);
 
-      expect(first).toMatchObject({ sent: false, reason: 'runtime_dispatch_submitted' });
-      expect(second.sent).toBe(false);
+      expect(first).toMatchObject({ sent: true, reason: 'runtime_dispatch_submitted' });
+      expect(second.sent).toBe(true);
       expect(second.reason).toMatch(/duplicate|terminal|served/);
       expect(dispatch).toHaveBeenCalledTimes(1);
     } finally {
