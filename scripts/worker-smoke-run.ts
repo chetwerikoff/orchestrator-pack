@@ -565,26 +565,41 @@ export function establishRuntimeSmokeDelivery(input: {
 
   let token: RuntimeObservationToken | undefined;
   const submitCount = 0;
-  while (now() < deadline) {
+  let observedNow = now();
+  while (observedNow < deadline) {
     if (observeSmokeDeliveryEstablished(input.binding)) {
       markTrackedSmokeWorkerDeliveryConfirmed(input.worker);
       return { ok: true, observationToken: token, submitCount };
     }
-    const read = input.adapter.readBoundedOutput({
-      worker: input.worker,
-      previousToken: token,
-      limit: 200,
-    }, { cwd: input.cwd });
-    if (read.status !== 'ok') {
-      return { ok: false, reason: failureReason(read), submitCount };
+
+    // Pane output is not delivery evidence for an ambiguous dispatch. Preserve
+    // output observation only for an evidence-backed dispatched result.
+    if (dispatched.status === 'dispatched') {
+      const read = input.adapter.readBoundedOutput({
+        worker: input.worker,
+        previousToken: token,
+        limit: 200,
+      }, { cwd: input.cwd });
+      if (read.status !== 'ok') {
+        return { ok: false, reason: failureReason(read), submitCount };
+      }
+      token = read.value.observationToken;
     }
-    token = read.value.observationToken;
-    sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, deadline - now())));
+
+    sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, deadline - observedNow)));
+    const nextNow = now();
+    if (nextNow <= observedNow) break;
+    observedNow = nextNow;
   }
   const reason = dispatched.status === 'dispatch_unknown'
-    ? `dispatch_unknown:${dispatched.reason};child_delivery_unconfirmed`
+    ? `dispatch_unknown:${dispatched.reason}`
     : 'prompt_delivery_unconfirmed';
-  return { ok: false, reason, observationToken: token, submitCount };
+  return {
+    ok: false,
+    reason,
+    ...(token ? { observationToken: token } : {}),
+    submitCount,
+  };
 }
 
 type SmokeCompletionObservation = ReturnType<typeof observeSmokeCompletionEvidence>['observation'];
