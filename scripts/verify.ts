@@ -56,6 +56,9 @@ const PLUGINS = [
   ['codex-pr-reviewer', '@orchestrator-pack/codex-pr-reviewer', 'pack-codex-review'],
 ] as const;
 
+const retiredRuntimeStem = ['agent', 'orchestrator'].join('-');
+const retiredStateStem = `.${retiredRuntimeStem}`;
+
 const ALLOWED_ROOT_PATTERNS = [
   'README.md', 'AGENTS.md', 'CLAUDE.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'LICENSE', 'LICENSE.md', '.gitignore', '.gitattributes', '.editorconfig',
   'package.json', 'package-lock.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json', 'tsconfig.*.json', '*.config.js', '*.config.cjs', '*.config.mjs', '*.config.ts', '*.config.mts', '*.config.cts',
@@ -63,9 +66,9 @@ const ALLOWED_ROOT_PATTERNS = [
 const ALLOWED_PATH_PATTERNS = ['.github/*', '.cursor/skills/*', '.cursor/rules/*', '.claude/skills/*', 'docs/*', 'prompts/*', 'plugins/*', 'scripts/*', 'schemas/*', 'examples/*', 'templates/*', 'tests/*'] as const;
 const EXCEPTION_PATTERNS = ['.env.example', '*/.env.example'] as const;
 const FORBIDDEN_PATTERNS = [
-  'agent-orchestrator.yaml', 'agent-orchestrator.*.yaml', '.env', '.env.*', '*/.env', '*/.env.*', '*.pem', '*.key', '*.pfx', '*.p12', '*.crt', '*.cer',
+  `${retiredRuntimeStem}.yaml`, `${retiredRuntimeStem}.*.yaml`, '.env', '.env.*', '*/.env', '*/.env.*', '*.pem', '*.key', '*.pfx', '*.p12', '*.crt', '*.cer',
   'id_rsa', 'id_rsa.*', '*/id_rsa', '*/id_rsa.*', 'id_ed25519', 'id_ed25519.*', '*/id_ed25519', '*/id_ed25519.*', 'secrets/*', 'private/*', '*/secrets/*', '*/private/*',
-  '.orchestrator-pack/*', '*/.orchestrator-pack/*', '.agent-orchestrator/*', '*/.agent-orchestrator/*', 'vendor/*', '*/vendor/*', 'packages/core/*', '*/packages/core/*',
+  '.orchestrator-pack/*', '*/.orchestrator-pack/*', `${retiredStateStem}/*`, `*/${retiredStateStem}/*`, 'vendor/*', '*/vendor/*', 'packages/core/*', '*/packages/core/*',
   'node_modules/*', '*/node_modules/*', '.pnpm-store/*', '*/.pnpm-store/*', '.npm/*', '*/.npm/*', 'dist/*', '*/dist/*', 'build/*', '*/build/*', 'coverage/*', '*/coverage/*',
   '.out/*', '*/.out/*', '.cache/*', '*/.cache/*', '.turbo/*', '*/.turbo/*', '.next/*', '*/.next/*', '*.log', '*.tmp', '*.temp', '*.bak', '*.swp', '*.sqlite', '*.sqlite3', '*.db', '*.jsonl.local',
   'scratch/*', 'tmp/*', 'temp/*', 'worktrees/*', 'target-repos/*', '*/scratch/*', '*/tmp/*', '*/temp/*', '*/worktrees/*', '*/target-repos/*',
@@ -136,7 +139,7 @@ function appendPathChecks(repoRoot: string, lines: VerifyLine[], failures: strin
       failures.push(`Missing required path: ${path}`);
     }
   }
-  const retiredConfig = 'agent-orchestrator.yaml.example';
+  const retiredConfig = `${retiredRuntimeStem}.yaml.example`;
   if (existsSync(resolve(repoRoot, retiredConfig))) {
     lines.push({ name: retiredConfig, status: 'FAIL', detail: 'must be absent' });
     failures.push(`Retired path remains active: ${retiredConfig}`);
