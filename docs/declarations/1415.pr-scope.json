@@ -7,11 +7,13 @@
     "docs/investigations/orca-pwsh-zero-estate/retained-dispositions.json",
     "scripts/check-reusable.ps1",
     "scripts/gate-runner/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/port-stage-evidence/",
     "scripts/runtime-retirement/",
     "scripts/verify.ps1",
     "scripts/verify.test.ts",
-    "scripts/verify.ts"
+    "scripts/verify.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     ".orca/",
@@ -28,6 +30,7 @@
     "scripts/check-reusable.ps1",
     "scripts/gate-runner/",
     "scripts/json-producers/retired-runtime-surfaces.json",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/port-stage-evidence/",
     "scripts/runtime-retirement/",
     "scripts/verify.ps1",
