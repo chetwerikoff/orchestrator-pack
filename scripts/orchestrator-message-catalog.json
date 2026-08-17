@@ -151,7 +151,11 @@
       "name": "dead-worker-recovery",
       "owning_process": "dead-worker-reconcile",
       "route": "llm-orchestrator",
-      "delivery_guarantee": "at-least-once-until-ack",
+      "delivery_guarantee": "no-ack-guarantee",
+      "guarantee_reconciliation": {
+        "decision": "downgrade",
+        "reason": "Existing producer/retention/run-scoped-observation/ack/duplicate-tolerance chain is not fully proven."
+      },
       "dedupe_owner": "issue-641",
       "trigger": {
         "summary": "Dead worker recovery exhausted",
@@ -177,7 +181,11 @@
       "name": "review-trigger-degraded-ci",
       "owning_process": "review-trigger-reconcile",
       "route": "llm-orchestrator",
-      "delivery_guarantee": "at-least-once-until-ack",
+      "delivery_guarantee": "no-ack-guarantee",
+      "guarantee_reconciliation": {
+        "decision": "downgrade",
+        "reason": "Existing producer/retention/run-scoped-observation/ack/duplicate-tolerance chain is not fully proven."
+      },
       "dedupe_owner": "issue-641",
       "trigger": {
         "summary": "Review trigger degraded CI exhausted",
@@ -190,7 +198,11 @@
       "name": "submit-adoption",
       "owning_process": "worker-message-submit-reconcile",
       "route": "llm-orchestrator",
-      "delivery_guarantee": "at-least-once-until-ack",
+      "delivery_guarantee": "no-ack-guarantee",
+      "guarantee_reconciliation": {
+        "decision": "downgrade",
+        "reason": "Existing producer/retention/run-scoped-observation/ack/duplicate-tolerance chain is not fully proven."
+      },
       "dedupe_owner": "issue-641",
       "trigger": {
         "summary": "Worker message submit reconcile escalated",
@@ -216,7 +228,11 @@
       "name": "ci-failure-notify",
       "owning_process": "ci-failure-notification-reconcile",
       "route": "llm-orchestrator",
-      "delivery_guarantee": "at-least-once-until-ack",
+      "delivery_guarantee": "no-ack-guarantee",
+      "guarantee_reconciliation": {
+        "decision": "downgrade",
+        "reason": "Existing producer/retention/run-scoped-observation/ack/duplicate-tolerance chain is not fully proven."
+      },
       "dedupe_owner": "issue-641",
       "trigger": {
         "summary": "CI failure notification reconcile escalate",
@@ -244,7 +260,11 @@
       "name": "ci-green-claim",
       "owning_process": "ci-green-wake-reconcile",
       "route": "llm-orchestrator",
-      "delivery_guarantee": "at-least-once-until-ack",
+      "delivery_guarantee": "no-ack-guarantee",
+      "guarantee_reconciliation": {
+        "decision": "downgrade",
+        "reason": "Existing producer/retention/run-scoped-observation/ack/duplicate-tolerance chain is not fully proven."
+      },
       "dedupe_owner": "issue-641",
       "trigger": {
         "summary": "CI green wake claim escalate (promoted)",
@@ -257,7 +277,11 @@
       "name": "gated-nudge",
       "owning_process": "ci-green-wake-reconcile",
       "route": "llm-orchestrator",
-      "delivery_guarantee": "at-least-once-until-ack",
+      "delivery_guarantee": "no-ack-guarantee",
+      "guarantee_reconciliation": {
+        "decision": "downgrade",
+        "reason": "Existing producer/retention/run-scoped-observation/ack/duplicate-tolerance chain is not fully proven."
+      },
       "dedupe_owner": "issue-641",
       "trigger": {
         "summary": "Gated worker nudge gate/claim escalate",
@@ -283,7 +307,11 @@
       "name": "review-start-claim",
       "owning_process": "review-start-claim-reaper",
       "route": "llm-orchestrator",
-      "delivery_guarantee": "at-least-once-until-ack",
+      "delivery_guarantee": "no-ack-guarantee",
+      "guarantee_reconciliation": {
+        "decision": "downgrade",
+        "reason": "Existing producer/retention/run-scoped-observation/ack/duplicate-tolerance chain is not fully proven."
+      },
       "dedupe_owner": "issue-641",
       "trigger": {
         "summary": "Review-start claim escalation path",
@@ -296,7 +324,11 @@
       "name": "worker-recovery",
       "owning_process": "dead-worker-reconcile",
       "route": "llm-orchestrator",
-      "delivery_guarantee": "at-least-once-until-ack",
+      "delivery_guarantee": "no-ack-guarantee",
+      "guarantee_reconciliation": {
+        "decision": "downgrade",
+        "reason": "Existing producer/retention/run-scoped-observation/ack/duplicate-tolerance chain is not fully proven."
+      },
       "dedupe_owner": "issue-641",
       "trigger": {
         "summary": "Worker recovery lib escalation branch",
@@ -309,7 +341,11 @@
       "name": "worker-degraded-ci-handoff",
       "owning_process": "worker",
       "route": "llm-orchestrator",
-      "delivery_guarantee": "at-least-once-until-ack",
+      "delivery_guarantee": "no-ack-guarantee",
+      "guarantee_reconciliation": {
+        "decision": "downgrade",
+        "reason": "Existing producer/retention/run-scoped-observation/ack/duplicate-tolerance chain is not fully proven."
+      },
       "dedupe_owner": "issue-641",
       "trigger": {
         "summary": "Worker degraded-CI hand-off routed through escalation contract",
@@ -320,7 +356,7 @@
   "overlapOverrides": [
     {
       "id": "ci-green-vs-ci-failure-mutex",
-      "rationale": "CI green hand-off and CI failure ping are mutually exclusive on required CI state",
+      "rationale": "CI green hand-off and CI failure reaction are mutually exclusive on required CI state",
       "reviewer": "issue-298",
       "linkedIssue": 283,
       "messageClassIds": [

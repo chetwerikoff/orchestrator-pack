@@ -25,7 +25,7 @@ describe('publishWorkerDegradedCiHandoffOnce', () => {
   it('uses one exact freshness lookup and one dispatch', () => {
     const f = fixture({ status: 'ok', value: worker });
     expect(publishWorkerDegradedCiHandoffOnce(f.adapter, { target, text: 'degraded', timeoutMs: 1_000 }))
-      .toBe('confirmed');
+      .toBe('submitted');
     expect(f.findCalls).toHaveLength(1);
     expect(f.dispatchCalls).toHaveLength(1);
     expect(f.dispatchCalls[0]).toMatchObject({ input: { worker: target, text: 'degraded' } });

@@ -60,6 +60,7 @@ import {
   smokeCancelRequestPath,
   smokeProgressPath,
 } from './lib/worker-smoke-lifecycle.ts';
+import { markTrackedSmokeWorkerDeliveryConfirmed } from './lib/worker-smoke-bounded-create.ts';
 import { verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import { selectRuntimeAdapter } from './runtime/registry.ts';
 import type {
@@ -543,7 +544,7 @@ export interface RuntimeSmokeDeliveryResult {
   submitCount: number;
 }
 
-/** Exactly one prompt dispatch. Output heuristics never authorize a second actuation. */
+/** Exactly one prompt dispatch. Adapter ambiguity is preserved; only child evidence can establish smoke delivery. */
 export function establishRuntimeSmokeDelivery(input: {
   adapter: RuntimeAdapter;
   worker: RuntimeWorkerIdentity;
@@ -558,28 +559,47 @@ export function establishRuntimeSmokeDelivery(input: {
   const sleepMs = input.sleepMs ?? sleep;
   const deadline = now() + input.deadlineMs;
   const dispatched = input.adapter.dispatchInput({ worker: input.worker, text: input.prompt }, { cwd: input.cwd });
-  if (dispatched.status !== 'dispatched') {
-    return { ok: false, reason: `${dispatched.status}:${dispatched.reason}`, submitCount: 0 };
+  if (dispatched.status === 'send_failed') {
+    return { ok: false, reason: `send_failed:${dispatched.reason}`, submitCount: 0 };
   }
 
   let token: RuntimeObservationToken | undefined;
   const submitCount = 0;
-  while (now() < deadline) {
+  let observedNow = now();
+  while (observedNow < deadline) {
     if (observeSmokeDeliveryEstablished(input.binding)) {
+      markTrackedSmokeWorkerDeliveryConfirmed(input.worker);
       return { ok: true, observationToken: token, submitCount };
     }
-    const read = input.adapter.readBoundedOutput({
-      worker: input.worker,
-      previousToken: token,
-      limit: 200,
-    }, { cwd: input.cwd });
-    if (read.status !== 'ok') {
-      return { ok: false, reason: failureReason(read), submitCount };
+
+    // Pane output is not delivery evidence for an ambiguous dispatch. Preserve
+    // output observation only for an evidence-backed dispatched result.
+    if (dispatched.status === 'dispatched') {
+      const read = input.adapter.readBoundedOutput({
+        worker: input.worker,
+        previousToken: token,
+        limit: 200,
+      }, { cwd: input.cwd });
+      if (read.status !== 'ok') {
+        return { ok: false, reason: failureReason(read), submitCount };
+      }
+      token = read.value.observationToken;
     }
-    token = read.value.observationToken;
-    sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, deadline - now())));
+
+    sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, deadline - observedNow)));
+    const nextNow = now();
+    if (nextNow <= observedNow) break;
+    observedNow = nextNow;
   }
-  return { ok: false, reason: 'prompt_delivery_unconfirmed', observationToken: token, submitCount };
+  const reason = dispatched.status === 'dispatch_unknown'
+    ? `dispatch_unknown:${dispatched.reason}`
+    : 'prompt_delivery_unconfirmed';
+  return {
+    ok: false,
+    reason,
+    ...(token ? { observationToken: token } : {}),
+    submitCount,
+  };
 }
 
 type SmokeCompletionObservation = ReturnType<typeof observeSmokeCompletionEvidence>['observation'];
@@ -1143,7 +1163,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       const lifecycleCleanup = cleanup(delivery.reason ?? 'prompt_delivery_unconfirmed', true);
       const report = operationalReport('FAIL', options, {
         action: 'dispatch smoke prompt once',
-        expected: 'dispatched and child-sealed delivery evidence',
+        expected: 'one dispatch attempt plus child-sealed delivery evidence',
         observed: delivery.reason ?? 'prompt_delivery_unconfirmed',
         terminalCleanup,
         environmentNotes: [`submit-count=${delivery.submitCount}`, `lifecycle-clean=${lifecycleCleanup.clean}`],
