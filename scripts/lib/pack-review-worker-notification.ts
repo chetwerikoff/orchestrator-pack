@@ -8,7 +8,7 @@ import {
 import type {
   PackReviewWorkerNotificationBinding,
   PackReviewWorkerNotificationRequest,
-  PackReviewWorkerNotificationResult,
+  PackReviewWorkerSubmissionResult,
 } from './pack-review-delivery.ts';
 import { getPackReviewRun } from './pack-review-run-store.ts';
 import { runProcess } from '../kernel/subprocess.ts';
@@ -250,7 +250,7 @@ async function finalizeBoth(input: {
   return claim.ok ? { ok: true } : { ok: false, reason: claim.reason ?? 'claim_finalize_failed' };
 }
 
-function fixture(options: WorkerNotificationOptions, workerId: string): PackReviewWorkerNotificationResult | null {
+function fixture(options: WorkerNotificationOptions, workerId: string): PackReviewWorkerSubmissionResult | null {
   if (options.adapter
     || process.env.OPK_VITEST_HARNESS !== '1'
     || process.env.PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER === '1') return null;
@@ -366,7 +366,7 @@ function bindPersistedReviewRun(options: WorkerNotificationOptions):
  */
 export async function sendPackReviewWorkerNotification(
   originalOptions: WorkerNotificationOptions,
-): Promise<PackReviewWorkerNotificationResult> {
+): Promise<PackReviewWorkerSubmissionResult> {
   const bound = bindPersistedReviewRun(originalOptions);
   if (!bound.ok) return { state: 'pre_dispatch_failure', reason: bound.reason };
   const options = bound.options;
