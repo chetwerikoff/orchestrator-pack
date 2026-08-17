@@ -7,6 +7,7 @@ import {
   assignmentStillCurrent,
   listCurrentWorkerAssignments,
   readWorkerAssignmentStore,
+  withCurrentWorkerAssignmentFence,
   type WorkerAssignment,
 } from './worker-assignment-store.ts';
 
@@ -26,6 +27,25 @@ export type WorkerAssignmentTargetResolution =
   | { readonly status: 'gone'; readonly assignment: WorkerAssignment }
   | { readonly status: 'remote_not_applicable'; readonly assignment: WorkerAssignment }
   | { readonly status: 'assignment_stale' | 'assignment_untrusted' | 'runtime_unavailable' | 'target_unresolved' };
+
+export type WorkerAssignmentReplacementAdmission =
+  | { readonly status: 'replaceable'; readonly expected: WorkerAssignment }
+  | {
+      readonly status: 'skipped_live';
+      readonly expected: WorkerAssignment;
+      readonly worker: RuntimeWorker;
+      readonly reason: 'runtime_busy' | 'runtime_idle';
+    }
+  | {
+      readonly status:
+        | 'assignment_stale'
+        | 'assignment_store_busy'
+        | 'assignment_fence_failed'
+        | 'assignment_untrusted'
+        | 'runtime_unavailable'
+        | 'target_unresolved';
+      readonly reason?: string;
+    };
 
 export type WorkerAssignmentResolution =
   | {
@@ -81,6 +101,60 @@ export function resolveCurrentWorkerAssignmentTarget(input: {
     return { status: 'gone', assignment: current };
   }
   return { status: 'resolved', assignment: current, worker: resolved.value.worker };
+}
+
+/**
+ * Admit a logical replacement while the exact expected assignment is fenced.
+ * Remote current ownership needs only exact-current serialization. Current local
+ * ownership additionally requires affirmative assignment-resolution `gone`.
+ * A resolved busy/idle worker is live; unknown or contradictory liveness is not
+ * absence evidence and fails closed.
+ */
+export async function admitCurrentWorkerAssignmentReplacement(input: {
+  readonly file: string;
+  readonly expected: WorkerAssignment;
+  readonly adapter: RuntimeAdapter;
+  readonly timeoutMs?: number;
+  readonly observationWindowMs?: number;
+}): Promise<WorkerAssignmentReplacementAdmission> {
+  const fenced = await withCurrentWorkerAssignmentFence(input.file, input.expected, () => {
+    if (input.expected.kind !== 'local') {
+      return { status: 'replaceable', expected: input.expected } as const;
+    }
+    const target = resolveCurrentWorkerAssignmentTarget({
+      file: input.file,
+      expected: input.expected,
+      adapter: input.adapter,
+      timeoutMs: input.timeoutMs,
+    });
+    if (target.status === 'gone') {
+      return { status: 'replaceable', expected: input.expected } as const;
+    }
+    if (target.status === 'resolved') {
+      const liveness = input.adapter.liveness({
+        worker: target.worker.identity,
+        observationWindowMs: input.observationWindowMs ?? 50,
+      }, { timeoutMs: input.timeoutMs ?? 5_000 });
+      if (liveness.status === 'busy' || liveness.status === 'idle') {
+        return {
+          status: 'skipped_live',
+          expected: input.expected,
+          worker: target.worker,
+          reason: `runtime_${liveness.status}` as 'runtime_busy' | 'runtime_idle',
+        } as const;
+      }
+      return {
+        status: 'target_unresolved',
+        reason: `resolved_target_liveness_${liveness.status}_is_not_assignment_gone_evidence`,
+      } as const;
+    }
+    if (target.status === 'remote_not_applicable') {
+      return { status: 'assignment_stale' } as const;
+    }
+    return { status: target.status } as const;
+  });
+  if (!fenced.ok) return { status: fenced.reason };
+  return fenced.value;
 }
 
 export function resolveCurrentWorkerAssignmentBindings(input: {
