@@ -1445,7 +1445,7 @@ export async function readPageObservation(
           text,
           ...(validCarrierKey(row.key) ? { key: row.key } : {}),
           fingerprint: transcriptFingerprint(role, text),
-          domIndex,
+          domIndex: row.domIndex,
         });
       }
       if (observed.rows.length !== carriers.length) transcriptIncomplete = true;
