@@ -12,6 +12,7 @@
     "scripts/lib/pack-pr-review-contract.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
@@ -33,6 +34,7 @@
     "scripts/lib/pack-pr-review-contract.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
