@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, webcrypto } from 'node:crypto';
 import { createServer } from 'node:net';
-import { mkdtemp, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,7 @@ import {
   ACQUISITION_READINESS_INTERVAL_MS,
   ACQUISITION_READINESS_TIMEOUT_MS,
   CDP_REQUEST_TIMEOUT_MS,
+  HARVEST_EXPRESSION,
   INSPECTION_EXPRESSION,
   LIVENESS_EXPRESSION,
   LIVENESS_FAN_OUT,
@@ -30,6 +31,12 @@ import {
   type ProbeDependencies,
   type PublishOperations,
 } from './browser-gpt-page-probe.ts';
+import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import {
+  admitStateLightTurnObservation,
+  readStateLightTurnObservation,
+  transitionStateLightTurnObservation,
+} from './chatgpt-browser-turn/state-light-turn-observation.ts';
 
 class FakeNode {
   readonly innerText: string;
@@ -117,6 +124,14 @@ test('closed CLI rejects arbitrary selectors, JavaScript, watch mode, and ambigu
   assert.throws(() => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--url', 'https://chatgpt.com/c/x', '--open-if-missing', 'false']), /open_if_missing_must_be_true/);
   assert.throws(() => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--target-id', 'x', '--open-if-missing', 'true']), /open_if_missing_requires_url/);
   assert.deepEqual(parseCliArgs(['liveness', '--cdp', 'http://127.0.0.1:9222']), { operation: 'liveness', cdp: 'http://127.0.0.1:9222' });
+  assert.deepEqual(
+    parseCliArgs(['harvest', '--cdp', 'http://127.0.0.1:9222', '--profile', '/tmp/profile', '--invocation-id', 'inv-1', '--output', '/tmp/out']),
+    { operation: 'harvest', cdp: 'http://127.0.0.1:9222', profile: '/tmp/profile', invocationId: 'inv-1', output: '/tmp/out' },
+  );
+  assert.throws(
+    () => parseCliArgs(['harvest', '--cdp', 'http://127.0.0.1:9222', '--profile', '/tmp/profile', '--invocation-id', 'inv-1', '--output', '/tmp/out', '--url', 'https://chatgpt.com/c/x']),
+    /unknown_option/,
+  );
 });
 
 test('target listing is bounded, passive, and excludes unrelated pages', async () => {
@@ -484,8 +499,8 @@ test('a post-create write failure removes the incomplete artifact', async () => 
   assert.deepEqual(calls, ['close', 'unlink']);
 });
 
-test('the fixed browser expressions contain no mutation or arbitrary-evaluation surface', () => {
-  for (const expression of [INSPECTION_EXPRESSION, buildExportExpression({
+test('the fixed passive browser expressions contain no mutation or arbitrary-evaluation surface', () => {
+  for (const expression of [INSPECTION_EXPRESSION, LIVENESS_EXPRESSION, buildExportExpression({
     role: 'assistant', ordinal: 0, representation: 'innerText', expectedByteLength: 0, expectedSha256: '0'.repeat(64),
   })]) {
     for (const forbidden of ['.click(', '.focus(', '.scroll', '.remove(', '.append(', '.submit(', 'location.href =', 'window.open(', 'Runtime.evaluate']) {
@@ -1048,6 +1063,112 @@ test('liveness reports unavailable targets and truncation without mutation', asy
   assert.equal(closeCalls, 0);
 });
 
+async function withHarvestObservation<T>(
+  phase: 'sent_unharvested' | 'sent_unbound',
+  callback: (input: { profile: string; cdp: string; invocationId: string; marker: string; output: string }) => Promise<T>,
+): Promise<T> {
+  const previous = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+  const stateDir = await mkdtemp(join(tmpdir(), 'probe-harvest-state-'));
+  process.env.CHATGPT_BROWSER_TURN_STATE_DIR = stateDir;
+  const cdp = 'http://127.0.0.1:9222';
+  const profile = join(stateDir, 'profile');
+  const invocationId = '11111111-1111-4111-8111-111111111111';
+  const marker = `OPKTURNV1${'33'.repeat(16)}`;
+  const output = join(stateDir, 'harvest.txt');
+  const profileKey = configuredProfileKey(profile, cdp);
+  try {
+    admitStateLightTurnObservation({ profileKey, invocationId, marker });
+    transitionStateLightTurnObservation({
+      profileKey,
+      invocationId,
+      phase,
+      reason: 'test_send',
+      sendCount: 1,
+      sendWitness: 'numeric_send_count',
+      ...(phase === 'sent_unharvested' ? { conversationUrl: 'https://chatgpt.com/c/test' } : {}),
+    });
+    return await callback({ profile, cdp, invocationId, marker, output });
+  } finally {
+    if (previous === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = previous;
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}
+
+test('harvest publishes a completed exact owned turn and remains workflow-authority none', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let published = '';
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => [{
+        id: 'harvest-completed', type: 'page', url: 'https://chatgpt.com/c/test', title: 'Completed',
+        webSocketDebuggerUrl: 'ws://example/harvest-completed',
+      }],
+      evaluate: async (_target, expression) => {
+        assert.equal(expression, HARVEST_EXPRESSION);
+        return evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-harvest' }),
+          new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': 'a-harvest' }),
+        ], false, 'https://chatgpt.com/c/test');
+      },
+      publish: async (_destination, bytes) => { published = Buffer.from(bytes).toString('utf8'); },
+    }));
+    assert.equal(result.status, 'ok');
+    assert.equal(result.diagnostic_only, false);
+    assert.equal(result.workflow_authority, 'none');
+    assert.equal(result.classifier, 'completed');
+    assert.equal(result.harvested, true);
+    assert.equal(published, 'FINAL');
+    const record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+    assert.equal(record.phase, 'harvested');
+    assert.equal(record.primary?.sha256, sha256('FINAL'));
+  });
+});
+
+test('harvest treats long-running as nonterminal and publishes nothing', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let publishCalls = 0;
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => [{
+        id: 'harvest-running', type: 'page', url: 'https://chatgpt.com/c/test', title: 'Running',
+        webSocketDebuggerUrl: 'ws://example/harvest-running',
+      }],
+      evaluate: async (_target, expression) => evaluateExpression(expression, [
+        new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-running' }),
+        new FakeNode('assistant', 'partial', 'partial', { 'data-message-id': 'a-running' }),
+      ], true, 'https://chatgpt.com/c/test'),
+      publish: async () => { publishCalls += 1; },
+    }));
+    assert.equal(result.status, 'ok');
+    assert.equal(result.diagnostic_only, false);
+    assert.equal(result.workflow_authority, 'none');
+    assert.equal(result.classifier, 'long_running');
+    assert.equal(result.harvested, false);
+    assert.equal(publishCalls, 0);
+    assert.equal(readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase, 'sent_unharvested');
+  });
+});
+
+test('harvest classifies a dead exact owned turn without publication', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let publishCalls = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [{
+          id: 'harvest-dead', type: 'page', url: 'https://chatgpt.com/c/test', title: 'Dead',
+          webSocketDebuggerUrl: 'ws://example/harvest-dead',
+        }],
+        evaluate: async (_target, expression) => evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-dead' }),
+        ], false, 'https://chatgpt.com/c/test'),
+        publish: async () => { publishCalls += 1; },
+      })),
+      (error: any) => error.status === 'not_found' && error.reason === 'owned_turn_dead',
+    );
+    assert.equal(publishCalls, 0);
+    assert.equal(readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase, 'sent_unharvested');
+  });
+});
+
 test('the canonical npm entrypoint emits exactly one JSON result line', async () => {
   const repoRoot = fileURLToPath(new URL('../', import.meta.url));
   const result = await runProcess({
@@ -1064,13 +1185,15 @@ test('the canonical npm entrypoint emits exactly one JSON result line', async ()
   assert.equal(JSON.parse(lines[0]!).status, 'input_invalid');
 });
 
-test('the implementation has no browser mutation, helper lifecycle, state-write, or polling path', async () => {
+test('the probe keeps browser-control and polling authority closed while harvest is the explicit state-write exception', async () => {
   const source = await readFile(new URL('./browser-gpt-page-probe.ts', import.meta.url), 'utf8');
   for (const forbidden of [
     '.click(', '.focus(', '.scroll(', '.goto(', '.reload(', '.close({', 'newPage(',
-    'chatgpt-browser-turn', 'browser-turn-recurrence', 'setInterval(', 'while (true)',
+    'browser-turn-recurrence', 'setInterval(', 'while (true)',
     'Runtime.callFunctionOn', 'Page.navigate', 'Input.dispatch', 'Target.closeTarget',
   ]) {
     assert.equal(source.includes(forbidden), false, forbidden);
   }
+  assert.equal(source.includes("diagnostic_only: operation !== 'harvest'"), true);
+  assert.equal(source.includes("workflow_authority: 'none'"), true);
 });
