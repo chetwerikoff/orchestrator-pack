@@ -263,7 +263,7 @@ function fixture(options: WorkerNotificationOptions, workerId: string): PackRevi
       idempotencyKey: options.request.idempotencyKey,
     }, null, 2)}\n`, 'utf8');
   }
-  return { state: 'delivered', reason: 'fixture_dispatched' };
+  return { state: 'escalated', reason: 'fixture_submitted' };
 }
 
 function bindPersistedReviewRun(options: WorkerNotificationOptions):
@@ -282,9 +282,6 @@ function bindPersistedReviewRun(options: WorkerNotificationOptions):
     return { ok: false, reason: 'review_run_binding_unresolved' };
   }
   if (!run) {
-    // Preserve explicitly bound low-level callers. Review delivery remains
-    // fail-closed unless it supplies a PR, while task continuation remains
-    // issue-keyed and must not depend on a review-run store entry.
     const intentClass = trim(options.intentClass) || 'review-findings';
     const explicitBinding = intentClass === 'task-continuation'
       ? Number.isInteger(Number(options.issueNumber)) && Number(options.issueNumber) > 0
@@ -309,8 +306,6 @@ function bindPersistedReviewRun(options: WorkerNotificationOptions):
     return { ok: false, reason: 'review_run_session_mismatch' };
   }
 
-  // Ordinary fixture delivery intentionally does not inspect host session state.
-  // Focused real-adapter tests opt in and exercise the production binding path.
   const bypassFixtureBinding = process.env.OPK_VITEST_HARNESS === '1'
     && !options.adapter
     && process.env.PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER !== '1';
@@ -366,6 +361,8 @@ function bindPersistedReviewRun(options: WorkerNotificationOptions):
  * loaded from the immutable persisted review-run binding before claim acquisition,
  * then revalidated against the selected adapter immediately before one dispatch.
  * `dispatch_unknown` is persisted as UNCERTAIN and never retried.
+ * A submit-scoped success is intentionally surfaced as escalated/submitted rather
+ * than the legacy delivered state; this result type has no submitted member.
  */
 export async function sendPackReviewWorkerNotification(
   originalOptions: WorkerNotificationOptions,
@@ -434,7 +431,7 @@ export async function sendPackReviewWorkerNotification(
     namespace: claimNamespace,
   });
   if (!claim.acquired) {
-    if (claim.reason === 'already_served') return { state: 'delivered', reason: 'claim_duplicate_no_op' };
+    if (claim.reason === 'already_served') return { state: 'escalated', reason: 'claim_duplicate_no_op' };
     return { state: 'escalated', reason: claim.reason };
   }
 
@@ -455,7 +452,7 @@ export async function sendPackReviewWorkerNotification(
   }
   if (admission.duplicate) {
     await finalizeWorkerNudgeClaim(claim, 'SENT', { duplicateNoOp: true });
-    return { state: 'delivered', reason: 'journal_duplicate_no_op' };
+    return { state: 'escalated', reason: 'journal_duplicate_no_op' };
   }
 
   const fenced = await withSideEffectFence({
@@ -505,9 +502,7 @@ export async function sendPackReviewWorkerNotification(
       journalOutcome: DISPATCH_OUTCOME_DISPATCHED,
       claimOutcome: 'SENT',
     });
-    return completed.ok
-      ? { state: 'delivered', reason: 'runtime_dispatch_dispatched' }
-      : { state: 'escalated', reason: completed.reason };
+    return { state: 'escalated', reason: completed.ok ? 'runtime_dispatch_submitted' : completed.reason };
   }
   if (dispatch.status === 'dispatch_unknown') {
     const completed = await finalizeBoth({
