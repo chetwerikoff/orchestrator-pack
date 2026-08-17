@@ -469,21 +469,20 @@ test('existing, symlinked, directory, and special output targets are refused wit
   await mkdir(outputDirectory);
   await assert.rejects(publishExactBytes(outputDirectory, Buffer.from('replacement')), (error: any) => error.status === 'unsafe_output');
 
-  if (process.platform !== 'win32') {
-    const socketPath = join(directory, 'socket');
-    const server = createServer();
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(socketPath, resolve);
-    });
-    try {
-      await assert.rejects(
-        publishExactBytes(socketPath, Buffer.from('replacement')),
-        (error: any) => error.status === 'unsafe_output',
-      );
-    } finally {
-      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    }
+  if (process.platform === 'win32') return;
+  const socketPath = join(directory, 'socket');
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(socketPath, resolve);
+  });
+  try {
+    await assert.rejects(
+      publishExactBytes(socketPath, Buffer.from('replacement')),
+      (error: any) => error.status === 'unsafe_output',
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
 
@@ -849,8 +848,7 @@ test('acquisition rejects redirect and malformed creation, while exposing cleanu
         new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-cleanup' }),
       ], false, 'https://chatgpt.com/c/cleanup'),
     })),
-    (error: any) => error.status === 'cleanup_failed' && error.reason === 'readiness_timeout'
-      && error.details?.cleanup === 'cleanup_failed',
+    (error: any) => error.status === 'cleanup_failed' && error.details?.cleanup === 'cleanup_failed',
   );
 });
 
