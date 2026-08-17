@@ -76,14 +76,8 @@ function normalizePath(path: string): string {
   return path.replaceAll('\\', '/').replace(/^\.\//u, '');
 }
 
-export function loadHistoricalDispositions(repoRoot: string): readonly HistoricalDisposition[] {
-  const source = join(repoRoot, HISTORICAL_DISPOSITION_SOURCE);
-  if (!existsSync(source)) return [];
-  const raw = JSON.parse(readFileSync(source, 'utf8')) as {
-    version?: unknown;
-    owner?: unknown;
-    dispositions?: unknown;
-  };
+export function parseHistoricalDispositions(text: string): readonly HistoricalDisposition[] {
+  const raw = JSON.parse(text) as { version?: unknown; owner?: unknown; dispositions?: unknown };
   if (raw.version !== 1 || !Array.isArray(raw.dispositions)) {
     throw new Error('historical disposition source must be version 1 with a dispositions array');
   }
@@ -116,6 +110,11 @@ export function loadHistoricalDispositions(repoRoot: string): readonly Historica
     });
   }
   return result;
+}
+
+export function loadHistoricalDispositions(repoRoot: string): readonly HistoricalDisposition[] {
+  const source = join(repoRoot, HISTORICAL_DISPOSITION_SOURCE);
+  return existsSync(source) ? parseHistoricalDispositions(readFileSync(source, 'utf8')) : [];
 }
 
 export function loadHistoricalDispositionPaths(repoRoot: string): ReadonlySet<string> {
