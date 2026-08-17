@@ -103,6 +103,7 @@ describe('runtime retirement closed-world scanner', () => {
     mkdirSync(dirname(manifest), { recursive: true });
     writeFileSync(manifest, JSON.stringify({
       version: 1,
+      owningIssue: 1352,
       dispositions: [{
         path: 'docs/frozen-contract.mjs',
         class: 'precut-behavioral-contract',
@@ -130,6 +131,7 @@ describe('runtime retirement closed-world scanner', () => {
     mkdirSync(dirname(manifest), { recursive: true });
     writeFileSync(manifest, JSON.stringify({
       version: 1,
+      owningIssue: 1352,
       dispositions: [{
         path: 'docs/*.mjs',
         class: 'precut-behavioral-contract',
