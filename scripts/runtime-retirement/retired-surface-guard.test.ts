@@ -139,6 +139,6 @@ describe('runtime retirement closed-world scanner', () => {
         owningReference: 'Issue #1352',
       }],
     }));
-    expect(() => loadHistoricalDispositionPaths(root)).toThrow(/exact file/);
+    expect(() => loadHistoricalDispositionPaths(root)).toThrow(/normalized exact repository file/u);
   });
 });
