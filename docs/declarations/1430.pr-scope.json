@@ -2,41 +2,41 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1430,
   "declared_paths": [
-    "scripts/chatgpt-browser-turn/state-light-turn.ts",
-    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
-    "scripts/chatgpt-browser-turn/storage-common.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
-    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
-    "scripts/browser-gpt-page-probe.ts",
-    "scripts/browser-gpt-page-probe.test.ts",
-    "scripts/chatgpt-browser-turn/README.md",
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
     "docs/browser-gpt-turn-runbook.md",
-    "docs/declarations/1430.pr-scope.json"
+    "docs/declarations/1430.pr-scope.json",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/storage-common.ts"
   ],
   "denylist": [
-    "vendor/",
-    "packages/core/",
     ".github/workflows/",
     "credentials/",
-    "secrets/",
     "docs/issues_drafts/",
+    "packages/core/",
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/state.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json",
-    "scripts/lib/vitest-pre-topology-measurement.mjs"
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
-    "scripts/chatgpt-browser-turn/state-light-turn.ts",
-    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
-    "scripts/chatgpt-browser-turn/storage-common.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
-    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
-    "scripts/browser-gpt-page-probe.ts",
-    "scripts/browser-gpt-page-probe.test.ts",
-    "scripts/chatgpt-browser-turn/README.md",
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
     "docs/browser-gpt-turn-runbook.md",
-    "docs/declarations/1430.pr-scope.json"
+    "docs/declarations/1430.pr-scope.json",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/storage-common.ts"
   ]
 }
