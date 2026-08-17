@@ -141,6 +141,11 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     expect(classifyInstructionOccurrence(negative, negative.indexOf('scripts/verify.ps1') + 1)).toBe('instruction-reference-only');
   });
 
+  it('does not treat dots inside an earlier script path as sentence boundaries', () => {
+    const line = 'Run scripts/helper.ps1 then scripts/verify.ps1 for the current check.';
+    expect(classifyInstructionOccurrence(line, line.indexOf('scripts/verify.ps1') + 1)).toBe('instruction-directive');
+  });
+
   it('emits an outside-root tracked PowerShell path even when the file has no token bytes', () => {
     expect(unclassifiedPowerShellPathOccurrence('examples/legacy.PS1')).toEqual({
       sourcePath: 'examples/legacy.PS1',

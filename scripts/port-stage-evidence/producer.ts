@@ -170,7 +170,12 @@ function stripInstructionPrefix(line: string): string {
 }
 
 function lastClause(prefix: string): string {
-  const splitAt = Math.max(prefix.lastIndexOf(';'), prefix.lastIndexOf('.'), prefix.lastIndexOf('!'), prefix.lastIndexOf('?'));
+  let splitAt = -1;
+  for (let index = 0; index < prefix.length; index += 1) {
+    const char = prefix[index]!;
+    const next = prefix[index + 1];
+    if (char === ';' || char === '!' || char === '?' || (char === '.' && (next === undefined || /\s/u.test(next)))) splitAt = index;
+  }
   return stripInstructionPrefix(prefix.slice(splitAt + 1));
 }
 
