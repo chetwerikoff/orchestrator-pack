@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 2
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -64,13 +66,13 @@ describe('Issue #1430 retirement cleanup visibility', () => {
       profileKey,
       invocationId,
       phase: 'dispatching',
-      reason: 'test_dispatch_boundary',
+      reason: 'retirement_fault_dispatch_boundary',
     });
     transitionStateLightTurnObservation({
       profileKey,
       invocationId,
       phase: 'sent_unharvested',
-      reason: 'test_send',
+      reason: 'retirement_fault_send',
       sendCount: 1,
       sendWitness: 'numeric_send_count',
       conversationUrl,
@@ -99,9 +101,8 @@ describe('Issue #1430 retirement cleanup visibility', () => {
       }),
       publish: async (destination, bytes) => {
         writeFileSync(destination, Buffer.from(bytes), { flag: 'wx' });
-        // The publication is already committed. Keep one extra child in the
-        // mutation slot so releaseObservationMutation() cannot retire the now-
-        // empty owner directory; this models the post-commit cleanup-only fault.
+        // Publication is committed. Leave an extra child in the mutation slot
+        // so lease retirement fails as cleanup-only evidence after finalization.
         writeFileSync(join(mutationSlot, 'retirement-blocker'), 'block');
       },
     };
@@ -156,6 +157,7 @@ describe('Issue #1430 retirement cleanup visibility', () => {
         '--profile', join(root, 'profile'),
         '--cdp', 'http://127.0.0.1:9222',
         '--input', join(root, 'prompt.txt'),
+        '--invocation-id', invocationId,
       ], {
         runTurn: async () => outcome,
       });
