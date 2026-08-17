@@ -4,8 +4,10 @@
   "declared_paths": [
     "docs/orchestration-runbook.md",
     "scripts/invoke-gated-worker-nudge.test.ts",
+    "scripts/invoke-gated-worker-nudge.ts",
     "scripts/lib/operator-publication.test.ts",
     "scripts/lib/operator-publication.ts",
+    "scripts/lib/pack-review-delivery.ts",
     "scripts/lib/pack-review-worker-notification.ts",
     "scripts/lib/worker-degraded-ci-handoff.test.ts",
     "scripts/lib/worker-smoke-bounded-create.ts",
@@ -36,8 +38,10 @@
   "allowed_roots": [
     "docs/orchestration-runbook.md",
     "scripts/invoke-gated-worker-nudge.test.ts",
+    "scripts/invoke-gated-worker-nudge.ts",
     "scripts/lib/operator-publication.test.ts",
     "scripts/lib/operator-publication.ts",
+    "scripts/lib/pack-review-delivery.ts",
     "scripts/lib/pack-review-worker-notification.ts",
     "scripts/lib/worker-degraded-ci-handoff.test.ts",
     "scripts/lib/worker-smoke-bounded-create.ts",
@@ -58,5 +62,5 @@
     "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "r07"
+  "source_revision": "r08"
 }
