@@ -136,7 +136,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   resolveAssignmentWorker(
     input: { readonly provider: string; readonly bindingKey: string },
     options: RuntimeCallOptions = {},
-  ): RuntimeResult<RuntimeWorker | null> {
+  ): ReturnType<NonNullable<import('../runtime/contracts.ts').RuntimeAdapter['resolveAssignmentWorker']>> {
     if (input.provider.trim().toLowerCase() !== 'orca') {
       return runtimeUnsupported('resolve_assignment_worker', 'assignment_provider_unsupported');
     }
@@ -148,17 +148,25 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     );
     if (!shown.ok) return runtimeFailure('resolve_assignment_worker', neutralFailureReason(shown));
     const exact = shown.result?.observation?.exactWorker === true;
+    const observationStatus = String(shown.result?.observation?.status ?? '').trim().toLowerCase();
+    if (exact && observationStatus === 'gone') {
+      return { status: 'ok', value: { kind: 'gone' } };
+    }
     const terminalHandle = String(
       shown.result?.terminal?.handle
         ?? shown.result?.worker?.agent_terminal_handle
         ?? '',
     ).trim();
-    if (!exact || !terminalHandle) return { status: 'ok', value: null };
+    if (!exact || !terminalHandle) {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
     const current = super.findWorkerById(terminalHandle, options);
     if (current.status !== 'ok') {
       return runtimeFailure('resolve_assignment_worker', current.reason);
     }
-    if (current.value === null) return { status: 'ok', value: null };
+    if (current.value === null) {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
     // A current PACK WorkerAssignment plus Orca's exact Dispatch-to-terminal
     // observation is the durable ownership witness across bounded adapter
     // processes. Retain only the resolved composite identity in memory so later
@@ -167,7 +175,10 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     this.#assignmentOwned.set(current.value.identity.id, current.value.identity);
     return {
       status: 'ok',
-      value: this.#assignmentProvenance(current.value),
+      value: {
+        kind: 'resolved',
+        worker: this.#assignmentProvenance(current.value),
+      },
     };
   }
 
