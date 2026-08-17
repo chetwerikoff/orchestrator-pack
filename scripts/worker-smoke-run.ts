@@ -120,7 +120,7 @@ const SMOKE_PROFILE_FIELDS = {
 } as const;
 
 const SUPPORTED_SMOKE_AGENTS = new Map([
-  ['cursor', 'cursor-agent'],
+  ['cursor', 'agent'],
 ]);
 const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
 
@@ -155,7 +155,7 @@ export function resolveSmokeExecutorProfile(
     agent: launchAgent,
     model,
     effort,
-    command: `${launchAgent} --model ${shellQuoteProfileValue(`${model}[effort=${effort}]`)}`,
+    command: `${launchAgent} --model ${shellQuoteProfileValue(`${model}-${effort}`)}`,
   };
 }
 
