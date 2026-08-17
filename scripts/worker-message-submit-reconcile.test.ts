@@ -25,11 +25,11 @@ describe('worker message submission through the runtime boundary', () => {
         request: { message: 'continue issue 1248', idempotencyKey: 'issue-1248-worker-message' },
       } as const;
       await expect(sendPackReviewWorkerNotification(request)).resolves.toMatchObject({
-        state: 'escalated',
+        state: 'submitted',
         reason: 'runtime_dispatch_submitted',
       });
       const duplicate = await sendPackReviewWorkerNotification(request);
-      expect(duplicate.state).toBe('escalated');
+      expect(duplicate.state).toBe('submitted');
       expect(duplicate.reason).toMatch(/duplicate|terminal|served/);
       expect(readFileSync(request.journalPath, 'utf8')).toContain('issue-1248-worker-message');
       expect(existsSync(path.resolve('scripts/journaled-worker-send.ps1'))).toBe(false);
