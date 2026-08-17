@@ -166,22 +166,24 @@ export async function runAggregateProof(
 ): Promise<AggregateProof> {
   const errors: string[] = [];
   const expectedAcceptanceIds = ACCEPTANCE_SCENARIOS.map((entry) => entry.split(':', 1)[0] ?? '');
+  const cleanupFixtureIds: readonly string[] = CLEANUP_FIXTURE_IDS;
+  const requiredScenarioIds: readonly string[] = REQUIRED_SCENARIO_IDS;
   if (options.zeroCoverage) {
     errors.push('coverage:execution-skipped');
   } else {
     const scenarioEvidence = new Map<string, ScenarioEvidence>();
-    for (const scenarioId of REQUIRED_SCENARIO_IDS) {
+    for (const scenarioId of requiredScenarioIds) {
       try {
         scenarioEvidence.set(scenarioId, await executeScenario(scenarioId));
       } catch {
         scenarioEvidence.set(scenarioId, { negative: false, positive: false });
       }
     }
-    const fixtureEvidence = CLEANUP_FIXTURE_IDS.map(executeFixture);
-    exactSet('scenario', REQUIRED_SCENARIO_IDS, [...scenarioEvidence.keys()], errors);
+    const fixtureEvidence = cleanupFixtureIds.map(executeFixture);
+    exactSet('scenario', requiredScenarioIds, [...scenarioEvidence.keys()], errors);
     exactSet(
       'cleanup-fixture',
-      CLEANUP_FIXTURE_IDS,
+      cleanupFixtureIds,
       fixtureEvidence.filter((entry) => entry.valid).map((entry) => entry.fixtureId),
       errors,
     );
@@ -196,15 +198,15 @@ export async function runAggregateProof(
       }
     }
     exactSet('acceptance', expectedAcceptanceIds, ACCEPTANCE_SCENARIO_MAP.map((entry) => entry.acceptanceId), errors);
-    exactSet('mapped-scenario', REQUIRED_SCENARIO_IDS, ACCEPTANCE_SCENARIO_MAP.flatMap((entry) => entry.scenarioIds), errors);
+    exactSet('mapped-scenario', requiredScenarioIds, ACCEPTANCE_SCENARIO_MAP.flatMap((entry) => entry.scenarioIds), errors);
   }
-  if (CLEANUP_FIXTURE_IDS.length === 0) errors.push('cleanup-fixture:zero-coverage');
-  if (REQUIRED_SCENARIO_IDS.length === 0) errors.push('scenario:zero-coverage');
+  if (cleanupFixtureIds.length === 0) errors.push('cleanup-fixture:zero-coverage');
+  if (requiredScenarioIds.length === 0) errors.push('scenario:zero-coverage');
   return {
     ok: errors.length === 0,
     acceptanceCount: expectedAcceptanceIds.length,
-    scenarioCount: REQUIRED_SCENARIO_IDS.length,
-    fixtureCount: CLEANUP_FIXTURE_IDS.length,
+    scenarioCount: requiredScenarioIds.length,
+    fixtureCount: cleanupFixtureIds.length,
     errors,
   };
 }
