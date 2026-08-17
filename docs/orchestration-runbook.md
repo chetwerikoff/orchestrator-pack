@@ -49,23 +49,39 @@ read live Issue/rules
 -> implement scoped work
 -> required local verification
 -> create/update PR and exact head
--> worker-owned pre-review CI
--> truthful current-head ready_for_review
--> verify no known worker-owned pre-review blocker remains
+-> worker-owned smoke (exact head; fix and repeat until PASS)
+-> tier/cap-governed pack-review cycle
+-> review finding: worker fix + exact-head worker-owned smoke + next review cycle
+-> settled review obligations
+-> independent smoke
+-> independent-smoke finding: worker fix + fresh independent smoke
+-> completion
 -> worker_done
 ```
 
-Independent smoke happens after this bounded handoff. Pack-review is not the next step after smoke.
+Worker-owned smoke and independent smoke are different actors and different
+gates. Pack-review starts only after the exact current head has a passing
+worker-owned smoke. Independent smoke starts only after the review tier/cap
+obligations settle. Once independent smoke has started, pack-review is
+forbidden for this work, including after a smoke-driven fix.
 
 After a current-head smoke returns a gap or fail, the next legal coordinator step is a worker fix that produces a new SHA, then a fresh smoke of that exact SHA:
 
 ```text
-smoke (current SHA)
-  |-- complete --> pack-review eligible
-  |-- gap/fail --> fix (new SHA) --> smoke that SHA
+worker-owned smoke (current SHA)
+  |-- PASS --> pack-review eligible
+  |-- FAIL/BLOCKED --> fix (new SHA) --> worker-owned smoke that SHA
+
+pack-review (settled)
+  |-- eligible --> independent smoke
+  |-- finding --> fix (new SHA) --> independent smoke that SHA
 ```
 
-Old-head smoke proofs do not count for the new head. Pack-review starts only after current-head smoke is complete. Independent review after this handoff does not authorize pack-review while smoke is still incomplete. Exact folding and SHA-binding stay in `docs/worker-smoke-testing.md`. A later finding opens a fresh correction Dispatch.
+Old-head smoke proofs do not count for a new head. A review finding requires
+worker-owned smoke before the next governed review cycle. An independent-smoke
+finding requires only a worker fix and fresh independent smoke; it never opens a
+later pack-review cycle. Exact folding and SHA-binding stay in
+`docs/worker-smoke-testing.md`.
 
 ### Reconciler
 

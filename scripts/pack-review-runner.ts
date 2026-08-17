@@ -32,6 +32,7 @@ import {
   PACK_REVIEW_AUTHORITY_PHASES,
   PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS,
   acknowledgePackReviewReset,
+  assertPackReviewSmokeAdmission,
   commitPackReviewAuthorityTransition,
   commitPackReviewTerminal,
   commitPackReviewTriage,
@@ -41,6 +42,7 @@ import {
   recordPackReviewPublication,
   selectPackReviewEvidence,
   selectPackReviewGptSourceCardinality,
+  smokeOrderingRequired,
   stableJson,
   type PackReviewAuthorityDocument,
   type PackReviewAuthorityOptions,
@@ -293,6 +295,7 @@ interface AuthoritativeReviewContext {
   tier: PackReviewTier;
   issueNumber: number;
   snapshotDigest: string;
+  issueBody?: string;
   frozenScope: ResolvedScopeContext;
 }
 
@@ -685,7 +688,7 @@ function resolveAuthoritativeReviewContext(input: StartInput, target: {
       unverifiedIssueConstraints: true,
     };
   }
-  return { tier, issueNumber, snapshotDigest, frozenScope };
+  return { tier, issueNumber, snapshotDigest, issueBody: body, frozenScope };
 }
 
 function parseReviewPayload(stdout: string): ReviewPayload {
@@ -2420,6 +2423,21 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       cycleId: authority.cycle.cycleId,
       httpStatus: 409,
     };
+  }
+  if (smokeOrderingRequired(authoritative.issueBody)) {
+    try {
+      assertPackReviewSmokeAdmission({ authority, headSha: target.headSha });
+    } catch (error) {
+      return {
+        ok: false,
+        created: false,
+        reused: false,
+        reason: error instanceof Error ? error.message : String(error),
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        httpStatus: 409,
+      };
+    }
   }
 
   const roundOrdinal = (authority.cycle?.consumedHeadShas.length ?? 0) + 1;

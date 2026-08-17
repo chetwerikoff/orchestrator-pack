@@ -61,6 +61,19 @@ import {
   smokeProgressPath,
 } from './lib/worker-smoke-lifecycle.ts';
 import { verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
+import {
+  assertIndependentSmokeAdmission,
+  commitSmokeOrderingTransition,
+  initializePackReviewAuthority,
+  observePackReviewHead,
+  readPackReviewAuthority,
+  smokeOrderingRequired,
+  type PackReviewAuthorityOptions,
+  type PackReviewTier,
+  type SmokeOrderingActor,
+} from './pack-review-state.ts';
+import { resolvePackReviewRunStoreRoot } from './lib/pack-review-run-store.ts';
+import { parseComplexityTierFence } from './lib/tier-gate-core.ts';
 import { selectRuntimeAdapter } from './runtime/registry.ts';
 import type {
   RuntimeAdapter,
@@ -76,6 +89,7 @@ export interface CliOptions {
   headSha: string;
   issueBodyFile: string;
   smokeComplexity: SmokeComplexity | '';
+  smokeActor?: SmokeOrderingActor;
   repoRoot: string;
   cwd: string;
   dryRun: boolean;
@@ -160,6 +174,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
     headSha: '',
     issueBodyFile: '',
     smokeComplexity: '',
+    smokeActor: 'worker-owned',
     repoRoot: process.cwd(),
     cwd: process.cwd(),
     dryRun: false,
@@ -174,6 +189,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case '--head-sha': options.headSha = args[++index] ?? ''; break;
       case '--issue-body-file': options.issueBodyFile = args[++index] ?? ''; break;
       case '--smoke-complexity': options.smokeComplexity = (args[++index] ?? '') as SmokeComplexity; break;
+      case '--smoke-actor': options.smokeActor = (args[++index] ?? '') as SmokeOrderingActor; break;
       case '--repo-root': options.repoRoot = args[++index] ?? options.repoRoot; break;
       case '--cwd': options.cwd = args[++index] ?? options.cwd; break;
       case '--dry-run': options.dryRun = true; break;
@@ -1050,6 +1066,75 @@ export async function runGateCheck(
   }
 }
 
+interface SmokeOrderingBinding {
+  actor: SmokeOrderingActor;
+  prNumber: number;
+  headSha: string;
+  options: PackReviewAuthorityOptions;
+}
+
+function beginSmokeOrdering(
+  options: CliOptions,
+  issueBody: string,
+): SmokeOrderingBinding | null {
+  const actor = options.smokeActor ?? 'worker-owned';
+  if (actor !== 'worker-owned' && actor !== 'independent') {
+    throw new Error('smoke_actor_unsupported');
+  }
+  const required = smokeOrderingRequired(issueBody);
+  if (!required && actor === 'worker-owned') return null;
+  const fence = parseComplexityTierFence(issueBody);
+  if (fence.kind !== 'tier-fence') {
+    if (actor === 'worker-owned') return null;
+    throw new Error('smoke_ordering_tier_missing');
+  }
+  const projectId = 'orchestrator-pack';
+  const storeRoot = resolvePackReviewRunStoreRoot({
+    projectId,
+    storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT,
+  });
+  const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
+  let authority = initializePackReviewAuthority({
+    prNumber: options.prNumber,
+    headSha: options.headSha,
+    tier: fence.tier as PackReviewTier,
+    options: authorityOptions,
+  });
+  if (authority.currentHeadSha !== options.headSha.toLowerCase()) {
+    authority = observePackReviewHead({
+      prNumber: options.prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      headSha: options.headSha,
+      options: authorityOptions,
+    });
+  }
+  if (actor === 'independent') assertIndependentSmokeAdmission({ authority, headSha: options.headSha });
+  const started = commitSmokeOrderingTransition({
+    prNumber: options.prNumber,
+    expectedTransitionSeq: authority.transitionSeq,
+    actor,
+    headSha: options.headSha,
+    status: 'started',
+    options: authorityOptions,
+  });
+  void started;
+  return { actor, prNumber: options.prNumber, headSha: options.headSha, options: authorityOptions };
+}
+
+function finishSmokeOrdering(binding: SmokeOrderingBinding | null, status: 'passed' | 'failed'): void {
+  if (!binding) return;
+  const authority = readPackReviewAuthority(binding.prNumber, binding.options);
+  if (!authority) throw new Error('smoke_ordering_authority_missing_at_terminal');
+  commitSmokeOrderingTransition({
+    prNumber: binding.prNumber,
+    expectedTransitionSeq: authority.transitionSeq,
+    actor: binding.actor,
+    headSha: binding.headSha,
+    status,
+    options: binding.options,
+  });
+}
+
 async function runSmokeAttempt(options: CliOptions): Promise<number> {
   const issueBody = readIssueBody(options.issueBodyFile);
   const plan = resolveSmokeRequirement(issueBody);
@@ -1098,6 +1183,24 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
   if (!headBinding.ok) {
     const report = operationalReport('BLOCKED', options, {
       action: 'bind smoke to current head', expected: options.headSha, observed: `${headBinding.reason}:${headBinding.observed}`, adapterId: adapter.id,
+    });
+    publishSmokeReport(report, options);
+    emit({ ok: false, report }, options.json);
+    return 1;
+  }
+
+  let orderingBinding: SmokeOrderingBinding | null = null;
+  let orderingOutcome: 'passed' | 'failed' = 'failed';
+  try {
+    orderingBinding = beginSmokeOrdering(options, issueBody);
+  } catch (error) {
+    const report = operationalReport('BLOCKED', options, {
+      action: 'admit smoke actor ordering',
+      expected: options.smokeActor === 'independent'
+        ? 'settled pack-review obligations'
+        : 'worker-owned smoke before pack-review',
+      observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
+      adapterId: adapter.id,
     });
     publishSmokeReport(report, options);
     emit({ ok: false, report }, options.json);
@@ -1282,6 +1385,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     const report = normalized.report;
     report.terminalCleanup = terminalCleanup;
     if (!lifecycleCleanup.clean && report.result === 'PASS') report.result = 'FAIL';
+    orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
     publishSmokeReport(report, options);
     emit({ ok: report.result === 'PASS', report, lifecycleCleanup }, options.json);
     return report.result === 'PASS' ? 0 : 1;
@@ -1299,6 +1403,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     emit({ ok: false, report }, options.json);
     return 1;
   } finally {
+    try { finishSmokeOrdering(orderingBinding, orderingOutcome); } catch { /* missing ordering evidence remains fail-closed */ }
     process.off('SIGINT', onSigint);
     process.off('SIGTERM', onSigterm);
     if (worker && !cleanupFinished) {
@@ -1314,7 +1419,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     case 'validate-plan': return runValidatePlan(options);
     case 'gate-check': return runGateCheck(options);
     case 'run': return runSmokeAttempt(options);
-    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run> [options]');
+    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run> [options] (run accepts --smoke-actor worker-owned|independent)');
   }
 }
 

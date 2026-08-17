@@ -1,7 +1,8 @@
 # Worker smoke testing (Issues #1061, #1138, and #1343)
 
 Workers prove operator-visible behavior with a **head-bound Orca smoke run** before
-`ready_for_review`. CI remains mandatory and separate. Issue #1138 adds progress-aware
+`ready_for_review`. CI remains mandatory and separate. Issue #1436 distinguishes the
+implementing worker's smoke from the later independent smoke. Issue #1138 adds progress-aware
 deadlines, durable spawn state, cooperative cancellation, deterministic recovery, and an
 orthogonal lifecycle-cleanliness gate without changing Browser-GPT transport. Issue #1343
 changes readiness evidence from one latest all-covering report to a trusted point-in-time fold of
@@ -21,6 +22,35 @@ New action-producing tasks must declare a plan during authoring:
 ```bash
 node scripts/draft-discipline.mjs smoke-test-plan --draft path/to/issue-body.md
 ```
+
+## Actor ordering
+
+The two smoke actors are separate:
+
+1. **Worker-owned smoke** is the implementing worker's exact-head gate. It runs
+   after implementation and before pack-review, and the worker fixes and repeats
+   it until that exact head passes.
+2. **Independent smoke** is a separate post-review actor. It runs only after
+   every tier/cap-governed pack-review obligation has settled.
+
+The enforced order is:
+
+```text
+implementation
+  -> worker-owned smoke PASS
+  -> pack-review cycle
+  -> review finding: fix + worker-owned smoke PASS + next review cycle
+  -> review obligations settled
+  -> independent smoke
+  -> independent finding: fix + fresh independent smoke
+  -> completion
+```
+
+Pack-review admission refuses an exact head without a passing worker-owned
+smoke. Independent-smoke dispatch refuses unsettled review obligations. Once
+independent smoke has started, pack-review remains forbidden, including after an
+independent-smoke fix. A fresh head after an independent finding therefore gets
+fresh independent smoke, not another review cycle.
 
 ## Pre-smoke prerequisite preparation (parent worker)
 
@@ -73,10 +103,17 @@ worker-smoke-run run \
   --issue <N> \
   --pr <PR> \
   --head-sha <40-hex> \
+  --smoke-actor worker-owned \
   --issue-body-file /tmp/issue-body.md \
   --repo-root "$PWD" \
   --cwd "$PWD"
 ```
+
+The post-review actor uses the same bounded launcher and exact target binding,
+but must opt in explicitly with `--smoke-actor independent`. The launcher
+admits that actor only after the existing pack-review authority records settled
+obligations; it records a started independent attempt before child creation and
+binds the final PASS to that attempt's exact head.
 
 The supported lifecycle is:
 
@@ -322,6 +359,11 @@ allowed only when all independent predicates hold:
 - the current clearing publication's terminal cleanup and singular receipt/provenance validate; and
 - there is no active admission, live bound worker-smoke child, incomplete teardown, executable
   ambiguous state, corrupt registry, or unsafe smoke operator-routing file.
+
+This handoff is the worker-owned-smoke boundary. It does not authorize
+independent smoke. Independent smoke is admitted only by the settled review
+state, and its PASS on the final head is the completion evidence. No later
+pack-review is legal after that actor starts.
 
 Accumulated historical comments supply tuple evidence only; they are not authenticated or ordered
 by the singular receipt. A same-head aggregate PASS cannot bypass unclean lifecycle state. Operator

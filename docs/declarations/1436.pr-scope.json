@@ -4,6 +4,10 @@
   "declared_paths": [
     "docs/declarations/1436.pr-scope.json",
     "docs/orchestration-runbook.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts",
     "scripts/worker-smoke-entrypoint-1359.test.ts"
@@ -17,8 +21,12 @@
     "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/",
+    "docs/declarations/1436.pr-scope.json",
     "docs/orchestration-runbook.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts",
     "scripts/worker-smoke-entrypoint-1359.test.ts"
