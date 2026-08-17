@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { parseHistoricalDispositions, HISTORICAL_DISPOSITION_SOURCE, type HistoricalDisposition } from '../runtime-retirement/retired-surface-guard.ts';
 import { generateCurrentHeadProjection, serializeCurrentHeadProjection } from '../gate-runner/census-generator.ts';
 import { assertUntrackedStagePath, loadMeasuredTree, type MeasuredTree, type MeasuredTreeFile } from './git-tree.ts';
+import { createScriptTargetResolver } from './target-resolver.ts';
 import {
   jsonStringValueRanges,
   scanPowerShellTokens,
@@ -123,31 +124,6 @@ function exactHistoricalMap(tree: MeasuredTree): ReadonlyMap<string, HistoricalD
   return new Map(records.map((record) => [record.path, record]));
 }
 
-function normalizedScriptCandidate(token: string): string {
-  return normalizePath(token).replace(/^\.\//u, '');
-}
-
-function scriptResolver(trackedPs1: readonly string[]): {
-  resolvesWholePath(candidate: string): boolean;
-  resolve(token: string): string | undefined;
-} {
-  const lowerToPaths = new Map<string, string[]>();
-  for (const path of trackedPs1) {
-    const key = path.toLowerCase();
-    const values = lowerToPaths.get(key) ?? [];
-    values.push(path);
-    lowerToPaths.set(key, values);
-  }
-  const resolveToken = (token: string): string | undefined => {
-    const candidate = normalizedScriptCandidate(token);
-    const exact = lowerToPaths.get(candidate.toLowerCase()) ?? [];
-    if (exact.length === 1) return exact[0];
-    const suffix = trackedPs1.filter((path) => path.toLowerCase().endsWith(`/${candidate.toLowerCase()}`));
-    return suffix.length === 1 ? suffix[0] : undefined;
-  };
-  return { resolvesWholePath: (candidate) => resolveToken(candidate) !== undefined, resolve: resolveToken };
-}
-
 function occurrenceFromToken(token: TokenOccurrence): EvidenceOccurrence {
   return { sourcePath: token.sourcePath, line: token.line, column: token.column, tokenKind: token.tokenKind, matchedBytes: token.matchedBytes };
 }
@@ -193,7 +169,6 @@ function occurrenceIndexInLine(bytes: Buffer, occurrence: EvidenceOccurrence): n
 function instructionKind(file: MeasuredTreeFile, occurrence: EvidenceOccurrence, inFence: boolean): SourceKind {
   const rawLine = sourceLine(file.bytes, occurrence.line);
   const stripped = stripInstructionPrefix(rawLine);
-  const normalizedMatched = occurrence.matchedBytes.toLowerCase();
   const occurrenceAt = occurrenceIndexInLine(file.bytes, occurrence);
   const prefix = rawLine.slice(0, occurrenceAt);
   const commandPattern = /^(?:pwsh(?:\.exe)?|powershell(?:\.exe)?|[^\s]+\.ps1|&\s+[^\s]+\.ps1)(?:\s|$)/iu;
@@ -205,7 +180,6 @@ function instructionKind(file: MeasuredTreeFile, occurrence: EvidenceOccurrence,
   const modal = /\b(?:must|should|required\s+to|may\s+only)\b/iu.test(lowerPrefix);
   const startsVerb = ACTION_VERBS.some((candidate) => new RegExp(`^\\s*${candidate}(?:\\s|$)`, 'iu').test(stripInstructionPrefix(prefix)));
   if (!negative && (startsVerb || (modal && verb))) return 'instruction-directive';
-  void normalizedMatched;
   return 'instruction-reference-only';
 }
 
@@ -282,22 +256,23 @@ export async function producePortStageEvidence(input: {
   assertUntrackedStagePath(tree, outputPath);
   const historical = exactHistoricalMap(tree);
   const trackedPs1 = tree.files.filter((file) => isClassifiedRoot(file.path) && /\.ps1$/iu.test(file.path) && !historical.has(file.path)).map((file) => file.path);
-  const resolver = scriptResolver(trackedPs1);
+  const resolver = createScriptTargetResolver(trackedPs1);
   const entries: EvidenceEntry[] = [];
   const unclassified: EvidenceOccurrence[] = [];
   const unresolved: EvidenceOccurrence[] = [];
   for (const file of tree.files) {
     if (historical.has(file.path)) continue;
     const classified = isClassifiedRoot(file.path);
+    const resolvesWholePath = (candidate: string): boolean => resolver.resolvesWholePath(file.path, candidate);
     if (!isUtf8(file.bytes)) {
       if (classified) continue;
-      const tokenBytes = scanPowerShellTokens({ sourcePath: file.path, bytes: file.bytes, resolvesWholePath: resolver.resolvesWholePath });
+      const tokenBytes = scanPowerShellTokens({ sourcePath: file.path, bytes: file.bytes, resolvesWholePath });
       unclassified.push(...tokenBytes.map(occurrenceFromToken));
       continue;
     }
     if (classified && /\.ps1$/iu.test(file.path)) continue;
     const ranges = classified ? sourceRanges(file) : undefined;
-    const tokens = scanPowerShellTokens({ sourcePath: file.path, bytes: file.bytes, ranges, resolvesWholePath: resolver.resolvesWholePath });
+    const tokens = scanPowerShellTokens({ sourcePath: file.path, bytes: file.bytes, ranges, resolvesWholePath });
     if (!classified) {
       unclassified.push(...tokens.map(occurrenceFromToken));
       continue;
@@ -310,7 +285,7 @@ export async function producePortStageEvidence(input: {
       let resolvedScriptPath: string | undefined;
       let targetResolution: 'exact' | 'unresolved' | undefined;
       if (token.tokenKind === 'script') {
-        resolvedScriptPath = resolver.resolve(token.matchedBytes);
+        resolvedScriptPath = resolver.resolve(file.path, token.matchedBytes);
         targetResolution = resolvedScriptPath ? 'exact' : 'unresolved';
         if (currentPrescriptive && !resolvedScriptPath) unresolved.push(occurrence);
       }
