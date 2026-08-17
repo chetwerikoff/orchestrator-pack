@@ -138,6 +138,11 @@ when the current activation lineage, current WorkerAssignment generation, and ex
 RuntimeAdapter-resolved worker still agree. Routine continuation remains the
 existing S2 one-shot path.
 
+The production S1 census resolves only the exact current workers attached to
+current local WorkerAssignments. This covers supervised child worktrees without
+using the repository root or active worktree as fleet scope, while unassigned
+external terminals remain excluded by the existing provenance filter.
+
 A successful supervised local start must go through the PACK
 `scripts/pr2-foundation/supervised-worker-start.ts` boundary so the proven Orca
 Dispatch publishes the current local WorkerAssignment. The persistence-safe binding

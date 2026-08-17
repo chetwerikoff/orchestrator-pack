@@ -20,7 +20,7 @@ Worktree lifecycle remains the deliberate narrower exception documented in `docs
 | `scripts/runtime/task-lifecycle.ts` | spawn, send, read, liveness, stop | `already-runtime-neutral` | Direct lifecycle caller retains exact spawned identity after ambiguous dispatch and never resends. |
 | `scripts/pr2-foundation/fleet-observer.ts` | list/find, read, liveness | `already-runtime-neutral` | Observer-only fleet census through `RuntimeAdapter`; no actuation or compatibility bridge. |
 | `scripts/pr2-foundation/fleet-nudge-production.ts` | find, send | `already-runtime-neutral` | Revalidates the exact current worker and performs the single S2 dispatch attempt through `RuntimeAdapter`. |
-| `scripts/pr2-foundation/scheduler.ts` | runtime composition, fleet observer, list/find, read, liveness | `use-runtime-interface` | Production scheduler composes the selected runtime and observer, scoped to the repository worktree. |
+| `scripts/pr2-foundation/scheduler.ts` | runtime composition, fleet observer, list/find, read, liveness | `use-runtime-interface` | Production scheduler composes the selected runtime and observer; the census resolves each current assignment to its exact worker across assigned worktrees. |
 | `scripts/invoke-gated-worker-nudge.ts` | find, send | `use-runtime-interface` | Issue/PR keyed claim and journal admission before one dispatch. |
 | `scripts/lib/pack-review-worker-notification.ts` | runtime composition, find, send, side-effect fence | `use-runtime-interface` | Loads persisted exact runtime identity; ambiguous delivery is terminal. |
 | `scripts/pack-review-worker-notification.cases.ts` | spawn, find, send | `already-runtime-neutral` | Focused review-delivery coverage. |
