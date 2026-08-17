@@ -973,7 +973,11 @@ export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[],
 export function validateReviewEpisodeTopology(state: ReviewEpisodeStateV1, phase: 'pre-lens' | 'final-acceptance'): string[] {
   const errors: string[] = [];
   if (!state.tier) return ['review episode tier is unresolved'];
-  const expected: ReviewStage[] = state.tier === 'T3' ? (phase === 'pre-lens' ? ['competitive', 'architectural-review'] : ['competitive', 'architectural-review', 'architectural-lens', 'architectural']) : ['architectural'];
+  const expected: ReviewStage[] = state.tier === 'T3'
+    ? (phase === 'pre-lens' ? ['competitive', 'architectural-review'] : ['competitive', 'architectural-review', 'architectural-lens', 'architectural'])
+    : state.tier === 'T2'
+      ? (phase === 'pre-lens' ? ['architectural-review'] : ['architectural-review', 'architectural'])
+      : ['architectural'];
   for (const stage of expected) {
     const receipts = state.receiptsByStage[stage]; const complete = receipts.filter((receipt) => receipt.outcome === 'complete');
     if (complete.length !== 1) errors.push(`${stage} requires exactly one credentialing complete stageAttemptId in the review episode`);

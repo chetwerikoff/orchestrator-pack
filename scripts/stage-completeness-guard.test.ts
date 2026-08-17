@@ -308,6 +308,7 @@ describe('Issue #1150 stage authority', () => {
     architectural.receipt.tier = 'T2';
     const accepted = deriveReviewEpisodeState([architectural.receipt], relay(architectural.captures), authority([architectural.receipt]));
     expect(accepted.errors, accepted.errors.join('\n')).toEqual([]);
+    expect(validateReviewEpisodeTopology(accepted, 'pre-lens')).toEqual([]);
 
     const competitive = sourceStage('competitive', 1, 3);
     competitive.receipt.tier = 'T2';
