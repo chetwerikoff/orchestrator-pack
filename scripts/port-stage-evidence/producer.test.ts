@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runProcess } from '#opk-kernel/subprocess';
 import { ARTIFACT_PATHS, ARTIFACT_ROLES, producePortStageEvidence, verifyEvidenceIntegrity } from './producer.ts';
+import { createScriptTargetResolver } from './target-resolver.ts';
 import { jsonStringValueRanges, scanPowerShellTokens, tsStringRanges, yamlScalarRanges } from './tokens.ts';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
@@ -54,10 +55,29 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     ]);
   });
 
-  it('limits workflow scanning to scalar value ranges including block scalar content', () => {
-    const bytes = Buffer.from('pwsh_key: harmless\nrun: pwsh -File scripts/verify.ps1\nscript: |\n  scripts/check-reusable.ps1\n', 'utf8');
+  it('limits workflow scanning to scalar values across block, sequence, and flow forms', () => {
+    const bytes = Buffer.from([
+      'pwsh_key: harmless',
+      'run: pwsh -File scripts/verify.ps1',
+      'script: |',
+      '  scripts/check-reusable.ps1',
+      'matrix: [pwsh, scripts/verify.ps1]',
+      'env: { pwsh_key: harmless, SHELL: powershell.exe, SCRIPT: scripts/check-reusable.ps1 }',
+      'steps:',
+      '  - scripts/verify.ps1',
+      '',
+    ].join('\n'), 'utf8');
     const tokens = scanPowerShellTokens({ sourcePath: '.github/workflows/x.yml', bytes, ranges: yamlScalarRanges(bytes), resolvesWholePath: () => false });
-    expect(tokens.map((token) => token.matchedBytes)).toEqual(['pwsh', 'scripts/verify.ps1', 'scripts/check-reusable.ps1']);
+    expect(tokens.map((token) => token.matchedBytes)).toEqual([
+      'pwsh',
+      'scripts/verify.ps1',
+      'scripts/check-reusable.ps1',
+      'pwsh',
+      'scripts/verify.ps1',
+      'powershell.exe',
+      'scripts/check-reusable.ps1',
+      'scripts/verify.ps1',
+    ]);
   });
 
   it('scans JSON/TypeScript string values but not JSON keys or TS comments', () => {
@@ -65,6 +85,19 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     expect(scanPowerShellTokens({ sourcePath: 'package.json', bytes: json, ranges: jsonStringValueRanges(json), resolvesWholePath: () => false }).map((token) => token.matchedBytes)).toEqual(['scripts/verify.ps1', 'pwsh']);
     const ts = Buffer.from('// pwsh\nexport default { value: "scripts/verify.ps1", shell: `pwsh` };', 'utf8');
     expect(scanPowerShellTokens({ sourcePath: 'tool.config.ts', bytes: ts, ranges: tsStringRanges(ts), resolvesWholePath: () => false }).map((token) => token.matchedBytes)).toEqual(['scripts/verify.ps1', 'pwsh']);
+  });
+
+  it('resolves only exact repo/source-relative or PSScriptRoot targets without suffix guessing', () => {
+    const resolver = createScriptTargetResolver([
+      'scripts/tools/check.ps1',
+      'scripts/other/check.ps1',
+      'scripts/work/run.ps1',
+    ]);
+    expect(resolver.resolve('scripts/work/caller.ts', '../tools/check.ps1')).toBe('scripts/tools/check.ps1');
+    expect(resolver.resolve('scripts/work/caller.ts', '$PSScriptRoot/run.ps1')).toBe('scripts/work/run.ps1');
+    expect(resolver.resolve('scripts/work/caller.ts', 'scripts/tools/check.ps1')).toBe('scripts/tools/check.ps1');
+    expect(resolver.resolve('scripts/work/caller.ts', 'check.ps1')).toBeUndefined();
+    expect(resolver.resolve('scripts/work/caller.ts', '../../../scripts/tools/check.ps1')).toBeUndefined();
   });
 
   it('produces and integrity-verifies baseline facts from the exact PR-head candidate Git tree', async () => {
