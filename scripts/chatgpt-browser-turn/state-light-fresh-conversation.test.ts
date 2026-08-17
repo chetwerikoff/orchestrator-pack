@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -215,6 +216,7 @@ async function runNewChatTurn(page: any, outputPath: string, timeoutMs = '5000')
   enqueueBrowserForTurn(mocks, page);
   return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
     ...STATE_LIGHT_TURN_BASE_ARGV,
+    '--invocation-id', randomUUID(),
     '--output', outputPath,
     '--new-chat',
     '--project-url', PROJECT_URL,
@@ -1021,6 +1023,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
   function runProductionNewChat(outputPath: string, timeoutMs: string) {
     return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
       ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
       '--output', outputPath,
       '--new-chat',
       '--project-url', PROJECT_URL,
