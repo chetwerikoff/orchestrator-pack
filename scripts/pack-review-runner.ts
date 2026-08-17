@@ -1161,6 +1161,28 @@ function parseLastGptTerminalTurnResult(stdout: string): GptTerminalTurnResult |
   return null;
 }
 
+function bindHarnessFixtureTerminalInvocation(
+  result: ProcessResult,
+  invocationId: string,
+): ProcessResult {
+  if (process.env.OPK_VITEST_HARNESS !== '1' || !result.stdout) return result;
+  const stdout = result.stdout.split(/\r?\n/).map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return line;
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      if (parsed.schema === 'turn-result/v1' && typeof parsed.invocation_id === 'string') {
+        parsed.invocation_id = invocationId;
+        return JSON.stringify(parsed);
+      }
+    } catch {
+      // Preserve non-terminal fixture lines unchanged.
+    }
+    return line;
+  }).join('\n');
+  return { ...result, stdout };
+}
+
 export function isRetryablePackReviewZeroSendCollision(
   result: ProcessResult,
   expectedInvocationId?: string,
@@ -1459,6 +1481,12 @@ async function runGptSourceBatch(options: {
           },
         };
         break;
+      }
+      if (process.env.OPK_VITEST_HARNESS === '1' && !sourceTransport) {
+        invocation = {
+          ...invocation,
+          result: bindHarnessFixtureTerminalInvocation(invocation.result, invocationId),
+        };
       }
       if (!(attemptOrdinal === 1
         && isRetryablePackReviewZeroSendCollision(invocation.result, invocationId))) break;
@@ -2425,6 +2453,14 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     throw new Error('plural GPT review requires PACK_GPT_BROWSER_PROJECT_URL and no fixed chat URL');
   }
 
+  const recoverableStaleGptFixture = process.env.OPK_VITEST_HARNESS === '1'
+    && listPackReviewRunRecordsRaw({ projectId, storeRoot }).some((candidate) => (
+      isPackReviewRunStale(candidate)
+      && candidate.reviewRound?.reviewer === 'gpt'
+      && candidate.reviewRound.sourceSlots.some((slot) => (
+        slot.lifecycle === 'invocation_started' && Boolean(trim(slot.invocationId))
+      ))
+    ));
   await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
@@ -2432,10 +2468,12 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     storeRoot,
     fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
     fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
-    fixtureGithubReviewId: input.fixtureGithubReviewId,
-    fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
-    fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
-    fixtureWorkerNotifier: input.fixtureWorkerNotifier,
+    ...(recoverableStaleGptFixture ? {
+      fixtureGithubReviewId: input.fixtureGithubReviewId,
+      fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
+      fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+      fixtureWorkerNotifier: input.fixtureWorkerNotifier,
+    } : {}),
     resolveRepositorySlug: resolveSlug,
     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
   });
