@@ -237,7 +237,8 @@ export function topologyIdentityKey(identity: TopologyIdentity): string {
 }
 
 export function policyForStage(tier: ReviewTier, stage: ReviewStage): ReviewPolicy {
-  if (stage === 'competitive' || stage === 'architectural-review') return 'triple-source/v1';
+  if (stage === 'competitive') return tier === 'T3' ? 'triple-source/v1' : 'single-source/v1';
+  if (stage === 'architectural-review') return tier === 'T1' ? 'single-source/v1' : 'triple-source/v1';
   return 'single-source/v1';
 }
 
@@ -296,6 +297,12 @@ export function validateTopology(
         errors.push('reviewerCardinality does not equal required slot count');
       }
     }
+  }
+  if (tier && topology.stage === 'competitive' && tier !== 'T3') {
+    errors.push('competitive is valid only for T3');
+  }
+  if (tier && topology.stage === 'architectural-review' && tier === 'T1') {
+    errors.push('architectural-review is not valid for T1');
   }
   if (tier && policyForStage(tier, topology.stage) !== topology.policyVersion) {
     errors.push('policy does not match stage');
