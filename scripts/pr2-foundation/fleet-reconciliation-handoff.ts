@@ -19,6 +19,7 @@ export const MAX_FLEET_RECONCILIATION_HANDOFF_BYTES = 16_384 as const;
 
 export type FleetReconciliationReason =
   | 'target_unresolved'
+  | 'target_gone'
   | 'target_stale'
   | 'observer_untrusted'
   | 'assignment_untrusted'
