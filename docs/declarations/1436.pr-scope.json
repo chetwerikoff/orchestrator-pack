@@ -8,9 +8,9 @@
     "scripts/pack-review-ordering.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts",
-    "scripts/worker-smoke.test.ts",
-    "scripts/worker-smoke-entrypoint-1359.test.ts"
+    "scripts/worker-smoke.test.ts"
   ],
   "denylist": [
     ".github/",
@@ -27,9 +27,9 @@
     "scripts/pack-review-ordering.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts",
-    "scripts/worker-smoke.test.ts",
-    "scripts/worker-smoke-entrypoint-1359.test.ts"
+    "scripts/worker-smoke.test.ts"
   ],
   "source_revision": "70fb45279991f0617b5d43153b425f7be5c08dca"
 }
