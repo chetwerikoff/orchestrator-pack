@@ -141,7 +141,9 @@ function normalizeInboxCheck(
   }
 
   if (result.count === 0 && result.delivery === undefined && result.messages === undefined) {
-    return { status: 'empty', runId };
+    return topRunId === runId
+      ? { status: 'empty', runId }
+      : { status: 'unknown', reason: 'runtime_inbox_run_identity_unproven' };
   }
 
   const deliveryRaw = asRecord(result.delivery) ?? result as unknown as Record<string, unknown>;
