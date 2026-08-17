@@ -19,6 +19,12 @@ You are reviewing a pull request for an orchestrator-pack managed repository.
 - Do **not** create GitHub reviews, labels, statuses, PR metadata changes,
   merges, branch/file mutations, or any repository mutation except the one
   bounded top-level source comment explicitly authorized below.
+- For one frozen source invocation, invoke at most one send-capable top-level
+  comment-create mutation. Once that mutation has been invoked, never invoke a
+  second comment-create mutation for the same invocation, even if the first
+  call reports an error, timeout, transport failure, or otherwise unknown
+  delivery. Treat such an outcome as possibly delivered; runner-side GitHub
+  census/reread owns recovery.
 
 ## Review target
 
