@@ -261,6 +261,17 @@ function readOwner(slotPath: string): { child: string; owner: string; pid: numbe
   }
 }
 
+function retireEmptyMutationSlot(slotPath: string): boolean {
+  try {
+    if (!lstatSync(slotPath).isDirectory()) return false;
+    if (readdirSync(slotPath).length !== 0) return false;
+    rmdirSync(slotPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function reclaimDeadOwner(slotPath: string): boolean {
   const incumbent = readOwner(slotPath);
   if (!incumbent || !ownerPidProvablyDead(incumbent.pid)) return false;
@@ -315,6 +326,7 @@ export function acquireObservationMutation(
       try { rmdirSync(staging); } catch { /* best effort */ }
       const code = error instanceof Error && 'code' in error ? String((error as NodeJS.ErrnoException).code) : '';
       if (code !== 'EEXIST' && code !== 'ENOTEMPTY') throw error;
+      if (retireEmptyMutationSlot(slotPath)) continue;
       if (!reclaimDeadOwner(slotPath)) throw new Error('observation_mutation_busy');
     }
   }
@@ -331,15 +343,12 @@ export function releaseObservationMutation(lease: ObservationMutationLease): boo
     const raw = JSON.parse(readFileSync(lease.ownerChildPath, 'utf8')) as { owner?: string; pid?: number };
     if (raw.owner !== lease.owner || raw.pid !== process.pid) return false;
     unlinkSync(lease.ownerChildPath);
-  } catch {
+  } catch (error) {
+    const code = error instanceof Error && 'code' in error ? String((error as NodeJS.ErrnoException).code) : '';
+    if (code === 'ENOENT') return retireEmptyMutationSlot(lease.slotPath);
     return false;
   }
-  try {
-    rmdirSync(lease.slotPath);
-    return true;
-  } catch {
-    return false;
-  }
+  return retireEmptyMutationSlot(lease.slotPath);
 }
 
 function validateTransition(
@@ -388,12 +397,18 @@ export function mutateStateLightTurnObservation(
   mutation: (current: StateLightTurnObservationRecord) => StateLightTurnObservationRecord,
 ): StateLightTurnObservationRecord {
   const lease = acquireObservationMutation(profileKey, invocationId);
+  let committed: StateLightTurnObservationRecord;
   try {
     const current = readStateLightTurnObservation(profileKey, invocationId);
-    return commitWithinLease(lease, current, mutation(current));
-  } finally {
+    committed = commitWithinLease(lease, current, mutation(current));
+  } catch (error) {
     releaseObservationMutation(lease);
+    throw error;
   }
+  if (!releaseObservationMutation(lease)) {
+    throw new Error('observation_mutation_retirement_cleanup_required');
+  }
+  return committed;
 }
 
 export function transitionStateLightTurnObservation(input: {
