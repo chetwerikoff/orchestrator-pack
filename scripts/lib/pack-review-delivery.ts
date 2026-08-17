@@ -729,11 +729,13 @@ export async function deliverPackReviewVerdict(
       });
       const submitted = notified.state === 'submitted' || notified.state === 'delivered';
       if (!submitted) deliveryFailed = true;
-      const durableState: PackReviewDeliveryOutcome['state'] = submitted
+      const durableState: PackReviewDeliveryOutcome['state'] = notified.state === 'submitted'
         ? 'succeeded'
-        : notified.state === 'pre_dispatch_failure' || notified.state === 'failed'
-          ? 'failed'
-          : 'escalated';
+        : notified.state === 'delivered'
+          ? 'delivered'
+          : notified.state === 'pre_dispatch_failure' || notified.state === 'failed'
+            ? 'failed'
+            : 'escalated';
       recordChannelOutcome(
         'workerNotification',
         outcome(durableState, notified.reason, workerKey, options.clock),
