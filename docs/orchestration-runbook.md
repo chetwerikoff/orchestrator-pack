@@ -71,9 +71,67 @@ It never sends `worker_done`, never terminates a live attempt, and never becomes
 
 The architect is an expensive one-shot architecture/specification role, not a fleet monitor, scheduler, retry service, or recovery daemon.
 
+## Executor profiles by role, tier, and smoke complexity
+
+Executor selection for new manager/worker work and smoke work is a stable work-class-to-profile rule. It does not change tier classification, WorkerAssignment, RuntimeAdapter, browser-chat lifecycle, scheduler, recovery, review, or smoke authorities.
+
+Immediately before starting new work, resolve exactly one executor profile from the work class:
+
+```text
+manager work         -> manager executor profile
+T1 worker            -> T1 executor profile
+T2 worker            -> T2 executor profile
+T3 worker            -> T3 executor profile
+routine smoke work   -> routine-smoke executor profile
+complex smoke work   -> complex-smoke executor profile
+```
+
+Each profile has operator-local `agent`, `model`, and `effort` values under stable names:
+
+```text
+PACK_EXECUTOR_MANAGER_AGENT
+PACK_EXECUTOR_MANAGER_MODEL
+PACK_EXECUTOR_MANAGER_EFFORT
+
+PACK_EXECUTOR_T1_AGENT
+PACK_EXECUTOR_T1_MODEL
+PACK_EXECUTOR_T1_EFFORT
+
+PACK_EXECUTOR_T2_AGENT
+PACK_EXECUTOR_T2_MODEL
+PACK_EXECUTOR_T2_EFFORT
+
+PACK_EXECUTOR_T3_AGENT
+PACK_EXECUTOR_T3_MODEL
+PACK_EXECUTOR_T3_EFFORT
+
+PACK_EXECUTOR_SMOKE_ROUTINE_AGENT
+PACK_EXECUTOR_SMOKE_ROUTINE_MODEL
+PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT
+
+PACK_EXECUTOR_SMOKE_COMPLEX_AGENT
+PACK_EXECUTOR_SMOKE_COMPLEX_MODEL
+PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT
+```
+
+The variable names and work-class-to-profile mapping are tracked policy. Concrete `agent`, `model`, and `effort` values are machine/operator-local configuration and must stay out of tracked documentation. Keep those values only in the existing gitignored local configuration/environment surface, resolve them immediately before starting new work, and treat a local value change as applying to subsequent work without a repository Issue or PR. Changing the stable mapping or variable contract remains a repository policy change.
+
+`agent` selects an already-supported invocation/lifecycle path:
+
+- Cursor/Orca implementation work uses the existing local Cursor/Orca launch path. When it is a supervised worker, initial delivery uses the PACK supervised-start boundary below and publishes the current local WorkerAssignment only after Orca returns a proven ready receipt.
+- GPT/Browser-GPT implementation work uses the existing standalone chat-implementer contract in `docs/chat-executor-rules.md` and the Browser-GPT turn mechanics in `docs/browser-gpt-turn-runbook.md`. That path is not an AO-managed Orca worker start and does not synthesize or publish an Orca WorkerAssignment.
+- Changing a profile between those already-supported executor paths changes only which existing path subsequent work uses; it does not create a new selector or lifecycle authority.
+- Smoke complexity selects only between the routine-smoke and complex-smoke executor profiles; it does not create a task tier or change smoke admission, evidence, ownership, or lifecycle rules.
+
+This profile rule does not add a runtime selector, WorkerAssignment type, provider registry, scheduler, service, store, queue, daemon, fallback transport, or retry mechanism.
+
+For example, changing the local T3 `agent` between the already-supported GPT/Browser-GPT and Cursor/Orca paths changes the path used by subsequent T3 work without a tracked policy edit. Routine versus complex smoke works the same way: it selects the corresponding local smoke profile, whose concrete values remain local-only.
+
 ## Supervised initial delivery and WorkerAssignment
 
-Initial supervised Task delivery remains Orca-owned. Use the PACK supervised-start boundary through the canonical TypeScript launcher:
+This section applies only to executor paths that use the existing Orca-managed supervised worker lifecycle. Standalone GPT/Browser-GPT implementation work follows `docs/chat-executor-rules.md` and `docs/browser-gpt-turn-runbook.md` instead and does not create an Orca WorkerAssignment.
+
+For an Orca-managed supervised worker, initial Task delivery remains Orca-owned. Use the PACK supervised-start boundary through the canonical TypeScript launcher:
 
 ```text
 node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
@@ -190,7 +248,7 @@ Preserve:
 - claim/gate/journal accounting;
 - `dispatched | send_failed | dispatch_unknown` outcomes.
 
-Routine S2 dispatch stays on RuntimeAdapter. Initial delivery stays Orca-owned. Do not dual-send through Orca mail or another transport. `dispatch_unknown` is uncertain and never authorizes automatic resend or an alternate transport.
+Routine S2 dispatch stays on RuntimeAdapter. For executor paths using Orca-managed workers, initial delivery stays Orca-owned. Standalone Browser-GPT chat execution is outside this WorkerAssignment/S2 path. Do not dual-send through Orca mail or another transport. `dispatch_unknown` is uncertain and never authorizes automatic resend or an alternate transport.
 
 ## Scheduler phases
 
