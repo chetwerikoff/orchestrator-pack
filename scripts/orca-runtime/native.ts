@@ -25,7 +25,8 @@ export type OrcaOperationName =
   | 'terminal_read'
   | 'terminal_wait'
   | 'terminal_submit'
-  | 'terminal_close';
+  | 'terminal_close'
+  | 'orchestration_check';
 
 export type OrcaLocalOutcomeCategory =
   | 'process_launch_failed'
@@ -133,6 +134,7 @@ export function resolveOrcaOperation(args: readonly string[]): OrcaOperationName
   if (args[0] === 'worktree' && args[1] === 'current') return 'worktree_current';
   if (args[0] === 'worktree' && args[1] === 'show') return 'worktree_show';
   if (args[0] === 'worktree' && args[1] === 'rm') return 'worktree_remove';
+  if (args[0] === 'orchestration' && args[1] === 'check') return 'orchestration_check';
   if (args[0] !== 'terminal') return undefined;
   if (args[1] === 'create') return 'terminal_create';
   if (args[1] === 'list') return 'terminal_list';

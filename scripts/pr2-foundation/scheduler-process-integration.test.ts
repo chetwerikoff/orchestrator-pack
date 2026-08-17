@@ -397,7 +397,7 @@ describe('scheduler bounded-child production composition', () => {
     expect(timeouts[0]).toBeGreaterThan(timeouts[1]!);
   });
 
-  it('restores one S1 lineage across separate child processes and dispatches one existing S2 episode', async () => {
+  it('restores one S1 lineage across separate child processes and records one ambiguous S2 send attempt', async () => {
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');
     const epochPath = path.join(root, 'epoch.json');
@@ -425,13 +425,15 @@ describe('scheduler bounded-child production composition', () => {
     expect([firstObserver.tickSequence, secondObserver.tickSequence, thirdObserver.tickSequence]).toEqual([1, 2, 3]);
 
     const secondNudge = schedulerResult(second).fleetNudge as Record<string, unknown>;
-    expect(secondNudge.dispatched).toBe(1);
+    expect(secondNudge.dispatched).toBe(0);
     expect(secondNudge.sendAttempts).toBe(1);
+    const secondOutcomes = secondNudge.outcomes as Array<Record<string, unknown>>;
+    expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true);
     const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>;
     expect(thirdNudge.dispatched).toBe(0);
   });
 
-  it('classifies a quiet assigned child as idle and dispatches one S2 episode', async () => {
+  it('classifies a quiet assigned child as idle and records one ambiguous S2 send attempt', async () => {
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');
     const epochPath = path.join(root, 'epoch.json');
@@ -464,7 +466,11 @@ describe('scheduler bounded-child production composition', () => {
     const second = await runTick(env);
     const secondCensus = (observerResult(second).snapshot as Record<string, unknown>).census as Array<Record<string, unknown>>;
     expect(secondCensus[0]?.class).toBe('idle');
-    expect((schedulerResult(second).fleetNudge as Record<string, unknown>).dispatched).toBe(1);
+    const secondNudge = schedulerResult(second).fleetNudge as Record<string, unknown>;
+    expect(secondNudge.dispatched).toBe(0);
+    expect(secondNudge.sendAttempts).toBe(1);
+    const secondOutcomes = secondNudge.outcomes as Array<Record<string, unknown>>;
+    expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true);
     expect(fixture(fixturePath).dispatches).toHaveLength(1);
 
     const third = await runTick(env);
@@ -518,7 +524,7 @@ describe('scheduler bounded-child production composition', () => {
     expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
-  it('persists effect_untrusted after send_failed and does not retry the same episode', async () => {
+  it('preserves provider rejection as dispatch_unknown and does not retry the same episode', async () => {
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');
     const epochPath = path.join(root, 'epoch.json');
@@ -534,9 +540,9 @@ describe('scheduler bounded-child production composition', () => {
     await runTick(env);
     const second = await runTick(env);
     const secondOutcomes = (schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>;
-    expect(secondOutcomes.some((row) => row.outcome === 'send_failed')).toBe(true);
+    expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true);
     expect(schedulerResult(second).orchestratorRequired).toBe(true);
-    expect(handoff(env)).toMatchObject({ reason: 'effect_untrusted', decision: 'orchestrator_required' });
+    expect(handoff(env)).toMatchObject({ reason: 'dispatch_unknown', decision: 'orchestrator_required' });
     const third = await runTick(env);
     expect(fixture(fixturePath).sendCalls).toBe(1);
     expect(fixture(fixturePath).dispatches).toHaveLength(0);
@@ -554,7 +560,7 @@ describe('scheduler bounded-child production composition', () => {
     writeFileSync(legacyConfig, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
     writeFileSync(fixturePath, JSON.stringify({
       workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }],
-      dispatches: [],
+      dispatchOutcome: 'dispatch_unknown', dispatches: [],
     }));
     writeEpoch(epochPath, 'epoch-defaults', 'nonce-defaults');
     const env = processEnv(root, fixturePath, epochPath, legacyConfig, 'epoch-defaults', 'nonce-defaults');
@@ -566,7 +572,7 @@ describe('scheduler bounded-child production composition', () => {
     const first = await runTick(env);
     const second = await runTick(env);
     expect(observerResult(first).schedulerGeneration).toBe(observerResult(second).schedulerGeneration);
-    expect(fixture(fixturePath).dispatches).toHaveLength(1);
+    expect(fixture(fixturePath).dispatches).toHaveLength(0);
     expect(existsSync(path.join(legacyHome, '.local', 'state', 'orchestrator-pack', 'fleet-observer', 'snapshot.json'))).toBe(true);
   });
 
@@ -724,7 +730,7 @@ describe('scheduler bounded-child production composition', () => {
     expect(handoff(env)).toMatchObject({ reason: 'observer_untrusted', decision: 'orchestrator_required' });
   });
 
-  it('persists effect_untrusted handoff and returns non-success when post-send journal settlement fails', async () => {
+  it('returns non-success for journal settlement failure while preserving dispatch_unknown handoff', async () => {
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');
     const epochPath = path.join(root, 'epoch.json');
@@ -742,7 +748,7 @@ describe('scheduler bounded-child production composition', () => {
     const error = await runTickFailure(env);
     expect(error).toContain('scheduler_fleet_phase_failed:one-budgeted-gated-nudge-per-new-eligible-episode');
     expect(fixture(fixturePath).dispatches).toHaveLength(1);
-    expect(handoff(env)).toMatchObject({ reason: 'effect_untrusted', decision: 'orchestrator_required' });
+    expect(handoff(env)).toMatchObject({ reason: 'dispatch_unknown', decision: 'orchestrator_required' });
   });
 
   it.each([
