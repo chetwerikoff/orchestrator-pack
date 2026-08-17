@@ -171,8 +171,8 @@ describe('smoke executor profiles', () => {
       ...env,
       PACK_EXECUTOR_SMOKE_COMPLEX_AGENT: 'cursor',
     });
-    expect(profile.agent).toBe('cursor-agent');
-    expect(profile.command).toBe("cursor-agent --model 'fixture-complex-model' --effort 'fixture-complex-effort'");
+    expect(profile.agent).toBe('agent');
+    expect(profile.command).toBe("agent --model 'fixture-complex-model' --effort 'fixture-complex-effort'");
   });
 
   it.each([
