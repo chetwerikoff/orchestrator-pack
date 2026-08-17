@@ -4,6 +4,11 @@ import { lstat, open, unlink, type FileHandle } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isSupportedChatGptConversationUrl } from './chatgpt-browser-turn/state-light-cancellation.ts';
+import {
+  ASSISTANT_TURN_ACTION_SELECTOR,
+  ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+  CONVERSATION_TURN_SECTION_SELECTOR,
+} from './chatgpt-browser-turn/product-page-selectors.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
   finalizeStateLightPrimaryPublication,
@@ -25,6 +30,7 @@ export const MAX_NORMALIZED_URL_CODE_POINTS = 2_048;
 export const CDP_REQUEST_TIMEOUT_MS = 10_000;
 export const ACQUISITION_READINESS_TIMEOUT_MS = 10_000;
 export const ACQUISITION_READINESS_INTERVAL_MS = 250;
+export const HARVEST_COMPLETION_CONFIRM_INTERVAL_MS = 1_000;
 export const LIVENESS_TARGET_TIMEOUT_MS = 2_000;
 export const LIVENESS_TOTAL_TIMEOUT_MS = 15_000;
 export const LIVENESS_FAN_OUT = MAX_TARGETS;
@@ -155,6 +161,7 @@ interface HarvestRow {
 interface HarvestSnapshot {
   readonly page_url: string;
   readonly generation_in_progress: boolean | 'unknown';
+  readonly final_completion_ready: boolean;
   readonly rows: readonly HarvestRow[];
 }
 
@@ -958,6 +965,7 @@ export const HARVEST_EXPRESSION = `(async () => {
   const raw = Array.from(document.querySelectorAll('[data-message-author-role]'));
   const roleCounts = { user: 0, assistant: 0 };
   const rows = [];
+  let finalAssistantNode = null;
   for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
     const node = raw[documentOrdinal];
     const role = node.getAttribute('data-message-author-role');
@@ -966,6 +974,7 @@ export const HARVEST_EXPRESSION = `(async () => {
     if (text === null) return { status: 'surface_unknown', reason: 'text_representation_unavailable', page_url: location.href };
     const bytes = new TextEncoder().encode(text);
     const hash = await crypto.subtle.digest('SHA-256', bytes);
+    if (role === 'assistant') finalAssistantNode = node;
     rows.push({
       role,
       ordinal: roleCounts[role]++,
@@ -983,7 +992,17 @@ export const HARVEST_EXPRESSION = `(async () => {
   } catch {
     generation_in_progress = 'unknown';
   }
-  return { status: 'ok', page_url: location.href, generation_in_progress, rows };
+  let final_completion_ready = false;
+  if (finalAssistantNode) {
+    try {
+      const turn = finalAssistantNode.closest(${JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR)}) || finalAssistantNode;
+      final_completion_ready = !turn.querySelector(${JSON.stringify(ASSISTANT_TURN_IN_PROGRESS_SELECTOR)})
+        && Boolean(turn.querySelector(${JSON.stringify(ASSISTANT_TURN_ACTION_SELECTOR)}));
+    } catch {
+      final_completion_ready = false;
+    }
+  }
+  return { status: 'ok', page_url: location.href, generation_in_progress, final_completion_ready, rows };
 })()`;
 
 interface LivenessRow {
@@ -1430,6 +1449,7 @@ function validateHarvestSnapshot(value: unknown, target: CompatibleTarget): Harv
   if (value.status !== 'ok'
     || typeof value.page_url !== 'string'
     || (typeof value.generation_in_progress !== 'boolean' && value.generation_in_progress !== 'unknown')
+    || typeof value.final_completion_ready !== 'boolean'
     || !Array.isArray(value.rows)) {
     return malformedSurface('malformed_harvest_snapshot');
   }
@@ -1463,7 +1483,12 @@ function validateHarvestSnapshot(value: unknown, target: CompatibleTarget): Harv
       sha256: raw.sha256,
     });
   }
-  return { page_url: pageUrl, generation_in_progress: value.generation_in_progress, rows };
+  return {
+    page_url: pageUrl,
+    generation_in_progress: value.generation_in_progress,
+    final_completion_ready: value.final_completion_ready,
+    rows,
+  };
 }
 
 async function readHarvestSnapshot(target: CompatibleTarget, deps: ProbeDependencies): Promise<HarvestSnapshot> {
@@ -1504,6 +1529,54 @@ function harvestReadinessKey(snapshot: HarvestSnapshot, marker: string): string 
       sha256: window.owned.sha256,
     },
   });
+}
+
+function sameHarvestRow(left: HarvestRow, right: HarvestRow): boolean {
+  return left.role === right.role
+    && left.ordinal === right.ordinal
+    && left.document_ordinal === right.document_ordinal
+    && left.message_id === right.message_id
+    && left.byte_length === right.byte_length
+    && left.sha256 === right.sha256
+    && left.text === right.text;
+}
+
+async function confirmStableHarvestCompletion(
+  target: CompatibleTarget,
+  marker: string,
+  initialSnapshot: HarvestSnapshot,
+  initialWindow: { readonly owned: HarvestRow; readonly assistants: readonly HarvestRow[] },
+  deps: ProbeDependencies,
+): Promise<HarvestRow> {
+  const initialAssistant = initialWindow.assistants.at(-1);
+  if (!initialAssistant || initialAssistant.text.trim().length === 0) {
+    throw new ProbeError('surface_unknown', 'harvest_completion_empty');
+  }
+  if (initialSnapshot.generation_in_progress !== false || !initialSnapshot.final_completion_ready) {
+    throw new ProbeError('surface_unknown', 'harvest_completion_unproven');
+  }
+
+  await delay(deps, HARVEST_COMPLETION_CONFIRM_INTERVAL_MS);
+  const confirmedSnapshot = await readHarvestSnapshot(target, deps);
+  const confirmedWindow = ownedHarvestWindow(confirmedSnapshot, marker);
+  if (!confirmedWindow) throw new ProbeError('surface_unknown', 'harvest_completion_ownership_changed');
+  const confirmedClassifier = classifyBrowserGptPageTurnStatus(
+    confirmedSnapshot.generation_in_progress,
+    confirmedWindow.assistants.length,
+  );
+  const confirmedAssistant = confirmedWindow.assistants.at(-1);
+  if (confirmedClassifier !== 'completed'
+    || !confirmedSnapshot.final_completion_ready
+    || !confirmedAssistant
+    || confirmedAssistant.text.trim().length === 0
+    || confirmedSnapshot.page_url !== initialSnapshot.page_url
+    || !sameHarvestRow(initialWindow.owned, confirmedWindow.owned)
+    || !sameHarvestRow(initialAssistant, confirmedAssistant)) {
+    throw new ProbeError('surface_unknown', 'harvest_completion_unstable', undefined, {
+      confirmed_classifier: confirmedClassifier,
+    });
+  }
+  return confirmedAssistant;
 }
 
 async function harvestWithReadiness(
@@ -1685,8 +1758,13 @@ async function runHarvest(args: ParsedHarvestArgs, deps: ProbeDependencies): Pro
     };
   }
 
-  const assistant = window.assistants.at(-1);
-  if (!assistant) throw new ProbeError('surface_unknown', 'completed_without_assistant');
+  const assistant = await confirmStableHarvestCompletion(
+    resolved.target,
+    record.marker,
+    resolved.snapshot,
+    window,
+    deps,
+  );
   const bytes = Buffer.from(assistant.text, 'utf8');
   if (bytes.byteLength !== assistant.byte_length || hashBytes(bytes) !== assistant.sha256) {
     throw new ProbeError('stale_node', 'harvest_page_host_witness_mismatch');
