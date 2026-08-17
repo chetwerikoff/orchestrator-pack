@@ -174,7 +174,7 @@ export type PackReviewRequiredStatusWriter = (
 ) => Promise<void>;
 
 export interface PackReviewWorkerNotificationResult {
-  state: 'delivered' | 'failed' | 'escalated';
+  state: 'submitted' | 'pre_dispatch_failure' | 'ambiguous';
   reason: string;
 }
 
@@ -381,7 +381,8 @@ function completedResumeChannelOutcome(
   if (channel === 'requiredStatus') {
     return value.state === 'succeeded' || value.state === 'failed';
   }
-  return value.state === 'delivered'
+  return value.state === 'succeeded'
+    || value.state === 'delivered'
     || value.state === 'failed'
     || value.state === 'escalated';
 }
@@ -719,8 +720,16 @@ export async function deliverPackReviewVerdict(
         idempotencyKey: workerKey,
         reviewRunId: options.run.id,
       });
-      if (notified.state !== 'delivered') deliveryFailed = true;
-      recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));
+      if (notified.state !== 'submitted') deliveryFailed = true;
+      const durableState: PackReviewDeliveryOutcome['state'] = notified.state === 'submitted'
+        ? 'succeeded'
+        : notified.state === 'pre_dispatch_failure'
+          ? 'failed'
+          : 'escalated';
+      recordChannelOutcome(
+        'workerNotification',
+        outcome(durableState, notified.reason, workerKey, options.clock),
+      );
     } catch (error) {
       deliveryFailed = true;
       recordChannelOutcome('workerNotification', outcome('failed', describeError(error), workerKey, options.clock));
