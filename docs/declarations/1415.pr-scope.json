@@ -11,8 +11,7 @@
     "scripts/runtime-retirement/",
     "scripts/verify.ps1",
     "scripts/verify.test.ts",
-    "scripts/verify.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/verify.ts"
   ],
   "denylist": [
     ".orca/",
