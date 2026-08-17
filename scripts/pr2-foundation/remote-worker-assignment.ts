@@ -76,9 +76,10 @@ export async function publishOperatorRemoteWorkerAssignment(input: {
       let adapter = input.adapter;
       if (!adapter) {
         try {
+          const env = input.env ?? process.env;
           adapter = await selectRuntimeAdapter(
-            { env: input.env ?? process.env },
-            { cwd: input.cwd ?? process.cwd(), env: input.env ?? process.env },
+            { env },
+            { cwd: input.cwd ?? process.cwd(), transport: { env } },
           );
         } catch {
           return { ok: false, reason: 'runtime_unavailable' };
