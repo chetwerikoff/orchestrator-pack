@@ -1182,6 +1182,7 @@ function terminalClassForGptResult(result: ProcessResult, terminal: GptTerminalT
     return terminal.state === 'ok' ? 'reviewer_output_malformed' : 'possible_delivery';
   }
   if (terminal) return `${terminal.state}:${terminal.cause}`;
+  if (result.ok) return 'reviewer_output_malformed';
   return 'possible_delivery/missing_result';
 }
 
@@ -1252,7 +1253,11 @@ function failedSourceCommentTerminal(options: {
 function harnessSourceResolution(
   identity: PackGptSourceIdentity,
   stdout: string,
+  browserTerminal: GptTerminalTurnResult | null,
 ): PackGptSourceCommentResolution {
+  if (!browserTerminal || browserTerminal.state !== 'ok' || browserTerminal.send_count < 1) {
+    return { kind: 'missing', reason: 'harness_source_comment_missing' };
+  }
   try {
     const payload = parseReviewPayload(stdout);
     const timestamp = new Date().toISOString();
@@ -1421,7 +1426,7 @@ async function runGptSourceBatch(options: {
         }
         resolution = sourceTransport
           ? await resolvePackGptSourceComment({ identity, transport: sourceTransport })
-          : harnessSourceResolution(identity, invocation.result.stdout);
+          : harnessSourceResolution(identity, invocation.result.stdout, browserTerminal);
       } catch (error) {
         resolution = { kind: 'conflict', reason: `source_comment_head_or_census_failed:${describeError(error)}` };
       }
@@ -1438,7 +1443,7 @@ async function runGptSourceBatch(options: {
           authority: sourceTransport ? 'credentialed_github' : 'harness_fixture',
         });
       } else {
-        terminalClass = 'possible_delivery';
+        terminalClass = terminalClassForGptResult(invocation.result, browserTerminal);
         terminalResult = failedSourceCommentTerminal({
           identity,
           resolution,

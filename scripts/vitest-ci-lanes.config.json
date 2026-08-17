@@ -80,8 +80,6 @@
     "scripts/lib/create-issue-stage-record.test.ts": "light",
     "scripts/lib/create-issue-stage-topology.test.ts": "light",
     "scripts/lib/operator-publication.test.ts": "light",
-    "scripts/lib/pack-gpt-source-comment-runner.test.ts": "light",
-    "scripts/lib/pack-gpt-source-comment.test.ts": "light",
     "scripts/lib/protected-signal-receipt.test.ts": "light",
     "scripts/lib/review-lane-routing.test.ts": "light",
     "scripts/lib/worker-degraded-ci-handoff.test.ts": "light",
