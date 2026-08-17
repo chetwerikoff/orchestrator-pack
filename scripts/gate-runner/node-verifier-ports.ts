@@ -3,21 +3,6 @@ import { resolve } from 'node:path';
 import { runProcess } from '#opk-kernel/subprocess';
 import type { VerifyLine } from '../verify.ts';
 
-export const NODE_CENSUS_PORT_TAGS = [
-  'verify-member:check-gh-inventory-static',
-  'verify-member:check-reusable',
-  'verify-member:check-review-delivery-no-visibility-poll',
-  'check-reusable:allow-no-git',
-  'check-reusable:allowed-path-patterns',
-  'check-reusable:allowed-root-patterns',
-  'check-reusable:exception-patterns',
-  'check-reusable:forbidden-patterns',
-  'check-reusable:git-command-presence',
-  'check-reusable:tracked-file-enumeration',
-  'check-reusable:violation-aggregation',
-  'check-reusable:worktree-detection',
-] as const;
-
 export interface NodeVerifierPortResult {
   readonly lines: readonly VerifyLine[];
   readonly failures: readonly string[];

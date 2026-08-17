@@ -169,27 +169,57 @@ function lineRanges(bytes: Buffer): readonly ByteRange[] {
   return ranges;
 }
 
+function findYamlQuoteClose(text: string, start: number, quote: '"' | "'", alreadyOpen = false): number {
+  let index = alreadyOpen ? start : start + 1;
+  while (index < text.length) {
+    const char = text[index]!;
+    if (quote === '"' && char === '\\') {
+      index += 2;
+      continue;
+    }
+    if (quote === "'" && char === "'" && text[index + 1] === "'") {
+      index += 2;
+      continue;
+    }
+    if (char === quote) return index;
+    index += 1;
+  }
+  return -1;
+}
+
 function commentStart(text: string): number {
-  let quote: string | undefined;
+  let quote: '"' | "'" | undefined;
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index]!;
-    if (quote) {
-      if (char === quote) quote = undefined;
+    if (quote === '"') {
+      if (char === '\\') index += 1;
+      else if (char === '"') quote = undefined;
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'" && text[index + 1] === "'") index += 1;
+      else if (char === "'") quote = undefined;
       continue;
     }
     if (char === '"' || char === "'") quote = char;
-    else if (char === '#') return index;
+    else if (char === '#' && (index === 0 || /[ \t]/u.test(text[index - 1]!))) return index;
   }
   return text.length;
 }
 
 function colonOutsideQuotes(text: string): number {
-  let quote: string | undefined;
+  let quote: '"' | "'" | undefined;
   let flowDepth = 0;
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index]!;
-    if (quote) {
-      if (char === quote) quote = undefined;
+    if (quote === '"') {
+      if (char === '\\') index += 1;
+      else if (char === '"') quote = undefined;
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'" && text[index + 1] === "'") index += 1;
+      else if (char === "'") quote = undefined;
       continue;
     }
     if (char === '"' || char === "'") quote = char;
@@ -208,13 +238,18 @@ function trimBounds(text: string, start: number, end: number): { start: number; 
 
 function splitFlow(text: string, start: number, end: number, separator: ',' | ':'): number[] {
   const points: number[] = [];
-  let quote: string | undefined;
+  let quote: '"' | "'" | undefined;
   let depth = 0;
   for (let index = start; index < end; index += 1) {
     const char = text[index]!;
-    if (quote) {
+    if (quote === '"') {
       if (char === '\\') index += 1;
-      else if (char === quote) quote = undefined;
+      else if (char === '"') quote = undefined;
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'" && text[index + 1] === "'") index += 1;
+      else if (char === "'") quote = undefined;
       continue;
     }
     if (char === '"' || char === "'") quote = char;
@@ -257,13 +292,29 @@ function collectYamlValueRanges(text: string, lineStart: number, rawStart: numbe
   output.push({ start: lineStart + bounds.start, end: lineStart + bounds.end });
 }
 
+function isPlainScalarStart(value: string): boolean {
+  const first = value.trimStart()[0];
+  return first !== undefined && first !== '"' && first !== "'" && first !== '[' && first !== '{' && first !== '|' && first !== '>';
+}
+
 export function yamlScalarRanges(bytes: Buffer): readonly ByteRange[] {
   const ranges: ByteRange[] = [];
   let blockIndent: number | undefined;
+  let plainContinuationIndent: number | undefined;
+  let quotedContinuation: { readonly quote: '"' | "'" } | undefined;
   for (const line of lineRanges(bytes)) {
     const raw = bytes.subarray(line.start, line.end).toString('latin1');
     const indentation = /^ */u.exec(raw)?.[0].length ?? 0;
     const trimmed = raw.trim();
+
+    if (quotedContinuation) {
+      const close = findYamlQuoteClose(raw, indentation, quotedContinuation.quote, true);
+      const end = close >= 0 ? close + 1 : raw.length;
+      if (end > indentation) ranges.push({ start: line.start + indentation, end: line.start + end });
+      if (close >= 0) quotedContinuation = undefined;
+      continue;
+    }
+
     if (blockIndent !== undefined) {
       if (trimmed === '') continue;
       if (indentation > blockIndent) {
@@ -272,24 +323,46 @@ export function yamlScalarRanges(bytes: Buffer): readonly ByteRange[] {
       }
       blockIndent = undefined;
     }
+
+    if (plainContinuationIndent !== undefined) {
+      if (trimmed === '' || trimmed.startsWith('#')) continue;
+      if (indentation > plainContinuationIndent) {
+        const visibleEnd = commentStart(raw);
+        const bounds = trimBounds(raw, indentation, visibleEnd);
+        if (bounds.start < bounds.end) ranges.push({ start: line.start + bounds.start, end: line.start + bounds.end });
+        continue;
+      }
+      plainContinuationIndent = undefined;
+    }
+
     if (trimmed === '' || trimmed.startsWith('#')) continue;
     const visibleEnd = commentStart(raw);
     const visible = raw.slice(0, visibleEnd);
     const colon = colonOutsideQuotes(visible);
+    const sequence = /^\s*-\s+/u.exec(visible);
     let valueStart = -1;
-    if (colon >= 0) valueStart = colon + 1;
-    else {
-      const sequence = /^\s*-\s+/u.exec(visible);
-      if (sequence) valueStart = sequence[0].length;
+    let ownerIndent = indentation;
+    if (colon >= 0) {
+      valueStart = colon + 1;
+      if (sequence && sequence[0].length <= colon) ownerIndent = sequence[0].length;
+    } else if (sequence) {
+      valueStart = sequence[0].length;
     }
     if (valueStart < 0) continue;
     while (valueStart < visible.length && /[ \t]/u.test(visible[valueStart]!)) valueStart += 1;
     const value = visible.slice(valueStart);
     if (/^[|>][0-9+-]*\s*$/u.test(value)) {
-      blockIndent = indentation;
+      blockIndent = ownerIndent;
       continue;
     }
-    if (valueStart < visible.length) collectYamlValueRanges(visible, line.start, valueStart, visible.length, ranges);
+    if (valueStart >= visible.length) continue;
+    collectYamlValueRanges(visible, line.start, valueStart, visible.length, ranges);
+    const first = value[0];
+    if ((first === '"' || first === "'") && findYamlQuoteClose(value, 0, first) < 0) {
+      quotedContinuation = { quote: first };
+    } else if (isPlainScalarStart(value)) {
+      plainContinuationIndent = ownerIndent;
+    }
   }
   return ranges;
 }

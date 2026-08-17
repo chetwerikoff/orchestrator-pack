@@ -82,6 +82,9 @@ export interface PortStageEvidence {
 
 const INSTRUCTION_ROOT_FILES = new Set(['AGENTS.md', 'CLAUDE.md', 'README.md']);
 const ACTION_VERBS = ['run', 'execute', 'invoke', 'call', 'launch', 'start', 'use', 'install', 'replace', 'remove', 'delete', 'retire', 'migrate', 'verify', 'check'] as const;
+const NEGATIVE = /\b(?:not|never)\b|\bdo\s+not\b/iu;
+const MODAL = /\b(?:must|should|required\s+to|may\s+only)\b/giu;
+const ACTION = new RegExp(`\\b(?:${ACTION_VERBS.join('|')})\\b`, 'giu');
 
 function sha256(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex');
@@ -128,6 +131,11 @@ function occurrenceFromToken(token: TokenOccurrence): EvidenceOccurrence {
   return { sourcePath: token.sourcePath, line: token.line, column: token.column, tokenKind: token.tokenKind, matchedBytes: token.matchedBytes };
 }
 
+export function unclassifiedPowerShellPathOccurrence(path: string): EvidenceOccurrence | undefined {
+  if (!/\.ps1$/iu.test(path)) return undefined;
+  return { sourcePath: path, line: 1, column: 1, tokenKind: 'tracked-ps1-file', matchedBytes: path };
+}
+
 function sourceLine(bytes: Buffer, line: number): string {
   return bytes.toString('latin1').split('\n')[line - 1] ?? '';
 }
@@ -161,26 +169,56 @@ function stripInstructionPrefix(line: string): string {
   return text.replace(/^(?:\$|PS>|>)\s*/iu, '');
 }
 
-function occurrenceIndexInLine(bytes: Buffer, occurrence: EvidenceOccurrence): number {
-  const line = sourceLine(bytes, occurrence.line);
-  return Math.max(0, Math.min(line.length, occurrence.column - 1));
+function lastClause(prefix: string): string {
+  const splitAt = Math.max(prefix.lastIndexOf(';'), prefix.lastIndexOf('.'), prefix.lastIndexOf('!'), prefix.lastIndexOf('?'));
+  return stripInstructionPrefix(prefix.slice(splitAt + 1));
 }
 
-function instructionKind(file: MeasuredTreeFile, occurrence: EvidenceOccurrence, inFence: boolean): SourceKind {
-  const rawLine = sourceLine(file.bytes, occurrence.line);
+interface TextMatch {
+  readonly index: number;
+  readonly end: number;
+}
+
+function allMatches(pattern: RegExp, text: string): readonly TextMatch[] {
+  pattern.lastIndex = 0;
+  const result: TextMatch[] = [];
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    result.push({ index: match.index, end: match.index + match[0].length });
+    if (match[0].length === 0) pattern.lastIndex += 1;
+  }
+  pattern.lastIndex = 0;
+  return result;
+}
+
+function positiveDirectivePrefix(prefix: string): boolean {
+  const clause = lastClause(prefix);
+  const clauseActions = allMatches(ACTION, clause);
+  const firstClauseAction = clauseActions[0];
+  if (firstClauseAction?.index === 0 && !NEGATIVE.test(clause.slice(firstClauseAction.index))) return true;
+
+  const modals = allMatches(MODAL, prefix);
+  const actions = allMatches(ACTION, prefix);
+  for (let modalIndex = modals.length - 1; modalIndex >= 0; modalIndex -= 1) {
+    const modal = modals[modalIndex]!;
+    const action = actions.find((candidate) => candidate.index >= modal.end);
+    if (!action) continue;
+    if (!NEGATIVE.test(prefix.slice(modal.index, action.end))) return true;
+  }
+  return false;
+}
+
+export function classifyInstructionOccurrence(rawLine: string, occurrenceColumn: number, inFence = false): SourceKind {
+  const occurrenceAt = Math.max(0, Math.min(rawLine.length, occurrenceColumn - 1));
   const stripped = stripInstructionPrefix(rawLine);
-  const occurrenceAt = occurrenceIndexInLine(file.bytes, occurrence);
   const prefix = rawLine.slice(0, occurrenceAt);
   const commandPattern = /^(?:pwsh(?:\.exe)?|powershell(?:\.exe)?|[^\s]+\.ps1|&\s+[^\s]+\.ps1)(?:\s|$)/iu;
   if (commandPattern.test(stripped)) return 'instruction-command';
   if (inFence) return 'instruction-reference-only';
-  const lowerPrefix = prefix.toLowerCase();
-  const negative = /(?:\bnot\b|\bnever\b|\bdo\s+not\b)/iu.test(lowerPrefix);
-  const verb = ACTION_VERBS.some((candidate) => new RegExp(`(?:^|[^a-z])${candidate}(?:[^a-z]|$)`, 'iu').test(lowerPrefix));
-  const modal = /\b(?:must|should|required\s+to|may\s+only)\b/iu.test(lowerPrefix);
-  const startsVerb = ACTION_VERBS.some((candidate) => new RegExp(`^\\s*${candidate}(?:\\s|$)`, 'iu').test(stripInstructionPrefix(prefix)));
-  if (!negative && (startsVerb || (modal && verb))) return 'instruction-directive';
-  return 'instruction-reference-only';
+  return positiveDirectivePrefix(prefix) ? 'instruction-directive' : 'instruction-reference-only';
+}
+
+function instructionKind(file: MeasuredTreeFile, occurrence: EvidenceOccurrence, inFence: boolean): SourceKind {
+  return classifyInstructionOccurrence(sourceLine(file.bytes, occurrence.line), occurrence.column, inFence);
 }
 
 function sourceRanges(file: MeasuredTreeFile): readonly ByteRange[] | undefined {
@@ -230,6 +268,14 @@ function stableEntries(entries: readonly EvidenceEntry[]): readonly EvidenceEntr
     || compareText(left.occurrence.matchedBytes, right.occurrence.matchedBytes));
 }
 
+function stableOccurrences(occurrences: readonly EvidenceOccurrence[]): readonly EvidenceOccurrence[] {
+  return [...occurrences].sort((left, right) => compareText(left.sourcePath, right.sourcePath)
+    || left.line - right.line
+    || left.column - right.column
+    || compareText(left.tokenKind, right.tokenKind)
+    || compareText(left.matchedBytes, right.matchedBytes));
+}
+
 function digestable(evidence: Omit<PortStageEvidence, 'integrityDigest'>): string {
   return `${JSON.stringify(evidence)}\n`;
 }
@@ -264,6 +310,10 @@ export async function producePortStageEvidence(input: {
     if (historical.has(file.path)) continue;
     const classified = isClassifiedRoot(file.path);
     const resolvesWholePath = (candidate: string): boolean => resolver.resolvesWholePath(file.path, candidate);
+    if (!classified) {
+      const pathOccurrence = unclassifiedPowerShellPathOccurrence(file.path);
+      if (pathOccurrence) unclassified.push(pathOccurrence);
+    }
     if (!isUtf8(file.bytes)) {
       if (classified) continue;
       const tokenBytes = scanPowerShellTokens({ sourcePath: file.path, bytes: file.bytes, resolvesWholePath });
@@ -330,8 +380,8 @@ export async function producePortStageEvidence(input: {
     gateCensus: { populationCount: censusProjection.populationCount, populationDigest: censusProjection.populationDigest, outputDigest: censusSerialized.outputDigest },
     historicalExclusions: [...historical.values()].sort((left, right) => compareText(left.path, right.path)),
     entries: stable,
-    unclassifiedPowerShellSurfaces: [...unclassified].sort((left, right) => compareText(left.sourcePath, right.sourcePath) || left.line - right.line || left.column - right.column),
-    unresolvedCurrentPrescriptiveScriptTargets: [...unresolved].sort((left, right) => compareText(left.sourcePath, right.sourcePath) || left.line - right.line || left.column - right.column),
+    unclassifiedPowerShellSurfaces: stableOccurrences(unclassified),
+    unresolvedCurrentPrescriptiveScriptTargets: stableOccurrences(unresolved),
     retainedDispositions: retained,
     broaderStatusClosed,
     dormantRetainedCoverageComplete,

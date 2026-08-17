@@ -1,38 +1,75 @@
 import { failGate, passGate, type GateResult } from './contracts.ts';
 import { evaluateCensus, type GateCensus } from './census.ts';
-import { NODE_CENSUS_PORT_TAGS } from './node-verifier-ports.ts';
 import type { SourceSnapshot } from './source-snapshot.ts';
 
-function nodePortSource(snapshot: SourceSnapshot): string {
-  return snapshot.files.get('scripts/gate-runner/node-verifier-ports.ts') ?? '';
+function snapshotFile(snapshot: SourceSnapshot, path: string): string {
+  return snapshot.files.get(path) ?? '';
 }
 
-function hasPortTag(snapshot: SourceSnapshot, tag: string): boolean {
-  return nodePortSource(snapshot).includes(`'${tag}'`) || nodePortSource(snapshot).includes(`\"${tag}\"`);
+function verifierSource(snapshot: SourceSnapshot): string {
+  return snapshotFile(snapshot, 'scripts/verify.ts');
+}
+
+function nodePortSource(snapshot: SourceSnapshot): string {
+  return snapshotFile(snapshot, 'scripts/gate-runner/node-verifier-ports.ts');
 }
 
 function thinNodeLauncher(snapshot: SourceSnapshot): boolean {
-  const launcher = snapshot.files.get('scripts/verify.ps1') ?? '';
-  const verifier = snapshot.files.get('scripts/verify.ts') ?? '';
+  const launcher = snapshotFile(snapshot, 'scripts/verify.ps1');
+  const verifier = verifierSource(snapshot);
   return launcher.includes('verify.ts')
     && /&\s+node\b/iu.test(launcher)
     && !launcher.includes('scripts/gate-runner/runner.ts')
-    && verifier.includes('runNodeVerificationPorts');
+    && verifier.includes('const ports = await runNodeVerificationPorts(repoRoot);')
+    && verifier.includes('const gateReport = runGateRunner(repoRoot);');
 }
 
-function legacyVerifyFailurePortTag(detail: string): string | undefined {
-  const match = /^(verify-script:scripts\/([^:]+)\.ps1): retained verify invocation was dropped$/u.exec(detail);
-  return match?.[2] ? `verify-member:${match[2]}` : undefined;
+function reusableBehaviorWired(snapshot: SourceSnapshot): boolean {
+  const verifier = verifierSource(snapshot);
+  const launcher = snapshotFile(snapshot, 'scripts/check-reusable.ps1');
+  return thinNodeLauncher(snapshot)
+    && launcher.includes('verify.ts')
+    && launcher.includes('--reusable-only')
+    && /&\s+node\b/iu.test(launcher)
+    && verifier.includes('export function evaluateReusableTrackedPaths')
+    && verifier.includes('export async function runReusableGuard')
+    && verifier.includes("args: ['ls-files']")
+    && verifier.includes('evaluateReusableTrackedPaths(tracked.paths)')
+    && verifier.includes('const reusable = await runReusableGuard(repoRoot);')
+    && verifier.includes("? await runReusableGuard(repoRoot, argv.includes('--allow-no-git'))");
+}
+
+function verifyMemberBehaviorWired(snapshot: SourceSnapshot, member: string): boolean {
+  if (!thinNodeLauncher(snapshot)) return false;
+  if (member === 'check-reusable') return reusableBehaviorWired(snapshot);
+  const ports = nodePortSource(snapshot);
+  if (member === 'check-gh-inventory-static') {
+    return ports.includes('const inventoryFailure = await runGhInventoryStatic(repoRoot);')
+      && ports.includes("args: [guard, path, '--mode', mode]")
+      && ports.includes("args: [inventory, 'validate', repoRoot]");
+  }
+  if (member === 'check-review-delivery-no-visibility-poll') {
+    return ports.includes('const deliveryFailure = reviewDeliveryFailure(repoRoot);')
+      && ports.includes("'deliverPackReviewVerdict'")
+      && ports.includes("'submit_visibility_timeout'");
+  }
+  return false;
+}
+
+function legacyVerifyFailureMember(detail: string): string | undefined {
+  const match = /^verify-script:scripts\/([^:]+)\.ps1: retained verify invocation was dropped$/u.exec(detail);
+  return match?.[1];
 }
 
 function isAdmittedNodeMigrationFailure(detail: string, snapshot: SourceSnapshot): boolean {
-  const verifyTag = legacyVerifyFailurePortTag(detail);
-  if (verifyTag) return thinNodeLauncher(snapshot) && hasPortTag(snapshot, verifyTag);
+  const verifyMember = legacyVerifyFailureMember(detail);
+  if (verifyMember) return verifyMemberBehaviorWired(snapshot, verifyMember);
   if (detail === 'scripts/check-reusable.ps1 behavior surface drifted without a reviewed current-source hash') {
-    return thinNodeLauncher(snapshot)
-      && NODE_CENSUS_PORT_TAGS.filter((tag) => tag.startsWith('check-reusable:')).every((tag) => hasPortTag(snapshot, tag));
+    return reusableBehaviorWired(snapshot);
   }
-  if (detail === 'verify.ps1 must contain exactly one gate-runner dispatch marker; found 0') return thinNodeLauncher(snapshot);
+  if (detail === 'verify.ps1 must contain exactly one gate-runner dispatch marker; found 0') {
+    return thinNodeLauncher(snapshot) && reusableBehaviorWired(snapshot);
+  }
   return false;
 }
 

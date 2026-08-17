@@ -3,7 +3,16 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runProcess } from '#opk-kernel/subprocess';
 import { generateCurrentHeadProjection, serializeCurrentHeadProjection } from '../gate-runner/census-generator.ts';
-import { ARTIFACT_PATHS, ARTIFACT_ROLES, SOURCE_KINDS, producePortStageEvidence, verifyEvidenceIntegrity, writePortStageEvidence } from './producer.ts';
+import {
+  ARTIFACT_PATHS,
+  ARTIFACT_ROLES,
+  SOURCE_KINDS,
+  classifyInstructionOccurrence,
+  producePortStageEvidence,
+  unclassifiedPowerShellPathOccurrence,
+  verifyEvidenceIntegrity,
+  writePortStageEvidence,
+} from './producer.ts';
 import { createScriptTargetResolver } from './target-resolver.ts';
 import { jsonStringValueRanges, scanPowerShellTokens, tsStringRanges, yamlScalarRanges } from './tokens.ts';
 
@@ -16,6 +25,16 @@ function scan(source: string, ranges?: readonly { start: number; end: number }[]
     ranges,
     resolvesWholePath: (candidate) => candidate.replaceAll('\\', '/') === 'scripts/path with spaces/check.ps1',
   });
+}
+
+function workflowTokens(source: string): readonly string[] {
+  const bytes = Buffer.from(source, 'utf8');
+  return scanPowerShellTokens({
+    sourcePath: '.github/workflows/x.yml',
+    bytes,
+    ranges: yamlScalarRanges(bytes),
+    resolvesWholePath: () => false,
+  }).map((token) => token.matchedBytes);
 }
 
 async function exactCandidateHead(): Promise<string> {
@@ -70,7 +89,7 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
   });
 
   it('limits workflow scanning to scalar values across block, sequence, and flow forms', () => {
-    const bytes = Buffer.from([
+    const source = [
       'pwsh_key: harmless',
       'run: pwsh -File scripts/verify.ps1',
       'script: |',
@@ -80,9 +99,8 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
       'steps:',
       '  - scripts/verify.ps1',
       '',
-    ].join('\n'), 'utf8');
-    const tokens = scanPowerShellTokens({ sourcePath: '.github/workflows/x.yml', bytes, ranges: yamlScalarRanges(bytes), resolvesWholePath: () => false });
-    expect(tokens.map((token) => token.matchedBytes)).toEqual([
+    ].join('\n');
+    expect(workflowTokens(source)).toEqual([
       'pwsh',
       'scripts/verify.ps1',
       'scripts/check-reusable.ps1',
@@ -92,6 +110,45 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
       'scripts/check-reusable.ps1',
       'scripts/verify.ps1',
     ]);
+  });
+
+  it('scans a PowerShell token that exists only on a plain scalar continuation line', () => {
+    const source = [
+      'steps:',
+      '  - run: echo start',
+      '      && pwsh -File scripts/verify.ps1',
+      '',
+    ].join('\n');
+    expect(workflowTokens(source)).toEqual(['pwsh', 'scripts/verify.ps1']);
+  });
+
+  it('keeps escaped YAML quotes and embedded comment/colon bytes inside the scalar range', () => {
+    const source = `${String.raw`run: "echo \"#:\"; pwsh -File scripts/verify.ps1"`}\n`;
+    expect(workflowTokens(source)).toEqual(['pwsh', 'scripts/verify.ps1']);
+  });
+
+  it('does not treat a non-separated hash in a plain scalar as a YAML comment', () => {
+    expect(workflowTokens('run: echo#tag pwsh -File scripts/verify.ps1\n')).toEqual(['pwsh', 'scripts/verify.ps1']);
+  });
+
+  it('binds directive negation to the qualifying action or modal/action span', () => {
+    const positive = 'Do not use the old wrapper; you must run scripts/verify.ps1 for the current check.';
+    expect(classifyInstructionOccurrence(positive, positive.indexOf('scripts/verify.ps1') + 1)).toBe('instruction-directive');
+    const positiveActionClause = 'Do not use the old wrapper; run scripts/verify.ps1 for the current check.';
+    expect(classifyInstructionOccurrence(positiveActionClause, positiveActionClause.indexOf('scripts/verify.ps1') + 1)).toBe('instruction-directive');
+    const negative = 'You must not run scripts/verify.ps1 for the current check.';
+    expect(classifyInstructionOccurrence(negative, negative.indexOf('scripts/verify.ps1') + 1)).toBe('instruction-reference-only');
+  });
+
+  it('emits an outside-root tracked PowerShell path even when the file has no token bytes', () => {
+    expect(unclassifiedPowerShellPathOccurrence('examples/legacy.PS1')).toEqual({
+      sourcePath: 'examples/legacy.PS1',
+      line: 1,
+      column: 1,
+      tokenKind: 'tracked-ps1-file',
+      matchedBytes: 'examples/legacy.PS1',
+    });
+    expect(unclassifiedPowerShellPathOccurrence('examples/readme.md')).toBeUndefined();
   });
 
   it('scans JSON/TypeScript string values but not JSON keys or TS comments', () => {

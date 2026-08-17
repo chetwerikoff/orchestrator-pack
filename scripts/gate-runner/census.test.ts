@@ -92,11 +92,34 @@ describe('terminal gate population census after Issue #906', () => {
     expect(result.details?.join('\n')).toContain(`${row!.id}: migrated/retired PowerShell gate still exists`);
   });
 
-  it('fails when a retained verify behavior loses its Node port proof', () => {
+  it('fails when a retained verify behavior loses its executable Node wiring', () => {
     const files = currentFiles();
-    files['scripts/gate-runner/node-verifier-ports.ts'] = (files['scripts/gate-runner/node-verifier-ports.ts'] ?? '').replace('verify-member:check-gh-inventory-static', 'removed-node-port');
+    files['scripts/verify.ts'] = (files['scripts/verify.ts'] ?? '').replace(
+      'const ports = await runNodeVerificationPorts(repoRoot);',
+      'const ports = { lines: [], failures: [] };',
+    );
     const result = evaluateCurrentCensus(loadCensus(repoRoot), memorySnapshot(files), registeredGateIds);
     expect(result.details?.join('\n')).toContain('verify-script:scripts/check-gh-inventory-static.ps1: retained verify invocation was dropped');
+  });
+
+  it('fails when the reusable migration loses its executable top-level wiring', () => {
+    const files = currentFiles();
+    files['scripts/verify.ts'] = (files['scripts/verify.ts'] ?? '').replace(
+      'const reusable = await runReusableGuard(repoRoot);',
+      'const reusable = { lines: [], failures: [], warnings: [] };',
+    );
+    const result = evaluateCurrentCensus(loadCensus(repoRoot), memorySnapshot(files), registeredGateIds);
+    expect(result.details?.join('\n')).toContain('scripts/check-reusable.ps1 behavior surface drifted without a reviewed current-source hash');
+  });
+
+  it('fails when top-level verification filters the gate runner and would skip gate-census', () => {
+    const files = currentFiles();
+    files['scripts/verify.ts'] = (files['scripts/verify.ts'] ?? '').replace(
+      'const gateReport = runGateRunner(repoRoot);',
+      'const gateReport = runGateRunner(repoRoot, gateRegistrations.map((registration) => registration.gateId));',
+    );
+    const result = evaluateCurrentCensus(loadCensus(repoRoot), memorySnapshot(files), registeredGateIds);
+    expect(result.details?.join('\n')).toContain('verify.ps1 must contain exactly one gate-runner dispatch marker; found 0');
   });
 
   it('fails when a new check script bypasses the frozen population', () => {

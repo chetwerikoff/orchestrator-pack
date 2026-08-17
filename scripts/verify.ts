@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { isDirectExecution } from '#opk-toolchain/baseline-io';
 import { runProcess } from '#opk-kernel/subprocess';
-import { gateRegistrations, runGateRunner } from './gate-runner/runner.ts';
+import { runGateRunner } from './gate-runner/runner.ts';
 import { runNodeVerificationPorts } from './gate-runner/node-verifier-ports.ts';
 import { scanRetiredRuntimeSurfaces } from './runtime-retirement/retired-surface-guard.ts';
 
@@ -188,7 +188,7 @@ export async function runVerification(repoRoot: string, options: { readonly stri
   lines.push(...ports.lines);
   failures.push(...ports.failures);
 
-  const gateReport = runGateRunner(repoRoot, gateRegistrations.map((registration) => registration.gateId));
+  const gateReport = runGateRunner(repoRoot);
   for (const result of gateReport.results) {
     const lineStatus: VerifyLine['status'] = result.status === 'PASS' ? 'PASS' : result.status === 'FAIL' ? 'FAIL' : 'WARN';
     lines.push({ name: `gate/${result.gateId}`, status: lineStatus, detail: result.summary });
