@@ -3,20 +3,43 @@
   "issue_number": 1436,
   "declared_paths": [
     "docs/declarations/1436.pr-scope.json",
-    "docs/orchestration-runbook.md"
+    "docs/orchestration-runbook.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/worker-smoke-bounded-create.ts",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/pr2-foundation/mutation-behavior-probes.ts",
+    "scripts/pr2-foundation/mutation-semantic-gates.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
   ],
   "denylist": [
     ".github/",
     "credentials/",
     "packages/core/",
     "plugins/",
-    "scripts/",
     "secrets/",
     "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/",
-    "docs/orchestration-runbook.md"
+    "docs/declarations/1436.pr-scope.json",
+    "docs/orchestration-runbook.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/worker-smoke-bounded-create.ts",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/pr2-foundation/mutation-behavior-probes.ts",
+    "scripts/pr2-foundation/mutation-semantic-gates.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "dd691bbcd78ddff186e29891a456d4742eafaabb"
+  "source_revision": "70fb45279991f0617b5d43153b425f7be5c08dca"
 }

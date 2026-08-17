@@ -95,6 +95,7 @@
     "scripts/pack-reviewer-preference.test.ts": "light",
     "scripts/pack-pr-review-contract.test.ts": "light",
     "scripts/pack-review-carryover.test.ts": "light",
+    "scripts/pack-review-ordering.test.ts": "light",
     "scripts/pack-review-runner-gpt.test.ts": "light",
     "scripts/pack-review-runner-issue-898.test.ts": "light",
     "scripts/pack-review-runner-severity.test.ts": "light",
