@@ -174,6 +174,13 @@ interface StartInput {
     invocationId: string;
     round: PackReviewGptRoundRecord;
   }) => void | Promise<void>;
+  fixtureBeforeGptSourceCommentCensus?: (event: {
+    slotId: string;
+    attemptOrdinal: number;
+    invocationId: string;
+    identity: PackGptSourceIdentity;
+  }) => void | Promise<void>;
+  fixtureCrashAfterGptSourceCredentialedCount?: number;
   fixtureAfterGptSourceSlotTerminal?: (event: {
     slotId: string;
     round: PackReviewGptRoundRecord;
@@ -212,7 +219,10 @@ export interface ReconcileStalePackReviewRunsInput {
   storeRoot?: string;
   fixtureCurrentPrHeadSha?: string;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
+  fixtureGithubReviewId?: number;
+  fixtureGithubReviewTransport?: GithubReviewTransport;
   fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
+  fixtureWorkerNotifier?: PackReviewWorkerNotifier;
   resolveRepositorySlug?: (repoRoot: string) => Promise<string>;
   beforeStaleStatusWrite?: (run: PackReviewRunRecord) => void | Promise<void>;
   fixturePauseBeforeStaleStatusWrite?: () => void | Promise<void>;
@@ -293,6 +303,7 @@ const DEFAULT_PROJECT_ID = 'orchestrator-pack';
 const DEFAULT_BASE_REF = 'origin/main';
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const GPT_HARVEST_CLASSES = new Set(['harvest_failed', 'no_reply', 'forbidden_verdict_envelope']);
+const GPT_SOURCE_FIXTURE_CRASH_REASON = 'fixture_crash_after_gpt_source_comment_credentialed';
 
 function trim(value: unknown): string {
   return String(value ?? '').trim();
@@ -739,13 +750,15 @@ function validatePersistedGptReviewPayload(
   payload: ReviewPayload,
   options: { projectId: string; storeRoot: string },
 ): ReviewPayload {
+  const persisted = getPackReviewRun(runId, options);
+  if (!persisted) throw new Error(`pack review run ${runId} is unavailable for GPT source authority validation`);
+  assertCredentialedGptSourceAuthority(persisted);
   const aggregate = validatePersistedPackReviewGptAggregate(runId, {
     reviewVerdict: payload.verdict,
     findingCount: payload.findingCount,
     findings: payload.findings,
   }, options);
-  const persisted = getPackReviewRun(runId, options);
-  const diagnostics = gptRoundDiagnostics(persisted?.reviewRound);
+  const diagnostics = gptRoundDiagnostics(persisted.reviewRound);
   return {
     verdict: aggregate.reviewVerdict,
     findingCount: aggregate.findingCount,
@@ -978,7 +991,11 @@ async function findJournaledDeliveryResumeCandidate(options: {
       candidate,
       options.resolveSlug ?? resolveRepositorySlug,
     );
-    if (identity.ok && identity.slug === options.repoSlug) repositoryBoundCandidates.push(candidate);
+    if (identity.ok
+      && identity.slug === options.repoSlug
+      && hasCredentialedGptSourceAuthority(candidate)) {
+      repositoryBoundCandidates.push(candidate);
+    }
   }
   if (repositoryBoundCandidates.length > 1) {
     throw new Error(`ambiguous journaled pack review deliveries for PR #${options.prNumber} head ${options.headSha}`);
@@ -1144,9 +1161,13 @@ function parseLastGptTerminalTurnResult(stdout: string): GptTerminalTurnResult |
   return null;
 }
 
-export function isRetryablePackReviewZeroSendCollision(result: ProcessResult): boolean {
+export function isRetryablePackReviewZeroSendCollision(
+  result: ProcessResult,
+  expectedInvocationId?: string,
+): boolean {
   const terminal = parseLastGptTerminalTurnResult(result.stdout);
   if (result.ok || terminal?.send_count !== 0) return false;
+  if (expectedInvocationId && trim(terminal.invocation_id) !== trim(expectedInvocationId)) return false;
   return (terminal.state === 'driver_error'
       && terminal.cause === 'state_light_new_chat_send_slot_timeout')
     || (terminal.state === 'profile_busy'
@@ -1229,6 +1250,55 @@ function credentialedSourceTerminal(options: {
   };
 }
 
+function hasCredentialedGptSourceAuthority(run: PackReviewRunRecord): boolean {
+  const round = run.reviewRound;
+  if (!round || round.reviewer !== 'gpt') return true;
+  const repository = trim(run.canonicalRepository);
+  if (!repository) return false;
+  for (const slot of round.sourceSlots) {
+    if (slot.terminalClass !== 'complete_clean' && slot.terminalClass !== 'complete_findings') continue;
+    const invocationId = trim(slot.invocationId);
+    const terminal = slot.terminalResult && typeof slot.terminalResult === 'object' && !Array.isArray(slot.terminalResult)
+      ? slot.terminalResult as Record<string, unknown>
+      : null;
+    if (!terminal || !invocationId || trim(terminal.invocation_id) !== invocationId) return false;
+    const authority = trim(terminal.source_comment_authority);
+    const acceptedAuthority = authority === 'credentialed_github'
+      || (process.env.OPK_VITEST_HARNESS === '1' && authority === 'harness_fixture');
+    if (!acceptedAuthority) return false;
+    const receipt = terminal.source_comment_receipt
+      && typeof terminal.source_comment_receipt === 'object'
+      && !Array.isArray(terminal.source_comment_receipt)
+      ? terminal.source_comment_receipt as Record<string, unknown>
+      : null;
+    if (!receipt) return false;
+    const commentId = receipt.commentId;
+    const validCommentId = (typeof commentId === 'number' && Number.isInteger(commentId) && commentId > 0)
+      || (typeof commentId === 'string' && Boolean(commentId.trim()));
+    if (!validCommentId
+      || trim(receipt.repository).toLowerCase() !== repository.toLowerCase()
+      || Number(receipt.prNumber) !== run.prNumber
+      || trim(receipt.headSha).toLowerCase() !== run.targetSha.toLowerCase()
+      || trim(receipt.runId) !== run.id
+      || trim(receipt.slotId) !== slot.slotId
+      || trim(receipt.invocationId) !== invocationId
+      || !trim(receipt.commentUrl)
+      || !trim(receipt.actorLogin)
+      || !trim(receipt.createdAt)
+      || trim(receipt.createdAt) !== trim(receipt.updatedAt)
+      || !/^[0-9a-f]{64}$/i.test(trim(receipt.bodySha256))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function assertCredentialedGptSourceAuthority(run: PackReviewRunRecord): void {
+  if (!hasCredentialedGptSourceAuthority(run)) {
+    throw new Error(`gpt_source_authority_missing_or_invalid:${run.id}`);
+  }
+}
+
 function failedSourceCommentTerminal(options: {
   resolution: Exclude<PackGptSourceCommentResolution, { kind: 'credentialed' }>;
   browserTerminal?: GptTerminalTurnResult | null;
@@ -1306,6 +1376,7 @@ async function runGptSourceBatch(options: {
     : PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS;
   let nextAdmissionAt = 0;
   let admissionTail = Promise.resolve();
+  let credentialedSourceCount = 0;
   const admit = async (): Promise<number> => {
     let release!: () => void;
     const predecessor = admissionTail;
@@ -1389,16 +1460,14 @@ async function runGptSourceBatch(options: {
         };
         break;
       }
-      if (!(attemptOrdinal === 1 && isRetryablePackReviewZeroSendCollision(invocation.result))) break;
+      if (!(attemptOrdinal === 1
+        && isRetryablePackReviewZeroSendCollision(invocation.result, invocationId))) break;
       attemptOrdinal = 2;
       invocationId = randomUUID();
       await markInvocationStarted(await admit());
     }
 
-    const rawTerminal = parseLastGptTerminalTurnResult(invocation.result.stdout);
-    const browserTerminal = rawTerminal && process.env.OPK_VITEST_HARNESS === '1'
-      ? { ...rawTerminal, invocation_id: invocationId }
-      : rawTerminal;
+    const browserTerminal = parseLastGptTerminalTurnResult(invocation.result.stdout);
     const identity = gptSourceIdentity({
       repoSlug: options.target.repoSlug,
       prNumber: options.target.prNumber,
@@ -1411,10 +1480,21 @@ async function runGptSourceBatch(options: {
     let payload: ReviewPayload | undefined;
     let terminalClass: string;
     let terminalResult: Record<string, unknown>;
-    const sourceMayHaveBeenPublished = !browserTerminal || browserTerminal.send_count >= 1;
+    const terminalBoundToInvocation = browserTerminal?.invocation_id === invocationId;
+    const sourceMayHaveBeenPublished = !browserTerminal
+      || !terminalBoundToInvocation
+      || browserTerminal.send_count >= 1;
     if (sourceMayHaveBeenPublished) {
       let resolution: PackGptSourceCommentResolution;
       try {
+        if (options.input.fixtureBeforeGptSourceCommentCensus) {
+          await options.input.fixtureBeforeGptSourceCommentCensus({
+            slotId,
+            attemptOrdinal,
+            invocationId,
+            identity,
+          });
+        }
         if (!(process.env.OPK_VITEST_HARNESS === '1' && !sourceTransport)) {
           await assertBoundHeadStillCurrent({
             repoRoot: options.target.sourceRepoRoot,
@@ -1442,6 +1522,11 @@ async function runGptSourceBatch(options: {
           result: invocation.result,
           authority: sourceTransport ? 'credentialed_github' : 'harness_fixture',
         });
+        credentialedSourceCount += 1;
+        if (process.env.OPK_VITEST_HARNESS === '1'
+          && options.input.fixtureCrashAfterGptSourceCredentialedCount === credentialedSourceCount) {
+          throw new Error(GPT_SOURCE_FIXTURE_CRASH_REASON);
+        }
       } else {
         terminalClass = terminalClassForGptResult(invocation.result, browserTerminal);
         terminalResult = failedSourceCommentTerminal({
@@ -1452,7 +1537,8 @@ async function runGptSourceBatch(options: {
       }
     } else {
       terminalClass = terminalClassForGptResult(invocation.result, browserTerminal);
-      if (attemptOrdinal === 2 && isRetryablePackReviewZeroSendCollision(invocation.result)) {
+      if (attemptOrdinal === 2
+        && isRetryablePackReviewZeroSendCollision(invocation.result, invocationId)) {
         terminalClass = 'explicit_refusal:zero_send_collision_exhausted';
       }
       terminalResult = browserTerminal
@@ -1626,6 +1712,14 @@ async function recoverStaleGptSourceComments(options: {
     findingCount: findings.length,
     findings,
   };
+  const persistedBeforeAggregate = getPackReviewRun(options.run.id, {
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
+  });
+  if (!persistedBeforeAggregate) {
+    return { recovered: false, reason: 'recovered_run_missing_before_aggregate' };
+  }
+  assertCredentialedGptSourceAuthority(persistedBeforeAggregate);
   validatePersistedPackReviewGptAggregate(options.run.id, {
     reviewVerdict: aggregate.verdict,
     findingCount: aggregate.findingCount,
@@ -1646,6 +1740,60 @@ async function recoverStaleGptSourceComments(options: {
     },
   }, { projectId: options.projectId, storeRoot: options.storeRoot });
   return { recovered: true, reason: 'gpt_source_comments_recovered_for_resume' };
+}
+
+async function resumeRecoveredGptDelivery(options: {
+  run: PackReviewRunRecord;
+  input: ReconcileStalePackReviewRunsInput;
+  projectId: string;
+  storeRoot: string;
+  repoSlug: string;
+  writeRequiredStatus: PackReviewRequiredStatusWriter;
+}): Promise<Awaited<ReturnType<typeof resumePackReviewVerdictDelivery>>> {
+  const payload = packReviewJournaledPayload(options.run);
+  if (!payload) throw new Error(`recovered pack review run ${options.run.id} has no journaled payload`);
+  const typedPayload = validatePersistedGptReviewPayload(
+    options.run.id,
+    payload as ReviewPayload,
+    { projectId: options.projectId, storeRoot: options.storeRoot },
+  );
+  const currentHead = options.input.fixtureCurrentPrHeadSha
+    ?? await resolveCurrentPrHead(options.input.sourceRepoRoot, options.repoSlug, options.run.prNumber);
+  if (currentHead.toLowerCase() !== options.run.targetSha.toLowerCase()) {
+    throw new Error('recovered GPT source head changed before final delivery');
+  }
+  const reviewTransport = createGithubReviewTransport({
+    repoRoot: options.input.sourceRepoRoot,
+    repoSlug: options.repoSlug,
+    prNumber: options.run.prNumber,
+    fixtureReviewId: options.input.fixtureGithubReviewId,
+    fixtureTransport: options.input.fixtureGithubReviewTransport,
+  });
+  return resumePackReviewVerdictDelivery({
+    run: options.run,
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
+    postGithubComment: async () => {
+      const posted = await postGithubReview({
+        repoRoot: options.input.sourceRepoRoot,
+        repoSlug: options.repoSlug,
+        prNumber: options.run.prNumber,
+        headSha: options.run.targetSha,
+        run: options.run,
+        payload: typedPayload,
+        projectId: options.projectId,
+        storeRoot: options.storeRoot,
+        transport: reviewTransport,
+      });
+      return { id: posted.id, url: posted.url, event: 'COMMENT' };
+    },
+    writeRequiredStatus: options.writeRequiredStatus,
+    notifyWorker: options.input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
+      trustedPackRoot: options.run.trustedPackRoot,
+      sessionId: options.run.linkedSessionId,
+      request,
+    })),
+  });
 }
 
 export async function reconcileStalePackReviewRuns(
@@ -1821,13 +1969,40 @@ export async function reconcileStalePackReviewRuns(
         repoSlug,
       });
       if (recovery.recovered) {
-        results.push({
-          runId: run.id,
-          terminalized: false,
-          statusReconciled: false,
-          recovered: true,
-          reason: recovery.reason,
-        });
+        const recoveredRun = await bindRepositoryIdentity(
+          getPackReviewRun(run.id, { projectId, storeRoot }) ?? run,
+        );
+        try {
+          const resumed = await resumeRecoveredGptDelivery({
+            run: recoveredRun,
+            input,
+            projectId,
+            storeRoot,
+            repoSlug,
+            writeRequiredStatus: statusWriter,
+          });
+          results.push({
+            runId: run.id,
+            terminalized: false,
+            statusReconciled: resumed.reason === 'completed',
+            recovered: true,
+            reason: resumed.reason === 'completed'
+              ? 'gpt_source_comments_recovered_and_delivered'
+              : `gpt_source_comments_recovered_delivery_${resumed.reason}`,
+            deliveryReason: resumed.reason,
+            status: resumed.status,
+            ...(resumed.githubReviewId !== undefined ? { githubReviewId: resumed.githubReviewId } : {}),
+            ...(resumed.githubReviewUrl ? { githubReviewUrl: resumed.githubReviewUrl } : {}),
+          });
+        } catch (error) {
+          results.push({
+            runId: run.id,
+            terminalized: false,
+            statusReconciled: false,
+            recovered: true,
+            reason: `gpt_source_comments_recovered_delivery_failed:${describeError(error)}`,
+          });
+        }
         continue;
       }
       const terminal = terminalizePackReviewStaleRun(run.id, { projectId, storeRoot });
@@ -2257,6 +2432,10 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     storeRoot,
     fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
     fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
+    fixtureGithubReviewId: input.fixtureGithubReviewId,
+    fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
+    fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+    fixtureWorkerNotifier: input.fixtureWorkerNotifier,
     resolveRepositorySlug: resolveSlug,
     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
   });
@@ -3032,7 +3211,10 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       ...(delivered.githubReviewUrl ? { githubReviewUrl: delivered.githubReviewUrl } : {}),
     };
   } catch (error) {
-    if (run && !terminal) {
+    const fixtureCrash = process.env.OPK_VITEST_HARNESS === '1'
+      && describeError(error) === GPT_SOURCE_FIXTURE_CRASH_REASON;
+    if (fixtureCrash) retainClaimDirectory = true;
+    if (run && !terminal && !fixtureCrash) {
       try {
         const persisted = getPackReviewRun(run.id, { projectId, storeRoot });
         if (persisted
@@ -3234,7 +3416,10 @@ async function main(): Promise<void> {
       storeRoot: trim(input.storeRoot) || undefined,
       fixtureCurrentPrHeadSha: (input as StartInput).fixtureCurrentPrHeadSha,
       fixtureGptSourceCommentTransport: (input as StartInput).fixtureGptSourceCommentTransport,
+      fixtureGithubReviewId: (input as StartInput).fixtureGithubReviewId,
+      fixtureGithubReviewTransport: (input as StartInput).fixtureGithubReviewTransport,
       fixtureRequiredStatusWriter: (input as StartInput).fixtureRequiredStatusWriter,
+      fixtureWorkerNotifier: (input as StartInput).fixtureWorkerNotifier,
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
