@@ -84,7 +84,7 @@ export function resolveCurrentWorkerAssignmentTarget(input: {
   const store = readWorkerAssignmentStore(input.file);
   if (!store) return { status: 'assignment_untrusted' };
   const current = store.assignments[`issue-${input.expected.issueNumber}`];
-  if (!sameLogicalAssignment(current, input.expected)) return { status: 'assignment_stale' };
+  if (!current || !sameLogicalAssignment(current, input.expected)) return { status: 'assignment_stale' };
   if (current.kind !== 'local') {
     return { status: 'remote_not_applicable', assignment: current };
   }
