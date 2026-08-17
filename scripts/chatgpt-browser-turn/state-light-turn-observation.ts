@@ -492,7 +492,11 @@ export async function finalizeStateLightPrimaryPublication(input: {
   const payload = typeof input.bytes === 'string' ? Buffer.from(input.bytes, 'utf8') : Buffer.from(input.bytes);
   const binding = bindingFor(input.target, payload);
   const lease = acquireObservationMutation(input.profileKey, input.invocationId);
-  let retirementCleanupRequired = false;
+  let returned: ObservationPrimaryFinalizationResult | undefined;
+  const finish = (result: ObservationPrimaryFinalizationResult): ObservationPrimaryFinalizationResult => {
+    returned = result;
+    return result;
+  };
   try {
     let current = readStateLightTurnObservation(input.profileKey, input.invocationId);
     if (current.phase !== 'sent_unharvested' && current.phase !== 'harvested') {
@@ -510,7 +514,7 @@ export async function finalizeStateLightPrimaryPublication(input: {
       if (existing.state === 'mismatch'
         && existing.byte_length === binding.byte_length
         && existing.sha256 === binding.sha256) {
-        return {
+        return finish({
           state: 'committed_ok',
           converged: true,
           output_bytes: binding.byte_length,
@@ -519,16 +523,16 @@ export async function finalizeStateLightPrimaryPublication(input: {
           expected_sha256: binding.sha256,
           observed_byte_length: existing.byte_length,
           observed_sha256: existing.sha256,
-        };
+        });
       }
-      return {
+      return finish({
         state: existing.state === 'unsafe' ? 'error' : 'conflict',
         cause: existing.state === 'unsafe' ? 'output_existing_unsafe' : 'output_existing_mismatch',
         expected_byte_length: binding.byte_length,
         expected_sha256: binding.sha256,
         ...(existing.byte_length !== undefined ? { observed_byte_length: existing.byte_length } : {}),
         ...(existing.sha256 !== undefined ? { observed_sha256: existing.sha256 } : {}),
-      };
+      });
     }
 
     if (!current.primary) {
@@ -560,24 +564,24 @@ export async function finalizeStateLightPrimaryPublication(input: {
         && existing.byte_length === binding.byte_length
         && existing.sha256 === binding.sha256;
       if (!converged) {
-        return {
+        return finish({
           state: existing.state === 'unsafe' ? 'error' : 'conflict',
           cause: existing.state === 'unsafe' ? 'output_existing_unsafe' : 'output_existing_mismatch',
           expected_byte_length: binding.byte_length,
           expected_sha256: binding.sha256,
           ...(observedByteLength !== undefined ? { observed_byte_length: observedByteLength } : {}),
           ...(observedSha256 !== undefined ? { observed_sha256: observedSha256 } : {}),
-        };
+        });
       }
     }
     if (!converged) {
-      return {
+      return finish({
         ...publication,
         expected_byte_length: binding.byte_length,
         expected_sha256: binding.sha256,
         ...(observedByteLength !== undefined ? { observed_byte_length: observedByteLength } : {}),
         ...(observedSha256 !== undefined ? { observed_sha256: observedSha256 } : {}),
-      };
+      });
     }
 
     current = readStateLightTurnObservation(input.profileKey, input.invocationId);
@@ -593,7 +597,7 @@ export async function finalizeStateLightPrimaryPublication(input: {
         : 'primary_publication_converged',
     });
     if (harvested.phase !== 'harvested') throw new Error('observation_harvested_readback_missing');
-    return {
+    return finish({
       state: 'committed_ok',
       ...(publication.state !== 'committed_ok' ? { converged: true } : {}),
       output_bytes: binding.byte_length,
@@ -602,9 +606,10 @@ export async function finalizeStateLightPrimaryPublication(input: {
       expected_sha256: binding.sha256,
       ...(observedByteLength !== undefined ? { observed_byte_length: observedByteLength } : {}),
       ...(observedSha256 !== undefined ? { observed_sha256: observedSha256 } : {}),
-    };
+    });
   } finally {
-    retirementCleanupRequired = !releaseObservationMutation(lease);
-    void retirementCleanupRequired;
+    if (!releaseObservationMutation(lease) && returned) {
+      Object.assign(returned, { retirement_cleanup_required: true });
+    }
   }
 }
