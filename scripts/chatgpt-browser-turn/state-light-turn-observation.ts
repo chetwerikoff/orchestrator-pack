@@ -1,19 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
-  existsSync,
   fsyncSync,
   linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmdirSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { atomicJson, fsyncDirectory, profileDirs, profileStatePaths } from './storage-common.ts';
 
 export const STATE_LIGHT_TURN_OBSERVATION_SCHEMA = 'state-light-turn-observation/v1' as const;
@@ -56,13 +56,13 @@ export interface ObservationMutationLease {
   readonly ownerChildPath: string;
 }
 
-const PHASE_ORDER: Readonly<Record<StateLightTurnObservationPhase, number>> = {
-  prepared: 0,
-  dispatching: 1,
-  not_sent: 2,
-  sent_unbound: 2,
-  sent_unharvested: 3,
-  harvested: 4,
+const LEGAL_NEXT: Readonly<Record<StateLightTurnObservationPhase, ReadonlySet<StateLightTurnObservationPhase>>> = {
+  prepared: new Set(['prepared', 'dispatching', 'not_sent']),
+  dispatching: new Set(['dispatching', 'sent_unbound', 'sent_unharvested']),
+  not_sent: new Set(['not_sent']),
+  sent_unbound: new Set(['sent_unbound', 'sent_unharvested']),
+  sent_unharvested: new Set(['sent_unharvested', 'harvested']),
+  harvested: new Set(['harvested']),
 };
 
 function observationRoot(profileKey: string): string {
@@ -87,7 +87,7 @@ function parseRecord(raw: string): StateLightTurnObservationRecord {
     || value.profile_key.length === 0
     || typeof value.marker !== 'string'
     || value.marker.length === 0
-    || !(value.phase in PHASE_ORDER)
+    || !(value.phase in LEGAL_NEXT)
     || !['none', 'numeric_send_count', 'owned_marker'].includes(value.send_witness)
     || (value.conversation_url !== null && typeof value.conversation_url !== 'string')
     || typeof value.transitioned_at !== 'string'
@@ -116,11 +116,12 @@ export function readStateLightTurnObservation(
   profileKey: string,
   invocationId: string,
 ): StateLightTurnObservationRecord {
-  const record = rereadExact(observationRecordPath(profileKey, invocationId));
+  const path = observationRecordPath(profileKey, invocationId);
+  const record = rereadExact(path);
   if (record.profile_key !== profileKey || record.invocation_id !== invocationId) {
     throw new Error('observation_identity_mismatch');
   }
-  if (observationRecordKey(record.invocation_id) !== basename(observationRecordPath(profileKey, invocationId), '.json')) {
+  if (observationRecordKey(record.invocation_id) !== basename(path, '.json')) {
     throw new Error('observation_record_key_mismatch');
   }
   return record;
@@ -136,7 +137,6 @@ export function admitStateLightTurnObservation(input: {
   const dir = observationRoot(input.profileKey);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const finalPath = observationRecordPath(input.profileKey, input.invocationId);
-  const now = (input.now ?? new Date()).toISOString();
   const proposed: StateLightTurnObservationRecord = {
     schema: STATE_LIGHT_TURN_OBSERVATION_SCHEMA,
     version: 1,
@@ -146,7 +146,7 @@ export function admitStateLightTurnObservation(input: {
     phase: 'prepared',
     send_witness: 'none',
     conversation_url: null,
-    transitioned_at: now,
+    transitioned_at: (input.now ?? new Date()).toISOString(),
     transition_reason: 'admitted_before_send',
   };
   const tempPath = join(dir, `.${observationRecordKey(input.invocationId)}.${randomUUID()}.tmp`);
@@ -195,12 +195,9 @@ function ownerChild(slotPath: string, owner: string): string {
 
 function readOwnerPid(slotPath: string): number | undefined {
   try {
-    const names = [basename(slotPath)];
-    void names;
-    const entry = lstatSync(slotPath);
-    if (!entry.isDirectory()) return undefined;
-    const ownerFiles = require('node:fs').readdirSync(slotPath) as string[];
-    if (ownerFiles.length !== 1) return undefined;
+    if (!lstatSync(slotPath).isDirectory()) return undefined;
+    const ownerFiles = readdirSync(slotPath);
+    if (ownerFiles.length !== 1 || !/^owner-[0-9a-f-]+\.json$/u.test(ownerFiles[0]!)) return undefined;
     const raw = JSON.parse(readFileSync(join(slotPath, ownerFiles[0]!), 'utf8')) as { pid?: unknown };
     return Number.isSafeInteger(raw.pid) && Number(raw.pid) > 0 ? Number(raw.pid) : undefined;
   } catch {
@@ -212,8 +209,7 @@ function reclaimDeadOwner(slotPath: string): boolean {
   const pid = readOwnerPid(slotPath);
   if (pid === undefined || !ownerPidProvablyDead(pid)) return false;
   try {
-    const fs = require('node:fs') as typeof import('node:fs');
-    const children = fs.readdirSync(slotPath);
+    const children = readdirSync(slotPath);
     if (children.length !== 1) return false;
     unlinkSync(join(slotPath, children[0]!));
     rmdirSync(slotPath);
@@ -243,7 +239,10 @@ export function acquireObservationMutation(
       closeSync(fd);
     }
     const stagedOwner = JSON.parse(readFileSync(child, 'utf8')) as { owner?: string; pid?: number };
-    if (stagedOwner.owner !== owner || stagedOwner.pid !== process.pid) throw new Error('observation_mutation_owner_readback_mismatch');
+    if (stagedOwner.owner !== owner || stagedOwner.pid !== process.pid) {
+      throw new Error('observation_mutation_owner_readback_mismatch');
+    }
+    fsyncDirectory(staging);
     try {
       renameSync(staging, slotPath);
       fsyncDirectory(locks);
@@ -278,13 +277,16 @@ function validateTransition(
     || current.marker !== next.marker) {
     throw new Error('observation_immutable_identity_changed');
   }
+  if (!LEGAL_NEXT[current.phase].has(next.phase)) throw new Error('observation_phase_transition_invalid');
   if (current.primary && JSON.stringify(current.primary) !== JSON.stringify(next.primary)) {
     throw new Error('observation_primary_binding_conflict');
   }
   if (current.conversation_url && next.conversation_url !== current.conversation_url) {
     throw new Error('observation_conversation_rebind');
   }
-  if (PHASE_ORDER[next.phase] < PHASE_ORDER[current.phase]) throw new Error('observation_phase_regression');
+  if (current.send_count !== undefined && next.send_count !== undefined && next.send_count !== current.send_count) {
+    throw new Error('observation_send_count_changed');
+  }
 }
 
 export function mutateStateLightTurnObservation(
@@ -339,12 +341,17 @@ export function bindPrimaryPublication(input: {
     byte_length: bytes.byteLength,
     sha256: createHash('sha256').update(bytes).digest('hex'),
   };
-  return mutateStateLightTurnObservation(input.profileKey, input.invocationId, (current) => ({
-    ...current,
-    primary: current.primary ?? binding,
-    transitioned_at: new Date().toISOString(),
-    transition_reason: current.primary ? 'primary_binding_verified' : 'primary_binding_established',
-  }));
+  return mutateStateLightTurnObservation(input.profileKey, input.invocationId, (current) => {
+    if (current.primary && JSON.stringify(current.primary) !== JSON.stringify(binding)) {
+      throw new Error('observation_primary_binding_conflict');
+    }
+    return {
+      ...current,
+      primary: current.primary ?? binding,
+      transitioned_at: new Date().toISOString(),
+      transition_reason: current.primary ? 'primary_binding_verified' : 'primary_binding_established',
+    };
+  });
 }
 
 export function primaryBindingMatches(
