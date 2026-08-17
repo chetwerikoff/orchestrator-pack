@@ -1,6 +1,10 @@
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ARTIFACT_PATHS, ARTIFACT_ROLES } from './producer.ts';
+import { runProcess } from '#opk-kernel/subprocess';
+import { ARTIFACT_PATHS, ARTIFACT_ROLES, producePortStageEvidence, verifyEvidenceIntegrity } from './producer.ts';
 import { jsonStringValueRanges, scanPowerShellTokens, tsStringRanges, yamlScalarRanges } from './tokens.ts';
+
+const repoRoot = resolve(import.meta.dirname, '../..');
 
 function scan(source: string, ranges?: readonly { start: number; end: number }[]) {
   return scanPowerShellTokens({
@@ -9,6 +13,15 @@ function scan(source: string, ranges?: readonly { start: number; end: number }[]
     ranges,
     resolvesWholePath: (candidate) => candidate.replaceAll('\\', '/') === 'scripts/path with spaces/check.ps1',
   });
+}
+
+async function exactCandidateHead(): Promise<string> {
+  const parents = await runProcess({ command: 'git', args: ['rev-list', '--parents', '-n', '1', 'HEAD'], cwd: repoRoot, inheritParentEnv: true, allowEmptyStdout: false });
+  if (!parents.ok) throw new Error(`cannot read test candidate parents: ${parents.stderr || parents.error || parents.outcome}`);
+  const parts = parents.stdout.trim().split(/\s+/u);
+  const candidate = parts.length >= 3 ? parts[2] : parts[0];
+  if (!candidate || !/^[0-9a-f]{40}$/u.test(candidate)) throw new Error(`cannot derive exact test candidate SHA: ${parents.stdout.trim()}`);
+  return candidate;
 }
 
 describe('Issue #1415 role-neutral port-stage evidence', () => {
@@ -52,5 +65,16 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     expect(scanPowerShellTokens({ sourcePath: 'package.json', bytes: json, ranges: jsonStringValueRanges(json), resolvesWholePath: () => false }).map((token) => token.matchedBytes)).toEqual(['scripts/verify.ps1', 'pwsh']);
     const ts = Buffer.from('// pwsh\nexport default { value: "scripts/verify.ps1", shell: `pwsh` };', 'utf8');
     expect(scanPowerShellTokens({ sourcePath: 'tool.config.ts', bytes: ts, ranges: tsStringRanges(ts), resolvesWholePath: () => false }).map((token) => token.matchedBytes)).toEqual(['scripts/verify.ps1', 'pwsh']);
+  });
+
+  it('produces and integrity-verifies baseline facts from the exact PR-head candidate Git tree', async () => {
+    const measuredHead = await exactCandidateHead();
+    const evidence = await producePortStageEvidence({ repoRoot, artifactRole: 'baseline', measuredHead, producerRevision: measuredHead });
+    expect(evidence.measuredHead).toBe(measuredHead);
+    expect(evidence.producerRevision).toBe(measuredHead);
+    expect(evidence.gateCensus.populationCount).toBeGreaterThan(0);
+    expect(evidence.gateCensus.populationDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(evidence.gateCensus.outputDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(() => verifyEvidenceIntegrity(evidence)).not.toThrow();
   });
 });
