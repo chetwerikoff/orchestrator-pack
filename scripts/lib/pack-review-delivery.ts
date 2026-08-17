@@ -173,7 +173,14 @@ export type PackReviewRequiredStatusWriter = (
   request: PackReviewRequiredStatusRequest,
 ) => Promise<void>;
 
+/** Legacy Pack Review test/injection result; the production transport consumer uses submit truth below. */
 export interface PackReviewWorkerNotificationResult {
+  state: 'delivered' | 'failed' | 'escalated';
+  reason: string;
+}
+
+/** Submit-boundary truth returned by the production worker-notification transport. */
+export interface PackReviewWorkerSubmissionResult {
   state: 'submitted' | 'pre_dispatch_failure' | 'ambiguous';
   reason: string;
 }
@@ -195,7 +202,7 @@ export interface PackReviewWorkerNotificationBinding {
 
 export type PackReviewWorkerNotifier = (
   request: PackReviewWorkerNotificationRequest,
-) => Promise<PackReviewWorkerNotificationResult>;
+) => Promise<PackReviewWorkerNotificationResult | PackReviewWorkerSubmissionResult>;
 
 export type PackReviewJournalWriter = (
   runId: string,
@@ -720,10 +727,11 @@ export async function deliverPackReviewVerdict(
         idempotencyKey: workerKey,
         reviewRunId: options.run.id,
       });
-      if (notified.state !== 'submitted') deliveryFailed = true;
-      const durableState: PackReviewDeliveryOutcome['state'] = notified.state === 'submitted'
+      const submitted = notified.state === 'submitted' || notified.state === 'delivered';
+      if (!submitted) deliveryFailed = true;
+      const durableState: PackReviewDeliveryOutcome['state'] = submitted
         ? 'succeeded'
-        : notified.state === 'pre_dispatch_failure'
+        : notified.state === 'pre_dispatch_failure' || notified.state === 'failed'
           ? 'failed'
           : 'escalated';
       recordChannelOutcome(
