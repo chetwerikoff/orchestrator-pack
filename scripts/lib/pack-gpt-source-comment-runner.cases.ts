@@ -436,8 +436,9 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     }
     expect(run?.reviewVerdict).toBe('findings');
     expect(run?.findingCount).toBe(2);
-    expect(run?.findings?.map((finding) => finding.sourceSlotId)).toEqual(['source-01', 'source-03']);
-    expect(new Set(run?.findings?.map((finding) => finding.fingerprint)).size).toBe(2);
+    const findings = run?.findings as Array<{ sourceSlotId: string; fingerprint: string }> | undefined;
+    expect(findings?.map((finding) => finding.sourceSlotId)).toEqual(['source-01', 'source-03']);
+    expect(new Set(findings?.map((finding) => finding.fingerprint)).size).toBe(2);
     expect(run?.deliveryOutcomes.githubComment?.state).toBe('succeeded');
     expect(run?.deliveryOutcomes.requiredStatus?.state).toBe('succeeded');
     expect(run?.deliveryOutcomes.workerNotification?.state).toBe('delivered');
