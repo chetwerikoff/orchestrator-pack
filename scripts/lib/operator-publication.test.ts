@@ -22,7 +22,7 @@ function adapterWith(result: RuntimeDispatchResult): { adapter: RuntimeAdapter; 
 
 describe('publishOperatorMessageOnce', () => {
   it.each([
-    [{ status: 'dispatched' } as const, 'confirmed'],
+    [{ status: 'dispatched' } as const, 'submitted'],
     [{ status: 'send_failed', reason: 'no-send' } as const, 'pre_dispatch_failure'],
     [{ status: 'dispatch_unknown', reason: 'unknown' } as const, 'ambiguous'],
   ])('maps one transport result exactly', (transport, expected) => {
@@ -52,7 +52,7 @@ describe('publishOperatorMessageOnce', () => {
     const { adapter, calls } = adapterWith({ status: 'dispatched' });
     expect(publishOperatorMessageOnce(adapter, {
       route: 'operator-primary', target, text: 'x'.repeat(OPERATOR_PUBLICATION_MAX_TEXT_BYTES), timeoutMs: 30_000,
-    })).toBe('confirmed');
+    })).toBe('submitted');
     expect(calls).toHaveLength(1);
   });
 });
