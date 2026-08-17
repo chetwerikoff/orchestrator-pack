@@ -53,6 +53,17 @@ class FakeNode {
   getAttribute(name: string): string | null {
     return this.attrs[name] ?? null;
   }
+
+  closest(_selector: string): FakeNode {
+    return this;
+  }
+
+  querySelector(selector: string): object | null {
+    if (selector.includes('copy-turn-action-button')
+      || selector.includes('good-response-turn-action-button')
+      || selector.includes('bad-response-turn-action-button')) return {};
+    return null;
+  }
 }
 
 async function evaluateExpression(expression: string, nodes: FakeNode[], generating = false, pageUrl = 'https://chatgpt.com/c/test', readyState: 'loading' | 'interactive' | 'complete' = 'complete'): Promise<any> {
@@ -458,20 +469,21 @@ test('existing, symlinked, directory, and special output targets are refused wit
   await mkdir(outputDirectory);
   await assert.rejects(publishExactBytes(outputDirectory, Buffer.from('replacement')), (error: any) => error.status === 'unsafe_output');
 
-  if (process.platform === 'win32') return;
-  const socketPath = join(directory, 'socket');
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(socketPath, resolve);
-  });
-  try {
-    await assert.rejects(
-      publishExactBytes(socketPath, Buffer.from('replacement')),
-      (error: any) => error.status === 'unsafe_output',
-    );
-  } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  if (process.platform !== 'win32') {
+    const socketPath = join(directory, 'socket');
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, resolve);
+    });
+    try {
+      await assert.rejects(
+        publishExactBytes(socketPath, Buffer.from('replacement')),
+        (error: any) => error.status === 'unsafe_output',
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   }
 });
 
@@ -837,7 +849,8 @@ test('acquisition rejects redirect and malformed creation, while exposing cleanu
         new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-cleanup' }),
       ], false, 'https://chatgpt.com/c/cleanup'),
     })),
-    (error: any) => error.status === 'cleanup_failed' && error.details?.cleanup === 'cleanup_failed',
+    (error: any) => error.status === 'cleanup_failed' && error.reason === 'readiness_timeout'
+      && error.details?.cleanup === 'cleanup_failed',
   );
 });
 
@@ -1169,7 +1182,7 @@ test('harvest waits for a recovery-opened bound page to expose a stable owned tu
     assert.equal(result.status, 'ok');
     assert.equal(result.harvested, true);
     assert.equal(published, 'FINAL');
-    assert.deepEqual({ createCalls, evaluateCalls, closeCalls }, { createCalls: 1, evaluateCalls: 3, closeCalls: 0 });
+    assert.deepEqual({ createCalls, evaluateCalls, closeCalls }, { createCalls: 1, evaluateCalls: 4, closeCalls: 0 });
   });
 });
 
