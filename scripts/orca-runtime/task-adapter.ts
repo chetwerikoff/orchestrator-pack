@@ -1,11 +1,9 @@
-import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import {
   runtimeFailure,
   runtimeUnsupported,
   sameRuntimeWorker,
   type RuntimeCallOptions,
-  type RuntimeDispatchResult,
   type RuntimeOperationFailure,
   type RuntimeResult,
   type RuntimeWorker,
@@ -41,39 +39,8 @@ type OrcaWorkerShowResult = Readonly<{
   observation?: Readonly<{ exactWorker?: boolean; status?: string }>;
 }>;
 
-type OrcaSubmitWitnessResult = Readonly<{
-  send?: Readonly<{
-    accepted?: boolean;
-    submitWitness?: Readonly<{
-      runtime?: string;
-      workerId?: string;
-      workerGeneration?: string;
-      payloadSha256?: string;
-      submitted?: boolean;
-    }>;
-  }>;
-}>;
-
 function failureDetail(failure: RuntimeOperationFailure): string {
   return `${failure.operation}:${failure.status}:${failure.reason}`;
-}
-
-function payloadSha256(text: string): string {
-  return createHash('sha256').update(text, 'utf8').digest('hex');
-}
-
-function hasExactSubmitWitness(
-  result: OrcaSubmitWitnessResult | undefined,
-  worker: RuntimeWorkerIdentity,
-  payload: string,
-): boolean {
-  const witness = result?.send?.submitWitness;
-  return result?.send?.accepted === true
-    && witness?.submitted === true
-    && witness.runtime === worker.runtime
-    && witness.workerId === worker.id
-    && witness.workerGeneration === worker.generation
-    && witness.payloadSha256 === payloadSha256(payload);
 }
 
 function attachNativeRuntimeError(
@@ -164,46 +131,6 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     const current = super.findWorker(worker, options);
     if (current.status !== 'ok' || current.value === null) return current;
     return { status: 'ok', value: this.#assignmentProvenance(current.value) };
-  }
-
-  override dispatchInput(
-    input: {
-      readonly worker: RuntimeWorkerIdentity;
-      readonly text?: string;
-      readonly submitOnly?: boolean;
-      readonly writeOnly?: boolean;
-    },
-    options: RuntimeCallOptions = {},
-  ): RuntimeDispatchResult {
-    if (input.worker.runtime !== 'orca') {
-      return { status: 'send_failed', reason: 'runtime_identity_mismatch' };
-    }
-    const current = this.findWorker(input.worker, options);
-    if (current.status !== 'ok') {
-      return { status: 'send_failed', reason: current.reason };
-    }
-    if (current.value === null) {
-      return { status: 'send_failed', reason: 'worker_generation_not_found' };
-    }
-
-    const args = ['terminal', 'send', '--terminal', input.worker.id];
-    if (!input.submitOnly) args.push('--text', input.text ?? '');
-    if (!input.writeOnly) args.push('--enter');
-    const response = this.#run<OrcaSubmitWitnessResult>(args, options);
-    if (!response.ok) {
-      const reason = neutralFailureReason(response);
-      return response.outcomeCategory === 'process_launch_failed'
-        ? { status: 'send_failed', reason }
-        : { status: 'dispatch_unknown', reason };
-    }
-
-    if (input.submitOnly || input.writeOnly) {
-      return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
-    }
-    const payload = input.text ?? '';
-    return hasExactSubmitWitness(response.result, input.worker, payload)
-      ? { status: 'dispatched' }
-      : { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
   }
 
   resolveAssignmentWorker(
