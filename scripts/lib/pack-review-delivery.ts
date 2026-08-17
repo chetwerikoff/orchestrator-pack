@@ -727,19 +727,22 @@ export async function deliverPackReviewVerdict(
         idempotencyKey: workerKey,
         reviewRunId: options.run.id,
       });
-      const submitted = notified.state === 'submitted' || notified.state === 'delivered';
-      if (!submitted) deliveryFailed = true;
-      const durableState: PackReviewDeliveryOutcome['state'] = notified.state === 'submitted'
-        ? 'succeeded'
-        : notified.state === 'delivered'
-          ? 'delivered'
-          : notified.state === 'pre_dispatch_failure' || notified.state === 'failed'
+      if (notified.state === 'delivered' || notified.state === 'failed' || notified.state === 'escalated') {
+        if (notified.state !== 'delivered') deliveryFailed = true;
+        recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));
+      } else {
+        const submitted = notified.state === 'submitted';
+        if (!submitted) deliveryFailed = true;
+        const durableState: PackReviewDeliveryOutcome['state'] = submitted
+          ? 'succeeded'
+          : notified.state === 'pre_dispatch_failure'
             ? 'failed'
             : 'escalated';
-      recordChannelOutcome(
-        'workerNotification',
-        outcome(durableState, notified.reason, workerKey, options.clock),
-      );
+        recordChannelOutcome(
+          'workerNotification',
+          outcome(durableState, notified.reason, workerKey, options.clock),
+        );
+      }
     } catch (error) {
       deliveryFailed = true;
       recordChannelOutcome('workerNotification', outcome('failed', describeError(error), workerKey, options.clock));
