@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -6,24 +5,6 @@ import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import { runOrcaJson, type OrcaJsonResponse } from '../orca-runtime/native.ts';
 import { DeterministicRuntimeAdapter } from './test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from './task-lifecycle.ts';
-
-function exactSubmitResult(handle: string, generation: string, text: string): OrcaJsonResponse {
-  return {
-    ok: true,
-    result: {
-      send: {
-        accepted: true,
-        submitWitness: {
-          runtime: 'orca',
-          workerId: handle,
-          workerGeneration: generation,
-          payloadSha256: createHash('sha256').update(text, 'utf8').digest('hex'),
-          submitted: true,
-        },
-      },
-    },
-  };
-}
 
 function fakeOrcaTransport() {
   const handle = 'term-1248';
@@ -59,7 +40,7 @@ function fakeOrcaTransport() {
         const textIndex = args.indexOf('--text');
         const text = textIndex >= 0 ? String(args[textIndex + 1] ?? '') : '';
         if (textIndex >= 0) lines.push(text);
-        return exactSubmitResult(handle, generation, text);
+        return { ok: true, result: { send: { accepted: true } } };
       }
       case 'terminal read':
         return {
@@ -105,7 +86,6 @@ function hermeticOrcaFixture(
   expectedPath: string,
 ): string {
   return `#!${process.execPath}
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter } from 'node:path';
 
@@ -196,21 +176,7 @@ switch (operation) {
     const textIndex = args.indexOf('--text');
     const text = textIndex >= 0 ? String(args[textIndex + 1] ?? '') : '';
     if (textIndex >= 0) state.lines.push(text);
-    respond({
-      ok: true,
-      result: {
-        send: {
-          accepted: true,
-          submitWitness: {
-            runtime: 'orca',
-            workerId: state.handle,
-            workerGeneration: state.generation,
-            payloadSha256: createHash('sha256').update(text, 'utf8').digest('hex'),
-            submitted: true,
-          },
-        },
-      },
-    });
+    respond({ ok: true, result: { send: { accepted: true } } });
     break;
   }
   case 'terminal read':
@@ -261,11 +227,17 @@ describe('direct runtime-neutral task caller', () => {
     expect(result.lines.join('\n')).toContain('implement the issue');
   });
 
-  it('runs unchanged with the Orca adapter when exact submit evidence is present', () => {
+  it('fails closed at the Orca dispatch boundary without a production submit witness', () => {
     const runJson = fakeOrcaTransport();
     const result = exercise(new OrcaTaskRuntimeAdapter({ runJson: runJson as never }));
-    expect(result).toMatchObject({ status: 'ok' });
-    expect(runJson).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      stage: 'dispatch',
+      result: { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' },
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'send')).toHaveLength(1);
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'read')).toHaveLength(0);
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'wait')).toHaveLength(0);
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'close')).toHaveLength(0);
   });
 
   it('acquires the claim before the first runtime side effect', () => {
@@ -340,7 +312,7 @@ describe('direct runtime-neutral task caller', () => {
     expect(after).toBe(before);
   });
 
-  it('runs complete Orca lifecycle with AO and pwsh unavailable', () => {
+  it('keeps the hermetic Orca worker open after an uncredentialed dispatch', () => {
     const root = mkdtempSync(join(process.cwd(), '.issue-1248-orca-hermetic-'));
     const fixturePath = join(root, 'orca-hermetic.mjs');
     const statePath = join(root, 'state.json');
@@ -387,29 +359,21 @@ describe('direct runtime-neutral task caller', () => {
         acquireClaim: () => ({ ok: true }),
       });
 
-      if (result.status !== 'ok') {
-        const capture = existsSync(capturePath)
-          ? readFileSync(capturePath, 'utf8').trim()
-          : 'capture_missing';
-        throw new Error(`lifecycle=${JSON.stringify(result)} native=${JSON.stringify(nativeCalls)} capture=${capture}`);
-      }
-      expect(result.lines).toContain('implement the issue');
-      expect(result.liveness).toBe('idle');
+      expect(result).toMatchObject({
+        stage: 'dispatch',
+        result: { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' },
+      });
 
       const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
         exists: boolean;
         operations: string[];
       };
-      expect(state.exists).toBe(false);
-      expect(state.operations).toEqual(expect.arrayContaining([
-        'terminal create',
-        'terminal send',
-        'terminal read',
-        'terminal wait',
-        'terminal close',
-      ]));
+      expect(state.exists).toBe(true);
+      expect(state.operations).toContain('terminal create');
       expect(state.operations.filter((operation) => operation === 'terminal send')).toHaveLength(1);
-      expect(state.operations.filter((operation) => operation === 'terminal close')).toHaveLength(1);
+      expect(state.operations.filter((operation) => operation === 'terminal read')).toHaveLength(0);
+      expect(state.operations.filter((operation) => operation === 'terminal wait')).toHaveLength(0);
+      expect(state.operations.filter((operation) => operation === 'terminal close')).toHaveLength(0);
 
       const capture = JSON.parse(readFileSync(capturePath, 'utf8')) as {
         operation: string;
@@ -418,7 +382,7 @@ describe('direct runtime-neutral task caller', () => {
         expectedPath: string;
       };
       expect(capture).toMatchObject({
-        operation: 'terminal close',
+        operation: 'terminal send',
         forbiddenEnvironment: [],
         pathEntries: [root],
         expectedPath: root,
