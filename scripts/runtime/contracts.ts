@@ -46,6 +46,24 @@ export interface RuntimeBoundedOutput {
   readonly terminalState: 'running' | 'exited' | 'unknown';
 }
 
+export interface RuntimeInboxMessage {
+  readonly type: string;
+  readonly subject?: string;
+  readonly body?: string;
+  readonly payload?: unknown;
+}
+
+export interface RuntimeInboxDelivery {
+  readonly runId: string;
+  readonly deliveryId: string;
+  readonly messages: readonly RuntimeInboxMessage[];
+}
+
+export type RuntimeInboxCheckResult =
+  | { readonly status: 'empty'; readonly runId: string }
+  | { readonly status: 'delivery'; readonly delivery: RuntimeInboxDelivery }
+  | { readonly status: 'failed' | 'unsupported' | 'unknown'; readonly reason: string };
+
 export type RuntimeOperationName =
   | 'readiness'
   | 'list_workers'
@@ -54,6 +72,7 @@ export type RuntimeOperationName =
   | 'resolve_assignment_worker'
   | 'spawn_worker'
   | 'dispatch_input'
+  | 'check_inbox'
   | 'read_bounded_output'
   | 'liveness'
   | 'stop_worker'
@@ -136,6 +155,20 @@ export interface RuntimeAdapter {
     },
     options?: RuntimeCallOptions,
   ): RuntimeDispatchResult;
+
+  /**
+   * Read the bound Run's oldest unacknowledged Delivery. When ackDeliveryId is
+   * supplied, the provider must acknowledge that exact prior whole Delivery
+   * before performing the next non-blocking check. Implementations must never
+   * synthesize delivery ids or surface/ack a sibling Run.
+   */
+  checkInbox?(
+    input: {
+      readonly runId: string;
+      readonly ackDeliveryId?: string;
+    },
+    options?: RuntimeCallOptions,
+  ): RuntimeInboxCheckResult;
 
   readBoundedOutput(
     input: {
