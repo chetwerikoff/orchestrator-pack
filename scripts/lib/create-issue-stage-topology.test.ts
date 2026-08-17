@@ -40,6 +40,19 @@ const active: LifecycleBinding = {
 };
 
 describe('create-issue remote review topology', () => {
+  it('uses triple-source topology for T2 architectural review but rejects T2 competitive', () => {
+    const architectural = buildTopology({
+      ...identity,
+      stage: 'architectural-review',
+    }, 'T2', 3, 'env:OPK_GPT_REVIEWER_CARDINALITY');
+    expect(architectural.policyVersion).toBe('triple-source/v1');
+    expect(architectural.requiredSlots).toEqual(['01', '02', '03']);
+    expect(() => buildTopology({
+      ...identity,
+      stage: 'competitive',
+    }, 'T2', 3, 'env:OPK_GPT_REVIEWER_CARDINALITY')).toThrow(/competitive/);
+  });
+
   it('uses stable canonical JSON and exact representability bounds', () => {
     expect(canonicalJson({ b: 2, a: 1 })).toBe('{"a":1,"b":2}');
     expect(MAX_REPRESENTABLE_REVIEWER_CARDINALITY * MAX_PART_COUNT).toBe(MAX_STAGE_SOURCE_RECORDS);

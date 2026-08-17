@@ -335,7 +335,7 @@ function slotForOrdinal(ordinal: number): ReviewerSlot { return String(ordinal).
 function expectedSlots(cardinality: number): ReviewerSlot[] { return Array.from({ length: cardinality }, (_, index) => slotForOrdinal(index + 1)); }
 
 export function parseReviewerCardinalityControl(raw: string | undefined): Record<ReviewTier, number> {
-  const defaults: Record<ReviewTier, number> = { T1: 1, T2: 1, T3: 3 };
+  const defaults: Record<ReviewTier, number> = { T1: 1, T2: 3, T3: 3 };
   if (!raw?.trim()) return defaults;
   const trimmed = raw.trim();
   if (/^\d+$/.test(trimmed)) {
@@ -354,7 +354,7 @@ export function parseReviewerCardinalityControl(raw: string | undefined): Record
     if (!validCardinality(value)) throw new Error(`${REVIEWER_CARDINALITY_CONTROL_ENV}.${tier} must be 1..99`);
     result[tier] = Number(value);
   }
-  if (result.T1 !== 1 || result.T2 !== 1) throw new Error(`${REVIEWER_CARDINALITY_CONTROL_ENV} must keep T1 and T2 singular`);
+  if (result.T1 !== 1 || result.T2 !== 3) throw new Error(`${REVIEWER_CARDINALITY_CONTROL_ENV} must keep T1 at 1 and T2 at 3`);
   return result;
 }
 function sameCapture(left: CaptureIdentityV1, right: CaptureIdentityV1): boolean {
@@ -775,8 +775,11 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
     relayEligibleCaptures,
     ...(isReviewLaneEvidence(reviewLane) ? { reviewLane } : {}),
   };
-  if (receipt.stage === 'competitive' || receipt.stage === 'architectural-review') {
-    if (receipt.tier !== 'T3') errors.push(`${receipt.stage} is valid only for T3`);
+  if (receipt.stage === 'competitive') {
+    if (receipt.tier !== 'T3') errors.push('competitive is valid only for T3');
+    if (receipt.policyVersion !== TRIPLE_SOURCE_POLICY_VERSION && receipt.policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) errors.push('competitive must use triple-source/v1 or review-lane-routing/v1');
+  } else if (receipt.stage === 'architectural-review') {
+    if (receipt.tier === 'T1') errors.push('architectural-review is not valid for T1');
     if (receipt.policyVersion !== TRIPLE_SOURCE_POLICY_VERSION && receipt.policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) errors.push(`${receipt.stage} must use triple-source/v1 or review-lane-routing/v1`);
   } else if (receipt.policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION) {
     errors.push(`${receipt.stage} review-lane-routing/v1 is limited to lane-controlled T3 stages`);
