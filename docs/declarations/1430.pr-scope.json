@@ -7,14 +7,15 @@
     "docs/declarations/1430.pr-scope.json",
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts",
+    "scripts/browser-gpt-review-regressions.test.ts",
     "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/chatgpt-browser-turn/storage-common.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
   "denylist": [
@@ -35,14 +36,15 @@
     "docs/declarations/1430.pr-scope.json",
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts",
+    "scripts/browser-gpt-review-regressions.test.ts",
     "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/chatgpt-browser-turn/storage-common.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ]
 }
