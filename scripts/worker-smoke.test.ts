@@ -29,6 +29,7 @@ import {
   parsePaginatedSmokeComments,
   resolveSmokeTarget,
   runGateCheck,
+  resolveSmokeExecutorProfile,
   smokeCommentSnapshotDigest,
   stabilizeSmokeCommentCensus,
   type CliOptions,
@@ -145,6 +146,45 @@ function mutateMachineBlock(body: string, mutate: (block: string) => string): st
   if (start < 0 || end < 0) throw new Error('machine report block missing');
   return `${body.slice(0, start)}${mutate(body.slice(start, end))}${body.slice(end)}`;
 }
+
+describe('smoke executor profiles', () => {
+  const env = {
+    PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor-agent',
+    PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-routine-model',
+    PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-routine-effort',
+    PACK_EXECUTOR_SMOKE_COMPLEX_AGENT: 'cursor-agent',
+    PACK_EXECUTOR_SMOKE_COMPLEX_MODEL: 'fixture-complex-model',
+    PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT: 'fixture-complex-effort',
+  };
+
+  it.each([
+    ['routine', 'fixture-routine-model', 'fixture-routine-effort'],
+    ['complex', 'fixture-complex-model', 'fixture-complex-effort'],
+  ] as const)('applies only the %s profile before spawn', (complexity, model, effort) => {
+    const profile = resolveSmokeExecutorProfile(complexity, env);
+    expect(profile.command).toBe(`cursor-agent --model '${model}' --effort '${effort}'`);
+    expect(profile.complexity).toBe(complexity);
+  });
+
+  it.each([
+    ['routine', 'PACK_EXECUTOR_SMOKE_ROUTINE_MODEL'],
+    ['complex', 'PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT'],
+  ] as const)('fails closed before spawn for missing %s profile data', (complexity, missing) => {
+    const invalid = { ...env };
+    delete invalid[missing];
+    expect(() => resolveSmokeExecutorProfile(complexity, invalid)).toThrow('smoke_profile_missing');
+  });
+
+  it('rejects unsupported and malformed profile data', () => {
+    expect(() => resolveSmokeExecutorProfile('routine', {
+      ...env, PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'unsupported-agent',
+    })).toThrow('smoke_profile_unsupported_agent');
+    expect(() => resolveSmokeExecutorProfile('routine', {
+      ...env, PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'model with spaces',
+    })).toThrow('smoke_profile_malformed');
+    expect(() => resolveSmokeExecutorProfile('routine', env)).not.toThrow();
+  });
+});
 
 describe('runtime-neutral worker smoke', () => {
   it('keeps the smoke-plan authoring floor', () => {
@@ -518,6 +558,7 @@ function gateOptions(root: string, issueBodyFile: string): CliOptions {
     prNumber: 2001,
     headSha: HEAD_ONE,
     issueBodyFile,
+    smokeComplexity: 'routine',
     repoRoot: root,
     cwd: root,
     dryRun: false,

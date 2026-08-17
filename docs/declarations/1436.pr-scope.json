@@ -3,20 +3,23 @@
   "issue_number": 1436,
   "declared_paths": [
     "docs/declarations/1436.pr-scope.json",
-    "docs/orchestration-runbook.md"
+    "docs/orchestration-runbook.md",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
   ],
   "denylist": [
     ".github/",
     "credentials/",
     "packages/core/",
     "plugins/",
-    "scripts/",
     "secrets/",
     "vendor/"
   ],
   "allowed_roots": [
     "docs/declarations/",
-    "docs/orchestration-runbook.md"
+    "docs/orchestration-runbook.md",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "dd691bbcd78ddff186e29891a456d4742eafaabb"
+  "source_revision": "70fb45279991f0617b5d43153b425f7be5c08dca"
 }

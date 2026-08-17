@@ -75,10 +75,71 @@ export interface CliOptions {
   prNumber: number;
   headSha: string;
   issueBodyFile: string;
+  smokeComplexity: SmokeComplexity | '';
   repoRoot: string;
   cwd: string;
   dryRun: boolean;
   json: boolean;
+}
+
+export type SmokeComplexity = 'routine' | 'complex';
+
+export interface SmokeExecutorProfile {
+  readonly complexity: SmokeComplexity;
+  readonly agent: string;
+  readonly model: string;
+  readonly effort: string;
+  readonly command: string;
+}
+
+const SMOKE_PROFILE_FIELDS = {
+  routine: {
+    agent: 'PACK_EXECUTOR_SMOKE_ROUTINE_AGENT',
+    model: 'PACK_EXECUTOR_SMOKE_ROUTINE_MODEL',
+    effort: 'PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT',
+  },
+  complex: {
+    agent: 'PACK_EXECUTOR_SMOKE_COMPLEX_AGENT',
+    model: 'PACK_EXECUTOR_SMOKE_COMPLEX_MODEL',
+    effort: 'PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT',
+  },
+} as const;
+
+const SUPPORTED_SMOKE_AGENTS = new Set(['cursor-agent']);
+const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
+
+function shellQuoteProfileValue(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function profileValue(env: Readonly<NodeJS.ProcessEnv>, name: string): string {
+  const value = env[name]?.trim() ?? '';
+  if (!value) throw new Error(`smoke_profile_missing:${name}`);
+  if (!PROFILE_VALUE_PATTERN.test(value)) throw new Error(`smoke_profile_malformed:${name}`);
+  return value;
+}
+
+export function resolveSmokeExecutorProfile(
+  complexity: SmokeComplexity | string,
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+): SmokeExecutorProfile {
+  if (complexity !== 'routine' && complexity !== 'complex') {
+    throw new Error('smoke_complexity_unsupported');
+  }
+  const fields = SMOKE_PROFILE_FIELDS[complexity];
+  const agent = profileValue(env, fields.agent);
+  const model = profileValue(env, fields.model);
+  const effort = profileValue(env, fields.effort);
+  if (!SUPPORTED_SMOKE_AGENTS.has(agent)) {
+    throw new Error(`smoke_profile_unsupported_agent:${fields.agent}`);
+  }
+  return {
+    complexity,
+    agent,
+    model,
+    effort,
+    command: `${agent} --model ${shellQuoteProfileValue(model)} --effort ${shellQuoteProfileValue(effort)}`,
+  };
 }
 
 export interface ResolvedSmokeTarget {
@@ -98,6 +159,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
     prNumber: 0,
     headSha: '',
     issueBodyFile: '',
+    smokeComplexity: '',
     repoRoot: process.cwd(),
     cwd: process.cwd(),
     dryRun: false,
@@ -111,6 +173,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case '--pr': options.prNumber = Number.parseInt(args[++index] ?? '', 10); break;
       case '--head-sha': options.headSha = args[++index] ?? ''; break;
       case '--issue-body-file': options.issueBodyFile = args[++index] ?? ''; break;
+      case '--smoke-complexity': options.smokeComplexity = (args[++index] ?? '') as SmokeComplexity; break;
       case '--repo-root': options.repoRoot = args[++index] ?? options.repoRoot; break;
       case '--cwd': options.cwd = args[++index] ?? options.cwd; break;
       case '--dry-run': options.dryRun = true; break;
@@ -1003,6 +1066,20 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     return 1;
   }
 
+  let smokeProfile: SmokeExecutorProfile;
+  try {
+    smokeProfile = resolveSmokeExecutorProfile(options.smokeComplexity);
+  } catch (error) {
+    const report = operationalReport('BLOCKED', options, {
+      action: 'resolve smoke executor profile',
+      expected: 'one supported smoke profile applied before child creation',
+      observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
+    });
+    publishSmokeReport(report, options);
+    emit({ ok: false, report }, options.json);
+    return 1;
+  }
+
   const adapter = await selectRuntimeAdapter({}, { cwd: options.cwd });
   const readiness = adapter.readiness({ cwd: options.cwd });
   if (readiness.status !== 'ok') {
@@ -1106,7 +1183,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
   try {
     const spawned = adapter.spawnWorker({
       title: `smoke-${options.issueNumber}`,
-      command: 'cursor-agent',
+      command: smokeProfile.command,
       workspace: 'active',
     }, { cwd: options.cwd, timeoutMs: SMOKE_CREATE_TIMEOUT_MS });
     if (spawned.status !== 'ok') {

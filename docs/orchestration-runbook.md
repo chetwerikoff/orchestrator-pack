@@ -133,6 +133,12 @@ The variable names and work-class-to-profile mapping are tracked policy. Concret
 - Changing a profile between those already-supported executor paths changes only which existing path subsequent work uses; it does not create a new selector or lifecycle authority.
 - Smoke complexity selects only between the routine-smoke and complex-smoke executor profiles; it does not create a task tier or change smoke admission, evidence, ownership, or lifecycle rules.
 
+The smoke launcher receives exactly one producer-owned `--smoke-complexity`
+value (`routine` or `complex`). It resolves that profile immediately before
+child creation, validates all three local values and the supported agent, and
+fails closed before spawn when the profile is missing, malformed, unsupported,
+mixed, or cannot be applied through the existing launch command.
+
 This profile rule does not add a runtime selector, WorkerAssignment type, provider registry, scheduler, service, store, queue, daemon, fallback transport, or retry mechanism.
 
 For example, changing the local T3 `agent` between the already-supported GPT/Browser-GPT and Cursor/Orca paths changes the path used by subsequent T3 work without a tracked policy edit. Routine versus complex smoke works the same way: it selects the corresponding local smoke profile, whose concrete values remain local-only.
