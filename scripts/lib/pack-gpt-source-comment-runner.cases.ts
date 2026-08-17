@@ -375,6 +375,109 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     ))).toBe(true);
   });
 
+  it('credentials a mixed findings/clean source round once and publishes one final review and status', async () => {
+    const storeRoot = tempRoot();
+    process.env.OPK_VITEST_HARNESS = '1';
+    process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/g-fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const publications = new Map<string, PublishedSource>();
+    const review = { posts: 0 };
+    const statusWrites: unknown[] = [];
+    const workerWrites: unknown[] = [];
+    const transport = dynamicTransport(publications);
+    const result = await startPackReview({
+      ...baseStart(storeRoot, transport),
+      fixtureGithubReviewTransport: finalReviewTransport(review),
+      fixtureRequiredStatusWriter: async (request) => { statusWrites.push(request); },
+      fixtureWorkerNotifier: async (request) => {
+        workerWrites.push(request);
+        return { state: 'delivered' as const, reason: 'fixture' };
+      },
+      fixtureBeforeGptSourceCommentCensus: ({ identity }) => {
+        const payload = identity.slotId === 'source-01'
+          ? findingSourcePayload('GPT-MIX-01')
+          : identity.slotId === 'source-03'
+            ? findingSourcePayload('GPT-MIX-03')
+            : 'NO_FINDINGS';
+        publications.set(identity.slotId, { identity, payload });
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(review.posts).toBe(1);
+    expect(statusWrites).toHaveLength(2);
+    expect(statusWrites.map((request) => (request as { state?: string }).state)).toEqual(['pending', 'failure']);
+    expect(workerWrites).toHaveLength(1);
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    const slots = run?.reviewRound?.sourceSlots ?? [];
+    expect(slots).toHaveLength(3);
+    expect(slots.map((slot) => slot.terminalClass)).toEqual([
+      'complete_findings',
+      'complete_clean',
+      'complete_findings',
+    ]);
+    for (const slot of slots) {
+      const terminal = slot.terminalResult as Record<string, unknown>;
+      const receipt = terminal.source_comment_receipt as Record<string, unknown>;
+      expect(terminal.source_comment_authority).toBe('credentialed_github');
+      expect(receipt).toMatchObject({
+        repository: REPO,
+        prNumber: 1436,
+        headSha: HEAD,
+        runId: run?.id,
+        slotId: slot.slotId,
+        invocationId: slot.invocationId,
+        actorLogin: 'browser-gpt-bot',
+        createdAt: '2026-08-17T00:00:00Z',
+        updatedAt: '2026-08-17T00:00:00Z',
+      });
+    }
+    expect(run?.reviewVerdict).toBe('findings');
+    expect(run?.findingCount).toBe(2);
+    expect(run?.findings?.map((finding) => finding.sourceSlotId)).toEqual(['source-01', 'source-03']);
+    expect(new Set(run?.findings?.map((finding) => finding.fingerprint)).size).toBe(2);
+    expect(run?.deliveryOutcomes.githubComment?.state).toBe('succeeded');
+    expect(run?.deliveryOutcomes.requiredStatus?.state).toBe('succeeded');
+    expect(run?.deliveryOutcomes.workerNotification?.state).toBe('delivered');
+  });
+
+  it('rejects a source round when the connected head advances before comment creation', async () => {
+    const storeRoot = tempRoot();
+    process.env.OPK_VITEST_HARNESS = '1';
+    process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/g-fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const publications = new Map<string, PublishedSource>();
+    const census = { listCalls: 0 };
+    const startedSlots: string[] = [];
+    const review = { posts: 0 };
+    const statusWrites: unknown[] = [];
+    const transport = dynamicTransport(publications, census);
+    const result = await startPackReview({
+      ...baseStart(storeRoot, transport),
+      fixturePostReviewHeadSha: 'b'.repeat(40),
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: '', exitCode: 13 }],
+        'source-02': [{ stdout: '', exitCode: 13 }],
+        'source-03': [{ stdout: '', exitCode: 13 }],
+      },
+      fixtureGithubReviewTransport: finalReviewTransport(review),
+      fixtureRequiredStatusWriter: async (request) => { statusWrites.push(request); },
+      fixtureAfterGptInvocationBound: ({ slotId }) => { startedSlots.push(slotId); },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(String(result.reason)).toContain('review target head changed after reviewer returned');
+    expect(startedSlots).toEqual(['source-01', 'source-02', 'source-03']);
+    expect(publications).toHaveLength(0);
+    expect(census.listCalls).toBe(0);
+    expect(review.posts).toBe(0);
+    expect(statusWrites.some((request) => (request as { state?: string }).state === 'error')).toBe(true);
+  });
+
   it('standalone reconcile recovers source comments and completes final review/status/worker delivery', async () => {
     const storeRoot = tempRoot();
     process.env.OPK_VITEST_HARNESS = '1';
