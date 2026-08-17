@@ -290,8 +290,9 @@ function ledgerOptions(fixture: ReturnType<typeof preLens>) {
 }
 
 describe('Issue #1150 stage authority', () => {
-  it('uses one configurable cardinality control and accepts non-three source sets', () => {
-    expect(parseReviewerCardinalityControl(undefined)).toEqual({ T1: 1, T2: 1, T3: 3 });
+  it('uses the decree cardinalities and accepts non-three T3 source sets', () => {
+    expect(parseReviewerCardinalityControl(undefined)).toEqual({ T1: 1, T2: 3, T3: 3 });
+    expect(() => parseReviewerCardinalityControl('{"T2":2}')).toThrow(/T1 at 1 and T2 at 3/);
     expect(parseReviewerCardinalityControl('2').T3).toBe(2);
     expect(parseReviewerCardinalityControl('{"T3":4}').T3).toBe(4);
     for (const cardinality of [2, 4]) {
@@ -300,6 +301,19 @@ describe('Issue #1150 stage authority', () => {
       expect(state.errors, state.errors.join('\n')).toEqual([]);
       expect(state.credentialingCapturesByStage.competitive).toHaveLength(cardinality);
     }
+  });
+
+  it('accepts T2 architectural-review and rejects T2 competitive', () => {
+    const architectural = sourceStage('architectural-review', 1, 3);
+    architectural.receipt.tier = 'T2';
+    const accepted = deriveReviewEpisodeState([architectural.receipt], relay(architectural.captures), authority([architectural.receipt]));
+    expect(accepted.errors, accepted.errors.join('\n')).toEqual([]);
+    expect(validateReviewEpisodeTopology(accepted, 'pre-lens')).toEqual([]);
+
+    const competitive = sourceStage('competitive', 1, 3);
+    competitive.receipt.tier = 'T2';
+    const rejected = deriveReviewEpisodeState([competitive.receipt], relay(competitive.captures), authority([competitive.receipt]));
+    expect(rejected.errors.join('\n')).toContain('competitive is valid only for T3');
   });
 
   it('credentials a post-send incident capture only with explicit authoritative GitHub artifact authority', () => {

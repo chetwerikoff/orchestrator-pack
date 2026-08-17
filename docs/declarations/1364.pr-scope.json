@@ -2,11 +2,12 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1364,
   "declared_paths": [
-    ".claude/skills/create-issue-draft/SKILL.md",
-    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
-    ".cursor/skills/create-issue-draft/SKILL.md",
-    "docs/create-issue-draft-acceptance-artifacts.md",
-    "docs/tiering.md"
+    "docs/declarations/1364.pr-scope.json",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-topology.test.ts",
+    "scripts/lib/create-issue-stage-topology.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.test.ts"
   ],
   "denylist": [
     "credentials/",
@@ -21,7 +22,12 @@
     "AGENTS.md",
     "docs/create-issue-draft-acceptance-artifacts.md",
     "docs/declarations/1364.pr-scope.json",
-    "docs/tiering.md"
+    "docs/tiering.md",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-topology.test.ts",
+    "scripts/lib/create-issue-stage-topology.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.test.ts"
   ],
   "source_revision": "39d409facbfd033eadf424798b1241e983d73a80"
 }
