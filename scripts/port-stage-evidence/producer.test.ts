@@ -37,6 +37,18 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     });
   });
 
+  it('keeps exactly the seven contract source kinds', () => {
+    expect(SOURCE_KINDS).toEqual([
+      'tracked-ps1-file',
+      'script-token-reference',
+      'workflow-token-reference',
+      'package-config-token-reference',
+      'instruction-command',
+      'instruction-directive',
+      'instruction-reference-only',
+    ]);
+  });
+
   it('records exact LF/UTF-8 byte coordinates and preserves matched bytes', () => {
     const source = 'α run scripts/verify.ps1\r\npwsh -File scripts/check-reusable.ps1\n';
     const tokens = scan(source);
@@ -126,7 +138,7 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     expect(evidence.gateCensus.populationDigest).toBe(projection.populationDigest);
     expect(evidence.gateCensus.outputDigest).toBe(canonical.outputDigest);
     expect(() => verifyEvidenceIntegrity(evidence)).not.toThrow();
-    for (const sourceKind of SOURCE_KINDS) expect(evidence.entries.some((entry) => entry.sourceKind === sourceKind), sourceKind).toBe(true);
+    for (const entry of evidence.entries) expect(SOURCE_KINDS).toContain(entry.sourceKind);
 
     const outputPath = await writePortStageEvidence(repoRoot, evidence);
     try {
