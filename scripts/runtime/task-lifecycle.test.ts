@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import { runOrcaJson, type OrcaJsonResponse } from '../orca-runtime/native.ts';
+import { drainRuntimeInbox, type RuntimeInboxCheckResult } from './contracts.ts';
 import { DeterministicRuntimeAdapter } from './test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from './task-lifecycle.ts';
 
@@ -390,5 +391,164 @@ describe('direct runtime-neutral task caller', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('bounded runtime inbox drain', () => {
+  it('processes all messages before exactly one ack per delivery and loops to authoritative empty', async () => {
+    const runId = 'run-inbox-1';
+    const calls: Array<{ runId: string; ackDeliveryId?: string }> = [];
+    const processed: string[] = [];
+    const checkInbox = vi.fn((input: { readonly runId: string; readonly ackDeliveryId?: string }): RuntimeInboxCheckResult => {
+      calls.push({ ...input });
+      if (!input.ackDeliveryId) {
+        return {
+          status: 'delivery',
+          delivery: {
+            runId,
+            deliveryId: 'delivery-1',
+            messages: [{ type: 'a' }, { type: 'b' }],
+          },
+        };
+      }
+      if (input.ackDeliveryId === 'delivery-1') {
+        return {
+          status: 'delivery',
+          delivery: {
+            runId,
+            deliveryId: 'delivery-2',
+            messages: [{ type: 'c' }],
+          },
+        };
+      }
+      if (input.ackDeliveryId === 'delivery-2') return { status: 'empty', runId };
+      return { status: 'failed', reason: 'unexpected_ack' };
+    });
+
+    const result = await drainRuntimeInbox(
+      { checkInbox },
+      {
+        runId,
+        processMessage: (message) => {
+          processed.push(message.type);
+        },
+      },
+      { timeoutMs: 1_000 },
+    );
+
+    expect(result).toEqual({ status: 'empty', runId });
+    expect(processed).toEqual(['a', 'b', 'c']);
+    expect(calls).toEqual([
+      { runId },
+      { runId, ackDeliveryId: 'delivery-1' },
+      { runId, ackDeliveryId: 'delivery-2' },
+    ]);
+  });
+
+  it('does not ack a delivery when any interior message fails processing', async () => {
+    const runId = 'run-inbox-2';
+    const checkInbox = vi.fn((_input: { readonly runId: string; readonly ackDeliveryId?: string }): RuntimeInboxCheckResult => ({
+      status: 'delivery',
+      delivery: {
+        runId,
+        deliveryId: 'delivery-fail',
+        messages: [{ type: 'first' }, { type: 'explode' }, { type: 'never' }],
+      },
+    }));
+    const processed: string[] = [];
+
+    const result = await drainRuntimeInbox(
+      { checkInbox },
+      {
+        runId,
+        processMessage: (message) => {
+          processed.push(message.type);
+          if (message.type === 'explode') throw new Error('surface_failed');
+        },
+      },
+      { timeoutMs: 1_000 },
+    );
+
+    expect(result).toEqual({
+      status: 'blocked',
+      runId,
+      reason: 'runtime_inbox_message_processing_failed:surface_failed',
+      pendingDeliveryId: 'delivery-fail',
+    });
+    expect(processed).toEqual(['first', 'explode']);
+    expect(checkInbox).toHaveBeenCalledTimes(1);
+    expect(checkInbox.mock.calls[0]?.[0]).toEqual({ runId });
+  });
+
+  it('returns boundary_busy and leaves the current delivery unacked when arrivals exhaust the caller budget', async () => {
+    const runId = 'run-inbox-3';
+    let nowMs = 0;
+    const calls: Array<{ runId: string; ackDeliveryId?: string }> = [];
+    const checkInbox = vi.fn((input: { readonly runId: string; readonly ackDeliveryId?: string }): RuntimeInboxCheckResult => {
+      calls.push({ ...input });
+      return {
+        status: 'delivery',
+        delivery: {
+          runId,
+          deliveryId: input.ackDeliveryId ? 'delivery-2' : 'delivery-1',
+          messages: [{ type: input.ackDeliveryId ? 'second' : 'first' }],
+        },
+      };
+    });
+
+    const result = await drainRuntimeInbox(
+      { checkInbox },
+      {
+        runId,
+        now: () => nowMs,
+        processMessage: () => {
+          nowMs += 6;
+        },
+      },
+      { timeoutMs: 10 },
+    );
+
+    expect(result).toEqual({
+      status: 'boundary_busy',
+      runId,
+      reason: 'runtime_inbox_budget_exhausted',
+      pendingDeliveryId: 'delivery-2',
+    });
+    expect(calls).toEqual([
+      { runId },
+      { runId, ackDeliveryId: 'delivery-1' },
+    ]);
+  });
+
+  it('fails closed without retrying an ack whose combined ack/check result is unknown', async () => {
+    const runId = 'run-inbox-4';
+    const calls: Array<{ runId: string; ackDeliveryId?: string }> = [];
+    const checkInbox = vi.fn((input: { readonly runId: string; readonly ackDeliveryId?: string }): RuntimeInboxCheckResult => {
+      calls.push({ ...input });
+      if (!input.ackDeliveryId) {
+        return {
+          status: 'delivery',
+          delivery: { runId, deliveryId: 'delivery-unknown', messages: [{ type: 'one' }] },
+        };
+      }
+      return { status: 'unknown', reason: 'ack_result_unknown' };
+    });
+
+    const result = await drainRuntimeInbox(
+      { checkInbox },
+      { runId, processMessage: () => undefined },
+      { timeoutMs: 1_000 },
+    );
+
+    expect(result).toEqual({
+      status: 'blocked',
+      runId,
+      reason: 'runtime_inbox_unknown:ack_result_unknown',
+      pendingDeliveryId: 'delivery-unknown',
+    });
+    expect(calls).toEqual([
+      { runId },
+      { runId, ackDeliveryId: 'delivery-unknown' },
+    ]);
   });
 });
