@@ -1148,7 +1148,7 @@ function directPublicationConfig(
   prompt: string,
 ): DirectPublicationConfig | undefined {
   const sourceOutput = stringOption(args, 'reviewer-source-output');
-  const directKeys = ['invocation-id', 'reviewer-source', 'repository', 'issue-number', 'source-revision'];
+  const directKeys = ['reviewer-source', 'repository', 'issue-number', 'source-revision'];
   const hasDirectOptions = directKeys.some((key) => args.options.has(key));
   if (!sourceOutput) {
     if (hasDirectOptions) throw new Error('input_invalid:direct_publication_requires_source_output');
