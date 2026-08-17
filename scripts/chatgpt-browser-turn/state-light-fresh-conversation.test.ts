@@ -30,7 +30,7 @@ vi.mock('node:fs', async (importOriginal) => {
   return {
     ...actual,
     appendFileSync: mocks.appendFileSync,
-    linkSync: mocks.linkSync,
+    linkSync: actual.linkSync,
   };
 });
 
@@ -1287,4 +1287,3 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     expect(foreignClose).not.toHaveBeenCalled();
   });
 });
-
