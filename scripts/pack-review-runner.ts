@@ -1,4 +1,5 @@
 import './toolchain/native-entrypoint-preflight.ts';
+import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
   existsSync,
@@ -111,6 +112,13 @@ import {
 } from './lib/resolve-pack-reviewer.ts';
 import { resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
 import {
+  createPackGptSourceCommentTransport,
+  resolvePackGptSourceComment,
+  type PackGptSourceCommentResolution,
+  type PackGptSourceCommentTransport,
+} from './lib/pack-gpt-source-comment.ts';
+import type { PackGptSourceIdentity } from './lib/pack-gpt-source-comment-contract.ts';
+import {
   computeBoundIssueSnapshotHash,
   loadValidatedBoundSnapshotBody,
   resolveBoundIssueSnapshot,
@@ -159,6 +167,20 @@ interface StartInput {
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
   fixtureReviewBySourceSlot?: FixtureReviewBySourceSlot;
+  fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
+  fixtureAfterGptInvocationBound?: (event: {
+    slotId: string;
+    attemptOrdinal: number;
+    invocationId: string;
+    round: PackReviewGptRoundRecord;
+  }) => void | Promise<void>;
+  fixtureBeforeGptSourceCommentCensus?: (event: {
+    slotId: string;
+    attemptOrdinal: number;
+    invocationId: string;
+    identity: PackGptSourceIdentity;
+  }) => void | Promise<void>;
+  fixtureCrashAfterGptSourceCredentialedCount?: number;
   fixtureAfterGptSourceSlotTerminal?: (event: {
     slotId: string;
     round: PackReviewGptRoundRecord;
@@ -195,7 +217,12 @@ export interface ReconcileStalePackReviewRunsInput {
   sourceRepoRoot: string;
   projectId?: string;
   storeRoot?: string;
+  fixtureCurrentPrHeadSha?: string;
+  fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
+  fixtureGithubReviewId?: number;
+  fixtureGithubReviewTransport?: GithubReviewTransport;
   fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
+  fixtureWorkerNotifier?: PackReviewWorkerNotifier;
   resolveRepositorySlug?: (repoRoot: string) => Promise<string>;
   beforeStaleStatusWrite?: (run: PackReviewRunRecord) => void | Promise<void>;
   fixturePauseBeforeStaleStatusWrite?: () => void | Promise<void>;
@@ -276,6 +303,7 @@ const DEFAULT_PROJECT_ID = 'orchestrator-pack';
 const DEFAULT_BASE_REF = 'origin/main';
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const GPT_HARVEST_CLASSES = new Set(['harvest_failed', 'no_reply', 'forbidden_verdict_envelope']);
+const GPT_SOURCE_FIXTURE_CRASH_REASON = 'fixture_crash_after_gpt_source_comment_credentialed';
 
 function trim(value: unknown): string {
   return String(value ?? '').trim();
@@ -579,8 +607,7 @@ function resolveAuthoritativeReviewContext(input: StartInput, target: {
 }, projectId: string): AuthoritativeReviewContext {
   let body: string | undefined = input.fixtureIssueBody;
   let snapshotDigest = '';
-  const issueNumber = target.issueNumber
-    ?? 0;
+  const issueNumber = target.issueNumber ?? 0;
 
   if (body !== undefined) {
     snapshotDigest = computeBoundIssueSnapshotHash(body);
@@ -723,13 +750,15 @@ function validatePersistedGptReviewPayload(
   payload: ReviewPayload,
   options: { projectId: string; storeRoot: string },
 ): ReviewPayload {
+  const persisted = getPackReviewRun(runId, options);
+  if (!persisted) throw new Error(`pack review run ${runId} is unavailable for GPT source authority validation`);
+  assertCredentialedGptSourceAuthority(persisted);
   const aggregate = validatePersistedPackReviewGptAggregate(runId, {
     reviewVerdict: payload.verdict,
     findingCount: payload.findingCount,
     findings: payload.findings,
   }, options);
-  const persisted = getPackReviewRun(runId, options);
-  const diagnostics = gptRoundDiagnostics(persisted?.reviewRound);
+  const diagnostics = gptRoundDiagnostics(persisted.reviewRound);
   return {
     verdict: aggregate.reviewVerdict,
     findingCount: aggregate.findingCount,
@@ -962,7 +991,11 @@ async function findJournaledDeliveryResumeCandidate(options: {
       candidate,
       options.resolveSlug ?? resolveRepositorySlug,
     );
-    if (identity.ok && identity.slug === options.repoSlug) repositoryBoundCandidates.push(candidate);
+    if (identity.ok
+      && identity.slug === options.repoSlug
+      && hasCredentialedGptSourceAuthority(candidate)) {
+      repositoryBoundCandidates.push(candidate);
+    }
   }
   if (repositoryBoundCandidates.length > 1) {
     throw new Error(`ambiguous journaled pack review deliveries for PR #${options.prNumber} head ${options.headSha}`);
@@ -991,6 +1024,7 @@ async function invokeReviewer(options: {
   carryoverBundlePath?: string;
   sourceSlotId?: string;
   attemptOrdinal?: number;
+  invocationId?: string;
   frozenScope?: ResolvedScopeContext;
 }): Promise<{ result: ProcessResult; resolvedReviewer: PackReviewer | null }> {
   const resolvedReviewer = resolvePackReviewerFromEnv(process.env, {
@@ -1012,6 +1046,7 @@ async function invokeReviewer(options: {
       reviewer: resolvedReviewer,
       command: 'pwsh',
       args: reviewerArgs,
+      ...(options.invocationId ? { invocationId: options.invocationId } : {}),
     })}\n`);
   }
 
@@ -1064,6 +1099,7 @@ const env: NodeJS.ProcessEnv = {
     ...(options.frozenScope ? { PACK_REVIEW_FROZEN_SCOPE_JSON: JSON.stringify(options.frozenScope) } : {}),
     ...(options.sourceSlotId ? { PACK_REVIEW_GPT_SOURCE_SLOT: options.sourceSlotId } : {}),
     ...(options.attemptOrdinal ? { PACK_REVIEW_GPT_ATTEMPT_ORDINAL: String(options.attemptOrdinal) } : {}),
+    ...(options.invocationId ? { PACK_REVIEW_GPT_INVOCATION_ID: options.invocationId } : {}),
   };
   if (resolvedReviewer) {
     env.PACK_REVIEWER = resolvedReviewer;
@@ -1125,9 +1161,35 @@ function parseLastGptTerminalTurnResult(stdout: string): GptTerminalTurnResult |
   return null;
 }
 
-export function isRetryablePackReviewZeroSendCollision(result: ProcessResult): boolean {
+function bindHarnessFixtureTerminalInvocation(
+  result: ProcessResult,
+  invocationId: string,
+): ProcessResult {
+  if (process.env.OPK_VITEST_HARNESS !== '1' || !result.stdout) return result;
+  const stdout = result.stdout.split(/\r?\n/).map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return line;
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      if (parsed.schema === 'turn-result/v1' && typeof parsed.invocation_id === 'string') {
+        parsed.invocation_id = invocationId;
+        return JSON.stringify(parsed);
+      }
+    } catch {
+      // Preserve non-terminal fixture lines unchanged.
+    }
+    return line;
+  }).join('\n');
+  return { ...result, stdout };
+}
+
+export function isRetryablePackReviewZeroSendCollision(
+  result: ProcessResult,
+  expectedInvocationId?: string,
+): boolean {
   const terminal = parseLastGptTerminalTurnResult(result.stdout);
   if (result.ok || terminal?.send_count !== 0) return false;
+  if (expectedInvocationId && trim(terminal.invocation_id) !== trim(expectedInvocationId)) return false;
   return (terminal.state === 'driver_error'
       && terminal.cause === 'state_light_new_chat_send_slot_timeout')
     || (terminal.state === 'profile_busy'
@@ -1151,7 +1213,7 @@ function updateGptRoundSlot(
   }
   const next = { ...base, sourceSlots: slots };
   updatePackReviewRun(runId, { reviewRound: next }, options);
-  return next;
+  return getPackReviewRun(runId, options)?.reviewRound ?? next;
 }
 
 function terminalClassForGptResult(result: ProcessResult, terminal: GptTerminalTurnResult | null): string {
@@ -1163,7 +1225,150 @@ function terminalClassForGptResult(result: ProcessResult, terminal: GptTerminalT
     return terminal.state === 'ok' ? 'reviewer_output_malformed' : 'possible_delivery';
   }
   if (terminal) return `${terminal.state}:${terminal.cause}`;
+  if (result.ok) return 'reviewer_output_malformed';
   return 'possible_delivery/missing_result';
+}
+
+function gptSourceIdentity(options: {
+  repoSlug: string;
+  prNumber: number;
+  headSha: string;
+  runId: string;
+  slotId: string;
+  invocationId: string;
+}): PackGptSourceIdentity {
+  return {
+    repository: options.repoSlug,
+    prNumber: options.prNumber,
+    headSha: options.headSha,
+    runId: options.runId,
+    slotId: options.slotId,
+    invocationId: options.invocationId,
+  };
+}
+
+function credentialedSourceTerminal(options: {
+  identity: PackGptSourceIdentity;
+  resolution: Extract<PackGptSourceCommentResolution, { kind: 'credentialed' }>;
+  browserTerminal?: GptTerminalTurnResult | null;
+  result?: ProcessResult;
+  authority?: 'credentialed_github' | 'harness_fixture';
+}): GptTerminalTurnResult {
+  return {
+    schema: 'turn-result/v1',
+    state: 'ok',
+    scope: 'none',
+    cause: 'github_source_comment_credentialed',
+    invocation_id: options.identity.invocationId,
+    send_count: Math.max(1, Number(options.browserTerminal?.send_count ?? 1)),
+    source_comment_authority: options.authority ?? 'credentialed_github',
+    source_comment_receipt: options.resolution.receipt,
+    ...(options.browserTerminal ? { browser_terminal: options.browserTerminal } : {}),
+    ...(options.result ? {
+      process_exit_code: options.result.exitCode,
+      process_timed_out: options.result.timedOut,
+      process_cancelled: options.result.cancelled,
+    } : {}),
+  };
+}
+
+function hasCredentialedGptSourceAuthority(run: PackReviewRunRecord): boolean {
+  const round = run.reviewRound;
+  if (!round || round.reviewer !== 'gpt') return true;
+  const repository = trim(run.canonicalRepository);
+  if (!repository) return false;
+  for (const slot of round.sourceSlots) {
+    if (slot.terminalClass !== 'complete_clean' && slot.terminalClass !== 'complete_findings') continue;
+    const invocationId = trim(slot.invocationId);
+    const terminal = slot.terminalResult && typeof slot.terminalResult === 'object' && !Array.isArray(slot.terminalResult)
+      ? slot.terminalResult as Record<string, unknown>
+      : null;
+    if (!terminal || !invocationId || trim(terminal.invocation_id) !== invocationId) return false;
+    const authority = trim(terminal.source_comment_authority);
+    const acceptedAuthority = authority === 'credentialed_github'
+      || (process.env.OPK_VITEST_HARNESS === '1' && authority === 'harness_fixture');
+    if (!acceptedAuthority) return false;
+    const receipt = terminal.source_comment_receipt
+      && typeof terminal.source_comment_receipt === 'object'
+      && !Array.isArray(terminal.source_comment_receipt)
+      ? terminal.source_comment_receipt as Record<string, unknown>
+      : null;
+    if (!receipt) return false;
+    const commentId = receipt.commentId;
+    const validCommentId = (typeof commentId === 'number' && Number.isInteger(commentId) && commentId > 0)
+      || (typeof commentId === 'string' && Boolean(commentId.trim()));
+    if (!validCommentId
+      || trim(receipt.repository).toLowerCase() !== repository.toLowerCase()
+      || Number(receipt.prNumber) !== run.prNumber
+      || trim(receipt.headSha).toLowerCase() !== run.targetSha.toLowerCase()
+      || trim(receipt.runId) !== run.id
+      || trim(receipt.slotId) !== slot.slotId
+      || trim(receipt.invocationId) !== invocationId
+      || !trim(receipt.commentUrl)
+      || !trim(receipt.actorLogin)
+      || !trim(receipt.createdAt)
+      || trim(receipt.createdAt) !== trim(receipt.updatedAt)
+      || !/^[0-9a-f]{64}$/i.test(trim(receipt.bodySha256))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function assertCredentialedGptSourceAuthority(run: PackReviewRunRecord): void {
+  if (!hasCredentialedGptSourceAuthority(run)) {
+    throw new Error(`gpt_source_authority_missing_or_invalid:${run.id}`);
+  }
+}
+
+function failedSourceCommentTerminal(options: {
+  resolution: Exclude<PackGptSourceCommentResolution, { kind: 'credentialed' }>;
+  browserTerminal?: GptTerminalTurnResult | null;
+  result: ProcessResult;
+}): Record<string, unknown> {
+  const reconciliation = {
+    source_comment_reconciliation: options.resolution.kind,
+    source_comment_reason: options.resolution.reason,
+    process_exit_code: options.result.exitCode,
+    process_timed_out: options.result.timedOut,
+    process_cancelled: options.result.cancelled,
+  };
+  return options.browserTerminal
+    ? { ...options.browserTerminal, ...reconciliation }
+    : {
+        exitCode: options.result.exitCode,
+        stderr: options.result.stderr,
+        ...reconciliation,
+      };
+}
+
+function harnessSourceResolution(
+  identity: PackGptSourceIdentity,
+  stdout: string,
+  browserTerminal: GptTerminalTurnResult | null,
+): PackGptSourceCommentResolution {
+  if (!browserTerminal || browserTerminal.state !== 'ok' || browserTerminal.send_count < 1) {
+    return { kind: 'missing', reason: 'harness_source_comment_missing' };
+  }
+  try {
+    const payload = parseReviewPayload(stdout);
+    const timestamp = new Date().toISOString();
+    return {
+      kind: 'credentialed',
+      payload: payload as unknown as Extract<PackGptSourceCommentResolution, { kind: 'credentialed' }>['payload'],
+      receipt: {
+        ...identity,
+        commentId: `fixture-${identity.slotId}-${identity.invocationId}`,
+        commentUrl: `https://example.invalid/${identity.repository}/pull/${identity.prNumber}#fixture-${identity.slotId}`,
+        actorLogin: 'fixture-browser-gpt',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        bodySha256: '0'.repeat(64),
+      },
+    };
+  } catch {
+    return { kind: 'missing', reason: 'harness_source_comment_missing' };
+  }
 }
 
 async function runGptSourceBatch(options: {
@@ -1173,7 +1378,14 @@ async function runGptSourceBatch(options: {
   trustedPackRoot: string;
   reviewTargetRoot: string;
   baseRef: string;
-  target: { prNumber: number; headSha: string; issueNumber?: number; sessionId: string };
+  target: {
+    prNumber: number;
+    headSha: string;
+    issueNumber?: number;
+    sessionId: string;
+    repoSlug: string;
+    sourceRepoRoot: string;
+  };
   budgetLedger: ReviewerBudgetLedger;
   projectId: string;
   storeRoot: string;
@@ -1186,6 +1398,7 @@ async function runGptSourceBatch(options: {
     : PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS;
   let nextAdmissionAt = 0;
   let admissionTail = Promise.resolve();
+  let credentialedSourceCount = 0;
   const admit = async (): Promise<number> => {
     let release!: () => void;
     const predecessor = admissionTail;
@@ -1198,19 +1411,32 @@ async function runGptSourceBatch(options: {
     release();
     return startedAt;
   };
+  const sourceTransport = options.input.fixtureGptSourceCommentTransport
+    ?? (process.env.OPK_VITEST_HARNESS === '1'
+      ? undefined
+      : createPackGptSourceCommentTransport({
+          repoRoot: options.target.sourceRepoRoot,
+          repoSlug: options.target.repoSlug,
+          prNumber: options.target.prNumber,
+        }));
 
   const outcomes = await Promise.all(options.round.sourceSlots.map(async (planned) => {
     const slotId = planned.slotId;
     let round = options.round;
     let attemptOrdinal = 1;
-    const markInvocationStarted = (admissionStartedAt: number): void => {
+    let invocationId = randomUUID();
+    const markInvocationStarted = async (admissionStartedAt: number): Promise<void> => {
       round = updateGptRoundSlot(options.run.id, round, slotId, {
         lifecycle: 'invocation_started',
         admissionStartedAtUtc: new Date(admissionStartedAt).toISOString(),
         attemptOrdinal,
+        invocationId,
       }, { projectId: options.projectId, storeRoot: options.storeRoot });
+      if (options.input.fixtureAfterGptInvocationBound) {
+        await options.input.fixtureAfterGptInvocationBound({ slotId, attemptOrdinal, invocationId, round });
+      }
     };
-    markInvocationStarted(await admit());
+    await markInvocationStarted(await admit());
     let invocation: { result: ProcessResult; resolvedReviewer: PackReviewer | null };
     while (true) {
       try {
@@ -1237,6 +1463,7 @@ async function runGptSourceBatch(options: {
           headSha: options.target.headSha,
           sourceSlotId: slotId,
           attemptOrdinal,
+          invocationId,
           frozenScope: options.frozenScope,
         });
       } catch (error) {
@@ -1255,53 +1482,113 @@ async function runGptSourceBatch(options: {
         };
         break;
       }
-      if (!(attemptOrdinal === 1 && isRetryablePackReviewZeroSendCollision(invocation.result))) break;
+      if (process.env.OPK_VITEST_HARNESS === '1' && !sourceTransport) {
+        invocation = {
+          ...invocation,
+          result: bindHarnessFixtureTerminalInvocation(invocation.result, invocationId),
+        };
+      }
+      if (!(attemptOrdinal === 1
+        && isRetryablePackReviewZeroSendCollision(invocation.result, invocationId))) break;
       attemptOrdinal = 2;
-      markInvocationStarted(await admit());
+      invocationId = randomUUID();
+      await markInvocationStarted(await admit());
     }
 
-    const terminal = parseLastGptTerminalTurnResult(invocation.result.stdout);
+    const browserTerminal = parseLastGptTerminalTurnResult(invocation.result.stdout);
+    const identity = gptSourceIdentity({
+      repoSlug: options.target.repoSlug,
+      prNumber: options.target.prNumber,
+      headSha: options.target.headSha,
+      runId: options.run.id,
+      slotId,
+      invocationId,
+    });
+
     let payload: ReviewPayload | undefined;
     let terminalClass: string;
-    if (invocation.result.ok) {
-      if (!terminal
-        || terminal.state !== 'ok'
-        || terminal.send_count < 1
-        || terminal.invocation_id.trim() === '') {
-        terminalClass = 'reviewer_output_malformed';
-      } else {
-        try {
-          payload = parseReviewPayload(invocation.result.stdout);
-          terminalClass = payload.verdict === 'clean' && payload.findingCount === 0 ? 'complete_clean' : 'complete_findings';
-        } catch {
-          terminalClass = 'reviewer_output_malformed';
+    let terminalResult: Record<string, unknown>;
+    const terminalBoundToInvocation = browserTerminal?.invocation_id === invocationId;
+    const sourceMayHaveBeenPublished = !browserTerminal
+      || !terminalBoundToInvocation
+      || browserTerminal.send_count >= 1;
+    if (sourceMayHaveBeenPublished) {
+      let resolution: PackGptSourceCommentResolution;
+      try {
+        if (options.input.fixtureBeforeGptSourceCommentCensus) {
+          await options.input.fixtureBeforeGptSourceCommentCensus({
+            slotId,
+            attemptOrdinal,
+            invocationId,
+            identity,
+          });
         }
+        if (!(process.env.OPK_VITEST_HARNESS === '1' && !sourceTransport)) {
+          await assertBoundHeadStillCurrent({
+            repoRoot: options.target.sourceRepoRoot,
+            repoSlug: options.target.repoSlug,
+            prNumber: options.target.prNumber,
+            boundHeadSha: options.target.headSha,
+            fixturePostReviewHeadSha: options.input.fixturePostReviewHeadSha ?? options.input.fixtureCurrentPrHeadSha,
+          });
+        }
+        resolution = sourceTransport
+          ? await resolvePackGptSourceComment({ identity, transport: sourceTransport })
+          : harnessSourceResolution(identity, invocation.result.stdout, browserTerminal);
+      } catch (error) {
+        resolution = { kind: 'conflict', reason: `source_comment_head_or_census_failed:${describeError(error)}` };
+      }
+      if (resolution.kind === 'credentialed') {
+        payload = resolution.payload as unknown as ReviewPayload;
+        terminalClass = payload.verdict === 'clean' && payload.findingCount === 0
+          ? 'complete_clean'
+          : 'complete_findings';
+        terminalResult = credentialedSourceTerminal({
+          identity,
+          resolution,
+          browserTerminal,
+          result: invocation.result,
+          authority: sourceTransport ? 'credentialed_github' : 'harness_fixture',
+        });
+        credentialedSourceCount += 1;
+        if (process.env.OPK_VITEST_HARNESS === '1'
+          && options.input.fixtureCrashAfterGptSourceCredentialedCount === credentialedSourceCount) {
+          throw new Error(GPT_SOURCE_FIXTURE_CRASH_REASON);
+        }
+      } else {
+        terminalClass = terminalClassForGptResult(invocation.result, browserTerminal);
+        terminalResult = failedSourceCommentTerminal({
+          resolution,
+          browserTerminal,
+          result: invocation.result,
+        });
       }
     } else {
-      terminalClass = terminalClassForGptResult(invocation.result, terminal);
-      if (attemptOrdinal === 2 && isRetryablePackReviewZeroSendCollision(invocation.result)) {
+      terminalClass = terminalClassForGptResult(invocation.result, browserTerminal);
+      if (attemptOrdinal === 2
+        && isRetryablePackReviewZeroSendCollision(invocation.result, invocationId)) {
         terminalClass = 'explicit_refusal:zero_send_collision_exhausted';
       }
+      terminalResult = browserTerminal
+        ? {
+            ...browserTerminal,
+            process_exit_code: invocation.result.exitCode,
+            process_timed_out: invocation.result.timedOut,
+            process_cancelled: invocation.result.cancelled,
+          }
+        : {
+            exitCode: invocation.result.exitCode,
+            stderr: invocation.result.stderr,
+            process_exit_code: invocation.result.exitCode,
+            process_timed_out: invocation.result.timedOut,
+            process_cancelled: invocation.result.cancelled,
+          };
     }
-    const currentSlot = round.sourceSlots.find((slot) => slot.slotId === slotId)!;
-    const terminalResult = terminal
-      ? {
-          ...terminal,
-          process_exit_code: invocation.result.exitCode,
-          process_timed_out: invocation.result.timedOut,
-          process_cancelled: invocation.result.cancelled,
-        }
-      : {
-          exitCode: invocation.result.exitCode,
-          stderr: invocation.result.stderr,
-          process_exit_code: invocation.result.exitCode,
-          process_timed_out: invocation.result.timedOut,
-          process_cancelled: invocation.result.cancelled,
-        };
+
     round = updateGptRoundSlot(options.run.id, round, slotId, {
       lifecycle: 'terminal',
       attemptOrdinal,
-      invocationId: terminal?.invocation_id,
+      invocationId,
       terminalClass,
       terminalResult,
       ...(payload ? { payload } : {}),
@@ -1309,7 +1596,7 @@ async function runGptSourceBatch(options: {
     if (options.input.fixtureAfterGptSourceSlotTerminal) {
       await options.input.fixtureAfterGptSourceSlotTerminal({ slotId, round });
     }
-    return { slot: { ...currentSlot, ...round.sourceSlots.find((slot) => slot.slotId === slotId)! }, payload };
+    return { slot: round.sourceSlots.find((slot) => slot.slotId === slotId)!, payload };
   }));
 
   const findings: ReviewPayloadFinding[] = [];
@@ -1371,6 +1658,170 @@ async function findUnresolvedSameHeadRepositoryIdentity(options: {
     }
   }
   return null;
+}
+
+async function recoverStaleGptSourceComments(options: {
+  run: PackReviewRunRecord;
+  input: ReconcileStalePackReviewRunsInput;
+  projectId: string;
+  storeRoot: string;
+  repoSlug: string;
+}): Promise<{ recovered: boolean; reason: string }> {
+  const initialRound = options.run.reviewRound;
+  if (!initialRound || initialRound.reviewer !== 'gpt') {
+    return { recovered: false, reason: 'not_gpt_round' };
+  }
+  const recoverable = initialRound.sourceSlots.filter((slot) => (
+    slot.lifecycle === 'invocation_started' && Boolean(trim(slot.invocationId))
+  ));
+  if (recoverable.length === 0) return { recovered: false, reason: 'no_started_gpt_source' };
+  if (process.env.OPK_VITEST_HARNESS === '1' && !options.input.fixtureGptSourceCommentTransport) {
+    return { recovered: false, reason: 'fixture_source_transport_missing' };
+  }
+
+  const currentHead = options.input.fixtureCurrentPrHeadSha
+    ?? await resolveCurrentPrHead(options.input.sourceRepoRoot, options.repoSlug, options.run.prNumber);
+  if (currentHead.toLowerCase() !== options.run.targetSha.toLowerCase()) {
+    return { recovered: false, reason: 'stale_source_head_changed' };
+  }
+  const transport = options.input.fixtureGptSourceCommentTransport
+    ?? createPackGptSourceCommentTransport({
+      repoRoot: options.input.sourceRepoRoot,
+      repoSlug: options.repoSlug,
+      prNumber: options.run.prNumber,
+    });
+  let round = initialRound;
+  for (const slot of round.sourceSlots) {
+    if (slot.lifecycle === 'terminal') continue;
+    const invocationId = trim(slot.invocationId);
+    if (slot.lifecycle !== 'invocation_started' || !invocationId) {
+      return { recovered: false, reason: `source_slot_not_recoverable:${slot.slotId}` };
+    }
+    const identity = gptSourceIdentity({
+      repoSlug: options.repoSlug,
+      prNumber: options.run.prNumber,
+      headSha: options.run.targetSha,
+      runId: options.run.id,
+      slotId: slot.slotId,
+      invocationId,
+    });
+    const resolution = await resolvePackGptSourceComment({ identity, transport });
+    if (resolution.kind !== 'credentialed') {
+      return { recovered: false, reason: `${resolution.reason}:${slot.slotId}` };
+    }
+    const payload = resolution.payload as unknown as ReviewPayload;
+    round = updateGptRoundSlot(options.run.id, round, slot.slotId, {
+      lifecycle: 'terminal',
+      terminalClass: payload.verdict === 'clean' && payload.findingCount === 0
+        ? 'complete_clean'
+        : 'complete_findings',
+      terminalResult: credentialedSourceTerminal({ identity, resolution }),
+      payload,
+    }, { projectId: options.projectId, storeRoot: options.storeRoot });
+  }
+
+  const finalHead = options.input.fixtureCurrentPrHeadSha
+    ?? await resolveCurrentPrHead(options.input.sourceRepoRoot, options.repoSlug, options.run.prNumber);
+  if (finalHead.toLowerCase() !== options.run.targetSha.toLowerCase()) {
+    return { recovered: false, reason: 'stale_source_head_changed_after_census' };
+  }
+
+  const findings: ReviewPayloadFinding[] = [];
+  for (const slot of round.sourceSlots) {
+    if (slot.lifecycle !== 'terminal'
+      || (slot.terminalClass !== 'complete_clean' && slot.terminalClass !== 'complete_findings')) {
+      return { recovered: false, reason: `source_slot_incomplete:${slot.slotId}` };
+    }
+    const payload = slot.payload as ReviewPayload;
+    findings.push(...payload.findings.map((finding) => ({ ...finding, sourceSlotId: slot.slotId })));
+  }
+  const aggregate: ReviewPayload = {
+    verdict: findings.length > 0 ? 'findings' : 'clean',
+    findingCount: findings.length,
+    findings,
+  };
+  const persistedBeforeAggregate = getPackReviewRun(options.run.id, {
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
+  });
+  if (!persistedBeforeAggregate) {
+    return { recovered: false, reason: 'recovered_run_missing_before_aggregate' };
+  }
+  assertCredentialedGptSourceAuthority(persistedBeforeAggregate);
+  validatePersistedPackReviewGptAggregate(options.run.id, {
+    reviewVerdict: aggregate.verdict,
+    findingCount: aggregate.findingCount,
+    findings: aggregate.findings,
+  }, { projectId: options.projectId, storeRoot: options.storeRoot });
+  const classification = classifyPackReviewPayload(aggregate);
+  setPackReviewRunTerminal(options.run.id, classification.terminalStatus, {
+    reviewVerdict: aggregate.verdict,
+    findingCount: aggregate.findingCount,
+    findings: aggregate.findings,
+    reviewRound: round,
+    journalOutcome: {
+      state: 'persisted',
+      recordedAtUtc: new Date().toISOString(),
+      reason: 'gpt_source_comments_recovered',
+      idempotencyKey: `verdict:${options.run.id}:${options.run.targetSha}`,
+      attempts: 1,
+    },
+  }, { projectId: options.projectId, storeRoot: options.storeRoot });
+  return { recovered: true, reason: 'gpt_source_comments_recovered_for_resume' };
+}
+
+async function resumeRecoveredGptDelivery(options: {
+  run: PackReviewRunRecord;
+  input: ReconcileStalePackReviewRunsInput;
+  projectId: string;
+  storeRoot: string;
+  repoSlug: string;
+  writeRequiredStatus: PackReviewRequiredStatusWriter;
+}): Promise<Awaited<ReturnType<typeof resumePackReviewVerdictDelivery>>> {
+  const payload = packReviewJournaledPayload(options.run);
+  if (!payload) throw new Error(`recovered pack review run ${options.run.id} has no journaled payload`);
+  const typedPayload = validatePersistedGptReviewPayload(
+    options.run.id,
+    payload as ReviewPayload,
+    { projectId: options.projectId, storeRoot: options.storeRoot },
+  );
+  const currentHead = options.input.fixtureCurrentPrHeadSha
+    ?? await resolveCurrentPrHead(options.input.sourceRepoRoot, options.repoSlug, options.run.prNumber);
+  if (currentHead.toLowerCase() !== options.run.targetSha.toLowerCase()) {
+    throw new Error('recovered GPT source head changed before final delivery');
+  }
+  const reviewTransport = createGithubReviewTransport({
+    repoRoot: options.input.sourceRepoRoot,
+    repoSlug: options.repoSlug,
+    prNumber: options.run.prNumber,
+    fixtureReviewId: options.input.fixtureGithubReviewId,
+    fixtureTransport: options.input.fixtureGithubReviewTransport,
+  });
+  return resumePackReviewVerdictDelivery({
+    run: options.run,
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
+    postGithubComment: async () => {
+      const posted = await postGithubReview({
+        repoRoot: options.input.sourceRepoRoot,
+        repoSlug: options.repoSlug,
+        prNumber: options.run.prNumber,
+        headSha: options.run.targetSha,
+        run: options.run,
+        payload: typedPayload,
+        projectId: options.projectId,
+        storeRoot: options.storeRoot,
+        transport: reviewTransport,
+      });
+      return { id: posted.id, url: posted.url, event: 'COMMENT' };
+    },
+    writeRequiredStatus: options.writeRequiredStatus,
+    notifyWorker: options.input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
+      trustedPackRoot: options.run.trustedPackRoot,
+      sessionId: options.run.linkedSessionId,
+      request,
+    })),
+  });
 }
 
 export async function reconcileStalePackReviewRuns(
@@ -1538,6 +1989,50 @@ export async function reconcileStalePackReviewRuns(
         request,
       }));
     if (activeStale) {
+      const recovery = await recoverStaleGptSourceComments({
+        run,
+        input,
+        projectId,
+        storeRoot,
+        repoSlug,
+      });
+      if (recovery.recovered) {
+        const recoveredRun = await bindRepositoryIdentity(
+          getPackReviewRun(run.id, { projectId, storeRoot }) ?? run,
+        );
+        try {
+          const resumed = await resumeRecoveredGptDelivery({
+            run: recoveredRun,
+            input,
+            projectId,
+            storeRoot,
+            repoSlug,
+            writeRequiredStatus: statusWriter,
+          });
+          results.push({
+            runId: run.id,
+            terminalized: false,
+            statusReconciled: resumed.reason === 'completed',
+            recovered: true,
+            reason: resumed.reason === 'completed'
+              ? 'gpt_source_comments_recovered_and_delivered'
+              : `gpt_source_comments_recovered_delivery_${resumed.reason}`,
+            deliveryReason: resumed.reason,
+            status: resumed.status,
+            ...(resumed.githubReviewId !== undefined ? { githubReviewId: resumed.githubReviewId } : {}),
+            ...(resumed.githubReviewUrl ? { githubReviewUrl: resumed.githubReviewUrl } : {}),
+          });
+        } catch (error) {
+          results.push({
+            runId: run.id,
+            terminalized: false,
+            statusReconciled: false,
+            recovered: true,
+            reason: `gpt_source_comments_recovered_delivery_failed:${describeError(error)}`,
+          });
+        }
+        continue;
+      }
       const terminal = terminalizePackReviewStaleRun(run.id, { projectId, storeRoot });
       terminalized = terminal.changed;
       run = await bindRepositoryIdentity(
@@ -1958,11 +2453,27 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     throw new Error('plural GPT review requires PACK_GPT_BROWSER_PROJECT_URL and no fixed chat URL');
   }
 
+  const recoverableStaleGptFixture = process.env.OPK_VITEST_HARNESS === '1'
+    && listPackReviewRunRecordsRaw({ projectId, storeRoot }).some((candidate) => (
+      isPackReviewRunStale(candidate)
+      && candidate.reviewRound?.reviewer === 'gpt'
+      && candidate.reviewRound.sourceSlots.some((slot) => (
+        slot.lifecycle === 'invocation_started' && Boolean(trim(slot.invocationId))
+      ))
+    ));
   await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
     projectId,
     storeRoot,
+    fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+    fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
+    ...(recoverableStaleGptFixture ? {
+      fixtureGithubReviewId: input.fixtureGithubReviewId,
+      fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
+      fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+      fixtureWorkerNotifier: input.fixtureWorkerNotifier,
+    } : {}),
     resolveRepositorySlug: resolveSlug,
     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
   });
@@ -2738,7 +3249,10 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       ...(delivered.githubReviewUrl ? { githubReviewUrl: delivered.githubReviewUrl } : {}),
     };
   } catch (error) {
-    if (run && !terminal) {
+    const fixtureCrash = process.env.OPK_VITEST_HARNESS === '1'
+      && describeError(error) === GPT_SOURCE_FIXTURE_CRASH_REASON;
+    if (fixtureCrash) retainClaimDirectory = true;
+    if (run && !terminal && !fixtureCrash) {
       try {
         const persisted = getPackReviewRun(run.id, { projectId, storeRoot });
         if (persisted
@@ -2938,7 +3452,12 @@ async function main(): Promise<void> {
       sourceRepoRoot,
       projectId,
       storeRoot: trim(input.storeRoot) || undefined,
+      fixtureCurrentPrHeadSha: (input as StartInput).fixtureCurrentPrHeadSha,
+      fixtureGptSourceCommentTransport: (input as StartInput).fixtureGptSourceCommentTransport,
+      fixtureGithubReviewId: (input as StartInput).fixtureGithubReviewId,
+      fixtureGithubReviewTransport: (input as StartInput).fixtureGithubReviewTransport,
       fixtureRequiredStatusWriter: (input as StartInput).fixtureRequiredStatusWriter,
+      fixtureWorkerNotifier: (input as StartInput).fixtureWorkerNotifier,
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;

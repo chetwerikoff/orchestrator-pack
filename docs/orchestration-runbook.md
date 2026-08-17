@@ -55,7 +55,17 @@ read live Issue/rules
 -> worker_done
 ```
 
-Independent review and smoke happen after this bounded handoff. A later finding opens a fresh correction Dispatch.
+Independent smoke happens after this bounded handoff. Pack-review is not the next step after smoke.
+
+After a current-head smoke returns a gap or fail, the next legal coordinator step is a worker fix that produces a new SHA, then a fresh smoke of that exact SHA:
+
+```text
+smoke (current SHA)
+  |-- complete --> pack-review eligible
+  |-- gap/fail --> fix (new SHA) --> smoke that SHA
+```
+
+Old-head smoke proofs do not count for the new head. Pack-review starts only after current-head smoke is complete. Independent review after this handoff does not authorize pack-review while smoke is still incomplete. Exact folding and SHA-binding stay in `docs/worker-smoke-testing.md`. A later finding opens a fresh correction Dispatch.
 
 ### Reconciler
 
@@ -127,6 +137,45 @@ This profile rule does not add a runtime selector, WorkerAssignment type, provid
 
 For example, changing the local T3 `agent` between the already-supported GPT/Browser-GPT and Cursor/Orca paths changes the path used by subsequent T3 work without a tracked policy edit. Routine versus complex smoke works the same way: it selects the corresponding local smoke profile, whose concrete values remain local-only.
 
+### Cursor/Orca launch procedure
+
+For manager work and for T1/T2/T3 or smoke worker work whose resolved `agent`
+is the existing Cursor/Orca path, resolve the matching `PACK_EXECUTOR_*`
+`agent`, `model`, and `effort` immediately before launch. Apply `model` and
+`effort` through that agent's existing launch flags; if the resolved values
+cannot be applied on that path, fail closed. Do not copy the concrete local
+values into tracked documentation, task metadata, or PR metadata.
+
+The first-turn start must use a fresh idle agent terminal owned by this start:
+
+1. Use the intended worktree only as a checkout; reusing a worktree does not
+   authorize reusing an agent session.
+2. Create a new terminal in that worktree and launch the agent with the resolved
+   model and effort. Do not put the Task spec in the startup command.
+3. Wait until the terminal is TUI-idle.
+4. From that exact pane, prove that the composer is empty, the agent is not
+   generating, the pane is not a leftover or foreign session, and the visible
+   model and effort match the resolved profile.
+5. Only after those proofs, invoke the existing PACK supervised-start boundary
+   with `--terminal` set to that exact handle and `--worktree` set to that exact
+   worktree. Initial Task delivery remains Orca-owned and must be the first user
+   turn in that fresh TUI.
+
+Fail the start closed, even if a later Orca receipt says `ready`, when the
+terminal is leftover or foreign (`reused_agent_terminal`), `worker-start
+--agent` attaches to a dirty existing pane, the spec is delivered as a
+follow-up or queued message instead of the first user turn, the visible model
+or effort does not match, or a second send is used to recover a bad first
+attach. Do not paste into a generating turn or dual-send; stop the pane and,
+if work must continue, create a new Task and a new proven TUI. Child-process
+liveness is not proof that the profile was applied.
+
+`--terminal` reuse is legal only for the exact handle this start just created
+and proved idle/matching; a receipt saying that this already-created terminal
+was reused does not make it leftover-session reuse. `new-child` or
+`--agent` without that explicit proven terminal is not a substitute for this
+sequence.
+
 ## Supervised initial delivery and WorkerAssignment
 
 This section applies only to executor paths that use the existing Orca-managed supervised worker lifecycle. Standalone GPT/Browser-GPT implementation work follows `docs/chat-executor-rules.md` and `docs/browser-gpt-turn-runbook.md` instead and does not create an Orca WorkerAssignment.
@@ -143,6 +192,11 @@ node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
 ```
 
 The wrapper calls supported Orca `orchestration worker-start` with structured JSON output. It publishes a current local WorkerAssignment only after Orca returns a proven `ready` receipt with both `taskId` and `dispatchId`. Failed, malformed, or outcome-unknown startup does not create a successful assignment.
+
+`supervised-worker-start` does not read `PACK_EXECUTOR_*`. The orchestrator
+applies the resolved profile during the Cursor/Orca launch procedure above;
+teaching this wrapper to consume those variables is out of scope for this
+Issue.
 
 The minimum current assignment authority is:
 
