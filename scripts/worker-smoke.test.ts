@@ -166,6 +166,15 @@ describe('smoke executor profiles', () => {
     expect(profile.complexity).toBe(complexity);
   });
 
+  it('maps the configured Cursor agent name onto the existing launch surface', () => {
+    const profile = resolveSmokeExecutorProfile('complex', {
+      ...env,
+      PACK_EXECUTOR_SMOKE_COMPLEX_AGENT: 'cursor',
+    });
+    expect(profile.agent).toBe('cursor-agent');
+    expect(profile.command).toBe("cursor-agent --model 'fixture-complex-model' --effort 'fixture-complex-effort'");
+  });
+
   it.each([
     ['routine', 'PACK_EXECUTOR_SMOKE_ROUTINE_MODEL'],
     ['complex', 'PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT'],

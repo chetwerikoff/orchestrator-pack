@@ -8,6 +8,7 @@
     "scripts/pack-review-ordering.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.ts",
+    "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
@@ -27,6 +28,7 @@
     "scripts/pack-review-ordering.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.ts",
+    "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"

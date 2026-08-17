@@ -119,7 +119,10 @@ const SMOKE_PROFILE_FIELDS = {
   },
 } as const;
 
-const SUPPORTED_SMOKE_AGENTS = new Set(['cursor-agent']);
+const SUPPORTED_SMOKE_AGENTS = new Map([
+  ['cursor', 'cursor-agent'],
+  ['cursor-agent', 'cursor-agent'],
+]);
 const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
 
 function shellQuoteProfileValue(value: string): string {
@@ -144,15 +147,16 @@ export function resolveSmokeExecutorProfile(
   const agent = profileValue(env, fields.agent);
   const model = profileValue(env, fields.model);
   const effort = profileValue(env, fields.effort);
-  if (!SUPPORTED_SMOKE_AGENTS.has(agent)) {
+  const launchAgent = SUPPORTED_SMOKE_AGENTS.get(agent);
+  if (!launchAgent) {
     throw new Error(`smoke_profile_unsupported_agent:${fields.agent}`);
   }
   return {
     complexity,
-    agent,
+    agent: launchAgent,
     model,
     effort,
-    command: `${agent} --model ${shellQuoteProfileValue(model)} --effort ${shellQuoteProfileValue(effort)}`,
+    command: `${launchAgent} --model ${shellQuoteProfileValue(model)} --effort ${shellQuoteProfileValue(effort)}`,
   };
 }
 
