@@ -14,17 +14,21 @@ const REUSABLE_PORT_TAGS = [
   'check-reusable:worktree-detection',
 ] as const;
 
-function nodeVerifySource(snapshot: SourceSnapshot): string {
-  return snapshot.files.get('scripts/verify.ts') ?? '';
+function nodePortSource(snapshot: SourceSnapshot): string {
+  return snapshot.files.get('scripts/gate-runner/node-verifier-ports.ts') ?? '';
 }
 
 function hasPortTag(snapshot: SourceSnapshot, tag: string): boolean {
-  return nodeVerifySource(snapshot).includes(`'${tag}'`) || nodeVerifySource(snapshot).includes(`\"${tag}\"`);
+  return nodePortSource(snapshot).includes(`'${tag}'`) || nodePortSource(snapshot).includes(`\"${tag}\"`);
 }
 
 function thinNodeLauncher(snapshot: SourceSnapshot): boolean {
   const launcher = snapshot.files.get('scripts/verify.ps1') ?? '';
-  return launcher.includes('verify.ts') && /&\s+node\b/iu.test(launcher) && !launcher.includes('scripts/gate-runner/runner.ts');
+  const verifier = snapshot.files.get('scripts/verify.ts') ?? '';
+  return launcher.includes('verify.ts')
+    && /&\s+node\b/iu.test(launcher)
+    && !launcher.includes('scripts/gate-runner/runner.ts')
+    && verifier.includes('runNodeVerificationPorts');
 }
 
 function legacyVerifyFailurePortTag(detail: string): string | undefined {
