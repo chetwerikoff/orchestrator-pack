@@ -21,32 +21,17 @@ export interface VerifyReport {
 }
 
 const REQUIRED_FILES = [
-  'AGENTS.md',
-  'README.md',
-  'package.json',
-  'package-lock.json',
-  '.claude/skills/change-orchestrator-runtime/SKILL.md',
-  '.cursor/skills/change-orchestrator-runtime/SKILL.md',
-  'scripts/runtime/contracts.ts',
-  'scripts/runtime/registry.ts',
-  'scripts/runtime/runtime-cli.ts',
-  'scripts/lib/operator-publication.ts',
-  'scripts/lib/worker-degraded-ci-handoff.ts',
-  'scripts/pack-review-runner.ts',
-  'scripts/pack-worker-report.ps1',
-  'scripts/runtime-retirement/retired-surface-guard.ts',
-  'scripts/runtime-retirement/retired-surface-selftest.ts',
-  'scripts/json-producers/retired-runtime-surfaces.json',
+  'AGENTS.md', 'README.md', 'package.json', 'package-lock.json',
+  '.claude/skills/change-orchestrator-runtime/SKILL.md', '.cursor/skills/change-orchestrator-runtime/SKILL.md',
+  'scripts/runtime/contracts.ts', 'scripts/runtime/registry.ts', 'scripts/runtime/runtime-cli.ts',
+  'scripts/lib/operator-publication.ts', 'scripts/lib/worker-degraded-ci-handoff.ts', 'scripts/pack-review-runner.ts',
+  'scripts/pack-worker-report.ps1', 'scripts/runtime-retirement/retired-surface-guard.ts',
+  'scripts/runtime-retirement/retired-surface-selftest.ts', 'scripts/json-producers/retired-runtime-surfaces.json',
   'scripts/check-reusable.ps1',
 ] as const;
 
 const REQUIRED_DIRECTORIES = [
-  'plugins/task-declaration',
-  'plugins/scope-guard',
-  'plugins/token-chain-ledger',
-  'plugins/codex-pr-reviewer',
-  'prompts',
-  '.github/workflows',
+  'plugins/task-declaration', 'plugins/scope-guard', 'plugins/token-chain-ledger', 'plugins/codex-pr-reviewer', 'prompts', '.github/workflows',
 ] as const;
 
 const PLUGINS = [
@@ -54,6 +39,23 @@ const PLUGINS = [
   ['scope-guard', '@orchestrator-pack/scope-guard', 'scope-check'],
   ['token-chain-ledger', '@orchestrator-pack/token-chain-ledger', 'pack-ledger'],
   ['codex-pr-reviewer', '@orchestrator-pack/codex-pr-reviewer', 'pack-codex-review'],
+] as const;
+
+const SMOKE_FILES = [
+  'scripts/gh-wrapper.test.ts',
+  'scripts/command-runtime-bootstrap.test.ts',
+  'scripts/github-fleet-cache-coalesce.test.ts',
+  'scripts/github-fleet-cache-memo.test.ts',
+  'scripts/github-fleet-cache-bypass-guard.test.ts',
+  'scripts/github-fleet-cache-bypass.test.ts',
+  'scripts/github-fleet-cache-stale-snapshot.test.ts',
+  'scripts/contract-evidence.test.ts',
+  'scripts/autonomous-spawn-policy.test.ts',
+  'scripts/autonomous-spawn-worktree-gate.test.ts',
+  'scripts/autonomous-spawn-budget.test.ts',
+  'scripts/review-pipeline-spawn-budget.test.ts',
+  'scripts/review-start-repeat-classifier.test.ts',
+  'scripts/autonomous-orchestrator-interposer.test.ts',
 ] as const;
 
 const retiredRuntimeStem = ['agent', 'orchestrator'].join('-');
@@ -164,6 +166,30 @@ function appendPluginChecks(repoRoot: string, lines: VerifyLine[], failures: str
   }
 }
 
+async function appendTestBackedSmoke(repoRoot: string, lines: VerifyLine[], failures: string[]): Promise<void> {
+  const missing = SMOKE_FILES.filter((path) => !existsSync(resolve(repoRoot, path)));
+  if (missing.length > 0) {
+    for (const path of missing) {
+      lines.push({ name: `verify-smoke/${path}`, status: 'FAIL', detail: 'missing' });
+      failures.push(`Missing test-backed smoke file: ${path}`);
+    }
+    return;
+  }
+  if (!existsSync(resolve(repoRoot, 'node_modules'))) {
+    const install = await runProcess({ command: 'npm', args: ['ci', '--include=dev'], cwd: repoRoot, inheritParentEnv: true, allowEmptyStdout: true });
+    if (!install.ok) {
+      lines.push({ name: 'verify-smoke/npm-preflight', status: 'FAIL', detail: `exit=${String(install.exitCode)}` });
+      failures.push(`verify smoke npm ci failed: ${install.stderr || install.error || install.outcome}`);
+      return;
+    }
+  } else lines.push({ name: 'verify-smoke/npm-preflight', status: 'PASS', detail: 'node_modules present' });
+  const smoke = await runProcess({ command: 'npx', args: ['vitest', 'run', ...SMOKE_FILES], cwd: repoRoot, inheritParentEnv: true, env: { CI: 'true' }, allowEmptyStdout: true });
+  if (!smoke.ok) {
+    lines.push({ name: 'verify-smoke/vitest', status: 'FAIL', detail: `exit=${String(smoke.exitCode)}` });
+    failures.push(`verify smoke vitest failed: ${smoke.stderr || smoke.error || smoke.outcome}`);
+  } else lines.push({ name: 'verify-smoke/vitest', status: 'PASS', detail: `batched files=${SMOKE_FILES.length}` });
+}
+
 export async function runVerification(repoRoot: string, options: { readonly strictPrereqs?: boolean; readonly testBackedSmoke?: boolean } = {}): Promise<VerifyReport> {
   const lines: VerifyLine[] = [];
   const failures: string[] = [];
@@ -175,7 +201,6 @@ export async function runVerification(repoRoot: string, options: { readonly stri
   } else lines.push({ name: 'node', status: 'PASS', detail: process.version });
   appendPathChecks(repoRoot, lines, failures);
   appendPluginChecks(repoRoot, lines, failures);
-
   const selectedGateIds = gateRegistrations.map((registration) => registration.gateId);
   const gateReport = runGateRunner(repoRoot, selectedGateIds);
   for (const result of gateReport.results) {
@@ -183,22 +208,16 @@ export async function runVerification(repoRoot: string, options: { readonly stri
     if (result.status === 'FAIL') failures.push(`gate ${result.gateId}: ${result.summary}`);
     else if (result.status === 'WARN') warnings.push(`gate ${result.gateId}: ${result.summary}`);
   }
-
   const retirement = scanRetiredRuntimeSurfaces({ repoRoot });
   if (retirement.violations.length > 0) {
     failures.push(...retirement.violations.map((violation) => `${violation.path}:${violation.line} ${violation.surfaceId}: ${violation.match}`));
     lines.push({ name: 'runtime retirement scan', status: 'FAIL', detail: `violations=${retirement.violations.length}` });
   } else lines.push({ name: 'runtime retirement scan', status: 'PASS', detail: `scanned=${retirement.scannedFileCount}` });
-
   const reusable = await runReusableGuard(repoRoot);
   lines.push(...reusable.lines);
   failures.push(...reusable.failures);
   warnings.push(...reusable.warnings);
-
-  if (options.testBackedSmoke) {
-    failures.push('TestBackedSmoke has no Node-owned implementation; refusing to call PowerShell from the Node verifier');
-    lines.push({ name: 'test-backed smoke', status: 'FAIL', detail: 'Node-owned smoke implementation unavailable' });
-  }
+  if (options.testBackedSmoke) await appendTestBackedSmoke(repoRoot, lines, failures);
   return { lines, failures, warnings, exitCode: failures.length > 0 ? 1 : 0 };
 }
 
