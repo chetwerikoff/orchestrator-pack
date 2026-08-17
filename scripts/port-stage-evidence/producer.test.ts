@@ -123,7 +123,8 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
   });
 
   it('keeps escaped YAML quotes and embedded comment/colon bytes inside the scalar range', () => {
-    const source = `${String.raw`run: "echo \"#:\"; pwsh -File scripts/verify.ps1"`}\n`;
+    const slash = String.fromCharCode(0x5c);
+    const source = `run: "echo ${slash}"#:${slash}"; pwsh -File scripts/verify.ps1"\n`;
     expect(workflowTokens(source)).toEqual(['pwsh', 'scripts/verify.ps1']);
   });
 
