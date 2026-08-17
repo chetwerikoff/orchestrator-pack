@@ -16,8 +16,10 @@ export interface TokenOccurrence {
 
 export type WholePathResolver = (candidate: string) => boolean;
 
-const RUNTIME = /(?:^|[^A-Za-z0-9_.-])(pwsh(?:\.exe)?|powershell(?:\.exe)?)(?=$|[^A-Za-z0-9_.-])/iy;
-const SCRIPT = /(?:^|[^A-Za-z0-9_.$@{}()+:=/\\-])((?:[A-Za-z0-9_.$@{}()+:=.-]+[\\/])*[A-Za-z0-9_.$@{}()+:=.-]+\.ps1)(?=$|[^A-Za-z0-9_.$@{}()+:=/\\-])/iy;
+const RUNTIME_TOKEN = /^(pwsh(?:\.exe)?|powershell(?:\.exe)?)(?=$|[^A-Za-z0-9_.-])/iu;
+const SCRIPT_TOKEN = /^((?:[A-Za-z0-9_.$@{}()+:=.-]+[\\/])*[A-Za-z0-9_.$@{}()+:=.-]+\.ps1)(?=$|[^A-Za-z0-9_.$@{}()+:=/\\-])/iu;
+const RUNTIME_LEFT = /[A-Za-z0-9_.-]/u;
+const SCRIPT_LEFT = /[A-Za-z0-9_.$@{}()+:=/\\-]/u;
 
 function isDelimiter(byte: number): boolean {
   return byte === 0x27 || byte === 0x22 || byte === 0x60;
@@ -39,17 +41,6 @@ function coordinates(buffer: Buffer, offset: number): { line: number; column: nu
   return { line, column: offset - lineStart + 1 };
 }
 
-function matchAnchored(regex: RegExp, text: string, cursor: number): RegExpExecArray | null {
-  regex.lastIndex = cursor;
-  return regex.exec(text);
-}
-
-function captureOffset(match: RegExpExecArray, capture: string): number {
-  const full = match[0];
-  const index = full.toLowerCase().indexOf(capture.toLowerCase());
-  return match.index + Math.max(0, index);
-}
-
 function wholeDelimitedPath(interior: string, resolver: WholePathResolver): boolean {
   if (!interior.toLowerCase().endsWith('.ps1') || /[\r\n]/u.test(interior)) return false;
   if (!/^[^"'`\r\n]+\.ps1$/iu.test(interior)) return false;
@@ -64,12 +55,19 @@ interface RelativeMatch {
   readonly consumedEnd: number;
 }
 
-function firstTokenAt(text: string, cursor: number): RelativeMatch | null {
-  const runtime = matchAnchored(RUNTIME, text, cursor);
-  const script = matchAnchored(SCRIPT, text, cursor);
+function tokenAt(text: string, cursor: number, regionStart: number, regionEnd: number): RelativeMatch | null {
+  if (cursor < regionStart || cursor >= regionEnd) return null;
+  const previous = cursor > regionStart ? text[cursor - 1] : undefined;
+  const slice = text.slice(cursor, regionEnd);
   const candidates: RelativeMatch[] = [];
-  if (runtime?.[1]) candidates.push({ kind: 'runtime', capture: runtime[1], captureStart: captureOffset(runtime, runtime[1]), consumedEnd: runtime.index + runtime[0].length });
-  if (script?.[1]) candidates.push({ kind: 'script', capture: script[1], captureStart: captureOffset(script, script[1]), consumedEnd: script.index + script[0].length });
+  if (previous === undefined || !RUNTIME_LEFT.test(previous)) {
+    const match = RUNTIME_TOKEN.exec(slice);
+    if (match?.[1]) candidates.push({ kind: 'runtime', capture: match[1], captureStart: cursor, consumedEnd: cursor + match[1].length });
+  }
+  if (previous === undefined || !SCRIPT_LEFT.test(previous)) {
+    const match = SCRIPT_TOKEN.exec(slice);
+    if (match?.[1]) candidates.push({ kind: 'script', capture: match[1], captureStart: cursor, consumedEnd: cursor + match[1].length });
+  }
   candidates.sort((left, right) => left.captureStart - right.captureStart || (left.kind === 'runtime' ? -1 : 1));
   return candidates[0] ?? null;
 }
@@ -78,10 +76,10 @@ function scanPlain(text: string, start: number, end: number): RelativeMatch[] {
   const matches: RelativeMatch[] = [];
   let cursor = start;
   while (cursor < end) {
-    const match = firstTokenAt(text, cursor);
-    if (match && match.captureStart < end && match.consumedEnd <= end) {
+    const match = tokenAt(text, cursor, start, end);
+    if (match) {
       matches.push(match);
-      cursor = Math.max(cursor + 1, match.captureStart + match.capture.length);
+      cursor = Math.max(cursor + 1, match.consumedEnd);
     } else cursor += 1;
   }
   return matches;
@@ -93,10 +91,10 @@ function scanLine(text: string, lineStart: number, lineEnd: number, resolver: Wh
   while (cursor < lineEnd) {
     const byte = text.charCodeAt(cursor);
     if (!isDelimiter(byte)) {
-      const token = firstTokenAt(text, cursor);
-      if (token && token.captureStart < lineEnd && token.consumedEnd <= lineEnd) {
+      const token = tokenAt(text, cursor, lineStart, lineEnd);
+      if (token) {
         matches.push(token);
-        cursor = Math.max(cursor + 1, token.captureStart + token.capture.length);
+        cursor = Math.max(cursor + 1, token.consumedEnd);
       } else cursor += 1;
       continue;
     }
@@ -187,6 +185,7 @@ function commentStart(text: string): number {
 
 function colonOutsideQuotes(text: string): number {
   let quote: string | undefined;
+  let flowDepth = 0;
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index]!;
     if (quote) {
@@ -194,9 +193,68 @@ function colonOutsideQuotes(text: string): number {
       continue;
     }
     if (char === '"' || char === "'") quote = char;
-    else if (char === ':') return index;
+    else if (char === '[' || char === '{') flowDepth += 1;
+    else if (char === ']' || char === '}') flowDepth = Math.max(0, flowDepth - 1);
+    else if (char === ':' && flowDepth === 0) return index;
   }
   return -1;
+}
+
+function trimBounds(text: string, start: number, end: number): { start: number; end: number } {
+  while (start < end && /[ \t]/u.test(text[start]!)) start += 1;
+  while (end > start && /[ \t]/u.test(text[end - 1]!)) end -= 1;
+  return { start, end };
+}
+
+function splitFlow(text: string, start: number, end: number, separator: ',' | ':'): number[] {
+  const points: number[] = [];
+  let quote: string | undefined;
+  let depth = 0;
+  for (let index = start; index < end; index += 1) {
+    const char = text[index]!;
+    if (quote) {
+      if (char === '\\') index += 1;
+      else if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") quote = char;
+    else if (char === '[' || char === '{') depth += 1;
+    else if (char === ']' || char === '}') depth = Math.max(0, depth - 1);
+    else if (char === separator && depth === 0) points.push(index);
+  }
+  return points;
+}
+
+function collectYamlValueRanges(text: string, lineStart: number, rawStart: number, rawEnd: number, output: ByteRange[]): void {
+  const bounds = trimBounds(text, rawStart, rawEnd);
+  if (bounds.start >= bounds.end) return;
+  const first = text[bounds.start];
+  const last = text[bounds.end - 1];
+  if (first === '{' && last === '}') {
+    const interiorStart = bounds.start + 1;
+    const interiorEnd = bounds.end - 1;
+    const commas = splitFlow(text, interiorStart, interiorEnd, ',');
+    const segments = [interiorStart, ...commas.map((point) => point + 1)];
+    const ends = [...commas, interiorEnd];
+    for (let index = 0; index < segments.length; index += 1) {
+      const start = segments[index]!;
+      const end = ends[index]!;
+      const colons = splitFlow(text, start, end, ':');
+      const colon = colons[0];
+      if (colon !== undefined) collectYamlValueRanges(text, lineStart, colon + 1, end, output);
+    }
+    return;
+  }
+  if (first === '[' && last === ']') {
+    const interiorStart = bounds.start + 1;
+    const interiorEnd = bounds.end - 1;
+    const commas = splitFlow(text, interiorStart, interiorEnd, ',');
+    const segments = [interiorStart, ...commas.map((point) => point + 1)];
+    const ends = [...commas, interiorEnd];
+    for (let index = 0; index < segments.length; index += 1) collectYamlValueRanges(text, lineStart, segments[index]!, ends[index]!, output);
+    return;
+  }
+  output.push({ start: lineStart + bounds.start, end: lineStart + bounds.end });
 }
 
 export function yamlScalarRanges(bytes: Buffer): readonly ByteRange[] {
@@ -231,7 +289,7 @@ export function yamlScalarRanges(bytes: Buffer): readonly ByteRange[] {
       blockIndent = indentation;
       continue;
     }
-    if (valueStart < visible.length) ranges.push({ start: line.start + valueStart, end: line.start + visible.length });
+    if (valueStart < visible.length) collectYamlValueRanges(visible, line.start, valueStart, visible.length, ranges);
   }
   return ranges;
 }
