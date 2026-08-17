@@ -1588,12 +1588,20 @@ async function resolveHarvestTarget(
 
   const candidates: Array<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> = [];
   for (const target of targets) {
-    if (!target.web_socket_debugger_url) continue;
+    if (!target.web_socket_debugger_url) {
+      throw new ProbeError('surface_unknown', 'owned_turn_unbound_census_incomplete', undefined, {
+        target_id: target.target_id,
+        failure_reason: 'target_attach_unavailable',
+      });
+    }
     let snapshot: HarvestSnapshot;
     try {
       snapshot = await readHarvestSnapshot(target, deps);
-    } catch {
-      continue;
+    } catch (error) {
+      throw new ProbeError('surface_unknown', 'owned_turn_unbound_census_incomplete', undefined, {
+        target_id: target.target_id,
+        failure_reason: error instanceof ProbeError ? error.reason : boundedDetail(error),
+      });
     }
     if (ownedHarvestWindow(snapshot, marker)) candidates.push({ target, snapshot });
   }
@@ -1628,14 +1636,33 @@ async function runHarvest(args: ParsedHarvestArgs, deps: ProbeDependencies): Pro
     window.assistants.length,
   );
 
-  if (record.conversation_url === null && isSupportedChatGptConversationUrl(resolved.snapshot.page_url)) {
+  const recoveredConversationUrl = isSupportedChatGptConversationUrl(resolved.snapshot.page_url)
+    ? resolved.snapshot.page_url
+    : undefined;
+  if (record.phase === 'dispatching') {
+    transitionStateLightTurnObservation({
+      profileKey,
+      invocationId: args.invocationId,
+      phase: record.conversation_url !== null || recoveredConversationUrl !== undefined
+        ? 'sent_unharvested'
+        : 'sent_unbound',
+      reason: record.conversation_url === null && recoveredConversationUrl !== undefined
+        ? 'harvest_marker_locator_bound'
+        : 'harvest_marker_send_recovered',
+      sendWitness: record.send_witness === 'numeric_send_count' ? undefined : 'owned_marker',
+      ...(record.conversation_url === null && recoveredConversationUrl !== undefined
+        ? { conversationUrl: recoveredConversationUrl }
+        : {}),
+    });
+    record = readStateLightTurnObservation(profileKey, args.invocationId);
+  } else if (record.conversation_url === null && recoveredConversationUrl !== undefined) {
     transitionStateLightTurnObservation({
       profileKey,
       invocationId: args.invocationId,
       phase: 'sent_unharvested',
       reason: 'harvest_marker_locator_bound',
       sendWitness: record.send_witness === 'numeric_send_count' ? undefined : 'owned_marker',
-      conversationUrl: resolved.snapshot.page_url,
+      conversationUrl: recoveredConversationUrl,
     });
     record = readStateLightTurnObservation(profileKey, args.invocationId);
   }
