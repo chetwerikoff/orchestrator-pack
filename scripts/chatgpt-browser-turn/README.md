@@ -19,11 +19,18 @@ standalone `.claude/skills/discuss-with-gpt/driver.mjs` adversarial driver.
 
 ## Canonical invocation
 
-Use the repository package entrypoint so the Node-major guard runs first.
+Use the repository package entrypoint so the Node-major guard runs first. The
+caller/orchestrator must mint and retain one non-empty `--invocation-id` before
+every tracked turn and pass that same value through the ordinary transport or
+long-running adapter and any later harvest/finalization action for the attempt.
+Downstream wrappers validate and forward this identity; they do not mint or
+replace it. Presence of `--invocation-id` alone never selects direct mode.
+
 Existing conversation:
 
 ```bash
 npm run chatgpt-browser-turn -- turn \
+  --invocation-id ${INVOCATION_ID} \
   --profile ${BROWSER_PROFILE} \
   --cdp ${CDP_ENDPOINT} \
   --input ${INPUT_FILE} \
@@ -35,6 +42,7 @@ Fresh conversation:
 
 ```bash
 npm run chatgpt-browser-turn -- turn \
+  --invocation-id ${INVOCATION_ID} \
   --profile ${BROWSER_PROFILE} \
   --cdp ${CDP_ENDPOINT} \
   --input ${INPUT_FILE} \
@@ -46,7 +54,6 @@ npm run chatgpt-browser-turn -- turn \
 The package entrypoint also accepts the new direct shape without the `turn` word,
 but existing callers do not need to change their argv.
 
-
 ## Flow-manager long-running launcher (#1164)
 
 Applicable create-issue-draft long turns must launch through the caller-side
@@ -56,6 +63,7 @@ that may exit before the turn completes:
 ```bash
 npm run --silent flow-manager-browser-gpt-long-run -- \
   --run-identity <id> --attempt-identity <id> \
+  --invocation-id ${INVOCATION_ID} \
   --handoff-receipt ${HANDOFF_RECEIPT} \
   --terminal-envelope ${TERMINAL_ENVELOPE} \
   --output ${OUTPUT_FILE} \
@@ -64,7 +72,8 @@ npm run --silent flow-manager-browser-gpt-long-run -- \
 
 See [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md).
 This transport's send-once, atomic reply publication, and `turn-result/v1`
-stdout authority are unchanged.
+stdout authority are unchanged. Direct-publication mode is selected only by its
+direct-only arguments, never merely by the common `--invocation-id` identity.
 
 ## State-light turn contract
 
@@ -215,9 +224,13 @@ tab cleanup ambiguity.
 - the connected browser release runs after that page decision and only disconnects
   this Playwright client; sibling/foreign tabs remain outside the cleanup target set.
 
-A helper crash can leave an orphan. The supported follow-up is the explicit,
-one-shot read-only page probe for bounded diagnosis; no later process derives page-close
-authority from metadata, URLs, target IDs, age, focus, or liveness.
+A helper crash can leave an orphan. The supported follow-up uses the exact same
+caller-owned invocation identity: `browser-gpt-page-probe harvest` is the sole
+action-producing probe (`diagnostic_only: false`) and still has
+`workflow_authority: none`; `list`, `inspect`, `export`, and `liveness` are
+diagnostic-only and also have `workflow_authority: none`. No later process
+derives page-close authority from metadata, URLs, target IDs, age, focus, or
+liveness.
 
 ## Fresh-conversation prepare bounds and advisory walls
 
