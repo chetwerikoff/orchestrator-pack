@@ -15,6 +15,7 @@
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
+    ".orca/",
     "credentials/",
     "packages/core/",
     "secrets/",
@@ -22,10 +23,12 @@
   ],
   "allowed_roots": [
     ".github/workflows/typescript-foundation.yml",
-    "docs/declarations/1415.pr-scope.json",
-    "docs/investigations/orca-pwsh-zero-estate/retained-dispositions.json",
+    "docs/declarations/",
+    "docs/investigations/orca-pwsh-zero-estate/",
+    "package.json",
     "scripts/check-reusable.ps1",
     "scripts/gate-runner/",
+    "scripts/json-producers/retired-runtime-surfaces.json",
     "scripts/port-stage-evidence/",
     "scripts/runtime-retirement/",
     "scripts/verify.ps1",
