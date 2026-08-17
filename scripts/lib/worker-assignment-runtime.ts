@@ -6,6 +6,7 @@ import {
 import {
   assignmentStillCurrent,
   listCurrentWorkerAssignments,
+  readWorkerAssignmentStore,
   type WorkerAssignment,
 } from './worker-assignment-store.ts';
 
@@ -17,8 +18,14 @@ export interface ResolvedWorkerAssignment {
 
 export interface WorkerAssignmentReconciliation {
   readonly assignment: WorkerAssignment;
-  readonly reason: 'target_unresolved' | 'remote_not_applicable';
+  readonly reason: 'target_unresolved' | 'target_gone' | 'remote_not_applicable';
 }
+
+export type WorkerAssignmentTargetResolution =
+  | { readonly status: 'resolved'; readonly assignment: WorkerAssignment; readonly worker: RuntimeWorker }
+  | { readonly status: 'gone'; readonly assignment: WorkerAssignment }
+  | { readonly status: 'remote_not_applicable'; readonly assignment: WorkerAssignment }
+  | { readonly status: 'assignment_stale' | 'assignment_untrusted' | 'runtime_unavailable' | 'target_unresolved' };
 
 export type WorkerAssignmentResolution =
   | {
@@ -31,6 +38,50 @@ export type WorkerAssignmentResolution =
       readonly bindings: readonly [];
       readonly reconciliations: readonly [];
     };
+
+function sameLogicalAssignment(left: WorkerAssignment | undefined, right: WorkerAssignment): boolean {
+  return Boolean(left
+    && left.assignmentId === right.assignmentId
+    && left.generation === right.generation
+    && left.issueNumber === right.issueNumber
+    && left.taskId === right.taskId
+    && left.kind === right.kind
+    && left.provider === right.provider
+    && left.bindingKey === right.bindingKey);
+}
+
+/**
+ * Resolve one exact expected current assignment without collapsing affirmative
+ * gone evidence into generic unresolved state. This function observes only;
+ * callers that authorize an effect must still hold withCurrentWorkerAssignmentFence.
+ */
+export function resolveCurrentWorkerAssignmentTarget(input: {
+  readonly file: string;
+  readonly expected: WorkerAssignment;
+  readonly adapter: RuntimeAdapter;
+  readonly timeoutMs?: number;
+}): WorkerAssignmentTargetResolution {
+  const store = readWorkerAssignmentStore(input.file);
+  if (!store) return { status: 'assignment_untrusted' };
+  const current = store.assignments[`issue-${input.expected.issueNumber}`];
+  if (!sameLogicalAssignment(current, input.expected)) return { status: 'assignment_stale' };
+  if (current.kind !== 'local') {
+    return { status: 'remote_not_applicable', assignment: current };
+  }
+  if (typeof input.adapter.resolveAssignmentWorker !== 'function') {
+    return { status: 'runtime_unavailable' };
+  }
+  const resolved = input.adapter.resolveAssignmentWorker(
+    { provider: current.provider, bindingKey: current.bindingKey },
+    { timeoutMs: input.timeoutMs ?? 5_000 },
+  );
+  if (resolved.status !== 'ok') return { status: 'target_unresolved' };
+  if (!assignmentStillCurrent(input.file, current)) return { status: 'assignment_stale' };
+  if (resolved.value.kind === 'gone') {
+    return { status: 'gone', assignment: current };
+  }
+  return { status: 'resolved', assignment: current, worker: resolved.value.worker };
+}
 
 export function resolveCurrentWorkerAssignmentBindings(input: {
   readonly file: string;
@@ -58,17 +109,22 @@ export function resolveCurrentWorkerAssignmentBindings(input: {
       { provider: assignment.provider, bindingKey: assignment.bindingKey },
       { timeoutMs: input.timeoutMs ?? 5_000 },
     );
-    if (resolved.status !== 'ok' || resolved.value === null) {
+    if (resolved.status !== 'ok') {
       if (assignmentStillCurrent(input.file, assignment)) {
         reconciliations.push({ assignment, reason: 'target_unresolved' });
       }
       continue;
     }
     if (!assignmentStillCurrent(input.file, assignment)) continue;
-    if (bindings.some((candidate) => sameRuntimeWorker(candidate.worker.identity, resolved.value!.identity))) {
+    if (resolved.value.kind === 'gone') {
+      reconciliations.push({ assignment, reason: 'target_gone' });
+      continue;
+    }
+    const worker = resolved.value.worker;
+    if (bindings.some((candidate) => sameRuntimeWorker(candidate.worker.identity, worker.identity))) {
       return { status: 'assignment_untrusted', bindings: [], reconciliations: [] };
     }
-    bindings.push({ assignment, worker: resolved.value });
+    bindings.push({ assignment, worker });
   }
   return { status: 'ok', bindings, reconciliations };
 }
