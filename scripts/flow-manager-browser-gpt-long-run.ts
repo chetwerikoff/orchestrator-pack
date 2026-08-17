@@ -103,8 +103,9 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
   const options = parseFlagArgv(argv);
   const runIdentity = requiredOption(options, 'run-identity');
   const attemptIdentity = requiredOption(options, 'attempt-identity');
-  const invocationId = requiredOption(options, 'invocation-id');
   const handoffReceipt = requiredOption(options, 'handoff-receipt');
+  if (refuseStaleHandoffReceipt(handoffReceipt, runIdentity, attemptIdentity)) return 2;
+  const invocationId = requiredOption(options, 'invocation-id');
   const terminalEnvelope = requiredOption(options, 'terminal-envelope');
   const browserOutput = requiredOption(options, 'output');
   const reviewerSourceOutput = typeof options.get('reviewer-source-output') === 'string'
@@ -159,8 +160,6 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     browserEntry,
     ...browserArgs,
   ];
-
-  if (refuseStaleHandoffReceipt(handoffReceipt, runIdentity, attemptIdentity)) return 2;
 
   const pid = await spawnDetachedLauncher(launcherArgs);
   const receiptReady = await waitForReceipt(handoffReceipt, runIdentity, attemptIdentity, 30_000);
