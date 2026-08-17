@@ -62,15 +62,17 @@ describe('publishOperatorMessageOnce', () => {
 describe('Orca message truth', () => {
   const worker: RuntimeWorkerIdentity = { runtime: 'orca', id: 'worker-1', generation: 'g1' };
 
+  function workerLookup(): OrcaJsonResponse {
+    return {
+      ok: true,
+      result: { terminal: { handle: worker.id, incarnationId: worker.generation, worktreePath: '/tmp/w' } },
+    };
+  }
+
   it('treats successful terminal send without a submit witness as unknown and sends once', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
-      if (operation === 'terminal show') {
-        return {
-          ok: true,
-          result: { terminal: { handle: worker.id, incarnationId: worker.generation, worktreePath: '/tmp/w' } },
-        };
-      }
+      if (operation === 'terminal show') return workerLookup();
       if (operation === 'terminal send') return { ok: true, result: {} };
       return { ok: false, error: { code: 'unexpected_operation', message: operation } };
     });
@@ -86,10 +88,54 @@ describe('Orca message truth', () => {
     ]);
   });
 
-  it('returns an authoritative empty bound-run check without --wait', () => {
+  it('reports a process-launch failure before send as definitive and never retries', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'terminal show') return workerLookup();
+      if (operation === 'terminal send') {
+        return {
+          ok: false,
+          outcomeCategory: 'process_launch_failed',
+          error: { code: 'spawn_failed', message: 'not started' },
+        };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.dispatchInput({ worker, text: 'exact payload' })).toEqual({
+      status: 'send_failed',
+      reason: 'runtime_unavailable',
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[0] === 'terminal' && call[0]?.[1] === 'send'))
+      .toHaveLength(1);
+  });
+
+  it('keeps an ambiguous send response unknown and never retries', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'terminal show') return workerLookup();
+      if (operation === 'terminal send') {
+        return {
+          ok: false,
+          outcomeCategory: 'invalid_json',
+          error: { code: 'invalid_json', message: 'ambiguous' },
+        };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.dispatchInput({ worker, text: 'exact payload' })).toEqual({
+      status: 'dispatch_unknown',
+      reason: 'runtime_response_invalid',
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[0] === 'terminal' && call[0]?.[1] === 'send'))
+      .toHaveLength(1);
+  });
+
+  it('returns an authoritative empty bound-run check only with exact run identity and without --wait', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => ({
       ok: true,
-      result: { count: 0 },
+      result: { count: 0, run_id: 'run-current' },
     }));
     const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
     expect(adapter.checkInbox({ runId: 'run-current' }, { timeoutMs: 100 })).toEqual({
@@ -102,7 +148,17 @@ describe('Orca message truth', () => {
     expect(runJson.mock.calls[0]?.[0]).not.toContain('--wait');
   });
 
-  it('surfaces one exact Delivery and carries its ack on the next check', () => {
+  it('fails closed when an empty result has no run identity', () => {
+    const adapter = new OrcaRuntimeAdapter({
+      runJson: vi.fn((): OrcaJsonResponse => ({ ok: true, result: { count: 0 } })) as never,
+    });
+    expect(adapter.checkInbox({ runId: 'run-current' })).toEqual({
+      status: 'unknown',
+      reason: 'runtime_inbox_run_identity_unproven',
+    });
+  });
+
+  it('surfaces one whole Delivery with many messages and carries one exact ack on the next check', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => ({
       ok: true,
       result: args.includes('--ack')
@@ -138,20 +194,115 @@ describe('Orca message truth', () => {
     ]);
   });
 
-  it('fails closed on a sibling-run Delivery', () => {
-    const runJson = vi.fn((): OrcaJsonResponse => ({
-      ok: true,
-      result: {
-        count: 1,
-        run_id: 'run-sibling',
-        delivery_id: 'foreign',
-        messages: [{ type: 'status', body: 'foreign' }],
+  it('replays an unacked Delivery and advances serially only after its exact ack', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const ackIndex = args.indexOf('--ack');
+      const ack = ackIndex >= 0 ? args[ackIndex + 1] : undefined;
+      if (ack === 'delivery-2') return { ok: true, result: { count: 0, run_id: 'run-current' } };
+      if (ack === 'delivery-1') {
+        return {
+          ok: true,
+          result: {
+            count: 1,
+            run_id: 'run-current',
+            delivery_id: 'delivery-2',
+            messages: [{ type: 'status', body: 'second' }],
+          },
+        };
+      }
+      return {
+        ok: true,
+        result: {
+          count: 1,
+          run_id: 'run-current',
+          delivery_id: 'delivery-1',
+          messages: [{ type: 'status', body: 'first' }],
+        },
+      };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    const first = adapter.checkInbox({ runId: 'run-current' });
+    expect(adapter.checkInbox({ runId: 'run-current' })).toEqual(first);
+    expect(first).toMatchObject({ status: 'delivery', delivery: { deliveryId: 'delivery-1' } });
+    expect(adapter.checkInbox({ runId: 'run-current', ackDeliveryId: 'delivery-1' }))
+      .toMatchObject({ status: 'delivery', delivery: { deliveryId: 'delivery-2' } });
+    expect(adapter.checkInbox({ runId: 'run-current', ackDeliveryId: 'delivery-2' }))
+      .toEqual({ status: 'empty', runId: 'run-current' });
+  });
+
+  it('fails closed on sibling-run and missing-run Deliveries', () => {
+    const responses: OrcaJsonResponse[] = [
+      {
+        ok: true,
+        result: {
+          count: 1,
+          run_id: 'run-sibling',
+          delivery_id: 'foreign',
+          messages: [{ type: 'status', body: 'foreign' }],
+        },
       },
-    }));
+      {
+        ok: true,
+        result: {
+          count: 1,
+          delivery_id: 'missing-run',
+          messages: [{ type: 'status', body: 'unscoped' }],
+        },
+      },
+    ];
+    const runJson = vi.fn((): OrcaJsonResponse => responses.shift()!);
     const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
     expect(adapter.checkInbox({ runId: 'run-current' })).toEqual({
       status: 'unknown',
       reason: 'runtime_inbox_run_mismatch',
+    });
+    expect(adapter.checkInbox({ runId: 'run-current' })).toEqual({
+      status: 'unknown',
+      reason: 'runtime_inbox_run_identity_unproven',
+    });
+  });
+
+  it('fails closed on malformed message or duplicate/concurrent ack ambiguity', () => {
+    const malformed = new OrcaRuntimeAdapter({
+      runJson: vi.fn((): OrcaJsonResponse => ({
+        ok: true,
+        result: {
+          count: 1,
+          run_id: 'run-current',
+          delivery_id: 'delivery-1',
+          messages: [{ body: 'missing-type' }],
+        },
+      })) as never,
+    });
+    expect(malformed.checkInbox({ runId: 'run-current' })).toEqual({
+      status: 'unsupported',
+      reason: 'runtime_inbox_message_shape_unsupported',
+    });
+
+    const ambiguousAck = new OrcaRuntimeAdapter({
+      runJson: vi.fn((): OrcaJsonResponse => ({
+        ok: false,
+        outcomeCategory: 'supported_operation_failure',
+        error: { code: 'duplicate_ack', message: 'ack state ambiguous' },
+      })) as never,
+    });
+    expect(ambiguousAck.checkInbox({ runId: 'run-current', ackDeliveryId: 'delivery-1' })).toEqual({
+      status: 'unknown',
+      reason: 'runtime_operation_failed',
+    });
+  });
+
+  it('reports inbox deadline exhaustion as unknown instead of empty', () => {
+    const adapter = new OrcaRuntimeAdapter({
+      runJson: vi.fn((): OrcaJsonResponse => ({
+        ok: false,
+        outcomeCategory: 'supported_operation_failure',
+        error: { code: 'orca_operation_timeout', message: 'deadline' },
+      })) as never,
+    });
+    expect(adapter.checkInbox({ runId: 'run-current' }, { timeoutMs: 1 })).toEqual({
+      status: 'unknown',
+      reason: 'runtime_timeout',
     });
   });
 });
