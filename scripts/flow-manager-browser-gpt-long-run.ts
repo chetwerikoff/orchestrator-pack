@@ -110,7 +110,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
   const reviewerSourceOutput = typeof options.get('reviewer-source-output') === 'string'
     ? options.get('reviewer-source-output') as string
     : undefined;
-  const directArgumentKeys = ['invocation-id', 'reviewer-source', 'repository', 'issue-number', 'source-revision'];
+  const directArgumentKeys = ['reviewer-source', 'repository', 'issue-number', 'source-revision'];
   const directRequested = reviewerSourceOutput !== undefined
     || directArgumentKeys.some((key) => options.has(key));
   if (directRequested && (
