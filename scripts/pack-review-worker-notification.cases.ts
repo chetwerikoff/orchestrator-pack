@@ -132,7 +132,7 @@ async function startTerminalFailureFixture(options: {
   storeRoot: string;
   transport: GithubReviewTransport;
   writeRequiredStatus: (request: PackReviewRequiredStatusRequest) => Promise<void>;
-  notifyWorker: () => Promise<{ state: 'delivered'; reason: string }>;
+  notifyWorker: () => Promise<{ state: 'submitted'; reason: string }>;
   fixtureReviewStdout: string;
 }) {
   process.env.OPK_VITEST_HARNESS = '1';
@@ -234,7 +234,7 @@ describe('pack review worker notification admission (Issue #894)', () => {
         return { id: 89402, url: 'fixture://review/89402', event: 'COMMENT' as const };
       });
       const writeRequiredStatus = vi.fn(async () => undefined);
-      const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'unexpected_retry' }));
+      const notifyWorker = vi.fn(async () => ({ state: 'submitted' as const, reason: 'unexpected_retry' }));
 
       expect(packReviewDeliveryNeedsResume(journaled)).toBe(true);
       const result = await resumePackReviewVerdictDelivery({
@@ -296,7 +296,7 @@ describe('pack review worker notification admission (Issue #894)', () => {
         event: 'COMMENT' as const,
       }));
       const writeRequiredStatus = vi.fn(async () => undefined);
-      const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'unexpected_retry' }));
+      const notifyWorker = vi.fn(async () => ({ state: 'submitted' as const, reason: 'unexpected_retry' }));
 
       expect(packReviewDeliveryNeedsResume(journaled)).toBe(true);
       const result = await resumePackReviewVerdictDelivery({
@@ -327,7 +327,7 @@ describe('pack review worker notification admission (Issue #894)', () => {
     const transport = new TerminalFailureGithubTransport();
     transport.mode = 'definitely-rejected';
     const writeRequiredStatus = vi.fn(async (_request: PackReviewRequiredStatusRequest) => undefined);
-    const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'fixture_dispatched' }));
+    const notifyWorker = vi.fn(async () => ({ state: 'submitted' as const, reason: 'fixture_submitted' }));
 
     const first = await startTerminalFailureFixture({
       storeRoot,
@@ -358,7 +358,7 @@ describe('pack review worker notification admission (Issue #894)', () => {
       deliveryOutcomes: {
         githubComment: { state: 'failed' },
         requiredStatus: { state: 'succeeded' },
-        workerNotification: { state: 'delivered' },
+        workerNotification: { state: 'succeeded' },
       },
     });
     const recordedFailure = before.deliveryOutcomes.githubComment;
@@ -388,7 +388,7 @@ describe('pack review worker notification admission (Issue #894)', () => {
     const writeRequiredStatus = vi.fn(async (request: PackReviewRequiredStatusRequest) => {
       if (request.state !== 'pending') throw new Error('required status authorization denied');
     });
-    const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'fixture_dispatched' }));
+    const notifyWorker = vi.fn(async () => ({ state: 'submitted' as const, reason: 'fixture_submitted' }));
 
     const first = await startTerminalFailureFixture({
       storeRoot,
@@ -416,7 +416,7 @@ describe('pack review worker notification admission (Issue #894)', () => {
       deliveryOutcomes: {
         githubComment: { state: 'succeeded' },
         requiredStatus: { state: 'failed' },
-        workerNotification: { state: 'delivered' },
+        workerNotification: { state: 'succeeded' },
       },
     });
     const recordedFailure = before.deliveryOutcomes.requiredStatus;
@@ -476,11 +476,11 @@ describe('pack review worker notification admission (Issue #894)', () => {
       request: { message, idempotencyKey: deliveryKey, reviewRunId: runId },
     });
     expect(await notify()).toMatchObject({
-      state: 'escalated',
+      state: 'submitted',
       reason: 'runtime_dispatch_submitted',
     });
     expect(await notify()).toMatchObject({
-      state: 'escalated',
+      state: 'submitted',
       reason: 'claim_duplicate_no_op',
     });
 
