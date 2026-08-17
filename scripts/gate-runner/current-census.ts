@@ -53,8 +53,7 @@ export function evaluateCurrentCensus(
 ): GateResult {
   const historical = evaluateCensus(census, snapshot, registeredGateIds);
   if (historical.status === 'PASS') return historical;
-  const details = historical.details ?? [];
-  const remaining = details.filter((detail) => !isAdmittedNodeMigrationFailure(detail, snapshot));
-  if (remaining.length > 0) return failGate('gate-census', 'Gate population census reconciliation failed.', remaining);
-  return passGate('gate-census', 'Gate population census reconciled through the Node verification migration authority.');
+  const remaining = (historical.details ?? []).filter((detail) => !isAdmittedNodeMigrationFailure(detail, snapshot));
+  if (remaining.length > 0) return failGate('gate-census', 'Gate population census reconciliation failed.', historical.evidence, remaining);
+  return passGate('gate-census', 'Gate population census reconciled through the Node verification migration authority.', [], historical.evidence);
 }
