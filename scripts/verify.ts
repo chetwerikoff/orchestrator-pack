@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { isDirectExecution } from '#opk-toolchain/baseline-io';
 import { runProcess } from '#opk-kernel/subprocess';
 import { gateRegistrations, runGateRunner } from './gate-runner/runner.ts';
+import { runNodeVerificationPorts } from './gate-runner/node-verifier-ports.ts';
 import { scanRetiredRuntimeSurfaces } from './runtime-retirement/retired-surface-guard.ts';
 
 export interface VerifyLine {
@@ -29,38 +30,23 @@ const REQUIRED_FILES = [
   'scripts/runtime-retirement/retired-surface-selftest.ts', 'scripts/json-producers/retired-runtime-surfaces.json',
   'scripts/check-reusable.ps1',
 ] as const;
-
-const REQUIRED_DIRECTORIES = [
-  'plugins/task-declaration', 'plugins/scope-guard', 'plugins/token-chain-ledger', 'plugins/codex-pr-reviewer', 'prompts', '.github/workflows',
-] as const;
-
+const REQUIRED_DIRECTORIES = ['plugins/task-declaration', 'plugins/scope-guard', 'plugins/token-chain-ledger', 'plugins/codex-pr-reviewer', 'prompts', '.github/workflows'] as const;
 const PLUGINS = [
   ['task-declaration', '@orchestrator-pack/task-declaration', 'pack-declare'],
   ['scope-guard', '@orchestrator-pack/scope-guard', 'scope-check'],
   ['token-chain-ledger', '@orchestrator-pack/token-chain-ledger', 'pack-ledger'],
   ['codex-pr-reviewer', '@orchestrator-pack/codex-pr-reviewer', 'pack-codex-review'],
 ] as const;
-
 const SMOKE_FILES = [
-  'scripts/gh-wrapper.test.ts',
-  'scripts/command-runtime-bootstrap.test.ts',
-  'scripts/github-fleet-cache-coalesce.test.ts',
-  'scripts/github-fleet-cache-memo.test.ts',
-  'scripts/github-fleet-cache-bypass-guard.test.ts',
-  'scripts/github-fleet-cache-bypass.test.ts',
-  'scripts/github-fleet-cache-stale-snapshot.test.ts',
-  'scripts/contract-evidence.test.ts',
-  'scripts/autonomous-spawn-policy.test.ts',
-  'scripts/autonomous-spawn-worktree-gate.test.ts',
-  'scripts/autonomous-spawn-budget.test.ts',
-  'scripts/review-pipeline-spawn-budget.test.ts',
-  'scripts/review-start-repeat-classifier.test.ts',
-  'scripts/autonomous-orchestrator-interposer.test.ts',
+  'scripts/gh-wrapper.test.ts', 'scripts/command-runtime-bootstrap.test.ts', 'scripts/github-fleet-cache-coalesce.test.ts',
+  'scripts/github-fleet-cache-memo.test.ts', 'scripts/github-fleet-cache-bypass-guard.test.ts', 'scripts/github-fleet-cache-bypass.test.ts',
+  'scripts/github-fleet-cache-stale-snapshot.test.ts', 'scripts/contract-evidence.test.ts', 'scripts/autonomous-spawn-policy.test.ts',
+  'scripts/autonomous-spawn-worktree-gate.test.ts', 'scripts/autonomous-spawn-budget.test.ts', 'scripts/review-pipeline-spawn-budget.test.ts',
+  'scripts/review-start-repeat-classifier.test.ts', 'scripts/autonomous-orchestrator-interposer.test.ts',
 ] as const;
 
 const retiredRuntimeStem = ['agent', 'orchestrator'].join('-');
 const retiredStateStem = `.${retiredRuntimeStem}`;
-
 const ALLOWED_ROOT_PATTERNS = [
   'README.md', 'AGENTS.md', 'CLAUDE.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'LICENSE', 'LICENSE.md', '.gitignore', '.gitattributes', '.editorconfig',
   'package.json', 'package-lock.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json', 'tsconfig.*.json', '*.config.js', '*.config.cjs', '*.config.mjs', '*.config.ts', '*.config.mts', '*.config.cts',
@@ -80,7 +66,6 @@ function globRegex(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/gu, '\\$&').replaceAll('*', '.*').replaceAll('?', '.');
   return new RegExp(`^${escaped}$`, 'iu');
 }
-
 function anyGlob(path: string, patterns: readonly string[]): boolean {
   return patterns.some((pattern) => globRegex(pattern).test(path));
 }
@@ -121,8 +106,8 @@ export async function runReusableGuard(repoRoot: string, allowNoGit = false): Pr
     if (violations.length > 0) failures.push(...violations);
     else lines.push({ name: 'reusable repository content guard', status: 'PASS', detail: `tracked=${tracked.paths.length}` });
   }
-  if (warnings.length > 0) lines.push(...warnings.map((detail) => ({ name: 'reusable repository content guard', status: 'WARN' as const, detail })));
-  if (failures.length > 0) lines.push(...failures.map((detail) => ({ name: 'reusable repository content guard', status: 'FAIL' as const, detail })));
+  lines.push(...warnings.map((detail) => ({ name: 'reusable repository content guard', status: 'WARN' as const, detail })));
+  lines.push(...failures.map((detail) => ({ name: 'reusable repository content guard', status: 'FAIL' as const, detail })));
   return { lines, failures, warnings, exitCode: failures.length > 0 ? 1 : 0 };
 }
 
@@ -150,9 +135,8 @@ function appendPathChecks(repoRoot: string, lines: VerifyLine[], failures: strin
 
 function appendPluginChecks(repoRoot: string, lines: VerifyLine[], failures: string[]): void {
   for (const [directory, packageName, commandName] of PLUGINS) {
-    const path = resolve(repoRoot, 'plugins', directory, 'package.json');
     try {
-      const manifest = JSON.parse(readFileSync(path, 'utf8')) as { name?: unknown; bin?: unknown };
+      const manifest = JSON.parse(readFileSync(resolve(repoRoot, 'plugins', directory, 'package.json'), 'utf8')) as { name?: unknown; bin?: unknown };
       const bins = manifest.bin && typeof manifest.bin === 'object' && !Array.isArray(manifest.bin) ? Object.keys(manifest.bin as Record<string, unknown>) : [];
       if (manifest.name === packageName && bins.includes(commandName)) lines.push({ name: `plugin/${directory}`, status: 'PASS', detail: `${packageName} / ${commandName}` });
       else {
@@ -201,8 +185,12 @@ export async function runVerification(repoRoot: string, options: { readonly stri
   } else lines.push({ name: 'node', status: 'PASS', detail: process.version });
   appendPathChecks(repoRoot, lines, failures);
   appendPluginChecks(repoRoot, lines, failures);
-  const selectedGateIds = gateRegistrations.map((registration) => registration.gateId);
-  const gateReport = runGateRunner(repoRoot, selectedGateIds);
+
+  const ports = await runNodeVerificationPorts(repoRoot);
+  lines.push(...ports.lines);
+  failures.push(...ports.failures);
+
+  const gateReport = runGateRunner(repoRoot, gateRegistrations.map((registration) => registration.gateId));
   for (const result of gateReport.results) {
     lines.push({ name: `gate/${result.gateId}`, status: result.status === 'PASS' ? 'PASS' : result.status === 'WARN' ? 'WARN' : 'FAIL', detail: result.summary });
     if (result.status === 'FAIL') failures.push(`gate ${result.gateId}: ${result.summary}`);
@@ -222,12 +210,11 @@ export async function runVerification(repoRoot: string, options: { readonly stri
 }
 
 export function formatVerifyReport(report: VerifyReport): string {
-  const lines = ['== orchestrator-pack verify =='];
-  for (const item of report.lines) lines.push(`[${item.status}] ${item.name}${item.detail ? `: ${item.detail}` : ''}`);
-  lines.push(`Failures: ${report.failures.length}`);
-  lines.push(`Warnings: ${report.warnings.length}`);
-  if (report.failures.length === 0) lines.push('[PASS] orchestrator-pack verification completed.');
-  return `${lines.join('\n')}\n`;
+  const output = ['== orchestrator-pack verify =='];
+  for (const item of report.lines) output.push(`[${item.status}] ${item.name}${item.detail ? `: ${item.detail}` : ''}`);
+  output.push(`Failures: ${report.failures.length}`, `Warnings: ${report.warnings.length}`);
+  if (report.failures.length === 0) output.push('[PASS] orchestrator-pack verification completed.');
+  return `${output.join('\n')}\n`;
 }
 
 function argument(argv: readonly string[], name: string): string | undefined {
@@ -238,8 +225,7 @@ function argument(argv: readonly string[], name: string): string | undefined {
 export async function main(argv: readonly string[]): Promise<number> {
   try {
     const repoRoot = resolve(argument(argv, '--repo-root') ?? resolve(import.meta.dirname, '..'));
-    const reusableOnly = argv.includes('--reusable-only');
-    const report = reusableOnly
+    const report = argv.includes('--reusable-only')
       ? await runReusableGuard(repoRoot, argv.includes('--allow-no-git'))
       : await runVerification(repoRoot, { strictPrereqs: argv.includes('--strict-prereqs'), testBackedSmoke: argv.includes('--test-backed-smoke') });
     process.stdout.write(formatVerifyReport(report));
@@ -250,9 +236,4 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
 }
 
-if (isDirectExecution(import.meta.url, process.argv[1])) {
-  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }).catch((error) => {
-    process.stderr.write(`[FAIL] verify: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
-  });
-}
+if (isDirectExecution(import.meta.url, process.argv[1])) process.exitCode = await main(process.argv.slice(2));
