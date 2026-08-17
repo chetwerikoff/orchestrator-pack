@@ -304,6 +304,35 @@ Preserve:
 
 Routine S2 dispatch stays on RuntimeAdapter. For executor paths using Orca-managed workers, initial delivery stays Orca-owned. Standalone Browser-GPT chat execution is outside this WorkerAssignment/S2 path. Do not dual-send through Orca mail or another transport. `dispatch_unknown` is uncertain and never authorizes automatic resend or an alternate transport.
 
+## Bound-run inbox drain and acknowledgement
+
+For an Orca-bound Run, all roles use the single runtime-neutral `RuntimeAdapter.checkInbox` seam. The Orca adapter maps that seam to `orca orchestration check [--ack <delivery_id>] --run <run_id>` without `--wait`. One check returns either authoritative empty or one oldest unacknowledged Delivery. A Delivery is the atomic replay-and-ack unit even when it contains many messages.
+
+At one lifecycle boundary, process the inbox serially:
+
+```text
+check current bound run
+-> empty: boundary may advance
+-> Delivery: surface and process every message
+-> any message fails: do not ack; boundary is blocked/degraded
+-> all messages succeed: carry that exact delivery_id on the next check
+-> repeat until authoritative empty or the existing lifecycle deadline expires
+```
+
+Exactly one acknowledgement is issued per Delivery, never per message. Missing, malformed, foreign/sibling-run, unsupported, ambiguous, duplicate/concurrent-ack, or deadline-exhausted evidence is not empty and does not authorize resend. `read`, `delivered_at`, process state, pane state, heartbeat existence, and terminal-send exit status never prove that mail was surfaced.
+
+The provider does not expose a reliable snapshot of “Deliveries present when the boundary began”. Do not invent one. The existing lifecycle/turn deadline bounds the drain. If continuous arrivals prevent an authoritative empty result before that deadline, report an explicit busy/degraded boundary and do not advance. Do not turn the drain into a watcher, poller, subscription, daemon, retry service, queue, or second observer.
+
+Role obligations are mandatory:
+
+- **Manager:** drain before starting or claiming the next authoring/review stage and immediately before manager `worker_done`.
+- **Worker:** drain immediately before worker `worker_done` and before emitting a blocker/escalation that hands control upward.
+- **Coordinator / flow-manager / orchestrator acting on the bound Run:** drain before issuing a reply, ruling, escalation decision, or dispatch, and again before reporting its own turn complete.
+
+Every message returned by the drain is surfaced and processed in the same role turn before the guarded action. An unreachable/unsupported/ambiguous drain is reported as degraded/blocking evidence and is never silently skipped.
+
+Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness. A supervised agent with no actionable report sends nothing. S1 remains the sole liveness observer; existing observer heartbeat/process-liveness artifacts remain observation evidence, not agent assertions.
+
 ## Scheduler phases
 
 `runSchedulerTick` remains two phases.

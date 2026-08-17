@@ -173,8 +173,15 @@ export type PackReviewRequiredStatusWriter = (
   request: PackReviewRequiredStatusRequest,
 ) => Promise<void>;
 
+/** Legacy Pack Review test/injection result; the production transport consumer uses submit truth below. */
 export interface PackReviewWorkerNotificationResult {
   state: 'delivered' | 'failed' | 'escalated';
+  reason: string;
+}
+
+/** Submit-boundary truth returned by the production worker-notification transport. */
+export interface PackReviewWorkerSubmissionResult {
+  state: 'submitted' | 'pre_dispatch_failure' | 'ambiguous';
   reason: string;
 }
 
@@ -195,7 +202,7 @@ export interface PackReviewWorkerNotificationBinding {
 
 export type PackReviewWorkerNotifier = (
   request: PackReviewWorkerNotificationRequest,
-) => Promise<PackReviewWorkerNotificationResult>;
+) => Promise<PackReviewWorkerNotificationResult | PackReviewWorkerSubmissionResult>;
 
 export type PackReviewJournalWriter = (
   runId: string,
@@ -381,7 +388,8 @@ function completedResumeChannelOutcome(
   if (channel === 'requiredStatus') {
     return value.state === 'succeeded' || value.state === 'failed';
   }
-  return value.state === 'delivered'
+  return value.state === 'succeeded'
+    || value.state === 'delivered'
     || value.state === 'failed'
     || value.state === 'escalated';
 }
@@ -719,8 +727,24 @@ export async function deliverPackReviewVerdict(
         idempotencyKey: workerKey,
         reviewRunId: options.run.id,
       });
-      if (notified.state !== 'delivered') deliveryFailed = true;
-      recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));
+      if (notified.state === 'delivered' || notified.state === 'failed' || notified.state === 'escalated') {
+        if (notified.state !== 'delivered') deliveryFailed = true;
+        recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));
+      } else {
+        const submitted = notified.state === 'submitted';
+        if (!submitted) deliveryFailed = true;
+        const durableState: PackReviewDeliveryOutcome['state'] = submitted
+          ? 'succeeded'
+          : notified.state === 'pre_dispatch_failure'
+            ? notified.reason === 'worker_generation_mismatch'
+              ? 'escalated'
+              : 'failed'
+            : 'escalated';
+        recordChannelOutcome(
+          'workerNotification',
+          outcome(durableState, notified.reason, workerKey, options.clock),
+        );
+      }
     } catch (error) {
       deliveryFailed = true;
       recordChannelOutcome('workerNotification', outcome('failed', describeError(error), workerKey, options.clock));

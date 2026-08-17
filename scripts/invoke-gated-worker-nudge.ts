@@ -135,7 +135,7 @@ export async function runGatedWorkerNudge(input: {
   if (input.options.dryRun) {
     return { sent: false, reason: 'dry_run', ...identity };
   }
-  const delivered = await sendPackReviewWorkerNotification({
+  const submitted = await sendPackReviewWorkerNotification({
     trustedPackRoot: input.options.repoRoot,
     repoRoot: input.options.repoRoot,
     workerId: input.options.workerId,
@@ -158,8 +158,8 @@ export async function runGatedWorkerNudge(input: {
     sideEffectFencePath: input.sideEffectFencePath,
   });
   return {
-    sent: delivered.state === 'delivered',
-    reason: delivered.reason,
+    sent: submitted.state === 'submitted',
+    reason: submitted.reason,
     intentClass: identity.intentClass,
     cycleKey: identity.cycleKey,
   };

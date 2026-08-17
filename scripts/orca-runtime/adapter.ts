@@ -7,6 +7,8 @@ import {
   type RuntimeBoundedOutput,
   type RuntimeCallOptions,
   type RuntimeDispatchResult,
+  type RuntimeInboxCheckResult,
+  type RuntimeInboxMessage,
   type RuntimeLivenessResult,
   type RuntimeObservationToken,
   type RuntimeReadiness,
@@ -57,6 +59,19 @@ interface DecodedObservation {
   readonly nativeCursor: string;
 }
 
+interface OrcaInboxDeliveryShape {
+  readonly run_id?: unknown;
+  readonly runId?: unknown;
+  readonly delivery_id?: unknown;
+  readonly deliveryId?: unknown;
+  readonly messages?: unknown;
+}
+
+interface OrcaInboxCheckShape extends OrcaInboxDeliveryShape {
+  readonly count?: unknown;
+  readonly delivery?: unknown;
+}
+
 const OBSERVATION_TOKEN_PREFIX = 'opk-orca-output-v3.';
 
 function isNativeTimeout(response: OrcaJsonResponse): boolean {
@@ -79,12 +94,6 @@ export function neutralFailureReason(response: OrcaJsonResponse): string {
   }
 }
 
-function dispatchOutcomeUnknown(response: OrcaJsonResponse): boolean {
-  return isNativeTimeout(response)
-    || response.outcomeCategory === 'empty_stdout'
-    || response.outcomeCategory === 'invalid_json';
-}
-
 function nativeGeneration(terminal: OrcaTerminalSummary | OrcaTerminalHandle): string | null {
   const generation = terminal.incarnationId?.trim() || terminal.ptyId?.trim();
   return generation || null;
@@ -92,6 +101,74 @@ function nativeGeneration(terminal: OrcaTerminalSummary | OrcaTerminalHandle): s
 
 function identityKey(identity: RuntimeWorkerIdentity): string {
   return `${identity.runtime}\u0000${identity.id}\u0000${identity.generation}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function normalizeInboxMessage(value: unknown): RuntimeInboxMessage | null {
+  const raw = asRecord(value);
+  const type = nonEmptyString(raw?.type);
+  if (!raw || !type) return null;
+  const subject = typeof raw.subject === 'string' ? raw.subject : undefined;
+  const body = typeof raw.body === 'string' ? raw.body : undefined;
+  return {
+    type,
+    ...(subject === undefined ? {} : { subject }),
+    ...(body === undefined ? {} : { body }),
+    ...('payload' in raw ? { payload: raw.payload } : {}),
+  };
+}
+
+function normalizeInboxCheck(
+  runId: string,
+  result: OrcaInboxCheckShape | undefined,
+): RuntimeInboxCheckResult {
+  if (!result || typeof result !== 'object') {
+    return { status: 'unsupported', reason: 'runtime_inbox_shape_unsupported' };
+  }
+
+  const topRunId = nonEmptyString(result.run_id) ?? nonEmptyString(result.runId);
+  if (topRunId && topRunId !== runId) {
+    return { status: 'unknown', reason: 'runtime_inbox_run_mismatch' };
+  }
+
+  if (result.count === 0 && result.delivery === undefined && result.messages === undefined) {
+    return topRunId === runId
+      ? { status: 'empty', runId }
+      : { status: 'unknown', reason: 'runtime_inbox_run_identity_unproven' };
+  }
+
+  const deliveryRaw = asRecord(result.delivery) ?? result as unknown as Record<string, unknown>;
+  const delivery = deliveryRaw as OrcaInboxDeliveryShape;
+  const deliveryRunId = nonEmptyString(delivery.run_id) ?? nonEmptyString(delivery.runId) ?? topRunId;
+  const deliveryId = nonEmptyString(delivery.delivery_id) ?? nonEmptyString(delivery.deliveryId);
+  if (!deliveryRunId || deliveryRunId !== runId) {
+    return { status: 'unknown', reason: 'runtime_inbox_run_identity_unproven' };
+  }
+  if (!deliveryId || !Array.isArray(delivery.messages) || delivery.messages.length === 0) {
+    return { status: 'unsupported', reason: 'runtime_inbox_delivery_shape_unsupported' };
+  }
+
+  const messages: RuntimeInboxMessage[] = [];
+  for (const value of delivery.messages) {
+    const message = normalizeInboxMessage(value);
+    if (!message) {
+      return { status: 'unsupported', reason: 'runtime_inbox_message_shape_unsupported' };
+    }
+    messages.push(message);
+  }
+  return {
+    status: 'delivery',
+    delivery: { runId, deliveryId, messages },
+  };
 }
 
 function normalizeTerminalRead(
@@ -450,11 +527,38 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!input.submitOnly) args.push('--text', input.text ?? '');
     if (!input.writeOnly) args.push('--enter');
     const response = this.#run(args, options);
-    if (response.ok) return { status: 'dispatched' };
+    if (response.ok) {
+      return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
+    }
     const reason = neutralFailureReason(response);
-    return dispatchOutcomeUnknown(response)
-      ? { status: 'dispatch_unknown', reason }
-      : { status: 'send_failed', reason };
+    return response.outcomeCategory === 'process_launch_failed'
+      ? { status: 'send_failed', reason }
+      : { status: 'dispatch_unknown', reason };
+  }
+
+  checkInbox(
+    input: {
+      readonly runId: string;
+      readonly ackDeliveryId?: string;
+    },
+    options: RuntimeCallOptions = {},
+  ): RuntimeInboxCheckResult {
+    const runId = input.runId.trim();
+    if (!runId) return { status: 'failed', reason: 'runtime_inbox_run_id_missing' };
+    const args = ['orchestration', 'check', '--run', runId];
+    if (input.ackDeliveryId !== undefined) {
+      const deliveryId = input.ackDeliveryId.trim();
+      if (!deliveryId) return { status: 'failed', reason: 'runtime_inbox_delivery_id_missing' };
+      args.push('--ack', deliveryId);
+    }
+    const response = this.#run<OrcaInboxCheckShape>(args, options);
+    if (!response.ok) {
+      const reason = neutralFailureReason(response);
+      return response.outcomeCategory === 'process_launch_failed'
+        ? { status: 'failed', reason }
+        : { status: 'unknown', reason };
+    }
+    return normalizeInboxCheck(runId, response.result);
   }
 
   readBoundedOutput(
