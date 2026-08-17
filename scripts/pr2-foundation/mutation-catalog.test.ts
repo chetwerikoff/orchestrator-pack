@@ -43,4 +43,21 @@ describe('[Issue 1440] orchestration escalation guarantees', () => {
       }
     }
   });
+
+  it('guards the role-bound drain and supervised-heartbeat policy in the runbook', () => {
+    const runbook = readFileSync(
+      new URL('../../docs/orchestration-runbook.md', import.meta.url),
+      'utf8',
+    );
+    for (const required of [
+      '## Bound-run inbox drain and acknowledgement',
+      '**Manager:** drain before starting or claiming the next authoring/review stage and immediately before manager `worker_done`.',
+      '**Worker:** drain immediately before worker `worker_done` and before emitting a blocker/escalation that hands control upward.',
+      '**Coordinator / flow-manager / orchestrator acting on the bound Run:** drain before issuing a reply, ruling, escalation decision, or dispatch, and again before reporting its own turn complete.',
+      'Exactly one acknowledgement is issued per Delivery, never per message.',
+      'Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness.',
+      'A supervised agent with no actionable report sends nothing.',
+      'S1 remains the sole liveness observer',
+    ]) expect(runbook).toContain(required);
+  });
 });
