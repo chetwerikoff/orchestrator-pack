@@ -3,6 +3,7 @@
   "issue_number": 1364,
   "declared_paths": [
     "docs/declarations/1364.pr-scope.json",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
     "scripts/lib/create-issue-stage-topology.test.ts",
     "scripts/lib/create-issue-stage-topology.ts",
     "scripts/lib/stage-completeness-core.ts",
@@ -22,6 +23,7 @@
     "docs/create-issue-draft-acceptance-artifacts.md",
     "docs/declarations/1364.pr-scope.json",
     "docs/tiering.md",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
     "scripts/lib/create-issue-stage-topology.test.ts",
     "scripts/lib/create-issue-stage-topology.ts",
     "scripts/lib/stage-completeness-core.ts",

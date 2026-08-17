@@ -131,7 +131,8 @@ function fixture(input: {
   const intakePath = join(dir, 'tier-intake.json');
   const evidencePath = join(dir, 'attempt-001.json');
   const authorPath = join(dir, 'author-dispositions.json');
-  const capturePath = join(dir, 'pass-01-architectural.capture.txt');
+  const capturePath = join(dir, 'pass-02-architectural.capture.txt');
+  const reviewEvidencePath = join(dir, 'attempt-000.json');
   const turnResultPath = join(dir, 'turn-result-001.json');
   const outputDir = join(dir, 'output');
   const episode = deriveReviewEpisodeId(TASK, intakeRevision);
@@ -142,10 +143,26 @@ function fixture(input: {
     producer: 'flow-manager',
     taskIdentity: TASK,
     kind: 'fresh',
-    priorTier: 'T1',
+    priorTier: 'T2',
     firstRevision: intakeRevision,
   }));
   writeFileSync(authorPath, JSON.stringify({ schema: AUTHOR_DISPOSITIONS_SCHEMA, findings: [] }));
+  const reviewComments = Array.from({ length: 3 }, (_, index) => {
+    const invocationId = `architectural-review-invocation-${String(index + 1).padStart(2, '0')}`;
+    return comment(canonicalVerdict(sourceRevision, invocationId), { id: COMMENT_ID + 100 + index });
+  });
+  const reviewInvocations = reviewComments.map((reviewComment, index) => {
+    const ordinal = index + 1;
+    const invocationId = `architectural-review-invocation-${String(ordinal).padStart(2, '0')}`;
+    const reviewCapturePath = join(dir, `pass-01-architectural-review-${String(ordinal).padStart(2, '0')}.capture.txt`);
+    const reviewTurnResultPath = join(dir, `turn-result-review-${String(ordinal).padStart(2, '0')}.json`);
+    writeFileSync(reviewCapturePath, String(reviewComment.body));
+    const turnResult = { schema: 'turn-result/v1', state: 'ok', scope: 'none', cause: 'ok', invocation_id: invocationId, configured_profile_key: 'fixture-profile', send_count: 1, output: { byte_length: Buffer.byteLength(String(reviewComment.body)), sha256: createHash('sha256').update(String(reviewComment.body)).digest('hex') } };
+    const turnResultText = JSON.stringify(turnResult);
+    writeFileSync(reviewTurnResultPath, turnResultText);
+    return { schema: 'reviewer-invocation-envelope/v1', reviewEpisodeId: episode, stageAttemptId: 'architectural-review-attempt', policyVersion: 'triple-source/v1', reviewerCardinality: 3, cardinalityConfigIdentity: CONFIG, stage: 'architectural-review', sourceRevision, invocationId, terminalResultIdentity: `sha256:${createHash('sha256').update(turnResultText).digest('hex')}:${basename(reviewTurnResultPath)}`, reviewerSource: `browser-gpt-${String(ordinal).padStart(2, '0')}#capture=final-node/v1`, reviewerSlot: String(ordinal).padStart(2, '0'), reviewerOrdinal: ordinal, attemptOrdinal: 1, retryAttempt: false, terminal: true, terminalClassification: 'complete', sendCount: 1, retryClass: 'none', revisionCheck: 'matched', capacityOutcome: 'admitted', capacityWaitMs: 0, capturePath: reviewCapturePath, turnResultPath: reviewTurnResultPath };
+  });
+  writeFileSync(reviewEvidencePath, JSON.stringify({ schema: STAGE_EVIDENCE_SCHEMA, tier: 'T2', stage: 'architectural-review', stageAttemptId: 'architectural-review-attempt', stageSequence: 1, cycleId: 'cycle-1385', cycleBinding: { cycleId: 'cycle-1385', sourceRevision, boundBeforeLaunch: true }, policyVersion: 'triple-source/v1', reviewerCardinality: 3, cardinalityConfigIdentity: CONFIG, sourceRevision, outcome: 'complete', revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' }, settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true }, invocations: reviewInvocations }));
   if (input.withCapture) writeFileSync(capturePath, body);
 
   const invocation: Record<string, unknown> = {
@@ -194,10 +211,10 @@ function fixture(input: {
 
   const evidence = {
     schema: STAGE_EVIDENCE_SCHEMA,
-    tier: 'T1',
+    tier: 'T2',
     stage: 'architectural',
     stageAttemptId: 'attempt-001',
-    stageSequence: 1,
+    stageSequence: 2,
     cycleId: 'cycle-1385',
     cycleBinding: { cycleId: 'cycle-1385', sourceRevision, boundBeforeLaunch: true },
     policyVersion: 'single-source/v1',
@@ -210,19 +227,19 @@ function fixture(input: {
     invocations: [invocation],
   };
   writeFileSync(evidencePath, JSON.stringify(evidence));
-  return { dir, intakePath, evidencePath, authorPath, capturePath, turnResultPath, outputDir, evidence, invocation, body, episode };
+  return { dir, intakePath, evidencePath, reviewEvidencePath, authorPath, capturePath, turnResultPath, outputDir, evidence, invocation, body, episode, reviewComments };
 }
 
 function produce(
   input: ReturnType<typeof fixture>,
-  source = transport({ census: [comment(input.body)] }),
+  source = transport({ census: [...input.reviewComments, comment(input.body)] }),
   operatorAdjudication?: Record<string, unknown>,
 ) {
   return produceAcceptanceArtifacts({
     reviewDir: input.dir,
     outputDir: input.outputDir,
     tierIntakePath: input.intakePath,
-    stageEvidencePaths: [input.evidencePath],
+    stageEvidencePaths: [input.reviewEvidencePath, input.evidencePath],
     authorDispositionsPath: input.authorPath,
     phase: 'final-acceptance',
     artifactSourceTransport: source,
@@ -247,7 +264,7 @@ function inspect(input: ReturnType<typeof fixture>) {
     reviewDir: input.dir,
     outputDir: input.outputDir,
     tierIntakePath: input.intakePath,
-    stageEvidencePaths: [input.evidencePath],
+    stageEvidencePaths: [input.reviewEvidencePath, input.evidencePath],
     authorDispositionsPath: input.authorPath,
     phase: 'final-acceptance',
   });
@@ -256,12 +273,13 @@ function inspect(input: ReturnType<typeof fixture>) {
 describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
   it('accepts receipt-ok/artifact-ok only after census, principal proof, and reread', () => {
     const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
-    const source = transport({ census: [comment(input.body)] });
+    const source = transport({ census: [...input.reviewComments, comment(input.body)] });
     const result = produce(input, source);
     expect(result.ok, result.errors.join('\n')).toBe(true);
     expect(source.runGh.mock.calls.map((call) => call[0][2])).toEqual([
       'user',
       `repos/${REPOSITORY}/issues/${ISSUE}/comments?per_page=100&page=1`,
+      ...input.reviewComments.map((item) => `repos/${REPOSITORY}/issues/comments/${String(item.id)}`),
       `repos/${REPOSITORY}/issues/comments/${COMMENT_ID}`,
     ]);
     const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
@@ -351,7 +369,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     input.evidence.settlement.retryState = 'exhausted';
     writeFileSync(input.evidencePath, JSON.stringify(input.evidence));
     const live = canonicalVerdict(REVISION, 'invocation-retry');
-    const source = transport({ census: [comment(live)] });
+    const source = transport({ census: [...input.reviewComments, comment(live)] });
 
     const result = produce(input, source);
     expect(result.ok, result.errors.join('\n')).toBe(true);
@@ -405,7 +423,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${authorlessNoiseId}`,
       user: null,
     });
-    const result = produce(input, transport({ census: [authorlessNoise, comment(input.body)] }));
+    const result = produce(input, transport({ census: [...input.reviewComments, authorlessNoise, comment(input.body)] }));
     expect(result.ok, result.errors.join('\n')).toBe(true);
     const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
     expect(receipt.invocations[0].artifactAuthority.commentId).toBe(COMMENT_ID);
@@ -413,7 +431,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
 
   it('fails closed when the canonical invocation candidate itself has no author', () => {
     const input = fixture({ transportClassification: 'incident' });
-    const result = produce(input, transport({ census: [comment(input.body, { user: null })] }));
+    const result = produce(input, transport({ census: [...input.reviewComments, comment(input.body, { user: null })] }));
     expect(result.ok).toBe(false);
     expect(result.temporary).toBe('provenance-unresolved');
     expect(result.errors.join('\n')).toContain('canonical artifact candidate has no authoritative comment-author login');
@@ -429,7 +447,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     });
     const result = produce(input, transport({
       principal: PUBLISHER.toUpperCase(),
-      census: [foreignComment, principalComment],
+      census: [...input.reviewComments, foreignComment, principalComment],
     }));
     expect(result.ok, result.errors.join('\n')).toBe(true);
     const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
@@ -481,13 +499,13 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const result = produce(input);
     expect(result.ok, result.errors.join('\n')).toBe(true);
     expect(readFileSync(input.capturePath, 'utf8')).toBe(input.body);
-    expect(readdirSync(input.dir).filter((name) => name.startsWith('.pass-01-architectural.capture.txt.tmp-'))).toEqual([]);
+    expect(readdirSync(input.dir).filter((name) => name.startsWith('.pass-02-architectural.capture.txt.tmp-'))).toEqual([]);
   });
 
   it('rejects an existing canonical capture conflict and never overwrites it', () => {
     const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: 'foreign local bytes\n' });
     const live = canonicalVerdict();
-    const result = produce(input, transport({ census: [comment(live)], reread: comment(live) }));
+    const result = produce(input, transport({ census: [...input.reviewComments, comment(live)], reread: comment(live) }));
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('conflicts with existing canonical capture');
     expect(readFileSync(input.capturePath, 'utf8')).toBe('foreign local bytes\n');
@@ -503,7 +521,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
   it('rejects artifact bytes that change between the complete census and reread', () => {
     const input = fixture({ transportClassification: 'incident' });
     const changed = `${input.body}changed\n`;
-    const result = produce(input, transport({ census: [comment(input.body)], reread: comment(changed) }));
+    const result = produce(input, transport({ census: [...input.reviewComments, comment(input.body)], reread: comment(changed) }));
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toMatch(/malformed|changed between complete census and reread/);
   });
@@ -538,7 +556,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const live = canonicalVerdict();
     const result = produce(
       input,
-      transport({ census: [comment(live)], reread: comment(live) }),
+      transport({ census: [...input.reviewComments, comment(live)], reread: comment(live) }),
       validOperatorHint(live),
     );
     expect(result.ok).toBe(false);
@@ -548,7 +566,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
 
   it('uses the operator URL only as a narrowing hint after unique canonical resolution', () => {
     const input = fixture({ transportClassification: 'incident' });
-    const result = produce(input, transport({ census: [comment(input.body)] }), validOperatorHint(input.body));
+    const result = produce(input, transport({ census: [...input.reviewComments, comment(input.body)] }), validOperatorHint(input.body));
     expect(result.ok, result.errors.join('\n')).toBe(true);
     const manifest = JSON.parse(readFileSync(join(input.outputDir, 'acceptance-artifacts.json'), 'utf8'));
     expect(manifest.acceptanceBasis).toBe('authoritative-github-artifact');
@@ -558,7 +576,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
   it('rejects a first stage receipt that re-roots the intake revision', () => {
     const input = fixture({ intakeRevision: 'r03', sourceRevision: 'r04', transportClassification: 'incident' });
     const live = canonicalVerdict('r04');
-    const result = produce(input, transport({ census: [comment(live)], reread: comment(live) }));
+    const result = produce(input, transport({ census: [...input.reviewComments, comment(live)], reread: comment(live) }));
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('first stage receipt sourceRevision must equal episodeFirstRevision');
   });
@@ -571,14 +589,14 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const relay = JSON.parse(readFileSync(join(input.outputDir, 'verified-relay-evidence.json'), 'utf8'));
     expect(receipt.credentialingCaptures).toHaveLength(1);
     expect(receipt.relayEligibleCaptures).toHaveLength(1);
-    expect(relay).toHaveLength(1);
+    expect(relay).toHaveLength(4);
     expect(new Set([
       receipt.credentialingCaptures[0].captureIdentity,
       receipt.relayEligibleCaptures[0].captureIdentity,
-      relay[0].captureIdentity,
+      relay.find((item: VerifiedRelayEvidenceV1) => item.captureIdentity === receipt.credentialingCaptures[0].captureIdentity)?.captureIdentity,
     ]).size).toBe(1);
     const ledgerCall = vi.mocked(checkFindingLedgerGuard).mock.calls.at(-1);
-    expect(ledgerCall?.[0]).toEqual([input.body]);
+    expect(ledgerCall?.[0]).toEqual([...input.reviewComments.map((item) => String(item.body)), input.body]);
   });
 
   it('never fabricates ok state, reviewer_source, send accounting, or success terminal identity', () => {
