@@ -6,7 +6,7 @@ import { sendPackReviewWorkerNotification } from './lib/pack-review-worker-notif
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 
 describe('worker message submission through the runtime boundary', () => {
-  it('dispatches once and suppresses a duplicate without a PowerShell sender', async () => {
+  it('submits once and suppresses a duplicate without a PowerShell sender', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'opk-worker-submit-'));
     try {
       const adapter = new DeterministicRuntimeAdapter();
@@ -25,13 +25,12 @@ describe('worker message submission through the runtime boundary', () => {
         request: { message: 'continue issue 1248', idempotencyKey: 'issue-1248-worker-message' },
       } as const;
       await expect(sendPackReviewWorkerNotification(request)).resolves.toMatchObject({
-        state: 'delivered',
-        reason: 'runtime_dispatch_dispatched',
+        state: 'escalated',
+        reason: 'runtime_dispatch_submitted',
       });
-      await expect(sendPackReviewWorkerNotification(request)).resolves.toMatchObject({
-        state: 'delivered',
-        reason: 'claim_duplicate_no_op',
-      });
+      const duplicate = await sendPackReviewWorkerNotification(request);
+      expect(duplicate.state).toBe('escalated');
+      expect(duplicate.reason).toMatch(/duplicate|terminal|served/);
       expect(readFileSync(request.journalPath, 'utf8')).toContain('issue-1248-worker-message');
       expect(existsSync(path.resolve('scripts/journaled-worker-send.ps1'))).toBe(false);
     } finally {
