@@ -77,12 +77,9 @@ function normalizePath(path: string): string {
 }
 
 export function parseHistoricalDispositions(text: string): readonly HistoricalDisposition[] {
-  const raw = JSON.parse(text) as { version?: unknown; owner?: unknown; dispositions?: unknown };
-  if (raw.version !== 1 || !Array.isArray(raw.dispositions)) {
-    throw new Error('historical disposition source must be version 1 with a dispositions array');
-  }
-  if (raw.owner !== undefined && (typeof raw.owner !== 'string' || raw.owner.trim() === '')) {
-    throw new Error('historical disposition source owner must be non-empty when present');
+  const raw = JSON.parse(text) as { version?: unknown; owningIssue?: unknown; dispositions?: unknown };
+  if (raw.version !== 1 || !Number.isInteger(raw.owningIssue) || !Array.isArray(raw.dispositions)) {
+    throw new Error('historical disposition source must be version 1 with integer owningIssue and a dispositions array');
   }
   const seen = new Set<string>();
   const result: HistoricalDisposition[] = [];
@@ -102,12 +99,7 @@ export function parseHistoricalDispositions(text: string): readonly HistoricalDi
     }
     if (seen.has(path)) throw new Error(`duplicate historical disposition: ${path}`);
     seen.add(path);
-    result.push({
-      path,
-      class: String(value.class),
-      reason: String(value.reason),
-      owningReference: String(value.owningReference),
-    });
+    result.push({ path, class: String(value.class), reason: String(value.reason), owningReference: String(value.owningReference) });
   }
   return result;
 }
@@ -121,10 +113,7 @@ export function loadHistoricalDispositionPaths(repoRoot: string): ReadonlySet<st
   return new Set(loadHistoricalDispositions(repoRoot).map((record) => record.path));
 }
 
-export function isHistoricalOrDeniedPath(
-  path: string,
-  historicalExact: ReadonlySet<string> = EXCLUDED_EXACT,
-): boolean {
+export function isHistoricalOrDeniedPath(path: string, historicalExact: ReadonlySet<string> = EXCLUDED_EXACT): boolean {
   const normalized = normalizePath(path);
   return historicalExact.has(normalized)
     || EXCLUDED_EXACT.has(normalized)
@@ -132,11 +121,7 @@ export function isHistoricalOrDeniedPath(
     || EXCLUDED_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
-function walk(
-  root: string,
-  current = root,
-  historicalExact: ReadonlySet<string> = EXCLUDED_EXACT,
-): string[] {
+function walk(root: string, current = root, historicalExact: ReadonlySet<string> = EXCLUDED_EXACT): string[] {
   const result: string[] = [];
   for (const entry of readdirSync(current, { withFileTypes: true })) {
     const absolute = join(current, entry.name);
@@ -149,24 +134,17 @@ function walk(
 }
 
 export function loadRetiredSurfaces(repoRoot: string): readonly RetiredSurfaceDefinition[] {
-  const raw = JSON.parse(readFileSync(join(repoRoot, CANONICAL_PATTERN_SOURCE), 'utf8')) as {
-    version?: unknown;
-    surfaces?: unknown;
-  };
+  const raw = JSON.parse(readFileSync(join(repoRoot, CANONICAL_PATTERN_SOURCE), 'utf8')) as { version?: unknown; surfaces?: unknown };
   if (raw.version !== 1 || !Array.isArray(raw.surfaces) || raw.surfaces.length === 0) {
     throw new Error('retired runtime surface source must be version 1 with non-empty surfaces');
   }
   const ids = new Set<string>();
   return raw.surfaces.map((candidate, index) => {
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
-      throw new Error(`surface ${index} must be an object`);
-    }
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) throw new Error(`surface ${index} must be an object`);
     const value = candidate as Record<string, unknown>;
     const fields = ['id', 'sourceCommandPattern', 'pathPattern', 'reason', 'owningReference'] as const;
     for (const field of fields) {
-      if (typeof value[field] !== 'string' || String(value[field]).trim() === '') {
-        throw new Error(`surface ${index} ${field} must be non-empty`);
-      }
+      if (typeof value[field] !== 'string' || String(value[field]).trim() === '') throw new Error(`surface ${index} ${field} must be non-empty`);
     }
     const definition = value as unknown as RetiredSurfaceDefinition;
     if (ids.has(definition.id)) throw new Error(`duplicate retired surface id: ${definition.id}`);
@@ -183,10 +161,7 @@ function lineAt(content: string, index: number): number {
   return line;
 }
 
-export function scanRetiredRuntimeSurfaces(input: {
-  readonly repoRoot: string;
-  readonly paths?: readonly string[];
-}): GuardResult {
+export function scanRetiredRuntimeSurfaces(input: { readonly repoRoot: string; readonly paths?: readonly string[] }): GuardResult {
   const repoRoot = resolve(input.repoRoot);
   const surfaces = loadRetiredSurfaces(repoRoot);
   const historicalExact = new Set([...EXCLUDED_EXACT, ...loadHistoricalDispositionPaths(repoRoot)]);
@@ -194,32 +169,19 @@ export function scanRetiredRuntimeSurfaces(input: {
   const excludedPaths = requested.filter((path) => isHistoricalOrDeniedPath(path, historicalExact)).sort();
   const scannedPaths = requested.filter((path) => !isHistoricalOrDeniedPath(path, historicalExact)).sort();
   const violations: GuardViolation[] = [];
-
   for (const path of scannedPaths) {
     const absolute = join(repoRoot, path);
     if (!statSync(absolute).isFile()) continue;
     for (const surface of surfaces) {
       const pathMatch = new RegExp(surface.pathPattern, 'i').exec(path);
-      if (pathMatch) {
-        violations.push({ path, line: 0, surfaceId: surface.id, match: pathMatch[0], reason: surface.reason });
-      }
+      if (pathMatch) violations.push({ path, line: 0, surfaceId: surface.id, match: pathMatch[0], reason: surface.reason });
     }
     const content = readFileSync(absolute, 'utf8');
     for (const surface of surfaces) {
       const regex = new RegExp(surface.sourceCommandPattern, 'gm');
-      for (const match of content.matchAll(regex)) {
-        violations.push({
-          path,
-          line: lineAt(content, match.index ?? 0),
-          surfaceId: surface.id,
-          match: match[0],
-          reason: surface.reason,
-        });
-      }
+      for (const match of content.matchAll(regex)) violations.push({ path, line: lineAt(content, match.index ?? 0), surfaceId: surface.id, match: match[0], reason: surface.reason });
     }
   }
-
-  violations.sort((left, right) => left.path.localeCompare(right.path)
-    || left.line - right.line || left.surfaceId.localeCompare(right.surfaceId) || left.match.localeCompare(right.match));
+  violations.sort((left, right) => left.path.localeCompare(right.path) || left.line - right.line || left.surfaceId.localeCompare(right.surfaceId) || left.match.localeCompare(right.match));
   return { scannedFileCount: scannedPaths.length, scannedPaths, excludedPaths, violations };
 }
