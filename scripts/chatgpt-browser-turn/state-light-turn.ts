@@ -62,6 +62,13 @@ import {
 } from './state-light-fresh-conversation.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import {
+  admitStateLightTurnObservation,
+  bindPrimaryPublication,
+  finalizeStateLightPrimaryPublication,
+  readStateLightTurnObservation,
+  transitionStateLightTurnObservation,
+} from './state-light-turn-observation.ts';
+import {
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   classifyProductWall,
@@ -961,7 +968,10 @@ export function publishStateLightReply(
 ): StateLightPublicationResult {
   const finalPath = resolve(outputPath);
   const parent = dirname(finalPath);
-  const tempPath = join(parent, `.${basename(finalPath)}.${invocationId}.${randomUUID()}.tmp`);
+  // Invocation ids are exact caller identity data and may contain path-sensitive
+  // bytes. Staging uniqueness is intentionally identity-inert.
+  void invocationId;
+  const tempPath = join(parent, `.${basename(finalPath)}.${randomUUID()}.tmp`);
   let fd = -1;
 
   try {
@@ -1927,7 +1937,7 @@ async function runTurn(
     'issue-number',
     'source-revision',
   ]);
-  const invocationId = stringOption(args, 'invocation-id') ?? randomUUID();
+  const invocationId = stringOption(args, 'invocation-id') ?? '';
   let profileKey = 'profile-unresolved';
   let browser: any;
   let page: any;
@@ -1951,6 +1961,7 @@ async function runTurn(
   };
 
   try {
+    if (!invocationId) throw new Error('input_invalid:invocation_id_required');
     const baseConfig = browserConfig(args);
     if (baseConfig.timeoutMs > STATE_LIGHT_MAX_TIMEOUT_MS) {
       incident('input_invalid', 'timeout_ms_exceeds_maximum', 'return_local_error');
@@ -1979,6 +1990,17 @@ async function runTurn(
       throw new Error('input_invalid:direct_publication_artifact_alias');
     }
     const config = direct ? { ...baseConfig, directPublication: direct } : baseConfig;
+    const marker = generateOwnedPromptMarker();
+    admitStateLightTurnObservation({ profileKey, invocationId, marker });
+    if (!config.newChat && config.chatUrl) {
+      transitionStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        phase: 'prepared',
+        reason: 'existing_conversation_bound_before_send',
+        conversationUrl: normalizeConversationUrl(config.chatUrl),
+      });
+    }
 
     const profile = await verifyProfile(config);
     if (profile.state !== 'verified') {
@@ -2060,7 +2082,6 @@ async function runTurn(
       return null;
     };
 
-    const marker = generateOwnedPromptMarker();
     const markedPayload = wrapOwnedPromptPayload(marker, snapshot.text);
 
     const emitCancellationReceipt = (conversationUrl: string): void => {
@@ -2104,6 +2125,12 @@ async function runTurn(
       }
       remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      transitionStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        phase: 'dispatching',
+        reason: 'dispatch_boundary_entered',
+      });
       if (hasSendButton) {
         await sendButton.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
       } else {
@@ -2112,7 +2139,26 @@ async function runTurn(
       sendCount += 1;
       afterSend = true;
       if (!config.newChat && config.chatUrl) {
-        emitCancellationReceipt(normalizeConversationUrl(config.chatUrl));
+        const conversationUrl = normalizeConversationUrl(config.chatUrl);
+        transitionStateLightTurnObservation({
+          profileKey,
+          invocationId,
+          phase: 'sent_unharvested',
+          reason: 'send_observed_existing_chat',
+          sendCount,
+          sendWitness: 'numeric_send_count',
+          conversationUrl,
+        });
+        emitCancellationReceipt(conversationUrl);
+      } else {
+        transitionStateLightTurnObservation({
+          profileKey,
+          invocationId,
+          phase: 'sent_unbound',
+          reason: 'send_observed_fresh_chat',
+          sendCount,
+          sendWitness: 'numeric_send_count',
+        });
       }
       return null;
     };
@@ -2355,6 +2401,15 @@ async function runTurn(
             };
           }
           lastAttemptConversationUrl = conversationUrl;
+          transitionStateLightTurnObservation({
+            profileKey,
+            invocationId,
+            phase: 'sent_unharvested',
+            reason: 'fresh_conversation_url_bound',
+            sendCount,
+            sendWitness: 'numeric_send_count',
+            conversationUrl,
+          });
 
           if (verifyStateLightSendSlotOwnerFence(profileKey, invocationId) !== 'valid') {
             if (sendCount >= 1) {
@@ -2702,6 +2757,15 @@ async function runTurn(
       browser = recovered.browser;
       if (recovered.kind === 'failure') return recoveryFailureOutcome(recovered);
 
+      transitionStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        phase: 'sent_unharvested',
+        reason: 'recovered_conversation_url_bound',
+        sendCount,
+        sendWitness: 'numeric_send_count',
+        conversationUrl: recovered.conversationUrl,
+      });
       if (config.newChat && !ownedConversationUrl) {
         let claim: ReturnType<typeof tryClaimStateLightFreshConversation>;
         try {
@@ -2772,7 +2836,18 @@ async function runTurn(
       if (config.newChat && sendCount >= 1) {
         const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
         if (observedConversationUrl) {
-          if (!ownedConversationUrl) ownedConversationUrl = observedConversationUrl;
+          if (!ownedConversationUrl) {
+            transitionStateLightTurnObservation({
+              profileKey,
+              invocationId,
+              phase: 'sent_unharvested',
+              reason: 'fresh_conversation_url_observed',
+              sendCount,
+              sendWitness: 'numeric_send_count',
+              conversationUrl: observedConversationUrl,
+            });
+            ownedConversationUrl = observedConversationUrl;
+          }
           recoveryState.immutableConversationUrl = observedConversationUrl;
           await navigateToProjectConversationIfNeeded(
             page,
@@ -2954,6 +3029,20 @@ async function runTurn(
       const durableConversationUrl = targetChatUrl
         ?? ownedConversationUrl
         ?? pageConversationUrl(page);
+      if (durableConversationUrl && sendCount >= 1) {
+        const durableRecord = readStateLightTurnObservation(profileKey, invocationId);
+        if (!durableRecord.conversation_url) {
+          transitionStateLightTurnObservation({
+            profileKey,
+            invocationId,
+            phase: 'sent_unharvested',
+            reason: 'conversation_url_observed',
+            sendCount,
+            sendWitness: 'numeric_send_count',
+            conversationUrl: durableConversationUrl,
+          });
+        }
+      }
       if (
         durableConversationUrl
         && markerCardinality.matchingUserCarrierCount === 1
@@ -3309,6 +3398,14 @@ async function runTurn(
                 result: compactResult('recovery_required', 'conversation', 'direct_publication_receipt_invalid', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
               };
             }
+            // The observation-managed primary binding must survive before an
+            // auxiliary reviewer-source artifact can outlive this process.
+            bindPrimaryPublication({
+              profileKey,
+              invocationId,
+              target: destination.finalPath,
+              bytes: managerReply,
+            });
             const sourcePublication = publishStateLightReply(
               config.directPublication.reviewerSourceOutput,
               invocationId,
@@ -3325,11 +3422,17 @@ async function runTurn(
               };
             }
           }
-          const publication = publishStateLightReply(
-            destination.finalPath,
+          const publication = await finalizeStateLightPrimaryPublication({
+            profileKey,
             invocationId,
-            managerReply,
-          );
+            target: destination.finalPath,
+            bytes: managerReply,
+            publish: () => publishStateLightReply(
+              destination.finalPath,
+              invocationId,
+              managerReply,
+            ),
+          });
           if (publication.state !== 'committed_ok') {
             incident('output_publication_error', publication.cause ?? publication.state, 'return_local_error');
             const publicationState: TurnState = publication.state === 'conflict' ? 'output_conflict' : 'driver_error';
@@ -3583,6 +3686,35 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let journalWriteFailed = outcome.result.journal_write_failed === true;
   const incidents = [...outcome.result.incidents];
   const pageLost = browserOrPageDefinitelyLost(outcome.page, outcome.browser);
+
+  // A normal pre-send terminal may close prepared observation state. A
+  // dispatching record is deliberately left untouched: click/submit may have
+  // delivered even if the process did not increment its numeric counter.
+  if (
+    outcome.result.send_count === 0
+    && outcome.result.invocation_id.length > 0
+    && outcome.result.configured_profile_key !== 'profile-unresolved'
+  ) {
+    try {
+      const observation = readStateLightTurnObservation(
+        outcome.result.configured_profile_key,
+        outcome.result.invocation_id,
+      );
+      if (observation.phase === 'prepared') {
+        transitionStateLightTurnObservation({
+          profileKey: outcome.result.configured_profile_key,
+          invocationId: outcome.result.invocation_id,
+          phase: 'not_sent',
+          reason: 'terminal_pre_send',
+          sendCount: 0,
+          sendWitness: 'numeric_send_count',
+        });
+      }
+    } catch {
+      // Missing/malformed observation is itself fail-closed; do not manufacture
+      // not_sent or alter the transport result solely for cleanup bookkeeping.
+    }
+  }
 
   if (outcome.result.send_count >= 1 && outcome.result.state !== 'ok') {
     const stopIncident: BrowserIncident = {
