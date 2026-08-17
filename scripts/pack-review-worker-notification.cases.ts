@@ -476,11 +476,11 @@ describe('pack review worker notification admission (Issue #894)', () => {
       request: { message, idempotencyKey: deliveryKey, reviewRunId: runId },
     });
     expect(await notify()).toMatchObject({
-      state: 'delivered',
-      reason: 'runtime_dispatch_dispatched',
+      state: 'escalated',
+      reason: 'runtime_dispatch_submitted',
     });
     expect(await notify()).toMatchObject({
-      state: 'delivered',
+      state: 'escalated',
       reason: 'claim_duplicate_no_op',
     });
 
