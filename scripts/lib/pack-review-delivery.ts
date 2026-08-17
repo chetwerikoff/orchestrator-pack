@@ -736,7 +736,9 @@ export async function deliverPackReviewVerdict(
         const durableState: PackReviewDeliveryOutcome['state'] = submitted
           ? 'succeeded'
           : notified.state === 'pre_dispatch_failure'
-            ? 'failed'
+            ? notified.reason === 'worker_generation_mismatch'
+              ? 'escalated'
+              : 'failed'
             : 'escalated';
         recordChannelOutcome(
           'workerNotification',
