@@ -162,7 +162,7 @@ describe('smoke executor profiles', () => {
     ['complex', 'fixture-complex-model', 'fixture-complex-effort'],
   ] as const)('applies only the %s profile before spawn', (complexity, model, effort) => {
     const profile = resolveSmokeExecutorProfile(complexity, env);
-    expect(profile.command).toBe(`agent --model '${model}' --effort '${effort}'`);
+    expect(profile.command).toBe(`cursor-agent --model '${model}' --effort '${effort}'`);
     expect(profile.complexity).toBe(complexity);
   });
 
@@ -171,8 +171,8 @@ describe('smoke executor profiles', () => {
       ...env,
       PACK_EXECUTOR_SMOKE_COMPLEX_AGENT: 'cursor',
     });
-    expect(profile.agent).toBe('agent');
-    expect(profile.command).toBe("agent --model 'fixture-complex-model' --effort 'fixture-complex-effort'");
+    expect(profile.agent).toBe('cursor-agent');
+    expect(profile.command).toBe("cursor-agent --model 'fixture-complex-model' --effort 'fixture-complex-effort'");
   });
 
   it.each([
