@@ -11,22 +11,21 @@
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
-    "scripts/chatgpt-browser-turn/storage-common.ts",
-    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+    "scripts/chatgpt-browser-turn/storage-common.ts"
   ],
   "denylist": [
-    ".github/workflows/",
-    "credentials/",
-    "docs/issues_drafts/",
-    "packages/core/",
+    ".github/workflows/**",
+    "credentials/**",
+    "docs/issues_drafts/**",
+    "packages/core/**",
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/state.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json",
-    "secrets/",
-    "vendor/"
+    "secrets/**",
+    "vendor/**"
   ],
   "allowed_roots": [
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
@@ -38,9 +37,8 @@
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
-    "scripts/chatgpt-browser-turn/storage-common.ts",
-    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+    "scripts/chatgpt-browser-turn/storage-common.ts"
   ]
 }
