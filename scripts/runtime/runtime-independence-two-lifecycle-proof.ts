@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import { selectRuntimeAdapterFactory } from './registry.ts';
-import { executeRuntimeTaskLifecycle, type RuntimeTaskLifecycleResult } from './task-lifecycle.ts';
+import { executeRuntimeTaskLifecycle } from './task-lifecycle.ts';
 
 const LOADERS = ['orca'] as const;
 const IMPORTS = ['../orca-runtime/native.ts', '../orca-runtime/task-adapter.ts', './contracts.ts'] as const;
@@ -33,9 +33,9 @@ function rejectLegacyMutation(source: string): void {
 }
 
 function fixture(statePath: string, root: string): string {
-  return `#!${process.execPath}\nimport fs from'node:fs';import path from'node:path';import{createHash}from'node:crypto';
+  return `#!${process.execPath}\nimport fs from'node:fs';import path from'node:path';
 const P=${JSON.stringify({ statePath, root })},a=process.argv.slice(2).filter(x=>x!=='--json'),op=a.slice(0,2).join(' '),get=n=>{const i=a.indexOf(n);return i<0?'':String(a[i+1]??'')},S=fs.existsSync(P.statePath)?JSON.parse(fs.readFileSync(P.statePath,'utf8')):{n:0,t:{},ops:[],captures:[]},bad=Object.keys(process.env).filter(k=>k.startsWith('AO_')||k.startsWith('AGENT_ORCHESTRATOR_')),paths=(process.env.PATH??'').split(path.delimiter).filter(Boolean);S.captures.push({op,bad,paths});const save=()=>fs.writeFileSync(P.statePath,JSON.stringify(S)),out=x=>{save();process.stdout.write(JSON.stringify(x)+'\\n')};if(bad.length||paths.length!==1||paths[0]!==P.root){out({ok:false,error:{code:'fixture_environment_not_hermetic'}});process.exit(0)}S.ops.push(op);
-switch(op){case'worktree current':out({ok:true,result:{worktree:{path:P.root,head:'a'.repeat(40)}}});break;case'terminal create':{const h='term-'+(++S.n),g='generation-'+S.n,q={handle:h,incarnationId:g,title:get('--title'),worktreePath:P.root,status:'running',lines:['started:'+get('--command')],dispatches:0,closes:0,exists:true};S.t[h]=q;out({ok:true,result:{terminal:{handle:h,incarnationId:g,title:q.title}}});break}case'terminal list':out({ok:true,result:{terminals:Object.values(S.t).filter(x=>x.exists).map(({lines,dispatches,closes,exists,...x})=>x)}});break;case'terminal send':{const q=S.t[get('--terminal')],text=get('--text');if(!q||!q.exists)out({ok:false,error:{code:'terminal_not_found'}});else{q.dispatches++;q.lines.push(text);out({ok:true,result:{send:{accepted:true,submitWitness:{runtime:'orca',workerId:q.handle,workerGeneration:q.incarnationId,payloadSha256:createHash('sha256').update(text,'utf8').digest('hex'),submitted:true}}}})}break}case'terminal read':{const h=get('--terminal'),q=S.t[h];if(!q||!q.exists)out({ok:false,error:{code:'terminal_not_found'}});else out({ok:true,result:{terminal:{handle:h,status:q.status,tail:q.lines,nextCursor:String(q.lines.length),latestCursor:String(q.lines.length)}}});break}case'terminal wait':{const h=get('--terminal'),q=S.t[h];out(q&&q.exists?{ok:true,result:{wait:{handle:h,condition:'tui-idle',satisfied:true,status:'running'}}}:{ok:false,error:{code:'terminal_not_found'}});break}case'terminal close':{const h=get('--terminal'),q=S.t[h];if(!q||!q.exists)out({ok:false,error:{code:'terminal_not_found'}});else{q.closes++;q.exists=false;q.status='exited';out({ok:true,result:{close:{handle:h,closed:true}}})}break}default:out({ok:false,error:{code:'unexpected_operation',message:op}})}\n`;
+switch(op){case'worktree current':out({ok:true,result:{worktree:{path:P.root,head:'a'.repeat(40)}}});break;case'terminal create':{const h='term-'+(++S.n),g='generation-'+S.n,q={handle:h,incarnationId:g,title:get('--title'),worktreePath:P.root,status:'running',lines:['started:'+get('--command')],dispatches:0,closes:0,exists:true};S.t[h]=q;out({ok:true,result:{terminal:{handle:h,incarnationId:g,title:q.title}}});break}case'terminal list':out({ok:true,result:{terminals:Object.values(S.t).filter(x=>x.exists).map(({lines,dispatches,closes,exists,...x})=>x)}});break;case'terminal send':{const q=S.t[get('--terminal')],text=get('--text');if(!q||!q.exists)out({ok:false,error:{code:'terminal_not_found'}});else{q.dispatches++;q.lines.push(text);out({ok:true,result:{send:{accepted:true}}})}break}case'terminal read':{const h=get('--terminal'),q=S.t[h];if(!q||!q.exists)out({ok:false,error:{code:'terminal_not_found'}});else out({ok:true,result:{terminal:{handle:h,status:q.status,tail:q.lines,nextCursor:String(q.lines.length),latestCursor:String(q.lines.length)}}});break}case'terminal wait':{const h=get('--terminal'),q=S.t[h];out(q&&q.exists?{ok:true,result:{wait:{handle:h,condition:'tui-idle',satisfied:true,status:'running'}}}:{ok:false,error:{code:'terminal_not_found'}});break}case'terminal close':{const h=get('--terminal'),q=S.t[h];if(!q||!q.exists)out({ok:false,error:{code:'terminal_not_found'}});else{q.closes++;q.exists=false;q.status='exited';out({ok:true,result:{close:{handle:h,closed:true}}})}break}default:out({ok:false,error:{code:'unexpected_operation',message:op}})}\n`;
 }
 
 function childEnv(root: string): NodeJS.ProcessEnv {
@@ -44,14 +44,25 @@ function childEnv(root: string): NodeJS.ProcessEnv {
   ]));
 }
 
-function ok(result: ReturnType<typeof executeRuntimeTaskLifecycle>, label: string): RuntimeTaskLifecycleResult {
-  if (!('status' in result) || result.status !== 'ok') throw new Error(`${label}:${JSON.stringify(result)}`);
-  return result;
+function lifecycle(adapter: OrcaTaskRuntimeAdapter, root: string, title: string, prompt: string) {
+  return executeRuntimeTaskLifecycle({
+    adapter,
+    title,
+    command: 'cursor-agent',
+    prompt,
+    observationWindowMs: 1_000,
+    options: { cwd: root, timeoutMs: 5_000 },
+    acquireClaim: () => ({ ok: true }),
+  });
 }
 
-function lifecycle(adapter: OrcaTaskRuntimeAdapter, root: string, title: string, prompt: string): RuntimeTaskLifecycleResult {
-  return ok(executeRuntimeTaskLifecycle({ adapter, title, command: 'cursor-agent', prompt, observationWindowMs: 1_000,
-    options: { cwd: root, timeoutMs: 5_000 }, acquireClaim: () => ({ ok: true }) }), title);
+function requireUnknownDispatch(result: ReturnType<typeof lifecycle>, label: string) {
+  if (!('stage' in result) || result.stage !== 'dispatch') {
+    throw new Error(`${label}:expected_dispatch_boundary:${JSON.stringify(result)}`);
+  }
+  assert.equal(result.result.status, 'dispatch_unknown');
+  assert.equal(result.result.reason, 'submit_witness_unavailable');
+  return result;
 }
 
 async function main(): Promise<void> {
@@ -92,18 +103,24 @@ async function main(): Promise<void> {
       cwd: root, timeoutMs: 5_000, transport: { executable, env, runner },
     });
     assert.ok(selected instanceof OrcaTaskRuntimeAdapter);
-    const first = lifecycle(selected, root, 'issue-1250-lifecycle-a', 'implement task A');
-    const second = lifecycle(selected, root, 'issue-1250-lifecycle-b', 'implement task B');
+    const first = requireUnknownDispatch(
+      lifecycle(selected, root, 'issue-1250-lifecycle-a', 'implement task A'),
+      'issue-1250-lifecycle-a',
+    );
+    const second = requireUnknownDispatch(
+      lifecycle(selected, root, 'issue-1250-lifecycle-b', 'implement task B'),
+      'issue-1250-lifecycle-b',
+    );
     assert.notDeepEqual(first.worker.identity, second.worker.identity);
-    assert.ok(first.lines.includes('implement task A') && second.lines.includes('implement task B'));
-    assert.equal(first.liveness, 'idle'); assert.equal(second.liveness, 'idle');
     const state = JSON.parse(readFileSync(statePath, 'utf8')) as { t: Record<string, { dispatches: number; closes: number; exists: boolean }>; ops: string[]; captures: Array<{ bad: string[]; paths: string[] }> };
     const terminals = Object.values(state.t);
     assert.equal(terminals.length, 2);
-    assert.ok(terminals.every((value) => value.dispatches === 1 && value.closes === 1 && !value.exists));
+    assert.ok(terminals.every((value) => value.dispatches === 1 && value.closes === 0 && value.exists));
     assert.equal(state.ops.filter((value) => value === 'terminal create').length, 2);
     assert.equal(state.ops.filter((value) => value === 'terminal send').length, 2);
-    assert.equal(state.ops.filter((value) => value === 'terminal close').length, 2);
+    assert.equal(state.ops.filter((value) => value === 'terminal close').length, 0);
+    assert.equal(state.ops.filter((value) => value === 'terminal read').length, 0);
+    assert.equal(state.ops.filter((value) => value === 'terminal wait').length, 0);
     assert.ok(state.captures.every((value) => value.bad.length === 0 && value.paths.length === 1 && value.paths[0] === root));
     process.stdout.write(`${JSON.stringify({ status: 'pass', selectedAdapter: selected.constructor.name, witness, operations: state.ops })}\n`);
   } finally { rmSync(root, { recursive: true, force: true }); }
