@@ -94,6 +94,11 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/runtime/single-instance-lease.test.ts': 120,
   'scripts/runtime/task-lifecycle.test.ts': 120,
   'scripts/runtime/worker-recovery.test.ts': 120,
+  // Issue #1415 adds deterministic light contract suites for the Node verifier
+  // and exact-head port-stage evidence. Keep the bounded topology producer stable
+  // until runtime-history harvest records measured weights for these new files.
+  'scripts/port-stage-evidence/producer.test.ts': 120,
+  'scripts/verify.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains

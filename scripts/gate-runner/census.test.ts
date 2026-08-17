@@ -7,6 +7,7 @@ import {
   validateCensusSchema,
   type GateCensus,
 } from './census.ts';
+import { evaluateCurrentCensus } from './current-census.ts';
 import { registeredGateIds } from './runner.ts';
 import { captureSourceSnapshot, memorySnapshot } from './source-snapshot.ts';
 
@@ -15,14 +16,13 @@ const repoRoot = resolve(import.meta.dirname, '../..');
 function clone(census: GateCensus): GateCensus {
   return JSON.parse(JSON.stringify(census)) as GateCensus;
 }
-
 function currentFiles(): Record<string, string> {
   return Object.fromEntries(captureSourceSnapshot(repoRoot).files);
 }
 
 describe('terminal gate population census after Issue #906', () => {
-  it('reconciles the real cut tree', () => {
-    const result = evaluateCensus(loadCensus(repoRoot), captureSourceSnapshot(repoRoot), registeredGateIds);
+  it('reconciles the real cut tree through the current Node migration authority', () => {
+    const result = evaluateCurrentCensus(loadCensus(repoRoot), captureSourceSnapshot(repoRoot), registeredGateIds);
     expect(result.status, result.details?.join('\n')).toBe('PASS');
   });
 
@@ -78,7 +78,7 @@ describe('terminal gate population census after Issue #906', () => {
     expect(row).toBeDefined();
     const files = currentFiles();
     delete files[row!.sourcePath];
-    const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
+    const result = evaluateCurrentCensus(census, memorySnapshot(files), registeredGateIds);
     expect(result.details?.join('\n')).toContain(`${row!.id}: retained legacy gate was dropped`);
   });
 
@@ -88,35 +88,59 @@ describe('terminal gate population census after Issue #906', () => {
     expect(row).toBeDefined();
     const files = currentFiles();
     files[row!.sourcePath] = '# restored legacy gate\n';
-    const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
+    const result = evaluateCurrentCensus(census, memorySnapshot(files), registeredGateIds);
     expect(result.details?.join('\n')).toContain(`${row!.id}: migrated/retired PowerShell gate still exists`);
   });
 
-  it('fails when a retained verify member disappears', () => {
-    const census = loadCensus(repoRoot);
-    const row = census.entries.find((entry) => entry.classification === 'kept-in-pr1' && entry.sourceKind === 'verify-script-member');
-    expect(row).toBeDefined();
+  it('fails when a retained verify behavior loses its executable Node wiring', () => {
     const files = currentFiles();
-    files['scripts/verify.ps1'] = (files['scripts/verify.ps1'] ?? '').replaceAll(row!.marker, 'removed-marker');
-    const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
-    expect(result.details?.join('\n')).toContain(`${row!.id}: retained verify invocation was dropped`);
+    files['scripts/verify.ts'] = (files['scripts/verify.ts'] ?? '').replace(
+      'const ports = await runNodeVerificationPorts(repoRoot);',
+      'const ports = { lines: [], failures: [] };',
+    );
+    const result = evaluateCurrentCensus(loadCensus(repoRoot), memorySnapshot(files), registeredGateIds);
+    expect(result.details?.join('\n')).toContain('verify-script:scripts/check-gh-inventory-static.ps1: retained verify invocation was dropped');
+  });
+
+  it('fails when the reusable migration loses its executable top-level wiring', () => {
+    const files = currentFiles();
+    files['scripts/verify.ts'] = (files['scripts/verify.ts'] ?? '').replace(
+      'const reusable = await runReusableGuard(repoRoot);',
+      'const reusable = { lines: [], failures: [], warnings: [] };',
+    );
+    const result = evaluateCurrentCensus(loadCensus(repoRoot), memorySnapshot(files), registeredGateIds);
+    expect(result.details?.join('\n')).toContain('scripts/check-reusable.ps1 behavior surface drifted without a reviewed current-source hash');
+  });
+
+  it('fails when top-level verification filters the gate runner and would skip gate-census', () => {
+    const files = currentFiles();
+    files['scripts/verify.ts'] = (files['scripts/verify.ts'] ?? '').replace(
+      'const gateReport = runGateRunner(repoRoot);',
+      'const gateReport = runGateRunner(repoRoot, gateRegistrations.map((registration) => registration.gateId));',
+    );
+    const result = evaluateCurrentCensus(loadCensus(repoRoot), memorySnapshot(files), registeredGateIds);
+    expect(result.details?.join('\n')).toContain('verify.ps1 must contain exactly one gate-runner dispatch marker; found 0');
   });
 
   it('fails when a new check script bypasses the frozen population', () => {
-    const census = loadCensus(repoRoot);
     const files = currentFiles();
     files['scripts/check-new-hidden-gate.ps1'] = '# new\n';
-    expect(evaluateCensus(census, memorySnapshot(files), registeredGateIds).details?.join('\n')).toContain('unaccounted check script');
+    expect(evaluateCurrentCensus(loadCensus(repoRoot), memorySnapshot(files), registeredGateIds).details?.join('\n')).toContain('unaccounted check script');
   });
 
-  it('keeps the real verify aggregator discoverable', () => {
+  it('keeps the real Node verify aggregator discoverable through the PowerShell launcher', () => {
     const verify = readFileSync(resolve(repoRoot, 'scripts/verify.ps1'), 'utf8');
-    expect(verify).toContain('scripts/gate-runner/runner.ts');
+    expect(verify).toContain('verify.ts');
+    expect(verify).not.toContain('scripts/gate-runner/runner.ts');
   });
 
   it('fails when a ported gate id is not registered', () => {
-    const result = evaluateCensus(loadCensus(repoRoot), captureSourceSnapshot(repoRoot), new Set());
+    const result = evaluateCurrentCensus(loadCensus(repoRoot), captureSourceSnapshot(repoRoot), new Set());
     expect(result.status).toBe('FAIL');
     expect(result.details?.join('\n')).toContain('registered gate missing');
+  });
+
+  it('keeps historical evaluator immutable for pre-Node fixtures', () => {
+    expect(evaluateCensus(loadCensus(repoRoot), captureSourceSnapshot(repoRoot), registeredGateIds).status).toBe('FAIL');
   });
 });
