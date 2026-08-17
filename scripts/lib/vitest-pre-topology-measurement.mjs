@@ -253,7 +253,7 @@ function measureFile(repoRoot, file, root, index, timeoutMs) {
         const entry = parsed?.files?.find((candidate) => String(candidate.file ?? '').replace(/\\/g, '/') === file);
         const durationMs = Number(entry?.durationMs);
         if (!entry || !Number.isFinite(durationMs) || durationMs < 0) {
-          return reject(new Error(`pre-topology measurement report omitted: ${file}`);
+          return reject(new Error(`pre-topology measurement report omitted: ${file}`));
         }
         resolve([file, Math.max(0.001, durationMs / 1000)]);
       } catch (error) {
