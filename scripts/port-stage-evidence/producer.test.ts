@@ -1,7 +1,9 @@
+import { readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runProcess } from '#opk-kernel/subprocess';
-import { ARTIFACT_PATHS, ARTIFACT_ROLES, producePortStageEvidence, verifyEvidenceIntegrity } from './producer.ts';
+import { generateCurrentHeadProjection, serializeCurrentHeadProjection } from '../gate-runner/census-generator.ts';
+import { ARTIFACT_PATHS, ARTIFACT_ROLES, SOURCE_KINDS, producePortStageEvidence, verifyEvidenceIntegrity, writePortStageEvidence } from './producer.ts';
 import { createScriptTargetResolver } from './target-resolver.ts';
 import { jsonStringValueRanges, scanPowerShellTokens, tsStringRanges, yamlScalarRanges } from './tokens.ts';
 
@@ -100,14 +102,41 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     expect(resolver.resolve('scripts/work/caller.ts', '../../../scripts/tools/check.ps1')).toBeUndefined();
   });
 
-  it('produces and integrity-verifies baseline facts from the exact PR-head candidate Git tree', async () => {
+  it('produces canonical current-head census and emits an untracked baseline for the exact PR-head candidate', async () => {
     const measuredHead = await exactCandidateHead();
+    const projection = await generateCurrentHeadProjection(repoRoot, measuredHead);
+    const canonical = serializeCurrentHeadProjection(projection);
+    const cli = await runProcess({
+      command: 'node',
+      args: ['--experimental-strip-types', 'scripts/gate-runner/census-generator.ts', '--current-head', measuredHead],
+      cwd: repoRoot,
+      inheritParentEnv: true,
+      allowEmptyStdout: false,
+    });
+    expect(cli.ok, cli.stderr || cli.error || cli.outcome).toBe(true);
+    expect(cli.stderr).toBe('');
+    expect(cli.stdout).toBe(canonical.bytes);
+    expect(cli.stdout.endsWith('\n')).toBe(true);
+    expect(cli.stdout.endsWith('\n\n')).toBe(false);
+
     const evidence = await producePortStageEvidence({ repoRoot, artifactRole: 'baseline', measuredHead, producerRevision: measuredHead });
     expect(evidence.measuredHead).toBe(measuredHead);
     expect(evidence.producerRevision).toBe(measuredHead);
     expect(evidence.gateCensus.populationCount).toBeGreaterThan(0);
-    expect(evidence.gateCensus.populationDigest).toMatch(/^[0-9a-f]{64}$/u);
-    expect(evidence.gateCensus.outputDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(evidence.gateCensus.populationDigest).toBe(projection.populationDigest);
+    expect(evidence.gateCensus.outputDigest).toBe(canonical.outputDigest);
     expect(() => verifyEvidenceIntegrity(evidence)).not.toThrow();
+    for (const sourceKind of SOURCE_KINDS) expect(evidence.entries.some((entry) => entry.sourceKind === sourceKind), sourceKind).toBe(true);
+
+    const outputPath = await writePortStageEvidence(repoRoot, evidence);
+    try {
+      expect(outputPath).toBe(ARTIFACT_PATHS.baseline);
+      const written = JSON.parse(readFileSync(resolve(repoRoot, outputPath), 'utf8'));
+      expect(written.integrityDigest).toBe(evidence.integrityDigest);
+      const tracked = await runProcess({ command: 'git', args: ['ls-files', '--error-unmatch', outputPath], cwd: repoRoot, inheritParentEnv: true, allowEmptyStdout: true });
+      expect(tracked.ok).toBe(false);
+    } finally {
+      rmSync(resolve(repoRoot, outputPath), { force: true });
+    }
   });
 });
