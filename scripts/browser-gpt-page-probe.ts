@@ -3,6 +3,7 @@ import { constants as fsConstants } from 'node:fs';
 import { lstat, open, unlink, type FileHandle } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isSupportedChatGptConversationUrl } from './chatgpt-browser-turn/state-light-cancellation.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
   finalizeStateLightPrimaryPublication,
@@ -1554,7 +1555,7 @@ async function runHarvest(args: ParsedHarvestArgs, deps: ProbeDependencies): Pro
     window.assistants.length,
   );
 
-  if (record.conversation_url === null) {
+  if (record.conversation_url === null && isSupportedChatGptConversationUrl(resolved.snapshot.page_url)) {
     transitionStateLightTurnObservation({
       profileKey,
       invocationId: args.invocationId,
@@ -1624,6 +1625,7 @@ async function runHarvest(args: ParsedHarvestArgs, deps: ProbeDependencies): Pro
         expected_sha256: finalized.expected_sha256,
         ...(finalized.observed_byte_length !== undefined ? { observed_byte_length: finalized.observed_byte_length } : {}),
         ...(finalized.observed_sha256 !== undefined ? { observed_sha256: finalized.observed_sha256 } : {}),
+        ...(finalized.retirement_cleanup_required ? { retirement_cleanup_required: true } : {}),
       },
     );
   }
@@ -1645,6 +1647,7 @@ async function runHarvest(args: ParsedHarvestArgs, deps: ProbeDependencies): Pro
     byte_length: bytes.byteLength,
     sha256: hashBytes(bytes),
     converged: finalized.converged === true,
+    ...(finalized.retirement_cleanup_required ? { retirement_cleanup_required: true } : {}),
     workflow_authority: 'none',
   };
 }
