@@ -103,6 +103,7 @@ worker-smoke-run run \
   --issue <N> \
   --pr <PR> \
   --head-sha <40-hex> \
+  --smoke-complexity <routine-or-complex> \
   --smoke-actor worker-owned \
   --issue-body-file /tmp/issue-body.md \
   --repo-root "$PWD" \
@@ -110,7 +111,22 @@ worker-smoke-run run \
 ```
 
 The post-review actor uses the same bounded launcher and exact target binding,
-but must opt in explicitly with `--smoke-actor independent`. The launcher
+with `--smoke-complexity` set to exactly `routine` or `complex`, but must opt
+in explicitly with `--smoke-actor independent`:
+
+```bash
+worker-smoke-run run \
+  --issue <N> \
+  --pr <PR> \
+  --head-sha <40-hex> \
+  --smoke-complexity <routine-or-complex> \
+  --smoke-actor independent \
+  --issue-body-file /tmp/issue-body.md \
+  --repo-root "$PWD" \
+  --cwd "$PWD"
+```
+
+The launcher
 admits that actor only after the existing pack-review authority records settled
 obligations; it records a started independent attempt before child creation and
 binds the final PASS to that attempt's exact head.

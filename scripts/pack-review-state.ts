@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { resolveSmokeRequirement } from './draft-discipline.mjs';
 
 export const PACK_REVIEW_AUTHORITY_SCHEMA_VERSION = 1;
 export const PACK_REVIEW_TERMINAL_CONTRACT_VERSION = 2;
@@ -149,6 +150,7 @@ export interface PackReviewAuthorityDocument {
     targetSha: string;
     reviewVerdict: 'clean' | 'findings';
     terminalSource: PackReviewTerminalSource;
+    reviewStatus?: string;
   };
   cycle: PackReviewCycle | null;
   evidence?: PackReviewEvidenceSelection;
@@ -577,12 +579,14 @@ export function observePackReviewHead(input: {
       current.triage = undefined;
       current.publication = undefined;
       if (current.smokeOrdering) {
+        const independent = current.smokeOrdering.independent;
         current.smokeOrdering = {
           ...current.smokeOrdering,
           workerOwned: undefined,
-          ...(current.smokeOrdering.independent
-            ? { independent: { ...current.smokeOrdering.independent, headSha, status: 'failed' } }
+          ...(independent
+            ? { independent: { ...independent, headSha, status: 'failed' } }
             : {}),
+          ...(independent?.startedEver ? {} : { reviewSettledHeadSha: undefined }),
         };
       }
       if (current.cycle?.state === 'closed') {
@@ -754,6 +758,7 @@ export function commitPackReviewTerminal(input: {
         targetSha: terminal.targetSha,
         reviewVerdict: terminal.reviewVerdict,
         terminalSource: terminal.terminalSource,
+        reviewStatus: input.status,
       };
       const cycle = current.cycle;
       if (!cycle) return current;
@@ -780,9 +785,8 @@ export function commitPackReviewTerminal(input: {
 }
 
 export function smokeOrderingRequired(issueBody: string | undefined): boolean {
-  const body = String(issueBody ?? '');
-  return body.includes('```smoke-test-plan')
-    && !/not-applicable\s*:\s*true/i.test(body);
+  const resolved = resolveSmokeRequirement(String(issueBody ?? ''));
+  return resolved.requirement !== 'not-applicable' && resolved.requirement !== 'legacy-exempt';
 }
 
 export function assertPackReviewSmokeAdmission(input: {
@@ -817,10 +821,10 @@ export function assertIndependentSmokeAdmission(input: {
     throw new PackReviewAuthorityError('smoke_ordering_head_mismatch', `expected ${input.authority.currentHeadSha}, got ${headSha}`);
   }
   const ordering = input.authority.smokeOrdering;
-  if (!ordering?.reviewSettledHeadSha && !ordering?.independent?.startedEver) {
+  if (!ordering?.independent?.startedEver && ordering?.reviewSettledHeadSha !== headSha) {
     throw new PackReviewAuthorityError(
       'smoke_ordering_review_unsettled',
-      'independent smoke requires settled pack-review obligations',
+      'independent smoke requires settled pack-review obligations for the exact head',
     );
   }
 }
@@ -973,6 +977,16 @@ export function commitPackReviewTriage(input: {
   });
 }
 
+function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boolean {
+  if (authority.cycle?.state === 'closed') return true;
+  const reviewStatus = authority.terminal?.reviewStatus;
+  if (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented') return true;
+  return (authority.cycle?.state === 'at_cap_open_findings'
+      || authority.cycle?.state === 'at_cap_continuation_required')
+    && authority.triage?.source === 'architect'
+    && authority.triage.verdict === 'DEFER';
+}
+
 export function recordPackReviewPublication(input: {
   prNumber: number;
   expectedTransitionSeq: number;
@@ -991,7 +1005,7 @@ export function recordPackReviewPublication(input: {
         throw new PackReviewAuthorityError('publication_head_stale', input.publication.headSha);
       }
       current.publication = { ...input.publication };
-      if (input.publication.status === 'succeeded' && current.cycle?.state === 'closed') {
+      if (input.publication.status === 'succeeded' && reviewObligationsSettled(current)) {
         current.smokeOrdering = {
           ...current.smokeOrdering,
           reviewSettledHeadSha: current.currentHeadSha,

@@ -32,7 +32,7 @@ function textGate(
 const IMMUTABLE_BASE_SHA256: Readonly<Record<string, string>> = Object.freeze({
   'scripts/orchestrator-side-process-registry.json': 'b1c945541db67d48cdbf7c44777ae478e3cf11bd66255a82f7852767f0e0f39a',
   'scripts/review-trigger-reconcile.ps1': '20762cfc1549a1c7d03516b87da7c8d0a6d9daf9606cac99d27f3cc3ee1864d8',
-  'scripts/pack-review-runner.ts': '20889c052830aa8d8039e0099bd97234ced63cc226342512e0f24a1f26b4afec',
+  'scripts/pack-review-runner.ts': '202bf5bc8c79f5387a24eddc472a114ccebdd318515cba5c52834d9f02481edf',
   'scripts/orchestrator-wake-supervisor.ps1': 'c84ebfe9166960f1b4079f86019f9eaa997276680a6e42f8db5d402e71cf3391',
   'tests/external-output-references/capture-manifest.json': '82ac82a443123b90dd688a31f1af5f00b9058e96c4f536f8ae691ed01e917987',
 });

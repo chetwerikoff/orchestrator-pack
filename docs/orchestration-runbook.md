@@ -74,7 +74,7 @@ worker-owned smoke (current SHA)
 
 pack-review (settled)
   |-- eligible --> independent smoke
-  |-- finding --> fix (new SHA) --> independent smoke that SHA
+  |-- finding --> fix (new SHA) --> worker-owned smoke that SHA --> next pack-review cycle
 ```
 
 Old-head smoke proofs do not count for a new head. A review finding requires

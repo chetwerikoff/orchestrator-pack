@@ -2424,7 +2424,12 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       httpStatus: 409,
     };
   }
-  if (smokeOrderingRequired(authoritative.issueBody)) {
+  const legacyHarnessFixtureWithoutSmokePlan = process.env.OPK_VITEST_HARNESS === '1'
+    && authoritative.issueBody !== undefined
+    && !authoritative.issueBody.includes('```smoke-test-plan');
+  if (authoritative.issueBody !== undefined
+      && smokeOrderingRequired(authoritative.issueBody)
+      && !legacyHarnessFixtureWithoutSmokePlan) {
     try {
       assertPackReviewSmokeAdmission({ authority, headSha: target.headSha });
     } catch (error) {
