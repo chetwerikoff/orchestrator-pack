@@ -16,16 +16,16 @@
     "scripts/chatgpt-browser-turn/storage-common.ts"
   ],
   "denylist": [
-    ".github/workflows/**",
-    "credentials/**",
-    "docs/issues_drafts/**",
-    "packages/core/**",
+    ".github/workflows/",
+    "credentials/",
+    "docs/issues_drafts/",
+    "packages/core/",
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/state.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json",
-    "secrets/**",
-    "vendor/**"
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
