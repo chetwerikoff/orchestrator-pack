@@ -55,7 +55,17 @@ read live Issue/rules
 -> worker_done
 ```
 
-Independent review and smoke happen after this bounded handoff. A later finding opens a fresh correction Dispatch.
+Independent smoke happens after this bounded handoff. Pack-review is not the next step after smoke.
+
+After a current-head smoke returns a gap or fail, the next legal coordinator step is a worker fix that produces a new SHA, then a fresh smoke of that exact SHA:
+
+```text
+smoke (current SHA)
+  |-- complete --> pack-review eligible
+  |-- gap/fail --> fix (new SHA) --> smoke that SHA
+```
+
+Old-head smoke proofs do not count for the new head. Pack-review starts only after current-head smoke is complete. Independent review after this handoff does not authorize pack-review while smoke is still incomplete. Exact folding and SHA-binding stay in `docs/worker-smoke-testing.md`. A later finding opens a fresh correction Dispatch.
 
 ### Reconciler
 
