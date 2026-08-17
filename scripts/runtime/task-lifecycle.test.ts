@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -5,6 +6,24 @@ import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import { runOrcaJson, type OrcaJsonResponse } from '../orca-runtime/native.ts';
 import { DeterministicRuntimeAdapter } from './test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from './task-lifecycle.ts';
+
+function exactSubmitResult(handle: string, generation: string, text: string): OrcaJsonResponse {
+  return {
+    ok: true,
+    result: {
+      send: {
+        accepted: true,
+        submitWitness: {
+          runtime: 'orca',
+          workerId: handle,
+          workerGeneration: generation,
+          payloadSha256: createHash('sha256').update(text, 'utf8').digest('hex'),
+          submitted: true,
+        },
+      },
+    },
+  };
+}
 
 function fakeOrcaTransport() {
   const handle = 'term-1248';
@@ -38,8 +57,9 @@ function fakeOrcaTransport() {
         };
       case 'terminal send': {
         const textIndex = args.indexOf('--text');
-        if (textIndex >= 0) lines.push(String(args[textIndex + 1] ?? ''));
-        return { ok: true, result: { send: { accepted: true } } };
+        const text = textIndex >= 0 ? String(args[textIndex + 1] ?? '') : '';
+        if (textIndex >= 0) lines.push(text);
+        return exactSubmitResult(handle, generation, text);
       }
       case 'terminal read':
         return {
@@ -85,6 +105,7 @@ function hermeticOrcaFixture(
   expectedPath: string,
 ): string {
   return `#!${process.execPath}
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter } from 'node:path';
 
@@ -173,8 +194,23 @@ switch (operation) {
     break;
   case 'terminal send': {
     const textIndex = args.indexOf('--text');
-    if (textIndex >= 0) state.lines.push(String(args[textIndex + 1] ?? ''));
-    respond({ ok: true, result: { send: { accepted: true } } });
+    const text = textIndex >= 0 ? String(args[textIndex + 1] ?? '') : '';
+    if (textIndex >= 0) state.lines.push(text);
+    respond({
+      ok: true,
+      result: {
+        send: {
+          accepted: true,
+          submitWitness: {
+            runtime: 'orca',
+            workerId: state.handle,
+            workerGeneration: state.generation,
+            payloadSha256: createHash('sha256').update(text, 'utf8').digest('hex'),
+            submitted: true,
+          },
+        },
+      },
+    });
     break;
   }
   case 'terminal read':
@@ -225,7 +261,7 @@ describe('direct runtime-neutral task caller', () => {
     expect(result.lines.join('\n')).toContain('implement the issue');
   });
 
-  it('runs unchanged with the Orca adapter', () => {
+  it('runs unchanged with the Orca adapter when exact submit evidence is present', () => {
     const runJson = fakeOrcaTransport();
     const result = exercise(new OrcaTaskRuntimeAdapter({ runJson: runJson as never }));
     expect(result).toMatchObject({ status: 'ok' });
