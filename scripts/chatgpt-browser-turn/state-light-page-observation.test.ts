@@ -605,3 +605,111 @@ describe('issue 1168 source tooling', () => {
     await expect(captureTooManyRequestsSource(ambiguousPage)).rejects.toThrow('capture_ambiguous_visible_match');
   });
 });
+
+describe('Issue #1430 retirement cleanup visibility', () => {
+  it('keeps committed primary success while surfacing mutation-retirement cleanup failure', async () => {
+    const { randomUUID } = await import('node:crypto');
+    const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const {
+      admitStateLightTurnObservation,
+      finalizeStateLightPrimaryPublication,
+      observationRecordKey,
+      readStateLightTurnObservation,
+      transitionStateLightTurnObservation,
+    } = await import('./state-light-turn-observation.ts');
+    const { profileDirs } = await import('./storage-common.ts');
+
+    const root = mkdtempSync(join(tmpdir(), 'opk-1430-retirement-'));
+    const priorStateDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'state');
+    const profileKey = 'retirement-profile';
+    const invocationId = randomUUID();
+    const retirementMarker = `OPKTURNV1${'44'.repeat(16)}`;
+    const conversationUrl = 'https://chatgpt.com/c/11111111-1111-4111-8111-111111111111';
+    const output = join(root, 'reply.txt');
+    const reply = 'RETIREMENT FINAL';
+
+    try {
+      admitStateLightTurnObservation({ profileKey, invocationId, marker: retirementMarker });
+      transitionStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        phase: 'dispatching',
+        reason: 'retirement_fault_dispatch_boundary',
+      });
+      transitionStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        phase: 'sent_unharvested',
+        reason: 'retirement_fault_send',
+        sendCount: 1,
+        sendWitness: 'numeric_send_count',
+        conversationUrl,
+      });
+
+      const mutationSlot = join(
+        profileDirs(profileKey).locks,
+        `state-light-turn-observation-${observationRecordKey(invocationId)}.slot`,
+      );
+      const result = await finalizeStateLightPrimaryPublication({
+        profileKey,
+        invocationId,
+        target: output,
+        bytes: reply,
+        publish: async () => {
+          writeFileSync(output, reply, { flag: 'wx' });
+          writeFileSync(join(mutationSlot, 'retirement-blocker'), 'block');
+          return {
+            state: 'committed_ok',
+            output_bytes: Buffer.byteLength(reply, 'utf8'),
+            output_sha256: (await import('node:crypto')).createHash('sha256').update(reply).digest('hex'),
+          };
+        },
+      });
+
+      expect(result).toMatchObject({
+        state: 'committed_ok',
+        retirement_cleanup_required: true,
+        output_bytes: Buffer.byteLength(reply, 'utf8'),
+      });
+      expect(readFileSync(output, 'utf8')).toBe(reply);
+      expect(readStateLightTurnObservation(profileKey, invocationId).phase).toBe('harvested');
+    } finally {
+      if (priorStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = priorStateDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps retirement_cleanup_required in the public normal-turn final result', async () => {
+    const { randomUUID } = await import('node:crypto');
+    const { __testFinalizeTurn, type TurnRunOutcome } = await import('./state-light-turn.ts');
+    const invocationId = randomUUID();
+    const outcome: TurnRunOutcome = {
+      result: {
+        schema: 'turn-result/v1',
+        state: 'ok',
+        scope: 'none',
+        cause: 'completed_page_only',
+        invocation_id: invocationId,
+        configured_profile_key: 'profile-test',
+        send_count: 1,
+        poll_count: 2,
+        goto_count: 0,
+        new_chat_click_count: 0,
+        navigation_count: 0,
+        incidents: [],
+        retirement_cleanup_required: true,
+      },
+    };
+
+    await expect(__testFinalizeTurn(outcome)).resolves.toMatchObject({
+      state: 'ok',
+      invocation_id: invocationId,
+      retirement_cleanup_required: true,
+      cleanup: 'skipped',
+    });
+  });
+});
