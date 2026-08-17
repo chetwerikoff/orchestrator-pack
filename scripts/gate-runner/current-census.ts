@@ -1,18 +1,7 @@
 import { failGate, passGate, type GateResult } from './contracts.ts';
 import { evaluateCensus, type GateCensus } from './census.ts';
+import { NODE_CENSUS_PORT_TAGS } from './node-verifier-ports.ts';
 import type { SourceSnapshot } from './source-snapshot.ts';
-
-const REUSABLE_PORT_TAGS = [
-  'check-reusable:allow-no-git',
-  'check-reusable:allowed-path-patterns',
-  'check-reusable:allowed-root-patterns',
-  'check-reusable:exception-patterns',
-  'check-reusable:forbidden-patterns',
-  'check-reusable:git-command-presence',
-  'check-reusable:tracked-file-enumeration',
-  'check-reusable:violation-aggregation',
-  'check-reusable:worktree-detection',
-] as const;
 
 function nodePortSource(snapshot: SourceSnapshot): string {
   return snapshot.files.get('scripts/gate-runner/node-verifier-ports.ts') ?? '';
@@ -40,7 +29,8 @@ function isAdmittedNodeMigrationFailure(detail: string, snapshot: SourceSnapshot
   const verifyTag = legacyVerifyFailurePortTag(detail);
   if (verifyTag) return thinNodeLauncher(snapshot) && hasPortTag(snapshot, verifyTag);
   if (detail === 'scripts/check-reusable.ps1 behavior surface drifted without a reviewed current-source hash') {
-    return thinNodeLauncher(snapshot) && REUSABLE_PORT_TAGS.every((tag) => hasPortTag(snapshot, tag));
+    return thinNodeLauncher(snapshot)
+      && NODE_CENSUS_PORT_TAGS.filter((tag) => tag.startsWith('check-reusable:')).every((tag) => hasPortTag(snapshot, tag));
   }
   if (detail === 'verify.ps1 must contain exactly one gate-runner dispatch marker; found 0') return thinNodeLauncher(snapshot);
   return false;
