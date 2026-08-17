@@ -28,10 +28,10 @@
   ],
   "denylist": [
     ".env",
-    "credentials/**",
-    "packages/core/**",
-    "secrets/**",
-    "vendor/**"
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     "docs/orchestration-runbook.md",
