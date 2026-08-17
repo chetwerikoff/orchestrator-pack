@@ -1,53 +1,78 @@
 ---
-description: Before proposing any solution/fix/recommendation, consult the wiki/hybrid knowledge base and summarize findings first
+description: Consult wiki for corpus-covered decisions using bounded, auditable retrieval
 alwaysApply: true
 ---
 <!-- generated from ~/agent-rules/*.md — do not hand-edit; re-run the generator to resync -->
 
-# Knowledge-base consult before proposing a solution (global)
+# Knowledge-base consultation before proposing a solution (global)
 
-Operating principle: **for any request that calls for a solution, consult the
-local wiki knowledge base before you answer.** When a prompt asks you to fix,
-build, choose, design, or recommend — anything where your reply proposes a
-course of action — search the wiki knowledge base first and ground the proposal
-in what you find. This is a default, not an occasional step.
+Operating principle: **consult the local wiki when its current corpus can add
+decision-relevant knowledge.** Retrieval is advisory evidence, not a ritual for
+every proposed action. Direct user instructions, the live Issue, current
+repository state and tests, and repository policy remain stronger authorities.
 
-**When it applies (the trigger).** Any request whose answer is a *solution,
-fix, recommendation, decision, or design* — e.g. "fix this bug", "how do I do
-X", "what should I use", "design Y", "why is this failing and how do I resolve
-it". It is keyed on the *shape of the expected answer* (a proposed action), not
-on the exact words used.
+## When consultation is required
 
-**When to run the search (the timing).** *After* you understand the problem —
-and for a bug, *after* you have identified the root cause — but *before* you
-propose the solution. Diagnose first, then consult the base, then answer. Do
-not propose a fix and search afterward; the search must inform the proposal.
+Search **`wiki`** before proposing a solution when at least one condition holds:
 
-**Required search — wiki/hybrid only.**
-1. Search the **`wiki`** MCP server (its `search` tool) for material
-   bearing on the problem and the candidate solution.
-2. For `wiki.search`, prefer a query fan-out via `queries[]` with 2-4
-   reformulations, not a single query. Mix the author's exact term, a plain
-   language task description, and RU/EN synonyms; if recall is weak, add the
-   original term spelling.
-3. After search returns its top hits, read 2-3 full notes/articles with
-   `wiki.read` before proposing a solution. Do not rely on snippets alone.
-4. **Summarize** in one or two lines what the wiki contributes that is relevant
-   to the solution — citing what you found — then give your answer informed by
-   it.
+- the user explicitly asks to consult wiki or personal notes;
+- the decision concerns architecture or design trade-offs;
+- the decision concerns migration or evolution of data, schemas, APIs,
+  protocols, or compatibility;
+- the task concerns refactoring strategy, CI/CD, deployment pipelines,
+  distributed systems, messaging, consistency, or testing strategy;
+- the domain is unfamiliar and belongs to one of the corpus-covered areas
+  above.
 
-**Optional synto.** The **`syntо`** MCP server may be consulted when a task
-specifically benefits from it, but it is not a required step and its absence
-must not block the answer.
+Run the consultation after understanding the problem and, for a bug, after
+identifying the root cause, but before choosing or presenting the solution.
 
-**When the wiki has nothing.** If `wiki` returns nothing relevant, say so in one
-line and proceed with your own reasoning. Absence of wiki material is never a
-reason to stall or to skip answering.
+## When to skip
 
-**When to skip entirely.** Pure state or action prompts that imply no proposed
-solution — "what's the git status", "run the tests", "show me file X", "list
-the open PRs". Answer these directly with no KB search.
+Skip consultation when:
 
-This is a prompt-level obligation (you see the rule and follow it), not a hard
-hook. The required knowledge base is `wiki`/hybrid; `syntо` is an optional MCP
-server when available.
+- a precise local fix is already established by repository evidence and tests;
+- the request is a pure state/action operation, including an action fully
+  determined by direct instruction, Issue, or acceptance criteria;
+- the change is local, mechanical, low-cost, and reversible;
+- wiki was already consulted for the same task and no new root cause, domain,
+  decision, or relevant file has appeared.
+
+## Bounded retrieval
+
+1. Start with one `wiki.search` call containing 2-3 focused RU/EN
+   reformulations in `queries[]`. Use hybrid mode, `limit: 4`, and
+   `snippet_length: 400`.
+2. On the first pass, exclude routing and bulk corpus surfaces: `dossiers/`,
+   `sources/`, `index.md`, and `log.md`. They may be used once as a bounded
+   routing fallback when direct results are empty or only generic.
+3. Do not run another broad search merely because the first search is empty.
+   Add one independent or counter-framing search only when a high-impact or
+   hard-to-reverse decision needs it, or when relevant results conflict or
+   expose a one-sided framing.
+4. Judge candidate relevance from title, tags, aliases, and snippet together.
+   A score alone is not evidence, and a source-list snippet does not by itself
+   make an otherwise relevant note irrelevant.
+5. Read no note without a decision-relevant candidate. Normally read one note;
+   read a second for conflict or high-impact corroboration; read a third only
+   for an explicit research or synthesis request.
+6. Start reads with `related: false` and `snippet_length: 3000`. Fetch more only
+   when the required claim or caveat is truncated.
+
+If wiki returns nothing relevant, continue with repository evidence and normal
+reasoning. Optional **`syntо`** consultation is allowed when the task benefits
+from it but is never required.
+
+## Accountability
+
+End the answer with one compact disposition so consultation remains auditable:
+
+```text
+wiki: <vault-relative path>
+wiki: none
+wiki: skip(<reason>)
+```
+
+When a note materially changes, constrains, or corroborates the recommendation,
+briefly state that contribution and cite the note. Do not manufacture a wiki
+rationale when no relevant material was found.
