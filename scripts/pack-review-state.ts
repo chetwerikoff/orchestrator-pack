@@ -24,6 +24,7 @@ export type PackReviewTier = keyof typeof PACK_REVIEW_CAPS;
 export type PackReviewAuthorityPhase = (typeof PACK_REVIEW_AUTHORITY_PHASES)[number];
 export type SmokeOrderingActor = 'worker-owned' | 'independent';
 export type SmokeOrderingStatus = 'started' | 'passed' | 'failed';
+export type SmokeOrderingFailureKind = 'finding' | 'retryable';
 
 export interface PackReviewSmokeOrdering {
   workerOwned?: {
@@ -37,6 +38,8 @@ export interface PackReviewSmokeOrdering {
     headSha: string;
     status: SmokeOrderingStatus;
     updatedAtUtc: string;
+    failureKind?: SmokeOrderingFailureKind;
+    failureHeadSha?: string;
   };
 }
 
@@ -860,6 +863,14 @@ export function assertIndependentSmokeAdmission(input: {
   const ordering = input.authority.smokeOrdering;
   const independent = ordering?.independent;
   if (independent?.startedEver) {
+    if (independent.status === 'failed'
+        && independent.failureKind === 'finding'
+        && independent.failureHeadSha === headSha) {
+      throw new PackReviewAuthorityError(
+        'smoke_ordering_independent_same_head_forbidden',
+        'an independent smoke finding requires a worker fix and a new head',
+      );
+    }
     if (independent.headSha !== headSha && independent.status !== 'failed') {
       throw new PackReviewAuthorityError(
         'smoke_ordering_independent_head_forbidden',
@@ -882,6 +893,7 @@ export function commitSmokeOrderingTransition(input: {
   actor: SmokeOrderingActor;
   headSha: string;
   status: SmokeOrderingStatus;
+  failureKind?: SmokeOrderingFailureKind;
   options: PackReviewAuthorityOptions;
 }): PackReviewAuthorityDocument {
   const headSha = normalizeSha(input.headSha, 'headSha');
@@ -930,6 +942,12 @@ export function commitSmokeOrderingTransition(input: {
             headSha,
             status: input.status,
             updatedAtUtc: now,
+            ...(input.status === 'failed' && input.failureKind
+              ? {
+                failureKind: input.failureKind,
+                ...(input.failureKind === 'finding' ? { failureHeadSha: headSha } : {}),
+              }
+              : {}),
           },
         };
       }

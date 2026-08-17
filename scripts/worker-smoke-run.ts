@@ -155,7 +155,7 @@ export function resolveSmokeExecutorProfile(
     agent: launchAgent,
     model,
     effort,
-    command: `${launchAgent} --model ${shellQuoteProfileValue(`${model}-${effort}`)}`,
+    command: `${launchAgent} --model ${shellQuoteProfileValue(`${model}[effort=${effort}]`)}`,
   };
 }
 
@@ -1079,6 +1079,8 @@ interface SmokeOrderingBinding {
   options: PackReviewAuthorityOptions;
 }
 
+type SmokeOrderingFailureKind = 'finding' | 'retryable';
+
 function beginSmokeOrdering(
   options: CliOptions,
   issueBody: string,
@@ -1127,7 +1129,11 @@ function beginSmokeOrdering(
   return { actor, prNumber: options.prNumber, headSha: options.headSha, options: authorityOptions };
 }
 
-function finishSmokeOrdering(binding: SmokeOrderingBinding | null, status: 'passed' | 'failed'): void {
+function finishSmokeOrdering(
+  binding: SmokeOrderingBinding | null,
+  status: 'passed' | 'failed',
+  failureKind: SmokeOrderingFailureKind = 'retryable',
+): void {
   if (!binding) return;
   const authority = readPackReviewAuthority(binding.prNumber, binding.options);
   if (!authority) throw new Error('smoke_ordering_authority_missing_at_terminal');
@@ -1137,6 +1143,7 @@ function finishSmokeOrdering(binding: SmokeOrderingBinding | null, status: 'pass
     actor: binding.actor,
     headSha: binding.headSha,
     status,
+    ...(status === 'failed' ? { failureKind } : {}),
     options: binding.options,
   });
 }
@@ -1213,21 +1220,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
 
   let orderingBinding: SmokeOrderingBinding | null = null;
   let orderingOutcome: 'passed' | 'failed' = 'failed';
-  try {
-    orderingBinding = beginSmokeOrdering(options, issueBody);
-  } catch (error) {
-    const report = operationalReport('BLOCKED', options, {
-      action: 'admit smoke actor ordering',
-      expected: options.smokeActor === 'independent'
-        ? 'settled pack-review obligations'
-        : 'worker-owned smoke before pack-review',
-      observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
-      adapterId: adapter.id,
-    });
-    publishSmokeReport(report, options);
-    emit({ ok: false, report }, options.json);
-    return 1;
-  }
+  let orderingFailureKind: SmokeOrderingFailureKind = 'retryable';
 
   const beforeStatus = gitPorcelain(options.cwd);
   if (hasPreexistingTrackedDirtiness(beforeStatus)) {
@@ -1269,6 +1262,22 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     scenarioCount: plan.scenarios.length,
   });
   markSmokeCreateInProgress(artifactDir);
+
+  try {
+    orderingBinding = beginSmokeOrdering(options, issueBody);
+  } catch (error) {
+    const report = operationalReport('BLOCKED', options, {
+      action: 'admit smoke actor ordering',
+      expected: options.smokeActor === 'independent'
+        ? 'settled pack-review obligations'
+        : 'worker-owned smoke before pack-review',
+      observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
+      adapterId: adapter.id,
+    });
+    publishSmokeReport(report, options);
+    emit({ ok: false, report }, options.json);
+    return 1;
+  }
 
   let worker: RuntimeWorkerIdentity | undefined;
   let terminalCleanup = 'pending';
@@ -1408,6 +1417,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     report.terminalCleanup = terminalCleanup;
     if (!lifecycleCleanup.clean && report.result === 'PASS') report.result = 'FAIL';
     orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
+    orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';
     publishSmokeReport(report, options);
     emit({ ok: report.result === 'PASS', report, lifecycleCleanup }, options.json);
     return report.result === 'PASS' ? 0 : 1;
@@ -1425,7 +1435,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     emit({ ok: false, report }, options.json);
     return 1;
   } finally {
-    try { finishSmokeOrdering(orderingBinding, orderingOutcome); } catch { /* missing ordering evidence remains fail-closed */ }
+    try { finishSmokeOrdering(orderingBinding, orderingOutcome, orderingFailureKind); } catch { /* missing ordering evidence remains fail-closed */ }
     process.off('SIGINT', onSigint);
     process.off('SIGTERM', onSigterm);
     if (worker && !cleanupFinished) {

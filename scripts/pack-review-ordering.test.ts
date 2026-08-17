@@ -519,8 +519,11 @@ describe('Issue #1436 smoke/review ordering', () => {
         actor: 'independent',
         headSha: HEAD,
         status: 'failed',
+        failureKind: 'finding',
         options,
       });
+      expect(() => assertIndependentSmokeAdmission({ authority: independentFailed, headSha: HEAD }))
+        .toThrow('smoke_ordering_independent_same_head_forbidden');
       const nextHead = observePackReviewHead({
         prNumber: 1436,
         expectedTransitionSeq: independentFailed.transitionSeq,
