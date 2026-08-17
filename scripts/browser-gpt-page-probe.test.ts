@@ -1081,6 +1081,12 @@ async function withHarvestObservation<T>(
     transitionStateLightTurnObservation({
       profileKey,
       invocationId,
+      phase: 'dispatching',
+      reason: 'test_dispatch_boundary',
+    });
+    transitionStateLightTurnObservation({
+      profileKey,
+      invocationId,
       phase,
       reason: 'test_send',
       sendCount: 1,
