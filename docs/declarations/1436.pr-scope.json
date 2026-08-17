@@ -15,7 +15,8 @@
     "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/1436.pr-scope.json",
+    "docs/declarations/",
     "docs/orchestration-runbook.md"
-  ]
+  ],
+  "source_revision": "dd691bbcd78ddff186e29891a456d4742eafaabb"
 }

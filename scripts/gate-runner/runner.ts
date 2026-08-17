@@ -2,7 +2,8 @@ import '../toolchain/native-entrypoint-preflight.ts';
 import { resolve } from 'node:path';
 import { isDirectExecution } from '#opk-toolchain/baseline-io';
 import { aggregateLane, type GateResult } from './contracts.ts';
-import { evaluateCensus, loadCensus } from './census.ts';
+import { loadCensus } from './census.ts';
+import { evaluateCurrentCensus } from './current-census.ts';
 import { evaluateDeclarativeGate } from './declarative.ts';
 import { representativeDeclarativeGates } from './representative-gates.ts';
 import { captureSourceSnapshot } from './source-snapshot.ts';
@@ -58,7 +59,7 @@ export function runGateRunner(repoRootInput: string, requestedGateIds?: readonly
   const selected = selectGateRegistrations(gateRegistrations, requestedGateIds);
   const results = selected.map((registration) => registration.evaluate(context));
   if (requestedGateIds === undefined || requestedGateIds.length === 0 || requestedGateIds.includes('gate-census')) {
-    results.push(evaluateCensus(loadCensus(repoRoot), snapshot, registeredGateIds));
+    results.push(evaluateCurrentCensus(loadCensus(repoRoot), snapshot, registeredGateIds));
   }
   return { results, aggregate: aggregateLane(results) };
 }
@@ -87,9 +88,7 @@ function requiredArgumentValues(argv: readonly string[], name: string): string[]
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] !== name) continue;
     const value = argv[index + 1];
-    if (value === undefined || value.trim().length === 0) {
-      throw new Error(`${name} requires a non-empty value`);
-    }
+    if (value === undefined || value.trim().length === 0) throw new Error(`${name} requires a non-empty value`);
     values.push(value);
   }
   return values;
@@ -112,6 +111,4 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
 }
 
-if (isDirectExecution(import.meta.url, process.argv[1])) {
-  process.exitCode = await main(process.argv.slice(2));
-}
+if (isDirectExecution(import.meta.url, process.argv[1])) process.exitCode = await main(process.argv.slice(2));

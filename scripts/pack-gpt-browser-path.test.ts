@@ -5,6 +5,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as subprocess from './kernel/subprocess.ts';
+import './lib/pack-gpt-source-comment.cases.ts';
+import './lib/pack-gpt-source-comment-runner.cases.ts';
 import {
   defaultRunBrowserTurn,
   mapGptReplyToTerminalStdout,
@@ -362,6 +364,7 @@ describe('Browser-GPT harvest boundary (Issue #1393)', () => {
       ORCHESTRATOR_PACK_STATE_ROOT: stateRoot,
       PACK_REVIEW_RUN_ID: 'prr-issue-1393',
       PACK_REVIEW_GPT_SOURCE_SLOT: 'source-02',
+      PACK_REVIEW_GPT_INVOCATION_ID: '22222222-2222-4222-8222-222222222222',
     };
 
     const result = await runGptPackReview({
@@ -402,10 +405,12 @@ describe('Browser-GPT harvest boundary (Issue #1393)', () => {
     const first = await runGptPackReview(request, successfulReviewDeps('NO_FINDINGS'), {
       ...baseEnv,
       PACK_REVIEW_GPT_SOURCE_SLOT: 'source-01',
+      PACK_REVIEW_GPT_INVOCATION_ID: '11111111-1111-4111-8111-111111111111',
     });
     const second = await runGptPackReview(request, successfulReviewDeps('NO_FINDINGS'), {
       ...baseEnv,
       PACK_REVIEW_GPT_SOURCE_SLOT: 'source-02',
+      PACK_REVIEW_GPT_INVOCATION_ID: '22222222-2222-4222-8222-222222222222',
     });
     const firstEvidence = (JSON.parse(first.stdout.split(/\r?\n/)[0]!) as Record<string, unknown>)
       .review_evidence as Record<string, string>;

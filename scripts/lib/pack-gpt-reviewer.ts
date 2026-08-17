@@ -14,6 +14,10 @@ import { parseCodexOutput } from '../../plugins/codex-pr-reviewer/lib/parse_outp
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { buildGptReviewPrompt, resolvePackRepoRoot } from './pack-pr-review-contract.ts';
 import { packReviewLogsDir, resolvePackReviewRunStoreRoot } from './pack-review-run-store.ts';
+import {
+  normalizePackGptSourceIdentity,
+  type PackGptSourceIdentity,
+} from './pack-gpt-source-comment-contract.ts';
 
 const GPT_BROWSER_SOURCE = 'gpt-browser';
 const VALID_GPT_SEVERITIES = new Set(['blocking', 'non-blocking']);
@@ -81,6 +85,12 @@ export interface GptTurnResultV1 {
   [key: string]: unknown;
 }
 
+export interface GptMappedReviewPayload {
+  verdict: 'clean' | 'findings';
+  findingCount: number;
+  findings: ReturnType<typeof toRuntimeFindings>;
+}
+
 export function extractLastGptTurnResult(stdout: string): GptTurnResultV1 | null {
   const rows = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   for (const row of rows.reverse()) {
@@ -112,12 +122,35 @@ export interface GptReviewDependencies {
     inputPath: string;
     outputPath: string;
     config: GptBrowserTurnConfig;
+    invocationId?: string;
   }) => Promise<ProcessResult>;
   resolvePrUrl: (repoSlug: string, prNumber: number) => string;
 }
 
 function trim(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function resolveBoundSourceIdentity(
+  request: GptReviewRequest,
+  env: NodeJS.ProcessEnv,
+): PackGptSourceIdentity | undefined {
+  const runId = trim(env.PACK_REVIEW_RUN_ID);
+  const slotId = trim(env.PACK_REVIEW_GPT_SOURCE_SLOT);
+  const invocationId = trim(env.PACK_REVIEW_GPT_INVOCATION_ID);
+  const present = [runId, slotId, invocationId].filter(Boolean).length;
+  if (present === 0) return undefined;
+  if (present !== 3) {
+    throw new Error('runner-bound GPT source publication requires run, slot, and invocation identity');
+  }
+  return normalizePackGptSourceIdentity({
+    repository: request.repoSlug,
+    prNumber: request.prNumber,
+    headSha: request.headSha,
+    runId,
+    slotId,
+    invocationId,
+  });
 }
 
 function safeEvidenceSegment(value: string, fallback: string): string {
@@ -242,6 +275,7 @@ export async function defaultRunBrowserTurn(options: {
   inputPath: string;
   outputPath: string;
   config: GptBrowserTurnConfig;
+  invocationId?: string;
 }): Promise<ProcessResult> {
   const args = [
     'run',
@@ -253,6 +287,7 @@ export async function defaultRunBrowserTurn(options: {
     '--input', options.inputPath,
     '--output', options.outputPath,
   ];
+  if (options.invocationId) args.push('--invocation-id', options.invocationId);
   if (options.config.chatUrl) {
     args.push('--chat-url', options.config.chatUrl);
   } else if (options.config.projectUrl) {
@@ -285,7 +320,7 @@ function validateGptStructuredFindings(findings: ReturnType<typeof parseCodexOut
   }
 }
 
-export function mapGptReplyToTerminalStdout(replyText: string): string {
+export function mapGptReplyToReviewPayload(replyText: string): GptMappedReviewPayload {
   const trimmed = replyText.trim();
   if (/^\{[\s\S]*"verdict"\s*:/.test(trimmed)) {
     throw new Error(FORBIDDEN_VERDICT_ERROR);
@@ -293,14 +328,19 @@ export function mapGptReplyToTerminalStdout(replyText: string): string {
 
   const parsed = parseCodexOutput(normalizeMissingGptSources(replyText));
   if (parsed.kind === 'clean') {
-    return emitTerminalVerdictPayload({ verdict: 'clean', findings: [] });
+    return { verdict: 'clean', findingCount: 0, findings: [] };
   }
   if (parsed.kind === 'findings') {
     validateGptStructuredFindings(parsed);
     const findings = toRuntimeFindings(parsed.findings);
-    return emitTerminalVerdictPayload({ verdict: 'findings', findings });
+    return { verdict: 'findings', findingCount: findings.length, findings };
   }
   throw new Error(parsed.message);
+}
+
+export function mapGptReplyToTerminalStdout(replyText: string): string {
+  const payload = mapGptReplyToReviewPayload(replyText);
+  return emitTerminalVerdictPayload({ verdict: payload.verdict, findings: payload.findings });
 }
 
 export async function runGptPackReview(
@@ -340,11 +380,13 @@ export async function runGptPackReview(
     repoRoot: request.repoRoot,
     issueNumber,
   });
+  const sourceIdentity = resolveBoundSourceIdentity(request, env);
   const prUrl = merged.resolvePrUrl(request.repoSlug, request.prNumber);
   const prompt = buildGptReviewPrompt({
     prUrl,
     headSha: request.headSha,
     scope,
+    sourceIdentity,
     packRoot,
   });
 
@@ -353,7 +395,7 @@ export async function runGptPackReview(
   }
   if (/\b(create|post|submit|publish)\b[^.\n]{0,80}\bgithub\s+review/i.test(prompt)
     && !/do \*\*not\*\* create github reviews/i.test(prompt)) {
-    throw new Error('GPT review prompt must not request GitHub mutation');
+    throw new Error('GPT review prompt must not request GitHub Review submission');
   }
 
   const browserConfig = merged.resolveBrowserConfig(env);
@@ -368,6 +410,7 @@ export async function runGptPackReview(
       inputPath,
       outputPath,
       config: browserConfig,
+      invocationId: sourceIdentity?.invocationId,
     });
     const terminal = extractLastGptTurnResult(turn.stdout);
 
