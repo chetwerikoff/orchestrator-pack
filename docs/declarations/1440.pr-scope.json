@@ -6,7 +6,6 @@
     "scripts/invoke-gated-worker-nudge.test.ts",
     "scripts/lib/operator-publication.test.ts",
     "scripts/lib/operator-publication.ts",
-    "scripts/lib/pack-review-worker-notification.cases.ts",
     "scripts/lib/pack-review-worker-notification.ts",
     "scripts/lib/worker-degraded-ci-handoff.test.ts",
     "scripts/lib/worker-smoke-bounded-create.ts",
@@ -14,6 +13,7 @@
     "scripts/orca-runtime/native.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orchestrator-message-catalog.json",
+    "scripts/pack-review-worker-notification.cases.ts",
     "scripts/pr2-foundation/fleet-nudge-actuator.test.ts",
     "scripts/pr2-foundation/fleet-nudge-actuator.ts",
     "scripts/pr2-foundation/mutation-catalog.test.ts",
@@ -38,7 +38,6 @@
     "scripts/invoke-gated-worker-nudge.test.ts",
     "scripts/lib/operator-publication.test.ts",
     "scripts/lib/operator-publication.ts",
-    "scripts/lib/pack-review-worker-notification.cases.ts",
     "scripts/lib/pack-review-worker-notification.ts",
     "scripts/lib/worker-degraded-ci-handoff.test.ts",
     "scripts/lib/worker-smoke-bounded-create.ts",
@@ -46,6 +45,7 @@
     "scripts/orca-runtime/native.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orchestrator-message-catalog.json",
+    "scripts/pack-review-worker-notification.cases.ts",
     "scripts/pr2-foundation/fleet-nudge-actuator.test.ts",
     "scripts/pr2-foundation/fleet-nudge-actuator.ts",
     "scripts/pr2-foundation/mutation-catalog.test.ts",
@@ -58,5 +58,5 @@
     "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "r06"
+  "source_revision": "r07"
 }
