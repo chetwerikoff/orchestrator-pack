@@ -685,9 +685,9 @@ describe('Issue #1430 retirement cleanup visibility', () => {
 
   it('keeps retirement_cleanup_required in the public normal-turn final result', async () => {
     const { randomUUID } = await import('node:crypto');
-    const { __testFinalizeTurn, type TurnRunOutcome } = await import('./state-light-turn.ts');
+    const { __testFinalizeTurn } = await import('./state-light-turn.ts');
     const invocationId = randomUUID();
-    const outcome: TurnRunOutcome = {
+    const outcome: Parameters<typeof __testFinalizeTurn>[0] = {
       result: {
         schema: 'turn-result/v1',
         state: 'ok',
