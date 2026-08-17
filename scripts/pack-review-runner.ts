@@ -43,6 +43,7 @@ import {
   selectPackReviewEvidence,
   selectPackReviewGptSourceCardinality,
   smokeOrderingRequired,
+  reconcilePackReviewTier,
   stableJson,
   type PackReviewAuthorityDocument,
   type PackReviewAuthorityOptions,
@@ -2402,6 +2403,23 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     retainedOpenCycle,
     options: authorityOptions,
   });
+  try {
+    authority = reconcilePackReviewTier({
+      prNumber: target.prNumber,
+      tier: authoritative.tier,
+      options: authorityOptions,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      created: false,
+      reused: false,
+      reason: error instanceof Error ? error.message : String(error),
+      prNumber: target.prNumber,
+      headSha: target.headSha,
+      httpStatus: 409,
+    };
+  }
   const priorAuthority = authority.currentHeadSha === target.headSha ? undefined : authority;
   if (authority.currentHeadSha !== target.headSha) {
     authority = observePackReviewHead({
@@ -2657,7 +2675,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
             findingCount: typedResumePayload.findingCount,
             findings: typedResumePayload.findings,
           }),
-          status: typedResumePayload.verdict === 'clean' && typedResumePayload.findingCount === 0 ? 'clean' : 'changes_requested',
+          status: classifyPackReviewPayload(typedResumePayload).terminalStatus,
           findingCount: typedResumePayload.findingCount,
           options: authorityOptions,
         });
@@ -3175,7 +3193,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           focusedResolutionRunId: carryover.replay.kind === 'merge_composite' ? run.id : undefined,
         } : undefined,
       }),
-      status: payload.verdict === 'clean' && payload.findingCount === 0 ? 'clean' : 'changes_requested',
+      status: classifyPackReviewPayload(payload).terminalStatus,
       findingCount: payload.findingCount,
       options: authorityOptions,
     });

@@ -199,7 +199,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
           FAKE_ORCA_HEAD: head,
           FAKE_ORCA_PROMPT: promptPath,
           WORKER_SMOKE_SUBMIT_CONFIRMATION_TIMEOUT_MS: '20',
-          PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor-agent',
+          PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor',
           PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-routine-model',
           PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-routine-effort',
         },
@@ -266,6 +266,10 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         .map((value, index) => value === 'terminal read' ? index : -1)
         .filter((index) => index >= 0);
       expect(createIndex).toBeGreaterThanOrEqual(0);
+      const createArgs = calls[createIndex!] ?? [];
+      const commandIndex = createArgs.indexOf('--command');
+      expect(commandIndex).toBeGreaterThanOrEqual(0);
+      expect(createArgs[commandIndex! + 1]).toBe("agent --model 'fixture-routine-model-fixture-routine-effort'");
       expect(showIndexes.length).toBeGreaterThanOrEqual(3);
       expect(sendIndexes).toHaveLength(3);
       expect(calls[sendIndexes[0]!] ?? []).not.toContain('--text');

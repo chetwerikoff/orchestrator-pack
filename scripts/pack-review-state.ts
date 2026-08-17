@@ -527,6 +527,40 @@ export function initializePackReviewAuthority(input: {
   });
 }
 
+export function reconcilePackReviewTier(input: {
+  prNumber: number;
+  tier: PackReviewTier;
+  options: PackReviewAuthorityOptions;
+}): PackReviewAuthorityDocument {
+  const current = readPackReviewAuthority(input.prNumber, input.options);
+  if (!current) throw new PackReviewAuthorityError('authority_missing', `PR ${input.prNumber}`);
+  if (!current.cycle || current.cycle.frozenTier === input.tier) return current;
+  const cycle = current.cycle;
+  const safelyReplaceable = cycle.state === 'open'
+    && cycle.consumedHeadShas.length === 0
+    && !current.terminal
+    && !current.evidence
+    && !current.triage
+    && !current.publication
+    && !current.smokeOrdering?.independent?.startedEver;
+  if (!safelyReplaceable) {
+    throw new PackReviewAuthorityError(
+      'tier_change_requires_reset',
+      `persisted ${cycle.frozenTier} cycle cannot be replaced with authoritative ${input.tier}`,
+    );
+  }
+  return commitPackReviewAuthorityTransition({
+    prNumber: input.prNumber,
+    expectedTransitionSeq: current.transitionSeq,
+    nextPhase: current.phase,
+    mutate(authority) {
+      authority.cycle = createNewPackReviewCycle(input.tier, { now: input.options.now });
+      return authority;
+    },
+    options: input.options,
+  });
+}
+
 export function commitPackReviewAuthorityTransition(input: {
   prNumber: number;
   expectedTransitionSeq: number;
@@ -580,11 +614,14 @@ export function observePackReviewHead(input: {
       current.publication = undefined;
       if (current.smokeOrdering) {
         const independent = current.smokeOrdering.independent;
+        const failedIndependent = independent?.status === 'failed';
         current.smokeOrdering = {
           ...current.smokeOrdering,
           workerOwned: undefined,
           ...(independent
-            ? { independent: { ...independent, headSha, status: 'failed' } }
+            ? { independent: failedIndependent
+              ? { ...independent, headSha, status: 'failed' }
+              : { ...independent } }
             : {}),
           ...(independent?.startedEver ? {} : { reviewSettledHeadSha: undefined }),
         };
@@ -821,7 +858,17 @@ export function assertIndependentSmokeAdmission(input: {
     throw new PackReviewAuthorityError('smoke_ordering_head_mismatch', `expected ${input.authority.currentHeadSha}, got ${headSha}`);
   }
   const ordering = input.authority.smokeOrdering;
-  if (!ordering?.independent?.startedEver && ordering?.reviewSettledHeadSha !== headSha) {
+  const independent = ordering?.independent;
+  if (independent?.startedEver) {
+    if (independent.headSha !== headSha && independent.status !== 'failed') {
+      throw new PackReviewAuthorityError(
+        'smoke_ordering_independent_head_forbidden',
+        'a started or passed independent smoke cannot continue on a new head',
+      );
+    }
+    return;
+  }
+  if (ordering?.reviewSettledHeadSha !== headSha) {
     throw new PackReviewAuthorityError(
       'smoke_ordering_review_unsettled',
       'independent smoke requires settled pack-review obligations for the exact head',

@@ -149,10 +149,10 @@ function mutateMachineBlock(body: string, mutate: (block: string) => string): st
 
 describe('smoke executor profiles', () => {
   const env = {
-    PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor-agent',
+    PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor',
     PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-routine-model',
     PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-routine-effort',
-    PACK_EXECUTOR_SMOKE_COMPLEX_AGENT: 'cursor-agent',
+    PACK_EXECUTOR_SMOKE_COMPLEX_AGENT: 'cursor',
     PACK_EXECUTOR_SMOKE_COMPLEX_MODEL: 'fixture-complex-model',
     PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT: 'fixture-complex-effort',
   };
@@ -185,6 +185,9 @@ describe('smoke executor profiles', () => {
   });
 
   it('rejects unsupported and malformed profile data', () => {
+    expect(() => resolveSmokeExecutorProfile('routine', {
+      ...env, PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor-agent',
+    })).toThrow('smoke_profile_unsupported_agent');
     expect(() => resolveSmokeExecutorProfile('routine', {
       ...env, PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'unsupported-agent',
     })).toThrow('smoke_profile_unsupported_agent');

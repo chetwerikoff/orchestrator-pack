@@ -16,6 +16,7 @@ import {
   observePackReviewHead,
   readPackReviewAuthority,
   recordPackReviewPublication,
+  reconcilePackReviewTier,
   smokeOrderingRequired,
   type PackReviewAuthorityOptions,
 } from './pack-review-state.ts';
@@ -71,6 +72,63 @@ describe('Issue #1436 smoke/review ordering', () => {
     expect(result).toMatchObject({ ok: false, created: false, httpStatus: 409 });
     expect(String(result.reason)).toContain('smoke_ordering_worker_smoke_required');
     expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot: options.storeRoot })).toEqual([]);
+  });
+
+  it('settles a production non-blocking review for independent-smoke admission', async () => {
+    const { options, authority } = authorityFixture();
+    const started = commitSmokeOrderingTransition({
+      prNumber: 1436,
+      expectedTransitionSeq: authority.transitionSeq,
+      actor: 'worker-owned',
+      headSha: HEAD,
+      status: 'started',
+      options,
+    });
+    commitSmokeOrderingTransition({
+      prNumber: 1436,
+      expectedTransitionSeq: started.transitionSeq,
+      actor: 'worker-owned',
+      headSha: HEAD,
+      status: 'passed',
+      options,
+    });
+    const issueBody = [
+      '```complexity-tier',
+      'tier: T3',
+      'advisory-prior: T3',
+      '```',
+      '',
+      '```smoke-test-plan',
+      'scenarios:',
+      '  - action: exact head smoke | expected: PASS',
+      '```',
+    ].join('\n');
+    const result = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot: options.storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber: 1436,
+      headSha: HEAD,
+      fixtureCurrentPrHeadSha: HEAD,
+      fixturePrState: 'OPEN',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: 1436,
+      fixtureIssueBody: issueBody,
+      fixtureReviewStdout: JSON.stringify({
+        verdict: 'findings',
+        findingCount: 1,
+        findings: [{ severity: 'warning', title: 'non-blocking fixture finding' }],
+      }),
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => undefined,
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      claimMode: 'preacquired',
+    });
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    const finalAuthority = readPackReviewAuthority(1436, options)!;
+    expect(finalAuthority.terminal?.reviewStatus).toBe('commented');
+    expect(() => assertIndependentSmokeAdmission({ authority: finalAuthority, headSha: HEAD })).not.toThrow();
   });
 
   it('refuses review until the exact-head worker-owned smoke passes', () => {
@@ -353,5 +411,123 @@ describe('Issue #1436 smoke/review ordering', () => {
       '```',
     ].join('\n'))).toBe(false);
     expect(smokeOrderingRequired('```smoke-test-plan\nnot-applicable: true\n```')).toBe(true);
+  });
+
+  it('reconciles a persisted T2 cycle before T3 review admission', () => {
+    const { options, authority } = authorityFixture('T2');
+    const reconciled = reconcilePackReviewTier({
+      prNumber: 1436,
+      tier: 'T3',
+      options,
+    });
+    expect(reconciled.transitionSeq).toBe(authority.transitionSeq + 1);
+    expect(reconciled.cycle).toMatchObject({ state: 'open', frozenTier: 'T3', frozenCap: 4 });
+  });
+
+  it('refuses a passed independent phase after a head change but permits failed continuation', () => {
+    const settleWorkerAndReview = (options: PackReviewAuthorityOptions, authority: ReturnType<typeof initializePackReviewAuthority>) => {
+      const started = commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: authority.transitionSeq,
+        actor: 'worker-owned',
+        headSha: HEAD,
+        status: 'started',
+        options,
+      });
+      const passed = commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: started.transitionSeq,
+        actor: 'worker-owned',
+        headSha: HEAD,
+        status: 'passed',
+        options,
+      });
+      const terminal = commitPackReviewTerminal({
+        prNumber: 1436,
+        expectedTransitionSeq: passed.transitionSeq,
+        terminal: {
+          schemaVersion: 1,
+          terminalContractVersion: 2,
+          terminalSource: 'normal',
+          runId: 'settle-review',
+          targetSha: HEAD,
+          reviewVerdict: 'clean',
+          findingCount: 0,
+          findingsDigest: 'findings-digest',
+        },
+        status: 'up_to_date',
+        findingCount: 0,
+        options,
+      });
+      return recordPackReviewPublication({
+        prNumber: 1436,
+        expectedTransitionSeq: terminal.transitionSeq,
+        publication: {
+          headSha: HEAD,
+          terminalRunId: 'settle-review',
+          status: 'succeeded',
+          publicationDigest: 'publication-digest',
+          recordedAtUtc: new Date().toISOString(),
+        },
+        options,
+      });
+    };
+
+    {
+      const { options, authority } = authorityFixture();
+      const settled = settleWorkerAndReview(options, authority);
+      const independentStarted = commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: settled.transitionSeq,
+        actor: 'independent',
+        headSha: HEAD,
+        status: 'started',
+        options,
+      });
+      const independentPassed = commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: independentStarted.transitionSeq,
+        actor: 'independent',
+        headSha: HEAD,
+        status: 'passed',
+        options,
+      });
+      const nextHead = observePackReviewHead({
+        prNumber: 1436,
+        expectedTransitionSeq: independentPassed.transitionSeq,
+        headSha: NEXT_HEAD,
+        options,
+      });
+      expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD }))
+        .toThrow('smoke_ordering_independent_head_forbidden');
+    }
+
+    {
+      const { options, authority } = authorityFixture();
+      const settled = settleWorkerAndReview(options, authority);
+      const independentStarted = commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: settled.transitionSeq,
+        actor: 'independent',
+        headSha: HEAD,
+        status: 'started',
+        options,
+      });
+      const independentFailed = commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: independentStarted.transitionSeq,
+        actor: 'independent',
+        headSha: HEAD,
+        status: 'failed',
+        options,
+      });
+      const nextHead = observePackReviewHead({
+        prNumber: 1436,
+        expectedTransitionSeq: independentFailed.transitionSeq,
+        headSha: NEXT_HEAD,
+        options,
+      });
+      expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD })).not.toThrow();
+    }
   });
 });

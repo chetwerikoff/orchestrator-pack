@@ -121,7 +121,6 @@ const SMOKE_PROFILE_FIELDS = {
 
 const SUPPORTED_SMOKE_AGENTS = new Map([
   ['cursor', 'agent'],
-  ['cursor-agent', 'agent'],
 ]);
 const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
 
@@ -1143,7 +1142,23 @@ function finishSmokeOrdering(binding: SmokeOrderingBinding | null, status: 'pass
 }
 
 async function runSmokeAttempt(options: CliOptions): Promise<number> {
-  const issueBody = readIssueBody(options.issueBodyFile);
+  const suppliedIssueBody = readIssueBody(options.issueBodyFile);
+  let issueBody = suppliedIssueBody;
+  const suppliedTier = parseComplexityTierFence(suppliedIssueBody);
+  if (smokeOrderingRequired(suppliedIssueBody) && suppliedTier.kind === 'tier-fence') {
+    try {
+      issueBody = resolveSmokeTarget(options, suppliedIssueBody).issueBody;
+    } catch (error) {
+      const report = operationalReport('BLOCKED', options, {
+        action: 'bind smoke to trusted live Issue and PR',
+        expected: 'supplied body, open Issue/PR, and exact live PR head match',
+        observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
+      });
+      publishSmokeReport(report, options);
+      emit({ ok: false, report }, options.json);
+      return 1;
+    }
+  }
   const plan = resolveSmokeRequirement(issueBody);
   if (plan.requirement !== 'required') {
     emit({ ok: true, skipped: true, reason: plan.requirement }, options.json);
