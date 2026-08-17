@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import {
   runtimeFailure,
   runtimeUnsupported,
@@ -72,19 +72,6 @@ interface OrcaInboxCheckShape extends OrcaInboxDeliveryShape {
   readonly delivery?: unknown;
 }
 
-interface OrcaSubmitWitnessResult {
-  readonly send?: Readonly<{
-    accepted?: boolean;
-    submitWitness?: Readonly<{
-      runtime?: string;
-      workerId?: string;
-      workerGeneration?: string;
-      payloadSha256?: string;
-      submitted?: boolean;
-    }>;
-  }>;
-}
-
 const OBSERVATION_TOKEN_PREFIX = 'opk-orca-output-v3.';
 
 function isNativeTimeout(response: OrcaJsonResponse): boolean {
@@ -124,20 +111,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function hasExactSubmitWitness(
-  result: OrcaSubmitWitnessResult | undefined,
-  worker: RuntimeWorkerIdentity,
-  payload: string,
-): boolean {
-  const witness = result?.send?.submitWitness;
-  return result?.send?.accepted === true
-    && witness?.submitted === true
-    && witness.runtime === worker.runtime
-    && witness.workerId === worker.id
-    && witness.workerGeneration === worker.generation
-    && witness.payloadSha256 === createHash('sha256').update(payload, 'utf8').digest('hex');
 }
 
 function normalizeInboxMessage(value: unknown): RuntimeInboxMessage | null {
@@ -553,14 +526,9 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');
     if (!input.writeOnly) args.push('--enter');
-    const response = this.#run<OrcaSubmitWitnessResult>(args, options);
+    const response = this.#run(args, options);
     if (response.ok) {
-      if (input.submitOnly || input.writeOnly) {
-        return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
-      }
-      return hasExactSubmitWitness(response.result, input.worker, input.text ?? '')
-        ? { status: 'dispatched' }
-        : { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
+      return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
     }
     const reason = neutralFailureReason(response);
     return response.outcomeCategory === 'process_launch_failed'
