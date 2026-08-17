@@ -156,12 +156,12 @@ interface HarvestRow {
   readonly text: string;
   readonly byte_length: number;
   readonly sha256: string;
+  readonly completion_ready: boolean | null;
 }
 
 interface HarvestSnapshot {
   readonly page_url: string;
   readonly generation_in_progress: boolean | 'unknown';
-  readonly final_completion_ready: boolean;
   readonly rows: readonly HarvestRow[];
 }
 
@@ -965,7 +965,6 @@ export const HARVEST_EXPRESSION = `(async () => {
   const raw = Array.from(document.querySelectorAll('[data-message-author-role]'));
   const roleCounts = { user: 0, assistant: 0 };
   const rows = [];
-  let finalAssistantNode = null;
   for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
     const node = raw[documentOrdinal];
     const role = node.getAttribute('data-message-author-role');
@@ -974,7 +973,16 @@ export const HARVEST_EXPRESSION = `(async () => {
     if (text === null) return { status: 'surface_unknown', reason: 'text_representation_unavailable', page_url: location.href };
     const bytes = new TextEncoder().encode(text);
     const hash = await crypto.subtle.digest('SHA-256', bytes);
-    if (role === 'assistant') finalAssistantNode = node;
+    let completion_ready = null;
+    if (role === 'assistant') {
+      try {
+        const turn = node.closest(${JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR)}) || node;
+        completion_ready = !turn.querySelector(${JSON.stringify(ASSISTANT_TURN_IN_PROGRESS_SELECTOR)})
+          && Boolean(turn.querySelector(${JSON.stringify(ASSISTANT_TURN_ACTION_SELECTOR)}));
+      } catch {
+        completion_ready = false;
+      }
+    }
     rows.push({
       role,
       ordinal: roleCounts[role]++,
@@ -983,6 +991,7 @@ export const HARVEST_EXPRESSION = `(async () => {
       text,
       byte_length: bytes.byteLength,
       sha256: Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join(''),
+      completion_ready,
     });
   }
   if (rows.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing', page_url: location.href };
@@ -992,17 +1001,7 @@ export const HARVEST_EXPRESSION = `(async () => {
   } catch {
     generation_in_progress = 'unknown';
   }
-  let final_completion_ready = false;
-  if (finalAssistantNode) {
-    try {
-      const turn = finalAssistantNode.closest(${JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR)}) || finalAssistantNode;
-      final_completion_ready = !turn.querySelector(${JSON.stringify(ASSISTANT_TURN_IN_PROGRESS_SELECTOR)})
-        && Boolean(turn.querySelector(${JSON.stringify(ASSISTANT_TURN_ACTION_SELECTOR)}));
-    } catch {
-      final_completion_ready = false;
-    }
-  }
-  return { status: 'ok', page_url: location.href, generation_in_progress, final_completion_ready, rows };
+  return { status: 'ok', page_url: location.href, generation_in_progress, rows };
 })()`;
 
 interface LivenessRow {
@@ -1449,7 +1448,6 @@ function validateHarvestSnapshot(value: unknown, target: CompatibleTarget): Harv
   if (value.status !== 'ok'
     || typeof value.page_url !== 'string'
     || (typeof value.generation_in_progress !== 'boolean' && value.generation_in_progress !== 'unknown')
-    || typeof value.final_completion_ready !== 'boolean'
     || !Array.isArray(value.rows)) {
     return malformedSurface('malformed_harvest_snapshot');
   }
@@ -1465,7 +1463,8 @@ function validateHarvestSnapshot(value: unknown, target: CompatibleTarget): Harv
       || (raw.message_id !== null && (typeof raw.message_id !== 'string' || !MESSAGE_ID_RE.test(raw.message_id)))
       || typeof raw.text !== 'string'
       || !isNonNegativeSafeInteger(raw.byte_length)
-      || !isSha256(raw.sha256)) {
+      || !isSha256(raw.sha256)
+      || (raw.role === 'assistant' ? typeof raw.completion_ready !== 'boolean' : raw.completion_ready !== null)) {
       return malformedSurface('malformed_harvest_snapshot');
     }
     const bytes = Buffer.from(raw.text, 'utf8');
@@ -1481,12 +1480,12 @@ function validateHarvestSnapshot(value: unknown, target: CompatibleTarget): Harv
       text: raw.text,
       byte_length: raw.byte_length,
       sha256: raw.sha256,
+      completion_ready: raw.completion_ready as boolean | null,
     });
   }
   return {
     page_url: pageUrl,
     generation_in_progress: value.generation_in_progress,
-    final_completion_ready: value.final_completion_ready,
     rows,
   };
 }
@@ -1538,7 +1537,8 @@ function sameHarvestRow(left: HarvestRow, right: HarvestRow): boolean {
     && left.message_id === right.message_id
     && left.byte_length === right.byte_length
     && left.sha256 === right.sha256
-    && left.text === right.text;
+    && left.text === right.text
+    && left.completion_ready === right.completion_ready;
 }
 
 async function confirmStableHarvestCompletion(
@@ -1552,7 +1552,7 @@ async function confirmStableHarvestCompletion(
   if (!initialAssistant || initialAssistant.text.trim().length === 0) {
     throw new ProbeError('surface_unknown', 'harvest_completion_empty');
   }
-  if (initialSnapshot.generation_in_progress !== false || !initialSnapshot.final_completion_ready) {
+  if (initialSnapshot.generation_in_progress !== false || initialAssistant.completion_ready !== true) {
     throw new ProbeError('surface_unknown', 'harvest_completion_unproven');
   }
 
@@ -1566,8 +1566,8 @@ async function confirmStableHarvestCompletion(
   );
   const confirmedAssistant = confirmedWindow.assistants.at(-1);
   if (confirmedClassifier !== 'completed'
-    || !confirmedSnapshot.final_completion_ready
     || !confirmedAssistant
+    || confirmedAssistant.completion_ready !== true
     || confirmedAssistant.text.trim().length === 0
     || confirmedSnapshot.page_url !== initialSnapshot.page_url
     || !sameHarvestRow(initialWindow.owned, confirmedWindow.owned)
