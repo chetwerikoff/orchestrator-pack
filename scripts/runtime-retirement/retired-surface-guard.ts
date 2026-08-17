@@ -2,7 +2,6 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 export interface RetiredSurfaceDefinition {
   readonly id: string;
@@ -35,7 +34,7 @@ export interface GuardResult {
 }
 
 const CANONICAL_PATTERN_SOURCE = 'scripts/json-producers/retired-runtime-surfaces.json';
-const HISTORICAL_DISPOSITION_SOURCE = 'docs/investigations/runtime-hard-cut/historical-dispositions.json';
+export const HISTORICAL_DISPOSITION_SOURCE = 'docs/investigations/runtime-hard-cut/historical-dispositions.json';
 const SELF_AUTHORITY_PATHS = new Set([
   CANONICAL_PATTERN_SOURCE,
   HISTORICAL_DISPOSITION_SOURCE,
@@ -55,13 +54,9 @@ const EXCLUDED_PREFIXES = [
   'docs/issues_drafts/',
   'docs/declarations/',
   'docs/archive/',
-  // Frozen pre-cut evidence for the gate-runner migration. These files are
-  // historical inputs/goldens, never executable current-runtime authority.
   'scripts/gate-runner/census/',
   'scripts/gate-runner/goldens/',
   'scripts/fixtures/gate-runner/legacy-wave-3b/',
-  // Foundation-terminalized sources are frozen pre-hard-cut behavior witnesses;
-  // no production caller imports this directory.
   'scripts/pr2-foundation/terminalized/',
 ] as const;
 const EXCLUDED_EXACT = new Set([
@@ -78,20 +73,25 @@ const EXCLUDED_EXACT = new Set([
 ]);
 
 function normalizePath(path: string): string {
-  return path.replaceAll('\\', '/').replace(/^\.\//, '');
+  return path.replaceAll('\\', '/').replace(/^\.\//u, '');
 }
 
-export function loadHistoricalDispositionPaths(repoRoot: string): ReadonlySet<string> {
+export function loadHistoricalDispositions(repoRoot: string): readonly HistoricalDisposition[] {
   const source = join(repoRoot, HISTORICAL_DISPOSITION_SOURCE);
-  if (!existsSync(source)) return new Set<string>();
+  if (!existsSync(source)) return [];
   const raw = JSON.parse(readFileSync(source, 'utf8')) as {
     version?: unknown;
+    owner?: unknown;
     dispositions?: unknown;
   };
   if (raw.version !== 1 || !Array.isArray(raw.dispositions)) {
     throw new Error('historical disposition source must be version 1 with a dispositions array');
   }
-  const result = new Set<string>();
+  if (raw.owner !== undefined && (typeof raw.owner !== 'string' || raw.owner.trim() === '')) {
+    throw new Error('historical disposition source owner must be non-empty when present');
+  }
+  const seen = new Set<string>();
+  const result: HistoricalDisposition[] = [];
   for (const [index, candidate] of raw.dispositions.entries()) {
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
       throw new Error(`historical disposition ${index} must be an object`);
@@ -103,13 +103,23 @@ export function loadHistoricalDispositionPaths(repoRoot: string): ReadonlySet<st
       }
     }
     const path = normalizePath(String(value.path));
-    if (path.endsWith('/') || path.includes('*')) {
-      throw new Error(`historical disposition ${index} must name one exact file: ${path}`);
+    if (path === '' || path.startsWith('/') || path.endsWith('/') || path.includes('*') || path.split('/').includes('..')) {
+      throw new Error(`historical disposition ${index} must name one normalized exact repository file: ${path}`);
     }
-    if (result.has(path)) throw new Error(`duplicate historical disposition: ${path}`);
-    result.add(path);
+    if (seen.has(path)) throw new Error(`duplicate historical disposition: ${path}`);
+    seen.add(path);
+    result.push({
+      path,
+      class: String(value.class),
+      reason: String(value.reason),
+      owningReference: String(value.owningReference),
+    });
   }
   return result;
+}
+
+export function loadHistoricalDispositionPaths(repoRoot: string): ReadonlySet<string> {
+  return new Set(loadHistoricalDispositions(repoRoot).map((record) => record.path));
 }
 
 export function isHistoricalOrDeniedPath(
@@ -162,9 +172,6 @@ export function loadRetiredSurfaces(repoRoot: string): readonly RetiredSurfaceDe
     const definition = value as unknown as RetiredSurfaceDefinition;
     if (ids.has(definition.id)) throw new Error(`duplicate retired surface id: ${definition.id}`);
     ids.add(definition.id);
-    // Source patterns are deliberately case-sensitive. Runtime selectors and
-    // executable names are exact identities; case-folding turns neutral status
-    // codes and historical prose into false active-runtime violations.
     new RegExp(definition.sourceCommandPattern, 'gm');
     new RegExp(definition.pathPattern, 'i');
     return definition;
