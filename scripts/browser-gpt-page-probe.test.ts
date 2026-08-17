@@ -37,6 +37,7 @@ import {
   readStateLightTurnObservation,
   transitionStateLightTurnObservation,
 } from './chatgpt-browser-turn/state-light-turn-observation.ts';
+import { publishStateLightReply } from './chatgpt-browser-turn/state-light-turn.ts';
 
 class FakeNode {
   readonly innerText: string;
@@ -1127,6 +1128,101 @@ test('harvest publishes a completed exact owned turn and remains workflow-author
     const record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
     assert.equal(record.phase, 'harvested');
     assert.equal(record.primary?.sha256, sha256('FINAL'));
+  });
+});
+
+test('harvest waits for a recovery-opened bound page to expose a stable owned turn', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let fakeNow = 0;
+    let evaluateCalls = 0;
+    let createCalls = 0;
+    let closeCalls = 0;
+    let published = '';
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => [],
+      createPage: async () => {
+        createCalls += 1;
+        return {
+          id: 'harvest-created',
+          type: 'page',
+          url: 'about:blank',
+          title: 'Loading',
+          webSocketDebuggerUrl: 'ws://example/harvest-created',
+        };
+      },
+      closePage: async () => { closeCalls += 1; return 'closed'; },
+      now: () => fakeNow,
+      sleep: async (delay) => { fakeNow += delay; },
+      evaluate: async (_target, expression) => {
+        assert.equal(expression, HARVEST_EXPRESSION);
+        evaluateCalls += 1;
+        if (evaluateCalls === 1) {
+          return evaluateExpression(expression, [], false, 'https://chatgpt.com/');
+        }
+        return evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-created' }),
+          new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': 'a-created' }),
+        ], false, 'https://chatgpt.com/c/test');
+      },
+      publish: async (_destination, bytes) => { published = Buffer.from(bytes).toString('utf8'); },
+    }));
+    assert.equal(result.status, 'ok');
+    assert.equal(result.harvested, true);
+    assert.equal(published, 'FINAL');
+    assert.deepEqual({ createCalls, evaluateCalls, closeCalls }, { createCalls: 1, evaluateCalls: 3, closeCalls: 0 });
+  });
+});
+
+test('harvest atomic publication leaves no canonical partial and retries the same binding', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    const common = {
+      listTargets: async () => [{
+        id: 'harvest-atomic', type: 'page', url: 'https://chatgpt.com/c/test', title: 'Atomic',
+        webSocketDebuggerUrl: 'ws://example/harvest-atomic',
+      }],
+      evaluate: async (_target: any, expression: string) => {
+        assert.equal(expression, HARVEST_EXPRESSION);
+        return evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-atomic' }),
+          new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': 'a-atomic' }),
+        ], false, 'https://chatgpt.com/c/test');
+      },
+      publish: async () => { throw new Error('legacy_publish_must_not_run'); },
+    } satisfies Partial<ProbeDependencies>;
+
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        ...common,
+        publishPrimary: (destination, ownerInvocationId, reply) => publishStateLightReply(
+          destination,
+          ownerInvocationId,
+          reply,
+          { beforeFinalLink: () => { throw new Error('injected_before_final_link'); } },
+        ),
+      })),
+      (error: any) => error.status === 'export_failed',
+    );
+    await assert.rejects(readFile(output, 'utf8'), (error: any) => error.code === 'ENOENT');
+    assert.equal(
+      readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase,
+      'sent_unharvested',
+    );
+
+    const retry = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      ...common,
+      publishPrimary: (destination, ownerInvocationId, reply) => publishStateLightReply(
+        destination,
+        ownerInvocationId,
+        reply,
+      ),
+    }));
+    assert.equal(retry.status, 'ok');
+    assert.equal(retry.harvested, true);
+    assert.equal(await readFile(output, 'utf8'), 'FINAL');
+    assert.equal(
+      readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase,
+      'harvested',
+    );
   });
 });
 

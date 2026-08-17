@@ -13,6 +13,8 @@ import {
 import {
   classifyBrowserGptPageTurnStatus,
   ownedPromptMatches,
+  publishStateLightReply,
+  type StateLightPublicationResult,
 } from './chatgpt-browser-turn/state-light-turn.ts';
 
 export const PROBE_SCHEMA = 'browser-gpt-page-probe/v1';
@@ -160,6 +162,11 @@ export interface ProbeDependencies {
   readonly listTargets: (cdp: string) => Promise<readonly CdpTarget[]>;
   readonly evaluate: (target: CompatibleTarget, expression: string, timeoutMs?: number) => Promise<unknown>;
   readonly publish: (destination: string, bytes: Uint8Array) => Promise<void>;
+  readonly publishPrimary?: (
+    destination: string,
+    invocationId: string,
+    reply: string,
+  ) => Promise<StateLightPublicationResult> | StateLightPublicationResult;
   readonly createPage?: (cdp: string, conversationUrl: string) => Promise<CdpTarget | readonly CdpTarget[]>;
   readonly closePage?: (cdp: string, targetId: string) => Promise<'closed' | 'already_gone'>;
   readonly setTimeout?: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
@@ -850,6 +857,7 @@ export const defaultDependencies: ProbeDependencies = {
   listTargets: defaultListTargets,
   evaluate: defaultEvaluate,
   publish: publishExactBytes,
+  publishPrimary: (destination, invocationId, reply) => publishStateLightReply(destination, invocationId, reply),
   createPage: defaultCreatePage,
   closePage: defaultClosePage,
 };
@@ -1483,6 +1491,71 @@ function ownedHarvestWindow(snapshot: HarvestSnapshot, marker: string): {
   return { owned: owned[0]!, assistants: window.filter((row) => row.role === 'assistant') };
 }
 
+function harvestReadinessKey(snapshot: HarvestSnapshot, marker: string): string | undefined {
+  const window = ownedHarvestWindow(snapshot, marker);
+  if (!window) return undefined;
+  return JSON.stringify({
+    page_url: snapshot.page_url,
+    owned: {
+      ordinal: window.owned.ordinal,
+      document_ordinal: window.owned.document_ordinal,
+      message_id: window.owned.message_id,
+      byte_length: window.owned.byte_length,
+      sha256: window.owned.sha256,
+    },
+  });
+}
+
+async function harvestWithReadiness(
+  target: CompatibleTarget,
+  requestedIdentity: string,
+  marker: string,
+  deps: ProbeDependencies,
+): Promise<HarvestSnapshot> {
+  const deadline = clockNow(deps) + ACQUISITION_READINESS_TIMEOUT_MS;
+  let previousKey: string | undefined;
+  while (clockNow(deps) < deadline) {
+    const remaining = deadline - clockNow(deps);
+    if (remaining <= 0) break;
+    let value: unknown;
+    try {
+      value = await withTimeout(
+        deps.evaluate(target, HARVEST_EXPRESSION, Math.min(CDP_REQUEST_TIMEOUT_MS, remaining)),
+        remaining,
+        deps,
+        'harvest_readiness_sample_timeout',
+      );
+      if (clockNow(deps) >= deadline) throw new ProbeError('unavailable', 'harvest_readiness_sample_timeout');
+    } catch (error) {
+      if ((error instanceof ProbeError && error.reason === 'harvest_readiness_sample_timeout')
+        || (error instanceof Error && error.message === 'cdp_evaluate_timeout')) {
+        throw new ProbeError('surface_unknown', 'harvest_readiness_timeout');
+      }
+      throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
+    }
+    const actualIdentity = normalizedConversationIdentity(value);
+    if (actualIdentity !== undefined && actualIdentity !== requestedIdentity) {
+      throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+    }
+    try {
+      const snapshot = validateHarvestSnapshot(value, target);
+      if (snapshot.page_url === requestedIdentity) {
+        const key = harvestReadinessKey(snapshot, marker);
+        if (key !== undefined && key === previousKey) return snapshot;
+        previousKey = key;
+      } else {
+        previousKey = undefined;
+      }
+    } catch (error) {
+      if (!(error instanceof ProbeError) || error.status !== 'surface_unknown') throw error;
+      previousKey = undefined;
+    }
+    if (clockNow(deps) >= deadline) break;
+    await delay(deps, Math.min(ACQUISITION_READINESS_INTERVAL_MS, Math.max(0, deadline - clockNow(deps))));
+  }
+  throw new ProbeError('surface_unknown', 'harvest_readiness_timeout');
+}
+
 async function resolveHarvestTarget(
   args: ParsedHarvestArgs,
   marker: string,
@@ -1509,8 +1582,8 @@ async function resolveHarvestTarget(
     }
     const target = validateCreatedTarget(created, normalized, preExistingTargetIds);
     // Harvest never derives cleanup authority. A recovery-opened page is left
-    // untouched for the caller/operator after this one-shot observation.
-    return { target, snapshot: await readHarvestSnapshot(target, deps) };
+    // untouched for the caller/operator after this bounded readiness observation.
+    return { target, snapshot: await harvestWithReadiness(target, normalized, marker, deps) };
   }
 
   const candidates: Array<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> = [];
@@ -1598,6 +1671,13 @@ async function runHarvest(args: ParsedHarvestArgs, deps: ProbeDependencies): Pro
     target: args.output,
     bytes,
     publish: async () => {
+      if (deps.publishPrimary) {
+        try {
+          return await deps.publishPrimary(args.output, args.invocationId, assistant.text);
+        } catch (error) {
+          return { state: 'error' as const, cause: boundedDetail(error) };
+        }
+      }
       try {
         await deps.publish(args.output, bytes);
         return {
