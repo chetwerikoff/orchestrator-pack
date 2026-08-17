@@ -46,6 +46,9 @@ function sourcePublicationSection(identity: PackGptSourceIdentity | undefined): 
   const marker = formatPackGptSourceMarker(normalized);
   return [
     'After you have determined the source result and only after the final live-head recheck, create exactly one top-level PR Conversation comment.',
+    'Invoke the send-capable comment-create mutation at most once for this frozen invocation.',
+    'After that create mutation has been invoked, never invoke comment creation again for this invocation, including after an error, timeout, transport failure, or unknown delivery result.',
+    'Treat every such ambiguous create outcome as possibly delivered. Do not recover by creating another comment; runner-side GitHub census and exact reread are the only recovery path.',
     'Never create a GitHub Review. Never edit or update the source comment after creation.',
     '',
     'The comment body must be exactly:',
