@@ -16,16 +16,16 @@
   ],
   "allowed_roots": [
     ".claude/skills/create-issue-draft/SKILL.md",
-    ".cursor/skills/create-issue-draft/SKILL.md",
-    "docs/tiering.md",
-    "docs/create-issue-draft-acceptance-artifacts.md",
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    ".cursor/skills/create-issue-draft/SKILL.md",
     "AGENTS.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
     "docs/declarations/1364.pr-scope.json",
-    "scripts/lib/stage-completeness-core.ts",
+    "docs/tiering.md",
+    "scripts/lib/create-issue-stage-topology.test.ts",
     "scripts/lib/create-issue-stage-topology.ts",
-    "scripts/stage-completeness-guard.test.ts",
-    "scripts/lib/create-issue-stage-topology.test.ts"
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.test.ts"
   ],
   "source_revision": "39d409facbfd033eadf424798b1241e983d73a80"
 }
