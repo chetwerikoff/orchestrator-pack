@@ -560,7 +560,7 @@ describe('scheduler bounded-child production composition', () => {
     writeFileSync(legacyConfig, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
     writeFileSync(fixturePath, JSON.stringify({
       workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }],
-      dispatches: [],
+      dispatchOutcome: 'dispatch_unknown', dispatches: [],
     }));
     writeEpoch(epochPath, 'epoch-defaults', 'nonce-defaults');
     const env = processEnv(root, fixturePath, epochPath, legacyConfig, 'epoch-defaults', 'nonce-defaults');
@@ -572,7 +572,7 @@ describe('scheduler bounded-child production composition', () => {
     const first = await runTick(env);
     const second = await runTick(env);
     expect(observerResult(first).schedulerGeneration).toBe(observerResult(second).schedulerGeneration);
-    expect(fixture(fixturePath).dispatches).toHaveLength(1);
+    expect(fixture(fixturePath).dispatches).toHaveLength(0);
     expect(existsSync(path.join(legacyHome, '.local', 'state', 'orchestrator-pack', 'fleet-observer', 'snapshot.json'))).toBe(true);
   });
 
