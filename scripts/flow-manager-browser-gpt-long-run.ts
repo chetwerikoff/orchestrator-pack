@@ -25,7 +25,6 @@ function refuse(reason: string): void {
   process.exitCode = 2;
 }
 
-
 function refuseStaleHandoffReceipt(
   handoffReceipt: string,
   runIdentity: string,
@@ -104,6 +103,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
   const options = parseFlagArgv(argv);
   const runIdentity = requiredOption(options, 'run-identity');
   const attemptIdentity = requiredOption(options, 'attempt-identity');
+  const invocationId = requiredOption(options, 'invocation-id');
   const handoffReceipt = requiredOption(options, 'handoff-receipt');
   const terminalEnvelope = requiredOption(options, 'terminal-envelope');
   const browserOutput = requiredOption(options, 'output');
@@ -127,13 +127,14 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
 
   const browserArgs = [
     'turn',
+    '--invocation-id', invocationId,
     '--profile', profile,
     '--cdp', cdp,
     '--input', input,
     '--output', browserOutput,
   ];
   if (reviewerSourceOutput) browserArgs.push('--reviewer-source-output', reviewerSourceOutput);
-  for (const key of ['invocation-id', 'reviewer-source', 'repository', 'issue-number', 'source-revision', 'timeout-ms', 'poll-ms']) {
+  for (const key of ['reviewer-source', 'repository', 'issue-number', 'source-revision', 'timeout-ms', 'poll-ms']) {
     if (typeof options.get(key) === 'string') browserArgs.push(`--${key}`, options.get(key) as string);
   }
   if (typeof options.get('chat-url') === 'string') browserArgs.push('--chat-url', options.get('chat-url') as string);
