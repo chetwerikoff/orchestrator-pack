@@ -13,7 +13,6 @@ export interface VerifyLine {
   readonly status: 'PASS' | 'WARN' | 'FAIL';
   readonly detail: string;
 }
-
 export interface VerifyReport {
   readonly lines: readonly VerifyLine[];
   readonly failures: readonly string[];
@@ -69,7 +68,6 @@ function globRegex(pattern: string): RegExp {
 function anyGlob(path: string, patterns: readonly string[]): boolean {
   return patterns.some((pattern) => globRegex(pattern).test(path));
 }
-
 export function evaluateReusableTrackedPaths(paths: readonly string[]): readonly string[] {
   const violations: string[] = [];
   for (const raw of paths) {
@@ -192,9 +190,10 @@ export async function runVerification(repoRoot: string, options: { readonly stri
 
   const gateReport = runGateRunner(repoRoot, gateRegistrations.map((registration) => registration.gateId));
   for (const result of gateReport.results) {
-    lines.push({ name: `gate/${result.gateId}`, status: result.status === 'PASS' ? 'PASS' : result.status === 'WARN' ? 'WARN' : 'FAIL', detail: result.summary });
+    const lineStatus: VerifyLine['status'] = result.status === 'PASS' ? 'PASS' : result.status === 'FAIL' ? 'FAIL' : 'WARN';
+    lines.push({ name: `gate/${result.gateId}`, status: lineStatus, detail: result.summary });
     if (result.status === 'FAIL') failures.push(`gate ${result.gateId}: ${result.summary}`);
-    else if (result.status === 'WARN') warnings.push(`gate ${result.gateId}: ${result.summary}`);
+    else if (result.status === 'SKIP') warnings.push(`gate ${result.gateId}: ${result.summary}`);
   }
   const retirement = scanRetiredRuntimeSurfaces({ repoRoot });
   if (retirement.violations.length > 0) {
@@ -221,7 +220,6 @@ function argument(argv: readonly string[], name: string): string | undefined {
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] : undefined;
 }
-
 export async function main(argv: readonly string[]): Promise<number> {
   try {
     const repoRoot = resolve(argument(argv, '--repo-root') ?? resolve(import.meta.dirname, '..'));
@@ -235,5 +233,4 @@ export async function main(argv: readonly string[]): Promise<number> {
     return 1;
   }
 }
-
 if (isDirectExecution(import.meta.url, process.argv[1])) process.exitCode = await main(process.argv.slice(2));
