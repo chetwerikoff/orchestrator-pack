@@ -3753,6 +3753,7 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     const exitCode = await runStateLightTurn([
       '--profile', join(root, 'profile'),
       '--cdp', cdp,
+      '--invocation-id', randomUUID(),
       '--input', input,
       '--output', output,
       '--chat-url', target,
