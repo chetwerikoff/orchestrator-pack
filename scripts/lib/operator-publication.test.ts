@@ -88,6 +88,38 @@ describe('Orca message truth', () => {
     ]);
   });
 
+  it('does not credential a synthetic submit-witness shape without production capture', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'terminal show') return workerLookup();
+      if (operation === 'terminal send') {
+        return {
+          ok: true,
+          result: {
+            send: {
+              accepted: true,
+              submitWitness: {
+                runtime: worker.runtime,
+                workerId: worker.id,
+                workerGeneration: worker.generation,
+                payloadSha256: '0cfefcacfe03534dd908444efd6e4d0d1075fd8cf59ac79bf956312385679cfe',
+                submitted: true,
+              },
+            },
+          },
+        };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.dispatchInput({ worker, text: 'exact payload' })).toEqual({
+      status: 'dispatch_unknown',
+      reason: 'submit_witness_unavailable',
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[0] === 'terminal' && call[0]?.[1] === 'send'))
+      .toHaveLength(1);
+  });
+
   it('reports a process-launch failure before send as definitive and never retries', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
