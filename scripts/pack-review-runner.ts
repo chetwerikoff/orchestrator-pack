@@ -1230,24 +1230,24 @@ function credentialedSourceTerminal(options: {
 }
 
 function failedSourceCommentTerminal(options: {
-  identity: PackGptSourceIdentity;
   resolution: Exclude<PackGptSourceCommentResolution, { kind: 'credentialed' }>;
   browserTerminal?: GptTerminalTurnResult | null;
   result: ProcessResult;
-}): GptTerminalTurnResult {
-  return {
-    schema: 'turn-result/v1',
-    state: 'driver_error',
-    scope: 'local',
-    cause: options.resolution.reason,
-    invocation_id: options.identity.invocationId,
-    send_count: Math.max(1, Number(options.browserTerminal?.send_count ?? 1)),
+}): Record<string, unknown> {
+  const reconciliation = {
     source_comment_reconciliation: options.resolution.kind,
-    browser_terminal: options.browserTerminal ?? null,
+    source_comment_reason: options.resolution.reason,
     process_exit_code: options.result.exitCode,
     process_timed_out: options.result.timedOut,
     process_cancelled: options.result.cancelled,
   };
+  return options.browserTerminal
+    ? { ...options.browserTerminal, ...reconciliation }
+    : {
+        exitCode: options.result.exitCode,
+        stderr: options.result.stderr,
+        ...reconciliation,
+      };
 }
 
 function harnessSourceResolution(
@@ -1445,7 +1445,6 @@ async function runGptSourceBatch(options: {
       } else {
         terminalClass = terminalClassForGptResult(invocation.result, browserTerminal);
         terminalResult = failedSourceCommentTerminal({
-          identity,
           resolution,
           browserTerminal,
           result: invocation.result,
