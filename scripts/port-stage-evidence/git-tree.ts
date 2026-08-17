@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { lstat, readFile } from 'node:fs/promises';
 import { runProcess } from '#opk-kernel/subprocess';
 
 export interface MeasuredTreeFile {
@@ -116,11 +117,59 @@ async function readBlobs(repoRoot: string, entries: readonly TreeEntry[]): Promi
   return parseBatchOutput(result.stdout, entries);
 }
 
+interface IndexEntry {
+  readonly mode: '100644' | '100755';
+  readonly blobSha: string;
+  readonly stage: string;
+  readonly path: string;
+}
+
+async function readIndexEntries(repoRoot: string, path: string): Promise<readonly IndexEntry[]> {
+  const result = await runProcess({
+    command: 'git',
+    args: ['ls-files', '--stage', '--full-name', '-z', '--', path],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    encoding: 'utf8',
+    allowEmptyStdout: true,
+  });
+  if (!result.ok) throw new Error(`cannot inspect measured index entry for ${path}: ${result.stderr || result.error || result.outcome}`);
+  return result.stdout.split('\0').filter(Boolean).map((record) => {
+    const match = /^(100644|100755) ([0-9a-f]{40}) ([0-3])\t([\s\S]+)$/u.exec(record);
+    if (!match) throw new Error(`malformed measured index entry for ${path}`);
+    return { mode: match[1] as IndexEntry['mode'], blobSha: match[2]!, stage: match[3]!, path: normalizePath(match[4]!) };
+  });
+}
+
+async function assertMeasuredCheckout(repoRoot: string, files: readonly MeasuredTreeFile[]): Promise<void> {
+  for (const file of files) {
+    const indexEntries = await readIndexEntries(repoRoot, file.path);
+    if (indexEntries.length !== 1 || indexEntries[0]?.stage !== '0' || indexEntries[0].path !== file.path
+      || indexEntries[0].mode !== file.mode || indexEntries[0].blobSha !== file.blobSha) {
+      throw new Error(`measured tracked input index identity mismatch: ${file.path}`);
+    }
+
+    const absolute = `${repoRoot}/${file.path}`;
+    let stat;
+    try {
+      stat = await lstat(absolute);
+    } catch {
+      throw new Error(`measured tracked input worktree missing: ${file.path}`);
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`measured tracked input worktree is not a regular file: ${file.path}`);
+    const worktreeMode = (stat.mode & 0o111) === 0 ? '100644' : '100755';
+    if (worktreeMode !== file.mode) throw new Error(`measured tracked input worktree mode mismatch: ${file.path}`);
+    const bytes = await readFile(absolute);
+    if (!bytes.equals(file.bytes)) throw new Error(`measured tracked input worktree byte mismatch: ${file.path}`);
+  }
+}
+
 export async function loadMeasuredTree(repoRoot: string, candidateHead: string): Promise<MeasuredTree> {
   const measuredHead = await exactCommit(repoRoot, candidateHead);
   const entries = await listRegularFiles(repoRoot, measuredHead);
   const blobs = await readBlobs(repoRoot, entries);
   const files = entries.map((entry, index): MeasuredTreeFile => ({ ...entry, bytes: blobs[index]! }));
+  await assertMeasuredCheckout(repoRoot, files);
   const byPath = new Map(files.map((file) => [file.path, file]));
   const digestPayload = files.map((file) => `${file.mode} ${file.blobSha}\t${file.path}\n`).join('');
   return { measuredHead, files, byPath, inputFactTreeDigest: sha256(Buffer.from(digestPayload, 'utf8')) };

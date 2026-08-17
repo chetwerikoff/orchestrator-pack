@@ -1,4 +1,5 @@
-import { readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runProcess } from '#opk-kernel/subprocess';
@@ -6,6 +7,7 @@ import { generateCurrentHeadProjection, serializeCurrentHeadProjection } from '.
 import {
   ARTIFACT_PATHS,
   ARTIFACT_ROLES,
+  parseRetainedDispositions,
   SOURCE_KINDS,
   classifyInstructionOccurrence,
   producePortStageEvidence,
@@ -44,6 +46,25 @@ async function exactCandidateHead(): Promise<string> {
   const candidate = parts.length >= 3 ? parts[2] : parts[0];
   if (!candidate || !/^[0-9a-f]{40}$/u.test(candidate)) throw new Error(`cannot derive exact test candidate SHA: ${parents.stdout.trim()}`);
   return candidate;
+}
+
+async function git(cwd: string, args: readonly string[]): Promise<string> {
+  const result = await runProcess({ command: 'git', args, cwd, inheritParentEnv: true, allowEmptyStdout: true });
+  if (!result.ok) throw new Error(`git ${args.join(' ')} failed: ${result.stderr || result.error || result.outcome}`);
+  return result.stdout.trim();
+}
+
+async function cloneCandidate(measuredHead: string): Promise<string> {
+  const root = mkdtempSync(`${tmpdir()}/opk-1415-evidence-`);
+  await git(repoRoot, ['clone', '--local', '--no-hardlinks', repoRoot, root]);
+  await git(root, ['checkout', '--detach', measuredHead]);
+  return root;
+}
+
+async function commitFixture(root: string, paths: readonly string[]): Promise<string> {
+  await git(root, ['add', '--', ...paths]);
+  await git(root, ['-c', 'user.name=Issue 1415 test', '-c', 'user.email=issue-1415@example.invalid', 'commit', '--no-gpg-sign', '-m', 'Issue 1415 fixture']);
+  return git(root, ['rev-parse', 'HEAD']);
 }
 
 describe('Issue #1415 role-neutral port-stage evidence', () => {
@@ -157,6 +178,42 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     expect(unclassifiedPowerShellPathOccurrence('examples/readme.md')).toBeUndefined();
   });
 
+  it('accepts a valid retained row and rejects invalid retained-row mutations', () => {
+    const valid = JSON.stringify({
+      version: 1,
+      owningIssue: 1415,
+      dispositions: [{
+        path: 'scripts/dormant.ps1',
+        disposition: 'retained-for-1251-zero-estate',
+        reason: 'dormant survivor is owned by the final zero-estate child',
+        owningReference: '#1251',
+      }],
+    });
+    expect(parseRetainedDispositions(valid)).toEqual([{
+      path: 'scripts/dormant.ps1',
+      disposition: 'retained-for-1251-zero-estate',
+      reason: 'dormant survivor is owned by the final zero-estate child',
+      owningReference: '#1251',
+    }]);
+
+    const mutations = [
+      { name: 'wrong owner', mutate: (row: Record<string, unknown>) => { row.owningReference = '#1415'; } },
+      { name: 'non-PowerShell target', mutate: (row: Record<string, unknown>) => { row.path = 'scripts/dormant.ts'; } },
+      { name: 'empty reason', mutate: (row: Record<string, unknown>) => { row.reason = ' '; } },
+      { name: 'wrong disposition', mutate: (row: Record<string, unknown>) => { row.disposition = 'current-prescriptive'; } },
+    ];
+    for (const mutation of mutations) {
+      const row = {
+        path: 'scripts/dormant.ps1',
+        disposition: 'retained-for-1251-zero-estate',
+        reason: 'dormant survivor',
+        owningReference: '#1251',
+      } as Record<string, unknown>;
+      mutation.mutate(row);
+      expect(() => parseRetainedDispositions(JSON.stringify({ version: 1, owningIssue: 1415, dispositions: [row] })), mutation.name).toThrow(/invalid retained disposition/u);
+    }
+  });
+
   it('scans JSON/TypeScript string values but not JSON keys or TS comments', () => {
     const json = Buffer.from('{"pwsh":"scripts/verify.ps1","other":"pwsh"}', 'utf8');
     expect(scanPowerShellTokens({ sourcePath: 'package.json', bytes: json, ranges: jsonStringValueRanges(json), resolvesWholePath: () => false }).map((token) => token.matchedBytes)).toEqual(['scripts/verify.ps1', 'pwsh']);
@@ -177,6 +234,101 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     expect(resolver.resolve('scripts/work/caller.ts', '../../../scripts/tools/check.ps1')).toBeUndefined();
   });
 
+  it('replays staged, deleted, renamed, and retained-metadata mutations fail-closed', async () => {
+    const measuredHead = await exactCandidateHead();
+    const cases: readonly { name: string; mutate: (root: string) => Promise<void> }[] = [
+      {
+        name: 'staged tracked input bytes',
+        mutate: async (root) => {
+          appendFileSync(resolve(root, 'scripts/verify.ts'), '\n// staged mutation replay\n');
+          await git(root, ['add', '--', 'scripts/verify.ts']);
+        },
+      },
+      {
+        name: 'staged tracked input deletion',
+        mutate: async (root) => {
+          rmSync(resolve(root, 'scripts/verify.ts'));
+          await git(root, ['add', '-u', '--', 'scripts/verify.ts']);
+        },
+      },
+      {
+        name: 'staged tracked input rename',
+        mutate: async (root) => {
+          await git(root, ['mv', 'scripts/verify.ts', 'scripts/verify-renamed.ts']);
+        },
+      },
+      {
+        name: 'staged retained metadata bytes',
+        mutate: async (root) => {
+          appendFileSync(resolve(root, 'docs/investigations/orca-pwsh-zero-estate/retained-dispositions.json'), '\n');
+          await git(root, ['add', '-f', '--', 'docs/investigations/orca-pwsh-zero-estate/retained-dispositions.json']);
+        },
+      },
+    ];
+
+    for (const mutation of cases) {
+      const root = await cloneCandidate(measuredHead);
+      try {
+        await mutation.mutate(root);
+        await expect(producePortStageEvidence({
+          repoRoot: root,
+          artifactRole: 'baseline',
+          measuredHead,
+          producerRevision: measuredHead,
+        }), mutation.name).rejects.toThrow(/measured tracked input/u);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('proves an end-to-end oracle for all seven source kinds', async () => {
+    const measuredBase = await exactCandidateHead();
+    const root = await cloneCandidate(measuredBase);
+    try {
+      mkdirSync(resolve(root, '.github/workflows'), { recursive: true });
+      mkdirSync(resolve(root, 'docs'), { recursive: true });
+      writeFileSync(resolve(root, 'scripts/fixture-source-kind.ps1'), 'Write-Output fixture\n');
+      writeFileSync(resolve(root, 'scripts/fixture-source-kind.ts'), 'const command = "pwsh -File scripts/fixture-source-kind.ps1";\n');
+      writeFileSync(resolve(root, '.github/workflows/fixture-source-kind.yml'), 'jobs:\n  check:\n    steps:\n      - run: pwsh -File scripts/fixture-source-kind.ps1\n');
+      writeFileSync(resolve(root, 'source-kind.config.json'), JSON.stringify({ command: 'pwsh -File scripts/fixture-source-kind.ps1' }));
+      appendFileSync(resolve(root, 'README.md'), '\npwsh -File scripts/fixture-source-kind.ps1\n');
+      appendFileSync(resolve(root, 'AGENTS.md'), '\nRun scripts/fixture-source-kind.ps1 for the fixture check.\n');
+      writeFileSync(resolve(root, 'docs/fixture-source-kind.md'), 'See scripts/fixture-source-kind.ps1 for context.\n');
+      const measuredHead = await commitFixture(root, [
+        'scripts/fixture-source-kind.ps1',
+        'scripts/fixture-source-kind.ts',
+        '.github/workflows/fixture-source-kind.yml',
+        'source-kind.config.json',
+        'README.md',
+        'AGENTS.md',
+        'docs/fixture-source-kind.md',
+      ]);
+      const evidence = await producePortStageEvidence({
+        repoRoot: root,
+        artifactRole: 'baseline',
+        measuredHead,
+        producerRevision: measuredHead,
+      });
+      expect(new Set(evidence.entries.map((entry) => entry.sourceKind))).toEqual(new Set(SOURCE_KINDS));
+      const fixtureEntries = evidence.entries.filter((entry) => (
+        entry.occurrence.matchedBytes === 'scripts/fixture-source-kind.ps1'
+        || entry.occurrence.sourcePath === 'scripts/fixture-source-kind.ps1'
+      ));
+      expect(fixtureEntries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ sourceKind: 'tracked-ps1-file', resolvedScriptPath: 'scripts/fixture-source-kind.ps1', targetResolution: 'exact' }),
+        expect.objectContaining({ sourceKind: 'script-token-reference', targetResolution: 'exact' }),
+        expect.objectContaining({ sourceKind: 'workflow-token-reference', targetResolution: 'exact' }),
+        expect.objectContaining({ sourceKind: 'package-config-token-reference', targetResolution: 'exact' }),
+        expect.objectContaining({ sourceKind: 'instruction-command', targetResolution: 'exact' }),
+        expect.objectContaining({ sourceKind: 'instruction-directive', targetResolution: 'exact' }),
+        expect.objectContaining({ sourceKind: 'instruction-reference-only', targetResolution: 'exact' }),
+      ]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('produces canonical current-head census and emits an untracked baseline for the exact PR-head candidate', async () => {
     const measuredHead = await exactCandidateHead();
     const projection = await generateCurrentHeadProjection(repoRoot, measuredHead);
@@ -194,24 +346,26 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     expect(cli.stdout.endsWith('\n')).toBe(true);
     expect(cli.stdout.endsWith('\n\n')).toBe(false);
 
-    const evidence = await producePortStageEvidence({ repoRoot, artifactRole: 'baseline', measuredHead, producerRevision: measuredHead });
-    expect(evidence.measuredHead).toBe(measuredHead);
-    expect(evidence.producerRevision).toBe(measuredHead);
-    expect(evidence.gateCensus.populationCount).toBeGreaterThan(0);
-    expect(evidence.gateCensus.populationDigest).toBe(projection.populationDigest);
-    expect(evidence.gateCensus.outputDigest).toBe(canonical.outputDigest);
-    expect(() => verifyEvidenceIntegrity(evidence)).not.toThrow();
-    for (const entry of evidence.entries) expect(SOURCE_KINDS).toContain(entry.sourceKind);
-
-    const outputPath = await writePortStageEvidence(repoRoot, evidence);
+    const cleanRoot = await cloneCandidate(measuredHead);
     try {
+      const evidence = await producePortStageEvidence({ repoRoot: cleanRoot, artifactRole: 'baseline', measuredHead, producerRevision: measuredHead });
+      expect(evidence.measuredHead).toBe(measuredHead);
+      expect(evidence.producerRevision).toBe(measuredHead);
+      expect(evidence.gateCensus.populationCount).toBeGreaterThan(0);
+      expect(evidence.gateCensus.populationDigest).toBe(projection.populationDigest);
+      expect(evidence.gateCensus.outputDigest).toBe(canonical.outputDigest);
+      expect(() => verifyEvidenceIntegrity(evidence)).not.toThrow();
+      for (const entry of evidence.entries) expect(SOURCE_KINDS).toContain(entry.sourceKind);
+
+      const outputPath = await writePortStageEvidence(cleanRoot, evidence);
       expect(outputPath).toBe(ARTIFACT_PATHS.baseline);
-      const written = JSON.parse(readFileSync(resolve(repoRoot, outputPath), 'utf8'));
+      const written = JSON.parse(readFileSync(resolve(cleanRoot, outputPath), 'utf8'));
       expect(written.integrityDigest).toBe(evidence.integrityDigest);
-      const tracked = await runProcess({ command: 'git', args: ['ls-files', '--error-unmatch', outputPath], cwd: repoRoot, inheritParentEnv: true, allowEmptyStdout: true });
+      const tracked = await runProcess({ command: 'git', args: ['ls-files', '--error-unmatch', outputPath], cwd: cleanRoot, inheritParentEnv: true, allowEmptyStdout: true });
       expect(tracked.ok).toBe(false);
+      rmSync(resolve(cleanRoot, outputPath), { force: true });
     } finally {
-      rmSync(resolve(repoRoot, outputPath), { force: true });
+      rmSync(cleanRoot, { recursive: true, force: true });
     }
   });
 });

@@ -247,10 +247,8 @@ interface RetainedFile {
   readonly dispositions?: unknown;
 }
 
-function parseRetained(tree: MeasuredTree): readonly RetainedDisposition[] {
-  const file = tree.byPath.get(RETAINED_DISPOSITIONS_PATH);
-  if (!file) throw new Error(`tracked retained disposition authority is missing: ${RETAINED_DISPOSITIONS_PATH}`);
-  const parsed = JSON.parse(file.bytes.toString('utf8')) as RetainedFile;
+export function parseRetainedDispositions(bytes: Buffer | string): readonly RetainedDisposition[] {
+  const parsed = JSON.parse(typeof bytes === 'string' ? bytes : bytes.toString('utf8')) as RetainedFile;
   if (parsed.version !== 1 || parsed.owningIssue !== 1415 || !Array.isArray(parsed.dispositions)) throw new Error('retained-dispositions.json must be version 1, owningIssue 1415, with dispositions array');
   const seen = new Set<string>();
   return parsed.dispositions.map((candidate, index) => {
@@ -263,6 +261,12 @@ function parseRetained(tree: MeasuredTree): readonly RetainedDisposition[] {
     if (value.disposition !== 'retained-for-1251-zero-estate' || value.owningReference !== '#1251' || typeof value.reason !== 'string' || value.reason.trim() === '') throw new Error(`invalid retained disposition metadata for ${path}`);
     return { path, disposition: 'retained-for-1251-zero-estate', reason: value.reason, owningReference: '#1251' };
   });
+}
+
+function parseRetained(tree: MeasuredTree): readonly RetainedDisposition[] {
+  const file = tree.byPath.get(RETAINED_DISPOSITIONS_PATH);
+  if (!file) throw new Error(`tracked retained disposition authority is missing: ${RETAINED_DISPOSITIONS_PATH}`);
+  return parseRetainedDispositions(file.bytes);
 }
 
 function stableEntries(entries: readonly EvidenceEntry[]): readonly EvidenceEntry[] {
