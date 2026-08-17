@@ -263,7 +263,7 @@ function fixture(options: WorkerNotificationOptions, workerId: string): PackRevi
       idempotencyKey: options.request.idempotencyKey,
     }, null, 2)}\n`, 'utf8');
   }
-  return { state: 'escalated', reason: 'fixture_submitted' };
+  return { state: 'submitted', reason: 'fixture_submitted' };
 }
 
 function bindPersistedReviewRun(options: WorkerNotificationOptions):
@@ -360,22 +360,22 @@ function bindPersistedReviewRun(options: WorkerNotificationOptions):
  * Journal-first runtime notification. The exact runtime + id + generation is
  * loaded from the immutable persisted review-run binding before claim acquisition,
  * then revalidated against the selected adapter immediately before one dispatch.
- * `dispatch_unknown` is persisted as UNCERTAIN and never retried.
- * A submit-scoped success is intentionally surfaced as escalated/submitted rather
- * than the legacy delivered state; this result type has no submitted member.
+ * The consumer result is submit-scoped: only evidence-backed dispatch is
+ * `submitted`; definite failures before dispatch are `pre_dispatch_failure`; and
+ * post-dispatch uncertainty is `ambiguous`. Recipient delivery is never inferred.
  */
 export async function sendPackReviewWorkerNotification(
   originalOptions: WorkerNotificationOptions,
 ): Promise<PackReviewWorkerNotificationResult> {
   const bound = bindPersistedReviewRun(originalOptions);
-  if (!bound.ok) return { state: 'escalated', reason: bound.reason };
+  if (!bound.ok) return { state: 'pre_dispatch_failure', reason: bound.reason };
   const options = bound.options;
   const workerId = trim(options.workerId || options.sessionId);
-  if (!workerId) return { state: 'escalated', reason: 'worker_id_unresolved' };
+  if (!workerId) return { state: 'pre_dispatch_failure', reason: 'worker_id_unresolved' };
   const fixtureResult = fixture(options, workerId);
   if (fixtureResult) return fixtureResult;
   if (!trim(options.request.idempotencyKey)) {
-    return { state: 'escalated', reason: 'worker_notification_delivery_key_missing' };
+    return { state: 'pre_dispatch_failure', reason: 'worker_notification_delivery_key_missing' };
   }
 
   const stateRoot = resolveWakeSupervisorStateRoot();
@@ -393,7 +393,7 @@ export async function sendPackReviewWorkerNotification(
       expectedHeadSha: trim(options.headSha).toLowerCase(),
     });
   } catch (error) {
-    return { state: 'escalated', reason: error instanceof Error ? error.message : 'worker_target_unresolved' };
+    return { state: 'pre_dispatch_failure', reason: error instanceof Error ? error.message : 'worker_target_unresolved' };
   }
 
   const projectId = trim(options.projectId) || 'orchestrator-pack';
@@ -402,10 +402,10 @@ export async function sendPackReviewWorkerNotification(
   const intentClass = trim(options.intentClass) || 'review-findings';
   if (intentClass === 'task-continuation') {
     if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
-      return { state: 'escalated', reason: 'task_continuation_issue_required' };
+      return { state: 'pre_dispatch_failure', reason: 'task_continuation_issue_required' };
     }
   } else if (!Number.isInteger(prNumber) || prNumber <= 0) {
-    return { state: 'escalated', reason: 'pr_number_required' };
+    return { state: 'pre_dispatch_failure', reason: 'pr_number_required' };
   }
 
   const workerTarget = `${worker.identity.runtime}:${worker.identity.id}:${worker.identity.generation}`;
@@ -431,8 +431,8 @@ export async function sendPackReviewWorkerNotification(
     namespace: claimNamespace,
   });
   if (!claim.acquired) {
-    if (claim.reason === 'already_served') return { state: 'escalated', reason: 'claim_duplicate_no_op' };
-    return { state: 'escalated', reason: claim.reason };
+    if (claim.reason === 'already_served') return { state: 'submitted', reason: 'claim_duplicate_no_op' };
+    return { state: 'pre_dispatch_failure', reason: claim.reason };
   }
 
   let admission: JournalAdmission;
@@ -448,11 +448,11 @@ export async function sendPackReviewWorkerNotification(
       reason: 'journal_register_failed',
       detail: error instanceof Error ? error.message : String(error),
     });
-    return { state: 'escalated', reason: error instanceof Error ? error.message : 'journal_register_failed' };
+    return { state: 'pre_dispatch_failure', reason: error instanceof Error ? error.message : 'journal_register_failed' };
   }
   if (admission.duplicate) {
     await finalizeWorkerNudgeClaim(claim, 'SENT', { duplicateNoOp: true });
-    return { state: 'escalated', reason: 'journal_duplicate_no_op' };
+    return { state: 'submitted', reason: 'journal_duplicate_no_op' };
   }
 
   const fenced = await withSideEffectFence({
@@ -481,7 +481,7 @@ export async function sendPackReviewWorkerNotification(
       claimOutcome: 'FAILED_DEFINITIVE',
       extra: { reason: fenced.reason },
     });
-    return { state: 'escalated', reason: completed.ok ? fenced.reason : completed.reason };
+    return { state: 'pre_dispatch_failure', reason: completed.ok ? fenced.reason : completed.reason };
   }
   if (!fenced.value.marked) {
     const completed = await finalizeBoth({
@@ -491,7 +491,7 @@ export async function sendPackReviewWorkerNotification(
       claimOutcome: 'FAILED_DEFINITIVE',
       extra: { reason: fenced.value.reason },
     });
-    return { state: 'escalated', reason: completed.ok ? fenced.value.reason : completed.reason };
+    return { state: 'pre_dispatch_failure', reason: completed.ok ? fenced.value.reason : completed.reason };
   }
 
   const dispatch = fenced.value.result;
@@ -502,7 +502,10 @@ export async function sendPackReviewWorkerNotification(
       journalOutcome: DISPATCH_OUTCOME_DISPATCHED,
       claimOutcome: 'SENT',
     });
-    return { state: 'escalated', reason: completed.ok ? 'runtime_dispatch_submitted' : completed.reason };
+    return {
+      state: 'submitted',
+      reason: completed.ok ? 'runtime_dispatch_submitted' : `runtime_dispatch_submitted:${completed.reason}`,
+    };
   }
   if (dispatch.status === 'dispatch_unknown') {
     const completed = await finalizeBoth({
@@ -512,7 +515,7 @@ export async function sendPackReviewWorkerNotification(
       claimOutcome: 'UNCERTAIN',
       extra: { reason: dispatch.reason },
     });
-    return { state: 'escalated', reason: completed.ok ? 'dispatch_unknown' : completed.reason };
+    return { state: 'ambiguous', reason: completed.ok ? 'dispatch_unknown' : completed.reason };
   }
   const completed = await finalizeBoth({
     admission,
@@ -521,7 +524,7 @@ export async function sendPackReviewWorkerNotification(
     claimOutcome: 'FAILED_DEFINITIVE',
     extra: { reason: dispatch.reason },
   });
-  return { state: 'failed', reason: completed.ok ? dispatch.reason : completed.reason };
+  return { state: 'pre_dispatch_failure', reason: completed.ok ? dispatch.reason : completed.reason };
 }
 
 export { sendPackReviewWorkerNotification as dispatchPackReviewWorkerNotification };
