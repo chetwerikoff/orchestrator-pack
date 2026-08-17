@@ -231,5 +231,4 @@ export const STATE_LIGHT_TURN_BASE_ARGV = [
   '--profile', '/tmp/profile',
   '--cdp', 'http://127.0.0.1:9222',
   '--input', '/tmp/prompt.txt',
-  '--invocation-id', '11111111-1111-4111-8111-111111111111',
 ] as const;
