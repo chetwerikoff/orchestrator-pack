@@ -640,7 +640,10 @@ export function establishRuntimeSmokeDelivery(input: {
   const now = input.now ?? (() => Date.now());
   const sleepMs = input.sleepMs ?? sleep;
   const deadline = now() + input.deadlineMs;
-  const dispatched = input.adapter.dispatchInput({ worker: input.worker, text: input.prompt }, { cwd: input.cwd });
+  const dispatched = input.adapter.dispatchInput(
+    { worker: input.worker, text: input.prompt },
+    { cwd: input.cwd, timeoutMs: input.deadlineMs },
+  );
   if (dispatched.status !== 'dispatched') {
     return { ok: false, reason: `${dispatched.status}:${dispatched.reason}`, submitCount: 0 };
   }

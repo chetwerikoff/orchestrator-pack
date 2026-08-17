@@ -7,6 +7,7 @@ import {
   type OrcaTerminalSummary,
 } from '../orca-runtime/native.ts';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
+import { SMOKE_DELIVERY_TIMEOUT_MS } from './worker-smoke-lifecycle-base.ts';
 import type {
   RuntimeCallOptions,
   RuntimeDispatchResult,
@@ -604,7 +605,7 @@ export function installStableWorkerSmokeSpawnPatch(
         10,
       );
       const configuredTimeoutMs = options.deliveryConfirmationTimeoutMs
-        ?? (Number.isSafeInteger(envTimeoutMs) && envTimeoutMs > 0 ? envTimeoutMs : 30_000);
+        ?? (Number.isSafeInteger(envTimeoutMs) && envTimeoutMs > 0 ? envTimeoutMs : SMOKE_DELIVERY_TIMEOUT_MS);
       const timeoutMs = Math.max(
         2,
         Math.min(callOptions.timeoutMs ?? 30_000, configuredTimeoutMs),
