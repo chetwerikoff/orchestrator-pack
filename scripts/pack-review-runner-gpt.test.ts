@@ -297,7 +297,6 @@ describe('Issue #1341 operator-only pack-review start', () => {
     expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([]);
   });
 
-
   it.each(['active', 'journaled-terminal'])('rejects operator invocation on %s same-head run without mutating provenance', async (kind) => {
     const storeRoot = tempRoot('opk-1341-operator-existing-');
     const capture = path.join(storeRoot, 'github-review.json');
@@ -1781,19 +1780,22 @@ describe('Issue #1393 legacy aggregate compatibility and runner harvest matrix',
     runId: string,
     storeRoot: string,
     slotId: string,
-    invocationId: string,
+    fixtureInvocationId: string,
     harvestClass: HarvestClass,
   ): void {
     const run = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
     const slot = run?.reviewRound?.sourceSlots.find((candidate) => candidate.slotId === slotId);
-    const evidenceRoot = `/fixture/gpt-evidence/${invocationId}`;
+    const evidenceRoot = `/fixture/gpt-evidence/${fixtureInvocationId}`;
+    const persistedInvocationId = slot?.invocationId;
+    expect(persistedInvocationId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(persistedInvocationId).not.toBe(fixtureInvocationId);
     expect(slot).toMatchObject({
       slotId,
       lifecycle: 'terminal',
-      invocationId,
+      invocationId: persistedInvocationId,
       terminalClass: harvestClass,
       terminalResult: {
-        invocation_id: invocationId,
+        invocation_id: persistedInvocationId,
         send_count: 1,
         review_harvest_class: harvestClass,
         review_evidence: {
