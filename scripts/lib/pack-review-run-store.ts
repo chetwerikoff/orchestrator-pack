@@ -688,11 +688,20 @@ function mergeFrozenGptSlot(
     throw new Error(`corrupt pack review run record at ${path}: terminal source slot attempt cannot advance`);
   }
 
-  let invocationId = existing.invocationId ?? incoming.invocationId;
+  const legalRetryIdentityRotation = existing.lifecycle !== 'terminal'
+    && existingAttempt === 1
+    && incomingAttempt === 2
+    && existing.invocationId !== undefined
+    && incoming.invocationId !== undefined
+    && existing.invocationId !== incoming.invocationId;
+  let invocationId = legalRetryIdentityRotation
+    ? incoming.invocationId
+    : existing.invocationId ?? incoming.invocationId;
   if (existing.invocationId !== undefined
     && incoming.invocationId !== undefined
-    && existing.invocationId !== incoming.invocationId) {
-    throw new Error(`corrupt pack review run record at ${path}: invocationId cannot change`);
+    && existing.invocationId !== incoming.invocationId
+    && !legalRetryIdentityRotation) {
+    throw new Error(`corrupt pack review run record at ${path}: invocationId cannot change outside the one retry transition`);
   }
 
   const attemptOrdinal = existingAttempt === undefined
