@@ -26,6 +26,16 @@ export interface RuntimeWorker {
   readonly provenance: RuntimeWorkerProvenance;
 }
 
+/**
+ * Result of resolving one persistence-safe logical assignment binding.
+ * `gone` is affirmative exact-target absence/terminal evidence, not generic
+ * lookup failure. Ambiguous or unavailable resolution remains RuntimeResult
+ * failure and must not be reinterpreted as `gone` by callers.
+ */
+export type RuntimeAssignmentWorkerResolution =
+  | { readonly kind: 'resolved'; readonly worker: RuntimeWorker }
+  | { readonly kind: 'gone' };
+
 export interface RuntimeReadiness {
   readonly ready: true;
   readonly workspacePath: string;
@@ -151,9 +161,10 @@ export interface RuntimeAdapter {
   ): RuntimeResult<RuntimeWorker | null>;
 
   /**
-   * Resolve a persistence-safe lifecycle binding into a current exact runtime
-   * worker. The binding key is provider-owned lifecycle identity, never a raw
-   * runtime id/generation. Adapters that cannot prove this mapping omit the seam.
+   * Resolve a persistence-safe lifecycle binding into either one current exact
+   * runtime worker or affirmative exact-target gone evidence. The binding key is
+   * provider-owned lifecycle identity, never a raw runtime id/generation.
+   * Adapters that cannot prove this mapping omit the seam.
    */
   resolveAssignmentWorker?(
     input: {
@@ -161,7 +172,7 @@ export interface RuntimeAdapter {
       readonly bindingKey: string;
     },
     options?: RuntimeCallOptions,
-  ): RuntimeResult<RuntimeWorker | null>;
+  ): RuntimeResult<RuntimeAssignmentWorkerResolution>;
 
   spawnWorker(
     input: {
