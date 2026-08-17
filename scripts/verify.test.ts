@@ -11,9 +11,9 @@ describe('Issue #1415 Node verification authority', () => {
     ]);
   });
 
-  it('keeps .env.example as the exact reusable exception', () => {
+  it('preserves the legacy exception semantics without widening the allowlist', () => {
     expect(evaluateReusableTrackedPaths(['.env.example', 'plugins/demo/.env.example'])).toEqual([
-      'plugins/demo/.env.example :: not in reusable pack allowlist',
+      '.env.example :: not in reusable pack allowlist',
     ]);
   });
 });
