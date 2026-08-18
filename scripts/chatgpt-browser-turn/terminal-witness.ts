@@ -862,6 +862,15 @@ export function settleDirectPublication(
       invocation,
     };
   }
+  const unpairedResults = matching.results.filter((item) => item.toolCallId !== invocation.toolCallId);
+  if (unpairedResults.some((item) =>
+    item.parentUserMessageId === undefined || item.parentUserMessageId === target.userMessageId)) {
+    return {
+      state: 'possible-delivery',
+      cause: 'direct_publication_result_ambiguous',
+      invocation,
+    };
+  }
   const results = matching.results.filter((item) => item.toolCallId === invocation.toolCallId);
   if (results.some((item) => item.parentUserMessageId !== target.userMessageId)) {
     return {
