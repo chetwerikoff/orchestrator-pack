@@ -324,6 +324,12 @@ describe('Issue #1431 manager reviewer canon', () => {
       expect(await runStateLightEntry(baseArgs, {
         runTurn: async (argv) => {
           delegated.push([...argv]);
+          const delegatedInputIndex = argv.indexOf('--input');
+          const delegatedInput = delegatedInputIndex >= 0 ? argv[delegatedInputIndex + 1] : undefined;
+          expect(delegatedInput).toBeDefined();
+          expect(delegatedInput).not.toBe(input);
+          writeFileSync(input, `${rendered.text}mutation\n`);
+          expect(readFileSync(delegatedInput!, 'utf8')).toBe(rendered.text);
           return 0;
         },
       })).toBe(0);
@@ -372,6 +378,20 @@ describe('Issue #1431 manager reviewer canon', () => {
       };
       expect(refusal.cause).toBe('input_invalid:legacy_direct_publication_turn_refused');
       expect(refusal.send_count).toBe(0);
+
+      stdout.chunks.length = 0;
+      expect(await runLegacyBrowserTurnCli([
+        'turn',
+        '--invocation-id', reviewContext.invocationId,
+        '--capture-too-many-requests-source', 'unused-capture.html',
+        '--reviewer-source-output', 'unused.txt',
+      ])).not.toBe(0);
+      const combinedRefusal = JSON.parse(stdout.chunks.join('').trim()) as {
+        cause: string;
+        send_count: number;
+      };
+      expect(combinedRefusal.cause).toBe('input_invalid:legacy_direct_publication_turn_refused');
+      expect(combinedRefusal.send_count).toBe(0);
     } finally {
       stdout.restore();
     }
