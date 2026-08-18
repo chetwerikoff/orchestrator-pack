@@ -15,6 +15,7 @@ import {
   readStateLightTurnObservation,
   transitionStateLightTurnObservation,
 } from './chatgpt-browser-turn/state-light-turn-observation.ts';
+import { recoveryMarkerCardinality } from './chatgpt-browser-turn/state-light-turn-recovery.ts';
 import {
   classifyBrowserGptPageTurnStatus,
   ownedPromptMatches,
@@ -1505,9 +1506,15 @@ function ownedHarvestWindow(snapshot: HarvestSnapshot, marker: string): {
   readonly owned: HarvestRow;
   readonly assistants: readonly HarvestRow[];
 } | null {
+  const markerCardinality = recoveryMarkerCardinality(snapshot.rows, marker);
+  if (markerCardinality.matchingUserCarrierCount > 1 || markerCardinality.exactMarkerTokenCount > 1) {
+    throw new ProbeError('ambiguous', 'owned_turn_marker_ambiguous');
+  }
   const owned = snapshot.rows.filter((row) => row.role === 'user' && ownedPromptMatches(row.text, marker));
   if (owned.length === 0) return null;
-  if (owned.length > 1) throw new ProbeError('ambiguous', 'owned_turn_marker_ambiguous');
+  if (owned.length > 1 || markerCardinality.exactMarkerTokenCount !== 1) {
+    throw new ProbeError('ambiguous', 'owned_turn_marker_ambiguous');
+  }
   const index = snapshot.rows.indexOf(owned[0]!);
   const suffix = snapshot.rows.slice(index + 1);
   const nextUser = suffix.findIndex((row) => row.role === 'user');
