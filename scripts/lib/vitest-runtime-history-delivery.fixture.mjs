@@ -886,6 +886,61 @@ async function testPolicyUnavailableFailsClosed() {
   equal(fixture.state().mergeCalls, 0, 'policy lookup failure must block merge');
 }
 
+async function testLateMembershipDriftMatrixRequiresFreshRefresh() {
+  const stable = [
+    'scripts/check-ci-pipeline-split.test.ts',
+    'scripts/orchestrator-wake-supervisor.test.ts',
+  ];
+  const reintroduced = 'scripts/reintroduced-runtime-history.test.ts';
+  const cases = [
+    {
+      name: 'add',
+      prior: stable,
+      prepared: stable,
+      current: [...stable, 'scripts/late-added-runtime-history.test.ts'],
+    },
+    {
+      name: 'delete',
+      prior: stable,
+      prepared: stable,
+      current: [stable[0]],
+    },
+    {
+      name: 'reintroduce',
+      prior: [...stable, reintroduced],
+      prepared: stable,
+      current: [...stable, reintroduced],
+    },
+  ];
+
+  for (const testCase of cases) {
+    const prepared = new Set(testCase.prepared);
+    const current = new Set(testCase.current);
+    const delta = [
+      ...testCase.prepared.filter((path) => !current.has(path)),
+      ...testCase.current.filter((path) => !prepared.has(path)),
+    ];
+    assert(delta.length > 0, `${testCase.name}: modeled trusted-main inventory must differ after candidate preparation`);
+    if (testCase.name === 'reintroduce') {
+      assert(testCase.prior.includes(reintroduced), 'reintroduce case must prove the path existed before candidate preparation');
+      assert(!testCase.prepared.includes(reintroduced), 'reintroduce case must remove the path at candidate preparation');
+      assert(testCase.current.includes(reintroduced), 'reintroduce case must add the path back after candidate preparation');
+    }
+
+    const fixture = createIo({
+      getPr({ prReads }) {
+        if (prReads === 1) return validPr();
+        return { ...validPr(), mergeable: true, mergeable_state: 'behind' };
+      },
+    });
+    const result = await runDeliveryMonitor(config, fixture.io);
+    equal(result.outcome, 'close-as-obsolete', `${testCase.name}: stale membership candidate must retire`);
+    assert(result.reason.includes('fresh complete refresh required'), `${testCase.name}: stale membership must require a fresh complete refresh`);
+    equal(fixture.state().mergeCalls, 0, `${testCase.name}: stale membership candidate must never reach merge`);
+    equal(fixture.state().closeCalls, 1, `${testCase.name}: obsolete delivery PR must close exactly once`);
+  }
+}
+
 async function testOrdinaryPrIsolation() {
   const fixture = createIo({
     pr: { ...validPr(), head: { ...validPr().head, ref: 'feature/contributor' } },
@@ -953,6 +1008,7 @@ function testSourceContracts() {
   const source = readFileSync(new URL('../vitest-runtime-history-delivery.mjs', import.meta.url), 'utf8');
   assert(source.includes('`sha=${headSha}`'), 'existing expected-head merge protection must remain');
   assert(source.includes('policy.strict !== true'), 'delivery monitor must fail closed if main no longer requires an up-to-date branch');
+  assert(source.includes("pr?.mergeable_state === 'behind'"), 'delivery monitor must retire generated heads whose base advanced after candidate preparation');
   assert(!source.includes('PACK_REVIEWER'), 'generated helper must not invoke PACK_REVIEWER');
   assert(!source.includes('requiredCheckNamesFromSnapshot'), 'snapshot must not remain readiness authority');
 
@@ -972,6 +1028,8 @@ function testSourceContracts() {
   assert(deliveryWorkflow.includes('./scripts/gh api user --jq .login'), 'trusted actor resolution must remain');
   assert(deliveryWorkflow.includes('--trusted-actor "${{ steps.delivery_actor.outputs.trusted_actor }}"'), 'monitor must receive trusted actor');
   assert(deliveryWorkflow.includes('--event-sender "${{ github.event.sender.login }}"'), 'monitor must receive event sender');
+  assert(deliveryWorkflow.includes('GH_TOKEN: ${{ github.token }}'), 'monitor merge must use the scoped workflow token');
+  assert(!deliveryWorkflow.includes('GH_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}'), 'delivery owner credential must not remain the monitor merge token');
 }
 
 function testNarrowGithubReadInventory() {
@@ -1017,6 +1075,7 @@ async function main() {
     testHeadDriftAtFinalBoundary,
     testPolicyDriftAtFinalBoundary,
     testPolicyUnavailableFailsClosed,
+    testLateMembershipDriftMatrixRequiresFreshRefresh,
     testOrdinaryPrIsolation,
     testMergeReadbackFailure,
     testMergeRejectionReturnsToBoundedDecision,
