@@ -542,6 +542,134 @@ exit 2
   }
 }
 
+async function testDeliveryBranchLeaseMatrix() {
+  const root = mkdtempSync(join(tmpdir(), 'runtime-history-lease-'));
+  const scriptsDir = join(root, 'scripts');
+  const binDir = join(root, 'bin');
+  const remoteState = join(root, 'remote-head.txt');
+  const pushAudit = join(root, 'push-audit.txt');
+  const pushOutput = join(root, 'push-output.txt');
+  const preparedHead = '4444444444444444444444444444444444444444';
+  const oldHead = '5555555555555555555555555555555555555555';
+  const unrelatedNewerHead = '6666666666666666666666666666666666666666';
+  try {
+    mkdirSync(scriptsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(scriptsDir, 'vitest-runtime-history.json'), '{}\n', 'utf8');
+    writeExecutable(join(binDir, 'node'), `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "scripts/refresh-vitest-runtime-history.mjs" ] && [ "\${2:-}" = "reconcile" ]; then
+  out=''
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = '--output' ]; then shift; out="$1"; break; fi
+    shift
+  done
+  [ -n "$out" ] || { echo 'missing reconcile output' >&2; exit 2; }
+  printf '%s\\n' '{}' > "$out"
+  exit 0
+fi
+exec "\${REAL_NODE}" "$@"
+`);
+    writeExecutable(join(binDir, 'git'), `#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-}" in
+  fetch|remote|worktree) exit 0 ;;
+  rev-parse)
+    case "\${2:-}" in
+      origin/main|HEAD^) printf '%s\\n' "\${MAIN_SHA}" ;;
+      HEAD) printf '%s\\n' "\${PREPARED_HEAD}" ;;
+      *) echo "fake git rev-parse: unhandled \${2:-}" >&2; exit 2 ;;
+    esac
+    ;;
+  diff)
+    if [[ "$*" == *"--name-only"* ]]; then
+      printf '%s\\n' 'scripts/vitest-runtime-history.json'
+    fi
+    ;;
+  push)
+    printf '%s\\n' "$*" >> "\${PUSH_AUDIT}"
+    lease="\${2:-}"
+    prefix="--force-with-lease=refs/heads/${DELIVERY_BRANCH}:"
+    [[ "${lease}" == "${prefix}"* ]] || { echo 'missing exact delivery lease' >&2; exit 2; }
+    expected="\${lease#${prefix}}"
+    current="$(cat "\${REMOTE_STATE}")"
+    if [ "${current}" != "${expected}" ]; then
+      echo "stale lease: expected ${expected:-<absent>} current ${current:-<absent>}" >&2
+      exit 1
+    fi
+    printf '%s\\n' "\${PREPARED_HEAD}" > "\${REMOTE_STATE}"
+    ;;
+  *) echo "fake git: unhandled $*" >&2; exit 2 ;;
+esac
+`);
+
+    const workflow = readFileSync(new URL('../../.github/workflows/vitest-runtime-history-refresh.yml', import.meta.url), 'utf8');
+    const pushBlock = workflowRunBlock(workflow, 'Push delivery branch');
+    const runScenario = async ({ name, initialRemote, remoteSha, expectedExit, expectedRemote }) => {
+      writeFileSync(remoteState, initialRemote, 'utf8');
+      writeFileSync(pushAudit, '', 'utf8');
+      writeFileSync(pushOutput, '', 'utf8');
+      const result = await runProcess({
+        command: 'bash',
+        args: ['-c', pushBlock],
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH ?? ''}`,
+          REAL_NODE: process.execPath,
+          GITHUB_REPOSITORY: TARGET_REPOSITORY,
+          GITHUB_OUTPUT: pushOutput,
+          DELIVERY_BRANCH,
+          DELIVERY_TOKEN: 'fixture-delivery-token',
+          REMOTE_SHA: remoteSha,
+          MAIN_SHA: SOURCE_MAIN,
+          PREPARED_HEAD: preparedHead,
+          REMOTE_STATE: remoteState,
+          PUSH_AUDIT: pushAudit,
+        },
+        allowEmptyStdout: true,
+      });
+      equal(result.exitCode, expectedExit, `${name} exit code`);
+      equal(readFileSync(remoteState, 'utf8').trim(), expectedRemote, `${name} remote head`);
+      const pushes = readFileSync(pushAudit, 'utf8').trim().split(/\r?\n/).filter(Boolean);
+      equal(pushes.length, 1, `${name} must attempt exactly one generated-head update`);
+      return { result, push: pushes[0], output: readFileSync(pushOutput, 'utf8') };
+    };
+
+    const absent = await runScenario({
+      name: 'absent branch',
+      initialRemote: '',
+      remoteSha: '',
+      expectedExit: 0,
+      expectedRemote: preparedHead,
+    });
+    assert(absent.push.includes(`--force-with-lease=refs/heads/${DELIVERY_BRANCH}:`), 'absent branch must use the absent-ref lease');
+    assert(absent.output.includes(`head_sha=${preparedHead}`), 'absent branch success must publish generated head output');
+
+    const existing = await runScenario({
+      name: 'existing branch',
+      initialRemote: oldHead,
+      remoteSha: oldHead,
+      expectedExit: 0,
+      expectedRemote: preparedHead,
+    });
+    assert(existing.push.includes(`--force-with-lease=refs/heads/${DELIVERY_BRANCH}:${oldHead}`), 'existing branch must use exact old-head lease authority');
+    assert(existing.output.includes(`head_sha=${preparedHead}`), 'existing branch success must publish generated head output');
+
+    const stale = await runScenario({
+      name: 'stale lease',
+      initialRemote: unrelatedNewerHead,
+      remoteSha: oldHead,
+      expectedExit: 1,
+      expectedRemote: unrelatedNewerHead,
+    });
+    assert(stale.result.stderr.includes('stale lease'), 'stale lease refusal must remain observable');
+    equal(stale.output.trim(), '', 'stale lease refusal must not publish generated head output');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function testStatusHistoryProjection() {
   equal(projectPackReviewStatusHistory([provenanceStatus()]).state, 'absent', 'no operator row should be absent');
   equal(
@@ -835,6 +963,7 @@ function testSourceContracts() {
   assert(refreshWorkflow.includes('verifyRefreshRun'), 'same-payload recovery must verify the prior refresh episode before reusing its head');
   assert(refreshWorkflow.includes('matching remote payload lacks successful exact-head provenance; regenerating delivery head'), 'failed provenance must regenerate the generated head instead of deadlocking the PR');
   assert(refreshWorkflow.includes('commit --amend --no-edit'), 'invalid-provenance recovery must be able to regenerate a distinct delivery head without an extra empty commit');
+  assert(refreshWorkflow.includes('prepared_parent_sha="$(git rev-parse HEAD^)"'), 'delivery push must bind current main to the actual prepared commit parent');
   assert(refreshWorkflow.includes('--force-with-lease="refs/heads/${DELIVERY_BRANCH}:'), 'generated branch delivery must use exact force-with-lease authority');
   assert(!refreshWorkflow.includes("name: 'refs/heads/main'"), 'refresh producer must never submit protected main as an updateRefs entry');
   assert(!refreshWorkflow.includes('PACK_REVIEWER'), 'refresh workflow must not invoke PACK_REVIEWER');
@@ -870,6 +999,7 @@ async function main() {
     testIdentityMatrix,
     testProvenanceMatrix,
     testSamePayloadFailedProvenanceRetryExecutesWorkflowRecovery,
+    testDeliveryBranchLeaseMatrix,
     testStatusHistoryProjection,
     testCurrentPolicySnapshotRegression,
     testProviderRestrictionFailsClosedWhenUnprovable,
