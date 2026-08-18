@@ -40,6 +40,15 @@ understand goal / tier / prerequisites
 
 Child author/reviewer/lens `worker_done` never settles the parent manager Task. A single LLM turn is never a Dispatch.
 
+For create-Issue independent review, the reviewer publishes its own complete
+verdict/findings as the governed top-level Issue comment. The manager consumes
+the reviewer receipt and owns later workflow/disposition actions; it does not
+normally relay or summarize a review into a replacement comment. The canonical
+reviewer publication and prompt policy remains in
+`.claude/skills/create-issue-draft/SKILL.md`; this runbook does not copy that
+prompt. Any genuine-write-failure exception remains limited to the fallback
+already defined by that owning skill.
+
 ### Worker
 
 A worker owns the bounded implementation workflow:
