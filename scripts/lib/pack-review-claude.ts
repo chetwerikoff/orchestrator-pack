@@ -1,6 +1,9 @@
 import '../toolchain/native-entrypoint-preflight.ts';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { executeReview } from '../../plugins/codex-pr-reviewer/lib/review_core.ts';
 import { parseReviewArgs } from '../../plugins/codex-pr-reviewer/lib/review_cli.ts';
+import { createReviewerBudgetLedger } from '../../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
 import { runProcess } from '../kernel/subprocess.ts';
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
@@ -23,6 +26,7 @@ export async function runClaudePackReview(argv: string[]): Promise<number> {
     return 2;
   }
 
+  const budget = createReviewerBudgetLedger();
   const promptResult = executeReview({
     ...options,
     fixtureStdout: undefined,
@@ -40,6 +44,7 @@ export async function runClaudePackReview(argv: string[]): Promise<number> {
     inheritParentEnv: true,
     input: promptResult.reviewStdout,
     allowEmptyStdout: false,
+    timeoutMs: budget.effectiveBudgetMs,
   });
   if (!claude.ok) {
     if (claude.stderr) process.stderr.write(claude.stderr.endsWith('\n') ? claude.stderr : `${claude.stderr}\n`);
@@ -60,7 +65,10 @@ export async function runClaudePackReview(argv: string[]): Promise<number> {
   return parsed.exitCode;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const direct = process.argv[1]
+  ? resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
+  : false;
+if (direct) {
   try {
     process.exitCode = await runClaudePackReview(process.argv.slice(2));
   } catch (error) {
