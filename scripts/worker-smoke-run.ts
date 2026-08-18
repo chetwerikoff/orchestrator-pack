@@ -674,8 +674,7 @@ export function establishRuntimeSmokeDelivery(input: {
 
   let token: RuntimeObservationToken | undefined;
   const submitCount = 0;
-  let observedNow = now();
-  while (observedNow < deadline) {
+  while (now() < deadline) {
     if (observeSmokeDeliveryEstablished(input.binding)) {
       markTrackedSmokeWorkerDeliveryConfirmed(input.worker);
       return { ok: true, observationToken: token, submitCount };
@@ -695,10 +694,9 @@ export function establishRuntimeSmokeDelivery(input: {
       token = read.value.observationToken;
     }
 
-    sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, deadline - observedNow)));
-    const nextNow = now();
-    if (nextNow <= observedNow) break;
-    observedNow = nextNow;
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) break;
+    sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, remainingMs)));
   }
   const reason = dispatched.status === 'dispatch_unknown'
     ? `dispatch_unknown:${dispatched.reason}`
