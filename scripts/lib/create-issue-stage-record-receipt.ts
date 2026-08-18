@@ -219,7 +219,6 @@ export function validateHistoricalReceiptsAgainstLineage(
   const expectedEventKeys = new Set<string>();
   let previousPosition = -1;
   let terminalCount = 0;
-  let terminalReceipt: { receipt: ConsumableStageReceipt; index: number } | undefined;
 
   for (const record of records) {
     const { receipt, raw, index } = record;
@@ -268,7 +267,6 @@ export function validateHistoricalReceiptsAgainstLineage(
 
     if (receipt.stage === 'architectural' && receipt.outcome === 'complete') {
       terminalCount += 1;
-      terminalReceipt = { receipt, index };
     }
   }
 
@@ -282,12 +280,12 @@ export function validateHistoricalReceiptsAgainstLineage(
 
   if (terminalCount !== 1) {
     errors.push(`final architectural terminal receipt count is ${terminalCount}; exactly one is required`);
-  } else if (terminalReceipt) {
-    const terminalLabel = receiptLabel(input.receiptPaths?.[terminalReceipt.index], terminalReceipt.index, terminalReceipt.receipt);
-    if (terminalReceipt.receipt.cycleId !== input.cycleId || terminalReceipt.receipt.sourceRevision !== input.issueRevision) {
-      errors.push(`${terminalLabel}: terminal receipt must use current head cycle ${input.cycleId} and revision ${input.issueRevision}`);
-    }
   }
+  // C6: the terminal GPT is one-shot. A bounded author correction may move the
+  // live Issue to a successor canonical cycle/revision, but it must not re-arm
+  // architectural. The original terminal receipt remains valid because its
+  // own cycle/source binding is proven above and the caller separately verifies
+  // the repaired live body + disposition/finding state.
 
   return [...new Set(errors)];
 }
