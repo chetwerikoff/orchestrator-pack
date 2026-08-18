@@ -64,32 +64,137 @@ const POSSIBLE_OR_ACTUAL_SEND_FAILURES = new Set([
   'incident',
 ]);
 
-function invocationProvesUnobservable(
-  receipt: Record<string, unknown>,
-  slot: string,
-  invocation: Record<string, unknown>,
-): boolean {
+function invocationProvesUnobservable(invocation: Record<string, unknown>): boolean {
   const invocationId = stringValue(invocation.invocationId);
-  const baseWitness = Boolean(
+  return Boolean(
     invocationId
     && invocation.terminal === true
     && invocation.sendCount === 1
     && invocation.retryClass === 'retry-forbidden'
     && POSSIBLE_OR_ACTUAL_SEND_FAILURES.has(String(invocation.terminalClassification)),
   );
-  if (!baseWitness) return false;
+}
 
-  const lane = record(receipt.reviewLane) ? receipt.reviewLane : null;
-  if (!lane) return true;
-  const sourceVerdicts = record(lane.sourceVerdicts) ? lane.sourceVerdicts : null;
-  const evidence = record(lane.sourceVerdictEvidence) ? lane.sourceVerdictEvidence : null;
-  const verdict = sourceVerdicts?.[slot];
-  const slotEvidence = evidence && record(evidence[slot]) ? evidence[slot] as Record<string, unknown> : null;
-  const producerEvidenceIdentity = stringValue(slotEvidence?.producerEvidenceIdentity);
-  return Boolean(
-    producerEvidenceIdentity
-    && (verdict === 'blocked' || verdict === 'unparseable'),
-  );
+function partialWitnessesBySlot(
+  receipt: Record<string, unknown>,
+  stage: LifecycleReviewStage,
+  errors: string[],
+): Map<string, Record<string, unknown>> {
+  const result = new Map<string, Record<string, unknown>>();
+  if (!Array.isArray(receipt.partialMissingSources)) return result;
+  for (const [index, value] of receipt.partialMissingSources.entries()) {
+    if (!record(value)) {
+      errors.push(`${stage} partialMissingSources[${index}] must be an object`);
+      continue;
+    }
+    const slot = stringValue(value.reviewerSlot);
+    const invocationId = stringValue(value.invocationId);
+    const evidenceIdentity = stringValue(value.evidenceIdentity);
+    const reason = stringValue(value.reason);
+    if (!slot || !/^\d{2}$/.test(slot) || !invocationId || !evidenceIdentity || !reason) {
+      errors.push(`${stage} partialMissingSources[${index}] must name reviewerSlot, invocationId, evidenceIdentity, and reason`);
+      continue;
+    }
+    if (result.has(slot)) {
+      errors.push(`${stage} partialMissingSources repeats reviewer slot ${slot}`);
+      continue;
+    }
+    result.set(slot, value);
+  }
+  return result;
+}
+
+export interface StageCredentialingResult {
+  credentialed: boolean;
+  errors: string[];
+  credentialingCaptures: Record<string, unknown>[];
+  missingSlots: string[];
+}
+
+/**
+ * Single executable settlement predicate for progression, artifact production,
+ * finding-ledger topology and final acceptance. A partial is never promoted by
+ * outcome alone: every missing slot needs a journal witness naming the exact
+ * invocation, and two-or-more missing slots additionally consume the existing
+ * producerEvidence=waived operator seam.
+ */
+export function evaluateStageCredentialingSettlement(
+  receiptValue: unknown,
+  reviewerCardinality: number,
+  stage: LifecycleReviewStage,
+): StageCredentialingResult {
+  const errors: string[] = [];
+  if (!record(receiptValue)) {
+    return { credentialed: false, errors: [`${stage} receipt is malformed`], credentialingCaptures: [], missingSlots: [] };
+  }
+  const receipt = receiptValue;
+  const required = canonicalSlots(reviewerCardinality);
+  validateLaneSlots(receipt, required, stage, errors);
+  const finals = finalInvocationBySlot(receipt);
+  const extraSlots = [...finals.keys()].filter((slotName) => !required.includes(slotName));
+  if (extraSlots.length > 0) errors.push(`${stage} settlement contains non-canonical slots: ${extraSlots.join(',')}`);
+
+  const credentialingCaptures = required.flatMap((slotName) => {
+    const invocation = finals.get(slotName);
+    return invocationCredentialed(invocation) && record(invocation?.capture)
+      ? [invocation.capture]
+      : [];
+  });
+  const missing = required.filter((slotName) => !invocationCredentialed(finals.get(slotName)));
+
+  if (receipt.outcome === 'complete') {
+    if (missing.length > 0) errors.push(`${stage} complete settlement is missing credentialed slots: ${missing.join(',')}`);
+    return { credentialed: errors.length === 0, errors, credentialingCaptures, missingSlots: missing };
+  }
+  if (receipt.outcome !== 'partial') {
+    errors.push(`${stage} outcome ${String(receipt.outcome)} consumes the stage slot but cannot credential progression/final acceptance`);
+    return { credentialed: false, errors, credentialingCaptures, missingSlots: missing };
+  }
+  if (reviewerCardinality !== 3) {
+    errors.push(`${stage} partial settlement is valid only for a canonical three-source stage`);
+    return { credentialed: false, errors, credentialingCaptures, missingSlots: missing };
+  }
+  if (missing.length === 0) {
+    errors.push(`${stage} partial settlement has no missing source`);
+    return { credentialed: false, errors, credentialingCaptures, missingSlots: missing };
+  }
+
+  const witnesses = partialWitnessesBySlot(receipt, stage, errors);
+  const witnessSlots = [...witnesses.keys()].sort();
+  const expectedMissing = [...missing].sort();
+  if (witnessSlots.length !== expectedMissing.length
+    || witnessSlots.some((slotName, index) => slotName !== expectedMissing[index])) {
+    errors.push(`${stage} partial journal witnesses must equal missing slots exactly: expected ${expectedMissing.join(',') || '<none>'}, got ${witnessSlots.join(',') || '<none>'}`);
+  }
+  for (const missingSlot of missing) {
+    const invocation = finals.get(missingSlot);
+    const witness = witnesses.get(missingSlot);
+    if (!invocation) {
+      errors.push(`${stage} partial missing slot ${missingSlot} lacks its invocation identity/evidence`);
+      continue;
+    }
+    if (!invocationProvesUnobservable(invocation)) {
+      errors.push(`${stage} partial missing slot ${missingSlot} is not a possible-or-actual send with resend forbidden`);
+      continue;
+    }
+    const invocationId = stringValue(invocation.invocationId);
+    if (!witness || stringValue(witness.invocationId) !== invocationId) {
+      errors.push(`${stage} partial missing slot ${missingSlot} lacks a journal witness naming invocation ${invocationId ?? '<missing>'}`);
+    }
+  }
+  if (missing.length >= 2 && receipt.producerEvidence !== 'waived') {
+    errors.push(`${stage} partial settlement is missing ${missing.length} slots; explicit operator waiver through the existing waiver seam is required`);
+  }
+  if (missing.length === 1 && credentialingCaptures.length !== 2) {
+    errors.push(`${stage} partial settlement must retain exactly two credentialed sources; observed ${credentialingCaptures.length}`);
+  }
+
+  return {
+    credentialed: errors.length === 0,
+    errors: [...new Set(errors)],
+    credentialingCaptures,
+    missingSlots: missing,
+  };
 }
 
 export interface LifecycleAcceptanceResult {
@@ -150,56 +255,14 @@ export function validateLifecycleAcceptanceTopology(
       errors.push(`${stage} requires exactly one settled Issue-lifetime stageAttemptId; observed ${candidates.length}`);
       continue;
     }
-    const { raw: receipt, slot } = candidates[0]!;
+    const { raw: receipt } = candidates[0]!;
     for (const predecessor of expectedStages.slice(0, expectedStages.indexOf(stage))) {
       if (!progressed.has(predecessor)) errors.push(`${stage} settled before predecessor ${predecessor} successfully settled`);
     }
 
-    const required = canonicalSlots(topologyEntry.reviewerCardinality);
-    validateLaneSlots(receipt, required, stage, errors);
-    if (slot.outcome === 'complete') {
-      progressed.add(stage);
-      continue;
-    }
-    if (slot.outcome !== 'partial') {
-      errors.push(`${stage} outcome ${slot.outcome} consumes the stage slot but cannot credential progression/final acceptance`);
-      continue;
-    }
-    if (topologyEntry.reviewerCardinality !== 3) {
-      errors.push(`${stage} partial settlement is valid only for a canonical three-source stage`);
-      continue;
-    }
-    const finals = finalInvocationBySlot(receipt);
-    const extraSlots = [...finals.keys()].filter((slotName) => !required.includes(slotName));
-    if (extraSlots.length > 0) {
-      errors.push(`${stage} partial settlement contains non-canonical slots: ${extraSlots.join(',')}`);
-      continue;
-    }
-    const missing = required.filter((slotName) => !invocationCredentialed(finals.get(slotName)));
-    if (missing.length === 0) {
-      errors.push(`${stage} partial settlement has no missing source`);
-      continue;
-    }
-    if (missing.length >= 2) {
-      errors.push(`${stage} partial settlement is missing ${missing.length} slots; explicit operator waiver through the existing waiver seam is required`);
-      continue;
-    }
-    const missingSlot = missing[0]!;
-    const invocation = finals.get(missingSlot);
-    if (!invocation) {
-      errors.push(`${stage} partial missing slot ${missingSlot} lacks its invocation identity/evidence`);
-      continue;
-    }
-    if (!invocationProvesUnobservable(receipt, missingSlot, invocation)) {
-      errors.push(`${stage} partial missing slot ${missingSlot} is not journal/evidence-backed as possible-or-actual send with resend forbidden`);
-      continue;
-    }
-    const completed = required.filter((slotName) => invocationCredentialed(finals.get(slotName))).length;
-    if (completed !== 2) {
-      errors.push(`${stage} partial settlement must retain exactly two credentialed sources; observed ${completed}`);
-      continue;
-    }
-    progressed.add(stage);
+    const credentialing = evaluateStageCredentialingSettlement(receipt, topologyEntry.reviewerCardinality, stage);
+    errors.push(...credentialing.errors);
+    if (credentialing.credentialed) progressed.add(stage);
   }
 
   return { ok: errors.length === 0, errors: [...new Set(errors)], expectedStages };
