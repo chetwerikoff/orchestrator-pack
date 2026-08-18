@@ -14,7 +14,7 @@ export type PackReviewer = PackReviewerPreferenceValue;
 
 export const PACK_REVIEWER_ENTRYPOINT_BY_ID: Readonly<Record<PackReviewer, string>> = {
   codex: 'plugins/codex-pr-reviewer/bin/review.ts',
-  claude: 'scripts/runtime/pack-review-claude.ts',
+  claude: 'plugins/codex-pr-reviewer/bin/review-claude.ts',
   gpt: 'scripts/run-pack-review-gpt.ts',
 };
 
