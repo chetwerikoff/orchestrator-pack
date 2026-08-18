@@ -117,6 +117,7 @@ function writeT3AcceptanceFixture() {
   const stageAttemptIds: string[] = [];
   writeFileSync(tierIntakePath, JSON.stringify({
     schema: 'tier-intake/v1', producer: 'flow-manager', taskIdentity, kind: 'fresh', priorTier: 'T3', firstRevision: sourceRevision,
+    competitiveDecision: 'required', competitiveRationale: 'fixture freezes the canonical T3 competitive path',
   }));
   for (const spec of [
     { stage: 'competitive', sequence: 1 },
@@ -164,15 +165,15 @@ function writeT3AcceptanceFixture() {
       invocations, credentialingCaptures: invocations.map((invocation) => {
         const text = canonicalAcceptanceArtifact(invocation.invocationId);
         return {
-          captureIdentity: `sha256:${hash(text)}:${invocation.capturePath.split(/[\/]/).at(-1)}`,
-          name: invocation.capturePath.split(/[\/]/).at(-1), byteLength: Buffer.byteLength(text), sha256: hash(text), rawFindingCount: 0,
+          captureIdentity: `sha256:${hash(text)}:${invocation.capturePath.split(/[\\/]/).at(-1)}`,
+          name: invocation.capturePath.split(/[\\/]/).at(-1), byteLength: Buffer.byteLength(text), sha256: hash(text), rawFindingCount: 0,
         };
       }),
       relayEligibleCaptures: invocations.map((invocation) => {
         const text = canonicalAcceptanceArtifact(invocation.invocationId);
         return {
-          captureIdentity: `sha256:${hash(text)}:${invocation.capturePath.split(/[\/]/).at(-1)}`,
-          name: invocation.capturePath.split(/[\/]/).at(-1), byteLength: Buffer.byteLength(text), sha256: hash(text), rawFindingCount: 0,
+          captureIdentity: `sha256:${hash(text)}:${invocation.capturePath.split(/[\\/]/).at(-1)}`,
+          name: invocation.capturePath.split(/[\\/]/).at(-1), byteLength: Buffer.byteLength(text), sha256: hash(text), rawFindingCount: 0,
         };
       }),
     }));
@@ -234,9 +235,20 @@ function sourceStage(name: 'competitive' | 'architectural-review', sequence: num
 function relay(captures: CaptureIdentityV1[]): VerifiedRelayEvidenceV1[] {
   return captures.map((item, index) => ({ relayAttemptId: `relay-${index}`, captureIdentity: item.captureIdentity, sourceLabel: `${item.name}|${item.captureIdentity}`, name: item.name, byteLength: item.byteLength, sha256: item.sha256, verified: true }));
 }
-function authority(receipts: StageCompletenessReceiptV1[], claudeProducerEvidence: unknown[] = []): ReviewEpisodeDerivationAuthorityV1 {
+function authority(
+  receipts: StageCompletenessReceiptV1[],
+  claudeProducerEvidence: unknown[] = [],
+  competitiveDecision: 'required' | 'skipped' = 'required',
+): ReviewEpisodeDerivationAuthorityV1 {
+  const priorTier = receipts[0]?.tier ?? 'T3';
   return {
-    tierIntake: { schema: 'tier-intake/v1', producer: 'flow-manager', taskIdentity: TASK, kind: 'fresh', priorTier: 'T3', firstRevision: REVISION },
+    tierIntake: {
+      schema: 'tier-intake/v1', producer: 'flow-manager', taskIdentity: TASK, kind: 'fresh', priorTier, firstRevision: REVISION,
+      ...(priorTier === 'T3' ? {
+        competitiveDecision,
+        competitiveRationale: 'fixture freezes the canonical T3 competitive path',
+      } : {}),
+    },
     receiptInventory: { source: 'canonical-review-directory', taskIdentity: TASK, episodeFirstRevision: REVISION, reviewEpisodeId: EPISODE, stageReceiptIds: receipts.map((item) => item.stageReceiptId) },
     claudeProducerEvidence,
   };
@@ -314,6 +326,23 @@ describe('Issue #1150 stage authority', () => {
     competitive.receipt.tier = 'T2';
     const rejected = deriveReviewEpisodeState([competitive.receipt], relay(competitive.captures), authority([competitive.receipt]));
     expect(rejected.errors.join('\n')).toContain('competitive is valid only for T3');
+  });
+
+  it('honors a frozen T3 competitive skip in core topology validation', () => {
+    const architectural = sourceStage('architectural-review', 1, 3);
+    const receipts = [architectural.receipt];
+    const state = deriveReviewEpisodeState(
+      receipts,
+      relay(architectural.captures),
+      authority(receipts, [], 'skipped'),
+    );
+    expect(state.errors, state.errors.join('\n')).toEqual([]);
+    expect(state.canonicalStages).toEqual([
+      'architectural-review',
+      'architectural-lens',
+      'architectural',
+    ]);
+    expect(validateReviewEpisodeTopology(state, 'pre-lens')).toEqual([]);
   });
 
   it('credentials a post-send incident capture only with explicit authoritative GitHub artifact authority', () => {
