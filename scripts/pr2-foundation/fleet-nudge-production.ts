@@ -78,8 +78,8 @@ export function createProductionFleetNudgeEffects(input: {
       { timeoutMs: Math.max(1, deadlineMs - Date.now()) },
     );
     return current.status === 'ok'
-      && current.value !== null
-      && sameRuntimeWorker(current.value.identity, binding.worker);
+      && current.value.kind === 'resolved'
+      && sameRuntimeWorker(current.value.worker.identity, binding.worker);
   };
 
   return {

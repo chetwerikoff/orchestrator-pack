@@ -25,7 +25,7 @@ const REQUIRED_FILES = [
   '.claude/skills/change-orchestrator-runtime/SKILL.md', '.cursor/skills/change-orchestrator-runtime/SKILL.md',
   'scripts/runtime/contracts.ts', 'scripts/runtime/registry.ts', 'scripts/runtime/runtime-cli.ts',
   'scripts/lib/operator-publication.ts', 'scripts/lib/worker-degraded-ci-handoff.ts', 'scripts/pack-review-runner.ts',
-  'scripts/pack-worker-report.ps1', 'scripts/runtime-retirement/retired-surface-guard.ts',
+  'scripts/pack-worker-report.ts', 'scripts/runtime-retirement/retired-surface-guard.ts',
   'scripts/runtime-retirement/retired-surface-selftest.ts', 'scripts/json-producers/retired-runtime-surfaces.json',
   'scripts/check-reusable.ps1',
 ] as const;

@@ -20,12 +20,15 @@ Worktree lifecycle remains the deliberate narrower exception documented in `docs
 | `scripts/runtime/task-lifecycle.ts` | spawn, send, read, liveness, stop | `already-runtime-neutral` | Direct lifecycle caller retains exact spawned identity after ambiguous dispatch and never resends. |
 | `scripts/pr2-foundation/fleet-observer.ts` | list/find, read, liveness | `already-runtime-neutral` | Observer-only fleet census through `RuntimeAdapter`; no actuation or compatibility bridge. |
 | `scripts/pr2-foundation/fleet-nudge-production.ts` | find, send | `already-runtime-neutral` | Revalidates the exact current worker and performs the single S2 dispatch attempt through `RuntimeAdapter`. |
+| `scripts/lib/worker-assignment-runtime.ts` | liveness | `already-runtime-neutral` | Resolves current logical local ownership through `RuntimeAdapter`; busy/idle exact targets block replacement, while unresolved evidence never becomes `gone`. |
+| `scripts/pr2-foundation/remote-worker-assignment.ts` | runtime composition | `use-runtime-interface` | Direct operator remote admission composes `RuntimeAdapter` only to enforce current-local replacement evidence before logical publication. |
+| `scripts/pr2-foundation/supervised-worker-start.ts` | runtime composition | `use-runtime-interface` | Governed Orca local start composes `RuntimeAdapter` for current-local replacement admission before ready-receipt assignment publication. |
 | `scripts/pr2-foundation/scheduler.ts` | runtime composition, fleet observer, list/find, read, liveness | `use-runtime-interface` | Production scheduler composes the selected runtime and observer; the census resolves each current assignment to its exact worker across assigned worktrees. |
 | `scripts/invoke-gated-worker-nudge.ts` | find, send | `use-runtime-interface` | Issue/PR keyed claim and journal admission before one dispatch. |
 | `scripts/lib/pack-review-worker-notification.ts` | runtime composition, find, send, side-effect fence | `use-runtime-interface` | Loads persisted exact runtime identity; ambiguous delivery is terminal. |
 | `scripts/pack-review-worker-notification.cases.ts` | spawn, find, send | `already-runtime-neutral` | Focused review-delivery coverage. |
-| `scripts/invoke-worker-recovery.ts` | runtime composition, recovery, recovery claim, workspace remove, spawn | `use-runtime-interface` | Loads durable runtime-handle authority before cleanup/spawn. |
-| `scripts/runtime/worker-recovery.ts` | list/find, liveness, workspace remove, spawn | `use-runtime-interface` | Revalidates exact id + generation + provenance before cleanup. |
+| `scripts/invoke-worker-recovery.ts` | runtime composition, recovery, recovery claim | `use-runtime-interface` | Loads exact current assignment and pre-existing cleanup authority, then delegates fenced cleanup; successor start is operator-required. |
+| `scripts/runtime/worker-recovery.ts` | liveness, workspace remove | `use-runtime-interface` | Revalidates exact current assignment/runtime evidence; live targets are no-effect and only affirmatively gone targets may reach bounded cleanup. |
 | `scripts/orchestrator-wake-supervisor.ts` | supervisor startup | `already-runtime-neutral` | Node-only supervisor entrypoint. |
 | `scripts/lib/orchestrator-side-process-supervisor.ts` | singleton lease, crash backoff, terminal circuit | `already-runtime-neutral` | TypeScript invariants only; launches the Node scheduler. |
 | `scripts/runtime/side-effect-fence.ts` | side-effect fence | `already-runtime-neutral` | Kernel-held exact-owner lock. |
@@ -60,7 +63,7 @@ Worktree lifecycle remains the deliberate narrower exception documented in `docs
 - Runtime-reported linkage is never claim authority.
 - Worker identities are composite `runtime + id + generation`; destructive recovery also requires the expected workspace head.
 - Review delivery reloads the persisted runtime binding and rejects same-id generation recreation.
-- Cleanup and spawn selectors must differ before runtime calls or claim acquisition.
+- Cleanup and successor start are separate authorities: recovery may remove an affirmatively gone target workspace but does not automatically spawn or publish a successor.
 - Stop, workspace removal, and dispatch are attempted once; ambiguous transport never creates retry authority.
 - Worker-smoke output heuristics are observation-only and cannot trigger a second submit.
 - Worker-smoke close settlement verifies the exact runtime identity before reporting lifecycle cleanliness.

@@ -1,8 +1,10 @@
 /**
  * Pack-owned worker report store.
- * Runtime identity is always the exact adapter-produced composite
- * `{ runtime, id, generation }`. Pre-v3 session-keyed records are ignored and
- * never authorize a report, delivery acknowledgement, or state transition.
+ *
+ * Current reports are keyed by exact logical WorkerAssignment identity. Local
+ * reports may additionally carry the exact adapter-produced RuntimeWorker
+ * identity; remote reports deliberately do not fabricate one. Historical v3
+ * runtime-keyed records remain readable but cannot authorize a new report.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -36,15 +38,38 @@ function normalizeWorkerIdentity(value) {
   return { runtime, id, generation };
 }
 
+export function normalizeWorkerReportAssignment(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const assignmentId = String(value.assignmentId ?? '').trim();
+  const generation = Number(value.generation ?? 0);
+  const taskId = String(value.taskId ?? '').trim();
+  if (!assignmentId || !Number.isInteger(generation) || generation <= 0 || !taskId) return null;
+  return { assignmentId, generation, taskId };
+}
+
 function sameWorker(left, right) {
   const a = normalizeWorkerIdentity(left);
   const b = normalizeWorkerIdentity(right);
   return Boolean(a && b && a.runtime === b.runtime && a.id === b.id && a.generation === b.generation);
 }
 
+function sameAssignment(left, right) {
+  const a = normalizeWorkerReportAssignment(left);
+  const b = normalizeWorkerReportAssignment(right);
+  return Boolean(a && b
+    && a.assignmentId === b.assignmentId
+    && a.generation === b.generation
+    && a.taskId === b.taskId);
+}
+
 function workerKey(worker) {
   const exact = normalizeWorkerIdentity(worker);
   return exact ? `${exact.runtime}:${exact.id}:${exact.generation}` : '';
+}
+
+function assignmentKey(assignment) {
+  const exact = normalizeWorkerReportAssignment(assignment);
+  return exact ? `${exact.assignmentId}:${exact.generation}:${exact.taskId}` : '';
 }
 
 export function resolveWorkerReportStorePath(env = process.env) {
@@ -55,10 +80,12 @@ export function resolveWorkerReportStorePath(env = process.env) {
 
 export function buildWorkerReportRecordKey(record) {
   const repoSlug = String(record?.repoSlug ?? '').trim().toLowerCase();
+  const assignment = assignmentKey(record?.assignment);
   const worker = workerKey(record?.worker);
+  const identity = assignment ? `assignment:${assignment}` : `worker:${worker}`;
   const prNumber = Number(record?.prNumber ?? 0);
   const headSha = normalizeSha(record?.headSha);
-  const base = `${repoSlug}|${worker}|${prNumber}|${headSha}`;
+  const base = `${repoSlug}|${identity}|${prNumber}|${headSha}`;
   if (String(record?.reportState ?? '').toLowerCase() === 'addressing_reviews') {
     const runId = String(record?.deliveryRunId ?? '').trim();
     if (runId) return `${base}|ack|${runId}`;
@@ -108,6 +135,7 @@ export function upsertWorkerReportRecord(store, record, nowMs) {
     reportState: String(record.reportState ?? existing.reportState ?? '').toLowerCase(),
     accepted: record.accepted !== undefined ? Boolean(record.accepted) : Boolean(existing.accepted ?? true),
     repoSlug: String(record.repoSlug ?? existing.repoSlug ?? '').trim(),
+    assignment: normalizeWorkerReportAssignment(record.assignment ?? existing.assignment),
     worker: normalizeWorkerIdentity(record.worker ?? existing.worker),
     prNumber: Number(record.prNumber ?? existing.prNumber ?? 0),
     headSha: normalizeSha(record.headSha ?? existing.headSha),
@@ -136,11 +164,22 @@ export function listWorkerReportRecordsForWorker(store, repoSlug, worker) {
   ));
 }
 
+export function listWorkerReportRecordsForAssignment(store, repoSlug, assignment) {
+  const repo = String(repoSlug ?? '').trim().toLowerCase();
+  const exact = normalizeWorkerReportAssignment(assignment);
+  if (!exact) return [];
+  return Object.values(store.sourceRecords ?? {}).filter((record) => (
+    String(record?.repoSlug ?? '').trim().toLowerCase() === repo
+      && sameAssignment(record?.assignment, exact)
+  ));
+}
+
 export function workerReportRecordToRuntimeReportRow(record) {
   const reportedAtMs = Number(record?.reportedAtMs ?? record?.lastObservedMs ?? 0);
   return {
     reportState: String(record?.reportState ?? '').toLowerCase(),
     accepted: Boolean(record?.accepted ?? true),
+    assignment: normalizeWorkerReportAssignment(record?.assignment) ?? undefined,
     prNumber: Number(record?.prNumber ?? 0) || undefined,
     headSha: normalizeSha(record?.headSha) || undefined,
     repoSlug: String(record?.repoSlug ?? '').trim() || undefined,
@@ -160,8 +199,12 @@ export function mergePackWorkerReportsIntoWorkers(workers, store, repoSlug = '')
   const repo = String(repoSlug ?? '').trim().toLowerCase();
   return toArray(workers).map((workerRow) => {
     const identity = normalizeWorkerIdentity(workerRow?.identity ?? workerRow?.worker);
+    const assignment = normalizeWorkerReportAssignment(workerRow?.assignment);
     const rowRepo = String(workerRow?.repoSlug ?? repo ?? '').trim().toLowerCase();
-    const records = listWorkerReportRecordsForWorker(store, rowRepo, identity)
+    const source = assignment
+      ? listWorkerReportRecordsForAssignment(store, rowRepo, assignment)
+      : listWorkerReportRecordsForWorker(store, rowRepo, identity);
+    const records = source
       .sort((a, b) => Number(b.reportedAtMs ?? 0) - Number(a.reportedAtMs ?? 0))
       .map(workerReportRecordToRuntimeReportRow);
     if (records.length === 0) {
@@ -174,10 +217,11 @@ export function mergePackWorkerReportsIntoWorkers(workers, store, repoSlug = '')
       }
       return workerRow;
     }
+    const suffix = assignment ? `assignment:${assignmentKey(assignment)}` : `worker:${workerKey(identity)}`;
     return {
       ...workerRow,
       reports: records,
-      reportSourcePath: `pack-worker-report-store/${rowRepo}/${workerKey(identity)}`,
+      reportSourcePath: `pack-worker-report-store/${rowRepo}/${suffix}`,
       reportSnapshotKind: PACK_WORKER_REPORT_STORE_SURFACE,
     };
   });
@@ -228,9 +272,16 @@ export function evictWorkerReportRecords({
   return { removed, recordCount: Object.keys(store.sourceRecords ?? {}).length };
 }
 
-export function resolveWorkerReportTrustedBinding({ worker, openPrs = [], worktreeHeadSha = '', prNumber = 0 }) {
+export function resolveWorkerReportTrustedBinding({
+  assignment = null,
+  worker = null,
+  openPrs = [],
+  worktreeHeadSha = '',
+  prNumber = 0,
+}) {
+  const exactAssignment = normalizeWorkerReportAssignment(assignment);
   const exactWorker = normalizeWorkerIdentity(worker);
-  if (!exactWorker) return { ok: false, reason: 'missing_runtime_worker_identity' };
+  if (!exactAssignment && !exactWorker) return { ok: false, reason: 'missing_worker_assignment_identity' };
   const headSha = normalizeSha(worktreeHeadSha);
   if (!headSha) return { ok: false, reason: 'missing_worktree_head' };
   const pr = Number(prNumber ?? 0);
@@ -239,18 +290,31 @@ export function resolveWorkerReportTrustedBinding({ worker, openPrs = [], worktr
   if (!row) return { ok: false, reason: 'pr_binding_unresolved' };
   const openHead = normalizeSha(row?.headRefOid);
   if (!openHead || openHead !== headSha) return { ok: false, reason: 'trust_boundary_head_mismatch' };
-  return { ok: true, prNumber: pr, headSha, worker: exactWorker, bindingSource: 'explicit_github_task' };
+  return {
+    ok: true,
+    prNumber: pr,
+    headSha,
+    assignment: exactAssignment ?? undefined,
+    worker: exactWorker ?? undefined,
+    bindingSource: 'explicit_github_task',
+  };
 }
 
 export function validateWorkerReportTrustBoundary({ record, trustedBinding = null }) {
+  const assignment = normalizeWorkerReportAssignment(record?.assignment);
   const worker = normalizeWorkerIdentity(record?.worker);
-  if (!worker) return { ok: false, reason: 'missing_runtime_worker_identity' };
+  if (!assignment && !worker) return { ok: false, reason: 'missing_worker_assignment_identity' };
   if (!String(record?.repoSlug ?? '').trim()) return { ok: false, reason: 'missing_repo_slug' };
   if (Number(record?.prNumber ?? 0) <= 0) return { ok: false, reason: 'missing_pr_number' };
   if (!normalizeSha(record?.headSha)) return { ok: false, reason: 'missing_head_sha' };
   if (!WORKER_REPORT_STATES.includes(String(record?.reportState ?? '').toLowerCase())) return { ok: false, reason: 'invalid_report_state' };
   if (!trustedBinding || trustedBinding.ok !== true) return { ok: false, reason: String(trustedBinding?.reason ?? 'trust_boundary_binding_unresolved') };
-  if (!sameWorker(worker, trustedBinding.worker)) return { ok: false, reason: 'trust_boundary_worker_mismatch' };
+  const trustedAssignment = normalizeWorkerReportAssignment(trustedBinding.assignment);
+  const trustedWorker = normalizeWorkerIdentity(trustedBinding.worker);
+  if (assignment && !sameAssignment(assignment, trustedAssignment)) return { ok: false, reason: 'trust_boundary_assignment_mismatch' };
+  if (!assignment && trustedAssignment) return { ok: false, reason: 'trust_boundary_assignment_missing' };
+  if (worker && !sameWorker(worker, trustedWorker)) return { ok: false, reason: 'trust_boundary_worker_mismatch' };
+  if (!worker && trustedWorker && !assignment) return { ok: false, reason: 'trust_boundary_worker_missing' };
   if (Number(record?.prNumber ?? 0) !== Number(trustedBinding.prNumber ?? 0)) return { ok: false, reason: 'trust_boundary_pr_mismatch' };
   if (normalizeSha(record?.headSha) !== normalizeSha(trustedBinding.headSha)) return { ok: false, reason: 'trust_boundary_head_mismatch' };
   return { ok: true };
@@ -361,6 +425,7 @@ runStdinJsonCli('worker-report-store.mjs', {
   resolveTrustedBinding: () => {
     const payload = readStdinJson();
     return resolveWorkerReportTrustedBinding({
+      assignment: payload.assignment ?? null,
       worker: payload.worker ?? null,
       openPrs: toArray(payload.openPrs),
       worktreeHeadSha: String(payload.worktreeHeadSha ?? ''),

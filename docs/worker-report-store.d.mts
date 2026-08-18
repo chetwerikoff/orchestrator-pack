@@ -1,34 +1,62 @@
+export interface WorkerReportRuntimeIdentity {
+  readonly runtime: string;
+  readonly id: string;
+  readonly generation: string;
+}
+
+export interface WorkerReportAssignmentIdentity {
+  readonly assignmentId: string;
+  readonly generation: number;
+  readonly taskId: string;
+}
+
+export interface WorkerReportTrustedBinding {
+  readonly ok: boolean;
+  readonly reason?: string;
+  readonly prNumber?: number;
+  readonly headSha?: string;
+  readonly assignment?: WorkerReportAssignmentIdentity;
+  readonly worker?: WorkerReportRuntimeIdentity;
+  readonly bindingSource?: string;
+}
+
 export declare const WORKER_REPORT_STORE_SCHEMA_VERSION: number;
 export declare const PACK_WORKER_REPORT_STORE_SURFACE: string;
 export declare const DEFAULT_MAX_AGE_MS: number;
 export declare const DEFAULT_NONTERMINAL_MAX_AGE_MS: number;
 export declare const WORKER_REPORT_STATES: Readonly<string[]>;
 
+export declare function normalizeWorkerReportAssignment(value: unknown): WorkerReportAssignmentIdentity | null;
 export declare function resolveWorkerReportStorePath(env?: Record<string, unknown>): string;
 export declare function buildWorkerReportRecordKey(record: Record<string, unknown>): string;
 export declare function createDefaultWorkerReportStore(raw?: Record<string, unknown>): Record<string, unknown>;
-export declare function migrateLegacySeedStateToWorkerReportStore(legacy: Record<string, unknown>): Record<string, unknown>;
+export declare function normalizeWorkerReportStore(raw: unknown): Record<string, unknown>;
 export declare function readWorkerReportStoreFile(path: string): Record<string, unknown>;
 export declare function writeWorkerReportStoreFile(path: string, store: Record<string, unknown>): void;
 export declare function upsertWorkerReportRecord(
-  store: Record<string, unknown>,
-  record: Record<string, unknown>,
+  store: Record<string, any>,
+  record: Record<string, any>,
   nowMs: number,
-): { key: string; record: Record<string, unknown> };
-export declare function listWorkerReportRecordsForSession(
-  store: Record<string, unknown>,
+): { key: string; record: Record<string, any> };
+export declare function listWorkerReportRecordsForWorker(
+  store: Record<string, any>,
   repoSlug: string,
-  sessionId: string,
-): Record<string, unknown>[];
-export declare function workerReportRecordToSessionReportRow(record: Record<string, unknown>): Record<string, unknown>;
-export declare function mergePackWorkerReportsIntoSessions(
-  sessions: Record<string, unknown>[],
-  store: Record<string, unknown>,
+  worker: WorkerReportRuntimeIdentity,
+): Array<Record<string, any>>;
+export declare function listWorkerReportRecordsForAssignment(
+  store: Record<string, any>,
+  repoSlug: string,
+  assignment: WorkerReportAssignmentIdentity,
+): Array<Record<string, any>>;
+export declare function workerReportRecordToRuntimeReportRow(record: Record<string, any>): Record<string, unknown>;
+export declare function mergePackWorkerReportsIntoWorkers(
+  workers: Array<Record<string, any>>,
+  store: Record<string, any>,
   repoSlug?: string,
-): Record<string, unknown>[];
+): Array<Record<string, any>>;
 export declare function evictWorkerReportRecords(input: {
-  store: Record<string, unknown>;
-  openPrs?: Array<Record<string, unknown>>;
+  store: Record<string, any>;
+  openPrs?: Array<Record<string, any>>;
   currentHeadByPr?: Record<string, string>;
   nowMs: number;
   maxAgeMs?: number;
@@ -37,49 +65,46 @@ export declare function evictWorkerReportRecords(input: {
   repoSlug?: string;
 }): { removed: number; recordCount: number };
 export declare function resolveWorkerReportTrustedBinding(input: {
-  session: Record<string, unknown>;
-  openPrs?: Array<Record<string, unknown>>;
+  assignment?: WorkerReportAssignmentIdentity | null;
+  worker?: WorkerReportRuntimeIdentity | null;
+  openPrs?: Array<Record<string, any>>;
   worktreeHeadSha?: string;
-  sessionGetPayload?: Record<string, unknown> | null;
-}): { ok: boolean; reason?: string; prNumber?: number; headSha?: string; bindingSource?: string };
+  prNumber?: number;
+}): WorkerReportTrustedBinding;
 export declare function validateWorkerReportTrustBoundary(input: {
-  callerSessionId: string;
-  record: Record<string, unknown>;
-  trustedBinding?: { ok?: boolean; prNumber?: number; headSha?: string; reason?: string } | null;
+  record: Record<string, any>;
+  trustedBinding?: WorkerReportTrustedBinding | null;
 }): { ok: boolean; reason?: string };
-export declare function sessionHasPackWorkerReportReceiptSurface(session: Record<string, unknown>): boolean;
+export declare function workerHasPackWorkerReportReceiptSurface(worker: Record<string, any>): boolean;
 export declare function resolvePackWorkerReportDeliveryRunId(input: {
   reportState?: string;
-  sessionId?: string;
   prNumber?: number;
   headSha?: string;
   deliveryRunId?: string;
-  reviewRuns?: Array<Record<string, unknown>>;
+  reviewRuns?: Array<Record<string, any>>;
 }): string;
 export declare function findPackWorkerAckReportAfterDelivery(
-  session: Record<string, unknown>,
-  run: Record<string, unknown>,
+  worker: Record<string, any>,
+  run: Record<string, any>,
   sendObservedAtMs: number,
-): Record<string, unknown> | null;
+): Record<string, any> | null;
 export declare function upsertWorkerReportRecordInMemory(input: {
-  store: Record<string, unknown>;
-  record: Record<string, unknown>;
-  callerSessionId: string;
+  store: Record<string, any>;
+  record: Record<string, any>;
   nowMs: number;
-  trustedBinding?: { ok?: boolean; prNumber?: number; headSha?: string; reason?: string } | null;
-}): { ok: boolean; reason?: string; store?: Record<string, unknown>; key?: string; record?: Record<string, unknown>; generation?: number };
+  trustedBinding?: WorkerReportTrustedBinding | null;
+}): { ok: boolean; reason?: string; store?: Record<string, any>; key?: string; record?: Record<string, any>; generation?: number };
 export declare function writeWorkerReportRecordWithCas(input: {
   storePath: string;
-  record: Record<string, unknown>;
-  callerSessionId: string;
+  record: Record<string, any>;
   nowMs: number;
   expectedGeneration: number;
-  trustedBinding?: { ok?: boolean; prNumber?: number; headSha?: string; reason?: string } | null;
-}): { ok: boolean; reason?: string; key?: string; record?: Record<string, unknown>; generation?: number };
+  trustedBinding?: WorkerReportTrustedBinding | null;
+}): { ok: boolean; reason?: string; key?: string; record?: Record<string, any>; generation?: number };
 export declare function seedShouldPromoteReadyForReview(
-  store: Record<string, unknown>,
+  store: Record<string, any>,
   repoSlug: string,
   prNumber: number,
   headSha: string,
   currentHeadSha: string,
-): { promote: boolean; reason?: string; record?: Record<string, unknown> };
+): { promote: boolean; reason?: string; record?: Record<string, any> };

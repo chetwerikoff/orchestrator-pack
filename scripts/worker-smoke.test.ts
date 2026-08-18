@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { runProcessSync } from './kernel/subprocess.ts';
 import {
   checkSmokeTestPlan,
@@ -628,10 +628,6 @@ function executable(path: string, source: string): void {
   chmodSync(path, 0o755);
 }
 
-function psQuote(value: string): string {
-  return value.replaceAll("'", "''");
-}
-
 function runChild(
   command: string,
   args: readonly string[],
@@ -664,27 +660,15 @@ describe('worker-smoke consolidated gate regressions', () => {
     expect(exactClosingIssue('```md\nCloses #999\n```\nClose #1343')).toBe(1343);
   });
 
-  it('accepts a legacy fixture newline but verifies the caller writes the freshly fetched Issue body without BOM', async () => {
+  it('accepts a legacy fixture newline while the gate re-resolves the freshly fetched Issue body', async () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-caller-gate-'));
     const bin = join(root, 'bin');
     mkdirSync(bin, { recursive: true });
     const body = planBody([{ action: 'caller writes Issue body', expected: 'gate evaluates fetched bytes' }]);
-    const sourceBodyFile = join(root, 'source-issue.md');
     const issueBodyFile = join(root, 'caller-issue.md');
-    writeFileSync(sourceBodyFile, body, 'utf8');
-    const callerSource = readFileSync(resolve('scripts/pack-worker-report.ps1'), 'utf8');
-    expect(callerSource).toContain(
-      '[System.IO.File]::WriteAllText($issueBodyFile.FullName, $issueBody, [System.Text.UTF8Encoding]::new($false))',
-    );
-    const writer = runChild('pwsh', [
-      '-NoProfile',
-      '-Command',
-      `$body = [System.IO.File]::ReadAllText('${psQuote(sourceBodyFile)}'); `
-        + `Set-Content -LiteralPath '${psQuote(issueBodyFile)}' -Value $body -Encoding utf8NoBOM`,
-    ], { encoding: 'utf8' });
-    expect(writer.status, `${writer.stdout}\n${writer.stderr}`).toBe(0);
+    writeFileSync(issueBodyFile, `${body}\n`, 'utf8');
     const suppliedBody = readFileSync(issueBodyFile, 'utf8');
-    expect([`${body}\n`, `${body}\r\n`]).toContain(suppliedBody);
+    expect(suppliedBody).toBe(`${body}\n`);
 
     executable(join(bin, 'gh'), `#!/usr/bin/env node
 const endpoint = process.argv[3] ?? '';
