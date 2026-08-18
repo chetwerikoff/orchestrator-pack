@@ -165,11 +165,28 @@ function worktree(index: number, linkedIssue: number | null): OrcaWorktreeSummar
   };
 }
 
+function worktreeWithoutLinkedIssue(index: number): OrcaWorktreeSummary {
+  return {
+    id: `w-${index}`,
+    path: `/tmp/w-${index}`,
+    head: `${index}`.repeat(40).slice(0, 40),
+  };
+}
+
+interface OrcaTerminalListFixture {
+  readonly totalCount: number;
+  readonly truncated: boolean;
+}
+
 interface OrcaFixtureOptions {
   readonly terminalA: readonly OrcaTerminalSummary[];
   readonly terminalB?: readonly OrcaTerminalSummary[];
+  readonly terminalListA?: OrcaTerminalListFixture;
+  readonly terminalListB?: OrcaTerminalListFixture;
   readonly issueA?: Readonly<Record<number, number | null>>;
   readonly issueB?: Readonly<Record<number, number | null>>;
+  readonly omitLinkedIssueA?: readonly number[];
+  readonly omitLinkedIssueB?: readonly number[];
   readonly seedOwned?: readonly { handle: string; generation: string; worktree: number }[];
   readonly chargeMs?: number;
 }
@@ -199,8 +216,17 @@ function orcaFixture(options: OrcaFixtureOptions) {
         ? { ok: true, result: { worktree: worktree(seed.worktree, null) } }
         : { ok: false, error: { code: 'unexpected_current' } };
     } else if (operation === 'terminal list') {
-      const terminals = terminalLists++ === 0 ? options.terminalA : options.terminalB ?? options.terminalA;
-      response = { ok: true, result: { terminals } };
+      const phaseA = terminalLists++ === 0;
+      const terminals = phaseA ? options.terminalA : options.terminalB ?? options.terminalA;
+      const envelope = phaseA ? options.terminalListA : options.terminalListB ?? options.terminalListA;
+      response = {
+        ok: true,
+        result: {
+          terminals,
+          totalCount: envelope?.totalCount ?? terminals.length,
+          truncated: envelope?.truncated ?? false,
+        },
+      };
     } else if (operation === 'worktree show') {
       const selector = args[args.indexOf('--worktree') + 1] ?? '';
       const match = /^path:\/tmp\/w-(\d+)$/.exec(selector);
@@ -211,8 +237,9 @@ function orcaFixture(options: OrcaFixtureOptions) {
       if (phaseB && options.issueB && Object.prototype.hasOwnProperty.call(options.issueB, index)) {
         linkedIssue = options.issueB[index] ?? null;
       }
+      const omitLinkedIssue = (phaseB ? options.omitLinkedIssueB : options.omitLinkedIssueA)?.includes(index) ?? false;
       response = Number.isInteger(index)
-        ? { ok: true, result: { worktree: worktree(index, linkedIssue) } }
+        ? { ok: true, result: { worktree: omitLinkedIssue ? worktreeWithoutLinkedIssue(index) : worktree(index, linkedIssue) } }
         : { ok: false, error: { code: 'bad_selector' } };
     } else {
       response = { ok: false, error: { code: 'unexpected_operation', message: operation } };
@@ -228,6 +255,14 @@ function orcaFixture(options: OrcaFixtureOptions) {
   }
   binding = true;
   return { adapter, owned, calls, now: () => now };
+}
+
+function resultCode(result: RuntimeWorkerTaskBindingObservation): string {
+  return result.status === 'unavailable' ? result.code : result.status;
+}
+
+function firstOutcomeStatus(result: RuntimeWorkerTaskBindingObservation): string {
+  return result.status === 'ok' ? result.outcomes[0]?.status ?? 'missing' : result.code;
 }
 
 describe('Issue #1380 runtime worker identity binding', () => {
@@ -538,6 +573,31 @@ describe('Issue #1380 runtime worker identity binding', () => {
     });
   });
 
+  it('fails closed when worktree metadata omits linkedIssue instead of treating it as unbound', () => {
+    const fixture = orcaFixture({
+      terminalA: [terminal('exact', 'inc-a', 1)],
+      issueA: { 1: 1380 },
+      omitLinkedIssueA: [1],
+      seedOwned: [{ handle: 'exact', generation: 'inc-a', worktree: 1 }],
+    });
+    expect(fixture.adapter.observeWorkerTaskBindings({ workers: [fixture.owned[0]!.identity] }, { timeoutMs: 4_000 })).toEqual({
+      status: 'unavailable', code: 'task_metadata_unavailable',
+    });
+  });
+
+  it('rejects a truncated terminal census before a hidden duplicate can authorize', () => {
+    const fixture = orcaFixture({
+      terminalA: [terminal('exact', 'inc-a', 1)],
+      terminalListA: { totalCount: 2, truncated: true },
+      issueA: { 1: 1380 },
+      seedOwned: [{ handle: 'exact', generation: 'inc-a', worktree: 1 }],
+    });
+    expect(fixture.adapter.observeWorkerTaskBindings({ workers: [fixture.owned[0]!.identity] }, { timeoutMs: 4_000 })).toEqual({
+      status: 'unavailable', code: 'malformed_or_incomplete',
+    });
+    expect(fixture.calls).toHaveLength(1);
+  });
+
   it('fails closed above the six-worktree global inventory cap', () => {
     const fixture = orcaFixture({ terminalA: Array.from({ length: 7 }, (_, index) => terminal(`t-${index}`, `inc-${index}`, index + 1)) });
     expect(fixture.adapter.observeWorkerTaskBindings({ workers: [{ runtime: 'orca', id: 't-0', generation: 'inc-0' }] }, { timeoutMs: 4_000 })).toEqual({
@@ -546,7 +606,172 @@ describe('Issue #1380 runtime worker identity binding', () => {
     expect(fixture.calls).toHaveLength(1);
   });
 
-  it('emits the closed AC26 evidence datum without runtime-private identity', () => {
+  it('emits AC26 evidence from measured production-seam outcomes and counters', async () => {
+    const stateFixture = orcaFixture({
+      terminalA: [
+        terminal('bound', 'inc-bound', 1),
+        terminal('external', 'inc-external', 2),
+        terminal('unbound', 'inc-unbound', 3),
+        terminal('replacement', 'inc-new', 4),
+        terminal('pty-only', 'pty-only-generation', 5, false),
+      ],
+      issueA: { 1: 1380 },
+      seedOwned: [
+        { handle: 'bound', generation: 'inc-bound', worktree: 1 },
+        { handle: 'unbound', generation: 'inc-unbound', worktree: 3 },
+      ],
+    });
+    const stateResult = stateFixture.adapter.observeWorkerTaskBindings({
+      workers: [
+        stateFixture.owned[0]!.identity,
+        { runtime: 'orca', id: 'external', generation: 'inc-external' },
+        stateFixture.owned[1]!.identity,
+        { runtime: 'orca', id: 'missing', generation: 'inc-missing' },
+        { runtime: 'orca', id: 'replacement', generation: 'inc-old' },
+        { runtime: 'orca', id: 'pty-only', generation: 'pty-only-generation' },
+      ],
+    }, { timeoutMs: 4_000 });
+    const adapterStates = stateResult.status === 'ok'
+      ? stateResult.outcomes.map((outcome) => outcome.status)
+      : [stateResult.code];
+
+    const staleFixture = orcaFixture({
+      terminalA: [terminal('stale', 'inc-stale', 1)],
+      issueA: { 1: 1380 },
+      issueB: { 1: 1381 },
+      seedOwned: [{ handle: 'stale', generation: 'inc-stale', worktree: 1 }],
+    });
+    const staleResult = staleFixture.adapter.observeWorkerTaskBindings({
+      workers: [staleFixture.owned[0]!.identity],
+    }, { timeoutMs: 4_000 });
+
+    const collisionFixture = orcaFixture({
+      terminalA: [terminal('claimant', 'inc-claimant', 1), terminal('hidden-sibling', 'inc-sibling', 2)],
+      issueA: { 1: 1380, 2: 1380 },
+      seedOwned: [{ handle: 'claimant', generation: 'inc-claimant', worktree: 1 }],
+    });
+    const collisionResult = collisionFixture.adapter.observeWorkerTaskBindings({
+      workers: [collisionFixture.owned[0]!.identity],
+    }, { timeoutMs: 4_000 });
+    const collisionCode = collisionResult.status === 'ok'
+      && collisionResult.outcomes[0]?.status === 'ambiguous'
+      ? collisionResult.outcomes[0].code
+      : resultCode(collisionResult);
+
+    const truncatedFixture = orcaFixture({
+      terminalA: [terminal('visible-claimant', 'inc-visible', 1)],
+      terminalListA: { totalCount: 2, truncated: true },
+      issueA: { 1: 1380 },
+      seedOwned: [{ handle: 'visible-claimant', generation: 'inc-visible', worktree: 1 }],
+    });
+    const truncatedResult = truncatedFixture.adapter.observeWorkerTaskBindings({
+      workers: [truncatedFixture.owned[0]!.identity],
+    }, { timeoutMs: 4_000 });
+
+    const omittedIssueFixture = orcaFixture({
+      terminalA: [terminal('metadata', 'inc-metadata', 1)],
+      omitLinkedIssueA: [1],
+      seedOwned: [{ handle: 'metadata', generation: 'inc-metadata', worktree: 1 }],
+    });
+    const omittedIssueResult = omittedIssueFixture.adapter.observeWorkerTaskBindings({
+      workers: [omittedIssueFixture.owned[0]!.identity],
+    }, { timeoutMs: 4_000 });
+
+    const publicWorkers = [worker('public-bound', 'pg1'), worker('public-unresolved', 'pg2')];
+    const publicSource = new BindingFleetSource(publicWorkers, {
+      status: 'ok',
+      outcomes: [
+        { status: 'bound', worker: publicWorkers[0]!.identity, issueNumber: 1380, provenance: 'internal' },
+        { status: 'bound', worker: publicWorkers[1]!.identity, issueNumber: 9999, provenance: 'internal' },
+      ],
+    }, ['public-unresolved']);
+    const publicObserver = observerFor(publicSource, 'sg-ac26-public');
+    const publicTick = await publicObserver.tick({ schedulerIntervalMs: 16_000 });
+    const publicResult = await publicObserver.resolveWorkerIssueBindings({
+      schedulerGeneration: publicTick.schedulerGeneration,
+      tickSequence: publicTick.tickSequence,
+    });
+    const publicStates = publicResult.rows.map((row) => row.status);
+    const snapshotBytes = readFileSync(publicObserver.snapshotPath, 'utf8');
+    const snapshotLeakCount = [
+      ...publicWorkers.flatMap((candidate) => [candidate.identity.id, candidate.identity.generation]),
+      '1380',
+      '9999',
+    ].filter((secret) => snapshotBytes.includes(secret)).length;
+
+    const malformedWorker = worker('malformed', 'mg1');
+    const malformedSource = new BindingFleetSource([malformedWorker], {
+      status: 'ok',
+      outcomes: [{
+        status: 'bound',
+        worker: { ...malformedWorker.identity, generation: 'wrong-generation' },
+        issueNumber: 1380,
+        provenance: 'internal',
+      }],
+    });
+    const malformedObserver = observerFor(malformedSource, 'sg-ac26-malformed');
+    const malformedTick = await malformedObserver.tick({ schedulerIntervalMs: 16_000 });
+    const malformedResult = await malformedObserver.resolveWorkerIssueBindings({
+      schedulerGeneration: malformedTick.schedulerGeneration,
+      tickSequence: malformedTick.tickSequence,
+    });
+    const malformedSetCode = malformedResult.status === 'unavailable' ? malformedResult.code : malformedResult.status;
+
+    const singleFlightWorkers = [worker('single-flight', 'sf1')];
+    let release!: (value: RuntimeWorkerTaskBindingObservation) => void;
+    const pending = new Promise<RuntimeWorkerTaskBindingObservation>((resolve) => { release = resolve; });
+    const singleFlightSource = new BindingFleetSource(singleFlightWorkers, pending);
+    const singleFlightObserver = observerFor(singleFlightSource, 'sg-ac26-single-flight');
+    const firstTick = await singleFlightObserver.tick({ schedulerIntervalMs: 16_000 });
+    const first = singleFlightObserver.resolveWorkerIssueBindings({ schedulerGeneration: firstTick.schedulerGeneration, tickSequence: firstTick.tickSequence });
+    const second = singleFlightObserver.resolveWorkerIssueBindings({ schedulerGeneration: firstTick.schedulerGeneration, tickSequence: firstTick.tickSequence });
+    const repeated = singleFlightObserver.resolveWorkerIssueBindings({ schedulerGeneration: firstTick.schedulerGeneration, tickSequence: firstTick.tickSequence });
+    await Promise.resolve();
+    const sameTickPromiseCount = new Set([first, second, repeated]).size;
+    const sharedAttemptCalls = singleFlightSource.observationCalls;
+    singleFlightSource.observation = { status: 'unavailable', code: 'task_metadata_unavailable' };
+    const secondTick = await singleFlightObserver.tick({ schedulerIntervalMs: 16_000 });
+    release({
+      status: 'ok',
+      outcomes: [{ status: 'bound', worker: singleFlightWorkers[0]!.identity, issueNumber: 1380, provenance: 'internal' }],
+    });
+    const lateResult = await first;
+    const lateCompletionCode = lateResult.status === 'unavailable' ? lateResult.code : lateResult.status;
+    const callsBeforeExplicitRetry = singleFlightSource.observationCalls;
+    await singleFlightObserver.resolveWorkerIssueBindings({
+      schedulerGeneration: secondTick.schedulerGeneration,
+      tickSequence: secondTick.tickSequence,
+    });
+    const callsAfterExplicitRetry = singleFlightSource.observationCalls;
+
+    const positiveBudgetFixture = orcaFixture({
+      terminalA: Array.from({ length: 6 }, (_, index) => terminal(`budget-${index}`, `inc-budget-${index}`, index + 1)),
+      issueA: { 1: 1380 },
+      seedOwned: [{ handle: 'budget-0', generation: 'inc-budget-0', worktree: 1 }],
+      chargeMs: 250,
+    });
+    const positiveBudgetResult = positiveBudgetFixture.adapter.observeWorkerTaskBindings({
+      workers: [positiveBudgetFixture.owned[0]!.identity],
+    }, { timeoutMs: 4_000 });
+
+    const negativeBudgetFixture = orcaFixture({ terminalA: [terminal('budget-negative', 'inc-negative', 1)] });
+    const negativeBudgetResult = negativeBudgetFixture.adapter.observeWorkerTaskBindings({
+      workers: [{ runtime: 'orca', id: 'budget-negative', generation: 'inc-negative' }],
+    }, { timeoutMs: 2_000 });
+
+    const authorityFixtures = [
+      stateFixture,
+      staleFixture,
+      collisionFixture,
+      truncatedFixture,
+      omittedIssueFixture,
+      positiveBudgetFixture,
+      negativeBudgetFixture,
+    ];
+    const forbiddenAuthorityCalls = authorityFixtures
+      .flatMap((fixture) => fixture.calls)
+      .filter((call) => !['terminal list', 'worktree show'].includes(`${call.args[0]} ${call.args[1]}`)).length;
+
     const datum = {
       producer: 'orchestrator-pack',
       datum: '$.runtimeWorkerIdentityBinding.result',
@@ -554,15 +779,51 @@ describe('Issue #1380 runtime worker identity binding', () => {
       runtimeWorkerIdentityBinding: {
         result: {
           strategy: orcaWorkerTaskBindingStrategy,
-          uniqueCurrentInternalResolved: true,
-          noAuthorityCasesClosed: true,
-          runtimeGlobalCollisionProof: true,
-          memoryOnlyIdentity: true,
-          zeroMutation: true,
+          adapterStates,
+          staleStatus: firstOutcomeStatus(staleResult),
+          publicStates,
+          malformedSetCode,
+          collisionCode,
+          truncatedInventoryCode: resultCode(truncatedResult),
+          omittedLinkedIssueCode: resultCode(omittedIssueResult),
+          sameTickPromiseCount,
+          sharedAttemptCalls,
+          lateCompletionCode,
+          callsBeforeExplicitRetry,
+          callsAfterExplicitRetry,
+          positiveBudgetStatus: resultCode(positiveBudgetResult),
+          positiveBudgetCalls: positiveBudgetFixture.calls.length,
+          positiveBudgetElapsedMs: positiveBudgetFixture.now(),
+          negativeBudgetCode: resultCode(negativeBudgetResult),
+          negativeBudgetCalls: negativeBudgetFixture.calls.length,
+          snapshotLeakCount,
+          forbiddenAuthorityCalls,
         },
       },
     };
-    expect(datum.runtimeWorkerIdentityBinding.result.strategy).toBe('complete_ab_revalidation');
+
+    expect(datum.runtimeWorkerIdentityBinding.result).toEqual({
+      strategy: 'complete_ab_revalidation',
+      adapterStates: ['bound', 'external', 'unbound', 'absent', 'replaced', 'incarnation_unavailable'],
+      staleStatus: 'stale',
+      publicStates: ['resolved', 'identity_unresolved'],
+      malformedSetCode: 'malformed_or_incomplete',
+      collisionCode: 'duplicate_issue',
+      truncatedInventoryCode: 'malformed_or_incomplete',
+      omittedLinkedIssueCode: 'task_metadata_unavailable',
+      sameTickPromiseCount: 1,
+      sharedAttemptCalls: 1,
+      lateCompletionCode: 'late_completion_discarded',
+      callsBeforeExplicitRetry: 1,
+      callsAfterExplicitRetry: 2,
+      positiveBudgetStatus: 'ok',
+      positiveBudgetCalls: 14,
+      positiveBudgetElapsedMs: 3_500,
+      negativeBudgetCode: 'deadline_exhausted',
+      negativeBudgetCalls: 0,
+      snapshotLeakCount: 0,
+      forbiddenAuthorityCalls: 0,
+    });
     process.stdout.write(`${JSON.stringify(datum)}\n`);
   });
 });
