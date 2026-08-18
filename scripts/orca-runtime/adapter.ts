@@ -15,6 +15,10 @@ import {
   type RuntimeResult,
   type RuntimeWorker,
   type RuntimeWorkerIdentity,
+  type RuntimeWorkerProvenance,
+  type RuntimeWorkerTaskBindingCallOptions,
+  type RuntimeWorkerTaskBindingObservation,
+  type RuntimeWorkerTaskBindingOutcome,
 } from '../runtime/contracts.ts';
 import {
   runOrcaJson,
@@ -25,6 +29,7 @@ import {
   type OrcaTerminalSummary,
   type OrcaTerminalWaitResult,
   type OrcaWorktreeCurrent,
+  type OrcaWorktreeShow,
 } from './native.ts';
 
 export interface OrcaRuntimeAdapterOptions extends OrcaRunOptions {
@@ -74,6 +79,36 @@ interface OrcaInboxCheckShape extends OrcaInboxDeliveryShape {
 
 const OBSERVATION_TOKEN_PREFIX = 'opk-orca-output-v3.';
 
+export const ORCA_WORKER_TASK_BINDING_STRATEGY = 'complete_ab_revalidation' as const;
+export const ORCA_WORKER_TASK_BINDING_MAX_WORKTREES = 6 as const;
+export const ORCA_WORKER_TASK_BINDING_NATIVE_SLICE_MS = 250 as const;
+export const ORCA_WORKER_TASK_BINDING_MARGIN_MS = 500 as const;
+export const ORCA_WORKER_TASK_BINDING_REQUIRED_BUDGET_MS =
+  (2 + (2 * ORCA_WORKER_TASK_BINDING_MAX_WORKTREES))
+  * ORCA_WORKER_TASK_BINDING_NATIVE_SLICE_MS
+  + ORCA_WORKER_TASK_BINDING_MARGIN_MS;
+
+interface OrcaBindingTerminalEvidence {
+  readonly handle: string;
+  readonly generation: string | null;
+  readonly incarnationId: string | null;
+  readonly worktreeId: string;
+  readonly worktreePath: string;
+  readonly provenance: RuntimeWorkerProvenance;
+}
+
+interface OrcaBindingWorktreeEvidence {
+  readonly id: string;
+  readonly path: string;
+  readonly head: string;
+  readonly linkedIssue: number | null;
+}
+
+interface OrcaBindingSnapshot {
+  readonly terminals: readonly OrcaBindingTerminalEvidence[];
+  readonly worktrees: ReadonlyMap<string, OrcaBindingWorktreeEvidence>;
+}
+
 function isNativeTimeout(response: OrcaJsonResponse): boolean {
   return response.error?.code === 'orca_operation_timeout';
 }
@@ -111,6 +146,23 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function positiveIssueNumber(value: unknown): number | null | undefined {
+  if (value === null || value === undefined) return null;
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function sameBindingWorktree(
+  left: OrcaBindingWorktreeEvidence,
+  right: OrcaBindingWorktreeEvidence,
+): boolean {
+  return left.id === right.id
+    && left.path === right.path
+    && left.head === right.head
+    && left.linkedIssue === right.linkedIssue;
 }
 
 function normalizeInboxMessage(value: unknown): RuntimeInboxMessage | null {
@@ -271,6 +323,119 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       ...options,
       timeoutMs: Math.max(1, Math.min(remaining, requestedLimit)),
     };
+  }
+
+  #bindingCallOptions(
+    deadline: number,
+    options: RuntimeWorkerTaskBindingCallOptions,
+  ): RuntimeCallOptions | null {
+    const remaining = this.#remaining(deadline);
+    if (remaining <= 0) return null;
+    return {
+      ...options,
+      timeoutMs: Math.max(
+        1,
+        Math.min(ORCA_WORKER_TASK_BINDING_NATIVE_SLICE_MS, remaining),
+      ),
+    };
+  }
+
+  #bindingTerminalCensus(
+    deadline: number,
+    options: RuntimeWorkerTaskBindingCallOptions,
+  ): { readonly status: 'ok'; readonly value: readonly OrcaBindingTerminalEvidence[] }
+    | { readonly status: 'unavailable'; readonly code: 'deadline_exhausted' | 'malformed_or_incomplete' | 'inventory_ambiguous' } {
+    const callOptions = this.#bindingCallOptions(deadline, options);
+    if (!callOptions) return { status: 'unavailable', code: 'deadline_exhausted' };
+    const response = this.#run<{ terminals?: OrcaTerminalSummary[] }>(['terminal', 'list'], callOptions);
+    if (!response.ok) {
+      return {
+        status: 'unavailable',
+        code: isNativeTimeout(response) ? 'deadline_exhausted' : 'inventory_ambiguous',
+      };
+    }
+    const terminals = response.result?.terminals;
+    if (!Array.isArray(terminals)) {
+      return { status: 'unavailable', code: 'malformed_or_incomplete' };
+    }
+    const normalized: OrcaBindingTerminalEvidence[] = [];
+    for (const terminal of terminals) {
+      const handle = nonEmptyString(terminal.handle);
+      const worktreeId = nonEmptyString(terminal.worktreeId);
+      const worktreePath = nonEmptyString(terminal.worktreePath);
+      if (!handle || !worktreeId || !worktreePath) {
+        return { status: 'unavailable', code: 'malformed_or_incomplete' };
+      }
+      const generation = nativeGeneration(terminal);
+      const incarnationId = nonEmptyString(terminal.incarnationId);
+      const identity = generation
+        ? { runtime: 'orca', id: handle, generation }
+        : null;
+      const owned = this.#owned.get(handle);
+      normalized.push({
+        handle,
+        generation,
+        incarnationId,
+        worktreeId,
+        worktreePath,
+        provenance: identity && owned && sameRuntimeWorker(owned.identity, identity)
+          ? 'internal'
+          : 'external',
+      });
+    }
+    return { status: 'ok', value: normalized };
+  }
+
+  #bindingWorktreeCensus(
+    terminals: readonly OrcaBindingTerminalEvidence[],
+    deadline: number,
+    options: RuntimeWorkerTaskBindingCallOptions,
+    revalidation: boolean,
+  ): { readonly status: 'ok'; readonly value: ReadonlyMap<string, OrcaBindingWorktreeEvidence> }
+    | { readonly status: 'unavailable'; readonly code: 'deadline_exhausted' | 'task_metadata_unavailable' | 'snapshot_revalidation_unavailable' | 'inventory_ambiguous' } {
+    const paths = [...new Set(terminals.map((terminal) => terminal.worktreePath))].sort();
+    if (paths.length > ORCA_WORKER_TASK_BINDING_MAX_WORKTREES) {
+      return { status: 'unavailable', code: 'inventory_ambiguous' };
+    }
+    const worktrees = new Map<string, OrcaBindingWorktreeEvidence>();
+    for (const worktreePath of paths) {
+      const callOptions = this.#bindingCallOptions(deadline, options);
+      if (!callOptions) return { status: 'unavailable', code: 'deadline_exhausted' };
+      const shown = this.#run<OrcaWorktreeShow>(
+        ['worktree', 'show', '--worktree', `path:${worktreePath}`],
+        callOptions,
+      );
+      if (!shown.ok) {
+        return {
+          status: 'unavailable',
+          code: isNativeTimeout(shown)
+            ? 'deadline_exhausted'
+            : revalidation ? 'snapshot_revalidation_unavailable' : 'task_metadata_unavailable',
+        };
+      }
+      const raw = shown.result?.worktree;
+      const id = nonEmptyString(raw?.id);
+      const path = nonEmptyString(raw?.path);
+      const head = nonEmptyString(raw?.head);
+      const linkedIssue = positiveIssueNumber(raw?.linkedIssue);
+      if (!id || !path || !head || linkedIssue === undefined) {
+        return {
+          status: 'unavailable',
+          code: revalidation ? 'snapshot_revalidation_unavailable' : 'task_metadata_unavailable',
+        };
+      }
+      if (path !== worktreePath || worktrees.has(path)) {
+        return { status: 'unavailable', code: 'inventory_ambiguous' };
+      }
+      worktrees.set(path, { id, path, head, linkedIssue });
+    }
+    for (const terminal of terminals) {
+      const worktree = worktrees.get(terminal.worktreePath);
+      if (!worktree || worktree.id !== terminal.worktreeId) {
+        return { status: 'unavailable', code: 'inventory_ambiguous' };
+      }
+    }
+    return { status: 'ok', value: worktrees };
   }
 
   #resolveObservation(
@@ -444,6 +609,119 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
         ? current.value
         : null,
     };
+  }
+
+  observeWorkerTaskBindings(
+    input: { readonly workers: readonly RuntimeWorkerIdentity[] },
+    options: RuntimeWorkerTaskBindingCallOptions,
+  ): RuntimeWorkerTaskBindingObservation {
+    const workers = [...input.workers];
+    if (workers.length > 256
+      || workers.some((worker) => !worker.id.trim() || !worker.generation.trim() || !worker.runtime.trim())
+      || workers.some((worker, index) => workers.slice(0, index).some((prior) => sameRuntimeWorker(prior, worker)))) {
+      return { status: 'unavailable', code: 'malformed_or_incomplete' };
+    }
+    if (!Number.isFinite(options.timeoutMs)
+      || options.timeoutMs < ORCA_WORKER_TASK_BINDING_REQUIRED_BUDGET_MS) {
+      return { status: 'unavailable', code: 'deadline_exhausted' };
+    }
+
+    const deadline = this.#now() + Math.floor(options.timeoutMs);
+    const terminalA = this.#bindingTerminalCensus(deadline, options);
+    if (terminalA.status !== 'ok') return terminalA;
+    const pathsA = new Set(terminalA.value.map((terminal) => terminal.worktreePath));
+    if (pathsA.size > ORCA_WORKER_TASK_BINDING_MAX_WORKTREES) {
+      return { status: 'unavailable', code: 'inventory_over_cap' };
+    }
+    const worktreeA = this.#bindingWorktreeCensus(terminalA.value, deadline, options, false);
+    if (worktreeA.status !== 'ok') {
+      if (worktreeA.code === 'inventory_ambiguous') {
+        return { status: 'unavailable', code: 'inventory_ambiguous' };
+      }
+      return worktreeA;
+    }
+
+    const terminalB = this.#bindingTerminalCensus(deadline, options);
+    if (terminalB.status !== 'ok') {
+      return terminalB.code === 'deadline_exhausted'
+        ? terminalB
+        : { status: 'unavailable', code: 'snapshot_revalidation_unavailable' };
+    }
+    const allPaths = new Set([
+      ...terminalA.value.map((terminal) => terminal.worktreePath),
+      ...terminalB.value.map((terminal) => terminal.worktreePath),
+    ]);
+    if (allPaths.size > ORCA_WORKER_TASK_BINDING_MAX_WORKTREES) {
+      return { status: 'unavailable', code: 'inventory_over_cap' };
+    }
+    const unionTerminals = [
+      ...terminalA.value,
+      ...terminalB.value.filter((terminal) => !pathsA.has(terminal.worktreePath)),
+    ];
+    const worktreeB = this.#bindingWorktreeCensus(unionTerminals, deadline, options, true);
+    if (worktreeB.status !== 'ok') {
+      if (worktreeB.code === 'inventory_ambiguous') {
+        return { status: 'unavailable', code: 'inventory_ambiguous' };
+      }
+      return worktreeB;
+    }
+    if (this.#remaining(deadline) < ORCA_WORKER_TASK_BINDING_MARGIN_MS) {
+      return { status: 'unavailable', code: 'deadline_exhausted' };
+    }
+
+    const terminalMatches = (
+      terminals: readonly OrcaBindingTerminalEvidence[],
+      worker: RuntimeWorkerIdentity,
+    ): readonly OrcaBindingTerminalEvidence[] => terminals.filter((terminal) => terminal.handle === worker.id);
+    const issueClaimCount = (
+      snapshot: OrcaBindingSnapshot,
+      issueNumber: number,
+    ): number => snapshot.terminals.filter((terminal) =>
+      snapshot.worktrees.get(terminal.worktreePath)?.linkedIssue === issueNumber).length;
+    const snapshotA: OrcaBindingSnapshot = { terminals: terminalA.value, worktrees: worktreeA.value };
+    const snapshotB: OrcaBindingSnapshot = { terminals: terminalB.value, worktrees: worktreeB.value };
+
+    const outcomes: RuntimeWorkerTaskBindingOutcome[] = workers.map((worker) => {
+      if (worker.runtime !== 'orca') return { status: 'identity_unresolved', worker };
+      const matchesA = terminalMatches(snapshotA.terminals, worker);
+      if (matchesA.length === 0) return { status: 'absent', worker };
+      if (matchesA.length > 1) return { status: 'ambiguous', worker, code: 'duplicate_identity' };
+      const a = matchesA[0]!;
+      if (!a.generation || a.generation !== worker.generation) return { status: 'replaced', worker };
+      if (!a.incarnationId) return { status: 'incarnation_unavailable', worker };
+      if (a.incarnationId !== worker.generation) return { status: 'replaced', worker };
+
+      const matchesB = terminalMatches(snapshotB.terminals, worker);
+      if (matchesB.length === 0) {
+        return { status: 'stale', worker, code: 'disappeared_after_initial' };
+      }
+      if (matchesB.length > 1) return { status: 'ambiguous', worker, code: 'duplicate_identity' };
+      const b = matchesB[0]!;
+      if (!b.generation || b.generation !== worker.generation) return { status: 'replaced', worker };
+      if (!b.incarnationId) return { status: 'incarnation_unavailable', worker };
+      if (b.incarnationId !== worker.generation) return { status: 'replaced', worker };
+
+      const taskA = snapshotA.worktrees.get(a.worktreePath);
+      const taskB = snapshotB.worktrees.get(b.worktreePath);
+      if (!taskA || !taskB) return { status: 'ambiguous', worker, code: 'workspace_task_conflict' };
+      const issueA = taskA.linkedIssue;
+      const issueB = taskB.linkedIssue;
+      const duplicateIssue = (issueA !== null && issueClaimCount(snapshotA, issueA) > 1)
+        || (issueB !== null && issueClaimCount(snapshotB, issueB) > 1);
+      if (duplicateIssue) return { status: 'ambiguous', worker, code: 'duplicate_issue' };
+      if (a.provenance !== b.provenance) {
+        return { status: 'ambiguous', worker, code: 'provenance_conflict' };
+      }
+      if (a.worktreeId !== b.worktreeId
+        || a.worktreePath !== b.worktreePath
+        || !sameBindingWorktree(taskA, taskB)) {
+        return { status: 'stale', worker, code: 'metadata_changed' };
+      }
+      if (a.provenance === 'external') return { status: 'external', worker, provenance: 'external' };
+      if (issueA === null) return { status: 'unbound', worker, provenance: 'internal' };
+      return { status: 'bound', worker, issueNumber: issueA, provenance: 'internal' };
+    });
+    return { status: 'ok', outcomes };
   }
 
   spawnWorker(
