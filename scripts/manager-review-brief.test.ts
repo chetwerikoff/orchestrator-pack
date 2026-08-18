@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -10,7 +10,7 @@ import {
   renderManagerReviewBriefBatch,
   type ManagerReviewBriefContext,
 } from './lib/manager-review-brief.ts';
-import { runStateLightTurn } from './chatgpt-browser-turn/state-light-turn.ts';
+import { runStateLightEntry } from './chatgpt-browser-turn/state-light-entry.ts';
 import { runCli as runLegacyBrowserTurnCli } from './chatgpt-browser-turn.ts';
 import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
 
@@ -149,14 +149,52 @@ describe('manager review brief canon', () => {
     expect(comparison.mismatch.cause).toContain('.cursor/rules/flow-manager-browser-turn-monitoring.mdc@');
   });
 
+  it('admits exact current canonical bytes and strips gate-only stage context before transport', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-manager-review-valid-'));
+    roots.push(root);
+    const actualContext: ManagerReviewBriefContext = {
+      ...context,
+      repositoryFullName: 'chetwerikoff/orchestrator-pack',
+    };
+    const rendered = renderManagerReviewBrief(readManagerReviewCanon(), actualContext);
+    const input = join(root, 'prompt.txt');
+    writeFileSync(input, rendered.text);
+    const delegated: string[][] = [];
+
+    const exitCode = await runStateLightEntry([
+      'turn',
+      '--invocation-id', actualContext.invocationId,
+      '--input', input,
+      '--reviewer-source-output', join(root, 'source.txt'),
+      '--reviewer-source', 'direct-publication/v1',
+      '--repository', actualContext.repositoryFullName,
+      '--issue-number', String(actualContext.issueNumber),
+      '--source-revision', actualContext.sourceRevision,
+      '--stage', actualContext.stage,
+      '--source-slot', actualContext.sourceSlot,
+    ], {
+      runTurn: async (argv) => {
+        delegated.push([...argv]);
+        return 0;
+      },
+    });
+
+    expect(exitCode).toBe(0);
+    expect(delegated).toHaveLength(1);
+    expect(delegated[0]).not.toContain('--stage');
+    expect(delegated[0]).not.toContain('--source-slot');
+    expect(delegated[0]).toContain('--reviewer-source');
+  });
+
   it('rejects hand-written state-light direct-publication input before the browser core', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-manager-review-input-'));
     roots.push(root);
     const input = join(root, 'prompt.txt');
     writeFileSync(input, 'hand-written reviewer prompt\n');
     const capture = captureWrite(process.stdout);
+    const delegated: string[][] = [];
     try {
-      const exitCode = await runStateLightTurn([
+      const exitCode = await runStateLightEntry([
         'turn',
         '--invocation-id', context.invocationId,
         '--input', input,
@@ -167,8 +205,14 @@ describe('manager review brief canon', () => {
         '--source-revision', 'r07',
         '--stage', 'architectural-review',
         '--source-slot', '01',
-      ]);
+      ], {
+        runTurn: async (argv) => {
+          delegated.push([...argv]);
+          return 0;
+        },
+      });
       expect(exitCode).not.toBe(0);
+      expect(delegated).toHaveLength(0);
       const result = JSON.parse(capture.lines.join('').trim()) as {
         state: string;
         cause: string;
