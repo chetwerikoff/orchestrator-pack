@@ -7,6 +7,7 @@
     "docs/tiering.md",
     "prompts/codex_draft_review_prompt.md",
     "scripts/create-issue-stage-finalize.ts",
+    "scripts/flow-manager-authority-contract.test.ts",
     "scripts/lib/canonical-review-directory.ts",
     "scripts/lib/create-issue-final-acceptance-contract.ts",
     "scripts/lib/create-issue-final-acceptance.ts",
