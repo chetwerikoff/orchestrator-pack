@@ -10,10 +10,11 @@ import {
   type RuntimeResult,
   type RuntimeWorker,
   type RuntimeWorkerIdentity,
+  type RuntimeWorkerTaskBindingCallOptions,
   type RuntimeWorkerTaskBindingObservation,
 } from './runtime/contracts.ts';
 import {
-  ORCA_WORKER_TASK_BINDING_STRATEGY,
+  orcaWorkerTaskBindingStrategy,
   OrcaRuntimeAdapter,
 } from './orca-runtime/adapter.ts';
 import type {
@@ -40,6 +41,7 @@ class BindingFleetSource implements FleetObserverSource {
   readonly states: SourceState[];
   observation: RuntimeWorkerTaskBindingObservation | PromiseLike<RuntimeWorkerTaskBindingObservation>;
   observationCalls = 0;
+  lastObservationTimeoutMs: number | null = null;
 
   constructor(
     workers: readonly RuntimeWorker[],
@@ -94,8 +96,10 @@ class BindingFleetSource implements FleetObserverSource {
 
   observeWorkerTaskBindings(
     _input: { readonly workers: readonly RuntimeWorkerIdentity[] },
+    options: RuntimeWorkerTaskBindingCallOptions,
   ): RuntimeWorkerTaskBindingObservation | PromiseLike<RuntimeWorkerTaskBindingObservation> {
     this.observationCalls += 1;
+    this.lastObservationTimeoutMs = options.timeoutMs;
     return this.observation;
   }
 }
@@ -311,7 +315,9 @@ describe('Issue #1380 runtime worker identity binding', () => {
     const firstTick = await observer.tick({ schedulerIntervalMs: 16_000 });
     const first = observer.resolveWorkerIssueBindings({ schedulerGeneration: firstTick.schedulerGeneration, tickSequence: firstTick.tickSequence });
     const second = observer.resolveWorkerIssueBindings({ schedulerGeneration: firstTick.schedulerGeneration, tickSequence: firstTick.tickSequence });
+    const repeated = observer.resolveWorkerIssueBindings({ schedulerGeneration: firstTick.schedulerGeneration, tickSequence: firstTick.tickSequence });
     expect(first).toBe(second);
+    expect(first).toBe(repeated);
     expect(source.observationCalls).toBe(1);
 
     source.observation = { status: 'unavailable', code: 'task_metadata_unavailable' };
@@ -321,8 +327,8 @@ describe('Issue #1380 runtime worker identity binding', () => {
     expect(old).toMatchObject({ status: 'unavailable', code: 'late_completion_discarded' });
     const current = await observer.resolveWorkerIssueBindings({ schedulerGeneration: secondTick.schedulerGeneration, tickSequence: secondTick.tickSequence });
     expect(current).toMatchObject({ status: 'unavailable', code: 'task_metadata_unavailable' });
-    const repeated = observer.resolveWorkerIssueBindings({ schedulerGeneration: secondTick.schedulerGeneration, tickSequence: secondTick.tickSequence });
-    expect(await repeated).toBe(current);
+    const settledRepeat = observer.resolveWorkerIssueBindings({ schedulerGeneration: secondTick.schedulerGeneration, tickSequence: secondTick.tickSequence });
+    expect(await settledRepeat).toBe(current);
     expect(source.observationCalls).toBe(2);
     expect(Object.isFrozen(current)).toBe(true);
     expect(Object.isFrozen(current.rows)).toBe(true);
@@ -346,6 +352,20 @@ describe('Issue #1380 runtime worker identity binding', () => {
     });
   });
 
+  it('propagates the accepted 8000ms cadence budget as a 2000ms no-authority deadline', async () => {
+    const workers = [worker('one', 'g1')];
+    const source = new BindingFleetSource(workers, { status: 'unavailable', code: 'deadline_exhausted' });
+    const observer = observerFor(source, 'sg-eight-second-budget');
+    const tick = await observer.tick({ schedulerIntervalMs: 8_000 });
+    expect(tick.status).toBe('complete');
+    const result = await observer.resolveWorkerIssueBindings({
+      schedulerGeneration: tick.schedulerGeneration,
+      tickSequence: tick.tickSequence,
+    });
+    expect(result).toMatchObject({ status: 'unavailable', code: 'deadline_exhausted' });
+    expect(source.lastObservationTimeoutMs).toBe(2_000);
+  });
+
   it('grounds complete_ab_revalidation across six worktrees within the priced 4000ms budget', () => {
     const terminals = [
       terminal('bound', 'inc-bound', 1),
@@ -367,7 +387,7 @@ describe('Issue #1380 runtime worker identity binding', () => {
     const result = fixture.adapter.observeWorkerTaskBindings({
       workers: [fixture.owned[0]!.identity, { runtime: 'orca', id: 'external', generation: 'inc-external' }, fixture.owned[1]!.identity],
     }, { timeoutMs: 4_000 });
-    expect(ORCA_WORKER_TASK_BINDING_STRATEGY).toBe('complete_ab_revalidation');
+    expect(orcaWorkerTaskBindingStrategy).toBe('complete_ab_revalidation');
     expect(result).toEqual({
       status: 'ok',
       outcomes: [
@@ -388,6 +408,18 @@ describe('Issue #1380 runtime worker identity binding', () => {
       status: 'unavailable', code: 'deadline_exhausted',
     });
     expect(fixture.calls).toEqual([]);
+  });
+
+  it('stops native reads when charged calls exhaust the producer deadline', () => {
+    const terminals = Array.from({ length: 6 }, (_, index) => terminal(`slow-${index}`, `inc-${index}`, index + 1));
+    const fixture = orcaFixture({ terminalA: terminals, chargeMs: 400 });
+    const result = fixture.adapter.observeWorkerTaskBindings({
+      workers: [{ runtime: 'orca', id: 'slow-0', generation: 'inc-0' }],
+    }, { timeoutMs: 4_000 });
+    expect(result).toEqual({ status: 'unavailable', code: 'deadline_exhausted' });
+    expect(fixture.calls).toHaveLength(10);
+    expect(fixture.calls.every((call) => (call.timeoutMs ?? 0) <= 250)).toBe(true);
+    expect(fixture.now()).toBe(4_000);
   });
 
   it('keeps absence, replacement, pty-only incarnation, metadata races, duplicates, and restart external distinct', () => {
@@ -420,6 +452,34 @@ describe('Issue #1380 runtime worker identity binding', () => {
       status: 'ok', outcomes: [{ status: 'stale', code: 'metadata_changed' }],
     });
 
+    const staleUnbound = orcaFixture({
+      terminalA: [terminal('exact', 'inc-a', 1)],
+      issueA: { 1: 1380 },
+      issueB: { 1: null },
+      seedOwned: [{ handle: 'exact', generation: 'inc-a', worktree: 1 }],
+    });
+    expect(staleUnbound.adapter.observeWorkerTaskBindings({ workers: [staleUnbound.owned[0]!.identity] }, { timeoutMs: 4_000 })).toMatchObject({
+      status: 'ok', outcomes: [{ status: 'stale', code: 'metadata_changed' }],
+    });
+
+    const aba = orcaFixture({
+      terminalA: [terminal('exact', 'inc-a', 1)],
+      terminalB: [terminal('exact', 'inc-b', 1)],
+      issueA: { 1: 1380 },
+      seedOwned: [{ handle: 'exact', generation: 'inc-a', worktree: 1 }],
+    });
+    expect(aba.adapter.observeWorkerTaskBindings({ workers: [aba.owned[0]!.identity] }, { timeoutMs: 4_000 })).toMatchObject({
+      status: 'ok', outcomes: [{ status: 'replaced' }],
+    });
+
+    const sameTextNewIncarnation = orcaFixture({
+      terminalA: [{ ...terminal('same-text', 'new-native-incarnation', 1), ptyId: 'old-generation-text' }],
+      issueA: { 1: 1380 },
+    });
+    expect(sameTextNewIncarnation.adapter.observeWorkerTaskBindings({ workers: [{ runtime: 'orca', id: 'same-text', generation: 'old-generation-text' }] }, { timeoutMs: 4_000 })).toMatchObject({
+      status: 'ok', outcomes: [{ status: 'replaced' }],
+    });
+
     const inconsistentB = orcaFixture({
       terminalA: [terminal('exact', 'inc-a', 1)],
       terminalB: [{ ...terminal('exact', 'inc-a', 1), worktreeId: 'w-conflict' }],
@@ -437,6 +497,31 @@ describe('Issue #1380 runtime worker identity binding', () => {
     });
     expect(duplicate.adapter.observeWorkerTaskBindings({ workers: [duplicate.owned[0]!.identity] }, { timeoutMs: 4_000 })).toMatchObject({
       status: 'ok', outcomes: [{ status: 'ambiguous', code: 'duplicate_issue' }],
+    });
+
+    const sameWorkspaceDuplicate = orcaFixture({
+      terminalA: [terminal('exact', 'inc-a', 1), terminal('sibling', 'inc-b', 1)],
+      issueA: { 1: 1380 },
+      seedOwned: [{ handle: 'exact', generation: 'inc-a', worktree: 1 }],
+    });
+    expect(sameWorkspaceDuplicate.adapter.observeWorkerTaskBindings({ workers: [sameWorkspaceDuplicate.owned[0]!.identity] }, { timeoutMs: 4_000 })).toMatchObject({
+      status: 'ok', outcomes: [{ status: 'ambiguous', code: 'duplicate_issue' }],
+    });
+
+    const internalDuplicate = orcaFixture({
+      terminalA: [terminal('left', 'inc-left', 1), terminal('right', 'inc-right', 2)],
+      issueA: { 1: 1380, 2: 1380 },
+      seedOwned: [
+        { handle: 'left', generation: 'inc-left', worktree: 1 },
+        { handle: 'right', generation: 'inc-right', worktree: 2 },
+      ],
+    });
+    expect(internalDuplicate.adapter.observeWorkerTaskBindings({ workers: internalDuplicate.owned.map((candidate) => candidate.identity) }, { timeoutMs: 4_000 })).toMatchObject({
+      status: 'ok',
+      outcomes: [
+        { status: 'ambiguous', code: 'duplicate_issue' },
+        { status: 'ambiguous', code: 'duplicate_issue' },
+      ],
     });
 
     const restarted = orcaFixture({ terminalA: [terminal('survivor', 'inc-survivor', 1)], issueA: { 1: 1380 } });
@@ -461,7 +546,7 @@ describe('Issue #1380 runtime worker identity binding', () => {
       expected: 'exact-current-generation-one-to-one',
       runtimeWorkerIdentityBinding: {
         result: {
-          strategy: ORCA_WORKER_TASK_BINDING_STRATEGY,
+          strategy: orcaWorkerTaskBindingStrategy,
           uniqueCurrentInternalResolved: true,
           noAuthorityCasesClosed: true,
           runtimeGlobalCollisionProof: true,
