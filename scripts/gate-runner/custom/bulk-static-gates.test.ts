@@ -6,6 +6,7 @@ import {
   evaluateCoworkerDelegationThreshold,
   evaluateReview010Vocabulary,
   evaluateVerifyStructureContract,
+  evaluateWorkerReportHardCutDocs,
 } from './bulk-static-gates.ts';
 
 const repoRoot = process.cwd();
@@ -18,6 +19,16 @@ function verifyFixture(overrides: Readonly<Record<string, string>> = {}) {
   files['plugins/token-chain-ledger/README.md'] = 'chain_id planner reviewer worker per-session cost estimated_cost_usd';
   files['plugins/codex-pr-reviewer/README.md'] = 'Codex gpt-5.5 PR review GitHub Issues no core patch';
   return memorySnapshot({ ...files, ...overrides });
+}
+
+function workerReportDocs(overrides: Readonly<Record<string, string>> = {}) {
+  return memorySnapshot({
+    'AGENTS.md': 'pack-worker-report --state <state>\nskip silently\n',
+    'README.md': '[scripts/pack-worker-report](scripts/pack-worker-report) [scripts/pack-worker-report.ts](scripts/pack-worker-report.ts)',
+    'docs/worker-smoke-testing.md': 'pack-worker-report --state ready_for_review',
+    'docs/script-owned-review-pipeline.md': 'pack-worker-report --state <state>',
+    ...overrides,
+  });
 }
 
 describe('Wave 3.b bulk static gate ports', () => {
@@ -33,6 +44,15 @@ describe('Wave 3.b bulk static gate ports', () => {
     const clean = memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\n' });
     expect(evaluateAgentsReportContract(clean).status).toBe('PASS');
     expect(evaluateAgentsReportContract(memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\na\u006f report\n' })).status).toBe('FAIL');
+  });
+
+  it('guards the worker-report Node hard cut across live lifecycle docs', () => {
+    expect(evaluateWorkerReportHardCutDocs(workerReportDocs()).status).toBe('PASS');
+    const retired = evaluateWorkerReportHardCutDocs(workerReportDocs({
+      'README.md': '[old](scripts/pack-worker-report.ps1)',
+    }));
+    expect(retired.status).toBe('FAIL');
+    expect(retired.details?.join('\n')).toContain('retired pack-worker-report.ps1');
   });
 
   it('enforces the coworker 400-line floor and stale 600-literal exclusion', () => {
