@@ -98,7 +98,7 @@ switch (operation) {
       : [];
     const worker = matches.length === 1 ? matches[0] : null;
     out(worker
-      ? { ok: true, result: { worker: { agent_terminal_handle: worker.id }, terminal: { handle: worker.id }, observation: { exactWorker: true, status: 'running' } } }
+      ? { ok: true, result: { worker: { agent_terminal_handle: worker.id }, terminal: { handle: worker.id }, observation: { exactWorker: true, status: 'live' } } }
       : { ok: true, result: { observation: { exactWorker: false, status: 'unknown' } } });
     break;
   }
