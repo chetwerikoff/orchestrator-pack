@@ -22,6 +22,7 @@ export const PACK_REVIEW_AUTHORITY_PHASES = Object.freeze([
 
 export type PackReviewTier = keyof typeof PACK_REVIEW_CAPS;
 export type PackReviewAuthorityPhase = (typeof PACK_REVIEW_AUTHORITY_PHASES)[number];
+export type PackReviewAutomaticBudgetDisposition = 'consume' | 'non_consuming_explicit';
 export type SmokeOrderingActor = 'worker-owned' | 'independent';
 export type SmokeOrderingStatus = 'started' | 'passed' | 'failed';
 export type SmokeOrderingFailureKind = 'finding' | 'retryable';
@@ -69,6 +70,7 @@ export interface PackReviewTerminalV2 {
   schemaVersion: 1;
   terminalContractVersion: 2;
   terminalSource: PackReviewTerminalSource;
+  automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
   runId: string;
   targetSha: string;
   reviewVerdict: 'clean' | 'findings';
@@ -98,6 +100,8 @@ export interface PackReviewCycle {
   closedAtUtc?: string;
   consumedHeadShas: string[];
   atCapHash?: string;
+  reviewStageComplete?: boolean;
+  reviewStageCompletedAtUtc?: string;
   resetProvenance?: PackReviewResetProvenance;
 }
 
@@ -153,6 +157,7 @@ export interface PackReviewAuthorityDocument {
     targetSha: string;
     reviewVerdict: 'clean' | 'findings';
     terminalSource: PackReviewTerminalSource;
+    automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
     reviewStatus?: string;
   };
   cycle: PackReviewCycle | null;
@@ -333,6 +338,14 @@ function phaseIndex(phase: PackReviewAuthorityPhase): number {
   return index;
 }
 
+function validateBudgetDisposition(value: unknown, label: string): PackReviewAutomaticBudgetDisposition {
+  const disposition = value ?? 'consume';
+  if (disposition !== 'consume' && disposition !== 'non_consuming_explicit') {
+    throw new PackReviewAuthorityError('authority_schema_invalid', label);
+  }
+  return disposition;
+}
+
 function validateCycle(cycle: PackReviewCycle | null): void {
   if (!cycle) return;
   nonEmpty(cycle.cycleId, 'cycleId');
@@ -364,6 +377,12 @@ function validateCycle(cycle: PackReviewCycle | null): void {
       && cycle.frozenMapOrigin !== 'persisted-open-cycle') {
     throw new PackReviewAuthorityError('cap_state_invalid', 'legacy cycle lacks persisted origin');
   }
+  if (cycle.reviewStageComplete === true && !cycle.reviewStageCompletedAtUtc) {
+    throw new PackReviewAuthorityError('cap_state_invalid', 'completed review stage lacks timestamp');
+  }
+  if (cycle.reviewStageComplete !== true && cycle.reviewStageCompletedAtUtc !== undefined) {
+    throw new PackReviewAuthorityError('cap_state_invalid', 'incomplete review stage carries completion timestamp');
+  }
   const atCap = normalized.length === cycle.frozenCap;
   const atCapState = cycle.state === 'at_cap_open_findings' || cycle.state === 'at_cap_continuation_required';
   if (atCapState && (!atCap || !cycle.atCapHash || !/^[0-9a-f]{64}$/.test(cycle.atCapHash))) {
@@ -389,6 +408,7 @@ function validateAuthority(document: PackReviewAuthorityDocument): void {
     normalizeSha(document.terminal.targetSha, 'terminal.targetSha');
     nonEmpty(document.terminal.runId, 'terminal.runId');
     nonEmpty(document.terminal.digest, 'terminal.digest');
+    validateBudgetDisposition(document.terminal.automaticBudgetDisposition, 'terminal.automaticBudgetDisposition');
   }
   if (document.smokeOrdering) {
     const ordering = document.smokeOrdering;
@@ -479,6 +499,10 @@ export function retainPersistedOpenCycle(raw: unknown): PackReviewCycle {
       ? input.consumedHeadShas.map((sha) => normalizeSha(sha, 'consumedHeadSha'))
       : [],
     atCapHash: input.atCapHash,
+    reviewStageComplete: input.reviewStageComplete === true ? true : undefined,
+    reviewStageCompletedAtUtc: input.reviewStageComplete === true
+      ? nonEmpty(input.reviewStageCompletedAtUtc, 'reviewStageCompletedAtUtc')
+      : undefined,
     resetProvenance: input.resetProvenance,
   };
   validateCycle(cycle);
@@ -541,6 +565,7 @@ export function reconcilePackReviewTier(input: {
   const cycle = current.cycle;
   const safelyReplaceable = cycle.state === 'open'
     && cycle.consumedHeadShas.length === 0
+    && cycle.reviewStageComplete !== true
     && !current.terminal
     && !current.evidence
     && !current.triage
@@ -611,6 +636,14 @@ export function observePackReviewHead(input: {
     nextPhase: 'head_observed',
     mutate(current) {
       if (current.currentHeadSha === headSha) return current;
+      const completed = current.cycle?.reviewStageComplete === true
+        || (current.cycle?.state === 'closed'
+          && current.publication?.status === 'succeeded'
+          && current.terminal?.automaticBudgetDisposition !== 'non_consuming_explicit');
+      if (completed && current.cycle && current.cycle.reviewStageComplete !== true) {
+        current.cycle.reviewStageComplete = true;
+        current.cycle.reviewStageCompletedAtUtc = current.publication?.recordedAtUtc ?? nowIso(input.options);
+      }
       current.currentHeadSha = headSha;
       current.evidence = undefined;
       current.triage = undefined;
@@ -626,12 +659,13 @@ export function observePackReviewHead(input: {
               ? { ...independent, headSha, status: 'failed' }
               : { ...independent } }
             : {}),
-          ...(independent?.startedEver ? {} : { reviewSettledHeadSha: undefined }),
+          ...(independent?.startedEver || completed ? {} : { reviewSettledHeadSha: undefined }),
         };
       }
+      if (current.cycle?.reviewStageComplete === true) {
+        return current;
+      }
       if (current.cycle?.state === 'closed') {
-        // A clean terminal closes only the old head's cycle. The next head
-        // starts a fresh budget rather than inheriting a consumed clean slot.
         current.cycle = createNewPackReviewCycle(current.cycle.frozenTier, {
           now: input.options.now,
         });
@@ -651,7 +685,9 @@ export function terminalConsumesCapSlot(terminal: {
   reaperKilled?: boolean;
   superseded?: boolean;
   stale?: boolean;
+  automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
 }): boolean {
+  if (terminal.automaticBudgetDisposition === 'non_consuming_explicit') return false;
   if (terminal.superseded || terminal.stale || terminal.reaperKilled) return false;
   const status = String(terminal.status).toLowerCase();
   const findings = Number(terminal.findingCount ?? 0);
@@ -679,6 +715,10 @@ export function validateTerminalV2(value: unknown): PackReviewTerminalV2 {
     schemaVersion: 1,
     terminalContractVersion: 2,
     terminalSource: row.terminalSource as PackReviewTerminalSource,
+    automaticBudgetDisposition: validateBudgetDisposition(
+      row.automaticBudgetDisposition,
+      'terminal.automaticBudgetDisposition',
+    ),
     runId: nonEmpty(row.runId, 'runId'),
     targetSha: normalizeSha(row.targetSha, 'targetSha'),
     reviewVerdict: row.reviewVerdict === 'clean' || row.reviewVerdict === 'findings'
@@ -787,7 +827,9 @@ export function commitPackReviewTerminal(input: {
       if (terminal.targetSha !== current.currentHeadSha) {
         throw new PackReviewAuthorityError('terminal_head_stale', terminal.targetSha);
       }
-      if (current.terminal?.targetSha === terminal.targetSha
+      const explicit = terminal.automaticBudgetDisposition === 'non_consuming_explicit';
+      if (!explicit
+          && current.terminal?.targetSha === terminal.targetSha
           && current.terminal.reviewVerdict === 'findings'
           && terminal.reviewVerdict === 'clean') {
         throw new PackReviewAuthorityError('terminal_precedence_conflict', 'findings outrank clean');
@@ -798,11 +840,13 @@ export function commitPackReviewTerminal(input: {
         targetSha: terminal.targetSha,
         reviewVerdict: terminal.reviewVerdict,
         terminalSource: terminal.terminalSource,
+        automaticBudgetDisposition: terminal.automaticBudgetDisposition,
         reviewStatus: input.status,
       };
       const cycle = current.cycle;
-      if (!cycle) return current;
-      if (terminalConsumesCapSlot(input) && !cycle.consumedHeadShas.includes(terminal.targetSha)) {
+      if (!cycle || explicit) return current;
+      if (terminalConsumesCapSlot({ ...input, automaticBudgetDisposition: terminal.automaticBudgetDisposition })
+          && !cycle.consumedHeadShas.includes(terminal.targetSha)) {
         if (cycle.consumedHeadShas.length >= cycle.frozenCap) {
           throw new PackReviewAuthorityError('cap_exhausted', 'terminal cannot consume an extra head');
         }
@@ -1004,6 +1048,28 @@ export function selectPackReviewEvidence(input: {
   });
 }
 
+function markReviewStageComplete(
+  current: PackReviewAuthorityDocument,
+  completedAtUtc: string,
+): void {
+  if (!current.cycle || current.cycle.reviewStageComplete === true) return;
+  current.cycle.reviewStageComplete = true;
+  current.cycle.reviewStageCompletedAtUtc = completedAtUtc;
+}
+
+function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boolean {
+  if (authority.cycle?.reviewStageComplete === true) return true;
+  if (authority.cycle?.state === 'closed'
+      && authority.terminal?.automaticBudgetDisposition !== 'non_consuming_explicit') return true;
+  const reviewStatus = authority.terminal?.reviewStatus;
+  if (authority.terminal?.automaticBudgetDisposition !== 'non_consuming_explicit'
+      && (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented')) return true;
+  return (authority.cycle?.state === 'at_cap_open_findings'
+      || authority.cycle?.state === 'at_cap_continuation_required')
+    && authority.triage?.source === 'architect'
+    && authority.triage.verdict === 'DEFER';
+}
+
 export function commitPackReviewTriage(input: {
   prNumber: number;
   expectedTransitionSeq: number;
@@ -1037,19 +1103,16 @@ export function commitPackReviewTriage(input: {
         throw new PackReviewAuthorityError('triage_invalid', 'architect verdict must be BLOCK or DEFER');
       }
       current.triage = { ...input.triage };
+      if (current.publication?.status === 'succeeded' && reviewObligationsSettled(current)) {
+        markReviewStageComplete(current, input.triage.committedAtUtc);
+        current.smokeOrdering = {
+          ...current.smokeOrdering,
+          reviewSettledHeadSha: current.currentHeadSha,
+        };
+      }
       return current;
     },
   });
-}
-
-function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boolean {
-  if (authority.cycle?.state === 'closed') return true;
-  const reviewStatus = authority.terminal?.reviewStatus;
-  if (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented') return true;
-  return (authority.cycle?.state === 'at_cap_open_findings'
-      || authority.cycle?.state === 'at_cap_continuation_required')
-    && authority.triage?.source === 'architect'
-    && authority.triage.verdict === 'DEFER';
 }
 
 export function recordPackReviewPublication(input: {
@@ -1071,6 +1134,7 @@ export function recordPackReviewPublication(input: {
       }
       current.publication = { ...input.publication };
       if (input.publication.status === 'succeeded' && reviewObligationsSettled(current)) {
+        markReviewStageComplete(current, input.publication.recordedAtUtc);
         current.smokeOrdering = {
           ...current.smokeOrdering,
           reviewSettledHeadSha: current.currentHeadSha,
@@ -1097,6 +1161,9 @@ export function acknowledgePackReviewReset(input: {
       const cycle = current.cycle;
       if (!cycle || !['at_cap_open_findings', 'at_cap_continuation_required'].includes(cycle.state)) {
         throw new PackReviewAuthorityError('reset_invalid', 'cycle is not at cap');
+      }
+      if (cycle.reviewStageComplete === true) {
+        throw new PackReviewAuthorityError('reset_invalid', 'completed review stage cannot replenish automatic budget');
       }
       if (input.provenance.priorCycleId !== cycle.cycleId
           || input.provenance.priorAtCapHash !== cycle.atCapHash) {
