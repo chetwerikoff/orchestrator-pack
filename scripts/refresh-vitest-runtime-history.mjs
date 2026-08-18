@@ -51,13 +51,7 @@ Or: node scripts/refresh-vitest-runtime-history.mjs reconcile \\
   --proposed <path> \\
   --output <path> \\
   [--repo-root <path>] \\
-  [--require-equal-inventory]
-
-Or: node scripts/refresh-vitest-runtime-history.mjs verify-candidate \\
-  --trusted-history <path> \\
-  --candidate-history <path> \\
-  --trusted-repo-root <path> \\
-  --candidate-repo-root <path>`);
+  [--require-equal-inventory]`);
 }
 
 function parseArgs(argv) {
@@ -82,34 +76,6 @@ function parseArgs(argv) {
         options.repoRoot = argv[++index] ?? defaultRepoRoot;
       } else if (arg === '--require-equal-inventory') {
         options.requireEqualInventory = true;
-      } else if (arg === '--help' || arg === '-h') {
-        printUsage();
-        process.exit(0);
-      } else {
-        throw new Error(`unknown argument: ${arg}`);
-      }
-    }
-    return options;
-  }
-
-  if (argv[0] === 'verify-candidate') {
-    const options = {
-      mode: 'verify-candidate',
-      trustedHistoryPath: '',
-      candidateHistoryPath: '',
-      trustedRepoRoot: '',
-      candidateRepoRoot: '',
-    };
-    for (let index = 1; index < argv.length; index += 1) {
-      const arg = argv[index];
-      if (arg === '--trusted-history') {
-        options.trustedHistoryPath = argv[++index] ?? '';
-      } else if (arg === '--candidate-history') {
-        options.candidateHistoryPath = argv[++index] ?? '';
-      } else if (arg === '--trusted-repo-root') {
-        options.trustedRepoRoot = argv[++index] ?? '';
-      } else if (arg === '--candidate-repo-root') {
-        options.candidateRepoRoot = argv[++index] ?? '';
       } else if (arg === '--help' || arg === '-h') {
         printUsage();
         process.exit(0);
@@ -243,7 +209,7 @@ function stableObjectEntries(value) {
   return Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
 }
 
-function verifyTrustedCandidate({ trustedHistory, candidateHistory, canonicalPaths }) {
+function validateTrustedCandidate(trustedHistory, candidateHistory, canonicalPaths) {
   const violations = [];
   for (const file of canonicalPaths) {
     const trustedWeight = trustedHistory?.files?.[file];
@@ -282,41 +248,23 @@ function verifyTrustedCandidate({ trustedHistory, candidateHistory, canonicalPat
   return violations;
 }
 
-function runVerifyCandidate(options) {
+function resolveProductionCandidateRoot(proposedPath, outputPath) {
+  if (process.env.GITHUB_ACTIONS !== 'true') return null;
+  const cwdRoot = process.cwd();
+  const cwdHistoryPath = resolve(runtimeHistoryPath(cwdRoot));
   if (
-    !options.trustedHistoryPath
-    || !options.candidateHistoryPath
-    || !options.trustedRepoRoot
-    || !options.candidateRepoRoot
+    resolve(proposedPath) !== cwdHistoryPath
+    && resolve(outputPath) !== cwdHistoryPath
   ) {
-    printUsage();
-    process.exit(1);
-  }
-
-  const expectedTrustedHistoryPath = resolve(runtimeHistoryPath(options.trustedRepoRoot));
-  const expectedCandidateHistoryPath = resolve(runtimeHistoryPath(options.candidateRepoRoot));
-  if (resolve(options.trustedHistoryPath) !== expectedTrustedHistoryPath) {
     throw new Error(
-      `trusted history path must be ${expectedTrustedHistoryPath}; got ${resolve(options.trustedHistoryPath)}`,
+      `trusted production reconcile is not bound to ${cwdHistoryPath}`,
     );
   }
-  if (resolve(options.candidateHistoryPath) !== expectedCandidateHistoryPath) {
-    throw new Error(
-      `candidate history path must be ${expectedCandidateHistoryPath}; got ${resolve(options.candidateHistoryPath)}`,
-    );
-  }
+  return cwdRoot;
+}
 
-  const trustedHistory = readRawHistory(options.trustedHistoryPath);
-  const candidateHistory = readRawHistory(options.candidateHistoryPath);
-  const canonicalPaths = discoverVitestFiles(options.trustedRepoRoot);
-  const violations = verifyTrustedCandidate({ trustedHistory, candidateHistory, canonicalPaths });
-  if (violations.length > 0) {
-    console.error('[FAIL] runtime-history publication guard refused trusted-main corruption:');
-    for (const violation of violations) console.error(` - ${violation}`);
-    process.exit(1);
-  }
-
-  const topologyResult = buildHeavyTopology(options.candidateRepoRoot);
+function enforceExistingPreTopologyBound(candidateRepoRoot) {
+  const topologyResult = buildHeavyTopology(candidateRepoRoot);
   if (!topologyResult.ok) {
     throw new Error(
       `pre-topology publication guard unavailable: ${topologyResult.errors.join('; ')}`,
@@ -328,17 +276,11 @@ function runVerifyCandidate(options) {
   try {
     resolvePreTopologyMeasurementPlan(topologyResult);
   } catch (error) {
-    console.error(
-      `[FAIL] runtime-history publication guard refused pre-topology bound: observed=${observedPlan.targets.length} bound=${PRE_TOPOLOGY_MAX_FILES}; ${error instanceof Error ? error.message : String(error)}`,
+    throw new Error(
+      `pre-topology publication guard refused: observed=${observedPlan.targets.length} bound=${PRE_TOPOLOGY_MAX_FILES}; ${error instanceof Error ? error.message : String(error)}`,
     );
-    process.exit(1);
   }
-
-  const trustedPositive = countFinitePositiveWeights(trustedHistory, canonicalPaths);
-  const candidatePositive = countFinitePositiveWeights(candidateHistory, canonicalPaths);
-  console.log(
-    `[PASS] runtime-history publication guard: trusted-positive=${trustedPositive} candidate-positive=${candidatePositive} pre-topology=${observedPlan.targets.length}/${PRE_TOPOLOGY_MAX_FILES} contentSha=preserved`,
-  );
+  return observedPlan.targets.length;
 }
 
 function runReconcile(options) {
@@ -365,10 +307,44 @@ function runReconcile(options) {
       proposedRawHistory,
       currentInventory,
     );
+
+    let trustedPositive = null;
+    let preTopologyCount = null;
+    if (options.requireEqualInventory) {
+      const trustedHistoryPath = runtimeHistoryPath(options.repoRoot);
+      if (!existsSync(trustedHistoryPath)) {
+        throw new Error(`trusted runtime-history baseline is missing: ${trustedHistoryPath}`);
+      }
+      const trustedRawHistory = readRawHistory(trustedHistoryPath);
+      const violations = validateTrustedCandidate(
+        trustedRawHistory,
+        outputHistory,
+        currentInventory,
+      );
+      if (violations.length > 0) {
+        throw new Error(
+          `trusted-main candidate invariant violated: ${violations.join('; ')}`,
+        );
+      }
+      trustedPositive = countFinitePositiveWeights(trustedRawHistory, currentInventory);
+    }
+
     writeFileSync(options.outputPath, historyBytes(outputHistory), 'utf8');
-    const positiveWeightCount = countFinitePositiveWeights(outputHistory, currentInventory);
+
+    const candidateRepoRoot = options.requireEqualInventory
+      ? resolveProductionCandidateRoot(options.proposedPath, options.outputPath)
+      : null;
+    if (candidateRepoRoot) {
+      preTopologyCount = enforceExistingPreTopologyBound(candidateRepoRoot);
+    }
+
+    const candidatePositive = countFinitePositiveWeights(outputHistory, currentInventory);
+    const trustedSignal = trustedPositive === null ? '' : ` trusted-positive=${trustedPositive}`;
+    const topologySignal = preTopologyCount === null
+      ? ''
+      : ` pre-topology=${preTopologyCount}/${PRE_TOPOLOGY_MAX_FILES}`;
     console.log(
-      `[PASS] runtime-history stale-base reconcile complete; candidate-positive=${positiveWeightCount}`,
+      `[PASS] runtime-history stale-base reconcile complete; candidate-positive=${candidatePositive}${trustedSignal}${topologySignal}`,
     );
   } catch (error) {
     console.error(
@@ -382,10 +358,6 @@ function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.mode === 'reconcile') {
     runReconcile(options);
-    return;
-  }
-  if (options.mode === 'verify-candidate') {
-    runVerifyCandidate(options);
     return;
   }
 
