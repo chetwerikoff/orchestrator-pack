@@ -1,14 +1,95 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { runProcessSync } from './kernel/subprocess.ts';
+import {
+  compareManagerReviewBrief,
+  readManagerReviewCanon,
+  renderManagerReviewBrief,
+  renderManagerReviewBriefBatch,
+  type ManagerReviewBriefContext,
+} from './lib/manager-review-brief.ts';
+import { runStateLightEntry } from './chatgpt-browser-turn/state-light-entry.ts';
+import { runCli as runLegacyBrowserTurnCli } from './chatgpt-browser-turn.ts';
+import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
 
 const contract = readFileSync(new URL('../.claude/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
 const ghTransport = readFileSync(new URL('./lib/create-issue-stage-record-gh.ts', import.meta.url), 'utf8');
 const journalCore = readFileSync(new URL('./lib/create-issue-stage-record-core.ts', import.meta.url), 'utf8');
+const browserRunbook = readFileSync(new URL('../docs/browser-gpt-turn-runbook.md', import.meta.url), 'utf8');
 const authorityStart = contract.indexOf('## Flow-manager authority and bounded terminal outcomes — Issue #1197');
 const authorityEnd = contract.indexOf('## Mechanical parity edits', authorityStart);
 const authority = authorityStart >= 0 && authorityEnd > authorityStart
   ? contract.slice(authorityStart, authorityEnd)
   : '';
+
+const reviewContext: ManagerReviewBriefContext = {
+  repositoryFullName: 'chetwerikoff/orchestrator-pack',
+  issueNumber: 1431,
+  sourceRevision: 'r07',
+  stage: 'architectural-review',
+  sourceSlot: '01',
+  invocationId: '11111111-2222-4333-8444-555555555555',
+};
+
+function runGit(root: string, args: readonly string[]): void {
+  const result = runProcessSync({
+    command: 'git',
+    args,
+    cwd: root,
+    inheritParentEnv: true,
+    timeoutMs: 10_000,
+  });
+  if (!result.ok) throw new Error(`git fixture failed: ${args.join(' ')}: ${result.stderr}`);
+}
+
+function createCanonFixture(): string {
+  const root = mkdtempSync(join(tmpdir(), 'opk-manager-review-canon-'));
+  mkdirSync(join(root, '.claude/skills/create-issue-draft'), { recursive: true });
+  mkdirSync(join(root, '.cursor/rules'), { recursive: true });
+  writeFileSync(join(root, '.claude/skills/create-issue-draft/SKILL.md'), [
+    '# fixture skill',
+    '',
+    '```manager-review-brief-canon',
+    '.claude/skills/create-issue-draft/SKILL.md :: ### Frame',
+    '.cursor/rules/flow-manager-browser-turn-monitoring.mdc :: ## Launch and observation',
+    '```',
+    '',
+    '### Frame',
+    'Role: reviewer for <REPOSITORY> issue <ISSUE_NUMBER>.',
+    'Stage <STAGE> slot <SLOT> revision <EXPECTED_REVISION>.',
+    'INVOCATION_ID_TO_ECHO: <INVOCATION_ID>',
+    '',
+    '## Other',
+    'unselected skill bytes',
+    '',
+  ].join('\n'));
+  writeFileSync(join(root, '.cursor/rules/flow-manager-browser-turn-monitoring.mdc'), [
+    '## Launch and observation',
+    'Open <ISSUE_URL> and publish the complete review.',
+    '',
+    '## Other',
+    'outside-v1',
+    '',
+  ].join('\n'));
+  runGit(root, ['init']);
+  runGit(root, ['config', 'user.email', 'fixture@example.invalid']);
+  runGit(root, ['config', 'user.name', 'Fixture']);
+  runGit(root, ['add', '.']);
+  runGit(root, ['commit', '-m', 'fixture canon']);
+  return root;
+}
+
+function captureWrite(stream: NodeJS.WriteStream): { chunks: string[]; restore: () => void } {
+  const chunks: string[] = [];
+  const spy = vi.spyOn(stream, 'write');
+  spy.mockImplementation(((chunk: string | Uint8Array) => {
+    chunks.push(String(chunk));
+    return true;
+  }) as typeof stream.write);
+  return { chunks, restore: () => spy.mockRestore() };
+}
 
 describe('Issue #1197 flow-manager authority contract', () => {
   it('defines a closed self-authorized action list and explicit prohibitions', () => {
@@ -168,9 +249,173 @@ describe('Issue #1197 flow-manager authority contract', () => {
     ]) {
       expect(authority).toContain(scenario);
     }
-    expect(authority).toMatch(/add a\s+lease/);
+    expect(authority).toContain('second retry');
     expect(authority).toContain('heartbeat');
     expect(authority).toContain('service');
     expect(authority).toContain('durable store');
+  });
+});
+
+describe('Issue #1431 manager reviewer canon', () => {
+  it('keeps one canon declaration and retires the runbook reviewer template', () => {
+    expect(contract.match(/```manager-review-brief-canon/g)).toHaveLength(1);
+    expect(contract).toContain('### Generated independent reviewer binding frame');
+    expect(contract).toContain('### Direct GitHub publication and manager receipts — Issue #1225');
+    expect(browserRunbook).toContain('## Generated independent reviewer prompt');
+    expect(browserRunbook).not.toContain('## Universal independent reviewer prompt template');
+  });
+
+  it('renders one frozen plural snapshot while fresh selected-section drift fails exact-byte comparison', () => {
+    const root = createCanonFixture();
+    try {
+      const frozen = readManagerReviewCanon({ repositoryRoot: root });
+      const sibling = {
+        ...reviewContext,
+        sourceSlot: '02',
+        invocationId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      };
+      const rendered = renderManagerReviewBriefBatch(frozen, [reviewContext, sibling]);
+      expect(rendered[0]!.text).toContain('Role: reviewer for chetwerikoff/orchestrator-pack issue 1431.');
+      expect(rendered[1]!.text).toContain('slot 02 revision r07');
+
+      writeFileSync(join(root, '.cursor/rules/flow-manager-browser-turn-monitoring.mdc'), [
+        '## Launch and observation',
+        'Changed selected bytes for <ISSUE_URL>.',
+        '',
+        '## Other',
+        'outside-v1',
+        '',
+      ].join('\n'));
+      runGit(root, ['add', '.']);
+      runGit(root, ['commit', '-m', 'selected canon drift']);
+
+      const comparison = compareManagerReviewBrief(rendered[1]!.text, sibling, { repositoryRoot: root });
+      expect(comparison.ok).toBe(false);
+      if (comparison.ok) throw new Error('expected canonical mismatch');
+      expect(comparison.mismatch.cause).toMatch(/^canonical_prompt_mismatch:/);
+      expect(comparison.mismatch.cause).toContain('expected_sha256=');
+      expect(comparison.mismatch.cause).toContain('observed_sha256=');
+      expect(comparison.mismatch.cause).toContain('.cursor/rules/flow-manager-browser-turn-monitoring.mdc@');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('admits exact current unmarked bytes and rejects a mutation before transport delegation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-manager-review-entry-'));
+    try {
+      const input = join(root, 'review.txt');
+      const rendered = renderManagerReviewBrief(readManagerReviewCanon(), reviewContext);
+      writeFileSync(input, rendered.text);
+      const delegated: string[][] = [];
+      const baseArgs = [
+        'turn',
+        '--invocation-id', reviewContext.invocationId,
+        '--input', input,
+        '--reviewer-source-output', join(root, 'source.txt'),
+        '--reviewer-source', 'direct-publication/v1',
+        '--repository', reviewContext.repositoryFullName,
+        '--issue-number', String(reviewContext.issueNumber),
+        '--source-revision', reviewContext.sourceRevision,
+        '--stage', reviewContext.stage,
+        '--source-slot', reviewContext.sourceSlot,
+      ];
+
+      expect(await runStateLightEntry(baseArgs, {
+        runTurn: async (argv) => {
+          delegated.push([...argv]);
+          const delegatedInputIndex = argv.indexOf('--input');
+          const delegatedInput = delegatedInputIndex >= 0 ? argv[delegatedInputIndex + 1] : undefined;
+          expect(delegatedInput).toBeDefined();
+          expect(delegatedInput).not.toBe(input);
+          writeFileSync(input, `${rendered.text}mutation\n`);
+          expect(readFileSync(delegatedInput!, 'utf8')).toBe(rendered.text);
+          return 0;
+        },
+      })).toBe(0);
+      expect(delegated).toHaveLength(1);
+      expect(delegated[0]).not.toContain('--stage');
+      expect(delegated[0]).not.toContain('--source-slot');
+
+      writeFileSync(input, `${rendered.text}mutation\n`);
+      const stdout = captureWrite(process.stdout);
+      try {
+        const before = delegated.length;
+        expect(await runStateLightEntry(baseArgs, {
+          runTurn: async (argv) => {
+            delegated.push([...argv]);
+            return 0;
+          },
+        })).not.toBe(0);
+        expect(delegated).toHaveLength(before);
+        const refusal = JSON.parse(stdout.chunks.join('').trim()) as {
+          state: string;
+          cause: string;
+          send_count: number;
+        };
+        expect(refusal.state).toBe('input_invalid');
+        expect(refusal.send_count).toBe(0);
+        expect(refusal.cause).toMatch(/^canonical_prompt_mismatch:/);
+      } finally {
+        stdout.restore();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses legacy direct publication and requires long-run stage context before spawn', async () => {
+    const stdout = captureWrite(process.stdout);
+    try {
+      expect(await runLegacyBrowserTurnCli([
+        'turn',
+        '--invocation-id', reviewContext.invocationId,
+        '--reviewer-source-output', 'unused.txt',
+      ])).not.toBe(0);
+      const refusal = JSON.parse(stdout.chunks.join('').trim()) as {
+        cause: string;
+        send_count: number;
+      };
+      expect(refusal.cause).toBe('input_invalid:legacy_direct_publication_turn_refused');
+      expect(refusal.send_count).toBe(0);
+
+      stdout.chunks.length = 0;
+      expect(await runLegacyBrowserTurnCli([
+        'turn',
+        '--invocation-id', reviewContext.invocationId,
+        '--capture-too-many-requests-source', 'unused-capture.html',
+        '--reviewer-source-output', 'unused.txt',
+      ])).not.toBe(0);
+      const combinedRefusal = JSON.parse(stdout.chunks.join('').trim()) as {
+        cause: string;
+        send_count: number;
+      };
+      expect(combinedRefusal.cause).toBe('input_invalid:legacy_direct_publication_turn_refused');
+      expect(combinedRefusal.send_count).toBe(0);
+    } finally {
+      stdout.restore();
+    }
+
+    const root = mkdtempSync(join(tmpdir(), 'opk-manager-review-long-run-'));
+    const stderr = captureWrite(process.stderr);
+    try {
+      expect(await runBrowserAdapter([
+        '--run-identity', 'run-1',
+        '--attempt-identity', 'attempt-1',
+        '--handoff-receipt', join(root, 'handoff.json'),
+        '--invocation-id', reviewContext.invocationId,
+        '--terminal-envelope', join(root, 'terminal.json'),
+        '--output', join(root, 'output.json'),
+        '--reviewer-source-output', join(root, 'source.txt'),
+        '--reviewer-source', 'direct-publication/v1',
+        '--repository', reviewContext.repositoryFullName,
+        '--issue-number', String(reviewContext.issueNumber),
+        '--source-revision', reviewContext.sourceRevision,
+      ])).toBe(2);
+      expect(stderr.chunks.join('')).toContain('direct_publication_arguments_required');
+    } finally {
+      stderr.restore();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
