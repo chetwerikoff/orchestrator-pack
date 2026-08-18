@@ -119,6 +119,41 @@ function parseArgs(argv) {
   return options;
 }
 
+function hasFinitePositiveWeight(value) {
+  const weight = Number(value);
+  return Number.isFinite(weight) && weight > 0;
+}
+
+function preserveTrustedLegacyMeasuredWeights(mergedHistory, proposedHistory) {
+  for (const [file, provenance] of Object.entries(proposedHistory.provenance ?? {})) {
+    if (provenance !== 'measured' || !hasFinitePositiveWeight(proposedHistory.files?.[file])) {
+      continue;
+    }
+
+    const proposedSamples = proposedHistory.recentSamples?.[file];
+    const proposedChangedAt = proposedHistory.fileChangedAt?.[file];
+    const hasOrderingMetadata =
+      (Array.isArray(proposedSamples) && proposedSamples.length > 0)
+      || (typeof proposedChangedAt === 'string' && proposedChangedAt.trim().length > 0);
+    if (hasOrderingMetadata) {
+      continue;
+    }
+
+    const mergedHasValidWeight =
+      hasFinitePositiveWeight(mergedHistory.files?.[file])
+      && mergedHistory.provenance?.[file] !== 'fallback';
+    if (mergedHasValidWeight) {
+      continue;
+    }
+
+    mergedHistory.files[file] = Number(proposedHistory.files[file]);
+    mergedHistory.provenance[file] = 'measured';
+    delete mergedHistory.recentSamples[file];
+    delete mergedHistory.fileChangedAt[file];
+  }
+  return mergedHistory;
+}
+
 function runReconcile(options) {
   if (!options.remotePath || !options.proposedPath || !options.outputPath) {
     printUsage();
@@ -130,10 +165,13 @@ function runReconcile(options) {
     const currentInventory = options.requireEqualInventory
       ? discoverVitestFiles(options.repoRoot)
       : null;
-    const merged = reconcileProposedHistoryAgainstRemote(proposedHistory, remoteHistory, {
+    let merged = reconcileProposedHistoryAgainstRemote(proposedHistory, remoteHistory, {
       currentInventory,
       requireEqualInventory: options.requireEqualInventory,
     });
+    if (options.requireEqualInventory) {
+      merged = preserveTrustedLegacyMeasuredWeights(merged, proposedHistory);
+    }
     writeFileSync(options.outputPath, historyBytes(merged), 'utf8');
     console.log('[PASS] runtime-history stale-base reconcile complete');
   } catch (error) {
