@@ -207,9 +207,10 @@ function orcaFixture(options: OrcaFixtureOptions) {
       const index = match ? Number(match[1]) : NaN;
       const phaseB = worktreeShows >= new Set(options.terminalA.map((item) => item.worktreePath)).size;
       worktreeShows += 1;
-      const linkedIssue = phaseB
-        ? options.issueB?.[index] ?? options.issueA?.[index] ?? null
-        : options.issueA?.[index] ?? null;
+      let linkedIssue = options.issueA?.[index] ?? null;
+      if (phaseB && options.issueB && Object.prototype.hasOwnProperty.call(options.issueB, index)) {
+        linkedIssue = options.issueB[index] ?? null;
+      }
       response = Number.isInteger(index)
         ? { ok: true, result: { worktree: worktree(index, linkedIssue) } }
         : { ok: false, error: { code: 'bad_selector' } };
@@ -236,7 +237,12 @@ describe('Issue #1380 runtime worker identity binding', () => {
   });
 
   it('joins one accepted tick and keeps unresolved identity non-authoritative', async () => {
-    const workers = [worker('bound', 'g1'), worker('unbound', 'g2'), worker('external', 'g3', 'external'), worker('contradiction', 'g4')];
+    const workers = [
+      worker('raw-bound-id', 'g1'),
+      worker('raw-unbound-id', 'g2'),
+      worker('raw-external-id', 'g3', 'external'),
+      worker('raw-contradiction-id', 'g4'),
+    ];
     const observation: RuntimeWorkerTaskBindingObservation = {
       status: 'ok',
       outcomes: [
@@ -246,7 +252,7 @@ describe('Issue #1380 runtime worker identity binding', () => {
         { status: 'bound', worker: workers[3]!.identity, issueNumber: 9999, provenance: 'internal' },
       ],
     };
-    const source = new BindingFleetSource(workers, observation, ['contradiction']);
+    const source = new BindingFleetSource(workers, observation, ['raw-contradiction-id']);
     const observer = observerFor(source);
     const tick = await observer.tick({ schedulerIntervalMs: 16_000 });
     expect(tick.status).toBe('complete');
@@ -318,6 +324,7 @@ describe('Issue #1380 runtime worker identity binding', () => {
     const repeated = observer.resolveWorkerIssueBindings({ schedulerGeneration: firstTick.schedulerGeneration, tickSequence: firstTick.tickSequence });
     expect(first).toBe(second);
     expect(first).toBe(repeated);
+    await Promise.resolve();
     expect(source.observationCalls).toBe(1);
 
     source.observation = { status: 'unavailable', code: 'task_metadata_unavailable' };
