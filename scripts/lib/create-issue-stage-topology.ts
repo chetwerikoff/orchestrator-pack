@@ -5,6 +5,7 @@ export const SOURCE_SCHEMA = 'create-issue-review-source/v1' as const;
 export const DISPOSITION_SCHEMA = 'create-issue-author-disposition-m4/v1' as const;
 export const MIGRATION_SCHEMA = 'create-issue-parked-review-import/v1' as const;
 export const RECORD_MARKER_SCHEMA = 'create-issue-review-record/v1' as const;
+export const CANONICAL_STAGE_PLAN_SCHEMA = 'create-issue-stage-topology-plan/v1' as const;
 
 export const COMMENT_BODY_UTF8_LIMIT = 65_536;
 export const MAX_RAW_PART_BYTES = 32_000;
@@ -81,6 +82,27 @@ export type ReviewStage =
 export type ReviewTier = 'T1' | 'T2' | 'T3';
 export type ReviewPolicy = 'single-source/v1' | 'triple-source/v1';
 export type LifecycleState = 'active' | 'cancelled' | 'superseded';
+export type CanonicalCompetitiveDecision = 'required' | 'skipped';
+
+export interface CanonicalStagePlanInput {
+  competitiveDecision?: CanonicalCompetitiveDecision;
+  competitiveRationale?: string;
+}
+
+export interface CanonicalStagePlanEntry {
+  stage: ReviewStage;
+  reviewerCardinality: 1 | 3;
+  policyVersion: ReviewPolicy;
+  producer: 'browser-gpt' | 'claude-cli';
+}
+
+export interface CanonicalStagePlanV1 {
+  schema: typeof CANONICAL_STAGE_PLAN_SCHEMA;
+  tier: ReviewTier;
+  competitiveDecision: CanonicalCompetitiveDecision | 'not-applicable';
+  competitiveRationale: string | null;
+  stages: CanonicalStagePlanEntry[];
+}
 
 export interface TopologyIdentity {
   issueNumber: number;
@@ -240,6 +262,70 @@ export function policyForStage(tier: ReviewTier, stage: ReviewStage): ReviewPoli
   if (stage === 'competitive') return tier === 'T3' ? 'triple-source/v1' : 'single-source/v1';
   if (stage === 'architectural-review') return tier === 'T1' ? 'single-source/v1' : 'triple-source/v1';
   return 'single-source/v1';
+}
+
+export function canonicalReviewerCardinality(tier: ReviewTier, stage: ReviewStage): 1 | 3 {
+  return policyForStage(tier, stage) === 'triple-source/v1' ? 3 : 1;
+}
+
+function canonicalStageEntry(
+  tier: ReviewTier,
+  stage: ReviewStage,
+  producer: CanonicalStagePlanEntry['producer'],
+): CanonicalStagePlanEntry {
+  return {
+    stage,
+    reviewerCardinality: canonicalReviewerCardinality(tier, stage),
+    policyVersion: policyForStage(tier, stage),
+    producer,
+  };
+}
+
+/**
+ * Single executable create-issue stage plan authority. Historical/publication
+ * topology records below remain codecs for one already-selected stage; they do
+ * not choose stage order, conditional competitive admission, policy, or the
+ * canonical reviewer cardinality.
+ */
+export function canonicalStagePlan(tier: ReviewTier, input: CanonicalStagePlanInput = {}): CanonicalStagePlanV1 {
+  if (tier === 'T1') {
+    return {
+      schema: CANONICAL_STAGE_PLAN_SCHEMA,
+      tier,
+      competitiveDecision: 'not-applicable',
+      competitiveRationale: null,
+      stages: [canonicalStageEntry(tier, 'architectural', 'browser-gpt')],
+    };
+  }
+  if (tier === 'T2') {
+    return {
+      schema: CANONICAL_STAGE_PLAN_SCHEMA,
+      tier,
+      competitiveDecision: 'not-applicable',
+      competitiveRationale: null,
+      stages: [
+        canonicalStageEntry(tier, 'architectural-review', 'browser-gpt'),
+        canonicalStageEntry(tier, 'architectural', 'browser-gpt'),
+      ],
+    };
+  }
+  const decision = input.competitiveDecision;
+  const rationale = typeof input.competitiveRationale === 'string' ? input.competitiveRationale.trim() : '';
+  if ((decision !== 'required' && decision !== 'skipped') || !rationale) {
+    throw new Error('fresh T3 tier-intake/v1 must freeze competitiveDecision and a non-empty competitiveRationale');
+  }
+  return {
+    schema: CANONICAL_STAGE_PLAN_SCHEMA,
+    tier,
+    competitiveDecision: decision,
+    competitiveRationale: rationale,
+    stages: [
+      ...(decision === 'required' ? [canonicalStageEntry(tier, 'competitive', 'browser-gpt')] : []),
+      canonicalStageEntry(tier, 'architectural-review', 'browser-gpt'),
+      canonicalStageEntry(tier, 'architectural-lens', 'claude-cli'),
+      canonicalStageEntry(tier, 'architectural', 'browser-gpt'),
+    ],
+  };
 }
 
 export function defaultRequiredSlots(
