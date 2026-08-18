@@ -109,6 +109,7 @@ import {
 } from './lib/pack-review-delivery.ts';
 import {
   PACK_REVIEW_BOUND_REVIEWER_ENV,
+  packReviewEntrypointRelativePath,
   resolvePackReviewerFromEnv,
   type PackReviewer,
   type PackReviewerLayerOverrides,
@@ -301,7 +302,7 @@ interface AuthoritativeReviewContext {
 }
 
 const RUNNER_RELATIVE_PATH = 'scripts/pack-review-runner.ts';
-const REVIEWER_RELATIVE_PATH = 'scripts/invoke-pack-review.ps1';
+const REVIEWER_RELATIVE_PATH = 'scripts/lib/Invoke-TypeScriptCli.ts';
 const CLAIM_RELATIVE_PATH = 'scripts/lib/review-start-claim-store.ts';
 const DEFAULT_PROJECT_ID = 'orchestrator-pack';
 const DEFAULT_BASE_REF = 'origin/main';
@@ -1035,20 +1036,36 @@ async function invokeReviewer(options: {
     layerOverrides: options.fixtureReviewerLayerOverrides,
     emulateWin32: options.fixtureEmulateWin32Selector,
   });
-  const reviewerArgs = [
-    '-NoProfile',
-    '-File', options.reviewerPath,
+  const adapterArgs = [
     '--repo-root', options.reviewTargetRoot,
     '--base', options.baseRef,
     '--pr-number', String(options.prNumber),
   ];
-  if (options.issueNumber) reviewerArgs.push('--issue', String(options.issueNumber));
+  if (options.issueNumber) adapterArgs.push('--issue', String(options.issueNumber));
+
+  const reviewerEntrypoint = resolvedReviewer
+    ? resolve(options.trustedPackRoot, packReviewEntrypointRelativePath(resolvedReviewer))
+    : '';
+  if (resolvedReviewer
+      && (!pathInside(reviewerEntrypoint, options.trustedPackRoot) || !existsSync(reviewerEntrypoint))) {
+    throw new Error(`trusted reviewer entrypoint unavailable at ${reviewerEntrypoint}`);
+  }
+  const reviewerArgs = resolvedReviewer
+    ? [
+        '--experimental-strip-types',
+        options.reviewerPath,
+        '--repo-root', options.trustedPackRoot,
+        '--script', reviewerEntrypoint,
+        '--',
+        ...adapterArgs,
+      ]
+    : [];
 
   const invocationLog = trim(process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG);
   if (process.env.OPK_VITEST_HARNESS === '1' && invocationLog) {
     appendFileSync(invocationLog, `${JSON.stringify({
       reviewer: resolvedReviewer,
-      command: 'pwsh',
+      command: process.execPath,
       args: reviewerArgs,
       ...(options.invocationId ? { invocationId: options.invocationId } : {}),
     })}\n`);
@@ -1083,17 +1100,19 @@ async function invokeReviewer(options: {
     };
   }
 
+  if (!resolvedReviewer) throw new Error('pack review reviewer selector did not resolve');
+
   const args = reviewerArgs;
   const retiredRuntimePrefixes = [
-  ['A', 'O', '_'].join(''),
-  ['O', 'R', 'C', 'A', '_'].join(''),
-];
-const sanitizedParentEnv = Object.fromEntries(
-  Object.entries(process.env)
-    .filter(([key]) => !retiredRuntimePrefixes.some((prefix) => key.startsWith(prefix))),
-) as NodeJS.ProcessEnv;
-const env: NodeJS.ProcessEnv = {
-  ...sanitizedParentEnv,
+    ['A', 'O', '_'].join(''),
+    ['O', 'R', 'C', 'A', '_'].join(''),
+  ];
+  const sanitizedParentEnv = Object.fromEntries(
+    Object.entries(process.env)
+      .filter(([key]) => !retiredRuntimePrefixes.some((prefix) => key.startsWith(prefix))),
+  ) as NodeJS.ProcessEnv;
+  const env: NodeJS.ProcessEnv = {
+    ...sanitizedParentEnv,
     ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),
     OPK_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_RUN_ID: options.runId,
@@ -1105,10 +1124,8 @@ const env: NodeJS.ProcessEnv = {
     ...(options.attemptOrdinal ? { PACK_REVIEW_GPT_ATTEMPT_ORDINAL: String(options.attemptOrdinal) } : {}),
     ...(options.invocationId ? { PACK_REVIEW_GPT_INVOCATION_ID: options.invocationId } : {}),
   };
-  if (resolvedReviewer) {
-    env.PACK_REVIEWER = resolvedReviewer;
-    env[PACK_REVIEW_BOUND_REVIEWER_ENV] = resolvedReviewer;
-  }
+  env.PACK_REVIEWER = resolvedReviewer;
+  env[PACK_REVIEW_BOUND_REVIEWER_ENV] = resolvedReviewer;
   if (options.carryoverBundlePath) {
     env.PACK_REVIEW_CARRYOVER_BUNDLE_PATH = options.carryoverBundlePath;
   } else {
@@ -1116,7 +1133,7 @@ const env: NodeJS.ProcessEnv = {
   }
 
   const result = await runProcess({
-    command: 'pwsh',
+    command: process.execPath,
     args,
     cwd: options.trustedPackRoot,
     inheritParentEnv: false,
