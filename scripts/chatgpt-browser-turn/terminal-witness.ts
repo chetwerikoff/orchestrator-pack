@@ -840,10 +840,7 @@ export function settleDirectPublication(
   finalAssistantOutput?: string,
 ): DirectPublicationSettlement {
   const matching = matchingDirectPublicationPairs(state, target);
-  if (!target.userMessageId) {
-    return { state: 'possible-delivery', cause: 'direct_publication_owned_parent_missing' };
-  }
-  if (matching.hasWrongTargetCandidate) {
+  if (target.userMessageId && matching.hasWrongTargetCandidate) {
     return { state: 'possible-delivery', cause: 'direct_publication_wrong_target_candidate' };
   }
   const ownedInvocations = matching.invocations.filter((item) =>
@@ -855,16 +852,39 @@ export function settleDirectPublication(
     return { state: 'possible-delivery', cause: 'direct_publication_owned_parent_ambiguous' };
   }
   const invocation = ownedInvocations[0]!;
-  if (invocation.parentUserMessageId !== target.userMessageId) {
+  const ownedParentId = target.userMessageId ?? invocation.parentUserMessageId;
+  if (!ownedParentId) {
+    return {
+      state: 'possible-delivery',
+      cause: 'direct_publication_owned_parent_missing',
+      invocation,
+    };
+  }
+  if (target.userMessageId && invocation.parentUserMessageId !== target.userMessageId) {
     return {
       state: 'possible-delivery',
       cause: 'direct_publication_owned_parent_mismatch',
       invocation,
     };
   }
+  if (!target.userMessageId) {
+    const wrongTargetInvocation = state.invocations.some((item) =>
+      item.parentUserMessageId === ownedParentId
+      && (item.repositoryFullName !== target.repositoryFullName || item.issueNumber !== target.issueNumber));
+    const wrongTargetResult = state.results.some((item) =>
+      item.parentUserMessageId === ownedParentId
+      && (item.repositoryFullName !== target.repositoryFullName || item.issueNumber !== target.issueNumber));
+    if (wrongTargetInvocation || wrongTargetResult) {
+      return {
+        state: 'possible-delivery',
+        cause: 'direct_publication_wrong_target_candidate',
+        invocation,
+      };
+    }
+  }
   const unpairedResults = matching.results.filter((item) => item.toolCallId !== invocation.toolCallId);
   if (unpairedResults.some((item) =>
-    item.parentUserMessageId === undefined || item.parentUserMessageId === target.userMessageId)) {
+    item.parentUserMessageId === undefined || item.parentUserMessageId === ownedParentId)) {
     return {
       state: 'possible-delivery',
       cause: 'direct_publication_result_ambiguous',
@@ -872,7 +892,7 @@ export function settleDirectPublication(
     };
   }
   const results = matching.results.filter((item) => item.toolCallId === invocation.toolCallId);
-  if (results.some((item) => item.parentUserMessageId !== target.userMessageId)) {
+  if (results.some((item) => item.parentUserMessageId !== ownedParentId)) {
     return {
       state: 'possible-delivery',
       cause: 'direct_publication_result_parent_ambiguous',
