@@ -1650,7 +1650,11 @@ async function resolveHarvestTarget(
     if (matches.length > 1) throw new ProbeError('ambiguous', 'owned_turn_url_ambiguous');
     if (matches.length === 1) {
       const target = matches[0]!;
-      return { target, snapshot: await readHarvestSnapshot(target, deps) };
+      const snapshot = await readHarvestSnapshot(target, deps);
+      if (snapshot.page_url !== normalized) {
+        throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+      }
+      return { target, snapshot };
     }
     if (!deps.createPage) throw new ProbeError('unavailable', 'page_create_unavailable');
     const preExistingTargetIds = new Set(rawTargets.flatMap((target) => typeof target.id === 'string' ? [target.id] : []));
