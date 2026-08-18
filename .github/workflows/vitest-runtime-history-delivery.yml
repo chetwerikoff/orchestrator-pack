@@ -62,7 +62,7 @@ jobs:
       - name: Monitor and merge delivery PR
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           MACHINE_STATUS_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
