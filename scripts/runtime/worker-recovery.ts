@@ -159,6 +159,9 @@ export async function recoverRuntimeWorker(input: {
           reason: `resolved_target_liveness_${liveness.status}_is_not_assignment_gone_evidence`,
         } as const;
       }
+      if (target.status !== 'gone') {
+        return { outcome: 'skipped_ambiguous', reason: target.status } as const;
+      }
 
       if (!target.workerId) {
         return {

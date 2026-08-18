@@ -4,6 +4,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeAdapter } from '../runtime/contracts.ts';
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
+import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
+import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import {
   publishCurrentWorkerAssignment,
   resolveWorkerAssignmentStorePath,
@@ -137,5 +139,99 @@ describe('WorkerAssignment runtime target truth', () => {
       adapter: runtime.adapter,
     })).toEqual({ status: 'remote_not_applicable', assignment });
     expect(runtime.adapter.resolveAssignmentWorker).not.toHaveBeenCalled();
+  });
+});
+
+describe('real Orca assignment target resolution', () => {
+  it('preserves exact gone and its producer-backed Dispatch-owned terminal handle', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-exact-gone' });
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-exact-gone']);
+      return {
+        ok: true,
+        result: {
+          worker: { agent_terminal_handle: 'term-owned' },
+          terminal: null,
+          observation: { exactWorker: true, status: 'gone' },
+          terminalResource: {
+            terminalHandle: 'term-owned',
+            worktreeId: 'repo::worktree',
+            originDispatchId: 'dispatch-exact-gone',
+            ownerDispatchId: 'dispatch-exact-gone',
+          },
+        },
+      };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'gone', assignment, workerId: 'term-owned' });
+  });
+
+  it.each([false, undefined] as const)(
+    'does not upgrade gone to exact absence when exactWorker=%s',
+    async (exactWorker) => {
+      const file = assignmentFile();
+      const assignment = await publish(file, { bindingKey: `dispatch-not-exact-${String(exactWorker)}` });
+      const runJson = vi.fn((): OrcaJsonResponse => ({
+        ok: true,
+        result: {
+          worker: { agent_terminal_handle: 'term-owned' },
+          observation: { ...(exactWorker === undefined ? {} : { exactWorker }), status: 'gone' },
+        },
+      }));
+      const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+      expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+        .toEqual({ status: 'target_unresolved' });
+    },
+  );
+
+  it.each([undefined, '', 'unknown', 'unverifiable'])(
+    'fails closed on missing or ambiguous exact observation status %s',
+    async (status) => {
+      const file = assignmentFile();
+      const assignment = await publish(file, { bindingKey: `dispatch-status-${String(status)}` });
+      const runJson = vi.fn((): OrcaJsonResponse => ({
+        ok: true,
+        result: {
+          worker: { agent_terminal_handle: 'term-owned' },
+          terminal: { handle: 'term-owned' },
+          observation: { exactWorker: true, ...(status === undefined ? {} : { status }) },
+        },
+      }));
+      const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+      expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+        .toEqual({ status: 'target_unresolved' });
+    },
+  );
+
+  it('requires a terminal handle for an exact live target', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-live-no-terminal' });
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        worker: { agent_terminal_handle: null },
+        terminal: null,
+        observation: { exactWorker: true, status: 'live' },
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'target_unresolved' });
+  });
+
+  it('keeps worker-show transport failure unresolved rather than treating it as gone', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-runtime-failure' });
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: false,
+      outcomeCategory: 'empty_stdout',
+      error: { code: 'empty_stdout', message: 'no receipt' },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'target_unresolved' });
   });
 });
