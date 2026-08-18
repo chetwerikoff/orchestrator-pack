@@ -2963,7 +2963,6 @@ async function runTurn(
           incident,
         );
       }
-      if (ownedWindowCompletionReady) completionReadySeen = true;
       if (wall.state) {
         const cause = wall.cause ?? `${wall.state}_detected`;
         recordProductWallAdvisory(profileKey, wall.state, cause, invocationId);
@@ -3025,6 +3024,13 @@ async function runTurn(
       }
 
       const markerCardinality = recoveryMarkerCardinality(messages, marker);
+      if (
+        ownedWindowCompletionReady
+        && markerCardinality.matchingUserCarrierCount === 1
+        && markerCardinality.exactMarkerTokenCount === 1
+      ) {
+        completionReadySeen = true;
+      }
       if (
         config.newChat
         && sendCount >= 1
