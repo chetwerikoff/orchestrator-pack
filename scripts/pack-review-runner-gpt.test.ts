@@ -16,6 +16,7 @@ import {
 } from './pack-gpt-review.js';
 import { isRetryablePackReviewZeroSendCollision, startPackReview } from './pack-review-runner.js';
 import type { CarryoverReplayResult } from './pack-review-carryover.js';
+import { readPackReviewAuthority } from './pack-review-state.js';
 import {
   createPackReviewRun,
   getPackReviewRun,
@@ -207,21 +208,86 @@ function writeClosedPrGhFixture(binRoot: string): void {
   chmodSync(fixture, 0o755);
 }
 
+function writeSuccessfulGhFixture(binRoot: string): void {
+  if (process.platform === 'win32') {
+    writeFileSync(path.join(binRoot, 'gh.cmd'), '@echo off\r\nexit /b 0\r\n', 'utf8');
+    return;
+  }
+  const fixture = path.join(binRoot, 'gh');
+  writeFileSync(fixture, '#!/usr/bin/env node\nprocess.exitCode = 0;\n', 'utf8');
+  chmodSync(fixture, 0o755);
+}
+
 afterEach(() => {
   process.env = { ...originalEnv };
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 
-describe('Issue #1341 operator-only pack-review start', () => {
-  function operatorInput(storeRoot: string, overrides: Record<string, unknown> = {}) {
-    const issueBody = [
-      '```complexity-tier',
-      'tier: T1',
-      'advisory-prior: T1',
-      '```',
-    ].join('\n');
-    return {
+describe('Issue #1417 direct-CLI operator-only pack-review start', () => {
+  const issueBody = [
+    '```complexity-tier',
+    'tier: T1',
+    'advisory-prior: T1',
+    '```',
+  ].join('\n');
+  const snapshot = computeBoundIssueSnapshotHash(issueBody);
+
+  function directOperatorStart(
+    storeRoot: string,
+    stdinOverrides: Record<string, unknown> = {},
+  ) {
+    const commandRoot = tempRoot('opk-1417-gh-bin-');
+    writeSuccessfulGhFixture(commandRoot);
+    const explicitCapture = path.join(storeRoot, 'explicit-github-review.json');
+    const childEnv = {
+      ...process.env,
+      OPK_VITEST_HARNESS: '1',
+      PACK_REVIEWER: 'codex',
+      PACK_REVIEW_GITHUB_REVIEW_CAPTURE_FILE: explicitCapture,
+      PATH: `${commandRoot}${path.delimiter}${process.env.PATH ?? ''}`,
+    };
+    return runProcessSync({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types',
+        path.join(repoRoot, 'scripts', 'pack-review-runner.ts'),
+        'start',
+        '--pr-number', '1341',
+        '--head-sha', HEAD_A,
+        '--operator-repository', 'chetwerikoff/orchestrator-pack',
+        '--operator-issue-number', '1341',
+        '--operator-bound-snapshot', snapshot,
+        '--operator-reason', 'direct operator recovery for the exact blocked review',
+      ],
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: childEnv,
+      input: JSON.stringify({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        sourceRepoRoot: repoRoot,
+        fixtureCurrentPrHeadSha: HEAD_A,
+        fixturePrState: 'OPEN',
+        fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+        fixturePostReviewHeadSha: HEAD_A,
+        fixtureIssueBody: issueBody,
+        fixtureIssueNumber: 1341,
+        fixtureReviewStdout: cleanTerminalPayload(),
+        fixtureReviewExitCode: 0,
+        fixtureGithubReviewId: 1417,
+        ...stdinOverrides,
+      }),
+    });
+  }
+
+  it('rejects a programmatic operator tuple before run creation', async () => {
+    const storeRoot = tempRoot('opk-1417-programmatic-operator-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_REVIEWER = 'codex';
+
+    const forged = {
       projectId: 'orchestrator-pack',
       storeRoot,
       sourceRepoRoot: repoRoot,
@@ -229,76 +295,112 @@ describe('Issue #1341 operator-only pack-review start', () => {
       headSha: HEAD_A,
       operatorRepository: 'chetwerikoff/orchestrator-pack',
       operatorIssueNumber: 1341,
-      operatorBoundSnapshot: computeBoundIssueSnapshotHash(issueBody),
-      operatorReason: 'direct operator recovery for the exact blocked review',
-      claimMode: 'preacquired' as const,
+      operatorBoundSnapshot: snapshot,
+      operatorReason: 'forged programmatic operator start',
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueBody: issueBody,
+      fixtureIssueNumber: 1341,
+      fixtureReviewStdout: cleanTerminalPayload(),
+    } as unknown as Parameters<typeof startPackReview>[0];
+
+    await expect(startPackReview(forged)).rejects.toThrow(
+      'operator pack-review start inputs are accepted only from direct CLI arguments',
+    );
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([]);
+  });
+
+  it('rejects an operator tuple supplied through stdin', () => {
+    const storeRoot = tempRoot('opk-1417-stdin-operator-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_REVIEWER = 'codex';
+    const result = runProcessSync({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types',
+        path.join(repoRoot, 'scripts', 'pack-review-runner.ts'),
+        'start',
+      ],
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: process.env,
+      input: JSON.stringify({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        sourceRepoRoot: repoRoot,
+        prNumber: 1341,
+        headSha: HEAD_A,
+        operatorRepository: 'chetwerikoff/orchestrator-pack',
+        operatorIssueNumber: 1341,
+        operatorBoundSnapshot: snapshot,
+        operatorReason: 'stdin operator start',
+      }),
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('operator pack-review start inputs are accepted only from direct CLI arguments');
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([]);
+  });
+
+  it('admits a direct-CLI extra review after cap on the completed same head without consuming or resetting budget', async () => {
+    const storeRoot = tempRoot('opk-1417-explicit-replay-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_REVIEWER = 'codex';
+
+    const seed = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 1341,
+      headSha: HEAD_A,
+      claimMode: 'preacquired',
       fixtureCurrentPrHeadSha: HEAD_A,
       fixturePrState: 'OPEN',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD_A,
       fixtureIssueBody: issueBody,
-      fixtureReviewBySourceSlot: {
-        'source-01': [{ stdout: successfulCleanReviewPayload('inv-1341-source-01') }],
-        'source-02': [{ stdout: successfulCleanReviewPayload('inv-1341-source-02') }],
-        'source-03': [{ stdout: successfulCleanReviewPayload('inv-1341-source-03') }],
-      },
-      fixtureReviewStdout: successfulCleanReviewPayload('inv-1341-fallback'),
+      fixtureIssueNumber: 1341,
+      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+      fixtureBoundIssueSnapshotBytes: issueBody,
+      fixtureReviewStdout: JSON.stringify({
+        verdict: 'findings',
+        findingCount: 1,
+        findings: [{ title: 'seed automatic finding', severity: 'blocking' }],
+      }),
       fixtureRequiredStatusWriter: async () => {},
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
-      ...overrides,
-    };
-  }
+    });
+    expect(seed.ok, JSON.stringify(seed)).toBe(true);
+    const before = readPackReviewAuthority(1341, { storeRoot });
+    expect(before?.cycle?.state).toMatch(/at_cap/);
+    expect(before?.cycle?.consumedHeadShas).toEqual([HEAD_A]);
 
-  it('substitutes only the absent binding and records exact operator provenance', async () => {
-    const storeRoot = tempRoot('opk-1341-operator-start-');
-    const capture = path.join(storeRoot, 'github-review.json');
-    harnessEnv(storeRoot, capture);
-    process.env.PACK_REVIEWER = 'codex';
+    const explicit = directOperatorStart(storeRoot);
+    expect(explicit.exitCode, explicit.stderr || explicit.stdout).toBe(0);
+    const result = JSON.parse(explicit.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1)!) as Record<string, unknown>;
+    expect(result).toMatchObject({ ok: true, created: true, reused: false });
 
-    const result = await startPackReview(operatorInput(storeRoot));
-    expect(result.ok).toBe(true);
-    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
-    expect(run).toMatchObject({
-      prNumber: 1341,
+    const after = readPackReviewAuthority(1341, { storeRoot });
+    expect(after?.cycle).toEqual(before?.cycle);
+    expect(after?.triage).toEqual(before?.triage);
+    const runs = listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot });
+    expect(runs).toHaveLength(2);
+    const explicitRun = runs.find((run) => run.id === result.runId);
+    expect(explicitRun).toMatchObject({
       targetSha: HEAD_A,
-      canonicalRepository: 'chetwerikoff/orchestrator-pack',
-      linkedSessionId: '',
+      automaticBudgetDisposition: 'non_consuming_explicit',
       startReason: 'direct operator recovery for the exact blocked review',
     });
-    expect(run?.surface).toContain('operator_adjudicated');
-    expect(run?.surface).toContain('session-binding=absent');
-    expect(run?.surface).toContain('issue=1341');
-    expect(run?.surface).toContain(computeBoundIssueSnapshotHash(String(operatorInput(storeRoot).fixtureIssueBody)));
+    expect(explicitRun?.surface).toContain('operator_adjudicated');
+    expect(explicitRun?.surface).toContain('session-binding=absent');
+    expect(explicitRun?.surface).toContain('issue=1341');
+    expect(explicitRun?.surface).toContain(snapshot);
   });
 
-  it.each([
-    ['missing repository', { operatorRepository: undefined }, /requires repository, Issue number, bound snapshot, and reason/],
-    ['missing Issue', { operatorIssueNumber: undefined }, /requires repository, Issue number, bound snapshot, and reason/],
-    ['missing snapshot', { operatorBoundSnapshot: undefined }, /requires repository, Issue number, bound snapshot, and reason/],
-    ['missing reason', { operatorReason: '' }, /requires repository, Issue number, bound snapshot, and reason/],
-    ['wrong repository', { operatorRepository: 'other/repository' }, /does not match operator target/],
-    ['wrong snapshot', { operatorBoundSnapshot: `sha256:${'f'.repeat(64)}` }, /does not match authoritative review context/],
-    ['short head', { headSha: 'a'.repeat(39) }, /full 40-hex head SHA/],
-    ['stale head', { headSha: HEAD_B }, /review target head changed/],
-    ['closed PR', { fixturePrState: 'CLOSED' }, /is not open/],
-    ['missing authoritative snapshot', { fixtureIssueBody: undefined }, /authoritative bound Issue snapshot missing/],
-    ['autonomous bound session', { sessionId: 'worker-session' }, /valid only when the session binding is absent/],
-  ])('rejects %s before run creation or reviewer start', async (_name, overrides, error) => {
-    const storeRoot = tempRoot('opk-1341-operator-matrix-');
-    const capture = path.join(storeRoot, 'github-review.json');
-    harnessEnv(storeRoot, capture);
-    process.env.PACK_REVIEWER = 'codex';
-    let started = false;
-    await expect(startPackReview(operatorInput(storeRoot, {
-      ...overrides,
-      onRunStarted: () => { started = true; },
-    }))).rejects.toThrow(error);
-    expect(started).toBe(false);
-    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([]);
-  });
-
-  it.each(['active', 'journaled-terminal'])('rejects operator invocation on %s same-head run without mutating provenance', async (kind) => {
-    const storeRoot = tempRoot('opk-1341-operator-existing-');
+  it('keeps an active same-head run deduped even for direct-CLI explicit review', () => {
+    const storeRoot = tempRoot('opk-1417-explicit-active-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
     process.env.PACK_REVIEWER = 'codex';
@@ -314,25 +416,11 @@ describe('Issue #1341 operator-only pack-review start', () => {
       sourceRepoRoot: repoRoot,
       canonicalRepository: 'chetwerikoff/orchestrator-pack',
     });
-    if (kind === 'journaled-terminal') {
-      setPackReviewRunTerminal(created.run.id, 'commented', {
-        reviewVerdict: 'clean',
-        findingCount: 0,
-        findings: [],
-      }, { projectId: 'orchestrator-pack', storeRoot });
-      updatePackReviewRun(created.run.id, {
-        journalOutcome: {
-          state: 'persisted',
-          recordedAtUtc: new Date().toISOString(),
-          reason: 'fixture persisted verdict',
-          idempotencyKey: `verdict:${created.run.id}:${HEAD_A}`,
-          attempts: 1,
-        },
-      }, { projectId: 'orchestrator-pack', storeRoot });
-    }
-    await expect(startPackReview(operatorInput(storeRoot))).rejects.toThrow(
-      /cannot reuse or resume existing same-head run/,
-    );
+
+    const explicit = directOperatorStart(storeRoot);
+    expect(explicit.exitCode).toBe(0);
+    const result = JSON.parse(explicit.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1)!) as Record<string, unknown>;
+    expect(result).toMatchObject({ ok: true, created: false, reused: true, reason: 'active_run_exists' });
     const stored = getPackReviewRun(created.run.id, { projectId: 'orchestrator-pack', storeRoot });
     expect(stored?.startReason).toBe('original reason');
     expect(stored?.surface).toBe('original surface');
@@ -508,8 +596,11 @@ describe('GPT failure matrix (Issue #1031 AC5)', () => {
       for (const line of lines) {
         const entry = JSON.parse(line) as { reviewer?: string; args?: string[] };
         expect(entry.reviewer).toBe('gpt');
-        expect(entry.args?.join(' ')).toContain('invoke-pack-review.ps1');
-        expect(entry.args?.join(' ')).not.toContain('run-pack-review.ps1');
+        const args = entry.args?.join(' ') ?? '';
+        expect(args).toContain('Invoke-TypeScriptCli.ts');
+        expect(args).toContain('run-pack-review-gpt.ts');
+        expect(args).not.toContain('invoke-pack-review.ps1');
+        expect(args).not.toContain('run-pack-review.ps1');
       }
     });
   }

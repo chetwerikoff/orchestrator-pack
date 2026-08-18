@@ -12,10 +12,10 @@ export const PACK_REVIEW_BOUND_REVIEWER_ENV = 'PACK_REVIEW_BOUND_REVIEWER';
 export { PACK_REVIEWER_VALUES };
 export type PackReviewer = PackReviewerPreferenceValue;
 
-export const PACK_REVIEWER_WRAPPER_BY_ID: Readonly<Record<PackReviewer, string>> = {
-  codex: 'run-pack-review.ps1',
-  claude: 'run-pack-review-claude.ps1',
-  gpt: 'run-pack-review-gpt.ts',
+export const PACK_REVIEWER_ENTRYPOINT_BY_ID: Readonly<Record<PackReviewer, string>> = {
+  codex: 'plugins/codex-pr-reviewer/bin/review.ts',
+  claude: 'plugins/codex-pr-reviewer/bin/review-claude.ts',
+  gpt: 'scripts/run-pack-review-gpt.ts',
 };
 
 export type PackReviewerResolutionSource =
@@ -231,6 +231,6 @@ export function packReviewerSelectorErrorMessage(
     ?? 'No reviewer authority is configured.';
 }
 
-export function packReviewWrapperBasename(reviewer: PackReviewer): string {
-  return PACK_REVIEWER_WRAPPER_BY_ID[reviewer];
+export function packReviewEntrypointRelativePath(reviewer: PackReviewer): string {
+  return PACK_REVIEWER_ENTRYPOINT_BY_ID[reviewer];
 }
