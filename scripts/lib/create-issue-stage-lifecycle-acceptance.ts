@@ -58,24 +58,37 @@ function invocationCredentialed(invocation: Record<string, unknown> | undefined)
   return invocation.terminalClassification === 'complete' || record(invocation.artifactAuthority);
 }
 
-function reviewLaneProvesUnobservable(
+const POSSIBLE_OR_ACTUAL_SEND_FAILURES = new Set([
+  'post-send-failure',
+  'output-conflict',
+  'incident',
+]);
+
+function invocationProvesUnobservable(
   receipt: Record<string, unknown>,
   slot: string,
   invocation: Record<string, unknown>,
 ): boolean {
+  const invocationId = stringValue(invocation.invocationId);
+  const baseWitness = Boolean(
+    invocationId
+    && invocation.terminal === true
+    && invocation.sendCount === 1
+    && invocation.retryClass === 'retry-forbidden'
+    && POSSIBLE_OR_ACTUAL_SEND_FAILURES.has(String(invocation.terminalClassification)),
+  );
+  if (!baseWitness) return false;
+
   const lane = record(receipt.reviewLane) ? receipt.reviewLane : null;
-  const sourceVerdicts = lane && record(lane.sourceVerdicts) ? lane.sourceVerdicts : null;
-  const evidence = lane && record(lane.sourceVerdictEvidence) ? lane.sourceVerdictEvidence : null;
+  if (!lane) return true;
+  const sourceVerdicts = record(lane.sourceVerdicts) ? lane.sourceVerdicts : null;
+  const evidence = record(lane.sourceVerdictEvidence) ? lane.sourceVerdictEvidence : null;
   const verdict = sourceVerdicts?.[slot];
   const slotEvidence = evidence && record(evidence[slot]) ? evidence[slot] as Record<string, unknown> : null;
-  const invocationId = stringValue(invocation.invocationId);
   const producerEvidenceIdentity = stringValue(slotEvidence?.producerEvidenceIdentity);
   return Boolean(
-    invocationId
-    && producerEvidenceIdentity
-    && invocation.terminal === true
-    && invocation.retryClass === 'retry-forbidden'
-    && (verdict === 'blocked' || verdict === 'refused' || verdict === 'unparseable'),
+    producerEvidenceIdentity
+    && (verdict === 'blocked' || verdict === 'unparseable'),
   );
 }
 
@@ -177,8 +190,8 @@ export function validateLifecycleAcceptanceTopology(
       errors.push(`${stage} partial missing slot ${missingSlot} lacks its invocation identity/evidence`);
       continue;
     }
-    if (!reviewLaneProvesUnobservable(receipt, missingSlot, invocation)) {
-      errors.push(`${stage} partial missing slot ${missingSlot} is not journal/evidence-backed as unobservable with resend forbidden`);
+    if (!invocationProvesUnobservable(receipt, missingSlot, invocation)) {
+      errors.push(`${stage} partial missing slot ${missingSlot} is not journal/evidence-backed as possible-or-actual send with resend forbidden`);
       continue;
     }
     const completed = required.filter((slotName) => invocationCredentialed(finals.get(slotName))).length;
