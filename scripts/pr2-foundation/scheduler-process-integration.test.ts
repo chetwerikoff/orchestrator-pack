@@ -56,7 +56,7 @@ const state = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
 const get = (name) => { const index = args.indexOf(name); return index < 0 ? '' : String(args[index + 1] ?? ''); };
 const operation = args.slice(0, 2).join(' ');
 const save = () => fs.writeFileSync(fixturePath, JSON.stringify(state));
-const out = (value) => { save(); process.stdout.write(JSON.stringify(value) + '\\n'); };
+const out = (value) => { save(); process.stdout.write(JSON.stringify(value) + '\n'); };
 const terminal = (worker) => ({
   handle: worker.id,
   incarnationId: worker.generation,
@@ -242,7 +242,12 @@ function handoff(env: NodeJS.ProcessEnv) {
   return readFleetReconciliationHandoff(resolveFleetReconciliationHandoffPath('orchestrator-pack', env));
 }
 
-async function publishLocal(env: NodeJS.ProcessEnv, bindingKey = 'dispatch-1', taskId = 'task-1420') {
+async function publishLocal(
+  env: NodeJS.ProcessEnv,
+  bindingKey = 'dispatch-1',
+  taskId = 'task-1420',
+  expectedCurrent?: { assignmentId: string; generation: number },
+) {
   const result = await publishCurrentWorkerAssignment({
     file: resolveWorkerAssignmentStorePath('orchestrator-pack', env),
     repository: 'chetwerikoff/orchestrator-pack',
@@ -251,9 +256,11 @@ async function publishLocal(env: NodeJS.ProcessEnv, bindingKey = 'dispatch-1', t
     kind: 'local',
     provider: 'orca',
     bindingKey,
+    ...(expectedCurrent ? { expectedCurrent } : {}),
   });
   expect(result.ok).toBe(true);
-  return result;
+  if (!result.ok) throw new Error(result.reason);
+  return result.assignment;
 }
 
 describe('scheduler bounded-child production composition', () => {
@@ -653,9 +660,12 @@ describe('scheduler bounded-child production composition', () => {
     }));
     writeEpoch(epochPath, 'epoch-stale-assignment', 'nonce-stale-assignment');
     const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-stale-assignment', 'nonce-stale-assignment');
-    await publishLocal(env, 'dispatch-1', 'task-1');
+    const firstAssignment = await publishLocal(env, 'dispatch-1', 'task-1');
     await runTick(env);
-    await publishLocal(env, 'dispatch-2', 'task-2');
+    await publishLocal(env, 'dispatch-2', 'task-2', {
+      assignmentId: firstAssignment.assignmentId,
+      generation: firstAssignment.generation,
+    });
     await runTick(env);
     expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
