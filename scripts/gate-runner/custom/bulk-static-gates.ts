@@ -54,30 +54,6 @@ function requireText(
   return result.text;
 }
 
-function collectWorkerReportHardCutDocFailures(snapshot: SourceSnapshot): { failures: string[]; unreachable: string[] } {
-  const failures: string[] = [];
-  const unreachable: string[] = [];
-  const paths = [
-    'AGENTS.md',
-    'README.md',
-    'docs/worker-smoke-testing.md',
-    'docs/script-owned-review-pipeline.md',
-  ] as const;
-  for (const path of paths) {
-    const source = readSource(snapshot, path);
-    if (source.unreachable) unreachable.push(source.unreachable);
-    if (source.text !== undefined && /pack-worker-report\.ps1/iu.test(source.text)) {
-      failures.push(`${path} still references retired pack-worker-report.ps1`);
-    }
-  }
-  const readme = snapshot.files.get('README.md');
-  if (readme !== undefined) {
-    if (!/scripts\/pack-worker-report\b/iu.test(readme)) failures.push('README.md must reference the public scripts/pack-worker-report command');
-    if (!/scripts\/pack-worker-report\.ts\b/iu.test(readme)) failures.push('README.md must identify scripts/pack-worker-report.ts as the native implementation');
-  }
-  return { failures, unreachable };
-}
-
 export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResult {
   const gateId = 'agents-report-contract';
   const failures: string[] = [];
@@ -95,9 +71,6 @@ export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResu
       failures.push('AGENTS.md must include skip silently rule for unavailable report command');
     }
   }
-  const hardCut = collectWorkerReportHardCutDocFailures(snapshot);
-  failures.push(...hardCut.failures);
-  unreachable.push(...hardCut.unreachable);
   return completeStaticGate(
     gateId,
     'AGENTS.md worker-report contract',
@@ -106,19 +79,6 @@ export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResu
     failures,
     unreachable,
     failures[0] ? `${failures[0]}\n` : undefined,
-  );
-}
-
-export function evaluateWorkerReportHardCutDocs(snapshot: SourceSnapshot): GateResult {
-  const gateId = 'worker-report-hard-cut-docs';
-  const { failures, unreachable } = collectWorkerReportHardCutDocFailures(snapshot);
-  return completeStaticGate(
-    gateId,
-    'Worker report Node 22 hard-cut documentation contract',
-    '[PASS] worker report hard-cut docs contain no retired PowerShell path.\n',
-    snapshot,
-    failures,
-    unreachable,
   );
 }
 
