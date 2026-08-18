@@ -25,6 +25,22 @@ interface OrcaWorkerStartEnvelope {
   readonly result?: unknown;
 }
 
+interface OrcaPlacementEnvelope {
+  readonly ok?: boolean;
+  readonly result?: unknown;
+}
+
+interface OrcaPlacementWitness {
+  readonly terminalHandle: string;
+  readonly worktreeId: string;
+}
+
+interface ChildResult {
+  readonly ok: boolean;
+  readonly stdout: string;
+  readonly stderr?: string;
+}
+
 export interface SupervisedWorkerStartResidual {
   readonly authority: 'non_authoritative';
   readonly disposition: 'operator_manual';
@@ -48,6 +64,10 @@ export interface SupervisedWorkerStartResult {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function nonEmpty(value: unknown): string {
+  return String(value ?? '').trim();
 }
 
 function residualResources(receipt: SupervisedWorkerStartReceipt): readonly unknown[] | undefined {
@@ -110,6 +130,86 @@ function residualDiagnostic(input: {
   };
 }
 
+function parsePlacementEnvelope(execution: ChildResult): Record<string, unknown> | null {
+  if (!execution.ok || !execution.stdout.trim()) return null;
+  try {
+    const parsed: unknown = JSON.parse(execution.stdout);
+    if (!isRecord(parsed) || parsed.ok !== true || !isRecord(parsed.result)) return null;
+    return parsed.result;
+  } catch {
+    return null;
+  }
+}
+
+async function resolvePlacementWitness(input: {
+  readonly terminalSelector: string;
+  readonly worktreeSelector: string;
+  readonly inspect: (args: readonly string[]) => Promise<ChildResult>;
+}): Promise<{ readonly ok: true; readonly witness: OrcaPlacementWitness } | { readonly ok: false; readonly reason: string }> {
+  const terminalExecution = await input.inspect([
+    'terminal', 'show', '--terminal', input.terminalSelector, '--json',
+  ]);
+  const terminalResult = parsePlacementEnvelope(terminalExecution);
+  const terminal = terminalResult && isRecord(terminalResult.terminal) ? terminalResult.terminal : null;
+  const terminalHandle = nonEmpty(terminal?.handle);
+  const terminalWorktreeId = nonEmpty(terminal?.worktreeId);
+  if (!terminalHandle || !terminalWorktreeId) {
+    return { ok: false, reason: 'supervised_start_terminal_witness_unavailable' };
+  }
+
+  const worktreeExecution = await input.inspect([
+    'worktree', 'show', '--worktree', input.worktreeSelector, '--json',
+  ]);
+  const worktreeResult = parsePlacementEnvelope(worktreeExecution);
+  const worktree = worktreeResult && isRecord(worktreeResult.worktree) ? worktreeResult.worktree : null;
+  const worktreeId = nonEmpty(worktree?.id);
+  if (!worktreeId) {
+    return { ok: false, reason: 'supervised_start_worktree_witness_unavailable' };
+  }
+  if (terminalWorktreeId !== worktreeId) {
+    return { ok: false, reason: 'supervised_start_terminal_worktree_mismatch' };
+  }
+  return { ok: true, witness: { terminalHandle, worktreeId } };
+}
+
+function validateReceiptPlacement(
+  receipt: SupervisedWorkerStartReceipt,
+  witness: OrcaPlacementWitness,
+): string | null {
+  if (!Array.isArray(receipt.effects)) return 'supervised_start_effect_witness_unavailable';
+  let worktreeSeen = false;
+  let agentTerminalSeen = false;
+  for (const raw of receipt.effects) {
+    if (!isRecord(raw)) continue;
+    const kind = nonEmpty(raw.kind);
+    const role = nonEmpty(raw.role);
+    const action = nonEmpty(raw.action);
+    const id = nonEmpty(raw.id);
+    if (kind === 'worktree') {
+      if (!id) return 'supervised_start_worktree_witness_unavailable';
+      worktreeSeen = true;
+      if (id !== witness.worktreeId) return 'supervised_start_worktree_mismatch';
+      if (action !== 'reused') return 'supervised_start_worktree_action_mismatch';
+      continue;
+    }
+    if (kind === 'terminal' && role === 'agent') {
+      if (!id) return 'supervised_start_terminal_witness_unavailable';
+      agentTerminalSeen = true;
+      if (id !== witness.terminalHandle) return 'supervised_start_terminal_mismatch';
+      if (action !== 'reused' && action !== 'reused_agent_terminal') {
+        return 'supervised_start_terminal_action_mismatch';
+      }
+      continue;
+    }
+    if (kind === 'dispatch_input' && role === 'agent' && raw.id !== undefined) {
+      if (!id || id !== witness.terminalHandle) return 'supervised_start_dispatch_terminal_mismatch';
+    }
+  }
+  if (!worktreeSeen) return 'supervised_start_worktree_witness_unavailable';
+  if (!agentTerminalSeen) return 'supervised_start_terminal_witness_unavailable';
+  return null;
+}
+
 export async function runSupervisedWorkerStart(input: {
   readonly issueNumber: number;
   readonly repository: string;
@@ -118,7 +218,8 @@ export async function runSupervisedWorkerStart(input: {
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
   readonly adapter?: RuntimeAdapter;
-  readonly execute?: (args: readonly string[]) => Promise<{ ok: boolean; stdout: string; stderr?: string }>;
+  readonly execute?: (args: readonly string[]) => Promise<ChildResult>;
+  readonly inspect?: (args: readonly string[]) => Promise<ChildResult>;
 }): Promise<SupervisedWorkerStartResult> {
   const repository = input.repository.trim().toLowerCase();
   if (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0 || !repository) {
@@ -164,6 +265,25 @@ export async function runSupervisedWorkerStart(input: {
     }
   }
 
+  const inspect = input.inspect ?? (async (inspectArgs) => {
+    const result = await runProcess({
+      command: 'orca',
+      args: [...inspectArgs],
+      cwd: input.cwd ?? process.cwd(),
+      env: input.env,
+      inheritParentEnv: true,
+      allowEmptyStdout: false,
+      timeoutMs: 15_000,
+    });
+    return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error };
+  });
+  const placement = await resolvePlacementWitness({
+    terminalSelector: terminal,
+    worktreeSelector: worktree,
+    inspect,
+  });
+  if (!placement.ok) return { ok: false, reason: placement.reason };
+
   if (!args.includes('--json')) args.push('--json');
   const execute = input.execute ?? (async (workerArgs) => {
     const result = await runProcess({
@@ -203,6 +323,9 @@ export async function runSupervisedWorkerStart(input: {
   if (taskId !== requestedTaskId) {
     return rejectedStart('supervised_start_task_mismatch', receipt);
   }
+  const placementReason = validateReceiptPlacement(receipt, placement.witness);
+  if (placementReason) return rejectedStart(placementReason, receipt);
+
   const published = await publishCurrentWorkerAssignment({
     file,
     projectId: input.projectId,

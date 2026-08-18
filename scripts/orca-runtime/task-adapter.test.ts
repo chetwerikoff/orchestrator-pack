@@ -25,6 +25,99 @@ function workspaceRunner() {
   });
 }
 
+describe('Orca assignment resolution', () => {
+  it('preserves authoritative exact-target gone and producer-backed Dispatch terminal association', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-1']);
+      return {
+        ok: true,
+        result: {
+          worker: { agent_terminal_handle: 'term-owned' },
+          terminal: null,
+          observation: { exactWorker: true, status: 'gone' },
+          terminalResource: {
+            terminalHandle: 'term-owned',
+            worktreeId: 'repo::worktree',
+            originDispatchId: 'dispatch-1',
+            ownerDispatchId: 'dispatch-1',
+          },
+        },
+      };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+      status: 'ok',
+      value: { kind: 'gone', workerId: 'term-owned' },
+    });
+  });
+
+  it('does not reinterpret gone when exactWorker is not true', () => {
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        worker: { agent_terminal_handle: 'term-owned' },
+        observation: { exactWorker: false, status: 'gone' },
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'assignment_target_unresolved',
+    });
+  });
+
+  it.each([undefined, '', 'unknown', 'unverifiable'])(
+    'fails closed on missing/ambiguous exact observation status %s',
+    (status) => {
+      const runJson = vi.fn((): OrcaJsonResponse => ({
+        ok: true,
+        result: {
+          worker: { agent_terminal_handle: 'term-owned' },
+          terminal: { handle: 'term-owned' },
+          observation: { exactWorker: true, ...(status === undefined ? {} : { status }) },
+        },
+      }));
+      const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+      expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+        status: 'failed',
+        operation: 'resolve_assignment_worker',
+        reason: 'assignment_target_unresolved',
+      });
+    },
+  );
+
+  it('requires a terminal handle on an exact non-gone observation', () => {
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        worker: { agent_terminal_handle: null },
+        terminal: null,
+        observation: { exactWorker: true, status: 'live' },
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'assignment_target_unresolved',
+    });
+  });
+
+  it('preserves worker-show transport/runtime failure as unresolved failure, never gone', () => {
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: false,
+      outcomeCategory: 'empty_stdout',
+      error: { code: 'empty_stdout', message: 'no receipt' },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+    });
+  });
+});
+
 describe('Orca task adapter destructive operations', () => {
   it('prevalidates exact path and head before one remove', () => {
     const runner = workspaceRunner();

@@ -84,6 +84,11 @@ function verifyWorkspaceHasNoLiveOwner(input: {
  * removal. A resolved live target returns skipped_live and stopWorker is never
  * called. Only RuntimeAdapter assignment-resolution `gone` plus the pre-existing
  * cleanup authority may enter cleanup. No successor worker is spawned here.
+ *
+ * Destructive cleanup additionally requires a producer-backed terminal handle
+ * for the gone Dispatch and proves that it is the same handle named by the
+ * pack-owned cleanup reservation. A bare `gone` with no target association is
+ * sufficient for logical replacement admission, but never for workspace cleanup.
  */
 export async function recoverRuntimeWorker(input: {
   readonly assignmentStorePath: string;
@@ -152,6 +157,19 @@ export async function recoverRuntimeWorker(input: {
         return {
           outcome: 'skipped_ambiguous',
           reason: `resolved_target_liveness_${liveness.status}_is_not_assignment_gone_evidence`,
+        } as const;
+      }
+
+      if (!target.workerId) {
+        return {
+          outcome: 'skipped_ambiguous',
+          reason: 'cleanup_target_identity_unavailable',
+        } as const;
+      }
+      if (target.workerId !== input.cleanupAuthority.worker.id) {
+        return {
+          outcome: 'skipped_ambiguous',
+          reason: 'cleanup_ownership_authority_target_mismatch',
         } as const;
       }
 

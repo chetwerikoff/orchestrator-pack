@@ -17,10 +17,11 @@ import {
 
 const roots: string[] = [];
 const previousBase = process.env.OPK_BASE_DIR;
+type ResolutionWithTarget = RuntimeAssignmentWorkerResolution & { readonly workerId?: string };
 
 function runtimeWithResolution(
   base: DeterministicRuntimeAdapter,
-  resolution: RuntimeAssignmentWorkerResolution,
+  resolution: ResolutionWithTarget,
 ): RuntimeAdapter {
   const adapter = base as unknown as RuntimeAdapter;
   Object.defineProperty(adapter, 'resolveAssignmentWorker', {
@@ -86,10 +87,10 @@ afterEach(() => {
 });
 
 describe('assignment-fenced worker recovery entrypoint', () => {
-  it('returns operator_required_successor_start after gone cleanup and never auto-spawns', async () => {
+  it('returns operator_required_successor_start after exact gone cleanup and never auto-spawns', async () => {
     const f = await fixture();
     expect(f.base.stopWorker(f.worker.identity).status).toBe('ok');
-    const adapter = runtimeWithResolution(f.base, { kind: 'gone' });
+    const adapter = runtimeWithResolution(f.base, { kind: 'gone', workerId: f.worker.identity.id });
     const remove = vi.spyOn(f.base, 'removeWorkspace');
     const spawn = vi.spyOn(f.base, 'spawnWorker');
     const result = await runWorkerRecovery({
@@ -141,6 +142,23 @@ describe('assignment-fenced worker recovery entrypoint', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it('refuses cleanup when gone Dispatch target and pack cleanup reservation name different workers', async () => {
+    const f = await fixture();
+    expect(f.base.stopWorker(f.worker.identity).status).toBe('ok');
+    const remove = vi.spyOn(f.base, 'removeWorkspace');
+    const result = await runWorkerRecovery({
+      options: f.options,
+      adapter: runtimeWithResolution(f.base, { kind: 'gone', workerId: 'foreign-terminal' }),
+      claimNamespace: join(f.root, 'claims'),
+      cleanupAuthority: f.authority,
+    });
+    expect(result).toMatchObject({
+      outcome: 'skipped_ambiguous',
+      reason: 'cleanup_ownership_authority_target_mismatch',
+    });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
   it('rejects a stale expected assignment before recovery effects', async () => {
     const f = await fixture();
     const winner = await publishCurrentWorkerAssignment({
@@ -154,7 +172,7 @@ describe('assignment-fenced worker recovery entrypoint', () => {
       expectedCurrent: { assignmentId: f.assignment.assignmentId, generation: f.assignment.generation },
     });
     if (!winner.ok) throw new Error(winner.reason);
-    const adapter = runtimeWithResolution(f.base, { kind: 'gone' });
+    const adapter = runtimeWithResolution(f.base, { kind: 'gone', workerId: f.worker.identity.id });
     const remove = vi.spyOn(f.base, 'removeWorkspace');
     const spawn = vi.spyOn(f.base, 'spawnWorker');
     const result = await runWorkerRecovery({

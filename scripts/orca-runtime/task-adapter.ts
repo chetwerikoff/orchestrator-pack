@@ -34,9 +34,18 @@ type UnprovenOwnedPresence = Readonly<{
 }>;
 
 type OrcaWorkerShowResult = Readonly<{
-  worker?: Readonly<{ agent_terminal_handle?: string | null }>;
+  worker?: Readonly<{
+    agent_terminal_handle?: string | null;
+    worktree_id?: string | null;
+  }>;
   terminal?: Readonly<{ handle?: string | null }> | null;
   observation?: Readonly<{ exactWorker?: boolean; status?: string }>;
+  terminalResource?: Readonly<{
+    terminalHandle?: string | null;
+    worktreeId?: string | null;
+    originDispatchId?: string | null;
+    ownerDispatchId?: string | null;
+  }> | null;
 }>;
 
 function failureDetail(failure: RuntimeOperationFailure): string {
@@ -149,15 +158,34 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (!shown.ok) return runtimeFailure('resolve_assignment_worker', neutralFailureReason(shown));
     const exact = shown.result?.observation?.exactWorker === true;
     const observationStatus = String(shown.result?.observation?.status ?? '').trim().toLowerCase();
-    if (exact && observationStatus === 'gone') {
-      return { status: 'ok', value: { kind: 'gone' } };
+    if (!exact) {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
+    if (observationStatus === 'gone') {
+      const resource = shown.result?.terminalResource;
+      const resourceOwner = String(resource?.ownerDispatchId ?? '').trim();
+      const workerId = String(
+        resourceOwner === dispatchId
+          ? resource?.terminalHandle
+          : '',
+      ).trim();
+      const value = workerId
+        ? { kind: 'gone' as const, workerId }
+        : { kind: 'gone' as const };
+      return { status: 'ok', value };
+    }
+    // Current Orca emits live/exited for exact non-gone observations. Missing,
+    // unverifiable, identity-changed, unknown, or future ambiguous statuses are
+    // not exact current-target evidence and must not be upgraded to resolved.
+    if (observationStatus !== 'live' && observationStatus !== 'exited') {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     const terminalHandle = String(
       shown.result?.terminal?.handle
         ?? shown.result?.worker?.agent_terminal_handle
         ?? '',
     ).trim();
-    if (!exact || !terminalHandle) {
+    if (!terminalHandle) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     const current = super.findWorkerById(terminalHandle, options);

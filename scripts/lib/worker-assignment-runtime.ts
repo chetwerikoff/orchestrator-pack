@@ -24,7 +24,7 @@ export interface WorkerAssignmentReconciliation {
 
 export type WorkerAssignmentTargetResolution =
   | { readonly status: 'resolved'; readonly assignment: WorkerAssignment; readonly worker: RuntimeWorker }
-  | { readonly status: 'gone'; readonly assignment: WorkerAssignment }
+  | { readonly status: 'gone'; readonly assignment: WorkerAssignment; readonly workerId?: string }
   | { readonly status: 'remote_not_applicable'; readonly assignment: WorkerAssignment }
   | { readonly status: 'assignment_stale' | 'assignment_untrusted' | 'runtime_unavailable' | 'target_unresolved' };
 
@@ -74,6 +74,11 @@ function sameLogicalAssignment(left: WorkerAssignment | undefined, right: Worker
  * Resolve one exact expected current assignment without collapsing affirmative
  * gone evidence into generic unresolved state. This function observes only;
  * callers that authorize an effect must still hold withCurrentWorkerAssignmentFence.
+ *
+ * Orca may attach a producer-backed historical terminal handle to affirmative
+ * gone evidence. That handle is optional, in-memory-only evidence used by
+ * destructive cleanup to bind an existing pack reservation to this Dispatch;
+ * it is never persisted as WorkerAssignment authority.
  */
 export function resolveCurrentWorkerAssignmentTarget(input: {
   readonly file: string;
@@ -98,7 +103,14 @@ export function resolveCurrentWorkerAssignmentTarget(input: {
   if (resolved.status !== 'ok') return { status: 'target_unresolved' };
   if (!assignmentStillCurrent(input.file, current)) return { status: 'assignment_stale' };
   if (resolved.value.kind === 'gone') {
-    return { status: 'gone', assignment: current };
+    const workerId = String(
+      (resolved.value as { readonly workerId?: unknown }).workerId ?? '',
+    ).trim();
+    return {
+      status: 'gone',
+      assignment: current,
+      ...(workerId ? { workerId } : {}),
+    };
   }
   return { status: 'resolved', assignment: current, worker: resolved.value.worker };
 }

@@ -1,5 +1,14 @@
 // @vitest-ci-lane light
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -65,6 +74,105 @@ function runFixture(input: { ready?: boolean; malformedPr?: boolean; prHead?: st
   };
 }
 
+function linkDir(source: string, target: string): void {
+  symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
+function createPublicWrapperSandbox(root: string): { repoRoot: string; binDir: string } {
+  const repoRoot = path.join(root, 'public-wrapper');
+  const scriptsDir = path.join(repoRoot, 'scripts');
+  const binDir = path.join(root, 'bin');
+  mkdirSync(scriptsDir, { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  const sourceRoot = process.cwd();
+  copyFileSync(path.join(sourceRoot, 'scripts', 'pack-worker-report'), path.join(scriptsDir, 'pack-worker-report'));
+  copyFileSync(path.join(sourceRoot, 'scripts', 'pack-worker-report.ts'), path.join(scriptsDir, 'pack-worker-report.ts'));
+  chmodSync(path.join(scriptsDir, 'pack-worker-report'), 0o755);
+  linkDir(path.join(sourceRoot, 'scripts', 'kernel'), path.join(scriptsDir, 'kernel'));
+  linkDir(path.join(sourceRoot, 'scripts', 'lib'), path.join(scriptsDir, 'lib'));
+  linkDir(path.join(sourceRoot, 'scripts', 'pr2-foundation'), path.join(scriptsDir, 'pr2-foundation'));
+  linkDir(path.join(sourceRoot, 'scripts', 'toolchain'), path.join(scriptsDir, 'toolchain'));
+  linkDir(path.join(sourceRoot, 'docs'), path.join(repoRoot, 'docs'));
+
+  writeFileSync(path.join(scriptsDir, 'worker-smoke-run.ts'), [
+    "const ok = process.env.OPK_TEST_SMOKE_READY !== '0';",
+    "process.stdout.write(`${JSON.stringify({ ok, reason: ok ? 'ready' : 'ci_pending' })}\\n`);",
+    'process.exitCode = ok ? 0 : 1;',
+    '',
+  ].join('\n'), 'utf8');
+
+  const ghPath = path.join(binDir, 'gh');
+  writeFileSync(ghPath, [
+    '#!/usr/bin/env node',
+    "const args = process.argv.slice(2);",
+    "if (args[0] === 'pr') {",
+    "  if (process.env.OPK_TEST_GH_MODE === 'malformed') process.stdout.write('{bad-json');",
+    "  else process.stdout.write(`${JSON.stringify({ number: 1456, state: 'OPEN', headRefOid: process.env.OPK_TEST_HEAD_SHA, body: 'Closes #1416' })}\\n`);",
+    "} else if (args[0] === 'issue') {",
+    "  process.stdout.write(`${JSON.stringify({ body: '#1416 body' })}\\n`);",
+    "} else {",
+    "  process.stderr.write(`unexpected gh args: ${args.join(' ')}\\n`);",
+    '  process.exitCode = 1;',
+    '}',
+    '',
+  ].join('\n'), 'utf8');
+  chmodSync(ghPath, 0o755);
+  return { repoRoot, binDir };
+}
+
+async function runPublicWrapper(input: {
+  state: string;
+  smokeReady?: boolean;
+  assignmentId: string;
+  assignmentGeneration: number;
+  root: string;
+  dryRun?: boolean;
+  malformedGh?: boolean;
+  storeAsDirectory?: boolean;
+}) {
+  const sandbox = createPublicWrapperSandbox(input.root);
+  const storePath = path.join(input.root, 'public-worker-report-store.json');
+  if (input.storeAsDirectory) mkdirSync(storePath);
+  const cliArgs = [
+    path.join(sandbox.repoRoot, 'scripts', 'pack-worker-report'),
+    '--state', input.state,
+    '--repository', 'chetwerikoff/orchestrator-pack',
+    '--issue-number', '1416',
+    '--task-id', 'task-1416',
+    '--assignment-id', input.assignmentId,
+    '--assignment-generation', String(input.assignmentGeneration),
+    '--pr-number', '1456',
+    '--head-sha', headSha,
+    '--project-id', 'orchestrator-pack',
+    '--repo-root', sandbox.repoRoot,
+    ...(input.dryRun ? ['--dry-run'] : []),
+  ];
+  const result = await runProcess({
+    command: 'bash',
+    args: cliArgs,
+    cwd: sandbox.repoRoot,
+    inheritParentEnv: true,
+    env: {
+      OPK_BASE_DIR: input.root,
+      OPK_WORKER_REPORT_STORE: storePath,
+      OPK_TEST_HEAD_SHA: headSha,
+      OPK_TEST_SMOKE_READY: input.smokeReady === false ? '0' : '1',
+      OPK_TEST_GH_MODE: input.malformedGh ? 'malformed' : 'normal',
+      PATH: `${sandbox.binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+    },
+    allowEmptyStdout: false,
+    timeoutMs: 30_000,
+  });
+  const lines = result.stdout.trim().split(/\r?\n/u);
+  expect(lines).toHaveLength(1);
+  return {
+    result,
+    output: JSON.parse(lines[0]!) as Record<string, unknown>,
+    storePath,
+    storeExists: existsSync(storePath) && !input.storeAsDirectory,
+  };
+}
+
 afterEach(() => {
   delete process.env.OPK_BASE_DIR;
   delete process.env.OPK_WORKER_REPORT_STORE;
@@ -115,7 +223,6 @@ describe('pack-worker-report Node hard cut', () => {
     expect(malformed).toMatchObject({ disposition: 'command_error', accepted: false, recordWritten: false, reason: 'github_child_json_malformed' });
 
     const badStore = path.join(f.root, 'store-as-directory');
-    const { mkdirSync } = await import('node:fs');
     mkdirSync(badStore);
     const failed = await evaluatePackWorkerReport({ ...f.request, state: 'working' }, { run: runFixture(), reportStorePath: badStore });
     expect(failed).toMatchObject({ disposition: 'command_error', accepted: false, recordWritten: false });
@@ -136,6 +243,35 @@ describe('pack-worker-report Node hard cut', () => {
     const accepted = await evaluatePackWorkerReport({ ...f.request, state: 'addressing_reviews', deliveryRunId: 'run-1' }, { run: runFixture(), reportStorePath: f.reportStorePath });
     expect(accepted).toMatchObject({ disposition: 'recorded', accepted: true, recordWritten: true });
   });
+
+  it.each([
+    ['accepted ready', { state:'ready_for_review', smokeReady:true }, 0, 'recorded', true, true, true],
+    ['ordinary not-ready', { state:'ready_for_review', smokeReady:false }, 0, 'continue_work', false, false, false],
+    ['unresolved binding', { state:'ready_for_review', generationDelta:1 }, 0, 'continue_work', false, false, false],
+    ['dry-run ready', { state:'ready_for_review', smokeReady:true, dryRun:true }, 0, 'dry_run', true, false, false],
+    ['dry-run not-ready', { state:'ready_for_review', smokeReady:false, dryRun:true }, 0, 'continue_work', false, false, false],
+    ['malformed child output', { state:'working', malformedGh:true }, 2, 'command_error', false, false, false],
+    ['store-write failure', { state:'working', storeAsDirectory:true }, 2, 'command_error', false, false, false],
+    ['non-ready state', { state:'fixing_ci' }, 0, 'recorded', true, true, true],
+  ] as const)(
+    'public wrapper subprocess matrix: %s',
+    async (_name, scenario, exitCode, disposition, accepted, recordWritten, storeDelta) => {
+      const f = await fixture();
+      const run = await runPublicWrapper({
+        root: f.root,
+        state: scenario.state,
+        assignmentId: f.assignment.assignmentId,
+        assignmentGeneration: f.assignment.generation + ('generationDelta' in scenario ? scenario.generationDelta : 0),
+        smokeReady: 'smokeReady' in scenario ? scenario.smokeReady : true,
+        dryRun: 'dryRun' in scenario ? scenario.dryRun : false,
+        malformedGh: 'malformedGh' in scenario ? scenario.malformedGh : false,
+        storeAsDirectory: 'storeAsDirectory' in scenario ? scenario.storeAsDirectory : false,
+      });
+      expect(run.result.exitCode).toBe(exitCode);
+      expect(run.output).toMatchObject({ disposition, accepted, recordWritten });
+      expect(run.storeExists).toBe(storeDelta);
+    },
+  );
 
   it('public wrapper emits exactly one command_error JSON object for malformed usage', async () => {
     const result = await runProcess({

@@ -10,7 +10,9 @@ import { recoverRuntimeWorker, type WorkerRecoveryCleanupAuthority } from './wor
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-function runtime(base: DeterministicRuntimeAdapter, resolution: RuntimeAssignmentWorkerResolution | { status: 'failed'; reason: string }): RuntimeAdapter {
+type ResolutionWithTarget = RuntimeAssignmentWorkerResolution & { readonly workerId?: string };
+
+function runtime(base: DeterministicRuntimeAdapter, resolution: ResolutionWithTarget | { status: 'failed'; reason: string }): RuntimeAdapter {
   const adapter = base as unknown as RuntimeAdapter;
   Object.defineProperty(adapter, 'resolveAssignmentWorker', {
     configurable: true,
@@ -74,17 +76,53 @@ describe('assignment-fenced cleanup-only worker recovery', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it('cleans only an affirmative gone target and never spawns a successor', async () => {
+  it('cleans only an affirmative gone target associated with the same pack-owned worker', async () => {
     const f = await fixture();
     const cleanupAuthority = authority(f.worker);
     expect(f.base.stopWorker(f.worker.identity).status).toBe('ok');
     const remove = vi.spyOn(f.base, 'removeWorkspace');
     const spawn = vi.spyOn(f.base, 'spawnWorker');
-    const request = input(f.file, f.assignment, runtime(f.base, { kind: 'gone' }), cleanupAuthority);
+    const request = input(
+      f.file,
+      f.assignment,
+      runtime(f.base, { kind: 'gone', workerId: f.worker.identity.id }),
+      cleanupAuthority,
+    );
     expect(await recoverRuntimeWorker(request)).toEqual({ outcome: 'cleanup_completed', workspaceRemoved: true, reason: 'gone_target_cleanup_completed' });
     expect(request.acquireClaim).toHaveBeenCalledTimes(1);
     expect(remove).toHaveBeenCalledTimes(1);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('rejects gone evidence that names a different worker than cleanup authority', async () => {
+    const f = await fixture();
+    expect(f.base.stopWorker(f.worker.identity).status).toBe('ok');
+    const remove = vi.spyOn(f.base, 'removeWorkspace');
+    const request = input(
+      f.file,
+      f.assignment,
+      runtime(f.base, { kind: 'gone', workerId: 'foreign-terminal' }),
+      authority(f.worker),
+    );
+    expect(await recoverRuntimeWorker(request)).toEqual({
+      outcome: 'skipped_ambiguous',
+      reason: 'cleanup_ownership_authority_target_mismatch',
+    });
+    expect(request.acquireClaim).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('rejects bare gone evidence without a producer-backed target association', async () => {
+    const f = await fixture();
+    expect(f.base.stopWorker(f.worker.identity).status).toBe('ok');
+    const remove = vi.spyOn(f.base, 'removeWorkspace');
+    const request = input(f.file, f.assignment, runtime(f.base, { kind: 'gone' }), authority(f.worker));
+    expect(await recoverRuntimeWorker(request)).toEqual({
+      outcome: 'skipped_ambiguous',
+      reason: 'cleanup_target_identity_unavailable',
+    });
+    expect(request.acquireClaim).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it('returns assignment_store_busy with zero effect', async () => {
@@ -95,7 +133,12 @@ describe('assignment-fenced cleanup-only worker recovery', () => {
     writeFileSync(lockPath, `${JSON.stringify({ schemaVersion: 1, pid: process.pid, nonce: 'live-test-lock', acquiredAtMs: Date.now() })}\n`, 'utf8');
     const remove = vi.spyOn(f.base, 'removeWorkspace');
     const spawn = vi.spyOn(f.base, 'spawnWorker');
-    const request = input(f.file, f.assignment, runtime(f.base, { kind: 'gone' }), cleanupAuthority);
+    const request = input(
+      f.file,
+      f.assignment,
+      runtime(f.base, { kind: 'gone', workerId: f.worker.identity.id }),
+      cleanupAuthority,
+    );
     expect(await recoverRuntimeWorker(request)).toEqual({ outcome: 'assignment_store_busy', reason: 'assignment_store_busy' });
     expect(request.acquireClaim).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
