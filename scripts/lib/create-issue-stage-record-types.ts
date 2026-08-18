@@ -38,6 +38,13 @@ export type DeliveryClass = 'immediate' | 'delayed';
 export type GhFailureKind = 'timeout' | 'transport' | 'terminal-refusal';
 export type TerminalOutcome = 'done' | 'blocked' | 'refused';
 
+export interface PartialMissingSourceWitness {
+  reviewerSlot: string;
+  invocationId: string;
+  evidenceIdentity: string;
+  reason: string;
+}
+
 export interface GhFailure {
   kind: GhFailureKind;
   message: string;
@@ -97,6 +104,7 @@ export interface StageEventLogical {
   'required-source-count': number;
   'producer-evidence': ProducerEvidence;
   'tier-transition': string;
+  'partial-missing-sources'?: PartialMissingSourceWitness[];
   'routed-lane'?: ReviewLaneEvidence;
 }
 
@@ -194,6 +202,7 @@ export interface ConsumableStageReceipt {
   cycleBinding: StageReceiptCycleBinding;
   producerEvidence: ProducerEvidence;
   tierTransition: string;
+  partialMissingSources: PartialMissingSourceWitness[];
   reviewLane?: ReviewLaneEvidence;
 }
 
