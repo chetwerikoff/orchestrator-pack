@@ -41,9 +41,8 @@ describe('Wave 3.b bulk static gate ports', () => {
   });
 
   it('preserves the AGENTS report predicate and catches the removed command', () => {
-    const clean = memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\n' });
-    expect(evaluateAgentsReportContract(clean).status).toBe('PASS');
-    expect(evaluateAgentsReportContract(memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\na\u006f report\n' })).status).toBe('FAIL');
+    expect(evaluateAgentsReportContract(workerReportDocs()).status).toBe('PASS');
+    expect(evaluateAgentsReportContract(workerReportDocs({ 'AGENTS.md': 'pack-worker-report\nskip silently\na\u006f report\n' })).status).toBe('FAIL');
   });
 
   it('guards the worker-report Node hard cut across live lifecycle docs', () => {
