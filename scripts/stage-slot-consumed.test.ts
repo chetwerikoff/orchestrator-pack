@@ -120,7 +120,7 @@ describe('stage-slot-consumed start-cycle admission', () => {
 
     expect(result.ok).toBe(true);
     expect(result.stageAttemptId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(result.cycleId).toMatch(/^[0-9a-f-]{36}$/i);
     expect(state.comments).toHaveLength(1);
-    expect(existsSync(join(workdir, '.create-issue-cycle-id'))).toBe(true);
   });
 });
