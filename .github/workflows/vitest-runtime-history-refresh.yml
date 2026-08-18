@@ -516,17 +516,15 @@ jobs:
         shell: bash
         env:
           DELIVERY_BRANCH: ci/vitest-runtime-history-refresh
-          GH_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}
+          DELIVERY_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}
           REMOTE_SHA: ${{ steps.delivery_branch.outputs.remote_sha }}
         run: |
           set -euo pipefail
           trusted_main_root="$(mktemp -d)"
           inventory_probe="$(mktemp)"
-          delivery_api_root="$(mktemp -d)"
           cleanup() {
             git worktree remove --force "${trusted_main_root}" >/dev/null 2>&1 || true
             rm -f "${inventory_probe}"
-            rm -rf "${delivery_api_root}"
           }
           trap cleanup EXIT
           git fetch origin main
@@ -540,97 +538,45 @@ jobs:
             --require-equal-inventory
           echo "runtime-history pre-delivery inventory guard: trusted main ${trusted_main_sha} matches prepared membership"
 
+          prepared_parent_sha="$(git rev-parse HEAD^)"
+          if [ "${trusted_main_sha}" != "${prepared_parent_sha}" ]; then
+            echo "runtime-history pre-delivery base drift: prepared parent ${prepared_parent_sha}, trusted main ${trusted_main_sha}" >&2
+            exit 1
+          fi
+
           mapfile -t delivery_paths < <(git diff --name-only HEAD^ HEAD --)
           if [ "${#delivery_paths[@]}" -ne 1 ] || [ "${delivery_paths[0]:-}" != 'scripts/vitest-runtime-history.json' ]; then
             printf 'runtime-history delivery commit must change only scripts/vitest-runtime-history.json; got: %s\n' "${delivery_paths[*]:-<none>}" >&2
             exit 1
           fi
 
-          parent_sha="$(git rev-parse HEAD^)"
-          parent_tree_sha="$(git rev-parse "${parent_sha}^{tree}")"
-          expected_tree_sha="$(git rev-parse 'HEAD^{tree}')"
-          expected_blob_sha="$(git hash-object scripts/vitest-runtime-history.json)"
-          repository_node_id="$(./scripts/gh api "repos/${GITHUB_REPOSITORY}" --jq .node_id)"
+          git remote set-url origin "https://x-access-token:${DELIVERY_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          delivery_head="$(git rev-parse HEAD)"
+          if [ -n "${REMOTE_SHA}" ]; then
+            git push --force-with-lease="refs/heads/${DELIVERY_BRANCH}:${REMOTE_SHA}" origin "HEAD:refs/heads/${DELIVERY_BRANCH}"
+          else
+            git push --force-with-lease="refs/heads/${DELIVERY_BRANCH}:" origin "HEAD:refs/heads/${DELIVERY_BRANCH}"
+          fi
 
-          blob_request="${delivery_api_root}/blob.json"
-          HISTORY_PATH='scripts/vitest-runtime-history.json' node --input-type=module <<'NODE' > "${blob_request}"
-          import { readFileSync } from 'node:fs';
-          process.stdout.write(JSON.stringify({
-            content: readFileSync(process.env.HISTORY_PATH).toString('base64'),
-            encoding: 'base64',
-          }));
-          NODE
-          blob_sha="$(./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/git/blobs" --input "${blob_request}" --jq .sha)"
-          if [ "${blob_sha}" != "${expected_blob_sha}" ]; then
-            echo "runtime-history delivery blob mismatch: expected ${expected_blob_sha}, got ${blob_sha}" >&2
+          git fetch origin main
+          observed_main_sha="$(git rev-parse origin/main)"
+          if [ "${observed_main_sha}" != "${trusted_main_sha}" ]; then
+            echo "runtime-history delivery detected main drift after branch update: expected ${trusted_main_sha}, got ${observed_main_sha}; rolling back delivery ref" >&2
+            if [ -n "${REMOTE_SHA}" ]; then
+              git push --force-with-lease="refs/heads/${DELIVERY_BRANCH}:${delivery_head}" origin "${REMOTE_SHA}:refs/heads/${DELIVERY_BRANCH}" || {
+                echo "runtime-history delivery rollback failed after main drift" >&2
+                exit 1
+              }
+            else
+              git push --force-with-lease="refs/heads/${DELIVERY_BRANCH}:${delivery_head}" origin ":refs/heads/${DELIVERY_BRANCH}" || {
+                echo "runtime-history delivery rollback failed after main drift" >&2
+                exit 1
+              }
+            fi
             exit 1
           fi
 
-          tree_request="${delivery_api_root}/tree.json"
-          BASE_TREE_SHA="${parent_tree_sha}" BLOB_SHA="${blob_sha}" node --input-type=module <<'NODE' > "${tree_request}"
-          process.stdout.write(JSON.stringify({
-            base_tree: process.env.BASE_TREE_SHA,
-            tree: [{
-              path: 'scripts/vitest-runtime-history.json',
-              mode: '100644',
-              type: 'blob',
-              sha: process.env.BLOB_SHA,
-            }],
-          }));
-          NODE
-          tree_sha="$(./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/git/trees" --input "${tree_request}" --jq .sha)"
-          if [ "${tree_sha}" != "${expected_tree_sha}" ]; then
-            echo "runtime-history delivery tree mismatch: expected ${expected_tree_sha}, got ${tree_sha}" >&2
-            exit 1
-          fi
-
-          commit_message_file="${delivery_api_root}/commit-message.txt"
-          git log -1 --format=%B HEAD > "${commit_message_file}"
-          commit_request="${delivery_api_root}/commit.json"
-          TREE_SHA="${tree_sha}" PARENT_SHA="${parent_sha}" COMMIT_MESSAGE_FILE="${commit_message_file}" \
-            node --input-type=module <<'NODE' > "${commit_request}"
-          import { readFileSync } from 'node:fs';
-          process.stdout.write(JSON.stringify({
-            message: readFileSync(process.env.COMMIT_MESSAGE_FILE, 'utf8').replace(/\n+$/, ''),
-            tree: process.env.TREE_SHA,
-            parents: [process.env.PARENT_SHA],
-          }));
-          NODE
-          delivery_head="$(./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/git/commits" --input "${commit_request}" --jq .sha)"
-
-          zero_oid='0000000000000000000000000000000000000000'
-          delivery_before_oid="${REMOTE_SHA:-${zero_oid}}"
-          update_refs_request="${delivery_api_root}/update-refs.json"
-          REPOSITORY_NODE_ID="${repository_node_id}" \
-          TRUSTED_MAIN_SHA="${trusted_main_sha}" \
-          DELIVERY_BRANCH="${DELIVERY_BRANCH}" \
-          DELIVERY_BEFORE_OID="${delivery_before_oid}" \
-          DELIVERY_HEAD="${delivery_head}" \
-            node --input-type=module <<'NODE' > "${update_refs_request}"
-          const input = {
-            repositoryId: process.env.REPOSITORY_NODE_ID,
-            refUpdates: [
-              {
-                name: 'refs/heads/main',
-                beforeOid: process.env.TRUSTED_MAIN_SHA,
-                afterOid: process.env.TRUSTED_MAIN_SHA,
-                force: false,
-              },
-              {
-                name: `refs/heads/${process.env.DELIVERY_BRANCH}`,
-                beforeOid: process.env.DELIVERY_BEFORE_OID,
-                afterOid: process.env.DELIVERY_HEAD,
-                force: true,
-              },
-            ],
-          };
-          process.stdout.write(JSON.stringify({
-            query: 'mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }',
-            variables: { input },
-          }));
-          NODE
-          ./scripts/gh api graphql --input "${update_refs_request}" >/dev/null
-          echo "runtime-history delivery atomic guard: trusted main ${trusted_main_sha} remained current in the same updateRefs transaction as ${DELIVERY_BRANCH}"
+          echo "runtime-history delivery source guard: trusted main ${trusted_main_sha} remained current before and after ${DELIVERY_BRANCH} update"
           echo "head_sha=${delivery_head}" >> "$GITHUB_OUTPUT"
 
       - name: Publish pending delivery provenance

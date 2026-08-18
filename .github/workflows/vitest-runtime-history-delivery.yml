@@ -59,6 +59,26 @@ jobs:
           fi
           echo "trusted_actor=${trusted_actor}" >> "$GITHUB_OUTPUT"
 
+      - name: Prove delivery merge authority
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}
+        run: |
+          set -euo pipefail
+          policy_json="$(./scripts/gh api "repos/${GITHUB_REPOSITORY}/branches/main/protection/required_status_checks")"
+          POLICY_JSON="${policy_json}" node --input-type=module <<'NODE'
+          const policy = JSON.parse(process.env.POLICY_JSON ?? '{}');
+          const source = Array.isArray(policy.checks)
+            ? policy.checks.map((entry) => entry?.context).filter(Boolean)
+            : Array.isArray(policy.contexts)
+              ? policy.contexts.filter(Boolean)
+              : [];
+          if (source.length === 0) {
+            throw new Error('current main required-status policy returned no contexts');
+          }
+          console.log(`runtime-history delivery capability probe: required contexts=${source.join(', ')}`);
+          NODE
+
       - name: Monitor and merge delivery PR
         shell: bash
         env:

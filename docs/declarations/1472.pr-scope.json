@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1472,
+  "declared_paths": [
+    "scripts/refresh-vitest-runtime-history.mjs",
+    "scripts/vitest-runtime-history-reconcile-legacy.fixture.mjs"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/vitest-runtime-history-merge.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1472.pr-scope.json",
+    "scripts/refresh-vitest-runtime-history.mjs",
+    "scripts/vitest-runtime-history-reconcile-legacy.fixture.mjs"
+  ]
+}

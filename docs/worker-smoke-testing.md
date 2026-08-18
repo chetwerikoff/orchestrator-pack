@@ -60,6 +60,119 @@ Before invoking `worker-smoke-run run`, the parent worker MUST make the environm
 executing the real Issue-declared scenarios. The smoke child is not responsible for discovering or
 creating missing external prerequisites after launch.
 
+### Smoke-parent first-attempt bootstrap
+
+The parent must pass two independent gates before the first smoke child is
+created: dependency/setup readiness and executor-profile readiness. A passing
+worker-profile proof does not prove the smoke profile, and a ready worktree
+does not prove that a child inherits the profile.
+
+For a fresh smoke worktree, use the existing Orca setup path and continue only
+after its successful setup/ready receipt:
+
+```bash
+orca worktree create \
+  --name <worktree-name> \
+  --repo <repo-selector> \
+  --base-branch <base-ref> \
+  --issue <N> \
+  --setup run \
+  --json
+```
+
+When the smoke parent is using an existing delivery worktree, positively bind it
+with `orca worktree current --json` and re-read the already-recorded setup-ready
+result; current-worktree binding alone is not setup readiness. A failed,
+incomplete, or unknown setup result blocks smoke before child creation.
+
+After setup and all Issue-declared external prerequisites are ready, resolve
+exactly one profile from the producer-owned `--smoke-complexity` value. Use only
+the corresponding three stable names:
+
+```bash
+smoke_complexity="<routine-or-complex>"
+case "$smoke_complexity" in
+  routine)
+    selected_profile_agent_name=PACK_EXECUTOR_SMOKE_ROUTINE_AGENT
+    selected_profile_model_name=PACK_EXECUTOR_SMOKE_ROUTINE_MODEL
+    selected_profile_effort_name=PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT
+    ;;
+  complex)
+    selected_profile_agent_name=PACK_EXECUTOR_SMOKE_COMPLEX_AGENT
+    selected_profile_model_name=PACK_EXECUTOR_SMOKE_COMPLEX_MODEL
+    selected_profile_effort_name=PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT
+    ;;
+  *)
+    printf '%s\n' 'executor_profile_blocked:invalid_smoke_complexity' >&2
+    exit 1
+    ;;
+esac
+```
+
+Resolve concrete values from the operator-owned store without printing them.
+The export, child-process proof, and smoke invocation must stay in this same
+launching shell:
+
+```bash
+set -a
+# POSIX `.` sources the store; Bash `source` is equivalent.
+. "<operator-local executor-profile store>"
+set +a
+```
+
+Plain `source`/`.` followed by shell-local `test -n` is not child-inheritance
+proof; separate tool or terminal calls do not share unexported shell state. Run
+this Node 22 probe before `worker-smoke-run` and check only the selected
+profile's three names. It prints no profile values:
+
+```bash
+node_major="$(node -p 'process.versions.node.split(".")[0]')" || exit 1
+if [ "$node_major" != 22 ]; then
+  printf '%s\n' 'executor_profile_probe_blocked:node_22_required' >&2
+  exit 1
+fi
+node --input-type=module -e '
+  const names = process.argv.slice(1);
+  const missing = names.filter((name) =>
+    typeof process.env[name] !== "string" || process.env[name].trim() === ""
+  );
+  if (missing.length > 0) {
+    console.error(`executor_profile_missing:${missing.join(",")}`);
+    process.exit(1);
+  }
+  console.log("executor_profile_child_inheritance:ready");
+' \
+  "$selected_profile_agent_name" \
+  "$selected_profile_model_name" \
+  "$selected_profile_effort_name"
+```
+
+Validate the selected profile's supported agent and that its model/effort can be
+applied through the existing smoke path without printing concrete values. A
+missing, empty, malformed, unsupported, or mixed profile, a failed probe, or an
+unready prerequisite blocks before smoke child creation. Do not add a loader,
+fallback, retry, or second selector to recover it.
+
+Only after setup readiness, external-prerequisite readiness, profile readiness,
+and the child probe pass, invoke the existing smoke command in the same shell:
+
+```bash
+export PATH="$PWD/scripts:$PATH"
+worker-smoke-run run \
+  --issue <N> \
+  --pr <PR> \
+  --head-sha <40-hex> \
+  --smoke-complexity <routine-or-complex> \
+  --smoke-actor worker-owned \
+  --issue-body-file <issue-body-file> \
+  --repo-root "$PWD" \
+  --cwd "$PWD"
+```
+
+Do not split export/probe/launch across terminal or tool calls. If any
+pre-launch checkpoint fails, report the first absent checkpoint and whether a
+smoke child was created; fix the bootstrap and make a fresh attempt.
+
 The parent worker must:
 
 1. inspect the current Issue `smoke-test-plan`, every declared scenario, and any named
