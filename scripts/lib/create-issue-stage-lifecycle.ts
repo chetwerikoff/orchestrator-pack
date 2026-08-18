@@ -206,7 +206,11 @@ export function admissionStageSequence(
       continue;
     }
     if (slot.tier !== topology.tier) errors.push(`${slot.stage} receipt tier ${slot.tier} does not match canonical ${topology.tier} topology`);
-    if (slot.policyVersion !== topologyEntry.policyVersion) errors.push(`${slot.stage} receipt policy ${slot.policyVersion} does not match canonical ${topologyEntry.policyVersion}`);
+    const routedPolicyCompatible = slot.policyVersion === 'review-lane-routing/v1'
+      && (slot.stage === 'competitive' || slot.stage === 'architectural-review');
+    if (slot.policyVersion !== topologyEntry.policyVersion && !routedPolicyCompatible) {
+      errors.push(`${slot.stage} receipt policy ${slot.policyVersion} does not match canonical ${topologyEntry.policyVersion}`);
+    }
     if (slot.reviewerCardinality !== topologyEntry.reviewerCardinality) errors.push(`${slot.stage} receipt cardinality ${slot.reviewerCardinality} does not match canonical ${topologyEntry.reviewerCardinality}`);
     const list = byStage.get(slot.stage) ?? [];
     list.push(slot);
