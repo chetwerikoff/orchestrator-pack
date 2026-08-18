@@ -314,6 +314,7 @@ async function inspect(config, io) {
   const scope = validateDeliveryFiles(files);
   if (!scope.ok) return { terminal: true, ...scope, pr };
   if (pr?.mergeable === false || pr?.mergeable_state === 'dirty') return { terminal: true, ...fail('close-as-obsolete', 'delivery PR is conflicted or unmergeable'), pr };
+  if (pr?.mergeable_state === 'behind') return { terminal: true, ...fail('close-as-obsolete', 'delivery PR base advanced after candidate preparation; fresh complete refresh required'), pr };
   if (pr?.mergeable === null || pr?.mergeable_state === 'unknown') return { wait: true, outcome: 'mergeability-pending', reason: 'delivery PR mergeability still computing', pr };
   let history;
   try { history = await io.getStatusHistory(config.expectedHeadSha); }
@@ -322,7 +323,7 @@ async function inspect(config, io) {
   if (!provenance.ok) return { terminal: true, ...provenance, pr };
   let run;
   try { run = await io.getActionsRun(provenance.runId); }
-  catch (e) { return { terminal: true, ...fail('provenance-invalid', `refresh run read failed: ${e.message}`), pr }; }
+  catch (e) { return { terminal: true, ...fail('provenance-invalid', `refresh run read failed: ${e.message}`), pr };
   const runProof = verifyRefreshRun(run, provenance);
   if (!runProof.ok) return { terminal: true, ...runProof, pr };
   if (runProof.state === 'pending') return { wait: true, outcome: 'provenance-pending', reason: runProof.reason, pr };
