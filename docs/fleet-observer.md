@@ -101,6 +101,47 @@ unit counter may reuse a suffix, but old exceptions remain inert because
 their namespace differs. Corrupt prior state never restores runtime
 continuity.
 
+## Runtime worker to Issue authority
+
+Issue #1380 adds one optional read-only capability on the observer-held
+runtime-neutral source. It is evaluated only for the most recently committed
+complete tick of the same live `FleetObserver` instance. The accepted tick
+keeps exact `{runtime,id,generation}`, local `unitRef`, and the independently
+accepted `findWorker` identity result in memory only; none of those binding
+outcomes are added to the snapshot, config, claims, journal, output, or other
+durable state.
+
+Only a `resolved` row carries Issue authority, and it requires a unique current
+internal worker with an exact `sameRuntimeWorker` identity, explicit positive
+Issue metadata, and an unchanged authoritative runtime snapshot. `unbound`,
+`external`, `absent`, `replaced`, `identity_unresolved`,
+`incarnation_unavailable`, `stale`, `ambiguous`, set-unavailable, superseded,
+and late-completion results carry no authority. Row ambiguity outranks an
+accepted-tick identity contradiction; the contradiction still prevents any
+`resolved` upgrade. Capability responses are closed and must match the exact
+accepted unit count, order, identity, status, and fields or the whole set is
+`malformed_or_incomplete`.
+
+The Orca implementation uses `complete_ab_revalidation`: a global terminal
+census A, canonical worktree/task census A, global terminal census B, then a
+canonical worktree/task census B for the A∪B worktree set. It publishes only
+after comparison and performs no authority read after that comparison. At
+most six canonical worktrees are admitted. The priced boundary is at most 14
+native reads at 250 ms each plus a fixed 500 ms settlement margin, so the
+six-worktree case requires a 4,000 ms producer budget. With the observer's
+quarter-interval cap that requires at least a 16,000 ms scheduler interval; an
+8,000 ms interval fails `deadline_exhausted` before Orca authority reads.
+
+Positive Orca authority requires an explicit non-empty `incarnationId`; a
+PTY-only fallback is `incarnation_unavailable`. Duplicate positive Issue
+claims are detected over the complete current runtime, including external and
+cross-worktree workers, and every affected queried claimant is ambiguous.
+A surviving terminal after adapter restart is external until recreated by the
+current adapter instance. Same-tick resolver calls share one single-flight
+attempt, settled no-authority results are not retried in that tick, and a new
+accepted tick invalidates any late predecessor completion. Cross-tick retry or
+backoff remains caller-owned.
+
 ## S2 one-shot fleet nudge
 
 Issue #1259 adds one bounded actuator phase immediately after accepted S1
@@ -153,15 +194,16 @@ completed ticks in the active generation, dropped on generation restart, and
 capped at 1,024 records. Untagged legacy `task-continuation` callers remain on
 the pre-existing legacy claim policy.
 
-The accepted specification requires a separately reviewed producer that maps
-`{schedulerGeneration,unitRef}` to the exact live Issue incarnation and
-runtime-neutral worker identity. That producer is not present at this landing.
-Therefore the production scheduler composition hard-wires the
-`target_unresolved` actuator and deliberately returns `target_unresolved` for
-every otherwise eligible candidate before claim, journal, message hash, or
-dispatch. A caller cannot inject an enabled actuator through the production
-constructor. The injected target/revalidation path exists for focused contract
-coverage only and is not production actuation evidence.
+Issue #1380 now provides the separately reviewed observer-held producer that
+can map `{schedulerGeneration,unitRef}` to an exact live Issue incarnation and
+runtime-neutral worker identity. This landing deliberately does not wire that
+producer into Issue #1259 production target composition. Therefore the
+production scheduler still hard-wires the `target_unresolved` actuator and
+returns `target_unresolved` for every otherwise eligible candidate before
+claim, journal, message hash, or dispatch. A caller cannot inject an enabled
+actuator through the production constructor. The injected target/revalidation
+path exists for focused contract coverage only and is not production actuation
+evidence.
 
 ## Diagnostics and rollback
 
