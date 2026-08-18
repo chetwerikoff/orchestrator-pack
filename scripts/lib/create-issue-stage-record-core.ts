@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { hasBlockingLineageConflict } from './create-issue-stage-record-lineage.ts';
 import {
   logicalFingerprint,
@@ -94,6 +94,14 @@ export interface OperationResult {
 
 function resolveWorkdir(issueNumber: number, workdir?: string): string {
   return workdir ?? defaultWorkdir(issueNumber);
+}
+
+function semanticStageAttemptId(repo: string, issueNumber: number, stage: LifecycleReviewStage): string {
+  const hex = createHash('sha256')
+    .update(`create-issue-stage-attempt/v1\n${repo}\n${issueNumber}\n${stage}`, 'utf8')
+    .digest('hex')
+    .slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 function pendingFailure(
@@ -539,8 +547,19 @@ export function startReviewCycle(
         ...(admission.consumingStageAttemptId ? { stageAttemptId: admission.consumingStageAttemptId } : {}),
       };
     }
-    // stageAttemptId is minted only after canonical Issue-root admission succeeds.
-    stageAttemptId ??= randomUUID();
+    // Admission succeeds before identity minting. The semantic stage has one
+    // deterministic Issue-lifetime attempt identity, so repeated pre-settlement
+    // start-cycle calls cannot create a second logical attempt.
+    const canonicalAttemptId = semanticStageAttemptId(input.repo, input.issueNumber, input.stage);
+    if (stageAttemptId && stageAttemptId !== canonicalAttemptId) {
+      diagnostics.push({
+        code: 'stage_authority_invalid',
+        message: `stageAttemptId ${stageAttemptId} does not match the canonical active attempt ${canonicalAttemptId}`,
+        eventKey: canonicalAttemptId,
+      });
+      return { ok: false, diagnostics, stageAttemptId: canonicalAttemptId };
+    }
+    stageAttemptId = canonicalAttemptId;
   }
 
   const persistedCandidate = readPersistedCycleId(workdir);
@@ -766,6 +785,7 @@ export function publishSettledStageRecord(
     'required-source-count': receipt.reviewerCardinality,
     'producer-evidence': receipt.producerEvidence,
     'tier-transition': receipt.tierTransition,
+    ...(receipt.partialMissingSources.length > 0 ? { 'partial-missing-sources': receipt.partialMissingSources } : {}),
     'routed-lane': receipt.reviewLane,
   };
   const published = publishLogicalJournalEvent(
