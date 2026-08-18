@@ -665,10 +665,13 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       workerNotifier: async () => { M1Order.push('worker'); return { state: 'delivered', reason: 'delivered' }; },
     });
     const injectedReviewer = runProcessSync({
-      command: 'pwsh',
+      command: process.execPath,
       args: [
-        '-NoProfile',
-        '-File', path.join(repoRoot, 'scripts/invoke-pack-review.ps1'),
+        '--experimental-strip-types',
+        path.join(repoRoot, 'scripts/lib/Invoke-TypeScriptCli.ts'),
+        '--repo-root', repoRoot,
+        '--script', path.join(repoRoot, 'scripts/run-pack-review-gpt.ts'),
+        '--',
         '--repo-root', repoRoot,
         '--base', 'origin/main',
         '--pr-number', String(M1Run.prNumber),
@@ -682,7 +685,7 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       inheritParentEnv: false,
       encoding: 'utf8',
     });
-    invariant(injectedReviewer.exitCode === 0, `reviewer-rerun fault did not execute the real wrapper: ${injectedReviewer.stderr || injectedReviewer.stdout || injectedReviewer.error}`);
+    invariant(injectedReviewer.exitCode === 0, `reviewer-rerun fault did not execute the real TypeScript reviewer entrypoint: ${injectedReviewer.stderr || injectedReviewer.stdout || injectedReviewer.error}`);
     const M1Result = await M1Pending;
     invariant(M1Result.ok === true && M1Result.recovered === true, `reviewer-rerun recovery failed: ${String(M1Result.reason)}`);
     const M1Persisted = getPackReviewRun(M1Run.id, { projectId, storeRoot: M1Store });
