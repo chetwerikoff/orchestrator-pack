@@ -32,6 +32,7 @@ import {
   type TierIntakeAuthorityV1,
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
+import { canonicalStagePlan } from './create-issue-stage-topology.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import { defaultGhTransport } from './create-issue-stage-record-gh.ts';
 import type { GhTransport } from './create-issue-stage-record-types.ts';
@@ -1175,7 +1176,7 @@ function loadTierIntake(path: string, errors: string[]): TierIntakeAuthorityV1 |
   if (kind === null) errors.push('tier-intake.kind is invalid');
   if (priorTier === null) errors.push('tier-intake.priorTier is invalid');
   if (!producer || !taskIdentity || !firstRevision || kind === null || priorTier === null) return null;
-  return { schema: 'tier-intake/v1', producer, taskIdentity, kind, priorTier, firstRevision };
+  return { ...value, schema: 'tier-intake/v1', producer, taskIdentity, kind, priorTier, firstRevision } as TierIntakeAuthorityV1;
 }
 
 function assertDerived(
@@ -1447,13 +1448,20 @@ function relayEvidence(
   }));
 }
 
-function expectedStages(tier: ReviewTier, phase: 'pre-lens' | 'final-acceptance'): ReviewStage[] {
-  if (tier === 'T3') {
-    return phase === 'pre-lens'
-      ? ['competitive', 'architectural-review']
-      : ['competitive', 'architectural-review', 'architectural-lens', 'architectural'];
-  }
-  return ['architectural'];
+export function canonicalAcceptanceStages(
+  tier: ReviewTier,
+  intakeValue: unknown,
+  phase: 'pre-lens' | 'final-acceptance',
+): ReviewStage[] {
+  const intake = isRecord(intakeValue) ? intakeValue : {};
+  const competitiveDecision = intake.competitiveDecision === 'required' || intake.competitiveDecision === 'skipped'
+    ? intake.competitiveDecision
+    : undefined;
+  const competitiveRationale = optionalString(intake.competitiveRationale);
+  const stages = canonicalStagePlan(tier, { competitiveDecision, competitiveRationale }).stages.map((entry) => entry.stage);
+  return tier === 'T3' && phase === 'pre-lens'
+    ? stages.filter((stage) => stage === 'competitive' || stage === 'architectural-review')
+    : stages;
 }
 
 const PRODUCED_ARTIFACT_NAMES = new Set<string>(ACCEPTANCE_ARTIFACT_OUTPUT_NAMES);
@@ -1639,11 +1647,15 @@ export function produceAcceptanceArtifacts(
   if (cycleIds.size > 1) errors.push('stage evidence mixes cycle identities');
   if (!tier) errors.push('no completed-stage evidence was supplied');
   if (tier && receipts.length > 0) {
-    const required = expectedStages(tier, options.phase ?? 'final-acceptance');
-    for (const stage of required) {
-      if (!receipts.some((receipt) => receipt.stage === stage && receipt.outcome === 'complete')) {
-        errors.push(`missing completed stage evidence: ${stage}`);
+    try {
+      const required = canonicalAcceptanceStages(tier, intake, options.phase ?? 'final-acceptance');
+      for (const stage of required) {
+        if (!receipts.some((receipt) => receipt.stage === stage && receipt.outcome === 'complete')) {
+          errors.push(`missing completed stage evidence: ${stage}`);
+        }
       }
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
     }
   }
   for (let index = 0; index < receipts.length; index += 1) {
@@ -1870,9 +1882,13 @@ export function inspectAcceptanceArtifacts(
   }
 
   if (evidenceTier) {
-    const requiredStages = expectedStages(evidenceTier, options.phase ?? 'final-acceptance');
-    for (const stage of requiredStages) {
-      if (!completedStages.has(stage)) missing.push({ artifact: 'stage-completeness-receipt', reason: 'missing completed stage evidence for ' + stage + ' at ' + (options.phase ?? 'final-acceptance') });
+    try {
+      const requiredStages = canonicalAcceptanceStages(evidenceTier, intake, options.phase ?? 'final-acceptance');
+      for (const stage of requiredStages) {
+        if (!completedStages.has(stage)) missing.push({ artifact: 'stage-completeness-receipt', reason: 'missing completed stage evidence for ' + stage + ' at ' + (options.phase ?? 'final-acceptance') });
+      }
+    } catch (error) {
+      missing.push({ artifact: 'tier-intake/v1', reason: error instanceof Error ? error.message : String(error) });
     }
   }
 
