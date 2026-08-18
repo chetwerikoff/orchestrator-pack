@@ -781,10 +781,13 @@ export class FleetObserver {
     }
     const trustedOutcomes = outcomes as RuntimeWorkerTaskBindingOutcome[];
     const rows = accepted.units.map((unit, index): FleetWorkerIssueBindingRow => {
+      const outcome = trustedOutcomes[index]!;
+      if (outcome.status === 'ambiguous') {
+        return { status: 'ambiguous', unitRef: unit.unitRef, worker: unit.identity, code: outcome.code };
+      }
       if (!unit.identityResolved) {
         return { status: 'identity_unresolved', unitRef: unit.unitRef, worker: unit.identity };
       }
-      const outcome = trustedOutcomes[index]!;
       switch (outcome.status) {
         case 'bound':
           return { status: 'resolved', unitRef: unit.unitRef, worker: unit.identity, issueNumber: outcome.issueNumber };
@@ -797,8 +800,6 @@ export class FleetObserver {
           return { status: outcome.status, unitRef: unit.unitRef, worker: unit.identity };
         case 'stale':
           return { status: 'stale', unitRef: unit.unitRef, worker: unit.identity, code: outcome.code };
-        case 'ambiguous':
-          return { status: 'ambiguous', unitRef: unit.unitRef, worker: unit.identity, code: outcome.code };
         default:
           throw new Error('unreachable-runtime-binding-outcome');
       }
