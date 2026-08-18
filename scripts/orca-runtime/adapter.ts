@@ -109,6 +109,12 @@ interface OrcaBindingSnapshot {
   readonly worktrees: ReadonlyMap<string, OrcaBindingWorktreeEvidence>;
 }
 
+interface OrcaBindingTerminalListResult {
+  readonly terminals?: OrcaTerminalSummary[];
+  readonly totalCount: number;
+  readonly truncated: boolean;
+}
+
 function isNativeTimeout(response: OrcaJsonResponse): boolean {
   return response.error?.code === 'orca_operation_timeout';
 }
@@ -149,7 +155,8 @@ function nonEmptyString(value: unknown): string | null {
 }
 
 function positiveIssueNumber(value: unknown): number | null | undefined {
-  if (value === null || value === undefined) return null;
+  if (value === null) return null;
+  if (value === undefined) return undefined;
   return typeof value === 'number' && Number.isInteger(value) && value > 0
     ? value
     : undefined;
@@ -347,7 +354,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     | { readonly status: 'unavailable'; readonly code: 'deadline_exhausted' | 'malformed_or_incomplete' | 'inventory_ambiguous' } {
     const callOptions = this.#bindingCallOptions(deadline, options);
     if (!callOptions) return { status: 'unavailable', code: 'deadline_exhausted' };
-    const response = this.#run<{ terminals?: OrcaTerminalSummary[] }>(['terminal', 'list'], callOptions);
+    const response = this.#run<OrcaBindingTerminalListResult>(['terminal', 'list'], callOptions);
     if (!response.ok) {
       return {
         status: 'unavailable',
@@ -355,7 +362,12 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       };
     }
     const terminals = response.result?.terminals;
-    if (!Array.isArray(terminals)) {
+    const totalCount = response.result?.totalCount;
+    const truncated = response.result?.truncated;
+    if (!Array.isArray(terminals)
+      || truncated !== false
+      || !Number.isInteger(totalCount)
+      || totalCount !== terminals.length) {
       return { status: 'unavailable', code: 'malformed_or_incomplete' };
     }
     const normalized: OrcaBindingTerminalEvidence[] = [];
