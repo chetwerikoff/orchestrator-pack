@@ -195,10 +195,6 @@ export function runFinalAcceptance(
       guardErrors: [`caller issue revision ${input.issueRevision} does not match live source-revision marker ${liveRevision}`],
     };
   }
-  const callerBodyErrors = validatePublishBodyBinding(input.terminalSourceBody ?? input.issueBody, liveIssue.body);
-  if (callerBodyErrors.length > 0) {
-    return { ok: false, diagnostics, guardErrors: callerBodyErrors };
-  }
 
   const head = censusState.lineage.head;
   if (!head || head.logical.schema !== CYCLE_SCHEMA) {
@@ -270,7 +266,7 @@ export function runFinalAcceptance(
     ...(publishRevisionResult.revision !== liveRevision
       ? [`live source-revision marker changed before final publication: expected ${liveRevision}, got ${publishRevisionResult.revision ?? '<missing>'}`]
       : []),
-    ...validatePublishBodyBinding(input.terminalSourceBody ?? input.issueBody, publishIssue.body),
+    ...validatePublishBodyBinding(liveIssue.body, publishIssue.body),
   ];
   if (publishBodyErrors.length > 0) {
     return {
@@ -311,7 +307,7 @@ export function runFinalAcceptance(
           ...(latestRevisionResult.revision !== liveRevision
             ? [`live source-revision marker changed during final publication: expected ${liveRevision}, got ${latestRevisionResult.revision ?? '<missing>'}`]
             : []),
-          ...validatePublishBodyBinding(input.terminalSourceBody ?? input.issueBody, latest.body),
+          ...validatePublishBodyBinding(liveIssue.body, latest.body),
         ];
         return errors.length === 0
           ? { ok: true }
@@ -397,7 +393,7 @@ export function runFinalAcceptance(
     ...(confirmedRevisionResult.revision !== liveRevision
       ? [`live source-revision marker changed after final event confirmation: expected ${liveRevision}, got ${confirmedRevisionResult.revision ?? '<missing>'}`]
       : []),
-    ...validatePublishBodyBinding(input.terminalSourceBody ?? input.issueBody, issue.body),
+    ...validatePublishBodyBinding(liveIssue.body, issue.body),
   ];
   if (confirmedErrors.length > 0) {
     return {
