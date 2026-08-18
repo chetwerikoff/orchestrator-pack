@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from '../runtime/task-lifecycle.ts';
@@ -389,14 +387,5 @@ describe('Orca assignment resolution', () => {
       status: 'failed',
       operation: 'resolve_assignment_worker',
     });
-  });
-
-  it('emits bounded runtime-history content hashes for CI diagnosis', () => {
-    const digest = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
-    const packWorker = digest('scripts/pack-worker-report.test.ts');
-    const assignmentRuntime = digest('scripts/lib/worker-assignment-runtime.test.ts');
-    process.stdout.write(`OPK_RUNTIME_HISTORY_SHA pack=${packWorker} assignment=${assignmentRuntime}\n`);
-    expect(packWorker).toMatch(/^[0-9a-f]{64}$/);
-    expect(assignmentRuntime).toMatch(/^[0-9a-f]{64}$/);
   });
 });
