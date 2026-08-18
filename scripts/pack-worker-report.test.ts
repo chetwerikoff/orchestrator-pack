@@ -85,6 +85,7 @@ function createPublicWrapperSandbox(root: string): { repoRoot: string; binDir: s
   mkdirSync(scriptsDir, { recursive: true });
   mkdirSync(binDir, { recursive: true });
   const sourceRoot = process.cwd();
+  symlinkSync(path.join(sourceRoot, 'package.json'), path.join(repoRoot, 'package.json'));
   copyFileSync(path.join(sourceRoot, 'scripts', 'pack-worker-report'), path.join(scriptsDir, 'pack-worker-report'));
   copyFileSync(path.join(sourceRoot, 'scripts', 'pack-worker-report.ts'), path.join(scriptsDir, 'pack-worker-report.ts'));
   chmodSync(path.join(scriptsDir, 'pack-worker-report'), 0o755);
