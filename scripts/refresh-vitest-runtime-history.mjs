@@ -295,6 +295,9 @@ function runReconcile(options) {
     const currentInventory = options.requireEqualInventory
       ? discoverVitestFiles(options.repoRoot)
       : null;
+    const trustedRawHistory = options.requireEqualInventory
+      ? readRawHistory(runtimeHistoryPath(options.repoRoot))
+      : null;
     let merged = reconcileProposedHistoryAgainstRemote(proposedHistory, remoteHistory, {
       currentInventory,
       requireEqualInventory: options.requireEqualInventory,
@@ -302,20 +305,16 @@ function runReconcile(options) {
     if (options.requireEqualInventory) {
       merged = preserveTrustedLegacyMeasuredWeights(merged, proposedHistory);
     }
+    const shapeAuthority = trustedRawHistory ?? proposedRawHistory;
     const outputHistory = projectHistoryOntoTrustedShape(
       merged,
-      proposedRawHistory,
+      shapeAuthority,
       currentInventory,
     );
 
     let trustedPositive = null;
     let preTopologyCount = null;
     if (options.requireEqualInventory) {
-      const trustedHistoryPath = runtimeHistoryPath(options.repoRoot);
-      if (!existsSync(trustedHistoryPath)) {
-        throw new Error(`trusted runtime-history baseline is missing: ${trustedHistoryPath}`);
-      }
-      const trustedRawHistory = readRawHistory(trustedHistoryPath);
       const violations = validateTrustedCandidate(
         trustedRawHistory,
         outputHistory,
