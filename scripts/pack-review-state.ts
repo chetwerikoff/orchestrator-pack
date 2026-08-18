@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { resolveSmokeRequirement } from './draft-discipline.mjs';
 
 export const PACK_REVIEW_AUTHORITY_SCHEMA_VERSION = 1;
 export const PACK_REVIEW_TERMINAL_CONTRACT_VERSION = 2;
@@ -21,6 +22,26 @@ export const PACK_REVIEW_AUTHORITY_PHASES = Object.freeze([
 
 export type PackReviewTier = keyof typeof PACK_REVIEW_CAPS;
 export type PackReviewAuthorityPhase = (typeof PACK_REVIEW_AUTHORITY_PHASES)[number];
+export type SmokeOrderingActor = 'worker-owned' | 'independent';
+export type SmokeOrderingStatus = 'started' | 'passed' | 'failed';
+export type SmokeOrderingFailureKind = 'finding' | 'retryable';
+
+export interface PackReviewSmokeOrdering {
+  workerOwned?: {
+    headSha: string;
+    status: SmokeOrderingStatus;
+    updatedAtUtc: string;
+  };
+  reviewSettledHeadSha?: string;
+  independent?: {
+    startedEver: boolean;
+    headSha: string;
+    status: SmokeOrderingStatus;
+    updatedAtUtc: string;
+    failureKind?: SmokeOrderingFailureKind;
+    failureHeadSha?: string;
+  };
+}
 
 export function selectPackReviewGptSourceCardinality(input: {
   reviewer: string;
@@ -132,11 +153,13 @@ export interface PackReviewAuthorityDocument {
     targetSha: string;
     reviewVerdict: 'clean' | 'findings';
     terminalSource: PackReviewTerminalSource;
+    reviewStatus?: string;
   };
   cycle: PackReviewCycle | null;
   evidence?: PackReviewEvidenceSelection;
   triage?: PackReviewTriageState;
   publication?: PackReviewPublicationState;
+  smokeOrdering?: PackReviewSmokeOrdering;
 }
 
 export interface PackReviewAuthorityOptions {
@@ -367,6 +390,29 @@ function validateAuthority(document: PackReviewAuthorityDocument): void {
     nonEmpty(document.terminal.runId, 'terminal.runId');
     nonEmpty(document.terminal.digest, 'terminal.digest');
   }
+  if (document.smokeOrdering) {
+    const ordering = document.smokeOrdering;
+    if (ordering.workerOwned) {
+      normalizeSha(ordering.workerOwned.headSha, 'smokeOrdering.workerOwned.headSha');
+      if (!['started', 'passed', 'failed'].includes(ordering.workerOwned.status)) {
+        throw new PackReviewAuthorityError('authority_schema_invalid', 'smokeOrdering.workerOwned.status');
+      }
+      nonEmpty(ordering.workerOwned.updatedAtUtc, 'smokeOrdering.workerOwned.updatedAtUtc');
+    }
+    if (ordering.reviewSettledHeadSha) {
+      normalizeSha(ordering.reviewSettledHeadSha, 'smokeOrdering.reviewSettledHeadSha');
+    }
+    if (ordering.independent) {
+      normalizeSha(ordering.independent.headSha, 'smokeOrdering.independent.headSha');
+      if (ordering.independent.startedEver !== true) {
+        throw new PackReviewAuthorityError('authority_schema_invalid', 'smokeOrdering.independent.startedEver');
+      }
+      if (!['started', 'passed', 'failed'].includes(ordering.independent.status)) {
+        throw new PackReviewAuthorityError('authority_schema_invalid', 'smokeOrdering.independent.status');
+      }
+      nonEmpty(ordering.independent.updatedAtUtc, 'smokeOrdering.independent.updatedAtUtc');
+    }
+  }
 }
 
 function readAuthorityUnlocked(
@@ -484,6 +530,40 @@ export function initializePackReviewAuthority(input: {
   });
 }
 
+export function reconcilePackReviewTier(input: {
+  prNumber: number;
+  tier: PackReviewTier;
+  options: PackReviewAuthorityOptions;
+}): PackReviewAuthorityDocument {
+  const current = readPackReviewAuthority(input.prNumber, input.options);
+  if (!current) throw new PackReviewAuthorityError('authority_missing', `PR ${input.prNumber}`);
+  if (!current.cycle || current.cycle.frozenTier === input.tier) return current;
+  const cycle = current.cycle;
+  const safelyReplaceable = cycle.state === 'open'
+    && cycle.consumedHeadShas.length === 0
+    && !current.terminal
+    && !current.evidence
+    && !current.triage
+    && !current.publication
+    && !current.smokeOrdering?.independent?.startedEver;
+  if (!safelyReplaceable) {
+    throw new PackReviewAuthorityError(
+      'tier_change_requires_reset',
+      `persisted ${cycle.frozenTier} cycle cannot be replaced with authoritative ${input.tier}`,
+    );
+  }
+  return commitPackReviewAuthorityTransition({
+    prNumber: input.prNumber,
+    expectedTransitionSeq: current.transitionSeq,
+    nextPhase: current.phase,
+    mutate(authority) {
+      authority.cycle = createNewPackReviewCycle(input.tier, { now: input.options.now });
+      return authority;
+    },
+    options: input.options,
+  });
+}
+
 export function commitPackReviewAuthorityTransition(input: {
   prNumber: number;
   expectedTransitionSeq: number;
@@ -535,6 +615,20 @@ export function observePackReviewHead(input: {
       current.evidence = undefined;
       current.triage = undefined;
       current.publication = undefined;
+      if (current.smokeOrdering) {
+        const independent = current.smokeOrdering.independent;
+        const failedIndependent = independent?.status === 'failed';
+        current.smokeOrdering = {
+          ...current.smokeOrdering,
+          workerOwned: undefined,
+          ...(independent
+            ? { independent: failedIndependent
+              ? { ...independent, headSha, status: 'failed' }
+              : { ...independent } }
+            : {}),
+          ...(independent?.startedEver ? {} : { reviewSettledHeadSha: undefined }),
+        };
+      }
       if (current.cycle?.state === 'closed') {
         // A clean terminal closes only the old head's cycle. The next head
         // starts a fresh budget rather than inheriting a consumed clean slot.
@@ -704,6 +798,7 @@ export function commitPackReviewTerminal(input: {
         targetSha: terminal.targetSha,
         reviewVerdict: terminal.reviewVerdict,
         terminalSource: terminal.terminalSource,
+        reviewStatus: input.status,
       };
       const cycle = current.cycle;
       if (!cycle) return current;
@@ -726,6 +821,139 @@ export function commitPackReviewTerminal(input: {
       }
       return current;
     },
+  });
+}
+
+export function smokeOrderingRequired(issueBody: string | undefined): boolean {
+  const resolved = resolveSmokeRequirement(String(issueBody ?? ''));
+  return resolved.requirement !== 'not-applicable' && resolved.requirement !== 'legacy-exempt';
+}
+
+export function assertPackReviewSmokeAdmission(input: {
+  authority: PackReviewAuthorityDocument;
+  headSha: string;
+}): void {
+  const headSha = normalizeSha(input.headSha, 'headSha');
+  if (input.authority.currentHeadSha !== headSha) {
+    throw new PackReviewAuthorityError('smoke_ordering_head_mismatch', `expected ${input.authority.currentHeadSha}, got ${headSha}`);
+  }
+  if (input.authority.smokeOrdering?.independent) {
+    throw new PackReviewAuthorityError(
+      'smoke_ordering_review_forbidden',
+      'pack-review is forbidden after independent smoke has started',
+    );
+  }
+  const workerOwned = input.authority.smokeOrdering?.workerOwned;
+  if (!workerOwned || workerOwned.headSha !== headSha || workerOwned.status !== 'passed') {
+    throw new PackReviewAuthorityError(
+      'smoke_ordering_worker_smoke_required',
+      'exact-head worker-owned smoke must pass before pack-review',
+    );
+  }
+}
+
+export function assertIndependentSmokeAdmission(input: {
+  authority: PackReviewAuthorityDocument;
+  headSha: string;
+}): void {
+  const headSha = normalizeSha(input.headSha, 'headSha');
+  if (input.authority.currentHeadSha !== headSha) {
+    throw new PackReviewAuthorityError('smoke_ordering_head_mismatch', `expected ${input.authority.currentHeadSha}, got ${headSha}`);
+  }
+  const ordering = input.authority.smokeOrdering;
+  const independent = ordering?.independent;
+  if (independent?.startedEver) {
+    if (independent.status === 'failed'
+        && independent.failureKind === 'finding'
+        && independent.failureHeadSha === headSha) {
+      throw new PackReviewAuthorityError(
+        'smoke_ordering_independent_same_head_forbidden',
+        'an independent smoke finding requires a worker fix and a new head',
+      );
+    }
+    if (independent.headSha !== headSha && independent.status !== 'failed') {
+      throw new PackReviewAuthorityError(
+        'smoke_ordering_independent_head_forbidden',
+        'a started or passed independent smoke cannot continue on a new head',
+      );
+    }
+    return;
+  }
+  if (ordering?.reviewSettledHeadSha !== headSha) {
+    throw new PackReviewAuthorityError(
+      'smoke_ordering_review_unsettled',
+      'independent smoke requires settled pack-review obligations for the exact head',
+    );
+  }
+}
+
+export function commitSmokeOrderingTransition(input: {
+  prNumber: number;
+  expectedTransitionSeq: number;
+  actor: SmokeOrderingActor;
+  headSha: string;
+  status: SmokeOrderingStatus;
+  failureKind?: SmokeOrderingFailureKind;
+  options: PackReviewAuthorityOptions;
+}): PackReviewAuthorityDocument {
+  const headSha = normalizeSha(input.headSha, 'headSha');
+  const current = readPackReviewAuthority(input.prNumber, input.options);
+  if (!current) throw new PackReviewAuthorityError('authority_missing', `PR ${input.prNumber}`);
+  return commitPackReviewAuthorityTransition({
+    prNumber: input.prNumber,
+    expectedTransitionSeq: input.expectedTransitionSeq,
+    nextPhase: current.phase,
+    mutate(authority) {
+      if (authority.currentHeadSha !== headSha) {
+        throw new PackReviewAuthorityError('smoke_ordering_head_mismatch', `expected ${authority.currentHeadSha}, got ${headSha}`);
+      }
+      const now = nowIso(input.options);
+      if (input.actor === 'worker-owned') {
+        if (input.status !== 'started' && authority.smokeOrdering?.workerOwned?.status !== 'started') {
+          throw new PackReviewAuthorityError(
+            'smoke_ordering_worker_smoke_not_started',
+            'worker-owned smoke result requires a started dispatch',
+          );
+        }
+        if (authority.smokeOrdering?.independent) {
+          throw new PackReviewAuthorityError(
+            'smoke_ordering_worker_smoke_forbidden',
+            'worker-owned smoke is forbidden after independent smoke has started',
+          );
+        }
+        authority.smokeOrdering = {
+          ...authority.smokeOrdering,
+          workerOwned: { headSha, status: input.status, updatedAtUtc: now },
+        };
+      } else {
+        if (input.status === 'started') {
+          assertIndependentSmokeAdmission({ authority, headSha });
+        } else if (!authority.smokeOrdering?.independent?.startedEver
+            || authority.smokeOrdering.independent.status !== 'started') {
+          throw new PackReviewAuthorityError(
+            'smoke_ordering_independent_not_started',
+            'independent smoke result requires a started dispatch',
+          );
+        }
+        authority.smokeOrdering = {
+          ...authority.smokeOrdering,
+          independent: {
+            startedEver: true,
+            headSha,
+            status: input.status,
+            updatedAtUtc: now,
+            ...(input.status === 'failed' && input.failureKind
+              ? {
+                failureKind: input.failureKind,
+                ...(input.failureKind === 'finding' ? { failureHeadSha: headSha } : {}),
+              }
+              : {}),
+          },
+        };
+      }
+      return authority;
+    },
+    options: input.options,
   });
 }
 
@@ -814,6 +1042,16 @@ export function commitPackReviewTriage(input: {
   });
 }
 
+function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boolean {
+  if (authority.cycle?.state === 'closed') return true;
+  const reviewStatus = authority.terminal?.reviewStatus;
+  if (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented') return true;
+  return (authority.cycle?.state === 'at_cap_open_findings'
+      || authority.cycle?.state === 'at_cap_continuation_required')
+    && authority.triage?.source === 'architect'
+    && authority.triage.verdict === 'DEFER';
+}
+
 export function recordPackReviewPublication(input: {
   prNumber: number;
   expectedTransitionSeq: number;
@@ -832,6 +1070,12 @@ export function recordPackReviewPublication(input: {
         throw new PackReviewAuthorityError('publication_head_stale', input.publication.headSha);
       }
       current.publication = { ...input.publication };
+      if (input.publication.status === 'succeeded' && reviewObligationsSettled(current)) {
+        current.smokeOrdering = {
+          ...current.smokeOrdering,
+          reviewSettledHeadSha: current.currentHeadSha,
+        };
+      }
       return current;
     },
   });

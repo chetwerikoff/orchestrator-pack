@@ -19,6 +19,7 @@ import { createScriptTargetResolver } from './target-resolver.ts';
 import { jsonStringValueRanges, scanPowerShellTokens, tsStringRanges, yamlScalarRanges } from './tokens.ts';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
+const HISTORICAL_PRODUCER_REVISION = 'a172e02ddf0a57d4d43d10e16ba59f2b45539bbd';
 
 function scan(source: string, ranges?: readonly { start: number; end: number }[]) {
   return scanPowerShellTokens({
@@ -40,11 +41,18 @@ function workflowTokens(source: string): readonly string[] {
 }
 
 async function exactCandidateHead(): Promise<string> {
-  const parents = await runProcess({ command: 'git', args: ['rev-list', '--parents', '-n', '1', 'HEAD'], cwd: repoRoot, inheritParentEnv: true, allowEmptyStdout: false });
-  if (!parents.ok) throw new Error(`cannot read test candidate parents: ${parents.stderr || parents.error || parents.outcome}`);
-  const parts = parents.stdout.trim().split(/\s+/u);
-  const candidate = parts.length >= 3 ? parts[2] : parts[0];
-  if (!candidate || !/^[0-9a-f]{40}$/u.test(candidate)) throw new Error(`cannot derive exact test candidate SHA: ${parents.stdout.trim()}`);
+  const resolved = await runProcess({
+    command: 'git',
+    args: ['rev-parse', '--verify', `${HISTORICAL_PRODUCER_REVISION}^{commit}`],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    allowEmptyStdout: false,
+  });
+  if (!resolved.ok) throw new Error(`cannot resolve exact historical test candidate ${HISTORICAL_PRODUCER_REVISION}: ${resolved.stderr || resolved.error || resolved.outcome}`);
+  const candidate = resolved.stdout.trim();
+  if (candidate !== HISTORICAL_PRODUCER_REVISION) {
+    throw new Error(`historical test candidate resolved to unexpected commit: ${candidate}`);
+  }
   return candidate;
 }
 

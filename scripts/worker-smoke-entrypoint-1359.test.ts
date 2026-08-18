@@ -57,7 +57,7 @@ function ok<T>(result: T): OrcaJsonResponse<T> {
 }
 
 describe('Issue #1359 real worker-smoke entrypoint', () => {
-  it('submits a pasted prompt, confirms first-ordinal evidence, and closes the frozen owned handle', () => {
+  it('submits one combined prompt actuation, confirms first-ordinal evidence, and closes the frozen owned handle', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-entrypoint-1359-'));
     const bin = join(root, 'bin');
     const callsPath = join(root, 'orca-calls.jsonl');
@@ -118,47 +118,50 @@ if (args[0] === 'worktree' && args[1] === 'current') {
   ok({ terminal });
 } else if (args[0] === 'terminal' && args[1] === 'list') {
   ok({ terminals: [] });
-} else if (args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')) {
-  const text = args[args.indexOf('--text') + 1] || '';
-  writeFileSync(process.env.FAKE_ORCA_PROMPT, text, 'utf8');
-  ok({ sent: true });
-} else if (args[0] === 'terminal' && args[1] === 'send' && args.includes('--enter')) {
-  if (!existsSync(process.env.FAKE_ORCA_PROMPT)) {
+} else if (args[0] === 'terminal' && args[1] === 'send') {
+  const hasText = args.includes('--text');
+  const hasEnter = args.includes('--enter');
+  const text = hasText ? (args[args.indexOf('--text') + 1] || '') : '';
+  if (hasText) writeFileSync(process.env.FAKE_ORCA_PROMPT, text, 'utf8');
+
+  if (!hasEnter) {
+    ok({ sent: true });
+  } else if (!hasText && !existsSync(process.env.FAKE_ORCA_PROMPT)) {
     writeFileSync(startupPath, 'started', 'utf8');
     ok({ sent: true, startup: true });
   } else {
-    const text = readFileSync(process.env.FAKE_ORCA_PROMPT, 'utf8');
-  const runId = /run-id:\\s*([^\\r\\n]+)/u.exec(text)?.[1]?.trim();
-  const artifactDir = /artifact-dir:\\s*([^\\r\\n]+)/u.exec(text)?.[1]?.trim();
-  const progressPath = /Progress file:\\s*([^\\r\\n]+)/u.exec(text)?.[1]?.trim();
-  if (!runId || !artifactDir || !progressPath) {
-    fail('fixture_binding_missing', 'prompt binding not found');
-  } else {
-    mkdirSync(artifactDir, { recursive: true });
-    writeFileSync(path.join(artifactDir, 'delivery.sealed.json'), JSON.stringify({ runId }), 'utf8');
-    writeFileSync(progressPath, [
-      JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'started' }),
-      JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'pass' }),
-      '',
-    ].join('\\n'), 'utf8');
-    const fence = String.fromCharCode(96).repeat(3);
-    const body = [
-      fence + 'worker-smoke-report',
-      'result: PASS',
-      'tracked-files-unmodified: true',
-      'scenarios:',
-      '  - action: execute real entrypoint | expected: sealed scenario report | observed: pasted prompt submitted and child evidence sealed | outcome: pass',
-      fence,
-    ].join('\\n');
-    const digest = createHash('sha256').update(body, 'utf8').digest('hex');
-    writeFileSync(path.join(artifactDir, 'completion-' + digest + '.body'), body, { flag: 'wx' });
-    writeFileSync(
-      path.join(artifactDir, 'completion-' + digest + '.sealed.json'),
-      JSON.stringify({ runId, bodySha256: digest }),
-      { flag: 'wx' },
-    );
-    ok({ sent: true });
-  }
+    const submittedText = hasText ? text : readFileSync(process.env.FAKE_ORCA_PROMPT, 'utf8');
+    const runId = /run-id:\\s*([^\\r\\n]+)/u.exec(submittedText)?.[1]?.trim();
+    const artifactDir = /artifact-dir:\\s*([^\\r\\n]+)/u.exec(submittedText)?.[1]?.trim();
+    const progressPath = /Progress file:\\s*([^\\r\\n]+)/u.exec(submittedText)?.[1]?.trim();
+    if (!runId || !artifactDir || !progressPath) {
+      fail('fixture_binding_missing', 'prompt binding not found');
+    } else {
+      mkdirSync(artifactDir, { recursive: true });
+      writeFileSync(path.join(artifactDir, 'delivery.sealed.json'), JSON.stringify({ runId }), 'utf8');
+      writeFileSync(progressPath, [
+        JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'started' }),
+        JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'pass' }),
+        '',
+      ].join('\\n'), 'utf8');
+      const fence = String.fromCharCode(96).repeat(3);
+      const body = [
+        fence + 'worker-smoke-report',
+        'result: PASS',
+        'tracked-files-unmodified: true',
+        'scenarios:',
+        '  - action: execute real entrypoint | expected: sealed scenario report | observed: one prompt actuation and child evidence sealed | outcome: pass',
+        fence,
+      ].join('\\n');
+      const digest = createHash('sha256').update(body, 'utf8').digest('hex');
+      writeFileSync(path.join(artifactDir, 'completion-' + digest + '.body'), body, { flag: 'wx' });
+      writeFileSync(
+        path.join(artifactDir, 'completion-' + digest + '.sealed.json'),
+        JSON.stringify({ runId, bodySha256: digest }),
+        { flag: 'wx' },
+      );
+      ok({ sent: true });
+    }
   }
 } else if (args[0] === 'terminal' && args[1] === 'close') {
   ok({ closed: true });
@@ -185,6 +188,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         '--pr', '1365',
         '--head-sha', head,
         '--issue-body-file', issueBodyPath,
+        '--smoke-complexity', 'routine',
         '--repo-root', root,
         '--cwd', root,
         '--dry-run',
@@ -198,6 +202,9 @@ if (args[0] === 'worktree' && args[1] === 'current') {
           FAKE_ORCA_HEAD: head,
           FAKE_ORCA_PROMPT: promptPath,
           WORKER_SMOKE_SUBMIT_CONFIRMATION_TIMEOUT_MS: '20',
+          PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor',
+          PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-routine-model',
+          PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-routine-effort',
         },
       });
 
@@ -262,20 +269,18 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         .map((value, index) => value === 'terminal read' ? index : -1)
         .filter((index) => index >= 0);
       expect(createIndex).toBeGreaterThanOrEqual(0);
+      const createArgs = calls[createIndex!] ?? [];
+      const commandIndex = createArgs.indexOf('--command');
+      expect(commandIndex).toBeGreaterThanOrEqual(0);
+      expect(createArgs[commandIndex! + 1]).toBe("agent --model 'fixture-routine-model-fixture-routine-effort'");
       expect(showIndexes.length).toBeGreaterThanOrEqual(3);
-      expect(sendIndexes).toHaveLength(3);
+      expect(sendIndexes).toHaveLength(2);
       expect(calls[sendIndexes[0]!] ?? []).not.toContain('--text');
       expect(calls[sendIndexes[0]!] ?? []).toContain('--enter');
       expect(calls[sendIndexes[1]!] ?? []).toContain('--text');
-      expect(calls[sendIndexes[1]!] ?? []).not.toContain('--enter');
-      expect(calls[sendIndexes[2]!] ?? []).not.toContain('--text');
-      expect(calls[sendIndexes[2]!] ?? []).toContain('--enter');
+      expect(calls[sendIndexes[1]!] ?? []).toContain('--enter');
       expect(readIndexes.some((index) => index > createIndex && index < sendIndexes[0]!)).toBe(true);
       expect(readIndexes.some((index) => index > sendIndexes[0]! && index < sendIndexes[1]!)).toBe(true);
-      expect(readIndexes.some((index) => index > sendIndexes[1]! && index < sendIndexes[2]!)).toBe(true);
-      const postSubmitReadIndex = readIndexes.find((index) => index > sendIndexes[2]!);
-      expect(postSubmitReadIndex).toBeDefined();
-      expect(calls[postSubmitReadIndex!] ?? []).toContain('--cursor');
       expect(operations.filter((value) => value === 'terminal close')).toHaveLength(1);
       expect(operations.filter((value) => value === 'terminal list')).toHaveLength(0);
       expect(createHash('sha256').update(readFileSync(wrapper), 'utf8').digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
@@ -405,7 +410,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     }
   });
 
-  it('refuses actionably after one submit-only retry when delivery remains unconfirmable', () => {
+  it('preserves dispatch_unknown after one prompt actuation when delivery remains unconfirmable', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-submit-unconfirmed-'));
     const terminal: OrcaTerminalSummary = {
       handle: 'terminal-unconfirmed',
@@ -460,27 +465,16 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         text: `Durable smoke-run binding (authoritative for delivery and completion):\nrun-id: run-unconfirmed\nartifact-dir: ${join(root, 'run-unconfirmed')}`,
       }, { cwd: root });
 
-      expect(dispatched.status).toBe('send_failed');
-      if (dispatched.status === 'send_failed') {
-        expect(dispatched.reason).toContain('prompt_submission_unconfirmed');
-        expect(dispatched.reason).toContain('runtime_prompt_write=dispatched');
-        expect(dispatched.reason).toContain('runtime_submit_write=dispatched');
-        expect(dispatched.reason).toContain('pane_observation=unchanged_after_submit');
-        expect(dispatched.reason).toContain('child_delivery=unconfirmed');
-        expect(dispatched.reason).toContain('delivery_evidence=');
-        expect(dispatched.reason).toContain('preservation=owned_child_panel_preserved');
-        expect(dispatched.reason).toContain('resolution=');
-        expect(dispatched.reason).not.toContain('initial_submit=');
-        expect(dispatched.reason).not.toContain('retry_submit=');
-      }
+      expect(dispatched).toEqual({
+        status: 'dispatch_unknown',
+        reason: 'submit_witness_unavailable',
+      });
       const sends = calls.filter((args) => args[0] === 'terminal' && args[1] === 'send');
       const reads = calls.filter((args) => args[0] === 'terminal' && args[1] === 'read');
-      expect(sends).toHaveLength(2);
+      expect(sends).toHaveLength(1);
       expect(sends[0]).toContain('--text');
-      expect(sends[1]).not.toContain('--text');
-      expect(sends[1]).toContain('--enter');
-      expect(reads).toHaveLength(2);
-      expect(reads[1]).toContain('--cursor');
+      expect(sends[0]).toContain('--enter');
+      expect(reads).toHaveLength(0);
 
       const closeOutcome = runtimeClose(adapter, spawned.value.identity, { cwd: root });
       expect(closeOutcome).toContain('close_failed:delivery_failure_evidence_preserved');
@@ -590,7 +584,10 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         worker: spawned.value.identity,
         text: 'execute the sealed-report scenario',
       }, { cwd: root });
-      expect(dispatched.status).toBe('dispatched');
+      expect(dispatched).toEqual({
+        status: 'dispatch_unknown',
+        reason: 'submit_witness_unavailable',
+      });
       expect(spawned.value.identity.generation).toBe(frozenGeneration);
 
       ensureSmokeRunArtifactDir(artifactDir);

@@ -5,7 +5,7 @@ export const OPERATOR_PUBLICATION_MIN_TIMEOUT_MS = 1;
 export const OPERATOR_PUBLICATION_MAX_TIMEOUT_MS = 30_000;
 
 export type OperatorPublicationOutcome =
-  | 'confirmed'
+  | 'submitted'
   | 'pre_dispatch_failure'
   | 'ambiguous';
 
@@ -48,7 +48,7 @@ export function publishOperatorMessageOnce(
     { worker: input.target, text: input.text },
     { timeoutMs: input.timeoutMs },
   );
-  if (result.status === 'dispatched') return 'confirmed';
+  if (result.status === 'dispatched') return 'submitted';
   if (result.status === 'send_failed') return 'pre_dispatch_failure';
   return 'ambiguous';
 }

@@ -168,6 +168,7 @@ export interface FleetNudgeResult {
   readonly outcomes: readonly FleetNudgeCandidateResult[];
   readonly claimStarts: number;
   readonly sendAttempts: number;
+  /** Legacy recipient-delivery evidence counter. Submit-only evidence never increments it. */
   readonly dispatched: number;
   readonly returnedWithinBudget: boolean;
   readonly targetBindingAvailable: boolean;
@@ -505,7 +506,6 @@ export async function runFleetNudgeActuator(
   const outcomes = [...settled];
   let claimStarts = 0;
   let sendAttempts = 0;
-  let dispatched = 0;
   const projectId = input.projectId?.trim() || 'orchestrator-pack';
 
   for (const candidate of eligible) {
@@ -719,7 +719,6 @@ export async function runFleetNudgeActuator(
       now,
     );
     if (!settledAttempt) settlementFailed = true;
-    if (dispatchOutcome === 'dispatched') dispatched += 1;
     outcomes.push({ ...candidateResult(candidate), issueNumber, outcome: dispatchOutcome });
   }
 
@@ -731,7 +730,7 @@ export async function runFleetNudgeActuator(
     outcomes,
     claimStarts,
     sendAttempts,
-    dispatched,
+    dispatched: 0,
     returnedWithinBudget: now() <= hardDeadline,
     targetBindingAvailable: true,
   };

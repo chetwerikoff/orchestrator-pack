@@ -320,7 +320,7 @@ function resultFor(outcome: FleetNudgeUnitOutcome): FleetNudgeResult {
     outcomes: [{ unitRef: 'u-000001', class: 'idle', outcome }],
     claimStarts: outcome === 'target_unresolved' ? 0 : 1,
     sendAttempts: attempted ? 1 : 0,
-    dispatched: outcome === 'dispatched' ? 1 : 0,
+    dispatched: 0,
     returnedWithinBudget: true,
     targetBindingAvailable: outcome !== 'target_unresolved',
   };
@@ -444,9 +444,10 @@ describe('S2 fleet nudge actuator', () => {
       'u-000007': 'fresh_baseline_ineligible',
       'u-000008': 'not_new_episode',
     });
+    expect(result.dispatched).toBe(0);
   });
 
-  it('persists canonical claim and journal bytes without runtime-private identity', async () => {
+  it('persists canonical claim and journal bytes without laundering submit into delivery evidence', async () => {
     const namespace = root('opk-s2-persistence-');
     const { effects, journalPath } = realEffects({ namespace });
     const result = await runFleetNudgeActuator({
@@ -454,7 +455,8 @@ describe('S2 fleet nudge actuator', () => {
       schedulerIntervalMs: 16_000,
       tickSequence: 2,
     }, effects);
-    expect(result).toMatchObject({ status: 'complete', dispatched: 1 });
+    expect(result).toMatchObject({ status: 'complete', dispatched: 0 });
+    expect(result.outcomes[0]?.outcome).toBe('dispatched');
     expect(existsSync(journalPath)).toBe(true);
 
     const persisted = [

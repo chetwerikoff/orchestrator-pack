@@ -49,23 +49,39 @@ read live Issue/rules
 -> implement scoped work
 -> required local verification
 -> create/update PR and exact head
--> worker-owned pre-review CI
--> truthful current-head ready_for_review
--> verify no known worker-owned pre-review blocker remains
+-> worker-owned smoke (exact head; fix and repeat until PASS)
+-> tier/cap-governed pack-review cycle
+-> review finding: worker fix + exact-head worker-owned smoke + next review cycle
+-> settled review obligations
+-> independent smoke
+-> independent-smoke finding: worker fix + fresh independent smoke
+-> completion
 -> worker_done
 ```
 
-Independent smoke happens after this bounded handoff. Pack-review is not the next step after smoke.
+Worker-owned smoke and independent smoke are different actors and different
+gates. Pack-review starts only after the exact current head has a passing
+worker-owned smoke. Independent smoke starts only after the review tier/cap
+obligations settle. Once independent smoke has started, pack-review is
+forbidden for this work, including after a smoke-driven fix.
 
 After a current-head smoke returns a gap or fail, the next legal coordinator step is a worker fix that produces a new SHA, then a fresh smoke of that exact SHA:
 
 ```text
-smoke (current SHA)
-  |-- complete --> pack-review eligible
-  |-- gap/fail --> fix (new SHA) --> smoke that SHA
+worker-owned smoke (current SHA)
+  |-- PASS --> pack-review eligible
+  |-- FAIL/BLOCKED --> fix (new SHA) --> worker-owned smoke that SHA
+
+pack-review (settled)
+  |-- eligible --> independent smoke
+  |-- finding --> fix (new SHA) --> worker-owned smoke that SHA --> next pack-review cycle
 ```
 
-Old-head smoke proofs do not count for the new head. Pack-review starts only after current-head smoke is complete. Independent review after this handoff does not authorize pack-review while smoke is still incomplete. Exact folding and SHA-binding stay in `docs/worker-smoke-testing.md`. A later finding opens a fresh correction Dispatch.
+Old-head smoke proofs do not count for a new head. A review finding requires
+worker-owned smoke before the next governed review cycle. An independent-smoke
+finding requires only a worker fix and fresh independent smoke; it never opens a
+later pack-review cycle. Exact folding and SHA-binding stay in
+`docs/worker-smoke-testing.md`.
 
 ### Reconciler
 
@@ -132,6 +148,12 @@ The variable names and work-class-to-profile mapping are tracked policy. Concret
 - GPT/Browser-GPT implementation work uses the existing standalone chat-implementer contract in `docs/chat-executor-rules.md` and the Browser-GPT turn mechanics in `docs/browser-gpt-turn-runbook.md`. That path is not an AO-managed Orca worker start and does not synthesize or publish an Orca WorkerAssignment.
 - Changing a profile between those already-supported executor paths changes only which existing path subsequent work uses; it does not create a new selector or lifecycle authority.
 - Smoke complexity selects only between the routine-smoke and complex-smoke executor profiles; it does not create a task tier or change smoke admission, evidence, ownership, or lifecycle rules.
+
+The smoke launcher receives exactly one producer-owned `--smoke-complexity`
+value (`routine` or `complex`). It resolves that profile immediately before
+child creation, validates all three local values and the supported agent, and
+fails closed before spawn when the profile is missing, malformed, unsupported,
+mixed, or cannot be applied through the existing launch command.
 
 This profile rule does not add a runtime selector, WorkerAssignment type, provider registry, scheduler, service, store, queue, daemon, fallback transport, or retry mechanism.
 
@@ -303,6 +325,35 @@ Preserve:
 - `dispatched | send_failed | dispatch_unknown` outcomes.
 
 Routine S2 dispatch stays on RuntimeAdapter. For executor paths using Orca-managed workers, initial delivery stays Orca-owned. Standalone Browser-GPT chat execution is outside this WorkerAssignment/S2 path. Do not dual-send through Orca mail or another transport. `dispatch_unknown` is uncertain and never authorizes automatic resend or an alternate transport.
+
+## Bound-run inbox drain and acknowledgement
+
+For an Orca-bound Run, all roles use the single runtime-neutral `RuntimeAdapter.checkInbox` seam. The Orca adapter maps that seam to `orca orchestration check [--ack <delivery_id>] --run <run_id>` without `--wait`. One check returns either authoritative empty or one oldest unacknowledged Delivery. A Delivery is the atomic replay-and-ack unit even when it contains many messages.
+
+At one lifecycle boundary, process the inbox serially:
+
+```text
+check current bound run
+-> empty: boundary may advance
+-> Delivery: surface and process every message
+-> any message fails: do not ack; boundary is blocked/degraded
+-> all messages succeed: carry that exact delivery_id on the next check
+-> repeat until authoritative empty or the existing lifecycle deadline expires
+```
+
+Exactly one acknowledgement is issued per Delivery, never per message. Missing, malformed, foreign/sibling-run, unsupported, ambiguous, duplicate/concurrent-ack, or deadline-exhausted evidence is not empty and does not authorize resend. `read`, `delivered_at`, process state, pane state, heartbeat existence, and terminal-send exit status never prove that mail was surfaced.
+
+The provider does not expose a reliable snapshot of “Deliveries present when the boundary began”. Do not invent one. The existing lifecycle/turn deadline bounds the drain. If continuous arrivals prevent an authoritative empty result before that deadline, report an explicit busy/degraded boundary and do not advance. Do not turn the drain into a watcher, poller, subscription, daemon, retry service, queue, or second observer.
+
+Role obligations are mandatory:
+
+- **Manager:** drain before starting or claiming the next authoring/review stage and immediately before manager `worker_done`.
+- **Worker:** drain immediately before worker `worker_done` and before emitting a blocker/escalation that hands control upward.
+- **Coordinator / flow-manager / orchestrator acting on the bound Run:** drain before issuing a reply, ruling, escalation decision, or dispatch, and again before reporting its own turn complete.
+
+Every message returned by the drain is surfaced and processed in the same role turn before the guarded action. An unreachable/unsupported/ambiguous drain is reported as degraded/blocking evidence and is never silently skipped.
+
+Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness. A supervised agent with no actionable report sends nothing. S1 remains the sole liveness observer; existing observer heartbeat/process-liveness artifacts remain observation evidence, not agent assertions.
 
 ## Scheduler phases
 
