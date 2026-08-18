@@ -114,6 +114,12 @@ export function parseConsumableStageReceipt(value: unknown): {
   if (outcome !== 'partial' && partialMissingSources.length > 0) {
     errors.push('partialMissingSources is valid only for partial settlement');
   }
+  if (outcome === 'partial' && partialMissingSources.length === 0) {
+    errors.push('partial settlement requires at least one journaled missing-source witness');
+  }
+  if (outcome === 'partial' && partialMissingSources.length >= 2 && producerEvidence !== 'waived') {
+    errors.push('partial settlement with two or more missing-source witnesses requires explicit operator waiver');
+  }
   const routedPolicy = policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION;
   if (!routedPolicy && reviewLane !== undefined) {
     errors.push('legacy stage policy cannot carry reviewLane evidence');
