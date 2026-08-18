@@ -141,7 +141,11 @@ export type LineageDiagnosticCode =
   | 'cyclic-cycle-lineage'
   | 'non-current-cycle-fork'
   | 'duplicate-remote-event'
-  | 'conflicting-remote-event';
+  | 'conflicting-remote-event'
+  | 'stage_slot_consumed'
+  | 'stage_order_violation'
+  | 'stage_authority_invalid'
+  | 'terminal_bundle_unavailable';
 
 export interface LineageDiagnostic {
   code: LineageDiagnosticCode | 'foreign-comment' | 'edited-comment' | 'malformed-marker' | 'trust-field-incomplete' | 'comments-truncated' | 'public-journal-gap' | 'label-sync-failed';
