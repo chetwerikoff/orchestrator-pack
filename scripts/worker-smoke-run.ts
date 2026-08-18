@@ -38,6 +38,7 @@ import {
   writeSmokeCancelRequest,
   type SmokeReport,
   type SmokeRunBinding,
+  type SmokeTestPlan,
   type WorkerSmokeCommentRecord,
   type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
@@ -574,6 +575,29 @@ function publishSmokeReport(report: SmokeReport, options: CliOptions): void {
   }
 }
 
+export function bindSmokeReportToPlan(
+  partial: Partial<SmokeReport>,
+  plan: Pick<SmokeTestPlan, 'scenarios'>,
+): Partial<SmokeReport> {
+  const childRows = partial.scenarios ?? [];
+  const childRowsComplete = childRows.length === plan.scenarios.length
+    && childRows.every((row) => Boolean(row.observed?.trim()) && Boolean(row.outcome));
+  return {
+    ...partial,
+    result: partial.result === 'PASS' && !childRowsComplete ? 'FAIL' : partial.result,
+    scenarios: plan.scenarios.map((declared, index) => {
+      const child = childRows[index];
+      return {
+        action: declared.action,
+        expected: declared.expected,
+        ...(child?.observed !== undefined ? { observed: child.observed } : {}),
+        ...(child?.outcome !== undefined ? { outcome: child.outcome } : {}),
+        ...(child?.skipReason !== undefined ? { skipReason: child.skipReason } : {}),
+      };
+    }),
+  };
+}
+
 type RuntimeFailureWithNativeError = RuntimeOperationFailure & {
   readonly nativeError?: Readonly<{
     code: string;
@@ -650,8 +674,7 @@ export function establishRuntimeSmokeDelivery(input: {
 
   let token: RuntimeObservationToken | undefined;
   const submitCount = 0;
-  let observedNow = now();
-  while (observedNow < deadline) {
+  while (now() < deadline) {
     if (observeSmokeDeliveryEstablished(input.binding)) {
       markTrackedSmokeWorkerDeliveryConfirmed(input.worker);
       return { ok: true, observationToken: token, submitCount };
@@ -671,10 +694,9 @@ export function establishRuntimeSmokeDelivery(input: {
       token = read.value.observationToken;
     }
 
-    sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, deadline - observedNow)));
-    const nextNow = now();
-    if (nextNow <= observedNow) break;
-    observedNow = nextNow;
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) break;
+    sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, remainingMs)));
   }
   const reason = dispatched.status === 'dispatch_unknown'
     ? `dispatch_unknown:${dispatched.reason}`
@@ -1416,7 +1438,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     const afterStatus = gitPorcelain(options.cwd);
     const afterHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(afterStatus));
     const mutated = detectTrackedImplementationMutation(beforeStatus, afterStatus, beforeHashes, afterHashes);
-    const normalized = normalizeSmokeReport({
+    const normalized = normalizeSmokeReport(bindSmokeReportToPlan({
       ...completion.partial,
       result: mutated ? 'FAIL' : completion.partial.result ?? 'FAIL',
       scenarios: completion.partial.scenarios ?? [],
@@ -1427,7 +1449,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       producer: SMOKE_REPORT_PRODUCER,
       orcaExecutable: adapter.id,
       terminalHandle: worker.id,
-    }, {
+    }, plan), {
       issueNumber: options.issueNumber,
       prNumber: options.prNumber,
       headSha: options.headSha,

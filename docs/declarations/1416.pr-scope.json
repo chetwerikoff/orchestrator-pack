@@ -44,6 +44,7 @@
     "scripts/verify.ts",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json",
+    "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
   "denylist": [
@@ -96,7 +97,8 @@
     "scripts/verify.ts",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json",
+    "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "r16"
+  "source_revision": "r17"
 }
