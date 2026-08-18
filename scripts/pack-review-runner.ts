@@ -2080,10 +2080,10 @@ export async function reconcileStalePackReviewRuns(
         }
         continue;
       }
-      const terminalized = terminalizePackReviewStaleRun(run.id, { projectId, storeRoot });
-      terminalized = terminalized.changed;
+      const terminalizationResult = terminalizePackReviewStaleRun(run.id, { projectId, storeRoot });
+      terminalized = terminalizationResult.changed;
       run = await bindRepositoryIdentity(
-        getPackReviewRun(run.id, { projectId, storeRoot }) ?? terminalized.run,
+        getPackReviewRun(run.id, { projectId, storeRoot }) ?? terminalizationResult.run,
       );
     }
 
