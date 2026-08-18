@@ -32,6 +32,7 @@ import {
   PACK_REVIEW_AUTHORITY_PHASES,
   PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS,
   acknowledgePackReviewReset,
+  assertPackReviewSmokeAdmission,
   commitPackReviewAuthorityTransition,
   commitPackReviewTerminal,
   commitPackReviewTriage,
@@ -41,6 +42,8 @@ import {
   recordPackReviewPublication,
   selectPackReviewEvidence,
   selectPackReviewGptSourceCardinality,
+  smokeOrderingRequired,
+  reconcilePackReviewTier,
   stableJson,
   type PackReviewAuthorityDocument,
   type PackReviewAuthorityOptions,
@@ -293,6 +296,7 @@ interface AuthoritativeReviewContext {
   tier: PackReviewTier;
   issueNumber: number;
   snapshotDigest: string;
+  issueBody?: string;
   frozenScope: ResolvedScopeContext;
 }
 
@@ -685,7 +689,7 @@ function resolveAuthoritativeReviewContext(input: StartInput, target: {
       unverifiedIssueConstraints: true,
     };
   }
-  return { tier, issueNumber, snapshotDigest, frozenScope };
+  return { tier, issueNumber, snapshotDigest, issueBody: body, frozenScope };
 }
 
 function parseReviewPayload(stdout: string): ReviewPayload {
@@ -2399,6 +2403,23 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     retainedOpenCycle,
     options: authorityOptions,
   });
+  try {
+    authority = reconcilePackReviewTier({
+      prNumber: target.prNumber,
+      tier: authoritative.tier,
+      options: authorityOptions,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      created: false,
+      reused: false,
+      reason: error instanceof Error ? error.message : String(error),
+      prNumber: target.prNumber,
+      headSha: target.headSha,
+      httpStatus: 409,
+    };
+  }
   const priorAuthority = authority.currentHeadSha === target.headSha ? undefined : authority;
   if (authority.currentHeadSha !== target.headSha) {
     authority = observePackReviewHead({
@@ -2420,6 +2441,26 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       cycleId: authority.cycle.cycleId,
       httpStatus: 409,
     };
+  }
+  const legacyHarnessFixtureWithoutSmokePlan = process.env.OPK_VITEST_HARNESS === '1'
+    && authoritative.issueBody !== undefined
+    && !authoritative.issueBody.includes('```smoke-test-plan');
+  if (authoritative.issueBody !== undefined
+      && smokeOrderingRequired(authoritative.issueBody)
+      && !legacyHarnessFixtureWithoutSmokePlan) {
+    try {
+      assertPackReviewSmokeAdmission({ authority, headSha: target.headSha });
+    } catch (error) {
+      return {
+        ok: false,
+        created: false,
+        reused: false,
+        reason: error instanceof Error ? error.message : String(error),
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        httpStatus: 409,
+      };
+    }
   }
 
   const roundOrdinal = (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
@@ -2634,7 +2675,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
             findingCount: typedResumePayload.findingCount,
             findings: typedResumePayload.findings,
           }),
-          status: typedResumePayload.verdict === 'clean' && typedResumePayload.findingCount === 0 ? 'clean' : 'changes_requested',
+          status: classifyPackReviewPayload(typedResumePayload).terminalStatus,
           findingCount: typedResumePayload.findingCount,
           options: authorityOptions,
         });
@@ -3152,7 +3193,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           focusedResolutionRunId: carryover.replay.kind === 'merge_composite' ? run.id : undefined,
         } : undefined,
       }),
-      status: payload.verdict === 'clean' && payload.findingCount === 0 ? 'clean' : 'changes_requested',
+      status: classifyPackReviewPayload(payload).terminalStatus,
       findingCount: payload.findingCount,
       options: authorityOptions,
     });
