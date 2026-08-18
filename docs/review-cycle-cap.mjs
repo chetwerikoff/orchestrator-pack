@@ -436,6 +436,7 @@ export function evaluateReviewCycleCapGate(input) {
       reason: prState.terminal ?? REVIEW_STAGE_COMPLETE,
       terminal: prState.terminal,
       mergeEligible: prState.mergeEligible,
+      ...(prState.atCapRecord ? { atCapRecord: prState.atCapRecord } : {}),
       capState: synced.capState,
       prState,
     };
