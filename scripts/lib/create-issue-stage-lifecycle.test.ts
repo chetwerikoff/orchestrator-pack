@@ -227,7 +227,11 @@ describe('Issue #1439 canonical stage lifecycle', () => {
 describe('Issue #1439 terminal bundle binding', () => {
   const body = '<!-- source-revision: r01 -->\nbody';
 
-  function writeBundleArtifacts(reviewDir: string, authorOverrides: Record<string, unknown> = {}): void {
+  function writeBundleArtifacts(
+    reviewDir: string,
+    authorOverrides: Record<string, unknown> = {},
+    ledgerOverrides: Record<string, unknown> = {},
+  ): void {
     const author = {
       schema: 'create-issue-author-dispositions/v1',
       reviewEpisodeId: 'issue:1439@r01',
@@ -240,9 +244,13 @@ describe('Issue #1439 terminal bundle binding', () => {
     writeFileSync(join(reviewDir, 'author-dispositions.json'), JSON.stringify(author));
     writeFileSync(join(reviewDir, 'finding-disposition-ledger.json'), JSON.stringify({
       version: 2,
+      reviewEpisodeId: 'issue:1439@r01',
+      sourceRevision: 'r01',
+      predecessorStage: null,
       draft: body,
       counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 },
       findings: [],
+      ...ledgerOverrides,
     }));
   }
 
@@ -293,11 +301,30 @@ describe('Issue #1439 terminal bundle binding', () => {
     }
   });
 
+  it('refuses a stale finding-ledger binding instead of promoting its economics to current', () => {
+    const reviewDir = mkdtempSync(join(tmpdir(), 'opk-terminal-bundle-'));
+    try {
+      writeBundleArtifacts(reviewDir, {}, { sourceRevision: 'r00' });
+      expect(() => composeTerminalBundle({
+        reviewDir,
+        reviewEpisodeId: 'issue:1439@r01',
+        sourceRevision: 'r01',
+        predecessorStage: null,
+        issueBody: body,
+      })).toThrow('finding disposition ledger sourceRevision binding is stale');
+    } finally {
+      rmSync(reviewDir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses an absent author-disposition producer artifact', () => {
     const reviewDir = mkdtempSync(join(tmpdir(), 'opk-terminal-bundle-'));
     try {
       writeFileSync(join(reviewDir, 'finding-disposition-ledger.json'), JSON.stringify({
         version: 2,
+        reviewEpisodeId: 'issue:1439@r01',
+        sourceRevision: 'r01',
+        predecessorStage: null,
         draft: body,
         counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 },
         findings: [],
