@@ -508,8 +508,11 @@ describe('GPT failure matrix (Issue #1031 AC5)', () => {
       for (const line of lines) {
         const entry = JSON.parse(line) as { reviewer?: string; args?: string[] };
         expect(entry.reviewer).toBe('gpt');
-        expect(entry.args?.join(' ')).toContain('invoke-pack-review.ps1');
-        expect(entry.args?.join(' ')).not.toContain('run-pack-review.ps1');
+        const args = entry.args?.join(' ') ?? '';
+        expect(args).toContain('Invoke-TypeScriptCli.ts');
+        expect(args).toContain('run-pack-review-gpt.ts');
+        expect(args).not.toContain('invoke-pack-review.ps1');
+        expect(args).not.toContain('run-pack-review.ps1');
       }
     });
   }
