@@ -37,8 +37,7 @@
     ".claude/skills/",
     "docs/",
     "prompts/",
-    "scripts/",
-    "tests/"
+    "scripts/"
   ],
   "source_revision": "6f37d1917863b449e201e120caf0ff826fba75d0"
 }
