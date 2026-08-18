@@ -1414,6 +1414,11 @@ function buildLedger(
   const findings = raw.findings as JsonRecord[];
   const ledger = {
     version: 2,
+    ...(typeof raw.reviewEpisodeId === 'string' ? { reviewEpisodeId: raw.reviewEpisodeId } : {}),
+    ...(typeof raw.sourceRevision === 'string' ? { sourceRevision: raw.sourceRevision } : {}),
+    ...((raw.predecessorStage === null || typeof raw.predecessorStage === 'string')
+      ? { predecessorStage: raw.predecessorStage }
+      : {}),
     ...(typeof raw.draft === 'string' ? { draft: raw.draft } : {}),
     counts: {
       rawFindingCount: captures.reduce((sum, capture) => sum + capture.rawFindingCount, 0),
