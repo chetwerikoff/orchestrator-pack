@@ -420,6 +420,16 @@ describe('Issue #1380 runtime worker identity binding', () => {
       status: 'ok', outcomes: [{ status: 'stale', code: 'metadata_changed' }],
     });
 
+    const inconsistentB = orcaFixture({
+      terminalA: [terminal('exact', 'inc-a', 1)],
+      terminalB: [{ ...terminal('exact', 'inc-a', 1), worktreeId: 'w-conflict' }],
+      issueA: { 1: 1380 },
+      seedOwned: [{ handle: 'exact', generation: 'inc-a', worktree: 1 }],
+    });
+    expect(inconsistentB.adapter.observeWorkerTaskBindings({ workers: [inconsistentB.owned[0]!.identity] }, { timeoutMs: 4_000 })).toEqual({
+      status: 'unavailable', code: 'inventory_ambiguous',
+    });
+
     const duplicate = orcaFixture({
       terminalA: [terminal('exact', 'inc-a', 1), terminal('sibling', 'inc-b', 2)],
       issueA: { 1: 1380, 2: 1380 },
