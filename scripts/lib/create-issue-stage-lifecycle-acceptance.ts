@@ -16,6 +16,11 @@ function stringValue(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function lifecycleStage(value: unknown): LifecycleReviewStage | null {
+  if (value === 'competitive' || value === 'architectural-review' || value === 'architectural-lens' || value === 'architectural') return value;
+  return null;
+}
+
 function finalInvocationBySlot(receipt: Record<string, unknown>): Map<string, Record<string, unknown>> {
   const result = new Map<string, Record<string, unknown>>();
   if (!Array.isArray(receipt.invocations)) return result;
@@ -212,7 +217,18 @@ export function validateLifecycleAcceptanceTopology(
   const intake = parseLifecycleTierIntake(intakeValue);
   if (!intake) return { ok: false, errors: ['canonical tier-intake/v1 is missing or malformed'], expectedStages: [] };
 
-  const records = receiptValues.map((value) => ({ raw: record(value) ? value : null, slot: parseSettledStageSlot(value) }));
+  const records = receiptValues.map((value) => {
+    const raw = record(value) ? value : null;
+    const slot = parseSettledStageSlot(value);
+    if (raw && !slot && raw.outcome === 'partial') {
+      const stage = lifecycleStage(raw.stage);
+      const reviewerCardinality = Number(raw.reviewerCardinality);
+      if (stage && Number.isInteger(reviewerCardinality) && reviewerCardinality > 0) {
+        errors.push(...evaluateStageCredentialingSettlement(raw, reviewerCardinality, stage).errors);
+      }
+    }
+    return { raw, slot };
+  });
   if (records.some((entry) => !entry.raw || !entry.slot)) errors.push('stage receipt inventory contains a malformed receipt');
   const valid = records.filter((entry): entry is { raw: Record<string, unknown>; slot: SettledStageSlot } => Boolean(entry.raw && entry.slot));
   const observedTier = tierValue ?? valid[0]?.slot.tier ?? intake.priorTier;

@@ -92,15 +92,28 @@ function partialReview(
   };
 }
 
-const terminal = coreReceipt({
-  stage: 'architectural',
-  stageAttemptId: 'terminal-once',
-  stageSequence: 2,
-  policyVersion: 'single-source/v1',
-  reviewerCardinality: 1,
-  completedSourceCount: 1,
-  outcome: 'complete',
-});
+const terminal = {
+  ...coreReceipt({
+    stage: 'architectural',
+    stageAttemptId: 'terminal-once',
+    stageSequence: 2,
+    policyVersion: 'single-source/v1',
+    reviewerCardinality: 1,
+    completedSourceCount: 1,
+    outcome: 'complete',
+  }),
+  invocations: [{
+    invocationId: 'terminal-invocation-01',
+    terminalResultIdentity: 'terminal-result-01',
+    reviewerSlot: '01',
+    attemptOrdinal: 1,
+    terminal: true,
+    terminalClassification: 'complete',
+    retryClass: 'none',
+    sendCount: 1,
+    capture: { captureIdentity: 'terminal-capture-01' },
+  }],
+};
 
 describe('lifecycle acceptance policy', () => {
   it('accepts a three-source stage settled partial with exactly one journaled possible-or-actual send failure', () => {

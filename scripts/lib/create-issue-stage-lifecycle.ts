@@ -54,6 +54,16 @@ export interface SettledStageSlot {
   reviewerCardinality: number;
 }
 
+interface SettledStageConsumption {
+  tier: LifecycleReviewTier;
+  stage: LifecycleReviewStage;
+  stageAttemptId: string;
+  outcome: LifecycleSettledOutcome;
+  reviewEpisodeId: string;
+  taskIdentity: string;
+  episodeFirstRevision: string;
+}
+
 export interface TerminalBundleV1 {
   schema: 'create-issue-terminal-input-bundle/v1';
   reviewEpisodeId: string;
@@ -154,6 +164,49 @@ export function canonicalStageTopology(tier: LifecycleReviewTier, intake: Lifecy
     competitiveDecision: intake.competitiveDecision,
     competitiveRationale: intake.competitiveRationale,
   });
+}
+
+function parseSettledStageConsumption(value: unknown): SettledStageConsumption | null {
+  if (!isRecord(value) || value.schema !== STAGE_RECEIPT_SCHEMA) return null;
+  const tier = asTier(value.tier);
+  const stage = REVIEW_STAGES.has(value.stage as LifecycleReviewStage) ? value.stage as LifecycleReviewStage : null;
+  const outcome = SETTLED_OUTCOMES.has(value.outcome as LifecycleSettledOutcome) ? value.outcome as LifecycleSettledOutcome : null;
+  const sourceRevision = nonEmpty(value.sourceRevision) ? value.sourceRevision.trim() : '';
+  const cycleId = nonEmpty(value.cycleId) ? value.cycleId.trim() : '';
+  const cycleBinding = isRecord(value.cycleBinding) ? value.cycleBinding : null;
+  if (
+    !tier
+    || !stage
+    || !outcome
+    || !nonEmpty(value.stageAttemptId)
+    || !Number.isInteger(value.stageSequence)
+    || Number(value.stageSequence) < 1
+    || !cycleId
+    || !sourceRevision
+    || !SOURCE_REVISION_RE.test(sourceRevision)
+    || !nonEmpty(value.policyVersion)
+    || !Number.isInteger(value.reviewerCardinality)
+    || Number(value.reviewerCardinality) < 1
+    || !Number.isInteger(value.completedSourceCount)
+    || Number(value.completedSourceCount) < 0
+    || !cycleBinding
+    || cycleBinding.boundBeforeLaunch !== true
+    || cycleBinding.cycleId !== cycleId
+    || cycleBinding.sourceRevision !== sourceRevision
+    || !nonEmpty(value.reviewEpisodeId)
+    || !nonEmpty(value.taskIdentity)
+    || !nonEmpty(value.episodeFirstRevision)
+    || !SOURCE_REVISION_RE.test(value.episodeFirstRevision)
+  ) return null;
+  return {
+    tier,
+    stage,
+    stageAttemptId: value.stageAttemptId.trim(),
+    outcome,
+    reviewEpisodeId: value.reviewEpisodeId.trim(),
+    taskIdentity: value.taskIdentity.trim(),
+    episodeFirstRevision: value.episodeFirstRevision.trim(),
+  };
 }
 
 export function parseSettledStageSlot(value: unknown): SettledStageSlot | null {
@@ -257,15 +310,15 @@ export function admitStageLaunch(input: StageAdmissionInput): StageAdmissionResu
   let topology: CanonicalStageTopologyV1;
   try { topology = canonicalStageTopology(input.tier, intake); }
   catch (error) { return { ok: false, code: STAGE_AUTHORITY_INVALID, message: error instanceof Error ? error.message : String(error), intake }; }
-  const parsed = input.receiptValues.map(parseSettledStageSlot);
-  if (parsed.some((slot) => slot === null)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory contains a malformed stage receipt', topology, intake };
-  const slots = parsed as SettledStageSlot[];
   const episodeId = `${intake.taskIdentity}@${intake.firstRevision}`;
-  if (slots.some((slot) => slot.reviewEpisodeId !== episodeId)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory mixes reviewEpisodeId values', topology, intake, slots };
-  if (slots.some((slot) => slot.taskIdentity !== intake.taskIdentity)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory mixes taskIdentity values', topology, intake, slots };
-  if (slots.some((slot) => slot.episodeFirstRevision !== intake.firstRevision)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory mixes episodeFirstRevision values', topology, intake, slots };
-
-  const consumed = slots.find((slot) => slot.stage === input.stage);
+  const consumed = input.receiptValues
+    .map(parseSettledStageConsumption)
+    .find((slot) => slot
+      && slot.tier === input.tier
+      && slot.stage === input.stage
+      && slot.reviewEpisodeId === episodeId
+      && slot.taskIdentity === intake.taskIdentity
+      && slot.episodeFirstRevision === intake.firstRevision);
   if (consumed) return {
     ok: false,
     code: STAGE_SLOT_CONSUMED,
@@ -273,8 +326,14 @@ export function admitStageLaunch(input: StageAdmissionInput): StageAdmissionResu
     consumingStageAttemptId: consumed.stageAttemptId,
     topology,
     intake,
-    slots,
   };
+
+  const parsed = input.receiptValues.map(parseSettledStageSlot);
+  if (parsed.some((slot) => slot === null)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory contains a malformed stage receipt', topology, intake };
+  const slots = parsed as SettledStageSlot[];
+  if (slots.some((slot) => slot.reviewEpisodeId !== episodeId)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory mixes reviewEpisodeId values', topology, intake, slots };
+  if (slots.some((slot) => slot.taskIdentity !== intake.taskIdentity)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory mixes taskIdentity values', topology, intake, slots };
+  if (slots.some((slot) => slot.episodeFirstRevision !== intake.firstRevision)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory mixes episodeFirstRevision values', topology, intake, slots };
 
   const sequence = admissionStageSequence(topology, slots);
   if (sequence.errors.length > 0) return { ok: false, code: STAGE_ORDER_VIOLATION, message: sequence.errors.join('; '), expectedStage: sequence.expectedStage, predecessorStage: sequence.predecessorStage, topology, intake, slots };

@@ -19,6 +19,7 @@
     "scripts/lib/create-issue-stage-record-artifacts.ts",
     "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record-marker.ts",
     "scripts/lib/create-issue-stage-record-receipt.ts",
     "scripts/lib/create-issue-stage-record-review-lane.test.ts",
     "scripts/lib/create-issue-stage-record-review-lane.ts",
