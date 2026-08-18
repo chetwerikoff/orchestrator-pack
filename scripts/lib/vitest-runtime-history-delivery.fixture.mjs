@@ -590,11 +590,11 @@ case "\${1:-}" in
     printf '%s\\n' "$*" >> "\${PUSH_AUDIT}"
     lease="\${2:-}"
     prefix="--force-with-lease=refs/heads/${DELIVERY_BRANCH}:"
-    [[ "${lease}" == "${prefix}"* ]] || { echo 'missing exact delivery lease' >&2; exit 2; }
-    expected="\${lease#${prefix}}"
+    [[ "\${lease}" == "\${prefix}"* ]] || { echo 'missing exact delivery lease' >&2; exit 2; }
+    expected="\${lease#\${prefix}}"
     current="$(cat "\${REMOTE_STATE}")"
-    if [ "${current}" != "${expected}" ]; then
-      echo "stale lease: expected ${expected:-<absent>} current ${current:-<absent>}" >&2
+    if [ "\${current}" != "\${expected}" ]; then
+      echo "stale lease: expected \${expected:-<absent>} current \${current:-<absent>}" >&2
       exit 1
     fi
     printf '%s\\n' "\${PREPARED_HEAD}" > "\${REMOTE_STATE}"
