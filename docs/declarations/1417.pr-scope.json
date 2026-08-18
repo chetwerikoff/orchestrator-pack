@@ -48,5 +48,5 @@
     "scripts/run-pack-review-claude.ps1",
     "scripts/run-pack-review-fixture.mjs"
   ],
-  "source_revision": "r09"
+  "source_revision": "r10"
 }
