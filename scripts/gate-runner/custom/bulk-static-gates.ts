@@ -54,36 +54,7 @@ function requireText(
   return result.text;
 }
 
-export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResult {
-  const gateId = 'agents-report-contract';
-  const failures: string[] = [];
-  const unreachable: string[] = [];
-  const source = readSource(snapshot, 'AGENTS.md');
-  if (source.unreachable) unreachable.push(source.unreachable);
-  if (source.missing) {
-    failures.push('Missing AGENTS.md');
-  } else if (source.text !== undefined) {
-    if (/(?<![A-Za-z0-9_-])a\u006f report(?![A-Za-z0-9_-])/u.test(source.text)) {
-      failures.push('AGENTS.md still references removed a\u006f report command');
-    } else if (!/pack-worker-report/iu.test(source.text)) {
-      failures.push('AGENTS.md must reference pack-worker-report command');
-    } else if (!/skip silently/iu.test(source.text)) {
-      failures.push('AGENTS.md must include skip silently rule for unavailable report command');
-    }
-  }
-  return completeStaticGate(
-    gateId,
-    'AGENTS.md worker-report contract',
-    'check-agents-report-contract: PASS\n',
-    snapshot,
-    failures,
-    unreachable,
-    failures[0] ? `${failures[0]}\n` : undefined,
-  );
-}
-
-export function evaluateWorkerReportHardCutDocs(snapshot: SourceSnapshot): GateResult {
-  const gateId = 'worker-report-hard-cut-docs';
+function collectWorkerReportHardCutDocFailures(snapshot: SourceSnapshot): { failures: string[]; unreachable: string[] } {
   const failures: string[] = [];
   const unreachable: string[] = [];
   const paths = [
@@ -102,6 +73,43 @@ export function evaluateWorkerReportHardCutDocs(snapshot: SourceSnapshot): GateR
     if (!/scripts\/pack-worker-report\b/iu.test(readme)) failures.push('README.md must reference the public scripts/pack-worker-report command');
     if (!/scripts\/pack-worker-report\.ts\b/iu.test(readme)) failures.push('README.md must identify scripts/pack-worker-report.ts as the native implementation');
   }
+  return { failures, unreachable };
+}
+
+export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResult {
+  const gateId = 'agents-report-contract';
+  const failures: string[] = [];
+  const unreachable: string[] = [];
+  const source = readSource(snapshot, 'AGENTS.md');
+  if (source.unreachable) unreachable.push(source.unreachable);
+  if (source.missing) {
+    failures.push('Missing AGENTS.md');
+  } else if (source.text !== undefined) {
+    if (/(?<![A-Za-z0-9_-])a\u006f report(?![A-Za-z0-9_-])/u.test(source.text)) {
+      failures.push('AGENTS.md still references removed a\u006f report command');
+    } else if (!/pack-worker-report/iu.test(source.text)) {
+      failures.push('AGENTS.md must reference pack-worker-report command');
+    } else if (!/skip silently/iu.test(source.text)) {
+      failures.push('AGENTS.md must include skip silently rule for unavailable report command');
+    }
+  }
+  const hardCut = collectWorkerReportHardCutDocFailures(snapshot);
+  failures.push(...hardCut.failures);
+  unreachable.push(...hardCut.unreachable);
+  return completeStaticGate(
+    gateId,
+    'AGENTS.md worker-report contract',
+    'check-agents-report-contract: PASS\n',
+    snapshot,
+    failures,
+    unreachable,
+    failures[0] ? `${failures[0]}\n` : undefined,
+  );
+}
+
+export function evaluateWorkerReportHardCutDocs(snapshot: SourceSnapshot): GateResult {
+  const gateId = 'worker-report-hard-cut-docs';
+  const { failures, unreachable } = collectWorkerReportHardCutDocFailures(snapshot);
   return completeStaticGate(
     gateId,
     'Worker report Node 22 hard-cut documentation contract',
@@ -277,7 +285,6 @@ function registration(gateId: string, evaluate: (snapshot: SourceSnapshot) => Ga
 
 export const bulkStaticGateRegistrations: readonly GateRegistration[] = [
   registration('agents-report-contract', evaluateAgentsReportContract),
-  registration('worker-report-hard-cut-docs', evaluateWorkerReportHardCutDocs),
   registration('coworker-delegation-threshold-drift', evaluateCoworkerDelegationThreshold),
   registration('review-010-vocabulary', evaluateReview010Vocabulary),
   registration('review-command-not-ao', evaluateReviewCommandNotAo),
