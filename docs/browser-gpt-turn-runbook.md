@@ -115,11 +115,26 @@ continue sanctioned observation, and harvest the answer with the same
 
 The transport owns a per-payload `OPKTURNV1...` marker and exact-one current
 user-node attribution. The workflow owns direct target-Issue publication and
-receipt-only manager output. Publish final bytes before closing the exact
-retained invocation page. Preserve a reachable page after post-send failure or
-no publication; release only the invocation's browser client. Never close a
-foreign, sibling, or orphan tab by URL, target id, age, focus, metadata, or
-liveness.
+receipt-only manager output. For direct publication, the one top-level reviewer
+comment must begin with exactly these two lines:
+
+```text
+Read revision: #<ISSUE_NUMBER> <EXPECTED_REVISION>
+INVOCATION_ID_TO_ECHO: <INVOCATION_ID>
+```
+
+The `INVOCATION_ID_TO_ECHO:` declaration must occur exactly once in that comment
+and equal the caller-minted invocation id. Settlement uses that exact comment
+marker to choose the invocation; same repository/Issue, candidate order, parent
+position, titles, URLs, or product message ids do not substitute for it. Zero
+exact owned-marker matches and multiple exact owned-marker matches remain
+fail-closed, while missing/conflicting results or post-send uncertainty retain
+their existing possible-delivery/no-resend semantics.
+
+Publish final bytes before closing the exact retained invocation page. Preserve
+a reachable page after post-send failure or no publication; release only the
+invocation's browser client. Never close a foreign, sibling, or orphan tab by
+URL, target id, age, focus, metadata, or liveness.
 
 ## Incident handling
 
@@ -198,8 +213,11 @@ Stage: <STAGE>; source slot: <SLOT>; expected revision: <EXPECTED_REVISION>.
 INVOCATION_ID_TO_ECHO: <INVOCATION_ID>
 
 Open and read the live Issue through GitHub. Do not review memory or a pasted
-body. The first non-empty line of the one top-level Issue comment must be:
+body. The one top-level Issue comment must begin with exactly these two lines:
 Read revision: #<ISSUE_NUMBER> <EXPECTED_REVISION>
+INVOCATION_ID_TO_ECHO: <INVOCATION_ID>
+The invocation marker must appear exactly once in that comment and immediately
+after the revision line.
 
 Apply the owning workflow's stage rubric. Use stable finding ids and include
 severity, type, evidence, non-binding recommendation, and
