@@ -1076,7 +1076,7 @@ test('liveness reports unavailable targets and truncation without mutation', asy
 });
 
 async function withHarvestObservation<T>(
-  phase: 'sent_unharvested' | 'sent_unbound',
+  phase: 'dispatching' | 'sent_unharvested' | 'sent_unbound',
   callback: (input: { profile: string; cdp: string; invocationId: string; marker: string; output: string }) => Promise<T>,
 ): Promise<T> {
   const previous = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
@@ -1096,15 +1096,17 @@ async function withHarvestObservation<T>(
       phase: 'dispatching',
       reason: 'test_dispatch_boundary',
     });
-    transitionStateLightTurnObservation({
-      profileKey,
-      invocationId,
-      phase,
-      reason: 'test_send',
-      sendCount: 1,
-      sendWitness: 'numeric_send_count',
-      ...(phase === 'sent_unharvested' ? { conversationUrl: 'https://chatgpt.com/c/test' } : {}),
-    });
+    if (phase !== 'dispatching') {
+      transitionStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        phase,
+        reason: 'test_send',
+        sendCount: 1,
+        sendWitness: 'numeric_send_count',
+        ...(phase === 'sent_unharvested' ? { conversationUrl: 'https://chatgpt.com/c/test' } : {}),
+      });
+    }
     return await callback({ profile, cdp, invocationId, marker, output });
   } finally {
     if (previous === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
@@ -1139,6 +1141,132 @@ test('harvest publishes a completed exact owned turn and remains workflow-author
     const record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
     assert.equal(record.phase, 'harvested');
     assert.equal(record.primary?.sha256, sha256('FINAL'));
+  });
+});
+
+test('harvest recovers a sent_unbound observation from exactly one owned marker candidate', async () => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, marker, output }) => {
+    const conversationUrl = 'https://chatgpt.com/c/unbound-owned';
+    let published = '';
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => [{
+        id: 'unbound-owned', type: 'page', url: conversationUrl, title: 'Owned unbound',
+        webSocketDebuggerUrl: 'ws://example/unbound-owned',
+      }],
+      sleep: async () => {},
+      evaluate: async (_target, expression) => {
+        assert.equal(expression, HARVEST_EXPRESSION);
+        return evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-unbound-owned' }),
+          new FakeNode('assistant', 'UNBOUND FINAL', 'UNBOUND FINAL', { 'data-message-id': 'a-unbound-owned' }),
+        ], false, conversationUrl);
+      },
+      publish: async (_destination, bytes) => { published = Buffer.from(bytes).toString('utf8'); },
+    }));
+
+    assert.equal(result.status, 'ok');
+    assert.equal(result.harvested, true);
+    assert.equal(published, 'UNBOUND FINAL');
+    const record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+    assert.equal(record.phase, 'harvested');
+    assert.equal(record.conversation_url, conversationUrl);
+    assert.equal(record.send_count, 1);
+    assert.equal(record.send_witness, 'numeric_send_count');
+  });
+});
+
+test('harvest promotes dispatching by exact owned marker without synthesizing numeric send_count', async () => {
+  await withHarvestObservation('dispatching', async ({ profile, cdp, invocationId, marker, output }) => {
+    const conversationUrl = 'https://chatgpt.com/c/dispatch-owned';
+    let published = '';
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => [{
+        id: 'dispatch-owned', type: 'page', url: conversationUrl, title: 'Owned dispatch',
+        webSocketDebuggerUrl: 'ws://example/dispatch-owned',
+      }],
+      sleep: async () => {},
+      evaluate: async (_target, expression) => {
+        assert.equal(expression, HARVEST_EXPRESSION);
+        return evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-dispatch-owned' }),
+          new FakeNode('assistant', 'DISPATCH FINAL', 'DISPATCH FINAL', { 'data-message-id': 'a-dispatch-owned' }),
+        ], false, conversationUrl);
+      },
+      publish: async (_destination, bytes) => { published = Buffer.from(bytes).toString('utf8'); },
+    }));
+
+    assert.equal(result.status, 'ok');
+    assert.equal(result.harvested, true);
+    assert.equal(published, 'DISPATCH FINAL');
+    const record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+    assert.equal(record.phase, 'harvested');
+    assert.equal(record.conversation_url, conversationUrl);
+    assert.equal(record.send_witness, 'owned_marker');
+    assert.equal(record.send_count, undefined);
+  });
+});
+
+test('sent_unbound harvest fails closed when the marker census finds zero candidates', async () => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, output }) => {
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [],
+      })),
+      (error: any) => error.status === 'not_found' && error.reason === 'owned_turn_unbound_not_found',
+    );
+    assert.equal(
+      readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase,
+      'sent_unbound',
+    );
+  });
+});
+
+test('sent_unbound harvest fails closed when the exact marker appears on multiple candidates', async () => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, marker, output }) => {
+    const firstUrl = 'https://chatgpt.com/c/unbound-first';
+    const secondUrl = 'https://chatgpt.com/c/unbound-second';
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [
+          { id: 'unbound-first', type: 'page', url: firstUrl, title: 'First', webSocketDebuggerUrl: 'ws://example/unbound-first' },
+          { id: 'unbound-second', type: 'page', url: secondUrl, title: 'Second', webSocketDebuggerUrl: 'ws://example/unbound-second' },
+        ],
+        evaluate: async (target, expression) => {
+          assert.equal(expression, HARVEST_EXPRESSION);
+          const pageUrl = target.target_id === 'unbound-first' ? firstUrl : secondUrl;
+          return evaluateExpression(expression, [
+            new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': `u-${target.target_id}` }),
+            new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': `a-${target.target_id}` }),
+          ], false, pageUrl);
+        },
+      })),
+      (error: any) => error.status === 'ambiguous' && error.reason === 'owned_turn_marker_ambiguous',
+    );
+    assert.equal(
+      readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase,
+      'sent_unbound',
+    );
+  });
+});
+
+test('sent_unbound harvest reports an incomplete census when any candidate is unreadable', async () => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, output }) => {
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [{
+          id: 'unbound-unreadable', type: 'page', url: 'https://chatgpt.com/c/unbound-unreadable', title: 'Unreadable',
+          webSocketDebuggerUrl: 'ws://example/unbound-unreadable',
+        }],
+        evaluate: async () => { throw new Error('injected_unreadable_target'); },
+      })),
+      (error: any) => error.status === 'surface_unknown'
+        && error.reason === 'owned_turn_unbound_census_incomplete'
+        && error.details?.failure_reason === 'target_read_unavailable',
+    );
+    assert.equal(
+      readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase,
+      'sent_unbound',
+    );
   });
 });
 
