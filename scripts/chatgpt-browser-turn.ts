@@ -84,6 +84,15 @@ import { writeCapturedSource } from './chatgpt-browser-turn/too-many-requests-so
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 const STALE_PRE_SEND_MS = 120_000;
 const BOOLEAN_OPTIONS = new Set(['new-chat', 'quarantine', 'adjudicate']);
+const LEGACY_DIRECT_PUBLICATION_KEYS = [
+  'reviewer-source-output',
+  'reviewer-source',
+  'repository',
+  'issue-number',
+  'source-revision',
+  'stage',
+  'source-slot',
+] as const;
 
 interface ParsedArgs {
   readonly command: string;
@@ -130,8 +139,25 @@ function assertAllowedOptions(args: ParsedArgs, allowed: readonly string[]): voi
   for (const key of args.options.keys()) if (!set.has(key)) throw new Error(`argument_unknown:${key}`);
 }
 
+function legacyDirectPublicationRequested(args: ParsedArgs): boolean {
+  return LEGACY_DIRECT_PUBLICATION_KEYS.some((key) => args.options.has(key));
+}
+
 function emit(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
+}
+
+function refuseLegacyDirectPublication(args: ParsedArgs): number {
+  emit({
+    schema: 'turn-result/v1',
+    state: 'input_invalid',
+    scope: 'invocation',
+    cause: 'input_invalid:legacy_direct_publication_turn_refused',
+    invocation_id: option(args, 'invocation-id') ?? randomUUID(),
+    configured_profile_key: 'profile-unresolved',
+    send_count: 0,
+  });
+  return turnExitCode('input_invalid');
 }
 
 function turnResult(
@@ -1195,6 +1221,9 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     if (option(args, 'capture-too-many-requests-source')) {
       if (args.command !== 'turn') throw new Error('argument_invalid');
       return await runTooManyRequestsSourceCapture(args);
+    }
+    if (args.command === 'turn' && legacyDirectPublicationRequested(args)) {
+      return refuseLegacyDirectPublication(args);
     }
     if (args.command === 'turn') return await runTurn(args);
     if (args.command === 'status/list') return await runStatus(args);
