@@ -20,6 +20,7 @@
     "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/lib/create-issue-stage-record-core.ts",
     "scripts/lib/create-issue-stage-record-receipt.ts",
+    "scripts/lib/create-issue-stage-record-review-lane.test.ts",
     "scripts/lib/create-issue-stage-record-review-lane.ts",
     "scripts/lib/create-issue-stage-record-types.ts",
     "scripts/lib/create-issue-stage-topology.ts",
