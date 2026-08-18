@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   STAGE_AUTHORITY_INVALID,
@@ -6,6 +9,7 @@ import {
   TERMINAL_BUNDLE_UNAVAILABLE,
   admitStageLaunch,
   canonicalStageTopology,
+  composeTerminalBundle,
   type LifecycleReviewTier,
   type LifecycleTierIntakeV1,
   type TerminalBundleV1,
@@ -217,5 +221,96 @@ describe('Issue #1439 canonical stage lifecycle', () => {
       code: STAGE_SLOT_CONSUMED,
       consumingStageAttemptId: 'terminal-once',
     });
+  });
+});
+
+describe('Issue #1439 terminal bundle binding', () => {
+  const body = '<!-- source-revision: r01 -->\nbody';
+
+  function writeBundleArtifacts(reviewDir: string, authorOverrides: Record<string, unknown> = {}): void {
+    const author = {
+      schema: 'create-issue-author-dispositions/v1',
+      reviewEpisodeId: 'issue:1439@r01',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      draft: body,
+      findings: [],
+      ...authorOverrides,
+    };
+    writeFileSync(join(reviewDir, 'author-dispositions.json'), JSON.stringify(author));
+    writeFileSync(join(reviewDir, 'finding-disposition-ledger.json'), JSON.stringify({
+      version: 2,
+      draft: body,
+      counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 },
+      findings: [],
+    }));
+  }
+
+  it('composes explicit empty governed values with current producer bindings', () => {
+    const reviewDir = mkdtempSync(join(tmpdir(), 'opk-terminal-bundle-'));
+    try {
+      writeBundleArtifacts(reviewDir);
+      const result = composeTerminalBundle({
+        reviewDir,
+        reviewEpisodeId: 'issue:1439@r01',
+        sourceRevision: 'r01',
+        predecessorStage: null,
+        issueBody: body,
+      });
+      expect(result).toMatchObject({
+        reviewEpisodeId: 'issue:1439@r01',
+        sourceRevision: 'r01',
+        predecessorStage: null,
+        rejectPartition: [],
+        protectedM3: [],
+        authorM4: [],
+        reviewEconomics: {
+          rawFindingCount: 0,
+          reviewEpisodeId: 'issue:1439@r01',
+          sourceRevision: 'r01',
+          predecessorStage: null,
+          evidenceBasis: 'receipt-backed-finding-ledger/v1',
+        },
+      });
+    } finally {
+      rmSync(reviewDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a stale producer-owned sourceRevision instead of re-binding it', () => {
+    const reviewDir = mkdtempSync(join(tmpdir(), 'opk-terminal-bundle-'));
+    try {
+      writeBundleArtifacts(reviewDir, { sourceRevision: 'r00' });
+      expect(() => composeTerminalBundle({
+        reviewDir,
+        reviewEpisodeId: 'issue:1439@r01',
+        sourceRevision: 'r01',
+        predecessorStage: null,
+        issueBody: body,
+      })).toThrow('author dispositions sourceRevision binding is stale');
+    } finally {
+      rmSync(reviewDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an absent author-disposition producer artifact', () => {
+    const reviewDir = mkdtempSync(join(tmpdir(), 'opk-terminal-bundle-'));
+    try {
+      writeFileSync(join(reviewDir, 'finding-disposition-ledger.json'), JSON.stringify({
+        version: 2,
+        draft: body,
+        counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 },
+        findings: [],
+      }));
+      expect(() => composeTerminalBundle({
+        reviewDir,
+        reviewEpisodeId: 'issue:1439@r01',
+        sourceRevision: 'r01',
+        predecessorStage: null,
+        issueBody: body,
+      })).toThrow('missing author dispositions');
+    } finally {
+      rmSync(reviewDir, { recursive: true, force: true });
+    }
   });
 });
