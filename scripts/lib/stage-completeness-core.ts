@@ -19,6 +19,7 @@ export { findLegacyReceiptPaths } from './canonical-review-directory.ts';
 import { isReviewLaneEvidence, isReviewLaneRouting, sameReviewLaneRouting } from './review-lane-record.ts';
 import type { ReviewLaneEvidence } from './create-issue-stage-record-types.ts';
 import { REVIEW_LANE_ROUTING_POLICY_VERSION, normalizeMaterialVerdict, type ReviewLaneRouting } from './review-lane-routing.ts';
+import { canonicalStagePlan } from './create-issue-stage-topology.ts';
 
 export const GRANDFATHERED_REVIEW_DIR_BASENAMES = new Set([
   '206-ao-010-session-status-readers-migration',
@@ -231,6 +232,8 @@ export interface TierIntakeAuthorityV1 {
   kind: 'fresh' | 'compatibility';
   priorTier: ReviewTier;
   firstRevision: string;
+  competitiveDecision?: 'required' | 'skipped';
+  competitiveRationale?: string;
 }
 export interface ReviewEpisodeDerivationAuthorityV1 {
   tierIntake: TierIntakeAuthorityV1;
@@ -256,6 +259,7 @@ export interface ReviewEpisodeStateV1 {
   taskIdentity: string | null;
   episodeFirstRevision: string | null;
   tier: ReviewTier | null;
+  canonicalStages: ReviewStage[];
   receipts: StageCompletenessReceiptV1[];
   receiptsByStage: Record<ReviewStage, StageCompletenessReceiptV1[]>;
   credentialingReceiptsByStage: Partial<Record<ReviewStage, StageCompletenessReceiptV1>>;
@@ -862,6 +866,28 @@ function validateInventoryAuthority(receipts: readonly StageCompletenessReceiptV
   if (inventory.stageReceiptIds.length !== ids.length || inventory.stageReceiptIds.some((id, index) => id !== ids[index])) errors.push('canonical receipt inventory does not equal the complete supplied receipt chain');
   for (const receipt of receipts) if (receipt.taskIdentity !== inventory.taskIdentity || receipt.episodeFirstRevision !== inventory.episodeFirstRevision || receipt.reviewEpisodeId !== inventory.reviewEpisodeId) errors.push(`stage receipt ${receipt.stageReceiptId} is outside the authoritative episode root`);
 }
+function canonicalStagesFromAuthority(
+  tier: ReviewTier | null,
+  authority: ReviewEpisodeDerivationAuthorityV1 | undefined,
+  errors: string[],
+): ReviewStage[] {
+  if (!tier || !authority || !isRecord(authority.tierIntake)) return [];
+  const intake = authority.tierIntake;
+  if (intake.priorTier !== tier) {
+    errors.push(`tier-intake priorTier ${String(intake.priorTier)} does not match review episode tier ${tier}`);
+    return [];
+  }
+  const competitiveDecision = intake.competitiveDecision === 'required' || intake.competitiveDecision === 'skipped'
+    ? intake.competitiveDecision
+    : undefined;
+  const competitiveRationale = nonEmpty(intake.competitiveRationale) ? intake.competitiveRationale.trim() : undefined;
+  try {
+    return canonicalStagePlan(tier, { competitiveDecision, competitiveRationale }).stages.map((entry) => entry.stage);
+  } catch (error) {
+    errors.push(`canonical stage plan is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  }
+}
 export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[], verifiedRelayEvidenceInput: readonly unknown[], authority?: ReviewEpisodeDerivationAuthorityV1): ReviewEpisodeStateV1 {
   const errors: string[] = [];
   const receipts = stageReceiptsInput.map((value, index) => parseStageReceipt(value, index, errors)).filter((value): value is StageCompletenessReceiptV1 => Boolean(value)).sort((a, b) => a.stageSequence - b.stageSequence || a.stageAttemptId.localeCompare(b.stageAttemptId));
@@ -875,6 +901,8 @@ export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[],
   if (firstRevisions.size > 1) errors.push('stage receipts mix episodeFirstRevision values');
   if (tiers.size > 1) errors.push('stage receipts mix tiers');
   validateInventoryAuthority(receipts, authority, errors);
+  const tier = tiers.size === 1 ? [...tiers][0]! : null;
+  const canonicalStages = canonicalStagesFromAuthority(tier, authority, errors);
   const producerEvidence = parseClaudeProducerEvidence(authority?.claudeProducerEvidence ?? [], errors);
   const attemptIds = new Set<string>(); const stageSequences = new Set<number>(); const receiptIds = new Set<string>();
   const episodeInvocationIds = new Set<string>(); const episodeTerminalResultIds = new Set<string>(); const producingRunIds = new Set<string>();
@@ -953,7 +981,8 @@ export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[],
     reviewEpisodeId: episodeIds.size === 1 ? [...episodeIds][0]! : null,
     taskIdentity: taskIdentities.size === 1 ? [...taskIdentities][0]! : null,
     episodeFirstRevision: firstRevisions.size === 1 ? [...firstRevisions][0]! : null,
-    tier: tiers.size === 1 ? [...tiers][0]! : null,
+    tier,
+    canonicalStages,
     receipts,
     receiptsByStage,
     credentialingReceiptsByStage,
@@ -970,14 +999,20 @@ export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[],
     errors,
   };
 }
+function expectedStagesForPhase(state: ReviewEpisodeStateV1, phase: 'pre-lens' | 'final-acceptance'): ReviewStage[] {
+  if (state.tier === 'T3' && phase === 'pre-lens') {
+    return state.canonicalStages.filter((stage) => stage === 'competitive' || stage === 'architectural-review');
+  }
+  if (state.tier === 'T2' && phase === 'pre-lens') {
+    return state.canonicalStages.filter((stage) => stage === 'architectural-review');
+  }
+  return state.canonicalStages;
+}
 export function validateReviewEpisodeTopology(state: ReviewEpisodeStateV1, phase: 'pre-lens' | 'final-acceptance'): string[] {
   const errors: string[] = [];
   if (!state.tier) return ['review episode tier is unresolved'];
-  const expected: ReviewStage[] = state.tier === 'T3'
-    ? (phase === 'pre-lens' ? ['competitive', 'architectural-review'] : ['competitive', 'architectural-review', 'architectural-lens', 'architectural'])
-    : state.tier === 'T2'
-      ? (phase === 'pre-lens' ? ['architectural-review'] : ['architectural-review', 'architectural'])
-      : ['architectural'];
+  if (state.canonicalStages.length === 0) return ['review episode canonical stage plan is unresolved'];
+  const expected = expectedStagesForPhase(state, phase);
   for (const stage of expected) {
     const receipts = state.receiptsByStage[stage]; const complete = receipts.filter((receipt) => receipt.outcome === 'complete');
     if (complete.length !== 1) errors.push(`${stage} requires exactly one credentialing complete stageAttemptId in the review episode`);
