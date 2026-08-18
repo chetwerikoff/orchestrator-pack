@@ -17,9 +17,10 @@ import {
 } from './canonical-review-directory.ts';
 export { findLegacyReceiptPaths } from './canonical-review-directory.ts';
 import { isReviewLaneEvidence, isReviewLaneRouting, sameReviewLaneRouting } from './review-lane-record.ts';
-import type { ReviewLaneEvidence } from './create-issue-stage-record-types.ts';
+import type { PartialMissingSourceWitness, ProducerEvidence, ReviewLaneEvidence } from './create-issue-stage-record-types.ts';
 import { REVIEW_LANE_ROUTING_POLICY_VERSION, normalizeMaterialVerdict, type ReviewLaneRouting } from './review-lane-routing.ts';
 import { canonicalStagePlan } from './create-issue-stage-topology.ts';
+import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
 
 export const GRANDFATHERED_REVIEW_DIR_BASENAMES = new Set([
   '206-ao-010-session-status-readers-migration',
@@ -198,6 +199,8 @@ export interface StageCompletenessReceiptV1 {
   cardinalityConfigIdentity: string;
   sourceRevision: string;
   outcome: StageOutcome;
+  producerEvidence: ProducerEvidence;
+  partialMissingSources: PartialMissingSourceWitness[];
   revisionChecks: { attemptCreation: 'matched'; beforeLaunch: 'matched'; settlement: 'matched' };
   settlement: { allLaunchedTerminal: boolean; retryState: RetryState; finalRevisionMatched: boolean };
   invocations?: ReviewerInvocationEnvelopeV1[];
@@ -641,13 +644,22 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
     if (allInvocationCaptures.length > 0 && passNumbers.size !== 1) errors.push(`stage ${receipt.stage} sibling captures must share one pass-NN prefix`);
   }
   if (!exactIdentitySet(allInvocationCaptures, receipt.relayEligibleCaptures)) errors.push(`stage ${receipt.stage} relayEligibleCaptures do not equal invocation capture evidence`);
-  if (receipt.outcome === 'complete') {
-    if (!allFinalComplete) errors.push(`stage ${receipt.stage} complete outcome requires every required slot credentialed by successful transport or artifactAuthority`);
-    if (receipt.settlement.retryState !== 'none' && receipt.settlement.retryState !== 'exhausted') errors.push(`stage ${receipt.stage} complete outcome has invalid retry settlement`);
-    if (!exactIdentitySet(finalCaptures, receipt.credentialingCaptures)) errors.push(`stage ${receipt.stage} credentialingCaptures do not equal final successful slot captures`);
+  if (receipt.outcome === 'complete' || receipt.outcome === 'partial') {
+    const credentialing = evaluateStageCredentialingSettlement(receipt, receipt.reviewerCardinality, receipt.stage);
+    errors.push(...credentialing.errors);
+    const expectedCredentialing = credentialing.credentialingCaptures as CaptureIdentityV1[];
+    if (credentialing.credentialed && !exactIdentitySet(expectedCredentialing, receipt.credentialingCaptures)) {
+      errors.push(`stage ${receipt.stage} credentialingCaptures do not equal final credentialing slot captures`);
+    }
+    if (!credentialing.credentialed && receipt.credentialingCaptures.length > 0) {
+      errors.push(`stage ${receipt.stage} cannot carry credentialingCaptures without a proven credentialing settlement`);
+    }
+    if (receipt.outcome === 'complete' && receipt.settlement.retryState !== 'none' && receipt.settlement.retryState !== 'exhausted') {
+      errors.push(`stage ${receipt.stage} complete outcome has invalid retry settlement`);
+    }
   } else {
     if (allFinalComplete) errors.push(`stage ${receipt.stage} has a non-complete outcome despite complete required slots`);
-    if (receipt.credentialingCaptures.length > 0) errors.push(`stage ${receipt.stage} non-complete outcome cannot credential the stage`);
+    if (receipt.credentialingCaptures.length > 0) errors.push(`stage ${receipt.stage} blocked/incident outcome cannot credential the stage`);
   }
 }
 function parseClaudeProducerEvidence(input: readonly unknown[], errors: string[]): Map<string, ClaudeProducerEvidenceV1> {
@@ -717,6 +729,14 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
   const cardinalityConfigIdentity = nonEmpty(value.cardinalityConfigIdentity) ? value.cardinalityConfigIdentity.trim() : '';
   const reviewLane = value.reviewLane;
   const routedPolicy = policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION;
+  const producerEvidence = value.producerEvidence === 'verified' || value.producerEvidence === 'waived' || value.producerEvidence === 'not-applicable'
+    ? value.producerEvidence
+    : stage === 'architectural-lens'
+      ? (isRecord(value.claude) && value.claude.kind === 'capture' ? 'verified' : 'waived')
+      : 'not-applicable';
+  const partialMissingSources = Array.isArray(value.partialMissingSources)
+    ? value.partialMissingSources as PartialMissingSourceWitness[]
+    : [];
   if (reviewLane !== undefined && !isReviewLaneEvidence(reviewLane)) errors.push(`${label} reviewLane must be complete immutable evidence`);
   if (!routedPolicy && reviewLane !== undefined) errors.push(`${label} legacy policy cannot carry routed reviewLane evidence`);
   if (routedPolicy && !isReviewLaneEvidence(reviewLane)) errors.push(`${label} review-lane-routing/v1 requires full reviewLane evidence`);
@@ -771,6 +791,8 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
     cardinalityConfigIdentity,
     sourceRevision: String(value.sourceRevision).trim(),
     outcome: outcome as StageOutcome,
+    producerEvidence,
+    partialMissingSources,
     revisionChecks: value.revisionChecks as StageCompletenessReceiptV1['revisionChecks'],
     settlement: value.settlement as StageCompletenessReceiptV1['settlement'],
     invocations: Array.isArray(value.invocations) ? value.invocations as ReviewerInvocationEnvelopeV1[] : undefined,
@@ -946,8 +968,12 @@ export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[],
   const governed = new Map<string, CaptureIdentityV1>();
   for (const receipt of receipts) {
     receiptsByStage[receipt.stage].push(receipt);
-    if (receipt.outcome === 'complete') {
-      if (credentialingReceiptsByStage[receipt.stage]) errors.push(`${receipt.stage} has more than one credentialing complete stage attempt`);
+    const credentialed = receipt.stage === 'architectural-lens'
+      ? receipt.outcome === 'complete'
+      : (receipt.outcome === 'complete' || receipt.outcome === 'partial')
+        && evaluateStageCredentialingSettlement(receipt, receipt.reviewerCardinality, receipt.stage).credentialed;
+    if (credentialed) {
+      if (credentialingReceiptsByStage[receipt.stage]) errors.push(`${receipt.stage} has more than one credentialing stage attempt`);
       else { credentialingReceiptsByStage[receipt.stage] = receipt; credentialingCapturesByStage[receipt.stage].push(...receipt.credentialingCaptures); }
     }
     for (const capture of receipt.relayEligibleCaptures) {
@@ -975,8 +1001,7 @@ export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[],
       errors.push(`${stage} has a reopened logical round: multiple distinct stageAttemptId values`);
     }
   }
-  const completeReceipts = receipts.filter((receipt) => receipt.outcome === 'complete');
-  const activationReady = completeReceipts.length > 0 && errors.length === 0;
+  const activationReady = Object.keys(credentialingReceiptsByStage).length > 0 && errors.length === 0;
   return {
     reviewEpisodeId: episodeIds.size === 1 ? [...episodeIds][0]! : null,
     taskIdentity: taskIdentities.size === 1 ? [...taskIdentities][0]! : null,
@@ -1014,13 +1039,12 @@ export function validateReviewEpisodeTopology(state: ReviewEpisodeStateV1, phase
   if (state.canonicalStages.length === 0) return ['review episode canonical stage plan is unresolved'];
   const expected = expectedStagesForPhase(state, phase);
   for (const stage of expected) {
-    const receipts = state.receiptsByStage[stage]; const complete = receipts.filter((receipt) => receipt.outcome === 'complete');
-    if (complete.length !== 1) errors.push(`${stage} requires exactly one credentialing complete stageAttemptId in the review episode`);
-    const credentialing = complete[0];
-    if (credentialing && receipts.at(-1) !== credentialing) errors.push(`${stage} credentialing complete attempt must be the latest settled attempt for that stage`);
+    const receipts = state.receiptsByStage[stage];
+    const credentialing = state.credentialingReceiptsByStage[stage];
+    if (!credentialing) errors.push(`${stage} requires exactly one credentialing complete-or-proven-partial stageAttemptId in the review episode`);
+    if (credentialing && receipts.at(-1) !== credentialing) errors.push(`${stage} credentialing attempt must be the latest settled attempt for that stage`);
     for (const receipt of receipts) {
-      if (receipt !== credentialing && receipt.outcome === 'complete') errors.push(`${stage} has multiple credentialing attempts`);
-      if (credentialing && receipt !== credentialing && receipt.stageSequence > credentialing.stageSequence) errors.push(`${stage} has a later non-credentialing attempt after completion`);
+      if (credentialing && receipt !== credentialing && receipt.stageSequence > credentialing.stageSequence) errors.push(`${stage} has a later non-credentialing attempt after credentialing settlement`);
     }
   }
   for (const stage of Object.keys(state.receiptsByStage) as ReviewStage[]) if (!expected.includes(stage) && state.receiptsByStage[stage].length > 0) errors.push(`${stage} is not admissible for ${state.tier} ${phase}`);
@@ -1033,7 +1057,7 @@ export function validateReviewEpisodeTopology(state: ReviewEpisodeStateV1, phase
       if (!completedBefore.has(predecessor)) errors.push(`${receipt.stage} stage attempt ${receipt.stageAttemptId} started before ${predecessor} credentialed`);
     }
     highestStageIndex = Math.max(highestStageIndex, stageIndex);
-    if (receipt.outcome === 'complete') completedBefore.add(receipt.stage);
+    if (state.credentialingReceiptsByStage[receipt.stage] === receipt) completedBefore.add(receipt.stage);
   }
   const ordered = expected.map((stage) => state.credentialingReceiptsByStage[stage]).filter((receipt): receipt is StageCompletenessReceiptV1 => Boolean(receipt));
   for (let index = 1; index < ordered.length; index += 1) if (ordered[index]!.stageSequence <= ordered[index - 1]!.stageSequence) errors.push(`${ordered[index]!.stage} stage is out of order`);
