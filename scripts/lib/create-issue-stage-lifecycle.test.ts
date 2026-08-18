@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { canonicalAcceptanceStages } from './create-issue-stage-record-artifacts.ts';
 import {
   STAGE_AUTHORITY_INVALID,
   STAGE_ORDER_VIOLATION,
@@ -94,6 +95,24 @@ describe('Issue #1439 canonical stage lifecycle', () => {
     expect(canonicalStageTopology('T3', intake({ competitiveDecision: 'required' })).stages[0]).toMatchObject({
       stage: 'competitive', reviewerCardinality: 3, policyVersion: 'triple-source/v1',
     });
+  });
+
+  it('uses the same frozen T3 competitive decision for acceptance-artifact stage requirements', () => {
+    expect(canonicalAcceptanceStages('T3', intake(), 'final-acceptance')).toEqual([
+      'architectural-review',
+      'architectural-lens',
+      'architectural',
+    ]);
+    expect(canonicalAcceptanceStages('T3', intake({ competitiveDecision: 'required' }), 'final-acceptance')).toEqual([
+      'competitive',
+      'architectural-review',
+      'architectural-lens',
+      'architectural',
+    ]);
+    expect(canonicalAcceptanceStages('T2', intake({ priorTier: 'T2', competitiveDecision: undefined, competitiveRationale: undefined }), 'final-acceptance')).toEqual([
+      'architectural-review',
+      'architectural',
+    ]);
   });
 
   it('refuses a consumed semantic stage slot with the consuming attempt id across revisions', () => {
