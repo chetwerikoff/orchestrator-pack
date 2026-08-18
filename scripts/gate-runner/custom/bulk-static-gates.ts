@@ -64,9 +64,11 @@ function collectWorkerReportHardCutDocFailures(snapshot: SourceSnapshot): { fail
     'docs/script-owned-review-pipeline.md',
   ] as const;
   for (const path of paths) {
-    const text = requireText(snapshot, path, failures, unreachable);
-    if (text === undefined) continue;
-    if (/pack-worker-report\.ps1/iu.test(text)) failures.push(`${path} still references retired pack-worker-report.ps1`);
+    const source = readSource(snapshot, path);
+    if (source.unreachable) unreachable.push(source.unreachable);
+    if (source.text !== undefined && /pack-worker-report\.ps1/iu.test(source.text)) {
+      failures.push(`${path} still references retired pack-worker-report.ps1`);
+    }
   }
   const readme = snapshot.files.get('README.md');
   if (readme !== undefined) {
