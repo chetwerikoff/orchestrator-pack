@@ -6,6 +6,7 @@
     "docs/browser-gpt-turn-runbook.md",
     "docs/declarations/1430.pr-scope.json",
     "docs/flow-manager-long-running-child-runbook.md",
+    "scripts/browser-gpt-post-settlement-close.ts",
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts",
     "scripts/chatgpt-browser-turn/README.md",
@@ -16,6 +17,7 @@
     "scripts/chatgpt-browser-turn/state-light-turn.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/chatgpt-browser-turn/storage-common.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
     "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
@@ -36,6 +38,7 @@
     "docs/browser-gpt-turn-runbook.md",
     "docs/declarations/1430.pr-scope.json",
     "docs/flow-manager-long-running-child-runbook.md",
+    "scripts/browser-gpt-post-settlement-close.ts",
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts",
     "scripts/chatgpt-browser-turn/README.md",
@@ -46,6 +49,7 @@
     "scripts/chatgpt-browser-turn/state-light-turn.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/chatgpt-browser-turn/storage-common.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
     "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ]
