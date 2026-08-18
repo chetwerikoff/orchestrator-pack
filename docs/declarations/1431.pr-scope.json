@@ -12,7 +12,6 @@
     "scripts/chatgpt-browser-turn/state-light-entry.ts",
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/flow-manager-browser-gpt-long-run.ts",
-    "scripts/issue-1431-findings.test.ts",
     "scripts/lib/manager-review-brief.ts"
   ],
   "denylist": [
