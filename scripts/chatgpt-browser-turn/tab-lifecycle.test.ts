@@ -369,7 +369,7 @@ describe('Issue #1238 mechanically derived production graph', () => {
     const compilerOptions: ts.CompilerOptions = {
       allowImportingTsExtensions: true,
       module: ts.ModuleKind.NodeNext,
-      moduleResolution: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
       resolveJsonModule: true,
     };
     const queue = [entryPath];
@@ -947,6 +947,7 @@ describe('Issue #1377 cancellation actuator and receipt admission', () => {
     }
   });
 });
+
 
 
 describe('Issue #1377 production runStateLightTurn recovery integration', () => {
