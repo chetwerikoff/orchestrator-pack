@@ -654,9 +654,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (allPaths.size > ORCA_WORKER_TASK_BINDING_MAX_WORKTREES) {
       return { status: 'unavailable', code: 'inventory_over_cap' };
     }
+    const pathsB = new Set(terminalB.value.map((terminal) => terminal.worktreePath));
     const unionTerminals = [
-      ...terminalA.value,
-      ...terminalB.value.filter((terminal) => !pathsA.has(terminal.worktreePath)),
+      ...terminalB.value,
+      ...terminalA.value.filter((terminal) => !pathsB.has(terminal.worktreePath)),
     ];
     const worktreeB = this.#bindingWorktreeCensus(unionTerminals, deadline, options, true);
     if (worktreeB.status !== 'ok') {
