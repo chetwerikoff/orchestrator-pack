@@ -902,6 +902,19 @@ function resolveAuthoritativeArtifact(
       );
       return null;
     }
+    const journalableUnobservableSend = invocation.terminal === true
+      && invocation.sendCount === 1
+      && invocation.retryClass === 'retry-forbidden'
+      && (invocation.terminalClassification === 'post-send-failure'
+        || invocation.terminalClassification === 'output-conflict'
+        || invocation.terminalClassification === 'incident');
+    if (journalableUnobservableSend) {
+      // A complete Issue-comment census with zero invocation candidates is the
+      // authoritative negative observation required by the partial-settlement
+      // path. The receipt/journal layer still has to bind this exact invocation
+      // through partialMissingSources before the stage can credential.
+      return null;
+    }
     errors.push(
       `authoritative GitHub artifact absent after complete census: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} sourceRevision=${sourceRevision} invocationId=${invocationId} source=GitHub-Issue-comments`,
     );
