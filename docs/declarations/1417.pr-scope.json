@@ -12,11 +12,11 @@
     "scripts/runtime/pack-review-claude.ts"
   ],
   "denylist": [
-    ".orca/",
-    "credentials/",
-    "packages/core/",
-    "secrets/",
-    "vendor/"
+    ".orca/**",
+    "credentials/**",
+    "packages/core/**",
+    "secrets/**",
+    "vendor/**"
   ],
   "allowed_roots": [
     "docs/declarations/1417.pr-scope.json",
