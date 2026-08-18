@@ -1146,7 +1146,7 @@ test('harvest publishes a completed exact owned turn and remains workflow-author
 
 test('harvest recovers a sent_unbound observation from exactly one owned marker candidate', async () => {
   await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, marker, output }) => {
-    const conversationUrl = 'https://chatgpt.com/c/unbound-owned';
+    const conversationUrl = 'https://chatgpt.com/c/44444444-4444-4444-8444-444444444444';
     let published = '';
     const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
       listTargets: async () => [{
@@ -1177,7 +1177,7 @@ test('harvest recovers a sent_unbound observation from exactly one owned marker 
 
 test('harvest promotes dispatching by exact owned marker without synthesizing numeric send_count', async () => {
   await withHarvestObservation('dispatching', async ({ profile, cdp, invocationId, marker, output }) => {
-    const conversationUrl = 'https://chatgpt.com/c/dispatch-owned';
+    const conversationUrl = 'https://chatgpt.com/c/55555555-5555-4555-8555-555555555555';
     let published = '';
     const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
       listTargets: async () => [{
