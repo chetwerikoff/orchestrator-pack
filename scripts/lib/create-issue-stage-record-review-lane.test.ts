@@ -74,6 +74,17 @@ function routedFixture() {
   };
 }
 
+const routedTierIntake = {
+  schema: 'tier-intake/v1' as const,
+  producer: 'test',
+  taskIdentity: 'task',
+  kind: 'fresh' as const,
+  priorTier: 'T3' as const,
+  firstRevision: 'r00',
+  competitiveDecision: 'required' as const,
+  competitiveRationale: 'fixture exercises the routed competitive stage',
+};
+
 afterEach(() => {
   cleanupTempDirs();
   vi.restoreAllMocks();
@@ -240,7 +251,7 @@ describe('review-lane production activation', () => {
       reviewLane: routed,
     };
     const state = deriveReviewEpisodeState([receipt], [], {
-      tierIntake: { schema: 'tier-intake/v1', producer: 'test', taskIdentity: 'task', kind: 'fresh', priorTier: 'T3', firstRevision: 'r00' },
+      tierIntake: routedTierIntake,
       receiptInventory: { source: 'canonical-review-directory', taskIdentity: 'task', episodeFirstRevision: 'r00', reviewEpisodeId: 'task@r00', stageReceiptIds: ['task@r00:stage-receipt:0001'] },
     });
     expect(state.errors.join('\n')).toContain('reviewLaneRouting disagrees with the full stage evidence');
@@ -362,12 +373,12 @@ describe('review-lane production activation', () => {
       return legacy;
     })() : invocation) };
     const result = deriveReviewEpisodeState([withoutRoute], [], {
-      tierIntake: { schema: 'tier-intake/v1', producer: 'test', taskIdentity: 'task', kind: 'fresh', priorTier: 'T3', firstRevision: 'r00' },
+      tierIntake: routedTierIntake,
       receiptInventory: { source: 'canonical-review-directory', taskIdentity: 'task', episodeFirstRevision: 'r00', reviewEpisodeId: 'task@r00', stageReceiptIds: ['task@r00:stage-receipt:0001'] },
     });
     expect(result.errors.join('\n')).toContain('missing immutable reviewLaneRouting evidence');
     expect(deriveReviewEpisodeState([receipt], [], {
-      tierIntake: { schema: 'tier-intake/v1', producer: 'test', taskIdentity: 'task', kind: 'fresh', priorTier: 'T3', firstRevision: 'r00' },
+      tierIntake: routedTierIntake,
       receiptInventory: { source: 'canonical-review-directory', taskIdentity: 'task', episodeFirstRevision: 'r00', reviewEpisodeId: 'task@r00', stageReceiptIds: ['task@r00:stage-receipt:0001'] },
     }).errors.join('\n')).not.toContain('reviewLaneRouting');
   });
@@ -479,7 +490,7 @@ describe('review-lane production activation', () => {
       reviewLane: routed,
     };
     const authority = {
-      tierIntake: { schema: 'tier-intake/v1' as const, producer: 'test', taskIdentity: 'task', kind: 'fresh' as const, priorTier: 'T3' as const, firstRevision: 'r00' },
+      tierIntake: routedTierIntake,
       receiptInventory: { source: 'canonical-review-directory' as const, taskIdentity: 'task', episodeFirstRevision: 'r00', reviewEpisodeId: 'task@r00', stageReceiptIds: ['task@r00:stage-receipt:0001'] },
     };
     const episode = deriveReviewEpisodeState([stageReceipt], [], authority);
