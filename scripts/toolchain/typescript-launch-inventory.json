@@ -83,6 +83,10 @@
       "classification": "native-node-22"
     },
     {
+      "path": "scripts/pack-worker-report.ts",
+      "classification": "native-node-22"
+    },
+    {
       "path": "scripts/pr-scope-check.ts",
       "classification": "native-node-22"
     },
