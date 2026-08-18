@@ -85,7 +85,9 @@ function runReconcile({ remote, proposed, trusted = true, extraProposedPath = nu
 
 function runProductionGuard({ root, remote, trustedHistory, outputName = 'output.json' }) {
   const scriptsDir = join(root, 'scripts');
+  const pluginsDir = join(root, 'plugins');
   mkdirSync(scriptsDir, { recursive: true });
+  mkdirSync(pluginsDir, { recursive: true });
   const historyPath = join(scriptsDir, 'vitest-runtime-history.json');
   const remotePath = join(root, 'remote.json');
   const outputPath = join(root, outputName);
@@ -240,6 +242,7 @@ assert(
 {
   const root = join(tmpdir(), `vhr-publication-s2-${process.pid}-${Date.now()}`);
   mkdirSync(join(root, 'scripts'), { recursive: true });
+  mkdirSync(join(root, 'plugins'), { recursive: true });
   writeFileSync(join(root, testPath), 'export {};\n', 'utf8');
   const trusted = history({
     weight: 45000,
@@ -252,10 +255,10 @@ assert(
   const guarded = runProductionGuard({ root, remote, trustedHistory: trusted });
   const signal = `${guarded.result.stderr}${guarded.result.stdout}`;
   assert(guarded.result.exitCode !== 0, 'S2 tuple loss/downgrade must fail closed');
-  assert(signal.includes(testPath), 'S2 refusal must name the affected canonical path');
+  assert(signal.includes(testPath), `S2 refusal must name the affected canonical path: ${signal}`);
   assert(
     signal.includes('trusted-main candidate invariant violated'),
-    'S2 refusal must name the violated trusted-main invariant',
+    `S2 refusal must name the violated trusted-main invariant: ${signal}`,
   );
   assert(!existsSync(guarded.outputPath), 'S2 refusal must occur before candidate output mutation');
   rmSync(root, { recursive: true, force: true });
@@ -267,6 +270,7 @@ assert(
   const root = join(tmpdir(), `vhr-publication-s3-${process.pid}-${Date.now()}`);
   const scriptsDir = join(root, 'scripts');
   mkdirSync(scriptsDir, { recursive: true });
+  mkdirSync(join(root, 'plugins'), { recursive: true });
   const lanesConfig = JSON.parse(
     readFileSync(join(repoRoot, 'scripts', 'vitest-ci-lanes.config.json'), 'utf8'),
   );
@@ -312,7 +316,7 @@ assert(
   assert(guarded.result.exitCode !== 0, 'S3 pre-topology bound must fail closed');
   assert(
     signal.includes(`observed=${PRE_TOPOLOGY_MAX_FILES + 1} bound=${PRE_TOPOLOGY_MAX_FILES}`),
-    'S3 refusal must report the observed count and unchanged bound',
+    `S3 refusal must report the observed count and unchanged bound: ${signal}`,
   );
   rmSync(root, { recursive: true, force: true });
 }
