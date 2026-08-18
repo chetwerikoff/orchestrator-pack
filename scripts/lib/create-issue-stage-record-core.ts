@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { hasBlockingLineageConflict } from './create-issue-stage-record-lineage.ts';
 import {
   logicalFingerprint,
@@ -27,6 +27,13 @@ import {
   readEvidenceWaiverProducerEvidence,
   validateReceiptMatchesCycle,
 } from './create-issue-stage-record-receipt.ts';
+import {
+  admitStageLaunch,
+  composeTerminalBundle,
+  loadCanonicalLifecycleAuthority,
+  TERMINAL_BUNDLE_UNAVAILABLE,
+  type LifecycleReviewStage,
+} from './create-issue-stage-lifecycle.ts';
 import type {
   CommentCensusOptions,
   ConsumableStageReceipt,
@@ -56,9 +63,11 @@ export interface StartCycleInput {
   tier: string;
   publicActor: PublicActor;
   predecessorCycleId?: string;
+  stage?: LifecycleReviewStage;
   stageAttemptId?: string;
   permittedLaneOverride?: ReviewLaneOverride;
   workdir?: string;
+  stateRootOverride?: string;
   census?: CommentCensusOptions;
 }
 
@@ -77,6 +86,7 @@ export interface OperationResult {
   diagnostics: LineageDiagnostic[];
   cycleId?: string;
   eventKey?: string;
+  stageAttemptId?: string;
   projectionPendingRepair?: boolean;
   terminal?: OperationTerminal;
   reviewLaneRouting?: ReviewLaneRouting;
@@ -84,6 +94,14 @@ export interface OperationResult {
 
 function resolveWorkdir(issueNumber: number, workdir?: string): string {
   return workdir ?? defaultWorkdir(issueNumber);
+}
+
+function semanticStageAttemptId(repo: string, issueNumber: number, stage: LifecycleReviewStage): string {
+  const hex = createHash('sha256')
+    .update(`create-issue-stage-attempt/v1\n${repo}\n${issueNumber}\n${stage}`, 'utf8')
+    .digest('hex')
+    .slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 function pendingFailure(
@@ -174,8 +192,6 @@ function censusFailureResult(
     terminal,
   };
 }
-
-
 
 export function appendPublishedLogicalJournalEvent(
   diagnostics: LineageDiagnostic[],
@@ -478,6 +494,74 @@ export function startReviewCycle(
     diagnostics.push({ code: 'comments-truncated', message: 'unable to read issue before cycle admission' });
     return { ok: false, diagnostics, projectionPendingRepair: true };
   }
+
+  let stageAttemptId = input.stageAttemptId;
+  if (input.stage) {
+    let authority: ReturnType<typeof loadCanonicalLifecycleAuthority>;
+    try {
+      authority = loadCanonicalLifecycleAuthority(input.issueNumber, input.stateRootOverride);
+    } catch (error) {
+      diagnostics.push({
+        code: 'stage_authority_invalid',
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return { ok: false, diagnostics };
+    }
+    const admissionInput = {
+      issueNumber: input.issueNumber,
+      tier: input.tier as 'T1' | 'T2' | 'T3',
+      stage: input.stage,
+      sourceRevision: input.sourceRevision,
+      issueBody: issueBefore.body,
+      intake: authority.intake,
+      receiptValues: authority.receiptValues,
+    };
+    let admission = admitStageLaunch(admissionInput);
+    if (admission.code === TERMINAL_BUNDLE_UNAVAILABLE && admission.intake) {
+      try {
+        const terminalBundle = composeTerminalBundle({
+          reviewDir: authority.reviewDir,
+          reviewEpisodeId: `${admission.intake.taskIdentity}@${admission.intake.firstRevision}`,
+          sourceRevision: input.sourceRevision,
+          predecessorStage: admission.predecessorStage ?? null,
+          issueBody: issueBefore.body,
+        });
+        admission = admitStageLaunch({ ...admissionInput, terminalBundle });
+      } catch (error) {
+        diagnostics.push({
+          code: 'terminal_bundle_unavailable',
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return { ok: false, diagnostics };
+      }
+    }
+    if (!admission.ok) {
+      diagnostics.push({
+        code: admission.code ?? 'stage_authority_invalid',
+        message: admission.message ?? 'stage lifecycle admission refused launch',
+        ...(admission.consumingStageAttemptId ? { eventKey: admission.consumingStageAttemptId } : {}),
+      });
+      return {
+        ok: false,
+        diagnostics,
+        ...(admission.consumingStageAttemptId ? { stageAttemptId: admission.consumingStageAttemptId } : {}),
+      };
+    }
+    // Admission succeeds before identity minting. The semantic stage has one
+    // deterministic Issue-lifetime attempt identity, so repeated pre-settlement
+    // start-cycle calls cannot create a second logical attempt.
+    const canonicalAttemptId = semanticStageAttemptId(input.repo, input.issueNumber, input.stage);
+    if (stageAttemptId && stageAttemptId !== canonicalAttemptId) {
+      diagnostics.push({
+        code: 'stage_authority_invalid',
+        message: `stageAttemptId ${stageAttemptId} does not match the canonical active attempt ${canonicalAttemptId}`,
+        eventKey: canonicalAttemptId,
+      });
+      return { ok: false, diagnostics, stageAttemptId: canonicalAttemptId };
+    }
+    stageAttemptId = canonicalAttemptId;
+  }
+
   const persistedCandidate = readPersistedCycleId(workdir);
   const persistedEvent = persistedCandidate ? censusState.lineage.eventsByKey.get(persistedCandidate) : undefined;
   const activeCycleIsAccepted = issueBefore.labels.includes('spec-review:accepted');
@@ -486,7 +570,8 @@ export function startReviewCycle(
   const persisted = !persistedCandidate || activeCycleIsAccepted || revisionChanged ? randomUUID() : persistedCandidate;
   persistCycleId(workdir, persisted);
 
-  if (input.stageAttemptId && input.tier !== 'T3') {
+  const laneControlledStage = input.stage === 'competitive' || input.stage === 'architectural-review';
+  if (!input.stage && input.stageAttemptId && input.tier !== 'T3') {
     diagnostics.push({
       code: 'malformed-marker',
       message: 'routed review-lane attempts require T3 lane-controlled stages',
@@ -509,13 +594,16 @@ export function startReviewCycle(
   }
 
   let reviewLaneRouting: ReviewLaneRouting | undefined;
-  if (input.stageAttemptId) {
+  const shouldPrepareLane = Boolean(stageAttemptId)
+    && input.tier === 'T3'
+    && (!input.stage || laneControlledStage);
+  if (shouldPrepareLane && stageAttemptId) {
     const prepared = prepareReviewLaneStageAttempt({
       transport,
       repo: input.repo,
       issueNumber: input.issueNumber,
       sourceRevision: input.sourceRevision,
-      stageAttemptId: input.stageAttemptId,
+      stageAttemptId,
       permittedLaneOverride: input.permittedLaneOverride,
     });
     diagnostics.push(...prepared.diagnostics.map((message) => ({
@@ -523,7 +611,7 @@ export function startReviewCycle(
       message,
     })));
     if (!prepared.ok || !prepared.routing) {
-      return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted };
+      return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted, stageAttemptId };
     }
     reviewLaneRouting = prepared.routing;
   }
@@ -545,6 +633,7 @@ export function startReviewCycle(
       diagnostics,
       cycleId: persisted,
       eventKey: persisted,
+      ...(stageAttemptId ? { stageAttemptId } : {}),
       projectionPendingRepair: published.projectionPendingRepair,
     };
   }
@@ -554,7 +643,7 @@ export function startReviewCycle(
     issue = fetchIssueRevision(transport, input.repo, input.issueNumber);
   } catch {
     diagnostics.push({ code: 'comments-truncated', message: 'unable to confirm issue revision after cycle publication' });
-    return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted, projectionPendingRepair: true };
+    return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted, ...(stageAttemptId ? { stageAttemptId } : {}), projectionPendingRepair: true };
   }
   let finalCensus: ReturnType<typeof loadIssueJournalCensus>;
   try {
@@ -575,14 +664,14 @@ export function startReviewCycle(
       message: 'cycle head drift after publication',
       eventKey: persisted,
     });
-    return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted };
+    return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted, ...(stageAttemptId ? { stageAttemptId } : {}) };
   }
   if (!issue.body.includes(input.sourceRevision)) {
     diagnostics.push({
       code: 'conflicting-remote-event',
       message: 'issue revision drift detected before projection',
     });
-    return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted, projectionPendingRepair: true };
+    return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted, ...(stageAttemptId ? { stageAttemptId } : {}), projectionPendingRepair: true };
   }
 
   const projection = syncIssueProjectionLabels(
@@ -598,6 +687,7 @@ export function startReviewCycle(
     diagnostics,
     cycleId: persisted,
     eventKey: persisted,
+    ...(stageAttemptId ? { stageAttemptId } : {}),
     projectionPendingRepair: projection.pendingRepair,
     reviewLaneRouting,
   };
@@ -695,6 +785,7 @@ export function publishSettledStageRecord(
     'required-source-count': receipt.reviewerCardinality,
     'producer-evidence': receipt.producerEvidence,
     'tier-transition': receipt.tierTransition,
+    ...(receipt.partialMissingSources.length > 0 ? { 'partial-missing-sources': receipt.partialMissingSources } : {}),
     'routed-lane': receipt.reviewLane,
   };
   const published = publishLogicalJournalEvent(

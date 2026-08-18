@@ -195,10 +195,12 @@ export function runFinalAcceptance(
       guardErrors: [`caller issue revision ${input.issueRevision} does not match live source-revision marker ${liveRevision}`],
     };
   }
-  const callerBodyErrors = validatePublishBodyBinding(input.terminalSourceBody ?? input.issueBody, liveIssue.body);
-  if (callerBodyErrors.length > 0) {
-    return { ok: false, diagnostics, guardErrors: callerBodyErrors };
+  const terminalSourceBody = input.terminalSourceBody ?? input.issueBody;
+  const terminalRevisionResult = parseCanonicalSourceRevisionMarker(terminalSourceBody);
+  if (terminalRevisionResult.errors.length > 0 || !terminalRevisionResult.revision) {
+    return { ok: false, diagnostics, guardErrors: terminalRevisionResult.errors.map((error) => `terminal source: ${error}`) };
   }
+  const terminalRevision = terminalRevisionResult.revision;
 
   const head = censusState.lineage.head;
   if (!head || head.logical.schema !== CYCLE_SCHEMA) {
@@ -209,8 +211,12 @@ export function runFinalAcceptance(
   if (headCycle['cycle-id'] !== input.cycleId) {
     return { ok: false, diagnostics, guardErrors: ['cycle head mismatch'] };
   }
-  if (headCycle['source-revision'] !== liveRevision) {
-    return { ok: false, diagnostics, guardErrors: ['issue revision does not match canonical cycle head'] };
+  if (headCycle['source-revision'] !== terminalRevision) {
+    return {
+      ok: false,
+      diagnostics,
+      guardErrors: [`terminal source revision ${terminalRevision} does not match original canonical cycle head ${headCycle['source-revision']}`],
+    };
   }
 
   let canonicalInventory: ReturnType<typeof loadCanonicalReceiptInventory>;
@@ -239,6 +245,7 @@ export function runFinalAcceptance(
   const guard = executeFinalAcceptanceGuards({
     ...input,
     issueBody: liveIssue.body,
+    terminalSourceBody,
     currentIssueBody: liveIssue.body,
     stageReceiptValues: canonicalInventory.receiptValues,
     stageReceiptPaths: canonicalInventory.receiptPaths,
@@ -260,7 +267,7 @@ export function runFinalAcceptance(
       ok: false,
       diagnostics,
       guardErrors: ['unable to re-read current Issue body before final event publication'],
-      eventKey: `${headCycle['cycle-id']}:final-acceptance:${headCycle['source-revision']}`,
+      eventKey: `${headCycle['cycle-id']}:final-acceptance:${liveRevision}`,
       projectionPendingRepair: true,
     };
   }
@@ -270,25 +277,25 @@ export function runFinalAcceptance(
     ...(publishRevisionResult.revision !== liveRevision
       ? [`live source-revision marker changed before final publication: expected ${liveRevision}, got ${publishRevisionResult.revision ?? '<missing>'}`]
       : []),
-    ...validatePublishBodyBinding(input.terminalSourceBody ?? input.issueBody, publishIssue.body),
+    ...validatePublishBodyBinding(liveIssue.body, publishIssue.body),
   ];
   if (publishBodyErrors.length > 0) {
     return {
       ok: false,
       diagnostics,
       guardErrors: publishBodyErrors,
-      eventKey: `${headCycle['cycle-id']}:final-acceptance:${headCycle['source-revision']}`,
+      eventKey: `${headCycle['cycle-id']}:final-acceptance:${liveRevision}`,
       projectionPendingRepair: true,
     };
   }
 
-  const eventKey = `${headCycle['cycle-id']}:final-acceptance:${headCycle['source-revision']}`;
+  const eventKey = `${headCycle['cycle-id']}:final-acceptance:${liveRevision}`;
   const logical: FinalEventLogical = {
     schema: FINAL_SCHEMA,
     'event-key': eventKey,
     'cycle-id': headCycle['cycle-id'],
     tier: headCycle.tier,
-    'source-revision': headCycle['source-revision'],
+    'source-revision': liveRevision,
     outcome: 'accepted',
     'contract-version': FINAL_ACCEPTANCE_CONTRACT_VERSION,
     'public-actor': input.publicActor,
@@ -311,7 +318,7 @@ export function runFinalAcceptance(
           ...(latestRevisionResult.revision !== liveRevision
             ? [`live source-revision marker changed during final publication: expected ${liveRevision}, got ${latestRevisionResult.revision ?? '<missing>'}`]
             : []),
-          ...validatePublishBodyBinding(input.terminalSourceBody ?? input.issueBody, latest.body),
+          ...validatePublishBodyBinding(liveIssue.body, latest.body),
         ];
         return errors.length === 0
           ? { ok: true }
@@ -397,7 +404,7 @@ export function runFinalAcceptance(
     ...(confirmedRevisionResult.revision !== liveRevision
       ? [`live source-revision marker changed after final event confirmation: expected ${liveRevision}, got ${confirmedRevisionResult.revision ?? '<missing>'}`]
       : []),
-    ...validatePublishBodyBinding(input.terminalSourceBody ?? input.issueBody, issue.body),
+    ...validatePublishBodyBinding(liveIssue.body, issue.body),
   ];
   if (confirmedErrors.length > 0) {
     return {

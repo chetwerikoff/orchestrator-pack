@@ -164,11 +164,11 @@ describe('Issue #1197 flow-manager authority contract', () => {
       'no legal action',
       'premature stage transition',
       'ambiguous authority',
-      'two non-converging author-fix cycles',
+      'two non-converging author corrections',
     ]) {
       expect(authority).toContain(scenario);
     }
-    expect(authority).toContain('add a lease');
+    expect(authority).toMatch(/add a\s+lease/);
     expect(authority).toContain('heartbeat');
     expect(authority).toContain('service');
     expect(authority).toContain('durable store');

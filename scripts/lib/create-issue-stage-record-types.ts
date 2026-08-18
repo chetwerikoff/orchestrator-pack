@@ -38,6 +38,13 @@ export type DeliveryClass = 'immediate' | 'delayed';
 export type GhFailureKind = 'timeout' | 'transport' | 'terminal-refusal';
 export type TerminalOutcome = 'done' | 'blocked' | 'refused';
 
+export interface PartialMissingSourceWitness {
+  reviewerSlot: string;
+  invocationId: string;
+  evidenceIdentity: string;
+  reason: string;
+}
+
 export interface GhFailure {
   kind: GhFailureKind;
   message: string;
@@ -97,6 +104,7 @@ export interface StageEventLogical {
   'required-source-count': number;
   'producer-evidence': ProducerEvidence;
   'tier-transition': string;
+  'partial-missing-sources'?: PartialMissingSourceWitness[];
   'routed-lane'?: ReviewLaneEvidence;
 }
 
@@ -141,7 +149,11 @@ export type LineageDiagnosticCode =
   | 'cyclic-cycle-lineage'
   | 'non-current-cycle-fork'
   | 'duplicate-remote-event'
-  | 'conflicting-remote-event';
+  | 'conflicting-remote-event'
+  | 'stage_slot_consumed'
+  | 'stage_order_violation'
+  | 'stage_authority_invalid'
+  | 'terminal_bundle_unavailable';
 
 export interface LineageDiagnostic {
   code: LineageDiagnosticCode | 'foreign-comment' | 'edited-comment' | 'malformed-marker' | 'trust-field-incomplete' | 'comments-truncated' | 'public-journal-gap' | 'label-sync-failed';
@@ -190,6 +202,7 @@ export interface ConsumableStageReceipt {
   cycleBinding: StageReceiptCycleBinding;
   producerEvidence: ProducerEvidence;
   tierTransition: string;
+  partialMissingSources: PartialMissingSourceWitness[];
   reviewLane?: ReviewLaneEvidence;
 }
 
