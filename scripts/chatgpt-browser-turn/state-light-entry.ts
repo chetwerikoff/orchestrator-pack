@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-import { resolve } from 'node:path';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readStableInput } from './input.ts';
+import { readStableInput, type InputSnapshot } from './input.ts';
 import { turnExitCode } from './contracts.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import { runStateLightTurn } from './state-light-turn.ts';
@@ -74,6 +76,16 @@ function stripCanonicalContext(argv: readonly string[]): string[] {
   return stripped;
 }
 
+function replaceInputPath(argv: readonly string[], inputPath: string): string[] {
+  const rewritten = [...argv];
+  const inputIndex = rewritten.indexOf('--input');
+  if (inputIndex < 0 || inputIndex + 1 >= rewritten.length) {
+    throw new Error('canonical_prompt_context_missing:input');
+  }
+  rewritten[inputIndex + 1] = inputPath;
+  return rewritten;
+}
+
 function rejectionProfileKey(argv: readonly string[]): string {
   const profile = optionValue(argv, 'profile');
   const cdp = optionValue(argv, 'cdp');
@@ -113,24 +125,56 @@ function emitCanonicalRefusal(argv: readonly string[], cause: string): number {
   return turnExitCode('input_invalid');
 }
 
+function pinValidatedSnapshot(snapshot: InputSnapshot): { inputPath: string; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), 'opk-manager-review-input-'));
+  const inputPath = join(root, 'prompt.txt');
+  try {
+    // The transport must never re-read caller-controlled bytes after canonical
+    // admission. Materialize only the already-admitted snapshot into a private
+    // one-shot input and keep it alive for the awaited transport invocation.
+    writeFileSync(inputPath, snapshot.bytes, { flag: 'wx', mode: 0o400 });
+  } catch (error) {
+    try { rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
+    throw error;
+  }
+  return {
+    inputPath,
+    cleanup: () => {
+      try { rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
+    },
+  };
+}
+
 async function runCanonicalTurn(
   argv: readonly string[],
   runTurn: (argv: readonly string[]) => Promise<number>,
 ): Promise<number> {
   if (!directPublicationRequested(argv)) return await runTurn(argv);
 
+  let snapshot: InputSnapshot;
   try {
     requiredCanonicalOption(argv, 'reviewer-source-output');
     requiredCanonicalOption(argv, 'reviewer-source');
     const inputPath = requiredCanonicalOption(argv, 'input');
     const context = canonicalContext(argv);
-    const snapshot = readStableInput(inputPath);
+    snapshot = readStableInput(inputPath);
     assertCanonicalManagerReviewBrief(snapshot.text, context);
   } catch (error) {
     return emitCanonicalRefusal(argv, canonicalCause(error));
   }
 
-  return await runTurn(stripCanonicalContext(argv));
+  let pinned: ReturnType<typeof pinValidatedSnapshot>;
+  try {
+    pinned = pinValidatedSnapshot(snapshot);
+  } catch {
+    return emitCanonicalRefusal(argv, 'canonical_prompt_input_snapshot_unavailable');
+  }
+
+  try {
+    return await runTurn(replaceInputPath(stripCanonicalContext(argv), pinned.inputPath));
+  } finally {
+    pinned.cleanup();
+  }
 }
 
 export async function runStateLightEntry(
