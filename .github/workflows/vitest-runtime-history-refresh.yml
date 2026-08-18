@@ -538,8 +538,9 @@ jobs:
             --require-equal-inventory
           echo "runtime-history pre-delivery inventory guard: trusted main ${trusted_main_sha} matches prepared membership"
 
-          if [ "${trusted_main_sha}" != "${GITHUB_SHA}" ]; then
-            echo "runtime-history pre-delivery source drift: expected ${GITHUB_SHA}, got ${trusted_main_sha}" >&2
+          prepared_parent_sha="$(git rev-parse HEAD^)"
+          if [ "${trusted_main_sha}" != "${prepared_parent_sha}" ]; then
+            echo "runtime-history pre-delivery base drift: prepared parent ${prepared_parent_sha}, trusted main ${trusted_main_sha}" >&2
             exit 1
           fi
 
