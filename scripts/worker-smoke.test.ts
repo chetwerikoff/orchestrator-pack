@@ -10,6 +10,8 @@ import {
   evaluateWorkerSmokeCoverage,
   evaluateWorkerSmokeGate,
   formatSmokeReportComment,
+  normalizeSmokeReport,
+  resolveSmokeRequirement,
   smokeDeliverySealedPath,
   SMOKE_REPORT_PRODUCER,
   type SmokeReport,
@@ -22,6 +24,7 @@ import { writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import type { RuntimeDispatchResult, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 import {
+  bindSmokeReportToPlan,
   establishRuntimeSmokeDelivery,
   exactClosingIssue,
   finalSmokeCommentSnapshotMatches,
@@ -203,6 +206,45 @@ describe('runtime-neutral worker smoke', () => {
     const result = checkSmokeTestPlan(issueBody);
     expect(result.ok).toBe(true);
     expect(result.plan?.scenarios).toHaveLength(1);
+  });
+
+  it('binds child PASS observations to exact plan tuples before immediate gate coverage', () => {
+    const declared = [
+      {
+        action: 'attempt replacement while the exact current local RuntimeWorker is `busy` or `idle`',
+        expected: 'replacement returns `skipped_live`/no-effect, current assignment is unchanged, and zero start/stop/cleanup/workspace/publication effect occurs',
+      },
+      {
+        action: 'after #1415 lands, enumerate every allowed-root and production caller, including terminalized report/wake compatibility copies',
+        expected: 'every pre-existing root resolves; the only intentionally absent-before-implementation files are scripts/lib/worker-assignment-store.test.ts, scripts/lib/worker-assignment-runtime.test.ts, scripts/pr2-foundation/remote-worker-assignment.ts and scripts/pr2-foundation/remote-worker-assignment.test.ts; each executable compatibility twin is either retired or kept in semantic parity without widening to a blanket tree',
+      },
+    ];
+    const child = report('PASS', [
+      scenario('attempt replacement while the exact current local RuntimeWorker is busy or idle', 'replacement returns skipped_live/no-effect and the current assignment is unchanged'),
+      scenario('after #1415 lands, enumerate every allowed-root and production caller', 'the only four named #1416 files are absent while compatibility remains in parity'),
+    ]);
+    const plan = resolveSmokeRequirement(planBody(declared));
+    const bound = bindSmokeReportToPlan(child, plan);
+    expect(bound.result).toBe('PASS');
+    expect(bound.scenarios).toEqual([
+      { ...declared[0], observed: 'pass observed', outcome: 'pass' },
+      { ...declared[1], observed: 'pass observed', outcome: 'pass' },
+    ]);
+
+    const normalized = normalizeSmokeReport(bound, { issueNumber: 1343, prNumber: 2001, headSha: HEAD_ONE });
+    expect(normalized.ok).toBe(true);
+    if (!normalized.ok) throw new Error(normalized.reason);
+    expect(normalized.report.scenarios).toEqual([
+      { ...declared[0], observed: 'pass observed', outcome: 'pass' },
+      { ...declared[1], observed: 'pass observed', outcome: 'pass' },
+    ]);
+    expect(coverage([comment(1, normalized.report)], planBody(declared)).accepting).toBe(true);
+
+    expect(bindSmokeReportToPlan({ ...child, scenarios: child.scenarios.slice(0, 1) }, plan).result).toBe('FAIL');
+    expect(bindSmokeReportToPlan({
+      ...child,
+      scenarios: [child.scenarios[0]!, { ...child.scenarios[1]!, observed: '' }],
+    }, plan).result).toBe('FAIL');
   });
 
   it('dispatches the prompt once and consumes child delivery evidence', () => {
