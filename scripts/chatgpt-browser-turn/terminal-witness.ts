@@ -488,6 +488,23 @@ const DEFINITIVE_REJECTION_STATUSES = new Set([401, 403, 404, 410, 422]);
 const DIRECT_POLICY_IDENTITY_RE = /^([^#\s]+)#capture=(final-node\/v1|issue-comment-api-harvest\/v1|direct-publication\/v1)$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const REVISION_LINE_RE = /^Read revision: #([1-9][0-9]*) (r[0-9]+)$/;
+const INVOCATION_ECHO_PREFIX = 'INVOCATION_ID_TO_ECHO:';
+
+function hasBoundInvocationCommentMarker(
+  comment: string,
+  target: Pick<DirectPublicationTarget, 'issueNumber' | 'sourceRevision' | 'invocationId'>,
+): boolean {
+  const lines = comment.split(/\n/).map((line) => line.endsWith('\r') ? line.slice(0, -1) : line);
+  const firstNonEmptyIndex = lines.findIndex((line) => line.trim().length > 0);
+  if (firstNonEmptyIndex < 0) return false;
+  const expectedRevisionLine = `Read revision: #${target.issueNumber} ${target.sourceRevision}`;
+  const expectedMarkerLine = `${INVOCATION_ECHO_PREFIX} ${target.invocationId}`;
+  const markerLines = lines.filter((line) => line.trimStart().startsWith(INVOCATION_ECHO_PREFIX));
+  return lines[firstNonEmptyIndex] === expectedRevisionLine
+    && lines[firstNonEmptyIndex + 1] === expectedMarkerLine
+    && markerLines.length === 1
+    && markerLines[0] === expectedMarkerLine;
+}
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -823,32 +840,66 @@ export function settleDirectPublication(
   finalAssistantOutput?: string,
 ): DirectPublicationSettlement {
   const matching = matchingDirectPublicationPairs(state, target);
-  if (!target.userMessageId) {
-    return { state: 'possible-delivery', cause: 'direct_publication_owned_parent_missing' };
-  }
-  if (matching.hasWrongTargetCandidate) {
+  if (target.userMessageId && matching.hasWrongTargetCandidate) {
     return { state: 'possible-delivery', cause: 'direct_publication_wrong_target_candidate' };
   }
-  if (matching.invocations.length !== 1) {
-    return { state: 'possible-delivery', cause: 'direct_publication_invocation_ambiguous' };
+  const ownedInvocations = matching.invocations.filter((item) =>
+    hasBoundInvocationCommentMarker(item.comment, target));
+  if (ownedInvocations.length === 0) {
+    return { state: 'possible-delivery', cause: 'direct_publication_no_owned_publication' };
   }
-  const invocation = matching.invocations[0]!;
-  if (invocation.parentUserMessageId !== target.userMessageId) {
+  if (ownedInvocations.length > 1) {
+    return { state: 'possible-delivery', cause: 'direct_publication_owned_parent_ambiguous' };
+  }
+  const invocation = ownedInvocations[0]!;
+  const ownedParentId = target.userMessageId ?? invocation.parentUserMessageId;
+  if (!ownedParentId) {
+    return {
+      state: 'possible-delivery',
+      cause: 'direct_publication_owned_parent_missing',
+      invocation,
+    };
+  }
+  if (target.userMessageId && invocation.parentUserMessageId !== target.userMessageId) {
     return {
       state: 'possible-delivery',
       cause: 'direct_publication_owned_parent_mismatch',
       invocation,
     };
   }
-  if (matching.results.some((item) => item.parentUserMessageId !== target.userMessageId)) {
+  if (!target.userMessageId) {
+    const wrongTargetInvocation = state.invocations.some((item) =>
+      item.parentUserMessageId === ownedParentId
+      && (item.repositoryFullName !== target.repositoryFullName || item.issueNumber !== target.issueNumber));
+    const wrongTargetResult = state.results.some((item) =>
+      item.parentUserMessageId === ownedParentId
+      && (item.repositoryFullName !== target.repositoryFullName || item.issueNumber !== target.issueNumber));
+    if (wrongTargetInvocation || wrongTargetResult) {
+      return {
+        state: 'possible-delivery',
+        cause: 'direct_publication_wrong_target_candidate',
+        invocation,
+      };
+    }
+  }
+  const unpairedResults = matching.results.filter((item) => item.toolCallId !== invocation.toolCallId);
+  if (unpairedResults.some((item) =>
+    item.parentUserMessageId === undefined || item.parentUserMessageId === ownedParentId)) {
+    return {
+      state: 'possible-delivery',
+      cause: 'direct_publication_result_ambiguous',
+      invocation,
+    };
+  }
+  const results = matching.results.filter((item) => item.toolCallId === invocation.toolCallId);
+  if (results.some((item) => item.parentUserMessageId !== ownedParentId)) {
     return {
       state: 'possible-delivery',
       cause: 'direct_publication_result_parent_ambiguous',
       invocation,
     };
   }
-  const results = matching.results.filter((item) => item.toolCallId === invocation.toolCallId);
-  if (matching.results.length !== 1 || results.length !== 1) {
+  if (results.length !== 1) {
     return {
       state: 'possible-delivery',
       cause: results.length === 0 ? 'direct_publication_result_missing' : 'direct_publication_result_ambiguous',

@@ -836,40 +836,59 @@ const target = {
 
 const successComment = [
   'Read revision: #1196 r18',
+  `INVOCATION_ID_TO_ECHO: ${target.invocationId}`,
   'VERDICT: APPROVE',
   '',
   'id: F-001',
   'Finding: example',
 ].join('\n');
 
-function observeSuccess() {
-  const state = createDirectPublicationObservationState();
+function observeSuccessfulPublicationPair(
+  state: ReturnType<typeof createDirectPublicationObservationState>,
+  toolCallId: string,
+  parentUserMessageId: string,
+  comment: string,
+  commentId: string,
+  commentUrl: string,
+) {
   observeDirectPublicationPayload(state, {
     type: 'tool_call',
     action: 'add_comment_to_issue',
-    tool_call_id: 'call-01',
-    assistant_message_id: 'assistant-01',
-    parent_user_message_id: 'user-01',
+    tool_call_id: toolCallId,
+    assistant_message_id: `assistant-${toolCallId}`,
+    parent_user_message_id: parentUserMessageId,
     arguments: {
       repository: target.repositoryFullName,
       issue_number: target.issueNumber,
-      comment: successComment,
+      comment,
     },
   });
   observeDirectPublicationPayload(state, {
     type: 'tool_result',
     action: 'add_comment_to_issue',
-    tool_call_id: 'call-01',
-    parent_user_message_id: 'user-01',
+    tool_call_id: toolCallId,
+    parent_user_message_id: parentUserMessageId,
     repository: target.repositoryFullName,
     issue_number: target.issueNumber,
     response: {
       status: 201,
-      comment_id: '987',
-      comment_url: 'https://github.com/chetwerikoff/orchestrator-pack/issues/1196#issuecomment-987',
+      comment_id: commentId,
+      comment_url: commentUrl,
     },
     success: true,
   });
+}
+
+function observeSuccess() {
+  const state = createDirectPublicationObservationState();
+  observeSuccessfulPublicationPair(
+    state,
+    'call-01',
+    'user-01',
+    successComment,
+    '987',
+    'https://github.com/chetwerikoff/orchestrator-pack/issues/1196#issuecomment-987',
+  );
   return state;
 }
 
@@ -891,6 +910,127 @@ describe('direct-publication terminal matrix', () => {
       `INVOCATION_ID: ${target.invocationId}`,
       'FINDING_COUNT: 1',
     ].join('\n'));
+  });
+
+  it('settles the marker-owned pair without a pre-resolved parent when a foreign same-Issue publication exists', () => {
+    const state = createDirectPublicationObservationState();
+    const foreignComment = [
+      'Read revision: #1196 r18',
+      'INVOCATION_ID_TO_ECHO: 11111111-1111-4111-8111-111111111111',
+      'VERDICT: APPROVE',
+    ].join('\n');
+    observeSuccessfulPublicationPair(
+      state,
+      'call-foreign',
+      'user-foreign',
+      foreignComment,
+      '986',
+      'https://github.com/example/foreign',
+    );
+    observeSuccessfulPublicationPair(
+      state,
+      'call-owned',
+      'user-01',
+      successComment,
+      '987',
+      'https://github.com/example/owned',
+    );
+
+    const markerOnlyTarget = {
+      repositoryFullName: target.repositoryFullName,
+      issueNumber: target.issueNumber,
+      sourceRevision: target.sourceRevision,
+      invocationId: target.invocationId,
+    } as const;
+    const settlement = settleDirectPublication(state, markerOnlyTarget);
+    expect(settlement).toMatchObject({
+      state: 'success',
+      cause: 'direct_publication_success',
+      invocation: { toolCallId: 'call-owned' },
+      result: { toolCallId: 'call-owned', commentId: '987' },
+      sourceBytes: successComment,
+    });
+  });
+
+  it('rejects missing, foreign, or duplicate invocation markers as no owned publication', () => {
+    const nonOwnedComments = [
+      [
+        'Read revision: #1196 r18',
+        'VERDICT: APPROVE',
+      ].join('\n'),
+      [
+        'Read revision: #1196 r18',
+        'INVOCATION_ID_TO_ECHO: 11111111-1111-4111-8111-111111111111',
+        'VERDICT: APPROVE',
+      ].join('\n'),
+      [
+        'Read revision: #1196 r18',
+        `INVOCATION_ID_TO_ECHO: ${target.invocationId}`,
+        `INVOCATION_ID_TO_ECHO: ${target.invocationId}`,
+        'VERDICT: APPROVE',
+      ].join('\n'),
+    ];
+
+    for (const [index, comment] of nonOwnedComments.entries()) {
+      const state = createDirectPublicationObservationState();
+      observeDirectPublicationPayload(state, {
+        action: 'add_comment_to_issue',
+        tool_call_id: `call-non-owned-${index}`,
+        parent_user_message_id: 'user-01',
+        arguments: {
+          repository: target.repositoryFullName,
+          issue_number: target.issueNumber,
+          comment,
+        },
+      });
+      expect(settleDirectPublication(state, target).cause)
+        .toBe('direct_publication_no_owned_publication');
+    }
+  });
+
+  it('fails closed when more than one same-Issue invocation carries the bound marker', () => {
+    const state = createDirectPublicationObservationState();
+    for (const toolCallId of ['call-owned-a', 'call-owned-b']) {
+      observeDirectPublicationPayload(state, {
+        action: 'add_comment_to_issue',
+        tool_call_id: toolCallId,
+        parent_user_message_id: 'user-01',
+        arguments: {
+          repository: target.repositoryFullName,
+          issue_number: target.issueNumber,
+          comment: successComment,
+        },
+      });
+    }
+    expect(settleDirectPublication(state, target).cause)
+      .toBe('direct_publication_owned_parent_ambiguous');
+  });
+
+  it('keeps missing and conflicting selected results distinct from ownership failures', () => {
+    const missing = createDirectPublicationObservationState();
+    observeDirectPublicationPayload(missing, {
+      action: 'add_comment_to_issue',
+      tool_call_id: 'call-missing-result',
+      parent_user_message_id: 'user-01',
+      arguments: {
+        repository: target.repositoryFullName,
+        issue_number: target.issueNumber,
+        comment: successComment,
+      },
+    });
+    expect(settleDirectPublication(missing, target).cause).toBe('direct_publication_result_missing');
+
+    const conflicting = observeSuccess();
+    observeDirectPublicationPayload(conflicting, {
+      action: 'add_comment_to_issue',
+      tool_call_id: 'call-01',
+      parent_user_message_id: 'user-01',
+      repository: target.repositoryFullName,
+      issue_number: target.issueNumber,
+      response_complete: true,
+      response: { status: 503 },
+    });
+    expect(settleDirectPublication(conflicting, target).cause).toBe('direct_publication_result_ambiguous');
   });
 
   it.each([401, 403, 404, 410, 422])('accepts only definitive GitHub rejection %s as no-commit', (status) => {
@@ -1022,7 +1162,11 @@ describe('direct-publication terminal matrix', () => {
       response: { status: 201, comment_id: '988', comment_url: 'https://github.com/example/unpaired' },
       success: true,
     });
-    expect(settleDirectPublication(unpaired, target).cause).toBe('direct_publication_result_ambiguous');
+    expect(settleDirectPublication(unpaired, target)).toMatchObject({
+      state: 'possible-delivery',
+      cause: 'direct_publication_result_ambiguous',
+      invocation: { toolCallId: 'call-01' },
+    });
 
     const wrongTarget = createDirectPublicationObservationState();
     observeDirectPublicationPayload(wrongTarget, {

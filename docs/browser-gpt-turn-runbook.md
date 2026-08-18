@@ -152,10 +152,29 @@ successful match may the existing transport prepend its owned
 that marker. The workflow owns direct target-Issue publication and receipt-only
 manager output. The reviewer publishes its own complete verdict/findings
 comment; the manager consumes the receipt and later owns disposition/workflow
-actions. Publish final bytes before closing the exact retained invocation page.
-Preserve a reachable page after post-send failure or no publication; release
-only the invocation's browser client. Never close a foreign, sibling, or orphan
-tab by URL, target id, age, focus, metadata, or liveness.
+actions.
+
+For direct publication, the one top-level reviewer comment must use exactly
+these as its first two non-empty lines:
+
+```text
+Read revision: #<ISSUE_NUMBER> <EXPECTED_REVISION>
+INVOCATION_ID_TO_ECHO: <INVOCATION_ID>
+```
+
+Leading blank lines are ignored for this grammar. The invocation marker must
+occur exactly once in that comment and equal the caller-minted invocation id.
+Settlement uses that exact comment marker to choose the invocation; same
+repository/Issue, candidate order, parent position, titles, URLs, or product
+message ids do not substitute for it. Zero exact owned-marker matches and
+multiple exact owned-marker matches remain fail-closed, while
+missing/conflicting results or post-send uncertainty retain their existing
+possible-delivery/no-resend semantics.
+
+Publish final bytes before closing the exact retained invocation page. Preserve
+a reachable page after post-send failure or no publication; release only the
+invocation's browser client. Never close a foreign, sibling, or orphan tab by
+URL, target id, age, focus, metadata, or liveness.
 
 ## Incident handling
 
