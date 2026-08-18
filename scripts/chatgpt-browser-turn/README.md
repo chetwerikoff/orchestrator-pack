@@ -208,6 +208,28 @@ The final reply bytes are written through the existing atomic no-clobber
 publication primitive. Publication conflict is invocation-local; it does not
 create a profile/browser admission wall.
 
+### Direct-publication invocation binding
+
+Direct-publication settlement treats a candidate Issue comment as owned by the
+current invocation only when its first two non-empty-position lines are exactly:
+
+```text
+Read revision: #<ISSUE_NUMBER> <EXPECTED_REVISION>
+INVOCATION_ID_TO_ECHO: <INVOCATION_ID>
+```
+
+The invocation marker must appear exactly once in that comment and equal the
+caller-bound invocation id. Repository/Issue equality, candidate order,
+parent position, titles, URLs, or product message ids do not establish ownership.
+A same-Issue candidate census with zero exact owned-marker matches settles as
+`direct_publication_no_owned_publication`; two or more exact owned-marker matches
+settle as `direct_publication_owned_parent_ambiguous`. After exactly one invocation
+is selected, only results carrying that invocation's `toolCallId` can settle the
+pair. Marker identity does not upgrade possible delivery, observation loss, a
+missing/conflicting result, or any other post-send uncertainty into success and
+never grants resend authority. `turn-result/v1`, send-count accounting, page
+attribution, and publication semantics are otherwise unchanged.
+
 ## Tab lifetime and cleanup
 
 Every canonical turn creates a dedicated owned tab. This removes the old shared-
