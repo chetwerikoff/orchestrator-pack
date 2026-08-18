@@ -151,7 +151,7 @@ describe('deferred watch wake decision tier threading', () => {
 });
 
 describe('review-cycle cap state in deferred watch ticks', () => {
-  it('carries capCycleState across sequential cap gates in one tick', () => {
+  it('carries durable review-stage completion across sequential cap gates in one tick', () => {
     const pr = 672;
     const cleanHead = 'cleanhead'.padEnd(40, 'c');
     const nextHead = 'nexthead'.padEnd(40, 'n');
@@ -183,6 +183,7 @@ describe('review-cycle cap state in deferred watch ticks', () => {
       producer: 'review-trigger-reeval',
     });
     expect(first.reason).toBe(TERMINAL_CLEAN_EARLY_STOP);
+    expect(first.prState?.reviewStageComplete).toBe(true);
 
     const accumulated = evaluateReviewCycleCapGate({
       prNumber: pr,
@@ -201,8 +202,10 @@ describe('review-cycle cap state in deferred watch ticks', () => {
       producer: 'review-trigger-reeval',
     });
 
-    expect(accumulated.allowStart).toBe(true);
-    expect(accumulated.prState?.distinctHeadsReviewed).toEqual([]);
+    expect(accumulated.allowStart).toBe(false);
+    expect(accumulated.reason).toBe(TERMINAL_CLEAN_EARLY_STOP);
+    expect(accumulated.prState?.reviewStageComplete).toBe(true);
+    expect(accumulated.prState?.distinctHeadsReviewed).toEqual(first.prState?.distinctHeadsReviewed);
     expect(staleInput.prState?.distinctHeadsReviewed?.length).toBeGreaterThan(0);
   });
 });
