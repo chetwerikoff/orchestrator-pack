@@ -19,7 +19,7 @@ export interface ResolvedWorkerAssignment {
 
 export interface WorkerAssignmentReconciliation {
   readonly assignment: WorkerAssignment;
-  readonly reason: 'target_unresolved' | 'target_gone' | 'remote_not_applicable';
+  readonly reason: 'target_unresolved' | 'remote_not_applicable';
 }
 
 export type WorkerAssignmentTargetResolution =
@@ -191,7 +191,10 @@ export function resolveCurrentWorkerAssignmentBindings(input: {
     }
     if (!assignmentStillCurrent(input.file, assignment)) continue;
     if (resolved.value.kind === 'gone') {
-      reconciliations.push({ assignment, reason: 'target_gone' });
+      // Fleet reconciliation has no authority to act on gone evidence. Preserve
+      // the exact gone distinction only on the target-resolution seam used by
+      // replacement/recovery; the existing scheduler handoff remains generic.
+      reconciliations.push({ assignment, reason: 'target_unresolved' });
       continue;
     }
     const worker = resolved.value.worker;
