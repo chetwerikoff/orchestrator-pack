@@ -43,30 +43,25 @@ Use `--phase pre-lens` when only the T3 pre-lens stages are complete. The
 command returns a non-zero status and a named missing input when evidence is
 absent. It writes no acceptance artifact on failure.
 
-`check-artifacts` keeps its existing enforcement matrix; this task does not
-change the gate mechanics. Its current `expectedStages` behavior still
-requires `architectural` for T2 and requires `competitive` unconditionally for
-T3 (with the other existing phase requirements). It reports every missing
-completed stage even when stale output markers are already present.
+`check-artifacts`, artifact production, launch admission, and final acceptance
+consume the single executable stage-plan authority in
+`scripts/lib/create-issue-stage-topology.ts`. T1 requires one `architectural`
+stage. T2 requires `architectural-review` followed by `architectural`. T3 reads
+the immutable `tier-intake/v1` decision: `competitiveDecision: required` with a
+non-empty `competitiveRationale` requires `competitive`; `skipped` with a
+non-empty rationale omits it. T3 then requires `architectural-review`,
+`architectural-lens`, and `architectural`. Journal state is audit-only and does
+not choose this topology.
 
-The Issue #1364 operator policy is separate from that gate: T1 has one GPT
-lens followed by a mandatory author fix-round; T2 has three concurrent GPT
-`architectural-review` sources, a mandatory author fix-round, one GPT lens, and
-a mandatory author fix-round; T3 has three concurrent GPT `competitive` sources
-when directly required by the operator, selected by the architect, or judged
-necessary by the flow-manager because the task has fundamentally different
-plausible solution designs, then a mandatory author fix-round, three concurrent
-GPT `architectural-review` sources, a mandatory author fix-round, one Claude
-lens, a mandatory author fix-round, one GPT lens, and a mandatory author
-fix-round. Every fix-round is required even for `NO_FINDINGS`; it records “no
-findings, no changes required” in the journal, and the next stage cannot start
-until that record exists. Competitive selection and skipping are substantive
-judgments, not checklist, threshold, score, or scale decisions. A skip requires
-an explicit journal rationale for why the solution space is narrow; missing
-rationale is a process defect.
+A clean settled stage closes with the governed no-findings disposition only: no
+author fix-round, Issue-body edit, revision increment, or re-run of that stage.
+A stage with findings gets the bounded author correction/disposition defined by
+the lifecycle contract, after which only the next canonical stage can be
+admitted. The terminal GPT stage is Issue-lifetime one-shot; a permitted bounded
+post-terminal correction does not create a second terminal receipt.
+
 Browser starts are staggered by 10–15 seconds. No stage starts on a stale Issue
-revision; reviewers read the latest revision. Updating `expectedStages` to
-enforce this policy is separate future work and is not part of Issue #1364.
+revision; reviewers read the latest admitted revision.
 
 ## Evidence inputs
 
@@ -149,18 +144,24 @@ transport classification remains unchanged. `terminalResultIdentity` and
 `reviewerSource` are present only when actually observed. The pre-existing
 successful transport branch retains its existing invariants.
 
-Each stage is bound to its own recorded `sourceRevision`; `tier-intake.firstRevision`
-remains the immutable episode root, not the required revision for every later
-stage. Therefore a mandatory author fix-round from intake r03 to terminal r04
-is valid when the terminal invocation and live terminal verdict both bind r04.
-A verdict declaring a revision different from its own invocation's frozen
+Each stage is bound to its own recorded `sourceRevision`;
+`tier-intake.firstRevision` remains the immutable episode root, not the required
+revision for every later stage. A bounded author correction can therefore move
+the Issue from one revision to the next before the next canonical stage, while
+the stage that produced the finding remains permanently consumed. A verdict
+declaring a revision different from its own invocation's frozen
 `sourceRevision` is rejected.
 
-`author-dispositions.json` has this shape:
+`author-dispositions.json` carries the producer-owned terminal-bundle binding as
+well as occurrence-level dispositions:
 
 ```json
 {
   "schema": "create-issue-author-dispositions/v1",
+  "reviewEpisodeId": "issue:1439@r01",
+  "sourceRevision": "r02",
+  "predecessorStage": "architectural-review",
+  "draft": "<exact live Issue body for r02>",
   "findings": [
     {
       "id": "DEFECT-1",
@@ -173,8 +174,14 @@ A verdict declaring a revision different from its own invocation's frozen
 }
 ```
 
-The producer computes the ledger counts from the capture bytes and disposition
-values, then runs the unchanged finding-ledger guard before writing it.
+`predecessorStage: null` is an explicit valid value when there is no predecessor.
+An empty `findings` array is an explicit governed no-findings value, not a
+missing producer result. The producer computes ledger counts from the capture
+bytes and disposition values, copies the producer-owned
+`reviewEpisodeId`/`sourceRevision`/`predecessorStage`/exact-draft binding into
+`finding-disposition-ledger.json`, and runs the finding-ledger guard before
+writing it. Terminal-bundle composition verifies those bindings and refuses
+absent, stale, or foreign producer data instead of re-wrapping it as current.
 
 `check-artifacts` validates the complete output set, not just two marker files:
 every stage receipt, `verified-relay-evidence.json`,
