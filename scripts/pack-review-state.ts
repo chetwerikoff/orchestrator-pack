@@ -635,6 +635,9 @@ export function observePackReviewHead(input: {
     ...input,
     nextPhase: 'head_observed',
     mutate(current) {
+      // Same-head observe is the legal extra-review reopen: this transition
+      // still rewinds phase to head_observed without resetting cycle, triage,
+      // or automatic budget.
       if (current.currentHeadSha === headSha) return current;
       const completed = current.cycle?.reviewStageComplete === true
         || (current.cycle?.state === 'closed'
@@ -676,6 +679,25 @@ export function observePackReviewHead(input: {
       return current;
     },
   });
+}
+
+export function reopenPackReviewAuthorityForExplicitExtraReview(input: {
+  prNumber: number;
+  expectedTransitionSeq: number;
+  headSha: string;
+  options: PackReviewAuthorityOptions;
+}): PackReviewAuthorityDocument {
+  const headSha = normalizeSha(input.headSha);
+  const current = readPackReviewAuthority(input.prNumber, input.options);
+  if (!current) throw new PackReviewAuthorityError('authority_missing', `PR ${input.prNumber}`);
+  if (current.currentHeadSha !== headSha) {
+    throw new PackReviewAuthorityError(
+      'authority_transition_invalid',
+      'explicit extra review reopen requires the exact current head',
+    );
+  }
+  if (phaseIndex(current.phase) <= phaseIndex('head_observed')) return current;
+  return observePackReviewHead(input);
 }
 
 export function terminalConsumesCapSlot(terminal: {

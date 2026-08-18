@@ -13,7 +13,10 @@ import {
   createInitialPackReviewAuthority,
   initializePackReviewAuthority,
   observePackReviewHead,
+  PackReviewAuthorityError,
   readPackReviewAuthority,
+  recordPackReviewPublication,
+  reopenPackReviewAuthorityForExplicitExtraReview,
   retainPersistedOpenCycle,
   selectPackReviewGptSourceCardinality,
   selectPackReviewEvidence,
@@ -331,6 +334,95 @@ describe('Issue #898 authority and cap state', () => {
     expect(() => validateTerminalV2({ ...row, terminalContractVersion: 3 })).toThrow(
       /terminal_contract_invalid/,
     );
+  });
+});
+
+describe('Issue #1417 explicit extra-review reopen', () => {
+  it('rewinds a published same-head authority without consuming or resetting automatic budget', () => {
+    const storeOptions = options();
+    const head = sha('a');
+    let state = initializePackReviewAuthority({
+      prNumber: 1417,
+      headSha: head,
+      tier: 'T1',
+      options: storeOptions,
+    });
+    state = commitPackReviewTerminal({
+      prNumber: 1417,
+      expectedTransitionSeq: state.transitionSeq,
+      terminal: {
+        ...findingsTerminal('auto-run', head),
+        automaticBudgetDisposition: 'consume',
+      },
+      status: 'changes_requested',
+      findingCount: 1,
+      options: storeOptions,
+    });
+    expect(state.cycle).toMatchObject({
+      state: 'at_cap_open_findings',
+      consumedHeadShas: [head],
+    });
+    state = recordPackReviewPublication({
+      prNumber: 1417,
+      expectedTransitionSeq: state.transitionSeq,
+      publication: {
+        headSha: head,
+        terminalRunId: 'auto-run',
+        status: 'succeeded',
+        publicationDigest: 'pub-auto',
+        recordedAtUtc: '2026-08-03T00:00:00.000Z',
+      },
+      options: storeOptions,
+    });
+    expect(state.phase).toBe('external_published');
+    const cycleBefore = structuredClone(state.cycle);
+    const triageBefore = structuredClone(state.triage);
+
+    state = reopenPackReviewAuthorityForExplicitExtraReview({
+      prNumber: 1417,
+      expectedTransitionSeq: state.transitionSeq,
+      headSha: head,
+      options: storeOptions,
+    });
+    expect(state.phase).toBe('head_observed');
+    expect(state.cycle).toEqual(cycleBefore);
+    expect(state.triage).toEqual(triageBefore);
+
+    state = commitPackReviewTerminal({
+      prNumber: 1417,
+      expectedTransitionSeq: state.transitionSeq,
+      terminal: {
+        schemaVersion: 1,
+        terminalContractVersion: 2,
+        terminalSource: 'normal',
+        runId: 'explicit-run',
+        targetSha: head,
+        reviewVerdict: 'clean',
+        findingCount: 0,
+        findingsDigest: 'clean-explicit',
+        automaticBudgetDisposition: 'non_consuming_explicit',
+      },
+      status: 'clean',
+      findingCount: 0,
+      options: storeOptions,
+    });
+    expect(state.phase).toBe('terminal_and_cap_committed');
+    expect(state.cycle).toEqual(cycleBefore);
+    expect(state.terminal?.runId).toBe('explicit-run');
+    expect(state.terminal?.automaticBudgetDisposition).toBe('non_consuming_explicit');
+
+    expect(() => reopenPackReviewAuthorityForExplicitExtraReview({
+      prNumber: 1417,
+      expectedTransitionSeq: state.transitionSeq,
+      headSha: sha('b'),
+      options: storeOptions,
+    })).toThrow(PackReviewAuthorityError);
+    expect(() => reopenPackReviewAuthorityForExplicitExtraReview({
+      prNumber: 1417,
+      expectedTransitionSeq: state.transitionSeq,
+      headSha: sha('b'),
+      options: storeOptions,
+    })).toThrow(/exact current head/);
   });
 });
 

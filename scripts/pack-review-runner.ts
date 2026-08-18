@@ -39,6 +39,7 @@ import {
   initializePackReviewAuthority,
   observePackReviewHead,
   readPackReviewAuthority,
+  reopenPackReviewAuthorityForExplicitExtraReview,
   recordPackReviewPublication,
   selectPackReviewEvidence,
   selectPackReviewGptSourceCardinality,
@@ -2463,6 +2464,13 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   const priorAuthority = authority.currentHeadSha === target.headSha ? undefined : authority;
   if (authority.currentHeadSha !== target.headSha) {
     authority = observePackReviewHead({
+      prNumber: target.prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      headSha: target.headSha,
+      options: authorityOptions,
+    });
+  } else if (target.operatorStart) {
+    authority = reopenPackReviewAuthorityForExplicitExtraReview({
       prNumber: target.prNumber,
       expectedTransitionSeq: authority.transitionSeq,
       headSha: target.headSha,
