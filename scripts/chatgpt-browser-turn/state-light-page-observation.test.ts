@@ -713,3 +713,155 @@ describe('Issue #1430 retirement cleanup visibility', () => {
     });
   });
 });
+
+describe('Issue #1430 deterministic admission and direct-publication crash recovery', () => {
+  it('leaves no canonical record before the hard-link and preserves one after a post-link crash', async () => {
+    const actualFs = await import('node:fs');
+    const { randomUUID } = await import('node:crypto');
+    const { join } = await import('node:path');
+    let linkMode: 'before' | 'after' | null = null;
+
+    vi.doMock('node:fs', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('node:fs')>();
+      return {
+        ...actual,
+        linkSync: (source: any, target: any) => {
+          if (linkMode === 'before') {
+            linkMode = null;
+            throw new Error('injected_observation_admission_before_link');
+          }
+          actual.linkSync(source, target);
+          if (linkMode === 'after') {
+            linkMode = null;
+            throw new Error('injected_observation_admission_after_link');
+          }
+        },
+      };
+    });
+    vi.resetModules();
+
+    const root = actualFs.mkdtempSync(join((await import('node:os')).tmpdir(), 'opk-1430-admission-crash-'));
+    const priorStateDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'state');
+    const profileKey = 'admission-crash-profile';
+    const invocationId = randomUUID();
+    const marker = `OPKTURNV1${'AB'.repeat(16)}`;
+
+    try {
+      const {
+        admitStateLightTurnObservation,
+        observationRecordPath,
+        readStateLightTurnObservation,
+      } = await import('./state-light-turn-observation.ts');
+      const canonicalPath = observationRecordPath(profileKey, invocationId);
+
+      linkMode = 'before';
+      expect(() => admitStateLightTurnObservation({ profileKey, invocationId, marker }))
+        .toThrow('injected_observation_admission_before_link');
+      expect(actualFs.existsSync(canonicalPath)).toBe(false);
+
+      linkMode = 'after';
+      expect(() => admitStateLightTurnObservation({ profileKey, invocationId, marker }))
+        .toThrow('injected_observation_admission_after_link');
+      expect(actualFs.existsSync(canonicalPath)).toBe(true);
+      expect(readStateLightTurnObservation(profileKey, invocationId)).toMatchObject({
+        phase: 'prepared',
+        invocation_id: invocationId,
+        marker,
+      });
+
+      expect(admitStateLightTurnObservation({ profileKey, invocationId, marker }))
+        .toMatchObject({ phase: 'prepared', invocation_id: invocationId, marker });
+      expect(() => admitStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        marker: `OPKTURNV1${'CD'.repeat(16)}`,
+      })).toThrow('observation_marker_conflict');
+    } finally {
+      if (priorStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = priorStateDir;
+      actualFs.rmSync(root, { recursive: true, force: true });
+      vi.doUnmock('node:fs');
+      vi.resetModules();
+    }
+  });
+
+  it('keeps the auxiliary reviewer-source artifact after primary finalization crashes', async () => {
+    const { randomUUID, createHash } = await import('node:crypto');
+    const { existsSync, mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const {
+      admitStateLightTurnObservation,
+      finalizeStateLightPrimaryPublication,
+      readStateLightTurnObservation,
+      transitionStateLightTurnObservation,
+    } = await import('./state-light-turn-observation.ts');
+    const { __testPublishStateLightReply } = await import('./state-light-turn.ts');
+
+    const root = mkdtempSync(join(tmpdir(), 'opk-1430-direct-crash-'));
+    const priorStateDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'state');
+    const profileKey = 'direct-crash-profile';
+    const invocationId = randomUUID();
+    const marker = `OPKTURNV1${'EF'.repeat(16)}`;
+    const primaryPath = join(root, 'primary.txt');
+    const reviewerSourcePath = join(root, 'reviewer-source.txt');
+    const primaryReply = 'PRIMARY REPLY';
+    const reviewerSource = 'REVIEWER SOURCE';
+
+    try {
+      admitStateLightTurnObservation({ profileKey, invocationId, marker });
+      transitionStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        phase: 'dispatching',
+        reason: 'direct_publication_dispatch_boundary',
+      });
+      transitionStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        phase: 'sent_unharvested',
+        reason: 'direct_publication_auxiliary_before_primary',
+        sendCount: 1,
+        sendWitness: 'numeric_send_count',
+        conversationUrl: 'https://chatgpt.com/c/direct-publication-crash',
+      });
+
+      const sourcePublication = __testPublishStateLightReply(
+        reviewerSourcePath,
+        invocationId,
+        reviewerSource,
+      );
+      expect(sourcePublication).toMatchObject({
+        state: 'committed_ok',
+        output_bytes: Buffer.byteLength(reviewerSource, 'utf8'),
+        output_sha256: createHash('sha256').update(reviewerSource).digest('hex'),
+      });
+      expect(readFileSync(reviewerSourcePath, 'utf8')).toBe(reviewerSource);
+
+      await expect(finalizeStateLightPrimaryPublication({
+        profileKey,
+        invocationId,
+        target: primaryPath,
+        bytes: primaryReply,
+        publish: async () => { throw new Error('injected_primary_publication_crash'); },
+      })).rejects.toThrow('injected_primary_publication_crash');
+
+      expect(existsSync(primaryPath)).toBe(false);
+      expect(readFileSync(reviewerSourcePath, 'utf8')).toBe(reviewerSource);
+      expect(readStateLightTurnObservation(profileKey, invocationId)).toMatchObject({
+        phase: 'sent_unharvested',
+        primary: {
+          target: primaryPath,
+          byte_length: Buffer.byteLength(primaryReply, 'utf8'),
+          sha256: createHash('sha256').update(primaryReply).digest('hex'),
+        },
+      });
+    } finally {
+      if (priorStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = priorStateDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

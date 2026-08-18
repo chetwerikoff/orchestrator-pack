@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   appendFileSync: vi.fn(() => undefined),
   linkSync: vi.fn(() => undefined),
   failNextObservationMutationRmdir: false,
+  failNextObservationMutationRename: null as 'before' | 'after' | null,
   releaseBrowser: vi.fn(async () => undefined),
   nowMs: 10_000,
   readStableInput: vi.fn(() => ({
@@ -43,6 +44,22 @@ vi.mock('node:fs', async (importOriginal) => {
         throw error;
       }
       return actual.rmdirSync(path, options);
+    },
+    renameSync: (source: any, target: any) => {
+      const isMutationInstall = /\.state-light-turn-observation-[0-9a-f]{64}\.[^/]+\.tmp$/u.test(String(source))
+        && /state-light-turn-observation-[0-9a-f]{64}\.slot$/u.test(String(target));
+      const mode = isMutationInstall ? mocks.failNextObservationMutationRename : null;
+      if (!mode) return actual.renameSync(source, target);
+      mocks.failNextObservationMutationRename = null;
+      if (mode === 'before') {
+        const error = new Error('injected_observation_mutation_install_before_rename') as NodeJS.ErrnoException;
+        error.code = 'EIO';
+        throw error;
+      }
+      actual.renameSync(source, target);
+      const error = new Error('injected_observation_mutation_install_after_rename') as NodeJS.ErrnoException;
+      error.code = 'EIO';
+      throw error;
     },
   };
 });
@@ -1474,5 +1491,74 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     expect(foreignStop).not.toHaveBeenCalled();
     expect(ownedClose).not.toHaveBeenCalled();
     expect(foreignClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue #1430 mutation-generation crash and restart coverage', () => {
+  it('recovers a generation installed before an owner crash and retires it safely', async () => {
+    const { randomUUID } = await import('node:crypto');
+    const {
+      acquireObservationMutation,
+      admitStateLightTurnObservation,
+      observationRecordKey,
+      releaseObservationMutation,
+    } = await import('./state-light-turn-observation.ts');
+    const { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { profileDirs } = await import('./storage-common.ts');
+
+    const root = mkdtempSync(join(tmpdir(), 'slt-mutation-crash-'));
+    const priorStateDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = root;
+    const profileKey = 'mutation-crash-profile';
+    const invocationId = randomUUID();
+    const marker = `OPKTURNV1${'12'.repeat(16)}`;
+
+    try {
+      admitStateLightTurnObservation({ profileKey, invocationId, marker });
+      const recordKey = observationRecordKey(invocationId);
+      const slotPath = join(
+        profileDirs(profileKey).locks,
+        `state-light-turn-observation-${recordKey}.slot`,
+      );
+
+      mocks.failNextObservationMutationRename = 'before';
+      expect(() => acquireObservationMutation(profileKey, invocationId))
+        .toThrow('injected_observation_mutation_install_before_rename');
+      expect(existsSync(slotPath)).toBe(false);
+
+      mocks.failNextObservationMutationRename = 'after';
+      expect(() => acquireObservationMutation(profileKey, invocationId))
+        .toThrow('injected_observation_mutation_install_after_rename');
+      const incumbentChild = readdirSync(slotPath)[0];
+      expect(incumbentChild).toMatch(/^owner-/u);
+      const incumbentPath = join(slotPath, incumbentChild);
+      const incumbent = JSON.parse(readFileSync(incumbentPath, 'utf8')) as { owner: string; pid: number };
+      writeFileSync(incumbentPath, `${JSON.stringify({ ...incumbent, pid: 999999 })}\n`);
+
+      const restarted = acquireObservationMutation(profileKey, invocationId);
+      expect(restarted.owner).not.toBe(incumbent.owner);
+      expect(releaseObservationMutation(restarted)).toBe(true);
+      expect(existsSync(slotPath)).toBe(false);
+
+      const retiring = acquireObservationMutation(profileKey, invocationId);
+      writeFileSync(join(retiring.slotPath, 'retirement-crash-blocker'), 'block');
+      mocks.failNextObservationMutationRmdir = true;
+      expect(releaseObservationMutation(retiring)).toBe(false);
+      expect(existsSync(retiring.slotPath)).toBe(true);
+      rmSync(join(retiring.slotPath, 'retirement-crash-blocker'));
+      mocks.failNextObservationMutationRmdir = false;
+      const afterRetirement = acquireObservationMutation(profileKey, invocationId);
+      expect(afterRetirement.owner).not.toBe(retiring.owner);
+      expect(releaseObservationMutation(afterRetirement)).toBe(true);
+      expect(existsSync(retiring.slotPath)).toBe(false);
+    } finally {
+      if (priorStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = priorStateDir;
+      mocks.failNextObservationMutationRename = null;
+      mocks.failNextObservationMutationRmdir = false;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
