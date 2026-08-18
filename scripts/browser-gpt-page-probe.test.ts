@@ -1167,6 +1167,31 @@ test('harvest rejects duplicate marker occurrences in one owned user carrier', a
   });
 });
 
+test('harvest rejects a bound target that navigates before the snapshot', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let publishCalls = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [{
+          id: 'harvest-navigated', type: 'page', url: 'https://chatgpt.com/c/test', title: 'Bound before navigation',
+          webSocketDebuggerUrl: 'ws://example/harvest-navigated',
+        }],
+        evaluate: async (_target, expression) => {
+          assert.equal(expression, HARVEST_EXPRESSION);
+          return evaluateExpression(expression, [
+            new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-navigated' }),
+            new FakeNode('assistant', 'FOREIGN', 'FOREIGN', { 'data-message-id': 'a-navigated' }),
+          ], false, 'https://chatgpt.com/c/foreign');
+        },
+        publish: async () => { publishCalls += 1; },
+      })),
+      (error: any) => error.status === 'surface_unknown' && error.reason === 'conversation_identity_mismatch',
+    );
+    assert.equal(publishCalls, 0);
+    assert.equal(readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase, 'sent_unharvested');
+  });
+});
+
 test('harvest waits for a recovery-opened bound page to expose a stable owned turn', async () => {
   await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
     let fakeNow = 0;
