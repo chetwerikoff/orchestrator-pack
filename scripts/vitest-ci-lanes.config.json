@@ -86,6 +86,7 @@
     "scripts/lib/worker-assignment-store.test.ts": "light",
     "scripts/lib/worker-degraded-ci-handoff.test.ts": "light",
     "scripts/lib/worker-report-store.test.ts": "light",
+    "scripts/manager-review-brief.test.ts": "light",
     "scripts/merge-triage-evidence.test.ts": "light",
     "scripts/orca-runtime/task-adapter.test.ts": "light",
     "scripts/orchestrator-escalation-router.test.ts": "parked",
