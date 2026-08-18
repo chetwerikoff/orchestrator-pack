@@ -52,5 +52,6 @@
     "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
     "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
-  ]
+  ],
+  "source_revision": "786dc9d357dfa40afc3a34295a89513eb401b273"
 }
