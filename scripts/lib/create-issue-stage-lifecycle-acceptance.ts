@@ -1,8 +1,11 @@
 import {
+  admissionStageSequence,
   canonicalStageTopology,
   parseLifecycleTierIntake,
+  parseSettledStageSlot,
   type LifecycleReviewStage,
   type LifecycleTierIntakeV1,
+  type SettledStageSlot,
 } from './create-issue-stage-lifecycle.ts';
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -26,13 +29,28 @@ function finalInvocationBySlot(receipt: Record<string, unknown>): Map<string, Re
   return result;
 }
 
-function requiredSlots(receipt: Record<string, unknown>, cardinality: number): string[] {
-  const lane = record(receipt.reviewLane) ? receipt.reviewLane : null;
-  if (lane && Array.isArray(lane.finalRequiredSlots)) {
-    const slots = lane.finalRequiredSlots.filter((slot): slot is string => typeof slot === 'string' && /^\d{2}$/.test(slot));
-    if (slots.length > 0) return slots;
-  }
+function canonicalSlots(cardinality: number): string[] {
   return Array.from({ length: cardinality }, (_, index) => String(index + 1).padStart(2, '0'));
+}
+
+function validateLaneSlots(
+  receipt: Record<string, unknown>,
+  expected: readonly string[],
+  stage: LifecycleReviewStage,
+  errors: string[],
+): void {
+  const lane = record(receipt.reviewLane) ? receipt.reviewLane : null;
+  if (!lane) return;
+  if (!Array.isArray(lane.finalRequiredSlots)) {
+    errors.push(`${stage} reviewLane finalRequiredSlots is missing or malformed`);
+    return;
+  }
+  const observed = lane.finalRequiredSlots.filter((slot): slot is string => typeof slot === 'string');
+  if (observed.length !== lane.finalRequiredSlots.length
+    || observed.length !== expected.length
+    || observed.some((slot, index) => slot !== expected[index])) {
+    errors.push(`${stage} reviewLane finalRequiredSlots does not equal canonical ${expected.join(',')}`);
+  }
 }
 
 function invocationCredentialed(invocation: Record<string, unknown> | undefined): boolean {
@@ -74,10 +92,12 @@ export function validateLifecycleAcceptanceTopology(
 ): LifecycleAcceptanceResult {
   const errors: string[] = [];
   const intake = parseLifecycleTierIntake(intakeValue);
-  const records = receiptValues.filter(record);
   if (!intake) return { ok: false, errors: ['canonical tier-intake/v1 is missing or malformed'], expectedStages: [] };
-  if (records.length !== receiptValues.length) errors.push('stage receipt inventory contains a malformed receipt');
-  const observedTier = tierValue ?? stringValue(records[0]?.tier) ?? intake.priorTier;
+
+  const records = receiptValues.map((value) => ({ raw: record(value) ? value : null, slot: parseSettledStageSlot(value) }));
+  if (records.some((entry) => !entry.raw || !entry.slot)) errors.push('stage receipt inventory contains a malformed receipt');
+  const valid = records.filter((entry): entry is { raw: Record<string, unknown>; slot: SettledStageSlot } => Boolean(entry.raw && entry.slot));
+  const observedTier = tierValue ?? valid[0]?.slot.tier ?? intake.priorTier;
   if (observedTier !== 'T1' && observedTier !== 'T2' && observedTier !== 'T3') {
     return { ok: false, errors: [...errors, 'review episode tier is unresolved'], expectedStages: [] };
   }
@@ -93,74 +113,80 @@ export function validateLifecycleAcceptanceTopology(
       expectedStages: [],
     };
   }
-  const expectedStages = topology.stages.map((entry) => entry.stage);
-  const byStage = new Map<LifecycleReviewStage, Record<string, unknown>[]>();
-  for (const receipt of records) {
-    const stage = stringValue(receipt.stage) as LifecycleReviewStage | null;
-    if (!stage || !expectedStages.includes(stage)) {
-      errors.push(`stage ${stage ?? '<missing>'} is outside canonical ${observedTier} topology`);
+  const expectedStages = topology.stages.map((entry) => entry.stage as LifecycleReviewStage);
+  const sequence = admissionStageSequence(topology, valid.map((entry) => entry.slot));
+  errors.push(...sequence.errors);
+  if (sequence.expectedStage !== null) errors.push(`final acceptance is missing required stage ${sequence.expectedStage}`);
+
+  const byStage = new Map<LifecycleReviewStage, Array<{ raw: Record<string, unknown>; slot: SettledStageSlot }>>();
+  for (const entry of valid) {
+    if (!expectedStages.includes(entry.slot.stage)) {
+      errors.push(`stage ${entry.slot.stage} is outside canonical ${observedTier} topology`);
       continue;
     }
-    const list = byStage.get(stage) ?? [];
-    list.push(receipt);
-    byStage.set(stage, list);
+    const list = byStage.get(entry.slot.stage) ?? [];
+    list.push(entry);
+    byStage.set(entry.slot.stage, list);
   }
 
   const progressed = new Set<LifecycleReviewStage>();
-  let priorSequence = 0;
-  for (const entry of topology.stages) {
-    const candidates = byStage.get(entry.stage) ?? [];
+  for (const topologyEntry of topology.stages) {
+    const stage = topologyEntry.stage as LifecycleReviewStage;
+    const candidates = byStage.get(stage) ?? [];
     if (candidates.length !== 1) {
-      errors.push(`${entry.stage} requires exactly one settled Issue-lifetime stageAttemptId; observed ${candidates.length}`);
+      errors.push(`${stage} requires exactly one settled Issue-lifetime stageAttemptId; observed ${candidates.length}`);
       continue;
     }
-    const receipt = candidates[0]!;
-    const sequence = Number(receipt.stageSequence);
-    if (!Number.isInteger(sequence) || sequence <= priorSequence) errors.push(`${entry.stage} stageSequence is out of canonical order`);
-    priorSequence = Number.isInteger(sequence) ? sequence : priorSequence;
-    for (const predecessor of expectedStages.slice(0, expectedStages.indexOf(entry.stage))) {
-      if (!progressed.has(predecessor)) errors.push(`${entry.stage} settled before predecessor ${predecessor} successfully settled`);
+    const { raw: receipt, slot } = candidates[0]!;
+    for (const predecessor of expectedStages.slice(0, expectedStages.indexOf(stage))) {
+      if (!progressed.has(predecessor)) errors.push(`${stage} settled before predecessor ${predecessor} successfully settled`);
     }
 
-    if (receipt.outcome === 'complete') {
-      progressed.add(entry.stage);
+    const required = canonicalSlots(topologyEntry.reviewerCardinality);
+    validateLaneSlots(receipt, required, stage, errors);
+    if (slot.outcome === 'complete') {
+      progressed.add(stage);
       continue;
     }
-    if (receipt.outcome !== 'partial') {
-      errors.push(`${entry.stage} outcome ${String(receipt.outcome)} consumes the stage slot but cannot credential progression/final acceptance`);
+    if (slot.outcome !== 'partial') {
+      errors.push(`${stage} outcome ${slot.outcome} consumes the stage slot but cannot credential progression/final acceptance`);
       continue;
     }
-    if (entry.reviewerCardinality !== 3) {
-      errors.push(`${entry.stage} partial settlement is valid only for a canonical three-source stage`);
+    if (topologyEntry.reviewerCardinality !== 3) {
+      errors.push(`${stage} partial settlement is valid only for a canonical three-source stage`);
       continue;
     }
-    const slots = requiredSlots(receipt, entry.reviewerCardinality);
     const finals = finalInvocationBySlot(receipt);
-    const missing = slots.filter((slot) => !invocationCredentialed(finals.get(slot)));
+    const extraSlots = [...finals.keys()].filter((slotName) => !required.includes(slotName));
+    if (extraSlots.length > 0) {
+      errors.push(`${stage} partial settlement contains non-canonical slots: ${extraSlots.join(',')}`);
+      continue;
+    }
+    const missing = required.filter((slotName) => !invocationCredentialed(finals.get(slotName)));
     if (missing.length === 0) {
-      errors.push(`${entry.stage} partial settlement has no missing source`);
+      errors.push(`${stage} partial settlement has no missing source`);
       continue;
     }
     if (missing.length >= 2) {
-      errors.push(`${entry.stage} partial settlement is missing ${missing.length} slots; explicit operator waiver through the existing waiver seam is required`);
+      errors.push(`${stage} partial settlement is missing ${missing.length} slots; explicit operator waiver through the existing waiver seam is required`);
       continue;
     }
     const missingSlot = missing[0]!;
     const invocation = finals.get(missingSlot);
     if (!invocation) {
-      errors.push(`${entry.stage} partial missing slot ${missingSlot} lacks its invocation identity/evidence`);
+      errors.push(`${stage} partial missing slot ${missingSlot} lacks its invocation identity/evidence`);
       continue;
     }
     if (!reviewLaneProvesUnobservable(receipt, missingSlot, invocation)) {
-      errors.push(`${entry.stage} partial missing slot ${missingSlot} is not journal/evidence-backed as unobservable with resend forbidden`);
+      errors.push(`${stage} partial missing slot ${missingSlot} is not journal/evidence-backed as unobservable with resend forbidden`);
       continue;
     }
-    const completed = slots.filter((slot) => invocationCredentialed(finals.get(slot))).length;
+    const completed = required.filter((slotName) => invocationCredentialed(finals.get(slotName))).length;
     if (completed !== 2) {
-      errors.push(`${entry.stage} partial settlement must retain exactly two credentialed sources; observed ${completed}`);
+      errors.push(`${stage} partial settlement must retain exactly two credentialed sources; observed ${completed}`);
       continue;
     }
-    progressed.add(entry.stage);
+    progressed.add(stage);
   }
 
   return { ok: errors.length === 0, errors: [...new Set(errors)], expectedStages };
