@@ -90,7 +90,9 @@ function createPublicWrapperSandbox(root: string): { repoRoot: string; binDir: s
   copyFileSync(path.join(sourceRoot, 'scripts', 'pack-worker-report.ts'), path.join(scriptsDir, 'pack-worker-report.ts'));
   chmodSync(path.join(scriptsDir, 'pack-worker-report'), 0o755);
   linkDir(path.join(sourceRoot, 'scripts', 'kernel'), path.join(scriptsDir, 'kernel'));
-  linkDir(path.join(sourceRoot, 'scripts', 'lib'), path.join(scriptsDir, 'lib'));
+  mkdirSync(path.join(scriptsDir, 'lib'));
+  copyFileSync(path.join(sourceRoot, 'scripts', 'lib', 'Invoke-TypeScriptCli.ts'), path.join(scriptsDir, 'lib', 'Invoke-TypeScriptCli.ts'));
+  symlinkSync(path.join(sourceRoot, 'scripts', 'lib', 'worker-assignment-store.ts'), path.join(scriptsDir, 'lib', 'worker-assignment-store.ts'));
   linkDir(path.join(sourceRoot, 'scripts', 'pr2-foundation'), path.join(scriptsDir, 'pr2-foundation'));
   linkDir(path.join(sourceRoot, 'scripts', 'toolchain'), path.join(scriptsDir, 'toolchain'));
   linkDir(path.join(sourceRoot, 'docs'), path.join(repoRoot, 'docs'));
