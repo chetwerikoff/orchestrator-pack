@@ -5,6 +5,12 @@ turns. The adapter does not detach the Browser child independently; it starts th
 canonical launcher at the supported detached boundary and waits for a committed
 handoff receipt before acknowledging acceptance.
 
+For every Browser-GPT attempt, the caller/orchestrator must mint and retain one
+non-empty invocation identity before invoking the adapter. The adapter validates
+`--invocation-id` before detached launch or handoff acceptance and forwards those
+exact bytes to the child. The same value is reused for supported recovery/harvest;
+its presence is common turn identity and does not select direct-publication mode.
+
 ## Package commands
 
 ```bash
@@ -18,6 +24,7 @@ Production Browser-GPT long-running turns use the adapter (`--silent` keeps npm 
 npm run --silent flow-manager-browser-gpt-long-run -- \
   --run-identity <opaque-run-id> \
   --attempt-identity <opaque-attempt-id> \
+  --invocation-id <caller-owned-invocation-id> \
   --handoff-receipt /absolute/path/handoff-receipt.json \
   --terminal-envelope /absolute/path/terminal-envelope.json \
   --output /absolute/path/reply.txt \
@@ -32,6 +39,7 @@ Fresh conversation:
 ```bash
 npm run --silent flow-manager-browser-gpt-long-run -- \
   ... \
+  --invocation-id <caller-owned-invocation-id> \
   --new-chat \
   --project-url <configured-project-url>
 ```
@@ -40,15 +48,17 @@ npm run --silent flow-manager-browser-gpt-long-run -- \
 
 `flow-manager-long-running-child.ts launch` is the sole terminal-envelope writer.
 
-1. Validate pairwise-distinct receipt, envelope, and Browser `--output` destinations.
-2. Atomically create one `flow-manager-long-running-child-handoff/v1` receipt
+1. The Browser-GPT adapter validates the caller-owned invocation identity before
+   starting this launcher or acknowledging handoff.
+2. Validate pairwise-distinct receipt, envelope, and Browser `--output` destinations.
+3. Atomically create one `flow-manager-long-running-child-handoff/v1` receipt
    (`completion_mode: browser-turn-result-v1` fixed constant).
-3. Start the Browser-GPT child with stdin closed, stdout parsed in-process, stderr
+4. Start the Browser-GPT child with stdin closed, stdout parsed in-process, stderr
    to a null sink.
-4. Accept the first valid child-produced `turn-result/v1` from stdout; tolerate
+5. Accept the first valid child-produced `turn-result/v1` from stdout; tolerate
    `observation-heartbeat/v1` heartbeats.
-5. Finalize with bounded candidate or no-candidate stdout/exit graces.
-6. Atomically publish one `flow-manager-long-running-child-terminal/v1` envelope.
+6. Finalize with bounded candidate or no-candidate stdout/exit graces.
+7. Atomically publish one `flow-manager-long-running-child-terminal/v1` envelope.
 
 There is no completion-mode selector. Authority is fixed to `browser-turn-result-v1`.
 

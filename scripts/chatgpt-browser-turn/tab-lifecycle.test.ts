@@ -1717,3 +1717,41 @@ test('enhanced production probe entrypoint is read-only and enriches two observa
     stdout.mockRestore();
   }
 });
+
+test('enhanced production probe preserves profile when dispatching harvest', async () => {
+  const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  let parsedCall: unknown;
+  try {
+    const code = await runEnhancedPageProbeCli([
+      'harvest',
+      '--cdp', cdp,
+      '--profile', profile,
+      '--invocation-id', 'invocation-1430-harvest',
+      '--output', '/tmp/reply-1430.txt',
+    ], {
+      runProbe: async (parsed) => {
+        parsedCall = parsed;
+        return {
+          schema: 'browser-gpt-page-probe/v1',
+          operation: 'harvest',
+          status: 'ok',
+          diagnostic_only: false,
+          workflow_authority: 'none',
+        };
+      },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(parsedCall, {
+      operation: 'harvest',
+      cdp,
+      profile,
+      invocationId: 'invocation-1430-harvest',
+      output: '/tmp/reply-1430.txt',
+    });
+    const emitted = JSON.parse(String(stdout.mock.calls.at(-1)?.[0] ?? '{}')) as Record<string, unknown>;
+    assert.equal(emitted.operation, 'harvest');
+    assert.equal(emitted.diagnostic_only, false);
+  } finally {
+    stdout.mockRestore();
+  }
+});

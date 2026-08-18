@@ -689,6 +689,9 @@ function splitProfileArgument(argv: readonly string[]): {
     if (!candidate || candidate.startsWith('--') || profile) throw new Error('profile_argument_invalid');
     profile = candidate;
   }
+  if (probeArgv[0] === 'harvest' && profile) {
+    probeArgv.push('--profile', profile);
+  }
   return { profile, probeArgv };
 }
 

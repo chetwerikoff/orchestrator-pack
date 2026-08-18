@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   }),
   appendFileSync: vi.fn(() => undefined),
   linkSync: vi.fn(() => undefined),
+  failNextObservationMutationRmdir: false,
+  failNextObservationMutationRename: null as 'before' | 'after' | null,
   releaseBrowser: vi.fn(async () => undefined),
   nowMs: 10_000,
   readStableInput: vi.fn(() => ({
@@ -29,7 +32,35 @@ vi.mock('node:fs', async (importOriginal) => {
   return {
     ...actual,
     appendFileSync: mocks.appendFileSync,
-    linkSync: mocks.linkSync,
+    linkSync: actual.linkSync,
+    rmdirSync: (path: any, options?: any) => {
+      if (
+        mocks.failNextObservationMutationRmdir
+        && /state-light-turn-observation-[0-9a-f]{64}\.slot$/u.test(String(path))
+      ) {
+        mocks.failNextObservationMutationRmdir = false;
+        const error = new Error('injected_observation_mutation_retirement_failure') as NodeJS.ErrnoException;
+        error.code = 'ENOTEMPTY';
+        throw error;
+      }
+      return actual.rmdirSync(path, options);
+    },
+    renameSync: (source: any, target: any) => {
+      const isMutationInstall = /\.state-light-turn-observation-[0-9a-f]{64}\.[^/]+\.tmp$/u.test(String(source))
+        && /state-light-turn-observation-[0-9a-f]{64}\.slot$/u.test(String(target));
+      const mode = isMutationInstall ? mocks.failNextObservationMutationRename : null;
+      if (!mode) return actual.renameSync(source, target);
+      mocks.failNextObservationMutationRename = null;
+      if (mode === 'before') {
+        const error = new Error('injected_observation_mutation_install_before_rename') as NodeJS.ErrnoException;
+        error.code = 'EIO';
+        throw error;
+      }
+      actual.renameSync(source, target);
+      const error = new Error('injected_observation_mutation_install_after_rename') as NodeJS.ErrnoException;
+      error.code = 'EIO';
+      throw error;
+    },
   };
 });
 
@@ -76,6 +107,7 @@ import {
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
 import { classifyPageObservation, classifySendLandingEvidence, runStateLightTurn } from './state-light-turn.ts';
+import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
   readRecoveryAuthoritativeUserMessages,
@@ -134,7 +166,7 @@ function clearSendSlotDisableEnv(): void {
   delete process.env.OPK_STATE_LIGHT_SEND_SLOT_DISABLE_REASON;
 }
 
-function makeLoserPage(prompt: string, reply: string) {
+function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
   let sends = 0;
   let sent = false;
   let url = PROJECT_URL;
@@ -155,6 +187,7 @@ function makeLoserPage(prompt: string, reply: string) {
       sends++;
       sent = true;
       url = sends === 1 ? SHARED_CONV : LOSER_CONV;
+      onSend?.();
     }),
   });
   const sendButton = scalarLocator({
@@ -163,6 +196,7 @@ function makeLoserPage(prompt: string, reply: string) {
       sends++;
       sent = true;
       url = sends === 1 ? SHARED_CONV : LOSER_CONV;
+      onSend?.();
     }),
   });
 
@@ -211,10 +245,16 @@ function makeLoserPage(prompt: string, reply: string) {
   return { page, getSends: () => sends };
 }
 
-async function runNewChatTurn(page: any, outputPath: string, timeoutMs = '5000') {
+async function runNewChatTurn(
+  page: any,
+  outputPath: string,
+  timeoutMs = '5000',
+  invocationId = randomUUID(),
+) {
   enqueueBrowserForTurn(mocks, page);
   return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
     ...STATE_LIGHT_TURN_BASE_ARGV,
+    '--invocation-id', invocationId,
     '--output', outputPath,
     '--new-chat',
     '--project-url', PROJECT_URL,
@@ -232,6 +272,9 @@ describe('state-light fresh conversation collision recovery', () => {
     disableSendSlotForTest();
     mocks.browserQueue.length = 0;
     mocks.cleanupOutcome = 'confirmed';
+    mocks.failNextObservationMutationRmdir = false;
+    mocks.verifyProfile.mockReset();
+    mocks.verifyProfile.mockResolvedValue({ state: 'verified' });
     mocks.nowMs = 10_000;
     mocks.productStatusText.mockReset();
     mocks.productStatusText.mockResolvedValue({ text: '', composer: true });
@@ -460,6 +503,165 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(outcome.result.state).not.toBe('send_failed');
     expect(outcome.result.incidents).toContain('send_observation_deferred');
+  });
+
+  it('does not bind a delayed fresh-chat URL until that surface proves the owned marker', async () => {
+    const prompt = 'PROMPT-LATE-BIND';
+    const reply = 'OWNED FINAL';
+    const output = join(stateDir, 'late-bind.txt');
+    const invocationId = randomUUID();
+    let sent = false;
+    let composerText = '';
+    let surface: 'project' | 'foreign' | 'owned' = 'project';
+    let ownedObservationIndex = 0;
+    const waiterDeadline = mocks.nowMs + 1_000;
+    const ownedFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
+      messages,
+      generating: index < 2,
+    }));
+    const foreignMessages: StateLightTestMessage[] = [
+      { role: 'user', text: 'FOREIGN PROMPT' },
+      { role: 'assistant', text: 'FOREIGN ANSWER', finalAction: true, finalActionInTurnContainer: true },
+    ];
+    let activeMessages: StateLightTestMessage[] = [];
+    let activeGenerating = false;
+
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => composerText),
+      textContent: vi.fn(async () => composerText),
+      press: vi.fn(async () => { sent = true; }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => { sent = true; }),
+    });
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async (target: string) => {
+        if (target === PROJECT_URL) surface = 'project';
+        else if (target === LOSER_CONV) surface = 'foreign';
+        else if (target === SHARED_CONV) surface = 'owned';
+      }),
+      url: vi.fn(() => {
+        if (!sent || mocks.nowMs < waiterDeadline) return PROJECT_URL;
+        if (surface === 'project') surface = 'foreign';
+        return surface === 'foreign' ? LOSER_CONV : SHARED_CONV;
+      }),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => {
+        const before = mocks.nowMs;
+        mocks.nowMs += ms;
+        if (sent && before >= waiterDeadline && surface === 'foreign') surface = 'owned';
+      }),
+      close: vi.fn(async () => undefined),
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          if (!sent) return collectionLocator([]);
+          if (surface === 'foreign') {
+            activeMessages = foreignMessages;
+            activeGenerating = false;
+          } else {
+            const frame = ownedFrames[Math.min(ownedObservationIndex, ownedFrames.length - 1)]!;
+            ownedObservationIndex++;
+            activeMessages = frame.messages;
+            activeGenerating = frame.generating;
+          }
+          return collectionLocator(activeMessages, activeGenerating);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          const last = activeMessages.at(-1);
+          if (last?.finalActionInTurnContainer) return messageLocator(last, activeGenerating);
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return collectionLocator(
+            activeMessages.filter((message: StateLightTestMessage) => message.role === 'assistant'),
+            activeGenerating,
+          );
+        }
+        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output, '1000', invocationId);
+
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      send_count: 1,
+      conversation_id: SHARED_CONV,
+    });
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'harvested',
+      conversation_url: SHARED_CONV,
+    });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(composerText).toContain(prompt);
+  });
+
+  it('surfaces committed post-send observation retirement cleanup without resend', async () => {
+    const prompt = 'PROMPT-CLEANUP-POST-SEND';
+    const invocationId = randomUUID();
+    const output = join(stateDir, 'cleanup-post-send.txt');
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED', () => {
+      mocks.failNextObservationMutationRmdir = true;
+    });
+
+    const outcome = await runNewChatTurn(turn.page, output, '5000', invocationId);
+
+    expect(outcome.result).toMatchObject({
+      state: 'driver_error',
+      cause: 'observation_mutation_retirement_cleanup_required',
+      send_count: 1,
+      retirement_cleanup_required: true,
+    });
+    expect(outcome.result.incidents).toContain('observation_mutation_retirement_cleanup_required');
+    expect(turn.getSends()).toBe(1);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'sent_unbound',
+      send_witness: 'numeric_send_count',
+    });
+  });
+
+  it('surfaces committed pre-send not_sent retirement cleanup without changing transport truth', async () => {
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-CLEANUP-PRE-SEND'));
+    mocks.verifyProfile.mockImplementationOnce(async () => {
+      mocks.failNextObservationMutationRmdir = true;
+      return { state: 'mismatch', cause: 'profile_mismatch' };
+    });
+    const page = makeLoserPage('PROMPT-CLEANUP-PRE-SEND', 'UNREACHED');
+
+    const outcome = await runNewChatTurn(
+      page.page,
+      join(stateDir, 'cleanup-pre-send.txt'),
+      '5000',
+      invocationId,
+    );
+
+    expect(outcome.result).toMatchObject({
+      state: 'profile_mismatch',
+      cause: 'profile_mismatch',
+      send_count: 0,
+      retirement_cleanup_required: true,
+    });
+    expect(outcome.result.incidents).toContain('observation_mutation_retirement_cleanup_required');
+    expect(page.getSends()).toBe(0);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'not_sent',
+      send_witness: 'numeric_send_count',
+    });
   });
 
   it('classifies send landing evidence from page state', async () => {
@@ -754,6 +956,9 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     disableSendSlotForTest();
     mocks.browserQueue.length = 0;
     mocks.cleanupOutcome = 'confirmed';
+    mocks.failNextObservationMutationRmdir = false;
+    mocks.verifyProfile.mockReset();
+    mocks.verifyProfile.mockResolvedValue({ state: 'verified' });
     mocks.nowMs = 1_700_000_000_000;
     mocks.productStatusText.mockReset();
     mocks.productStatusText.mockResolvedValue({ text: '', composer: true });
@@ -988,6 +1193,9 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     disableSendSlotForTest();
     mocks.browserQueue.length = 0;
     mocks.cleanupOutcome = 'confirmed';
+    mocks.failNextObservationMutationRmdir = false;
+    mocks.verifyProfile.mockReset();
+    mocks.verifyProfile.mockResolvedValue({ state: 'verified' });
     mocks.nowMs = 10_000;
     mocks.productStatusText.mockReset();
     mocks.productStatusText.mockResolvedValue({ text: '', composer: true });
@@ -1021,6 +1229,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
   function runProductionNewChat(outputPath: string, timeoutMs: string) {
     return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
       ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
       '--output', outputPath,
       '--new-chat',
       '--project-url', PROJECT_URL,
@@ -1285,3 +1494,71 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
   });
 });
 
+describe('Issue #1430 mutation-generation crash and restart coverage', () => {
+  it('recovers a generation installed before an owner crash and retires it safely', async () => {
+    const { randomUUID } = await import('node:crypto');
+    const {
+      acquireObservationMutation,
+      admitStateLightTurnObservation,
+      observationRecordKey,
+      releaseObservationMutation,
+    } = await import('./state-light-turn-observation.ts');
+    const { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { profileDirs } = await import('./storage-common.ts');
+
+    const root = mkdtempSync(join(tmpdir(), 'slt-mutation-crash-'));
+    const priorStateDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = root;
+    const profileKey = 'mutation-crash-profile';
+    const invocationId = randomUUID();
+    const marker = `OPKTURNV1${'12'.repeat(16)}`;
+
+    try {
+      admitStateLightTurnObservation({ profileKey, invocationId, marker });
+      const recordKey = observationRecordKey(invocationId);
+      const slotPath = join(
+        profileDirs(profileKey).locks,
+        `state-light-turn-observation-${recordKey}.slot`,
+      );
+
+      mocks.failNextObservationMutationRename = 'before';
+      expect(() => acquireObservationMutation(profileKey, invocationId))
+        .toThrow('injected_observation_mutation_install_before_rename');
+      expect(existsSync(slotPath)).toBe(false);
+
+      mocks.failNextObservationMutationRename = 'after';
+      expect(() => acquireObservationMutation(profileKey, invocationId))
+        .toThrow('injected_observation_mutation_install_after_rename');
+      const incumbentChild = readdirSync(slotPath)[0];
+      expect(incumbentChild).toMatch(/^owner-/u);
+      const incumbentPath = join(slotPath, incumbentChild);
+      const incumbent = JSON.parse(readFileSync(incumbentPath, 'utf8')) as { owner: string; pid: number };
+      writeFileSync(incumbentPath, `${JSON.stringify({ ...incumbent, pid: 999999 })}\n`);
+
+      const restarted = acquireObservationMutation(profileKey, invocationId);
+      expect(restarted.owner).not.toBe(incumbent.owner);
+      expect(releaseObservationMutation(restarted)).toBe(true);
+      expect(existsSync(slotPath)).toBe(false);
+
+      const retiring = acquireObservationMutation(profileKey, invocationId);
+      writeFileSync(join(retiring.slotPath, 'retirement-crash-blocker'), 'block');
+      mocks.failNextObservationMutationRmdir = true;
+      expect(releaseObservationMutation(retiring)).toBe(false);
+      expect(existsSync(retiring.slotPath)).toBe(true);
+      rmSync(join(retiring.slotPath, 'retirement-crash-blocker'));
+      mocks.failNextObservationMutationRmdir = false;
+      const afterRetirement = acquireObservationMutation(profileKey, invocationId);
+      expect(afterRetirement.owner).not.toBe(retiring.owner);
+      expect(releaseObservationMutation(afterRetirement)).toBe(true);
+      expect(existsSync(retiring.slotPath)).toBe(false);
+    } finally {
+      if (priorStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = priorStateDir;
+      mocks.failNextObservationMutationRename = null;
+      mocks.failNextObservationMutationRmdir = false;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
