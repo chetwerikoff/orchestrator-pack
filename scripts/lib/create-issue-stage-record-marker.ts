@@ -9,6 +9,7 @@ import type {
   CycleEventLogical,
   FinalEventLogical,
   JournalLogical,
+  PartialMissingSourceWitness,
   PublicActor,
   StageEventLogical,
 } from './create-issue-stage-record-types.ts';
@@ -45,6 +46,24 @@ function isPublicActor(value: unknown): value is PublicActor {
   return typeof value === 'string' && PUBLIC_ACTORS.has(value as PublicActor);
 }
 
+function isPartialMissingSourceWitness(value: unknown): value is PartialMissingSourceWitness {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.reviewerSlot === 'string'
+    && /^\d{2}$/.test(row.reviewerSlot)
+    && isNonEmptyString(row.invocationId)
+    && isNonEmptyString(row.evidenceIdentity)
+    && isNonEmptyString(row.reason);
+}
+
+function parsePartialMissingSources(value: unknown): PartialMissingSourceWitness[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((item) => !isPartialMissingSourceWitness(item))) return null;
+  const slots = value.map((item) => item.reviewerSlot);
+  if (new Set(slots).size !== slots.length) return null;
+  return value;
+}
+
 function isJournalPayload(value: Record<string, unknown>): boolean {
   if (!isKnownSchema(value.schema) || !isNonEmptyString(value['event-key'])) {
     return false;
@@ -58,6 +77,7 @@ function isJournalPayload(value: Record<string, unknown>): boolean {
       && (value['routed-lane'] === undefined || isReviewLaneRouting(value['routed-lane']));
   }
   if (value.schema === STAGE_SCHEMA) {
+    const partialMissingSources = parsePartialMissingSources(value['partial-missing-sources']);
     return isNonEmptyString(value['cycle-id'])
       && isNonEmptyString(value.stage)
       && isNonEmptyString(value.tier)
@@ -68,7 +88,9 @@ function isJournalPayload(value: Record<string, unknown>): boolean {
       && Number.isInteger(value['source-count'])
       && Number.isInteger(value['required-source-count'])
       && ['complete', 'partial', 'blocked', 'incident'].includes(String(value['settled-outcome']))
-      && ['verified', 'waived', 'not-applicable'].includes(String(value['producer-evidence']));
+      && ['verified', 'waived', 'not-applicable'].includes(String(value['producer-evidence']))
+      && partialMissingSources !== null
+      && (value['settled-outcome'] === 'partial' || partialMissingSources.length === 0);
   }
   return isNonEmptyString(value['cycle-id'])
     && isNonEmptyString(value.tier)
@@ -123,6 +145,7 @@ function buildJournalLogical(parsed: Record<string, unknown>): JournalLogical | 
     const requiredSourceCount = parsed['required-source-count'];
     const producerEvidence = parsed['producer-evidence'];
     const routedLane = parsed['routed-lane'];
+    const partialMissingSources = parsePartialMissingSources(parsed['partial-missing-sources']);
     if (!isNonEmptyString(cycleId)
       || !isNonEmptyString(stage)
       || !isNonEmptyString(tier)
@@ -133,7 +156,9 @@ function buildJournalLogical(parsed: Record<string, unknown>): JournalLogical | 
       || (settledOutcome !== 'complete' && settledOutcome !== 'partial' && settledOutcome !== 'blocked' && settledOutcome !== 'incident')
       || typeof sourceCount !== 'number' || !Number.isInteger(sourceCount)
       || typeof requiredSourceCount !== 'number' || !Number.isInteger(requiredSourceCount)
-      || (producerEvidence !== 'verified' && producerEvidence !== 'waived' && producerEvidence !== 'not-applicable')) {
+      || (producerEvidence !== 'verified' && producerEvidence !== 'waived' && producerEvidence !== 'not-applicable')
+      || partialMissingSources === null
+      || (settledOutcome !== 'partial' && partialMissingSources.length > 0)) {
       return null;
     }
     if (policyVersion === 'review-lane-routing/v1') {
@@ -155,6 +180,7 @@ function buildJournalLogical(parsed: Record<string, unknown>): JournalLogical | 
       'required-source-count': requiredSourceCount,
       'producer-evidence': producerEvidence,
       'tier-transition': tierTransition,
+      ...(partialMissingSources.length > 0 ? { 'partial-missing-sources': partialMissingSources } : {}),
       'routed-lane': routedLane,
     };
     return logical;
@@ -264,6 +290,7 @@ function canonicalizeLogicalRecord(logical: JournalLogical): Record<string, unkn
         'required-source-count': logical['required-source-count'],
         'producer-evidence': logical['producer-evidence'],
         'tier-transition': logical['tier-transition'],
+        'partial-missing-sources': logical['partial-missing-sources'],
         'routed-lane': logical['routed-lane'],
       };
     case FINAL_SCHEMA:

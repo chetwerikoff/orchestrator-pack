@@ -285,6 +285,7 @@ describe('runtime-neutral worker smoke', () => {
     const dispatch = vi.spyOn(adapter, 'dispatchInput').mockImplementation((
       _input: { readonly worker: RuntimeWorkerIdentity; readonly text?: string; readonly submitOnly?: boolean },
     ): RuntimeDispatchResult => ({ status: 'dispatch_unknown', reason: 'transport_interrupted' }));
+    let clock = 0;
 
     expect(establishRuntimeSmokeDelivery({
       adapter,
@@ -292,8 +293,8 @@ describe('runtime-neutral worker smoke', () => {
       prompt: 'verify',
       binding: { runId: 'run-2', artifactDir: '/missing' },
       cwd: process.cwd(),
-      deadlineMs: 100,
-      now: () => 1,
+      deadlineMs: 2,
+      now: () => clock++,
       sleepMs: () => undefined,
     })).toEqual({
       ok: false,
@@ -301,6 +302,37 @@ describe('runtime-neutral worker smoke', () => {
       submitCount: 0,
     });
     expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps waiting when the first clock tick does not advance until delivery.sealed.json appears', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-smoke-stall-'));
+    try {
+      const artifactDir = join(root, 'run-stall');
+      ensureSmokeRunArtifactDir(artifactDir);
+      const adapter = new DeterministicRuntimeAdapter();
+      const spawned = adapter.spawnWorker({ title: 'smoke', command: 'cursor-agent' });
+      expect(spawned.status).toBe('ok');
+      if (spawned.status !== 'ok') return;
+      const dispatch = vi.spyOn(adapter, 'dispatchInput');
+
+      const result = establishRuntimeSmokeDelivery({
+        adapter,
+        worker: spawned.value.identity,
+        prompt: 'verify',
+        binding: { runId: 'run-stall', artifactDir },
+        cwd: root,
+        deadlineMs: 100,
+        now: () => 1,
+        sleepMs: () => {
+          writeFileSync(smokeDeliverySealedPath(artifactDir), JSON.stringify({ runId: 'run-stall' }), 'utf8');
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('does not turn pasted-text output into a second dispatch', () => {

@@ -1,0 +1,47 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1439,
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "docs/tiering.md",
+    "prompts/codex_draft_review_prompt.md",
+    "scripts/create-issue-stage-finalize.ts",
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/lib/canonical-review-directory.ts",
+    "scripts/lib/create-issue-final-acceptance-contract.ts",
+    "scripts/lib/create-issue-final-acceptance.ts",
+    "scripts/lib/create-issue-stage-lifecycle-acceptance.test.ts",
+    "scripts/lib/create-issue-stage-lifecycle-acceptance.ts",
+    "scripts/lib/create-issue-stage-lifecycle.test.ts",
+    "scripts/lib/create-issue-stage-lifecycle.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record-marker.ts",
+    "scripts/lib/create-issue-stage-record-receipt.ts",
+    "scripts/lib/create-issue-stage-record-review-lane.test.ts",
+    "scripts/lib/create-issue-stage-record-review-lane.ts",
+    "scripts/lib/create-issue-stage-record-types.ts",
+    "scripts/lib/create-issue-stage-topology.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/stage-completeness-guard.test.ts",
+    "scripts/stage-slot-consumed.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/",
+    "docs/",
+    "prompts/",
+    "scripts/"
+  ],
+  "source_revision": "6f37d1917863b449e201e120caf0ff826fba75d0"
+}

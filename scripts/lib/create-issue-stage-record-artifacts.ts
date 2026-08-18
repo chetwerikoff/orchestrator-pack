@@ -32,9 +32,12 @@ import {
   type TierIntakeAuthorityV1,
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
+import { canonicalStagePlan } from './create-issue-stage-topology.ts';
+import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
+import { readEvidenceWaiverProducerEvidence } from './create-issue-stage-record-receipt.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import { defaultGhTransport } from './create-issue-stage-record-gh.ts';
-import type { GhTransport } from './create-issue-stage-record-types.ts';
+import type { GhTransport, PartialMissingSourceWitness, ProducerEvidence } from './create-issue-stage-record-types.ts';
 
 export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
 export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
@@ -96,6 +99,7 @@ export interface ProduceAcceptanceArtifactsOptions {
   stageEvidencePaths: string[];
   authorDispositionsPath: string;
   claudeProducerEvidencePaths?: string[];
+  waiverPath?: string;
   outputDir?: string;
   phase?: 'pre-lens' | 'final-acceptance';
   operatorAdjudication?: OperatorAcceptanceAdjudication;
@@ -898,6 +902,19 @@ function resolveAuthoritativeArtifact(
       );
       return null;
     }
+    const journalableUnobservableSend = invocation.terminal === true
+      && invocation.sendCount === 1
+      && invocation.retryClass === 'retry-forbidden'
+      && (invocation.terminalClassification === 'post-send-failure'
+        || invocation.terminalClassification === 'output-conflict'
+        || invocation.terminalClassification === 'incident');
+    if (journalableUnobservableSend) {
+      // A complete Issue-comment census with zero invocation candidates is the
+      // authoritative negative observation required by the partial-settlement
+      // path. The receipt/journal layer still has to bind this exact invocation
+      // through partialMissingSources before the stage can credential.
+      return null;
+    }
     errors.push(
       `authoritative GitHub artifact absent after complete census: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} sourceRevision=${sourceRevision} invocationId=${invocationId} source=GitHub-Issue-comments`,
     );
@@ -1175,7 +1192,7 @@ function loadTierIntake(path: string, errors: string[]): TierIntakeAuthorityV1 |
   if (kind === null) errors.push('tier-intake.kind is invalid');
   if (priorTier === null) errors.push('tier-intake.priorTier is invalid');
   if (!producer || !taskIdentity || !firstRevision || kind === null || priorTier === null) return null;
-  return { schema: 'tier-intake/v1', producer, taskIdentity, kind, priorTier, firstRevision };
+  return { ...value, schema: 'tier-intake/v1', producer, taskIdentity, kind, priorTier, firstRevision } as TierIntakeAuthorityV1;
 }
 
 function assertDerived(
@@ -1214,6 +1231,10 @@ function finalCredentialingCaptures(
   return captures;
 }
 
+function readOperatorWaiver(path: string | undefined): ProducerEvidence {
+  return readEvidenceWaiverProducerEvidence(path, (candidate) => JSON.parse(readFileSync(candidate, 'utf8')) as unknown);
+}
+
 function buildReceipt(
   evidencePath: string,
   raw: JsonRecord,
@@ -1223,6 +1244,7 @@ function buildReceipt(
   captureTexts: Map<string, string>,
   captureTimestamps: Map<string, number>,
   errors: string[],
+  operatorWaiverEvidence: ProducerEvidence,
   artifactContext?: ArtifactAuthorityContext,
 ): ProducedStageReceipt | null {
   if (raw.schema !== STAGE_EVIDENCE_SCHEMA) {
@@ -1346,9 +1368,21 @@ function buildReceipt(
   const derivedOutcome: StageCompletenessReceiptV1['outcome'] = browserCredentialing
     ? 'complete'
     : raw.outcome as StageCompletenessReceiptV1['outcome'];
-  const credentialingCaptures = stage === 'architectural-lens'
-    ? (raw.outcome === 'complete' ? captures : [])
-    : (browserCredentialing ?? []);
+  const assertedProducerEvidence: ProducerEvidence = raw.producerEvidence === 'verified' || raw.producerEvidence === 'waived'
+    ? raw.producerEvidence
+    : 'not-applicable';
+  let producerEvidence = assertedProducerEvidence;
+  if (stage === 'architectural-lens') {
+    producerEvidence = claude?.kind === 'capture' ? 'verified' : 'waived';
+  } else if (assertedProducerEvidence === 'waived') {
+    if (operatorWaiverEvidence !== 'waived') {
+      errors.push(`stage ${stage} asserted producerEvidence=waived without a valid explicit operator waiver through --waiver`);
+      producerEvidence = 'not-applicable';
+    }
+  }
+  const partialMissingSources = Array.isArray(raw.partialMissingSources)
+    ? raw.partialMissingSources as PartialMissingSourceWitness[]
+    : [];
 
   const receipt: ProducedStageReceipt = {
     schema: 'stage-completeness-receipt/v1',
@@ -1369,14 +1403,23 @@ function buildReceipt(
     cycleId,
     cycleBinding: cycleBinding as { cycleId: string; sourceRevision: string; boundBeforeLaunch: true },
     outcome: derivedOutcome,
+    producerEvidence,
+    partialMissingSources,
     revisionChecks: raw.revisionChecks as StageCompletenessReceiptV1['revisionChecks'],
     settlement: raw.settlement as StageCompletenessReceiptV1['settlement'],
     ...(invocations.length > 0 ? { invocations } : {}),
     ...(claude ? { claude: claude as unknown as StageCompletenessReceiptV1['claude'] } : {}),
-    credentialingCaptures,
+    credentialingCaptures: stage === 'architectural-lens'
+      ? (raw.outcome === 'complete' ? captures : [])
+      : (browserCredentialing ?? []),
     relayEligibleCaptures: captures,
     ...(isRecord(raw.reviewLane) ? { reviewLane: raw.reviewLane as unknown as StageCompletenessReceiptV1['reviewLane'] } : {}),
   };
+  if (stage !== 'architectural-lens' && receipt.outcome === 'partial') {
+    const credentialing = evaluateStageCredentialingSettlement(receipt, receipt.reviewerCardinality, stage);
+    errors.push(...credentialing.errors);
+    if (credentialing.credentialed) receipt.credentialingCaptures = credentialing.credentialingCaptures as CaptureIdentityV1[];
+  }
   return receipt;
 }
 
@@ -1414,6 +1457,11 @@ function buildLedger(
   const findings = raw.findings as JsonRecord[];
   const ledger = {
     version: 2,
+    ...(typeof raw.reviewEpisodeId === 'string' ? { reviewEpisodeId: raw.reviewEpisodeId } : {}),
+    ...(typeof raw.sourceRevision === 'string' ? { sourceRevision: raw.sourceRevision } : {}),
+    ...((raw.predecessorStage === null || typeof raw.predecessorStage === 'string')
+      ? { predecessorStage: raw.predecessorStage }
+      : {}),
     ...(typeof raw.draft === 'string' ? { draft: raw.draft } : {}),
     counts: {
       rawFindingCount: captures.reduce((sum, capture) => sum + capture.rawFindingCount, 0),
@@ -1442,13 +1490,20 @@ function relayEvidence(
   }));
 }
 
-function expectedStages(tier: ReviewTier, phase: 'pre-lens' | 'final-acceptance'): ReviewStage[] {
-  if (tier === 'T3') {
-    return phase === 'pre-lens'
-      ? ['competitive', 'architectural-review']
-      : ['competitive', 'architectural-review', 'architectural-lens', 'architectural'];
-  }
-  return ['architectural'];
+export function canonicalAcceptanceStages(
+  tier: ReviewTier,
+  intakeValue: unknown,
+  phase: 'pre-lens' | 'final-acceptance',
+): ReviewStage[] {
+  const intake = isRecord(intakeValue) ? intakeValue : {};
+  const competitiveDecision = intake.competitiveDecision === 'required' || intake.competitiveDecision === 'skipped'
+    ? intake.competitiveDecision
+    : undefined;
+  const competitiveRationale = optionalString(intake.competitiveRationale);
+  const stages = canonicalStagePlan(tier, { competitiveDecision, competitiveRationale }).stages.map((entry) => entry.stage);
+  return tier === 'T3' && phase === 'pre-lens'
+    ? stages.filter((stage) => stage === 'competitive' || stage === 'architectural-review')
+    : stages;
 }
 
 const PRODUCED_ARTIFACT_NAMES = new Set<string>(ACCEPTANCE_ARTIFACT_OUTPUT_NAMES);
@@ -1567,6 +1622,7 @@ export function produceAcceptanceArtifacts(
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)] };
   }
   const episodeId = deriveReviewEpisodeId(taskIdentity, episodeFirstRevision);
+  const operatorWaiverEvidence = readOperatorWaiver(options.waiverPath);
   const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(options.reviewDir, options.stageEvidencePaths, errors);
   if (canonicalStageEvidencePaths === null) {
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)], reviewEpisodeId: episodeId };
@@ -1625,6 +1681,7 @@ export function produceAcceptanceArtifacts(
       captureTexts,
       captureTimestamps,
       errors,
+      operatorWaiverEvidence,
       artifactContext,
     ))
     .filter((receipt): receipt is ProducedStageReceipt => receipt !== null)
@@ -1633,14 +1690,6 @@ export function produceAcceptanceArtifacts(
   const cycleIds = new Set(receipts.map((receipt) => receipt.cycleId));
   if (cycleIds.size > 1) errors.push('stage evidence mixes cycle identities');
   if (!tier) errors.push('no completed-stage evidence was supplied');
-  if (tier && receipts.length > 0) {
-    const required = expectedStages(tier, options.phase ?? 'final-acceptance');
-    for (const stage of required) {
-      if (!receipts.some((receipt) => receipt.stage === stage && receipt.outcome === 'complete')) {
-        errors.push(`missing completed stage evidence: ${stage}`);
-      }
-    }
-  }
   for (let index = 0; index < receipts.length; index += 1) {
     const receipt = receipts[index]!;
     receipt.previousStageReceiptId = index === 0 ? null : receipts[index - 1]!.stageReceiptId;
@@ -1733,6 +1782,7 @@ export function produceAcceptanceArtifacts(
       tierIntake: resolve(options.tierIntakePath),
       stageEvidence: canonicalStageEvidencePaths.map((path) => resolve(path)),
       authorDispositions: resolve(options.authorDispositionsPath),
+      ...(options.waiverPath ? { operatorWaiver: resolve(options.waiverPath) } : {}),
     },
   };
   const artifactContents = new Map<string, string>();
@@ -1805,7 +1855,6 @@ export function inspectAcceptanceArtifacts(
   if (options.stageEvidencePaths.length === 0) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: 'no recorded stage evidence paths were supplied' });
   const stageEvidencePaths = canonicalStageEvidencePaths ?? options.stageEvidencePaths;
   const stageReceiptNames: string[] = [];
-  const completedStages = new Set<ReviewStage>();
   let evidenceTier: ReviewTier | null = null;
   let requiresClaudeProducerEvidence = false;
   for (const path of stageEvidencePaths) {
@@ -1815,14 +1864,8 @@ export function inspectAcceptanceArtifacts(
       continue;
     }
     const stageTier = reviewTier(value.tier);
-    const stage = reviewStage(value.stage);
     if (stageTier && evidenceTier && stageTier !== evidenceTier) missing.push({ artifact: 'stage-completeness-receipt', reason: 'stage evidence mixes tier values: ' + path });
     else if (stageTier) evidenceTier = stageTier;
-    const invocations = Array.isArray(value.invocations) ? value.invocations.filter(isRecord) : [];
-    const potentiallyArtifactComplete = stage !== 'architectural-lens'
-      && invocations.length > 0
-      && invocations.every((invocation) => invocation.terminal === true && (invocation.terminalClassification === 'complete' || invocationRequiresAuthoritativeArtifact(invocation)));
-    if (stage && (value.outcome === 'complete' || potentiallyArtifactComplete)) completedStages.add(stage);
     const stageAttemptId = typeof value.stageAttemptId === 'string' ? value.stageAttemptId.trim() : '';
     if (isSafeFileComponent(stageAttemptId)) stageReceiptNames.push(stageCompletenessReceiptFileName(stageAttemptId));
     else missing.push({ artifact: 'stage-completeness-receipt', reason: 'stage evidence has no safe stageAttemptId: ' + path });
@@ -1864,13 +1907,6 @@ export function inspectAcceptanceArtifacts(
     }
   }
 
-  if (evidenceTier) {
-    const requiredStages = expectedStages(evidenceTier, options.phase ?? 'final-acceptance');
-    for (const stage of requiredStages) {
-      if (!completedStages.has(stage)) missing.push({ artifact: 'stage-completeness-receipt', reason: 'missing completed stage evidence for ' + stage + ' at ' + (options.phase ?? 'final-acceptance') });
-    }
-  }
-
   const claudeProducerEvidencePaths = options.claudeProducerEvidencePaths ?? [];
   for (const path of claudeProducerEvidencePaths) readArtifactJson(path, CLAUDE_PRODUCER_EVIDENCE_SCHEMA, 'Claude producer evidence is missing');
   if (requiresClaudeProducerEvidence && claudeProducerEvidencePaths.length === 0) {
@@ -1894,12 +1930,44 @@ export function inspectAcceptanceArtifacts(
     if (value !== null) outputValues.set(name, value);
     else if (present.includes(artifactPath)) addInvalid(artifact, artifactPath, artifact + ' is malformed JSON');
   }
+  const credentialedStages = new Set<ReviewStage>();
+  const operatorWaiverEvidence = readOperatorWaiver(options.waiverPath);
   for (const name of stageReceiptNames) {
     const value = outputValues.get(name);
     if (value !== undefined && (!isRecord(value) || value.schema !== 'stage-completeness-receipt/v1')) {
       addInvalid('stage-completeness-receipt', join(outputDir, name), 'stage receipt has an invalid schema');
+      continue;
+    }
+    if (!isRecord(value)) continue;
+    const stage = reviewStage(value.stage);
+    const cardinality = Number(value.reviewerCardinality);
+    if (!stage || !Number.isInteger(cardinality) || cardinality < 1) continue;
+    if (stage === 'architectural-lens') {
+      if (value.outcome === 'complete') credentialedStages.add(stage);
+      continue;
+    }
+    if (value.outcome === 'partial' && value.producerEvidence === 'waived' && operatorWaiverEvidence !== 'waived') {
+      missing.push({ artifact: 'operator waiver', reason: `${stage} partial receipt asserts an operator waiver but --waiver does not resolve to the existing waiver seam` });
+      continue;
+    }
+    const settlement = evaluateStageCredentialingSettlement(value, cardinality, stage);
+    if (settlement.credentialed) credentialedStages.add(stage);
+    else if (value.outcome === 'complete' || value.outcome === 'partial') {
+      for (const error of settlement.errors) missing.push({ artifact: 'stage-completeness-receipt', reason: error + ': ' + join(outputDir, name) });
     }
   }
+
+  if (evidenceTier) {
+    try {
+      const requiredStages = canonicalAcceptanceStages(evidenceTier, intake, options.phase ?? 'final-acceptance');
+      for (const stage of requiredStages) {
+        if (!credentialedStages.has(stage)) missing.push({ artifact: 'stage-completeness-receipt', reason: 'missing credentialing complete-or-proven-partial stage evidence for ' + stage + ' at ' + (options.phase ?? 'final-acceptance') });
+      }
+    } catch (error) {
+      missing.push({ artifact: 'tier-intake/v1', reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   const relay = outputValues.get('verified-relay-evidence.json');
   if (relay !== undefined && !Array.isArray(relay)) addInvalid('verified-relay-evidence', join(outputDir, 'verified-relay-evidence.json'), 'verified relay evidence is malformed');
   const ledger = outputValues.get('finding-disposition-ledger.json');

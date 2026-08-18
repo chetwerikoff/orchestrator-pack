@@ -11,6 +11,7 @@ import {
   inspectAcceptanceArtifacts,
   produceAcceptanceArtifacts,
 } from './create-issue-stage-record-artifacts.ts';
+import type { LifecycleReviewStage } from './create-issue-stage-lifecycle.ts';
 import type { PublicActor } from './create-issue-stage-record-types.ts';
 import type { ReviewLaneOverride } from './review-lane-selector.ts';
 import {
@@ -32,6 +33,7 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   repo: string;
   issueNumber: number;
   sourceRevision?: string;
+  stage?: LifecycleReviewStage;
   stageAttemptId?: string;
   permittedLaneOverride?: ReviewLaneOverride;
   tier?: string;
@@ -177,11 +179,11 @@ function runParsedCli<T>(
 export function stageFinalizeUsage(): string {
   return [
     'Usage:',
-    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> [--stage-attempt-id <id>] --tier <T1|T2|T3> [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
+    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
-    `  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]`,
-    `  create-issue-stage-finalize.ts check-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--output-dir <path>] [--json]`,
+    `  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]`,
+    `  create-issue-stage-finalize.ts check-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--json]`,
   ].join('\n');
 }
 
@@ -215,6 +217,14 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
       case '--source-revision':
         opts.sourceRevision = String(argv[++i] ?? '');
         break;
+      case '--stage': {
+        const stage = String(argv[++i] ?? '');
+        if (stage !== 'competitive' && stage !== 'architectural-review' && stage !== 'architectural-lens' && stage !== 'architectural') {
+          throw new Error('--stage must be competitive, architectural-review, architectural-lens, or architectural');
+        }
+        opts.stage = stage;
+        break;
+      }
       case '--stage-attempt-id':
         opts.stageAttemptId = String(argv[++i] ?? '');
         break;
@@ -385,6 +395,7 @@ export function runStageFinalizeCli(argv: string[]): number {
         stageEvidencePaths,
         authorDispositionsPath,
         claudeProducerEvidencePaths: opts.claudeProducerEvidencePaths,
+        waiverPath: opts.waiverPath,
         outputDir: opts.outputDir,
         phase: opts.phase,
         operatorAdjudication: operatorAcceptanceAdjudication(opts),
@@ -406,10 +417,12 @@ export function runStageFinalizeCli(argv: string[]): number {
     if (opts.command === 'start-cycle') {
       const sourceRevision = parseRequiredNonEmptyString(opts.sourceRevision, '--source-revision');
       const tier = parseRequiredNonEmptyString(opts.tier, '--tier');
+      const stage = parseRequiredNonEmptyString(opts.stage, '--stage') as LifecycleReviewStage;
       const result = startReviewCycle(transport, {
         repo: opts.repo,
         issueNumber,
         sourceRevision,
+        stage,
         stageAttemptId: opts.stageAttemptId ? parseRequiredNonEmptyString(opts.stageAttemptId, '--stage-attempt-id') : undefined,
         permittedLaneOverride: opts.permittedLaneOverride,
         tier,

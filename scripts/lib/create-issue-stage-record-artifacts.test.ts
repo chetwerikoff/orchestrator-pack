@@ -804,6 +804,8 @@ describe('Issue #1385 round-two receipt regressions', () => {
         kind: 'fresh' as const,
         priorTier: 'T3' as const,
         firstRevision: episodeFirstRevision,
+        competitiveDecision: 'required' as const,
+        competitiveRationale: 'fixture includes the required competitive predecessor',
       },
       receiptInventory: {
         source: 'canonical-review-directory' as const,
