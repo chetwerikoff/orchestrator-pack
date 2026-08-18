@@ -206,6 +206,7 @@ function requiredCheckEvidence(checks, requirement, byName) {
 export function evaluateRequiredChecks({ checks, policy, packReviewProjection, machineAdmissionAttempted = false }) {
   if (!Array.isArray(checks)) return { action: 'fail', outcome: 'current-checks-unavailable', reason: 'current checks payload is malformed' };
   if (!policy?.ok) return { action: 'fail', outcome: policy?.outcome ?? 'current-policy-unavailable', reason: policy?.reason ?? 'current policy unavailable' };
+  if (policy.strict !== true) return { action: 'fail', outcome: 'current-policy-unsupported', reason: 'runtime-history delivery requires strict current-main status policy so any base advancement is rejected before merge' };
   const byName = new Map(checks.filter((x) => x?.name).map((x) => [String(x.name), checkState(x)]));
   const ordinary = policy.checks.filter((x) => x.context !== PACK_REVIEW_CONTEXT);
   const evidence = ordinary.map((requirement) => ({ requirement, ...requiredCheckEvidence(checks, requirement, byName) }));
@@ -313,6 +314,7 @@ async function inspect(config, io) {
   const scope = validateDeliveryFiles(files);
   if (!scope.ok) return { terminal: true, ...scope, pr };
   if (pr?.mergeable === false || pr?.mergeable_state === 'dirty') return { terminal: true, ...fail('close-as-obsolete', 'delivery PR is conflicted or unmergeable'), pr };
+  if (pr?.mergeable_state === 'behind') return { terminal: true, ...fail('close-as-obsolete', 'delivery PR base advanced after candidate preparation; fresh complete refresh required'), pr };
   if (pr?.mergeable === null || pr?.mergeable_state === 'unknown') return { wait: true, outcome: 'mergeability-pending', reason: 'delivery PR mergeability still computing', pr };
   let history;
   try { history = await io.getStatusHistory(config.expectedHeadSha); }

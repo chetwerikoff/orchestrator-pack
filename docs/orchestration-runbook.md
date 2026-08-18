@@ -40,6 +40,15 @@ understand goal / tier / prerequisites
 
 Child author/reviewer/lens `worker_done` never settles the parent manager Task. A single LLM turn is never a Dispatch.
 
+For create-Issue independent review, the reviewer publishes its own complete
+verdict/findings as the governed top-level Issue comment. The manager consumes
+the reviewer receipt and owns later workflow/disposition actions; it does not
+normally relay or summarize a review into a replacement comment. The canonical
+reviewer publication and prompt policy remains in
+`.claude/skills/create-issue-draft/SKILL.md`; this runbook does not copy that
+prompt. Any genuine-write-failure exception remains limited to the fallback
+already defined by that owning skill.
+
 ### Worker
 
 A worker owns the bounded implementation workflow:
@@ -160,6 +169,109 @@ mixed, or cannot be applied through the existing launch command.
 This profile rule does not add a runtime selector, WorkerAssignment type, provider registry, scheduler, service, store, queue, daemon, fallback transport, or retry mechanism.
 
 For example, changing the local T3 `agent` between the already-supported GPT/Browser-GPT and Cursor/Orca paths changes the path used by subsequent T3 work without a tracked policy edit. Routine versus complex smoke works the same way: it selects the corresponding local smoke profile, whose concrete values remain local-only.
+
+### First local launch bootstrap
+
+For every new local worker, treat dependency/setup readiness and executor-profile
+readiness as separate gates. Both must pass before the first terminal is used for
+implementation or the first Dispatch is created. A terminal existing in a fresh
+worktree is not setup evidence.
+
+For a fresh worktree, use the existing Orca setup path and wait for its successful
+ready receipt:
+
+```bash
+orca worktree create \
+  --name <worktree-name> \
+  --repo <repo-selector> \
+  --base-branch <base-ref> \
+  --issue <N> \
+  --setup run \
+  --json
+```
+
+Continue only when the command succeeds and its response proves that worktree
+setup is ready. A failed, incomplete, or unknown setup response blocks the start;
+do not let the worker discover or install dependencies after Dispatch.
+
+Immediately before launch, resolve exactly one profile for the work class. For a
+T2 worker, the selected names are exactly:
+
+```bash
+selected_profile_names=(
+  PACK_EXECUTOR_T2_AGENT
+  PACK_EXECUTOR_T2_MODEL
+  PACK_EXECUTOR_T2_EFFORT
+)
+```
+
+Resolve the concrete local values from the operator-owned store without printing
+them, and export them in the same shell that will launch the agent and PACK
+boundary:
+
+```bash
+set -a
+# POSIX `.` sources the store; Bash `source` is equivalent.
+. "<operator-local executor-profile store>"
+set +a
+```
+
+Plain `source`/`.` followed by shell-local `test -n` is not child-inheritance
+proof. An unexported shell assignment remains local to that shell, and separate
+tool or terminal calls do not share it. The following Node 22 child-process probe
+must run before terminal creation or Dispatch; it checks only the selected
+profile's three names, reports missing names only, and never prints values:
+
+```bash
+node_major="$(node -p 'process.versions.node.split(".")[0]')" || exit 1
+if [ "$node_major" != 22 ]; then
+  printf '%s\n' 'executor_profile_probe_blocked:node_22_required' >&2
+  exit 1
+fi
+node --input-type=module -e '
+  const names = process.argv.slice(1);
+  const missing = names.filter((name) =>
+    typeof process.env[name] !== "string" || process.env[name].trim() === ""
+  );
+  if (missing.length > 0) {
+    console.error(`executor_profile_missing:${missing.join(",")}`);
+    process.exit(1);
+  }
+  console.log("executor_profile_child_inheritance:ready");
+' "${selected_profile_names[@]}"
+```
+
+Resolve and validate the selected `agent` as an already-supported launch path,
+and verify locally that its resolved `model` and `effort` can be applied. A
+missing, empty, malformed, or unsupported value, or a failed probe, blocks before
+any terminal/Dispatch effect. Do not print concrete values while diagnosing it.
+
+Keep setup, export, probe, fresh-TUI creation, TUI proof, and the supervised-start
+invocation in this one launching shell/process chain; stop immediately on every
+failure:
+
+```bash
+orca terminal create \
+  --worktree <worktree-selector> \
+  --command "<existing Cursor/Orca launch command with resolved model and effort>" \
+  --json
+orca terminal wait --terminal <fresh-terminal-handle> --for tui-idle --timeout-ms <timeout-ms> --json
+# From this exact fresh pane, prove empty composer, no generation, no foreign/leftover
+# session, and visible model/effort matching the selected profile.
+node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+  --script scripts/pr2-foundation/supervised-worker-start.ts -- \
+  --issue-number <N> \
+  --repository <owner/repo> \
+  -- \
+  --task <task-id> <worker-start-options>
+```
+
+The final command is the existing PACK supervised-start boundary; it must return
+a proven `ready` receipt containing the exact `taskId` and `dispatchId` before
+the worker is considered started. Do not split these steps across terminals,
+paste a Task spec into the startup command, dual-send, or recover a failed first
+attach by sending into an old pane. A later unrelated command must repeat the
+profile export and child probe.
 
 ### Cursor/Orca launch procedure
 
