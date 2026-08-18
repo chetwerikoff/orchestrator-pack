@@ -82,6 +82,36 @@ export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResu
   );
 }
 
+export function evaluateWorkerReportHardCutDocs(snapshot: SourceSnapshot): GateResult {
+  const gateId = 'worker-report-hard-cut-docs';
+  const failures: string[] = [];
+  const unreachable: string[] = [];
+  const paths = [
+    'AGENTS.md',
+    'README.md',
+    'docs/worker-smoke-testing.md',
+    'docs/script-owned-review-pipeline.md',
+  ] as const;
+  for (const path of paths) {
+    const text = requireText(snapshot, path, failures, unreachable);
+    if (text === undefined) continue;
+    if (/pack-worker-report\.ps1/iu.test(text)) failures.push(`${path} still references retired pack-worker-report.ps1`);
+  }
+  const readme = snapshot.files.get('README.md');
+  if (readme !== undefined) {
+    if (!/scripts\/pack-worker-report\b/iu.test(readme)) failures.push('README.md must reference the public scripts/pack-worker-report command');
+    if (!/scripts\/pack-worker-report\.ts\b/iu.test(readme)) failures.push('README.md must identify scripts/pack-worker-report.ts as the native implementation');
+  }
+  return completeStaticGate(
+    gateId,
+    'Worker report Node 22 hard-cut documentation contract',
+    '[PASS] worker report hard-cut docs contain no retired PowerShell path.\n',
+    snapshot,
+    failures,
+    unreachable,
+  );
+}
+
 export function evaluateCoworkerDelegationThreshold(snapshot: SourceSnapshot): GateResult {
   const gateId = 'coworker-delegation-threshold-drift';
   const failures: string[] = [];
@@ -247,6 +277,7 @@ function registration(gateId: string, evaluate: (snapshot: SourceSnapshot) => Ga
 
 export const bulkStaticGateRegistrations: readonly GateRegistration[] = [
   registration('agents-report-contract', evaluateAgentsReportContract),
+  registration('worker-report-hard-cut-docs', evaluateWorkerReportHardCutDocs),
   registration('coworker-delegation-threshold-drift', evaluateCoworkerDelegationThreshold),
   registration('review-010-vocabulary', evaluateReview010Vocabulary),
   registration('review-command-not-ao', evaluateReviewCommandNotAo),
