@@ -323,7 +323,7 @@ async function inspect(config, io) {
   if (!provenance.ok) return { terminal: true, ...provenance, pr };
   let run;
   try { run = await io.getActionsRun(provenance.runId); }
-  catch (e) { return { terminal: true, ...fail('provenance-invalid', `refresh run read failed: ${e.message}`), pr };
+  catch (e) { return { terminal: true, ...fail('provenance-invalid', `refresh run read failed: ${e.message}`), pr }; }
   const runProof = verifyRefreshRun(run, provenance);
   if (!runProof.ok) return { terminal: true, ...runProof, pr };
   if (runProof.state === 'pending') return { wait: true, outcome: 'provenance-pending', reason: runProof.reason, pr };
