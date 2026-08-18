@@ -271,15 +271,10 @@ assert(
   const scriptsDir = join(root, 'scripts');
   mkdirSync(scriptsDir, { recursive: true });
   mkdirSync(join(root, 'plugins'), { recursive: true });
-  const lanesConfig = JSON.parse(
+  const sourceConfig = JSON.parse(
     readFileSync(join(repoRoot, 'scripts', 'vitest-ci-lanes.config.json'), 'utf8'),
   );
-  writeFileSync(
-    join(scriptsDir, 'vitest-ci-lanes.config.json'),
-    `${JSON.stringify(lanesConfig, null, 2)}\n`,
-    'utf8',
-  );
-  const targets = Object.entries(lanesConfig.classification ?? {})
+  const targets = Object.entries(sourceConfig.classification ?? {})
     .filter(([file, lane]) => {
       if (!file.endsWith('.test.ts')) return false;
       if (lane === 'postMergeWallclock' || lane === 'parked') return false;
@@ -294,6 +289,26 @@ assert(
   assert(
     targets.length === PRE_TOPOLOGY_MAX_FILES + 1,
     `S3 fixture must resolve exactly ${PRE_TOPOLOGY_MAX_FILES + 1} non-estimated guard targets`,
+  );
+  const targetSet = new Set(targets);
+  const lanesConfig = {
+    ...sourceConfig,
+    classification: Object.fromEntries(
+      targets.map((file) => [file, sourceConfig.classification[file]]),
+    ),
+    heavyPerTestIsolate: (sourceConfig.heavyPerTestIsolate ?? []).filter((file) => targetSet.has(file)),
+    heavyFileBatchIsolate: (sourceConfig.heavyFileBatchIsolate ?? []).filter((file) => targetSet.has(file)),
+    parkedWallclockE2e: sourceConfig.parkedWallclockE2e
+      ? {
+          ...sourceConfig.parkedWallclockE2e,
+          files: (sourceConfig.parkedWallclockE2e.files ?? []).filter((file) => targetSet.has(file)),
+        }
+      : sourceConfig.parkedWallclockE2e,
+  };
+  writeFileSync(
+    join(scriptsDir, 'vitest-ci-lanes.config.json'),
+    `${JSON.stringify(lanesConfig, null, 2)}\n`,
+    'utf8',
   );
   for (const file of targets) {
     const fullPath = join(root, file);
