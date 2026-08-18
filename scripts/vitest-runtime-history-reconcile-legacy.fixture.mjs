@@ -2,8 +2,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { runProcessSync } from './kernel/subprocess.ts';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const cli = join(repoRoot, 'scripts', 'refresh-vitest-runtime-history.mjs');
@@ -55,10 +55,13 @@ function runReconcile({ remote, proposed, trusted = true, extraProposedPath = nu
   ];
   if (trusted) args.push('--require-equal-inventory');
 
-  const result = spawnSync(process.execPath, args, {
+  const result = runProcessSync({
+    command: process.execPath,
+    args,
     cwd: repoRoot,
     encoding: 'utf8',
-    env: { ...process.env },
+    inheritParentEnv: true,
+    timeoutMs: 30_000,
   });
   const output = existsSync(outputPath)
     ? JSON.parse(readFileSync(outputPath, 'utf8'))
@@ -77,7 +80,7 @@ const trustedLegacy = runReconcile({
     dataChangedAt: '2026-08-18T15:00:00.000Z',
   }),
 });
-assert(trustedLegacy.result.status === 0, 'trusted legacy reconcile must succeed');
+assert(trustedLegacy.result.exitCode === 0, 'trusted legacy reconcile must succeed');
 assert(trustedLegacy.output?.files?.[testPath] === 45000, 'trusted legacy weight must be preserved');
 assert(trustedLegacy.output?.provenance?.[testPath] === 'measured', 'trusted legacy provenance must stay measured');
 assert(!(testPath in (trustedLegacy.output?.recentSamples ?? {})), 'legacy repair must not invent recentSamples');
@@ -97,7 +100,7 @@ const validRemote = runReconcile({
     dataChangedAt: '2026-08-18T15:00:00.000Z',
   }),
 });
-assert(validRemote.result.status === 0, 'valid remote reconcile must succeed');
+assert(validRemote.result.exitCode === 0, 'valid remote reconcile must succeed');
 assert(validRemote.output?.files?.[testPath] === 31000, 'legacy carry-forward must not overwrite valid remote weight');
 assert(validRemote.output?.fileChangedAt?.[testPath] === '2026-08-18T16:00:00.000Z', 'newer remote timestamp must remain authoritative');
 
@@ -112,7 +115,7 @@ const untrustedLegacy = runReconcile({
   }),
   trusted: false,
 });
-assert(untrustedLegacy.result.status === 0, 'untrusted reconcile must retain legacy behavior');
+assert(untrustedLegacy.result.exitCode === 0, 'untrusted reconcile must retain legacy behavior');
 assert(!(testPath in (untrustedLegacy.output?.files ?? {})), 'untrusted reconcile must not restore legacy weight');
 assert(untrustedLegacy.output?.provenance?.[testPath] === 'fallback', 'untrusted reconcile must keep remote fallback provenance');
 
@@ -127,7 +130,7 @@ const inventoryDrift = runReconcile({
   }),
   extraProposedPath: 'scripts/not-in-trusted-inventory.test.ts',
 });
-assert(inventoryDrift.result.status !== 0, 'inventory drift must remain fail-closed');
+assert(inventoryDrift.result.exitCode !== 0, 'inventory drift must remain fail-closed');
 assert(
   `${inventoryDrift.result.stderr}${inventoryDrift.result.stdout}`.includes('inventory drift:'),
   'inventory drift failure must remain explicit',
