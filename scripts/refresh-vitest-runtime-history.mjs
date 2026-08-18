@@ -2,8 +2,8 @@
 /**
  * CLI for runtime-history refresh (Issue #691).
  */
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   defaultRepoRoot,
@@ -19,9 +19,23 @@ import {
 } from './lib/vitest-runtime-history-merge.mjs';
 import { buildHeavyTopology } from './lib/vitest-heavy-topology.mjs';
 import { discoverVitestFiles } from './lib/vitest-ci-lanes.mjs';
+import {
+  PRE_TOPOLOGY_MAX_FILES,
+  resolvePreTopologyMeasurementPlan,
+} from './lib/vitest-pre-topology-measurement.mjs';
 
 const SUPPLEMENTAL_TUPLE_ERROR =
   'SupplementalReportsDir, SupplementalSourceSha, SupplementalRunId, and SupplementalRunAttempt must be supplied together';
+const NORMALIZED_HISTORY_FIELDS = [
+  'issue',
+  'source',
+  'dataChangedAt',
+  'smoothingRule',
+  'files',
+  'provenance',
+  'recentSamples',
+  'fileChangedAt',
+];
 
 function printUsage() {
   console.error(`Usage: node scripts/refresh-vitest-runtime-history.mjs \\
@@ -119,6 +133,153 @@ function parseArgs(argv) {
   return options;
 }
 
+function readRawHistory(path) {
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function hasFinitePositiveWeight(value) {
+  const weight = Number(value);
+  return Number.isFinite(weight) && weight > 0;
+}
+
+function countFinitePositiveWeights(history, canonicalPaths = null) {
+  const allowed = canonicalPaths ? new Set(canonicalPaths) : null;
+  return Object.entries(history?.files ?? {}).filter(
+    ([file, value]) => (!allowed || allowed.has(file)) && hasFinitePositiveWeight(value),
+  ).length;
+}
+
+function filterContentSha(contentSha, canonicalPaths) {
+  if (!contentSha || typeof contentSha !== 'object' || Array.isArray(contentSha)) {
+    return contentSha;
+  }
+  const allowed = canonicalPaths ? new Set(canonicalPaths) : null;
+  return Object.fromEntries(
+    Object.entries(contentSha).filter(([file]) => !allowed || allowed.has(file)),
+  );
+}
+
+function projectHistoryOntoTrustedShape(history, trustedRawHistory, canonicalPaths = null) {
+  const projected = structuredClone(trustedRawHistory ?? {});
+  for (const field of NORMALIZED_HISTORY_FIELDS) {
+    projected[field] = structuredClone(history[field]);
+  }
+  if (Object.prototype.hasOwnProperty.call(trustedRawHistory ?? {}, 'contentSha')) {
+    projected.contentSha = structuredClone(
+      filterContentSha(trustedRawHistory.contentSha, canonicalPaths),
+    );
+  } else {
+    delete projected.contentSha;
+  }
+  return projected;
+}
+
+function preserveTrustedLegacyMeasuredWeights(mergedHistory, proposedHistory) {
+  for (const [file, provenance] of Object.entries(proposedHistory.provenance ?? {})) {
+    if (provenance !== 'measured' || !hasFinitePositiveWeight(proposedHistory.files?.[file])) {
+      continue;
+    }
+
+    const proposedSamples = proposedHistory.recentSamples?.[file];
+    const proposedChangedAt = proposedHistory.fileChangedAt?.[file];
+    const hasOrderingMetadata =
+      (Array.isArray(proposedSamples) && proposedSamples.length > 0)
+      || (typeof proposedChangedAt === 'string' && proposedChangedAt.trim().length > 0);
+    if (hasOrderingMetadata) {
+      continue;
+    }
+
+    const mergedHasValidWeight =
+      hasFinitePositiveWeight(mergedHistory.files?.[file])
+      && mergedHistory.provenance?.[file] !== 'fallback';
+    if (mergedHasValidWeight) {
+      continue;
+    }
+
+    mergedHistory.files[file] = Number(proposedHistory.files[file]);
+    mergedHistory.provenance[file] = 'measured';
+    delete mergedHistory.recentSamples[file];
+    delete mergedHistory.fileChangedAt[file];
+  }
+  return mergedHistory;
+}
+
+function stableObjectEntries(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  return Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+}
+
+function validateTrustedCandidate(trustedHistory, candidateHistory, canonicalPaths) {
+  const violations = [];
+  for (const file of canonicalPaths) {
+    const trustedWeight = trustedHistory?.files?.[file];
+    if (!hasFinitePositiveWeight(trustedWeight)) continue;
+
+    if (!hasFinitePositiveWeight(candidateHistory?.files?.[file])) {
+      violations.push(`${file}: trusted positive weight ${trustedWeight} was dropped`);
+      continue;
+    }
+
+    const trustedProvenance = trustedHistory?.provenance?.[file];
+    const candidateProvenance = candidateHistory?.provenance?.[file];
+    if (
+      (trustedProvenance === 'measured' || trustedProvenance === 'seeded')
+      && candidateProvenance !== 'measured'
+      && candidateProvenance !== 'seeded'
+    ) {
+      violations.push(
+        `${file}: trusted ${trustedProvenance} provenance became ${candidateProvenance ?? '<missing>'}`,
+      );
+    }
+  }
+
+  const trustedHasContentSha = Object.prototype.hasOwnProperty.call(trustedHistory ?? {}, 'contentSha');
+  const candidateHasContentSha = Object.prototype.hasOwnProperty.call(candidateHistory ?? {}, 'contentSha');
+  if (trustedHasContentSha !== candidateHasContentSha) {
+    violations.push('contentSha shape differs from trusted main');
+  } else if (trustedHasContentSha) {
+    const trustedContentSha = filterContentSha(trustedHistory.contentSha, canonicalPaths);
+    const candidateContentSha = filterContentSha(candidateHistory.contentSha, canonicalPaths);
+    if (JSON.stringify(stableObjectEntries(trustedContentSha)) !== JSON.stringify(stableObjectEntries(candidateContentSha))) {
+      violations.push('contentSha values differ from trusted main');
+    }
+  }
+
+  return violations;
+}
+
+function resolveProductionCandidateRoot(proposedPath, outputPath) {
+  if (process.env.GITHUB_ACTIONS !== 'true') return null;
+  const cwdRoot = process.cwd();
+  const cwdHistoryPath = resolve(runtimeHistoryPath(cwdRoot));
+  return (
+    resolve(proposedPath) === cwdHistoryPath
+    || resolve(outputPath) === cwdHistoryPath
+  )
+    ? cwdRoot
+    : null;
+}
+
+function enforceExistingPreTopologyBound(candidateRepoRoot) {
+  const topologyResult = buildHeavyTopology(candidateRepoRoot);
+  if (!topologyResult.ok) {
+    throw new Error(
+      `pre-topology publication guard unavailable: ${topologyResult.errors.join('; ')}`,
+    );
+  }
+  const observedPlan = resolvePreTopologyMeasurementPlan(topologyResult, {
+    maxFiles: Number.MAX_SAFE_INTEGER,
+  });
+  try {
+    resolvePreTopologyMeasurementPlan(topologyResult);
+  } catch (error) {
+    throw new Error(
+      `pre-topology publication guard refused: observed=${observedPlan.targets.length} bound=${PRE_TOPOLOGY_MAX_FILES}; ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return observedPlan.targets.length;
+}
+
 function runReconcile(options) {
   if (!options.remotePath || !options.proposedPath || !options.outputPath) {
     printUsage();
@@ -126,16 +287,70 @@ function runReconcile(options) {
   }
   const remoteHistory = loadHistoryFromFile(options.remotePath);
   const proposedHistory = loadHistoryFromFile(options.proposedPath);
+  const proposedRawHistory = readRawHistory(options.proposedPath);
   try {
     const currentInventory = options.requireEqualInventory
       ? discoverVitestFiles(options.repoRoot)
       : null;
-    const merged = reconcileProposedHistoryAgainstRemote(proposedHistory, remoteHistory, {
+    const candidateRepoRoot = options.requireEqualInventory
+      ? resolveProductionCandidateRoot(options.proposedPath, options.outputPath)
+      : null;
+    const trustedHistoryPath = options.requireEqualInventory
+      ? runtimeHistoryPath(options.repoRoot)
+      : null;
+    const trustedRawHistory = options.requireEqualInventory && existsSync(trustedHistoryPath)
+      ? readRawHistory(trustedHistoryPath)
+      : proposedRawHistory;
+    if (candidateRepoRoot && !existsSync(trustedHistoryPath)) {
+      throw new Error(`trusted runtime-history baseline is missing: ${trustedHistoryPath}`);
+    }
+
+    let merged = reconcileProposedHistoryAgainstRemote(proposedHistory, remoteHistory, {
       currentInventory,
       requireEqualInventory: options.requireEqualInventory,
     });
-    writeFileSync(options.outputPath, historyBytes(merged), 'utf8');
-    console.log('[PASS] runtime-history stale-base reconcile complete');
+    if (options.requireEqualInventory) {
+      merged = preserveTrustedLegacyMeasuredWeights(merged, proposedHistory);
+    }
+    const shapeAuthority = options.requireEqualInventory
+      ? trustedRawHistory
+      : proposedRawHistory;
+    const outputHistory = projectHistoryOntoTrustedShape(
+      merged,
+      shapeAuthority,
+      currentInventory,
+    );
+
+    let trustedPositive = null;
+    let preTopologyCount = null;
+    if (options.requireEqualInventory) {
+      const violations = validateTrustedCandidate(
+        trustedRawHistory,
+        outputHistory,
+        currentInventory,
+      );
+      if (violations.length > 0) {
+        throw new Error(
+          `trusted-main candidate invariant violated: ${violations.join('; ')}`,
+        );
+      }
+      trustedPositive = countFinitePositiveWeights(trustedRawHistory, currentInventory);
+    }
+
+    writeFileSync(options.outputPath, historyBytes(outputHistory), 'utf8');
+
+    if (candidateRepoRoot) {
+      preTopologyCount = enforceExistingPreTopologyBound(candidateRepoRoot);
+    }
+
+    const candidatePositive = countFinitePositiveWeights(outputHistory, currentInventory);
+    const trustedSignal = trustedPositive === null ? '' : ` trusted-positive=${trustedPositive}`;
+    const topologySignal = preTopologyCount === null
+      ? ''
+      : ` pre-topology=${preTopologyCount}/${PRE_TOPOLOGY_MAX_FILES}`;
+    console.log(
+      `[PASS] runtime-history stale-base reconcile complete; candidate-positive=${candidatePositive}${trustedSignal}${topologySignal}`,
+    );
   } catch (error) {
     console.error(
       `[FAIL] runtime-history stale-base reconcile refused: ${error instanceof Error ? error.message : String(error)}`,
@@ -181,9 +396,9 @@ function main() {
   const supplementalReports = supplementalCount === supplementalTuple.length
     ? loadSupplementalReportsFromDir(options.supplementalReportsDir)
     : null;
-  const baseHistory = options.baseHistoryFile
-    ? loadHistoryFromFile(options.baseHistoryFile)
-    : loadHistoryFromFile(historyPath);
+  const baseHistoryPath = options.baseHistoryFile || historyPath;
+  const baseRawHistory = readRawHistory(baseHistoryPath);
+  const baseHistory = loadHistoryFromFile(baseHistoryPath);
 
   const result = refreshRuntimeHistory({
     baseHistory,
@@ -207,6 +422,19 @@ function main() {
     process.exit(1);
   }
 
+  const currentInventory = discoverVitestFiles(options.repoRoot);
+  const outputHistory = projectHistoryOntoTrustedShape(
+    result.history,
+    baseRawHistory,
+    currentInventory,
+  );
+  const outputBytes = historyBytes(outputHistory);
+  const inputBytes = historyBytes(baseRawHistory);
+  result.history = outputHistory;
+  result.outputBytes = outputBytes;
+  result.changed = outputBytes !== inputBytes;
+  result.idempotent = !result.changed;
+
   if (result.idempotent) {
     console.log('[PASS] runtime-history refresh idempotent no-op (no data changes)');
     process.exit(0);
@@ -217,7 +445,7 @@ function main() {
   }
 
   console.log(
-    `[PASS] runtime-history refresh updated ${Object.keys(result.history.files).length} file weight(s); source=${result.history.source}`,
+    `[PASS] runtime-history refresh prepared candidate with ${countFinitePositiveWeights(result.history, currentInventory)} positive weight(s); source=${result.history.source}`,
   );
 }
 
