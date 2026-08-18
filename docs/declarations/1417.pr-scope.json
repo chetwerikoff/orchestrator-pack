@@ -5,11 +5,11 @@
     "docs/declarations/1417.pr-scope.json",
     "docs/review-cycle-cap.d.mts",
     "docs/review-cycle-cap.mjs",
+    "plugins/codex-pr-reviewer/bin/review-claude.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/lib/resolve-pack-reviewer.ts",
     "scripts/merge-triage-gate.ps1",
-    "scripts/pack-review-state.ts",
-    "scripts/runtime/pack-review-claude.ts"
+    "scripts/pack-review-state.ts"
   ],
   "denylist": [
     ".orca/",
@@ -22,11 +22,11 @@
     "docs/declarations/1417.pr-scope.json",
     "docs/review-cycle-cap.d.mts",
     "docs/review-cycle-cap.mjs",
+    "plugins/codex-pr-reviewer/bin/review-claude.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/lib/resolve-pack-reviewer.ts",
     "scripts/merge-triage-gate.ps1",
-    "scripts/pack-review-state.ts",
-    "scripts/runtime/pack-review-claude.ts"
+    "scripts/pack-review-state.ts"
   ],
   "source_revision": "r09"
 }
