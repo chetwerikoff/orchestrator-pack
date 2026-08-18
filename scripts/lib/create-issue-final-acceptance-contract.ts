@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import {
-  checkStageCompletenessGuard,
   deriveReviewEpisodeState,
   type ReviewEpisodeDerivationAuthorityV1,
 } from '../lib/stage-completeness-core.ts';
@@ -11,12 +10,14 @@ import {
   checkTierGateGuard,
   type TierTransitionEvidence,
 } from '../lib/tier-gate-core.ts';
+import { validateLifecycleAcceptanceTopology } from './create-issue-stage-lifecycle-acceptance.ts';
 import {
   validateHistoricalReceiptsAgainstLineage,
 } from './create-issue-stage-record-receipt.ts';
 import type { CanonicalLineage } from './create-issue-stage-record-types.ts';
 
 export const FINAL_ACCEPTANCE_CONTRACT_VERSION = 'create-issue-final-acceptance-contract/v1';
+const SOURCE_REVISION_MARKER_RE = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i;
 
 export interface FinalAcceptanceGuardInput {
   issueBody: string;
@@ -94,6 +95,10 @@ function tryReadJson(path: string, readJson: (path: string) => unknown): unknown
   }
 }
 
+function record(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 export function validateExactTerminalBodyBinding(
   sourceBody: string,
   currentBody: string | undefined,
@@ -116,6 +121,53 @@ export function validateExactTerminalBodyBinding(
   }
 }
 
+/**
+ * The terminal GPT is Issue-lifetime one-shot. Exact body equality is the
+ * ordinary path. A later live revision is also legal only as the bounded
+ * post-terminal author correction: the one terminal receipt remains bound to
+ * the reviewed source marker and no terminal receipt exists for the repaired
+ * revision. Finding/disposition guards below still have to accept the repaired
+ * state; this function never turns a second terminal verdict into authority.
+ */
+export function validateTerminalOneShotBodyBinding(
+  sourceBody: string,
+  currentBody: string | undefined,
+  issueRevision: string,
+  stageReceipts: readonly unknown[],
+  errors: string[],
+): void {
+  if (currentBody === undefined) {
+    errors.push('terminal current Issue body is required for exact binding');
+    return;
+  }
+  const sourceBytes = Buffer.from(sourceBody, 'utf8');
+  const currentBytes = Buffer.from(currentBody, 'utf8');
+  const sourceSha = createHash('sha256').update(sourceBytes).digest('hex');
+  const currentSha = createHash('sha256').update(currentBytes).digest('hex');
+  if (sourceBytes.byteLength === currentBytes.byteLength && sourceSha === currentSha) return;
+
+  const sourceRevision = SOURCE_REVISION_MARKER_RE.exec(sourceBody)?.[1];
+  const currentRevision = SOURCE_REVISION_MARKER_RE.exec(currentBody)?.[1];
+  if (!sourceRevision || !currentRevision || currentRevision !== issueRevision || sourceRevision === currentRevision) {
+    errors.push(`terminal source body changed outside a bound post-terminal correction: reviewed=${sourceRevision ?? '<missing>'} current=${currentRevision ?? '<missing>'} acceptance=${issueRevision}`);
+    return;
+  }
+  const terminal = stageReceipts.filter((value) => (
+    record(value) && value.stage === 'architectural' && value.outcome === 'complete'
+  ));
+  if (terminal.length !== 1) {
+    errors.push(`post-terminal correction requires exactly one original terminal receipt; observed ${terminal.length}`);
+    return;
+  }
+  const terminalReceipt = terminal[0]! as Record<string, unknown>;
+  if (terminalReceipt.sourceRevision !== sourceRevision) {
+    errors.push(`post-terminal correction source marker ${sourceRevision} does not match original terminal receipt revision ${String(terminalReceipt.sourceRevision)}`);
+  }
+  if (stageReceipts.some((value) => record(value) && value.stage === 'architectural' && value.sourceRevision === currentRevision)) {
+    errors.push('post-terminal correction must not re-arm or publish a second terminal stage receipt');
+  }
+}
+
 export function executeFinalAcceptanceGuards(
   input: FinalAcceptanceGuardInput,
 ): FinalAcceptanceGuardResult {
@@ -134,7 +186,6 @@ export function executeFinalAcceptanceGuards(
 
   if (!input.cycleId.trim()) errors.push('cycleId is required');
   if (!input.issueRevision.trim()) errors.push('issueRevision is required');
-  validateExactTerminalBodyBinding(input.terminalSourceBody ?? input.issueBody, input.currentIssueBody, errors);
 
   const tierEvidence = input.tierTransitionEvidence
     ?? (input.tierReceiptPath
@@ -159,11 +210,13 @@ export function executeFinalAcceptanceGuards(
       return value === null ? [] : [value];
     });
   let episodeAuthority = input.episodeAuthority;
+  let intakeValue: unknown = episodeAuthority?.tierIntake;
   if (!episodeAuthority) {
     const intakePath = input.tierIntakePath ?? join(input.reviewDir, 'tier-intake.json');
     const intake = input.tierIntakePath
       ? readJsonSafely(intakePath, readJson, errors, 'stage-completeness')
       : tryReadJson(intakePath, readJson);
+    intakeValue = intake;
     const first = stageReceipts[0];
     if (intake && first && typeof intake === 'object' && typeof first === 'object') {
       const intakeRecord = intake as Record<string, unknown>;
@@ -196,17 +249,22 @@ export function executeFinalAcceptanceGuards(
     const value = readJsonSafely(path, readJson, errors, 'stage-completeness');
     return value === null ? [] : Array.isArray(value) ? value : [value];
   }) ?? [];
-  const stageResult = checkStageCompletenessGuard(input.issueBody, {
-    phase: 'final-acceptance',
-    stageReceipts,
-    verifiedRelayEvidence,
-    episodeAuthority,
-    repoRoot: process.cwd(),
-    draftPath: undefined,
-  });
-  if (!stageResult.ok) errors.push(...stageResult.errors.map((item) => `stage-completeness: ${item}`));
 
   const ledgerEpisodeState = deriveReviewEpisodeState(stageReceipts, verifiedRelayEvidence, episodeAuthority);
+  if (ledgerEpisodeState.errors.length > 0) {
+    errors.push(...ledgerEpisodeState.errors.map((item) => `stage-completeness: ${item}`));
+  }
+  if (!ledgerEpisodeState.relayComplete) errors.push('stage-completeness: review episode relay is incomplete');
+  const lifecycleTopology = validateLifecycleAcceptanceTopology(stageReceipts, intakeValue, input.tier ?? ledgerEpisodeState.tier ?? undefined);
+  if (!lifecycleTopology.ok) errors.push(...lifecycleTopology.errors.map((item) => `stage-completeness: ${item}`));
+
+  validateTerminalOneShotBodyBinding(
+    input.terminalSourceBody ?? input.issueBody,
+    input.currentIssueBody,
+    input.issueRevision,
+    stageReceipts,
+    errors,
+  );
 
   if (!input.ledgerPath) {
     errors.push('finding-ledger: ledger path is required for final acceptance');
@@ -246,13 +304,14 @@ export function executeFinalAcceptanceGuards(
     }).map((item) => `cycle-binding: ${item}`));
   }
 
-  if (!input.issueBody.includes(input.issueRevision)) {
+  const currentBody = input.currentIssueBody ?? input.issueBody;
+  if (!currentBody.includes(input.issueRevision)) {
     errors.push('issue revision drift detected before final acceptance');
   }
 
   return {
     ok: errors.length === 0,
     contractVersion: FINAL_ACCEPTANCE_CONTRACT_VERSION,
-    errors,
+    errors: [...new Set(errors)],
   };
 }
