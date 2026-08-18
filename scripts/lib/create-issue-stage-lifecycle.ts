@@ -364,6 +364,9 @@ export function composeTerminalBundle(input: {
   const ledger = requiredJsonRecord(join(input.reviewDir, 'finding-disposition-ledger.json'), 'finding disposition ledger');
   const counts = isRecord(ledger.counts) ? ledger.counts : null;
   if (!counts || !Number.isInteger(counts.rawFindingCount) || Number(counts.rawFindingCount) < 0) throw new Error('finding disposition ledger is missing review-economics rawFindingCount');
+  if (ledger.reviewEpisodeId !== input.reviewEpisodeId) throw new Error('finding disposition ledger reviewEpisodeId binding is stale or foreign');
+  if (ledger.sourceRevision !== input.sourceRevision) throw new Error('finding disposition ledger sourceRevision binding is stale');
+  if ((ledger.predecessorStage ?? null) !== input.predecessorStage) throw new Error('finding disposition ledger predecessorStage binding is stale');
   if (ledger.draft !== input.issueBody) throw new Error('finding disposition ledger is not bound to the exact live Issue bytes');
   if (!Array.isArray(ledger.findings) || !jsonEqual(ledger.findings, author.findings)) throw new Error('finding disposition ledger findings do not match the bound author disposition record');
   const receiptRawFindingCount = rawFindingCountFromReceipts(authorityReceipts);
@@ -385,9 +388,9 @@ export function composeTerminalBundle(input: {
     authorM4,
     reviewEconomics: {
       ...counts,
-      reviewEpisodeId: input.reviewEpisodeId,
-      sourceRevision: input.sourceRevision,
-      predecessorStage: input.predecessorStage,
+      reviewEpisodeId: ledger.reviewEpisodeId,
+      sourceRevision: ledger.sourceRevision,
+      predecessorStage: ledger.predecessorStage ?? null,
       evidenceBasis: 'receipt-backed-finding-ledger/v1',
     },
   };
