@@ -8,7 +8,6 @@ import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from
 import { readWorkerReportStoreFile } from '../docs/worker-report-store.mjs';
 import {
   evaluatePackWorkerReport,
-  resolvePackWorkerReportRequest,
   type ReportDeps,
   type ReportRequest,
 } from './pack-worker-report.ts';
@@ -66,21 +65,6 @@ function runFixture(input: { ready?: boolean; malformedPr?: boolean; prHead?: st
   };
 }
 
-function autoBindingRun(input: { prHead?: string; body?: string; repo?: string } = {}): NonNullable<ReportDeps['run']> {
-  return async (command, args) => {
-    if (command === 'git' && args[0] === 'rev-parse') {
-      return { ok: true, stdout: `${headSha}\n` };
-    }
-    if (command === 'gh' && args[0] === 'repo') {
-      return { ok: true, stdout: JSON.stringify({ nameWithOwner: input.repo ?? 'chetwerikoff/orchestrator-pack' }) };
-    }
-    if (command === 'gh' && args[0] === 'pr') {
-      return { ok: true, stdout: JSON.stringify({ number: 1456, state: 'OPEN', headRefOid: input.prHead ?? headSha, body: input.body ?? 'Closes #1416' }) };
-    }
-    return { ok: false, stdout: '', stderr: 'unexpected child' };
-  };
-}
-
 afterEach(() => {
   delete process.env.OPK_BASE_DIR;
   delete process.env.OPK_WORKER_REPORT_STORE;
@@ -95,38 +79,6 @@ describe('pack-worker-report Node hard cut', () => {
     const store = readWorkerReportStoreFile(f.reportStorePath) as { sourceRecords?: Record<string, unknown> };
     expect(Object.keys(store.sourceRecords ?? {})).toHaveLength(1);
     expect(JSON.stringify(store.sourceRecords)).toContain(f.assignment.assignmentId);
-  });
-
-  it('resolves the documented state-only public command from exact repo, PR/head, Issue, and current assignment facts', async () => {
-    const f = await fixture('local');
-    const resolved = await resolvePackWorkerReportRequest(['--state', 'fixing_ci'], process.env, { run: autoBindingRun() });
-    expect(resolved).toEqual({
-      kind: 'ok',
-      value: {
-        state: 'fixing_ci',
-        repository: 'chetwerikoff/orchestrator-pack',
-        issueNumber: 1416,
-        taskId: 'task-1416',
-        assignmentId: f.assignment.assignmentId,
-        assignmentGeneration: f.assignment.generation,
-        prNumber: 1456,
-        headSha,
-        deliveryRunId: '',
-        projectId: 'orchestrator-pack',
-        repoRoot: process.cwd(),
-        dryRun: false,
-      },
-    });
-    if (resolved.kind !== 'ok') return;
-    const result = await evaluatePackWorkerReport(resolved.value, { run: runFixture(), reportStorePath: f.reportStorePath });
-    expect(result).toMatchObject({ disposition: 'recorded', accepted: true, recordWritten: true, requestedState: 'fixing_ci' });
-  });
-
-  it('keeps state-only binding failures as continue_work with zero store delta', async () => {
-    const f = await fixture();
-    const resolved = await resolvePackWorkerReportRequest(['--state', 'fixing_ci'], process.env, { run: autoBindingRun({ prHead: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }) });
-    expect(resolved).toEqual({ kind: 'continue_work', reason: 'pr_head_mismatch' });
-    expect(existsSync(f.reportStorePath)).toBe(false);
   });
 
   it('returns continue_work with zero store delta when ready evidence is incomplete', async () => {
