@@ -14,6 +14,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   RUNTIME_LIVENESS_RESULTS,
+  RUNTIME_WORKER_TASK_BINDING_AMBIGUITY_CODES,
+  RUNTIME_WORKER_TASK_BINDING_STALE_CODES,
+  RUNTIME_WORKER_TASK_BINDING_UNAVAILABLE_CODES,
+  isRuntimeWorkerTaskBindingSource,
   sameRuntimeWorker,
   runtimeFailure,
   type RuntimeAdapter,
@@ -26,6 +30,12 @@ import {
   type RuntimeWorker,
   type RuntimeWorkerIdentity,
   type RuntimeWorkerProvenance,
+  type RuntimeWorkerTaskBindingAmbiguityCode,
+  type RuntimeWorkerTaskBindingObservation,
+  type RuntimeWorkerTaskBindingOutcome,
+  type RuntimeWorkerTaskBindingSource,
+  type RuntimeWorkerTaskBindingStaleCode,
+  type RuntimeWorkerTaskBindingUnavailableCode,
 } from '../runtime/contracts.ts';
 import type { FleetAssignmentBinding } from './fleet-assignment-binding.ts';
 
@@ -57,9 +67,11 @@ export interface FleetObserverSource {
     readonly worker: RuntimeWorkerIdentity;
     readonly observationWindowMs: number;
   }, options?: RuntimeCallOptions): MaybePromise<RuntimeLivenessResult>;
+  readonly observeWorkerTaskBindings?: RuntimeWorkerTaskBindingSource['observeWorkerTaskBindings'];
 }
 
-export type RuntimeNeutralFleetSource = Pick<RuntimeAdapter, 'listWorkers' | 'findWorker' | 'readBoundedOutput' | 'liveness'>;
+export type RuntimeNeutralFleetSource = Pick<RuntimeAdapter, 'listWorkers' | 'findWorker' | 'readBoundedOutput' | 'liveness'>
+  & Partial<RuntimeWorkerTaskBindingSource>;
 
 export interface FleetObserverConfig {
   readonly schemaVersion: 1;
@@ -161,10 +173,47 @@ export interface FleetObserverResult {
   readonly snapshot?: FleetObserverSnapshot;
 }
 
+export type FleetWorkerIssueBindingUnavailableCode =
+  | RuntimeWorkerTaskBindingUnavailableCode
+  | 'superseded_or_wrong_tick'
+  | 'late_completion_discarded';
+
+interface FleetWorkerIssueBindingRowBase {
+  readonly unitRef: string;
+  readonly worker: RuntimeWorkerIdentity;
+}
+
+export type FleetWorkerIssueBindingRow =
+  | (FleetWorkerIssueBindingRowBase & { readonly status: 'resolved'; readonly issueNumber: number })
+  | (FleetWorkerIssueBindingRowBase & { readonly status: 'unbound' | 'external' | 'absent' | 'replaced' | 'identity_unresolved' | 'incarnation_unavailable' })
+  | (FleetWorkerIssueBindingRowBase & { readonly status: 'stale'; readonly code: RuntimeWorkerTaskBindingStaleCode })
+  | (FleetWorkerIssueBindingRowBase & { readonly status: 'ambiguous'; readonly code: RuntimeWorkerTaskBindingAmbiguityCode });
+
+export interface FleetWorkerIssueBindingUnavailableRow extends FleetWorkerIssueBindingRowBase {
+  readonly status: 'unavailable';
+  readonly code: FleetWorkerIssueBindingUnavailableCode;
+}
+
+export type FleetWorkerIssueBindingSet =
+  | {
+      readonly status: 'complete';
+      readonly schedulerGeneration: string;
+      readonly tickSequence: number;
+      readonly rows: readonly FleetWorkerIssueBindingRow[];
+    }
+  | {
+      readonly status: 'unavailable';
+      readonly schedulerGeneration: string;
+      readonly tickSequence: number;
+      readonly code: FleetWorkerIssueBindingUnavailableCode;
+      readonly rows: readonly FleetWorkerIssueBindingUnavailableRow[];
+    };
+
 interface InMemoryUnit {
   readonly identity: RuntimeWorkerIdentity;
   readonly unitRef: string;
   readonly provenance: RuntimeWorkerProvenance;
+  identityResolved: boolean;
   assignmentId?: string;
   assignmentGeneration?: number;
   token: RuntimeObservationToken | null;
@@ -179,6 +228,24 @@ interface ParsedSnapshotResult { snapshot: FleetObserverSnapshot | null; rawByte
 
 type ConfigResult = { readonly ok: true; readonly config: FleetObserverConfig } | { readonly ok: false; readonly reason: string };
 interface BoundedCall<T> { readonly completed: boolean; readonly value?: T }
+
+interface AcceptedBindingUnit {
+  readonly unitRef: string;
+  readonly identity: RuntimeWorkerIdentity;
+  readonly identityResolved: boolean;
+}
+interface AcceptedBindingTick {
+  readonly schedulerGeneration: string;
+  readonly tickSequence: number;
+  readonly schedulerIntervalMs: number;
+  readonly effectiveBudgetMs: number;
+  readonly units: readonly AcceptedBindingUnit[];
+}
+interface BindingAttempt {
+  readonly schedulerGeneration: string;
+  readonly tickSequence: number;
+  readonly promise: Promise<FleetWorkerIssueBindingSet>;
+}
 
 const UNIT_REF_PATTERN = /^u-[0-9]{1,9}$/u;
 const GENERATION_PATTERN = /^sg-[A-Za-z0-9._~-]{1,80}$/u;
@@ -204,6 +271,50 @@ function sameIdentity(left: RuntimeWorkerIdentity, right: RuntimeWorkerIdentity)
 function sameLogicalWorker(left: RuntimeWorkerIdentity, right: RuntimeWorkerIdentity): boolean { return left.runtime === right.runtime && left.id === right.id; }
 function iso(ms: number): string { return new Date(ms).toISOString(); }
 function outputDigest(lines: readonly string[]): string { return createHash('sha256').update(JSON.stringify(lines), 'utf8').digest('hex'); }
+
+function cloneIdentity(identity: RuntimeWorkerIdentity): RuntimeWorkerIdentity {
+  return Object.freeze({ runtime: identity.runtime, id: identity.id, generation: identity.generation });
+}
+function freezeBindingSet<T extends FleetWorkerIssueBindingSet>(value: T): T {
+  for (const row of value.rows) Object.freeze(row);
+  Object.freeze(value.rows);
+  return Object.freeze(value);
+}
+function validRuntimeBindingOutcome(
+  value: unknown,
+  expected: RuntimeWorkerIdentity,
+): value is RuntimeWorkerTaskBindingOutcome {
+  if (!isRecord(value) || typeof value.status !== 'string' || !isRecord(value.worker)) return false;
+  const worker = value.worker as unknown as RuntimeWorkerIdentity;
+  if (!hasOnlyKeys(value.worker as RecordValue, new Set(['runtime', 'id', 'generation']))
+    || typeof worker.runtime !== 'string' || typeof worker.id !== 'string' || typeof worker.generation !== 'string'
+    || !sameRuntimeWorker(worker, expected)) return false;
+  switch (value.status) {
+    case 'bound':
+      return hasOnlyKeys(value, new Set(['status', 'worker', 'issueNumber', 'provenance']))
+        && value.provenance === 'internal'
+        && positiveInteger(value.issueNumber);
+    case 'unbound':
+      return hasOnlyKeys(value, new Set(['status', 'worker', 'provenance']))
+        && value.provenance === 'internal';
+    case 'external':
+      return hasOnlyKeys(value, new Set(['status', 'worker', 'provenance']))
+        && value.provenance === 'external';
+    case 'absent':
+    case 'replaced':
+    case 'identity_unresolved':
+    case 'incarnation_unavailable':
+      return hasOnlyKeys(value, new Set(['status', 'worker']));
+    case 'stale':
+      return hasOnlyKeys(value, new Set(['status', 'worker', 'code']))
+        && (RUNTIME_WORKER_TASK_BINDING_STALE_CODES as readonly string[]).includes(String(value.code));
+    case 'ambiguous':
+      return hasOnlyKeys(value, new Set(['status', 'worker', 'code']))
+        && (RUNTIME_WORKER_TASK_BINDING_AMBIGUITY_CODES as readonly string[]).includes(String(value.code));
+    default:
+      return false;
+  }
+}
 
 function effectiveBudget(config: FleetObserverConfig, schedulerIntervalMs: number) {
   const interval = Math.max(1, Math.floor(schedulerIntervalMs));
@@ -472,6 +583,8 @@ export class FleetObserver {
   #latestRequestedSequence = 0;
   #cancelVersion = 0;
   #exceptionCollisionRejected = false;
+  #acceptedBindingTick: AcceptedBindingTick | null = null;
+  #bindingAttempt: BindingAttempt | null = null;
 
   constructor(options: FleetObserverOptions) {
     this.source = options.source;
@@ -524,7 +637,7 @@ export class FleetObserver {
       used.add(prior.unitRef);
       const numeric = Number(prior.unitRef.slice(2)); if (Number.isInteger(numeric)) this.#unitCounter = Math.max(this.#unitCounter, numeric);
       this.#states.set(this.#identityKey(worker.identity), {
-        identity: worker.identity, unitRef: prior.unitRef, provenance: worker.provenance,
+        identity: worker.identity, unitRef: prior.unitRef, provenance: worker.provenance, identityResolved: false,
         assignmentId: binding.assignmentId, assignmentGeneration: binding.assignmentGeneration,
         token: null, hasBaseline: prior.hasBaseline, outputDigest: prior.outputDigest,
         livelockStreak: prior.livelockStreak, class: prior.class, present: true,
@@ -549,7 +662,7 @@ export class FleetObserver {
     if ([...this.#states.values()].some((state) => state.unitRef === unitRef)) return null;
     const numeric = Number(unitRef.slice(2)); if (Number.isInteger(numeric)) this.#unitCounter = Math.max(this.#unitCounter, numeric);
     const state: InMemoryUnit = {
-      identity: worker.identity, unitRef, provenance: worker.provenance,
+      identity: worker.identity, unitRef, provenance: worker.provenance, identityResolved: false,
       ...(binding ? { assignmentId: binding.assignmentId, assignmentGeneration: binding.assignmentGeneration } : {}),
       token: null, hasBaseline: false, outputDigest: null, livelockStreak: 0, class: null, present: true,
     };
@@ -565,6 +678,7 @@ export class FleetObserver {
     if (identityCheck.value.value === null || !sameIdentity(identityCheck.value.value.identity, state.identity)) {
       return { unitRef: state.unitRef, provenance: state.provenance, class: 'unknown', reason: 'identity-contradiction', probes: { output: 'failed', liveness: 'failed' }, livelockStreak: state.livelockStreak };
     }
+    state.identityResolved = true;
     const output = await beforeDeadline(() => this.source.readBoundedOutput({ worker: state.identity, previousToken: state.token, limit: 128 }, { timeoutMs: Math.max(1, deadlineMs - now()) }), deadlineMs, now);
     const livenessWindowMs = Math.max(1, Math.floor(deadlineMs - now()));
     const live = await beforeDeadline(() => this.source.liveness({ worker: state.identity, observationWindowMs: livenessWindowMs }, { timeoutMs: livenessWindowMs }), deadlineMs, now);
@@ -626,6 +740,130 @@ export class FleetObserver {
     };
   }
 
+  #unavailableBindingSet(
+    accepted: AcceptedBindingTick | null,
+    code: FleetWorkerIssueBindingUnavailableCode,
+  ): FleetWorkerIssueBindingSet {
+    const schedulerGeneration = accepted?.schedulerGeneration ?? this.schedulerGeneration;
+    const tickSequence = accepted?.tickSequence ?? this.#tickSequence;
+    const rows = (accepted?.units ?? []).map((unit): FleetWorkerIssueBindingUnavailableRow => ({
+      status: 'unavailable',
+      unitRef: unit.unitRef,
+      worker: unit.identity,
+      code,
+    }));
+    return freezeBindingSet({ status: 'unavailable', schedulerGeneration, tickSequence, code, rows });
+  }
+
+  #projectBindingObservation(
+    accepted: AcceptedBindingTick,
+    observation: RuntimeWorkerTaskBindingObservation,
+  ): FleetWorkerIssueBindingSet {
+    const rawObservation = observation as unknown;
+    if (!isRecord(rawObservation) || typeof rawObservation.status !== 'string') {
+      return this.#unavailableBindingSet(accepted, 'malformed_or_incomplete');
+    }
+    if (rawObservation.status === 'unavailable') {
+      if (!hasOnlyKeys(rawObservation, new Set(['status', 'code']))
+        || !(RUNTIME_WORKER_TASK_BINDING_UNAVAILABLE_CODES as readonly string[]).includes(String(rawObservation.code))) {
+        return this.#unavailableBindingSet(accepted, 'malformed_or_incomplete');
+      }
+      return this.#unavailableBindingSet(accepted, rawObservation.code as RuntimeWorkerTaskBindingUnavailableCode);
+    }
+    if (rawObservation.status !== 'ok' || !hasOnlyKeys(rawObservation, new Set(['status', 'outcomes']))) {
+      return this.#unavailableBindingSet(accepted, 'malformed_or_incomplete');
+    }
+    const outcomes = rawObservation.outcomes;
+    if (!Array.isArray(outcomes)
+      || outcomes.length !== accepted.units.length
+      || outcomes.some((outcome, index) => !validRuntimeBindingOutcome(outcome, accepted.units[index]!.identity))) {
+      return this.#unavailableBindingSet(accepted, 'malformed_or_incomplete');
+    }
+    const trustedOutcomes = outcomes as RuntimeWorkerTaskBindingOutcome[];
+    const rows = accepted.units.map((unit, index): FleetWorkerIssueBindingRow => {
+      if (!unit.identityResolved) {
+        return { status: 'identity_unresolved', unitRef: unit.unitRef, worker: unit.identity };
+      }
+      const outcome = trustedOutcomes[index]!;
+      switch (outcome.status) {
+        case 'bound':
+          return { status: 'resolved', unitRef: unit.unitRef, worker: unit.identity, issueNumber: outcome.issueNumber };
+        case 'unbound':
+        case 'external':
+        case 'absent':
+        case 'replaced':
+        case 'identity_unresolved':
+        case 'incarnation_unavailable':
+          return { status: outcome.status, unitRef: unit.unitRef, worker: unit.identity };
+        case 'stale':
+          return { status: 'stale', unitRef: unit.unitRef, worker: unit.identity, code: outcome.code };
+        case 'ambiguous':
+          return { status: 'ambiguous', unitRef: unit.unitRef, worker: unit.identity, code: outcome.code };
+        default:
+          throw new Error('unreachable-runtime-binding-outcome');
+      }
+    });
+    return freezeBindingSet({
+      status: 'complete',
+      schedulerGeneration: accepted.schedulerGeneration,
+      tickSequence: accepted.tickSequence,
+      rows,
+    });
+  }
+
+  async #resolveAcceptedWorkerIssueBindings(
+    accepted: AcceptedBindingTick,
+  ): Promise<FleetWorkerIssueBindingSet> {
+    if (!isRuntimeWorkerTaskBindingSource(this.source)) {
+      return this.#unavailableBindingSet(accepted, 'capability_absent');
+    }
+    const attemptBudgetMs = Math.min(
+      accepted.effectiveBudgetMs,
+      Math.max(1, Math.floor(accepted.schedulerIntervalMs / 2)),
+    );
+    if (attemptBudgetMs <= 0) return this.#unavailableBindingSet(accepted, 'deadline_exhausted');
+    const deadline = this.#now() + attemptBudgetMs;
+    const observed = await beforeDeadline(
+      () => this.source.observeWorkerTaskBindings!({ workers: accepted.units.map((unit) => unit.identity) }, { timeoutMs: attemptBudgetMs }),
+      deadline,
+      this.#now,
+    );
+    const current = this.#acceptedBindingTick;
+    if (!current
+      || current.schedulerGeneration !== accepted.schedulerGeneration
+      || current.tickSequence !== accepted.tickSequence) {
+      return this.#unavailableBindingSet(accepted, 'late_completion_discarded');
+    }
+    if (!observed.completed || !observed.value) {
+      return this.#unavailableBindingSet(accepted, 'deadline_exhausted');
+    }
+    return this.#projectBindingObservation(accepted, observed.value);
+  }
+
+  resolveWorkerIssueBindings(input: {
+    readonly schedulerGeneration: string;
+    readonly tickSequence: number;
+  }): Promise<FleetWorkerIssueBindingSet> {
+    const accepted = this.#acceptedBindingTick;
+    if (!accepted
+      || input.schedulerGeneration !== accepted.schedulerGeneration
+      || input.tickSequence !== accepted.tickSequence) {
+      return Promise.resolve(this.#unavailableBindingSet(accepted, 'superseded_or_wrong_tick'));
+    }
+    if (this.#bindingAttempt
+      && this.#bindingAttempt.schedulerGeneration === accepted.schedulerGeneration
+      && this.#bindingAttempt.tickSequence === accepted.tickSequence) {
+      return this.#bindingAttempt.promise;
+    }
+    const promise = this.#resolveAcceptedWorkerIssueBindings(accepted);
+    this.#bindingAttempt = Object.freeze({
+      schedulerGeneration: accepted.schedulerGeneration,
+      tickSequence: accepted.tickSequence,
+      promise,
+    });
+    return promise;
+  }
+
   async tick(input: FleetObserverTickInput): Promise<FleetObserverResult> {
     const parsed = this.#readConfig(); const config = parsed.ok ? parsed.config : defaultConfig();
     const budget = effectiveBudget(config, input.schedulerIntervalMs);
@@ -640,7 +878,7 @@ export class FleetObserver {
     const workers = [...listing.value.value];
     if (workers.length > MAX_UNITS) return this.#failure({ reason: 'fleet-cap-exceeded', sequence: requested, budget, startedAt, previous, fleetCap: true });
     if (!this.#restore(workers)) return this.#failure({ reason: 'assignment-binding-untrusted', sequence: requested, budget, startedAt, previous });
-    for (const state of this.#states.values()) state.present = false;
+    for (const state of this.#states.values()) { state.present = false; state.identityResolved = false; }
     const states: InMemoryUnit[] = [];
     for (const worker of workers) {
       const state = this.#ensureState(worker); if (!state) return this.#failure({ reason: 'assignment-binding-untrusted', sequence: requested, budget, startedAt, previous });
@@ -665,6 +903,15 @@ export class FleetObserver {
     if (requested !== this.#latestRequestedSequence || cancelVersion !== this.#cancelVersion) return this.#failure({ reason: 'stale-completion', sequence: requested, budget, startedAt, previous, stale: true });
     if (this.#now() > deadlineMs || rows.length + transitions.filter((item) => item.type === 'unit-disappeared').length < states.length) return this.#failure({ reason: 'phase-budget-expired', sequence: requested, budget, startedAt, previous });
     rows.sort((a, b) => a.unitRef.localeCompare(b.unitRef)); transitions.sort((a, b) => a.unitRef.localeCompare(b.unitRef) || a.type.localeCompare(b.type));
+    const acceptedUnits = rows.map((row): AcceptedBindingUnit | null => {
+      const state = [...this.#states.values()].find((candidate) => candidate.unitRef === row.unitRef);
+      return state
+        ? { unitRef: row.unitRef, identity: cloneIdentity(state.identity), identityResolved: state.identityResolved }
+        : null;
+    });
+    if (acceptedUnits.some((unit) => unit === null)) {
+      return this.#failure({ reason: 'assignment-binding-untrusted', sequence: requested, budget, startedAt, previous });
+    }
     const continuity = this.#activationLineage ? [...this.#states.values()].filter((state) => state.assignmentId && state.assignmentGeneration).map((state): FleetObserverContinuityRow => ({
       assignmentId: state.assignmentId!, assignmentGeneration: state.assignmentGeneration!, unitRef: state.unitRef,
       class: state.class, livelockStreak: state.livelockStreak, hasBaseline: state.hasBaseline, outputDigest: state.outputDigest,
@@ -698,6 +945,14 @@ export class FleetObserver {
         ...(superseded ? { stale: true } : {}),
       });
     }
+    this.#acceptedBindingTick = Object.freeze({
+      schedulerGeneration: this.schedulerGeneration,
+      tickSequence: requested,
+      schedulerIntervalMs: Math.max(1, Math.floor(input.schedulerIntervalMs)),
+      effectiveBudgetMs: budget.effectiveBudgetMs,
+      units: Object.freeze(acceptedUnits as AcceptedBindingUnit[]),
+    });
+    this.#bindingAttempt = null;
     this.#tickSequence = Math.max(this.#tickSequence, requested);
     return {
       result: 'census-published-observer-only', status: 'complete', snapshotCommitted: true, snapshotPath: this.snapshotPath,
