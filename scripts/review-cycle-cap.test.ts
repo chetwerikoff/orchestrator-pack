@@ -317,8 +317,6 @@ describe('distinct head counting matrix', () => {
         completedAt: `2026-07-0${idx + 1}T00:00:00Z`,
       })),
     ];
-    const t1Body = '```complexity-tier\ntier: T1\n```';
-    const t2Body = '```complexity-tier\ntier: T2\n```';
     const base = {
       openPrs: [{ number: pr, headRefOid: current, headCommittedAt: '2026-07-03T00:00:00Z' }],
       reviewRuns: runs,
@@ -570,12 +568,15 @@ describe('review cycle cap scenario matrix', () => {
     expect(deriveDistinctHeadBudget(runs, pr, sha)).toHaveLength(1);
   });
 
-  it('post clean_early_stop new head opens fresh cycle', () => {
+  it('post clean_early_stop new head preserves durable review-stage completion', () => {
     const oldHead = 'old-clean'.padEnd(40, 'o');
     const newHead = 'new-head'.padEnd(40, 'n');
     const oldRuns = [{ prNumber: pr, targetSha: oldHead, status: 'up_to_date', openFindingCount: 0, completedAt: '2026-07-01T00:00:00Z' }];
     const stopped = run(pr, oldHead, oldRuns);
     expect(stopped.terminal).toBe(TERMINAL_CLEAN_EARLY_STOP);
+    expect(stopped.prState?.reviewStageComplete).toBe(true);
+    const completedHeads = stopped.prState?.distinctHeadsReviewed;
+    const cycleOpenedAtUtc = stopped.prState?.cycleOpenedAtUtc;
 
     const historicalRuns = [
       ...oldRuns,
@@ -586,10 +587,12 @@ describe('review cycle cap scenario matrix', () => {
       capState: stopped.capState,
       nowMs: Date.parse('2026-07-02T00:00:00Z'),
     });
-    expect(gate.terminal).not.toBe(TERMINAL_CLEAN_EARLY_STOP);
-    expect(gate.allowStart).toBe(true);
-    expect(gate.prState?.distinctHeadsReviewed).toEqual([]);
-    expect(gate.prState?.cycleOpenedAtUtc).toBeTruthy();
+    expect(gate.allowStart).toBe(false);
+    expect(gate.reason).toBe(TERMINAL_CLEAN_EARLY_STOP);
+    expect(gate.terminal).toBe(TERMINAL_CLEAN_EARLY_STOP);
+    expect(gate.prState?.reviewStageComplete).toBe(true);
+    expect(gate.prState?.distinctHeadsReviewed).toEqual(completedHeads);
+    expect(gate.prState?.cycleOpenedAtUtc).toBe(cycleOpenedAtUtc);
   });
 
   it('absent cap state does not inherit mergeEligible from historical clean on prior head', () => {
