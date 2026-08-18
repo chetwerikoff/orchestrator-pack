@@ -4,7 +4,6 @@
   "declared_paths": [
     "docs/browser-gpt-turn-runbook.md",
     "scripts/chatgpt-browser-turn/README.md",
-    "scripts/chatgpt-browser-turn/direct-publication-settlement.test.ts",
     "scripts/chatgpt-browser-turn/state-light-session.test.ts",
     "scripts/chatgpt-browser-turn/terminal-witness.ts"
   ],
