@@ -376,6 +376,7 @@ export function syncReviewCycleCapState(input) {
     prState.terminal = TERMINAL_AT_CAP_OPEN_FINDINGS;
     prState.terminalHeadSha = currentHead;
     prState.mergeEligible = false;
+    prState.reviewStageComplete = true;
     prState.atCapRecord = buildAtCapOpenFindingsRecord({
       prNumber,
       headSha: currentHead,
@@ -432,7 +433,7 @@ export function evaluateReviewCycleCapGate(input) {
   if (prState.reviewStageComplete) {
     return {
       allowStart: false,
-      reason: REVIEW_STAGE_COMPLETE,
+      reason: prState.terminal ?? REVIEW_STAGE_COMPLETE,
       terminal: prState.terminal,
       mergeEligible: prState.mergeEligible,
       capState: synced.capState,
@@ -500,6 +501,7 @@ export function evaluateReviewCycleCapGate(input) {
         terminal: TERMINAL_AT_CAP_OPEN_FINDINGS,
         terminalHeadSha: currentHeadSha,
         mergeEligible: false,
+        reviewStageComplete: true,
         atCapRecord,
       };
       const blockedCapState = { ...synced.capState, [String(prNumber)]: blockedPrState };
