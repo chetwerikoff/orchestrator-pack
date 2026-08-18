@@ -1,11 +1,20 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveCanonicalReviewDirectory } from './canonical-review-directory.ts';
+import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
+import {
+  canonicalStagePlan,
+  type CanonicalCompetitiveDecision,
+  type CanonicalStagePlanEntry,
+  type CanonicalStagePlanV1,
+} from './create-issue-stage-topology.ts';
 
 export type LifecycleReviewTier = 'T1' | 'T2' | 'T3';
 export type LifecycleReviewStage = 'competitive' | 'architectural-review' | 'architectural-lens' | 'architectural';
-export type CompetitiveDecision = 'required' | 'skipped';
+export type CompetitiveDecision = CanonicalCompetitiveDecision;
 export type LifecycleSettledOutcome = 'complete' | 'partial' | 'blocked' | 'incident';
+export type CanonicalStageTopologyEntry = CanonicalStagePlanEntry;
+export type CanonicalStageTopologyV1 = CanonicalStagePlanV1;
 
 export const STAGE_SLOT_CONSUMED = 'stage_slot_consumed' as const;
 export const STAGE_ORDER_VIOLATION = 'stage_order_violation' as const;
@@ -30,29 +39,19 @@ export interface LifecycleTierIntakeV1 {
   competitiveRationale?: string;
 }
 
-export interface CanonicalStageTopologyEntry {
-  stage: LifecycleReviewStage;
-  reviewerCardinality: 1 | 3;
-  producer: 'browser-gpt' | 'claude-cli';
-}
-
-export interface CanonicalStageTopologyV1 {
-  schema: 'create-issue-stage-topology-plan/v1';
-  tier: LifecycleReviewTier;
-  competitiveDecision: CompetitiveDecision | 'not-applicable';
-  competitiveRationale: string | null;
-  stages: CanonicalStageTopologyEntry[];
-}
-
 export interface SettledStageSlot {
+  tier: LifecycleReviewTier;
   stage: LifecycleReviewStage;
   stageAttemptId: string;
   stageSequence: number;
   sourceRevision: string;
   outcome: LifecycleSettledOutcome;
-  reviewEpisodeId?: string;
-  taskIdentity?: string;
-  episodeFirstRevision?: string;
+  reviewEpisodeId: string;
+  taskIdentity: string;
+  episodeFirstRevision: string;
+  cycleId: string;
+  policyVersion: string;
+  reviewerCardinality: number;
 }
 
 export interface TerminalBundleV1 {
@@ -115,6 +114,9 @@ function taskIssueNumber(taskIdentity: string): number | null {
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8')) as unknown;
 }
+function jsonEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 export function parseLifecycleTierIntake(value: unknown): LifecycleTierIntakeV1 | null {
   if (!isRecord(value)) return null;
@@ -146,51 +148,47 @@ export function parseLifecycleTierIntake(value: unknown): LifecycleTierIntakeV1 
   };
 }
 
+/** Compatibility name retained for callers; the executable authority lives in create-issue-stage-topology.ts. */
 export function canonicalStageTopology(tier: LifecycleReviewTier, intake: LifecycleTierIntakeV1): CanonicalStageTopologyV1 {
-  if (tier === 'T1') {
-    return { schema: 'create-issue-stage-topology-plan/v1', tier, competitiveDecision: 'not-applicable', competitiveRationale: null, stages: [
-      { stage: 'architectural', reviewerCardinality: 1, producer: 'browser-gpt' },
-    ] };
-  }
-  if (tier === 'T2') {
-    return { schema: 'create-issue-stage-topology-plan/v1', tier, competitiveDecision: 'not-applicable', competitiveRationale: null, stages: [
-      { stage: 'architectural-review', reviewerCardinality: 3, producer: 'browser-gpt' },
-      { stage: 'architectural', reviewerCardinality: 1, producer: 'browser-gpt' },
-    ] };
-  }
-  if (!intake.competitiveDecision || !intake.competitiveRationale) {
-    throw new Error('fresh T3 tier-intake/v1 must freeze competitiveDecision and a non-empty competitiveRationale');
-  }
-  return {
-    schema: 'create-issue-stage-topology-plan/v1',
-    tier,
+  return canonicalStagePlan(tier, {
     competitiveDecision: intake.competitiveDecision,
     competitiveRationale: intake.competitiveRationale,
-    stages: [
-      ...(intake.competitiveDecision === 'required'
-        ? [{ stage: 'competitive', reviewerCardinality: 3, producer: 'browser-gpt' } as const]
-        : []),
-      { stage: 'architectural-review', reviewerCardinality: 3, producer: 'browser-gpt' },
-      { stage: 'architectural-lens', reviewerCardinality: 1, producer: 'claude-cli' },
-      { stage: 'architectural', reviewerCardinality: 1, producer: 'browser-gpt' },
-    ],
-  };
+  });
 }
 
 export function parseSettledStageSlot(value: unknown): SettledStageSlot | null {
   if (!isRecord(value) || value.schema !== STAGE_RECEIPT_SCHEMA) return null;
-  const stage = REVIEW_STAGES.has(value.stage as LifecycleReviewStage) ? value.stage as LifecycleReviewStage : null;
-  const outcome = SETTLED_OUTCOMES.has(value.outcome as LifecycleSettledOutcome) ? value.outcome as LifecycleSettledOutcome : null;
-  if (!stage || !outcome || !nonEmpty(value.stageAttemptId) || !Number.isInteger(value.stageSequence) || Number(value.stageSequence) < 1 || !nonEmpty(value.sourceRevision)) return null;
+  const parsed = parseConsumableStageReceipt(value);
+  if (!parsed.receipt || parsed.errors.length > 0) return null;
+  const receipt = parsed.receipt;
+  const tier = asTier(receipt.tier);
+  const stage = REVIEW_STAGES.has(receipt.stage as LifecycleReviewStage) ? receipt.stage as LifecycleReviewStage : null;
+  const outcome = SETTLED_OUTCOMES.has(receipt.outcome as LifecycleSettledOutcome) ? receipt.outcome as LifecycleSettledOutcome : null;
+  if (
+    !tier
+    || !stage
+    || !outcome
+    || !Number.isInteger(value.stageSequence)
+    || Number(value.stageSequence) < 1
+    || !SOURCE_REVISION_RE.test(receipt.sourceRevision)
+    || !nonEmpty(value.reviewEpisodeId)
+    || !nonEmpty(value.taskIdentity)
+    || !nonEmpty(value.episodeFirstRevision)
+    || !SOURCE_REVISION_RE.test(value.episodeFirstRevision)
+  ) return null;
   return {
+    tier,
     stage,
-    stageAttemptId: value.stageAttemptId.trim(),
+    stageAttemptId: receipt.stageAttemptId,
     stageSequence: Number(value.stageSequence),
-    sourceRevision: value.sourceRevision.trim(),
+    sourceRevision: receipt.sourceRevision,
     outcome,
-    ...(nonEmpty(value.reviewEpisodeId) ? { reviewEpisodeId: value.reviewEpisodeId.trim() } : {}),
-    ...(nonEmpty(value.taskIdentity) ? { taskIdentity: value.taskIdentity.trim() } : {}),
-    ...(nonEmpty(value.episodeFirstRevision) ? { episodeFirstRevision: value.episodeFirstRevision.trim() } : {}),
+    reviewEpisodeId: value.reviewEpisodeId.trim(),
+    taskIdentity: value.taskIdentity.trim(),
+    episodeFirstRevision: value.episodeFirstRevision.trim(),
+    cycleId: receipt.cycleId,
+    policyVersion: receipt.policyVersion,
+    reviewerCardinality: receipt.reviewerCardinality,
   };
 }
 
@@ -199,13 +197,17 @@ export function admissionStageSequence(
   slots: readonly SettledStageSlot[],
 ): { expectedStage: LifecycleReviewStage | null; predecessorStage: LifecycleReviewStage | null; errors: string[] } {
   const errors: string[] = [];
-  const stageOrder = topology.stages.map((entry) => entry.stage);
+  const stageOrder = topology.stages.map((entry) => entry.stage as LifecycleReviewStage);
   const byStage = new Map<LifecycleReviewStage, SettledStageSlot[]>();
   for (const slot of slots) {
-    if (!stageOrder.includes(slot.stage)) {
+    const topologyEntry = topology.stages.find((entry) => entry.stage === slot.stage);
+    if (!topologyEntry) {
       errors.push(`settled stage ${slot.stage} is outside canonical ${topology.tier} topology`);
       continue;
     }
+    if (slot.tier !== topology.tier) errors.push(`${slot.stage} receipt tier ${slot.tier} does not match canonical ${topology.tier} topology`);
+    if (slot.policyVersion !== topologyEntry.policyVersion) errors.push(`${slot.stage} receipt policy ${slot.policyVersion} does not match canonical ${topologyEntry.policyVersion}`);
+    if (slot.reviewerCardinality !== topologyEntry.reviewerCardinality) errors.push(`${slot.stage} receipt cardinality ${slot.reviewerCardinality} does not match canonical ${topologyEntry.reviewerCardinality}`);
     const list = byStage.get(slot.stage) ?? [];
     list.push(slot);
     byStage.set(slot.stage, list);
@@ -216,6 +218,11 @@ export function admissionStageSequence(
   const sorted = [...slots].sort((left, right) => left.stageSequence - right.stageSequence);
   for (let index = 1; index < sorted.length; index += 1) {
     if (sorted[index]!.stageSequence <= sorted[index - 1]!.stageSequence) errors.push('settled receipt stageSequence values are not strictly increasing');
+  }
+  for (let index = 0; index < sorted.length && index < stageOrder.length; index += 1) {
+    if (sorted[index]!.stage !== stageOrder[index]) {
+      errors.push(`stageSequence ${sorted[index]!.stageSequence} records ${sorted[index]!.stage} where canonical topology requires ${stageOrder[index]}`);
+    }
   }
   const consumed = new Set(slots.map((slot) => slot.stage));
   const expectedIndex = stageOrder.findIndex((stage) => !consumed.has(stage));
@@ -250,9 +257,9 @@ export function admitStageLaunch(input: StageAdmissionInput): StageAdmissionResu
   if (parsed.some((slot) => slot === null)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory contains a malformed stage receipt', topology, intake };
   const slots = parsed as SettledStageSlot[];
   const episodeId = `${intake.taskIdentity}@${intake.firstRevision}`;
-  if (slots.some((slot) => slot.reviewEpisodeId && slot.reviewEpisodeId !== episodeId)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory mixes reviewEpisodeId values', topology, intake, slots };
-  if (slots.some((slot) => slot.taskIdentity && slot.taskIdentity !== intake.taskIdentity)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory mixes taskIdentity values', topology, intake, slots };
-  if (slots.some((slot) => slot.episodeFirstRevision && slot.episodeFirstRevision !== intake.firstRevision)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory mixes episodeFirstRevision values', topology, intake, slots };
+  if (slots.some((slot) => slot.reviewEpisodeId !== episodeId)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory mixes reviewEpisodeId values', topology, intake, slots };
+  if (slots.some((slot) => slot.taskIdentity !== intake.taskIdentity)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory mixes taskIdentity values', topology, intake, slots };
+  if (slots.some((slot) => slot.episodeFirstRevision !== intake.firstRevision)) return { ok: false, code: STAGE_AUTHORITY_INVALID, message: 'canonical receipt inventory mixes episodeFirstRevision values', topology, intake, slots };
 
   const consumed = slots.find((slot) => slot.stage === input.stage);
   if (consumed) return {
@@ -338,16 +345,23 @@ export function composeTerminalBundle(input: {
   const slots = authorityReceipts.map(parseSettledStageSlot);
   if (slots.some((slot) => slot === null)) throw new Error('terminal bundle canonical receipt inventory is malformed');
   const settled = (slots as SettledStageSlot[]).sort((left, right) => left.stageSequence - right.stageSequence);
-  if (settled.some((slot) => slot.reviewEpisodeId && slot.reviewEpisodeId !== input.reviewEpisodeId)) throw new Error('terminal bundle canonical receipt inventory is stale or foreign');
+  if (settled.some((slot) => slot.reviewEpisodeId !== input.reviewEpisodeId)) throw new Error('terminal bundle canonical receipt inventory is stale or foreign');
   const successful = settled.filter((slot) => slot.outcome === 'complete' || slot.outcome === 'partial');
   const actualPredecessor = successful.at(-1)?.stage ?? null;
   if (actualPredecessor !== input.predecessorStage) throw new Error(`terminal bundle predecessor is stale: expected ${input.predecessorStage ?? 'none'}, canonical receipt chain ends at ${actualPredecessor ?? 'none'}`);
 
   const author = requiredJsonRecord(join(input.reviewDir, 'author-dispositions.json'), 'author dispositions');
   if (author.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(author.findings)) throw new Error(`author dispositions must use ${AUTHOR_DISPOSITIONS_SCHEMA}`);
+  if (author.reviewEpisodeId !== input.reviewEpisodeId) throw new Error('author dispositions reviewEpisodeId binding is stale or foreign');
+  if (author.sourceRevision !== input.sourceRevision) throw new Error('author dispositions sourceRevision binding is stale');
+  if ((author.predecessorStage ?? null) !== input.predecessorStage) throw new Error('author dispositions predecessorStage binding is stale');
+  if (author.draft !== input.issueBody) throw new Error('author dispositions draft binding does not equal the exact live Issue bytes');
+
   const ledger = requiredJsonRecord(join(input.reviewDir, 'finding-disposition-ledger.json'), 'finding disposition ledger');
   const counts = isRecord(ledger.counts) ? ledger.counts : null;
   if (!counts || !Number.isInteger(counts.rawFindingCount) || Number(counts.rawFindingCount) < 0) throw new Error('finding disposition ledger is missing review-economics rawFindingCount');
+  if (ledger.draft !== input.issueBody) throw new Error('finding disposition ledger is not bound to the exact live Issue bytes');
+  if (!Array.isArray(ledger.findings) || !jsonEqual(ledger.findings, author.findings)) throw new Error('finding disposition ledger findings do not match the bound author disposition record');
   const receiptRawFindingCount = rawFindingCountFromReceipts(authorityReceipts);
   if (Number(counts.rawFindingCount) !== receiptRawFindingCount) throw new Error(`finding disposition ledger is stale for current receipt chain: ledger rawFindingCount=${String(counts.rawFindingCount)} receipts=${receiptRawFindingCount}`);
 
@@ -365,6 +379,12 @@ export function composeTerminalBundle(input: {
     rejectPartition,
     protectedM3,
     authorM4,
-    reviewEconomics: counts,
+    reviewEconomics: {
+      ...counts,
+      reviewEpisodeId: input.reviewEpisodeId,
+      sourceRevision: input.sourceRevision,
+      predecessorStage: input.predecessorStage,
+      evidenceBasis: 'receipt-backed-finding-ledger/v1',
+    },
   };
 }
