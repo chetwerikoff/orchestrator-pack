@@ -4,6 +4,7 @@
   "declared_paths": [
     "docs/declarations/1416.pr-scope.json",
     "docs/launch-watch-wrappers.md",
+    "docs/orca-runtime-caller-census.md",
     "docs/worker-report-store.d.mts",
     "docs/worker-report-store.mjs",
     "scripts/invoke-worker-recovery.test.ts",
@@ -25,17 +26,20 @@
     "scripts/pack-worker-report.test.ts",
     "scripts/pack-worker-report.ts",
     "scripts/pr2-foundation/fleet-nudge-production.ts",
-    "scripts/pr2-foundation/fleet-reconciliation-handoff.ts",
     "scripts/pr2-foundation/remote-worker-assignment.test.ts",
     "scripts/pr2-foundation/remote-worker-assignment.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/supervised-worker-start.test.ts",
     "scripts/pr2-foundation/supervised-worker-start.ts",
     "scripts/pr2-foundation/terminalized/worker-report-store.ts",
+    "scripts/runtime/caller-census.ts",
     "scripts/runtime/contracts.ts",
     "scripts/runtime/worker-recovery.test.ts",
     "scripts/runtime/worker-recovery.ts",
     "scripts/verify.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "scripts/worker-smoke.test.ts"
   ],
   "denylist": [
     ".orca/",
@@ -47,6 +51,7 @@
   "allowed_roots": [
     "docs/declarations/1416.pr-scope.json",
     "docs/launch-watch-wrappers.md",
+    "docs/orca-runtime-caller-census.md",
     "docs/worker-report-store.d.mts",
     "docs/worker-report-store.mjs",
     "scripts/invoke-worker-recovery.test.ts",
@@ -68,17 +73,20 @@
     "scripts/pack-worker-report.test.ts",
     "scripts/pack-worker-report.ts",
     "scripts/pr2-foundation/fleet-nudge-production.ts",
-    "scripts/pr2-foundation/fleet-reconciliation-handoff.ts",
     "scripts/pr2-foundation/remote-worker-assignment.test.ts",
     "scripts/pr2-foundation/remote-worker-assignment.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/supervised-worker-start.test.ts",
     "scripts/pr2-foundation/supervised-worker-start.ts",
     "scripts/pr2-foundation/terminalized/worker-report-store.ts",
+    "scripts/runtime/caller-census.ts",
     "scripts/runtime/contracts.ts",
     "scripts/runtime/worker-recovery.test.ts",
     "scripts/runtime/worker-recovery.ts",
     "scripts/verify.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "r15"
+  "source_revision": "r16"
 }
