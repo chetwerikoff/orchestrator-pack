@@ -1,6 +1,7 @@
 import type {
   CanonicalLineage,
   ConsumableStageReceipt,
+  PartialMissingSourceWitness,
   ProducerEvidence,
   ReviewLaneEvidence,
   SettledOutcome,
@@ -35,6 +36,36 @@ export function parseCycleBinding(value: unknown): StageReceiptCycleBinding | nu
   };
 }
 
+function parsePartialMissingSources(value: unknown, errors: string[]): PartialMissingSourceWitness[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push('partialMissingSources must be an array');
+    return [];
+  }
+  const result: PartialMissingSourceWitness[] = [];
+  const slots = new Set<string>();
+  for (const [index, item] of value.entries()) {
+    if (!isRecord(item)) {
+      errors.push(`partialMissingSources[${index}] must be an object`);
+      continue;
+    }
+    const reviewerSlot = nonEmpty(item.reviewerSlot) ? item.reviewerSlot.trim() : '';
+    const invocationId = nonEmpty(item.invocationId) ? item.invocationId.trim() : '';
+    const evidenceIdentity = nonEmpty(item.evidenceIdentity) ? item.evidenceIdentity.trim() : '';
+    const reason = nonEmpty(item.reason) ? item.reason.trim() : '';
+    if (!/^\d{2}$/.test(reviewerSlot)) errors.push(`partialMissingSources[${index}].reviewerSlot must be NN`);
+    if (!invocationId) errors.push(`partialMissingSources[${index}].invocationId is required`);
+    if (!evidenceIdentity) errors.push(`partialMissingSources[${index}].evidenceIdentity is required`);
+    if (!reason) errors.push(`partialMissingSources[${index}].reason is required`);
+    if (slots.has(reviewerSlot)) errors.push(`partialMissingSources repeats reviewerSlot ${reviewerSlot}`);
+    slots.add(reviewerSlot);
+    if (/^\d{2}$/.test(reviewerSlot) && invocationId && evidenceIdentity && reason) {
+      result.push({ reviewerSlot, invocationId, evidenceIdentity, reason });
+    }
+  }
+  return result;
+}
+
 export function parseConsumableStageReceipt(value: unknown): {
   receipt: ConsumableStageReceipt | null;
   errors: string[];
@@ -63,6 +94,7 @@ export function parseConsumableStageReceipt(value: unknown): {
       : 'not-applicable');
   const tierTransition = nonEmpty(value.tierTransition) ? value.tierTransition.trim() : 'none';
   const reviewLane = value.reviewLane === undefined ? undefined : value.reviewLane;
+  const partialMissingSources = parsePartialMissingSources(value.partialMissingSources, errors);
 
   if (!tier) errors.push('missing tier');
   if (!stage) errors.push('missing stage');
@@ -78,6 +110,9 @@ export function parseConsumableStageReceipt(value: unknown): {
   else if (cycleBinding.sourceRevision !== sourceRevision) errors.push('cycleBinding sourceRevision mismatch');
   if (producerEvidence !== 'verified' && producerEvidence !== 'waived' && producerEvidence !== 'not-applicable') {
     errors.push('invalid producerEvidence');
+  }
+  if (outcome !== 'partial' && partialMissingSources.length > 0) {
+    errors.push('partialMissingSources is valid only for partial settlement');
   }
   const routedPolicy = policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION;
   if (!routedPolicy && reviewLane !== undefined) {
@@ -128,6 +163,7 @@ export function parseConsumableStageReceipt(value: unknown): {
       cycleBinding,
       producerEvidence: producerEvidence as ProducerEvidence,
       tierTransition,
+      partialMissingSources,
       reviewLane: reviewLane as ReviewLaneEvidence | undefined,
     },
     errors: [],
@@ -158,6 +194,20 @@ function receiptLabel(path: string | undefined, index: number, receipt: Consumab
   return `${path ?? `stage receipt ${index + 1}`} (stage=${receipt.stage}, attempt=${receipt.stageAttemptId}, cycle=${receipt.cycleId}, revision=${receipt.sourceRevision})`;
 }
 
+function samePartialMissingSources(
+  left: readonly PartialMissingSourceWitness[],
+  right: readonly PartialMissingSourceWitness[] | undefined,
+): boolean {
+  if (!right || left.length !== right.length) return left.length === 0 && (right?.length ?? 0) === 0;
+  return left.every((witness, index) => {
+    const other = right[index];
+    return other?.reviewerSlot === witness.reviewerSlot
+      && other.invocationId === witness.invocationId
+      && other.evidenceIdentity === witness.evidenceIdentity
+      && other.reason === witness.reason;
+  });
+}
+
 function stageEventMismatches(
   receipt: ConsumableStageReceipt,
   event: StageEventLogical,
@@ -174,6 +224,7 @@ function stageEventMismatches(
   if (event['required-source-count'] !== receipt.reviewerCardinality) mismatches.push('requiredSourceCount');
   if (event['producer-evidence'] !== receipt.producerEvidence) mismatches.push('producerEvidence');
   if (event['tier-transition'] !== receipt.tierTransition) mismatches.push('tierTransition');
+  if (!samePartialMissingSources(receipt.partialMissingSources, event['partial-missing-sources'])) mismatches.push('partialMissingSources');
   return mismatches;
 }
 
