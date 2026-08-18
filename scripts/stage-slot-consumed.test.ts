@@ -31,6 +31,7 @@ function writeIntake(stateRoot: string): string {
 }
 
 function settledReceipt(stageAttemptId: string) {
+  const cycleId = 'cycle-architectural-review';
   return {
     schema: 'stage-completeness-receipt/v1',
     tier: 'T2',
@@ -40,8 +41,15 @@ function settledReceipt(stageAttemptId: string) {
     stage: 'architectural-review',
     stageAttemptId,
     stageSequence: 1,
+    cycleId,
+    policyVersion: 'triple-source/v1',
+    reviewerCardinality: 3,
+    completedSourceCount: 2,
     sourceRevision: 'r01',
     outcome: 'partial',
+    producerEvidence: 'not-applicable',
+    tierTransition: 'none',
+    cycleBinding: { cycleId, sourceRevision: 'r01', boundBeforeLaunch: true },
   };
 }
 
