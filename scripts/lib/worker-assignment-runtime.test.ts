@@ -81,7 +81,7 @@ describe('WorkerAssignment runtime target truth', () => {
     })).toEqual({ status: 'resolved', assignment, worker: runtime.worker });
   });
 
-  it('preserves affirmative exact-target gone evidence instead of collapsing it to unresolved', async () => {
+  it('preserves affirmative exact-target gone evidence without widening fleet handoff vocabulary', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-gone' });
     const { adapter } = runtimeWith({ status: 'ok', value: { kind: 'gone' } });
@@ -95,7 +95,7 @@ describe('WorkerAssignment runtime target truth', () => {
     })).toEqual({
       status: 'ok',
       bindings: [],
-      reconciliations: [{ assignment, reason: 'target_gone' }],
+      reconciliations: [{ assignment, reason: 'target_unresolved' }],
     });
   });
 
