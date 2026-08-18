@@ -30,6 +30,49 @@ jobs:
         run: npm run check:node-major
       - name: Execute TypeScript without a build artifact
         run: npm run ts:smoke
+      - name: Diagnose Issue 1469 S2 production guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d)"
+          mkdir -p "${root}/scripts"
+          printf 'export {};\n' > "${root}/scripts/legacy-runtime-history.test.ts"
+          cat > "${root}/scripts/vitest-runtime-history.json" <<'JSON'
+          {
+            "issue": 556,
+            "source": "ci-measured",
+            "dataChangedAt": "2026-08-18T15:00:00.000Z",
+            "smoothingRule": "median-of-last-5-samples",
+            "files": {"scripts/legacy-runtime-history.test.ts": 45000},
+            "provenance": {"scripts/legacy-runtime-history.test.ts": "seeded"},
+            "recentSamples": {},
+            "fileChangedAt": {}
+          }
+          JSON
+          cat > "${root}/remote.json" <<'JSON'
+          {
+            "issue": 556,
+            "source": "ci-measured",
+            "dataChangedAt": "2026-08-18T16:00:00.000Z",
+            "smoothingRule": "median-of-last-5-samples",
+            "files": {},
+            "provenance": {"scripts/legacy-runtime-history.test.ts": "fallback"},
+            "recentSamples": {},
+            "fileChangedAt": {}
+          }
+          JSON
+          set +e
+          (cd "${root}" && GITHUB_ACTIONS=true node "${GITHUB_WORKSPACE}/scripts/refresh-vitest-runtime-history.mjs" reconcile \
+            --remote "${root}/remote.json" \
+            --proposed "${root}/scripts/vitest-runtime-history.json" \
+            --output "${root}/output.json" \
+            --repo-root "${root}" \
+            --require-equal-inventory)
+          rc=$?
+          set -e
+          echo "S2 diagnostic exit=${rc}"
+          test "${rc}" -ne 0
+          rm -rf "${root}"
       - name: Run Issue 1469 focused runtime-history smoke
         run: node scripts/vitest-runtime-history-reconcile-legacy.fixture.mjs
       - name: Enforce retired runtime surfaces from Node 22
