@@ -6,10 +6,18 @@
     "docs/review-cycle-cap.d.mts",
     "docs/review-cycle-cap.mjs",
     "plugins/codex-pr-reviewer/bin/review-claude.ts",
+    "scripts/invoke-pack-review.ps1",
+    "scripts/lib/Merge-TriageGate.ps1",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/lib/resolve-pack-reviewer.ts",
     "scripts/merge-triage-gate.ps1",
-    "scripts/pack-review-state.ts"
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/review-cycle-cap.test.ts",
+    "scripts/review-trigger-reeval.test.ts",
+    "scripts/run-pack-review-claude.ps1",
+    "scripts/run-pack-review-fixture.mjs"
   ],
   "denylist": [
     ".orca/",
@@ -23,10 +31,18 @@
     "docs/review-cycle-cap.d.mts",
     "docs/review-cycle-cap.mjs",
     "plugins/codex-pr-reviewer/bin/review-claude.ts",
+    "scripts/invoke-pack-review.ps1",
+    "scripts/lib/Merge-TriageGate.ps1",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/lib/resolve-pack-reviewer.ts",
     "scripts/merge-triage-gate.ps1",
-    "scripts/pack-review-state.ts"
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/review-cycle-cap.test.ts",
+    "scripts/review-trigger-reeval.test.ts",
+    "scripts/run-pack-review-claude.ps1",
+    "scripts/run-pack-review-fixture.mjs"
   ],
   "source_revision": "r09"
 }
