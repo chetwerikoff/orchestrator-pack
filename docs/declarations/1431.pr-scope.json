@@ -15,9 +15,11 @@
     "scripts/lib/manager-review-brief.ts"
   ],
   "denylist": [
-    "docs/issues_drafts/",
+    "credentials/",
     "docs/issue_queue_index.md",
+    "docs/issues_drafts/",
     "packages/core/",
+    "secrets/",
     "vendor/"
   ],
   "allowed_roots": [
