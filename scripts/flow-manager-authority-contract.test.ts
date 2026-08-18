@@ -168,7 +168,7 @@ describe('Issue #1197 flow-manager authority contract', () => {
     ]) {
       expect(authority).toContain(scenario);
     }
-    expect(authority).toContain('add a lease');
+    expect(authority).toMatch(/add a\s+lease/);
     expect(authority).toContain('heartbeat');
     expect(authority).toContain('service');
     expect(authority).toContain('durable store');
