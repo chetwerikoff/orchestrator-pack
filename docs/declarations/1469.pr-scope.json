@@ -4,7 +4,8 @@
   "declared_paths": [
     ".github/workflows/vitest-runtime-history-delivery.yml",
     "docs/vitest-runtime-history-delivery.md",
-    "scripts/refresh-vitest-runtime-history.mjs"
+    "scripts/refresh-vitest-runtime-history.mjs",
+    "scripts/vitest-runtime-history-reconcile-legacy.fixture.mjs"
   ],
   "denylist": [
     "credentials/",
@@ -22,7 +23,8 @@
     ".github/workflows/vitest-runtime-history-delivery.yml",
     "docs/declarations/1469.pr-scope.json",
     "docs/vitest-runtime-history-delivery.md",
-    "scripts/refresh-vitest-runtime-history.mjs"
+    "scripts/refresh-vitest-runtime-history.mjs",
+    "scripts/vitest-runtime-history-reconcile-legacy.fixture.mjs"
   ],
   "source_revision": "93d1ed818d66bf43346583bd9db94ba322ab847b"
 }
