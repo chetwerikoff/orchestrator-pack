@@ -2854,75 +2854,14 @@ async function runTurn(
         continue;
       }
       pollCount++;
-      if (config.newChat && sendCount >= 1) {
-        const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
-        if (observedConversationUrl && isSupportedChatGptConversationUrl(observedConversationUrl)) {
-          if (!ownedConversationUrl) {
-            let claim: ReturnType<typeof tryClaimStateLightFreshConversation>;
-            try {
-              claim = tryClaimStateLightFreshConversation(
-                profileKey,
-                observedConversationUrl,
-                invocationId,
-                config.timeoutMs,
-              );
-            } catch {
-              claim = 'contended';
-            }
-            if (claim === 'contended') {
-              ownershipForfeited = true;
-              incident(
-                'ownership_fence_lost',
-                'state_light_observed_conversation_claim_contended',
-                'retain_owned_page_no_resend',
-              );
-              return {
-                page,
-                browser,
-                ownershipForfeited: true,
-                cleanupAction: 'preserve',
-                result: compactResult(
-                  'driver_error',
-                  'invocation',
-                  'state_light_observed_conversation_claim_contended',
-                  invocationId,
-                  profileKey,
-                  sendCount,
-                  pollCount,
-                  navigation,
-                  incidents,
-                  { conversation_id: observedConversationUrl },
-                  journalWriteFailed,
-                ),
-              };
-            }
-            transitionStateLightTurnObservation({
-              profileKey,
-              invocationId,
-              phase: 'sent_unharvested',
-              reason: 'fresh_conversation_url_observed',
-              sendCount,
-              sendWitness: 'numeric_send_count',
-              conversationUrl: observedConversationUrl,
-            });
-            ownedConversationUrl = observedConversationUrl;
-            emitCancellationReceipt(observedConversationUrl);
-          }
-          recoveryState.immutableConversationUrl = observedConversationUrl;
-          await navigateToProjectConversationIfNeeded(
-            page,
-            observedConversationUrl,
-            navigation,
-            Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
-          );
-        } else if (ownedConversationUrl) {
-          await navigateToProjectConversationIfNeeded(
-            page,
-            ownedConversationUrl,
-            navigation,
-            Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
-          );
-        }
+      if (config.newChat && sendCount >= 1 && ownedConversationUrl) {
+        recoveryState.immutableConversationUrl = ownedConversationUrl;
+        await navigateToProjectConversationIfNeeded(
+          page,
+          ownedConversationUrl,
+          navigation,
+          Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
+        );
       }
       if (targetChatUrl) {
         const identity = readOwnedConversationIdentity(page, targetChatUrl);
@@ -3086,6 +3025,67 @@ async function runTurn(
       }
 
       const markerCardinality = recoveryMarkerCardinality(messages, marker);
+      if (
+        config.newChat
+        && sendCount >= 1
+        && !ownedConversationUrl
+        && markerCardinality.matchingUserCarrierCount === 1
+        && markerCardinality.exactMarkerTokenCount === 1
+      ) {
+        const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
+        if (observedConversationUrl && isSupportedChatGptConversationUrl(observedConversationUrl)) {
+          let claim: ReturnType<typeof tryClaimStateLightFreshConversation>;
+          try {
+            claim = tryClaimStateLightFreshConversation(
+              profileKey,
+              observedConversationUrl,
+              invocationId,
+              config.timeoutMs,
+            );
+          } catch {
+            claim = 'contended';
+          }
+          if (claim === 'contended') {
+            ownershipForfeited = true;
+            incident(
+              'ownership_fence_lost',
+              'state_light_observed_conversation_claim_contended',
+              'retain_owned_page_no_resend',
+            );
+            return {
+              page,
+              browser,
+              ownershipForfeited: true,
+              cleanupAction: 'preserve',
+              result: compactResult(
+                'driver_error',
+                'invocation',
+                'state_light_observed_conversation_claim_contended',
+                invocationId,
+                profileKey,
+                sendCount,
+                pollCount,
+                navigation,
+                incidents,
+                { conversation_id: observedConversationUrl },
+                journalWriteFailed,
+              ),
+            };
+          }
+          transitionStateLightTurnObservation({
+            profileKey,
+            invocationId,
+            phase: 'sent_unharvested',
+            reason: 'fresh_conversation_url_observed_owned_marker',
+            sendCount,
+            sendWitness: 'numeric_send_count',
+            conversationUrl: observedConversationUrl,
+          });
+          ownedConversationUrl = observedConversationUrl;
+          recoveryState.immutableConversationUrl = observedConversationUrl;
+          emitCancellationReceipt(observedConversationUrl);
+        }
+      }
       const durableConversationUrl = targetChatUrl ?? ownedConversationUrl;
       if (durableConversationUrl && sendCount >= 1) {
         const durableRecord = readStateLightTurnObservation(profileKey, invocationId);
@@ -3709,38 +3709,50 @@ async function runTurn(
         : isUi
           ? 'ui_contract_mismatch'
           : 'driver_error';
+    const retirementCleanupRequired = message === 'observation_mutation_retirement_cleanup_required';
     const lostAfterSend = afterSend && browserOrPageDefinitelyLost(page, browser);
-    const cause = afterSend
-      ? lostAfterSend
-        ? 'page_or_browser_lost_after_send'
-        : 'helper_error_after_send_page_retained'
-      : message;
+    const cause = retirementCleanupRequired
+      ? message
+      : afterSend
+        ? lostAfterSend
+          ? 'page_or_browser_lost_after_send'
+          : 'helper_error_after_send_page_retained'
+        : message;
     if (!isInput && !isOutput) {
       incident(
-        afterSend ? 'helper_failure_after_send' : 'helper_failure_before_send',
+        retirementCleanupRequired
+          ? 'observation_mutation_retirement_cleanup_required'
+          : afterSend
+            ? 'helper_failure_after_send'
+            : 'helper_failure_before_send',
         cause,
-        afterSend
-          ? lostAfterSend
-            ? 'skip_lost_page_no_resend'
-            : 'retain_owned_page_no_resend'
-          : 'return_local_error',
+        retirementCleanupRequired
+          ? 'retry_cleanup_later_no_resend'
+          : afterSend
+            ? lostAfterSend
+              ? 'skip_lost_page_no_resend'
+              : 'retain_owned_page_no_resend'
+            : 'return_local_error',
       );
     }
     return {
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
       ...(lostAfterSend ? { cleanupAction: 'skip' as const } : {}),
-      result: compactResult(
-        state,
-        'invocation',
-        cause,
-        invocationId,
-        profileKey,
-        sendCount,
-        pollCount, navigation, incidents,
-        { ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
-        journalWriteFailed,
-      ),
+      result: {
+        ...compactResult(
+          state,
+          'invocation',
+          cause,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount, navigation, incidents,
+          { ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+          journalWriteFailed,
+        ),
+        ...(retirementCleanupRequired ? { retirement_cleanup_required: true } : {}),
+      },
     };
   }
 }
@@ -3748,6 +3760,7 @@ async function runTurn(
 async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult> {
   let cleanup: ResourceCleanupOutcome = 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
+  let retirementCleanupRequired = outcome.result.retirement_cleanup_required === true;
   const incidents = [...outcome.result.incidents];
   const pageLost = browserOrPageDefinitelyLost(outcome.page, outcome.browser);
 
@@ -3774,7 +3787,18 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
           sendWitness: 'numeric_send_count',
         });
       }
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === 'observation_mutation_retirement_cleanup_required') {
+        retirementCleanupRequired = true;
+        const cleanupIncident: BrowserIncident = {
+          eventClass: 'observation_mutation_retirement_cleanup_required',
+          symptom: message,
+          action: 'retry_cleanup_later_no_resend',
+        };
+        incidents.push(cleanupIncident.eventClass);
+        if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
+      }
       // Missing/malformed observation is itself fail-closed; do not manufacture
       // not_sent or alter the transport result solely for cleanup bookkeeping.
     }
@@ -3840,6 +3864,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     ...outcome.result,
     cleanup,
     incidents,
+    ...(retirementCleanupRequired ? { retirement_cleanup_required: true } : {}),
     ...(journalWriteFailed ? { journal_write_failed: true } : {}),
   };
 }
