@@ -659,7 +659,7 @@ export function observePackReviewHead(input: {
               ? { ...independent, headSha, status: 'failed' }
               : { ...independent } }
             : {}),
-          ...(independent?.startedEver || completed ? {} : { reviewSettledHeadSha: undefined }),
+          ...(independent?.startedEver ? {} : { reviewSettledHeadSha: undefined }),
         };
       }
       if (current.cycle?.reviewStageComplete === true) {
