@@ -70,6 +70,42 @@ function runReconcile({ remote, proposed, trusted = true, extraProposedPath = nu
   return { result, output };
 }
 
+// Timing metadata attached to fallback/no-weight state is not authoritative in trusted mode:
+// reconcileTrustedInventory removes it even when no legacy measured repair is available.
+const fallbackMetadataWithoutRepair = runReconcile({
+  remote: history({
+    samples: [28000],
+    changedAt: '2026-08-18T16:30:00.000Z',
+    dataChangedAt: '2026-08-18T16:30:00.000Z',
+  }),
+  proposed: history({
+    dataChangedAt: '2026-08-18T15:00:00.000Z',
+  }),
+});
+assert(fallbackMetadataWithoutRepair.result.exitCode === 0, 'trusted fallback metadata reconcile must succeed');
+assert(!(testPath in (fallbackMetadataWithoutRepair.output?.files ?? {})), 'trusted fallback state must remain without a weight');
+assert(fallbackMetadataWithoutRepair.output?.provenance?.[testPath] === 'fallback', 'trusted fallback provenance must remain fallback');
+assert(!(testPath in (fallbackMetadataWithoutRepair.output?.recentSamples ?? {})), 'trusted inventory reconcile must discard fallback recentSamples');
+assert(!(testPath in (fallbackMetadataWithoutRepair.output?.fileChangedAt ?? {})), 'trusted inventory reconcile must discard fallback fileChangedAt');
+
+const trustedLegacyOverFallbackMetadata = runReconcile({
+  remote: history({
+    samples: [28000],
+    changedAt: '2026-08-18T16:30:00.000Z',
+    dataChangedAt: '2026-08-18T16:30:00.000Z',
+  }),
+  proposed: history({
+    weight: 45000,
+    provenance: 'measured',
+    dataChangedAt: '2026-08-18T15:00:00.000Z',
+  }),
+});
+assert(trustedLegacyOverFallbackMetadata.result.exitCode === 0, 'trusted legacy reconcile over fallback metadata must succeed');
+assert(trustedLegacyOverFallbackMetadata.output?.files?.[testPath] === 45000, 'trusted legacy weight must replace fallback state after metadata normalization');
+assert(trustedLegacyOverFallbackMetadata.output?.provenance?.[testPath] === 'measured', 'trusted legacy provenance must replace fallback provenance');
+assert(!(testPath in (trustedLegacyOverFallbackMetadata.output?.recentSamples ?? {})), 'legacy repair must not resurrect discarded fallback recentSamples');
+assert(!(testPath in (trustedLegacyOverFallbackMetadata.output?.fileChangedAt ?? {})), 'legacy repair must not resurrect discarded fallback fileChangedAt');
+
 const trustedLegacy = runReconcile({
   remote: history({
     dataChangedAt: '2026-08-18T14:00:00.000Z',
