@@ -23,6 +23,8 @@ New action-producing tasks must declare a plan during authoring:
 node scripts/draft-discipline.mjs smoke-test-plan --draft path/to/issue-body.md
 ```
 
+Routine and complex smoke profiles come from the live process environment for the existing `PACK_EXECUTOR_SMOKE_*` names; `worker-smoke-run` does not load the gitignored local configuration file.
+
 ## Actor ordering
 
 The two smoke actors are separate:

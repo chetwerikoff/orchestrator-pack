@@ -142,6 +142,8 @@ PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT
 
 The variable names and work-class-to-profile mapping are tracked policy. Concrete `agent`, `model`, and `effort` values are machine/operator-local configuration and must stay out of tracked documentation. Keep those values only in the existing gitignored local configuration/environment surface, resolve them immediately before starting new work, and treat a local value change as applying to subsequent work without a repository Issue or PR. Changing the stable mapping or variable contract remains a repository policy change.
 
+The gitignored local configuration file is a store, not the live process environment. The orchestrator or launching shell must export the matching `PACK_EXECUTOR_*` values into the live process environment before smoke or a new manager/worker spawn. The smoke launcher reads only that live environment, and `supervised-worker-start` does not read `PACK_EXECUTOR_*`; neither opens the gitignored local configuration file. A missing, empty, or malformed live profile still fails closed before child creation, so the presence of a file on disk is not a substitute. Do not add a pack script, dotenv loader, second selector, or compatibility fallback to close this gap.
+
 `agent` selects an already-supported invocation/lifecycle path:
 
 - Cursor/Orca implementation work uses the existing local Cursor/Orca launch path. When it is a supervised worker, initial delivery uses the PACK supervised-start boundary below and publishes the current local WorkerAssignment only after Orca returns a proven ready receipt.
