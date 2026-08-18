@@ -5,14 +5,14 @@
     ".claude/skills/create-issue-draft/SKILL.md",
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
     "docs/browser-gpt-turn-runbook.md",
+    "docs/declarations/1431.pr-scope.json",
     "docs/orchestration-runbook.md",
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/flow-manager-authority-contract.test.ts",
     "scripts/flow-manager-browser-gpt-long-run.ts",
-    "scripts/lib/manager-review-brief.ts",
-    "scripts/manager-review-brief.test.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/lib/manager-review-brief.ts"
   ],
   "denylist": [
     "docs/issues_drafts/",
