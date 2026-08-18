@@ -670,7 +670,7 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
         '--experimental-strip-types',
         path.join(repoRoot, 'scripts/lib/Invoke-TypeScriptCli.ts'),
         '--repo-root', repoRoot,
-        '--script', path.join(repoRoot, 'scripts/run-pack-review-gpt.ts'),
+        '--script', path.join(repoRoot, 'plugins/codex-pr-reviewer/bin/review.ts'),
         '--',
         '--repo-root', repoRoot,
         '--base', 'origin/main',
