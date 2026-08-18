@@ -2,12 +2,12 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1469,
   "declared_paths": [
-    ".github/workflows/vitest-runtime-history-refresh.yml",
     ".github/workflows/vitest-runtime-history-delivery.yml",
-    "scripts/vitest-runtime-history-delivery.mjs",
+    ".github/workflows/vitest-runtime-history-refresh.yml",
+    "docs/vitest-runtime-history-delivery.md",
     "scripts/lib/vitest-runtime-history-delivery.fixture.mjs",
     "scripts/lib/vitest-runtime-history-merge.fixture.mjs",
-    "docs/vitest-runtime-history-delivery.md"
+    "scripts/vitest-runtime-history-delivery.mjs"
   ],
   "denylist": [
     "credentials/",
