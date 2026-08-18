@@ -912,7 +912,7 @@ describe('direct-publication terminal matrix', () => {
     ].join('\n'));
   });
 
-  it('settles the marker-owned pair when a foreign same-Issue publication exists', () => {
+  it('settles the marker-owned pair without a pre-resolved parent when a foreign same-Issue publication exists', () => {
     const state = createDirectPublicationObservationState();
     const foreignComment = [
       'Read revision: #1196 r18',
@@ -936,7 +936,13 @@ describe('direct-publication terminal matrix', () => {
       'https://github.com/example/owned',
     );
 
-    const settlement = settleDirectPublication(state, target);
+    const markerOnlyTarget = {
+      repositoryFullName: target.repositoryFullName,
+      issueNumber: target.issueNumber,
+      sourceRevision: target.sourceRevision,
+      invocationId: target.invocationId,
+    } as const;
+    const settlement = settleDirectPublication(state, markerOnlyTarget);
     expect(settlement).toMatchObject({
       state: 'success',
       cause: 'direct_publication_success',
