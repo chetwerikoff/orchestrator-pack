@@ -33,24 +33,27 @@ function canonicalSlots(cardinality: number): string[] {
   return Array.from({ length: cardinality }, (_, index) => String(index + 1).padStart(2, '0'));
 }
 
-function validateLaneSlots(
+function requiredSlotsForReceipt(
   receipt: Record<string, unknown>,
-  expected: readonly string[],
+  reviewerCardinality: number,
   stage: LifecycleReviewStage,
   errors: string[],
-): void {
+): string[] {
+  const configured = canonicalSlots(reviewerCardinality);
   const lane = record(receipt.reviewLane) ? receipt.reviewLane : null;
-  if (!lane) return;
-  if (!Array.isArray(lane.finalRequiredSlots)) {
+  if (!lane) return configured;
+  if (!Array.isArray(lane.finalRequiredSlots) || lane.finalRequiredSlots.length === 0) {
     errors.push(`${stage} reviewLane finalRequiredSlots is missing or malformed`);
-    return;
+    return configured;
   }
-  const observed = lane.finalRequiredSlots.filter((slot): slot is string => typeof slot === 'string');
+  const observed = lane.finalRequiredSlots.filter((slot): slot is string => typeof slot === 'string' && /^\d{2}$/.test(slot));
   if (observed.length !== lane.finalRequiredSlots.length
-    || observed.length !== expected.length
-    || observed.some((slot, index) => slot !== expected[index])) {
-    errors.push(`${stage} reviewLane finalRequiredSlots does not equal canonical ${expected.join(',')}`);
+    || new Set(observed).size !== observed.length
+    || observed.some((slot) => !configured.includes(slot))) {
+    errors.push(`${stage} reviewLane finalRequiredSlots is outside configured slots ${configured.join(',')}`);
+    return configured;
   }
+  return observed;
 }
 
 function invocationCredentialed(invocation: Record<string, unknown> | undefined): boolean {
@@ -111,13 +114,6 @@ export interface StageCredentialingResult {
   missingSlots: string[];
 }
 
-/**
- * Single executable settlement predicate for progression, artifact production,
- * finding-ledger topology and final acceptance. A partial is never promoted by
- * outcome alone: every missing slot needs a journal witness naming the exact
- * invocation, and two-or-more missing slots additionally consume the existing
- * producerEvidence=waived operator seam.
- */
 export function evaluateStageCredentialingSettlement(
   receiptValue: unknown,
   reviewerCardinality: number,
@@ -128,10 +124,10 @@ export function evaluateStageCredentialingSettlement(
     return { credentialed: false, errors: [`${stage} receipt is malformed`], credentialingCaptures: [], missingSlots: [] };
   }
   const receipt = receiptValue;
-  const required = canonicalSlots(reviewerCardinality);
-  validateLaneSlots(receipt, required, stage, errors);
+  const configured = canonicalSlots(reviewerCardinality);
+  const required = requiredSlotsForReceipt(receipt, reviewerCardinality, stage, errors);
   const finals = finalInvocationBySlot(receipt);
-  const extraSlots = [...finals.keys()].filter((slotName) => !required.includes(slotName));
+  const extraSlots = [...finals.keys()].filter((slotName) => !configured.includes(slotName));
   if (extraSlots.length > 0) errors.push(`${stage} settlement contains non-canonical slots: ${extraSlots.join(',')}`);
 
   const credentialingCaptures = required.flatMap((slotName) => {
@@ -150,8 +146,8 @@ export function evaluateStageCredentialingSettlement(
     errors.push(`${stage} outcome ${String(receipt.outcome)} consumes the stage slot but cannot credential progression/final acceptance`);
     return { credentialed: false, errors, credentialingCaptures, missingSlots: missing };
   }
-  if (reviewerCardinality !== 3) {
-    errors.push(`${stage} partial settlement is valid only for a canonical three-source stage`);
+  if (reviewerCardinality !== 3 || required.length !== 3) {
+    errors.push(`${stage} partial settlement is valid only for a canonical three-slot stage`);
     return { credentialed: false, errors, credentialingCaptures, missingSlots: missing };
   }
   if (missing.length === 0) {
@@ -178,8 +174,12 @@ export function evaluateStageCredentialingSettlement(
       continue;
     }
     const invocationId = stringValue(invocation.invocationId);
+    const terminalResultIdentity = stringValue(invocation.terminalResultIdentity);
     if (!witness || stringValue(witness.invocationId) !== invocationId) {
       errors.push(`${stage} partial missing slot ${missingSlot} lacks a journal witness naming invocation ${invocationId ?? '<missing>'}`);
+    }
+    if (!terminalResultIdentity || stringValue(witness?.evidenceIdentity) !== terminalResultIdentity) {
+      errors.push(`${stage} partial missing slot ${missingSlot} journal witness does not bind terminal evidence ${terminalResultIdentity ?? '<missing>'}`);
     }
   }
   if (missing.length >= 2 && receipt.producerEvidence !== 'waived') {
@@ -260,7 +260,9 @@ export function validateLifecycleAcceptanceTopology(
       if (!progressed.has(predecessor)) errors.push(`${stage} settled before predecessor ${predecessor} successfully settled`);
     }
 
-    const credentialing = evaluateStageCredentialingSettlement(receipt, topologyEntry.reviewerCardinality, stage);
+    const credentialing = stage === 'architectural-lens'
+      ? { credentialed: receipt.outcome === 'complete', errors: receipt.outcome === 'complete' ? [] : [`${stage} must complete`] }
+      : evaluateStageCredentialingSettlement(receipt, topologyEntry.reviewerCardinality, stage);
     errors.push(...credentialing.errors);
     if (credentialing.credentialed) progressed.add(stage);
   }
