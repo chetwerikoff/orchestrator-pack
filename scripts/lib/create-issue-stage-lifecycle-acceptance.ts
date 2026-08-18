@@ -110,7 +110,7 @@ function partialWitnessesBySlot(
 export interface StageCredentialingResult {
   credentialed: boolean;
   errors: string[];
-  credentialingCaptures: Record<string, unknown>[];
+  credentialingCaptures: unknown[];
   missingSlots: string[];
 }
 
@@ -130,7 +130,7 @@ export function evaluateStageCredentialingSettlement(
   const extraSlots = [...finals.keys()].filter((slotName) => !configured.includes(slotName));
   if (extraSlots.length > 0) errors.push(`${stage} settlement contains non-canonical slots: ${extraSlots.join(',')}`);
 
-  const credentialingCaptures = required.flatMap((slotName) => {
+  const credentialingCaptures: unknown[] = required.flatMap((slotName) => {
     const invocation = finals.get(slotName);
     return invocationCredentialed(invocation) && record(invocation?.capture)
       ? [invocation.capture]
