@@ -79,14 +79,14 @@ interface OrcaInboxCheckShape extends OrcaInboxDeliveryShape {
 
 const OBSERVATION_TOKEN_PREFIX = 'opk-orca-output-v3.';
 
-export const ORCA_WORKER_TASK_BINDING_STRATEGY = 'complete_ab_revalidation' as const;
-export const ORCA_WORKER_TASK_BINDING_MAX_WORKTREES = 6 as const;
-export const ORCA_WORKER_TASK_BINDING_NATIVE_SLICE_MS = 250 as const;
-export const ORCA_WORKER_TASK_BINDING_MARGIN_MS = 500 as const;
-export const ORCA_WORKER_TASK_BINDING_REQUIRED_BUDGET_MS =
-  (2 + (2 * ORCA_WORKER_TASK_BINDING_MAX_WORKTREES))
-  * ORCA_WORKER_TASK_BINDING_NATIVE_SLICE_MS
-  + ORCA_WORKER_TASK_BINDING_MARGIN_MS;
+export const orcaWorkerTaskBindingStrategy = 'complete_ab_revalidation' as const;
+export const orcaWorkerTaskBindingMaxWorktrees = 6 as const;
+export const orcaWorkerTaskBindingNativeSliceMs = 250 as const;
+export const orcaWorkerTaskBindingMarginMs = 500 as const;
+export const orcaWorkerTaskBindingRequiredBudgetMs =
+  (2 + (2 * orcaWorkerTaskBindingMaxWorktrees))
+  * orcaWorkerTaskBindingNativeSliceMs
+  + orcaWorkerTaskBindingMarginMs;
 
 interface OrcaBindingTerminalEvidence {
   readonly handle: string;
@@ -335,7 +335,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       ...options,
       timeoutMs: Math.max(
         1,
-        Math.min(ORCA_WORKER_TASK_BINDING_NATIVE_SLICE_MS, remaining),
+        Math.min(orcaWorkerTaskBindingNativeSliceMs, remaining),
       ),
     };
   }
@@ -394,7 +394,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
   ): { readonly status: 'ok'; readonly value: ReadonlyMap<string, OrcaBindingWorktreeEvidence> }
     | { readonly status: 'unavailable'; readonly code: 'deadline_exhausted' | 'task_metadata_unavailable' | 'snapshot_revalidation_unavailable' | 'inventory_ambiguous' } {
     const paths = [...new Set(terminals.map((terminal) => terminal.worktreePath))].sort();
-    if (paths.length > ORCA_WORKER_TASK_BINDING_MAX_WORKTREES) {
+    if (paths.length > orcaWorkerTaskBindingMaxWorktrees) {
       return { status: 'unavailable', code: 'inventory_ambiguous' };
     }
     const worktrees = new Map<string, OrcaBindingWorktreeEvidence>();
@@ -622,7 +622,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       return { status: 'unavailable', code: 'malformed_or_incomplete' };
     }
     if (!Number.isFinite(options.timeoutMs)
-      || options.timeoutMs < ORCA_WORKER_TASK_BINDING_REQUIRED_BUDGET_MS) {
+      || options.timeoutMs < orcaWorkerTaskBindingRequiredBudgetMs) {
       return { status: 'unavailable', code: 'deadline_exhausted' };
     }
 
@@ -630,7 +630,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const terminalA = this.#bindingTerminalCensus(deadline, options);
     if (terminalA.status !== 'ok') return terminalA;
     const pathsA = new Set(terminalA.value.map((terminal) => terminal.worktreePath));
-    if (pathsA.size > ORCA_WORKER_TASK_BINDING_MAX_WORKTREES) {
+    if (pathsA.size > orcaWorkerTaskBindingMaxWorktrees) {
       return { status: 'unavailable', code: 'inventory_over_cap' };
     }
     const worktreeA = this.#bindingWorktreeCensus(terminalA.value, deadline, options, false);
@@ -651,7 +651,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       ...terminalA.value.map((terminal) => terminal.worktreePath),
       ...terminalB.value.map((terminal) => terminal.worktreePath),
     ]);
-    if (allPaths.size > ORCA_WORKER_TASK_BINDING_MAX_WORKTREES) {
+    if (allPaths.size > orcaWorkerTaskBindingMaxWorktrees) {
       return { status: 'unavailable', code: 'inventory_over_cap' };
     }
     const pathsB = new Set(terminalB.value.map((terminal) => terminal.worktreePath));
@@ -666,7 +666,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       }
       return worktreeB;
     }
-    if (this.#remaining(deadline) < ORCA_WORKER_TASK_BINDING_MARGIN_MS) {
+    if (this.#remaining(deadline) < orcaWorkerTaskBindingMarginMs) {
       return { status: 'unavailable', code: 'deadline_exhausted' };
     }
 
