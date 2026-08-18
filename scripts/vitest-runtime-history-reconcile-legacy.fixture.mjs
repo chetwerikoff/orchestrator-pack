@@ -30,7 +30,9 @@ function history({ weight = null, provenance = 'fallback', samples = null, chang
 function runReconcile({ remote, proposed, trusted = true, extraProposedPath = null }) {
   const root = join(tmpdir(), `vhr-legacy-reconcile-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const fakeScripts = join(root, 'scripts');
+  const fakePlugins = join(root, 'plugins');
   mkdirSync(fakeScripts, { recursive: true });
+  mkdirSync(fakePlugins, { recursive: true });
   writeFileSync(join(fakeScripts, 'legacy-runtime-history.test.ts'), 'export {};\n', 'utf8');
 
   if (extraProposedPath) {
