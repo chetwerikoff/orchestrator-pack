@@ -151,10 +151,6 @@ interface StartInput {
   baseRef?: string;
   startReason?: string;
   surface?: string;
-  operatorRepository?: string;
-  operatorIssueNumber?: number;
-  operatorBoundSnapshot?: string;
-  operatorReason?: string;
   storeRoot?: string;
   timeoutSeconds?: unknown;
   tier?: 'T1' | 'T2' | 'T3';
@@ -216,6 +212,13 @@ interface StartInput {
   fixtureBoundIssueSnapshotBytes?: string;
 }
 
+interface DirectCliStartInput extends StartInput {
+  operatorRepository?: string;
+  operatorIssueNumber?: number;
+  operatorBoundSnapshot?: string;
+  operatorReason?: string;
+}
+
 export interface ReconcileStalePackReviewRunsInput {
   repoSlug: string;
   sourceRepoRoot: string;
@@ -256,6 +259,14 @@ interface OperatorPackReviewStart {
   boundSnapshot: string;
   reason: string;
 }
+
+const directCliOperatorStarts = new WeakMap<StartInput, OperatorPackReviewStart>();
+const OPERATOR_START_FIELDS = [
+  'operatorRepository',
+  'operatorIssueNumber',
+  'operatorBoundSnapshot',
+  'operatorReason',
+] as const;
 
 interface ReviewPayloadFinding {
   title?: string;
@@ -414,7 +425,7 @@ function positiveInteger(value: unknown, label: string): number | undefined {
 }
 
 function resolveOperatorPackReviewStart(
-  input: StartInput,
+  input: DirectCliStartInput,
   sessionId: string,
 ): OperatorPackReviewStart | undefined {
   const raw = [
@@ -473,6 +484,7 @@ function terminalV2FromPayload(input: {
   verdict: ReviewPayload['verdict'];
   findingCount: number;
   findings: ReviewPayload['findings'];
+  automaticBudgetDisposition?: PackReviewTerminalV2['automaticBudgetDisposition'];
   carryover?: { replay: CarryoverReplayResult; sourceCleanRunId: string; focusedResolutionRunId?: string };
 }): PackReviewTerminalV2 {
   const carryover = input.carryover;
@@ -490,6 +502,9 @@ function terminalV2FromPayload(input: {
     reviewVerdict: input.verdict === 'clean' && input.findingCount === 0 ? 'clean' : 'findings',
     findingCount: input.findingCount,
     findingsDigest: sha256Bytes(JSON.stringify(input.findings)),
+    ...(input.automaticBudgetDisposition ? {
+      automaticBudgetDisposition: input.automaticBudgetDisposition,
+    } : {}),
     ...(carryover ? {
       sourceCleanRunId: carryover.sourceCleanRunId,
       sourceHeadSha: carryover.replay.sourceHeadSha,
@@ -533,7 +548,11 @@ async function resolveCurrentPrHead(repoRoot: string, repoSlug: string, prNumber
   return headSha!.toLowerCase();
 }
 
-async function resolveTarget(input: StartInput, trustedPackRoot: string): Promise<{
+async function resolveTarget(
+  input: StartInput,
+  trustedPackRoot: string,
+  operatorStart?: OperatorPackReviewStart,
+): Promise<{
   prNumber: number;
   headSha: string;
   sessionId: string;
@@ -543,7 +562,6 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
   operatorStart?: OperatorPackReviewStart;
 }> {
   const sessionId = trim(input.sessionId || input.linkedSessionId);
-  const operatorStart = resolveOperatorPackReviewStart(input, sessionId);
   const fixtureCurrentHead = trim(input.fixtureCurrentPrHeadSha).toLowerCase();
   const harness = process.env.OPK_VITEST_HARNESS === '1';
   const fixtureIssueNumber = harness ? positiveInteger(input.fixtureIssueNumber, 'fixtureIssueNumber') : undefined;
@@ -932,12 +950,20 @@ async function acquireClaimLease(options: {
   surface: string;
   startReason: string;
   resumeRunId?: string;
+  allowCompletedSameHeadReplay?: boolean;
 }): Promise<ClaimLease> {
   void options.trustedPackRoot;
   void options.claimPath;
   const visibleRuns = listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot });
+  const replayVisibleRuns = options.allowCompletedSameHeadReplay
+    ? visibleRuns.filter((candidate) => !(
+        candidate.prNumber === options.prNumber
+        && candidate.targetSha === options.headSha
+        && hasPersistedPackReviewVerdict(candidate)
+      ))
+    : visibleRuns;
   const claimRuns = options.resumeRunId
-    ? visibleRuns.map((candidate) => candidate.id === options.resumeRunId
+    ? replayVisibleRuns.map((candidate) => candidate.id === options.resumeRunId
       ? {
           ...candidate,
           status: 'failed' as const,
@@ -945,7 +971,7 @@ async function acquireClaimLease(options: {
           failureReason: 'journaled_delivery_resume_candidate',
         }
       : candidate)
-    : visibleRuns;
+    : replayVisibleRuns;
   const claim = acquireReviewStartClaim({
     prNumber: options.prNumber,
     headSha: options.headSha,
@@ -2054,10 +2080,10 @@ export async function reconcileStalePackReviewRuns(
         }
         continue;
       }
-      const terminal = terminalizePackReviewStaleRun(run.id, { projectId, storeRoot });
-      terminalized = terminal.changed;
+      const terminalized = terminalizePackReviewStaleRun(run.id, { projectId, storeRoot });
+      terminalized = terminalized.changed;
       run = await bindRepositoryIdentity(
-        getPackReviewRun(run.id, { projectId, storeRoot }) ?? terminal.run,
+        getPackReviewRun(run.id, { projectId, storeRoot }) ?? terminalized.run,
       );
     }
 
@@ -2348,6 +2374,12 @@ async function commitAtCapTriage(input: {
 }
 
 export async function startPackReview(input: StartInput): Promise<Record<string, unknown>> {
+  const operatorStart = directCliOperatorStarts.get(input);
+  if (!operatorStart && OPERATOR_START_FIELDS.some((field) => (
+    Object.prototype.hasOwnProperty.call(input as Record<string, unknown>, field)
+  ))) {
+    throw new Error('operator pack-review start inputs are accepted only from direct CLI arguments');
+  }
   const fixtureShortTimeout = process.env.OPK_VITEST_HARNESS === '1'
     && (input.fixtureReviewStdout !== undefined || input.fixtureReviewTimedOut === true);
   const budgetLedger = createReviewerBudgetLedger(
@@ -2360,7 +2392,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   const trusted = resolveTrustedRunnerPaths();
   const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;
   const baseRef = trim(input.baseRef) || DEFAULT_BASE_REF;
-  const target = await resolveTarget(input, trusted.trustedPackRoot);
+  const target = await resolveTarget(input, trusted.trustedPackRoot, operatorStart);
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
   const resolveSlug = input.fixtureResolveRepositorySlug
     ?? (process.env.OPK_VITEST_HARNESS === '1'
@@ -2384,15 +2416,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       headSha: target.headSha,
       httpStatus: 409,
     };
-  }
-  if (target.operatorStart) {
-    const existingSameHead = listPackReviewRunRecordsRaw({ projectId, storeRoot }).find((record) => (
-      record.prNumber === target.prNumber
-      && record.headSha.toLowerCase() === target.headSha.toLowerCase()
-    ));
-    if (existingSameHead) {
-      throw new Error(`operator pack-review start cannot reuse or resume existing same-head run ${existingSameHead.id}`);
-    }
   }
 
   const reviewer = resolvePackReviewerFromEnv(process.env, {
@@ -2446,7 +2469,8 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       options: authorityOptions,
     });
   }
-  if (authority.cycle
+  if (!target.operatorStart
+      && authority.cycle
       && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
     return {
       ok: false,
@@ -2462,7 +2486,8 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   const legacyHarnessFixtureWithoutSmokePlan = process.env.OPK_VITEST_HARNESS === '1'
     && authoritative.issueBody !== undefined
     && !authoritative.issueBody.includes('```smoke-test-plan');
-  if (authoritative.issueBody !== undefined
+  if (!target.operatorStart
+      && authoritative.issueBody !== undefined
       && smokeOrderingRequired(authoritative.issueBody)
       && !legacyHarnessFixtureWithoutSmokePlan) {
     try {
@@ -2536,15 +2561,17 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
   });
   const claimMode = input.claimMode ?? 'acquire';
-  const resumeCandidate = await findJournaledDeliveryResumeCandidate({
-    projectId,
-    storeRoot,
-    prNumber: target.prNumber,
-    headSha: target.headSha,
-    repoSlug: target.repoSlug,
-    sourceRepoRoot: target.sourceRepoRoot,
-    resolveSlug,
-  });
+  const resumeCandidate = target.operatorStart
+    ? null
+    : await findJournaledDeliveryResumeCandidate({
+        projectId,
+        storeRoot,
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        repoSlug: target.repoSlug,
+        sourceRepoRoot: target.sourceRepoRoot,
+        resolveSlug,
+      });
   const githubReviewTransport = createGithubReviewTransport({
     repoRoot: target.sourceRepoRoot,
     repoSlug: target.repoSlug,
@@ -2631,6 +2658,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       surface: operatorSurface ?? (trim(input.surface) || 'pack-review-runner-manual'),
       startReason: target.operatorStart?.reason ?? (trim(input.startReason) || 'manual'),
       resumeRunId: resumeCandidate?.id,
+      allowCompletedSameHeadReplay: Boolean(target.operatorStart),
     });
     if (!claimLease.acquired) {
       return {
@@ -2691,6 +2719,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
             verdict: typedResumePayload.verdict,
             findingCount: typedResumePayload.findingCount,
             findings: typedResumePayload.findings,
+            automaticBudgetDisposition: resumeCandidate.automaticBudgetDisposition,
           }),
           status: classifyPackReviewPayload(typedResumePayload).terminalStatus,
           findingCount: typedResumePayload.findingCount,
@@ -2803,6 +2832,8 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       sourceRepoRoot: target.sourceRepoRoot,
       canonicalRepository: target.repoSlug,
       legacyRepositoryBySourceRoot,
+      automaticBudgetDisposition: target.operatorStart ? 'non_consuming_explicit' : 'consume',
+      allowCompletedSameHeadReplay: Boolean(target.operatorStart),
       ...(gptRound ? { reviewRound: gptRound } : {}),
     });
     run = created.run;
@@ -3204,6 +3235,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         verdict: payload.verdict,
         findingCount: payload.findingCount,
         findings: payload.findings,
+        automaticBudgetDisposition: run.automaticBudgetDisposition,
         carryover: carryover ? {
           replay: carryover.replay,
           sourceCleanRunId: carryover.sourceCleanRunId,
@@ -3214,16 +3246,18 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       findingCount: payload.findingCount,
       options: authorityOptions,
     });
-    authority = await commitAtCapTriage({
-      start: input,
-      target,
-      projectId,
-      baseRef,
-      trustedPackRoot: trusted.trustedPackRoot,
-      storeRoot,
-      authority,
-      payload,
-    });
+    if (!target.operatorStart) {
+      authority = await commitAtCapTriage({
+        start: input,
+        target,
+        projectId,
+        baseRef,
+        trustedPackRoot: trusted.trustedPackRoot,
+        storeRoot,
+        authority,
+        payload,
+      });
+    }
 
     const deliveryRun = run;
     if (!(process.env.OPK_VITEST_HARNESS === '1' && input.fixturePostReviewHeadSha === undefined)) {
@@ -3477,11 +3511,11 @@ async function main(): Promise<void> {
     return;
   }
   const stdinPayload = readStdinPayload();
-  const operatorFields = ['operatorRepository', 'operatorIssueNumber', 'operatorBoundSnapshot', 'operatorReason'];
-  if (operatorFields.some((field) => Object.prototype.hasOwnProperty.call(stdinPayload, field))) {
+  if (OPERATOR_START_FIELDS.some((field) => Object.prototype.hasOwnProperty.call(stdinPayload, field))) {
     throw new Error('operator pack-review start inputs are accepted only from direct CLI arguments');
   }
-  const input = { ...stdinPayload, ...parseArgs(argv) };
+  const cliArgs = parseArgs(argv);
+  const input = { ...stdinPayload, ...cliArgs };
   if (subcommand === 'list') {
     const options = input as ListInput;
     process.stdout.write(`${JSON.stringify({ runs: listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot }) })}\n`);
@@ -3521,7 +3555,13 @@ async function main(): Promise<void> {
     return;
   }
   if (subcommand === 'start') {
-    const result = await startPackReview(input as StartInput);
+    const startInput = input as DirectCliStartInput;
+    const operatorStart = resolveOperatorPackReviewStart(
+      startInput,
+      trim(startInput.sessionId || startInput.linkedSessionId),
+    );
+    if (operatorStart) directCliOperatorStarts.set(startInput, operatorStart);
+    const result = await startPackReview(startInput);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (!result.ok) process.exitCode = 1;
     return;
