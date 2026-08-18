@@ -1142,6 +1142,31 @@ test('harvest publishes a completed exact owned turn and remains workflow-author
   });
 });
 
+test('harvest rejects duplicate marker occurrences in one owned user carrier', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let publishCalls = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [{
+          id: 'harvest-duplicate-marker', type: 'page', url: 'https://chatgpt.com/c/test', title: 'Duplicate marker',
+          webSocketDebuggerUrl: 'ws://example/harvest-duplicate-marker',
+        }],
+        evaluate: async (_target, expression) => {
+          assert.equal(expression, HARVEST_EXPRESSION);
+          return evaluateExpression(expression, [
+            new FakeNode('user', `${marker}\n\nprompt ${marker}`, `${marker}\n\nprompt ${marker}`, { 'data-message-id': 'u-duplicate-marker' }),
+            new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': 'a-duplicate-marker' }),
+          ], false, 'https://chatgpt.com/c/test');
+        },
+        publish: async () => { publishCalls += 1; },
+      })),
+      (error: any) => error.status === 'ambiguous' && error.reason === 'owned_turn_marker_ambiguous',
+    );
+    assert.equal(publishCalls, 0);
+    assert.equal(readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase, 'sent_unharvested');
+  });
+});
+
 test('harvest waits for a recovery-opened bound page to expose a stable owned turn', async () => {
   await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
     let fakeNow = 0;
