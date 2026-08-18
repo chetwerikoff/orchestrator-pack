@@ -265,7 +265,7 @@ describe('Issue #1436 smoke/review ordering', () => {
       .toThrow('smoke_ordering_review_forbidden');
   });
 
-  it('invalidates a settled review marker when the head changes before independent smoke', () => {
+  it('preserves the settled review marker when the head changes before independent smoke', () => {
     const { options, authority } = authorityFixture();
     const terminal = commitPackReviewTerminal({
       prNumber: 1436,
@@ -303,7 +303,7 @@ describe('Issue #1436 smoke/review ordering', () => {
       headSha: NEXT_HEAD,
       options,
     });
-    expect(nextHead.smokeOrdering?.reviewSettledHeadSha).toBeUndefined();
+    expect(nextHead.smokeOrdering?.reviewSettledHeadSha).toBe(HEAD);
     expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD }))
       .toThrow('smoke_ordering_review_unsettled');
   });
