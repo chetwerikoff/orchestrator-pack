@@ -608,6 +608,18 @@ function testProviderRestrictionFailsClosedWhenUnprovable() {
   equal(policy.outcome, 'current-policy-unsupported', 'unprovable provider restriction must not be flattened away');
 }
 
+function testNonStrictBasePolicyFailsClosed() {
+  const policy = normalizeCurrentRequiredPolicy({ ...livePolicy(), strict: false }, { providerProofAvailable: true });
+  assert(policy.ok, 'non-strict live policy shape should still parse');
+  const decision = evaluateRequiredChecks({
+    checks: ordinaryChecks(),
+    policy,
+    packReviewProjection: projectPackReviewStatusHistory([provenanceStatus()]),
+  });
+  equal(decision.action, 'fail', 'non-strict base policy must fail before any merge authority');
+  equal(decision.outcome, 'current-policy-unsupported', 'non-strict base policy must use the policy refusal outcome');
+}
+
 async function testHappyPathUnattended() {
   const fixture = createIo();
   const result = await runDeliveryMonitor(config, fixture.io);
@@ -812,6 +824,7 @@ async function testAmbiguousMergeTransportReadbackRecognizesSuccess() {
 function testSourceContracts() {
   const source = readFileSync(new URL('../vitest-runtime-history-delivery.mjs', import.meta.url), 'utf8');
   assert(source.includes('`sha=${headSha}`'), 'existing expected-head merge protection must remain');
+  assert(source.includes('policy.strict !== true'), 'delivery monitor must fail closed if main no longer requires an up-to-date branch');
   assert(!source.includes('PACK_REVIEWER'), 'generated helper must not invoke PACK_REVIEWER');
   assert(!source.includes('requiredCheckNamesFromSnapshot'), 'snapshot must not remain readiness authority');
 
@@ -822,6 +835,8 @@ function testSourceContracts() {
   assert(refreshWorkflow.includes('verifyRefreshRun'), 'same-payload recovery must verify the prior refresh episode before reusing its head');
   assert(refreshWorkflow.includes('matching remote payload lacks successful exact-head provenance; regenerating delivery head'), 'failed provenance must regenerate the generated head instead of deadlocking the PR');
   assert(refreshWorkflow.includes('commit --amend --no-edit'), 'invalid-provenance recovery must be able to regenerate a distinct delivery head without an extra empty commit');
+  assert(refreshWorkflow.includes('--force-with-lease="refs/heads/${DELIVERY_BRANCH}:'), 'generated branch delivery must use exact force-with-lease authority');
+  assert(!refreshWorkflow.includes("name: 'refs/heads/main'"), 'refresh producer must never submit protected main as an updateRefs entry');
   assert(!refreshWorkflow.includes('PACK_REVIEWER'), 'refresh workflow must not invoke PACK_REVIEWER');
 
   const deliveryWorkflow = readFileSync(new URL('../../.github/workflows/vitest-runtime-history-delivery.yml', import.meta.url), 'utf8');
@@ -858,6 +873,7 @@ async function main() {
     testStatusHistoryProjection,
     testCurrentPolicySnapshotRegression,
     testProviderRestrictionFailsClosedWhenUnprovable,
+    testNonStrictBasePolicyFailsClosed,
     testHappyPathUnattended,
     testOutOfBandSuccessSkipsMachine,
     testFailurePublicationRaceBlocksMerge,
