@@ -37,6 +37,11 @@ export interface WorkerAssignment {
   readonly createdAtUtc: string;
 }
 
+export interface WorkerAssignmentExpectation {
+  readonly assignmentId: string;
+  readonly generation: number;
+}
+
 export interface WorkerAssignmentStore {
   readonly schema: typeof WORKER_ASSIGNMENT_STORE_SCHEMA;
   readonly revision: number;
@@ -153,6 +158,22 @@ function atomicReplaceReadBack(file: string, store: WorkerAssignmentStore): bool
   }
 }
 
+function expectationMatches(
+  current: WorkerAssignment | undefined,
+  expected: WorkerAssignmentExpectation | undefined,
+): boolean {
+  if (!expected) return current === undefined;
+  return current?.assignmentId === expected.assignmentId
+    && current.generation === expected.generation;
+}
+
+/**
+ * Compare-and-publish the sole current logical WorkerAssignment.
+ *
+ * Omitting expectedCurrent means "expect no current assignment". Any replacement
+ * must name the exact current assignment id + generation. The store alone mints
+ * the successor assignment id and generation while holding the publication lock.
+ */
 export async function publishCurrentWorkerAssignment(input: {
   readonly file: string;
   readonly projectId?: string;
@@ -162,6 +183,7 @@ export async function publishCurrentWorkerAssignment(input: {
   readonly kind: WorkerAssignmentKind;
   readonly provider: string;
   readonly bindingKey: string;
+  readonly expectedCurrent?: WorkerAssignmentExpectation;
   readonly now?: () => Date;
 }): Promise<PublishWorkerAssignmentResult> {
   const projectId = bounded(input.projectId ?? 'orchestrator-pack', 80);
@@ -169,8 +191,15 @@ export async function publishCurrentWorkerAssignment(input: {
   const taskId = bounded(input.taskId, 160);
   const provider = bounded(input.provider, 80).toLowerCase();
   const bindingKey = bounded(input.bindingKey, 240);
+  const expectedCurrent = input.expectedCurrent;
   if (!projectId || !repository || !Number.isInteger(input.issueNumber) || input.issueNumber <= 0
-    || !taskId || !provider || !bindingKey) return { ok: false, reason: 'assignment_input_invalid' };
+    || !taskId || !provider || !bindingKey
+    || (expectedCurrent !== undefined
+      && (!bounded(expectedCurrent.assignmentId, 160)
+        || !Number.isInteger(expectedCurrent.generation)
+        || expectedCurrent.generation <= 0))) {
+    return { ok: false, reason: 'assignment_input_invalid' };
+  }
 
   try {
     return await withCrashRecoverableFileLock(`${input.file}.lock`, 10, () => {
@@ -178,6 +207,9 @@ export async function publishCurrentWorkerAssignment(input: {
       if (!store) return { ok: false, reason: 'assignment_store_untrusted' } as const;
       const key = `issue-${input.issueNumber}`;
       const previous = store.assignments[key];
+      if (!expectationMatches(previous, expectedCurrent)) {
+        return { ok: false, reason: 'assignment_stale' } as const;
+      }
       const generation = (previous?.generation ?? 0) + 1;
       const assignment: WorkerAssignment = {
         schema: WORKER_ASSIGNMENT_SCHEMA,

@@ -1,8 +1,27 @@
 import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { lstat, open, unlink, type FileHandle } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isSupportedChatGptConversationUrl } from './chatgpt-browser-turn/state-light-cancellation.ts';
+import {
+  ASSISTANT_TURN_ACTION_SELECTOR,
+  ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+  CONVERSATION_TURN_SECTION_SELECTOR,
+} from './chatgpt-browser-turn/product-page-selectors.ts';
+import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import {
+  finalizeStateLightPrimaryPublication,
+  readStateLightTurnObservation,
+  transitionStateLightTurnObservation,
+} from './chatgpt-browser-turn/state-light-turn-observation.ts';
+import { recoveryMarkerCardinality } from './chatgpt-browser-turn/state-light-turn-recovery.ts';
+import {
+  classifyBrowserGptPageTurnStatus,
+  ownedPromptMatches,
+  publishStateLightReply,
+  type StateLightPublicationResult,
+} from './chatgpt-browser-turn/state-light-turn.ts';
 
 export const PROBE_SCHEMA = 'browser-gpt-page-probe/v1';
 export const MAX_TARGETS = 50;
@@ -12,6 +31,7 @@ export const MAX_NORMALIZED_URL_CODE_POINTS = 2_048;
 export const CDP_REQUEST_TIMEOUT_MS = 10_000;
 export const ACQUISITION_READINESS_TIMEOUT_MS = 10_000;
 export const ACQUISITION_READINESS_INTERVAL_MS = 250;
+export const HARVEST_COMPLETION_CONFIRM_INTERVAL_MS = 1_000;
 export const LIVENESS_TARGET_TIMEOUT_MS = 2_000;
 export const LIVENESS_TOTAL_TIMEOUT_MS = 15_000;
 export const LIVENESS_FAN_OUT = MAX_TARGETS;
@@ -31,7 +51,7 @@ const ALLOWLISTED_ATTRIBUTES = [
 ] as const;
 const ALLOWLISTED_ATTRIBUTE_SET = new Set<string>(ALLOWLISTED_ATTRIBUTES);
 
-export type ProbeOperation = 'list' | 'inspect' | 'export' | 'liveness';
+export type ProbeOperation = 'list' | 'inspect' | 'export' | 'liveness' | 'harvest';
 export type ProbeStatus =
   | 'ok'
   | 'not_found'
@@ -129,10 +149,32 @@ interface ExportExpressionResult {
   readonly text?: string;
 }
 
+interface HarvestRow {
+  readonly role: MessageRole;
+  readonly ordinal: number;
+  readonly document_ordinal: number;
+  readonly message_id: string | null;
+  readonly text: string;
+  readonly byte_length: number;
+  readonly sha256: string;
+  readonly completion_ready: boolean | null;
+}
+
+interface HarvestSnapshot {
+  readonly page_url: string;
+  readonly generation_in_progress: boolean | 'unknown';
+  readonly rows: readonly HarvestRow[];
+}
+
 export interface ProbeDependencies {
   readonly listTargets: (cdp: string) => Promise<readonly CdpTarget[]>;
   readonly evaluate: (target: CompatibleTarget, expression: string, timeoutMs?: number) => Promise<unknown>;
   readonly publish: (destination: string, bytes: Uint8Array) => Promise<void>;
+  readonly publishPrimary?: (
+    destination: string,
+    invocationId: string,
+    reply: string,
+  ) => Promise<StateLightPublicationResult> | StateLightPublicationResult;
   readonly createPage?: (cdp: string, conversationUrl: string) => Promise<CdpTarget | readonly CdpTarget[]>;
   readonly closePage?: (cdp: string, targetId: string) => Promise<'closed' | 'already_gone'>;
   readonly setTimeout?: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
@@ -172,13 +214,21 @@ export interface ParsedLivenessArgs {
   readonly cdp: string;
 }
 
-export type ParsedArgs = ParsedListArgs | ParsedInspectArgs | ParsedExportArgs | ParsedLivenessArgs;
+export interface ParsedHarvestArgs {
+  readonly operation: 'harvest';
+  readonly cdp: string;
+  readonly profile: string;
+  readonly invocationId: string;
+  readonly output: string;
+}
+
+export type ParsedArgs = ParsedListArgs | ParsedInspectArgs | ParsedExportArgs | ParsedLivenessArgs | ParsedHarvestArgs;
 
 interface ProbeEnvelope {
   readonly schema: typeof PROBE_SCHEMA;
   readonly operation: ProbeOperation;
   readonly status: ProbeStatus;
-  readonly diagnostic_only: true;
+  readonly diagnostic_only: boolean;
   readonly workflow_authority: 'none';
   readonly [key: string]: unknown;
 }
@@ -493,7 +543,7 @@ function baseEnvelope(operation: ProbeOperation, status: ProbeStatus): ProbeEnve
     schema: PROBE_SCHEMA,
     operation,
     status,
-    diagnostic_only: true,
+    diagnostic_only: operation !== 'harvest',
     workflow_authority: 'none',
   };
 }
@@ -547,7 +597,7 @@ function validateCdp(value: string): string {
 
 export function parseCliArgs(argv: readonly string[]): ParsedArgs {
   const operation = argv[0];
-  if (operation !== 'list' && operation !== 'inspect' && operation !== 'export' && operation !== 'liveness') {
+  if (operation !== 'list' && operation !== 'inspect' && operation !== 'export' && operation !== 'liveness' && operation !== 'harvest') {
     throw new ProbeError('input_invalid', 'unknown_operation');
   }
   if ((argv.length - 1) % 2 !== 0) throw new ProbeError('input_invalid', 'invalid_option_shape');
@@ -557,6 +607,17 @@ export function parseCliArgs(argv: readonly string[]): ParsedArgs {
   if (operation === 'list' || operation === 'liveness') {
     requireOnly(values, ['--cdp']);
     return { operation, cdp };
+  }
+
+  if (operation === 'harvest') {
+    requireOnly(values, ['--cdp', '--profile', '--invocation-id', '--output']);
+    return {
+      operation,
+      cdp,
+      profile: required(values, '--profile'),
+      invocationId: required(values, '--invocation-id'),
+      output: required(values, '--output'),
+    };
   }
 
   if (operation === 'inspect') {
@@ -804,6 +865,7 @@ export const defaultDependencies: ProbeDependencies = {
   listTargets: defaultListTargets,
   evaluate: defaultEvaluate,
   publish: publishExactBytes,
+  publishPrimary: (destination, invocationId, reply) => publishStateLightReply(destination, invocationId, reply),
   createPage: defaultCreatePage,
   closePage: defaultClosePage,
 };
@@ -899,6 +961,49 @@ export const LIVENESS_EXPRESSION = `(() => ({
   ready_state: document.readyState,
   page_url: location.href,
 }))()`;
+
+export const HARVEST_EXPRESSION = `(async () => {
+  const raw = Array.from(document.querySelectorAll('[data-message-author-role]'));
+  const roleCounts = { user: 0, assistant: 0 };
+  const rows = [];
+  for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
+    const node = raw[documentOrdinal];
+    const role = node.getAttribute('data-message-author-role');
+    if (role !== 'user' && role !== 'assistant') continue;
+    const text = typeof node.innerText === 'string' ? node.innerText : null;
+    if (text === null) return { status: 'surface_unknown', reason: 'text_representation_unavailable', page_url: location.href };
+    const bytes = new TextEncoder().encode(text);
+    const hash = await crypto.subtle.digest('SHA-256', bytes);
+    let completion_ready = null;
+    if (role === 'assistant') {
+      try {
+        const turn = node.closest(${JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR)}) || node;
+        completion_ready = !turn.querySelector(${JSON.stringify(ASSISTANT_TURN_IN_PROGRESS_SELECTOR)})
+          && Boolean(turn.querySelector(${JSON.stringify(ASSISTANT_TURN_ACTION_SELECTOR)}));
+      } catch {
+        completion_ready = false;
+      }
+    }
+    rows.push({
+      role,
+      ordinal: roleCounts[role]++,
+      document_ordinal: documentOrdinal,
+      message_id: node.getAttribute('data-message-id'),
+      text,
+      byte_length: bytes.byteLength,
+      sha256: Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join(''),
+      completion_ready,
+    });
+  }
+  if (rows.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing', page_url: location.href };
+  let generation_in_progress = 'unknown';
+  try {
+    generation_in_progress = Boolean(document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]'));
+  } catch {
+    generation_in_progress = 'unknown';
+  }
+  return { status: 'ok', page_url: location.href, generation_in_progress, rows };
+})()`;
 
 interface LivenessRow {
   readonly target_id: string;
@@ -1336,6 +1441,413 @@ function requireActualTargetIdentity(
   return actual;
 }
 
+function validateHarvestSnapshot(value: unknown, target: CompatibleTarget): HarvestSnapshot {
+  if (!isRecord(value)) return malformedSurface('malformed_harvest_snapshot');
+  if (value.status === 'surface_unknown') {
+    throw new ProbeError('surface_unknown', typeof value.reason === 'string' ? value.reason : 'harvest_surface_unknown');
+  }
+  if (value.status !== 'ok'
+    || typeof value.page_url !== 'string'
+    || (typeof value.generation_in_progress !== 'boolean' && value.generation_in_progress !== 'unknown')
+    || !Array.isArray(value.rows)) {
+    return malformedSurface('malformed_harvest_snapshot');
+  }
+  const pageUrl = requireActualTargetIdentity(target, value.page_url, false);
+  const rows: HarvestRow[] = [];
+  let previousDocumentOrdinal = -1;
+  for (const raw of value.rows) {
+    if (!isRecord(raw)
+      || (raw.role !== 'user' && raw.role !== 'assistant')
+      || !isNonNegativeSafeInteger(raw.ordinal)
+      || !isNonNegativeSafeInteger(raw.document_ordinal)
+      || raw.document_ordinal <= previousDocumentOrdinal
+      || (raw.message_id !== null && (typeof raw.message_id !== 'string' || !MESSAGE_ID_RE.test(raw.message_id)))
+      || typeof raw.text !== 'string'
+      || !isNonNegativeSafeInteger(raw.byte_length)
+      || !isSha256(raw.sha256)
+      || (raw.role === 'assistant' ? typeof raw.completion_ready !== 'boolean' : raw.completion_ready !== null)) {
+      return malformedSurface('malformed_harvest_snapshot');
+    }
+    const bytes = Buffer.from(raw.text, 'utf8');
+    if (bytes.byteLength !== raw.byte_length || hashBytes(bytes) !== raw.sha256) {
+      throw new ProbeError('stale_node', 'harvest_page_host_witness_mismatch');
+    }
+    previousDocumentOrdinal = raw.document_ordinal;
+    rows.push({
+      role: raw.role,
+      ordinal: raw.ordinal,
+      document_ordinal: raw.document_ordinal,
+      message_id: raw.message_id,
+      text: raw.text,
+      byte_length: raw.byte_length,
+      sha256: raw.sha256,
+      completion_ready: raw.completion_ready as boolean | null,
+    });
+  }
+  return {
+    page_url: pageUrl,
+    generation_in_progress: value.generation_in_progress,
+    rows,
+  };
+}
+
+async function readHarvestSnapshot(target: CompatibleTarget, deps: ProbeDependencies): Promise<HarvestSnapshot> {
+  if (!target.web_socket_debugger_url) throw new ProbeError('unavailable', 'target_attach_unavailable');
+  let value: unknown;
+  try {
+    value = await deps.evaluate(target, HARVEST_EXPRESSION);
+  } catch (error) {
+    throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
+  }
+  return validateHarvestSnapshot(value, target);
+}
+
+function ownedHarvestWindow(snapshot: HarvestSnapshot, marker: string): {
+  readonly owned: HarvestRow;
+  readonly assistants: readonly HarvestRow[];
+} | null {
+  const markerCardinality = recoveryMarkerCardinality(snapshot.rows, marker);
+  if (markerCardinality.matchingUserCarrierCount > 1 || markerCardinality.exactMarkerTokenCount > 1) {
+    throw new ProbeError('ambiguous', 'owned_turn_marker_ambiguous');
+  }
+  const owned = snapshot.rows.filter((row) => row.role === 'user' && ownedPromptMatches(row.text, marker));
+  if (owned.length === 0) return null;
+  if (owned.length > 1 || markerCardinality.exactMarkerTokenCount !== 1) {
+    throw new ProbeError('ambiguous', 'owned_turn_marker_ambiguous');
+  }
+  const index = snapshot.rows.indexOf(owned[0]!);
+  const suffix = snapshot.rows.slice(index + 1);
+  const nextUser = suffix.findIndex((row) => row.role === 'user');
+  const window = nextUser >= 0 ? suffix.slice(0, nextUser) : suffix;
+  return { owned: owned[0]!, assistants: window.filter((row) => row.role === 'assistant') };
+}
+
+function harvestReadinessKey(snapshot: HarvestSnapshot, marker: string): string | undefined {
+  const window = ownedHarvestWindow(snapshot, marker);
+  if (!window) return undefined;
+  return JSON.stringify({
+    page_url: snapshot.page_url,
+    owned: {
+      ordinal: window.owned.ordinal,
+      document_ordinal: window.owned.document_ordinal,
+      message_id: window.owned.message_id,
+      byte_length: window.owned.byte_length,
+      sha256: window.owned.sha256,
+    },
+  });
+}
+
+function sameHarvestRow(left: HarvestRow, right: HarvestRow): boolean {
+  return left.role === right.role
+    && left.ordinal === right.ordinal
+    && left.document_ordinal === right.document_ordinal
+    && left.message_id === right.message_id
+    && left.byte_length === right.byte_length
+    && left.sha256 === right.sha256
+    && left.text === right.text
+    && left.completion_ready === right.completion_ready;
+}
+
+async function confirmStableHarvestCompletion(
+  target: CompatibleTarget,
+  marker: string,
+  initialSnapshot: HarvestSnapshot,
+  initialWindow: { readonly owned: HarvestRow; readonly assistants: readonly HarvestRow[] },
+  deps: ProbeDependencies,
+): Promise<HarvestRow> {
+  const initialAssistant = initialWindow.assistants.at(-1);
+  if (!initialAssistant || initialAssistant.text.trim().length === 0) {
+    throw new ProbeError('surface_unknown', 'harvest_completion_empty');
+  }
+  if (initialSnapshot.generation_in_progress !== false || initialAssistant.completion_ready !== true) {
+    throw new ProbeError('surface_unknown', 'harvest_completion_unproven');
+  }
+
+  await delay(deps, HARVEST_COMPLETION_CONFIRM_INTERVAL_MS);
+  const confirmedSnapshot = await readHarvestSnapshot(target, deps);
+  const confirmedWindow = ownedHarvestWindow(confirmedSnapshot, marker);
+  if (!confirmedWindow) throw new ProbeError('surface_unknown', 'harvest_completion_ownership_changed');
+  const confirmedClassifier = classifyBrowserGptPageTurnStatus(
+    confirmedSnapshot.generation_in_progress,
+    confirmedWindow.assistants.length,
+  );
+  const confirmedAssistant = confirmedWindow.assistants.at(-1);
+  if (confirmedClassifier !== 'completed'
+    || !confirmedAssistant
+    || confirmedAssistant.completion_ready !== true
+    || confirmedAssistant.text.trim().length === 0
+    || confirmedSnapshot.page_url !== initialSnapshot.page_url
+    || !sameHarvestRow(initialWindow.owned, confirmedWindow.owned)
+    || !sameHarvestRow(initialAssistant, confirmedAssistant)) {
+    throw new ProbeError('surface_unknown', 'harvest_completion_unstable', undefined, {
+      confirmed_classifier: confirmedClassifier,
+    });
+  }
+  return confirmedAssistant;
+}
+
+async function harvestWithReadiness(
+  target: CompatibleTarget,
+  requestedIdentity: string,
+  marker: string,
+  deps: ProbeDependencies,
+): Promise<HarvestSnapshot> {
+  const deadline = clockNow(deps) + ACQUISITION_READINESS_TIMEOUT_MS;
+  let previousKey: string | undefined;
+  while (clockNow(deps) < deadline) {
+    const remaining = deadline - clockNow(deps);
+    if (remaining <= 0) break;
+    let value: unknown;
+    try {
+      value = await withTimeout(
+        deps.evaluate(target, HARVEST_EXPRESSION, Math.min(CDP_REQUEST_TIMEOUT_MS, remaining)),
+        remaining,
+        deps,
+        'harvest_readiness_sample_timeout',
+      );
+      if (clockNow(deps) >= deadline) throw new ProbeError('unavailable', 'harvest_readiness_sample_timeout');
+    } catch (error) {
+      if ((error instanceof ProbeError && error.reason === 'harvest_readiness_sample_timeout')
+        || (error instanceof Error && error.message === 'cdp_evaluate_timeout')) {
+        throw new ProbeError('surface_unknown', 'harvest_readiness_timeout');
+      }
+      throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
+    }
+    const actualIdentity = normalizedConversationIdentity(value);
+    if (actualIdentity !== undefined && actualIdentity !== requestedIdentity) {
+      throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+    }
+    try {
+      const snapshot = validateHarvestSnapshot(value, target);
+      if (snapshot.page_url === requestedIdentity) {
+        const key = harvestReadinessKey(snapshot, marker);
+        if (key !== undefined && key === previousKey) return snapshot;
+        previousKey = key;
+      } else {
+        previousKey = undefined;
+      }
+    } catch (error) {
+      if (!(error instanceof ProbeError) || error.status !== 'surface_unknown') throw error;
+      previousKey = undefined;
+    }
+    if (clockNow(deps) >= deadline) break;
+    await delay(deps, Math.min(ACQUISITION_READINESS_INTERVAL_MS, Math.max(0, deadline - clockNow(deps))));
+  }
+  throw new ProbeError('surface_unknown', 'harvest_readiness_timeout');
+}
+
+async function resolveHarvestTarget(
+  args: ParsedHarvestArgs,
+  marker: string,
+  conversationUrl: string | null,
+  deps: ProbeDependencies,
+): Promise<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> {
+  const rawTargets = await listTargetCensus(args.cdp, deps);
+  const targets = toCompatibleTargets(rawTargets);
+  if (conversationUrl) {
+    const normalized = normalizeConversationUrl(conversationUrl);
+    const matches = targets.filter((target) => target.normalized_url === normalized);
+    if (matches.length > 1) throw new ProbeError('ambiguous', 'owned_turn_url_ambiguous');
+    if (matches.length === 1) {
+      const target = matches[0]!;
+      const snapshot = await readHarvestSnapshot(target, deps);
+      if (snapshot.page_url !== normalized) {
+        throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+      }
+      return { target, snapshot };
+    }
+    if (!deps.createPage) throw new ProbeError('unavailable', 'page_create_unavailable');
+    const preExistingTargetIds = new Set(rawTargets.flatMap((target) => typeof target.id === 'string' ? [target.id] : []));
+    let created: CdpTarget | readonly CdpTarget[];
+    try {
+      created = await deps.createPage(args.cdp, normalized);
+    } catch (error) {
+      throw new ProbeError('unavailable', 'page_create_failed', boundedDetail(error));
+    }
+    const target = validateCreatedTarget(created, normalized, preExistingTargetIds);
+    // Harvest never derives cleanup authority. A recovery-opened page is left
+    // untouched for the caller/operator after this bounded readiness observation.
+    return { target, snapshot: await harvestWithReadiness(target, normalized, marker, deps) };
+  }
+
+  const candidates: Array<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> = [];
+  for (const target of targets) {
+    if (!target.web_socket_debugger_url) {
+      throw new ProbeError('surface_unknown', 'owned_turn_unbound_census_incomplete', undefined, {
+        target_id: target.target_id,
+        failure_reason: 'target_attach_unavailable',
+      });
+    }
+    let snapshot: HarvestSnapshot;
+    try {
+      snapshot = await readHarvestSnapshot(target, deps);
+    } catch (error) {
+      throw new ProbeError('surface_unknown', 'owned_turn_unbound_census_incomplete', undefined, {
+        target_id: target.target_id,
+        failure_reason: error instanceof ProbeError ? error.reason : boundedDetail(error),
+      });
+    }
+    if (ownedHarvestWindow(snapshot, marker)) candidates.push({ target, snapshot });
+  }
+  if (candidates.length === 0) throw new ProbeError('not_found', 'owned_turn_unbound_not_found');
+  if (candidates.length > 1) throw new ProbeError('ambiguous', 'owned_turn_marker_ambiguous');
+  return candidates[0]!;
+}
+
+async function runHarvest(args: ParsedHarvestArgs, deps: ProbeDependencies): Promise<ProbeEnvelope> {
+  const profileKey = configuredProfileKey(args.profile, args.cdp);
+  let record;
+  try {
+    record = readStateLightTurnObservation(profileKey, args.invocationId);
+  } catch (error) {
+    throw new ProbeError('not_found', 'observation_not_found', boundedDetail(error));
+  }
+  if (record.phase === 'not_sent') {
+    throw new ProbeError('not_found', 'owned_turn_not_sent', undefined, { observation_phase: record.phase });
+  }
+  if (record.primary && record.primary.target !== resolve(args.output)) {
+    throw new ProbeError('unsafe_output', 'primary_binding_target_conflict', undefined, {
+      bound_target: record.primary.target,
+      requested_target: resolve(args.output),
+    });
+  }
+
+  const resolved = await resolveHarvestTarget(args, record.marker, record.conversation_url, deps);
+  const window = ownedHarvestWindow(resolved.snapshot, record.marker);
+  if (!window) throw new ProbeError('not_found', 'owned_turn_marker_not_found');
+  const classifier = classifyBrowserGptPageTurnStatus(
+    resolved.snapshot.generation_in_progress,
+    window.assistants.length,
+  );
+
+  const recoveredConversationUrl = isSupportedChatGptConversationUrl(resolved.snapshot.page_url)
+    ? resolved.snapshot.page_url
+    : undefined;
+  if (record.phase === 'dispatching') {
+    transitionStateLightTurnObservation({
+      profileKey,
+      invocationId: args.invocationId,
+      phase: record.conversation_url !== null || recoveredConversationUrl !== undefined
+        ? 'sent_unharvested'
+        : 'sent_unbound',
+      reason: record.conversation_url === null && recoveredConversationUrl !== undefined
+        ? 'harvest_marker_locator_bound'
+        : 'harvest_marker_send_recovered',
+      sendWitness: record.send_witness === 'numeric_send_count' ? undefined : 'owned_marker',
+      ...(record.conversation_url === null && recoveredConversationUrl !== undefined
+        ? { conversationUrl: recoveredConversationUrl }
+        : {}),
+    });
+    record = readStateLightTurnObservation(profileKey, args.invocationId);
+  } else if (record.conversation_url === null && recoveredConversationUrl !== undefined) {
+    transitionStateLightTurnObservation({
+      profileKey,
+      invocationId: args.invocationId,
+      phase: 'sent_unharvested',
+      reason: 'harvest_marker_locator_bound',
+      sendWitness: record.send_witness === 'numeric_send_count' ? undefined : 'owned_marker',
+      conversationUrl: recoveredConversationUrl,
+    });
+    record = readStateLightTurnObservation(profileKey, args.invocationId);
+  }
+
+  if (classifier === 'dead') {
+    throw new ProbeError('not_found', 'owned_turn_dead', undefined, {
+      classifier,
+      observation_phase: record.phase,
+      conversation_url: record.conversation_url,
+    });
+  }
+  if (classifier === 'long_running' || classifier === 'unknown') {
+    return {
+      ...baseEnvelope('harvest', 'ok'),
+      classifier,
+      harvested: false,
+      observation_phase: record.phase,
+      conversation_url: record.conversation_url,
+      target_id: resolved.target.target_id,
+    };
+  }
+
+  const assistant = await confirmStableHarvestCompletion(
+    resolved.target,
+    record.marker,
+    resolved.snapshot,
+    window,
+    deps,
+  );
+  const bytes = Buffer.from(assistant.text, 'utf8');
+  if (bytes.byteLength !== assistant.byte_length || hashBytes(bytes) !== assistant.sha256) {
+    throw new ProbeError('stale_node', 'harvest_page_host_witness_mismatch');
+  }
+
+  const finalized = await finalizeStateLightPrimaryPublication({
+    profileKey,
+    invocationId: args.invocationId,
+    target: args.output,
+    bytes,
+    publish: async () => {
+      if (deps.publishPrimary) {
+        try {
+          return await deps.publishPrimary(args.output, args.invocationId, assistant.text);
+        } catch (error) {
+          return { state: 'error' as const, cause: boundedDetail(error) };
+        }
+      }
+      try {
+        await deps.publish(args.output, bytes);
+        return {
+          state: 'committed_ok' as const,
+          output_bytes: bytes.byteLength,
+          output_sha256: hashBytes(bytes),
+        };
+      } catch (error) {
+        if (error instanceof ProbeError
+          && (error.reason === 'destination_exists'
+            || (error.reason === 'exclusive_create_refused' && /EEXIST/u.test(error.message)))) {
+          return { state: 'conflict' as const, cause: 'output_exists' };
+        }
+        return { state: 'error' as const, cause: boundedDetail(error) };
+      }
+    },
+  });
+  if (finalized.state !== 'committed_ok') {
+    throw new ProbeError(
+      finalized.state === 'conflict' ? 'unsafe_output' : 'export_failed',
+      finalized.cause ?? 'harvest_publication_failed',
+      undefined,
+      {
+        expected_byte_length: finalized.expected_byte_length,
+        expected_sha256: finalized.expected_sha256,
+        ...(finalized.observed_byte_length !== undefined ? { observed_byte_length: finalized.observed_byte_length } : {}),
+        ...(finalized.observed_sha256 !== undefined ? { observed_sha256: finalized.observed_sha256 } : {}),
+        ...(finalized.retirement_cleanup_required ? { retirement_cleanup_required: true } : {}),
+      },
+    );
+  }
+  const harvested = readStateLightTurnObservation(profileKey, args.invocationId);
+  return {
+    ...baseEnvelope('harvest', 'ok'),
+    classifier,
+    harvested: true,
+    observation_phase: harvested.phase,
+    conversation_url: harvested.conversation_url,
+    target_id: resolved.target.target_id,
+    node: {
+      role: assistant.role,
+      ordinal: assistant.ordinal,
+      document_ordinal: assistant.document_ordinal,
+      message_id: assistant.message_id,
+    },
+    output: resolve(args.output),
+    byte_length: bytes.byteLength,
+    sha256: hashBytes(bytes),
+    converged: finalized.converged === true,
+    ...(finalized.retirement_cleanup_required ? { retirement_cleanup_required: true } : {}),
+    workflow_authority: 'none',
+  };
+}
+
 export async function runProbe(args: ParsedArgs, deps: ProbeDependencies = defaultDependencies): Promise<ProbeEnvelope> {
   if (args.operation === 'list') {
     const targets = await availableTargets(args.cdp, deps);
@@ -1349,6 +1861,7 @@ export async function runProbe(args: ParsedArgs, deps: ProbeDependencies = defau
   }
 
   if (args.operation === 'liveness') return runLiveness(args, deps);
+  if (args.operation === 'harvest') return runHarvest(args, deps);
   if (args.operation === 'inspect' && args.conversationUrl && args.openIfMissing) {
     return inspectAcquiredUrl(args, deps);
   }
@@ -1457,7 +1970,11 @@ function statusExitCode(status: ProbeStatus): number {
 }
 
 export async function main(argv = process.argv.slice(2), deps: ProbeDependencies = defaultDependencies): Promise<number> {
-  let operation: ProbeOperation = argv[0] === 'list' || argv[0] === 'inspect' || argv[0] === 'export' || argv[0] === 'liveness'
+  let operation: ProbeOperation = argv[0] === 'list'
+    || argv[0] === 'inspect'
+    || argv[0] === 'export'
+    || argv[0] === 'liveness'
+    || argv[0] === 'harvest'
     ? argv[0]
     : 'list';
   try {

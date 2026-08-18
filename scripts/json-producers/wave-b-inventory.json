@@ -842,13 +842,16 @@
       "sourceKind": "powershell-json-producer",
       "taxonomy": "b",
       "ownerWave": "wave-c",
-      "owningIssue": "migration-plan-pr6",
-      "disposition": "deferred",
-      "reason": "Invokes or coordinates GitHub/review/notification/nudge transport; deferred to Wave C / PR 6.",
+      "owningIssue": "#1416",
+      "disposition": "migrated",
+      "reason": "Issue #1416 supersedes migration-plan-pr6 for this command: the PowerShell entrypoint is retired and the public command is hard-cut to the canonical Node 22 TypeScript implementation.",
       "goldenStatus": "none",
       "parityTargets": [],
-      "parityTests": [],
-      "entrypointMode": "unchanged"
+      "parityTests": [
+        "scripts/pack-worker-report.test.ts"
+      ],
+      "migratedModule": "scripts/pack-worker-report.ts",
+      "entrypointMode": "removed"
     },
     {
       "path": "scripts/pr-scope-check.ps1",

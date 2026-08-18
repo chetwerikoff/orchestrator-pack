@@ -112,6 +112,27 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Revalidates the exact current RuntimeWorkerIdentity and performs the single S2 dispatch attempt through RuntimeAdapter.',
   },
   {
+    surface: 'scripts/lib/worker-assignment-runtime.ts',
+    operations: ['liveness'],
+    kind: 'runtime-port',
+    disposition: 'already-runtime-neutral',
+    note: 'Resolves current logical local ownership through RuntimeAdapter and treats busy/idle liveness as replacement-blocking live evidence.',
+  },
+  {
+    surface: 'scripts/pr2-foundation/remote-worker-assignment.ts',
+    operations: ['runtime-composition'],
+    kind: 'runtime-port',
+    disposition: 'use-runtime-interface',
+    note: 'Direct operator remote assignment admission composes RuntimeAdapter only to enforce current-local replacement evidence before logical publication.',
+  },
+  {
+    surface: 'scripts/pr2-foundation/supervised-worker-start.ts',
+    operations: ['runtime-composition'],
+    kind: 'runtime-port',
+    disposition: 'use-runtime-interface',
+    note: 'Governed Orca local start composes RuntimeAdapter for current-local replacement admission before ready-receipt assignment publication.',
+  },
+  {
     surface: 'scripts/pr2-foundation/scheduler.ts',
     operations: ['runtime-composition', 'fleet-observer', 'list', 'find', 'read', 'liveness'],
     kind: 'runtime-port',

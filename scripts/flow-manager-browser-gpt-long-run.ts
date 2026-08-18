@@ -25,7 +25,6 @@ function refuse(reason: string): void {
   process.exitCode = 2;
 }
 
-
 function refuseStaleHandoffReceipt(
   handoffReceipt: string,
   runIdentity: string,
@@ -105,12 +104,14 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
   const runIdentity = requiredOption(options, 'run-identity');
   const attemptIdentity = requiredOption(options, 'attempt-identity');
   const handoffReceipt = requiredOption(options, 'handoff-receipt');
+  if (refuseStaleHandoffReceipt(handoffReceipt, runIdentity, attemptIdentity)) return 2;
+  const invocationId = requiredOption(options, 'invocation-id');
   const terminalEnvelope = requiredOption(options, 'terminal-envelope');
   const browserOutput = requiredOption(options, 'output');
   const reviewerSourceOutput = typeof options.get('reviewer-source-output') === 'string'
     ? options.get('reviewer-source-output') as string
     : undefined;
-  const directArgumentKeys = ['invocation-id', 'reviewer-source', 'repository', 'issue-number', 'source-revision'];
+  const directArgumentKeys = ['reviewer-source', 'repository', 'issue-number', 'source-revision'];
   const directRequested = reviewerSourceOutput !== undefined
     || directArgumentKeys.some((key) => options.has(key));
   if (directRequested && (
@@ -127,13 +128,14 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
 
   const browserArgs = [
     'turn',
+    '--invocation-id', invocationId,
     '--profile', profile,
     '--cdp', cdp,
     '--input', input,
     '--output', browserOutput,
   ];
   if (reviewerSourceOutput) browserArgs.push('--reviewer-source-output', reviewerSourceOutput);
-  for (const key of ['invocation-id', 'reviewer-source', 'repository', 'issue-number', 'source-revision', 'timeout-ms', 'poll-ms']) {
+  for (const key of ['reviewer-source', 'repository', 'issue-number', 'source-revision', 'timeout-ms', 'poll-ms']) {
     if (typeof options.get(key) === 'string') browserArgs.push(`--${key}`, options.get(key) as string);
   }
   if (typeof options.get('chat-url') === 'string') browserArgs.push('--chat-url', options.get('chat-url') as string);
@@ -158,8 +160,6 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     browserEntry,
     ...browserArgs,
   ];
-
-  if (refuseStaleHandoffReceipt(handoffReceipt, runIdentity, attemptIdentity)) return 2;
 
   const pid = await spawnDetachedLauncher(launcherArgs);
   const receiptReady = await waitForReceipt(handoffReceipt, runIdentity, attemptIdentity, 30_000);

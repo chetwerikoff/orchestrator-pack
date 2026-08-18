@@ -98,7 +98,7 @@ switch (operation) {
       : [];
     const worker = matches.length === 1 ? matches[0] : null;
     out(worker
-      ? { ok: true, result: { worker: { agent_terminal_handle: worker.id }, terminal: { handle: worker.id }, observation: { exactWorker: true, status: 'running' } } }
+      ? { ok: true, result: { worker: { agent_terminal_handle: worker.id }, terminal: { handle: worker.id }, observation: { exactWorker: true, status: 'live' } } }
       : { ok: true, result: { observation: { exactWorker: false, status: 'unknown' } } });
     break;
   }
@@ -242,7 +242,12 @@ function handoff(env: NodeJS.ProcessEnv) {
   return readFleetReconciliationHandoff(resolveFleetReconciliationHandoffPath('orchestrator-pack', env));
 }
 
-async function publishLocal(env: NodeJS.ProcessEnv, bindingKey = 'dispatch-1', taskId = 'task-1420') {
+async function publishLocal(
+  env: NodeJS.ProcessEnv,
+  bindingKey = 'dispatch-1',
+  taskId = 'task-1420',
+  expectedCurrent?: { assignmentId: string; generation: number },
+) {
   const result = await publishCurrentWorkerAssignment({
     file: resolveWorkerAssignmentStorePath('orchestrator-pack', env),
     repository: 'chetwerikoff/orchestrator-pack',
@@ -251,9 +256,11 @@ async function publishLocal(env: NodeJS.ProcessEnv, bindingKey = 'dispatch-1', t
     kind: 'local',
     provider: 'orca',
     bindingKey,
+    ...(expectedCurrent ? { expectedCurrent } : {}),
   });
   expect(result.ok).toBe(true);
-  return result;
+  if (!result.ok) throw new Error(result.reason);
+  return result.assignment;
 }
 
 describe('scheduler bounded-child production composition', () => {
@@ -263,19 +270,12 @@ describe('scheduler bounded-child production composition', () => {
     const epochPath = path.join(root, 'epoch.json');
     const configPath = path.join(root, 'fleet-config.json');
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [], dispatches: [],
-    }));
+    writeFileSync(fixturePath, JSON.stringify({ workers: [], dispatches: [] }));
     writeEpoch(epochPath, 'epoch-repo-root', 'nonce-repo-root');
     const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-repo-root', 'nonce-repo-root');
     delete env.OPK_REPOSITORY;
-
     const result = await runTick(env);
-    expect(observerResult(result)).toMatchObject({
-      result: 'census-published-observer-only',
-      status: 'complete',
-      snapshotCommitted: true,
-    });
+    expect(observerResult(result)).toMatchObject({ result: 'census-published-observer-only', status: 'complete', snapshotCommitted: true });
   });
 
   it('ignores an external operator terminal when no assignments are stored', async () => {
@@ -284,26 +284,11 @@ describe('scheduler bounded-child production composition', () => {
     const epochPath = path.join(root, 'epoch.json');
     const configPath = path.join(root, 'fleet-config.json');
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{
-        id: 'operator-panel',
-        generation: 'generation-external',
-        bindingKey: 'not-assigned',
-        lines: [],
-        liveness: 'busy',
-        worktreePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup',
-      }],
-      dispatches: [],
-    }));
+    writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'operator-panel', generation: 'generation-external', bindingKey: 'not-assigned', lines: [], liveness: 'busy', worktreePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup' }], dispatches: [] }));
     writeEpoch(epochPath, 'epoch-external-only', 'nonce-external-only');
     const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-external-only', 'nonce-external-only');
-
     const observer = observerResult(await runTick(env));
-    expect(observer).toMatchObject({
-      result: 'census-published-observer-only',
-      status: 'complete',
-      snapshotCommitted: true,
-    });
+    expect(observer).toMatchObject({ result: 'census-published-observer-only', status: 'complete', snapshotCommitted: true });
     expect((observer.snapshot as Record<string, unknown>).census).toEqual([]);
   });
 
@@ -315,37 +300,15 @@ describe('scheduler bounded-child production composition', () => {
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
     writeFileSync(fixturePath, JSON.stringify({
       workers: [
-        {
-          id: 'assigned-worker',
-          generation: 'generation-assigned',
-          bindingKey: 'dispatch-1',
-          lines: ['unchanged'],
-          liveness: 'idle',
-          worktreePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup',
-        },
-        {
-          id: 'operator-panel',
-          generation: 'generation-external',
-          bindingKey: 'not-assigned',
-          lines: [],
-          liveness: 'busy',
-          worktreePath: '/home/che/projects/orchestrator-pack',
-        },
-        {
-          id: 'child-external-panel',
-          generation: 'generation-external-child',
-          bindingKey: 'not-assigned-child',
-          lines: [],
-          liveness: 'busy',
-          worktreePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup',
-        },
+        { id: 'assigned-worker', generation: 'generation-assigned', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'idle', worktreePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup' },
+        { id: 'operator-panel', generation: 'generation-external', bindingKey: 'not-assigned', lines: [], liveness: 'busy', worktreePath: '/home/che/projects/orchestrator-pack' },
+        { id: 'child-external-panel', generation: 'generation-external-child', bindingKey: 'not-assigned-child', lines: [], liveness: 'busy', worktreePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup' },
       ],
       dispatches: [],
     }));
     writeEpoch(epochPath, 'epoch-shared-worktree', 'nonce-shared-worktree');
     const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-shared-worktree', 'nonce-shared-worktree');
     await publishLocal(env);
-
     const observer = observerResult(await runTick(env));
     const census = (observer.snapshot as Record<string, unknown>).census as Array<Record<string, unknown>>;
     expect(census).toHaveLength(1);
@@ -355,42 +318,21 @@ describe('scheduler bounded-child production composition', () => {
 
   it('keeps assignment census lookups inside one shared S1 timeout budget', async () => {
     const workers: RuntimeWorker[] = [
-      {
-        identity: { runtime: 'orca', id: 'budget-worker-a', generation: 'generation-budget-a' },
-        workspacePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup',
-        title: 'budget-worker-a',
-        provenance: 'internal',
-      },
-      {
-        identity: { runtime: 'orca', id: 'budget-worker-b', generation: 'generation-budget-b' },
-        workspacePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1416-sup',
-        title: 'budget-worker-b',
-        provenance: 'internal',
-      },
+      { identity: { runtime: 'orca', id: 'budget-worker-a', generation: 'generation-budget-a' }, workspacePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup', title: 'budget-worker-a', provenance: 'internal' },
+      { identity: { runtime: 'orca', id: 'budget-worker-b', generation: 'generation-budget-b' }, workspacePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1416-sup', title: 'budget-worker-b', provenance: 'internal' },
     ];
     const timeouts: number[] = [];
     const runtime: FleetObserverSource = {
       listWorkers: () => ({ status: 'ok', value: [] }),
       findWorker: (identity: RuntimeWorkerIdentity, options?: RuntimeCallOptions) => {
         timeouts.push(options?.timeoutMs ?? 0);
-        if (timeouts.length === 1) {
-          const delayDeadline = Date.now() + 20;
-          while (Date.now() < delayDeadline) {}
-        }
+        if (timeouts.length === 1) { const delayDeadline = Date.now() + 20; while (Date.now() < delayDeadline) {} }
         return { status: 'ok', value: workers.find((worker) => worker.identity.id === identity.id) ?? null };
       },
       readBoundedOutput: () => ({ status: 'failed', operation: 'read_bounded_output', reason: 'unused' }),
       liveness: () => ({ status: 'unknown', worker: workers[0]!.identity }),
     };
-    const source = productionFleetObserverSource(runtime, workers.map((worker, index) => ({
-      assignmentId: `assignment-budget-${index}`,
-      assignmentGeneration: 1,
-      issueNumber: 1420,
-      taskId: `task-budget-${index}`,
-      unitRef: `u-budget-${index}`,
-      worker: worker.identity,
-    })));
-
+    const source = productionFleetObserverSource(runtime, workers.map((worker, index) => ({ assignmentId: `assignment-budget-${index}`, assignmentGeneration: 1, issueNumber: 1420, taskId: `task-budget-${index}`, unitRef: `u-budget-${index}`, worker: worker.identity })));
     const result = await source.listWorkers({ workspace: 'active' }, { timeoutMs: 100 });
     expect(result).toMatchObject({ status: 'ok' });
     expect(timeouts).toHaveLength(2);
@@ -398,394 +340,83 @@ describe('scheduler bounded-child production composition', () => {
   });
 
   it('restores one S1 lineage across separate child processes and records one ambiguous S2 send attempt', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1, maxConcurrency: 2 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }],
-      dispatches: [],
-    }));
-    writeEpoch(epochPath, 'epoch-1420', 'nonce-1420');
-    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-1420', 'nonce-1420');
-    await publishLocal(env);
-
-    const first = await runTick(env);
-    const second = await runTick(env);
-    expect(fixture(fixturePath).dispatches).toHaveLength(1);
-    const third = await runTick(env);
-    expect(fixture(fixturePath).dispatches).toHaveLength(1);
-
-    const firstObserver = observerResult(first);
-    const secondObserver = observerResult(second);
-    const thirdObserver = observerResult(third);
-    expect(firstObserver.schedulerGeneration).toBe(secondObserver.schedulerGeneration);
-    expect(secondObserver.schedulerGeneration).toBe(thirdObserver.schedulerGeneration);
-    expect([firstObserver.tickSequence, secondObserver.tickSequence, thirdObserver.tickSequence]).toEqual([1, 2, 3]);
-
-    const secondNudge = schedulerResult(second).fleetNudge as Record<string, unknown>;
-    expect(secondNudge.dispatched).toBe(0);
-    expect(secondNudge.sendAttempts).toBe(1);
-    const secondOutcomes = secondNudge.outcomes as Array<Record<string, unknown>>;
-    expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true);
-    const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>;
-    expect(thirdNudge.dispatched).toBe(0);
+    writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatches: [] }));
+    writeEpoch(epochPath, 'epoch-1420', 'nonce-1420'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-1420', 'nonce-1420'); await publishLocal(env);
+    const first = await runTick(env); const second = await runTick(env); expect(fixture(fixturePath).dispatches).toHaveLength(1); const third = await runTick(env); expect(fixture(fixturePath).dispatches).toHaveLength(1);
+    const firstObserver = observerResult(first); const secondObserver = observerResult(second); const thirdObserver = observerResult(third);
+    expect(firstObserver.schedulerGeneration).toBe(secondObserver.schedulerGeneration); expect(secondObserver.schedulerGeneration).toBe(thirdObserver.schedulerGeneration); expect([firstObserver.tickSequence, secondObserver.tickSequence, thirdObserver.tickSequence]).toEqual([1, 2, 3]);
+    const secondNudge = schedulerResult(second).fleetNudge as Record<string, unknown>; expect(secondNudge.dispatched).toBe(0); expect(secondNudge.sendAttempts).toBe(1); const secondOutcomes = secondNudge.outcomes as Array<Record<string, unknown>>; expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true); const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>; expect(thirdNudge.dispatched).toBe(0);
   });
 
   it('classifies a quiet assigned child as idle and records one ambiguous S2 send attempt', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 2, maxConcurrency: 2 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{
-        id: 'quiet-worker',
-        generation: 'generation-quiet',
-        bindingKey: 'dispatch-quiet',
-        lines: ['baseline'],
-        liveness: 'busy',
-        worktreePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup',
-      }],
-      dispatches: [],
-    }));
-    writeEpoch(epochPath, 'epoch-quiet', 'nonce-quiet');
-    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-quiet', 'nonce-quiet');
-    await publishLocal(env, 'dispatch-quiet');
-
-    const first = await runTick(env);
-    const firstCensus = (observerResult(first).snapshot as Record<string, unknown>).census as Array<Record<string, unknown>>;
-    expect(firstCensus).toHaveLength(1);
-    expect(firstCensus[0]?.class).toBe('unknown');
-
-    const next = fixture(fixturePath);
-    next.workers = next.workers.map((worker) => ({ ...worker, liveness: 'idle' }));
-    writeFileSync(fixturePath, JSON.stringify(next));
-
-    const second = await runTick(env);
-    const secondCensus = (observerResult(second).snapshot as Record<string, unknown>).census as Array<Record<string, unknown>>;
-    expect(secondCensus[0]?.class).toBe('idle');
-    const secondNudge = schedulerResult(second).fleetNudge as Record<string, unknown>;
-    expect(secondNudge.dispatched).toBe(0);
-    expect(secondNudge.sendAttempts).toBe(1);
-    const secondOutcomes = secondNudge.outcomes as Array<Record<string, unknown>>;
-    expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true);
-    expect(fixture(fixturePath).dispatches).toHaveLength(1);
-
-    const third = await runTick(env);
-    expect((schedulerResult(third).fleetNudge as Record<string, unknown>).dispatched).toBe(0);
-    expect(fixture(fixturePath).dispatches).toHaveLength(1);
+    writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'quiet-worker', generation: 'generation-quiet', bindingKey: 'dispatch-quiet', lines: ['baseline'], liveness: 'busy', worktreePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup' }], dispatches: [] }));
+    writeEpoch(epochPath, 'epoch-quiet', 'nonce-quiet'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-quiet', 'nonce-quiet'); await publishLocal(env, 'dispatch-quiet');
+    const first = await runTick(env); const firstCensus = (observerResult(first).snapshot as Record<string, unknown>).census as Array<Record<string, unknown>>; expect(firstCensus).toHaveLength(1); expect(firstCensus[0]?.class).toBe('unknown');
+    const next = fixture(fixturePath); next.workers = next.workers.map((worker) => ({ ...worker, liveness: 'idle' })); writeFileSync(fixturePath, JSON.stringify(next));
+    const second = await runTick(env); const secondCensus = (observerResult(second).snapshot as Record<string, unknown>).census as Array<Record<string, unknown>>; expect(secondCensus[0]?.class).toBe('idle'); const secondNudge = schedulerResult(second).fleetNudge as Record<string, unknown>; expect(secondNudge.dispatched).toBe(0); expect(secondNudge.sendAttempts).toBe(1); const secondOutcomes = secondNudge.outcomes as Array<Record<string, unknown>>; expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true); expect(fixture(fixturePath).dispatches).toHaveLength(1);
+    const third = await runTick(env); expect((schedulerResult(third).fleetNudge as Record<string, unknown>).dispatched).toBe(0); expect(fixture(fixturePath).dispatches).toHaveLength(1);
   });
 
   it('starts a fresh baseline after an activation epoch change', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
-    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }],
-      dispatches: [],
-    }));
-    writeEpoch(epochPath, 'epoch-a', 'nonce-a');
-    const baseEnv = processEnv(root, fixturePath, epochPath, configPath, 'epoch-a', 'nonce-a');
-    await publishLocal(baseEnv);
-    const first = await runTick(baseEnv);
-
-    writeEpoch(epochPath, 'epoch-b', 'nonce-b');
-    const changedEnv = { ...baseEnv, ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-b', ORCHESTRATOR_CUTOVER_NONCE: 'nonce-b' };
-    const second = await runTick(changedEnv);
-    expect(observerResult(second).schedulerGeneration).not.toBe(observerResult(first).schedulerGeneration);
-    expect(observerResult(second).tickSequence).toBe(1);
-    expect(fixture(fixturePath).dispatches).toHaveLength(0);
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatches: [] })); writeEpoch(epochPath, 'epoch-a', 'nonce-a'); const baseEnv = processEnv(root, fixturePath, epochPath, configPath, 'epoch-a', 'nonce-a'); await publishLocal(baseEnv); const first = await runTick(baseEnv);
+    writeEpoch(epochPath, 'epoch-b', 'nonce-b'); const changedEnv = { ...baseEnv, ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-b', ORCHESTRATOR_CUTOVER_NONCE: 'nonce-b' }; const second = await runTick(changedEnv); expect(observerResult(second).schedulerGeneration).not.toBe(observerResult(first).schedulerGeneration); expect(observerResult(second).tickSequence).toBe(1); expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
   it('preserves dispatch_unknown without automatic retry in a later child', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
-    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }],
-      dispatchOutcome: 'dispatch_unknown', dispatches: [],
-    }));
-    writeEpoch(epochPath, 'epoch-unknown', 'nonce-unknown');
-    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-unknown', 'nonce-unknown');
-    await publishLocal(env);
-    await runTick(env);
-    const second = await runTick(env);
-    const third = await runTick(env);
-    const secondOutcomes = (schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>;
-    expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true);
-    const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>;
-    expect(thirdNudge.sendAttempts).toBe(0);
-    expect(fixture(fixturePath).dispatches).toHaveLength(0);
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatchOutcome: 'dispatch_unknown', dispatches: [] })); writeEpoch(epochPath, 'epoch-unknown', 'nonce-unknown'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-unknown', 'nonce-unknown'); await publishLocal(env); await runTick(env); const second = await runTick(env); const third = await runTick(env); const secondOutcomes = (schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>; expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true); const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>; expect(thirdNudge.sendAttempts).toBe(0); expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
   it('preserves provider rejection as dispatch_unknown and does not retry the same episode', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
-    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }],
-      dispatchOutcome: 'send_failed', dispatches: [], sendCalls: 0,
-    }));
-    writeEpoch(epochPath, 'epoch-send-failed', 'nonce-send-failed');
-    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-send-failed', 'nonce-send-failed');
-    await publishLocal(env);
-    await runTick(env);
-    const second = await runTick(env);
-    const secondOutcomes = (schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>;
-    expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true);
-    expect(schedulerResult(second).orchestratorRequired).toBe(true);
-    expect(handoff(env)).toMatchObject({ reason: 'dispatch_unknown', decision: 'orchestrator_required' });
-    const third = await runTick(env);
-    expect(fixture(fixturePath).sendCalls).toBe(1);
-    expect(fixture(fixturePath).dispatches).toHaveLength(0);
-    const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>;
-    expect(thirdNudge.sendAttempts).toBe(0);
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatchOutcome: 'send_failed', dispatches: [], sendCalls: 0 })); writeEpoch(epochPath, 'epoch-send-failed', 'nonce-send-failed'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-send-failed', 'nonce-send-failed'); await publishLocal(env); await runTick(env); const second = await runTick(env); const secondOutcomes = (schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>; expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true); expect(schedulerResult(second).orchestratorRequired).toBe(true); expect(handoff(env)).toMatchObject({ reason: 'dispatch_unknown', decision: 'orchestrator_required' }); const third = await runTick(env); expect(fixture(fixturePath).sendCalls).toBe(1); expect(fixture(fixturePath).dispatches).toHaveLength(0); const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>; expect(thirdNudge.sendAttempts).toBe(0);
   });
 
   it('uses the established default S1 config and snapshot authorities across bounded children', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const legacyHome = path.join(root, 'home');
-    const legacyConfig = path.join(legacyHome, '.config', 'orchestrator-pack', 'fleet-observer.json');
-    mkdirSync(path.dirname(legacyConfig), { recursive: true });
-    writeFileSync(legacyConfig, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }],
-      dispatchOutcome: 'dispatch_unknown', dispatches: [],
-    }));
-    writeEpoch(epochPath, 'epoch-defaults', 'nonce-defaults');
-    const env = processEnv(root, fixturePath, epochPath, legacyConfig, 'epoch-defaults', 'nonce-defaults');
-    delete env.OPK_SIDE_PROCESS_STATE_DIR;
-    delete env.OPK_FLEET_OBSERVER_CONFIG;
-    env.HOME = legacyHome;
-    await publishLocal(env);
-
-    const first = await runTick(env);
-    const second = await runTick(env);
-    expect(observerResult(first).schedulerGeneration).toBe(observerResult(second).schedulerGeneration);
-    expect(fixture(fixturePath).dispatches).toHaveLength(0);
-    expect(existsSync(path.join(legacyHome, '.local', 'state', 'orchestrator-pack', 'fleet-observer', 'snapshot.json'))).toBe(true);
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const legacyHome = path.join(root, 'home'); const legacyConfig = path.join(legacyHome, '.config', 'orchestrator-pack', 'fleet-observer.json'); mkdirSync(path.dirname(legacyConfig), { recursive: true }); writeFileSync(legacyConfig, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatchOutcome: 'dispatch_unknown', dispatches: [] })); writeEpoch(epochPath, 'epoch-defaults', 'nonce-defaults'); const env = processEnv(root, fixturePath, epochPath, legacyConfig, 'epoch-defaults', 'nonce-defaults'); delete env.OPK_SIDE_PROCESS_STATE_DIR; delete env.OPK_FLEET_OBSERVER_CONFIG; env.HOME = legacyHome; await publishLocal(env); const first = await runTick(env); const second = await runTick(env); expect(observerResult(first).schedulerGeneration).toBe(observerResult(second).schedulerGeneration); expect(fixture(fixturePath).dispatches).toHaveLength(0); expect(existsSync(path.join(legacyHome, '.local', 'state', 'orchestrator-pack', 'fleet-observer', 'snapshot.json'))).toBe(true);
   });
 
   it('re-resolves the persistence-safe Dispatch before S2 claim/send', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
-    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }],
-      dropResolutionAtCall: 3,
-      dispatches: [],
-    }));
-    writeEpoch(epochPath, 'epoch-revalidate', 'nonce-revalidate');
-    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-revalidate', 'nonce-revalidate');
-    await publishLocal(env);
-    await runTick(env);
-    const second = await runTick(env);
-    const outcomes = (schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>;
-    expect(outcomes.some((row) => row.outcome === 'revalidation_failed')).toBe(true);
-    expect(fixture(fixturePath).dispatches).toHaveLength(0);
-    expect(handoff(env)?.reason).toBe('target_stale');
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dropResolutionAtCall: 3, dispatches: [] })); writeEpoch(epochPath, 'epoch-revalidate', 'nonce-revalidate'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-revalidate', 'nonce-revalidate'); await publishLocal(env); await runTick(env); const second = await runTick(env); const outcomes = (schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>; expect(outcomes.some((row) => row.outcome === 'revalidation_failed')).toBe(true); expect(fixture(fixturePath).dispatches).toHaveLength(0); expect(handoff(env)?.reason).toBe('target_stale');
   });
 
   it('fails closed at the process boundary when assignment is missing', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
-    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'idle' }],
-      dispatches: [],
-    }));
-    writeEpoch(epochPath, 'epoch-missing-assignment', 'nonce-missing-assignment');
-    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-missing-assignment', 'nonce-missing-assignment');
-    await runTick(env);
-    await runTick(env);
-    expect(fixture(fixturePath).dispatches).toHaveLength(0);
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'idle' }], dispatches: [] })); writeEpoch(epochPath, 'epoch-missing-assignment', 'nonce-missing-assignment'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-missing-assignment', 'nonce-missing-assignment'); await runTick(env); await runTick(env); expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
   it('fails closed at the process boundary when the current runtime binding is missing', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
-    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-other', lines: ['unchanged'], liveness: 'idle' }],
-      dispatches: [], sendCalls: 0,
-    }));
-    writeEpoch(epochPath, 'epoch-missing-runtime', 'nonce-missing-runtime');
-    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-missing-runtime', 'nonce-missing-runtime');
-    await publishLocal(env, 'dispatch-1');
-    const first = await runTick(env);
-    expect(schedulerResult(first).orchestratorRequired).toBe(true);
-    expect(handoff(env)).toMatchObject({
-      reason: 'target_unresolved',
-      decision: 'orchestrator_required',
-      issueNumber: 1420,
-      taskId: 'task-1420',
-    });
-    await runTick(env);
-    expect(fixture(fixturePath).sendCalls).toBe(0);
-    expect(fixture(fixturePath).dispatches).toHaveLength(0);
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-other', lines: ['unchanged'], liveness: 'idle' }], dispatches: [], sendCalls: 0 })); writeEpoch(epochPath, 'epoch-missing-runtime', 'nonce-missing-runtime'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-missing-runtime', 'nonce-missing-runtime'); await publishLocal(env, 'dispatch-1'); const first = await runTick(env); expect(schedulerResult(first).orchestratorRequired).toBe(true); expect(handoff(env)).toMatchObject({ reason: 'target_unresolved', decision: 'orchestrator_required', issueNumber: 1420, taskId: 'task-1420' }); await runTick(env); expect(fixture(fixturePath).sendCalls).toBe(0); expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
   it('does not restore stale S1 authority after assignment generation advances', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
-    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }],
-      dispatches: [],
-    }));
-    writeEpoch(epochPath, 'epoch-stale-assignment', 'nonce-stale-assignment');
-    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-stale-assignment', 'nonce-stale-assignment');
-    await publishLocal(env, 'dispatch-1', 'task-1');
-    await runTick(env);
-    await publishLocal(env, 'dispatch-2', 'task-2');
-    await runTick(env);
-    expect(fixture(fixturePath).dispatches).toHaveLength(0);
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatches: [] })); writeEpoch(epochPath, 'epoch-stale-assignment', 'nonce-stale-assignment'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-stale-assignment', 'nonce-stale-assignment'); const firstAssignment = await publishLocal(env, 'dispatch-1', 'task-1'); await runTick(env); await publishLocal(env, 'dispatch-2', 'task-2', { assignmentId: firstAssignment.assignmentId, generation: firstAssignment.generation }); await runTick(env); expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
   it('fails closed after corrupt persisted S1 continuity instead of sending from it', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
-    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }],
-      dispatches: [],
-    }));
-    writeEpoch(epochPath, 'epoch-corrupt-continuity', 'nonce-corrupt-continuity');
-    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-corrupt-continuity', 'nonce-corrupt-continuity');
-    await publishLocal(env);
-    const first = await runTick(env);
-    const snapshotPath = path.join(String(env.OPK_SIDE_PROCESS_STATE_DIR), 'fleet-observer-snapshot.json');
-    writeFileSync(snapshotPath, '{not-json', 'utf8');
-    const second = await runTick(env);
-    expect(observerResult(second).schedulerGeneration).not.toBe(observerResult(first).schedulerGeneration);
-    expect(fixture(fixturePath).dispatches).toHaveLength(0);
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatches: [] })); writeEpoch(epochPath, 'epoch-corrupt-continuity', 'nonce-corrupt-continuity'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-corrupt-continuity', 'nonce-corrupt-continuity'); await publishLocal(env); const first = await runTick(env); const snapshotPath = path.join(String(env.OPK_SIDE_PROCESS_STATE_DIR), 'fleet-observer-snapshot.json'); writeFileSync(snapshotPath, '{not-json', 'utf8'); const second = await runTick(env); expect(observerResult(second).schedulerGeneration).not.toBe(observerResult(first).schedulerGeneration); expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
   it('keeps remote assignments outside local S1/S2 actuation and escalates them durably', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
-    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'idle' }],
-      dispatches: [], sendCalls: 0,
-    }));
-    writeEpoch(epochPath, 'epoch-remote', 'nonce-remote');
-    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-remote', 'nonce-remote');
-    expect((await publishCurrentWorkerAssignment({
-      file: resolveWorkerAssignmentStorePath('orchestrator-pack', env),
-      repository: 'chetwerikoff/orchestrator-pack',
-      issueNumber: 1420,
-      taskId: 'task-remote',
-      kind: 'remote',
-      provider: 'orca',
-      bindingKey: 'dispatch-1',
-    })).ok).toBe(true);
-    const first = await runTick(env);
-    expect(schedulerResult(first).orchestratorRequired).toBe(true);
-    expect(handoff(env)).toMatchObject({
-      reason: 'remote_not_applicable',
-      decision: 'orchestrator_required',
-      issueNumber: 1420,
-      taskId: 'task-remote',
-    });
-    await runTick(env);
-    expect(fixture(fixturePath).sendCalls).toBe(0);
-    expect(fixture(fixturePath).dispatches).toHaveLength(0);
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'idle' }], dispatches: [], sendCalls: 0 })); writeEpoch(epochPath, 'epoch-remote', 'nonce-remote'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-remote', 'nonce-remote'); expect((await publishCurrentWorkerAssignment({ file: resolveWorkerAssignmentStorePath('orchestrator-pack', env), repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1420, taskId: 'task-remote', kind: 'remote', provider: 'orca', bindingKey: 'dispatch-1' })).ok).toBe(true); const first = await runTick(env); expect(schedulerResult(first).orchestratorRequired).toBe(true); expect(handoff(env)).toMatchObject({ reason: 'remote_not_applicable', decision: 'orchestrator_required', issueNumber: 1420, taskId: 'task-remote' }); await runTick(env); expect(fixture(fixturePath).sendCalls).toBe(0); expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
   it('persists observer_untrusted handoff and returns non-success for an empty-census S1 failure', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
-    writeFileSync(configPath, JSON.stringify({ schemaVersion: 999 }));
-    writeFileSync(fixturePath, JSON.stringify({ workers: [], dispatches: [] }));
-    writeEpoch(epochPath, 'epoch-s1-failed', 'nonce-s1-failed');
-    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-s1-failed', 'nonce-s1-failed');
-    await publishLocal(env);
-    const error = await runTickFailure(env);
-    expect(error).toContain('scheduler_fleet_phase_failed:observer-untrusted');
-    expect(handoff(env)).toMatchObject({ reason: 'observer_untrusted', decision: 'orchestrator_required' });
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 999 })); writeFileSync(fixturePath, JSON.stringify({ workers: [], dispatches: [] })); writeEpoch(epochPath, 'epoch-s1-failed', 'nonce-s1-failed'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-s1-failed', 'nonce-s1-failed'); await publishLocal(env); const error = await runTickFailure(env); expect(error).toContain('scheduler_fleet_phase_failed:observer-untrusted'); expect(handoff(env)).toMatchObject({ reason: 'observer_untrusted', decision: 'orchestrator_required' });
   });
 
   it('returns non-success for journal settlement failure while preserving dispatch_unknown handoff', async () => {
-    const root = makeRoot();
-    const fixturePath = path.join(root, 'fixture.json');
-    const epochPath = path.join(root, 'epoch.json');
-    const configPath = path.join(root, 'fleet-config.json');
-    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
-    writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }],
-      corruptJournalAfterSend: true,
-      dispatches: [],
-    }));
-    writeEpoch(epochPath, 'epoch-settlement', 'nonce-settlement');
-    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-settlement', 'nonce-settlement');
-    await publishLocal(env);
-    await runTick(env);
-    const error = await runTickFailure(env);
-    expect(error).toContain('scheduler_fleet_phase_failed:one-budgeted-gated-nudge-per-new-eligible-episode');
-    expect(fixture(fixturePath).dispatches).toHaveLength(1);
-    expect(handoff(env)).toMatchObject({ reason: 'dispatch_unknown', decision: 'orchestrator_required' });
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], corruptJournalAfterSend: true, dispatches: [] })); writeEpoch(epochPath, 'epoch-settlement', 'nonce-settlement'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-settlement', 'nonce-settlement'); await publishLocal(env); await runTick(env); const error = await runTickFailure(env); expect(error).toContain('scheduler_fleet_phase_failed:one-budgeted-gated-nudge-per-new-eligible-episode'); expect(fixture(fixturePath).dispatches).toHaveLength(1); expect(handoff(env)).toMatchObject({ reason: 'dispatch_unknown', decision: 'orchestrator_required' });
   });
 
   it.each([
     ['observer_timeout', () => new Promise<never>(() => {})],
     ['observer_threw', async () => { throw new Error('injected'); }],
   ] as const)('does not turn %s into a successful scheduler tick', async (expectedReason, tick) => {
-    const root = makeRoot();
-    const epochPath = path.join(root, 'epoch.json');
-    writeEpoch(epochPath, `epoch-${expectedReason}`, `nonce-${expectedReason}`);
-    const env: NodeJS.ProcessEnv = {
-      ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath,
-      ORCHESTRATOR_CUTOVER_EPOCH_ID: `epoch-${expectedReason}`,
-      ORCHESTRATOR_CUTOVER_NONCE: `nonce-${expectedReason}`,
-    };
-    const handoffs: Array<{ reason: string; schedulerGeneration: string; tickSequence: number }> = [];
-    const boundary: SchedulerBoundary = {
-      listCandidates: () => [],
-      readCurrentPr: async () => { throw new Error('not called'); },
-      readChecks: async () => [],
-      listReviewRuns: () => [],
-      start: async () => ({ ok: true }),
-      schedulerIntervalMs: 40,
-      fleetObserver: {
-        schedulerGeneration: `sg-${expectedReason}`,
-        getEffectiveBudgetMs: () => expectedReason === 'observer_timeout' ? 10 : 100,
-        tick,
-      },
-      publishHandoff: (record) => {
-        handoffs.push(record);
-        return { ok: true };
-      },
-    };
-    await expect(runSchedulerTick(boundary, env)).rejects.toThrow(`scheduler_observer_untrusted:${expectedReason}`);
-    expect(handoffs).toEqual([{
-      reason: 'observer_untrusted',
-      schedulerGeneration: `sg-${expectedReason}`,
-      tickSequence: 1,
-    }]);
+    const root = makeRoot(); const epochPath = path.join(root, 'epoch.json'); writeEpoch(epochPath, `epoch-${expectedReason}`, `nonce-${expectedReason}`); const env: NodeJS.ProcessEnv = { ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath, ORCHESTRATOR_CUTOVER_EPOCH_ID: `epoch-${expectedReason}`, ORCHESTRATOR_CUTOVER_NONCE: `nonce-${expectedReason}` }; const handoffs: Array<{ reason: string; schedulerGeneration: string; tickSequence: number }> = []; const boundary: SchedulerBoundary = { listCandidates: () => [], readCurrentPr: async () => { throw new Error('not called'); }, readChecks: async () => [], listReviewRuns: () => [], start: async () => ({ ok: true }), schedulerIntervalMs: 40, fleetObserver: { schedulerGeneration: `sg-${expectedReason}`, getEffectiveBudgetMs: () => expectedReason === 'observer_timeout' ? 10 : 100, tick }, publishHandoff: (record) => { handoffs.push(record); return { ok: true }; } }; await expect(runSchedulerTick(boundary, env)).rejects.toThrow(`scheduler_observer_untrusted:${expectedReason}`); expect(handoffs).toEqual([{ reason: 'observer_untrusted', schedulerGeneration: `sg-${expectedReason}`, tickSequence: 1 }]);
   });
 });
