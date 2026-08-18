@@ -154,19 +154,20 @@ manager output. The reviewer publishes its own complete verdict/findings
 comment; the manager consumes the receipt and later owns disposition/workflow
 actions.
 
-For direct publication, the one top-level reviewer comment must begin with
-exactly these two lines:
+For direct publication, the one top-level reviewer comment must use exactly
+these as its first two non-empty lines:
 
 ```text
 Read revision: #<ISSUE_NUMBER> <EXPECTED_REVISION>
 INVOCATION_ID_TO_ECHO: <INVOCATION_ID>
 ```
 
-The invocation marker must occur exactly once in that comment and equal the
-caller-minted invocation id. Settlement uses that exact comment marker to choose
-the invocation; same repository/Issue, candidate order, parent position, titles,
-URLs, or product message ids do not substitute for it. Zero exact owned-marker
-matches and multiple exact owned-marker matches remain fail-closed, while
+Leading blank lines are ignored for this grammar. The invocation marker must
+occur exactly once in that comment and equal the caller-minted invocation id.
+Settlement uses that exact comment marker to choose the invocation; same
+repository/Issue, candidate order, parent position, titles, URLs, or product
+message ids do not substitute for it. Zero exact owned-marker matches and
+multiple exact owned-marker matches remain fail-closed, while
 missing/conflicting results or post-send uncertainty retain their existing
 possible-delivery/no-resend semantics.
 
