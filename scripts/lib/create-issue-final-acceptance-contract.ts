@@ -148,8 +148,12 @@ export function validateTerminalOneShotBodyBinding(
 
   const sourceRevision = SOURCE_REVISION_MARKER_RE.exec(sourceBody)?.[1];
   const currentRevision = SOURCE_REVISION_MARKER_RE.exec(currentBody)?.[1];
-  if (!sourceRevision || !currentRevision || currentRevision !== issueRevision || sourceRevision === currentRevision) {
-    errors.push(`terminal source body changed outside a bound post-terminal correction: reviewed=${sourceRevision ?? '<missing>'} current=${currentRevision ?? '<missing>'} acceptance=${issueRevision}`);
+  if (!sourceRevision || !currentRevision || sourceRevision === currentRevision) {
+    validateExactTerminalBodyBinding(sourceBody, currentBody, errors);
+    return;
+  }
+  if (currentRevision !== issueRevision) {
+    errors.push(`terminal source body changed outside a bound post-terminal correction: reviewed=${sourceRevision} current=${currentRevision} acceptance=${issueRevision}`);
     return;
   }
   const terminal = stageReceipts.filter((value) => (
