@@ -1218,12 +1218,12 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     return 22;
   }
   try {
+    if (args.command === 'turn' && legacyDirectPublicationRequested(args)) {
+      return refuseLegacyDirectPublication(args);
+    }
     if (option(args, 'capture-too-many-requests-source')) {
       if (args.command !== 'turn') throw new Error('argument_invalid');
       return await runTooManyRequestsSourceCapture(args);
-    }
-    if (args.command === 'turn' && legacyDirectPublicationRequested(args)) {
-      return refuseLegacyDirectPublication(args);
     }
     if (args.command === 'turn') return await runTurn(args);
     if (args.command === 'status/list') return await runStatus(args);
