@@ -69,6 +69,7 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/runtime/single-instance-lease.test.ts': 120,
   'scripts/runtime/task-lifecycle.test.ts': 120,
   'scripts/runtime/worker-recovery.test.ts': 120,
+  'scripts/runtime-worker-identity-binding.test.ts': 120,
   // Issue #1420 adds two deterministic light contract suites; keep the bounded
   // pre-topology producer stable until runtime-history harvest records them.
   'scripts/pr2-foundation/browser-modal-watcher.test.ts': 120,
