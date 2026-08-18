@@ -3,11 +3,8 @@
   "issue_number": 1469,
   "declared_paths": [
     ".github/workflows/vitest-runtime-history-delivery.yml",
-    ".github/workflows/vitest-runtime-history-refresh.yml",
     "docs/vitest-runtime-history-delivery.md",
-    "scripts/lib/vitest-runtime-history-delivery.fixture.mjs",
-    "scripts/lib/vitest-runtime-history-merge.fixture.mjs",
-    "scripts/vitest-runtime-history-delivery.mjs"
+    "scripts/refresh-vitest-runtime-history.mjs"
   ],
   "denylist": [
     "credentials/",
@@ -15,6 +12,7 @@
     "scripts/emit-vitest-heavy-topology.mjs",
     "scripts/lib/vitest-heavy-topology.mjs",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/vitest-runtime-history-merge.mjs",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json",
     "secrets/",
@@ -22,12 +20,9 @@
   ],
   "allowed_roots": [
     ".github/workflows/vitest-runtime-history-delivery.yml",
-    ".github/workflows/vitest-runtime-history-refresh.yml",
     "docs/declarations/1469.pr-scope.json",
     "docs/vitest-runtime-history-delivery.md",
-    "scripts/lib/vitest-runtime-history-delivery.fixture.mjs",
-    "scripts/lib/vitest-runtime-history-merge.fixture.mjs",
-    "scripts/vitest-runtime-history-delivery.mjs"
+    "scripts/refresh-vitest-runtime-history.mjs"
   ],
-  "source_revision": "4c23f05bbcc259a1c4fb4c670da201b6218a2f57"
+  "source_revision": "93d1ed818d66bf43346583bd9db94ba322ab847b"
 }
