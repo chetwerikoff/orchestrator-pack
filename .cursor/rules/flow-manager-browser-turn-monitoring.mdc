@@ -19,12 +19,21 @@ Applicable long-running launcher internals remain in
 For tracked create-issue and pack-review turns, use
 `npm run chatgpt-browser-turn -- turn ...`. Applicable long-running manager
 turns use `npm run flow-manager-browser-gpt-long-run -- ...` and its handoff
-receipt. Before launch, use a trusted current checkout, the configured local
-headed automation browser, and the applicable workflow/role. One invocation
-opens one dedicated owned tab, sends one exact user payload, and observes that
-same tab. Page/DOM completion is sufficient once the final assistant reply is
-stable and no longer generating; PID, shell state, silence, log growth,
-service-terminal witnesses, and heartbeats are not completion authority.
+receipt. Before every tracked turn, the caller/orchestrator mints and retains one
+non-empty `--invocation-id` and passes that exact value through the ordinary
+transport or long-running adapter and every later harvest/finalization action
+for the same attempt. Transport and adapter layers validate and forward this
+identity; they must not mint, replace, or reinterpret it. Presence of
+`--invocation-id` is common to ordinary and direct-publication-capable flows and
+never selects direct mode by itself; direct mode requires its direct-only
+arguments.
+
+Before launch, use a trusted current checkout, the configured local headed
+automation browser, and the applicable workflow/role. One invocation opens one
+dedicated owned tab, sends one exact user payload, and observes that same tab.
+Page/DOM completion is sufficient once the final assistant reply is stable and
+no longer generating; PID, shell state, silence, log growth, service-terminal
+witnesses, and heartbeats are not completion authority.
 In a fresh worktree, copy `local.config.json` from the operator checkout into
 the same worktree path, or set both required values before launch:
 `export DISCUSS_WITH_GPT_PROJECT_URL="<PROJECT_URL>"` and
@@ -100,10 +109,11 @@ or an owned turn with no returned result is not proof of non-delivery.
 Non-delivery is proven only by observing the conversation and finding no user
 node containing the owned prompt. After post-send observation loss, re-resolve
 the current target from the conversation URL, continue sanctioned observation,
-and harvest the answer. A saved target id may be stale and is not authoritative.
-Escalate only after the probe shows no delivery or sanctioned observation is
-unavailable. Every blocker names the exact probe and its observed result.
-Probe mechanics remain owned by Issues #1272 and #1122.
+and harvest the answer with the exact caller-owned `--invocation-id` for that
+attempt. A saved target id may be stale and is not authoritative. Escalate only
+after the probe shows no delivery or sanctioned observation is unavailable.
+Every blocker names the exact probe and its observed result. Probe mechanics
+remain owned by Issues #1272 and #1122.
 
 A failure belongs to the current work only when it is reproducible and
 causally linked to the current head/diff. Clean-base reproduction,
@@ -125,15 +135,17 @@ not admission or completion authority. Unexpected events are appended
 best-effort to the local recurrence journal and included in the current report;
 do not use that journal to authorize work.
 
-When direct diagnosis is genuinely needed, run the sanctioned one-shot,
-read-only **non-acquisition** page probe with local variables such as
-`${CDP_ENDPOINT}` and an exact target identity. Non-acquisition operations
-never navigate, send, click, focus, reload, create, close, publish, retry, or
-progress a stage. The explicit `inspect --url ... --open-if-missing true`
-acquisition path is the sole opt-in exception: it may create one owned page,
-observe it until readiness, and close exactly that owned page before returning.
-Do not replace either path with raw CDP, Playwright, salvage scripts, selectors,
-JavaScript, or a watch loop.
+When direct diagnosis is genuinely needed, run the sanctioned one-shot page
+probe with local variables such as `${CDP_ENDPOINT}` and an exact target
+identity. `list`, `inspect`, `export`, and `liveness` are diagnostic-only and
+always carry `workflow_authority: none`; they never publish a recovered turn or
+progress a workflow. `harvest` is the sole action-producing probe
+(`diagnostic_only: false`) and also carries `workflow_authority: none`; it may
+recover/publish only the exact owned turn for the supplied invocation identity.
+The explicit `inspect --url ... --open-if-missing true` acquisition path may
+create one owned page, observe it until readiness, and close exactly that owned
+page before returning. Do not replace these paths with raw CDP, Playwright,
+salvage scripts, selectors, JavaScript, or a watch loop.
 
 For contract-evidence authoring, `binding-id` uses
 `producer:datum:expected`, for example
@@ -161,28 +173,51 @@ progress.
 
 ## Sanctioned one-shot page probe
 
-When direct page diagnosis is genuinely needed, use only the canonical one-shot utility:
+When direct page diagnosis or exact-owned-turn harvest is genuinely needed, use
+only the canonical one-shot utility:
 
 ```bash
 npm run browser-gpt-page-probe -- list --cdp http://127.0.0.1:9222
 npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --target-id <exact-target-id>
 npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --url <exact-conversation-url> --open-if-missing true
 npm run browser-gpt-page-probe -- liveness --cdp http://127.0.0.1:9222
-npm run browser-gpt-page-probe -- export --cdp http://127.0.0.1:9222 --profile <configured-profile> --target-id <exact-target-id> --role assistant --ordinal <n> --message-id <id> --representation innerText --expected-byte-length <bytes> --expected-sha256 <sha256> --output <new-file>
+npm run browser-gpt-page-probe -- export --cdp http://127.0.0.1:9222 --target-id <exact-target-id> --role assistant --ordinal <n> --message-id <id> --representation innerText --expected-byte-length <bytes> --expected-sha256 <sha256> --output <new-file>
+npm run browser-gpt-page-probe -- harvest --cdp http://127.0.0.1:9222 --profile <configured-profile> --invocation-id <caller-owned-invocation-id> --output <new-file>
 ```
 
-The exact URL form remains existing-target-only unless `--open-if-missing true` is explicitly supplied. Without acquisition it reuses exactly one normalized match without creating or closing anything. With explicit acquisition it may create one page, waits for exact normalized conversation identity and bounded readable SPA state, then closes only the valid target identity returned by that same invocation. A redirect or same-path cross-host result is `surface_unknown` with `conversation_identity_mismatch`. Duplicate matches, malformed or timed-out creation, cleanup failure, and every reused-page path fail closed without guessed or delayed cleanup.
+The exact URL form remains existing-target-only unless `--open-if-missing true`
+is explicitly supplied. Without acquisition it reuses exactly one normalized
+match without creating or closing anything. With explicit acquisition it may
+create one page, waits for exact normalized conversation identity and bounded
+readable SPA state, then closes only the valid target identity returned by that
+same invocation. A redirect or same-path cross-host result is `surface_unknown`
+with `conversation_identity_mismatch`. Duplicate matches, malformed or timed-out
+creation, cleanup failure, and every reused-page path fail closed without
+guessed or delayed cleanup.
 
-`liveness` is a single passive census with immediate `MAX_TARGETS` fan-out and independent target deadlines. It reports responsive, unresponsive, or unavailable rows and exact unresponsive IDs; it never creates, closes, navigates, sends, reloads, or infers process death. Every operation runs once and exits with no watch loop, daemon, retry, background owner, or retained state.
+`liveness` is a single passive census with immediate `MAX_TARGETS` fan-out and
+independent target deadlines. It reports responsive, unresponsive, or
+unavailable rows and exact unresponsive IDs; it never creates, closes,
+navigates, sends, reloads, or infers process death. Every operation runs once
+and exits with no watch loop, daemon, retry, background owner, or retained
+state.
 
-The probe is **diagnostic only**:
+The four diagnostic-only operations (`list`, `inspect`, `export`, `liveness`)
+have no workflow authority:
 
 - `generation_in_progress: false` is not completion evidence;
 - node counts, hashes, witnesses, liveness rows, acquisition metadata, and an exported node file do not authorize publication, completion, retry, resend, cleanup, admission, recovery, review capture, or stage progression;
 - use inspection output to select exactly one node representation for optional offline export; never request or construct a transcript dump;
 - exported text may be sensitive. The caller supplies a new path in an existing directory and owns protection and cleanup of the resulting file.
 
-Do not replace this command with raw CDP WebSocket scripts, Playwright snippets, `salvage-*.mjs`, caller-supplied selectors/JavaScript, a watch loop, or a second supported probe.
+`harvest` is different only in that it may recover and publish the exact owned
+turn identified by the supplied invocation; its output remains
+`workflow_authority: none` and therefore cannot itself advance a stage, grant a
+resend, or authorize unrelated cleanup.
+
+Do not replace this command with raw CDP WebSocket scripts, Playwright snippets,
+`salvage-*.mjs`, caller-supplied selectors/JavaScript, a watch loop, or a second
+supported probe.
 
 ## Forbidden duplicate monitoring and authority
 
@@ -192,11 +227,15 @@ Do not replace this command with raw CDP WebSocket scripts, Playwright snippets,
 - No probe-driven takeover, helper bypass, resend, or workflow progression.
 - No flow-manager consolidation or content judgment over sibling reviewer output.
 
-The one-shot page probe diagnoses an already-open page, or one explicitly acquired under the zero-match ownership contract; it is not a fallback state machine or browser-turn owner.
+The one-shot page probe diagnoses an already-open page, may explicitly acquire
+one page under the zero-match ownership contract, or may harvest only the exact
+owned turn for a caller-supplied invocation. It is not a fallback state machine
+or browser-turn owner.
 
 ## Session handoff
 
 Never end a flow-manager turn with only “background job running”. Report the
-Issue and revision, the owned chat URL when known, the helper result or latest
-direct observation, the `reviewEpisodeId`/`stageAttemptId`/slot when applicable,
-any direct incident surfaced by the helper, and the next legal flow action.
+Issue and revision, the caller-owned invocation id, the owned chat URL when
+known, the helper result or latest direct observation, the
+`reviewEpisodeId`/`stageAttemptId`/slot when applicable, any direct incident
+surfaced by the helper, and the next legal flow action.

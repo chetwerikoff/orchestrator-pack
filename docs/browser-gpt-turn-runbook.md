@@ -60,9 +60,13 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
 
 Write the complete prompt to `${INPUT_FILE}`. Allocate fresh, distinct,
 attempt-isolated `${OUTPUT_FILE}`, `${HANDOFF_RECEIPT}`, and
-`${TERMINAL_ENVELOPE}` destinations. Mint the caller-owned `${INVOCATION_ID}`
-when the selected workflow requires it. Choose an existing conversation or a
-fresh project using local values; tracked content must not contain either URL.
+`${TERMINAL_ENVELOPE}` destinations. Before every tracked turn, the
+caller/orchestrator must mint and retain one non-empty `${INVOCATION_ID}` and
+pass that exact value through the ordinary turn or long-running adapter and any
+later harvest/finalization action for the same attempt. Transport/adapter code
+validates and forwards this identity; it must not mint, replace, or reinterpret
+it. Choose an existing conversation or a fresh project using local values;
+tracked content must not contain either URL.
 
 ## Launch
 
@@ -72,6 +76,7 @@ For applicable long turns, use the tracked adapter:
 npm run --silent flow-manager-browser-gpt-long-run -- \
   --run-identity <RUN_ID> \
   --attempt-identity <ATTEMPT_ID> \
+  --invocation-id "${INVOCATION_ID}" \
   --handoff-receipt "${HANDOFF_RECEIPT}" \
   --terminal-envelope "${TERMINAL_ENVELOPE}" \
   --output "${OUTPUT_FILE}" \
@@ -85,9 +90,12 @@ For a fresh project launch, use the same command with
 `--new-chat --project-url "${GPT_PROJECT_URL}"` instead of `--chat-url`.
 
 For an ordinary tracked turn, the underlying reference is
-`npm run chatgpt-browser-turn -- turn ...` with the current local CLI values.
-Use the existing launcher contract and bounded observation; do not invent a
-shell-backgrounding workaround or a second monitor.
+`npm run chatgpt-browser-turn -- turn --invocation-id "${INVOCATION_ID}" ...`
+with the current local CLI values. The presence of `--invocation-id` is normal
+for both ordinary and direct-publication-capable flows and never selects direct
+mode by itself; direct mode requires its direct-only arguments. Use the existing
+launcher contract and bounded observation; do not invent a shell-backgrounding
+workaround or a second monitor.
 
 ## Observe and settle
 
@@ -100,8 +108,8 @@ ownership, marker, stage, revision, and retry rules.
 
 If a result, page, or conversation binding is lost after a possible send, do
 not infer non-delivery. Re-resolve the current target from `${CHAT_URL}`,
-continue sanctioned observation, and harvest the answer. The saved target id
-may be stale.
+continue sanctioned observation, and harvest the answer with the same
+`${INVOCATION_ID}`. The saved target id may be stale.
 
 ## Publication and tab lifecycle
 
@@ -133,7 +141,11 @@ Use the sanctioned diagnostic utility once, with local values:
 npm run browser-gpt-page-probe -- inspect --cdp "${CDP_ENDPOINT}" --url "${CHAT_URL}"
 ```
 
-The non-acquisition probe is read-only and exits once. It cannot publish,
+`list`, `inspect`, `export`, and `liveness` are diagnostic-only and always have
+`workflow_authority: none`. `harvest` is the sole action-producing probe
+(`diagnostic_only: false`), and it also has `workflow_authority: none`; it may
+recover/publish only the exact owned turn for the caller-supplied invocation.
+The non-acquisition diagnostic probes are read-only and exit once. They cannot
 retry, resend, progress a stage, create, or close a tab. The explicit
 `--open-if-missing true` acquisition path is the sole opt-in exception: it may
 create one owned page, wait for bounded readiness, and close exactly that

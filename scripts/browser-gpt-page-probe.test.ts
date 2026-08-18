@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, webcrypto } from 'node:crypto';
 import { createServer } from 'node:net';
-import { mkdtemp, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,7 @@ import {
   ACQUISITION_READINESS_INTERVAL_MS,
   ACQUISITION_READINESS_TIMEOUT_MS,
   CDP_REQUEST_TIMEOUT_MS,
+  HARVEST_EXPRESSION,
   INSPECTION_EXPRESSION,
   LIVENESS_EXPRESSION,
   LIVENESS_FAN_OUT,
@@ -30,6 +31,13 @@ import {
   type ProbeDependencies,
   type PublishOperations,
 } from './browser-gpt-page-probe.ts';
+import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import {
+  admitStateLightTurnObservation,
+  readStateLightTurnObservation,
+  transitionStateLightTurnObservation,
+} from './chatgpt-browser-turn/state-light-turn-observation.ts';
+import { publishStateLightReply } from './chatgpt-browser-turn/state-light-turn.ts';
 
 class FakeNode {
   readonly innerText: string;
@@ -44,6 +52,17 @@ class FakeNode {
 
   getAttribute(name: string): string | null {
     return this.attrs[name] ?? null;
+  }
+
+  closest(_selector: string): FakeNode {
+    return this;
+  }
+
+  querySelector(selector: string): object | null {
+    if (selector.includes('copy-turn-action-button')
+      || selector.includes('good-response-turn-action-button')
+      || selector.includes('bad-response-turn-action-button')) return {};
+    return null;
   }
 }
 
@@ -117,6 +136,14 @@ test('closed CLI rejects arbitrary selectors, JavaScript, watch mode, and ambigu
   assert.throws(() => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--url', 'https://chatgpt.com/c/x', '--open-if-missing', 'false']), /open_if_missing_must_be_true/);
   assert.throws(() => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--target-id', 'x', '--open-if-missing', 'true']), /open_if_missing_requires_url/);
   assert.deepEqual(parseCliArgs(['liveness', '--cdp', 'http://127.0.0.1:9222']), { operation: 'liveness', cdp: 'http://127.0.0.1:9222' });
+  assert.deepEqual(
+    parseCliArgs(['harvest', '--cdp', 'http://127.0.0.1:9222', '--profile', '/tmp/profile', '--invocation-id', 'inv-1', '--output', '/tmp/out']),
+    { operation: 'harvest', cdp: 'http://127.0.0.1:9222', profile: '/tmp/profile', invocationId: 'inv-1', output: '/tmp/out' },
+  );
+  assert.throws(
+    () => parseCliArgs(['harvest', '--cdp', 'http://127.0.0.1:9222', '--profile', '/tmp/profile', '--invocation-id', 'inv-1', '--output', '/tmp/out', '--url', 'https://chatgpt.com/c/x']),
+    /unknown_option/,
+  );
 });
 
 test('target listing is bounded, passive, and excludes unrelated pages', async () => {
@@ -484,8 +511,8 @@ test('a post-create write failure removes the incomplete artifact', async () => 
   assert.deepEqual(calls, ['close', 'unlink']);
 });
 
-test('the fixed browser expressions contain no mutation or arbitrary-evaluation surface', () => {
-  for (const expression of [INSPECTION_EXPRESSION, buildExportExpression({
+test('the fixed passive browser expressions contain no mutation or arbitrary-evaluation surface', () => {
+  for (const expression of [INSPECTION_EXPRESSION, LIVENESS_EXPRESSION, buildExportExpression({
     role: 'assistant', ordinal: 0, representation: 'innerText', expectedByteLength: 0, expectedSha256: '0'.repeat(64),
   })]) {
     for (const forbidden of ['.click(', '.focus(', '.scroll', '.remove(', '.append(', '.submit(', 'location.href =', 'window.open(', 'Runtime.evaluate']) {
@@ -1048,6 +1075,391 @@ test('liveness reports unavailable targets and truncation without mutation', asy
   assert.equal(closeCalls, 0);
 });
 
+async function withHarvestObservation<T>(
+  phase: 'dispatching' | 'sent_unharvested' | 'sent_unbound',
+  callback: (input: { profile: string; cdp: string; invocationId: string; marker: string; output: string }) => Promise<T>,
+): Promise<T> {
+  const previous = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+  const stateDir = await mkdtemp(join(tmpdir(), 'probe-harvest-state-'));
+  process.env.CHATGPT_BROWSER_TURN_STATE_DIR = stateDir;
+  const cdp = 'http://127.0.0.1:9222';
+  const profile = join(stateDir, 'profile');
+  const invocationId = '11111111-1111-4111-8111-111111111111';
+  const marker = `OPKTURNV1${'33'.repeat(16)}`;
+  const output = join(stateDir, 'harvest.txt');
+  const profileKey = configuredProfileKey(profile, cdp);
+  try {
+    admitStateLightTurnObservation({ profileKey, invocationId, marker });
+    transitionStateLightTurnObservation({
+      profileKey,
+      invocationId,
+      phase: 'dispatching',
+      reason: 'test_dispatch_boundary',
+    });
+    if (phase !== 'dispatching') {
+      transitionStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        phase,
+        reason: 'test_send',
+        sendCount: 1,
+        sendWitness: 'numeric_send_count',
+        ...(phase === 'sent_unharvested' ? { conversationUrl: 'https://chatgpt.com/c/test' } : {}),
+      });
+    }
+    return await callback({ profile, cdp, invocationId, marker, output });
+  } finally {
+    if (previous === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = previous;
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}
+
+test('harvest publishes a completed exact owned turn and remains workflow-authority none', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let published = '';
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => [{
+        id: 'harvest-completed', type: 'page', url: 'https://chatgpt.com/c/test', title: 'Completed',
+        webSocketDebuggerUrl: 'ws://example/harvest-completed',
+      }],
+      evaluate: async (_target, expression) => {
+        assert.equal(expression, HARVEST_EXPRESSION);
+        return evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-harvest' }),
+          new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': 'a-harvest' }),
+        ], false, 'https://chatgpt.com/c/test');
+      },
+      publish: async (_destination, bytes) => { published = Buffer.from(bytes).toString('utf8'); },
+    }));
+    assert.equal(result.status, 'ok');
+    assert.equal(result.diagnostic_only, false);
+    assert.equal(result.workflow_authority, 'none');
+    assert.equal(result.classifier, 'completed');
+    assert.equal(result.harvested, true);
+    assert.equal(published, 'FINAL');
+    const record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+    assert.equal(record.phase, 'harvested');
+    assert.equal(record.primary?.sha256, sha256('FINAL'));
+  });
+});
+
+test('harvest recovers a sent_unbound observation from exactly one owned marker candidate', async () => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, marker, output }) => {
+    const conversationUrl = 'https://chatgpt.com/c/44444444-4444-4444-8444-444444444444';
+    let published = '';
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => [{
+        id: 'unbound-owned', type: 'page', url: conversationUrl, title: 'Owned unbound',
+        webSocketDebuggerUrl: 'ws://example/unbound-owned',
+      }],
+      sleep: async () => {},
+      evaluate: async (_target, expression) => {
+        assert.equal(expression, HARVEST_EXPRESSION);
+        return evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-unbound-owned' }),
+          new FakeNode('assistant', 'UNBOUND FINAL', 'UNBOUND FINAL', { 'data-message-id': 'a-unbound-owned' }),
+        ], false, conversationUrl);
+      },
+      publish: async (_destination, bytes) => { published = Buffer.from(bytes).toString('utf8'); },
+    }));
+
+    assert.equal(result.status, 'ok');
+    assert.equal(result.harvested, true);
+    assert.equal(published, 'UNBOUND FINAL');
+    const record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+    assert.equal(record.phase, 'harvested');
+    assert.equal(record.conversation_url, conversationUrl);
+    assert.equal(record.send_count, 1);
+    assert.equal(record.send_witness, 'numeric_send_count');
+  });
+});
+
+test('harvest promotes dispatching by exact owned marker without synthesizing numeric send_count', async () => {
+  await withHarvestObservation('dispatching', async ({ profile, cdp, invocationId, marker, output }) => {
+    const conversationUrl = 'https://chatgpt.com/c/55555555-5555-4555-8555-555555555555';
+    let published = '';
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => [{
+        id: 'dispatch-owned', type: 'page', url: conversationUrl, title: 'Owned dispatch',
+        webSocketDebuggerUrl: 'ws://example/dispatch-owned',
+      }],
+      sleep: async () => {},
+      evaluate: async (_target, expression) => {
+        assert.equal(expression, HARVEST_EXPRESSION);
+        return evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-dispatch-owned' }),
+          new FakeNode('assistant', 'DISPATCH FINAL', 'DISPATCH FINAL', { 'data-message-id': 'a-dispatch-owned' }),
+        ], false, conversationUrl);
+      },
+      publish: async (_destination, bytes) => { published = Buffer.from(bytes).toString('utf8'); },
+    }));
+
+    assert.equal(result.status, 'ok');
+    assert.equal(result.harvested, true);
+    assert.equal(published, 'DISPATCH FINAL');
+    const record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+    assert.equal(record.phase, 'harvested');
+    assert.equal(record.conversation_url, conversationUrl);
+    assert.equal(record.send_witness, 'owned_marker');
+    assert.equal(record.send_count, undefined);
+  });
+});
+
+test('sent_unbound harvest fails closed when the marker census finds zero candidates', async () => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, output }) => {
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [],
+      })),
+      (error: any) => error.status === 'not_found' && error.reason === 'owned_turn_unbound_not_found',
+    );
+    assert.equal(
+      readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase,
+      'sent_unbound',
+    );
+  });
+});
+
+test('sent_unbound harvest fails closed when the exact marker appears on multiple candidates', async () => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, marker, output }) => {
+    const firstUrl = 'https://chatgpt.com/c/unbound-first';
+    const secondUrl = 'https://chatgpt.com/c/unbound-second';
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [
+          { id: 'unbound-first', type: 'page', url: firstUrl, title: 'First', webSocketDebuggerUrl: 'ws://example/unbound-first' },
+          { id: 'unbound-second', type: 'page', url: secondUrl, title: 'Second', webSocketDebuggerUrl: 'ws://example/unbound-second' },
+        ],
+        evaluate: async (target, expression) => {
+          assert.equal(expression, HARVEST_EXPRESSION);
+          const pageUrl = target.target_id === 'unbound-first' ? firstUrl : secondUrl;
+          return evaluateExpression(expression, [
+            new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': `u-${target.target_id}` }),
+            new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': `a-${target.target_id}` }),
+          ], false, pageUrl);
+        },
+      })),
+      (error: any) => error.status === 'ambiguous' && error.reason === 'owned_turn_marker_ambiguous',
+    );
+    assert.equal(
+      readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase,
+      'sent_unbound',
+    );
+  });
+});
+
+test('sent_unbound harvest reports an incomplete census when any candidate is unreadable', async () => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, output }) => {
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [{
+          id: 'unbound-unreadable', type: 'page', url: 'https://chatgpt.com/c/unbound-unreadable', title: 'Unreadable',
+          webSocketDebuggerUrl: 'ws://example/unbound-unreadable',
+        }],
+        evaluate: async () => { throw new Error('injected_unreadable_target'); },
+      })),
+      (error: any) => error.status === 'surface_unknown'
+        && error.reason === 'owned_turn_unbound_census_incomplete'
+        && error.details?.failure_reason === 'target_read_unavailable',
+    );
+    assert.equal(
+      readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase,
+      'sent_unbound',
+    );
+  });
+});
+
+test('harvest rejects duplicate marker occurrences in one owned user carrier', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let publishCalls = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [{
+          id: 'harvest-duplicate-marker', type: 'page', url: 'https://chatgpt.com/c/test', title: 'Duplicate marker',
+          webSocketDebuggerUrl: 'ws://example/harvest-duplicate-marker',
+        }],
+        evaluate: async (_target, expression) => {
+          assert.equal(expression, HARVEST_EXPRESSION);
+          return evaluateExpression(expression, [
+            new FakeNode('user', `${marker}\n\nprompt ${marker}`, `${marker}\n\nprompt ${marker}`, { 'data-message-id': 'u-duplicate-marker' }),
+            new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': 'a-duplicate-marker' }),
+          ], false, 'https://chatgpt.com/c/test');
+        },
+        publish: async () => { publishCalls += 1; },
+      })),
+      (error: any) => error.status === 'ambiguous' && error.reason === 'owned_turn_marker_ambiguous',
+    );
+    assert.equal(publishCalls, 0);
+    assert.equal(readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase, 'sent_unharvested');
+  });
+});
+
+test('harvest rejects a bound target that navigates before the snapshot', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let publishCalls = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [{
+          id: 'harvest-navigated', type: 'page', url: 'https://chatgpt.com/c/test', title: 'Bound before navigation',
+          webSocketDebuggerUrl: 'ws://example/harvest-navigated',
+        }],
+        evaluate: async (_target, expression) => {
+          assert.equal(expression, HARVEST_EXPRESSION);
+          return evaluateExpression(expression, [
+            new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-navigated' }),
+            new FakeNode('assistant', 'FOREIGN', 'FOREIGN', { 'data-message-id': 'a-navigated' }),
+          ], false, 'https://chatgpt.com/c/foreign');
+        },
+        publish: async () => { publishCalls += 1; },
+      })),
+      (error: any) => error.status === 'surface_unknown' && error.reason === 'conversation_identity_mismatch',
+    );
+    assert.equal(publishCalls, 0);
+    assert.equal(readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase, 'sent_unharvested');
+  });
+});
+
+test('harvest waits for a recovery-opened bound page to expose a stable owned turn', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let fakeNow = 0;
+    let evaluateCalls = 0;
+    let createCalls = 0;
+    let closeCalls = 0;
+    let published = '';
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => [],
+      createPage: async () => {
+        createCalls += 1;
+        return {
+          id: 'harvest-created',
+          type: 'page',
+          url: 'about:blank',
+          title: 'Loading',
+          webSocketDebuggerUrl: 'ws://example/harvest-created',
+        };
+      },
+      closePage: async () => { closeCalls += 1; return 'closed'; },
+      now: () => fakeNow,
+      sleep: async (delay) => { fakeNow += delay; },
+      evaluate: async (_target, expression) => {
+        assert.equal(expression, HARVEST_EXPRESSION);
+        evaluateCalls += 1;
+        if (evaluateCalls === 1) {
+          return evaluateExpression(expression, [], false, 'https://chatgpt.com/');
+        }
+        return evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-created' }),
+          new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': 'a-created' }),
+        ], false, 'https://chatgpt.com/c/test');
+      },
+      publish: async (_destination, bytes) => { published = Buffer.from(bytes).toString('utf8'); },
+    }));
+    assert.equal(result.status, 'ok');
+    assert.equal(result.harvested, true);
+    assert.equal(published, 'FINAL');
+    assert.deepEqual({ createCalls, evaluateCalls, closeCalls }, { createCalls: 1, evaluateCalls: 4, closeCalls: 0 });
+  });
+});
+
+test('harvest atomic publication leaves no canonical partial and retries the same binding', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    const common = {
+      listTargets: async () => [{
+        id: 'harvest-atomic', type: 'page', url: 'https://chatgpt.com/c/test', title: 'Atomic',
+        webSocketDebuggerUrl: 'ws://example/harvest-atomic',
+      }],
+      evaluate: async (_target: any, expression: string) => {
+        assert.equal(expression, HARVEST_EXPRESSION);
+        return evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-atomic' }),
+          new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': 'a-atomic' }),
+        ], false, 'https://chatgpt.com/c/test');
+      },
+      publish: async () => { throw new Error('legacy_publish_must_not_run'); },
+    } satisfies Partial<ProbeDependencies>;
+
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        ...common,
+        publishPrimary: (destination, ownerInvocationId, reply) => publishStateLightReply(
+          destination,
+          ownerInvocationId,
+          reply,
+          { beforeFinalLink: () => { throw new Error('injected_before_final_link'); } },
+        ),
+      })),
+      (error: any) => error.status === 'export_failed',
+    );
+    await assert.rejects(readFile(output, 'utf8'), (error: any) => error.code === 'ENOENT');
+    assert.equal(
+      readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase,
+      'sent_unharvested',
+    );
+
+    const retry = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      ...common,
+      publishPrimary: (destination, ownerInvocationId, reply) => publishStateLightReply(
+        destination,
+        ownerInvocationId,
+        reply,
+      ),
+    }));
+    assert.equal(retry.status, 'ok');
+    assert.equal(retry.harvested, true);
+    assert.equal(await readFile(output, 'utf8'), 'FINAL');
+    assert.equal(
+      readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase,
+      'harvested',
+    );
+  });
+});
+
+test('harvest treats long-running as nonterminal and publishes nothing', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let publishCalls = 0;
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => [{
+        id: 'harvest-running', type: 'page', url: 'https://chatgpt.com/c/test', title: 'Running',
+        webSocketDebuggerUrl: 'ws://example/harvest-running',
+      }],
+      evaluate: async (_target, expression) => evaluateExpression(expression, [
+        new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-running' }),
+        new FakeNode('assistant', 'partial', 'partial', { 'data-message-id': 'a-running' }),
+      ], true, 'https://chatgpt.com/c/test'),
+      publish: async () => { publishCalls += 1; },
+    }));
+    assert.equal(result.status, 'ok');
+    assert.equal(result.diagnostic_only, false);
+    assert.equal(result.workflow_authority, 'none');
+    assert.equal(result.classifier, 'long_running');
+    assert.equal(result.harvested, false);
+    assert.equal(publishCalls, 0);
+    assert.equal(readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase, 'sent_unharvested');
+  });
+});
+
+test('harvest classifies a dead exact owned turn without publication', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let publishCalls = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [{
+          id: 'harvest-dead', type: 'page', url: 'https://chatgpt.com/c/test', title: 'Dead',
+          webSocketDebuggerUrl: 'ws://example/harvest-dead',
+        }],
+        evaluate: async (_target, expression) => evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-dead' }),
+        ], false, 'https://chatgpt.com/c/test'),
+        publish: async () => { publishCalls += 1; },
+      })),
+      (error: any) => error.status === 'not_found' && error.reason === 'owned_turn_dead',
+    );
+    assert.equal(publishCalls, 0);
+    assert.equal(readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase, 'sent_unharvested');
+  });
+});
+
 test('the canonical npm entrypoint emits exactly one JSON result line', async () => {
   const repoRoot = fileURLToPath(new URL('../', import.meta.url));
   const result = await runProcess({
@@ -1064,13 +1476,15 @@ test('the canonical npm entrypoint emits exactly one JSON result line', async ()
   assert.equal(JSON.parse(lines[0]!).status, 'input_invalid');
 });
 
-test('the implementation has no browser mutation, helper lifecycle, state-write, or polling path', async () => {
+test('the probe keeps browser-control and polling authority closed while harvest is the explicit state-write exception', async () => {
   const source = await readFile(new URL('./browser-gpt-page-probe.ts', import.meta.url), 'utf8');
   for (const forbidden of [
     '.click(', '.focus(', '.scroll(', '.goto(', '.reload(', '.close({', 'newPage(',
-    'chatgpt-browser-turn', 'browser-turn-recurrence', 'setInterval(', 'while (true)',
+    'browser-turn-recurrence', 'setInterval(', 'while (true)',
     'Runtime.callFunctionOn', 'Page.navigate', 'Input.dispatch', 'Target.closeTarget',
   ]) {
     assert.equal(source.includes(forbidden), false, forbidden);
   }
+  assert.equal(source.includes("diagnostic_only: operation !== 'harvest'"), true);
+  assert.equal(source.includes("workflow_authority: 'none'"), true);
 });
