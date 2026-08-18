@@ -542,6 +542,134 @@ exit 2
   }
 }
 
+async function testDeliveryBranchLeaseMatrix() {
+  const root = mkdtempSync(join(tmpdir(), 'runtime-history-lease-'));
+  const scriptsDir = join(root, 'scripts');
+  const binDir = join(root, 'bin');
+  const remoteState = join(root, 'remote-head.txt');
+  const pushAudit = join(root, 'push-audit.txt');
+  const pushOutput = join(root, 'push-output.txt');
+  const preparedHead = '4444444444444444444444444444444444444444';
+  const oldHead = '5555555555555555555555555555555555555555';
+  const unrelatedNewerHead = '6666666666666666666666666666666666666666';
+  try {
+    mkdirSync(scriptsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(scriptsDir, 'vitest-runtime-history.json'), '{}\n', 'utf8');
+    writeExecutable(join(binDir, 'node'), `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "scripts/refresh-vitest-runtime-history.mjs" ] && [ "\${2:-}" = "reconcile" ]; then
+  out=''
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = '--output' ]; then shift; out="$1"; break; fi
+    shift
+  done
+  [ -n "$out" ] || { echo 'missing reconcile output' >&2; exit 2; }
+  printf '%s\\n' '{}' > "$out"
+  exit 0
+fi
+exec "\${REAL_NODE}" "$@"
+`);
+    writeExecutable(join(binDir, 'git'), `#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-}" in
+  fetch|remote|worktree) exit 0 ;;
+  rev-parse)
+    case "\${2:-}" in
+      origin/main|HEAD^) printf '%s\\n' "\${MAIN_SHA}" ;;
+      HEAD) printf '%s\\n' "\${PREPARED_HEAD}" ;;
+      *) echo "fake git rev-parse: unhandled \${2:-}" >&2; exit 2 ;;
+    esac
+    ;;
+  diff)
+    if [[ "$*" == *"--name-only"* ]]; then
+      printf '%s\\n' 'scripts/vitest-runtime-history.json'
+    fi
+    ;;
+  push)
+    printf '%s\\n' "$*" >> "\${PUSH_AUDIT}"
+    lease="\${2:-}"
+    prefix="--force-with-lease=refs/heads/${DELIVERY_BRANCH}:"
+    [[ "\${lease}" == "\${prefix}"* ]] || { echo 'missing exact delivery lease' >&2; exit 2; }
+    expected="\${lease#\${prefix}}"
+    current="$(cat "\${REMOTE_STATE}")"
+    if [ "\${current}" != "\${expected}" ]; then
+      echo "stale lease: expected \${expected:-<absent>} current \${current:-<absent>}" >&2
+      exit 1
+    fi
+    printf '%s\\n' "\${PREPARED_HEAD}" > "\${REMOTE_STATE}"
+    ;;
+  *) echo "fake git: unhandled $*" >&2; exit 2 ;;
+esac
+`);
+
+    const workflow = readFileSync(new URL('../../.github/workflows/vitest-runtime-history-refresh.yml', import.meta.url), 'utf8');
+    const pushBlock = workflowRunBlock(workflow, 'Push delivery branch');
+    const runScenario = async ({ name, initialRemote, remoteSha, expectedExit, expectedRemote }) => {
+      writeFileSync(remoteState, initialRemote, 'utf8');
+      writeFileSync(pushAudit, '', 'utf8');
+      writeFileSync(pushOutput, '', 'utf8');
+      const result = await runProcess({
+        command: 'bash',
+        args: ['-c', pushBlock],
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH ?? ''}`,
+          REAL_NODE: process.execPath,
+          GITHUB_REPOSITORY: TARGET_REPOSITORY,
+          GITHUB_OUTPUT: pushOutput,
+          DELIVERY_BRANCH,
+          DELIVERY_TOKEN: 'fixture-delivery-token',
+          REMOTE_SHA: remoteSha,
+          MAIN_SHA: SOURCE_MAIN,
+          PREPARED_HEAD: preparedHead,
+          REMOTE_STATE: remoteState,
+          PUSH_AUDIT: pushAudit,
+        },
+        allowEmptyStdout: true,
+      });
+      equal(result.exitCode, expectedExit, `${name} exit code`);
+      equal(readFileSync(remoteState, 'utf8').trim(), expectedRemote, `${name} remote head`);
+      const pushes = readFileSync(pushAudit, 'utf8').trim().split(/\r?\n/).filter(Boolean);
+      equal(pushes.length, 1, `${name} must attempt exactly one generated-head update`);
+      return { result, push: pushes[0], output: readFileSync(pushOutput, 'utf8') };
+    };
+
+    const absent = await runScenario({
+      name: 'absent branch',
+      initialRemote: '',
+      remoteSha: '',
+      expectedExit: 0,
+      expectedRemote: preparedHead,
+    });
+    assert(absent.push.includes(`--force-with-lease=refs/heads/${DELIVERY_BRANCH}:`), 'absent branch must use the absent-ref lease');
+    assert(absent.output.includes(`head_sha=${preparedHead}`), 'absent branch success must publish generated head output');
+
+    const existing = await runScenario({
+      name: 'existing branch',
+      initialRemote: oldHead,
+      remoteSha: oldHead,
+      expectedExit: 0,
+      expectedRemote: preparedHead,
+    });
+    assert(existing.push.includes(`--force-with-lease=refs/heads/${DELIVERY_BRANCH}:${oldHead}`), 'existing branch must use exact old-head lease authority');
+    assert(existing.output.includes(`head_sha=${preparedHead}`), 'existing branch success must publish generated head output');
+
+    const stale = await runScenario({
+      name: 'stale lease',
+      initialRemote: unrelatedNewerHead,
+      remoteSha: oldHead,
+      expectedExit: 1,
+      expectedRemote: unrelatedNewerHead,
+    });
+    assert(stale.result.stderr.includes('stale lease'), 'stale lease refusal must remain observable');
+    equal(stale.output.trim(), '', 'stale lease refusal must not publish generated head output');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function testStatusHistoryProjection() {
   equal(projectPackReviewStatusHistory([provenanceStatus()]).state, 'absent', 'no operator row should be absent');
   equal(
@@ -606,6 +734,18 @@ function testProviderRestrictionFailsClosedWhenUnprovable() {
     checks: [{ context: 'Verify orchestrator-pack structure', app_id: 1234 }],
   });
   equal(policy.outcome, 'current-policy-unsupported', 'unprovable provider restriction must not be flattened away');
+}
+
+function testNonStrictBasePolicyFailsClosed() {
+  const policy = normalizeCurrentRequiredPolicy({ ...livePolicy(), strict: false }, { providerProofAvailable: true });
+  assert(policy.ok, 'non-strict live policy shape should still parse');
+  const decision = evaluateRequiredChecks({
+    checks: ordinaryChecks(),
+    policy,
+    packReviewProjection: projectPackReviewStatusHistory([provenanceStatus()]),
+  });
+  equal(decision.action, 'fail', 'non-strict base policy must fail before any merge authority');
+  equal(decision.outcome, 'current-policy-unsupported', 'non-strict base policy must use the policy refusal outcome');
 }
 
 async function testHappyPathUnattended() {
@@ -746,6 +886,61 @@ async function testPolicyUnavailableFailsClosed() {
   equal(fixture.state().mergeCalls, 0, 'policy lookup failure must block merge');
 }
 
+async function testLateMembershipDriftMatrixRequiresFreshRefresh() {
+  const stable = [
+    'scripts/check-ci-pipeline-split.test.ts',
+    'scripts/orchestrator-wake-supervisor.test.ts',
+  ];
+  const reintroduced = 'scripts/reintroduced-runtime-history.test.ts';
+  const cases = [
+    {
+      name: 'add',
+      prior: stable,
+      prepared: stable,
+      current: [...stable, 'scripts/late-added-runtime-history.test.ts'],
+    },
+    {
+      name: 'delete',
+      prior: stable,
+      prepared: stable,
+      current: [stable[0]],
+    },
+    {
+      name: 'reintroduce',
+      prior: [...stable, reintroduced],
+      prepared: stable,
+      current: [...stable, reintroduced],
+    },
+  ];
+
+  for (const testCase of cases) {
+    const prepared = new Set(testCase.prepared);
+    const current = new Set(testCase.current);
+    const delta = [
+      ...testCase.prepared.filter((path) => !current.has(path)),
+      ...testCase.current.filter((path) => !prepared.has(path)),
+    ];
+    assert(delta.length > 0, `${testCase.name}: modeled trusted-main inventory must differ after candidate preparation`);
+    if (testCase.name === 'reintroduce') {
+      assert(testCase.prior.includes(reintroduced), 'reintroduce case must prove the path existed before candidate preparation');
+      assert(!testCase.prepared.includes(reintroduced), 'reintroduce case must remove the path at candidate preparation');
+      assert(testCase.current.includes(reintroduced), 'reintroduce case must add the path back after candidate preparation');
+    }
+
+    const fixture = createIo({
+      getPr({ prReads }) {
+        if (prReads === 1) return validPr();
+        return { ...validPr(), mergeable: true, mergeable_state: 'behind' };
+      },
+    });
+    const result = await runDeliveryMonitor(config, fixture.io);
+    equal(result.outcome, 'close-as-obsolete', `${testCase.name}: stale membership candidate must retire`);
+    assert(result.reason.includes('fresh complete refresh required'), `${testCase.name}: stale membership must require a fresh complete refresh`);
+    equal(fixture.state().mergeCalls, 0, `${testCase.name}: stale membership candidate must never reach merge`);
+    equal(fixture.state().closeCalls, 1, `${testCase.name}: obsolete delivery PR must close exactly once`);
+  }
+}
+
 async function testOrdinaryPrIsolation() {
   const fixture = createIo({
     pr: { ...validPr(), head: { ...validPr().head, ref: 'feature/contributor' } },
@@ -812,6 +1007,8 @@ async function testAmbiguousMergeTransportReadbackRecognizesSuccess() {
 function testSourceContracts() {
   const source = readFileSync(new URL('../vitest-runtime-history-delivery.mjs', import.meta.url), 'utf8');
   assert(source.includes('`sha=${headSha}`'), 'existing expected-head merge protection must remain');
+  assert(source.includes('policy.strict !== true'), 'delivery monitor must fail closed if main no longer requires an up-to-date branch');
+  assert(source.includes("pr?.mergeable_state === 'behind'"), 'delivery monitor must retire generated heads whose base advanced after candidate preparation');
   assert(!source.includes('PACK_REVIEWER'), 'generated helper must not invoke PACK_REVIEWER');
   assert(!source.includes('requiredCheckNamesFromSnapshot'), 'snapshot must not remain readiness authority');
 
@@ -822,12 +1019,17 @@ function testSourceContracts() {
   assert(refreshWorkflow.includes('verifyRefreshRun'), 'same-payload recovery must verify the prior refresh episode before reusing its head');
   assert(refreshWorkflow.includes('matching remote payload lacks successful exact-head provenance; regenerating delivery head'), 'failed provenance must regenerate the generated head instead of deadlocking the PR');
   assert(refreshWorkflow.includes('commit --amend --no-edit'), 'invalid-provenance recovery must be able to regenerate a distinct delivery head without an extra empty commit');
+  assert(refreshWorkflow.includes('prepared_parent_sha="$(git rev-parse HEAD^)"'), 'delivery push must bind current main to the actual prepared commit parent');
+  assert(refreshWorkflow.includes('--force-with-lease="refs/heads/${DELIVERY_BRANCH}:'), 'generated branch delivery must use exact force-with-lease authority');
+  assert(!refreshWorkflow.includes("name: 'refs/heads/main'"), 'refresh producer must never submit protected main as an updateRefs entry');
   assert(!refreshWorkflow.includes('PACK_REVIEWER'), 'refresh workflow must not invoke PACK_REVIEWER');
 
   const deliveryWorkflow = readFileSync(new URL('../../.github/workflows/vitest-runtime-history-delivery.yml', import.meta.url), 'utf8');
   assert(deliveryWorkflow.includes('./scripts/gh api user --jq .login'), 'trusted actor resolution must remain');
   assert(deliveryWorkflow.includes('--trusted-actor "${{ steps.delivery_actor.outputs.trusted_actor }}"'), 'monitor must receive trusted actor');
   assert(deliveryWorkflow.includes('--event-sender "${{ github.event.sender.login }}"'), 'monitor must receive event sender');
+  assert(deliveryWorkflow.includes('GH_TOKEN: ${{ github.token }}'), 'monitor merge must use the scoped workflow token');
+  assert(!deliveryWorkflow.includes('GH_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}'), 'delivery owner credential must not remain the monitor merge token');
 }
 
 function testNarrowGithubReadInventory() {
@@ -855,9 +1057,11 @@ async function main() {
     testIdentityMatrix,
     testProvenanceMatrix,
     testSamePayloadFailedProvenanceRetryExecutesWorkflowRecovery,
+    testDeliveryBranchLeaseMatrix,
     testStatusHistoryProjection,
     testCurrentPolicySnapshotRegression,
     testProviderRestrictionFailsClosedWhenUnprovable,
+    testNonStrictBasePolicyFailsClosed,
     testHappyPathUnattended,
     testOutOfBandSuccessSkipsMachine,
     testFailurePublicationRaceBlocksMerge,
@@ -871,6 +1075,7 @@ async function main() {
     testHeadDriftAtFinalBoundary,
     testPolicyDriftAtFinalBoundary,
     testPolicyUnavailableFailsClosed,
+    testLateMembershipDriftMatrixRequiresFreshRefresh,
     testOrdinaryPrIsolation,
     testMergeReadbackFailure,
     testMergeRejectionReturnsToBoundedDecision,
