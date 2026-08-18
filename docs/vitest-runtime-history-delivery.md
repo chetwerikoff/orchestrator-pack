@@ -91,6 +91,52 @@ recurrence from PR `#995`), the current head exits the unattended class immediat
 as `non-generated-head`. The monitor neither blesses nor repairs that head. A later
 successful refresh may re-enter the class with a newly bound generated head.
 
+## Generated branch publication and late `main` drift
+
+Issue `#1469` removes the failed cross-ref CAS introduced by `#1384` / PR `#1398`.
+The refresh producer never submits `refs/heads/main` to `updateRefs`, `git push`, a
+REST ref update, or another ref-mutation request. Protected `main` changes only
+through its sanctioned PR/merge path.
+
+Commit-back first fetches `origin/main`, resets to that trusted head, and either
+preserves the source proposal or performs the existing measurement-only stale
+reconcile. Stale reconciliation is allowed only when the complete canonical
+Vitest inventory is equal. Addition, deletion, or reintroduction of a canonical
+test path refuses before a delivery commit is prepared.
+
+Immediately before publication, the producer fetches `main` again, checks the
+prepared history against that tree with `--require-equal-inventory`, and requires
+the freshly observed `main` SHA to equal the parent of the prepared one-file
+delivery commit (`HEAD^`). This binds the generated commit to the exact trusted
+base on which it is about to be published without requiring the workflow's
+original `GITHUB_SHA` to remain current. An equal-inventory advancement that was
+already reconciled during commit-back therefore remains valid; a later base
+advance requires a fresh refresh rather than fabricated membership.
+
+Only `ci/vitest-runtime-history-refresh` is then updated. Existing-branch updates
+use an exact `--force-with-lease` expectation for the previously fetched remote
+head; first publication uses the corresponding absent-ref lease. A stale lease
+fails rather than overwriting an unrelated newer delivery head.
+
+After the delivery-ref update, the producer fetches `main` once more. If it moved,
+the producer restores the prior delivery ref, or deletes a newly created ref,
+using a lease that expects the just-pushed generated head. The run fails before
+provenance or PR publication. Failure to perform that rollback also fails
+observably; it never becomes successful delivery evidence.
+
+There remains an unavoidable interval after the producer's final read and before
+the protected merge request. The trusted delivery monitor closes that interval
+through the existing server-enforced protected-branch boundary rather than a
+second `main` mutation. It live-reads the current required-status policy and now
+requires `strict: true`; a non-strict policy is `current-policy-unsupported` and
+cannot authorize merge. With strict protected-branch admission, any later `main`
+advance makes the generated head stale and GitHub rejects the merge before the
+history can reach `main`. The monitor then re-reads mutable proof before any later
+attempt. Thus add/delete/reintroduce inventory drift after candidate preparation
+cannot land the stale candidate; a fresh refresh on the newer base is required.
+An equal-inventory late advance is conservatively handled by the same fresh-base
+retry and never requires a threshold change or fabricated history membership.
+
 ## Live `main` policy, not the historical snapshot
 
 `docs/vitest-runtime-history-delivery-branch-protection.snapshot.json` remains a
@@ -100,8 +146,8 @@ refreshed by this path.
 At each decision boundary the monitor reads the current required-status-check
 policy GitHub enforces for `main`, then evaluates current checks for the exact PR
 head. A required context that appeared after the snapshot therefore blocks
-merge until it is genuinely satisfied. Unavailable, malformed, ambiguous, or
-unsupported policy fails closed.
+merge until it is genuinely satisfied. Unavailable, malformed, ambiguous,
+unsupported, or non-strict policy fails closed.
 
 The GitHub wrapper expansion is deliberately limited to three read shapes used
 by this delivery contract:
@@ -210,16 +256,18 @@ runtime-history refresh. Record:
 
 - refresh run id and attempt;
 - source `main` SHA;
-- generated delivery head and PR;
+- prepared delivery commit parent and generated delivery head;
+- generated delivery PR;
 - provenance pending/success binding;
-- current required contexts;
+- current required contexts and `strict` policy;
 - machine-admission result when pack-review is required;
 - exact-head out-of-band status projection;
 - expected-head merge result;
-- authoritative merged-PR read-back.
+- authoritative merged-PR read-back;
+- confirmation that the producer performed no protected-`main` ref mutation.
 
 From generated PR creation through merge/read-back, no operator PACK_REVIEWER
-invocation, empty retrigger commit, merge command, snapshot refresh, or manual
-retry is part of the successful unattended episode. A no-diff refresh is valid
-producer behavior but does not satisfy this rollout observation because it
-creates no delivery PR.
+invocation, empty retrigger commit, merge command, snapshot refresh, manual
+history edit, or manual retry is part of the successful unattended episode. A
+no-diff refresh is valid producer behavior but does not satisfy this rollout
+observation because it creates no delivery PR.
