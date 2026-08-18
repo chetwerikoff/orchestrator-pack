@@ -11,16 +11,49 @@ const intake = {
   firstRevision: 'r01',
 } as const;
 
-function partialReview(missing: string[] = ['03']) {
-  const slots = ['01', '02', '03'];
+function coreReceipt(input: {
+  stage: 'architectural-review' | 'architectural';
+  stageAttemptId: string;
+  stageSequence: number;
+  policyVersion: 'triple-source/v1' | 'single-source/v1';
+  reviewerCardinality: number;
+  completedSourceCount: number;
+  outcome: 'complete' | 'partial';
+}) {
+  const cycleId = `cycle-${input.stageSequence}`;
   return {
     schema: 'stage-completeness-receipt/v1',
     tier: 'T2',
-    stage: 'architectural-review',
-    stageAttemptId: 'review-1',
-    stageSequence: 1,
-    outcome: 'partial',
-    reviewerCardinality: 3,
+    taskIdentity: 'issue:1439',
+    episodeFirstRevision: 'r01',
+    reviewEpisodeId: 'issue:1439@r01',
+    stage: input.stage,
+    stageAttemptId: input.stageAttemptId,
+    stageSequence: input.stageSequence,
+    cycleId,
+    policyVersion: input.policyVersion,
+    reviewerCardinality: input.reviewerCardinality,
+    completedSourceCount: input.completedSourceCount,
+    sourceRevision: 'r01',
+    outcome: input.outcome,
+    producerEvidence: 'not-applicable',
+    tierTransition: 'none',
+    cycleBinding: { cycleId, sourceRevision: 'r01', boundBeforeLaunch: true },
+  };
+}
+
+function partialReview(missing: string[] = ['03']) {
+  const slots = ['01', '02', '03'];
+  return {
+    ...coreReceipt({
+      stage: 'architectural-review',
+      stageAttemptId: 'review-1',
+      stageSequence: 1,
+      policyVersion: 'triple-source/v1',
+      reviewerCardinality: 3,
+      completedSourceCount: 2,
+      outcome: 'partial',
+    }),
     invocations: slots.map((slot) => missing.includes(slot)
       ? {
           invocationId: `invocation-${slot}`,
@@ -41,27 +74,21 @@ function partialReview(missing: string[] = ['03']) {
           sendCount: 1,
           capture: { captureIdentity: `capture-${slot}` },
         }),
-    reviewLane: {
-      finalRequiredSlots: slots,
-      sourceVerdicts: Object.fromEntries(slots.map((slot) => [slot, missing.includes(slot) ? 'unparseable' : 'accept'])),
-      sourceVerdictEvidence: Object.fromEntries(slots.map((slot) => [slot, { producerEvidenceIdentity: `evidence-${slot}` }])),
-    },
   };
 }
 
-const terminal = {
-  schema: 'stage-completeness-receipt/v1',
-  tier: 'T2',
+const terminal = coreReceipt({
   stage: 'architectural',
   stageAttemptId: 'terminal-once',
   stageSequence: 2,
-  sourceRevision: 'r01',
-  outcome: 'complete',
+  policyVersion: 'single-source/v1',
   reviewerCardinality: 1,
-};
+  completedSourceCount: 1,
+  outcome: 'complete',
+});
 
 describe('lifecycle acceptance policy', () => {
-  it('accepts a three-source stage settled partial with exactly one evidence-backed unobservable slot', () => {
+  it('accepts a three-source stage settled partial with exactly one journaled possible-or-actual send failure', () => {
     const result = validateLifecycleAcceptanceTopology([partialReview(), terminal], intake, 'T2');
     expect(result).toEqual(expect.objectContaining({ ok: true, errors: [] }));
   });
@@ -70,6 +97,14 @@ describe('lifecycle acceptance policy', () => {
     const result = validateLifecycleAcceptanceTopology([partialReview(['02', '03']), terminal], intake, 'T2');
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('explicit operator waiver through the existing waiver seam is required');
+  });
+
+  it('rejects a missing slot that does not prove possible-or-actual send', () => {
+    const review = partialReview();
+    (review.invocations[2] as { sendCount: number }).sendCount = 0;
+    const result = validateLifecycleAcceptanceTopology([review, terminal], intake, 'T2');
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('possible-or-actual send with resend forbidden');
   });
 
   it('allows one post-terminal correction without rearming terminal GPT', () => {
