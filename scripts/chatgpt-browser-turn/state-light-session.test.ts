@@ -1156,7 +1156,11 @@ describe('direct-publication terminal matrix', () => {
       response: { status: 201, comment_id: '988', comment_url: 'https://github.com/example/unpaired' },
       success: true,
     });
-    expect(settleDirectPublication(unpaired, target).state).toBe('success');
+    expect(settleDirectPublication(unpaired, target)).toMatchObject({
+      state: 'possible-delivery',
+      cause: 'direct_publication_result_ambiguous',
+      invocation: { toolCallId: 'call-01' },
+    });
 
     const wrongTarget = createDirectPublicationObservationState();
     observeDirectPublicationPayload(wrongTarget, {
