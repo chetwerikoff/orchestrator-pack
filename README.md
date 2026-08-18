@@ -47,9 +47,10 @@ The pack is designed to survive runtime upgrades and replacements:
   reconciles pack-owned review runs.
 - The pack review store and claim authority preserve active, terminal, duplicate,
   concurrent, stale-head, malformed-state, and launch-failure outcomes.
-- [`scripts/pack-worker-report.ps1`](scripts/pack-worker-report.ps1) records worker
-  lifecycle state after proving the current repository, PR, head, and worker
-  binding.
+- [`scripts/pack-worker-report`](scripts/pack-worker-report) is the public worker
+  lifecycle report command and executes the native Node 22 TypeScript implementation
+  in [`scripts/pack-worker-report.ts`](scripts/pack-worker-report.ts). The retired
+  PowerShell implementation is not a compatibility or fallback path.
 - Required CI, smoke, findings, and handoff must all bind to the current PR head.
 
 ### Repository guards
