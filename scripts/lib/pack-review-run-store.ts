@@ -13,7 +13,11 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
-import { PACK_REVIEW_CAPS, selectPackReviewGptSourceCardinality } from '../pack-review-state.ts';
+import {
+  PACK_REVIEW_CAPS,
+  selectPackReviewGptSourceCardinality,
+  type PackReviewAutomaticBudgetDisposition,
+} from '../pack-review-state.ts';
 
 export const PACK_REVIEW_RUN_STORE_SCHEMA_VERSION = 1;
 export const PACK_REVIEW_ACTIVE_STATUSES = new Set(['queued', 'preparing', 'running', 'reviewing']);
@@ -124,6 +128,7 @@ export interface PackReviewRunRecord {
   surface: string;
   trustedPackRoot: string;
   sourceRepoRoot: string;
+  automaticBudgetDisposition: PackReviewAutomaticBudgetDisposition;
   reviewTargetRoot?: string;
   runnerPid: number;
   createdAt: string;
@@ -223,6 +228,8 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   canonicalRepository?: string;
   legacyRepositoryBySourceRoot?: Record<string, string>;
   reviewRound?: PackReviewGptRoundRecord;
+  automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
+  allowCompletedSameHeadReplay?: boolean;
 }
 
 interface LockHandle {
@@ -330,6 +337,17 @@ function requiredJsonNonNegativeInteger(value: unknown, name: string, path: stri
     throw new Error(`corrupt pack review run record at ${path}: invalid ${name}`);
   }
   return value;
+}
+
+function normalizeAutomaticBudgetDisposition(
+  value: unknown,
+  path = '',
+): PackReviewAutomaticBudgetDisposition {
+  const disposition = value === undefined || value === null || value === '' ? 'consume' : String(value);
+  if (disposition !== 'consume' && disposition !== 'non_consuming_explicit') {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid automaticBudgetDisposition`);
+  }
+  return disposition;
 }
 
 function validateCompleteGptPayload(payload: unknown, terminalClass: string, path: string): void {
@@ -1090,6 +1108,7 @@ function parseRecord(
   }
   const createdAt = requiredString(raw.createdAt, 'createdAt', path);
   const updatedAt = requiredString(raw.updatedAt, 'updatedAt', path);
+  const automaticBudgetDisposition = normalizeAutomaticBudgetDisposition(raw.automaticBudgetDisposition, path);
   const reviewRound = raw.reviewRound === undefined || raw.reviewRound === null
     ? undefined
     : normalizePackReviewGptRoundRecord(raw.reviewRound, path);
@@ -1139,6 +1158,7 @@ function parseRecord(
     surface: String(raw.surface ?? ''),
     trustedPackRoot: String(raw.trustedPackRoot ?? ''),
     sourceRepoRoot: String(raw.sourceRepoRoot ?? ''),
+    automaticBudgetDisposition,
     reviewRound,
     runnerPid: Number(raw.runnerPid ?? 0),
     createdAt,
@@ -1477,13 +1497,15 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       return { created: false, reused: true, reason: 'active_run_exists', run: consumerRow(active[0]!), storeRoot };
     }
 
-    const completed = boundRecords
-      .filter((record) => matchesInput(record)
-        && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
-        && hasPersistedPackReviewVerdict(record));
-    const latestCompleted = selectLatestSameKeyRun(boundRecords, completed);
-    if (latestCompleted) {
-      return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(latestCompleted), storeRoot };
+    if (!input.allowCompletedSameHeadReplay) {
+      const completed = boundRecords
+        .filter((record) => matchesInput(record)
+          && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
+          && hasPersistedPackReviewVerdict(record));
+      const latestCompleted = selectLatestSameKeyRun(boundRecords, completed);
+      if (latestCompleted) {
+        return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(latestCompleted), storeRoot };
+      }
     }
 
     const uncertain = boundRecords.filter((record) => matchesInput(record)
@@ -1500,7 +1522,8 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
     }
 
     const persistedGptRounds = boundRecords.filter((record) => matchesInput(record)
-      && hasRecordedGptRoundLifecycleOrEvidence(record));
+      && hasRecordedGptRoundLifecycleOrEvidence(record)
+      && (!input.allowCompletedSameHeadReplay || !hasPersistedPackReviewVerdict(record)));
     const latestPersistedGptRound = selectLatestSameKeyRun(boundRecords, persistedGptRounds);
     if (latestPersistedGptRound) {
       return {
@@ -1534,6 +1557,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       surface: input.surface?.trim() || 'pack-review-runner',
       trustedPackRoot: resolve(input.trustedPackRoot),
       sourceRepoRoot: resolve(input.sourceRepoRoot),
+      automaticBudgetDisposition: normalizeAutomaticBudgetDisposition(input.automaticBudgetDisposition),
       canonicalRepository,
       ...(input.reviewRound ? { reviewRound: input.reviewRound } : {}),
       runnerPid: process.pid,
@@ -1558,6 +1582,7 @@ function buildUpdatedPackReviewRun(
   const candidate: Record<string, unknown> = {
     ...existing,
     ...fields,
+    automaticBudgetDisposition: existing.automaticBudgetDisposition,
     sameKeyOrder: existing.sameKeyOrder,
     id: existing.id,
     runId: existing.runId,
