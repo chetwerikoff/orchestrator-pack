@@ -252,15 +252,12 @@ function resolveProductionCandidateRoot(proposedPath, outputPath) {
   if (process.env.GITHUB_ACTIONS !== 'true') return null;
   const cwdRoot = process.cwd();
   const cwdHistoryPath = resolve(runtimeHistoryPath(cwdRoot));
-  if (
-    resolve(proposedPath) !== cwdHistoryPath
-    && resolve(outputPath) !== cwdHistoryPath
-  ) {
-    throw new Error(
-      `trusted production reconcile is not bound to ${cwdHistoryPath}`,
-    );
-  }
-  return cwdRoot;
+  return (
+    resolve(proposedPath) === cwdHistoryPath
+    || resolve(outputPath) === cwdHistoryPath
+  )
+    ? cwdRoot
+    : null;
 }
 
 function enforceExistingPreTopologyBound(candidateRepoRoot) {
@@ -295,9 +292,19 @@ function runReconcile(options) {
     const currentInventory = options.requireEqualInventory
       ? discoverVitestFiles(options.repoRoot)
       : null;
-    const trustedRawHistory = options.requireEqualInventory
-      ? readRawHistory(runtimeHistoryPath(options.repoRoot))
+    const candidateRepoRoot = options.requireEqualInventory
+      ? resolveProductionCandidateRoot(options.proposedPath, options.outputPath)
       : null;
+    const trustedHistoryPath = options.requireEqualInventory
+      ? runtimeHistoryPath(options.repoRoot)
+      : null;
+    const trustedRawHistory = options.requireEqualInventory && existsSync(trustedHistoryPath)
+      ? readRawHistory(trustedHistoryPath)
+      : proposedRawHistory;
+    if (candidateRepoRoot && !existsSync(trustedHistoryPath)) {
+      throw new Error(`trusted runtime-history baseline is missing: ${trustedHistoryPath}`);
+    }
+
     let merged = reconcileProposedHistoryAgainstRemote(proposedHistory, remoteHistory, {
       currentInventory,
       requireEqualInventory: options.requireEqualInventory,
@@ -305,7 +312,9 @@ function runReconcile(options) {
     if (options.requireEqualInventory) {
       merged = preserveTrustedLegacyMeasuredWeights(merged, proposedHistory);
     }
-    const shapeAuthority = trustedRawHistory ?? proposedRawHistory;
+    const shapeAuthority = options.requireEqualInventory
+      ? trustedRawHistory
+      : proposedRawHistory;
     const outputHistory = projectHistoryOntoTrustedShape(
       merged,
       shapeAuthority,
@@ -330,9 +339,6 @@ function runReconcile(options) {
 
     writeFileSync(options.outputPath, historyBytes(outputHistory), 'utf8');
 
-    const candidateRepoRoot = options.requireEqualInventory
-      ? resolveProductionCandidateRoot(options.proposedPath, options.outputPath)
-      : null;
     if (candidateRepoRoot) {
       preTopologyCount = enforceExistingPreTopologyBound(candidateRepoRoot);
     }
