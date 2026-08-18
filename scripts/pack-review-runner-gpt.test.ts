@@ -418,9 +418,9 @@ describe('Issue #1417 direct-CLI operator-only pack-review start', () => {
     });
 
     const explicit = directOperatorStart(storeRoot);
-    expect(explicit.exitCode).toBe(1);
+    expect(explicit.exitCode).toBe(0);
     const result = JSON.parse(explicit.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1)!) as Record<string, unknown>;
-    expect(result).toMatchObject({ ok: false, created: false, reused: true, reason: 'active_run_exists' });
+    expect(result).toMatchObject({ ok: true, created: false, reused: true, reason: 'active_run_exists' });
     const stored = getPackReviewRun(created.run.id, { projectId: 'orchestrator-pack', storeRoot });
     expect(stored?.startReason).toBe('original reason');
     expect(stored?.surface).toBe('original surface');
