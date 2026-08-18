@@ -1,12 +1,18 @@
 import { createHash } from 'node:crypto';
 import { fetchIssueRevision } from './create-issue-stage-record-gh.ts';
-import { parseReviewLaneSourceRevision } from './review-lane-input.ts';
 import {
+  freezeAndProduceReviewLaneInput,
+  parseReviewLaneAuthorDeclarationFromBody,
+  parseReviewLaneSourceRevision,
+} from './review-lane-input.ts';
+import {
+  classifyReviewLaneDeclaration,
   freezeConsistentReviewLaneBody,
   REVIEW_LANE_ROUTING_POLICY_VERSION,
   type ReviewLaneRouting,
 } from './review-lane-routing.ts';
 import type { ReviewLaneOverride } from './review-lane-selector.ts';
+import { selectReviewLane } from './review-lane-selector.ts';
 import type { GhTransport } from './create-issue-stage-record-types.ts';
 
 export interface PrepareReviewLaneStageAttemptInput {
@@ -59,11 +65,11 @@ function canonicalFixedThreeRouting(
 }
 
 /**
- * Create-issue T3 stages keep the routed-cycle evidence envelope, but reviewer
- * cardinality is no longer selected by the legacy review-lane declaration.
- * Issue #1439 makes the canonical create-issue stage plan the sole authority:
- * competitive/architectural-review are fixed three-source stages. Two exact
- * live Issue reads remain the transport/body-identity witness before launch.
+ * Explicit legacy review-lane declarations retain their historical selector so
+ * already-created Issues preserve their frozen routing contract. New create-
+ * issue flows without that declaration use the #1439 canonical fixed-three
+ * route; the legacy declaration is no longer required to launch the canonical
+ * three-source competitive/architectural-review stages.
  */
 export function prepareReviewLaneStageAttempt(
   input: PrepareReviewLaneStageAttemptInput,
@@ -84,6 +90,30 @@ export function prepareReviewLaneStageAttempt(
   if (input.sourceRevision !== secondLiveRevision) {
     return { ok: false, diagnostics: [`caller source revision ${input.sourceRevision} disagrees with live Issue revision ${secondLiveRevision}`] };
   }
+
+  const authorDeclaration = parseReviewLaneAuthorDeclarationFromBody(second.body);
+  if (authorDeclaration) {
+    const produced = freezeAndProduceReviewLaneInput([
+      { sourceRevision: firstLiveRevision, body: first.body },
+      { sourceRevision: secondLiveRevision, body: second.body },
+    ]);
+    if (produced.status !== 'usable') {
+      return { ok: false, diagnostics: [`review-lane input is not usable: ${produced.reason}`] };
+    }
+    const classification = classifyReviewLaneDeclaration(authorDeclaration);
+    const selected = selectReviewLane(
+      produced,
+      classification,
+      secondLiveRevision,
+      input.stageAttemptId,
+      input.permittedLaneOverride,
+    );
+    if (!selected.ready || !selected.routing) {
+      return { ok: false, diagnostics: [selected.reason ?? 'review-lane selection was not ready'] };
+    }
+    return { ok: true, routing: selected.routing, diagnostics: [] };
+  }
+
   const frozen = freezeConsistentReviewLaneBody([
     { sourceRevision: firstLiveRevision, body: first.body },
     { sourceRevision: secondLiveRevision, body: second.body },
