@@ -8,10 +8,14 @@ only for diagnostics/rollback compatibility.
 Manager-facing launch, observation, attribution, retry/no-resend,
 publication, cleanup, diagnostic-probe, and handoff policy is canonical in
 [`../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc).
-The portable operator procedure and prompt templates are in
+The portable operator procedure and universal author template are in
 [`../../docs/browser-gpt-turn-runbook.md`](../../docs/browser-gpt-turn-runbook.md).
-This README is only the implementation-local CLI, result-schema, and component
-reference.
+Governed create-Issue reviewer prompt bytes are generated from the single canon
+declared in
+[`../../.claude/skills/create-issue-draft/SKILL.md`](../../.claude/skills/create-issue-draft/SKILL.md)
+by `scripts/lib/manager-review-brief.ts`; the runbook is not a second reviewer
+prompt owner. This README is only the implementation-local CLI, result-schema,
+and component reference.
 
 The helper connects to the operator's already-running headed automation Chrome.
 It does not launch Chrome, edit prompts, choose workflow stages, or replace the
@@ -54,6 +58,41 @@ npm run chatgpt-browser-turn -- turn \
 The package entrypoint also accepts the new direct shape without the `turn` word,
 but existing callers do not need to change their argv.
 
+### Governed create-Issue direct publication (#1431)
+
+A create-Issue reviewer using `direct-publication/v1` additionally supplies the
+existing publication binding plus the stage context needed to regenerate the
+tracked reviewer canon:
+
+```bash
+  --reviewer-source-output ${REVIEWER_SOURCE_OUTPUT} \
+  --reviewer-source direct-publication/v1 \
+  --repository ${REPOSITORY} \
+  --issue-number ${ISSUE_NUMBER} \
+  --source-revision ${EXPECTED_REVISION} \
+  --stage ${STAGE} \
+  --source-slot ${SOURCE_SLOT}
+```
+
+`--stage` and `--source-slot` are mandatory on both the ordinary and long-running
+governed direct-publication paths. The canonical state-light entry consumes them
+only for pre-browser reviewer-canon admission, then delegates the existing
+transport behavior unchanged. They are not a reviewer-source registry and no
+source-slot equality rule is introduced.
+
+Immediately before any browser effect, state-light reads the stable **unmarked**
+input and independently regenerates expected bytes from the current selected
+tracked canon plus repository/Issue/revision/stage/slot/invocation context.
+Exact byte equality is required. Missing or malformed context, unavailable canon,
+or mismatch returns the existing `turn-result/v1` with `state: input_invalid`,
+`scope: invocation`, `send_count: 0`, and a non-zero exit. Byte mismatch uses a
+bounded `canonical_prompt_mismatch:` cause containing expected/observed SHA-256
+and ordered current `path@blobSha` diagnostics, never prompt bytes. Caller-carried
+hashes, manifests, or source identities cannot satisfy this check.
+
+The existing transport-owned `OPKTURNV1...` marker is not part of the compared
+bytes. It is prepended only after canonical admission succeeds.
+
 ## Flow-manager long-running launcher (#1164)
 
 Applicable create-issue-draft long turns must launch through the caller-side
@@ -74,13 +113,18 @@ See [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-
 This transport's send-once, atomic reply publication, and `turn-result/v1`
 stdout authority are unchanged. Direct-publication mode is selected only by its
 direct-only arguments, never merely by the common `--invocation-id` identity.
+For governed create-Issue direct publication, the long-running adapter requires
+and forwards `--stage` and `--source-slot` with the existing direct argument set;
+a missing value returns its existing `direct_publication_arguments_required`
+refusal before detached child spawn.
 
 ## State-light turn contract
 
 One invocation owns one Browser-GPT exchange:
 
 1. validate the caller's stable input/output arguments and local browser/profile
-   preconditions;
+   preconditions; for governed create-Issue direct publication, first pass the
+   current-source exact-byte reviewer-canon gate described above;
 2. connect to the configured automation Chrome;
 3. open a **new dedicated tab owned by this invocation**, even when `--chat-url`
    refers to an existing conversation;
@@ -99,8 +143,10 @@ invocation.
 8. close only the retained invocation-owned tab when the cleanup partition permits it,
    then release only this Playwright CDP client connection.
 
-The input remains content-neutral. Existing stable-input validation and atomic
-publication primitives are reused; they do not become workflow admission state.
+General turns remain content-neutral. The #1431 create-Issue direct-publication
+wrapper is the narrow exception: it verifies exact tracked reviewer bytes at the
+existing pre-browser stable-input seam. That gate creates no new store, manifest,
+queue, lease, runtime selector, or completion authority.
 
 ### Composer timing (Issue #1188)
 
@@ -165,6 +211,8 @@ time thresholds, or process liveness do not create a second send.
 
 ## No create/review admission control plane
 
+The narrow #1431 current-source exact-byte gate is a pre-browser validation of
+one governed create-Issue reviewer input, not a general admission control plane.
 The canonical `turn` path does **not** read or wait on:
 
 - `status/list` or `clear`;
@@ -200,6 +248,11 @@ Typical state-light outcomes include:
 - `send_failed`;
 - `ui_contract_mismatch` / `observation_uncertain` (**exit 11**) / `driver_error` (**exit 13**).
 
+For #1431 pre-browser refusals, `input_invalid` carries a concrete
+`canonical_prompt_*` cause and `send_count: 0`; the long-running child parser
+preserves that same cause in its existing terminal envelope. No new result schema
+or refusal artifact is introduced.
+
 `stream_timeout` remains part of the shared legacy turn-state contract, but the
 state-light post-send path does not manufacture it merely because
 `--timeout-ms` elapsed while its owned page is still reachable.
@@ -207,28 +260,6 @@ state-light post-send path does not manufacture it merely because
 The final reply bytes are written through the existing atomic no-clobber
 publication primitive. Publication conflict is invocation-local; it does not
 create a profile/browser admission wall.
-
-### Direct-publication invocation binding
-
-Direct-publication settlement treats a candidate Issue comment as owned by the
-current invocation only when its first two non-empty-position lines are exactly:
-
-```text
-Read revision: #<ISSUE_NUMBER> <EXPECTED_REVISION>
-INVOCATION_ID_TO_ECHO: <INVOCATION_ID>
-```
-
-The invocation marker must appear exactly once in that comment and equal the
-caller-bound invocation id. Repository/Issue equality, candidate order,
-parent position, titles, URLs, or product message ids do not establish ownership.
-A same-Issue candidate census with zero exact owned-marker matches settles as
-`direct_publication_no_owned_publication`; two or more exact owned-marker matches
-settle as `direct_publication_owned_parent_ambiguous`. After exactly one invocation
-is selected, only results carrying that invocation's `toolCallId` can settle the
-pair. Marker identity does not upgrade possible delivery, observation loss, a
-missing/conflicting result, or any other post-send uncertainty into success and
-never grants resend authority. `turn-result/v1`, send-count accounting, page
-attribution, and publication semantics are otherwise unchanged.
 
 ## Tab lifetime and cleanup
 
@@ -396,6 +427,13 @@ repository for compatibility and rollback evidence. The package entrypoint route
 `turn` to `state-light-turn.ts`; non-turn legacy control verbs may delegate to the
 old CLI implementation.
 
+The separately invokable legacy prompt-bearing `scripts/chatgpt-browser-turn.ts
+turn` is not a second governed direct-publication sender. If it receives
+`--reviewer-source-output` or another direct-publication identity/context key, it
+returns `input_invalid:legacy_direct_publication_turn_refused` before legacy
+browser configuration, profile verification, CDP, page creation, or send. Its
+non-direct diagnostics/control compatibility remains unchanged.
+
 Do not copy old Gate-B, possible-delivery, profile-wall, claim/lock, or clear-before-
 retry procedures into create/review skills or call sites. Their continued presence
 on disk is not live authority.
@@ -431,6 +469,11 @@ Focused Issue #1120 tests cover:
 - absence of old admission/recovery calls from the state-light module;
 - append-only/non-authoritative recurrence journal behavior;
 - absence of a second inspector/watchdog.
+
+Focused Issue #1431 tests additionally cover current-source canon generation,
+selected-section versus whole-blob drift, frozen plural rendering, pre-browser
+hand-written/mutated prompt refusal, required long-run stage/slot context, and
+legacy direct-publication bypass refusal.
 
 Repository CI additionally runs Node 22 policy, strict TypeScript, foundation
 Vitest, scope/declaration checks, and current-head review gates. Real automation-

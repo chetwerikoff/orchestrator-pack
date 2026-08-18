@@ -68,6 +68,16 @@ validates and forwards this identity; it must not mint, replace, or reinterpret
 it. Choose an existing conversation or a fresh project using local values;
 tracked content must not contain either URL.
 
+For governed create-Issue reviewers, do **not** hand-author `${INPUT_FILE}`.
+`.claude/skills/create-issue-draft/SKILL.md` owns the manager-review canon
+section list and `scripts/lib/manager-review-brief.ts` renders the exact
+unmarked reviewer input from that tracked canon plus repository, Issue,
+revision, stage, slot, and invocation context. For one plural `stageAttemptId`,
+render all sibling input files from one ephemeral canon read before launching
+the first sibling. Do not re-prepare a later sibling from newer canon after the
+batch has started. The input files are transport inputs only, not provenance
+manifests or persisted canon snapshots.
+
 ## Launch
 
 For applicable long turns, use the tracked adapter:
@@ -86,16 +96,39 @@ npm run --silent flow-manager-browser-gpt-long-run -- \
   --chat-url "${CHAT_URL}"
 ```
 
+For a governed create-Issue direct-publication reviewer, add the existing
+direct-publication identity/output arguments and the required canon context:
+
+```bash
+  --reviewer-source-output "${REVIEWER_SOURCE_OUTPUT}" \
+  --reviewer-source direct-publication/v1 \
+  --repository "${REPOSITORY}" \
+  --issue-number "${ISSUE_NUMBER}" \
+  --source-revision "${EXPECTED_REVISION}" \
+  --stage "${STAGE}" \
+  --source-slot "${SLOT}"
+```
+
+The long-running adapter refuses missing direct-publication context before it
+spawns the detached child. State-light independently regenerates current
+canonical reviewer bytes from the stable unmarked input before profile/CDP/tab
+work and refuses a mismatch with an existing `turn-result/v1` carrying
+`state: input_invalid`, `send_count: 0`, and a concrete `canonical_prompt_*`
+cause. A byte-mismatch cause includes expected/observed unmarked prompt hashes
+and current `path@blobSha` diagnostics, never prompt bytes.
+
 For a fresh project launch, use the same command with
 `--new-chat --project-url "${GPT_PROJECT_URL}"` instead of `--chat-url`.
 
 For an ordinary tracked turn, the underlying reference is
 `npm run chatgpt-browser-turn -- turn --invocation-id "${INVOCATION_ID}" ...`
-with the current local CLI values. The presence of `--invocation-id` is normal
-for both ordinary and direct-publication-capable flows and never selects direct
-mode by itself; direct mode requires its direct-only arguments. Use the existing
-launcher contract and bounded observation; do not invent a shell-backgrounding
-workaround or a second monitor.
+with the current local CLI values. A governed create-Issue direct-publication
+turn carries the same `--stage` and `--source-slot` values as the long-running
+path. The presence of `--invocation-id` is normal for both ordinary and direct-
+publication-capable flows and never selects direct mode by itself; direct mode
+requires its direct-only arguments. Use the existing launcher contract and
+bounded observation; do not invent a shell-backgrounding workaround or a
+second monitor.
 
 ## Observe and settle
 
@@ -113,23 +146,29 @@ continue sanctioned observation, and harvest the answer with the same
 
 ## Publication and tab lifecycle
 
-The transport owns a per-payload `OPKTURNV1...` marker and exact-one current
-user-node attribution. The workflow owns direct target-Issue publication and
-receipt-only manager output. For direct publication, the one top-level reviewer
-comment must begin with exactly these two lines:
+Canonical reviewer admission compares **unmarked** input bytes. Only after a
+successful match may the existing transport prepend its owned
+`OPKTURNV1...` marker; callers and generated prompts never include or fabricate
+that marker. The workflow owns direct target-Issue publication and receipt-only
+manager output. The reviewer publishes its own complete verdict/findings
+comment; the manager consumes the receipt and later owns disposition/workflow
+actions.
+
+For direct publication, the one top-level reviewer comment must begin with
+exactly these two lines:
 
 ```text
 Read revision: #<ISSUE_NUMBER> <EXPECTED_REVISION>
 INVOCATION_ID_TO_ECHO: <INVOCATION_ID>
 ```
 
-The `INVOCATION_ID_TO_ECHO:` declaration must occur exactly once in that comment
-and equal the caller-minted invocation id. Settlement uses that exact comment
-marker to choose the invocation; same repository/Issue, candidate order, parent
-position, titles, URLs, or product message ids do not substitute for it. Zero
-exact owned-marker matches and multiple exact owned-marker matches remain
-fail-closed, while missing/conflicting results or post-send uncertainty retain
-their existing possible-delivery/no-resend semantics.
+The invocation marker must occur exactly once in that comment and equal the
+caller-minted invocation id. Settlement uses that exact comment marker to choose
+the invocation; same repository/Issue, candidate order, parent position, titles,
+URLs, or product message ids do not substitute for it. Zero exact owned-marker
+matches and multiple exact owned-marker matches remain fail-closed, while
+missing/conflicting results or post-send uncertainty retain their existing
+possible-delivery/no-resend semantics.
 
 Publish final bytes before closing the exact retained invocation page. Preserve
 a reachable page after post-send failure or no publication; release only the
@@ -203,46 +242,24 @@ Never include or fabricate an OPKTURNV1... transport marker; the tracked
 transport owns marker insertion.
 ```
 
-## Universal independent reviewer prompt template
+## Generated independent reviewer prompt
 
-Use this for one caller-selected independent reviewer invocation:
+This runbook no longer owns a normative reviewer template. The ordered owning
+sections and binding frame live only in
+`.claude/skills/create-issue-draft/SKILL.md` under **Manager review brief canon**.
+Use `scripts/lib/manager-review-brief.ts` to render exact unmarked reviewer
+bytes from those sections and bound invocation context. For plural stages,
+render all siblings from one canon snapshot before the first launch. Pass
+`--stage` and `--source-slot` on both ordinary and long-running governed direct-
+publication launches. Do not add an `OPKTURNV1...` marker to generated bytes;
+state-light validates the unmarked input and the transport owns marker insertion
+after admission.
 
-```text
-Role: independent reviewer for <REPOSITORY>, Issue <ISSUE_URL>.
-Stage: <STAGE>; source slot: <SLOT>; expected revision: <EXPECTED_REVISION>.
-INVOCATION_ID_TO_ECHO: <INVOCATION_ID>
-
-Open and read the live Issue through GitHub. Do not review memory or a pasted
-body. The one top-level Issue comment must begin with exactly these two lines:
-Read revision: #<ISSUE_NUMBER> <EXPECTED_REVISION>
-INVOCATION_ID_TO_ECHO: <INVOCATION_ID>
-The invocation marker must appear exactly once in that comment and immediately
-after the revision line.
-
-Apply the owning workflow's stage rubric. Use stable finding ids and include
-severity, type, evidence, non-binding recommendation, and
-persistent-machinery fields, plus the exact clean-verdict grammar.
-Attempt exactly one top-level comment containing the complete verdict/findings.
-Do not edit the Issue, mutate a PR, label, milestone, merge, add a second
-comment, or perform unrelated GitHub actions.
-
-On success, manager-facing chat output is exactly:
-VERDICT: <...>
-COMMENT_URL: <...>
-REVISION: <...>
-INVOCATION_ID: <...>
-FINDING_COUNT: <...>
-
-Use the existing complete authoritative no-commit fallback only for a genuine
-write failure. Possible delivery never permits another comment or resend.
-Do not receive sibling output, a manager summary, or a prior verdict unless
-the owning stage explicitly authorizes it. Never include or fabricate an
-OPKTURNV1... marker; tracked transport prepends it.
-```
-
-Stage-specific rubric and topology belong to the canonical workflow; this
-template does not define reviewer cardinality, repeat-round concurrency, or
-launch topology.
+If the selected canon changes after a plural batch starts, do not regenerate a
+later sibling's input. Its already-materialized old bytes reach state-light,
+current-source regeneration disagrees, and that invocation settles pre-browser
+as `input_invalid` rather than mixing canon revisions inside one
+`stageAttemptId`.
 
 ## Maintenance matrix
 
@@ -250,7 +267,8 @@ launch topology.
 | --- | --- |
 | browser launch, observation, attribution, retry/no-resend, publication, cleanup, probe, handoff | update the canonical carrier and audit this runbook |
 | CLI option, result field, or component boundary | update the transport README; update carrier/runbook when operator behavior changes |
-| author/reviewer role, direct publication, receipt, or invocation identity | update the owning skill and corresponding template |
+| author role or author invocation | update the owning skill and author template when needed |
+| reviewer role, direct publication, receipt, or invocation identity | update the owning skill/canon; do not copy a normative reviewer prompt into this runbook |
 | local configuration, launcher prerequisite, or setup procedure | update this runbook and the owning reference |
 | link or Issue authority supersession | repair all in-scope pointers and present-tense authority wording |
 

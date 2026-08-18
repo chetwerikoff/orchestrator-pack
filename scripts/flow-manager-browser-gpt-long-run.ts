@@ -111,7 +111,14 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
   const reviewerSourceOutput = typeof options.get('reviewer-source-output') === 'string'
     ? options.get('reviewer-source-output') as string
     : undefined;
-  const directArgumentKeys = ['reviewer-source', 'repository', 'issue-number', 'source-revision'];
+  const directArgumentKeys = [
+    'reviewer-source',
+    'repository',
+    'issue-number',
+    'source-revision',
+    'stage',
+    'source-slot',
+  ];
   const directRequested = reviewerSourceOutput !== undefined
     || directArgumentKeys.some((key) => options.has(key));
   if (directRequested && (
@@ -135,7 +142,16 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     '--output', browserOutput,
   ];
   if (reviewerSourceOutput) browserArgs.push('--reviewer-source-output', reviewerSourceOutput);
-  for (const key of ['reviewer-source', 'repository', 'issue-number', 'source-revision', 'timeout-ms', 'poll-ms']) {
+  for (const key of [
+    'reviewer-source',
+    'repository',
+    'issue-number',
+    'source-revision',
+    'stage',
+    'source-slot',
+    'timeout-ms',
+    'poll-ms',
+  ]) {
     if (typeof options.get(key) === 'string') browserArgs.push(`--${key}`, options.get(key) as string);
   }
   if (typeof options.get('chat-url') === 'string') browserArgs.push('--chat-url', options.get('chat-url') as string);
