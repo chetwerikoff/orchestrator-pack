@@ -18,43 +18,30 @@ import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 export const REVIEW_CYCLE_CAP_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_CYCLE_TIER = 'T2';
 export const TIER_CAP_BY_TIER = Object.freeze({ T1: 1, T2: 2, T3: 4 });
-/**
- * Adoption boundary (Issue #1063): new cycles read caps from TIER_CAP_BY_TIER at open/freeze.
- * Persisted prState.cap from an already-open cycle is authoritative across restart — an in-flight
- * cycle opened under the prior 2/4/8 mapping keeps its frozen cap until reset/close semantics apply.
- */
 export const VALID_REVIEW_CYCLE_TIERS = new Set(Object.keys(TIER_CAP_BY_TIER));
 
 export const TERMINAL_CLEAN_EARLY_STOP = 'clean_early_stop';
 export const TERMINAL_COMMENTED_EARLY_STOP = 'commented_early_stop';
 export const TERMINAL_AT_CAP_OPEN_FINDINGS = 'at_cap_open_findings';
 export const REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED = 'review_cycle_cap_budget_exhausted';
+export const REVIEW_STAGE_COMPLETE = 'review_stage_complete';
 
 const COMPLEXITY_TIER_FENCE_RE = /```complexity-tier\s*\n([\s\S]*?)```/i;
 
-/**
- * @param {string | undefined | null} body
- */
 export function parseComplexityTierFromIssueBody(body) {
   const text = String(body ?? '');
   const match = text.match(COMPLEXITY_TIER_FENCE_RE);
-  if (!match) {
-    return { kind: 'missing' };
-  }
+  if (!match) return { kind: 'missing' };
   const fields = new Map();
   for (const line of (match[1] ?? '').split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     const sep = trimmed.indexOf(':');
-    if (sep < 0) {
-      return { kind: 'invalid', reason: `invalid complexity-tier line: ${trimmed}` };
-    }
+    if (sep < 0) return { kind: 'invalid', reason: `invalid complexity-tier line: ${trimmed}` };
     fields.set(trimmed.slice(0, sep).trim().toLowerCase(), trimmed.slice(sep + 1).trim());
   }
   const skipLine = fields.get('skip-line');
-  if (skipLine && /^(true|yes|1)$/i.test(skipLine)) {
-    return { kind: 'no-tier', skipLine: true };
-  }
+  if (skipLine && /^(true|yes|1)$/i.test(skipLine)) return { kind: 'no-tier', skipLine: true };
   const tier = fields.get('tier')?.toUpperCase();
   if (!tier || !VALID_REVIEW_CYCLE_TIERS.has(tier)) {
     return { kind: 'invalid', reason: `invalid or missing tier: ${tier ?? '<empty>'}` };
@@ -62,9 +49,6 @@ export function parseComplexityTierFromIssueBody(body) {
   return { kind: 'tier', tier };
 }
 
-/**
- * @param {{ tier?: string | null, issueBody?: string | null, frozenTier?: string | null }} input
- */
 export function resolveTierAndCap(input = {}) {
   if (input.frozenTier && VALID_REVIEW_CYCLE_TIERS.has(String(input.frozenTier).toUpperCase())) {
     const tier = String(input.frozenTier).toUpperCase();
@@ -85,274 +69,158 @@ export function resolveTierAndCap(input = {}) {
   };
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
- */
 export function resolveOpenFindingCount(run) {
   const open = Number(run?.openFindingCount);
-  if (Number.isFinite(open) && open >= 0) {
-    return open;
-  }
+  if (Number.isFinite(open) && open >= 0) return open;
   const finding = Number(run?.findingCount);
-  if (Number.isFinite(finding) && finding >= 0) {
-    return finding;
-  }
+  if (Number.isFinite(finding) && finding >= 0) return finding;
   const rawStatus = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
-  if (isLegacyUndeliveredReviewStatus(rawStatus)) {
-    return 1;
-  }
-  const status = resolveAuthoritativeReviewRunStatus(run);
-  if (status === 'changes_requested') {
-    return 1;
-  }
+  if (isLegacyUndeliveredReviewStatus(rawStatus)) return 1;
+  if (resolveAuthoritativeReviewRunStatus(run) === 'changes_requested') return 1;
   return 0;
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
- */
 export function isRunInFlight(run) {
   return IN_FLIGHT_REVIEW_STATUSES.has(resolveAuthoritativeReviewRunStatus(run));
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
- */
 export function isCleanTerminalRun(run) {
   const status = resolveAuthoritativeReviewRunStatus(run);
-  if (status === 'up_to_date' || status === 'clean') {
-    return resolveOpenFindingCount(run) === 0;
-  }
-  return false;
+  return (status === 'up_to_date' || status === 'clean') && resolveOpenFindingCount(run) === 0;
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
- */
 export function isCommentedTerminalRun(run) {
-  return resolveAuthoritativeReviewRunStatus(run) === 'commented'
-    && resolveOpenFindingCount(run) === 0;
+  return resolveAuthoritativeReviewRunStatus(run) === 'commented' && resolveOpenFindingCount(run) === 0;
 }
 
 export function isZeroFindingFailedOrCancelled(run) {
   const status = resolveAuthoritativeReviewRunStatus(run);
-  if (status !== 'failed' && status !== 'cancelled') {
-    return false;
-  }
-  return resolveOpenFindingCount(run) === 0;
+  return (status === 'failed' || status === 'cancelled') && resolveOpenFindingCount(run) === 0;
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
- */
 export function isReaperKilledWithoutVerdict(run) {
-  if (run?.reaperKilled === true) {
-    return true;
-  }
-  if (String(run?.decisionSource ?? '').toLowerCase() === 'reaper') {
-    return true;
-  }
+  if (run?.reaperKilled === true) return true;
+  if (String(run?.decisionSource ?? '').toLowerCase() === 'reaper') return true;
   const reason = String(run?.body ?? run?.['termin' + 'ationReason'] ?? '').toLowerCase();
   return /reaper|stuck-run-reaper|reaper_killed/.test(reason);
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
- */
 export function isSupersededRun(run) {
-  if (run?.superseded === true) {
-    return true;
-  }
+  if (run?.superseded === true) return true;
   const status = resolveAuthoritativeReviewRunStatus(run);
   return status === 'outdated' || status === 'ineligible';
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
- * @param {string} [currentHeadSha]
- */
 export function resolveTerminalHeadSnapshot(run, currentHeadSha = '') {
   const explicit = normalizeSha(
     run?.terminalHeadSha ?? run?.headShaAtCompletion ?? run?.prHeadShaAtCompletion ?? '',
   );
-  if (explicit) {
-    return explicit;
-  }
+  if (explicit) return explicit;
   const target = normalizeSha(run?.targetSha);
   const current = normalizeSha(currentHeadSha);
-  if (target && current && target === current) {
-    return current;
-  }
+  if (target && current && target === current) return current;
   return target;
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
- * @param {string} [currentHeadSha]
- */
 export function isStaleHeadTerminal(run, currentHeadSha = '') {
   const target = normalizeSha(run?.targetSha);
   const headAtTerminal = resolveTerminalHeadSnapshot(run, currentHeadSha);
-  if (!target || !headAtTerminal) {
-    return false;
-  }
-  return target !== headAtTerminal;
+  return Boolean(target && headAtTerminal && target !== headAtTerminal);
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
- * @param {string} [currentHeadSha]
- */
 export function classifyTerminalRun(run, currentHeadSha = '') {
-  if (!run) {
-    return { kind: 'excluded', reason: 'missing_run' };
-  }
-  if (isRunInFlight(run)) {
-    return { kind: 'in_flight' };
-  }
-  if (isSupersededRun(run)) {
-    return { kind: 'excluded', reason: 'superseded' };
-  }
-  if (isReaperKilledWithoutVerdict(run)) {
-    return { kind: 'excluded', reason: 'reaper_killed' };
-  }
-  if (isStaleHeadTerminal(run, currentHeadSha)) {
-    return { kind: 'excluded', reason: 'stale_head' };
-  }
+  if (!run) return { kind: 'excluded', reason: 'missing_run' };
+  if (isRunInFlight(run)) return { kind: 'in_flight' };
+  if (isSupersededRun(run)) return { kind: 'excluded', reason: 'superseded' };
+  if (isReaperKilledWithoutVerdict(run)) return { kind: 'excluded', reason: 'reaper_killed' };
+  if (isStaleHeadTerminal(run, currentHeadSha)) return { kind: 'excluded', reason: 'stale_head' };
   if (isZeroFindingFailedOrCancelled(run)) {
     return { kind: 'excluded', reason: 'zero_finding_failed_cancelled' };
   }
-  if (isCleanTerminalRun(run)) {
-    return { kind: 'clean', openFindings: 0 };
-  }
-  if (isCommentedTerminalRun(run)) {
-    return { kind: 'non_blocking', openFindings: 0 };
-  }
+  if (isCleanTerminalRun(run)) return { kind: 'clean', openFindings: 0 };
+  if (isCommentedTerminalRun(run)) return { kind: 'non_blocking', openFindings: 0 };
   const status = resolveAuthoritativeReviewRunStatus(run);
   if (status === 'failed' || status === 'cancelled') {
     return { kind: 'open_findings', openFindings: resolveOpenFindingCount(run) };
   }
   const rawStatus = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
   if (
-    status === 'changes_requested' ||
-    isLegacyUndeliveredReviewStatus(rawStatus) ||
-    isLegacyDeliveredReviewStatus(rawStatus)
+    status === 'changes_requested'
+    || isLegacyUndeliveredReviewStatus(rawStatus)
+    || isLegacyDeliveredReviewStatus(rawStatus)
   ) {
     return { kind: 'open_findings', openFindings: Math.max(1, resolveOpenFindingCount(run)) };
   }
   return { kind: 'excluded', reason: 'non_verdict_terminal' };
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} runs
- */
 function sortRunsByRecency(runs) {
   return [...toArray(runs)].sort((a, b) => {
-    const aMs =
-      Date.parse(String(a?.completedAt ?? a?.updatedAt ?? a?.createdAt ?? a?.startedAt ?? '')) || 0;
-    const bMs =
-      Date.parse(String(b?.completedAt ?? b?.updatedAt ?? b?.createdAt ?? b?.startedAt ?? '')) || 0;
-    if (bMs !== aMs) {
-      return bMs - aMs;
-    }
+    const aMs = Date.parse(String(a?.completedAt ?? a?.updatedAt ?? a?.createdAt ?? a?.startedAt ?? '')) || 0;
+    const bMs = Date.parse(String(b?.completedAt ?? b?.updatedAt ?? b?.createdAt ?? b?.startedAt ?? '')) || 0;
+    if (bMs !== aMs) return bMs - aMs;
     return String(b?.id ?? b?.runId ?? '').localeCompare(String(a?.id ?? a?.runId ?? ''));
   });
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} runs
- * @param {number} prNumber
- * @param {string} currentHeadSha
- */
-
 function resolveRunCompletionMs(run) {
-  return (
-    Date.parse(String(run?.completedAt ?? run?.updatedAt ?? run?.createdAt ?? run?.startedAt ?? '')) ||
-    0
-  );
+  return Date.parse(String(run?.completedAt ?? run?.updatedAt ?? run?.createdAt ?? run?.startedAt ?? '')) || 0;
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} runs
- * @param {string | null | undefined} cycleOpenedAtUtc
- */
 export function filterRunsWithinCycleBoundary(runs, cycleOpenedAtUtc) {
   const boundaryMs = Date.parse(String(cycleOpenedAtUtc ?? '')) || 0;
-  if (!boundaryMs) {
-    return toArray(runs);
-  }
+  if (!boundaryMs) return toArray(runs);
   return toArray(runs).filter((run) => {
     const runMs = resolveRunCompletionMs(run);
-    // Undated run rows stay in the active cycle; fresh cycles still exclude them.
-    if (!runMs) {
-      return true;
-    }
-    return runMs >= boundaryMs;
+    return !runMs || runMs >= boundaryMs;
   });
 }
 
+function consumesAutomaticReviewBudget(run) {
+  return String(run?.automaticBudgetDisposition ?? 'consume') !== 'non_consuming_explicit';
+}
+
 export function deriveDistinctHeadBudget(runs, prNumber, currentHeadSha) {
-  const forPr = toArray(runs).filter((run) => Number(run?.prNumber) === prNumber);
-  /** @type {Map<string, { run: import('./review-trigger-reconcile.mjs').ReviewRun, runMs: number, classification: ReturnType<typeof classifyTerminalRun> }>} */
+  const forPr = toArray(runs).filter(
+    (run) => Number(run?.prNumber) === prNumber && consumesAutomaticReviewBudget(run),
+  );
   const latestByTarget = new Map();
   for (const run of forPr) {
     const target = normalizeSha(run?.targetSha);
     if (!target) continue;
     const classification = classifyTerminalRun(run, currentHeadSha);
-    if (classification.kind !== 'clean' && classification.kind !== 'non_blocking' && classification.kind !== 'open_findings') {
-      continue;
-    }
-    const runMs =
-      Date.parse(String(run?.completedAt ?? run?.updatedAt ?? run?.createdAt ?? run?.startedAt ?? '')) ||
-      0;
+    if (!['clean', 'non_blocking', 'open_findings'].includes(classification.kind)) continue;
+    const runMs = resolveRunCompletionMs(run);
     const existing = latestByTarget.get(target);
-    if (!existing || runMs >= existing.runMs) {
-      latestByTarget.set(target, { run, runMs, classification });
-    }
+    if (!existing || runMs >= existing.runMs) latestByTarget.set(target, { run, runMs, classification });
   }
-  const entries = [...latestByTarget.entries()]
+  return [...latestByTarget.entries()]
     .map(([targetSha, value]) => ({
       targetSha,
       classification: value.classification,
-      completedAt:
-        String(value.run?.completedAt ?? value.run?.updatedAt ?? value.run?.createdAt ?? '') || null,
+      completedAt: String(value.run?.completedAt ?? value.run?.updatedAt ?? value.run?.createdAt ?? '') || null,
       run: value.run,
     }))
-    .sort((a, b) => {
-      const aMs = Date.parse(String(a.completedAt ?? '')) || 0;
-      const bMs = Date.parse(String(b.completedAt ?? '')) || 0;
-      return aMs - bMs;
-    });
-  return entries;
+    .sort((a, b) => (Date.parse(String(a.completedAt ?? '')) || 0) - (Date.parse(String(b.completedAt ?? '')) || 0));
 }
 
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} runs
- * @param {number} prNumber
- * @param {string} currentHeadSha
- */
 export function resolveCurrentHeadOpenFindingCount(runs, prNumber, currentHeadSha) {
   const head = normalizeSha(currentHeadSha);
   const forHead = toArray(runs).filter(
-    (run) => Number(run?.prNumber) === prNumber && normalizeSha(run?.targetSha) === head,
+    (run) => Number(run?.prNumber) === prNumber
+      && normalizeSha(run?.targetSha) === head
+      && consumesAutomaticReviewBudget(run),
   );
-  if (forHead.length === 0) {
-    return 0;
-  }
+  if (forHead.length === 0) return 0;
   const latest = sortRunsByRecency(forHead)[0];
   const classification = classifyTerminalRun(latest, currentHeadSha);
-  if (classification.kind === 'clean' || classification.kind === 'non_blocking') {
-    return 0;
-  }
+  if (classification.kind === 'clean' || classification.kind === 'non_blocking') return 0;
   if (classification.kind === 'open_findings') {
     return Number(classification.openFindings ?? resolveOpenFindingCount(latest));
   }
   return 0;
 }
 
-/**
- * @param {object} input
- */
 export function buildAtCapOpenFindingsRecord(input) {
   const nowIso = new Date(Number(input.nowMs ?? Date.now())).toISOString();
   return {
@@ -370,10 +238,6 @@ export function buildAtCapOpenFindingsRecord(input) {
   };
 }
 
-/**
- * @param {Record<string, unknown> | null | undefined} raw
- * @param {number} prNumber
- */
 export function normalizePrCapCycleState(raw, prNumber) {
   const key = String(prNumber);
   const state = raw?.[key] && typeof raw[key] === 'object' ? { ...raw[key] } : {};
@@ -394,17 +258,12 @@ export function normalizePrCapCycleState(raw, prNumber) {
     mergeEligible: Boolean(state.mergeEligible),
     atCapRecord: state.atCapRecord ?? null,
     tierFrozen: Boolean(state.tierFrozen),
+    reviewStageComplete: state.reviewStageComplete === true,
   };
 }
 
-/**
- * @param {object} input
- */
 function openFreshCycle(input) {
-  const tierCap = resolveTierAndCap({
-    tier: input.tier,
-    issueBody: input.issueBody,
-  });
+  const tierCap = resolveTierAndCap({ tier: input.tier, issueBody: input.issueBody });
   const nowIso = new Date(Number(input.nowMs ?? Date.now())).toISOString();
   return {
     schemaVersion: REVIEW_CYCLE_CAP_SCHEMA_VERSION,
@@ -418,12 +277,15 @@ function openFreshCycle(input) {
     mergeEligible: false,
     atCapRecord: null,
     tierFrozen: true,
+    reviewStageComplete: false,
   };
 }
 
-/**
- * @param {object} input
- */
+function resolveReviewStageComplete(input, prState) {
+  if (input.reviewStageComplete === true || prState.reviewStageComplete === true) return true;
+  return toArray(input.reviewRuns).some((run) => run?.reviewStageComplete === true);
+}
+
 export function syncReviewCycleCapState(input) {
   const prNumber = Number(input.prNumber);
   const currentHeadSha = normalizeSha(
@@ -431,27 +293,19 @@ export function syncReviewCycleCapState(input) {
   );
   const nowMs = Number(input.nowMs ?? Date.now());
   const nowIso = new Date(nowMs).toISOString();
-  const capStateRoot =
-    input.capState && typeof input.capState === 'object' ? { ...input.capState } : {};
+  const capStateRoot = input.capState && typeof input.capState === 'object' ? { ...input.capState } : {};
   let prState = normalizePrCapCycleState(capStateRoot, prNumber);
+  const reviewStageComplete = resolveReviewStageComplete(input, prState);
 
-  if (
-    prState.terminal === TERMINAL_CLEAN_EARLY_STOP &&
-    prState.terminalHeadSha &&
-    prState.terminalHeadSha !== currentHeadSha
-  ) {
+  if (!reviewStageComplete && prState.terminal === TERMINAL_CLEAN_EARLY_STOP
+      && prState.terminalHeadSha && prState.terminalHeadSha !== currentHeadSha) {
     prState = openFreshCycle({ ...input, prNumber, nowMs });
-  } else if (
-    prState.mergeEligible &&
-    prState.terminal !== TERMINAL_COMMENTED_EARLY_STOP &&
-    (!prState.terminalHeadSha || prState.terminalHeadSha !== currentHeadSha)
-  ) {
+  } else if (!reviewStageComplete && prState.mergeEligible
+      && prState.terminal !== TERMINAL_COMMENTED_EARLY_STOP
+      && (!prState.terminalHeadSha || prState.terminalHeadSha !== currentHeadSha)) {
     prState = openFreshCycle({ ...input, prNumber, nowMs });
-  } else if (
-    prState.terminal === TERMINAL_COMMENTED_EARLY_STOP &&
-    prState.terminalHeadSha &&
-    prState.terminalHeadSha !== currentHeadSha
-  ) {
+  } else if (!reviewStageComplete && prState.terminal === TERMINAL_COMMENTED_EARLY_STOP
+      && prState.terminalHeadSha && prState.terminalHeadSha !== currentHeadSha) {
     prState = {
       ...prState,
       terminal: null,
@@ -461,6 +315,13 @@ export function syncReviewCycleCapState(input) {
     };
   }
 
+  if (reviewStageComplete) prState.reviewStageComplete = true;
+
+  if (prState.reviewStageComplete) {
+    capStateRoot[String(prNumber)] = prState;
+    return { capState: capStateRoot, prState };
+  }
+
   if (prState.terminal === TERMINAL_AT_CAP_OPEN_FINDINGS) {
     capStateRoot[String(prNumber)] = prState;
     return { capState: capStateRoot, prState };
@@ -468,10 +329,7 @@ export function syncReviewCycleCapState(input) {
 
   if (!prState.cycleOpenedAtUtc) {
     if (!prState.tierFrozen) {
-      const launchTierCap = resolveTierAndCap({
-        tier: input.tier,
-        issueBody: input.issueBody,
-      });
+      const launchTierCap = resolveTierAndCap({ tier: input.tier, issueBody: input.issueBody });
       prState.tier = launchTierCap.tier;
       prState.cap = launchTierCap.cap;
       prState.tierFrozen = true;
@@ -479,17 +337,15 @@ export function syncReviewCycleCapState(input) {
     const probeBudget = deriveDistinctHeadBudget(input.reviewRuns ?? [], prNumber, currentHeadSha);
     const firstConsuming = probeBudget[0];
     if (firstConsuming) {
-      prState.cycleOpenedAtUtc =
-        firstConsuming.completedAt != null
-          ? new Date(Date.parse(String(firstConsuming.completedAt)) || nowMs).toISOString()
-          : new Date(0).toISOString();
+      prState.cycleOpenedAtUtc = firstConsuming.completedAt != null
+        ? new Date(Date.parse(String(firstConsuming.completedAt)) || nowMs).toISOString()
+        : new Date(0).toISOString();
     }
   }
 
   const cycleRuns = filterRunsWithinCycleBoundary(input.reviewRuns ?? [], prState.cycleOpenedAtUtc);
   const budget = deriveDistinctHeadBudget(cycleRuns, prNumber, currentHeadSha);
   const distinctHeads = budget.map((entry) => entry.targetSha);
-
   prState.distinctHeadsReviewed = distinctHeads;
 
   const cleanEntry = [...budget].reverse().find((entry) => entry.classification.kind === 'clean');
@@ -498,12 +354,12 @@ export function syncReviewCycleCapState(input) {
     prState.terminalHeadSha = cleanEntry.targetSha;
     prState.mergeEligible = true;
     prState.atCapRecord = null;
+    prState.reviewStageComplete = true;
     capStateRoot[String(prNumber)] = prState;
     return { capState: capStateRoot, prState };
   }
 
-  const nonBlockingEntry = [...budget].reverse()
-    .find((entry) => entry.classification.kind === 'non_blocking');
+  const nonBlockingEntry = [...budget].reverse().find((entry) => entry.classification.kind === 'non_blocking');
   if (nonBlockingEntry && nonBlockingEntry.targetSha === currentHeadSha) {
     prState.terminal = TERMINAL_COMMENTED_EARLY_STOP;
     prState.terminalHeadSha = nonBlockingEntry.targetSha;
@@ -513,21 +369,17 @@ export function syncReviewCycleCapState(input) {
     return { capState: capStateRoot, prState };
   }
 
-  const openFindingCount = resolveCurrentHeadOpenFindingCount(
-    cycleRuns,
-    prNumber,
-    currentHeadSha,
-  );
+  const openFindingCount = resolveCurrentHeadOpenFindingCount(cycleRuns, prNumber, currentHeadSha);
   const currentHead = normalizeSha(currentHeadSha);
-  const alreadyConsumed = distinctHeads.includes(currentHead);
   const budgetExhausted = distinctHeads.length >= prState.cap;
   if (budgetExhausted && openFindingCount > 0) {
     prState.terminal = TERMINAL_AT_CAP_OPEN_FINDINGS;
-    prState.terminalHeadSha = currentHeadSha;
+    prState.terminalHeadSha = currentHead;
     prState.mergeEligible = false;
+    prState.reviewStageComplete = true;
     prState.atCapRecord = buildAtCapOpenFindingsRecord({
       prNumber,
-      headSha: currentHeadSha,
+      headSha: currentHead,
       tier: prState.tier,
       cap: prState.cap,
       distinctHeadsReviewed: distinctHeads,
@@ -548,11 +400,6 @@ export function syncReviewCycleCapState(input) {
   return { capState: capStateRoot, prState };
 }
 
-/**
- * Shared cap gate for all automated review-start surfaces.
- *
- * @param {object} input
- */
 export function evaluateReviewCycleCapGate(input) {
   const prNumber = Number(input.prNumber);
   const currentHeadSha = normalizeSha(
@@ -580,43 +427,41 @@ export function evaluateReviewCycleCapGate(input) {
     };
   }
 
-  const synced = syncReviewCycleCapState({
-    capState: input.capState ?? {},
-    reviewRuns: input.reviewRuns ?? [],
-    prNumber,
-    currentHeadSha,
-    openPrs: input.openPrs,
-    issueBody: input.issueBody,
-    tier: input.tier,
-    producer: input.producer,
-    nowMs: input.nowMs,
-  });
+  const synced = syncReviewCycleCapState({ ...input, prNumber, currentHeadSha });
   const prState = synced.prState;
 
-  if (prState.terminal === TERMINAL_CLEAN_EARLY_STOP) {
-    if (prState.terminalHeadSha === currentHeadSha) {
-      return {
-        allowStart: false,
-        reason: TERMINAL_CLEAN_EARLY_STOP,
-        terminal: prState.terminal,
-        mergeEligible: true,
-        capState: synced.capState,
-        prState,
-      };
-    }
+  if (prState.reviewStageComplete) {
+    return {
+      allowStart: false,
+      reason: prState.terminal ?? REVIEW_STAGE_COMPLETE,
+      terminal: prState.terminal,
+      mergeEligible: prState.mergeEligible,
+      ...(prState.atCapRecord ? { atCapRecord: prState.atCapRecord } : {}),
+      capState: synced.capState,
+      prState,
+    };
   }
 
-  if (prState.terminal === TERMINAL_COMMENTED_EARLY_STOP) {
-    if (prState.terminalHeadSha === currentHeadSha) {
-      return {
-        allowStart: false,
-        reason: TERMINAL_COMMENTED_EARLY_STOP,
-        terminal: prState.terminal,
-        mergeEligible: true,
-        capState: synced.capState,
-        prState,
-      };
-    }
+  if (prState.terminal === TERMINAL_CLEAN_EARLY_STOP && prState.terminalHeadSha === currentHeadSha) {
+    return {
+      allowStart: false,
+      reason: TERMINAL_CLEAN_EARLY_STOP,
+      terminal: prState.terminal,
+      mergeEligible: true,
+      capState: synced.capState,
+      prState,
+    };
+  }
+
+  if (prState.terminal === TERMINAL_COMMENTED_EARLY_STOP && prState.terminalHeadSha === currentHeadSha) {
+    return {
+      allowStart: false,
+      reason: TERMINAL_COMMENTED_EARLY_STOP,
+      terminal: prState.terminal,
+      mergeEligible: true,
+      capState: synced.capState,
+      prState,
+    };
   }
 
   if (prState.terminal === TERMINAL_AT_CAP_OPEN_FINDINGS) {
@@ -640,26 +485,24 @@ export function evaluateReviewCycleCapGate(input) {
       currentHeadSha,
     );
     if (openFindingCount > 0) {
-      const atCapRecord =
-        prState.atCapRecord ??
-        buildAtCapOpenFindingsRecord({
-          prNumber,
-          headSha: currentHeadSha,
-          tier: prState.tier,
-          cap: prState.cap,
-          distinctHeadsReviewed: prState.distinctHeadsReviewed,
-          openFindingCount,
-          cycleOpenedAtUtc:
-            prState.cycleOpenedAtUtc ?? new Date(Number(input.nowMs ?? Date.now())).toISOString(),
-          terminatedAtUtc: new Date(Number(input.nowMs ?? Date.now())).toISOString(),
-          producer: input.producer ?? 'review-cycle-cap',
-          nowMs: input.nowMs,
-        });
+      const atCapRecord = prState.atCapRecord ?? buildAtCapOpenFindingsRecord({
+        prNumber,
+        headSha: currentHeadSha,
+        tier: prState.tier,
+        cap: prState.cap,
+        distinctHeadsReviewed: prState.distinctHeadsReviewed,
+        openFindingCount,
+        cycleOpenedAtUtc: prState.cycleOpenedAtUtc ?? new Date(Number(input.nowMs ?? Date.now())).toISOString(),
+        terminatedAtUtc: new Date(Number(input.nowMs ?? Date.now())).toISOString(),
+        producer: input.producer ?? 'review-cycle-cap',
+        nowMs: input.nowMs,
+      });
       const blockedPrState = {
         ...prState,
         terminal: TERMINAL_AT_CAP_OPEN_FINDINGS,
         terminalHeadSha: currentHeadSha,
         mergeEligible: false,
+        reviewStageComplete: true,
         atCapRecord,
       };
       const blockedCapState = { ...synced.capState, [String(prNumber)]: blockedPrState };
@@ -687,18 +530,12 @@ export function evaluateReviewCycleCapGate(input) {
     allowStart: true,
     reason: 'cap_gate_open',
     terminal: null,
-    mergeEligible:
-      prState.terminal === TERMINAL_CLEAN_EARLY_STOP &&
-      prState.terminalHeadSha === currentHeadSha,
+    mergeEligible: false,
     capState: synced.capState,
     prState,
   };
 }
 
-/**
- * @param {object} input
- * @param {boolean} input.startAllowed
- */
 export function applyReviewCycleCapToStartDecision(input) {
   const cap = evaluateReviewCycleCapGate(input);
   if (!cap.allowStart) {

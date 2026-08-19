@@ -8,6 +8,7 @@ export declare const TERMINAL_CLEAN_EARLY_STOP: string;
 export declare const TERMINAL_COMMENTED_EARLY_STOP: string;
 export declare const TERMINAL_AT_CAP_OPEN_FINDINGS: string;
 export declare const REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED: string;
+export declare const REVIEW_STAGE_COMPLETE: string;
 
 export type ComplexityTierParseResult =
   | { kind: 'tier'; tier: string }
@@ -32,6 +33,7 @@ export interface PrCapCycleState {
   terminalHeadSha?: string | null;
   mergeEligible?: boolean;
   atCapRecord?: Record<string, unknown> | null;
+  reviewStageComplete?: boolean;
 }
 
 export interface ReviewCycleCapGateResult {
@@ -51,33 +53,25 @@ export declare function parseComplexityTierFromIssueBody(
 export declare function resolveTierAndCap(input?: {
   tier?: string;
   issueBody?: string | null;
-  tierFrozen?: boolean;
-}): { tier: string; cap: number };
+  frozenTier?: string | null;
+}): { tier: string; cap: number; source?: string };
 
 export declare function resolveOpenFindingCount(run: ReviewRun | Record<string, unknown> | null | undefined): number;
-
 export declare function isRunInFlight(run: ReviewRun | null | undefined): boolean;
-
 export declare function isCleanTerminalRun(run: ReviewRun | null | undefined): boolean;
-
 export declare function isCommentedTerminalRun(run: ReviewRun | null | undefined): boolean;
-
 export declare function isZeroFindingFailedOrCancelled(run: ReviewRun | null | undefined): boolean;
-
 export declare function isReaperKilledWithoutVerdict(run: ReviewRun | null | undefined): boolean;
-
 export declare function isSupersededRun(run: ReviewRun | null | undefined): boolean;
 
 export declare function resolveTerminalHeadSnapshot(
   run: ReviewRun | null | undefined,
   currentHeadSha?: string,
 ): string;
-
 export declare function isStaleHeadTerminal(
   run: ReviewRun | null | undefined,
   currentHeadSha?: string,
 ): boolean;
-
 export declare function classifyTerminalRun(
   run: ReviewRun | null | undefined,
   currentHeadSha?: string,
@@ -98,7 +92,6 @@ export declare function filterRunsWithinCycleBoundary(
   runs: ReviewRun[],
   cycleOpenedAtUtc: string | null | undefined,
 ): ReviewRun[];
-
 export declare function resolveCurrentHeadOpenFindingCount(
   runs: ReviewRun[],
   prNumber: number,
@@ -123,19 +116,7 @@ export declare function normalizePrCapCycleState(
   prNumber: number,
 ): PrCapCycleState;
 
-export declare function syncReviewCycleCapState(input: {
-  capState?: Record<string, unknown>;
-  reviewRuns?: ReviewRun[];
-  prNumber: number;
-  currentHeadSha: string;
-  openPrs?: OpenPr[];
-  issueBody?: string | null;
-  tier?: string;
-  producer?: string;
-  nowMs?: number;
-}): { capState: Record<string, unknown>; prState: PrCapCycleState };
-
-export declare function evaluateReviewCycleCapGate(input: {
+export interface ReviewCycleCapInput {
   prNumber: number;
   currentHeadSha?: string;
   openPrs?: OpenPr[];
@@ -146,22 +127,20 @@ export declare function evaluateReviewCycleCapGate(input: {
   mergedPrNumbers?: number[];
   producer?: string;
   nowMs?: number;
-}): ReviewCycleCapGateResult;
+  reviewStageComplete?: boolean;
+}
 
-export declare function applyReviewCycleCapToStartDecision(input: {
-  prNumber: number;
-  currentHeadSha?: string;
-  openPrs?: OpenPr[];
-  reviewRuns?: ReviewRun[];
-  capState?: Record<string, unknown>;
-  issueBody?: string | null;
-  tier?: string;
-  mergedPrNumbers?: number[];
-  producer?: string;
-  nowMs?: number;
-  startAllowed?: boolean;
-  priorReason?: string;
-}): {
+export declare function syncReviewCycleCapState(
+  input: ReviewCycleCapInput & { currentHeadSha: string },
+): { capState: Record<string, unknown>; prState: PrCapCycleState };
+
+export declare function evaluateReviewCycleCapGate(
+  input: ReviewCycleCapInput,
+): ReviewCycleCapGateResult;
+
+export declare function applyReviewCycleCapToStartDecision(
+  input: ReviewCycleCapInput & { startAllowed?: boolean; priorReason?: string },
+): {
   start: boolean;
   triggerReviewRun: boolean;
   launch: boolean;
