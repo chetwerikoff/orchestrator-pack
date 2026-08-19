@@ -498,8 +498,8 @@ jobs:
           OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
         run: ./scripts/run-vitest-heavy-shard.ps1 -Shard ${{ matrix.shard }}
 
-  test-pester:
-    name: Pester regression
+  test-vitest-contracts:
+    name: Vitest contracts
     needs: classify-pr-changes
     if: |
       !cancelled() &&
@@ -512,26 +512,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Cache Pester module
-        uses: actions/cache@v4
         with:
-          path: ~/.local/share/powershell/Modules/Pester
-          key: pester-5-${{ runner.os }}-${{ hashFiles('scripts/install-pester-ci.ps1', 'scripts/test-all.ps1') }}
-          restore-keys: |
-            pester-5-${{ runner.os }}-
+          fetch-depth: 0
 
-      - name: Install Pester
-        shell: pwsh
-        run: ./scripts/install-pester-ci.ps1
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
 
-      - name: Run Pester track
-        shell: pwsh
-        run: ./scripts/test-all.ps1 -SkipNpm
+      - name: Install npm dependencies
+        run: npm ci --include=dev
+
+      - name: Run Vitest contract lane
+        run: node --experimental-strip-types scripts/vitest-ci-runner.ts contract
 
   test-aggregate:
     name: Run pack contract tests
-    needs: [classify-pr-changes, plan-vitest-ci-topology, test-typecheck, test-vitest-light, test-vitest-heavy, test-pester]
+    needs: [classify-pr-changes, plan-vitest-ci-topology, test-typecheck, test-vitest-light, test-vitest-heavy, test-vitest-contracts]
     if: |
       always() &&
       (needs.classify-pr-changes.result == 'skipped' ||
@@ -550,8 +548,8 @@ jobs:
           TYPECHECK_RESULT: ${{ needs.test-typecheck.result }}
           VITEST_LIGHT_RESULT: ${{ needs.test-vitest-light.result }}
           VITEST_HEAVY_RESULT: ${{ needs.test-vitest-heavy.result }}
+          VITEST_CONTRACT_RESULT: ${{ needs.test-vitest-contracts.result }}
           VITEST_TOPOLOGY_PLAN_RESULT: ${{ needs.plan-vitest-ci-topology.result }}
-          PESTER_RESULT: ${{ needs.test-pester.result }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: ./scripts/ci-test-aggregate.ps1
