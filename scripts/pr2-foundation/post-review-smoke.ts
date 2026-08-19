@@ -15,6 +15,7 @@ import {
 import { resolvePackReviewRunStoreRoot } from '../lib/pack-review-run-store.ts';
 import { parseComplexityTierFence } from '../lib/tier-gate-core.ts';
 import {
+  assertIndependentSmokeAdmission,
   readPackReviewAuthority,
   stagePackReviewImmutableRecord,
 } from '../pack-review-state.ts';
@@ -162,12 +163,6 @@ function reviewStageDisposition(input: {
   if (authority.cycle?.reviewStageComplete !== true) {
     return { kind: 'review_pending', reason: 'review_stage_incomplete' };
   }
-  if (authority.cycle.state !== 'closed'
-      || authority.terminal?.targetSha !== input.headSha
-      || authority.terminal.reviewVerdict !== 'clean'
-      || authority.smokeOrdering?.reviewSettledHeadSha !== input.headSha) {
-    return { kind: 'smoke_blocked', reason: 'review_stage_complete_without_clean_terminal' };
-  }
   const independent = authority.smokeOrdering?.independent;
   if (independent?.headSha === input.headSha) {
     if (independent.status === 'started') {
@@ -176,11 +171,21 @@ function reviewStageDisposition(input: {
     if (independent.status === 'passed') {
       return { kind: 'smoke_blocked', reason: 'independent_smoke_already_passed' };
     }
-    if (independent.status === 'failed' && independent.failureKind === 'finding') {
+    if (independent.status === 'failed'
+        && independent.failureKind === 'finding'
+        && independent.failureHeadSha === input.headSha) {
       return { kind: 'smoke_blocked', reason: 'independent_smoke_finding_requires_new_head' };
     }
   }
-  return { kind: 'smoke_candidate', reason: 'clean_review_stage_complete' };
+  try {
+    assertIndependentSmokeAdmission({ authority, headSha: input.headSha });
+  } catch (error) {
+    return {
+      kind: 'smoke_blocked',
+      reason: `independent_smoke_admission_blocked:${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  return { kind: 'smoke_candidate', reason: 'review_stage_complete_smoke_admitted' };
 }
 
 function resolveIssueBinding(input: {
