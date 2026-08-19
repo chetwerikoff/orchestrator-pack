@@ -29,6 +29,7 @@ interface OrcaWorkerStartEnvelope {
   readonly error?: {
     readonly code?: unknown;
     readonly message?: unknown;
+    readonly data?: unknown;
   };
 }
 
@@ -60,11 +61,19 @@ export interface SupervisedWorkerStartResidual {
   readonly residualResources?: readonly unknown[];
 }
 
+export interface SupervisedWorkerStartRecoveryEvidence {
+  readonly requestId: string;
+  readonly dispatchId?: string;
+  readonly recoveryCommand?: string;
+}
+
 export interface SupervisedWorkerStartResult {
   readonly ok: boolean;
   readonly reason: string;
   /** Exact provider error code from a structurally valid Orca error envelope. */
   readonly errorCode?: string;
+  /** Exact non-secret provider recovery fields from Orca error.data, when present. */
+  readonly recovery?: SupervisedWorkerStartRecoveryEvidence;
   readonly receipt?: SupervisedWorkerStartReceipt;
   readonly residualResources?: readonly unknown[];
   readonly assignment?: WorkerAssignmentRecord;
@@ -83,6 +92,22 @@ function nonEmpty(value: unknown): string {
   return String(value ?? '').trim();
 }
 
+function recoveryEvidence(error: unknown): SupervisedWorkerStartRecoveryEvidence | undefined {
+  if (!isRecord(error) || !isRecord(error.data)) return undefined;
+  const orchestrationRequestId = nonEmpty(error.data.orchestrationRequestId);
+  const requestId = nonEmpty(error.data.requestId);
+  if (orchestrationRequestId && requestId && orchestrationRequestId !== requestId) return undefined;
+  const exactRequestId = orchestrationRequestId || requestId;
+  if (!exactRequestId) return undefined;
+  const dispatchId = nonEmpty(error.data.dispatchId);
+  const recoveryCommand = nonEmpty(error.data.recoveryCommand);
+  return {
+    requestId: exactRequestId,
+    ...(dispatchId ? { dispatchId } : {}),
+    ...(recoveryCommand ? { recoveryCommand } : {}),
+  };
+}
+
 function residualResources(receipt: SupervisedWorkerStartReceipt): readonly unknown[] | undefined {
   if (Array.isArray(receipt.residualResources)) return receipt.residualResources;
   return Array.isArray(receipt.effects) ? receipt.effects : undefined;
@@ -92,12 +117,14 @@ function rejectedStart(
   reason: string,
   receipt?: SupervisedWorkerStartReceipt,
   errorCode?: string,
+  recovery?: SupervisedWorkerStartRecoveryEvidence,
 ): SupervisedWorkerStartResult {
   const resources = receipt ? residualResources(receipt) : undefined;
   return {
     ok: false,
     reason,
     ...(errorCode ? { errorCode } : {}),
+    ...(recovery ? { recovery } : {}),
     ...(receipt ? { receipt } : {}),
     ...(resources ? { residualResources: resources } : {}),
   };
@@ -325,9 +352,10 @@ export async function runSupervisedWorkerStart(input: {
     }
     const errorRecord = isRecord(parsed.error) ? parsed.error : null;
     const errorCode = nonEmpty(errorRecord?.code);
+    const recovery = recoveryEvidence(errorRecord);
     if (!isRecord(parsed.result)) {
       return errorCode
-        ? rejectedStart('supervised_start_envelope_error', undefined, errorCode)
+        ? rejectedStart('supervised_start_envelope_error', undefined, errorCode, recovery)
         : rejectedStart('supervised_start_receipt_invalid');
     }
     envelope = parsed as OrcaWorkerStartEnvelope;
@@ -336,11 +364,12 @@ export async function runSupervisedWorkerStart(input: {
   }
   const receipt = envelope.result as SupervisedWorkerStartReceipt;
   const errorCode = nonEmpty(envelope.error?.code);
+  const recovery = recoveryEvidence(envelope.error);
   if (envelope.ok !== true) {
-    return rejectedStart('supervised_start_envelope_not_ok', receipt, errorCode || undefined);
+    return rejectedStart('supervised_start_envelope_not_ok', receipt, errorCode || undefined, recovery);
   }
   if (!execution.ok || receipt.state !== 'ready') {
-    return rejectedStart(`supervised_start_${receipt.state || 'failed'}`, receipt, errorCode || undefined);
+    return rejectedStart(`supervised_start_${receipt.state || 'failed'}`, receipt, errorCode || undefined, recovery);
   }
   const taskId = String(receipt.taskId ?? '').trim();
   const dispatchId = String(receipt.dispatchId ?? '').trim();
