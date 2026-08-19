@@ -9,22 +9,27 @@ import {
   readWorkerAssignmentStore,
   withCurrentWorkerAssignmentFence,
   workerAssignmentKey,
+  type BriefWorkerAssignment,
   type WorkerAssignment,
   type WorkerAssignmentRecord,
 } from './worker-assignment-store.ts';
 
 export interface ResolvedWorkerAssignment {
-  readonly assignment: WorkerAssignmentRecord;
+  readonly assignment: WorkerAssignment;
   /** Exact runtime-private identity is deliberately held only in memory. */
   readonly worker: RuntimeWorker;
 }
 
-export interface ResolvedIssueWorkerAssignment extends ResolvedWorkerAssignment {
-  readonly assignment: WorkerAssignment;
+export interface ResolvedBriefWorkerAssignment {
+  readonly assignment: BriefWorkerAssignment;
+  /** Exact runtime-private identity is deliberately held only in memory. */
+  readonly worker: RuntimeWorker;
 }
 
+export interface ResolvedIssueWorkerAssignment extends ResolvedWorkerAssignment {}
+
 export interface WorkerAssignmentReconciliation {
-  readonly assignment: WorkerAssignmentRecord;
+  readonly assignment: WorkerAssignment;
   readonly reason: 'target_unresolved' | 'remote_not_applicable';
 }
 
@@ -57,6 +62,8 @@ export type WorkerAssignmentResolution =
   | {
       readonly status: 'ok';
       readonly bindings: readonly ResolvedWorkerAssignment[];
+      /** Pre-Issue assignments resolved by the same repository/provider/binding authority. */
+      readonly briefBindings?: readonly ResolvedBriefWorkerAssignment[];
       readonly reconciliations: readonly WorkerAssignmentReconciliation[];
     }
   | {
@@ -64,6 +71,10 @@ export type WorkerAssignmentResolution =
       readonly bindings: readonly [];
       readonly reconciliations: readonly [];
     };
+
+function isNumberedAssignment(assignment: WorkerAssignmentRecord): assignment is WorkerAssignment {
+  return Number.isInteger(assignment.issueNumber) && Number(assignment.issueNumber) > 0;
+}
 
 function sameLogicalAssignment(left: WorkerAssignmentRecord | undefined, right: WorkerAssignmentRecord): boolean {
   return Boolean(left
@@ -191,11 +202,14 @@ export function resolveCurrentWorkerAssignmentBindings(input: {
   }
   const repository = input.repository.trim().toLowerCase();
   const bindings: ResolvedWorkerAssignment[] = [];
+  const briefBindings: ResolvedBriefWorkerAssignment[] = [];
   const reconciliations: WorkerAssignmentReconciliation[] = [];
+  const resolvedWorkers: RuntimeWorker[] = [];
   for (const assignment of assignments) {
     if (assignment.repository !== repository) continue;
+    const numbered = isNumberedAssignment(assignment);
     if (assignment.kind !== 'local') {
-      if (assignmentStillCurrent(input.file, assignment)) {
+      if (numbered && assignmentStillCurrent(input.file, assignment)) {
         reconciliations.push({ assignment, reason: 'remote_not_applicable' });
       }
       continue;
@@ -205,33 +219,38 @@ export function resolveCurrentWorkerAssignmentBindings(input: {
       { timeoutMs: input.timeoutMs ?? 5_000 },
     );
     if (resolved.status !== 'ok') {
-      if (assignmentStillCurrent(input.file, assignment)) {
+      if (numbered && assignmentStillCurrent(input.file, assignment)) {
         reconciliations.push({ assignment, reason: 'target_unresolved' });
       }
       continue;
     }
     if (!assignmentStillCurrent(input.file, assignment)) continue;
     if (resolved.value.kind === 'gone') {
-      // Fleet reconciliation has no authority to act on gone evidence. Preserve
-      // the exact gone distinction only on the target-resolution seam used by
-      // replacement/recovery; the existing scheduler handoff remains generic.
-      reconciliations.push({ assignment, reason: 'target_unresolved' });
+      // Fleet reconciliation is Issue-scoped and has no authority to act on a
+      // brief-only row. Numbered rows preserve the existing generic handoff.
+      if (numbered) reconciliations.push({ assignment, reason: 'target_unresolved' });
       continue;
     }
     const worker = resolved.value.worker;
-    if (bindings.some((candidate) => sameRuntimeWorker(candidate.worker.identity, worker.identity))) {
+    if (resolvedWorkers.some((candidate) => sameRuntimeWorker(candidate.identity, worker.identity))) {
       return { status: 'assignment_untrusted', bindings: [], reconciliations: [] };
     }
-    bindings.push({ assignment, worker });
+    resolvedWorkers.push(worker);
+    if (numbered) bindings.push({ assignment, worker });
+    else briefBindings.push({ assignment, worker });
   }
-  return { status: 'ok', bindings, reconciliations };
+  return {
+    status: 'ok',
+    bindings,
+    reconciliations,
+    ...(briefBindings.length > 0 ? { briefBindings } : {}),
+  };
 }
 
 export function bindingForIssue(
   bindings: readonly ResolvedWorkerAssignment[],
   issueNumber: number,
 ): ResolvedIssueWorkerAssignment | null {
-  const matches = bindings.filter((binding): binding is ResolvedIssueWorkerAssignment =>
-    binding.assignment.issueNumber === issueNumber);
+  const matches = bindings.filter((binding) => binding.assignment.issueNumber === issueNumber);
   return matches.length === 1 ? matches[0]! : null;
 }
