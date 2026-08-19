@@ -3,10 +3,10 @@
  * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
  * (Issue #695).
  */
-import { spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runProcessSync } from './kernel/subprocess.mjs';
 import {
   formatOversizedGuardFailures,
   topologyArtifactPath,
@@ -54,20 +54,24 @@ function writeGhaOutput(topology) {
 }
 
 function gitRevision(repoRoot, ref) {
-  const result = spawnSync('git', ['rev-parse', '--verify', ref], {
+  const result = runProcessSync({
+    command: 'git',
+    args: ['rev-parse', '--verify', ref],
     cwd: repoRoot,
-    encoding: 'utf8',
+    inheritParentEnv: true,
   });
-  const sha = result.status === 0 ? String(result.stdout ?? '').trim().toLowerCase() : '';
+  const sha = result.ok ? String(result.stdout ?? '').trim().toLowerCase() : '';
   return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
 }
 
 function gitHeadParents(repoRoot) {
-  const result = spawnSync('git', ['rev-list', '--parents', '-n', '1', 'HEAD'], {
+  const result = runProcessSync({
+    command: 'git',
+    args: ['rev-list', '--parents', '-n', '1', 'HEAD'],
     cwd: repoRoot,
-    encoding: 'utf8',
+    inheritParentEnv: true,
   });
-  if (result.status !== 0) return [];
+  if (!result.ok) return [];
   return String(result.stdout ?? '')
     .trim()
     .split(/\s+/u)
