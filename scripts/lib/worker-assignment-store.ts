@@ -177,12 +177,16 @@ export function currentWorkerAssignmentByDeliverable(
   return key ? store.assignments[key] ?? null : null;
 }
 
-/** Existing Issue-scoped census. Brief-only rows join it only after Issue metadata is attached. */
-export function listCurrentWorkerAssignments(file: string): readonly WorkerAssignment[] | null {
+/** Complete assignment census used by repository/provider/binding runtime resolution. */
+export function listCurrentWorkerAssignmentRecords(file: string): readonly WorkerAssignmentRecord[] | null {
   const store = readWorkerAssignmentStore(file);
-  return store
-    ? Object.values(store.assignments).filter(isNumberedAssignment)
-    : null;
+  return store ? Object.values(store.assignments) : null;
+}
+
+/** Issue-scoped projection for consumers that genuinely require a published Issue number. */
+export function listCurrentWorkerAssignments(file: string): readonly WorkerAssignment[] | null {
+  const assignments = listCurrentWorkerAssignmentRecords(file);
+  return assignments ? assignments.filter(isNumberedAssignment) : null;
 }
 
 function atomicReplaceReadBack(file: string, store: WorkerAssignmentStore): boolean {
@@ -411,7 +415,7 @@ function sameAssignment(left: WorkerAssignmentRecord | null, right: WorkerAssign
     && left.bindingKey === right.bindingKey);
 }
 
-export function assignmentStillCurrent(file: string, expected: WorkerAssignment): boolean {
+export function assignmentStillCurrent(file: string, expected: WorkerAssignmentRecord): boolean {
   const key = workerAssignmentKey(expected.taskId, expected.bindingKey);
   if (!key) return false;
   const store = readWorkerAssignmentStore(file);
@@ -429,7 +433,7 @@ export function assignmentStillCurrent(file: string, expected: WorkerAssignment)
  */
 export async function withCurrentWorkerAssignmentFence<T>(
   file: string,
-  expected: WorkerAssignment,
+  expected: WorkerAssignmentRecord,
   action: () => T | Promise<T>,
 ): Promise<CurrentWorkerAssignmentFenceResult<T>> {
   try {
