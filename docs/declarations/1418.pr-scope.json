@@ -1,0 +1,46 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1418,
+  "declared_paths": [
+    "docs/declarations/1418.pr-scope.json",
+    "scripts/ci-test-aggregate.ps1",
+    "scripts/lib/native-entrypoint-preflight-shim.ts",
+    "scripts/lib/testmode-fleet-lane.ts",
+    "scripts/lib/worker-assignment-store.test.ts",
+    "scripts/lib/worker-assignment-store.ts",
+    "scripts/pack-worker-report.test.ts",
+    "scripts/pack-worker-report.ts",
+    "scripts/pr2-foundation/post-review-smoke.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/run-vitest-heavy-shard.ps1",
+    "scripts/run-vitest-light-lane.ps1",
+    "scripts/run-vitest-wallclock-stage.ps1",
+    "scripts/vitest-ci-runner.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1418.pr-scope.json",
+    "scripts/ci-test-aggregate.ps1",
+    "scripts/lib/native-entrypoint-preflight-shim.ts",
+    "scripts/lib/testmode-fleet-lane.ts",
+    "scripts/lib/worker-assignment-store.test.ts",
+    "scripts/lib/worker-assignment-store.ts",
+    "scripts/pack-worker-report.test.ts",
+    "scripts/pack-worker-report.ts",
+    "scripts/pr2-foundation/post-review-smoke.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/run-vitest-heavy-shard.ps1",
+    "scripts/run-vitest-light-lane.ps1",
+    "scripts/run-vitest-wallclock-stage.ps1",
+    "scripts/vitest-ci-runner.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "source_revision": "a11e8e380c8adef680771cb124e030db81aeb2ea"
+}
