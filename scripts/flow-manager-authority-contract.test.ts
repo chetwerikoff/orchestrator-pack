@@ -13,6 +13,7 @@ import {
 import { runStateLightEntry } from './chatgpt-browser-turn/state-light-entry.ts';
 import { runCli as runLegacyBrowserTurnCli } from './chatgpt-browser-turn.ts';
 import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
+import { observePublishedArtifact, runWait } from './flow-manager-long-running-child.ts';
 
 const contract = readFileSync(new URL('../.claude/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
 const ghTransport = readFileSync(new URL('./lib/create-issue-stage-record-gh.ts', import.meta.url), 'utf8');
@@ -89,6 +90,48 @@ function captureWrite(stream: NodeJS.WriteStream): { chunks: string[]; restore: 
     return true;
   }) as typeof stream.write);
   return { chunks, restore: () => spy.mockRestore() };
+}
+
+function publicationComment(input: {
+  id: number;
+  body: string;
+  principal?: string;
+  edited?: boolean;
+}): Record<string, unknown> {
+  return {
+    id: input.id,
+    body: input.body,
+    created_at: '2026-08-19T01:00:00Z',
+    updated_at: input.edited ? '2026-08-19T01:01:00Z' : '2026-08-19T01:00:00Z',
+    user: { login: input.principal ?? 'chetwerikoff' },
+    author_association: 'OWNER',
+  };
+}
+
+function publicationTransport(
+  comments: readonly Record<string, unknown>[],
+  principal = 'chetwerikoff',
+) {
+  return {
+    runGh: vi.fn((argv: string[]) => {
+      const target = argv[2] ?? '';
+      if (target === 'user') {
+        return { exitCode: 0, stdout: `${principal}\n`, stderr: '' };
+      }
+      if (/\/issues\/1441\/comments\?/u.test(target)) {
+        return { exitCode: 0, stdout: JSON.stringify(comments), stderr: '' };
+      }
+      const rejected = target.match(/\/issues\/comments\/([0-9]+)$/u);
+      if (rejected) {
+        const id = Number(rejected[1]);
+        const comment = comments.find((candidate) => Number(candidate.id) === id);
+        return comment
+          ? { exitCode: 0, stdout: JSON.stringify(comment), stderr: '' }
+          : { exitCode: 1, stdout: '', stderr: `missing comment ${id}` };
+      }
+      return { exitCode: 1, stdout: '', stderr: `unexpected:${argv.join(' ')}` };
+    }),
+  };
 }
 
 describe('Issue #1197 flow-manager authority contract', () => {
@@ -415,6 +458,117 @@ describe('Issue #1431 manager reviewer canon', () => {
       expect(stderr.chunks.join('')).toContain('direct_publication_arguments_required');
     } finally {
       stderr.restore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Issue #1441 publication authority regressions', () => {
+  const currentInvocation = '14410000-1111-4222-8333-111111111111';
+  const siblingInvocation = '14410000-1111-4222-8333-222222222222';
+  const currentBody = [
+    'Read revision: #1441 r05',
+    `INVOCATION_ID_TO_ECHO: ${currentInvocation}`,
+    'stage: architectural-review',
+    'source-slot: 01',
+    'VERDICT: NO_FINDINGS',
+  ].join('\n');
+  const expectation = {
+    kind: 'reviewer' as const,
+    repository: 'chetwerikoff/orchestrator-pack',
+    issueNumber: 1441,
+    sourceRevision: 'r05',
+    invocationId: currentInvocation,
+    stage: 'architectural-review',
+    sourceSlot: '01',
+  };
+
+  it('blocks matching foreign or edited publications without blocking unrelated foreign comments', () => {
+    const foreign = observePublishedArtifact(expectation, publicationTransport([
+      publicationComment({ id: 11, body: currentBody, principal: 'foreign-reviewer' }),
+    ]) as never);
+    expect(foreign).toMatchObject({
+      status: 'blocked',
+      reason: 'reviewer_publication_foreign_principal',
+      diagnostics: ['comment:11'],
+    });
+
+    const edited = observePublishedArtifact(expectation, publicationTransport([
+      publicationComment({ id: 12, body: currentBody, edited: true }),
+    ]) as never);
+    expect(edited).toMatchObject({
+      status: 'blocked',
+      reason: 'reviewer_publication_edited_comment',
+      diagnostics: ['comment:12'],
+    });
+
+    const unrelated = observePublishedArtifact(expectation, publicationTransport([
+      publicationComment({
+        id: 13,
+        principal: 'foreign-reviewer',
+        body: [
+          'Read revision: #1441 r05',
+          'INVOCATION_ID_TO_ECHO: unrelated-invocation',
+          'stage: architectural-review',
+          'source-slot: 99',
+        ].join('\n'),
+      }),
+    ]) as never);
+    expect(unrelated).toMatchObject({
+      status: 'missing',
+      reason: 'reviewer_publication_not_visible',
+    });
+  });
+
+  it('settles a silent batch slot as incident/no-resend from a REST-visible sibling', async () => {
+    const siblingBody = [
+      'Read revision: #1441 r05',
+      `INVOCATION_ID_TO_ECHO: ${siblingInvocation}`,
+      'stage: architectural-review',
+      'source-slot: 02',
+      'VERDICT: NO_FINDINGS',
+    ].join('\n');
+    const transport = publicationTransport([
+      publicationComment({ id: 21, body: siblingBody }),
+    ]);
+    const root = mkdtempSync(join(tmpdir(), 'opk-1441-batch-settlement-'));
+    const stdout = captureWrite(process.stdout);
+    try {
+      await runWait({
+        runIdentity: 'run-1441-batch',
+        attemptIdentity: 'attempt-1441-batch',
+        terminalEnvelopePath: join(root, 'terminal.json'),
+        handoffReceiptPath: join(root, 'handoff.json'),
+        deadlineMs: 1_000,
+        publicationExpectation: expectation,
+        concurrentBatchExpectations: [
+          expectation,
+          {
+            ...expectation,
+            invocationId: siblingInvocation,
+            sourceSlot: '02',
+          },
+        ],
+        transport: transport as never,
+      });
+      const result = JSON.parse(stdout.chunks.join('').trim()) as Record<string, unknown>;
+      expect(result).toMatchObject({
+        non_terminal: false,
+        no_success_authority: true,
+        no_retry_authority: true,
+        completion_authority: 'concurrent_batch_publication',
+        batch_settlement_terminal: true,
+        concurrent_batch_incident: {
+          schema: 'flow-manager-concurrent-batch-incident/v1',
+          invocation_id: currentInvocation,
+          classification: 'possible-or-actual',
+          resend_forbidden: true,
+          settlement: 'incident',
+          published_sibling_invocation_ids: [siblingInvocation],
+        },
+      });
+    } finally {
+      stdout.restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
