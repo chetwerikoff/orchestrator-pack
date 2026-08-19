@@ -1,6 +1,8 @@
 import { runProcess } from '../kernel/subprocess.ts';
 import {
+  attachWorkerAssignmentIssueNumber,
   currentWorkerAssignment,
+  currentWorkerAssignmentByDeliverable,
   publishCurrentWorkerAssignment,
   resolveWorkerAssignmentStorePath,
   type WorkerAssignment,
@@ -68,6 +70,10 @@ export interface SupervisedWorkerStartResult {
   readonly assignment?: WorkerAssignmentRecord;
   readonly residual?: SupervisedWorkerStartResidual;
 }
+
+export type SupervisedWorkerIssueAttachResult =
+  | { readonly ok: true; readonly reason: 'issue_metadata_attached'; readonly assignment: WorkerAssignment }
+  | { readonly ok: false; readonly reason: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -382,7 +388,48 @@ export async function runSupervisedWorkerStart(input: {
   return { ok: true, reason: 'ready_and_assignment_bound', receipt, assignment: published.assignment };
 }
 
-function parseCli(argv: readonly string[]): {
+export async function attachSupervisedWorkerIssue(input: {
+  readonly repository: string;
+  readonly issueNumber: number;
+  readonly taskId: string;
+  readonly dispatchId: string;
+  readonly assignmentId: string;
+  readonly generation: number;
+  readonly projectId?: string;
+  readonly env?: NodeJS.ProcessEnv;
+}): Promise<SupervisedWorkerIssueAttachResult> {
+  const repository = input.repository.trim().toLowerCase();
+  const taskId = input.taskId.trim();
+  const dispatchId = input.dispatchId.trim();
+  const assignmentId = input.assignmentId.trim();
+  if (!repository || !Number.isInteger(input.issueNumber) || input.issueNumber <= 0
+    || !taskId || !dispatchId || !assignmentId
+    || !Number.isInteger(input.generation) || input.generation <= 0) {
+    return { ok: false, reason: 'assignment_input_invalid' };
+  }
+  const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
+  const current = currentWorkerAssignmentByDeliverable(file, taskId, dispatchId);
+  if (!current
+    || current.repository !== repository
+    || current.assignmentId !== assignmentId
+    || current.generation !== input.generation) {
+    return { ok: false, reason: 'assignment_stale' };
+  }
+  const attached = await attachWorkerAssignmentIssueNumber({
+    file,
+    expected: current,
+    issueNumber: input.issueNumber,
+  });
+  if (!attached.ok) return attached;
+  return { ok: true, reason: 'issue_metadata_attached', assignment: attached.assignment };
+}
+
+function optionValue(args: readonly string[], name: string): string {
+  const index = args.indexOf(name);
+  return index >= 0 ? String(args[index + 1] ?? '').trim() : '';
+}
+
+function parseStartCli(argv: readonly string[]): {
   issueNumber?: number;
   repository: string;
   projectId?: string;
@@ -392,27 +439,39 @@ function parseCli(argv: readonly string[]): {
   if (separator < 0) throw new Error('usage: supervised-worker-start [--issue-number N] --repository owner/repo [--project-id id] -- --task task_id --terminal handle --worktree selector ...');
   const own = argv.slice(0, separator);
   const orcaArgs = argv.slice(separator + 1);
-  const value = (name: string): string => {
-    const index = own.indexOf(name);
-    return index >= 0 ? String(own[index + 1] ?? '').trim() : '';
-  };
-  const issueNumberRaw = value('--issue-number');
+  const issueNumberRaw = optionValue(own, '--issue-number');
   return {
     ...(issueNumberRaw ? { issueNumber: Number(issueNumberRaw) } : {}),
-    repository: value('--repository'),
-    ...(value('--project-id') ? { projectId: value('--project-id') } : {}),
+    repository: optionValue(own, '--repository'),
+    ...(optionValue(own, '--project-id') ? { projectId: optionValue(own, '--project-id') } : {}),
     orcaArgs,
   };
 }
 
+function parseAttachCli(argv: readonly string[]): Parameters<typeof attachSupervisedWorkerIssue>[0] {
+  const projectId = optionValue(argv, '--project-id');
+  return {
+    repository: optionValue(argv, '--repository'),
+    issueNumber: Number(optionValue(argv, '--issue-number')),
+    taskId: optionValue(argv, '--task-id'),
+    dispatchId: optionValue(argv, '--dispatch-id'),
+    assignmentId: optionValue(argv, '--assignment-id'),
+    generation: Number(optionValue(argv, '--generation')),
+    ...(projectId ? { projectId } : {}),
+  };
+}
+
+async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
+  const result = argv[0] === 'attach-issue'
+    ? await attachSupervisedWorkerIssue(parseAttachCli(argv.slice(1)))
+    : await runSupervisedWorkerStart(parseStartCli(argv));
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+  if (!result.ok) process.exitCode = 1;
+}
+
 if (process.argv[1]?.endsWith('supervised-worker-start.ts')) {
-  runSupervisedWorkerStart(parseCli(process.argv.slice(2)))
-    .then((result) => {
-      process.stdout.write(`${JSON.stringify(result)}\n`);
-      if (!result.ok) process.exitCode = 1;
-    })
-    .catch((error) => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-      process.exitCode = 1;
-    });
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
 }
