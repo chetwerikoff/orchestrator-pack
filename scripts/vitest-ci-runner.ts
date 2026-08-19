@@ -2,6 +2,7 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import {
   applyOpkVitestHarnessEnv,
@@ -14,9 +15,17 @@ import {
 } from './lib/testmode-fleet-lane.ts';
 
 const RPC_FLAKE = /onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR/isu;
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+export function repositoryRootFromModuleUrl(moduleUrl: string): string {
+  return path.resolve(path.dirname(fileURLToPath(moduleUrl)), '..');
+}
+const ROOT = repositoryRootFromModuleUrl(import.meta.url);
 const NODE = process.execPath;
 const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const CONTRACT_TESTS = [
+  'scripts/vitest-ci-runner.test.ts',
+  'scripts/pester-retirement.test.ts',
+  'scripts/pr2-foundation/scheduler-post-review-smoke.test.ts',
+] as const;
 
 interface LightShardPlan {
   readonly lightMaxWorkers: number;
@@ -28,9 +37,9 @@ interface LightShardPlan {
 }
 interface HeavyShardPlan { readonly shard: number; readonly files: readonly string[]; readonly totalRuntimeMs: number }
 interface WallclockPlan { readonly files: readonly string[] }
-interface HeavyFileRunPlan { readonly mode: 'file' | 'tests'; readonly pool: string; readonly tests?: readonly string[]; readonly batchable?: boolean }
+export interface HeavyFileRunPlan { readonly mode: 'file' | 'tests'; readonly pool: string; readonly tests?: readonly string[]; readonly batchable?: boolean }
 interface HeavyMember { readonly kind: 'file' | 'test'; readonly file: string; readonly pool: string; readonly label: string; readonly testPattern?: string }
-interface HeavyInvocation { readonly label: string; readonly pool: string; readonly files: readonly string[]; readonly testPattern?: string; readonly members: readonly HeavyMember[] }
+export interface HeavyInvocation { readonly label: string; readonly pool: string; readonly files: readonly string[]; readonly testPattern?: string; readonly members: readonly HeavyMember[] }
 
 export interface AggregateInputs {
   readonly typecheckResult: string;
@@ -88,6 +97,9 @@ function positive(value: string | undefined, fallback: number): number {
 function reportPath(name: string): string { return path.join(ROOT, name); }
 function removeIfPresent(file: string): void { if (existsSync(file)) rmSync(file, { force: true }); }
 function elapsedSeconds(started: number): number { return Math.round(((Date.now() - started) / 1000) * 100) / 100; }
+export function runtimeReportAvailable(file: string): boolean { return existsSync(file); }
+export function hasRpcFlake(text: string): boolean { return RPC_FLAKE.test(text); }
+export function heavyAttemptLimit(env: Readonly<NodeJS.ProcessEnv>): number { return env.CI === 'true' ? 5 : 1; }
 
 async function runBudget(report: string, env: Readonly<NodeJS.ProcessEnv>): Promise<boolean> {
   const result = await child(NODE, [path.join(ROOT, 'scripts/enforce-vitest-runtime-budget.mjs'), report], env);
@@ -123,7 +135,7 @@ export function aggregateFromEnv(env: Readonly<NodeJS.ProcessEnv> = process.env)
     typecheckResult: String(env.TYPECHECK_RESULT ?? ''),
     vitestLightResult: String(env.VITEST_LIGHT_RESULT ?? ''),
     vitestHeavyResult: String(env.VITEST_HEAVY_RESULT ?? ''),
-    contractResult: String(env.VITEST_CONTRACT_RESULT ?? env.PESTER_RESULT ?? ''),
+    contractResult: String(env.VITEST_CONTRACT_RESULT ?? ''),
     topologyResult: String(env.VITEST_TOPOLOGY_PLAN_RESULT ?? ''),
     headSha: String(env.GITHUB_SHA ?? ''),
     runId: String(env.GITHUB_RUN_ID ?? ''),
@@ -142,6 +154,13 @@ async function runAggregate(env: Readonly<NodeJS.ProcessEnv>): Promise<number> {
   return 0;
 }
 
+async function runContract(env: NodeJS.ProcessEnv): Promise<number> {
+  const result = await runNpmTest(CONTRACT_TESTS, env);
+  if (!result.ok) return result.exitCode ?? 1;
+  process.stdout.write(`[PASS] Vitest contract lane files=${CONTRACT_TESTS.length}\n`);
+  return 0;
+}
+
 async function runLightShard(plan: LightShardPlan, shard: number, total: number, env: NodeJS.ProcessEnv): Promise<number> {
   if (plan.light.length === 0) {
     process.stdout.write(`[PASS] Vitest light lane shard=${shard}/${total}: no classified light files\n`);
@@ -156,12 +175,12 @@ async function runLightShard(plan: LightShardPlan, shard: number, total: number,
   const started = Date.now();
   const result = await runNpmTest([...plan.light, '--reporter=default', '--reporter=json', `--outputFile=${report}`], env);
   const combined = `${result.stdout}\n${result.stderr}`;
-  if (RPC_FLAKE.test(combined)) {
+  if (hasRpcFlake(combined)) {
     process.stdout.write(`[FAIL] Vitest worker RPC flake signature detected in light lane shard=${shard}/${total}\n`);
     return 1;
   }
   if (!result.ok) return result.exitCode ?? 1;
-  if (!existsSync(report)) {
+  if (!runtimeReportAvailable(report)) {
     process.stdout.write(`[FAIL] Vitest runtime report missing for light lane shard=${shard}/${total}\n`);
     return 1;
   }
@@ -191,7 +210,7 @@ async function runLight(shard: number, env: NodeJS.ProcessEnv): Promise<number> 
   return runLightShard(plan, 1, 1, env);
 }
 
-function buildHeavyInvocations(files: readonly string[], plans: ReadonlyMap<string, HeavyFileRunPlan>, batchSize: number): HeavyInvocation[] {
+export function buildHeavyInvocations(files: readonly string[], plans: ReadonlyMap<string, HeavyFileRunPlan>, batchSize: number): HeavyInvocation[] {
   const invocations: HeavyInvocation[] = [];
   let open: HeavyMember[] = [];
   let openPool = '';
@@ -275,7 +294,7 @@ async function runHeavy(shard: number, env: NodeJS.ProcessEnv): Promise<number> 
       const safe = invocation.label.replace(/[^\w.-]+/gu, '_');
       const report = reportPath(`.vitest-runtime-report-heavy-${shard}-${sequence}-${safe}.json`);
       let passed = false;
-      const attempts = env.CI === 'true' ? 5 : 1;
+      const attempts = heavyAttemptLimit(env);
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
         removeIfPresent(report);
         const args = [
@@ -286,14 +305,14 @@ async function runHeavy(shard: number, env: NodeJS.ProcessEnv): Promise<number> 
         ];
         const result = await runNpmTest(args, env);
         const combined = `${result.stdout}\n${result.stderr}`;
-        if (RPC_FLAKE.test(combined)) {
-          const failedReport = existsSync(report) && await jsonReportPredicate('has-failed-tests', report, env);
+        if (hasRpcFlake(combined)) {
+          const failedReport = runtimeReportAvailable(report) && await jsonReportPredicate('has-failed-tests', report, env);
           if (failedReport) {
             failure = result.exitCode ?? 1;
             process.stdout.write(`[FAIL] Vitest heavy shard ${shard} invocation ${invocation.label} reported genuine test failure alongside RPC-flake text; not retrying\n`);
             break;
           }
-          const clean = existsSync(report) && await jsonReportPredicate('is-clean', report, env);
+          const clean = runtimeReportAvailable(report) && await jsonReportPredicate('is-clean', report, env);
           if (clean) {
             process.stdout.write(`[WARN] Post-success vitest-worker onTaskUpdate shutdown flake suppressed for ${invocation.label}\n`);
             if (!await validateHeavyReport(invocation, report, env)) return 1;
@@ -310,7 +329,7 @@ async function runHeavy(shard: number, env: NodeJS.ProcessEnv): Promise<number> 
         }
         if (!result.ok) {
           failure = result.exitCode ?? 1;
-          const failedReport = existsSync(report) && await jsonReportPredicate('has-failed-tests', report, env);
+          const failedReport = runtimeReportAvailable(report) && await jsonReportPredicate('has-failed-tests', report, env);
           if (failedReport) {
             process.stdout.write(`[FAIL] Vitest heavy shard ${shard} invocation ${invocation.label} reported a genuine test failure; not retrying\n`);
             break;
@@ -327,7 +346,7 @@ async function runHeavy(shard: number, env: NodeJS.ProcessEnv): Promise<number> 
           }
           break;
         }
-        if (!existsSync(report)) {
+        if (!runtimeReportAvailable(report)) {
           process.stdout.write(`[FAIL] Vitest runtime report missing for heavy shard ${shard} invocation ${invocation.label}\n`);
           return 1;
         }
@@ -377,7 +396,7 @@ async function runWallclock(env: NodeJS.ProcessEnv): Promise<number> {
     const invocations = filePlan.mode === 'tests' ? (filePlan.tests ?? []).map((title) => ({ label: `${file} > ${title}`, title })) : [{ label: file, title: '' }];
     for (const invocation of invocations) {
       const result = await runNpmTest([...(invocation.title ? ['-t', invocation.title] : []), file, '--pool', filePlan.pool], env);
-      if (RPC_FLAKE.test(`${result.stdout}\n${result.stderr}`)) {
+      if (hasRpcFlake(`${result.stdout}\n${result.stderr}`)) {
         process.stdout.write(`[FAIL] Vitest worker RPC flake signature detected in wall-clock file ${invocation.label}\n`);
         return 1;
       }
@@ -398,10 +417,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   if (command === 'aggregate') return runAggregate(process.env);
   const harness = envWithHarness();
   try {
+    if (command === 'contract') return runContract(harness.env);
     if (command === 'light') return runLight(parseShard(argv), harness.env);
     if (command === 'heavy') return runHeavy(parseShard(argv), harness.env);
     if (command === 'wallclock') return runWallclock(harness.env);
-    throw new Error('usage: vitest-ci-runner.ts <light [--shard N]|heavy --shard N|wallclock|aggregate>');
+    throw new Error('usage: vitest-ci-runner.ts <contract|light [--shard N]|heavy --shard N|wallclock|aggregate>');
   } finally {
     try { cleanupHarnessRoot(harness.root); }
     catch (error) { process.stderr.write(`vitest-ci-runner: harness cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`); }
