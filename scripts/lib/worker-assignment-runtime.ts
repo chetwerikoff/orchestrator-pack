@@ -91,7 +91,9 @@ export function resolveCurrentWorkerAssignmentTarget(input: {
   if (!store) return { status: 'assignment_untrusted' };
   const key = workerAssignmentKey(input.expected.taskId, input.expected.bindingKey);
   const current = key ? store.assignments[key] : undefined;
-  if (!current || !sameLogicalAssignment(current, input.expected)) return { status: 'assignment_stale' };
+  if (!current || current.issueNumber === undefined || !sameLogicalAssignment(current, input.expected)) {
+    return { status: 'assignment_stale' };
+  }
   if (current.kind !== 'local') {
     return { status: 'remote_not_applicable', assignment: current };
   }
