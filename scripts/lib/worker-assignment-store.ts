@@ -22,12 +22,10 @@ export const MAX_WORKER_ASSIGNMENT_STORE_BYTES = 262_144 as const;
 
 export type WorkerAssignmentKind = 'local' | 'remote';
 
-export interface WorkerAssignment {
+interface WorkerAssignmentBase {
   readonly schema: typeof WORKER_ASSIGNMENT_SCHEMA;
   readonly projectId: string;
   readonly repository: string;
-  /** Optional published-Issue metadata. It is not the assignment-store key. */
-  readonly issueNumber?: number;
   readonly taskId: string;
   readonly assignmentId: string;
   readonly generation: number;
@@ -38,6 +36,18 @@ export interface WorkerAssignment {
   readonly createdAtUtc: string;
 }
 
+/** Existing Issue-scoped assignment shape retained for all numbered consumers. */
+export interface WorkerAssignment extends WorkerAssignmentBase {
+  readonly issueNumber: number;
+}
+
+/** Brief-only authoring shape before the GitHub Issue deliverable exists. */
+export interface BriefWorkerAssignment extends WorkerAssignmentBase {
+  readonly issueNumber?: undefined;
+}
+
+export type WorkerAssignmentRecord = WorkerAssignment | BriefWorkerAssignment;
+
 export interface WorkerAssignmentExpectation {
   readonly assignmentId: string;
   readonly generation: number;
@@ -46,14 +56,14 @@ export interface WorkerAssignmentExpectation {
 export interface WorkerAssignmentStore {
   readonly schema: typeof WORKER_ASSIGNMENT_STORE_SCHEMA;
   readonly revision: number;
-  readonly assignments: Readonly<Record<string, WorkerAssignment>>;
+  readonly assignments: Readonly<Record<string, WorkerAssignmentRecord>>;
 }
 
-type PublishWorkerAssignmentResult =
-  | { readonly ok: true; readonly assignment: WorkerAssignment }
+type PublishWorkerAssignmentResult<T extends WorkerAssignmentRecord = WorkerAssignmentRecord> =
+  | { readonly ok: true; readonly assignment: T }
   | { readonly ok: false; readonly reason: string };
 
-export type AttachWorkerAssignmentIssueResult = PublishWorkerAssignmentResult;
+export type AttachWorkerAssignmentIssueResult = PublishWorkerAssignmentResult<WorkerAssignment>;
 
 export type CurrentWorkerAssignmentFenceResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -69,6 +79,10 @@ function optionalIssueNumber(value: unknown): number | undefined {
   return Number.isInteger(value) && Number(value) > 0 ? Number(value) : Number.NaN;
 }
 
+function isNumberedAssignment(value: WorkerAssignmentRecord): value is WorkerAssignment {
+  return Number.isInteger(value.issueNumber) && Number(value.issueNumber) > 0;
+}
+
 /** Canonical hard-cut key for one deliverable identity. No Issue-number alias exists. */
 export function workerAssignmentKey(taskIdValue: unknown, bindingKeyValue: unknown): string {
   const taskId = bounded(taskIdValue, 160);
@@ -80,9 +94,9 @@ export function workerAssignmentKey(taskIdValue: unknown, bindingKeyValue: unkno
   return `task-dispatch-${digest}`;
 }
 
-function validAssignment(value: unknown): value is WorkerAssignment {
+function validAssignment(value: unknown): value is WorkerAssignmentRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const row = value as Partial<WorkerAssignment>;
+  const row = value as Partial<WorkerAssignmentRecord>;
   const issueNumber = optionalIssueNumber(row.issueNumber);
   return row.schema === WORKER_ASSIGNMENT_SCHEMA
     && Boolean(bounded(row.projectId, 80))
@@ -124,7 +138,7 @@ export function parseWorkerAssignmentStore(raw: string): WorkerAssignmentStore |
     || !store.assignments || typeof store.assignments !== 'object' || Array.isArray(store.assignments)) return null;
   const entries = Object.entries(store.assignments);
   if (entries.length > MAX_WORKER_ASSIGNMENTS) return null;
-  const assignments: Record<string, WorkerAssignment> = {};
+  const assignments: Record<string, WorkerAssignmentRecord> = {};
   for (const [key, value] of entries) {
     if (!validAssignment(value)) return null;
     const expectedKey = workerAssignmentKey(value.taskId, value.bindingKey);
@@ -147,7 +161,8 @@ export function currentWorkerAssignment(
   const store = readWorkerAssignmentStore(file);
   if (!store) return null;
   const matches = Object.values(store.assignments)
-    .filter((assignment) => assignment.issueNumber === issueNumber);
+    .filter((assignment): assignment is WorkerAssignment =>
+      isNumberedAssignment(assignment) && assignment.issueNumber === issueNumber);
   return matches.length === 1 ? matches[0]! : null;
 }
 
@@ -155,16 +170,19 @@ export function currentWorkerAssignmentByDeliverable(
   file: string,
   taskId: string,
   bindingKey: string,
-): WorkerAssignment | null {
+): WorkerAssignmentRecord | null {
   const store = readWorkerAssignmentStore(file);
   if (!store) return null;
   const key = workerAssignmentKey(taskId, bindingKey);
   return key ? store.assignments[key] ?? null : null;
 }
 
+/** Existing Issue-scoped census. Brief-only rows join it only after Issue metadata is attached. */
 export function listCurrentWorkerAssignments(file: string): readonly WorkerAssignment[] | null {
   const store = readWorkerAssignmentStore(file);
-  return store ? Object.values(store.assignments) : null;
+  return store
+    ? Object.values(store.assignments).filter(isNumberedAssignment)
+    : null;
 }
 
 function atomicReplaceReadBack(file: string, store: WorkerAssignmentStore): boolean {
@@ -194,7 +212,7 @@ function atomicReplaceReadBack(file: string, store: WorkerAssignmentStore): bool
 }
 
 function expectationMatches(
-  current: WorkerAssignment | undefined,
+  current: WorkerAssignmentRecord | undefined,
   expected: WorkerAssignmentExpectation | undefined,
 ): boolean {
   if (!expected) return current === undefined;
@@ -205,7 +223,7 @@ function expectationMatches(
 function expectedEntry(
   store: WorkerAssignmentStore,
   expected: WorkerAssignmentExpectation,
-): { readonly key: string; readonly assignment: WorkerAssignment } | null {
+): { readonly key: string; readonly assignment: WorkerAssignmentRecord } | null {
   const matches = Object.entries(store.assignments)
     .filter(([, assignment]) => expectationMatches(assignment, expected));
   return matches.length === 1
@@ -221,6 +239,24 @@ function validExpectation(expected: WorkerAssignmentExpectation | undefined): bo
   );
 }
 
+interface PublishWorkerAssignmentInputBase {
+  readonly file: string;
+  readonly projectId?: string;
+  readonly repository: string;
+  readonly taskId: string;
+  readonly kind: WorkerAssignmentKind;
+  readonly provider: string;
+  readonly bindingKey: string;
+  readonly expectedCurrent?: WorkerAssignmentExpectation;
+  readonly now?: () => Date;
+}
+
+export function publishCurrentWorkerAssignment(
+  input: PublishWorkerAssignmentInputBase & { readonly issueNumber: number },
+): Promise<PublishWorkerAssignmentResult<WorkerAssignment>>;
+export function publishCurrentWorkerAssignment(
+  input: PublishWorkerAssignmentInputBase & { readonly issueNumber?: undefined },
+): Promise<PublishWorkerAssignmentResult<BriefWorkerAssignment>>;
 /**
  * Compare-and-publish one logical WorkerAssignment under its canonical
  * `(taskId, bindingKey)` deliverable key.
@@ -232,18 +268,9 @@ function validExpectation(expected: WorkerAssignmentExpectation | undefined): bo
  * the same publication lock. This is not compatibility rekeying: unreadable
  * pre-hard-cut `issue-<N>` stores are never parsed or converted.
  */
-export async function publishCurrentWorkerAssignment(input: {
-  readonly file: string;
-  readonly projectId?: string;
-  readonly repository: string;
-  readonly issueNumber?: number;
-  readonly taskId: string;
-  readonly kind: WorkerAssignmentKind;
-  readonly provider: string;
-  readonly bindingKey: string;
-  readonly expectedCurrent?: WorkerAssignmentExpectation;
-  readonly now?: () => Date;
-}): Promise<PublishWorkerAssignmentResult> {
+export async function publishCurrentWorkerAssignment(
+  input: PublishWorkerAssignmentInputBase & { readonly issueNumber?: number },
+): Promise<PublishWorkerAssignmentResult> {
   const projectId = bounded(input.projectId ?? 'orchestrator-pack', 80);
   const repository = bounded(input.repository, 240).toLowerCase();
   const taskId = bounded(input.taskId, 160);
@@ -278,20 +305,33 @@ export async function publishCurrentWorkerAssignment(input: {
 
       const previous = replacement?.assignment;
       const generation = (previous?.generation ?? 0) + 1;
-      const assignment: WorkerAssignment = {
-        schema: WORKER_ASSIGNMENT_SCHEMA,
-        projectId,
-        repository,
-        ...(issueNumber === undefined ? {} : { issueNumber }),
-        taskId,
-        assignmentId: `wa-${randomUUID()}`,
-        generation,
-        kind: input.kind,
-        provider,
-        bindingKey,
-        createdAtUtc: (input.now?.() ?? new Date()).toISOString(),
-      };
-      const assignments: Record<string, WorkerAssignment> = { ...store.assignments };
+      const assignment: WorkerAssignmentRecord = issueNumber === undefined
+        ? {
+            schema: WORKER_ASSIGNMENT_SCHEMA,
+            projectId,
+            repository,
+            taskId,
+            assignmentId: `wa-${randomUUID()}`,
+            generation,
+            kind: input.kind,
+            provider,
+            bindingKey,
+            createdAtUtc: (input.now?.() ?? new Date()).toISOString(),
+          }
+        : {
+            schema: WORKER_ASSIGNMENT_SCHEMA,
+            projectId,
+            repository,
+            issueNumber,
+            taskId,
+            assignmentId: `wa-${randomUUID()}`,
+            generation,
+            kind: input.kind,
+            provider,
+            bindingKey,
+            createdAtUtc: (input.now?.() ?? new Date()).toISOString(),
+          };
+      const assignments: Record<string, WorkerAssignmentRecord> = { ...store.assignments };
       if (replacement && replacement.key !== key) delete assignments[replacement.key];
       assignments[key] = assignment;
       const next: WorkerAssignmentStore = {
@@ -316,7 +356,7 @@ export async function publishCurrentWorkerAssignment(input: {
 /** Attach a published Issue number as metadata without changing deliverable key or assignment identity. */
 export async function attachWorkerAssignmentIssueNumber(input: {
   readonly file: string;
-  readonly expected: WorkerAssignment;
+  readonly expected: WorkerAssignmentRecord;
   readonly issueNumber: number;
 }): Promise<AttachWorkerAssignmentIssueResult> {
   if (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0) {
@@ -336,7 +376,7 @@ export async function attachWorkerAssignmentIssueNumber(input: {
         candidateKey !== key && assignment.issueNumber === input.issueNumber);
       if (conflicting) return { ok: false, reason: 'assignment_stale' } as const;
       if (current!.issueNumber === input.issueNumber) {
-        return { ok: true, assignment: current! } as const;
+        return { ok: true, assignment: current! as WorkerAssignment } as const;
       }
       if (current!.issueNumber !== undefined) {
         return { ok: false, reason: 'assignment_stale' } as const;
@@ -361,7 +401,7 @@ export async function attachWorkerAssignmentIssueNumber(input: {
   }
 }
 
-function sameAssignment(left: WorkerAssignment | null, right: WorkerAssignment): boolean {
+function sameAssignment(left: WorkerAssignmentRecord | null, right: WorkerAssignmentRecord): boolean {
   return Boolean(left
     && left.assignmentId === right.assignmentId
     && left.generation === right.generation
