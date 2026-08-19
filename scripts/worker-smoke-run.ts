@@ -108,6 +108,15 @@ export interface SmokeExecutorProfile {
   readonly command: string;
 }
 
+export type SmokeStartFenceResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly reason: string; readonly actionEntered: boolean };
+
+export interface SmokeAttemptDependencies {
+  readonly adapter?: RuntimeAdapter;
+  readonly startFence?: <T>(action: () => T | Promise<T>) => Promise<SmokeStartFenceResult<T>>;
+}
+
 const SMOKE_PROFILE_FIELDS = {
   routine: {
     agent: 'PACK_EXECUTOR_SMOKE_ROUTINE_AGENT',
@@ -1190,7 +1199,14 @@ function finishSmokeOrdering(
   });
 }
 
-async function runSmokeAttempt(options: CliOptions): Promise<number> {
+async function directSmokeStartFence<T>(action: () => T | Promise<T>): Promise<SmokeStartFenceResult<T>> {
+  return { ok: true, value: await action() };
+}
+
+export async function runSmokeAttempt(
+  options: CliOptions,
+  dependencies: SmokeAttemptDependencies = {},
+): Promise<number> {
   const suppliedIssueBody = readIssueBody(options.issueBodyFile);
   let issueBody = suppliedIssueBody;
   const suppliedTier = parseComplexityTierFence(suppliedIssueBody);
@@ -1236,7 +1252,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     return 1;
   }
 
-  const adapter = await selectRuntimeAdapter({}, { cwd: options.cwd });
+  const adapter = dependencies.adapter ?? await selectRuntimeAdapter({}, { cwd: options.cwd });
   const readiness = adapter.readiness({ cwd: options.cwd });
   if (readiness.status !== 'ok') {
     const report = operationalReport('BLOCKED', options, {
@@ -1277,50 +1293,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
 
   const runId = createSmokeRunIdentity();
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
-  const admission = preflightSmokeLifecycle({
-    repoRoot: options.cwd,
-    runId,
-    closeBoundHandle: () => 'close_failed:cross_process_identity_not_adopted',
-  });
-  if (!admission.admitted) {
-    const report = operationalReport('BLOCKED', options, {
-      action: 'acquire smoke spawn admission', expected: 'exclusive admission before spawn', observed: admission.reason ?? 'admission_refused', adapterId: adapter.id,
-    });
-    publishSmokeReport(report, options);
-    emit({ ok: false, report, lifecycle: admission }, options.json);
-    return 1;
-  }
-
-  const startedAtMs = Date.now();
-  ensureSmokeRunArtifactDir(artifactDir);
-  createSmokeLifecycleReservation({
-    runId,
-    artifactDir,
-    issueNumber: options.issueNumber,
-    prNumber: options.prNumber,
-    headSha: options.headSha,
-    nowMs: startedAtMs,
-    createTimeoutMs: SMOKE_CREATE_TIMEOUT_MS,
-    scenarioCount: plan.scenarios.length,
-  });
-  markSmokeCreateInProgress(artifactDir);
-
-  try {
-    orderingBinding = beginSmokeOrdering(options, issueBody);
-  } catch (error) {
-    const report = operationalReport('BLOCKED', options, {
-      action: 'admit smoke actor ordering',
-      expected: options.smokeActor === 'independent'
-        ? 'settled pack-review obligations'
-        : 'worker-owned smoke before pack-review',
-      observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
-      adapterId: adapter.id,
-    });
-    publishSmokeReport(report, options);
-    emit({ ok: false, report }, options.json);
-    return 1;
-  }
-
+  let startedAtMs = 0;
   let worker: RuntimeWorkerIdentity | undefined;
   let terminalCleanup = 'pending';
   let cleanupFinished = false;
@@ -1357,23 +1330,79 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
   };
 
   try {
-    const spawned = adapter.spawnWorker({
-      title: `smoke-${options.issueNumber}`,
-      command: smokeProfile.command,
-      workspace: 'active',
-    }, { cwd: options.cwd, timeoutMs: SMOKE_CREATE_TIMEOUT_MS });
-    if (spawned.status !== 'ok') {
-      markSmokeCreateAmbiguous(artifactDir, failureReason(spawned));
-      releaseSmokeAdmission(options.cwd, runId);
+    const startFence = dependencies.startFence ?? directSmokeStartFence;
+    const start = await startFence(async () => {
+      const admission = preflightSmokeLifecycle({
+        repoRoot: options.cwd,
+        runId,
+        closeBoundHandle: () => 'close_failed:cross_process_identity_not_adopted',
+      });
+      if (!admission.admitted) {
+        return { kind: 'admission_blocked' as const, admission };
+      }
+
+      startedAtMs = Date.now();
+      ensureSmokeRunArtifactDir(artifactDir);
+      createSmokeLifecycleReservation({
+        runId,
+        artifactDir,
+        issueNumber: options.issueNumber,
+        prNumber: options.prNumber,
+        headSha: options.headSha,
+        nowMs: startedAtMs,
+        createTimeoutMs: SMOKE_CREATE_TIMEOUT_MS,
+        scenarioCount: plan.scenarios.length,
+      });
+      markSmokeCreateInProgress(artifactDir);
+      orderingBinding = beginSmokeOrdering(options, issueBody);
+
+      const spawned = adapter.spawnWorker({
+        title: `smoke-${options.issueNumber}`,
+        command: smokeProfile.command,
+        workspace: 'active',
+      }, { cwd: options.cwd, timeoutMs: SMOKE_CREATE_TIMEOUT_MS });
+      if (spawned.status !== 'ok') {
+        const reason = failureReason(spawned);
+        markSmokeCreateAmbiguous(artifactDir, reason);
+        releaseSmokeAdmission(options.cwd, runId);
+        return { kind: 'spawn_failed' as const, reason };
+      }
+      worker = spawned.value.identity;
+      bindSmokeTerminalHandle(artifactDir, worker.id);
+      return { kind: 'started' as const };
+    });
+
+    if (!start.ok) {
+      if (!start.actionEntered) {
+        emit({ ok: true, skipped: true, attempted: false, reason: start.reason }, options.json);
+        return 0;
+      }
+      throw new Error(`smoke_start_fence_post_entry:${start.reason}`);
+    }
+    if (start.value.kind === 'admission_blocked') {
       const report = operationalReport('BLOCKED', options, {
-        action: 'spawn runtime smoke worker', expected: 'composite worker identity', observed: failureReason(spawned), terminalCleanup: 'ambiguous_unbound', adapterId: adapter.id,
+        action: 'acquire smoke spawn admission',
+        expected: 'exclusive admission before spawn',
+        observed: start.value.admission.reason ?? 'admission_refused',
+        adapterId: adapter.id,
+      });
+      publishSmokeReport(report, options);
+      emit({ ok: false, report, lifecycle: start.value.admission }, options.json);
+      return 1;
+    }
+    if (start.value.kind === 'spawn_failed') {
+      const report = operationalReport('BLOCKED', options, {
+        action: 'spawn runtime smoke worker',
+        expected: 'composite worker identity',
+        observed: start.value.reason,
+        terminalCleanup: 'ambiguous_unbound',
+        adapterId: adapter.id,
       });
       publishSmokeReport(report, options);
       emit({ ok: false, report }, options.json);
       return 1;
     }
-    worker = spawned.value.identity;
-    bindSmokeTerminalHandle(artifactDir, worker.id);
+    if (!worker || startedAtMs <= 0) throw new Error('smoke_start_prefix_incomplete');
 
     const binding = { runId, artifactDir };
     const prompt = buildLifecyclePrompt(buildSmokeAgentPrompt({
@@ -1466,12 +1495,17 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
   } catch (error) {
     const observed = scrubSmokeOutput(error instanceof Error ? error.message : 'handled_exception');
     if (worker && !cleanupFinished) cleanup('handled_exception', true);
-    else if (!worker) {
+    else if (!worker && startedAtMs > 0) {
       try { markSmokeCreateAmbiguous(artifactDir, observed); } catch { /* fail closed */ }
       releaseSmokeAdmission(options.cwd, runId);
     }
     const report = operationalReport('BLOCKED', options, {
-      action: 'run runtime-neutral worker smoke', expected: 'bounded terminal lifecycle', observed, terminalCleanup: worker ? terminalCleanup : 'ambiguous_unbound', worker, adapterId: adapter.id,
+      action: 'run runtime-neutral worker smoke',
+      expected: 'bounded terminal lifecycle',
+      observed,
+      terminalCleanup: worker ? terminalCleanup : startedAtMs > 0 ? 'ambiguous_unbound' : 'not_started',
+      worker,
+      adapterId: adapter.id,
     });
     publishSmokeReport(report, options);
     emit({ ok: false, report }, options.json);
