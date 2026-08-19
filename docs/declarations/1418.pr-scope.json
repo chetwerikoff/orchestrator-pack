@@ -10,8 +10,8 @@
     "scripts/ci-test-aggregate.ps1",
     "scripts/emit-vitest-heavy-topology.mjs",
     "scripts/install-pester-ci.ps1",
-    "scripts/lib/Ci-Red-Watchdog.Tests.ps1",
     "scripts/lib/ci-red-watchdog-selftest.mjs",
+    "scripts/lib/Ci-Red-Watchdog.Tests.ps1",
     "scripts/lib/native-entrypoint-preflight-shim.ts",
     "scripts/lib/testmode-fleet-lane.ts",
     "scripts/lib/worker-assignment-store.test.ts",
@@ -54,5 +54,5 @@
     "scripts/",
     "tests/powershell/Lint-SelfArchitect.Tests.ps1"
   ],
-  "source_revision": "7153446ad250d5429ae537ecf1d364594209844a"
+  "source_revision": "58139c15670cfb66ee58850aedc6bca07dec7890"
 }
