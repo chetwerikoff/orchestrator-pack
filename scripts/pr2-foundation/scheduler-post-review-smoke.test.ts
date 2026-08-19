@@ -4,11 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  publishCurrentWorkerAssignment,
-  resolveWorkerAssignmentStorePath,
-  type WorkerAssignment,
-} from '../lib/worker-assignment-store.ts';
+import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath, type WorkerAssignment } from '../lib/worker-assignment-store.ts';
 import {
   commitPackReviewTerminal,
   commitSmokeOrderingTransition,
@@ -68,33 +64,35 @@ function epochEnv(root: string): NodeJS.ProcessEnv {
 
 function settleReview(options: PackReviewAuthorityOptions) {
   const initial = initializePackReviewAuthority({ prNumber: PR, headSha: HEAD, tier: 'T3', options });
+  const terminalContract = {
+    schemaVersion: 1,
+    terminalContractVersion: 2,
+    terminalSource: 'normal',
+    runId: 'review-run-1418',
+    targetSha: HEAD,
+    reviewVerdict: 'clean',
+    findingCount: 0,
+    findingsDigest: 'clean-findings-digest',
+  } as const;
   const terminal = commitPackReviewTerminal({
     prNumber: PR,
     expectedTransitionSeq: initial.transitionSeq,
-    terminal: {
-      schemaVersion: 1,
-      terminalContractVersion: 2,
-      terminalSource: 'normal',
-      runId: 'review-run-1418',
-      targetSha: HEAD,
-      reviewVerdict: 'clean',
-      findingCount: 0,
-      findingsDigest: 'clean-findings-digest',
-    },
+    terminal: terminalContract,
     status: 'up_to_date',
     findingCount: 0,
     options,
   });
+  const publication = {
+    headSha: HEAD,
+    terminalRunId: terminalContract.runId,
+    status: 'succeeded',
+    publicationDigest: 'publication-digest',
+    recordedAtUtc: '2026-08-19T00:01:00.000Z',
+  } as const;
   return recordPackReviewPublication({
     prNumber: PR,
     expectedTransitionSeq: terminal.transitionSeq,
-    publication: {
-      headSha: HEAD,
-      terminalRunId: 'review-run-1418',
-      status: 'succeeded',
-      publicationDigest: 'publication-digest',
-      recordedAtUtc: '2026-08-19T00:01:00.000Z',
-    },
+    publication,
     options,
   });
 }
@@ -105,12 +103,12 @@ async function publishLocal(
   expectedCurrent?: Pick<WorkerAssignment, 'assignmentId' | 'generation'>,
 ): Promise<WorkerAssignment> {
   const result = await publishCurrentWorkerAssignment({
-    file,
     repository: REPOSITORY,
     issueNumber: ISSUE,
     taskId: 'task-1418',
-    kind: 'local',
+    file,
     provider: 'orca',
+    kind: 'local',
     bindingKey,
     ...(expectedCurrent ? { expectedCurrent } : {}),
   });
