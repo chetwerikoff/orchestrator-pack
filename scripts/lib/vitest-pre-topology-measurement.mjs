@@ -76,6 +76,9 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/pr2-foundation/fleet-reconciliation-handoff.test.ts': 120,
   'scripts/pr2-foundation/supervised-worker-start.test.ts': 120,
   'scripts/pr2-foundation/scheduler-repository-identity.test.ts': 120,
+  // Issue #1479 adds a deterministic light launch-assistant contract suite.
+  // Keep pre-topology bounded until the normal runtime-history lifecycle covers it.
+  'scripts/pr2-foundation/supervised-task-launch-assistant.test.ts': 120,
   // Issue #1298 worktree lifecycle tests are deterministic fixture coverage.
   // Keep the pre-topology plan bounded until runtime-history harvest records them.
   'scripts/worktree-lifecycle/create-continuation.test.ts': 120,
