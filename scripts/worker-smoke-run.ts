@@ -257,7 +257,6 @@ function gitPorcelain(cwd: string): string[] {
     command: 'git', args: ['status', '--porcelain'], cwd,
   })).split(/\r?\n/u).filter(Boolean);
 }
-
 function gitHead(cwd: string): string {
   return requireProcessOutput('git rev-parse HEAD', runProcessSync({
     command: 'git', args: ['rev-parse', 'HEAD'], cwd,
@@ -1330,17 +1329,25 @@ export async function runSmokeAttempt(
   };
 
   try {
+    const admission = preflightSmokeLifecycle({
+      repoRoot: options.cwd,
+      runId,
+      closeBoundHandle: () => 'close_failed:cross_process_identity_not_adopted',
+    });
+    if (!admission.admitted) {
+      const report = operationalReport('BLOCKED', options, {
+        action: 'acquire smoke spawn admission',
+        expected: 'exclusive admission before spawn',
+        observed: admission.reason ?? 'admission_refused',
+        adapterId: adapter.id,
+      });
+      publishSmokeReport(report, options);
+      emit({ ok: false, report, lifecycle: admission }, options.json);
+      return 1;
+    }
+
     const startFence = dependencies.startFence ?? directSmokeStartFence;
     const start = await startFence(async () => {
-      const admission = preflightSmokeLifecycle({
-        repoRoot: options.cwd,
-        runId,
-        closeBoundHandle: () => 'close_failed:cross_process_identity_not_adopted',
-      });
-      if (!admission.admitted) {
-        return { kind: 'admission_blocked' as const, admission };
-      }
-
       startedAtMs = Date.now();
       ensureSmokeRunArtifactDir(artifactDir);
       createSmokeLifecycleReservation({
@@ -1374,21 +1381,11 @@ export async function runSmokeAttempt(
 
     if (!start.ok) {
       if (!start.actionEntered) {
+        releaseSmokeAdmission(options.cwd, runId);
         emit({ ok: true, skipped: true, attempted: false, reason: start.reason }, options.json);
         return 0;
       }
       throw new Error(`smoke_start_fence_post_entry:${start.reason}`);
-    }
-    if (start.value.kind === 'admission_blocked') {
-      const report = operationalReport('BLOCKED', options, {
-        action: 'acquire smoke spawn admission',
-        expected: 'exclusive admission before spawn',
-        observed: start.value.admission.reason ?? 'admission_refused',
-        adapterId: adapter.id,
-      });
-      publishSmokeReport(report, options);
-      emit({ ok: false, report, lifecycle: start.value.admission }, options.json);
-      return 1;
     }
     if (start.value.kind === 'spawn_failed') {
       const report = operationalReport('BLOCKED', options, {
