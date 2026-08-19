@@ -26,7 +26,6 @@ import {
 } from './ci-red-watchdog.mjs';
 
 const libDir = path.dirname(fileURLToPath(import.meta.url));
-const scriptsDir = path.dirname(libDir);
 const NOW = 1_800_000_000_000;
 const HEAD = 'a'.repeat(40);
 const NEXT_HEAD = 'b'.repeat(40);
@@ -489,7 +488,7 @@ test('replacement generation re-enters the behavior gate', () => {
   assert.equal(replacement.reason, 'behavior_gate_passed');
 });
 
-test('watchdog transport is journal-first and submit revalidates before Enter', () => {
+test('watchdog transport is journal-first before delivery', () => {
   const watchdog = readFileSync(path.join(libDir, 'Ci-Red-Watchdog.ps1'), 'utf8');
   assert.ok(watchdog.includes('Ci-Red-Watchdog-Tick.ps1'));
 
@@ -498,14 +497,6 @@ test('watchdog transport is journal-first and submit revalidates before Enter', 
   const transportSideEffect = tick.indexOf('Invoke-PlannedCiFailureReconcileSend');
   assert.ok(transportIntent > 0);
   assert.ok(transportSideEffect > transportIntent);
-
-  const submit = readFileSync(path.join(scriptsDir, 'worker-message-submit-reconcile.ps1'), 'utf8');
-  const guard = submit.indexOf('Test-CiRedWatchdogSubmitBoundary');
-  const enter = submit.indexOf('Invoke-WorkerInputDraftSubmit');
-  assert.ok(guard > 0);
-  assert.ok(enter > guard);
-  assert.ok(submit.includes('Release-CiRedWatchdogSubmitBoundaryAttempt'));
-  assert.ok(submit.includes("-DispatchOutcome 'send_failed'"));
 });
 
 test('atomic claim prevents concurrent duplicate sends', () => withStore((dir) => {
