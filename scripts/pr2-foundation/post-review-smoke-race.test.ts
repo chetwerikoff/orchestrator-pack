@@ -196,6 +196,9 @@ async function publishLocal(file: string, bindingKey: string): Promise<WorkerAss
 
 type RuntimeHooks = {
   onResolve?: (ordinal: number) => void;
+  onSmokeSpawn?: () => void;
+  onDispatch?: () => void;
+  failDispatch?: boolean;
   wrapSmokeWorker?: (worker: RuntimeWorker) => RuntimeWorker;
 };
 
@@ -215,6 +218,7 @@ function runtimeFor(
   let resolveOrdinal = 0;
   let smokeSpawns = 0;
   const originalSpawn = base.spawnWorker.bind(base);
+  const originalDispatch = base.dispatchInput.bind(base);
   Object.defineProperty(base, 'resolveAssignmentWorker', {
     configurable: true,
     value: vi.fn((selector: { bindingKey?: string }) => {
@@ -241,8 +245,19 @@ function runtimeFor(
     value: vi.fn((input: Parameters<RuntimeAdapter['spawnWorker']>[0]) => {
       smokeSpawns += 1;
       const spawned = originalSpawn(input);
+      hooks.onSmokeSpawn?.();
       if (spawned.status !== 'ok' || !hooks.wrapSmokeWorker) return spawned;
       return { status: 'ok' as const, value: hooks.wrapSmokeWorker(spawned.value) };
+    }),
+  });
+  Object.defineProperty(base, 'dispatchInput', {
+    configurable: true,
+    value: vi.fn((input: Parameters<RuntimeAdapter['dispatchInput']>[0]) => {
+      hooks.onDispatch?.();
+      if (hooks.failDispatch) {
+        return { status: 'send_failed' as const, reason: 'dispatch-failure-fixture' };
+      }
+      return originalDispatch(input);
     }),
   });
   return {
@@ -326,6 +341,54 @@ afterEach(() => {
 });
 
 describe('Issue #1418 r10 partial smoke-start production races', () => {
+  it('releases the shared assignment fence after the bounded handoff so an unrelated Issue can publish', async () => {
+    const fixture = rootFixture();
+    configureSmokeEnv(fixture);
+    const body = issueBody();
+    ghFixture.issueBody = body;
+    ghFixture.headSha = fixture.headSha;
+    const reviewOptions: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    settleReview(fixture.headSha, reviewOptions);
+    const assignment = await publishLocal(fixture.assignmentStorePath, 'dispatch-shared-fence');
+    let lockObservedDuringSpawn = false;
+    let lockObservedAtDispatch = true;
+    let unrelatedPublication: ReturnType<typeof publishCurrentWorkerAssignment> | undefined;
+    const runtime = runtimeFor(assignment.bindingKey, fixture.workspace, {
+      onSmokeSpawn: () => {
+        lockObservedDuringSpawn = existsSync(`${fixture.assignmentStorePath}.lock`);
+        unrelatedPublication = publishCurrentWorkerAssignment({
+          file: fixture.assignmentStorePath,
+          repository: REPOSITORY,
+          issueNumber: ISSUE + 1,
+          taskId: 'task-unrelated-issue',
+          kind: 'local',
+          provider: 'orca',
+          bindingKey: 'dispatch-unrelated-issue',
+        });
+      },
+      onDispatch: () => {
+        lockObservedAtDispatch = existsSync(`${fixture.assignmentStorePath}.lock`);
+      },
+      failDispatch: true,
+    });
+    const deps = dependencies(fixture, runtime.adapter, body);
+
+    const first = await reconcilePostReviewSmoke(candidate(fixture.headSha), deps);
+
+    expect(first.handled).toBe(true);
+    expect(first.attempted).toBe(true);
+    expect(runtime.smokeSpawnCount()).toBe(1);
+    expect(lockObservedDuringSpawn).toBe(true);
+    expect(lockObservedAtDispatch).toBe(false);
+    expect(unrelatedPublication).toBeDefined();
+    const published = await unrelatedPublication!;
+    expect(published.ok).toBe(true);
+    if (published.ok) {
+      expect(published.assignment.issueNumber).toBe(ISSUE + 1);
+      expect(published.assignment.bindingKey).toBe('dispatch-unrelated-issue');
+    }
+  });
+
   it('keeps a post-reservation failure attempted and blocks later duplicate lifecycle admission', async () => {
     const fixture = rootFixture();
     configureSmokeEnv(fixture);
