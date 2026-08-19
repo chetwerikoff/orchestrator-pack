@@ -118,6 +118,7 @@
     "scripts/pr2-foundation/mutation-catalog.test.ts": "light",
     "scripts/pr2-foundation/mutation-external-ci.test.ts": "heavy",
     "scripts/pr2-foundation/mutation-semantic-gates.test.ts": "light",
+    "scripts/pr2-foundation/post-review-smoke-race.test.ts": "light",
     "scripts/pr2-foundation/post-review-smoke.test.ts": "light",
     "scripts/pr2-foundation/real-scope-proof.test.ts": "light",
     "scripts/pr2-foundation/remote-worker-assignment.test.ts": "light",
