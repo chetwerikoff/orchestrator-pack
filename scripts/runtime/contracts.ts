@@ -139,6 +139,95 @@ export interface RuntimeCallOptions {
   readonly timeoutMs?: number;
 }
 
+export const RUNTIME_WORKER_TASK_BINDING_UNAVAILABLE_CODES = [
+  'capability_absent',
+  'deadline_exhausted',
+  'task_metadata_unavailable',
+  'snapshot_revalidation_unavailable',
+  'malformed_or_incomplete',
+  'inventory_ambiguous',
+  'inventory_over_cap',
+] as const;
+export type RuntimeWorkerTaskBindingUnavailableCode =
+  (typeof RUNTIME_WORKER_TASK_BINDING_UNAVAILABLE_CODES)[number];
+
+export const RUNTIME_WORKER_TASK_BINDING_AMBIGUITY_CODES = [
+  'duplicate_issue',
+  'duplicate_identity',
+  'workspace_task_conflict',
+  'provenance_conflict',
+] as const;
+export type RuntimeWorkerTaskBindingAmbiguityCode =
+  (typeof RUNTIME_WORKER_TASK_BINDING_AMBIGUITY_CODES)[number];
+
+export const RUNTIME_WORKER_TASK_BINDING_STALE_CODES = [
+  'disappeared_after_initial',
+  'metadata_changed',
+  'superseded',
+] as const;
+export type RuntimeWorkerTaskBindingStaleCode =
+  (typeof RUNTIME_WORKER_TASK_BINDING_STALE_CODES)[number];
+
+export type RuntimeWorkerTaskBindingOutcome =
+  | {
+      readonly status: 'bound';
+      readonly worker: RuntimeWorkerIdentity;
+      readonly issueNumber: number;
+      readonly provenance: 'internal';
+    }
+  | {
+      readonly status: 'unbound';
+      readonly worker: RuntimeWorkerIdentity;
+      readonly provenance: 'internal';
+    }
+  | {
+      readonly status: 'external';
+      readonly worker: RuntimeWorkerIdentity;
+      readonly provenance: 'external';
+    }
+  | {
+      readonly status: 'absent' | 'replaced' | 'identity_unresolved' | 'incarnation_unavailable';
+      readonly worker: RuntimeWorkerIdentity;
+    }
+  | {
+      readonly status: 'stale';
+      readonly worker: RuntimeWorkerIdentity;
+      readonly code: RuntimeWorkerTaskBindingStaleCode;
+    }
+  | {
+      readonly status: 'ambiguous';
+      readonly worker: RuntimeWorkerIdentity;
+      readonly code: RuntimeWorkerTaskBindingAmbiguityCode;
+    };
+
+export type RuntimeWorkerTaskBindingObservation =
+  | {
+      readonly status: 'ok';
+      readonly outcomes: readonly RuntimeWorkerTaskBindingOutcome[];
+    }
+  | {
+      readonly status: 'unavailable';
+      readonly code: RuntimeWorkerTaskBindingUnavailableCode;
+    };
+
+export interface RuntimeWorkerTaskBindingCallOptions extends RuntimeCallOptions {
+  readonly timeoutMs: number;
+}
+
+export interface RuntimeWorkerTaskBindingSource {
+  observeWorkerTaskBindings(
+    input: { readonly workers: readonly RuntimeWorkerIdentity[] },
+    options: RuntimeWorkerTaskBindingCallOptions,
+  ): RuntimeWorkerTaskBindingObservation | PromiseLike<RuntimeWorkerTaskBindingObservation>;
+}
+
+export function isRuntimeWorkerTaskBindingSource(
+  source: object,
+): source is RuntimeWorkerTaskBindingSource {
+  return typeof (source as { readonly observeWorkerTaskBindings?: unknown })
+    .observeWorkerTaskBindings === 'function';
+}
+
 export interface RuntimeAdapter {
   readonly id: RuntimeAdapterId;
 
