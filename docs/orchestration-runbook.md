@@ -260,7 +260,7 @@ orca terminal wait --terminal <fresh-terminal-handle> --for tui-idle --timeout-m
 # session, and visible model/effort matching the selected profile.
 node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
   --script scripts/pr2-foundation/supervised-worker-start.ts -- \
-  --issue-number <N> \
+  [--issue-number <N>] \
   --repository <owner/repo> \
   -- \
   --task <task-id> <worker-start-options>
@@ -268,10 +268,13 @@ node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
 
 The final command is the existing PACK supervised-start boundary; it must return
 a proven `ready` receipt containing the exact `taskId` and `dispatchId` before
-the worker is considered started. Do not split these steps across terminals,
-paste a Task spec into the startup command, dual-send, or recover a failed first
-attach by sending into an old pane. A later unrelated command must repeat the
-profile export and child probe.
+the worker is considered started. `--issue-number` is required for an already
+published Issue-backed worker and may be omitted only for brief-only authoring
+where the Issue itself is the deliverable; the resulting assignment remains
+keyed by the same `taskId` + `dispatchId` when Issue metadata is attached later.
+Do not split these steps across terminals, paste a Task spec into the startup
+command, dual-send, or recover a failed first attach by sending into an old pane.
+A later unrelated command must repeat the profile export and child probe.
 
 ### Cursor/Orca launch procedure
 
@@ -321,13 +324,15 @@ For an Orca-managed supervised worker, initial Task delivery remains Orca-owned.
 ```text
 node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
   --script scripts/pr2-foundation/supervised-worker-start.ts -- \
-  --issue-number <N> \
+  [--issue-number <N>] \
   --repository <owner/repo> \
   -- \
   --task <task_id> <worker-start options>
 ```
 
-The wrapper calls supported Orca `orchestration worker-start` with structured JSON output. It publishes a current local WorkerAssignment only after Orca returns a proven `ready` receipt with both `taskId` and `dispatchId`. Failed, malformed, or outcome-unknown startup does not create a successful assignment.
+The wrapper calls supported Orca `orchestration worker-start` with structured JSON output. It publishes a current local WorkerAssignment only after Orca returns a proven `ready` receipt with both `taskId` and `dispatchId`. Failed, malformed, or outcome-unknown startup does not create a successful assignment. A structurally valid Orca error envelope with a non-empty `error.code` remains non-success but exposes that exact code in the wrapper's structured failure evidence instead of collapsing it into a generic invalid-receipt reason.
+
+`--issue-number` may be omitted only when the GitHub Issue is not yet available because the worker is authoring that Issue. The assignment is then stored under the one canonical deliverable key derived from `(taskId, dispatchId)` with no Issue metadata. After publication, attach the positive Issue number to that same record; the canonical key, assignment id, and generation do not change. Do not use an `issue-<N>` key, alias, promotion, dual lookup, or conversion path.
 
 `supervised-worker-start` does not read `PACK_EXECUTOR_*`. The orchestrator
 applies the resolved profile during the Cursor/Orca launch procedure above;
@@ -340,7 +345,7 @@ The minimum current assignment authority is:
 scripts/lib/worker-assignment-store.ts
 ```
 
-A durable assignment contains only persistence-safe logical facts: project/repository, Issue, Task, assignment id, monotonically advancing assignment generation, `kind`, `provider`, provider lifecycle `bindingKey`, and timestamp. For current local Orca workers the binding key is the Orca **Dispatch id**.
+A durable assignment contains only persistence-safe logical facts: project/repository, optional published Issue metadata, Task, assignment id, monotonically advancing assignment generation, `kind`, `provider`, provider lifecycle `bindingKey`, and timestamp. For current local Orca workers the binding key is the Orca **Dispatch id**. The sole assignment-store key is derived from the stable `(taskId, dispatchId)` deliverable identity. A pre-#1441 generated store using `issue-<N>` object keys is intentionally unreadable after the hard cut; the operator retires/resets that generated `worker-assignments.json` instead of migrating or dual-resolving it.
 
 It must never contain raw `RuntimeWorkerIdentity`, runtime id/generation, terminal handle, `RuntimeObservationToken`, output, prompt/reply, workspace path, title, PID, or adapter-private fields.
 
@@ -362,7 +367,7 @@ current WorkerAssignment generation
 -> exact S2 target
 ```
 
-Missing, stale, ambiguous, remote/not-applicable, unsupported, or mismatched evidence is fail-closed and performs no routine effect. Never replace this with PR/session/title/path/pane/PID heuristics.
+Missing, stale, ambiguous, remote/not-applicable, unsupported, or mismatched evidence is fail-closed and performs no routine effect. Never replace this with PR/session/title/path/pane/PID heuristics. Orca's installed production observation does not provide a stable `pane_key` witness together with the current handle/incarnation, so a remap that cannot be proven through the existing Dispatch exact-worker binding takes the #1441 fence outcome. Do not synthesize a pane key or rebind by handle/title/path/PID/first match.
 
 ## S1 — single observation authority
 
@@ -468,6 +473,38 @@ Role obligations are mandatory:
 Every message returned by the drain is surfaced and processed in the same role turn before the guarded action. An unreachable/unsupported/ambiguous drain is reported as degraded/blocking evidence and is never silently skipped.
 
 Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness. A supervised agent with no actionable report sends nothing. S1 remains the sole liveness observer; existing observer heartbeat/process-liveness artifacts remain observation evidence, not agent assertions.
+
+## Published GitHub artifact completion and batch attribution
+
+For create-Issue author/reviewer/lens work, the manager's completion and delivery authority is the fresh GitHub REST-visible artifact, not the launcher child or its terminal envelope. The existing long-running child envelope, PID, pane, spinner, log growth, silence, and heartbeat remain timeout/diagnostic hints only.
+
+For an author turn, completion requires the exact tuple `(repository, issue_number, source_revision, exact_body_sha256)` from a fresh Issue read-back. GitHub editor/principal provenance is not invented when the Issue read surface does not expose it as a turn witness. A matching revision with a different exact body hash is a blocking mismatch; a stale/missing revision is non-terminal.
+
+For a reviewer/lens turn, completion requires exactly one unedited top-level comment from the currently authenticated principal whose first two non-empty lines bind the expected Issue/revision and exact invocation marker. The manager-held `stage` and `source-slot` must also match that publication. A foreign, edited, stale, missing-invocation, duplicate, ambiguous, or wrong-stage/slot publication cannot settle the current turn. A possible or confirmed send is never resent merely because the child is silent or gone.
+
+The long-running `wait` command may carry the publication expectation directly:
+
+```text
+# reviewer/lens
+... flow-manager-long-running-child.ts wait \
+  --run-identity <run> --attempt-identity <attempt> \
+  --terminal-envelope <path> --handoff-receipt <path> --deadline-ms <ms> \
+  --publication-kind reviewer --repository <owner/repo> --issue-number <N> \
+  --source-revision <rNN> --invocation-id <id> --stage <stage> --source-slot <slot>
+
+# author
+... flow-manager-long-running-child.ts wait \
+  --run-identity <run> --attempt-identity <attempt> \
+  --terminal-envelope <path> --handoff-receipt <path> --deadline-ms <ms> \
+  --publication-kind author --repository <owner/repo> --issue-number <N> \
+  --source-revision <rNN> --body-sha256 <exact-body-sha256>
+```
+
+When a publication expectation is present, an incident envelope such as `child_stdout_eof_timeout` does not end the wait as success or failure before the publication read-back settles or blocks. `completion_authority: published_artifact` is emitted only for the exact authoritative publication; the child envelope, when present, is retained alongside it as diagnostics. Missing/unavailable REST evidence stays non-terminal until the bounded deadline.
+
+For one concurrent plural batch, classify each slot from the REST publication census. A slot with its own authoritative artifact is `actual` and no-resend. If at least one sibling in the same batch is REST-visible while another slot is silent/missing, the silent slot is `possible-or-actual`, resend is forbidden, and it settles as an incident retaining that invocation identity. The sibling publication proves that the batch transport worked; it does **not** prove that the silent payload crossed the composer. With zero published siblings, no slot is classified as delivered. The stage-level `partial` rule for a short capture set remains the separate #1439 authority.
+
+Do not add a second observer, completion store, delivery-status store, reconciliation pass, retry service, or fallback transport around this rule.
 
 ## Scheduler phases
 
@@ -596,9 +633,12 @@ After landing the production implementation:
 
 1. adopt the merged PACK revision through the existing supported operator deployment path;
 2. preserve the registered side-process supervisor and `pr2-scheduler` child shape;
-3. start supervised workers through the PACK supervised-worker-start boundary so current assignments are published from successful Orca receipts;
-4. verify a supervisor-owned `scheduler.ts tick` under the current activation epoch;
-5. verify later bounded children retain the same trusted S1 lineage and advancing tick sequence;
-6. verify the latest `fleet-reconciliation-handoff/v1` is readable before treating silence as healthy.
+3. retire/reset the pre-#1441 generated `worker-assignments.json` before new assignment publication; do not convert, alias, or dual-resolve `issue-<N>` records;
+4. start supervised workers through the PACK supervised-worker-start boundary so current assignments are published from successful Orca receipts; for one brief-only author, omit the Issue number and attach it only after publication without changing the deliverable key/id/generation;
+5. verify one stale/remapped runtime identity fences without a stale-handle effect and one Orca error envelope preserves its exact non-empty `error.code` while remaining non-success;
+6. verify a supervisor-owned `scheduler.ts tick` under the current activation epoch;
+7. verify later bounded children retain the same trusted S1 lineage and advancing tick sequence;
+8. verify one exact REST-visible author/reviewer artifact settles its manager turn even when the helper child is silent/gone, and one published sibling makes a silent concurrent slot possible-or-actual/no-resend without claiming that its payload was proven delivered;
+9. verify the latest `fleet-reconciliation-handoff/v1` is readable before treating silence as healthy.
 
 Do not claim live machine supervision before this read-back.

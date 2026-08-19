@@ -183,6 +183,17 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     refuse('handoff_receipt_missing');
     return 2;
   }
+  const publicationExpectation = directRequested
+    ? {
+        kind: 'reviewer' as const,
+        repository: options.get('repository') as string,
+        issue_number: Number(options.get('issue-number')),
+        source_revision: options.get('source-revision') as string,
+        invocation_id: invocationId,
+        stage: options.get('stage') as string,
+        source_slot: options.get('source-slot') as string,
+      }
+    : undefined;
   process.stdout.write(`${JSON.stringify({
     schema: 'flow-manager-browser-gpt-long-run-accepted/v1',
     run_identity: runIdentity,
@@ -192,6 +203,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     terminal_envelope: terminalEnvelope,
     browser_output: browserOutput,
     completion_mode: 'browser-turn-result-v1',
+    ...(publicationExpectation ? { publication_expectation: publicationExpectation } : {}),
   })}\n`);
   return 0;
 }
