@@ -23,14 +23,19 @@ export function unitRefForAssignment(assignmentId: string, generation: number): 
 export function buildFleetAssignmentBindings(
   resolved: readonly ResolvedWorkerAssignment[],
 ): readonly FleetAssignmentBinding[] | null {
-  const bindings = resolved.map(({ assignment, worker }) => ({
-    assignmentId: assignment.assignmentId,
-    assignmentGeneration: assignment.generation,
-    issueNumber: assignment.issueNumber,
-    taskId: assignment.taskId,
-    unitRef: unitRefForAssignment(assignment.assignmentId, assignment.generation),
-    worker: worker.identity,
-  }));
+  // Brief-only authoring assignments are runtime-resolvable before the Issue is
+  // published, but fleet Issue-scoped effects must wait for positive Issue
+  // metadata. Attaching that metadata never changes the assignment key/id.
+  const bindings = resolved
+    .filter(({ assignment }) => Number.isInteger(assignment.issueNumber) && Number(assignment.issueNumber) > 0)
+    .map(({ assignment, worker }) => ({
+      assignmentId: assignment.assignmentId,
+      assignmentGeneration: assignment.generation,
+      issueNumber: assignment.issueNumber!,
+      taskId: assignment.taskId,
+      unitRef: unitRefForAssignment(assignment.assignmentId, assignment.generation),
+      worker: worker.identity,
+    }));
   const refs = new Set<string>();
   for (const binding of bindings) {
     if (refs.has(binding.unitRef)) return null;
