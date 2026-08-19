@@ -1,5 +1,38 @@
 # Migration notes
 
+## Runtime identity and completion-authority hard cut (Issue #1441)
+
+### What changed
+
+Issue #1441 makes three existing authorities explicit at their consumers:
+
+- runtime effects remain bound to exact `{ runtime, id, generation }` identity; a remapped/reused handle without a production-proven exact current target is fenced rather than heuristically rebound;
+- manager author/reviewer completion is read from the exact REST-visible GitHub artifact, while child/PID/pane/heartbeat/terminal-envelope state remains diagnostic only;
+- WorkerAssignment persistence is keyed only by the supervised-start receipt's stable `(taskId, dispatchId)` deliverable identity. `issueNumber` is optional metadata attached after publication and never changes that key, assignment id, or generation.
+
+A structurally valid Orca supervised-start error envelope also preserves its exact non-empty `error.code` in structured failure evidence. It remains a failed start and never publishes a successful assignment.
+
+The assignment-store change is intentionally a hard cut. A pre-upgrade `worker-assignment/v1` store whose object keys are `issue-<N>` is unreadable after this revision. There is no migration, dual-key lookup, compatibility alias, promotion, second store, or in-process conversion. This fail-closed state prevents stale pre-upgrade assignment facts from authorizing runtime effects under the new key contract.
+
+For concurrent Browser-GPT author/reviewer batches, a REST-visible sibling publication proves that the batch publication transport functioned, but it does not prove that a silent sibling payload crossed the composer. The silent sibling is therefore classified `possible-or-actual`, resend is forbidden, and the slot settles as an incident carrying its invocation identity. With zero REST-visible publications, no slot is classified as delivered. Stage-level `partial` settlement remains owned by #1439.
+
+### Operator adoption
+
+1. Adopt the merged PACK revision through the normal supported pack deployment/recycle path.
+2. Before starting new supervised work, retire or reset the operator-owned generated `worker-assignments.json` returned by `resolveWorkerAssignmentStorePath`. Do not hand-convert `issue-<N>` records or preserve them through an alias.
+3. Start one brief-only supervised worker without `--issue-number`. Confirm the ready receipt contains the expected `taskId` and non-empty `dispatchId`, and that the store contains exactly one canonical task/dispatch key with no Issue metadata yet.
+4. After the Issue is published, attach its positive Issue number through the tracked assignment-store path and confirm the canonical key, assignment id, and generation are unchanged. Issue-scoped scheduler/fleet behavior may begin only after this metadata exists.
+5. Exercise one stale/remapped Orca target. Confirm a changed generation, `exactWorker: false`, missing current identity, or ambiguous observation performs no send/read/stop/reassignment effect and returns the existing unresolved/fenced result.
+6. Exercise one Orca `worker-start` error envelope with a non-empty code such as `agent_unconfigured`. Confirm the exact code is reported and no successful assignment is published.
+7. Exercise one author or reviewer turn whose helper child is silent or gone after publication. Confirm a fresh GitHub REST read-back of the exact expected Issue body/hash or the exact unedited invocation-bound reviewer comment settles manager completion without requiring a second child handoff or resend.
+8. Exercise one three-slot concurrent reviewer batch with at least one REST-visible sibling publication and one silent `child_stdout_eof_timeout` slot. Confirm the silent slot is `possible-or-actual`, resend is forbidden, and its invocation identity is retained in the incident. Repeat with zero published siblings and confirm no slot is classified as delivered.
+
+Do not change credentials, local browser profiles/CDP state, or other generated runtime state as part of this adoption except for the explicit WorkerAssignment-store retirement/reset above.
+
+### Rollback
+
+Rollback is a source-control revert followed by the normal supported adoption/recycle path. Do not try to make old and new WorkerAssignment key formats live simultaneously. Generated assignment state must match the code revision that owns it; when moving across this hard-cut boundary, retire/reset that generated store instead of converting it in process.
+
 ## Runtime-neutral hard cut (Issue #1352)
 
 ### What changed
