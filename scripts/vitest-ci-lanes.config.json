@@ -143,6 +143,7 @@
     "scripts/review-trigger-reconcile.test.ts": "heavy",
     "scripts/review-trigger-reeval.test.ts": "heavy",
     "scripts/review-wake-trigger.test.ts": "heavy",
+    "scripts/runtime-worker-identity-binding.test.ts": "light",
     "scripts/runtime/runtime-independence-two-lifecycle-proof.test.ts": "light",
     "scripts/runtime/caller-census.test.ts": "light",
     "scripts/runtime/crash-backoff.test.ts": "light",
