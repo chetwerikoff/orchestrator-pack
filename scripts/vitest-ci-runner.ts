@@ -2,7 +2,7 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import {
   applyOpkVitestHarnessEnv,
@@ -17,6 +17,13 @@ import {
 const RPC_FLAKE = /onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR/isu;
 export function repositoryRootFromModuleUrl(moduleUrl: string): string {
   return path.resolve(path.dirname(fileURLToPath(moduleUrl)), '..');
+}
+export function isDirectEntrypoint(
+  moduleUrl: string,
+  argv1: string | undefined,
+  windows = process.platform === 'win32',
+): boolean {
+  return Boolean(argv1) && moduleUrl === pathToFileURL(argv1!, { windows }).href;
 }
 const ROOT = repositoryRootFromModuleUrl(import.meta.url);
 const NODE = process.execPath;
@@ -428,7 +435,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   }
 }
 
-if (import.meta.url === new URL(process.argv[1] ?? '', 'file:').href) {
+if (isDirectEntrypoint(import.meta.url, process.argv[1])) {
   main().then((code) => { process.exitCode = code; }).catch((error) => {
     process.stderr.write(`vitest-ci-runner: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
