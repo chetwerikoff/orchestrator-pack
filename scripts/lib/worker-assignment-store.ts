@@ -54,7 +54,12 @@ type PublishWorkerAssignmentResult =
 
 export type CurrentWorkerAssignmentFenceResult<T> =
   | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly reason: 'assignment_stale' | 'assignment_store_busy' | 'assignment_fence_failed' };
+  | {
+      readonly ok: false;
+      readonly reason: 'assignment_stale' | 'assignment_store_busy' | 'assignment_fence_failed';
+      /** True only after the fenced action itself has been entered. */
+      readonly actionEntered: boolean;
+    };
 
 function bounded(value: unknown, max: number): string {
   const text = String(value ?? '').trim();
@@ -265,17 +270,22 @@ export function assignmentStillCurrent(file: string, expected: WorkerAssignment)
  *
  * The fence never waits for a busy owner: S2 must fail closed within its phase
  * budget rather than turn assignment-lock contention into an unbounded send.
+ * `actionEntered` distinguishes a proven pre-action no-op from an exception
+ * thrown after the caller has begun a side effect; callers must not flatten the
+ * latter into a zero-attempt outcome.
  */
 export async function withCurrentWorkerAssignmentFence<T>(
   file: string,
   expected: WorkerAssignment,
   action: () => T | Promise<T>,
 ): Promise<CurrentWorkerAssignmentFenceResult<T>> {
+  let actionEntered = false;
   try {
     return await withCrashRecoverableFileLock(`${file}.lock`, 1, async () => {
       if (!assignmentStillCurrent(file, expected)) {
-        return { ok: false, reason: 'assignment_stale' } as const;
+        return { ok: false, reason: 'assignment_stale', actionEntered: false } as const;
       }
+      actionEntered = true;
       return { ok: true, value: await action() } as const;
     });
   } catch (error) {
@@ -284,6 +294,7 @@ export async function withCurrentWorkerAssignmentFence<T>(
       reason: error instanceof Error && error.message === 'journal_busy'
         ? 'assignment_store_busy'
         : 'assignment_fence_failed',
+      actionEntered,
     };
   }
 }
