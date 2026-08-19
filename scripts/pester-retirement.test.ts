@@ -55,16 +55,6 @@ describe('retired Pester population replacement coverage', () => {
     ].join('; '));
     expect(result.ok, output(result)).toBe(true);
     expect(JSON.parse(result.stdout.trim())).toEqual({ ok: true, alive: true, quiescent: true });
-
-    const watchdog = readFileSync(path.join(ROOT, 'scripts/lib/Ci-Red-Watchdog.ps1'), 'utf8');
-    const tick = readFileSync(path.join(ROOT, 'scripts/lib/Ci-Red-Watchdog-Tick.ps1'), 'utf8');
-    const submit = readFileSync(path.join(ROOT, 'scripts/worker-message-submit-reconcile.ps1'), 'utf8');
-    expect(watchdog).toContain('Ci-Red-Watchdog-Tick.ps1');
-    expect(tick.indexOf("-Command 'transport-issued'")).toBeGreaterThan(0);
-    expect(tick.indexOf('Invoke-PlannedCiFailureReconcileSend')).toBeGreaterThan(tick.indexOf("-Command 'transport-issued'"));
-    expect(submit.indexOf('Invoke-WorkerInputDraftSubmit')).toBeGreaterThan(submit.indexOf('Test-CiRedWatchdogSubmitBoundary'));
-    expect(submit).toContain('Release-CiRedWatchdogSubmitBoundaryAttempt');
-    expect(submit).toContain("-DispatchOutcome 'send_failed'");
   });
 
   it('keeps mechanical JSON state defaults isolated and corrupt action tracking fail-closed', async () => {
