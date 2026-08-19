@@ -5,35 +5,40 @@ import {
 } from '../runtime/contracts.ts';
 import {
   assignmentStillCurrent,
-  listCurrentWorkerAssignments,
+  listCurrentWorkerAssignmentRecords,
   readWorkerAssignmentStore,
   withCurrentWorkerAssignmentFence,
   workerAssignmentKey,
   type WorkerAssignment,
+  type WorkerAssignmentRecord,
 } from './worker-assignment-store.ts';
 
 export interface ResolvedWorkerAssignment {
-  readonly assignment: WorkerAssignment;
+  readonly assignment: WorkerAssignmentRecord;
   /** Exact runtime-private identity is deliberately held only in memory. */
   readonly worker: RuntimeWorker;
 }
 
-export interface WorkerAssignmentReconciliation {
+export interface ResolvedIssueWorkerAssignment extends ResolvedWorkerAssignment {
   readonly assignment: WorkerAssignment;
+}
+
+export interface WorkerAssignmentReconciliation {
+  readonly assignment: WorkerAssignmentRecord;
   readonly reason: 'target_unresolved' | 'remote_not_applicable';
 }
 
 export type WorkerAssignmentTargetResolution =
-  | { readonly status: 'resolved'; readonly assignment: WorkerAssignment; readonly worker: RuntimeWorker }
-  | { readonly status: 'gone'; readonly assignment: WorkerAssignment; readonly workerId?: string }
-  | { readonly status: 'remote_not_applicable'; readonly assignment: WorkerAssignment }
+  | { readonly status: 'resolved'; readonly assignment: WorkerAssignmentRecord; readonly worker: RuntimeWorker }
+  | { readonly status: 'gone'; readonly assignment: WorkerAssignmentRecord; readonly workerId?: string }
+  | { readonly status: 'remote_not_applicable'; readonly assignment: WorkerAssignmentRecord }
   | { readonly status: 'assignment_stale' | 'assignment_untrusted' | 'runtime_unavailable' | 'target_unresolved' };
 
 export type WorkerAssignmentReplacementAdmission =
-  | { readonly status: 'replaceable'; readonly expected: WorkerAssignment }
+  | { readonly status: 'replaceable'; readonly expected: WorkerAssignmentRecord }
   | {
       readonly status: 'skipped_live';
-      readonly expected: WorkerAssignment;
+      readonly expected: WorkerAssignmentRecord;
       readonly worker: RuntimeWorker;
       readonly reason: 'runtime_busy' | 'runtime_idle';
     }
@@ -60,7 +65,7 @@ export type WorkerAssignmentResolution =
       readonly reconciliations: readonly [];
     };
 
-function sameLogicalAssignment(left: WorkerAssignment | undefined, right: WorkerAssignment): boolean {
+function sameLogicalAssignment(left: WorkerAssignmentRecord | undefined, right: WorkerAssignmentRecord): boolean {
   return Boolean(left
     && left.assignmentId === right.assignmentId
     && left.generation === right.generation
@@ -83,7 +88,7 @@ function sameLogicalAssignment(left: WorkerAssignment | undefined, right: Worker
  */
 export function resolveCurrentWorkerAssignmentTarget(input: {
   readonly file: string;
-  readonly expected: WorkerAssignment;
+  readonly expected: WorkerAssignmentRecord;
   readonly adapter: RuntimeAdapter;
   readonly timeoutMs?: number;
 }): WorkerAssignmentTargetResolution {
@@ -91,7 +96,7 @@ export function resolveCurrentWorkerAssignmentTarget(input: {
   if (!store) return { status: 'assignment_untrusted' };
   const key = workerAssignmentKey(input.expected.taskId, input.expected.bindingKey);
   const current = key ? store.assignments[key] : undefined;
-  if (!current || current.issueNumber === undefined || !sameLogicalAssignment(current, input.expected)) {
+  if (!current || !sameLogicalAssignment(current, input.expected)) {
     return { status: 'assignment_stale' };
   }
   if (current.kind !== 'local') {
@@ -128,7 +133,7 @@ export function resolveCurrentWorkerAssignmentTarget(input: {
  */
 export async function admitCurrentWorkerAssignmentReplacement(input: {
   readonly file: string;
-  readonly expected: WorkerAssignment;
+  readonly expected: WorkerAssignmentRecord;
   readonly adapter: RuntimeAdapter;
   readonly timeoutMs?: number;
   readonly observationWindowMs?: number;
@@ -179,7 +184,7 @@ export function resolveCurrentWorkerAssignmentBindings(input: {
   readonly adapter: RuntimeAdapter;
   readonly timeoutMs?: number;
 }): WorkerAssignmentResolution {
-  const assignments = listCurrentWorkerAssignments(input.file);
+  const assignments = listCurrentWorkerAssignmentRecords(input.file);
   if (!assignments) return { status: 'assignment_untrusted', bindings: [], reconciliations: [] };
   if (typeof input.adapter.resolveAssignmentWorker !== 'function') {
     return { status: 'runtime_unavailable', bindings: [], reconciliations: [] };
@@ -225,7 +230,8 @@ export function resolveCurrentWorkerAssignmentBindings(input: {
 export function bindingForIssue(
   bindings: readonly ResolvedWorkerAssignment[],
   issueNumber: number,
-): ResolvedWorkerAssignment | null {
-  const matches = bindings.filter((binding) => binding.assignment.issueNumber === issueNumber);
+): ResolvedIssueWorkerAssignment | null {
+  const matches = bindings.filter((binding): binding is ResolvedIssueWorkerAssignment =>
+    binding.assignment.issueNumber === issueNumber);
   return matches.length === 1 ? matches[0]! : null;
 }
