@@ -98,18 +98,18 @@ function settleReview(options: PackReviewAuthorityOptions) {
 }
 
 async function publishLocal(
-  file: string,
-  bindingKey: string,
+  assignmentFile: string,
+  dispatchKey: string,
   expectedCurrent?: Pick<WorkerAssignment, 'assignmentId' | 'generation'>,
 ): Promise<WorkerAssignment> {
   const result = await publishCurrentWorkerAssignment({
     repository: REPOSITORY,
     issueNumber: ISSUE,
     taskId: 'task-1418',
-    file,
+    file: assignmentFile,
     provider: 'orca',
     kind: 'local',
-    bindingKey,
+    bindingKey: dispatchKey,
     ...(expectedCurrent ? { expectedCurrent } : {}),
   });
   if (!result.ok) throw new Error(result.reason);
