@@ -8,6 +8,7 @@ import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateHeadReadyForReview } from './review-head-ready.ts';
 import { listPackReviewRuns } from '../lib/pack-review-run-store.ts';
 import { startPackReview } from '../pack-review-runner.ts';
+import { reconcilePostReviewSmoke, type PostReviewSmokeOutcome } from './post-review-smoke.ts';
 import {
   createUnavailableFleetObserver,
   FleetObserver,
@@ -37,7 +38,7 @@ import {
   type WorkerAssignment,
 } from '../lib/worker-assignment-store.ts';
 import { resolveCurrentWorkerAssignmentBindings } from '../lib/worker-assignment-runtime.ts';
-import { runtimeFailure, sameRuntimeWorker } from '../runtime/contracts.ts';
+import { runtimeFailure, sameRuntimeWorker, type RuntimeAdapter } from '../runtime/contracts.ts';
 import { buildFleetAssignmentBindings, type FleetAssignmentBinding } from './fleet-assignment-binding.ts';
 import { createProductionFleetNudgeEffects } from './fleet-nudge-production.ts';
 import {
@@ -58,6 +59,7 @@ export interface DormantSchedulerState {
 
 export interface DormantActuatorResult { ok: true; executed: false; reason: 'foundation_inert' }
 export interface ActivatedSchedulerCandidate { sessionId: string; repoSlug: string; prNumber: number; boundHeadSha: string }
+export interface SchedulerCurrentPr { number: number; headRefOid: string; state: string; isDraft: boolean; body?: string }
 
 type SchedulerFleetObserver = Pick<FleetObserver, 'tick'> & Partial<Pick<FleetObserver, 'getEffectiveBudgetMs' | 'cancel' | 'schedulerGeneration' | 'snapshotPath'>>;
 type SchedulerFleetNudgeActuator = { tick(input: FleetNudgeTickInput): Promise<FleetNudgeResult> };
@@ -68,10 +70,11 @@ interface SchedulerAssignmentReconciliation {
 
 export interface SchedulerBoundary {
   listCandidates(): ActivatedSchedulerCandidate[];
-  readCurrentPr(candidate: ActivatedSchedulerCandidate): Promise<{ number: number; headRefOid: string; state: string; isDraft: boolean }>;
+  readCurrentPr(candidate: ActivatedSchedulerCandidate): Promise<SchedulerCurrentPr>;
   readChecks(candidate: ActivatedSchedulerCandidate): Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>;
   listReviewRuns(): ReturnType<typeof listPackReviewRuns>;
   start(candidate: ActivatedSchedulerCandidate, freshHeadSha: string): Promise<{ ok: boolean; reason?: string }>;
+  reconcilePostReviewSmoke?: (candidate: ActivatedSchedulerCandidate, fresh: SchedulerCurrentPr) => Promise<PostReviewSmokeOutcome>;
   schedulerIntervalMs?: number;
   fleetObserver?: SchedulerFleetObserver;
   fleetNudgeActuator?: SchedulerFleetNudgeActuator;
@@ -209,12 +212,13 @@ export function productionSchedulerBoundary(input: {
   fleetNudgeActuator?: SchedulerFleetNudgeActuator; schedulerIntervalMs?: number; activationLineage?: string;
   repository?: string; unresolvedReason?: FleetReconciliationReason; assignmentReconciliation?: SchedulerAssignmentReconciliation;
   fleetBindings?: readonly FleetAssignmentBinding[];
+  reconcilePostReviewSmoke?: SchedulerBoundary['reconcilePostReviewSmoke'];
   publishHandoff?: SchedulerBoundary['publishHandoff'];
 }): SchedulerBoundary {
   const env = input.env ?? process.env; const projectId = input.projectId ?? 'orchestrator-pack';
   return {
     listCandidates: () => liveCandidates(env, input.repository),
-    readCurrentPr: async (candidate) => ghJson(input.repoRoot, ['pr', 'view', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'number,headRefOid,state,isDraft']) as Promise<{ number: number; headRefOid: string; state: string; isDraft: boolean }>,
+    readCurrentPr: async (candidate) => ghJson(input.repoRoot, ['pr', 'view', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'number,headRefOid,state,isDraft,body']) as Promise<SchedulerCurrentPr>,
     readChecks: async (candidate) => ghJson(input.repoRoot, ['pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'name,state,conclusion,status']) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
     listReviewRuns: () => listPackReviewRuns({ projectId }),
     fleetNudgeActuator: input.fleetNudgeActuator ?? createTargetUnresolvedFleetNudgeActuator(),
@@ -225,6 +229,7 @@ export function productionSchedulerBoundary(input: {
     ...(input.unresolvedReason ? { unresolvedReason: input.unresolvedReason } : {}),
     ...(input.assignmentReconciliation ? { assignmentReconciliation: input.assignmentReconciliation } : {}),
     ...(input.fleetBindings ? { fleetBindings: input.fleetBindings } : {}),
+    ...(input.reconcilePostReviewSmoke ? { reconcilePostReviewSmoke: input.reconcilePostReviewSmoke } : {}),
     ...(input.publishHandoff ? { publishHandoff: input.publishHandoff } : {}),
     start: async (candidate, freshHeadSha) => {
       const result = await startPackReview({ projectId, linkedSessionId: candidate.sessionId, prNumber: candidate.prNumber, headSha: freshHeadSha, sourceRepoRoot: input.repoRoot, startReason: 'scheduler', surface: 'pr2-scheduler', claimMode: 'acquire' });
@@ -339,6 +344,11 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     attempted += 1; assertSchedulerEpoch(env); const fresh = await boundary.readCurrentPr(candidate); const freshHead = String(fresh.headRefOid ?? '').trim().toLowerCase();
     if (fresh.state !== 'OPEN' && String(fresh.state).toLowerCase() !== 'open') { skipped += 1; continue; }
     if (fresh.isDraft === true || freshHead !== candidate.boundHeadSha.toLowerCase()) { skipped += 1; continue; }
+    if (boundary.reconcilePostReviewSmoke) {
+      assertSchedulerEpoch(env);
+      const smoke = await boundary.reconcilePostReviewSmoke(candidate, fresh);
+      if (smoke.handled) { skipped += 1; continue; }
+    }
     const checks = await boundary.readChecks(candidate); const runs = boundary.listReviewRuns();
     const decision = evaluateHeadReadyForReview({ prNumber: candidate.prNumber, headSha: freshHead, session: { id: candidate.sessionId, role: 'worker', status: 'ready_for_review', ownedHeadSha: freshHead, reports: [{ reportState: 'ready_for_review', headRefOid: freshHead, accepted: true }] }, ciChecks: checks, reviewRuns: runs });
     if (!decision.eligible) { skipped += 1; continue; }
@@ -430,8 +440,10 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   let unresolvedReason: FleetReconciliationReason = storedAssignments === null ? 'assignment_untrusted' : 'target_unresolved';
   let assignmentReconciliation: SchedulerAssignmentReconciliation | undefined;
   let fleetBindings: readonly FleetAssignmentBinding[] = [];
+  let runtimeAdapter: RuntimeAdapter | undefined;
   try {
     const runtime = await selectRuntimeAdapter({ env });
+    runtimeAdapter = runtime;
     const resolution = repository
       ? resolveCurrentWorkerAssignmentBindings({ file: assignmentStorePath, repository, adapter: runtime })
       : { status: 'assignment_untrusted' as const, bindings: [] as const, reconciliations: [] as const };
@@ -507,6 +519,20 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     });
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   };
+  const postReviewSmoke = runtimeAdapter
+    ? (candidate: ActivatedSchedulerCandidate, fresh: SchedulerCurrentPr) => reconcilePostReviewSmoke({
+        repoSlug: candidate.repoSlug,
+        prNumber: candidate.prNumber,
+        headSha: String(fresh.headRefOid ?? '').trim().toLowerCase(),
+        prBody: String(fresh.body ?? ''),
+      }, {
+        projectId,
+        repoRoot,
+        assignmentStorePath,
+        adapter: runtimeAdapter!,
+        env,
+      })
+    : undefined;
   return {
     boundary: productionSchedulerBoundary({
       repoRoot,
@@ -520,6 +546,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       unresolvedReason,
       ...(assignmentReconciliation ? { assignmentReconciliation } : {}),
       fleetBindings,
+      ...(postReviewSmoke ? { reconcilePostReviewSmoke: postReviewSmoke } : {}),
       publishHandoff,
     }),
     cadence,
