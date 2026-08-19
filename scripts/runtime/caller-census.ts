@@ -133,6 +133,13 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Governed Orca local start composes RuntimeAdapter for current-local replacement admission before ready-receipt assignment publication.',
   },
   {
+    surface: 'scripts/pr2-foundation/supervised-task-launch-assistant.ts',
+    operations: ['runtime-composition', 'spawn', 'liveness'],
+    kind: 'runtime-port',
+    disposition: 'use-runtime-interface',
+    note: 'Launch composition creates one exact internal RuntimeAdapter worker, proves idle liveness, then delegates successful start to supervised-worker-start.',
+  },
+  {
     surface: 'scripts/pr2-foundation/scheduler.ts',
     operations: ['runtime-composition', 'fleet-observer', 'list', 'find', 'read', 'liveness'],
     kind: 'runtime-port',
