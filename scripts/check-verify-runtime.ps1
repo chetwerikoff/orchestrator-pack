@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
   Static guard for Issue #488 verify runtime refactor: structural verify.ps1 default,
-  optional batched smoke helper, full-lane slow-test budget, and Pester cache wiring.
+  optional batched smoke helper, full-lane slow-test budget, and conditional Pester cache wiring.
 #>
 [CmdletBinding()]
 param(
@@ -36,7 +36,7 @@ $scopeGuardPath = Join-Path $RepoRoot '.github/workflows/scope-guard.yml'
 $mappingDoc = Join-Path $RepoRoot 'docs/verify-runtime-refactor.md'
 $pesterInstaller = Join-Path $RepoRoot 'scripts/install-pester-ci.ps1'
 
-foreach ($required in @($verifyPath, $smokePath, $budgetConfig, $budgetEnforcer, $testAllPath, $mappingDoc, $pesterInstaller)) {
+foreach ($required in @($verifyPath, $smokePath, $budgetConfig, $budgetEnforcer, $testAllPath, $mappingDoc)) {
     if (-not (Test-Path -LiteralPath $required)) {
         Add-Fail "missing required artifact: $(Split-Path -Leaf $required)"
     }
@@ -89,6 +89,9 @@ if (Test-Path -LiteralPath $scopeGuardPath) {
 
     if ($jobs.ContainsKey('test-pester')) {
         $pesterJob = $jobs['test-pester']
+        if (-not (Test-Path -LiteralPath $pesterInstaller)) {
+            Add-Fail 'test-pester job requires scripts/install-pester-ci.ps1'
+        }
         if ($pesterJob -notmatch 'install-pester-ci\.ps1') {
             Add-Fail 'test-pester job must use scripts/install-pester-ci.ps1 instead of inline Install-Module every run'
         }
@@ -106,5 +109,5 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] verify.ps1 structural default, smoke helper, runtime budget, and Pester cache wiring OK.'
+Write-Host '[PASS] verify.ps1 structural default, smoke helper, runtime budget, and active test-lane wiring OK.'
 exit 0

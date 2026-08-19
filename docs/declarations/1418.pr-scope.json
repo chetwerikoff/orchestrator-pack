@@ -5,6 +5,7 @@
     ".github/workflows/scope-guard.yml",
     "docs/declarations/1418.pr-scope.json",
     "scripts/check-ci-cheap-wins.ps1",
+    "scripts/check-verify-runtime.ps1",
     "scripts/ci-red-watchdog-lookup-retention.Tests.ps1",
     "scripts/ci-test-aggregate.ps1",
     "scripts/emit-vitest-heavy-topology.mjs",
@@ -53,5 +54,5 @@
     "scripts/",
     "tests/powershell/Lint-SelfArchitect.Tests.ps1"
   ],
-  "source_revision": "47dd36c0508b465e0eed68b79aece70c1eb23835"
+  "source_revision": "7153446ad250d5429ae537ecf1d364594209844a"
 }
