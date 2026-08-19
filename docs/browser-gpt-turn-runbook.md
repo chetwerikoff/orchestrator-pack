@@ -26,7 +26,6 @@ not a new runtime configuration contract.
 | Chrome executable | `${CHROME_PATH}` shell placeholder; `DISCUSS_WITH_GPT_CHROME_PATH` or `chromePath` |
 | CDP endpoint | `${CDP_ENDPOINT}` shell-only placeholder passed to `--cdp` |
 | prompt and outputs | `${INPUT_FILE}`, `${OUTPUT_FILE}`, `${HANDOFF_RECEIPT}`, `${TERMINAL_ENVELOPE}` |
-| author publication expectation | `${AUTHOR_EXPECTED_BODY}` is an attempt-local author-produced exact-body file; `${AUTHOR_BODY_SHA256}` is computed from those bytes before GitHub mutation |
 | local config | existing `local.config.json` keys and supported environment variables |
 
 Use new no-clobber paths inside an existing local directory. Never commit a
@@ -78,21 +77,6 @@ render all sibling input files from one ephemeral canon read before launching
 the first sibling. Do not re-prepare a later sibling from newer canon after the
 batch has started. The input files are transport inputs only, not provenance
 manifests or persisted canon snapshots.
-
-For a governed author mutation, the expected body hash must exist **before**
-the GitHub write. Use an author-owned preparation turn that performs no GitHub
-mutation and yields the exact intended Issue body. Persist those exact UTF-8
-bytes to a fresh attempt-local `${AUTHOR_EXPECTED_BODY}` without normalization;
-the flow-manager may relay/hash those bytes but must not edit or author them.
-Compute `${AUTHOR_BODY_SHA256}` from that file before the publication turn. The
-publication prompt must relay the same exact body bytes and instruct the GPT
-author to publish them unchanged. A hash computed from the later REST read-back
-is circular and is never an expectation. For an existing Issue, retain its
-known Issue number before publication. For brief-only creation, retain the
-pre-publication body/hash first; completion remains non-terminal until the
-newly published Issue number is authoritatively identified and the same exact
-REST tuple can be checked. Do not reopen the old pre-author empty-seed pattern
-merely to obtain an Issue number.
 
 ## Launch
 
@@ -148,72 +132,12 @@ second monitor.
 
 ## Observe and settle
 
-For an ordinary tracked turn with no governed GitHub publication expectation,
-the valid child `turn-result/v1` remains the turn authority and the long-running
+The valid child `turn-result/v1` is the turn authority; for long turns the
 launcher terminal envelope represents that settled child result. The handoff
-receipt only acknowledges accepted detached launch.
-
-For a governed author or reviewer/lens publication, **fresh GitHub REST
-read-back is completion authority**. The child result, launcher envelope, PID,
-shell state, silence, log growth, and observation heartbeats are diagnostic or
-timeout hints only. The flow-manager must invoke the existing publication-aware
-waiter for the accepted attempt rather than settling from the terminal envelope
-alone.
-
-For one reviewer invocation, use the exact identity returned by the long-run
-adapter's `publication_expectation`:
-
-```bash
-npm run --silent flow-manager-long-running-child -- wait \
-  --run-identity "${RUN_ID}" \
-  --attempt-identity "${ATTEMPT_ID}" \
-  --handoff-receipt "${HANDOFF_RECEIPT}" \
-  --terminal-envelope "${TERMINAL_ENVELOPE}" \
-  --deadline-ms 5000 \
-  --publication-kind reviewer \
-  --repository "${REPOSITORY}" \
-  --issue-number "${ISSUE_NUMBER}" \
-  --source-revision "${EXPECTED_REVISION}" \
-  --invocation-id "${INVOCATION_ID}" \
-  --stage "${STAGE}" \
-  --source-slot "${SLOT}"
-```
-
-For an author publication whose Issue number is already authoritative, pass the
-manager-held pre-publication hash, never a hash derived from REST:
-
-```bash
-npm run --silent flow-manager-long-running-child -- wait \
-  --run-identity "${RUN_ID}" \
-  --attempt-identity "${ATTEMPT_ID}" \
-  --handoff-receipt "${HANDOFF_RECEIPT}" \
-  --terminal-envelope "${TERMINAL_ENVELOPE}" \
-  --deadline-ms 5000 \
-  --publication-kind author \
-  --repository "${REPOSITORY}" \
-  --issue-number "${ISSUE_NUMBER}" \
-  --source-revision "${EXPECTED_REVISION}" \
-  --body-sha256 "${AUTHOR_BODY_SHA256}"
-```
-
-For one concurrent reviewer `stageAttemptId`, launch every sibling first. Then
-build one JSON array from the **accepted sibling publication expectations** and
-pass that same array as `--publication-batch-json` to each sibling's waiter.
-Each array entry contains exactly `repository`, `issue_number`,
-`source_revision`, `invocation_id`, `stage`, and `source_slot`. The waiter calls
-`classifyConcurrentBatchDelivery()` on the live REST observations. If at least
-one sibling is published while the current slot is silent/missing, the current
-slot settles `possible-or-actual`, `resend_forbidden: true`, as an invocation-
-bound incident. A blocked current publication remains blocked and is never
-laundered by a successful sibling. With zero published artifacts, no slot is
-classified delivered and the waiter remains non-terminal absent another
-terminal authority.
-
-A REST-visible publication terminates the wait even when the helper child is
-dead, silent, or absent. A matching foreign-principal or edited reviewer
-publication is a blocked identity mismatch. Missing or unavailable REST
-evidence remains non-terminal. Follow the carrier's invocation-local ownership,
-marker, stage, revision, and retry rules.
+receipt only acknowledges accepted detached launch and is not completion
+authority. A stable final page reply is sufficient; PID, shell state, silence,
+log growth, and observation heartbeats are not completion authority. Follow the carrier's invocation-local
+ownership, marker, stage, revision, and retry rules.
 
 If a result, page, or conversation binding is lost after a possible send, do
 not infer non-delivery. Re-resolve the current target from `${CHAT_URL}`,
@@ -279,11 +203,11 @@ recover/publish only the exact owned turn for the caller-supplied invocation.
 The non-acquisition diagnostic probes are read-only and exit once. They cannot
 retry, resend, progress a stage, create, or close a tab. The explicit
 `--open-if-missing true` acquisition path is the sole opt-in exception: it may
-create one owned page, wait for bounded readiness, and close exactly that owned
-page. Resolve the current target from the conversation URL instead of trusting
-a saved target id. Probe mechanics remain owned by Issues #1272 and #1122; do
-not replace this utility with raw CDP, selectors, JavaScript, a watch loop, or
-a transcript dump.
+create one owned page, wait for bounded readiness, and close exactly that
+owned page. Resolve the current target from the conversation URL instead of
+trusting a saved target id. Probe mechanics remain owned by Issues #1272 and
+#1122; do not replace this utility with raw CDP, selectors, JavaScript, a watch
+loop, or a transcript dump.
 
 ## Shift handoff/close
 
@@ -296,40 +220,20 @@ hand off only “background job running”.
 
 ## Universal author prompt template
 
-Author publication is two bounded phases so the manager has independent
-pre-publication body bytes without authoring them.
-
-Preparation turn:
-
-```text
-Role: author for <REPOSITORY>.
-Mode: <brief-only-prepare|revise-existing-prepare>.
-Authoritative input: <BRIEF_REFERENCE> or live Issue <ISSUE_URL>; expected revision: <EXPECTED_REVISION>.
-
-Read the live target through GitHub when an Issue exists. Follow the canonical
-create-issue-draft procedure and current tier, floor, and scope rules. Produce
-the exact intended final Issue body, including the correct source-revision
-marker. Do not mutate GitHub in this preparation turn. Return the exact Issue
-body bytes only; do not wrap them in Markdown fences or add explanation.
-```
-
-The flow-manager stores that reply byte-for-byte as `${AUTHOR_EXPECTED_BODY}`,
-computes its SHA-256, and relays the unchanged bytes into the publication turn.
-It does not edit, normalize, merge, or adjudicate them.
-
-Publication turn:
+Copy this prompt and substitute placeholders:
 
 ```text
 Role: author for <REPOSITORY>.
 Mode: <brief-only-create|revise-existing-issue>.
-Target: <new Issue in REPOSITORY|live Issue ISSUE_URL>.
-Expected revision: <EXPECTED_REVISION>.
-Expected body SHA-256: <AUTHOR_BODY_SHA256>.
+Authoritative input: <BRIEF_REFERENCE> or live Issue <ISSUE_URL>; expected revision: <EXPECTED_REVISION>.
 
-The exact author-produced body follows between the BODY START/BODY END transport
-boundaries. Publish those body bytes unchanged to the target Issue. For
-brief-only-create, create the Issue; for revise-existing-issue, edit only the
-target Issue title/body as required. Do not create a PR, label, milestone,
+Read the live target through GitHub when an Issue exists. Follow the canonical
+create-issue-draft procedure and current tier, floor, and scope rules.
+For brief-only-create, author from the supplied brief. For revise-existing-issue,
+preserve the source revision marker and increment it for a substantive body
+revision. Apply these requirements: <AUTHORING_REQUIREMENTS>.
+
+Only mutate the target Issue title/body. Do not create a PR, label, milestone,
 merge, or unrelated GitHub authority. Re-read the final body for consistency.
 After a successful mutation return only this receipt, at most 15 lines:
 Issue URL/number, revision marker, and changed sections.
@@ -337,16 +241,7 @@ Use the existing audited genuine-write-failure fallback only when the direct
 GitHub mutation actually fails.
 Never include or fabricate an OPKTURNV1... transport marker; the tracked
 transport owns marker insertion.
-
-BODY START
-<EXACT_AUTHOR_EXPECTED_BODY_BYTES>
-BODY END
 ```
-
-The BODY START/BODY END lines are transport framing and are not part of the
-Issue body. The flow-manager must preserve the enclosed bytes exactly. A
-successful child receipt is useful for locating the Issue but is not the body
-completion authority; the waiter proves the exact REST body/revision/hash tuple.
 
 ## Generated independent reviewer prompt
 
