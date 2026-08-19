@@ -214,6 +214,7 @@ function runtimeFor(
     workspace: workspacePath,
   });
   if (owner.status !== 'ok') throw new Error('assignment owner spawn failed');
+  const runtimeHeadSha = git(workspacePath, ['rev-parse', 'HEAD']).toLowerCase();
 
   let resolveOrdinal = 0;
   let smokeSpawns = 0;
@@ -237,7 +238,7 @@ function runtimeFor(
     configurable: true,
     value: vi.fn(() => ({
       status: 'ok' as const,
-      value: { ready: true as const, workspacePath },
+      value: { ready: true as const, workspacePath, headSha: runtimeHeadSha },
     })),
   });
   Object.defineProperty(base, 'spawnWorker', {
