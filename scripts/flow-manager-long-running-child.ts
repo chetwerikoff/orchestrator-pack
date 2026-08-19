@@ -134,7 +134,6 @@ export interface ConcurrentBatchSlotAttribution {
   readonly classification: 'actual' | 'possible-or-actual' | 'unproven';
   readonly resendForbidden: boolean;
   readonly settlement: 'published' | 'incident' | 'unsettled';
-  readonly publishedSiblingInvocationIds?: readonly string[];
   readonly childHint?: string;
 }
 
@@ -1326,9 +1325,7 @@ export function observePublishedArtifact(
 export function classifyConcurrentBatchDelivery(
   slots: readonly ConcurrentBatchSlotEvidence[],
 ): readonly ConcurrentBatchSlotAttribution[] {
-  const publishedInvocationIds = slots
-    .filter((slot) => slot.publication === 'published')
-    .map((slot) => slot.invocationId);
+  const anyPublished = slots.some((slot) => slot.publication === 'published');
   return slots.map((slot) => {
     if (slot.publication === 'published') {
       return {
@@ -1348,13 +1345,12 @@ export function classifyConcurrentBatchDelivery(
         ...(slot.childHint ? { childHint: slot.childHint } : {}),
       };
     }
-    if (publishedInvocationIds.length > 0) {
+    if (anyPublished) {
       return {
         invocationId: slot.invocationId,
         classification: 'possible-or-actual' as const,
         resendForbidden: true,
         settlement: 'incident' as const,
-        publishedSiblingInvocationIds: publishedInvocationIds,
         ...(slot.childHint ? { childHint: slot.childHint } : {}),
       };
     }
@@ -1396,6 +1392,9 @@ export async function runWait(options: {
   let publication: PublicationObservation | undefined;
   let batchAttribution: readonly ConcurrentBatchSlotAttribution[] | undefined;
   let currentBatchAttribution: ConcurrentBatchSlotAttribution | undefined;
+  const currentReviewerExpectation = options.publicationExpectation?.kind === 'reviewer'
+    ? options.publicationExpectation
+    : undefined;
   const publicationTransport = options.publicationExpectation || options.concurrentBatchExpectations
     ? withGhDeadline(options.transport ?? defaultGhTransport(), deadlineAt)
     : undefined;
@@ -1406,21 +1405,21 @@ export async function runWait(options: {
     });
     if (options.publicationExpectation && publicationTransport) {
       publication = observePublishedArtifact(options.publicationExpectation, publicationTransport);
-      if (options.concurrentBatchExpectations && options.publicationExpectation.kind === 'reviewer') {
+      if (options.concurrentBatchExpectations && currentReviewerExpectation) {
         const evidence = options.concurrentBatchExpectations.map((expectation): ConcurrentBatchSlotEvidence => {
-          const observed = sameReviewerExpectation(expectation, options.publicationExpectation as ReviewerPublicationExpectation)
+          const isCurrent = sameReviewerExpectation(expectation, currentReviewerExpectation);
+          const observed = isCurrent
             ? publication!
             : observePublishedArtifact(expectation, publicationTransport);
           return {
             invocationId: expectation.invocationId,
             publication: observed.status,
-            ...(sameReviewerExpectation(expectation, options.publicationExpectation as ReviewerPublicationExpectation)
-              && envelope?.incident ? { childHint: envelope.incident } : {}),
+            ...(isCurrent && envelope?.incident ? { childHint: envelope.incident } : {}),
           };
         });
         batchAttribution = classifyConcurrentBatchDelivery(evidence);
         currentBatchAttribution = batchAttribution.find((slot) =>
-          slot.invocationId === options.publicationExpectation!.invocationId);
+          slot.invocationId === currentReviewerExpectation.invocationId);
       }
       if (publication.status === 'published' || publication.status === 'blocked') break;
       if (currentBatchAttribution?.settlement === 'incident' && currentBatchAttribution.resendForbidden) break;
@@ -1445,6 +1444,12 @@ export async function runWait(options: {
   const noSuccessAuthority = publicationExpected
     ? !publicationPublished
     : envelope?.lifecycle_outcome !== 'success';
+  const currentBatchInvocationId = currentBatchAttribution?.invocationId;
+  const publishedSiblingInvocationIds = currentBatchInvocationId
+    ? (batchAttribution ?? [])
+        .filter((slot) => slot.classification === 'actual' && slot.invocationId !== currentBatchInvocationId)
+        .map((slot) => slot.invocationId)
+    : [];
   const concurrentBatchIncident = batchIncidentSettled && currentBatchAttribution
     ? {
         schema: CONCURRENT_BATCH_INCIDENT_SCHEMA,
@@ -1452,7 +1457,7 @@ export async function runWait(options: {
         classification: currentBatchAttribution.classification,
         resend_forbidden: currentBatchAttribution.resendForbidden,
         settlement: currentBatchAttribution.settlement,
-        published_sibling_invocation_ids: currentBatchAttribution.publishedSiblingInvocationIds ?? [],
+        published_sibling_invocation_ids: publishedSiblingInvocationIds,
         ...(currentBatchAttribution.childHint ? { child_hint: currentBatchAttribution.childHint } : {}),
       }
     : undefined;
