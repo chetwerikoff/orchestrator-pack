@@ -194,11 +194,12 @@ if (Test-Path -LiteralPath $scopeGuardPath) {
     $scopeText = Get-Content -LiteralPath $scopeGuardPath -Raw
     $hasMonolithicTests = $scopeText -match '(?m)^\s*tests:\s*$' -and $scopeText -match 'test-all\.ps1'
     $hasShardedPipeline = $scopeText -match 'test-vitest-light' -and $scopeText -match 'test-vitest-heavy' -and $scopeText -match 'run-vitest-light-lane\.ps1' -and $scopeText -match 'run-vitest-heavy-shard\.ps1' -and $scopeText -match 'ci-test-aggregate\.ps1'
+    $hasNodeContractLane = $scopeText -match '(?m)^\s*test-vitest-contracts:\s*$' -and $scopeText -match 'vitest-ci-runner\.ts contract'
     if (-not $hasMonolithicTests -and -not $hasShardedPipeline) {
         Add-Fail 'scope-guard.yml must run scripts/test-all.ps1 or the sharded vitest/pester pipeline (Issue #487)'
     }
-    if ($hasShardedPipeline -and $scopeText -notmatch 'test-all\.ps1.*-SkipNpm|-SkipNpm.*test-all\.ps1') {
-        Add-Fail 'sharded pipeline must keep scripts/test-all.ps1 -SkipNpm for Pester/read-delegation ownership'
+    if ($hasShardedPipeline -and -not $hasNodeContractLane -and $scopeText -notmatch 'test-all\.ps1.*-SkipNpm|-SkipNpm.*test-all\.ps1') {
+        Add-Fail 'sharded pipeline must keep scripts/test-all.ps1 -SkipNpm or the Node Vitest contract lane for residual contract ownership'
     }
     if ($scopeText -notmatch 'check-ci-cheap-wins\.ps1') {
         Add-Fail 'scope-guard.yml must invoke scripts/check-ci-cheap-wins.ps1'

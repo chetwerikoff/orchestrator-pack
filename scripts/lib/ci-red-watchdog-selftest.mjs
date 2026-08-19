@@ -489,12 +489,9 @@ test('replacement generation re-enters the behavior gate', () => {
   assert.equal(replacement.reason, 'behavior_gate_passed');
 });
 
-test('watchdog owns fallback and revalidates before Enter', () => {
-  const reconcile = readFileSync(path.join(scriptsDir, 'ci-failure-notification-reconcile.ps1'), 'utf8');
-  assert.ok(reconcile.includes('lib/Ci-Red-Watchdog.ps1'));
-  assert.ok(reconcile.includes('Invoke-CiRedWatchdogTick'));
-  assert.ok(reconcile.includes('ci-red watchdog owns new fallback delivery'));
-  assert.ok(reconcile.includes('Invoke-CiFailureEpisodeDelivery'));
+test('watchdog transport is journal-first and submit revalidates before Enter', () => {
+  const watchdog = readFileSync(path.join(libDir, 'Ci-Red-Watchdog.ps1'), 'utf8');
+  assert.ok(watchdog.includes('Ci-Red-Watchdog-Tick.ps1'));
 
   const tick = readFileSync(path.join(libDir, 'Ci-Red-Watchdog-Tick.ps1'), 'utf8');
   const transportIntent = tick.indexOf("-Command 'transport-issued'");
