@@ -25,6 +25,16 @@ Operations required only by remaining supervisor/recovery callers are intentiona
 - The current public Orca CLI closes terminals only by handle and exposes no expected-generation binding. Therefore the shared runtime boundary does not claim generation-safe destructive authority where the native operation cannot prove it; callers must use only the exact supported boundary semantics and may not fall back to a compatibility facade.
 - Current upstream Orca output (`result.terminal.tail`, string-or-null cursor plus optional `latestCursor`) and the captured legacy smoke shape (`result.lines`, numeric cursor) are normalized internally. Any unsupported consumed response or progress shape returns the named `unsupported` result.
 
+## Runtime target and assignment authority (Issue #1441)
+
+Issue #1441 keeps runtime effects bound to the same exact composite identity. A terminal handle, title, path, PID, tab id, worktree id, or first census match is never enough to authorize send, read, liveness, stop, recovery, or reassignment. A stale or reused handle whose current Orca incarnation differs from the held generation performs no effect.
+
+The existing Orca assignment resolver remains the durable remap boundary: a PACK WorkerAssignment carries the provider plus Dispatch `bindingKey`, and `orca orchestration worker-show --dispatch <id>` must report an exact current worker before the adapter resolves the current composite runtime identity. The installed production surface does not supply a stable `pane_key` witness together with the current handle/incarnation. Therefore #1441 takes the specified **fence** branch rather than synthesizing a pane key or heuristically rebinding a remapped handle. `exactWorker: false`, unknown/ambiguous observation status, a missing current terminal identity, or a changed generation fails closed as `assignment_target_unresolved`; it never authorizes an effect against a guessed replacement.
+
+Supervised local start keeps two separate authorities. A successful start still requires a ready receipt with the exact requested `taskId`, non-empty `dispatchId`, exact placement witnesses, and successful WorkerAssignment publication. A structurally valid Orca error envelope with a non-empty `error.code` remains a failed start but exposes that exact code in structured failure evidence; the code is never upgraded into readiness or assignment authority.
+
+WorkerAssignment persistence is a hard cut. The sole store key is a SHA-256-derived key over the receipt's stable `(taskId, dispatchId)` deliverable identity. `issueNumber` is optional metadata and may be attached after a brief-only author publishes the Issue without changing the assignment key, assignment id, or generation. There is no `issue-<N>` key alias, dual lookup, migration, promotion, or in-process conversion. A pre-upgrade store using `issue-<N>` keys is intentionally unreadable and blocks new publication until the operator retires or resets that generated store. Issue-scoped scheduler/fleet consumers see a brief-only assignment only after positive Issue metadata has been attached; runtime resolution remains provider/binding based.
+
 ## Worktree lifecycle continuity (Issues #1298 and #1328)
 
 Worktree creation and teardown are deliberately not added to `RuntimeAdapter` by these tasks. Issue

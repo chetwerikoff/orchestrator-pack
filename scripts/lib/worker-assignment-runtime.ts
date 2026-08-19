@@ -5,10 +5,13 @@ import {
 } from '../runtime/contracts.ts';
 import {
   assignmentStillCurrent,
-  listCurrentWorkerAssignments,
+  listCurrentWorkerAssignmentRecords,
   readWorkerAssignmentStore,
   withCurrentWorkerAssignmentFence,
+  workerAssignmentKey,
+  type BriefWorkerAssignment,
   type WorkerAssignment,
+  type WorkerAssignmentRecord,
 } from './worker-assignment-store.ts';
 
 export interface ResolvedWorkerAssignment {
@@ -17,22 +20,30 @@ export interface ResolvedWorkerAssignment {
   readonly worker: RuntimeWorker;
 }
 
+export interface ResolvedBriefWorkerAssignment {
+  readonly assignment: BriefWorkerAssignment;
+  /** Exact runtime-private identity is deliberately held only in memory. */
+  readonly worker: RuntimeWorker;
+}
+
+export interface ResolvedIssueWorkerAssignment extends ResolvedWorkerAssignment {}
+
 export interface WorkerAssignmentReconciliation {
   readonly assignment: WorkerAssignment;
   readonly reason: 'target_unresolved' | 'remote_not_applicable';
 }
 
 export type WorkerAssignmentTargetResolution =
-  | { readonly status: 'resolved'; readonly assignment: WorkerAssignment; readonly worker: RuntimeWorker }
-  | { readonly status: 'gone'; readonly assignment: WorkerAssignment; readonly workerId?: string }
-  | { readonly status: 'remote_not_applicable'; readonly assignment: WorkerAssignment }
+  | { readonly status: 'resolved'; readonly assignment: WorkerAssignmentRecord; readonly worker: RuntimeWorker }
+  | { readonly status: 'gone'; readonly assignment: WorkerAssignmentRecord; readonly workerId?: string }
+  | { readonly status: 'remote_not_applicable'; readonly assignment: WorkerAssignmentRecord }
   | { readonly status: 'assignment_stale' | 'assignment_untrusted' | 'runtime_unavailable' | 'target_unresolved' };
 
 export type WorkerAssignmentReplacementAdmission =
-  | { readonly status: 'replaceable'; readonly expected: WorkerAssignment }
+  | { readonly status: 'replaceable'; readonly expected: WorkerAssignmentRecord }
   | {
       readonly status: 'skipped_live';
-      readonly expected: WorkerAssignment;
+      readonly expected: WorkerAssignmentRecord;
       readonly worker: RuntimeWorker;
       readonly reason: 'runtime_busy' | 'runtime_idle';
     }
@@ -51,6 +62,8 @@ export type WorkerAssignmentResolution =
   | {
       readonly status: 'ok';
       readonly bindings: readonly ResolvedWorkerAssignment[];
+      /** Pre-Issue assignments resolved by the same repository/provider/binding authority. */
+      readonly briefBindings?: readonly ResolvedBriefWorkerAssignment[];
       readonly reconciliations: readonly WorkerAssignmentReconciliation[];
     }
   | {
@@ -59,7 +72,11 @@ export type WorkerAssignmentResolution =
       readonly reconciliations: readonly [];
     };
 
-function sameLogicalAssignment(left: WorkerAssignment | undefined, right: WorkerAssignment): boolean {
+function isNumberedAssignment(assignment: WorkerAssignmentRecord): assignment is WorkerAssignment {
+  return Number.isInteger(assignment.issueNumber) && Number(assignment.issueNumber) > 0;
+}
+
+function sameLogicalAssignment(left: WorkerAssignmentRecord | undefined, right: WorkerAssignmentRecord): boolean {
   return Boolean(left
     && left.assignmentId === right.assignmentId
     && left.generation === right.generation
@@ -82,14 +99,17 @@ function sameLogicalAssignment(left: WorkerAssignment | undefined, right: Worker
  */
 export function resolveCurrentWorkerAssignmentTarget(input: {
   readonly file: string;
-  readonly expected: WorkerAssignment;
+  readonly expected: WorkerAssignmentRecord;
   readonly adapter: RuntimeAdapter;
   readonly timeoutMs?: number;
 }): WorkerAssignmentTargetResolution {
   const store = readWorkerAssignmentStore(input.file);
   if (!store) return { status: 'assignment_untrusted' };
-  const current = store.assignments[`issue-${input.expected.issueNumber}`];
-  if (!current || !sameLogicalAssignment(current, input.expected)) return { status: 'assignment_stale' };
+  const key = workerAssignmentKey(input.expected.taskId, input.expected.bindingKey);
+  const current = key ? store.assignments[key] : undefined;
+  if (!current || !sameLogicalAssignment(current, input.expected)) {
+    return { status: 'assignment_stale' };
+  }
   if (current.kind !== 'local') {
     return { status: 'remote_not_applicable', assignment: current };
   }
@@ -124,7 +144,7 @@ export function resolveCurrentWorkerAssignmentTarget(input: {
  */
 export async function admitCurrentWorkerAssignmentReplacement(input: {
   readonly file: string;
-  readonly expected: WorkerAssignment;
+  readonly expected: WorkerAssignmentRecord;
   readonly adapter: RuntimeAdapter;
   readonly timeoutMs?: number;
   readonly observationWindowMs?: number;
@@ -175,18 +195,21 @@ export function resolveCurrentWorkerAssignmentBindings(input: {
   readonly adapter: RuntimeAdapter;
   readonly timeoutMs?: number;
 }): WorkerAssignmentResolution {
-  const assignments = listCurrentWorkerAssignments(input.file);
+  const assignments = listCurrentWorkerAssignmentRecords(input.file);
   if (!assignments) return { status: 'assignment_untrusted', bindings: [], reconciliations: [] };
   if (typeof input.adapter.resolveAssignmentWorker !== 'function') {
     return { status: 'runtime_unavailable', bindings: [], reconciliations: [] };
   }
   const repository = input.repository.trim().toLowerCase();
   const bindings: ResolvedWorkerAssignment[] = [];
+  const briefBindings: ResolvedBriefWorkerAssignment[] = [];
   const reconciliations: WorkerAssignmentReconciliation[] = [];
+  const resolvedWorkers: RuntimeWorker[] = [];
   for (const assignment of assignments) {
     if (assignment.repository !== repository) continue;
+    const numbered = isNumberedAssignment(assignment);
     if (assignment.kind !== 'local') {
-      if (assignmentStillCurrent(input.file, assignment)) {
+      if (numbered && assignmentStillCurrent(input.file, assignment)) {
         reconciliations.push({ assignment, reason: 'remote_not_applicable' });
       }
       continue;
@@ -196,32 +219,38 @@ export function resolveCurrentWorkerAssignmentBindings(input: {
       { timeoutMs: input.timeoutMs ?? 5_000 },
     );
     if (resolved.status !== 'ok') {
-      if (assignmentStillCurrent(input.file, assignment)) {
+      if (numbered && assignmentStillCurrent(input.file, assignment)) {
         reconciliations.push({ assignment, reason: 'target_unresolved' });
       }
       continue;
     }
     if (!assignmentStillCurrent(input.file, assignment)) continue;
     if (resolved.value.kind === 'gone') {
-      // Fleet reconciliation has no authority to act on gone evidence. Preserve
-      // the exact gone distinction only on the target-resolution seam used by
-      // replacement/recovery; the existing scheduler handoff remains generic.
-      reconciliations.push({ assignment, reason: 'target_unresolved' });
+      // Fleet reconciliation is Issue-scoped and has no authority to act on a
+      // brief-only row. Numbered rows preserve the existing generic handoff.
+      if (numbered) reconciliations.push({ assignment, reason: 'target_unresolved' });
       continue;
     }
     const worker = resolved.value.worker;
-    if (bindings.some((candidate) => sameRuntimeWorker(candidate.worker.identity, worker.identity))) {
+    if (resolvedWorkers.some((candidate) => sameRuntimeWorker(candidate.identity, worker.identity))) {
       return { status: 'assignment_untrusted', bindings: [], reconciliations: [] };
     }
-    bindings.push({ assignment, worker });
+    resolvedWorkers.push(worker);
+    if (numbered) bindings.push({ assignment, worker });
+    else briefBindings.push({ assignment, worker });
   }
-  return { status: 'ok', bindings, reconciliations };
+  return {
+    status: 'ok',
+    bindings,
+    reconciliations,
+    ...(briefBindings.length > 0 ? { briefBindings } : {}),
+  };
 }
 
 export function bindingForIssue(
   bindings: readonly ResolvedWorkerAssignment[],
   issueNumber: number,
-): ResolvedWorkerAssignment | null {
+): ResolvedIssueWorkerAssignment | null {
   const matches = bindings.filter((binding) => binding.assignment.issueNumber === issueNumber);
   return matches.length === 1 ? matches[0]! : null;
 }

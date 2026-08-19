@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import './toolchain/native-entrypoint-preflight.ts';
+import { createHash } from 'node:crypto';
 import {
   closeSync,
   constants as fsConstants,
@@ -26,12 +27,20 @@ import {
   type BrowserTurnCancellationReceipt,
 } from './chatgpt-browser-turn/state-light-cancellation.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import {
+  defaultGhTransport,
+  fetchIssueComments,
+  fetchIssueRevision,
+  withGhDeadline,
+} from './lib/create-issue-stage-record-gh.ts';
+import type { GhTransport } from './lib/create-issue-stage-record-types.ts';
 
 export const COMPLETION_MODE = 'browser-turn-result-v1' as const;
 export const HANDOFF_SCHEMA = 'flow-manager-long-running-child-handoff/v1' as const;
 export const TERMINAL_SCHEMA = 'flow-manager-long-running-child-terminal/v1' as const;
 export const WAIT_SCHEMA = 'flow-manager-long-running-child-wait/v1' as const;
 export const REFUSAL_SCHEMA = 'flow-manager-long-running-child-refusal/v1' as const;
+export const CONCURRENT_BATCH_INCIDENT_SCHEMA = 'flow-manager-concurrent-batch-incident/v1' as const;
 
 export type DeliveryState = 'not-sent' | 'POSSIBLY_DELIVERED' | 'landed';
 
@@ -65,6 +74,67 @@ export interface TerminalEnvelope {
   readonly recovery_available: boolean;
   readonly conversation_locator?: string;
   readonly diagnostics?: Record<string, unknown>;
+}
+
+export type ReviewerPublicationExpectation = {
+  readonly kind: 'reviewer';
+  readonly repository: string;
+  readonly issueNumber: number;
+  readonly sourceRevision: string;
+  readonly invocationId: string;
+  readonly stage: string;
+  readonly sourceSlot: string;
+};
+
+export type PublicationExpectation =
+  | {
+      readonly kind: 'author';
+      readonly repository: string;
+      readonly issueNumber: number;
+      readonly sourceRevision: string;
+      readonly exactBodySha256: string;
+    }
+  | ReviewerPublicationExpectation;
+
+export type PublicationObservation =
+  | {
+      readonly status: 'published';
+      readonly kind: 'author';
+      readonly repository: string;
+      readonly issueNumber: number;
+      readonly sourceRevision: string;
+      readonly exactBodySha256: string;
+    }
+  | {
+      readonly status: 'published';
+      readonly kind: 'reviewer';
+      readonly repository: string;
+      readonly issueNumber: number;
+      readonly sourceRevision: string;
+      readonly invocationId: string;
+      readonly stage: string;
+      readonly sourceSlot: string;
+      readonly commentId: number;
+      readonly principal: string;
+    }
+  | {
+      readonly status: 'missing' | 'unavailable' | 'blocked';
+      readonly reason: string;
+      readonly diagnostics?: readonly string[];
+    };
+
+export interface ConcurrentBatchSlotEvidence {
+  readonly invocationId: string;
+  readonly publication: 'published' | 'missing' | 'unavailable' | 'blocked';
+  readonly childHint?: string;
+}
+
+export interface ConcurrentBatchSlotAttribution {
+  readonly invocationId: string;
+  readonly classification: 'actual' | 'possible-or-actual' | 'unproven';
+  readonly resendForbidden: boolean;
+  readonly settlement: 'published' | 'incident' | 'unsettled';
+  readonly childHint?: string;
 }
 
 const DEFAULT_CANDIDATE_GRACE_MS = 5_000;
@@ -1010,20 +1080,352 @@ export function readHandoffReceipt(
   }
 }
 
+function issueSourceRevision(body: string): string | null {
+  const match = body.match(/<!--\s*source-revision:\s*(r[0-9]+)\s*-->/u);
+  return match?.[1] ?? null;
+}
+
+function sha256Text(body: string): string {
+  return createHash('sha256').update(body, 'utf8').digest('hex');
+}
+
+function nonEmptyLines(body: string): readonly string[] {
+  return body
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function exactLineCount(lines: readonly string[], expected: string): number {
+  return lines.filter((line) => line === expected).length;
+}
+
+function authenticatedPrincipal(transport: GhTransport): string | null {
+  const response = transport.runGh(['gh', 'api', 'user', '--jq', '.login']);
+  if (response.exitCode !== 0) return null;
+  const login = response.stdout.trim();
+  return login || null;
+}
+
+interface RejectedPublicationComment {
+  readonly id: number;
+  readonly body: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly userLogin: string;
+}
+
+function fetchRejectedPublicationComments(
+  transport: GhTransport,
+  repository: string,
+  diagnostics: readonly { readonly code: string; readonly commentId?: number }[],
+): { readonly comments: readonly RejectedPublicationComment[]; readonly unavailableReason?: string } {
+  const rejectedIds = [...new Set(diagnostics
+    .filter((item) => (item.code === 'foreign-comment' || item.code === 'edited-comment')
+      && Number.isInteger(item.commentId))
+    .map((item) => Number(item.commentId)))];
+  if (rejectedIds.length === 0) return { comments: [] };
+  const [owner, name, extra] = repository.split('/');
+  if (!owner || !name || extra) {
+    return { comments: [], unavailableReason: 'publication_repository_invalid' };
+  }
+  const comments: RejectedPublicationComment[] = [];
+  for (const id of rejectedIds) {
+    const response = transport.runGh(['gh', 'api', `repos/${owner}/${name}/issues/comments/${id}`]);
+    if (response.exitCode !== 0) {
+      return {
+        comments: [],
+        unavailableReason: response.stderr.trim() || `publication_rejected_comment_fetch_failed:${id}`,
+      };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(response.stdout);
+    } catch {
+      return { comments: [], unavailableReason: `publication_rejected_comment_malformed:${id}` };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { comments: [], unavailableReason: `publication_rejected_comment_invalid:${id}` };
+    }
+    const raw = parsed as Record<string, unknown>;
+    const user = raw.user as Record<string, unknown> | undefined;
+    const body = typeof raw.body === 'string' ? raw.body : '';
+    const createdAt = typeof raw.created_at === 'string' ? raw.created_at : '';
+    const updatedAt = typeof raw.updated_at === 'string' ? raw.updated_at : '';
+    const userLogin = typeof user?.login === 'string' ? user.login : '';
+    if (Number(raw.id) !== id || !body || !createdAt || !updatedAt || !userLogin) {
+      return { comments: [], unavailableReason: `publication_rejected_comment_trust_fields_missing:${id}` };
+    }
+    comments.push({ id, body, createdAt, updatedAt, userLogin });
+  }
+  return { comments };
+}
+
+export function observePublishedArtifact(
+  expectation: PublicationExpectation,
+  transport: GhTransport = defaultGhTransport(),
+): PublicationObservation {
+  try {
+    if (expectation.kind === 'author') {
+      const revision = fetchIssueRevision(transport, expectation.repository, expectation.issueNumber);
+      const observedRevision = issueSourceRevision(revision.body);
+      const observedHash = sha256Text(revision.body);
+      if (observedRevision === expectation.sourceRevision
+        && observedHash === expectation.exactBodySha256) {
+        return {
+          status: 'published',
+          kind: 'author',
+          repository: expectation.repository,
+          issueNumber: expectation.issueNumber,
+          sourceRevision: expectation.sourceRevision,
+          exactBodySha256: observedHash,
+        };
+      }
+      if (observedRevision === expectation.sourceRevision) {
+        return {
+          status: 'blocked',
+          reason: `author_body_hash_mismatch:expected=${expectation.exactBodySha256}:observed=${observedHash}`,
+        };
+      }
+      return {
+        status: 'missing',
+        reason: `author_revision_not_current:expected=${expectation.sourceRevision}:observed=${observedRevision ?? 'missing'}`,
+      };
+    }
+
+    const principal = authenticatedPrincipal(transport);
+    if (!principal) {
+      return { status: 'unavailable', reason: 'publication_principal_unavailable' };
+    }
+    const fetched = fetchIssueComments(
+      transport,
+      expectation.repository,
+      expectation.issueNumber,
+      principal,
+      { pageSize: 100, maxPages: 10 },
+    );
+    const diagnostics = fetched.diagnostics.map((item) => item.message);
+    if (!fetched.commentsComplete) {
+      return {
+        status: 'unavailable',
+        reason: fetched.failure?.message || 'publication_comment_census_incomplete',
+        ...(diagnostics.length > 0 ? { diagnostics } : {}),
+      };
+    }
+
+    const revisionLine = `Read revision: #${expectation.issueNumber} ${expectation.sourceRevision}`;
+    const invocationLine = `INVOCATION_ID_TO_ECHO: ${expectation.invocationId}`;
+    const stageLine = `stage: ${expectation.stage}`;
+    const slotLine = `source-slot: ${expectation.sourceSlot}`;
+
+    const rejected = fetchRejectedPublicationComments(
+      transport,
+      expectation.repository,
+      fetched.diagnostics,
+    );
+    if (rejected.unavailableReason) {
+      return {
+        status: 'unavailable',
+        reason: rejected.unavailableReason,
+        ...(diagnostics.length > 0 ? { diagnostics } : {}),
+      };
+    }
+    const matchingRejected = rejected.comments.filter((comment) => {
+      const lines = nonEmptyLines(comment.body);
+      return lines[0] === revisionLine
+        && exactLineCount(lines, invocationLine) === 1
+        && exactLineCount(lines, stageLine) === 1
+        && exactLineCount(lines, slotLine) === 1;
+    });
+    if (matchingRejected.length > 0) {
+      const comment = matchingRejected[0]!;
+      return {
+        status: 'blocked',
+        reason: comment.userLogin !== principal
+          ? 'reviewer_publication_foreign_principal'
+          : comment.updatedAt !== comment.createdAt
+            ? 'reviewer_publication_edited_comment'
+            : 'reviewer_publication_rejected_identity',
+        diagnostics: matchingRejected.map((candidate) => `comment:${candidate.id}`),
+      };
+    }
+
+    const ownedInvocation = fetched.comments.filter((comment) => {
+      const lines = nonEmptyLines(comment.body);
+      return exactLineCount(lines, invocationLine) === 1;
+    });
+    if (ownedInvocation.length > 1) {
+      return {
+        status: 'blocked',
+        reason: 'reviewer_publication_duplicate_invocation',
+        diagnostics: ownedInvocation.map((comment) => `comment:${comment.id}`),
+      };
+    }
+    if (ownedInvocation.length === 1) {
+      const comment = ownedInvocation[0]!;
+      const lines = nonEmptyLines(comment.body);
+      if (lines[0] !== revisionLine || lines[1] !== invocationLine) {
+        return {
+          status: 'blocked',
+          reason: 'reviewer_publication_binding_header_mismatch',
+          diagnostics: [`comment:${comment.id}`],
+        };
+      }
+      if (exactLineCount(lines, stageLine) !== 1 || exactLineCount(lines, slotLine) !== 1) {
+        return {
+          status: 'blocked',
+          reason: 'reviewer_publication_stage_slot_mismatch',
+          diagnostics: [`comment:${comment.id}`],
+        };
+      }
+      return {
+        status: 'published',
+        kind: 'reviewer',
+        repository: expectation.repository,
+        issueNumber: expectation.issueNumber,
+        sourceRevision: expectation.sourceRevision,
+        invocationId: expectation.invocationId,
+        stage: expectation.stage,
+        sourceSlot: expectation.sourceSlot,
+        commentId: comment.id,
+        principal,
+      };
+    }
+
+    const boundFrameWithoutInvocation = fetched.comments.filter((comment) => {
+      const lines = nonEmptyLines(comment.body);
+      return lines[0] === revisionLine
+        && exactLineCount(lines, stageLine) === 1
+        && exactLineCount(lines, slotLine) === 1;
+    });
+    if (boundFrameWithoutInvocation.length > 0) {
+      return {
+        status: 'blocked',
+        reason: 'reviewer_publication_invocation_missing_or_mismatch',
+        diagnostics: boundFrameWithoutInvocation.map((comment) => `comment:${comment.id}`),
+      };
+    }
+    return {
+      status: 'missing',
+      reason: 'reviewer_publication_not_visible',
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    };
+  } catch (error) {
+    return {
+      status: 'unavailable',
+      reason: error instanceof Error ? error.message : 'publication_observation_failed',
+    };
+  }
+}
+
+/**
+ * Attribute a concurrent manager batch only from REST-visible sibling facts.
+ * Child state is copied as a timeout hint and never changes the classification.
+ */
+export function classifyConcurrentBatchDelivery(
+  slots: readonly ConcurrentBatchSlotEvidence[],
+): readonly ConcurrentBatchSlotAttribution[] {
+  const anyPublished = slots.some((slot) => slot.publication === 'published');
+  return slots.map((slot) => {
+    if (slot.publication === 'published') {
+      return {
+        invocationId: slot.invocationId,
+        classification: 'actual' as const,
+        resendForbidden: true,
+        settlement: 'published' as const,
+        ...(slot.childHint ? { childHint: slot.childHint } : {}),
+      };
+    }
+    if (slot.publication === 'blocked') {
+      return {
+        invocationId: slot.invocationId,
+        classification: 'unproven' as const,
+        resendForbidden: true,
+        settlement: 'incident' as const,
+        ...(slot.childHint ? { childHint: slot.childHint } : {}),
+      };
+    }
+    if (anyPublished) {
+      return {
+        invocationId: slot.invocationId,
+        classification: 'possible-or-actual' as const,
+        resendForbidden: true,
+        settlement: 'incident' as const,
+        ...(slot.childHint ? { childHint: slot.childHint } : {}),
+      };
+    }
+    return {
+      invocationId: slot.invocationId,
+      classification: 'unproven' as const,
+      resendForbidden: false,
+      settlement: 'unsettled' as const,
+      ...(slot.childHint ? { childHint: slot.childHint } : {}),
+    };
+  });
+}
+
+function sameReviewerExpectation(
+  left: ReviewerPublicationExpectation,
+  right: ReviewerPublicationExpectation,
+): boolean {
+  return left.repository === right.repository
+    && left.issueNumber === right.issueNumber
+    && left.sourceRevision === right.sourceRevision
+    && left.invocationId === right.invocationId
+    && left.stage === right.stage
+    && left.sourceSlot === right.sourceSlot;
+}
+
 export async function runWait(options: {
   readonly runIdentity: string;
   readonly attemptIdentity: string;
   readonly terminalEnvelopePath: string;
   readonly handoffReceiptPath: string;
   readonly deadlineMs: number;
+  readonly publicationExpectation?: PublicationExpectation;
+  readonly concurrentBatchExpectations?: readonly ReviewerPublicationExpectation[];
+  readonly transport?: GhTransport;
 }): Promise<void> {
   const started = Date.now();
+  const deadlineAt = started + options.deadlineMs;
   let envelope: TerminalEnvelope | null = null;
+  let publication: PublicationObservation | undefined;
+  let batchAttribution: readonly ConcurrentBatchSlotAttribution[] | undefined;
+  let currentBatchAttribution: ConcurrentBatchSlotAttribution | undefined;
+  const currentReviewerExpectation = options.publicationExpectation?.kind === 'reviewer'
+    ? options.publicationExpectation
+    : undefined;
+  const publicationTransport = options.publicationExpectation || options.concurrentBatchExpectations
+    ? withGhDeadline(options.transport ?? defaultGhTransport(), deadlineAt)
+    : undefined;
   while (Date.now() - started < options.deadlineMs) {
     envelope = readTerminalEnvelope(options.terminalEnvelopePath, {
       runIdentity: options.runIdentity,
       attemptIdentity: options.attemptIdentity,
     });
+    if (options.publicationExpectation && publicationTransport) {
+      publication = observePublishedArtifact(options.publicationExpectation, publicationTransport);
+      if (options.concurrentBatchExpectations && currentReviewerExpectation) {
+        const evidence = options.concurrentBatchExpectations.map((expectation): ConcurrentBatchSlotEvidence => {
+          const isCurrent = sameReviewerExpectation(expectation, currentReviewerExpectation);
+          const observed = isCurrent
+            ? publication!
+            : observePublishedArtifact(expectation, publicationTransport);
+          return {
+            invocationId: expectation.invocationId,
+            publication: observed.status,
+            ...(isCurrent && envelope?.incident ? { childHint: envelope.incident } : {}),
+          };
+        });
+        batchAttribution = classifyConcurrentBatchDelivery(evidence);
+        currentBatchAttribution = batchAttribution.find((slot) =>
+          slot.invocationId === currentReviewerExpectation.invocationId);
+      }
+      if (publication.status === 'published' || publication.status === 'blocked') break;
+      if (currentBatchAttribution?.settlement === 'incident' && currentBatchAttribution.resendForbidden) break;
+      await delay(250);
+      continue;
+    }
     if (envelope) break;
     await delay(50);
   }
@@ -1031,18 +1433,148 @@ export async function runWait(options: {
     runIdentity: options.runIdentity,
     attemptIdentity: options.attemptIdentity,
   });
+  const publicationExpected = options.publicationExpectation !== undefined;
+  const publicationPublished = publication?.status === 'published';
+  const publicationBlocked = publication?.status === 'blocked';
+  const batchIncidentSettled = currentBatchAttribution?.settlement === 'incident'
+    && currentBatchAttribution.resendForbidden;
+  const nonTerminal = publicationExpected
+    ? !publicationPublished && !publicationBlocked && !batchIncidentSettled
+    : envelope === null;
+  const noSuccessAuthority = publicationExpected
+    ? !publicationPublished
+    : envelope?.lifecycle_outcome !== 'success';
+  const currentBatchInvocationId = currentBatchAttribution?.invocationId;
+  const publishedSiblingInvocationIds = currentBatchInvocationId
+    ? (batchAttribution ?? [])
+        .filter((slot) => slot.classification === 'actual' && slot.invocationId !== currentBatchInvocationId)
+        .map((slot) => slot.invocationId)
+    : [];
+  const concurrentBatchIncident = batchIncidentSettled && currentBatchAttribution
+    ? {
+        schema: CONCURRENT_BATCH_INCIDENT_SCHEMA,
+        invocation_id: currentBatchAttribution.invocationId,
+        classification: currentBatchAttribution.classification,
+        resend_forbidden: currentBatchAttribution.resendForbidden,
+        settlement: currentBatchAttribution.settlement,
+        published_sibling_invocation_ids: publishedSiblingInvocationIds,
+        ...(currentBatchAttribution.childHint ? { child_hint: currentBatchAttribution.childHint } : {}),
+      }
+    : undefined;
   process.stdout.write(`${JSON.stringify({
     schema: WAIT_SCHEMA,
     run_identity: options.runIdentity,
     attempt_identity: options.attemptIdentity,
     terminal: envelope !== null,
     envelope_absent: envelope === null,
-    non_terminal: envelope === null,
-    no_success_authority: envelope?.lifecycle_outcome !== 'success',
+    non_terminal: nonTerminal,
+    no_success_authority: noSuccessAuthority,
     no_retry_authority: true,
     handoff_receipt_observed: handoff !== null,
+    ...(publicationExpected ? {
+      completion_authority: publicationPublished
+        ? 'published_artifact'
+        : batchIncidentSettled
+          ? 'concurrent_batch_publication'
+          : 'publication_unproven',
+      publication_terminal: publicationPublished,
+      publication_blocked: publicationBlocked,
+      publication_observation: publication ?? {
+        status: 'unavailable',
+        reason: 'publication_observation_not_run',
+      },
+    } : {}),
+    ...(batchAttribution ? {
+      concurrent_batch_attribution: batchAttribution,
+      batch_settlement_terminal: Boolean(batchIncidentSettled),
+      ...(concurrentBatchIncident ? { concurrent_batch_incident: concurrentBatchIncident } : {}),
+    } : {}),
     ...(envelope ? { envelope } : {}),
   })}\n`);
+}
+
+function parsePublicationExpectation(options: Map<string, string | true>): PublicationExpectation | undefined {
+  const kind = options.get('publication-kind');
+  if (kind === undefined) return undefined;
+  if (kind !== 'author' && kind !== 'reviewer') throw new Error('publication_kind_invalid');
+  const repository = requiredOption(options, 'repository').trim().toLowerCase();
+  const issueNumber = Number(requiredOption(options, 'issue-number'));
+  const sourceRevision = requiredOption(options, 'source-revision');
+  if (!repository || !Number.isInteger(issueNumber) || issueNumber <= 0 || !/^r[0-9]+$/u.test(sourceRevision)) {
+    throw new Error('publication_identity_invalid');
+  }
+  if (kind === 'author') {
+    const exactBodySha256 = requiredOption(options, 'body-sha256').toLowerCase();
+    if (!/^[0-9a-f]{64}$/u.test(exactBodySha256)) throw new Error('publication_body_sha256_invalid');
+    return { kind, repository, issueNumber, sourceRevision, exactBodySha256 };
+  }
+  return {
+    kind,
+    repository,
+    issueNumber,
+    sourceRevision,
+    invocationId: requiredOption(options, 'invocation-id'),
+    stage: requiredOption(options, 'stage'),
+    sourceSlot: requiredOption(options, 'source-slot'),
+  };
+}
+
+function parseConcurrentBatchExpectations(
+  options: Map<string, string | true>,
+  current: PublicationExpectation | undefined,
+): readonly ReviewerPublicationExpectation[] | undefined {
+  const raw = options.get('publication-batch-json');
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string' || current?.kind !== 'reviewer') {
+    throw new Error('publication_batch_requires_reviewer_expectation');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('publication_batch_json_invalid');
+  }
+  if (!Array.isArray(parsed) || parsed.length < 2 || parsed.length > 32) {
+    throw new Error('publication_batch_shape_invalid');
+  }
+  const expectations: ReviewerPublicationExpectation[] = parsed.map((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('publication_batch_entry_invalid');
+    }
+    const row = value as Record<string, unknown>;
+    const repository = String(row.repository ?? '').trim().toLowerCase();
+    const issueNumber = Number(row.issue_number);
+    const sourceRevision = String(row.source_revision ?? '');
+    const invocationId = String(row.invocation_id ?? '');
+    const stage = String(row.stage ?? '');
+    const sourceSlot = String(row.source_slot ?? '');
+    if (!repository || !Number.isInteger(issueNumber) || issueNumber <= 0
+      || !/^r[0-9]+$/u.test(sourceRevision) || !invocationId || !stage || !sourceSlot) {
+      throw new Error('publication_batch_entry_invalid');
+    }
+    return {
+      kind: 'reviewer',
+      repository,
+      issueNumber,
+      sourceRevision,
+      invocationId,
+      stage,
+      sourceSlot,
+    };
+  });
+  if (new Set(expectations.map((item) => item.invocationId)).size !== expectations.length) {
+    throw new Error('publication_batch_invocation_duplicate');
+  }
+  if (!expectations.some((item) => sameReviewerExpectation(item, current))) {
+    throw new Error('publication_batch_current_invocation_missing');
+  }
+  if (expectations.some((item) => item.repository !== current.repository
+    || item.issueNumber !== current.issueNumber
+    || item.sourceRevision !== current.sourceRevision
+    || item.stage !== current.stage)) {
+    throw new Error('publication_batch_scope_mismatch');
+  }
+  return expectations;
 }
 
 async function launchFromCli(argv: readonly string[]): Promise<number> {
@@ -1081,12 +1613,16 @@ async function main(): Promise<void> {
   if (command === 'wait') {
     const parsed = parseCli(rest);
     const options = parsed.options;
+    const publicationExpectation = parsePublicationExpectation(options);
+    const concurrentBatchExpectations = parseConcurrentBatchExpectations(options, publicationExpectation);
     await runWait({
       runIdentity: requiredOption(options, 'run-identity'),
       attemptIdentity: requiredOption(options, 'attempt-identity'),
       terminalEnvelopePath: requiredOption(options, 'terminal-envelope'),
       handoffReceiptPath: requiredOption(options, 'handoff-receipt'),
       deadlineMs: Number(requiredOption(options, 'deadline-ms')),
+      ...(publicationExpectation ? { publicationExpectation } : {}),
+      ...(concurrentBatchExpectations ? { concurrentBatchExpectations } : {}),
     });
     return;
   }

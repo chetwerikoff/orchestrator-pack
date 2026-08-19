@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from '../runtime/task-lifecycle.ts';
 import type { OrcaJsonResponse } from './native.ts';
+import { OrcaRuntimeAdapter } from './adapter.ts';
 import { OrcaTaskRuntimeAdapter } from './task-adapter.ts';
 
 function workspaceRunner() {
@@ -339,7 +340,7 @@ describe('Orca assignment resolution', () => {
     });
   });
 
-  it.each([undefined, '', 'unknown', 'unverifiable'])(
+  it.each([undefined, '', 'unknown', 'unverifiable', 'ambiguous'])(
     'fails closed on missing/ambiguous exact observation status %s',
     (status) => {
       const runJson = vi.fn((): OrcaJsonResponse => ({
@@ -387,5 +388,66 @@ describe('Orca assignment resolution', () => {
       status: 'failed',
       operation: 'resolve_assignment_worker',
     });
+  });
+
+  it('fences a remapped Dispatch when Orca cannot prove the exact current target', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'orchestration worker-show') {
+        return {
+          ok: true,
+          result: {
+            worker: { agent_terminal_handle: 'handle-B' },
+            terminal: { handle: 'handle-B' },
+            observation: { exactWorker: false, status: 'live' },
+          },
+        };
+      }
+      return { ok: false, error: { code: 'unexpected_effect', message: operation } };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1441' })).toEqual({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'assignment_target_unresolved',
+    });
+    expect(runJson).toHaveBeenCalledTimes(1);
+    expect(runJson.mock.calls[0]?.[0]).toEqual(['orchestration','worker-show','--dispatch','dispatch-1441']);
+  });
+});
+
+describe('Issue #1441 stale/reused runtime identity', () => {
+  it('performs zero send/read effects when a handle is reused by a new incarnation', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'terminal show') {
+        return {
+          ok: true,
+          result: {
+            terminal: {
+              handle: 'pane-handle',
+              incarnationId: 'incarnation-B',
+              worktreePath: '/tmp/worktree-1441',
+              title: 'current worker',
+              status: 'running',
+            },
+          },
+        };
+      }
+      return { ok: false, error: { code: 'unexpected_effect', message: operation } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    const stale = { runtime: 'orca', id: 'pane-handle', generation: 'incarnation-A' } as const;
+    expect(adapter.dispatchInput({ worker: stale, text: 'must not send' })).toEqual({
+      status: 'send_failed',
+      reason: 'worker_generation_not_found',
+    });
+    expect(adapter.readBoundedOutput({ worker: stale })).toEqual({
+      status: 'failed',
+      operation: 'read_bounded_output',
+      reason: 'worker_generation_not_found',
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'send')).toHaveLength(0);
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'read')).toHaveLength(0);
   });
 });

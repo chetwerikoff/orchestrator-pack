@@ -1,10 +1,13 @@
 import { runProcess } from '../kernel/subprocess.ts';
 import {
+  attachWorkerAssignmentIssueNumber,
   currentWorkerAssignment,
+  currentWorkerAssignmentByDeliverable,
   publishCurrentWorkerAssignment,
   resolveWorkerAssignmentStorePath,
   type WorkerAssignment,
   type WorkerAssignmentExpectation,
+  type WorkerAssignmentRecord,
 } from '../lib/worker-assignment-store.ts';
 import { admitCurrentWorkerAssignmentReplacement } from '../lib/worker-assignment-runtime.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
@@ -23,6 +26,10 @@ export interface SupervisedWorkerStartReceipt {
 interface OrcaWorkerStartEnvelope {
   readonly ok?: boolean;
   readonly result?: unknown;
+  readonly error?: {
+    readonly code?: unknown;
+    readonly message?: unknown;
+  };
 }
 
 interface OrcaPlacementEnvelope {
@@ -56,11 +63,17 @@ export interface SupervisedWorkerStartResidual {
 export interface SupervisedWorkerStartResult {
   readonly ok: boolean;
   readonly reason: string;
+  /** Exact provider error code from a structurally valid Orca error envelope. */
+  readonly errorCode?: string;
   readonly receipt?: SupervisedWorkerStartReceipt;
   readonly residualResources?: readonly unknown[];
-  readonly assignment?: WorkerAssignment;
+  readonly assignment?: WorkerAssignmentRecord;
   readonly residual?: SupervisedWorkerStartResidual;
 }
+
+export type SupervisedWorkerIssueAttachResult =
+  | { readonly ok: true; readonly reason: 'issue_metadata_attached'; readonly assignment: WorkerAssignment }
+  | { readonly ok: false; readonly reason: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -78,11 +91,13 @@ function residualResources(receipt: SupervisedWorkerStartReceipt): readonly unkn
 function rejectedStart(
   reason: string,
   receipt?: SupervisedWorkerStartReceipt,
+  errorCode?: string,
 ): SupervisedWorkerStartResult {
   const resources = receipt ? residualResources(receipt) : undefined;
   return {
     ok: false,
     reason,
+    ...(errorCode ? { errorCode } : {}),
     ...(receipt ? { receipt } : {}),
     ...(resources ? { residualResources: resources } : {}),
   };
@@ -211,7 +226,7 @@ function validateReceiptPlacement(
 }
 
 export async function runSupervisedWorkerStart(input: {
-  readonly issueNumber: number;
+  readonly issueNumber?: number;
   readonly repository: string;
   readonly projectId?: string;
   readonly orcaArgs: readonly string[];
@@ -222,7 +237,9 @@ export async function runSupervisedWorkerStart(input: {
   readonly inspect?: (args: readonly string[]) => Promise<ChildResult>;
 }): Promise<SupervisedWorkerStartResult> {
   const repository = input.repository.trim().toLowerCase();
-  if (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0 || !repository) {
+  if (!repository
+    || (input.issueNumber !== undefined
+      && (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0))) {
     return { ok: false, reason: 'supervised_start_input_invalid' };
   }
   const args = [...input.orcaArgs];
@@ -237,7 +254,9 @@ export async function runSupervisedWorkerStart(input: {
   }
 
   const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
-  const expectedCurrent = currentWorkerAssignment(file, input.issueNumber);
+  const expectedCurrent = input.issueNumber === undefined
+    ? null
+    : currentWorkerAssignment(file, input.issueNumber);
   if (expectedCurrent
     && (expectedCurrent.repository !== repository || expectedCurrent.taskId !== requestedTaskId)) {
     return { ok: false, reason: 'assignment_stale' };
@@ -301,19 +320,27 @@ export async function runSupervisedWorkerStart(input: {
   let envelope: OrcaWorkerStartEnvelope;
   try {
     const parsed: unknown = JSON.parse(execution.stdout);
-    if (!isRecord(parsed) || !isRecord(parsed.result)) {
+    if (!isRecord(parsed)) {
       return rejectedStart('supervised_start_receipt_invalid');
+    }
+    const errorRecord = isRecord(parsed.error) ? parsed.error : null;
+    const errorCode = nonEmpty(errorRecord?.code);
+    if (!isRecord(parsed.result)) {
+      return errorCode
+        ? rejectedStart('supervised_start_envelope_error', undefined, errorCode)
+        : rejectedStart('supervised_start_receipt_invalid');
     }
     envelope = parsed as OrcaWorkerStartEnvelope;
   } catch {
     return rejectedStart('supervised_start_receipt_invalid');
   }
   const receipt = envelope.result as SupervisedWorkerStartReceipt;
+  const errorCode = nonEmpty(envelope.error?.code);
   if (envelope.ok !== true) {
-    return rejectedStart('supervised_start_envelope_not_ok', receipt);
+    return rejectedStart('supervised_start_envelope_not_ok', receipt, errorCode || undefined);
   }
   if (!execution.ok || receipt.state !== 'ready') {
-    return rejectedStart(`supervised_start_${receipt.state || 'failed'}`, receipt);
+    return rejectedStart(`supervised_start_${receipt.state || 'failed'}`, receipt, errorCode || undefined);
   }
   const taskId = String(receipt.taskId ?? '').trim();
   const dispatchId = String(receipt.dispatchId ?? '').trim();
@@ -326,17 +353,19 @@ export async function runSupervisedWorkerStart(input: {
   const placementReason = validateReceiptPlacement(receipt, placement.witness);
   if (placementReason) return rejectedStart(placementReason, receipt);
 
-  const published = await publishCurrentWorkerAssignment({
+  const publishBase = {
     file,
     projectId: input.projectId,
     repository,
-    issueNumber: input.issueNumber,
     taskId,
-    kind: 'local',
+    kind: 'local' as const,
     provider: 'orca',
     bindingKey: dispatchId,
     expectedCurrent: expectedCurrentForPublish(expectedCurrent),
-  });
+  };
+  const published = input.issueNumber === undefined
+    ? await publishCurrentWorkerAssignment(publishBase)
+    : await publishCurrentWorkerAssignment({ ...publishBase, issueNumber: input.issueNumber });
   if (!published.ok) {
     if (published.reason === 'assignment_stale' || published.reason === 'assignment_store_busy') {
       const resources = residualResources(receipt);
@@ -359,36 +388,90 @@ export async function runSupervisedWorkerStart(input: {
   return { ok: true, reason: 'ready_and_assignment_bound', receipt, assignment: published.assignment };
 }
 
-function parseCli(argv: readonly string[]): {
-  issueNumber: number;
+export async function attachSupervisedWorkerIssue(input: {
+  readonly repository: string;
+  readonly issueNumber: number;
+  readonly taskId: string;
+  readonly dispatchId: string;
+  readonly assignmentId: string;
+  readonly generation: number;
+  readonly projectId?: string;
+  readonly env?: NodeJS.ProcessEnv;
+}): Promise<SupervisedWorkerIssueAttachResult> {
+  const repository = input.repository.trim().toLowerCase();
+  const taskId = input.taskId.trim();
+  const dispatchId = input.dispatchId.trim();
+  const assignmentId = input.assignmentId.trim();
+  if (!repository || !Number.isInteger(input.issueNumber) || input.issueNumber <= 0
+    || !taskId || !dispatchId || !assignmentId
+    || !Number.isInteger(input.generation) || input.generation <= 0) {
+    return { ok: false, reason: 'assignment_input_invalid' };
+  }
+  const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
+  const current = currentWorkerAssignmentByDeliverable(file, taskId, dispatchId);
+  if (!current
+    || current.repository !== repository
+    || current.assignmentId !== assignmentId
+    || current.generation !== input.generation) {
+    return { ok: false, reason: 'assignment_stale' };
+  }
+  const attached = await attachWorkerAssignmentIssueNumber({
+    file,
+    expected: current,
+    issueNumber: input.issueNumber,
+  });
+  if (!attached.ok) return attached;
+  return { ok: true, reason: 'issue_metadata_attached', assignment: attached.assignment };
+}
+
+function optionValue(args: readonly string[], name: string): string {
+  const index = args.indexOf(name);
+  return index >= 0 ? String(args[index + 1] ?? '').trim() : '';
+}
+
+function parseStartCli(argv: readonly string[]): {
+  issueNumber?: number;
   repository: string;
   projectId?: string;
   orcaArgs: string[];
 } {
   const separator = argv.indexOf('--');
-  if (separator < 0) throw new Error('usage: supervised-worker-start --issue-number N --repository owner/repo [--project-id id] -- --task task_id --terminal handle --worktree selector ...');
+  if (separator < 0) throw new Error('usage: supervised-worker-start [--issue-number N] --repository owner/repo [--project-id id] -- --task task_id --terminal handle --worktree selector ...');
   const own = argv.slice(0, separator);
   const orcaArgs = argv.slice(separator + 1);
-  const value = (name: string): string => {
-    const index = own.indexOf(name);
-    return index >= 0 ? String(own[index + 1] ?? '').trim() : '';
-  };
+  const issueNumberRaw = optionValue(own, '--issue-number');
   return {
-    issueNumber: Number(value('--issue-number')),
-    repository: value('--repository'),
-    ...(value('--project-id') ? { projectId: value('--project-id') } : {}),
+    ...(issueNumberRaw ? { issueNumber: Number(issueNumberRaw) } : {}),
+    repository: optionValue(own, '--repository'),
+    ...(optionValue(own, '--project-id') ? { projectId: optionValue(own, '--project-id') } : {}),
     orcaArgs,
   };
 }
 
+function parseAttachCli(argv: readonly string[]): Parameters<typeof attachSupervisedWorkerIssue>[0] {
+  const projectId = optionValue(argv, '--project-id');
+  return {
+    repository: optionValue(argv, '--repository'),
+    issueNumber: Number(optionValue(argv, '--issue-number')),
+    taskId: optionValue(argv, '--task-id'),
+    dispatchId: optionValue(argv, '--dispatch-id'),
+    assignmentId: optionValue(argv, '--assignment-id'),
+    generation: Number(optionValue(argv, '--generation')),
+    ...(projectId ? { projectId } : {}),
+  };
+}
+
+async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
+  const result = argv[0] === 'attach-issue'
+    ? await attachSupervisedWorkerIssue(parseAttachCli(argv.slice(1)))
+    : await runSupervisedWorkerStart(parseStartCli(argv));
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+  if (!result.ok) process.exitCode = 1;
+}
+
 if (process.argv[1]?.endsWith('supervised-worker-start.ts')) {
-  runSupervisedWorkerStart(parseCli(process.argv.slice(2)))
-    .then((result) => {
-      process.stdout.write(`${JSON.stringify(result)}\n`);
-      if (!result.ok) process.exitCode = 1;
-    })
-    .catch((error) => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-      process.exitCode = 1;
-    });
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
 }
