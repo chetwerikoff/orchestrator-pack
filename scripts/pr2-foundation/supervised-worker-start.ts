@@ -5,6 +5,7 @@ import {
   resolveWorkerAssignmentStorePath,
   type WorkerAssignment,
   type WorkerAssignmentExpectation,
+  type WorkerAssignmentRecord,
 } from '../lib/worker-assignment-store.ts';
 import { admitCurrentWorkerAssignmentReplacement } from '../lib/worker-assignment-runtime.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
@@ -64,7 +65,7 @@ export interface SupervisedWorkerStartResult {
   readonly errorCode?: string;
   readonly receipt?: SupervisedWorkerStartReceipt;
   readonly residualResources?: readonly unknown[];
-  readonly assignment?: WorkerAssignment;
+  readonly assignment?: WorkerAssignmentRecord;
   readonly residual?: SupervisedWorkerStartResidual;
 }
 
@@ -346,17 +347,19 @@ export async function runSupervisedWorkerStart(input: {
   const placementReason = validateReceiptPlacement(receipt, placement.witness);
   if (placementReason) return rejectedStart(placementReason, receipt);
 
-  const published = await publishCurrentWorkerAssignment({
+  const publishBase = {
     file,
     projectId: input.projectId,
     repository,
-    ...(input.issueNumber === undefined ? {} : { issueNumber: input.issueNumber }),
     taskId,
-    kind: 'local',
+    kind: 'local' as const,
     provider: 'orca',
     bindingKey: dispatchId,
     expectedCurrent: expectedCurrentForPublish(expectedCurrent),
-  });
+  };
+  const published = input.issueNumber === undefined
+    ? await publishCurrentWorkerAssignment(publishBase)
+    : await publishCurrentWorkerAssignment({ ...publishBase, issueNumber: input.issueNumber });
   if (!published.ok) {
     if (published.reason === 'assignment_stale' || published.reason === 'assignment_store_busy') {
       const resources = residualResources(receipt);
