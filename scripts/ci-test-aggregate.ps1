@@ -11,7 +11,7 @@ param(
     [string]$TypecheckResult = $env:TYPECHECK_RESULT,
     [string]$VitestLightResult = $env:VITEST_LIGHT_RESULT,
     [string]$VitestHeavyResult = $env:VITEST_HEAVY_RESULT,
-    [string]$PesterResult = $env:PESTER_RESULT,
+    [string]$VitestContractResult = $env:VITEST_CONTRACT_RESULT,
     [string]$VitestTopologyPlanResult = $env:VITEST_TOPOLOGY_PLAN_RESULT,
     [string]$HeadSha = $env:GITHUB_SHA,
     [string]$RunId = $env:GITHUB_RUN_ID
@@ -23,7 +23,7 @@ $Runner = Join-Path $Root 'scripts/vitest-ci-runner.ts'
 $env:TYPECHECK_RESULT = $TypecheckResult
 $env:VITEST_LIGHT_RESULT = $VitestLightResult
 $env:VITEST_HEAVY_RESULT = $VitestHeavyResult
-$env:VITEST_CONTRACT_RESULT = $PesterResult
+$env:VITEST_CONTRACT_RESULT = $VitestContractResult
 $env:VITEST_TOPOLOGY_PLAN_RESULT = $VitestTopologyPlanResult
 $env:GITHUB_SHA = $HeadSha
 $env:GITHUB_RUN_ID = $RunId
