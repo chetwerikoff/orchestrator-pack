@@ -252,6 +252,35 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(result).toEqual({ok:false,reason:'supervised_start_envelope_error',errorCode:'agent_unconfigured'});
   });
 
+  it('preserves exact Orca mutation recovery fields without promoting the failed start', async()=>{
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base};
+    const pending=await runSupervisedWorkerStart({
+      repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
+      execute:async()=>({
+        ok:false,
+        stdout:JSON.stringify({ok:false,error:{
+          code:'operation_unknown',message:'accepted before restart',
+          data:{requestId:'request-7',dispatchId:'dispatch-7',recoveryCommand:'orca orchestration worker-show --dispatch dispatch-7 --json'},
+        }}),
+      }),
+    });
+    expect(pending).toEqual({
+      ok:false,reason:'supervised_start_envelope_error',errorCode:'operation_unknown',
+      recovery:{requestId:'request-7',dispatchId:'dispatch-7',recoveryCommand:'orca orchestration worker-show --dispatch dispatch-7 --json'},
+    });
+    const transportUnknown=await runSupervisedWorkerStart({
+      repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
+      execute:async()=>({
+        ok:false,
+        stdout:JSON.stringify({ok:false,error:{code:'runtime_timeout',message:'timeout',data:{orchestrationRequestId:'request-8'}}}),
+      }),
+    });
+    expect(transportUnknown).toEqual({
+      ok:false,reason:'supervised_start_envelope_error',errorCode:'runtime_timeout',recovery:{requestId:'request-8'},
+    });
+    expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack',env),1416)).toBeNull();
+  });
+
   it('keeps malformed and code-less error envelopes on the generic invalid path', async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
     const malformed=await runSupervisedWorkerStart({
