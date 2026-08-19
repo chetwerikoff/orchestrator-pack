@@ -1,5 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
+import '../toolchain/native-entrypoint-preflight.ts';
 import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
