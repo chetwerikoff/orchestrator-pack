@@ -7,7 +7,10 @@ import {
   withCurrentWorkerAssignmentFence,
   type WorkerAssignment,
 } from '../lib/worker-assignment-store.ts';
-import { resolveCurrentWorkerAssignmentTarget } from '../lib/worker-assignment-runtime.ts';
+import {
+  bindingForIssue,
+  resolveCurrentWorkerAssignmentBindings,
+} from '../lib/worker-assignment-runtime.ts';
 import { resolvePackReviewRunStoreRoot } from '../lib/pack-review-run-store.ts';
 import { parseComplexityTierFence } from '../lib/tier-gate-core.ts';
 import { readPackReviewAuthority } from '../pack-review-state.ts';
@@ -113,11 +116,29 @@ function reviewStageDisposition(input: {
   return { kind: 'smoke_candidate', reason: 'clean_review_stage_complete' };
 }
 
+function resolveIssueBinding(input: {
+  file: string;
+  repository: string;
+  issueNumber: number;
+  adapter: RuntimeAdapter;
+}) {
+  const resolution = resolveCurrentWorkerAssignmentBindings({
+    file: input.file,
+    repository: input.repository,
+    adapter: input.adapter,
+  });
+  if (resolution.status !== 'ok') return { status: resolution.status as string } as const;
+  const binding = bindingForIssue(resolution.bindings, input.issueNumber);
+  if (!binding) return { status: 'target_unresolved' } as const;
+  return { status: 'resolved', binding } as const;
+}
+
 export async function reconcilePostReviewSmoke(
   candidate: PostReviewSmokeCandidate,
   dependencies: PostReviewSmokeDependencies,
 ): Promise<PostReviewSmokeOutcome> {
   const headSha = candidate.headSha.trim().toLowerCase();
+  const repository = candidate.repoSlug.trim().toLowerCase();
   const env = dependencies.env ?? process.env;
   let disposition: ReturnType<typeof reviewStageDisposition>;
   try {
@@ -146,37 +167,41 @@ export async function reconcilePostReviewSmoke(
     return { handled: true, attempted: false, reason: 'post_review_smoke_issue_binding_unresolved' };
   }
 
-  let expected = currentWorkerAssignment(dependencies.assignmentStorePath, issueNumber);
-  if (!expected) {
+  const current = currentWorkerAssignment(dependencies.assignmentStorePath, issueNumber);
+  if (!current) {
     return { handled: true, attempted: false, reason: 'post_review_smoke_assignment_missing_or_untrusted' };
   }
-  if (expected.kind !== 'local') {
+  if (current.repository !== repository || current.issueNumber !== issueNumber) {
+    return { handled: true, attempted: false, reason: 'post_review_smoke_assignment_repository_or_issue_mismatch' };
+  }
+  if (current.kind !== 'local') {
     return { handled: true, attempted: false, reason: 'post_review_smoke_remote_assignment_requires_local_reassignment' };
   }
-  const initialTarget = resolveCurrentWorkerAssignmentTarget({
+
+  const initial = resolveIssueBinding({
     file: dependencies.assignmentStorePath,
-    expected,
+    repository,
+    issueNumber,
     adapter: dependencies.adapter,
   });
-  if (initialTarget.status !== 'resolved') {
-    return { handled: true, attempted: false, reason: `post_review_smoke_target_${initialTarget.status}` };
+  if (initial.status !== 'resolved') {
+    return { handled: true, attempted: false, reason: `post_review_smoke_target_${initial.status}` };
+  }
+  const expected = initial.binding.assignment;
+  if (!exactAssignment(current, expected)) {
+    return { handled: true, attempted: false, reason: 'post_review_smoke_assignment_binding_ambiguous' };
   }
 
   const ciGreen = dependencies.ciGreen ?? resolveCiGreen;
-  if (!ciGreen(
-    candidate.prNumber,
-    headSha,
-    candidate.repoSlug,
-    initialTarget.worker.workspacePath,
-  )) {
+  if (!ciGreen(candidate.prNumber, headSha, repository, initial.binding.worker.workspacePath)) {
     return { handled: true, attempted: false, reason: 'post_review_smoke_required_ci_not_green' };
   }
 
   let issueBody: string;
   try {
     issueBody = dependencies.readIssueBody
-      ? await dependencies.readIssueBody(issueNumber, candidate.repoSlug)
-      : await defaultReadIssueBody(dependencies.repoRoot, issueNumber, candidate.repoSlug);
+      ? await dependencies.readIssueBody(issueNumber, repository)
+      : await defaultReadIssueBody(dependencies.repoRoot, issueNumber, repository);
   } catch (error) {
     return {
       handled: true,
@@ -196,22 +221,27 @@ export async function reconcilePostReviewSmoke(
   const startFence = async <T>(action: () => T | Promise<T>): Promise<SmokeStartFenceResult<T>> => {
     const fenced = await withCurrentWorkerAssignmentFence(
       dependencies.assignmentStorePath,
-      expected!,
+      expected,
       async () => {
-        const current = currentWorkerAssignment(dependencies.assignmentStorePath, issueNumber);
-        if (!current || !exactAssignment(current, expected!)) {
+        const currentInsideFence = currentWorkerAssignment(dependencies.assignmentStorePath, issueNumber);
+        if (!currentInsideFence || !exactAssignment(currentInsideFence, expected)) {
           return { kind: 'preaction_failed' as const, reason: 'assignment_stale' };
         }
-        const target = resolveCurrentWorkerAssignmentTarget({
+        if (currentInsideFence.repository !== repository || currentInsideFence.kind !== 'local') {
+          return { kind: 'preaction_failed' as const, reason: 'assignment_scope_changed' };
+        }
+        const rebound = resolveIssueBinding({
           file: dependencies.assignmentStorePath,
-          expected: current,
+          repository,
+          issueNumber,
           adapter: dependencies.adapter,
         });
-        if (target.status !== 'resolved') {
-          return { kind: 'preaction_failed' as const, reason: `target_${target.status}` };
+        if (rebound.status !== 'resolved') {
+          return { kind: 'preaction_failed' as const, reason: `target_${rebound.status}` };
         }
-        if (!sameRuntimeWorker(target.worker.identity, initialTarget.worker.identity)
-            || target.worker.workspacePath !== initialTarget.worker.workspacePath) {
+        if (!exactAssignment(rebound.binding.assignment, expected)
+            || !sameRuntimeWorker(rebound.binding.worker.identity, initial.binding.worker.identity)
+            || rebound.binding.worker.workspacePath !== initial.binding.worker.workspacePath) {
           return { kind: 'preaction_failed' as const, reason: 'runtime_binding_changed' };
         }
         smokeActionEntered = true;
@@ -235,8 +265,8 @@ export async function reconcilePostReviewSmoke(
     issueBodyFile,
     smokeComplexity: tier.tier === 'T3' ? 'complex' : 'routine',
     smokeActor: 'independent',
-    repoRoot: initialTarget.worker.workspacePath,
-    cwd: initialTarget.worker.workspacePath,
+    repoRoot: initial.binding.worker.workspacePath,
+    cwd: initial.binding.worker.workspacePath,
     dryRun: false,
     json: true,
   };
