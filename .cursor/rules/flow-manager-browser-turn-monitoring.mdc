@@ -37,6 +37,15 @@ existing repository, Issue, source-revision, reviewer-source, and invocation
 identity. The long-running adapter rejects missing direct-publication context
 before child spawn.
 
+For a governed author mutation, the flow-manager must possess the author-owned
+exact expected Issue body **before** the GitHub write. Obtain it through the
+owning skill's no-mutation author preparation turn, retain the exact UTF-8 bytes
+without normalization, compute SHA-256 from those bytes, and relay those same
+bytes unchanged into the publication turn. The manager may relay/hash author
+bytes but must not edit or author them. A hash computed from the later GitHub
+REST body is circular and is never an expected-body authority. Do not restore
+the old pre-author empty-Issue seed pattern merely to obtain an Issue number.
+
 Immediately before any profile verification, CDP connection, tab creation, or
 send, the canonical state-light entry reads the stable input and independently
 regenerates the expected reviewer bytes from the current tracked canon plus the
@@ -52,9 +61,12 @@ expected/observed unmarked prompt SHA-256 values plus the ordered current
 Before launch, use a trusted current checkout, the configured local headed
 automation browser, and the applicable workflow/role. One invocation opens one
 dedicated owned tab, sends one exact user payload, and observes that same tab.
-Page/DOM completion is sufficient once the final assistant reply is stable and
-no longer generating; PID, shell state, silence, log growth, service-terminal
-witnesses, and heartbeats are not completion authority.
+For ordinary turns without a governed GitHub publication expectation, Page/DOM
+completion and the valid child `turn-result/v1` remain the transport authority.
+For governed author/reviewer publication, the published GitHub artifact is
+completion/delivery authority and the manager must perform the publication-aware
+wait below. PID, shell state, silence, log growth, launcher envelopes, service-
+terminal witnesses, and heartbeats are diagnostic or timeout hints only.
 In a fresh worktree, copy `local.config.json` from the operator checkout into
 the same worktree path, or set both required values before launch:
 `export DISCUSS_WITH_GPT_PROJECT_URL="<PROJECT_URL>"` and
@@ -75,13 +87,74 @@ emits `turn-result/v1`; the long-running adapter additionally owns the terminal
 envelope and handoff receipt. A direct event is invocation-local, must be
 retained and reported, and must not gate siblings or the account.
 
+### Publication-aware manager wait
+
+A long-running governed publication is not settled from the launcher terminal
+envelope. After accepted handoff, invoke the existing
+`flow-manager-long-running-child -- wait` with the exact publication identity.
+For a direct reviewer, use the adapter's returned `publication_expectation`
+without changing repository, Issue, revision, invocation, stage, or slot:
+
+```bash
+npm run --silent flow-manager-long-running-child -- wait \
+  --run-identity <run-id> \
+  --attempt-identity <attempt-id> \
+  --handoff-receipt <handoff.json> \
+  --terminal-envelope <terminal.json> \
+  --deadline-ms 5000 \
+  --publication-kind reviewer \
+  --repository <owner/repo> \
+  --issue-number <N> \
+  --source-revision <rNN> \
+  --invocation-id <caller-owned-invocation-id> \
+  --stage <stage> \
+  --source-slot <slot>
+```
+
+For an author publication on a known Issue, use the manager-held prepublication
+body hash from the author preparation bytes:
+
+```bash
+npm run --silent flow-manager-long-running-child -- wait \
+  --run-identity <run-id> \
+  --attempt-identity <attempt-id> \
+  --handoff-receipt <handoff.json> \
+  --terminal-envelope <terminal.json> \
+  --deadline-ms 5000 \
+  --publication-kind author \
+  --repository <owner/repo> \
+  --issue-number <N> \
+  --source-revision <rNN> \
+  --body-sha256 <prepublication-exact-body-sha256>
+```
+
+A fresh REST-visible exact artifact is terminal even if the child is dead,
+silent, or absent. Exact author-body mismatch and matching foreign/edited
+reviewer artifacts are blocked. Missing or unavailable authoritative REST
+evidence remains non-terminal. Do not substitute a hash derived from the REST
+body being checked.
+
+For a plural reviewer `stageAttemptId`, launch every sibling before settlement.
+Collect the accepted `publication_expectation` for every sibling and pass the
+same complete array as `--publication-batch-json` to each sibling waiter. Each
+entry contains exactly `repository`, `issue_number`, `source_revision`,
+`invocation_id`, `stage`, and `source_slot`. The waiter consumes the existing
+concurrent-batch classifier on the live REST observations. If at least one
+sibling is published while the current slot is missing/silent, that slot settles
+`possible-or-actual`, resend forbidden, as an invocation-bound incident. A
+blocked current artifact is not laundered by a sibling. With zero published
+artifacts, no slot becomes delivered by inference.
+
 ## Stage and retry boundary
 
 Stage cardinality and order belong to the canonical create-issue workflow and
-are not redefined here. Relay or adjudication starts
-only after every launched invocation is terminal, no retry runs or remains
-eligible, and frozen revision checks match. Partial, blocked, and incident
-attempts remain ordered evidence.
+are not redefined here. Relay or adjudication starts only after every launched
+invocation is terminal under its applicable authority, no retry runs or remains
+eligible, and frozen revision checks match. For governed publication, terminal
+means the publication-aware waiter has either recognized the exact REST artifact
+or returned the existing blocked/incident settlement; child termination alone
+is insufficient. Partial, blocked, and incident attempts remain ordered
+evidence.
 
 For every plural T2/T3 reviewer `stageAttemptId`, ordinary preparation reads the
 selected manager-review canon exactly once and materializes every sibling's
@@ -107,20 +180,24 @@ proven pre-send quota/composer/fill failure with `send_count: 0`. It uses
 `attemptOrdinal: 2` and `retryAttempt: true`, consumes the only retry, and may
 settle blocked/exhausted. A possible or confirmed send, post-send failure,
 ambiguous delivery, output conflict, missing terminal result, or
-`send_count: 1` forbids resend. A zero-send result with unused eligibility
-keeps the attempt unsettled until retry or explicit abandonment.
+`send_count: 1` forbids resend. A silent concurrent slot whose same batch already
+has a REST-visible published sibling is also possible-or-actual and resend is
+forbidden. A zero-send result with unused eligibility keeps the attempt unsettled
+until retry or explicit abandonment.
 
 ## Publication and tab lifecycle
 
 Direct target-Issue publication and receipt-only manager output follow the
 canonical create-issue workflow. The reviewer is the normal publisher of its
-own complete verdict/findings comment; the manager consumes the receipt and
-owns only later workflow/disposition actions. Final output publication must
-succeed before the exact retained invocation page may close. After send with no
-publication, preserve the reachable page; release only this browser client. A
-lost page receives no later close authority. Never close or commandeer a
-foreign, sibling, or orphan tab by URL, target id, age, focus, metadata, or
-liveness.
+own complete verdict/findings comment; the author is the normal publisher of
+its prepared exact Issue body; the manager consumes the receipt and owns only
+later workflow/disposition actions. For governed publications, the manager's
+fresh REST read-back — not the receipt or child result — decides completion.
+Final output publication must succeed before the exact retained invocation page
+may close. After send with no publication, preserve the reachable page; release
+only this browser client. A lost page receives no later close authority. Never
+close or commandeer a foreign, sibling, or orphan tab by URL, target id, age,
+focus, metadata, or liveness.
 
 For an eligible direct `turn-result/v1` carrying
 `post_settlement_target.disposition: preserved_after_settlement`, the operator
@@ -145,7 +222,14 @@ Missing `turn-result/v1`, `page_or_browser_lost_after_send`,
 `fresh_conversation_landing_mismatch`, `owned_conversation_identity_mismatch`,
 or an owned turn with no returned result is not proof of non-delivery.
 Non-delivery is proven only by observing the conversation and finding no user
-node containing the owned prompt. After post-send observation loss, re-resolve
+node containing the owned prompt, except that governed GitHub publication has
+its stronger REST artifact authority. A REST-visible exact reviewer comment or
+author body/revision tuple settles publication completion regardless of child
+loss. For same-batch reviewer silence, one REST-visible sibling makes the silent
+slot possible-or-actual/no-resend but does not prove the silent payload crossed
+the composer.
+
+After post-send observation loss with no authoritative publication, re-resolve
 the current target from the conversation URL, continue sanctioned observation,
 and harvest the answer with the exact caller-owned `--invocation-id` for that
 attempt. A saved target id may be stale and is not authoritative. Escalate only
@@ -190,8 +274,8 @@ progress a workflow. `harvest` is the sole action-producing probe
 recover/publish only the exact owned turn for the supplied invocation identity.
 The explicit `inspect --url ... --open-if-missing true` acquisition path may
 create one owned page, observe it until readiness, and close exactly that owned
-page before returning. Do not replace these paths with raw CDP, Playwright,
-salvage scripts, selectors, JavaScript, or a watch loop.
+page before returning. Do not replace these paths with raw CDP, Playwright
+snippets, salvage scripts, selectors, JavaScript, or a watch loop.
 
 For contract-evidence authoring, `binding-id` uses
 `producer:datum:expected`, for example
@@ -282,6 +366,7 @@ or browser-turn owner.
 
 Never end a flow-manager turn with only “background job running”. Report the
 Issue and revision, the caller-owned invocation id, the owned chat URL when
-known, the helper result or latest direct observation, the
-`reviewEpisodeId`/`stageAttemptId`/slot when applicable, any direct incident
-surfaced by the helper, and the next legal flow action.
+known, the helper result or latest direct observation, the publication-aware
+wait result when applicable, the `reviewEpisodeId`/`stageAttemptId`/slot when
+applicable, any direct incident surfaced by the helper, and the next legal flow
+action.
