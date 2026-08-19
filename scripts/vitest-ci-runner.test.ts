@@ -15,6 +15,7 @@ import {
   buildHeavyInvocations,
   hasRpcFlake,
   heavyAttemptLimit,
+  isDirectEntrypoint,
   repositoryRootFromModuleUrl,
   runtimeReportAvailable,
   type HeavyFileRunPlan,
@@ -79,6 +80,13 @@ describe('Vitest CI runner platform and report fail-closed helpers', () => {
   it('derives the repository root through fileURLToPath-compatible URLs', () => {
     const moduleUrl = pathToFileURL(path.join(process.cwd(), 'scripts', 'vitest-ci-runner.ts')).href;
     expect(repositoryRootFromModuleUrl(moduleUrl)).toBe(path.resolve(process.cwd()));
+  });
+
+  it('recognizes Windows direct entrypoints without turning wrappers into no-ops', () => {
+    const windowsPath = String.raw`C:\repo\scripts\vitest-ci-runner.ts`;
+    const moduleUrl = pathToFileURL(windowsPath, { windows: true }).href;
+    expect(isDirectEntrypoint(moduleUrl, windowsPath, true)).toBe(true);
+    expect(isDirectEntrypoint(moduleUrl, undefined, true)).toBe(false);
   });
 
   it('fails closed when a successful lane did not emit its JSON report', () => {
