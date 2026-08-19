@@ -14,7 +14,10 @@ import {
 } from '../lib/worker-assignment-runtime.ts';
 import { resolvePackReviewRunStoreRoot } from '../lib/pack-review-run-store.ts';
 import { parseComplexityTierFence } from '../lib/tier-gate-core.ts';
-import { readPackReviewAuthority } from '../pack-review-state.ts';
+import {
+  readPackReviewAuthority,
+  stagePackReviewImmutableRecord,
+} from '../pack-review-state.ts';
 import { sameRuntimeWorker, type RuntimeAdapter } from '../runtime/contracts.ts';
 import {
   exactClosingIssue,
@@ -23,6 +26,8 @@ import {
   type CliOptions,
   type SmokeStartFenceResult,
 } from '../worker-smoke-run.ts';
+
+const REMOTE_ACTUATION_REASON = 'remote_assignment_no_runtime_managed_local_workspace';
 
 export interface PostReviewSmokeCandidate {
   readonly repoSlug: string;
@@ -53,6 +58,10 @@ type IssueBindingResolution =
   | { readonly status: 'resolved'; readonly binding: ResolvedWorkerAssignment }
   | { readonly status: 'assignment_untrusted' | 'runtime_unavailable' | 'target_unresolved' };
 
+type RemoteActuationEvidenceResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
+
 function exactAssignment(left: WorkerAssignment, right: WorkerAssignment): boolean {
   return left.assignmentId === right.assignmentId
     && left.generation === right.generation
@@ -61,6 +70,59 @@ function exactAssignment(left: WorkerAssignment, right: WorkerAssignment): boole
     && left.kind === right.kind
     && left.provider === right.provider
     && left.bindingKey === right.bindingKey;
+}
+
+function recordRemoteActuationNotApplicable(input: {
+  projectId: string;
+  env: NodeJS.ProcessEnv;
+  repository: string;
+  issueNumber: number;
+  prNumber: number;
+  headSha: string;
+  assignment: WorkerAssignment;
+}): RemoteActuationEvidenceResult {
+  if (input.assignment.kind !== 'remote') {
+    return { ok: false, reason: 'assignment_not_remote' };
+  }
+  const storeRoot = resolvePackReviewRunStoreRoot({
+    projectId: input.projectId,
+    storeRoot: input.env.PACK_REVIEW_RUN_STORE_ROOT,
+  });
+  const key = [
+    'local-smoke-na',
+    `pr-${input.prNumber}`,
+    input.headSha,
+    input.assignment.assignmentId,
+    `g-${input.assignment.generation}`,
+  ].join('-');
+  try {
+    stagePackReviewImmutableRecord({
+      kind: 'evidence',
+      key,
+      value: {
+        schema: 'local-smoke-actuation/v1',
+        disposition: 'not_applicable',
+        reason: REMOTE_ACTUATION_REASON,
+        repository: input.repository,
+        issueNumber: input.issueNumber,
+        prNumber: input.prNumber,
+        headSha: input.headSha,
+        assignment: {
+          assignmentId: input.assignment.assignmentId,
+          generation: input.assignment.generation,
+          kind: 'remote',
+          provider: input.assignment.provider,
+        },
+      },
+      options: { storeRoot },
+    });
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 async function defaultReadIssueBody(
@@ -179,7 +241,29 @@ export async function reconcilePostReviewSmoke(
   if (current.repository !== repository || current.issueNumber !== issueNumber) {
     return { handled: true, attempted: false, reason: 'post_review_smoke_assignment_repository_or_issue_mismatch' };
   }
+
+  const ciGreen = dependencies.ciGreen ?? resolveCiGreen;
+  if (!ciGreen(candidate.prNumber, headSha, repository, dependencies.repoRoot)) {
+    return { handled: true, attempted: false, reason: 'post_review_smoke_required_ci_not_green' };
+  }
+
   if (current.kind !== 'local') {
+    const recorded = recordRemoteActuationNotApplicable({
+      projectId: dependencies.projectId,
+      env,
+      repository,
+      issueNumber,
+      prNumber: candidate.prNumber,
+      headSha,
+      assignment: current,
+    });
+    if (!recorded.ok) {
+      return {
+        handled: true,
+        attempted: false,
+        reason: `post_review_smoke_remote_disposition_unrecorded:${recorded.reason}`,
+      };
+    }
     return { handled: true, attempted: false, reason: 'post_review_smoke_remote_assignment_requires_local_reassignment' };
   }
 
@@ -195,11 +279,6 @@ export async function reconcilePostReviewSmoke(
   const expected = initial.binding.assignment;
   if (!exactAssignment(current, expected)) {
     return { handled: true, attempted: false, reason: 'post_review_smoke_assignment_binding_ambiguous' };
-  }
-
-  const ciGreen = dependencies.ciGreen ?? resolveCiGreen;
-  if (!ciGreen(candidate.prNumber, headSha, repository, initial.binding.worker.workspacePath)) {
-    return { handled: true, attempted: false, reason: 'post_review_smoke_required_ci_not_green' };
   }
 
   let issueBody: string;
@@ -223,6 +302,7 @@ export async function reconcilePostReviewSmoke(
   const issueBodyFile = path.join(tempRoot, 'issue.md');
   writeFileSync(issueBodyFile, issueBody, 'utf8');
   let smokeActionEntered = false;
+  let remoteAssignmentObserved: WorkerAssignment | undefined;
   const startFence = async <T>(action: () => T | Promise<T>): Promise<SmokeStartFenceResult<T>> => {
     const fenced = await withCurrentWorkerAssignmentFence(
       dependencies.assignmentStorePath,
@@ -254,6 +334,33 @@ export async function reconcilePostReviewSmoke(
       },
     );
     if (!fenced.ok) {
+      if (!smokeActionEntered && fenced.reason === 'assignment_stale') {
+        const latest = currentWorkerAssignment(dependencies.assignmentStorePath, issueNumber);
+        if (latest?.repository === repository && latest.issueNumber === issueNumber && latest.kind === 'remote') {
+          const recorded = recordRemoteActuationNotApplicable({
+            projectId: dependencies.projectId,
+            env,
+            repository,
+            issueNumber,
+            prNumber: candidate.prNumber,
+            headSha,
+            assignment: latest,
+          });
+          if (!recorded.ok) {
+            return {
+              ok: false,
+              reason: `remote_disposition_unrecorded:${recorded.reason}`,
+              actionEntered: false,
+            };
+          }
+          remoteAssignmentObserved = latest;
+          return {
+            ok: false,
+            reason: 'remote_assignment_requires_local_reassignment',
+            actionEntered: false,
+          };
+        }
+      }
       return { ok: false, reason: fenced.reason, actionEntered: smokeActionEntered };
     }
     if (fenced.value.kind === 'preaction_failed') {
@@ -286,7 +393,11 @@ export async function reconcilePostReviewSmoke(
       return {
         handled: true,
         attempted: false,
-        reason: exitCode === 0 ? 'post_review_smoke_not_attempted' : 'post_review_smoke_preaction_failed',
+        reason: remoteAssignmentObserved
+          ? 'post_review_smoke_remote_assignment_requires_local_reassignment'
+          : exitCode === 0
+            ? 'post_review_smoke_not_attempted'
+            : 'post_review_smoke_preaction_failed',
         exitCode,
       };
     }
