@@ -1,5 +1,5 @@
 // @vitest-ci-lane light
-// @vitest-pre-topology-seconds 120
+// @vitest-pre-topology-seconds 60
 
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,11 +12,14 @@ import {
 } from '../lib/worker-assignment-store.ts';
 import {
   commitPackReviewTerminal,
+  commitPackReviewTriage,
   commitSmokeOrderingTransition,
   initializePackReviewAuthority,
   listPackReviewImmutableRecords,
+  observePackReviewHead,
   recordPackReviewPublication,
   type PackReviewAuthorityOptions,
+  type PackReviewTier,
 } from '../pack-review-state.ts';
 import type { RuntimeAdapter } from '../runtime/contracts.ts';
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
@@ -29,6 +32,7 @@ const REPOSITORY = 'chetwerikoff/orchestrator-pack';
 const ISSUE = 1418;
 const PR = 1481;
 const HEAD = 'c'.repeat(40);
+const NEXT_HEAD = 'd'.repeat(40);
 const roots: string[] = [];
 
 function rootFixture(): {
@@ -48,11 +52,11 @@ function rootFixture(): {
   };
 }
 
-function initializeReview(options: PackReviewAuthorityOptions) {
+function initializeReview(options: PackReviewAuthorityOptions, tier: PackReviewTier = 'T3') {
   return initializePackReviewAuthority({
     prNumber: PR,
     headSha: HEAD,
-    tier: 'T3',
+    tier,
     options,
   });
 }
@@ -84,6 +88,50 @@ function settleReview(options: PackReviewAuthorityOptions) {
       terminalRunId: 'review-run-1418',
       status: 'succeeded',
       publicationDigest: 'publication-digest',
+      recordedAtUtc: new Date().toISOString(),
+    },
+    options,
+  });
+}
+
+function settleReviewAtCapDefer(options: PackReviewAuthorityOptions) {
+  const authority = initializeReview(options, 'T1');
+  const terminal = commitPackReviewTerminal({
+    prNumber: PR,
+    expectedTransitionSeq: authority.transitionSeq,
+    terminal: {
+      schemaVersion: 1,
+      terminalContractVersion: 2,
+      terminalSource: 'normal',
+      runId: 'review-at-cap-1418',
+      targetSha: HEAD,
+      reviewVerdict: 'findings',
+      findingCount: 1,
+      findingsDigest: 'at-cap-findings-digest',
+    },
+    status: 'changes_requested',
+    findingCount: 1,
+    options,
+  });
+  const triaged = commitPackReviewTriage({
+    prNumber: PR,
+    expectedTransitionSeq: terminal.transitionSeq,
+    triage: {
+      verdict: 'DEFER',
+      source: 'architect',
+      findingSnapshotDigest: 'at-cap-findings-snapshot',
+      committedAtUtc: new Date().toISOString(),
+    },
+    options,
+  });
+  return recordPackReviewPublication({
+    prNumber: PR,
+    expectedTransitionSeq: triaged.transitionSeq,
+    publication: {
+      headSha: HEAD,
+      terminalRunId: 'review-at-cap-1418',
+      status: 'succeeded',
+      publicationDigest: 'at-cap-publication-digest',
       recordedAtUtc: new Date().toISOString(),
     },
     options,
@@ -228,6 +276,92 @@ describe('Issue #1418 post-review smoke reconciliation', () => {
     };
 
     const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      runAttempt,
+    }));
+
+    expect(result).toEqual({ handled: true, attempted: true, reason: 'post_review_smoke_completed', exitCode: 0 });
+    expect(effects).toBe(1);
+  });
+
+  it('admits smoke after authoritative at-cap architect DEFER', async () => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    const settled = settleReviewAtCapDefer(options);
+    expect(settled.cycle).toMatchObject({
+      state: 'at_cap_open_findings',
+      reviewStageComplete: true,
+    });
+    const assignment = await publishLocal(fixture.assignmentStorePath, 'dispatch-at-cap-defer');
+    const adapter = runtimeFor(assignment.bindingKey, path.join(fixture.root, 'worker-at-cap-defer'));
+    let effects = 0;
+    const runAttempt: NonNullable<PostReviewSmokeDependencies['runAttempt']> = async (_smokeOptions, smokeDeps) => {
+      const fenced = await smokeDeps.startFence!(() => {
+        effects += 1;
+      });
+      expect(fenced.ok).toBe(true);
+      return 0;
+    };
+
+    const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      runAttempt,
+    }));
+
+    expect(result).toEqual({ handled: true, attempted: true, reason: 'post_review_smoke_completed', exitCode: 0 });
+    expect(effects).toBe(1);
+  });
+
+  it('continues smoke on the new head after a smoke finding without reopening automatic review', async () => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    const settled = settleReview(options);
+    const started = commitSmokeOrderingTransition({
+      prNumber: PR,
+      expectedTransitionSeq: settled.transitionSeq,
+      actor: 'independent',
+      headSha: HEAD,
+      status: 'started',
+      options,
+    });
+    const failed = commitSmokeOrderingTransition({
+      prNumber: PR,
+      expectedTransitionSeq: started.transitionSeq,
+      actor: 'independent',
+      headSha: HEAD,
+      status: 'failed',
+      failureKind: 'finding',
+      options,
+    });
+    const next = observePackReviewHead({
+      prNumber: PR,
+      expectedTransitionSeq: failed.transitionSeq,
+      headSha: NEXT_HEAD,
+      options,
+    });
+    expect(next.cycle?.reviewStageComplete).toBe(true);
+    expect(next.smokeOrdering?.independent).toMatchObject({
+      headSha: NEXT_HEAD,
+      status: 'failed',
+      failureHeadSha: HEAD,
+    });
+
+    const assignment = await publishLocal(fixture.assignmentStorePath, 'dispatch-smoke-fix-head');
+    const adapter = runtimeFor(assignment.bindingKey, path.join(fixture.root, 'worker-smoke-fix-head'));
+    let effects = 0;
+    const runAttempt: NonNullable<PostReviewSmokeDependencies['runAttempt']> = async (smokeOptions, smokeDeps) => {
+      expect(smokeOptions.headSha).toBe(NEXT_HEAD);
+      const fenced = await smokeDeps.startFence!(() => {
+        effects += 1;
+      });
+      expect(fenced.ok).toBe(true);
+      return 0;
+    };
+    const nextCandidate = { ...candidate, headSha: NEXT_HEAD };
+
+    const result = await reconcilePostReviewSmoke(nextCandidate, dependencies({
       ...fixture,
       adapter,
       runAttempt,
