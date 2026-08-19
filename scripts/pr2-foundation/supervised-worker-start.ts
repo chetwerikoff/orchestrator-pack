@@ -23,6 +23,10 @@ export interface SupervisedWorkerStartReceipt {
 interface OrcaWorkerStartEnvelope {
   readonly ok?: boolean;
   readonly result?: unknown;
+  readonly error?: {
+    readonly code?: unknown;
+    readonly message?: unknown;
+  };
 }
 
 interface OrcaPlacementEnvelope {
@@ -56,6 +60,8 @@ export interface SupervisedWorkerStartResidual {
 export interface SupervisedWorkerStartResult {
   readonly ok: boolean;
   readonly reason: string;
+  /** Exact provider error code from a structurally valid Orca error envelope. */
+  readonly errorCode?: string;
   readonly receipt?: SupervisedWorkerStartReceipt;
   readonly residualResources?: readonly unknown[];
   readonly assignment?: WorkerAssignment;
@@ -78,11 +84,13 @@ function residualResources(receipt: SupervisedWorkerStartReceipt): readonly unkn
 function rejectedStart(
   reason: string,
   receipt?: SupervisedWorkerStartReceipt,
+  errorCode?: string,
 ): SupervisedWorkerStartResult {
   const resources = receipt ? residualResources(receipt) : undefined;
   return {
     ok: false,
     reason,
+    ...(errorCode ? { errorCode } : {}),
     ...(receipt ? { receipt } : {}),
     ...(resources ? { residualResources: resources } : {}),
   };
@@ -211,7 +219,7 @@ function validateReceiptPlacement(
 }
 
 export async function runSupervisedWorkerStart(input: {
-  readonly issueNumber: number;
+  readonly issueNumber?: number;
   readonly repository: string;
   readonly projectId?: string;
   readonly orcaArgs: readonly string[];
@@ -222,7 +230,9 @@ export async function runSupervisedWorkerStart(input: {
   readonly inspect?: (args: readonly string[]) => Promise<ChildResult>;
 }): Promise<SupervisedWorkerStartResult> {
   const repository = input.repository.trim().toLowerCase();
-  if (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0 || !repository) {
+  if (!repository
+    || (input.issueNumber !== undefined
+      && (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0))) {
     return { ok: false, reason: 'supervised_start_input_invalid' };
   }
   const args = [...input.orcaArgs];
@@ -237,7 +247,9 @@ export async function runSupervisedWorkerStart(input: {
   }
 
   const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
-  const expectedCurrent = currentWorkerAssignment(file, input.issueNumber);
+  const expectedCurrent = input.issueNumber === undefined
+    ? null
+    : currentWorkerAssignment(file, input.issueNumber);
   if (expectedCurrent
     && (expectedCurrent.repository !== repository || expectedCurrent.taskId !== requestedTaskId)) {
     return { ok: false, reason: 'assignment_stale' };
@@ -301,19 +313,27 @@ export async function runSupervisedWorkerStart(input: {
   let envelope: OrcaWorkerStartEnvelope;
   try {
     const parsed: unknown = JSON.parse(execution.stdout);
-    if (!isRecord(parsed) || !isRecord(parsed.result)) {
+    if (!isRecord(parsed)) {
       return rejectedStart('supervised_start_receipt_invalid');
+    }
+    const errorRecord = isRecord(parsed.error) ? parsed.error : null;
+    const errorCode = nonEmpty(errorRecord?.code);
+    if (!isRecord(parsed.result)) {
+      return errorCode
+        ? rejectedStart('supervised_start_envelope_error', undefined, errorCode)
+        : rejectedStart('supervised_start_receipt_invalid');
     }
     envelope = parsed as OrcaWorkerStartEnvelope;
   } catch {
     return rejectedStart('supervised_start_receipt_invalid');
   }
   const receipt = envelope.result as SupervisedWorkerStartReceipt;
+  const errorCode = nonEmpty(envelope.error?.code);
   if (envelope.ok !== true) {
-    return rejectedStart('supervised_start_envelope_not_ok', receipt);
+    return rejectedStart('supervised_start_envelope_not_ok', receipt, errorCode || undefined);
   }
   if (!execution.ok || receipt.state !== 'ready') {
-    return rejectedStart(`supervised_start_${receipt.state || 'failed'}`, receipt);
+    return rejectedStart(`supervised_start_${receipt.state || 'failed'}`, receipt, errorCode || undefined);
   }
   const taskId = String(receipt.taskId ?? '').trim();
   const dispatchId = String(receipt.dispatchId ?? '').trim();
@@ -330,7 +350,7 @@ export async function runSupervisedWorkerStart(input: {
     file,
     projectId: input.projectId,
     repository,
-    issueNumber: input.issueNumber,
+    ...(input.issueNumber === undefined ? {} : { issueNumber: input.issueNumber }),
     taskId,
     kind: 'local',
     provider: 'orca',
@@ -360,21 +380,22 @@ export async function runSupervisedWorkerStart(input: {
 }
 
 function parseCli(argv: readonly string[]): {
-  issueNumber: number;
+  issueNumber?: number;
   repository: string;
   projectId?: string;
   orcaArgs: string[];
 } {
   const separator = argv.indexOf('--');
-  if (separator < 0) throw new Error('usage: supervised-worker-start --issue-number N --repository owner/repo [--project-id id] -- --task task_id --terminal handle --worktree selector ...');
+  if (separator < 0) throw new Error('usage: supervised-worker-start [--issue-number N] --repository owner/repo [--project-id id] -- --task task_id --terminal handle --worktree selector ...');
   const own = argv.slice(0, separator);
   const orcaArgs = argv.slice(separator + 1);
   const value = (name: string): string => {
     const index = own.indexOf(name);
     return index >= 0 ? String(own[index + 1] ?? '').trim() : '';
   };
+  const issueNumberRaw = value('--issue-number');
   return {
-    issueNumber: Number(value('--issue-number')),
+    ...(issueNumberRaw ? { issueNumber: Number(issueNumberRaw) } : {}),
     repository: value('--repository'),
     ...(value('--project-id') ? { projectId: value('--project-id') } : {}),
     orcaArgs,
