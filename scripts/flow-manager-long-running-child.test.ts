@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   chmodSync,
@@ -18,7 +19,9 @@ import {
   COMPLETION_MODE,
   HANDOFF_SCHEMA,
   TERMINAL_SCHEMA,
+  classifyConcurrentBatchDelivery,
   deriveDelivery,
+  observePublishedArtifact,
   pathsAlias,
   readHandoffReceipt,
   readTerminalEnvelope,
@@ -504,7 +507,6 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(deriveDelivery(makeParsedTurnResult(), false)).toBe('landed');
   });
 
-
   it('uses top-level send_count for post-send failure delivery (P1)', () => {
     const parsed = makeParsedTurnResult({
       state: 'foreign_activity',
@@ -791,7 +793,6 @@ describe('flow-manager long-running child (#1164)', () => {
   });
 });
 
-
 describe('Issue #1377 long-running child abandonment proof', () => {
   it('preserves a valid exact-owned receipt without using it as Stop authority', async () => {
     const root = tempDir('opk-1377-eof-');
@@ -980,5 +981,207 @@ describe('Issue #1377 long-running child abandonment proof', () => {
       },
     });
   });
+});
 
+function publicationTransport(input: {
+  issueBody?: string;
+  comments?: readonly Record<string, unknown>[];
+  principal?: string;
+}) {
+  const runGh = vi.fn((argv: string[]) => {
+    const target = argv[2] ?? '';
+    if (target === 'user') {
+      return { exitCode: 0, stdout: `${input.principal ?? 'chetwerikoff'}\n`, stderr: '' };
+    }
+    if (target.includes('/comments?')) {
+      return { exitCode: 0, stdout: JSON.stringify(input.comments ?? []), stderr: '' };
+    }
+    if (/\/issues\/1441$/u.test(target)) {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({ title: 'fixture', body: input.issueBody ?? '', labels: [] }),
+        stderr: '',
+      };
+    }
+    return { exitCode: 1, stdout: '', stderr: `unexpected:${argv.join(' ')}` };
+  });
+  return { runGh };
+}
+
+function trustedComment(id: number, body: string, principal = 'chetwerikoff') {
+  return {
+    id,
+    body,
+    created_at: '2026-08-19T01:00:00Z',
+    updated_at: '2026-08-19T01:00:00Z',
+    user: { login: principal },
+    author_association: 'OWNER',
+  };
+}
+
+describe('Issue #1441 publication completion authority', () => {
+  it('settles an author from exact revision plus exact REST body hash', () => {
+    const body = '<!-- source-revision: r06 -->\n# Published author body\n';
+    const exactBodySha256 = createHash('sha256').update(body, 'utf8').digest('hex');
+    const transport = publicationTransport({ issueBody: body });
+    expect(observePublishedArtifact({
+      kind: 'author',
+      repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1441,
+      sourceRevision: 'r06',
+      exactBodySha256,
+    }, transport as never)).toEqual({
+      status: 'published',
+      kind: 'author',
+      repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1441,
+      sourceRevision: 'r06',
+      exactBodySha256,
+    });
+  });
+
+  it('binds reviewer completion to one unedited current-principal invocation/stage/slot comment', () => {
+    const invocationId = '14410000-1111-4222-8333-444444444444';
+    const body = [
+      'Read revision: #1441 r05',
+      `INVOCATION_ID_TO_ECHO: ${invocationId}`,
+      'stage: architectural-review',
+      'source-slot: 02',
+      'VERDICT: NO_FINDINGS',
+    ].join('\n');
+    const transport = publicationTransport({ comments: [trustedComment(1, body)] });
+    expect(observePublishedArtifact({
+      kind: 'reviewer',
+      repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1441,
+      sourceRevision: 'r05',
+      invocationId,
+      stage: 'architectural-review',
+      sourceSlot: '02',
+    }, transport as never)).toMatchObject({
+      status: 'published',
+      kind: 'reviewer',
+      commentId: 1,
+      principal: 'chetwerikoff',
+      invocationId,
+    });
+  });
+
+  it('keeps duplicate owned reviewer publications blocked and never selects first match', () => {
+    const invocationId = '14410000-1111-4222-8333-555555555555';
+    const body = [
+      'Read revision: #1441 r05',
+      `INVOCATION_ID_TO_ECHO: ${invocationId}`,
+      'stage: architectural-review',
+      'source-slot: 03',
+    ].join('\n');
+    const transport = publicationTransport({ comments: [trustedComment(1, body), trustedComment(2, body)] });
+    expect(observePublishedArtifact({
+      kind: 'reviewer',
+      repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1441,
+      sourceRevision: 'r05',
+      invocationId,
+      stage: 'architectural-review',
+      sourceSlot: '03',
+    }, transport as never)).toMatchObject({
+      status: 'blocked',
+      reason: 'reviewer_publication_duplicate_invocation',
+    });
+  });
+
+  it('lets a REST-visible reviewer publication override a dead-child incident as completion authority', async () => {
+    const root = tempDir('opk-1441-publication-wait-');
+    const paths = launchPaths(root, 'published-dead-child');
+    mkdirSync(dirname(paths.receipt), { recursive: true });
+    writeFileSync(paths.receipt, JSON.stringify({
+      schema: HANDOFF_SCHEMA,
+      run_identity: 'run-1441',
+      attempt_identity: 'attempt-1441',
+      launcher_started_at: '2026-08-19T01:00:00.000Z',
+      handoff_committed_at: '2026-08-19T01:00:01.000Z',
+      completion_mode: COMPLETION_MODE,
+    }));
+    writeFileSync(paths.envelope, JSON.stringify({
+      schema: TERMINAL_SCHEMA,
+      run_identity: 'run-1441',
+      attempt_identity: 'attempt-1441',
+      completion_mode: COMPLETION_MODE,
+      handoff_receipt_path: paths.receipt,
+      launcher_started_at: '2026-08-19T01:00:00.000Z',
+      handoff_committed_at: '2026-08-19T01:00:01.000Z',
+      terminal_at: '2026-08-19T01:00:02.000Z',
+      lifecycle_outcome: 'incident',
+      incident: 'child_stdout_eof_timeout',
+      delivery: 'POSSIBLY_DELIVERED',
+      recovery_available: false,
+    }));
+    const invocationId = '14410000-1111-4222-8333-666666666666';
+    const comment = [
+      'Read revision: #1441 r05',
+      `INVOCATION_ID_TO_ECHO: ${invocationId}`,
+      'stage: architectural-review',
+      'source-slot: 01',
+    ].join('\n');
+    const transport = publicationTransport({ comments: [trustedComment(9, comment)] });
+    const chunks: string[] = [];
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      await runWait({
+        runIdentity: 'run-1441',
+        attemptIdentity: 'attempt-1441',
+        terminalEnvelopePath: paths.envelope,
+        handoffReceiptPath: paths.receipt,
+        deadlineMs: 1_000,
+        publicationExpectation: {
+          kind: 'reviewer',
+          repository: 'chetwerikoff/orchestrator-pack',
+          issueNumber: 1441,
+          sourceRevision: 'r05',
+          invocationId,
+          stage: 'architectural-review',
+          sourceSlot: '01',
+        },
+        transport: transport as never,
+      });
+    } finally {
+      write.mockRestore();
+    }
+    const result = JSON.parse(chunks.join('').trim());
+    expect(result).toMatchObject({
+      terminal: true,
+      non_terminal: false,
+      no_success_authority: false,
+      no_retry_authority: true,
+      completion_authority: 'published_artifact',
+      publication_terminal: true,
+      envelope: { lifecycle_outcome: 'incident', incident: 'child_stdout_eof_timeout' },
+    });
+  });
+
+  it('classifies a silent sibling possible-or-actual only when the batch has a published artifact', () => {
+    const withPublishedSibling = classifyConcurrentBatchDelivery([
+      { invocationId: 'slot-1', publication: 'published' },
+      { invocationId: 'slot-2', publication: 'published' },
+      { invocationId: 'slot-3', publication: 'missing', childHint: 'child_stdout_eof_timeout' },
+    ]);
+    expect(withPublishedSibling[2]).toEqual({
+      invocationId: 'slot-3',
+      classification: 'possible-or-actual',
+      resendForbidden: true,
+      settlement: 'incident',
+      childHint: 'child_stdout_eof_timeout',
+    });
+
+    const withoutPublishedSibling = classifyConcurrentBatchDelivery([
+      { invocationId: 'slot-1', publication: 'missing' },
+      { invocationId: 'slot-2', publication: 'missing' },
+      { invocationId: 'slot-3', publication: 'missing', childHint: 'child_stdout_eof_timeout' },
+    ]);
+    expect(withoutPublishedSibling.every((slot) => slot.classification === 'unproven')).toBe(true);
+    expect(withoutPublishedSibling.every((slot) => slot.resendForbidden === false)).toBe(true);
+  });
 });
