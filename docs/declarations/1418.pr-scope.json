@@ -19,6 +19,7 @@
     "scripts/run-vitest-heavy-shard.ps1",
     "scripts/run-vitest-light-lane.ps1",
     "scripts/run-vitest-wallclock-stage.ps1",
+    "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-ci-runner.ts",
     "scripts/worker-smoke-run.ts"
   ],
@@ -47,6 +48,7 @@
     "scripts/run-vitest-heavy-shard.ps1",
     "scripts/run-vitest-light-lane.ps1",
     "scripts/run-vitest-wallclock-stage.ps1",
+    "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-ci-runner.ts",
     "scripts/worker-smoke-run.ts"
   ],
