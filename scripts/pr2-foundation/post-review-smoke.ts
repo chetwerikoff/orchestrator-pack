@@ -10,6 +10,7 @@ import {
 import {
   bindingForIssue,
   resolveCurrentWorkerAssignmentBindings,
+  type ResolvedWorkerAssignment,
 } from '../lib/worker-assignment-runtime.ts';
 import { resolvePackReviewRunStoreRoot } from '../lib/pack-review-run-store.ts';
 import { parseComplexityTierFence } from '../lib/tier-gate-core.ts';
@@ -47,6 +48,10 @@ export interface PostReviewSmokeDependencies {
   readonly runAttempt?: typeof runSmokeAttempt;
   readonly readIssueBody?: (issueNumber: number, repository: string) => Promise<string>;
 }
+
+type IssueBindingResolution =
+  | { readonly status: 'resolved'; readonly binding: ResolvedWorkerAssignment }
+  | { readonly status: 'assignment_untrusted' | 'runtime_unavailable' | 'target_unresolved' };
 
 function exactAssignment(left: WorkerAssignment, right: WorkerAssignment): boolean {
   return left.assignmentId === right.assignmentId
@@ -121,16 +126,16 @@ function resolveIssueBinding(input: {
   repository: string;
   issueNumber: number;
   adapter: RuntimeAdapter;
-}) {
+}): IssueBindingResolution {
   const resolution = resolveCurrentWorkerAssignmentBindings({
     file: input.file,
     repository: input.repository,
     adapter: input.adapter,
   });
-  if (resolution.status !== 'ok') return { status: resolution.status as string } as const;
+  if (resolution.status !== 'ok') return { status: resolution.status };
   const binding = bindingForIssue(resolution.bindings, input.issueNumber);
-  if (!binding) return { status: 'target_unresolved' } as const;
-  return { status: 'resolved', binding } as const;
+  if (!binding) return { status: 'target_unresolved' };
+  return { status: 'resolved', binding };
 }
 
 export async function reconcilePostReviewSmoke(
