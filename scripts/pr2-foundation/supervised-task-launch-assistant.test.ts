@@ -3,6 +3,7 @@ import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import type { SupervisedWorkerStartResult } from './supervised-worker-start.ts';
 import {
   parseLaunchAssistantCli,
+  prepareWorktreeWithOrca,
   resolveExecutorProfile,
   runSupervisedTaskLaunchAssistant,
   type DispatchObservation,
@@ -115,6 +116,10 @@ function launchInput(workClass: LaunchInput['workClass'] = 't2'): LaunchInput {
   };
 }
 
+function okEnvelope(result: Record<string, unknown>): string {
+  return JSON.stringify({ ok: true, result });
+}
+
 describe('supervised Task launch assistant', () => {
   it.each(['manager', 't1', 't2', 't3'] as const)('reaches ready only through supervised-start for %s', async (workClass) => {
     let supervised = 0;
@@ -215,6 +220,57 @@ describe('supervised Task launch assistant', () => {
       expect(result.nextAction.command).toContain('--retry-request');
       expect(result.nextAction.command).toContain('request-7');
     }
+  });
+
+  it('accepts fresh Orca worktree creation when setup is explicitly not configured', async () => {
+    const calls: readonly string[][] = [];
+    const mutableCalls = calls as string[][];
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
+    }, async (args) => {
+      mutableCalls.push([...args]);
+      return { ok: true, stdout: okEnvelope({
+        worktree: { id: 'repo::wt', path: '/tmp/wt' },
+        setupReceipt: { requested: 'run', hookFound: false, state: 'not_configured' },
+      }) };
+    });
+    expect(result).toMatchObject({ status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' } });
+    expect(mutableCalls).toHaveLength(1);
+  });
+
+  it('waits for the exact fresh setup terminal to exit successfully', async () => {
+    const calls: string[][] = [];
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', baseBranch: 'main',
+    }, async (args) => {
+      calls.push([...args]);
+      if (args[1] === 'worktree') return { ok: true, stdout: okEnvelope({
+        worktree: { id: 'repo::wt', path: '/tmp/wt' },
+        setupReceipt: { requested: 'run', hookFound: true, state: 'running', terminalHandle: 'setup-term' },
+      }) };
+      return { ok: true, stdout: okEnvelope({ wait: {
+        handle: 'setup-term', condition: 'exit', satisfied: true, status: 'exited', exitCode: 0,
+      } }) };
+    });
+    expect(result).toMatchObject({ status: 'ok', value: { setupWitness: 'same_invocation_complete' } });
+    expect(calls[1]).toEqual(['orca', 'terminal', 'wait', '--terminal', 'setup-term', '--for', 'exit', '--timeout-ms', '120000', '--json']);
+  });
+
+  it('fails closed when fresh setup exits non-zero', async () => {
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
+    }, async (args) => args[1] === 'worktree'
+      ? { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::wt', path: '/tmp/wt' },
+        setupReceipt: { requested: 'run', hookFound: true, state: 'running', terminalHandle: 'setup-term' } }) }
+      : { ok: true, stdout: okEnvelope({ wait: { handle: 'setup-term', satisfied: true, status: 'exited', exitCode: 1 } }) });
+    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_setup_wait_not_successful', evidence: { exitCode: 1 } });
+  });
+
+  it('does not infer reuse readiness from worktree path/head alone', async () => {
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeSelector: 'id:repo::existing',
+    }, async () => ({ ok: true, stdout: okEnvelope({ worktree: { id: 'repo::existing', path: '/tmp/existing', head: 'abc' } }) }));
+    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_reuse_readiness_unproven', evidence: { worktreeId: 'repo::existing' } });
   });
 
   it('records deterministic assistant-entry and per-stage timings only', async () => {
