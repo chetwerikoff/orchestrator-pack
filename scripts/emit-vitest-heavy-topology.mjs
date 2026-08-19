@@ -3,6 +3,7 @@
  * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
  * (Issue #695).
  */
+import { spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +19,7 @@ import {
   shouldMeasurePreTopology,
 } from './lib/vitest-pre-topology-measurement.mjs';
 import {
+  buildChangedPathManifest,
   normalizePrScopeMode,
   parseChangedPathManifestFromEnv,
 } from './lib/vitest-pr-scoped-selection.mjs';
@@ -49,6 +51,56 @@ function writeGhaOutput(topology) {
     outputPath,
     `fallback_classification=${topology.fallbackClassification}\n`,
   );
+}
+
+function gitRevision(repoRoot, ref) {
+  const result = spawnSync('git', ['rev-parse', '--verify', ref], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  const sha = result.status === 0 ? String(result.stdout ?? '').trim().toLowerCase() : '';
+  return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+
+function gitHeadParents(repoRoot) {
+  const result = spawnSync('git', ['rev-list', '--parents', '-n', '1', 'HEAD'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) return [];
+  return String(result.stdout ?? '')
+    .trim()
+    .split(/\s+/u)
+    .slice(1)
+    .filter((sha) => /^[0-9a-f]{40}$/u.test(sha));
+}
+
+function resolveChangedPathManifest(repoRoot) {
+  const fromEnv = parseChangedPathManifestFromEnv();
+  if (fromEnv) return fromEnv;
+  if (process.env.GITHUB_EVENT_NAME !== 'pull_request') return null;
+
+  const parents = gitHeadParents(repoRoot);
+  let baseSha;
+  let headSha;
+  if (parents.length === 2) {
+    [baseSha, headSha] = parents;
+  } else {
+    baseSha = process.env.GITHUB_BASE_REF
+      ? gitRevision(repoRoot, `origin/${process.env.GITHUB_BASE_REF}`)
+      : null;
+    headSha = gitRevision(repoRoot, 'HEAD');
+  }
+  if (!baseSha || !headSha) {
+    throw new Error('pull-request topology check cannot resolve exact base/head revisions');
+  }
+  const manifest = buildChangedPathManifest(repoRoot, baseSha, headSha);
+  if (!manifest.diffOk) {
+    throw new Error(
+      `pull-request topology check cannot compute changed paths: ${manifest.failureReason ?? 'unknown failure'}`,
+    );
+  }
+  return manifest;
 }
 
 function readChangedTestDirectives(repoRoot, changedFiles) {
@@ -99,7 +151,7 @@ async function withEphemeralChangedTestClassifications(repoRoot, changedFiles, a
 }
 
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
-const rawManifest = parseChangedPathManifestFromEnv();
+const rawManifest = resolveChangedPathManifest(repoRoot);
 const changedPathManifest = rawManifest
   ? {
       ...rawManifest,
