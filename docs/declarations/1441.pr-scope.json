@@ -1,0 +1,38 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1441,
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/orca-runtime-boundary.md",
+    "docs/orchestration-runbook.md",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/worker-assignment-runtime.ts",
+    "scripts/lib/worker-assignment-store.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/pr2-foundation/fleet-assignment-binding.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/migration_notes.md",
+    "docs/orca-runtime-boundary.md",
+    "docs/orchestration-runbook.md",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/worker-assignment-runtime.ts",
+    "scripts/lib/worker-assignment-store.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/pr2-foundation/fleet-assignment-binding.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ]
+}
