@@ -266,13 +266,18 @@ describe('Issue #1418 r10 production pre-action fence failures', () => {
     const { input, runtime, deps } = await readyCase('preaction-busy');
     const observation: FenceObservation = {};
     const lockPath = `${input.assignmentFile}.lock`;
+    const admissionPath = path.join(input.workspace, '.orca-worker-smoke', 'admission.lock.json');
+    let admissionObservedBeforeFence = false;
     const busy = withFenceMutation(deps, () => {
+      admissionObservedBeforeFence = existsSync(admissionPath);
       mkdirSync(path.dirname(lockPath), { recursive: true });
       writeFileSync(lockPath, `${JSON.stringify({ schemaVersion: 1, pid: process.pid, nonce: 'busy', acquiredAtMs: Date.now() })}\n`);
       return () => rmSync(lockPath, { force: true });
     }, observation);
     const result = await reconcilePostReviewSmoke(candidate(input), busy);
     expect(observation).toEqual({ reason: 'assignment_store_busy', actionEntered: false });
+    expect(admissionObservedBeforeFence).toBe(true);
+    expect(existsSync(admissionPath)).toBe(false);
     expectZeroAttempt(result, runtime, input);
   });
 
