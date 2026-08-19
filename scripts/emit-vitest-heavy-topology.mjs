@@ -73,14 +73,22 @@ async function withEphemeralChangedTestClassifications(repoRoot, changedFiles, a
   const estimates = {};
   let changed = false;
   for (const file of changedFiles) {
-    if (config.classification[file]) continue;
     const directive = directives.get(file);
     if (!directive) continue;
-    config.classification[file] = directive.lane;
+    const configuredLane = config.classification[file];
+    if (configuredLane) {
+      if (configuredLane !== directive.lane) {
+        throw new Error(
+          `changed test lane directive mismatch for ${file}: config=${configuredLane} directive=${directive.lane}`,
+        );
+      }
+    } else {
+      config.classification[file] = directive.lane;
+      changed = true;
+    }
     if (Number.isFinite(directive.estimateSeconds) && directive.estimateSeconds > 0) {
       estimates[file] = directive.estimateSeconds;
     }
-    changed = true;
   }
   if (changed) writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
   try {
