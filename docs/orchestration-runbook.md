@@ -151,11 +151,11 @@ PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT
 
 The variable names and work-class-to-profile mapping are tracked policy. Concrete `agent`, `model`, and `effort` values are machine/operator-local configuration and must stay out of tracked documentation. Keep those values only in the existing gitignored local configuration/environment surface, resolve them immediately before starting new work, and treat a local value change as applying to subsequent work without a repository Issue or PR. Changing the stable mapping or variable contract remains a repository policy change.
 
-The gitignored local configuration file is a store, not the live process environment. The orchestrator or launching shell must export the matching `PACK_EXECUTOR_*` values into the live process environment before smoke or a new manager/worker spawn. The smoke launcher reads only that live environment, and `supervised-worker-start` does not read `PACK_EXECUTOR_*`; neither opens the gitignored local configuration file. A missing, empty, or malformed live profile still fails closed before child creation, so the presence of a file on disk is not a substitute. Do not add a pack script, dotenv loader, second selector, or compatibility fallback to close this gap.
+The gitignored local configuration file is a store, not the live process environment. The orchestrator or launching shell must export the matching `PACK_EXECUTOR_*` values into the live process environment before smoke or a new manager/worker spawn. The smoke launcher and supervised Task launch assistant read only that live environment; neither opens the gitignored local configuration file. The lower-level `supervised-worker-start` boundary still does not read `PACK_EXECUTOR_*`. A missing, empty, malformed, unsupported, or non-applicable live launch profile fails closed before Task/runtime effects, so the presence of a file on disk is not a substitute. Do not add a pack dotenv loader, second selector, or compatibility fallback to close this gap.
 
 `agent` selects an already-supported invocation/lifecycle path:
 
-- Cursor/Orca implementation work uses the existing local Cursor/Orca launch path. When it is a supervised worker, initial delivery uses the PACK supervised-start boundary below and publishes the current local WorkerAssignment only after Orca returns a proven ready receipt.
+- Cursor/Orca implementation work uses the existing local Cursor/Orca launch path. New manager/T1/T2/T3 starts use the supervised Task launch assistant below; initial delivery still ends at the existing PACK supervised-start boundary and publishes the current local WorkerAssignment only after Orca returns a proven ready receipt.
 - GPT/Browser-GPT implementation work uses the existing standalone chat-implementer contract in `docs/chat-executor-rules.md` and the Browser-GPT turn mechanics in `docs/browser-gpt-turn-runbook.md`. That path is not an AO-managed Orca worker start and does not synthesize or publish an Orca WorkerAssignment.
 - Changing a profile between those already-supported executor paths changes only which existing path subsequent work uses; it does not create a new selector or lifecycle authority.
 - Smoke complexity selects only between the routine-smoke and complex-smoke executor profiles; it does not create a task tier or change smoke admission, evidence, ownership, or lifecycle rules.
@@ -170,174 +170,144 @@ This profile rule does not add a runtime selector, WorkerAssignment type, provid
 
 For example, changing the local T3 `agent` between the already-supported GPT/Browser-GPT and Cursor/Orca paths changes the path used by subsequent T3 work without a tracked policy edit. Routine versus complex smoke works the same way: it selects the corresponding local smoke profile, whose concrete values remain local-only.
 
-### First local launch bootstrap
+### Supervised Task launch assistant
 
-For every new local worker, treat dependency/setup readiness and executor-profile
-readiness as separate gates. Both must pass before the first terminal is used for
-implementation or the first Dispatch is created. A terminal existing in a fresh
-worktree is not setup evidence.
+For new Cursor/Orca **manager, T1, T2, and T3** work, the canonical composition
+point is:
 
-For a fresh worktree, use the existing Orca setup path and wait for its successful
-ready receipt:
-
-```bash
-orca worktree create \
-  --name <worktree-name> \
-  --repo <repo-selector> \
-  --base-branch <base-ref> \
-  --issue <N> \
-  --setup run \
-  --json
+```text
+scripts/pr2-foundation/supervised-task-launch-assistant.ts
 ```
 
-Continue only when the command succeeds and its response proves that worktree
-setup is ready. A failed, incomplete, or unknown setup response blocks the start;
-do not let the worker discover or install dependencies after Dispatch.
+It is a continuation-safe launch assistant, not a lifecycle authority. It owns
+only the shared mechanical sequence: Node/repository preflight; exact live
+executor-profile validation; manager Run/Task admission; supported worktree
+setup/reuse proof; one fresh RuntimeAdapter-created internal terminal; two
+fresh-start Dispatch absence witnesses; launch timing/diagnostics; and the call
+to the existing supervised-start boundary. It creates no durable retry state,
+queue, lease, WorkerReport/WorkerStatus, scheduler, or second assignment store.
 
-Immediately before launch, resolve exactly one profile for the work class. For a
-T2 worker, the selected names are exactly:
+The calling shell first exports the matching stable profile names. Concrete
+values remain local and must not appear in tracked docs, Task metadata, launch
+output, or PR metadata. For this assistant v1, the supported executable is
+exactly `cursor-agent`; literal `cursor` and any other agent value fail closed
+before Task/runtime effects. Model/effort applicability and child inheritance
+are validated before spawn.
 
-```bash
-selected_profile_names=(
-  PACK_EXECUTOR_T2_AGENT
-  PACK_EXECUTOR_T2_MODEL
-  PACK_EXECUTOR_T2_EFFORT
-)
-```
+Invoke through the canonical Node 22 wrapper. Exactly one of `--worktree` (a
+supported proven-reuse target) or `--worktree-name` (a fresh setup path) is
+required by the assistant.
 
-Resolve the concrete local values from the operator-owned store without printing
-them, and export them in the same shell that will launch the agent and PACK
-boundary:
-
-```bash
-set -a
-# POSIX `.` sources the store; Bash `source` is equivalent.
-. "<operator-local executor-profile store>"
-set +a
-```
-
-Plain `source`/`.` followed by shell-local `test -n` is not child-inheritance
-proof. An unexported shell assignment remains local to that shell, and separate
-tool or terminal calls do not share it. The following Node 22 child-process probe
-must run before terminal creation or Dispatch; it checks only the selected
-profile's three names, reports missing names only, and never prints values:
+T1:
 
 ```bash
-node_major="$(node -p 'process.versions.node.split(".")[0]')" || exit 1
-if [ "$node_major" != 22 ]; then
-  printf '%s\n' 'executor_profile_probe_blocked:node_22_required' >&2
-  exit 1
-fi
-node --input-type=module -e '
-  const names = process.argv.slice(1);
-  const missing = names.filter((name) =>
-    typeof process.env[name] !== "string" || process.env[name].trim() === ""
-  );
-  if (missing.length > 0) {
-    console.error(`executor_profile_missing:${missing.join(",")}`);
-    process.exit(1);
-  }
-  console.log("executor_profile_child_inheritance:ready");
-' "${selected_profile_names[@]}"
-```
-
-Resolve and validate the selected `agent` as an already-supported launch path,
-and verify locally that its resolved `model` and `effort` can be applied. A
-missing, empty, malformed, or unsupported value, or a failed probe, blocks before
-any terminal/Dispatch effect. Do not print concrete values while diagnosing it.
-
-Keep setup, export, probe, fresh-TUI creation, TUI proof, and the supervised-start
-invocation in this one launching shell/process chain; stop immediately on every
-failure:
-
-```bash
-orca terminal create \
-  --worktree <worktree-selector> \
-  --command "<existing Cursor/Orca launch command with resolved model and effort>" \
-  --json
-orca terminal wait --terminal <fresh-terminal-handle> --for tui-idle --timeout-ms <timeout-ms> --json
-# From this exact fresh pane, prove empty composer, no generation, no foreign/leftover
-# session, and visible model/effort matching the selected profile.
 node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
-  --script scripts/pr2-foundation/supervised-worker-start.ts -- \
-  [--issue-number <N>] \
-  --repository <owner/repo> \
-  -- \
-  --task <task-id> <worker-start-options>
+  --script scripts/pr2-foundation/supervised-task-launch-assistant.ts -- \
+  --repository <owner/repo> --work-class t1 --issue-number <N> \
+  --task <task-id> --worktree-name <worktree-name> --base-branch <base-ref>
 ```
 
-The final command is the existing PACK supervised-start boundary; it must return
-a proven `ready` receipt containing the exact `taskId` and `dispatchId` before
-the worker is considered started. `--issue-number` is required for an already
-published Issue-backed worker and may be omitted only for brief-only authoring
-where the Issue itself is the deliverable; the resulting assignment remains
-keyed by the same `taskId` + `dispatchId` when Issue metadata is attached later.
-Do not split these steps across terminals, paste a Task spec into the startup
-command, dual-send, or recover a failed first attach by sending into an old pane.
-A later unrelated command must repeat the profile export and child probe.
+T2:
 
-### Cursor/Orca launch procedure
+```bash
+node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+  --script scripts/pr2-foundation/supervised-task-launch-assistant.ts -- \
+  --repository <owner/repo> --work-class t2 --issue-number <N> \
+  --task <task-id> --worktree-name <worktree-name> --base-branch <base-ref>
+```
 
-For manager work and for T1/T2/T3 or smoke worker work whose resolved `agent`
-is the existing Cursor/Orca path, resolve the matching `PACK_EXECUTOR_*`
-`agent`, `model`, and `effort` immediately before launch. Apply `model` and
-`effort` through that agent's existing launch flags; if the resolved values
-cannot be applied on that path, fail closed. Do not copy the concrete local
-values into tracked documentation, task metadata, or PR metadata.
+T3:
 
-The first-turn start must use a fresh idle agent terminal owned by this start:
+```bash
+node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+  --script scripts/pr2-foundation/supervised-task-launch-assistant.ts -- \
+  --repository <owner/repo> --work-class t3 --issue-number <N> \
+  --task <task-id> --worktree-name <worktree-name> --base-branch <base-ref>
+```
 
-1. Use the intended worktree only as a checkout; reusing a worktree does not
-   authorize reusing an agent session.
-2. Create a new terminal in that worktree and launch the agent with the resolved
-   model and effort. Do not put the Task spec in the startup command.
-3. Wait until the terminal is TUI-idle.
-4. From that exact pane, prove that the composer is empty, the agent is not
-   generating, the pane is not a leftover or foreign session, and the visible
-   model and effort match the resolved profile.
-5. Only after those proofs, invoke the existing PACK supervised-start boundary
-   with `--terminal` set to that exact handle and `--worktree` set to that exact
-   worktree. Initial Task delivery remains Orca-owned and must be the first user
-   turn in that fresh TUI.
+Manager with an existing Task:
 
-Fail the start closed, even if a later Orca receipt says `ready`, when the
-terminal is leftover or foreign (`reused_agent_terminal`), `worker-start
---agent` attaches to a dirty existing pane, the spec is delivered as a
-follow-up or queued message instead of the first user turn, the visible model
-or effort does not match, or a second send is used to recover a bad first
-attach. Do not paste into a generating turn or dual-send; stop the pane and,
-if work must continue, create a new Task and a new proven TUI. Child-process
-liveness is not proof that the profile was applied.
+```bash
+node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+  --script scripts/pr2-foundation/supervised-task-launch-assistant.ts -- \
+  --repository <owner/repo> --work-class manager --run <run-id> \
+  [--issue-number <N>] --task <task-id> --worktree <worktree-selector>
+```
 
-`--terminal` reuse is legal only for the exact handle this start just created
-and proved idle/matching; a receipt saying that this already-created terminal
-was reused does not make it leftover-session reuse. `new-child` or
-`--agent` without that explicit proven terminal is not a substitute for this
-sequence.
+Manager with one caller-serialized brief:
+
+```bash
+manager_brief='<caller-serialized manager Task spec>'
+node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+  --script scripts/pr2-foundation/supervised-task-launch-assistant.ts -- \
+  --repository <owner/repo> --work-class manager --run <run-id> \
+  [--issue-number <N>] --manager-brief "$manager_brief" \
+  --worktree-name <worktree-name> --base-branch <base-ref>
+```
+
+Every manager invocation supplies the exact current `--run`. Before effects, the
+assistant requires the installed read-only Run authority to agree with that id.
+For `--task`, it also requires exactly one membership witness for that Task in
+that exact Run. For `--manager-brief`, exactly one Orca Task-create mutation is
+allowed and success requires a non-empty authoritative Task id/status. A
+provider outcome-unknown Task-create carrying a request id returns
+`outcome=continue` with the legal same-mutation `--retry-request` action; it does
+not authorize a second fresh brief.
+
+For every genuinely fresh known Task, `dispatch-show --task <task-id> --json`
+must prove exact `dispatch === null` **twice**: once before worktree/terminal
+effects and again immediately before supervised-start. Any present, malformed,
+unknown, or competing Dispatch is a continuation/reconciliation result, never
+permission for another start. Provider-identified recovery of an already
+attempted worker-start is different from a fresh start: execute only the exact
+recovery action returned by the assistant, using the same Task/worktree/terminal
+/options and provider request id. Do not create a new terminal or re-run the
+fresh double-null admission while that mutation remains unresolved.
+
+Worktree path/head existence is not setup readiness. A fresh worktree proceeds
+only from the supported same-invocation setup-complete witness; reuse proceeds
+only from a supported proven-reuse witness. Missing or unknown setup evidence is
+`outcome=continue`.
+
+The terminal boundary is machine-enforced through structured contracts: one
+RuntimeAdapter-created worker with provenance `internal`, exact
+`{runtime,id,generation}`, exact target workspace, and `idle` RuntimeAdapter
+liveness. The assistant does **not** scrape raw screen/title/preview/composer text.
+The old per-launch claim that PACK can prove visible model/effort and empty
+composer from the production API is retired because those structured witnesses
+are not exposed. A known contrary observation is still blocking. After rollout,
+perform one controlled visual profile/clean-first-turn smoke as provider-adoption
+evidence; it is not a per-launch parser or durable authority.
+
+The assistant emits one structured result. `outcome=ready` means only that the
+existing `runSupervisedWorkerStart` returned `ready_and_assignment_bound`.
+`outcome=continue` is handled non-success with the first failed/absent checkpoint,
+observed cause, known resources, responsible actor, evidence, exact legal
+`nextAction`, and assistant-entry/per-stage timings. Both ready and handled
+continue exit zero; malformed invocation or an internal failure that cannot emit
+the structured envelope exits non-zero. The helper never claims to measure time
+before its own entry.
 
 ## Supervised initial delivery and WorkerAssignment
 
 This section applies only to executor paths that use the existing Orca-managed supervised worker lifecycle. Standalone GPT/Browser-GPT implementation work follows `docs/chat-executor-rules.md` and `docs/browser-gpt-turn-runbook.md` instead and does not create an Orca WorkerAssignment.
 
-For an Orca-managed supervised worker, initial Task delivery remains Orca-owned. Use the PACK supervised-start boundary through the canonical TypeScript launcher:
+For new manager/T1/T2/T3 Cursor/Orca starts, operators invoke the supervised Task
+launch assistant above rather than hand-compose the terminal/start sequence. The
+assistant's successful final edge is still the existing PACK boundary:
 
 ```text
-node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
-  --script scripts/pr2-foundation/supervised-worker-start.ts -- \
-  [--issue-number <N>] \
-  --repository <owner/repo> \
-  -- \
-  --task <task_id> <worker-start options>
+scripts/pr2-foundation/supervised-worker-start.ts::runSupervisedWorkerStart
 ```
 
-The wrapper calls supported Orca `orchestration worker-start` with structured JSON output. It publishes a current local WorkerAssignment only after Orca returns a proven `ready` receipt with both `taskId` and `dispatchId`. Failed, malformed, or outcome-unknown startup does not create a successful assignment. A structurally valid Orca error envelope with a non-empty `error.code` remains non-success but exposes that exact code in the wrapper's structured failure evidence instead of collapsing it into a generic invalid-receipt reason.
+That lower-level boundary calls supported Orca `orchestration worker-start` with structured JSON output. It publishes a current local WorkerAssignment only after Orca returns a proven `ready` receipt with both `taskId` and `dispatchId`. Failed, malformed, or outcome-unknown startup does not create a successful assignment. A structurally valid Orca error envelope with a non-empty `error.code` remains non-success and exposes that exact code. When Orca also supplies structured mutation-recovery fields in `error.data`, the boundary preserves the exact request id and optional accepted Dispatch/recovery command so the assistant can return the one legal recovery action without inventing retry state.
 
-`--issue-number` may be omitted only when the GitHub Issue is not yet available because the worker is authoring that Issue. The assignment is then stored under the one canonical deliverable key derived from `(taskId, dispatchId)` with no Issue metadata. After publication, attach the positive Issue number to that same record; the canonical key, assignment id, and generation do not change. Do not use an `issue-<N>` key, alias, promotion, dual lookup, or conversion path.
+`--issue-number` may be omitted when the GitHub Issue is not yet available for manager authoring. The assignment is then stored under the one canonical deliverable key derived from `(taskId, dispatchId)` with no Issue metadata. After publication, attach the positive Issue number to that same record; the canonical key, assignment id, and generation do not change. Do not use an `issue-<N>` key, alias, promotion, dual lookup, or conversion path.
 
-`supervised-worker-start` does not read `PACK_EXECUTOR_*`. The orchestrator
-applies the resolved profile during the Cursor/Orca launch procedure above;
-teaching this wrapper to consume those variables is out of scope for this
-Issue.
+The assistant consumes `PACK_EXECUTOR_*` only during pre-spawn launch validation.
+`supervised-worker-start` itself remains executor-profile neutral and does not read
+those variables; it owns successful Orca receipt/placement/assignment publication
+semantics only.
 
 The minimum current assignment authority is:
 
@@ -634,11 +604,13 @@ After landing the production implementation:
 1. adopt the merged PACK revision through the existing supported operator deployment path;
 2. preserve the registered side-process supervisor and `pr2-scheduler` child shape;
 3. retire/reset the pre-#1441 generated `worker-assignments.json` before new assignment publication; do not convert, alias, or dual-resolve `issue-<N>` records;
-4. start supervised workers through the PACK supervised-worker-start boundary so current assignments are published from successful Orca receipts; for one brief-only author, omit the Issue number and attach it only after publication without changing the deliverable key/id/generation;
-5. verify one stale/remapped runtime identity fences without a stale-handle effect and one Orca error envelope preserves its exact non-empty `error.code` while remaining non-success;
-6. verify a supervisor-owned `scheduler.ts tick` under the current activation epoch;
-7. verify later bounded children retain the same trusted S1 lineage and advancing tick sequence;
-8. verify one exact REST-visible author/reviewer artifact settles its manager turn even when the helper child is silent/gone, and one published sibling makes a silent concurrent slot possible-or-actual/no-resend without claiming that its payload was proven delivered;
-9. verify the latest `fleet-reconciliation-handoff/v1` is readable before treating silence as healthy.
+4. start new Cursor/Orca manager/T1/T2/T3 work through the supervised Task launch assistant; treat only `outcome=ready`/`ready_and_assignment_bound` as started, and execute only the exact `nextAction` for handled continuations or provider recovery;
+5. for one manager authoring launch without an Issue, confirm the assignment is task/Dispatch-keyed with absent Issue metadata, then attach the Issue only after publication without changing the deliverable key/id/generation;
+6. verify one stale/remapped runtime identity fences without a stale-handle effect and one Orca error envelope preserves its exact non-empty `error.code` and any structured mutation-recovery request id while remaining non-success;
+7. perform one controlled visual Cursor profile/clean-first-turn smoke; treat it as adoption evidence only, not a per-launch PACK parser or durable witness;
+8. verify a supervisor-owned `scheduler.ts tick` under the current activation epoch;
+9. verify later bounded children retain the same trusted S1 lineage and advancing tick sequence;
+10. verify one exact REST-visible author/reviewer artifact settles its manager turn even when the helper child is silent/gone, and one published sibling makes a silent concurrent slot possible-or-actual/no-resend without claiming that its payload was proven delivered;
+11. verify the latest `fleet-reconciliation-handoff/v1` is readable before treating silence as healthy.
 
 Do not claim live machine supervision before this read-back.
