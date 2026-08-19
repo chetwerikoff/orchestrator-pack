@@ -14,6 +14,7 @@ import {
   commitPackReviewTerminal,
   commitSmokeOrderingTransition,
   initializePackReviewAuthority,
+  listPackReviewImmutableRecords,
   recordPackReviewPublication,
   type PackReviewAuthorityOptions,
 } from '../pack-review-state.ts';
@@ -108,7 +109,11 @@ async function publishLocal(
   return result.assignment;
 }
 
-async function publishRemote(file: string): Promise<WorkerAssignment> {
+async function publishRemote(
+  file: string,
+  bindingKey = 'remote-1418',
+  expectedCurrent?: Pick<WorkerAssignment, 'assignmentId' | 'generation'>,
+): Promise<WorkerAssignment> {
   const result = await publishCurrentWorkerAssignment({
     file,
     repository: REPOSITORY,
@@ -116,7 +121,8 @@ async function publishRemote(file: string): Promise<WorkerAssignment> {
     taskId: 'task-1418',
     kind: 'remote',
     provider: 'browser-gpt',
-    bindingKey: 'remote-1418',
+    bindingKey,
+    ...(expectedCurrent ? { expectedCurrent } : {}),
   });
   if (!result.ok) throw new Error(result.reason);
   return result.assignment;
@@ -164,6 +170,16 @@ function dependencies(input: {
   };
 }
 
+function remoteActuationRecords(options: PackReviewAuthorityOptions) {
+  return listPackReviewImmutableRecords('evidence', options)
+    .filter((record) => (
+      record.value
+      && typeof record.value === 'object'
+      && !Array.isArray(record.value)
+      && (record.value as Record<string, unknown>).schema === 'local-smoke-actuation/v1'
+    ));
+}
+
 const candidate = {
   repoSlug: REPOSITORY,
   prNumber: PR,
@@ -190,6 +206,7 @@ describe('Issue #1418 post-review smoke reconciliation', () => {
 
     expect(result).toEqual({ handled: false, attempted: false, reason: 'review_stage_incomplete' });
     expect(runAttempt).not.toHaveBeenCalled();
+    expect(remoteActuationRecords(options)).toHaveLength(0);
   });
 
   it('enters smoke exactly once through the exact current local assignment fence', async () => {
@@ -220,7 +237,7 @@ describe('Issue #1418 post-review smoke reconciliation', () => {
     expect(effects).toBe(1);
   });
 
-  it('treats G to G+1 reassignment before fence entry as proven zero-attempt', async () => {
+  it('treats local G to local G+1 reassignment before fence entry as proven zero-attempt', async () => {
     const fixture = rootFixture();
     const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
     settleReview(options);
@@ -247,6 +264,64 @@ describe('Issue #1418 post-review smoke reconciliation', () => {
 
     expect(result).toEqual({ handled: true, attempted: false, reason: 'post_review_smoke_preaction_failed', exitCode: 1 });
     expect(effects).toBe(0);
+    expect(remoteActuationRecords(options)).toHaveLength(0);
+  });
+
+  it('records remote G+1 as not-applicable when it wins before the final smoke fence', async () => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    settleReview(options);
+    const local = await publishLocal(fixture.assignmentStorePath, 'dispatch-local-g');
+    const adapter = runtimeFor(local.bindingKey, path.join(fixture.root, 'worker-local-g'));
+    let remote!: WorkerAssignment;
+    let effects = 0;
+    const runAttempt: NonNullable<PostReviewSmokeDependencies['runAttempt']> = async (_smokeOptions, smokeDeps) => {
+      remote = await publishRemote(
+        fixture.assignmentStorePath,
+        'remote-g-plus-1',
+        { assignmentId: local.assignmentId, generation: local.generation },
+      );
+      const fenced = await smokeDeps.startFence!(() => {
+        effects += 1;
+      });
+      expect(fenced).toEqual({
+        ok: false,
+        reason: 'remote_assignment_requires_local_reassignment',
+        actionEntered: false,
+      });
+      return 1;
+    };
+
+    const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      runAttempt,
+    }));
+
+    expect(result).toEqual({
+      handled: true,
+      attempted: false,
+      reason: 'post_review_smoke_remote_assignment_requires_local_reassignment',
+      exitCode: 1,
+    });
+    expect(effects).toBe(0);
+    const records = remoteActuationRecords(options);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.value).toMatchObject({
+      schema: 'local-smoke-actuation/v1',
+      disposition: 'not_applicable',
+      reason: 'remote_assignment_no_runtime_managed_local_workspace',
+      repository: REPOSITORY,
+      issueNumber: ISSUE,
+      prNumber: PR,
+      headSha: HEAD,
+      assignment: {
+        assignmentId: remote.assignmentId,
+        generation: remote.generation,
+        kind: 'remote',
+        provider: 'browser-gpt',
+      },
+    });
   });
 
   it('preserves post-entry failure as an attempted smoke', async () => {
@@ -275,26 +350,37 @@ describe('Issue #1418 post-review smoke reconciliation', () => {
     expect(effects).toBe(1);
   });
 
-  it('keeps remote ownership local-smoke-free and requires explicit local reassignment', async () => {
+  it('keeps remote ownership local-smoke-free, durable, idempotent, and blocked on local reassignment', async () => {
     const fixture = rootFixture();
     const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
     settleReview(options);
-    await publishRemote(fixture.assignmentStorePath);
+    const remote = await publishRemote(fixture.assignmentStorePath);
     const adapter = new DeterministicRuntimeAdapter() as unknown as RuntimeAdapter;
     const runAttempt = vi.fn(async () => 0);
+    const deps = dependencies({ ...fixture, adapter, runAttempt });
 
-    const result = await reconcilePostReviewSmoke(candidate, dependencies({
-      ...fixture,
-      adapter,
-      runAttempt,
-    }));
+    const first = await reconcilePostReviewSmoke(candidate, deps);
+    const second = await reconcilePostReviewSmoke(candidate, deps);
 
-    expect(result).toEqual({
+    expect(first).toEqual({
       handled: true,
       attempted: false,
       reason: 'post_review_smoke_remote_assignment_requires_local_reassignment',
     });
+    expect(second).toEqual(first);
     expect(runAttempt).not.toHaveBeenCalled();
+    const records = remoteActuationRecords(options);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.value).toMatchObject({
+      schema: 'local-smoke-actuation/v1',
+      disposition: 'not_applicable',
+      reason: 'remote_assignment_no_runtime_managed_local_workspace',
+      assignment: {
+        assignmentId: remote.assignmentId,
+        generation: remote.generation,
+        kind: 'remote',
+      },
+    });
   });
 
   it('does not duplicate smoke after the same exact head already passed', async () => {
