@@ -92,6 +92,14 @@ export interface PreparedWorktree {
   readonly path: string;
   readonly setupWitness: 'same_invocation_complete' | 'proven_reuse';
 }
+export interface WorktreePreparationRequest {
+  readonly repository: string;
+  readonly issueNumber?: number;
+  readonly taskId: string;
+  readonly worktreeSelector?: string;
+  readonly worktreeName?: string;
+  readonly baseBranch?: string;
+}
 export type DispatchObservation = { readonly kind: 'absent' }
   | { readonly kind: 'present'; readonly dispatchId?: string };
 export interface LaunchInput {
@@ -115,9 +123,7 @@ export interface LaunchDependencies {
   readonly proveManagerTaskMembership: (runId: string, taskId: string) => Promise<EdgeResult<{ readonly taskId: string }>>;
   readonly createManagerTask: (runId: string, brief: string) => Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>>;
   readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
-  readonly prepareWorktree: (input: { readonly repository: string; readonly issueNumber?: number;
-    readonly taskId: string; readonly worktreeSelector?: string; readonly worktreeName?: string;
-    readonly baseBranch?: string }) => Promise<EdgeResult<PreparedWorktree>>;
+  readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
   readonly adapter: RuntimeAdapter;
   readonly runSupervisedStart: typeof runSupervisedWorkerStart;
   readonly now: () => number;
@@ -294,6 +300,7 @@ export async function runSupervisedTaskLaunchAssistant(input: LaunchInput, deps:
 }
 
 interface ChildResult { readonly ok: boolean; readonly stdout: string; readonly stderr?: string }
+type ChildExecutor = (args: readonly string[], timeoutMs?: number) => Promise<ChildResult>;
 async function child(args: readonly string[], cwd: string, env: Readonly<NodeJS.ProcessEnv>, timeoutMs = 15_000): Promise<ChildResult> {
   const result = await runProcess({ command: args[0]!, args: args.slice(1), cwd, env, inheritParentEnv: true, allowEmptyStdout: true, timeoutMs });
   return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error };
@@ -315,10 +322,61 @@ function repoSlug(remote: string): string {
 function resultRecord(value: Record<string, unknown> | null): Record<string, unknown> | null {
   return value?.ok === true && record(value.result) ? value.result : null;
 }
-function setupComplete(result: Record<string, unknown>): boolean {
-  if (result.setupReady === true) return true; const setup = record(result.setup) ? result.setup : null;
-  return setup?.status === 'completed' || setup?.status === 'ready' || setup?.state === 'completed' || setup?.state === 'ready';
+function worktreeContinue(cause: string, evidence: Readonly<Record<string, unknown>> = {}): EdgeResult<PreparedWorktree> {
+  return { status: 'continue', cause, actor: 'provider', evidence,
+    nextAction: { kind: 'reconcile_worktree_setup', note: 'obtain a supported setup-complete/proven-reuse witness; never infer readiness from path/head' } };
 }
+
+export async function prepareWorktreeWithOrca(request: WorktreePreparationRequest, execute: ChildExecutor): Promise<EdgeResult<PreparedWorktree>> {
+  if (Boolean(request.worktreeSelector) === Boolean(request.worktreeName)) return {
+    status: 'continue', cause: 'worktree_input_invalid', actor: 'orchestrator', evidence: {},
+    nextAction: { kind: 'reconcile_worktree_setup', note: 'provide exactly one --worktree or --worktree-name' },
+  };
+  if (request.worktreeSelector) {
+    const shown = resultRecord(envelope(await execute(['orca', 'worktree', 'show', '--worktree', request.worktreeSelector, '--json'])));
+    const worktree = shown && record(shown.worktree) ? shown.worktree : null;
+    const id = text(worktree?.id); const path = text(worktree?.path);
+    if (!id || !path) return worktreeContinue('worktree_prepare_failed_or_unknown');
+    return worktreeContinue('worktree_reuse_readiness_unproven', { worktreeId: id, worktreePath: path });
+  }
+
+  const created = resultRecord(envelope(await execute([
+    'orca', 'worktree', 'create', '--repo', request.repository, '--name', request.worktreeName!,
+    ...(request.baseBranch ? ['--base-branch', request.baseBranch] : []),
+    ...(request.issueNumber ? ['--issue', String(request.issueNumber)] : ['--no-parent']),
+    '--setup', 'run', '--json',
+  ], 120_000)));
+  const worktree = created && record(created.worktree) ? created.worktree : null;
+  const id = text(worktree?.id); const path = text(worktree?.path);
+  if (!id || !path) return worktreeContinue('worktree_prepare_failed_or_unknown');
+  const baseEvidence = { worktreeId: id, worktreePath: path };
+  const setup = created && record(created.setupReceipt) ? created.setupReceipt : null;
+  if (!setup || text(setup.requested) !== 'run') return worktreeContinue('worktree_setup_receipt_unavailable', baseEvidence);
+  const state = text(setup.state);
+  if (state === 'not_configured' && setup.hookFound === false) {
+    return { status: 'ok', value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
+      evidence: { ...baseEvidence, setupState: state } };
+  }
+  if (state !== 'running' || setup.hookFound !== true) {
+    return worktreeContinue(`worktree_setup_${state || 'unknown'}`, { ...baseEvidence, setupState: state || 'unknown' });
+  }
+  const terminalHandle = text(setup.terminalHandle);
+  if (!terminalHandle) return worktreeContinue('worktree_setup_terminal_missing', { ...baseEvidence, setupState: state });
+  const waited = resultRecord(envelope(await execute([
+    'orca', 'terminal', 'wait', '--terminal', terminalHandle, '--for', 'exit', '--timeout-ms', '120000', '--json',
+  ], 130_000)));
+  const wait = waited && record(waited.wait) ? waited.wait : null;
+  const exitCode = typeof wait?.exitCode === 'number' && Number.isFinite(wait.exitCode) ? wait.exitCode : null;
+  if (!wait || text(wait.handle) !== terminalHandle || wait.satisfied !== true || text(wait.status) !== 'exited' || exitCode !== 0) {
+    return worktreeContinue('worktree_setup_wait_not_successful', {
+      ...baseEvidence, setupState: state, setupTerminalHandle: terminalHandle,
+      waitStatus: text(wait?.status) || 'unknown', exitCode,
+    });
+  }
+  return { status: 'ok', value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
+    evidence: { ...baseEvidence, setupState: 'completed', setupTerminalHandle: terminalHandle } };
+}
+
 function dispatchEdge(value: Record<string, unknown> | null): EdgeResult<DispatchObservation> {
   const result = resultRecord(value);
   if (!result || !Object.hasOwn(result, 'dispatch')) return { status: 'continue', cause: 'dispatch_observation_malformed', actor: 'provider', evidence: {},
@@ -388,19 +446,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
           nextAction: { kind: 'reconcile_manager_task', note: 'reconcile current Orca Task authority; no new brief mutation is authorized' } };
     },
     observeDispatch: async (taskId) => dispatchEdge(envelope(await child(['orca', 'orchestration', 'dispatch-show', '--task', taskId, '--json'], cwd, env))),
-    prepareWorktree: async (request) => {
-      if (Boolean(request.worktreeSelector) === Boolean(request.worktreeName)) return { status: 'continue', cause: 'worktree_input_invalid', actor: 'orchestrator', evidence: {},
-        nextAction: { kind: 'reconcile_worktree_setup', note: 'provide exactly one --worktree or --worktree-name' } };
-      const isReuse = Boolean(request.worktreeSelector);
-      const args = isReuse ? ['orca', 'worktree', 'show', '--worktree', request.worktreeSelector!, '--json']
-        : ['orca', 'worktree', 'create', '--repo', request.repository, '--name', request.worktreeName!, ...(request.baseBranch ? ['--base-branch', request.baseBranch] : []),
-          ...(request.issueNumber ? ['--issue', String(request.issueNumber)] : ['--no-parent']), '--setup', 'run', '--json'];
-      const value = envelope(await child(args, cwd, env, 120_000)); const result = resultRecord(value); const worktree = result && record(result.worktree) ? result.worktree : null;
-      const id = text(worktree?.id); const path = text(worktree?.path); const ready = Boolean(result && setupComplete(result));
-      if (!id || !path || !ready) return { status: 'continue', cause: id && path ? 'worktree_setup_readiness_unproven' : 'worktree_prepare_failed_or_unknown', actor: 'provider', evidence: { ...(id ? { worktreeId: id } : {}) },
-        nextAction: { kind: 'reconcile_worktree_setup', note: 'obtain a supported setup-complete/proven-reuse witness; never infer readiness from path/head' } };
-      return { status: 'ok', value: { id, selector: `id:${id}`, path, setupWitness: isReuse ? 'proven_reuse' : 'same_invocation_complete' } };
-    },
+    prepareWorktree: async (request) => prepareWorktreeWithOrca(request, (args, timeoutMs) => child(args, cwd, env, timeoutMs)),
   };
 }
 
