@@ -429,6 +429,40 @@ function productionFleetObserverSnapshotPath(env: NodeJS.ProcessEnv): string {
     : path.join(operatorHome(env), '.local', 'state', 'orchestrator-pack', 'fleet-observer', 'snapshot.json');
 }
 
+export function createProductionPostReviewSmokeReconciler(input: {
+  projectId: string;
+  repoRoot: string;
+  assignmentStorePath: string;
+  env: NodeJS.ProcessEnv;
+  selectAdapter?: () => Promise<RuntimeAdapter>;
+}): NonNullable<SchedulerBoundary['reconcilePostReviewSmoke']> {
+  const selectAdapter = input.selectAdapter ?? (() => selectRuntimeAdapter({ env: input.env }));
+  return async (candidate, fresh) => {
+    let adapter: RuntimeAdapter;
+    try {
+      adapter = await selectAdapter();
+    } catch (error) {
+      return {
+        handled: true,
+        attempted: false,
+        reason: `post_review_smoke_runtime_unavailable:${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    return reconcilePostReviewSmoke({
+      repoSlug: candidate.repoSlug,
+      prNumber: candidate.prNumber,
+      headSha: String(fresh.headRefOid ?? '').trim().toLowerCase(),
+      prBody: String(fresh.body ?? ''),
+    }, {
+      projectId: input.projectId,
+      repoRoot: input.repoRoot,
+      assignmentStorePath: input.assignmentStorePath,
+      adapter,
+      env: input.env,
+    });
+  };
+}
+
 async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
   const parsed = parseFoundationConfig({}); if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
   const repoRoot = process.cwd(); const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env; const projectId = 'orchestrator-pack';
@@ -440,10 +474,8 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   let unresolvedReason: FleetReconciliationReason = storedAssignments === null ? 'assignment_untrusted' : 'target_unresolved';
   let assignmentReconciliation: SchedulerAssignmentReconciliation | undefined;
   let fleetBindings: readonly FleetAssignmentBinding[] = [];
-  let runtimeAdapter: RuntimeAdapter | undefined;
   try {
     const runtime = await selectRuntimeAdapter({ env });
-    runtimeAdapter = runtime;
     const resolution = repository
       ? resolveCurrentWorkerAssignmentBindings({ file: assignmentStorePath, repository, adapter: runtime })
       : { status: 'assignment_untrusted' as const, bindings: [] as const, reconciliations: [] as const };
@@ -519,20 +551,12 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     });
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   };
-  const postReviewSmoke = runtimeAdapter
-    ? (candidate: ActivatedSchedulerCandidate, fresh: SchedulerCurrentPr) => reconcilePostReviewSmoke({
-        repoSlug: candidate.repoSlug,
-        prNumber: candidate.prNumber,
-        headSha: String(fresh.headRefOid ?? '').trim().toLowerCase(),
-        prBody: String(fresh.body ?? ''),
-      }, {
-        projectId,
-        repoRoot,
-        assignmentStorePath,
-        adapter: runtimeAdapter!,
-        env,
-      })
-    : undefined;
+  const postReviewSmoke = createProductionPostReviewSmokeReconciler({
+    projectId,
+    repoRoot,
+    assignmentStorePath,
+    env,
+  });
   return {
     boundary: productionSchedulerBoundary({
       repoRoot,
@@ -546,7 +570,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       unresolvedReason,
       ...(assignmentReconciliation ? { assignmentReconciliation } : {}),
       fleetBindings,
-      ...(postReviewSmoke ? { reconcilePostReviewSmoke: postReviewSmoke } : {}),
+      reconcilePostReviewSmoke: postReviewSmoke,
       publishHandoff,
     }),
     cadence,
