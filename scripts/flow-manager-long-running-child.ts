@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import './toolchain/native-entrypoint-preflight.ts';
+import { createHash } from 'node:crypto';
 import {
   closeSync,
   constants as fsConstants,
@@ -26,6 +27,13 @@ import {
   type BrowserTurnCancellationReceipt,
 } from './chatgpt-browser-turn/state-light-cancellation.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import {
+  defaultGhTransport,
+  fetchIssueComments,
+  fetchIssueRevision,
+  withGhDeadline,
+} from './lib/create-issue-stage-record-gh.ts';
+import type { GhTransport } from './lib/create-issue-stage-record-types.ts';
 
 export const COMPLETION_MODE = 'browser-turn-result-v1' as const;
 export const HANDOFF_SCHEMA = 'flow-manager-long-running-child-handoff/v1' as const;
@@ -65,6 +73,65 @@ export interface TerminalEnvelope {
   readonly recovery_available: boolean;
   readonly conversation_locator?: string;
   readonly diagnostics?: Record<string, unknown>;
+}
+
+export type PublicationExpectation =
+  | {
+      readonly kind: 'author';
+      readonly repository: string;
+      readonly issueNumber: number;
+      readonly sourceRevision: string;
+      readonly exactBodySha256: string;
+    }
+  | {
+      readonly kind: 'reviewer';
+      readonly repository: string;
+      readonly issueNumber: number;
+      readonly sourceRevision: string;
+      readonly invocationId: string;
+      readonly stage: string;
+      readonly sourceSlot: string;
+    };
+
+export type PublicationObservation =
+  | {
+      readonly status: 'published';
+      readonly kind: 'author';
+      readonly repository: string;
+      readonly issueNumber: number;
+      readonly sourceRevision: string;
+      readonly exactBodySha256: string;
+    }
+  | {
+      readonly status: 'published';
+      readonly kind: 'reviewer';
+      readonly repository: string;
+      readonly issueNumber: number;
+      readonly sourceRevision: string;
+      readonly invocationId: string;
+      readonly stage: string;
+      readonly sourceSlot: string;
+      readonly commentId: number;
+      readonly principal: string;
+    }
+  | {
+      readonly status: 'missing' | 'unavailable' | 'blocked';
+      readonly reason: string;
+      readonly diagnostics?: readonly string[];
+    };
+
+export interface ConcurrentBatchSlotEvidence {
+  readonly invocationId: string;
+  readonly publication: 'published' | 'missing' | 'unavailable' | 'blocked';
+  readonly childHint?: string;
+}
+
+export interface ConcurrentBatchSlotAttribution {
+  readonly invocationId: string;
+  readonly classification: 'actual' | 'possible-or-actual' | 'unproven';
+  readonly resendForbidden: boolean;
+  readonly settlement: 'published' | 'incident' | 'unsettled';
+  readonly childHint?: string;
 }
 
 const DEFAULT_CANDIDATE_GRACE_MS = 5_000;
@@ -1010,20 +1077,221 @@ export function readHandoffReceipt(
   }
 }
 
+function issueSourceRevision(body: string): string | null {
+  const match = body.match(/<!--\s*source-revision:\s*(r[0-9]+)\s*-->/u);
+  return match?.[1] ?? null;
+}
+
+function sha256Text(body: string): string {
+  return createHash('sha256').update(body, 'utf8').digest('hex');
+}
+
+function nonEmptyLines(body: string): readonly string[] {
+  return body
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function exactLineCount(lines: readonly string[], expected: string): number {
+  return lines.filter((line) => line === expected).length;
+}
+
+function authenticatedPrincipal(transport: GhTransport): string | null {
+  const response = transport.runGh(['gh', 'api', 'user', '--jq', '.login']);
+  if (response.exitCode !== 0) return null;
+  const login = response.stdout.trim();
+  return login || null;
+}
+
+export function observePublishedArtifact(
+  expectation: PublicationExpectation,
+  transport: GhTransport = defaultGhTransport(),
+): PublicationObservation {
+  try {
+    if (expectation.kind === 'author') {
+      const revision = fetchIssueRevision(transport, expectation.repository, expectation.issueNumber);
+      const observedRevision = issueSourceRevision(revision.body);
+      const observedHash = sha256Text(revision.body);
+      if (observedRevision === expectation.sourceRevision
+        && observedHash === expectation.exactBodySha256) {
+        return {
+          status: 'published',
+          kind: 'author',
+          repository: expectation.repository,
+          issueNumber: expectation.issueNumber,
+          sourceRevision: expectation.sourceRevision,
+          exactBodySha256: observedHash,
+        };
+      }
+      if (observedRevision === expectation.sourceRevision) {
+        return {
+          status: 'blocked',
+          reason: `author_body_hash_mismatch:expected=${expectation.exactBodySha256}:observed=${observedHash}`,
+        };
+      }
+      return {
+        status: 'missing',
+        reason: `author_revision_not_current:expected=${expectation.sourceRevision}:observed=${observedRevision ?? 'missing'}`,
+      };
+    }
+
+    const principal = authenticatedPrincipal(transport);
+    if (!principal) {
+      return { status: 'unavailable', reason: 'publication_principal_unavailable' };
+    }
+    const fetched = fetchIssueComments(
+      transport,
+      expectation.repository,
+      expectation.issueNumber,
+      principal,
+      { pageSize: 100, maxPages: 10 },
+    );
+    const diagnostics = fetched.diagnostics.map((item) => item.message);
+    if (!fetched.commentsComplete) {
+      return {
+        status: 'unavailable',
+        reason: fetched.failure?.message || 'publication_comment_census_incomplete',
+        ...(diagnostics.length > 0 ? { diagnostics } : {}),
+      };
+    }
+
+    const revisionLine = `Read revision: #${expectation.issueNumber} ${expectation.sourceRevision}`;
+    const invocationLine = `INVOCATION_ID_TO_ECHO: ${expectation.invocationId}`;
+    const stageLine = `stage: ${expectation.stage}`;
+    const slotLine = `source-slot: ${expectation.sourceSlot}`;
+    const ownedInvocation = fetched.comments.filter((comment) => {
+      const lines = nonEmptyLines(comment.body);
+      return exactLineCount(lines, invocationLine) === 1;
+    });
+    if (ownedInvocation.length > 1) {
+      return {
+        status: 'blocked',
+        reason: 'reviewer_publication_duplicate_invocation',
+        diagnostics: ownedInvocation.map((comment) => `comment:${comment.id}`),
+      };
+    }
+    if (ownedInvocation.length === 1) {
+      const comment = ownedInvocation[0]!;
+      const lines = nonEmptyLines(comment.body);
+      if (lines[0] !== revisionLine || lines[1] !== invocationLine) {
+        return {
+          status: 'blocked',
+          reason: 'reviewer_publication_binding_header_mismatch',
+          diagnostics: [`comment:${comment.id}`],
+        };
+      }
+      if (exactLineCount(lines, stageLine) !== 1 || exactLineCount(lines, slotLine) !== 1) {
+        return {
+          status: 'blocked',
+          reason: 'reviewer_publication_stage_slot_mismatch',
+          diagnostics: [`comment:${comment.id}`],
+        };
+      }
+      return {
+        status: 'published',
+        kind: 'reviewer',
+        repository: expectation.repository,
+        issueNumber: expectation.issueNumber,
+        sourceRevision: expectation.sourceRevision,
+        invocationId: expectation.invocationId,
+        stage: expectation.stage,
+        sourceSlot: expectation.sourceSlot,
+        commentId: comment.id,
+        principal,
+      };
+    }
+
+    const boundFrameWithoutInvocation = fetched.comments.filter((comment) => {
+      const lines = nonEmptyLines(comment.body);
+      return lines[0] === revisionLine
+        && exactLineCount(lines, stageLine) === 1
+        && exactLineCount(lines, slotLine) === 1;
+    });
+    if (boundFrameWithoutInvocation.length > 0) {
+      return {
+        status: 'blocked',
+        reason: 'reviewer_publication_invocation_missing_or_mismatch',
+        diagnostics: boundFrameWithoutInvocation.map((comment) => `comment:${comment.id}`),
+      };
+    }
+    return {
+      status: 'missing',
+      reason: 'reviewer_publication_not_visible',
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    };
+  } catch (error) {
+    return {
+      status: 'unavailable',
+      reason: error instanceof Error ? error.message : 'publication_observation_failed',
+    };
+  }
+}
+
+/**
+ * Attribute a concurrent manager batch only from REST-visible sibling facts.
+ * Child state is copied as a timeout hint and never changes the classification.
+ */
+export function classifyConcurrentBatchDelivery(
+  slots: readonly ConcurrentBatchSlotEvidence[],
+): readonly ConcurrentBatchSlotAttribution[] {
+  const anyPublished = slots.some((slot) => slot.publication === 'published');
+  return slots.map((slot) => {
+    if (slot.publication === 'published') {
+      return {
+        invocationId: slot.invocationId,
+        classification: 'actual' as const,
+        resendForbidden: true,
+        settlement: 'published' as const,
+        ...(slot.childHint ? { childHint: slot.childHint } : {}),
+      };
+    }
+    if (anyPublished) {
+      return {
+        invocationId: slot.invocationId,
+        classification: 'possible-or-actual' as const,
+        resendForbidden: true,
+        settlement: 'incident' as const,
+        ...(slot.childHint ? { childHint: slot.childHint } : {}),
+      };
+    }
+    return {
+      invocationId: slot.invocationId,
+      classification: 'unproven' as const,
+      resendForbidden: false,
+      settlement: 'unsettled' as const,
+      ...(slot.childHint ? { childHint: slot.childHint } : {}),
+    };
+  });
+}
+
 export async function runWait(options: {
   readonly runIdentity: string;
   readonly attemptIdentity: string;
   readonly terminalEnvelopePath: string;
   readonly handoffReceiptPath: string;
   readonly deadlineMs: number;
+  readonly publicationExpectation?: PublicationExpectation;
+  readonly transport?: GhTransport;
 }): Promise<void> {
   const started = Date.now();
+  const deadlineAt = started + options.deadlineMs;
   let envelope: TerminalEnvelope | null = null;
+  let publication: PublicationObservation | undefined;
+  const publicationTransport = options.publicationExpectation
+    ? withGhDeadline(options.transport ?? defaultGhTransport(), deadlineAt)
+    : undefined;
   while (Date.now() - started < options.deadlineMs) {
     envelope = readTerminalEnvelope(options.terminalEnvelopePath, {
       runIdentity: options.runIdentity,
       attemptIdentity: options.attemptIdentity,
     });
+    if (options.publicationExpectation && publicationTransport) {
+      publication = observePublishedArtifact(options.publicationExpectation, publicationTransport);
+      if (publication.status === 'published' || publication.status === 'blocked') break;
+      await delay(250);
+      continue;
+    }
     if (envelope) break;
     await delay(50);
   }
@@ -1031,18 +1299,62 @@ export async function runWait(options: {
     runIdentity: options.runIdentity,
     attemptIdentity: options.attemptIdentity,
   });
+  const publicationExpected = options.publicationExpectation !== undefined;
+  const publicationPublished = publication?.status === 'published';
+  const publicationBlocked = publication?.status === 'blocked';
+  const nonTerminal = publicationExpected
+    ? !publicationPublished && !publicationBlocked
+    : envelope === null;
+  const noSuccessAuthority = publicationExpected
+    ? !publicationPublished
+    : envelope?.lifecycle_outcome !== 'success';
   process.stdout.write(`${JSON.stringify({
     schema: WAIT_SCHEMA,
     run_identity: options.runIdentity,
     attempt_identity: options.attemptIdentity,
     terminal: envelope !== null,
     envelope_absent: envelope === null,
-    non_terminal: envelope === null,
-    no_success_authority: envelope?.lifecycle_outcome !== 'success',
+    non_terminal: nonTerminal,
+    no_success_authority: noSuccessAuthority,
     no_retry_authority: true,
     handoff_receipt_observed: handoff !== null,
+    ...(publicationExpected ? {
+      completion_authority: publicationPublished ? 'published_artifact' : 'publication_unproven',
+      publication_terminal: publicationPublished,
+      publication_blocked: publicationBlocked,
+      publication_observation: publication ?? {
+        status: 'unavailable',
+        reason: 'publication_observation_not_run',
+      },
+    } : {}),
     ...(envelope ? { envelope } : {}),
   })}\n`);
+}
+
+function parsePublicationExpectation(options: Map<string, string | true>): PublicationExpectation | undefined {
+  const kind = options.get('publication-kind');
+  if (kind === undefined) return undefined;
+  if (kind !== 'author' && kind !== 'reviewer') throw new Error('publication_kind_invalid');
+  const repository = requiredOption(options, 'repository').trim().toLowerCase();
+  const issueNumber = Number(requiredOption(options, 'issue-number'));
+  const sourceRevision = requiredOption(options, 'source-revision');
+  if (!repository || !Number.isInteger(issueNumber) || issueNumber <= 0 || !/^r[0-9]+$/u.test(sourceRevision)) {
+    throw new Error('publication_identity_invalid');
+  }
+  if (kind === 'author') {
+    const exactBodySha256 = requiredOption(options, 'body-sha256').toLowerCase();
+    if (!/^[0-9a-f]{64}$/u.test(exactBodySha256)) throw new Error('publication_body_sha256_invalid');
+    return { kind, repository, issueNumber, sourceRevision, exactBodySha256 };
+  }
+  return {
+    kind,
+    repository,
+    issueNumber,
+    sourceRevision,
+    invocationId: requiredOption(options, 'invocation-id'),
+    stage: requiredOption(options, 'stage'),
+    sourceSlot: requiredOption(options, 'source-slot'),
+  };
 }
 
 async function launchFromCli(argv: readonly string[]): Promise<number> {
@@ -1087,6 +1399,9 @@ async function main(): Promise<void> {
       terminalEnvelopePath: requiredOption(options, 'terminal-envelope'),
       handoffReceiptPath: requiredOption(options, 'handoff-receipt'),
       deadlineMs: Number(requiredOption(options, 'deadline-ms')),
+      ...(options.has('publication-kind')
+        ? { publicationExpectation: parsePublicationExpectation(options)! }
+        : {}),
     });
     return;
   }
