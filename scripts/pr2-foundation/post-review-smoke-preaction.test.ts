@@ -36,8 +36,19 @@ vi.mock('../lib/gh-repo-resolve.mjs', () => ({
   ghApiJson: vi.fn((_command: string, endpoint: string) => {
     switch (endpoint) {
       case 'user': return { login: 'preaction-fixture' };
-      case `repos/${REPO}/issues/${ISSUE}`: return { number: ISSUE, state: 'open', body: ISSUE_BODY };
-      case `repos/${REPO}/pulls/${PR}`: return { number: PR, state: 'open', body: `Closes #${ISSUE}`, head: { sha: gh.head } };
+      case `repos/${REPO}/issues/${ISSUE}`: return {
+        number: ISSUE,
+        state: 'open',
+        html_url: `https://github.com/${REPO}/issues/${ISSUE}`,
+        body: ISSUE_BODY,
+      };
+      case `repos/${REPO}/pulls/${PR}`: return {
+        number: PR,
+        state: 'open',
+        html_url: `https://github.com/${REPO}/pull/${PR}`,
+        body: `Closes #${ISSUE}`,
+        head: { sha: gh.head },
+      };
       default: throw new Error(`unexpected fixture endpoint: ${endpoint}`);
     }
   }),
