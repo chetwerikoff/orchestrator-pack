@@ -1,4 +1,5 @@
 // @vitest-ci-lane light
+// @vitest-pre-topology-seconds 120
 
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -43,7 +44,7 @@ describe('Issue #1436 smoke/review ordering', () => {
     return { options, authority };
   }
 
-  it('refuses the real pack-review start before creating a run', async () => {
+  it('runs the real pack-review before any worker-owned smoke and settles independent-smoke admission', async () => {
     const { options } = authorityFixture();
     const issueBody = [
       '```complexity-tier',
@@ -67,11 +68,19 @@ describe('Issue #1436 smoke/review ordering', () => {
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: 1436,
       fixtureIssueBody: issueBody,
+      fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => undefined,
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
       claimMode: 'preacquired',
     });
-    expect(result).toMatchObject({ ok: false, created: false, httpStatus: 409 });
-    expect(String(result.reason)).toContain('smoke_ordering_worker_smoke_required');
-    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot: options.storeRoot })).toEqual([]);
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot: options.storeRoot })).toHaveLength(1);
+    const finalAuthority = readPackReviewAuthority(1436, options)!;
+    expect(finalAuthority.cycle?.reviewStageComplete).toBe(true);
+    expect(finalAuthority.smokeOrdering?.independent).toBeUndefined();
+    expect(() => assertIndependentSmokeAdmission({ authority: finalAuthority, headSha: HEAD })).not.toThrow();
   });
 
   it('settles a production non-blocking review for independent-smoke admission', async () => {
@@ -131,10 +140,9 @@ describe('Issue #1436 smoke/review ordering', () => {
     expect(() => assertIndependentSmokeAdmission({ authority: finalAuthority, headSha: HEAD })).not.toThrow();
   });
 
-  it('refuses review until the exact-head worker-owned smoke passes', () => {
+  it('does not gate review admission on worker-owned smoke state', () => {
     const { options, authority } = authorityFixture();
-    expect(() => assertPackReviewSmokeAdmission({ authority, headSha: HEAD }))
-      .toThrow('smoke_ordering_worker_smoke_required');
+    expect(() => assertPackReviewSmokeAdmission({ authority, headSha: HEAD })).not.toThrow();
 
     const started = commitSmokeOrderingTransition({
       prNumber: 1436,
@@ -147,7 +155,7 @@ describe('Issue #1436 smoke/review ordering', () => {
     expect(() => assertPackReviewSmokeAdmission({
       authority: readPackReviewAuthority(1436, options)!,
       headSha: HEAD,
-    })).toThrow('smoke_ordering_worker_smoke_required');
+    })).not.toThrow();
 
     const failed = commitSmokeOrderingTransition({
       prNumber: 1436,
@@ -160,7 +168,7 @@ describe('Issue #1436 smoke/review ordering', () => {
     expect(() => assertPackReviewSmokeAdmission({
       authority: readPackReviewAuthority(1436, options)!,
       headSha: HEAD,
-    })).toThrow('smoke_ordering_worker_smoke_required');
+    })).not.toThrow();
 
     commitSmokeOrderingTransition({
       prNumber: 1436,
