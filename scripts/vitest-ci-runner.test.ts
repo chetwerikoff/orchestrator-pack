@@ -15,6 +15,7 @@ import {
   buildHeavyInvocations,
   hasRpcFlake,
   heavyAttemptLimit,
+  HEAVY_RETRY_DELAY_MS,
   isDirectEntrypoint,
   repositoryRootFromModuleUrl,
   runtimeReportAvailable,
@@ -113,6 +114,7 @@ describe('Vitest CI runner platform and report fail-closed helpers', () => {
     expect(heavyAttemptLimit({ CI: 'true' })).toBe(5);
     expect(heavyAttemptLimit({ CI: 'false' })).toBe(1);
     expect(heavyAttemptLimit({})).toBe(1);
+    expect(HEAVY_RETRY_DELAY_MS).toBe(5_000);
   });
 });
 

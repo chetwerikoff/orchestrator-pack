@@ -107,6 +107,10 @@ function elapsedSeconds(started: number): number { return Math.round(((Date.now(
 export function runtimeReportAvailable(file: string): boolean { return existsSync(file); }
 export function hasRpcFlake(text: string): boolean { return RPC_FLAKE.test(text); }
 export function heavyAttemptLimit(env: Readonly<NodeJS.ProcessEnv>): number { return env.CI === 'true' ? 5 : 1; }
+export const HEAVY_RETRY_DELAY_MS = 5_000;
+async function waitHeavyRetry(): Promise<void> {
+  await new Promise<void>((resolve) => { setTimeout(resolve, HEAVY_RETRY_DELAY_MS); });
+}
 
 async function runBudget(report: string, env: Readonly<NodeJS.ProcessEnv>): Promise<boolean> {
   const result = await child(NODE, [path.join(ROOT, 'scripts/enforce-vitest-runtime-budget.mjs'), report], env);
@@ -328,7 +332,7 @@ async function runHeavy(shard: number, env: NodeJS.ProcessEnv): Promise<number> 
           if (attempt < attempts) {
             process.stdout.write(`[WARN] Vitest worker RPC flake on heavy shard ${shard} invocation ${invocation.label} (attempt ${attempt}/${attempts}); retrying...\n`);
             await cleanupShard(shard, env);
-            await new Promise((resolve) => setTimeout(resolve, 5_000));
+            await waitHeavyRetry();
             continue;
           }
           process.stdout.write(`[FAIL] Vitest worker onTaskUpdate RPC timeout detected on heavy shard ${shard} invocation ${invocation.label}\n`);
@@ -348,7 +352,7 @@ async function runHeavy(shard: number, env: NodeJS.ProcessEnv): Promise<number> 
           if (attempt < attempts) {
             process.stdout.write(`[WARN] Vitest heavy shard ${shard} invocation ${invocation.label} failed (attempt ${attempt}/${attempts}, exit=${failure}); cleaning fleet and retrying...\n`);
             await cleanupShard(shard, env);
-            await new Promise((resolve) => setTimeout(resolve, 5_000));
+            await waitHeavyRetry();
             continue;
           }
           break;

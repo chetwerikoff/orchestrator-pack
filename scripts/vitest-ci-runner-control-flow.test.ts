@@ -23,7 +23,7 @@ vi.mock('./lib/testmode-fleet-lane.ts', () => ({
   observeHeavyShardFleet: fleet.observe,
 }));
 
-import { main } from './vitest-ci-runner.ts';
+import { HEAVY_RETRY_DELAY_MS, heavyAttemptLimit, main } from './vitest-ci-runner.ts';
 
 interface ProcessReply {
   readonly ok: boolean;
@@ -161,8 +161,16 @@ afterEach(() => {
     if (existsSync(file)) rmSync(file, { force: true });
   }
   touched.clear();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+async function runHeavyThroughRetryDelays(): Promise<number> {
+  vi.useFakeTimers();
+  const pending = main(['heavy', '--shard', '99']);
+  await vi.advanceTimersByTimeAsync(HEAVY_RETRY_DELAY_MS * heavyAttemptLimit({ CI: 'true' }));
+  return pending;
+}
 
 function heavySingle(file = 'scripts/control-heavy.test.ts'): void {
   scenario.heavyPlan = { shard: 99, files: [file], totalRuntimeMs: 1 };
@@ -194,7 +202,7 @@ describe('Vitest CI runner actual fail-closed control flow', () => {
     scenario.failedTests.push(false);
     scenario.cleanReports.push(false);
 
-    await expect(main(['heavy', '--shard', '99'])).resolves.toBe(0);
+    await expect(runHeavyThroughRetryDelays()).resolves.toBe(0);
     expect(fleet.cleanup).toHaveBeenCalledTimes(1);
     expect(subprocess.run.mock.calls.filter(([input]) => input.args?.[0] === 'test')).toHaveLength(2);
   });
@@ -213,7 +221,7 @@ describe('Vitest CI runner actual fail-closed control flow', () => {
     for (let index = 0; index < 5; index += 1) scenario.npm.push({ ok: false, exitCode: 1 });
     scenario.failedTests.push(false, false, false, false, false);
 
-    await expect(main(['heavy', '--shard', '99'])).resolves.toBe(1);
+    await expect(runHeavyThroughRetryDelays()).resolves.toBe(1);
     expect(subprocess.run.mock.calls.filter(([input]) => input.args?.[0] === 'test')).toHaveLength(5);
     expect(fleet.cleanup).toHaveBeenCalledTimes(5);
   });
