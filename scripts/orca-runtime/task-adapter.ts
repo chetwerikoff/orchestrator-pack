@@ -17,6 +17,7 @@ import {
 import {
   runOrcaJson,
   type OrcaJsonResponse,
+  type OrcaTerminalSummary,
   type OrcaWorktreeRemoveResult,
   type OrcaWorktreeShow,
 } from './native.ts';
@@ -46,6 +47,12 @@ type OrcaWorkerShowResult = Readonly<{
     originDispatchId?: string | null;
     ownerDispatchId?: string | null;
   }> | null;
+}>;
+
+type OrcaTerminalListResult = Readonly<{
+  terminals?: OrcaTerminalSummary[];
+  totalCount?: number;
+  truncated?: boolean;
 }>;
 
 function failureDetail(failure: RuntimeOperationFailure): string {
@@ -86,6 +93,7 @@ function isRetryableTabNotFound(response: OrcaJsonResponse): boolean {
 export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   readonly #options: OrcaRuntimeAdapterOptions;
   readonly #ownedForStop = new Map<string, RuntimeWorkerIdentity>();
+  readonly #stopWorkspace = new Map<string, 'active' | string>();
   readonly #assignmentOwned = new Map<string, RuntimeWorkerIdentity>();
   readonly #unprovenOwnedPresence = new Map<string, UnprovenOwnedPresence>();
   readonly #runJson: typeof runOrcaJson;
@@ -112,6 +120,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     reason: string,
   ): RuntimeOperationFailure {
     this.#ownedForStop.delete(worker.id);
+    this.#stopWorkspace.delete(worker.id);
     this.#unprovenOwnedPresence.set(worker.id, { identity: worker, reason });
     return runtimeFailure('stop_worker', reason);
   }
@@ -122,17 +131,48 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   ): RuntimeResult<RuntimeWorker | null> {
     const current = super.findWorker(worker, options);
     if (current.status !== 'ok') return current;
-    if (current.value) return current;
+    if (current.value) {
+      return current;
+    }
 
-    // A successful list census can prove the exact identity is absent, but a
-    // handle reuse must remain fail-closed. The handle lookup only upgrades a
-    // null list result when it positively observes a current identity.
-    const currentById = super.findWorkerById(worker.id, options);
-    if (currentById.status === 'ok' && currentById.value) {
-      if (sameRuntimeWorker(currentById.value.identity, worker)) {
-        return currentById;
+    const workspace = this.#stopWorkspace.get(worker.id) ?? 'active';
+    const response = this.#run<OrcaTerminalListResult>(
+      ['terminal', 'list', '--worktree', workspace],
+      options,
+    );
+    if (!response.ok) {
+      return runtimeFailure('find_worker', neutralFailureReason(response));
+    }
+
+    const terminals = response.result?.terminals;
+    const totalCount = response.result?.totalCount;
+    if (
+      !Array.isArray(terminals)
+      || response.result?.truncated !== false
+      || !Number.isInteger(totalCount)
+      || totalCount !== terminals.length
+    ) {
+      return runtimeFailure('find_worker', 'runtime_worker_list_incomplete');
+    }
+
+    for (const terminal of terminals) {
+      const id = terminal.handle?.trim();
+      const generation = terminal.incarnationId?.trim();
+      const workspacePath = terminal.worktreePath?.trim();
+      if (!id || !generation || !workspacePath) {
+        return runtimeUnsupported('find_worker', 'runtime_worker_identity_missing');
       }
-      return runtimeFailure('find_worker', 'worker_generation_mismatch');
+      if (id !== worker.id) continue;
+      const current: RuntimeWorker = {
+        identity: { runtime: 'orca', id, generation },
+        workspacePath,
+        title: typeof terminal.title === 'string' ? terminal.title : null,
+        provenance: 'external',
+      };
+      if (!sameRuntimeWorker(current.identity, worker)) {
+        return runtimeFailure('find_worker', 'worker_generation_mismatch');
+      }
+      return { status: 'ok', value: this.#assignmentProvenance(current) };
     }
     return { status: 'ok', value: null };
   }
@@ -249,6 +289,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (result.status === 'ok') {
       this.#unprovenOwnedPresence.delete(result.value.identity.id);
       this.#ownedForStop.set(result.value.identity.id, result.value.identity);
+      this.#stopWorkspace.set(result.value.identity.id, input.workspace ?? 'active');
     }
     return result;
   }
@@ -271,6 +312,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     }
     if (current.value === null) {
       this.#ownedForStop.delete(worker.id);
+      this.#stopWorkspace.delete(worker.id);
       return { status: 'ok', value: { stopped: true } };
     }
 
@@ -284,6 +326,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (!response.ok) {
       const presence = this.#findOwnedPresence(worker, options);
       if (presence.status === 'ok' && presence.value === null) {
+        this.#stopWorkspace.delete(worker.id);
         return { status: 'ok', value: { stopped: true } };
       }
       if (presence.status !== 'ok') {
@@ -299,11 +342,13 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
           options,
         );
         if (retry.ok) {
+          this.#stopWorkspace.delete(worker.id);
           return { status: 'ok', value: { stopped: true } };
         }
 
         const retryPresence = this.#findOwnedPresence(worker, options);
         if (retryPresence.status === 'ok' && retryPresence.value === null) {
+          this.#stopWorkspace.delete(worker.id);
           return { status: 'ok', value: { stopped: true } };
         }
         if (retryPresence.status !== 'ok') {
@@ -324,6 +369,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       );
     }
 
+    this.#stopWorkspace.delete(worker.id);
     return { status: 'ok', value: { stopped: true } };
   }
 

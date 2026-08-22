@@ -105,6 +105,8 @@ describe('Orca task adapter destructive operations', () => {
           return {
             ok: true,
             result: {
+              totalCount: 1,
+              truncated: false,
               terminals: [{
                 handle,
                 incarnationId: generation,
@@ -165,6 +167,8 @@ describe('Orca task adapter destructive operations', () => {
           return {
             ok: true,
             result: {
+              totalCount: 1,
+              truncated: false,
               terminals: [{
                 handle,
                 incarnationId: generation,
@@ -256,6 +260,8 @@ describe('Orca task adapter destructive operations', () => {
           return {
             ok: true,
             result: {
+              totalCount: 1,
+              truncated: false,
               terminals: [{
                 handle,
                 incarnationId: generation,
@@ -452,7 +458,7 @@ describe('Issue #1441 stale/reused runtime identity', () => {
   });
 });
 
-type ClosePresence = 'present' | 'absent' | 'mismatch' | 'unavailable';
+type ClosePresence = 'present' | 'absent' | 'mismatch' | 'unavailable' | 'truncated';
 
 function boundedCloseFixture(input: {
   readonly closeResponses: readonly OrcaJsonResponse[];
@@ -495,10 +501,17 @@ function boundedCloseFixture(input: {
           error: { code: 'inventory_unavailable', message: 'inventory unavailable' },
         };
       }
-      if (state === 'absent') return { ok: true, result: { terminals: [] } };
+      if (state === 'absent') {
+        return { ok: true, result: { terminals: [], totalCount: 0, truncated: false } };
+      }
+      if (state === 'truncated') {
+        return { ok: true, result: { terminals: [], totalCount: 1, truncated: true } };
+      }
       return {
         ok: true,
         result: {
+          totalCount: 1,
+          truncated: false,
           terminals: [{
             handle,
             incarnationId: state === 'mismatch' ? 'other-generation' : generation,
@@ -602,6 +615,20 @@ describe('Orca task adapter bounded tab-not-found close retry', () => {
       status: 'failed',
       operation: 'stop_worker',
       reason: expect.stringContaining('unproven_already_absent;'),
+    });
+    expect(fixture.closeCalls()).toBe(1);
+  });
+
+  it('fails closed when post-error inventory is truncated', () => {
+    const fixture = boundedCloseFixture({
+      closeResponses: [tabNotFound()],
+      presence: ['present', 'truncated'],
+    });
+
+    expect(fixture.adapter.stopWorker(fixture.worker)).toMatchObject({
+      status: 'failed',
+      operation: 'stop_worker',
+      reason: expect.stringContaining('runtime_worker_list_incomplete'),
     });
     expect(fixture.closeCalls()).toBe(1);
   });
