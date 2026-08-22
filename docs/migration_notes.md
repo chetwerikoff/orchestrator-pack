@@ -1,5 +1,71 @@
 # Migration notes
 
+## Continuation-safe supervised Task launch assistant (Issue #1479)
+
+### What changed
+
+New Cursor/Orca manager and T1/T2/T3 starts use the pack-owned
+`scripts/pr2-foundation/supervised-task-launch-assistant.ts` composition. The
+launcher is an **assistant**, not a lifecycle blocker, scheduler, retry service,
+or second start authority. It performs only the shared mechanical preparation
+around the existing successful-start boundary. A launch is ready only when the
+existing `runSupervisedWorkerStart` returns `ready_and_assignment_bound`; the
+#1441 task/Dispatch WorkerAssignment identity remains authoritative.
+
+For every genuinely fresh known Task, the assistant proves `dispatch === null`
+before worktree/terminal effects and again immediately before supervised-start.
+Managers additionally prove their explicitly supplied current Run, and an
+existing manager Task must be proven to belong to that exact Run before effects.
+A manager brief is one caller-serialized Orca Task-create mutation; provider
+unknown outcomes are recovered only by replaying that same mutation with its
+exact provider request id.
+
+The v1 TUI/profile blocking contract deliberately changes. PACK no longer claims
+that every launch has a machine-readable proof of the visible Cursor model,
+effort, and empty composer because the production RuntimeAdapter/Orca contracts
+do not expose such a structured witness. The machine-enforced boundary is now:
+exact `cursor-agent`; selected model/effort applicability checked before spawn;
+selected stable profile variables inherited by a child; one RuntimeAdapter-created
+internal terminal with exact `{runtime,id,generation}` identity in the exact
+workspace; and `idle` RuntimeAdapter liveness before delivery. PACK does not
+scrape raw screen/title/preview/composer text to recreate the retired witness.
+A known contrary observation still fails closed.
+
+### Operator adoption
+
+1. Adopt the merged PACK revision through the normal supported deployment/recycle
+   path. Do not copy concrete executor profile values into the repository.
+2. Export exactly the matching `PACK_EXECUTOR_<WORK_CLASS>_{AGENT,MODEL,EFFORT}`
+   names into the launching process before invoking the assistant. The helper
+   reads the live environment; it does not source or persist an operator-local
+   profile file.
+3. Invoke the canonical Node 22 TypeScript wrapper for
+   `supervised-task-launch-assistant.ts`. T1/T2/T3 use an exact Task and intended
+   worktree input; every manager supplies `--run` and exactly one of `--task` or
+   caller-serialized `--manager-brief`. A GitHub Issue is optional for manager
+   authoring work.
+4. Treat `outcome=ready` only as the projection of
+   `ready_and_assignment_bound`. Treat `outcome=continue` as a recoverable launch
+   result and execute only its named legal `nextAction`; do not mark the parent
+   Task blocked, completed, or done merely because launch did not reach ready.
+5. For provider outcome-unknown Task-create or worker-start, reuse the exact
+   returned provider request id and replay the same mutation with
+   `--retry-request`. Never substitute a fresh brief, terminal, or worker-start
+   while the original mutation remains unresolved.
+6. After adoption, perform one controlled legal Cursor/Orca launch and visually
+   confirm the expected selected profile and clean first-turn state. This is a
+   one-time adoption smoke for provider drift, not a per-launch PACK parser or
+   durable authority. If the provider visibly ignores the validated profile,
+   stop adoption and fix the provider/launch contract.
+
+### Rollback
+
+Rollback is a source-control revert followed by the normal supported PACK
+adoption/recycle path. Do not preserve this helper by adding a second retry
+store, compatibility lifecycle state, alternate start authority, screen parser,
+or state conversion. Existing WorkerAssignment and provider mutation evidence
+remain subject to the code revision that owns them.
+
 ## Runtime identity and completion-authority hard cut (Issue #1441)
 
 ### What changed
@@ -137,8 +203,7 @@ The producer records that absence by observing the canonical paths, empty epoch
 authority, registered-child census, legacy-writer census, and live repository.
 Its greenfield evidence includes a readiness observation from the registered
 runtime adapter, rather than a retired preflight or app-state-version claim. The
-heartbeat timestamp comes from the live observation at production time rather
-than source-file mtime.
+heartbeat timestamp comes from the live observation at production time rather than source-file mtime.
 It does not synthesize dormant-layer defaults. A partially present set of those
 inputs is ambiguous and fails closed. A machine with the complete artifact set
 continues through the existing artifact-backed foundation proof.
