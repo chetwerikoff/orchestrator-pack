@@ -1,6 +1,6 @@
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { runProcess } from '../kernel/subprocess.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import type { SupervisedWorkerStartResult } from './supervised-worker-start.ts';
 import {
@@ -425,16 +425,23 @@ describe('supervised Task launch assistant', () => {
     expect(() => parseLaunchAssistantCli(argv)).toThrow();
   });
 
-  it('CLI entrypoint exits non-zero for semantic shape rejected before dependencies/effects', () => {
+  it('CLI entrypoint exits non-zero for semantic shape rejected before dependencies/effects', async () => {
     const entrypoint = fileURLToPath(new URL('./supervised-task-launch-assistant.ts', import.meta.url));
-    const execution = spawnSync(process.execPath, [
-      '--experimental-strip-types', entrypoint,
-      '--repository', 'chetwerikoff/orchestrator-pack',
-      '--work-class', 'manager',
-      '--run', 'run-1',
-      '--manager-brief', 'brief',
-    ], { encoding: 'utf8' });
-    expect(execution.status).toBe(1);
+    const execution = await runProcess({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types', entrypoint,
+        '--repository', 'chetwerikoff/orchestrator-pack',
+        '--work-class', 'manager',
+        '--run', 'run-1',
+        '--manager-brief', 'brief',
+      ],
+      inheritParentEnv: true,
+      allowEmptyStdout: true,
+      timeoutMs: 5_000,
+    });
+    expect(execution.ok).toBe(false);
+    expect(execution.exitCode).toBe(1);
     expect(execution.stdout).toBe('');
     expect(execution.stderr).toMatch(/worktree/u);
   });
