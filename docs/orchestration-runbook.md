@@ -495,6 +495,8 @@ The existing `liveCandidates()` path remains limited to `ready_for_review` worke
 
 The registered production owner remains `scripts/lib/orchestrator-side-process-supervisor.ts::runSupervisor` with the existing `pr2-scheduler` child. Do not replace bounded `scheduler.ts tick` children with `runLoop()`, another daemon, timer, watcher, or watchdog.
 
+The same `pr2-scheduler` tick also submits an unsent headed Cursor composer when it contains only the exact Orca mailbox poke, after 10 seconds of unchanged composer text. Quiet and submitted fingerprints persist across tick processes. A crashed tick is restarted by the existing supervisor crash-backoff; do not add a second registry child or a long-lived CLI watcher beside a live supervisor. Manual/smoke CLI remains `node --experimental-strip-types scripts/cursor-unsent-composer-submit.ts` (`--once` for one scan).
+
 ## Durable `orchestrator_required` handoff
 
 The named carrier is:

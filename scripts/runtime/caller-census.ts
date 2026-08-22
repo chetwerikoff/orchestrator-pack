@@ -231,6 +231,13 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Contains only the Node pr2-scheduler child.',
   },
   {
+    surface: 'scripts/cursor-unsent-composer-submit.ts',
+    operations: ['runtime-composition', 'list', 'read', 'send'],
+    kind: 'runtime-port',
+    disposition: 'use-runtime-interface',
+    note: 'Lists and reads Cursor terminals through RuntimeAdapter, then performs one submitOnly dispatch for an exact stable Orca poke.',
+  },
+  {
     surface: 'scripts/json-producers/worker-status-report.ts',
     operations: ['runtime-composition', 'list'],
     kind: 'runtime-port',

@@ -12,6 +12,8 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // measurement, so timing it inside the pre-topology pass can create manifest
   // drift that the real light lane correctly owns.
   'scripts/reachability-purge.test.ts': 120,
+  // Issue #1489: fast composer-submit unit coverage; keep the 32-file bound.
+  'scripts/cursor-unsent-composer-submit.test.ts': 1,
   'scripts/cutover/issue-928.test.ts': 120,
   // Issue #1031 light-lane GPT reviewer tests: fast unit coverage without runtime-history
   // harvest yet; fixed estimates keep pre-topology measurement within the 32-file bound.
