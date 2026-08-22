@@ -42,6 +42,7 @@ function canonicalVerdict(
   revision = REVISION,
   invocationId = 'invocation-001',
   issueNumber = ISSUE,
+  invocationEchoLabel: 'INVOCATION_ID' | 'INVOCATION_ID_TO_ECHO' = 'INVOCATION_ID_TO_ECHO',
 ): string {
   return [
     `Read revision: #${issueNumber} ${revision}`,
@@ -50,7 +51,7 @@ function canonicalVerdict(
     'NO_FINDINGS',
     'SIMPLIFICATION_CLEAN',
     'FINDING_COUNT: 0',
-    `INVOCATION_ID: ${invocationId}`,
+    `${invocationEchoLabel}: ${invocationId}`,
     '',
   ].join('\n');
 }
@@ -119,6 +120,7 @@ function fixture(input: {
   withTurnResult?: boolean;
   withCapture?: boolean;
   captureText?: string;
+  invocationEchoLabel?: 'INVOCATION_ID' | 'INVOCATION_ID_TO_ECHO';
 } = {}) {
   const intakeRevision = input.intakeRevision ?? REVISION;
   const sourceRevision = input.sourceRevision ?? intakeRevision;
@@ -126,6 +128,7 @@ function fixture(input: {
   const reviewerSource = input.reviewerSource === undefined
     ? 'browser-gpt#capture=final-node/v1'
     : input.reviewerSource;
+  const invocationEchoLabel = input.invocationEchoLabel ?? 'INVOCATION_ID_TO_ECHO';
   const dir = mkdtempSync(join(tmpdir(), 'opk-1385-artifacts-'));
   tempDirs.push(dir);
   const intakePath = join(dir, 'tier-intake.json');
@@ -136,7 +139,7 @@ function fixture(input: {
   const turnResultPath = join(dir, 'turn-result-001.json');
   const outputDir = join(dir, 'output');
   const episode = deriveReviewEpisodeId(TASK, intakeRevision);
-  const body = input.captureText ?? canonicalVerdict(sourceRevision);
+  const body = input.captureText ?? canonicalVerdict(sourceRevision, 'invocation-001', ISSUE, invocationEchoLabel);
 
   writeFileSync(intakePath, JSON.stringify({
     schema: 'tier-intake/v1',
@@ -149,7 +152,7 @@ function fixture(input: {
   writeFileSync(authorPath, JSON.stringify({ schema: AUTHOR_DISPOSITIONS_SCHEMA, findings: [] }));
   const reviewComments = Array.from({ length: 3 }, (_, index) => {
     const invocationId = `architectural-review-invocation-${String(index + 1).padStart(2, '0')}`;
-    return comment(canonicalVerdict(sourceRevision, invocationId), { id: COMMENT_ID + 100 + index });
+    return comment(canonicalVerdict(sourceRevision, invocationId, ISSUE, invocationEchoLabel), { id: COMMENT_ID + 100 + index });
   });
   const reviewInvocations = reviewComments.map((reviewComment, index) => {
     const ordinal = index + 1;
@@ -619,6 +622,31 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.ok, result.errors.join('\n')).toBe(true);
     const status = inspect(input);
     expect(status.ok, status.missing.map((item) => item.reason).join('\n')).toBe(true);
+  });
+
+  it('credentials a TO_ECHO-only comment with no INVOCATION_ID line', () => {
+    const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
+    expect(input.body).toMatch(/^INVOCATION_ID_TO_ECHO: invocation-001$/m);
+    expect(input.body).not.toMatch(/^INVOCATION_ID: /m);
+    for (const reviewComment of input.reviewComments) {
+      expect(String(reviewComment.body)).toMatch(/^INVOCATION_ID_TO_ECHO: /m);
+      expect(String(reviewComment.body)).not.toMatch(/^INVOCATION_ID: /m);
+    }
+    const result = produce(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('still credentials an INVOCATION_ID comment (comment 5381523513 class)', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+      invocationEchoLabel: 'INVOCATION_ID',
+    });
+    expect(input.body).toMatch(/^INVOCATION_ID: invocation-001$/m);
+    expect(input.body).not.toMatch(/INVOCATION_ID_TO_ECHO:/);
+    const result = produce(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
   it('check-artifacts still requires capture and turn-result evidence for successful transport', () => {
