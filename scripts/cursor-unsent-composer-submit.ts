@@ -357,7 +357,8 @@ export function submitUnsentCursorComposer(
   }
   const requested = (input.terminals ?? []).map((handle) => handle.trim()).filter(Boolean);
   const workers = requested.length === 0
-    ? listed.workers.filter((worker) => requested.includes(worker.identity.id));
+    ? listed.workers
+    : listed.workers.filter((worker) => requested.includes(worker.identity.id));
   const terminals = workers.map((worker) => submitOne(worker, { ...input, watch }, deps, state));
   persistSubmitted(state, deps.sentStorePath);
   return {
