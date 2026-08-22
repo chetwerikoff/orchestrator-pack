@@ -132,6 +132,7 @@
     "scripts/pr2-foundation/scheduler-post-review-smoke.test.ts": "light",
     "scripts/pr2-foundation/scheduler-process-integration.test.ts": "heavy",
     "scripts/pr2-foundation/scheduler-repository-identity.test.ts": "light",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts": "light",
     "scripts/pr2-foundation/supervised-worker-start.test.ts": "light",
     "scripts/pr2-foundation/terminalized-port.test.ts": "light",
     "scripts/pr2-foundation/worker-notification-compat.test.ts": "light",

@@ -17,6 +17,7 @@ import {
 import {
   runOrcaJson,
   type OrcaJsonResponse,
+  type OrcaTerminalSummary,
   type OrcaWorktreeRemoveResult,
   type OrcaWorktreeShow,
 } from './native.ts';
@@ -48,6 +49,12 @@ type OrcaWorkerShowResult = Readonly<{
   }> | null;
 }>;
 
+type OrcaTerminalListResult = Readonly<{
+  terminals?: OrcaTerminalSummary[];
+  totalCount?: number;
+  truncated?: boolean;
+}>;
+
 function failureDetail(failure: RuntimeOperationFailure): string {
   return `${failure.operation}:${failure.status}:${failure.reason}`;
 }
@@ -68,18 +75,25 @@ function attachNativeRuntimeError(
   return failure;
 }
 
+function isRetryableTabNotFound(response: OrcaJsonResponse): boolean {
+  return response.error?.code?.trim() === 'runtime_error'
+    && response.error?.message?.trim() === 'tab_not_found';
+}
+
 /**
  * Production Orca adapter for task lifecycle callers.
  *
- * Orca closes by opaque handle. The adapter permits one close attempt only for
- * an identity spawned by this adapter instance and revalidated by exact runtime
- * + id + generation immediately before the destructive call. Authority is
- * consumed before transport, so success, explicit rejection, timeout, empty
- * output, invalid JSON, and every other ambiguous result can never be replayed.
+ * Orca closes by opaque handle. The adapter permits one close attempt for an
+ * identity spawned by this adapter instance and revalidated by exact runtime +
+ * id + generation immediately before the destructive call. The sole bounded
+ * exception is native runtime_error/tab_not_found with immediate exact presence:
+ * one retry of that same consumed authority is allowed. Authority is consumed
+ * before transport, so no caller can replay either attempt.
  */
 export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   readonly #options: OrcaRuntimeAdapterOptions;
   readonly #ownedForStop = new Map<string, RuntimeWorkerIdentity>();
+  readonly #stopWorkspace = new Map<string, 'active' | string>();
   readonly #assignmentOwned = new Map<string, RuntimeWorkerIdentity>();
   readonly #unprovenOwnedPresence = new Map<string, UnprovenOwnedPresence>();
   readonly #runJson: typeof runOrcaJson;
@@ -106,8 +120,73 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     reason: string,
   ): RuntimeOperationFailure {
     this.#ownedForStop.delete(worker.id);
+    this.#stopWorkspace.delete(worker.id);
     this.#unprovenOwnedPresence.set(worker.id, { identity: worker, reason });
     return runtimeFailure('stop_worker', reason);
+  }
+
+  #findOwnedPresence(
+    worker: RuntimeWorkerIdentity,
+    options: RuntimeCallOptions,
+    strict = false,
+  ): RuntimeResult<RuntimeWorker | null> {
+    const current = super.findWorker(worker, options);
+    if (!strict && current.status !== 'ok') return current;
+    if (!strict && current.status === 'ok') return current;
+    if (
+      current.status === 'ok'
+      && current.value
+      && !sameRuntimeWorker(current.value.identity, worker)
+    ) {
+      // The worker-smoke identity stabilizer deliberately returns its
+      // independently probed identity from the patched base lookup.
+      return current;
+    }
+    const workspace = this.#stopWorkspace.get(worker.id) ?? 'active';
+    const response = this.#run<OrcaTerminalListResult>(
+      ['terminal', 'list', '--worktree', workspace],
+      options,
+    );
+    if (!response.ok) {
+      return runtimeFailure('find_worker', neutralFailureReason(response));
+    }
+
+    const terminals = response.result?.terminals;
+    const totalCount = response.result?.totalCount;
+    if (
+      !Array.isArray(terminals)
+      || response.result?.truncated !== false
+      || !Number.isInteger(totalCount)
+      || totalCount !== terminals.length
+    ) {
+      return runtimeFailure('find_worker', 'runtime_worker_list_incomplete');
+    }
+
+    const matches: RuntimeWorker[] = [];
+    for (const terminal of terminals) {
+      const id = terminal.handle?.trim();
+      const generation = terminal.incarnationId?.trim();
+      const workspacePath = terminal.worktreePath?.trim();
+      if (!id || !generation || !workspacePath) {
+        return runtimeUnsupported('find_worker', 'runtime_worker_identity_missing');
+      }
+      if (id !== worker.id) continue;
+      matches.push({
+        identity: { runtime: 'orca', id, generation },
+        workspacePath,
+        title: typeof terminal.title === 'string' ? terminal.title : null,
+        provenance: 'external',
+      });
+    }
+    if (matches.length > 1) {
+      return runtimeFailure('find_worker', 'worker_identity_ambiguous');
+    }
+    const match = matches[0];
+    if (match && !sameRuntimeWorker(match.identity, worker)) {
+      return runtimeFailure('find_worker', 'worker_generation_mismatch');
+    }
+    if (match) return { status: 'ok', value: this.#assignmentProvenance(match) };
+    return { status: 'ok', value: null };
   }
 
   #assignmentProvenance(worker: RuntimeWorker): RuntimeWorker {
@@ -222,6 +301,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (result.status === 'ok') {
       this.#unprovenOwnedPresence.delete(result.value.identity.id);
       this.#ownedForStop.set(result.value.identity.id, result.value.identity);
+      this.#stopWorkspace.set(result.value.identity.id, input.workspace ?? 'active');
     }
     return result;
   }
@@ -235,7 +315,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('stop_worker', 'worker_not_owned_by_runtime_instance');
     }
 
-    const current = super.findWorker(worker, options);
+    const current = this.#findOwnedPresence(worker, options);
     if (current.status !== 'ok') {
       return this.#recordUnprovenOwnedPresence(
         worker,
@@ -244,6 +324,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     }
     if (current.value === null) {
       this.#ownedForStop.delete(worker.id);
+      this.#stopWorkspace.delete(worker.id);
       return { status: 'ok', value: { stopped: true } };
     }
 
@@ -255,8 +336,13 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       options,
     );
     if (!response.ok) {
-      const presence = super.findWorker(worker, options);
+      const presence = this.#findOwnedPresence(
+        worker,
+        options,
+        isRetryableTabNotFound(response),
+      );
       if (presence.status === 'ok' && presence.value === null) {
+        this.#stopWorkspace.delete(worker.id);
         return { status: 'ok', value: { stopped: true } };
       }
       if (presence.status !== 'ok') {
@@ -266,12 +352,40 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
         );
         return attachNativeRuntimeError(failure, response);
       }
+      if (isRetryableTabNotFound(response)) {
+        const retry = this.#run(
+          ['terminal', 'close', '--terminal', worker.id],
+          options,
+        );
+        if (retry.ok) {
+          this.#stopWorkspace.delete(worker.id);
+          return { status: 'ok', value: { stopped: true } };
+        }
+
+        const retryPresence = this.#findOwnedPresence(worker, options, true);
+        if (retryPresence.status === 'ok' && retryPresence.value === null) {
+          this.#stopWorkspace.delete(worker.id);
+          return { status: 'ok', value: { stopped: true } };
+        }
+        if (retryPresence.status !== 'ok') {
+          const failure = this.#recordUnprovenOwnedPresence(
+            worker,
+            `unproven_already_absent;close_error=${neutralFailureReason(retry)};inventory_error=${failureDetail(retryPresence)}`,
+          );
+          return attachNativeRuntimeError(failure, retry);
+        }
+        return attachNativeRuntimeError(
+          runtimeFailure('stop_worker', neutralFailureReason(retry)),
+          retry,
+        );
+      }
       return attachNativeRuntimeError(
         runtimeFailure('stop_worker', neutralFailureReason(response)),
         response,
       );
     }
 
+    this.#stopWorkspace.delete(worker.id);
     return { status: 'ok', value: { stopped: true } };
   }
 
