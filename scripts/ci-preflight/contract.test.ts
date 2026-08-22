@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TABLE, INVENTORY, WORKFLOW_BLOB_SHA, WORKFLOW_CONTENT_SHA256, workflowCoverage, nativeOutput } from './contract.ts';
+import { TABLE, INVENTORY, WORKFLOW_BLOB_SHA, WORKFLOW_CONTENT_SHA256, workflowCoverage, workflowHashes, nativeOutput } from './contract.ts';
 import { directDependencyExecutable, pesterProbeEnvironment } from './cli.ts';
 
 describe('ci preflight contract', () => {
@@ -22,8 +22,9 @@ describe('ci preflight contract', () => {
   });
 
   it('binds both workflow identity hashes and canonical empty output', () => {
-    expect(WORKFLOW_BLOB_SHA).toMatch(/^[0-9a-f]{40}$/);
-    expect(WORKFLOW_CONTENT_SHA256).toMatch(/^[0-9a-f]{64}$/);
+    const hashes = workflowHashes(process.cwd());
+    expect(WORKFLOW_BLOB_SHA).toBe(hashes.blob);
+    expect(WORKFLOW_CONTENT_SHA256).toBe(hashes.content);
     expect(nativeOutput('preflight-probe').stdout.sha256).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
   });
 
