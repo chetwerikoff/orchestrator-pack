@@ -61,7 +61,7 @@ proof and fails closed when that proof is missing.
 
 | `children[].id` | Script | Cadence (s) | Responsibility |
 | --- | --- | ---: | --- |
-| `pr2-scheduler` | `pr2-foundation/scheduler.ts` | 5 | Bounded fleet supervision, review-start scheduling, and unsent Cursor poke submit |
+| `pr2-scheduler` | `pr2-foundation/scheduler.ts` | 5 | Unsent Cursor poke submit, bounded fleet supervision, and review-start scheduling |
 
 ### pr2-scheduler
 
@@ -100,9 +100,11 @@ identity or a deleted PowerShell entrypoint is configuration drift.
 
 ### F1 — normal operation
 
-The supervisor owns one bounded `pr2-scheduler` child at a time. The child
-performs one epoch-gated tick and exits; the supervisor starts the next child
-according to the registered five-second cadence.
+The supervisor owns one bounded `pr2-scheduler` child at a time. The child runs
+the unsent Cursor poke submit pass concurrently with one epoch-gated fleet tick,
+waits for both passes to settle, then preserves any fleet failure. A fleet-phase
+failure therefore cannot cancel or skip the submit pass. The supervisor starts
+the next child according to the registered five-second cadence.
 
 ### F2 — child crash or stall
 
