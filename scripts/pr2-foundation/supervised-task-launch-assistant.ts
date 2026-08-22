@@ -42,6 +42,12 @@ export interface NextAction {
     | 'reconcile_supervised_start';
   readonly requestId?: string;
   readonly command?: string;
+  readonly replay?: {
+    readonly operation: 'orca_orchestration_task_create';
+    readonly runId: string;
+    readonly requestId: string;
+    readonly inputSource: 'caller_held_manager_brief';
+  };
   readonly note?: string;
 }
 
@@ -458,6 +464,35 @@ async function child(
   return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error };
 }
 
+export async function resolveLiveExecutorProfile(
+  workClass: LaunchWorkClass,
+  inheritedEnv: Readonly<NodeJS.ProcessEnv>,
+  execute: ChildExecutor,
+): Promise<EdgeResult<ExecutorProfile>> {
+  const resolved = resolveExecutorProfile(workClass, inheritedEnv);
+  if (resolved.status !== 'ok') return resolved;
+  const listed = await execute(['cursor-agent', '--list-models']);
+  if (!listed.ok || !cursorModelListContains(listed.stdout, resolved.value.modelId)) return {
+    status: 'continue',
+    cause: listed.ok ? 'executor_profile_model_unavailable' : 'executor_profile_applicability_unproven',
+    actor: 'operator',
+    evidence: { profileVariables: resolved.value.names },
+    nextAction: { kind: 'repair_executor_profile', note: 'select a model/effort combination present in cursor-agent --list-models' },
+  };
+  const inherited = await execute([
+    process.execPath,
+    '--input-type=module',
+    '-e',
+    'const n=process.argv.slice(1);process.exit(n.every((k)=>typeof process.env[k]==="string"&&process.env[k].trim())?0:1)',
+    ...resolved.value.names,
+  ]);
+  return inherited.ok ? resolved : {
+    status: 'continue', cause: 'executor_profile_child_inheritance_unproven', actor: 'operator',
+    evidence: { profileVariables: resolved.value.names },
+    nextAction: { kind: 'repair_executor_profile', note: 'export the selected stable profile variables into the launching process' },
+  };
+}
+
 function envelope(execution: ChildResult): Record<string, unknown> | null {
   try {
     const value: unknown = JSON.parse(execution.stdout);
@@ -478,6 +513,39 @@ function mutationRequestId(value: Record<string, unknown> | null): string {
   const requestId = text(data?.requestId);
   if (orchestrationRequestId && requestId && orchestrationRequestId !== requestId) return '';
   return orchestrationRequestId || requestId;
+}
+
+export async function createManagerTaskWithOrca(
+  runId: string,
+  brief: string,
+  execute: ChildExecutor,
+): Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>> {
+  const value = envelope(await execute([
+    'orca', 'orchestration', 'task-create', '--spec', brief, '--run', runId, '--json',
+  ]));
+  const result = resultRecord(value);
+  const task = result && record(result.task) ? result.task : null;
+  const taskId = text(task?.id);
+  const status = text(task?.status);
+  if (taskId && status) return { status: 'ok', value: { taskId, status } };
+  const requestId = mutationRequestId(value);
+  return requestId ? {
+    status: 'continue', cause: 'manager_task_create_outcome_unknown', actor: 'provider', evidence: { requestId },
+    nextAction: {
+      kind: 'retry_manager_task_create',
+      requestId,
+      replay: {
+        operation: 'orca_orchestration_task_create',
+        runId,
+        requestId,
+        inputSource: 'caller_held_manager_brief',
+      },
+      note: 'replay the exact original Task-create with the caller-held original brief and this exact --retry-request id; the brief payload is intentionally not echoed',
+    },
+  } : {
+    status: 'continue', cause: 'manager_task_create_failed_or_unknown', actor: 'provider', evidence: {},
+    nextAction: { kind: 'reconcile_manager_task', note: 'reconcile current Orca Task authority; no new brief mutation is authorized' },
+  };
 }
 
 function repoSlug(remote: string): string {
@@ -615,30 +683,11 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       };
       return { status: 'ok', value: true };
     },
-    resolveProfile: async (workClass, inheritedEnv) => {
-      const resolved = resolveExecutorProfile(workClass, inheritedEnv);
-      if (resolved.status !== 'ok') return resolved;
-      const listed = await child(['cursor-agent', '--list-models'], cwd, inheritedEnv);
-      if (!listed.ok || !cursorModelListContains(listed.stdout, resolved.value.modelId)) return {
-        status: 'continue',
-        cause: listed.ok ? 'executor_profile_model_unavailable' : 'executor_profile_applicability_unproven',
-        actor: 'operator',
-        evidence: { profileVariables: resolved.value.names },
-        nextAction: { kind: 'repair_executor_profile', note: 'select a model/effort combination present in cursor-agent --list-models' },
-      };
-      const inherited = await child([
-        process.execPath,
-        '--input-type=module',
-        '-e',
-        'const n=process.argv.slice(1);process.exit(n.every((k)=>typeof process.env[k]==="string"&&process.env[k].trim())?0:1)',
-        ...resolved.value.names,
-      ], cwd, inheritedEnv);
-      return inherited.ok ? resolved : {
-        status: 'continue', cause: 'executor_profile_child_inheritance_unproven', actor: 'operator',
-        evidence: { profileVariables: resolved.value.names },
-        nextAction: { kind: 'repair_executor_profile', note: 'export the selected stable profile variables into the launching process' },
-      };
-    },
+    resolveProfile: (workClass, inheritedEnv) => resolveLiveExecutorProfile(
+      workClass,
+      inheritedEnv,
+      (args, timeoutMs) => child(args, cwd, inheritedEnv, timeoutMs),
+    ),
     observeManagerRun: async (runId) => {
       const result = resultRecord(envelope(await child(['orca', 'orchestration', 'run-current', '--json'], cwd, env)));
       const observed = result && record(result.run) ? text(result.run.id) : '';
@@ -667,28 +716,11 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
         nextAction: { kind: 'reconcile_manager_task', note: 'prove exactly one requested Task in the exact Run' },
       };
     },
-    createManagerTask: async (runId, brief) => {
-      const value = envelope(await child([
-        'orca', 'orchestration', 'task-create', '--spec', brief, '--run', runId, '--json',
-      ], cwd, env));
-      const result = resultRecord(value);
-      const task = result && record(result.task) ? result.task : null;
-      const taskId = text(task?.id);
-      const status = text(task?.status);
-      if (taskId && status) return { status: 'ok', value: { taskId, status } };
-      const requestId = mutationRequestId(value);
-      return requestId ? {
-        status: 'continue', cause: 'manager_task_create_outcome_unknown', actor: 'provider', evidence: { requestId },
-        nextAction: {
-          kind: 'retry_manager_task_create', requestId,
-          command: `orca orchestration task-create --spec <same-manager-brief> --run ${quote(runId)} --retry-request ${quote(requestId)} --json`,
-          note: 'reuse the exact caller-held original brief; its payload is intentionally not echoed',
-        },
-      } : {
-        status: 'continue', cause: 'manager_task_create_failed_or_unknown', actor: 'provider', evidence: {},
-        nextAction: { kind: 'reconcile_manager_task', note: 'reconcile current Orca Task authority; no new brief mutation is authorized' },
-      };
-    },
+    createManagerTask: (runId, brief) => createManagerTaskWithOrca(
+      runId,
+      brief,
+      (args, timeoutMs) => child(args, cwd, env, timeoutMs),
+    ),
     observeDispatch: async (taskId) => dispatchEdge(envelope(await child([
       'orca', 'orchestration', 'dispatch-show', '--task', taskId, '--json',
     ], cwd, env))),
@@ -699,31 +731,60 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
   };
 }
 
-function option(argv: readonly string[], name: string): string {
-  const indexes = argv.map((value, index) => value === name ? index : -1).filter((index) => index >= 0);
-  if (indexes.length !== 1) return '';
-  const value = argv[indexes[0]! + 1] ?? '';
-  return value.startsWith('--') ? '' : value;
+const LAUNCH_CLI_OPTIONS = new Set([
+  '--repository',
+  '--work-class',
+  '--issue-number',
+  '--run',
+  '--task',
+  '--manager-brief',
+  '--worktree',
+  '--worktree-name',
+  '--base-branch',
+]);
+
+function launchCliOptions(argv: readonly string[]): ReadonlyMap<string, string> {
+  const parsed = new Map<string, string>();
+  for (let index = 0; index < argv.length; index += 2) {
+    const name = argv[index] ?? '';
+    if (!LAUNCH_CLI_OPTIONS.has(name)) throw new Error(`unknown launch option: ${name || '<empty>'}`);
+    if (parsed.has(name)) throw new Error(`duplicate launch option: ${name}`);
+    const value = argv[index + 1];
+    if (value === undefined || value.startsWith('--') || !value.trim()) throw new Error(`${name} requires a non-empty value`);
+    parsed.set(name, value);
+  }
+  return parsed;
 }
 
 export function parseLaunchAssistantCli(argv: readonly string[]): LaunchInput {
-  const workClass = option(argv, '--work-class');
+  const options = launchCliOptions(argv);
+  const workClass = (options.get('--work-class') ?? '').trim();
   if (!LAUNCH_WORK_CLASSES.includes(workClass as LaunchWorkClass)) throw new Error('--work-class must be exactly manager|t1|t2|t3');
-  const repository = option(argv, '--repository').trim().toLowerCase();
+  const repository = (options.get('--repository') ?? '').trim().toLowerCase();
   if (!/^[^/\s]+\/[^/\s]+$/u.test(repository)) throw new Error('--repository owner/repo is required');
-  const issueText = option(argv, '--issue-number');
-  const issueNumber = issueText ? Number.parseInt(issueText, 10) : undefined;
-  if (issueNumber !== undefined && (!Number.isInteger(issueNumber) || issueNumber <= 0)) throw new Error('--issue-number must be a positive integer');
+  const issueText = (options.get('--issue-number') ?? '').trim();
+  let issueNumber: number | undefined;
+  if (issueText) {
+    if (!/^[1-9]\d*$/u.test(issueText)) throw new Error('--issue-number must be a positive integer');
+    issueNumber = Number(issueText);
+    if (!Number.isSafeInteger(issueNumber)) throw new Error('--issue-number must be a safe positive integer');
+  }
+  const runId = (options.get('--run') ?? '').trim();
+  const taskId = (options.get('--task') ?? '').trim();
+  const managerBrief = options.get('--manager-brief');
+  const worktreeSelector = (options.get('--worktree') ?? '').trim();
+  const worktreeName = (options.get('--worktree-name') ?? '').trim();
+  const baseBranch = (options.get('--base-branch') ?? '').trim();
   return {
     repository,
     workClass: workClass as LaunchWorkClass,
     ...(issueNumber ? { issueNumber } : {}),
-    ...(option(argv, '--run') ? { runId: option(argv, '--run') } : {}),
-    ...(option(argv, '--task') ? { taskId: option(argv, '--task') } : {}),
-    ...(option(argv, '--manager-brief') ? { managerBrief: option(argv, '--manager-brief') } : {}),
-    ...(option(argv, '--worktree') ? { worktreeSelector: option(argv, '--worktree') } : {}),
-    ...(option(argv, '--worktree-name') ? { worktreeName: option(argv, '--worktree-name') } : {}),
-    ...(option(argv, '--base-branch') ? { baseBranch: option(argv, '--base-branch') } : {}),
+    ...(runId ? { runId } : {}),
+    ...(taskId ? { taskId } : {}),
+    ...(managerBrief !== undefined ? { managerBrief } : {}),
+    ...(worktreeSelector ? { worktreeSelector } : {}),
+    ...(worktreeName ? { worktreeName } : {}),
+    ...(baseBranch ? { baseBranch } : {}),
   };
 }
 
