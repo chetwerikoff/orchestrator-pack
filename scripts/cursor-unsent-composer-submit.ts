@@ -14,7 +14,10 @@ import {
 } from './runtime/contracts.ts';
 import { selectRuntimeAdapter } from './runtime/registry.ts';
 
-const FOOTER_LINE = /^(?:[▀▄]|~\s*\/|~\/|Cursor |GPT-|Composer |Run Everything|ctrl\+c to stop)/iu;
+const UNBOXED_BOX_CHROME = /^[▀▄]+$/u;
+const UNBOXED_CTRL_C = /^ctrl\+c to stop\b/iu;
+const UNBOXED_STATUS_FOOTER = /^(?:Cursor|GPT-\S+|Composer)\s.+(?:\d+(?:\.\d+)?%|Run Everything)/iu;
+const UNBOXED_CWD_FOOTER = /^~\//u;
 const EMPTY_COMPOSER = /^(?:→\s*)?Add a follow-up\b/iu;
 const LONE_ARROW = /^→$/u;
 const MACHINE_POKE = /^You have \d+ orchestration messages?\. Run `orca orchestration check --run [A-Za-z0-9_-]+`\.$/u;
@@ -23,7 +26,7 @@ const BOX_BOTTOM = /^\s*▀/u;
 const DEFAULT_INTERVAL_MS = 2_000;
 export const QUIET_AFTER_PRINT_MS = 10_000;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
-const LAUNCH_FAILED = 'process_launch_failed';
+const LAUNCH_FAILED = 'runtime_unavailable';
 
 export type CursorComposerKind = 'empty' | 'machine_poke' | 'manual';
 
@@ -51,7 +54,19 @@ function composerContentLines(lines: readonly string[]): string[] {
 function unboxedComposerLines(preview: string): string[] {
   const lines = composerContentLines(preview.split(/\r?\n/));
   let end = lines.length;
-  while (end > 0 && FOOTER_LINE.test(lines[end - 1] ?? '')) end -= 1;
+  while (
+    end > 0
+    && (UNBOXED_BOX_CHROME.test(lines[end - 1] ?? '') || UNBOXED_CTRL_C.test(lines[end - 1] ?? ''))
+  ) {
+    end -= 1;
+  }
+  if (
+    end >= 2
+    && UNBOXED_STATUS_FOOTER.test(lines[end - 2] ?? '')
+    && UNBOXED_CWD_FOOTER.test(lines[end - 1] ?? '')
+  ) {
+    return lines.slice(0, end - 2);
+  }
   return lines.slice(0, end);
 }
 

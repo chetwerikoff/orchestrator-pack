@@ -16,6 +16,10 @@ import {
 import type { RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 
 const POKE = 'You have 1 orchestration message. Run `orca orchestration check --run run_d613a86c140a`.';
+const CURSOR_FOOTER = [
+  'Cursor Grok 4.6 High · 40.6% · 22 files edited                                                                                                    Run Everything',
+  '~/projects/orchestrator-pack · main',
+];
 
 function worker(id: string, generation = 'g1'): RuntimeWorker {
   return {
@@ -133,6 +137,14 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 `)).toBe('manual');
   });
 
+  it('does not strip unboxed user text that only starts like Cursor footer chrome', () => {
+    const footer = CURSOR_FOOTER.join('\n');
+    expect(classifyCursorComposer(`${POKE}\nCursor please keep this\n${footer}`)).toBe('manual');
+    expect(classifyCursorComposer(`${POKE}\nGPT-please keep this\n${footer}`)).toBe('manual');
+    expect(classifyCursorComposer(`${POKE}\nComposer note keep this\n${footer}`)).toBe('manual');
+    expect(classifyCursorComposer(`${POKE}\n~/projects/foo\n${footer}`)).toBe('manual');
+  });
+
   it('does not submit an unboxed poke that still has a typed composer line above it', () => {
     expect(classifyCursorComposer(`
 → разберись почему
@@ -150,8 +162,8 @@ describe('submitUnsentCursorComposer', () => {
       {},
       depsFor(
         {
-          term_empty: ['→ Add a follow-up', 'Run Everything'],
-          term_unsent: [POKE, 'Run Everything'],
+          term_empty: ['→ Add a follow-up', ...CURSOR_FOOTER],
+          term_unsent: [POKE, ...CURSOR_FOOTER],
         },
         { submitted },
       ),
@@ -181,7 +193,7 @@ describe('submitUnsentCursorComposer', () => {
     const state = createUnsentComposerWatchState();
     let now = 0;
     const localDeps = depsFor(
-      { term_unsent: [POKE, 'Run Everything'] },
+      { term_unsent: [POKE, ...CURSOR_FOOTER] },
       { submitted, now: () => now },
     );
     const first = submitUnsentCursorComposer({ watch: true }, localDeps, state);
@@ -202,7 +214,7 @@ describe('submitUnsentCursorComposer', () => {
     const state = createUnsentComposerWatchState();
     let now = 0;
     const localDeps = depsFor(
-      { term_unsent: [POKE, 'Run Everything'] },
+      { term_unsent: [POKE, ...CURSOR_FOOTER] },
       {
         submitted,
         now: () => now,
@@ -226,13 +238,13 @@ describe('submitUnsentCursorComposer', () => {
     let now = 0;
     let launches = 0;
     const localDeps = depsFor(
-      { term_unsent: [POKE, 'Run Everything'] },
+      { term_unsent: [POKE, ...CURSOR_FOOTER] },
       {
         now: () => now,
         submitResult: (identity) => {
           submitted.push(identity);
           launches += 1;
-          if (launches === 1) return { status: 'send_failed', reason: 'process_launch_failed' };
+          if (launches === 1) return { status: 'send_failed', reason: 'runtime_unavailable' };
           return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
         },
       },
@@ -241,7 +253,7 @@ describe('submitUnsentCursorComposer', () => {
     now = QUIET_AFTER_PRINT_MS;
     const failed = submitUnsentCursorComposer({ watch: true }, localDeps, state);
     const retry = submitUnsentCursorComposer({ watch: true }, localDeps, state);
-    expect(failed.terminals[0]?.reason).toBe('process_launch_failed');
+    expect(failed.terminals[0]?.reason).toBe('runtime_unavailable');
     expect(retry.terminals[0]?.reason).toBe('enter_sent');
     expect(submitted).toHaveLength(2);
   });
@@ -253,7 +265,7 @@ describe('submitUnsentCursorComposer', () => {
     const result = submitUnsentCursorComposerOnce(
       { terminals: ['term_unsent'] },
       depsFor(
-        { term_unsent: [POKE, 'Run Everything'] },
+        { term_unsent: [POKE, ...CURSOR_FOOTER] },
         {
           submitted,
           now: () => now,
@@ -262,7 +274,7 @@ describe('submitUnsentCursorComposer', () => {
           },
           read: (identity) => {
             reads += 1;
-            return { ok: true as const, lines: identity.id === 'term_unsent' ? [POKE, 'Run Everything'] : ['→ Add a follow-up'] };
+            return { ok: true as const, lines: identity.id === 'term_unsent' ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up'] };
           },
         },
       ),
