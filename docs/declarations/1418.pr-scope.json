@@ -10,6 +10,8 @@
     "scripts/ci-preflight/contract.ts",
     "scripts/ci-red-watchdog-lookup-retention.Tests.ps1",
     "scripts/ci-test-aggregate.ps1",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
     "scripts/emit-vitest-heavy-topology.mjs",
     "scripts/install-pester-ci.ps1",
     "scripts/lib/ci-red-watchdog-selftest.mjs",
@@ -59,5 +61,5 @@
     "scripts/",
     "tests/powershell/Lint-SelfArchitect.Tests.ps1"
   ],
-  "source_revision": "7e09f1e9ce2a03e1ffb8d9db04969115b9a0f07f"
+  "source_revision": "dc807c104432b21d5b6fa89f307e8a46c491aa15"
 }
