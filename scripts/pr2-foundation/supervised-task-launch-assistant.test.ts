@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import type { SupervisedWorkerStartResult } from './supervised-worker-start.ts';
@@ -193,6 +195,9 @@ describe('supervised Task launch assistant', () => {
       managerRun: { status: 'ok', value: { runId: 'other-run' } }, onWorktree: () => { worktrees += 1; },
     }));
     expect(result).toMatchObject({ outcome: 'continue', stage: 'manager_run', observedCause: 'manager_run_mismatch' });
+    if (result.outcome === 'continue') {
+      expect(result.timings.at(-1)).toMatchObject({ stage: 'manager_run', outcome: 'continued' });
+    }
     expect(worktrees).toBe(0);
   });
 
@@ -245,11 +250,33 @@ describe('supervised Task launch assistant', () => {
     expect(JSON.stringify(result)).not.toContain('<same-manager-brief>');
   });
 
+  it.each([
+    ['mixed malformed orchestration alias', { orchestrationRequestId: 123, requestId: 'req-1' }],
+    ['empty orchestration alias', { orchestrationRequestId: '', requestId: 'req-1' }],
+    ['conflicting aliases', { orchestrationRequestId: 'req-2', requestId: 'req-1' }],
+  ] as const)('does not authorize manager Task-create retry for %s', async (_label, recoveryData) => {
+    const result = await createManagerTaskWithOrca('run-1', 'private brief payload', async () => ({
+      ok: false,
+      stdout: JSON.stringify({ ok: false, error: { code: 'operation_unknown', data: recoveryData } }),
+    }));
+    expect(result).toMatchObject({
+      status: 'continue', cause: 'manager_task_create_failed_or_unknown',
+      nextAction: { kind: 'reconcile_manager_task' },
+    });
+    if (result.status === 'continue') {
+      expect(result.nextAction.requestId).toBeUndefined();
+      expect(result.nextAction.replay).toBeUndefined();
+    }
+  });
+
   it('early non-null Dispatch creates no worktree or terminal and makes no start', async () => {
     let worktrees = 0; let spawns = 0; let starts = 0;
     const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ dispatch: [{ kind: 'present', dispatchId: 'dispatch-existing' }],
       onWorktree: () => { worktrees += 1; }, adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }), onSupervised: () => { starts += 1; } }));
     expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_early', resources: { dispatchId: 'dispatch-existing' } });
+    if (result.outcome === 'continue') {
+      expect(result.timings.at(-1)).toMatchObject({ stage: 'dispatch_admission_early', outcome: 'continued' });
+    }
     expect(worktrees).toBe(0); expect(spawns).toBe(0); expect(starts).toBe(0);
   });
 
@@ -258,6 +285,9 @@ describe('supervised Task launch assistant', () => {
     const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ dispatch: [{ kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-race' }],
       adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }), onSupervised: () => { starts += 1; } }));
     expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_final', resources: { dispatchId: 'dispatch-race' } });
+    if (result.outcome === 'continue') {
+      expect(result.timings.at(-1)).toMatchObject({ stage: 'dispatch_admission_final', outcome: 'continued' });
+    }
     expect(spawns).toBe(1); expect(starts).toBe(0);
   });
 
@@ -268,27 +298,40 @@ describe('supervised Task launch assistant', () => {
     ['terminal_liveness_unknown', worker, 'unknown' as const],
   ])('fails the machine-enforced terminal boundary: %s', async (cause, target, liveness) => {
     const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ adapter: runtimeAdapter({ worker: target, liveness }) }));
-    expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare', observedCause: cause });
+    expect(result).toMatchObject({
+      outcome: 'continue', stage: 'terminal_prepare', observedCause: cause,
+      resources: { terminal: target.identity },
+    });
   });
 
   it('fails closed when liveness observes a recreated terminal generation', async () => {
     const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({
       adapter: runtimeAdapter({ livenessWorker: { ...worker.identity, generation: 'pty-2' } }),
     }));
-    expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare', observedCause: 'terminal_generation_mismatch' });
+    expect(result).toMatchObject({
+      outcome: 'continue', stage: 'terminal_prepare', observedCause: 'terminal_generation_mismatch',
+      resources: { terminal: worker.identity },
+    });
   });
 
   it('preserves worker-start provider mutation recovery as one exact replay action', async () => {
+    const recoveryCommand = 'orca orchestration worker-show --dispatch dispatch-accepted --json';
     const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ supervised: {
       ok: false, reason: 'supervised_start_envelope_error', errorCode: 'runtime_timeout',
-      recovery: { requestId: 'request-7', dispatchId: 'dispatch-accepted', recoveryCommand: 'orca orchestration worker-show --dispatch dispatch-accepted --json' },
+      recovery: { requestId: 'request-7', dispatchId: 'dispatch-accepted', recoveryCommand },
     } }));
-    expect(result).toMatchObject({ outcome: 'continue', stage: 'supervised_start', resources: { dispatchId: 'dispatch-accepted' },
-      nextAction: { kind: 'retry_supervised_start', requestId: 'request-7' } });
+    expect(result).toMatchObject({
+      outcome: 'continue',
+      stage: 'supervised_start',
+      resources: { dispatchId: 'dispatch-accepted' },
+      evidence: { requestId: 'request-7', dispatchId: 'dispatch-accepted', recoveryCommand },
+      nextAction: { kind: 'retry_supervised_start', requestId: 'request-7', recoveryCommand },
+    });
     if (result.outcome === 'continue') {
       expect(result.nextAction.command).toContain('--retry-request');
       expect(result.nextAction.command).toContain('request-7');
       expect(result.nextAction.command).not.toContain('--agent');
+      expect(result.timings.at(-1)).toMatchObject({ stage: 'supervised_start', outcome: 'continued' });
     }
   });
 
@@ -352,11 +395,48 @@ describe('supervised Task launch assistant', () => {
     expect(result.timings.at(-1)?.stage).toBe('supervised_start');
   });
 
+  it('records a timing for a direct handled stage failure', async () => {
+    const result = await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack', workClass: 'manager', taskId: 'task-1',
+      worktreeName: 'issue-1479', env: profileEnv(),
+    }, deps());
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'manager_run', observedCause: 'manager_run_required' });
+    if (result.outcome === 'continue') {
+      expect(result.timings.at(-1)).toMatchObject({ stage: 'manager_run', outcome: 'continued', elapsedMs: 0 });
+    }
+  });
+
   it('CLI requires explicit work class and preserves manager argument shapes', () => {
     expect(parseLaunchAssistantCli(['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'manager', '--run', 'run-1', '--task', 'task-1', '--worktree', 'id:w'])).toMatchObject({
       workClass: 'manager', runId: 'run-1', taskId: 'task-1', worktreeSelector: 'id:w',
     });
     expect(() => parseLaunchAssistantCli(['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'smoke'])).toThrow(/work-class/u);
+  });
+
+  it.each([
+    ['manager missing run', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'manager', '--task', 'task-1', '--worktree', 'id:w']],
+    ['manager both task and brief', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'manager', '--run', 'run-1', '--task', 'task-1', '--manager-brief', 'brief', '--worktree', 'id:w']],
+    ['manager neither task nor brief', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'manager', '--run', 'run-1', '--worktree', 'id:w']],
+    ['worker missing task', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 't2', '--worktree', 'id:w']],
+    ['both worktree selectors', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 't2', '--task', 'task-1', '--worktree', 'id:w', '--worktree-name', 'wt']],
+    ['neither worktree selector', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 't2', '--task', 'task-1']],
+    ['manager-only option on worker', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 't2', '--task', 'task-1', '--run', 'run-1', '--worktree', 'id:w']],
+  ] as const)('CLI rejects semantically malformed invocation before effects: %s', (_label, argv) => {
+    expect(() => parseLaunchAssistantCli(argv)).toThrow();
+  });
+
+  it('CLI entrypoint exits non-zero for semantic shape rejected before dependencies/effects', () => {
+    const entrypoint = fileURLToPath(new URL('./supervised-task-launch-assistant.ts', import.meta.url));
+    const execution = spawnSync(process.execPath, [
+      '--experimental-strip-types', entrypoint,
+      '--repository', 'chetwerikoff/orchestrator-pack',
+      '--work-class', 'manager',
+      '--run', 'run-1',
+      '--manager-brief', 'brief',
+    ], { encoding: 'utf8' });
+    expect(execution.status).toBe(1);
+    expect(execution.stdout).toBe('');
+    expect(execution.stderr).toMatch(/worktree/u);
   });
 
   it.each([
