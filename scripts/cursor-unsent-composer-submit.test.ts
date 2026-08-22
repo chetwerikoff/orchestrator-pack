@@ -7,6 +7,7 @@ import {
   cursorComposerLooksUnsent,
   QUIET_AFTER_PRINT_MS,
   submitUnsentCursorComposer,
+  submitUnsentCursorComposerOnce,
 } from './cursor-unsent-composer-submit.ts';
 
 const POKE = 'You have 1 orchestration message. Run `orca orchestration check --run run_d613a86c140a`.';
@@ -68,6 +69,27 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   Cursor Grok 4.6 High · 44.7% · 22 files edited                                                                                                    Run Everything
   ~/projects/orchestrator-pack · main
+`)).toBe('manual');
+  });
+
+  it('does not treat chrome-looking typed text inside the composer box as UI chrome', () => {
+    expect(classifyCursorComposer(`
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  →
+    ${POKE}
+    Tip: do not send this
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  Cursor Grok 4.6 High · 44.7% · 22 files edited                                                                                                    Run Everything
+  ~/projects/orchestrator-pack · main
+`)).toBe('manual');
+  });
+
+  it('does not submit an unboxed poke that still has a typed composer line above it', () => {
+    expect(classifyCursorComposer(`
+→ разберись почему
+${POKE}
+Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
+~/projects/orchestrator-pack · main
 `)).toBe('manual');
   });
 });
@@ -180,5 +202,33 @@ describe('submitUnsentCursorComposer', () => {
     })();
     expect(submitted).toEqual([]);
     expect(resultAfterTyping.terminals[0]?.reason).toBe('manual_input');
+  });
+
+  it('does not submit on the first --once read; waits the quiet window then re-reads', () => {
+    const submitted: string[] = [];
+    let now = 0;
+    let reads = 0;
+    const result = submitUnsentCursorComposerOnce(
+      { terminals: ['term_unsent'] },
+      {
+        list: () => ({ ok: true, result: { terminals: [] } }),
+        read: () => {
+          reads += 1;
+          return pokeRead('term_unsent');
+        },
+        now: () => now,
+        sleep: (milliseconds) => {
+          now += milliseconds;
+        },
+        submit: (handle) => {
+          submitted.push(handle);
+          return { ok: true };
+        },
+      },
+    );
+    expect(reads).toBe(2);
+    expect(submitted).toEqual(['term_unsent']);
+    expect(result.watch).toBe(false);
+    expect(result.terminals[0]?.reason).toBe('enter_sent');
   });
 });

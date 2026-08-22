@@ -4,12 +4,14 @@ import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { processAlive } from './lib/cutover/activation-cordon.ts';
 import { submitOrcaTerminalComposer } from './orca-runtime/compat.ts';
 import { runOrcaJson, type OrcaJsonResponse } from './orca-runtime/native.ts';
 
 const CHROME_LINE = /^(?:Run Everything|Tip:|[▀▄]|~\s*\/|~\/|Cursor |GPT-|Composer |ctrl\+c to stop)/iu;
 const EMPTY_COMPOSER = /^(?:→\s*)?Add a follow-up\b/iu;
 const LONE_ARROW = /^→$/u;
+const PASTED_DRAFT = /^(?:→\s*)?\[Pasted text\b/u;
 const MACHINE_POKE = /^You have \d+ orchestration messages?\. Run `orca orchestration check --run [A-Za-z0-9_-]+`\.$/u;
 const BOX_TOP = /^\s*▄/u;
 const BOX_BOTTOM = /^\s*▀/u;
@@ -32,30 +34,40 @@ function composerInterior(preview: string): string[] | undefined {
   return undefined;
 }
 
-function meaningfulLines(lines: readonly string[]): string[] {
-  return lines
-    .map((line) => line.trim())
-    .filter((line) => line && !CHROME_LINE.test(line) && !LONE_ARROW.test(line));
+function trimNonEmpty(lines: readonly string[]): string[] {
+  return lines.map((line) => line.trim()).filter(Boolean);
+}
+
+function outerMeaningfulLines(lines: readonly string[]): string[] {
+  return trimNonEmpty(lines).filter((line) => !CHROME_LINE.test(line) && !LONE_ARROW.test(line));
+}
+
+function boxedComposerLines(lines: readonly string[]): string[] {
+  return trimNonEmpty(lines).filter((line) => !LONE_ARROW.test(line));
+}
+
+function isComposerManualLine(line: string): boolean {
+  if (EMPTY_COMPOSER.test(line) || MACHINE_POKE.test(line)) return false;
+  if (PASTED_DRAFT.test(line)) return true;
+  return /^→\s+\S/u.test(line);
 }
 
 export function classifyCursorComposer(preview: string): CursorComposerKind {
   const interior = composerInterior(preview);
   if (interior) {
-    const lines = meaningfulLines(interior);
+    const lines = boxedComposerLines(interior);
     if (lines.length === 0 || lines.every((line) => EMPTY_COMPOSER.test(line))) return 'empty';
     if (lines.every((line) => MACHINE_POKE.test(line))) return 'machine_poke';
     return 'manual';
   }
-  const lines = meaningfulLines(preview.split(/\r?\n/));
+  const lines = outerMeaningfulLines(preview.split(/\r?\n/));
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index] ?? '';
     if (EMPTY_COMPOSER.test(line)) return 'empty';
     if (MACHINE_POKE.test(line)) {
-      for (let cursor = index; cursor >= 0; cursor -= 1) {
-        const previous = lines[cursor] ?? '';
-        if (MACHINE_POKE.test(previous)) continue;
-        return 'machine_poke';
-      }
+      let cursor = index - 1;
+      while (cursor >= 0 && MACHINE_POKE.test(lines[cursor] ?? '')) cursor -= 1;
+      if (cursor >= 0 && isComposerManualLine(lines[cursor] ?? '')) return 'manual';
       return 'machine_poke';
     }
     return 'manual';
@@ -68,8 +80,9 @@ export function cursorComposerLooksUnsent(preview: string): boolean {
 }
 
 export function composerPokeFingerprint(preview: string): string {
-  const source = composerInterior(preview) ?? preview.split(/\r?\n/);
-  return meaningfulLines(source).filter((line) => MACHINE_POKE.test(line)).join('\n');
+  const interior = composerInterior(preview);
+  const source = interior ? boxedComposerLines(interior) : outerMeaningfulLines(preview.split(/\r?\n/));
+  return source.filter((line) => MACHINE_POKE.test(line)).join('\n');
 }
 
 function previewFromRead(response: OrcaJsonResponse<unknown>): string {
@@ -256,14 +269,18 @@ function sleepSync(milliseconds: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, milliseconds));
 }
 
-function processAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
+export function submitUnsentCursorComposerOnce(
+  input: UnsentComposerSubmitInput = {},
+  deps: UnsentComposerSubmitDeps = defaultDeps,
+  state: UnsentComposerWatchState = createUnsentComposerWatchState(),
+): UnsentComposerSubmitResult {
+  const first = submitUnsentCursorComposer({ ...input, watch: true }, deps, state);
+  if (!first.terminals.some((row) => row.reason === 'waiting_stable')) {
+    return { ...first, watch: false };
   }
+  (deps.sleep ?? sleepSync)(QUIET_AFTER_PRINT_MS);
+  const second = submitUnsentCursorComposer({ ...input, watch: true }, deps, state);
+  return { ...second, watch: false };
 }
 
 function acquireWatchLock(): void {
@@ -277,7 +294,7 @@ function acquireWatchLock(): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     const existing = Number.parseInt(readFileSync(LOCK_PATH, 'utf8').trim(), 10);
-    if (processAlive(existing)) {
+    if (Number.isInteger(existing) && existing > 0 && processAlive(existing)) {
       throw new Error(`already running pid=${existing}`);
     }
     unlinkSync(LOCK_PATH);
@@ -347,7 +364,7 @@ function isDirectCliExecution(): boolean {
 function main(): void {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed.once) {
-    const result = submitUnsentCursorComposer({ ...parsed, watch: false });
+    const result = submitUnsentCursorComposerOnce({ ...parsed });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (!result.ok) process.exitCode = 1;
     return;
