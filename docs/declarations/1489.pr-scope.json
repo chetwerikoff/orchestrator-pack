@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1489,
+  "declared_paths": [
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts"
+  ],
+  "denylist": [
+    ".github/",
+    ".orchestrator-pack/",
+    "credentials/",
+    "docs/worker-input-draft-submit.mjs",
+    "packages/core/",
+    "plugins/",
+    "prompts/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts"
+  ],
+  "source_revision": "932f7ab3d394b4337100938abbafb42bf4464a7c"
+}
