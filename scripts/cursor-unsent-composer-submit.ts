@@ -184,13 +184,19 @@ export function loadSubmittedFingerprints(path: string): Map<string, string> {
 
 export function saveSubmittedFingerprints(path: string, submitted: ReadonlyMap<string, string>): void {
   saveWatchStore(path, {
-    submittedFingerprint: new Map(submitted),
+    submittedFingerprint: submitted,
     lastFingerprint: new Map(),
     lastChangedAt: new Map(),
   });
 }
 
-function saveWatchStore(path: string, state: UnsentComposerWatchState): void {
+interface PersistableWatchState {
+  readonly submittedFingerprint: ReadonlyMap<string, string>;
+  readonly lastFingerprint: ReadonlyMap<string, string>;
+  readonly lastChangedAt: ReadonlyMap<string, number>;
+}
+
+function saveWatchStore(path: string, state: PersistableWatchState): void {
   const submitted = [...state.submittedFingerprint.entries()].flatMap(([key, fingerprint]) => {
     const row = identityFromKey(key, fingerprint);
     return row ? [row] : [];

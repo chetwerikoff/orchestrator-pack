@@ -379,13 +379,13 @@ describe('submitUnsentCursorComposer', () => {
     }
   });
 
-  it('persists submitted fingerprints from a readonly map', () => {
+  it('persists a ReadonlyMap of submitted fingerprints', () => {
     const sentStorePath = join(tmpdir(), `opk-unsent-readonly-${process.pid}-${Date.now()}.json`);
-    const identity = { runtime: 'orca' as const, id: 'term_readonly', generation: 'g1' };
-    const submitted: ReadonlyMap<string, string> = new Map([[workerKey(identity), 'fp-readonly']]);
+    const identity = worker('term_unsent').identity;
+    const submitted: ReadonlyMap<string, string> = new Map([[workerKey(identity), POKE]]);
     try {
       saveSubmittedFingerprints(sentStorePath, submitted);
-      expect(loadSubmittedFingerprints(sentStorePath).get(workerKey(identity))).toBe('fp-readonly');
+      expect(loadSubmittedFingerprints(sentStorePath).get(workerKey(identity))).toBe(POKE);
     } finally {
       try { unlinkSync(sentStorePath); } catch { /* ignore */ }
     }
