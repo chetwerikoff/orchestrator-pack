@@ -132,6 +132,23 @@ describe('supervised Task launch assistant', () => {
     }
   });
 
+  it('hands the pre-created terminal to supervised-start without an agent selector', async () => {
+    let emittedArgs: readonly string[] = [];
+    const baseDeps = deps();
+    const result = await runSupervisedTaskLaunchAssistant(launchInput(), {
+      ...baseDeps,
+      runSupervisedStart: async (start) => {
+        emittedArgs = [...start.orcaArgs];
+        return readyStart(String(start.orcaArgs[1]));
+      },
+    });
+    expect(result.outcome).toBe('ready');
+    expect(emittedArgs).toEqual([
+      '--task', 'task-1', '--terminal', 'terminal-fresh', '--worktree', 'id:repo::exact-worktree',
+    ]);
+    expect(emittedArgs).not.toContain('--agent');
+  });
+
   it('manager without Issue preserves run/task identity and still reaches ordinary supervised-start', async () => {
     const input = { ...launchInput('manager'), issueNumber: undefined };
     const result = await runSupervisedTaskLaunchAssistant(input, deps());
@@ -219,6 +236,7 @@ describe('supervised Task launch assistant', () => {
     if (result.outcome === 'continue') {
       expect(result.nextAction.command).toContain('--retry-request');
       expect(result.nextAction.command).toContain('request-7');
+      expect(result.nextAction.command).not.toContain('--agent');
     }
   });
 
