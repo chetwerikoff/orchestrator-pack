@@ -42,6 +42,7 @@ export interface NextAction {
     | 'reconcile_supervised_start';
   readonly requestId?: string;
   readonly command?: string;
+  readonly recoveryCommand?: string;
   readonly replay?: {
     readonly operation: 'orca_orchestration_task_create';
     readonly runId: string;
@@ -212,9 +213,24 @@ function continued(
   edge: { cause: string; actor: LaunchActor; evidence?: Readonly<Record<string, unknown>>; nextAction: NextAction },
   resources: LaunchResources,
   startedAtMs: number,
-  timings: readonly StageTiming[],
+  timings: StageTiming[],
   now: () => number,
 ): ContinueResult {
+  const lastTiming = timings.at(-1);
+  if (lastTiming?.stage === stage) {
+    if (lastTiming.outcome !== 'continued') {
+      timings[timings.length - 1] = { ...lastTiming, outcome: 'continued' };
+    }
+  } else {
+    const failedAtMs = now();
+    timings.push({
+      stage,
+      startedAtMs: failedAtMs,
+      finishedAtMs: failedAtMs,
+      elapsedMs: 0,
+      outcome: 'continued',
+    });
+  }
   const finishedAtMs = now();
   return {
     schema: LAUNCH_ASSISTANT_SCHEMA,
@@ -351,13 +367,16 @@ export async function runSupervisedTaskLaunchAssistant(
   let liveness: ReturnType<RuntimeAdapter['liveness']> | null = null;
   if (spawn.status !== 'ok') terminalCause = `terminal_spawn_${spawn.status}`;
   else if (!text(spawn.value.identity.runtime) || !text(spawn.value.identity.id) || !text(spawn.value.identity.generation)) terminalCause = 'terminal_identity_invalid';
-  else if (spawn.value.provenance !== 'internal') terminalCause = 'terminal_provenance_external';
-  else if (spawn.value.workspacePath !== prepared.value.path) terminalCause = 'terminal_workspace_mismatch';
-  else if (spawn.value.identity.runtime !== deps.adapter.id) terminalCause = 'terminal_runtime_mismatch';
   else {
-    liveness = deps.adapter.liveness({ worker: spawn.value.identity, observationWindowMs: 1_000 });
-    if (!sameIdentity(liveness.worker, spawn.value.identity)) terminalCause = 'terminal_generation_mismatch';
-    else if (liveness.status !== 'idle') terminalCause = `terminal_liveness_${liveness.status}`;
+    resources = { ...resources, terminal: spawn.value.identity };
+    if (spawn.value.provenance !== 'internal') terminalCause = 'terminal_provenance_external';
+    else if (spawn.value.workspacePath !== prepared.value.path) terminalCause = 'terminal_workspace_mismatch';
+    else if (spawn.value.identity.runtime !== deps.adapter.id) terminalCause = 'terminal_runtime_mismatch';
+    else {
+      liveness = deps.adapter.liveness({ worker: spawn.value.identity, observationWindowMs: 1_000 });
+      if (!sameIdentity(liveness.worker, spawn.value.identity)) terminalCause = 'terminal_generation_mismatch';
+      else if (liveness.status !== 'idle') terminalCause = `terminal_liveness_${liveness.status}`;
+    }
   }
   const terminalFinishedAt = deps.now();
   timings.push({
@@ -372,7 +391,6 @@ export async function runSupervisedTaskLaunchAssistant(
     nextAction: { kind: 'remediate_terminal', note: 'remediate the owned fresh terminal; never reuse a foreign/pre-existing or non-idle target' },
   }, resources, startedAtMs, timings, deps.now);
   const terminal = spawn.value;
-  resources = { ...resources, terminal: terminal.identity };
 
   const final = await checkpoint('dispatch_admission_final', timings, deps.now, () => deps.observeDispatch(taskId));
   if (final.status !== 'ok') return continued(input, 'dispatch_admission_final', final, resources, startedAtMs, timings, deps.now);
@@ -401,6 +419,7 @@ export async function runSupervisedTaskLaunchAssistant(
 
   if (!supervised.ok || supervised.reason !== 'ready_and_assignment_bound' || !supervised.assignment) {
     const requestId = supervised.recovery?.requestId;
+    const recoveryCommand = supervised.recovery?.recoveryCommand;
     const retry = requestId ? [
       'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2-foundation/supervised-worker-start.ts --',
       ...(input.issueNumber ? ['--issue-number', String(input.issueNumber)] : []),
@@ -415,13 +434,14 @@ export async function runSupervisedTaskLaunchAssistant(
         ...(supervised.errorCode ? { errorCode: supervised.errorCode } : {}),
         ...(requestId ? { requestId } : {}),
         ...(supervised.recovery?.dispatchId ? { dispatchId: supervised.recovery.dispatchId } : {}),
+        ...(recoveryCommand ? { recoveryCommand } : {}),
       },
       nextAction: requestId ? {
         kind: 'retry_supervised_start', requestId, command: retry,
-        ...(supervised.recovery?.recoveryCommand ? { note: `provider reconciliation command: ${supervised.recovery.recoveryCommand}` } : {}),
+        ...(recoveryCommand ? { recoveryCommand } : {}),
       } : {
         kind: 'reconcile_supervised_start',
-        ...(supervised.recovery?.recoveryCommand ? { command: supervised.recovery.recoveryCommand } : {}),
+        ...(recoveryCommand ? { recoveryCommand } : {}),
         note: 'reconcile the non-ready start; never fall through to a fresh mutation',
       },
     }, { ...resources, ...(supervised.recovery?.dispatchId ? { dispatchId: supervised.recovery.dispatchId } : {}) }, startedAtMs, timings, deps.now);
@@ -507,12 +527,24 @@ function errorData(value: Record<string, unknown> | null): Record<string, unknow
   return error && record(error.data) ? error.data : null;
 }
 
+function mutationRequestIdField(
+  data: Record<string, unknown>,
+  name: 'orchestrationRequestId' | 'requestId',
+): { readonly present: boolean; readonly value: string } | null {
+  if (!Object.hasOwn(data, name)) return { present: false, value: '' };
+  const value = typeof data[name] === 'string' ? data[name].trim() : '';
+  return value ? { present: true, value } : null;
+}
+
 function mutationRequestId(value: Record<string, unknown> | null): string {
   const data = errorData(value);
-  const orchestrationRequestId = text(data?.orchestrationRequestId);
-  const requestId = text(data?.requestId);
-  if (orchestrationRequestId && requestId && orchestrationRequestId !== requestId) return '';
-  return orchestrationRequestId || requestId;
+  if (!data) return '';
+  const orchestrationRequestId = mutationRequestIdField(data, 'orchestrationRequestId');
+  const requestId = mutationRequestIdField(data, 'requestId');
+  if (!orchestrationRequestId || !requestId) return '';
+  if (orchestrationRequestId.present && requestId.present
+    && orchestrationRequestId.value !== requestId.value) return '';
+  return orchestrationRequestId.value || requestId.value;
 }
 
 export async function createManagerTaskWithOrca(
@@ -775,6 +807,20 @@ export function parseLaunchAssistantCli(argv: readonly string[]): LaunchInput {
   const worktreeSelector = (options.get('--worktree') ?? '').trim();
   const worktreeName = (options.get('--worktree-name') ?? '').trim();
   const baseBranch = (options.get('--base-branch') ?? '').trim();
+  const hasTask = Boolean(taskId);
+  const hasManagerBrief = managerBrief !== undefined;
+  const hasWorktreeSelector = Boolean(worktreeSelector);
+  const hasWorktreeName = Boolean(worktreeName);
+
+  if (hasWorktreeSelector === hasWorktreeName) throw new Error('provide exactly one --worktree or --worktree-name');
+  if (workClass === 'manager') {
+    if (!runId) throw new Error('manager requires --run');
+    if (hasTask === hasManagerBrief) throw new Error('manager requires exactly one --task or --manager-brief');
+  } else {
+    if (!taskId) throw new Error(`${workClass} requires --task`);
+    if (runId || hasManagerBrief) throw new Error('--run and --manager-brief are manager-only');
+  }
+
   return {
     repository,
     workClass: workClass as LaunchWorkClass,
