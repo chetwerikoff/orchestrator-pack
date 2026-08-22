@@ -582,14 +582,24 @@ async function runComposerPass(): Promise<unknown> {
   return runSupervisorUnsentComposerTick();
 }
 
+export function settleSchedulerAndComposer<T, C>(
+  scheduler: PromiseSettledResult<T>,
+  composer: PromiseSettledResult<C>,
+): { result: T; composer: C } {
+  if (scheduler.status === 'rejected' && composer.status === 'rejected') {
+    throw new AggregateError([scheduler.reason, composer.reason], 'scheduler_and_composer_failed');
+  }
+  if (scheduler.status === 'rejected') throw scheduler.reason;
+  if (composer.status === 'rejected') throw composer.reason;
+  return { result: scheduler.value, composer: composer.value };
+}
+
 async function runTickWithComposer(boundary: SchedulerBoundary): Promise<{ result: Awaited<ReturnType<typeof runSchedulerTick>>; composer: unknown }> {
   const [scheduler, composer] = await Promise.allSettled([
     runSchedulerTick(boundary),
     runComposerPass(),
   ]);
-  if (scheduler.status === 'rejected') throw scheduler.reason;
-  if (composer.status === 'rejected') throw composer.reason;
-  return { result: scheduler.value, composer: composer.value };
+  return settleSchedulerAndComposer(scheduler, composer);
 }
 
 async function runSingleTick(): Promise<void> {

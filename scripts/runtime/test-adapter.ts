@@ -115,6 +115,7 @@ export class DeterministicRuntimeAdapter implements RuntimeAdapter {
     readonly worker: RuntimeWorkerIdentity;
     readonly previousToken?: RuntimeObservationToken | null;
     readonly limit?: number;
+    readonly screen?: boolean;
   }): RuntimeResult<RuntimeBoundedOutput> {
     const state = this.#workers.get(input.worker.id);
     if (!state || !sameRuntimeWorker(state.worker.identity, input.worker)) {
@@ -156,6 +157,7 @@ export class DeterministicRuntimeAdapter implements RuntimeAdapter {
         observationToken,
         changed,
         terminalState: state.liveness === 'gone' ? 'exited' : 'running',
+        source: input.screen ? 'screen' : 'stream',
       },
     };
   }

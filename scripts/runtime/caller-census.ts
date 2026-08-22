@@ -235,7 +235,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     operations: ['runtime-composition', 'list', 'read', 'send'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
-    note: 'Lists and reads Cursor terminals through RuntimeAdapter, then performs one submitOnly dispatch for an exact stable Orca poke.',
+    note: 'Lists and reads Cursor terminals through RuntimeAdapter rendered-screen observation, then performs one submitOnly dispatch for an exact stable Orca poke.',
   },
   {
     surface: 'scripts/json-producers/worker-status-report.ts',

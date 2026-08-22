@@ -422,6 +422,31 @@ describe('Orca assignment resolution', () => {
   });
 });
 
+describe('Issue #1489 rendered screen observation', () => {
+  it('requests --screen and rejects a stream fallback', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      if (args[0] === 'terminal' && args[1] === 'show') return {
+        ok: true,
+        result: { terminal: { handle: 'screen-terminal', incarnationId: 'screen-generation', worktreePath: '/tmp/screen', status: 'running' } },
+      };
+      if (args[0] === 'terminal' && args[1] === 'read') return {
+        ok: true,
+        result: { terminal: { handle: 'screen-terminal', status: 'running', tail: ['visible'], nextCursor: 'cursor-1', source: 'stream' } },
+      };
+      return { ok: false, error: { code: 'unexpected_effect', message: args.join(' ') } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    const result = adapter.readBoundedOutput({
+      worker: { runtime: 'orca', id: 'screen-terminal', generation: 'screen-generation' },
+      screen: true,
+    });
+    expect(result).toEqual({ status: 'unsupported', operation: 'read_bounded_output', reason: 'runtime_output_source_unobservable' });
+    expect(runJson.mock.calls.find((call) => call[0]?.[1] === 'read')?.[0]).toEqual([
+      'terminal', 'read', '--terminal', 'screen-terminal', '--screen',
+    ]);
+  });
+});
+
 describe('Issue #1441 stale/reused runtime identity', () => {
   it('performs zero send/read effects when a handle is reused by a new incarnation', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {

@@ -292,7 +292,7 @@ describe('submitUnsentCursorComposer', () => {
           },
           read: (identity) => {
             reads += 1;
-            return { ok: true as const, lines: identity.id === 'term_unsent' ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up'] };
+            return { ok: true as const, lines: identity.id === 'term_unsent' ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up'], source: 'screen' as const };
           },
         },
       ),

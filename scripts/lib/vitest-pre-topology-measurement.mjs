@@ -29,6 +29,7 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/reachability-purge.test.ts': 120,
   // Issue #1489: fast composer-submit unit coverage; keep the 32-file bound.
   'scripts/cursor-unsent-composer-submit.test.ts': 1,
+  'scripts/pr2-foundation/scheduler-composer-concurrency.test.ts': 1,
   'scripts/cutover/issue-928.test.ts': 120,
   // Issue #1031 light-lane GPT reviewer tests: fast unit coverage without runtime-history
   // harvest yet; fixed estimates keep pre-topology measurement within the 32-file bound.

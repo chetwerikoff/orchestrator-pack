@@ -233,7 +233,9 @@ function persistSubmitted(state: UnsentComposerWatchState, path: string | undefi
 
 export interface UnsentComposerSubmitDeps {
   readonly listWorkers: () => { ok: true; workers: readonly RuntimeWorker[] } | { ok: false; reason: string };
-  readonly read: (worker: RuntimeWorkerIdentity) => { ok: true; lines: readonly string[] } | { ok: false; reason: string };
+  readonly read: (worker: RuntimeWorkerIdentity) =>
+    | { ok: true; lines: readonly string[]; source: 'screen' }
+    | { ok: false; reason: string };
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
@@ -450,9 +452,12 @@ export function createAdapterSubmitDeps(adapter: RuntimeAdapter): UnsentComposer
       return { ok: true, workers };
     },
     read: (worker) => {
-      const output = adapter.readBoundedOutput({ worker });
+      const output = adapter.readBoundedOutput({ worker, screen: true });
       if (output.status !== 'ok') return { ok: false, reason: output.reason };
-      return { ok: true, lines: output.value.lines };
+      if (output.value.source !== 'screen') {
+        return { ok: false, reason: 'runtime_output_source_unobservable' };
+      }
+      return { ok: true, lines: output.value.lines, source: 'screen' };
     },
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
     sentStorePath: SENT_STORE_PATH,

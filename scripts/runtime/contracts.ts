@@ -54,6 +54,8 @@ export interface RuntimeBoundedOutput {
   readonly observationToken: RuntimeObservationToken;
   readonly changed: boolean;
   readonly terminalState: 'running' | 'exited' | 'unknown';
+  /** The provider's observation surface; screen callers must require `screen`. */
+  readonly source?: 'screen' | 'stream' | 'unknown';
 }
 
 export interface RuntimeInboxMessage {
@@ -300,6 +302,8 @@ export interface RuntimeAdapter {
       readonly worker: RuntimeWorkerIdentity;
       readonly previousToken?: RuntimeObservationToken | null;
       readonly limit?: number;
+      /** Request the provider's rendered current screen rather than stream tail. */
+      readonly screen?: boolean;
     },
     options?: RuntimeCallOptions,
   ): RuntimeResult<RuntimeBoundedOutput>;

@@ -53,6 +53,7 @@ interface NormalizedTerminalRead {
   readonly lines: readonly string[];
   readonly nativeCursor: string;
   readonly terminalState: 'running' | 'exited' | 'unknown';
+  readonly source: 'screen' | 'stream' | 'unknown';
 }
 
 interface ObservationBinding {
@@ -232,6 +233,7 @@ function normalizeInboxCheck(
 
 function normalizeTerminalRead(
   result: OrcaTerminalReadResult | undefined,
+  requireScreen = false,
 ): RuntimeResult<NormalizedTerminalRead> {
   const current = result?.terminal;
   if (current) {
@@ -241,6 +243,12 @@ function normalizeTerminalRead(
       || (current.latestCursor !== undefined && typeof current.latestCursor !== 'string')
       || !['running', 'exited', 'unknown'].includes(current.status ?? '')) {
       return runtimeUnsupported('read_bounded_output', 'runtime_output_shape_unsupported');
+    }
+    const source = current.source === 'screen' || current.source === 'stream' || current.source === 'unknown'
+      ? current.source
+      : 'unknown';
+    if (requireScreen && source !== 'screen') {
+      return runtimeUnsupported('read_bounded_output', 'runtime_output_source_unobservable');
     }
     const nativeCursor = current.nextCursor ?? current.latestCursor ?? null;
     if (nativeCursor === null) {
@@ -252,6 +260,7 @@ function normalizeTerminalRead(
         lines: current.tail,
         nativeCursor,
         terminalState: current.status!,
+        source,
       },
     };
   }
@@ -267,12 +276,19 @@ function normalizeTerminalRead(
   if (result.nextCursor === null) {
     return runtimeUnsupported('read_bounded_output', 'runtime_output_progress_unavailable');
   }
+  const source = result.source === 'screen' || result.source === 'stream' || result.source === 'unknown'
+    ? result.source
+    : 'unknown';
+  if (requireScreen && source !== 'screen') {
+    return runtimeUnsupported('read_bounded_output', 'runtime_output_source_unobservable');
+  }
   return {
     status: 'ok',
     value: {
       lines: result.lines,
       nativeCursor: String(result.nextCursor),
       terminalState: 'unknown',
+      source,
     },
   };
 }
@@ -857,6 +873,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       readonly worker: RuntimeWorkerIdentity;
       readonly previousToken?: RuntimeObservationToken | null;
       readonly limit?: number;
+      readonly screen?: boolean;
     },
     options: RuntimeCallOptions = {},
   ): RuntimeResult<RuntimeBoundedOutput> {
@@ -888,6 +905,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
 
     const args = ['terminal', 'read', '--terminal', input.worker.id];
+    if (input.screen) args.push('--screen');
     if (previous?.status === 'ok') {
       args.push('--cursor', previous.value.nativeCursor);
     }
@@ -898,7 +916,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!response.ok) {
       return runtimeFailure('read_bounded_output', neutralFailureReason(response));
     }
-    const normalized = normalizeTerminalRead(response.result);
+    const normalized = normalizeTerminalRead(response.result, input.screen === true);
     if (normalized.status !== 'ok') return normalized;
     const changed = previous?.status === 'ok'
       ? previous.value.nativeCursor !== normalized.value.nativeCursor
@@ -917,6 +935,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
         observationToken,
         changed,
         terminalState: normalized.value.terminalState,
+        source: normalized.value.source,
       },
     };
   }
