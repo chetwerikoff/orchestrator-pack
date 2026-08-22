@@ -83,13 +83,11 @@ export interface OrcaTerminalSummary extends OrcaTerminalHandle {
 export interface OrcaTerminalReadResult {
   /** Legacy pack capture shape. */
   lines?: string[];
-  source?: 'screen' | 'stream' | 'unknown' | string;
   nextCursor?: string | number | null;
   oldestCursor?: string | number;
   /** Current upstream Orca shape. */
   terminal?: {
     handle?: string;
-    source?: 'screen' | 'stream' | 'unknown' | string;
     status?: 'running' | 'exited' | 'unknown';
     tail?: string[];
     nextCursor?: string | null;

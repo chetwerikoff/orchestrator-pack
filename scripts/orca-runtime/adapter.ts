@@ -244,8 +244,9 @@ function normalizeTerminalRead(
       || !['running', 'exited', 'unknown'].includes(current.status ?? '')) {
       return runtimeUnsupported('read_bounded_output', 'runtime_output_shape_unsupported');
     }
-    const source = current.source === 'screen' || current.source === 'stream' || current.source === 'unknown'
-      ? current.source
+    const currentSource = (current as { source?: unknown }).source;
+    const source = currentSource === 'screen' || currentSource === 'stream' || currentSource === 'unknown'
+      ? currentSource
       : 'unknown';
     if (requireScreen && source !== 'screen') {
       return runtimeUnsupported('read_bounded_output', 'runtime_output_source_unobservable');
@@ -276,8 +277,9 @@ function normalizeTerminalRead(
   if (result.nextCursor === null) {
     return runtimeUnsupported('read_bounded_output', 'runtime_output_progress_unavailable');
   }
-  const source = result.source === 'screen' || result.source === 'stream' || result.source === 'unknown'
-    ? result.source
+  const resultSource = (result as { source?: unknown }).source;
+  const source = resultSource === 'screen' || resultSource === 'stream' || resultSource === 'unknown'
+    ? resultSource
     : 'unknown';
   if (requireScreen && source !== 'screen') {
     return runtimeUnsupported('read_bounded_output', 'runtime_output_source_unobservable');
