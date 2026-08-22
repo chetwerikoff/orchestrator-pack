@@ -9,10 +9,13 @@ import {
   classifyCursorComposer,
   createUnsentComposerWatchState,
   cursorComposerLooksUnsent,
+  loadSubmittedFingerprints,
   QUIET_AFTER_PRINT_MS,
   releaseWatchLock,
+  saveSubmittedFingerprints,
   submitUnsentCursorComposer,
   submitUnsentCursorComposerOnce,
+  workerKey,
   type UnsentComposerSubmitDeps,
 } from './cursor-unsent-composer-submit.ts';
 import type { RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
@@ -371,6 +374,18 @@ describe('submitUnsentCursorComposer', () => {
       );
       expect(submitted).toHaveLength(1);
       expect(again.terminals[0]?.reason).toBe('already_submitted');
+    } finally {
+      try { unlinkSync(sentStorePath); } catch { /* ignore */ }
+    }
+  });
+
+  it('persists a ReadonlyMap of submitted fingerprints', () => {
+    const sentStorePath = join(tmpdir(), `opk-unsent-readonly-${process.pid}-${Date.now()}.json`);
+    const identity = worker('term_unsent').identity;
+    const submitted: ReadonlyMap<string, string> = new Map([[workerKey(identity), POKE]]);
+    try {
+      saveSubmittedFingerprints(sentStorePath, submitted);
+      expect(loadSubmittedFingerprints(sentStorePath).get(workerKey(identity))).toBe(POKE);
     } finally {
       try { unlinkSync(sentStorePath); } catch { /* ignore */ }
     }
