@@ -20,7 +20,7 @@ import {
   type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
 import { evaluateSmokeLifecycleCleanliness } from './lib/worker-smoke-lifecycle.ts';
-import { writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
+import { deriveWorkerSmokeFailureCause, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import type { RuntimeDispatchResult, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 import {
@@ -369,6 +369,21 @@ describe('runtime-neutral worker smoke', () => {
   it('keeps smoke and CI orthogonal for ready handoff', () => {
     expect(evaluateReadyForReviewCombinations({ smokePass: true, ciGreen: true })).toBe(true);
     expect(evaluateReadyForReviewCombinations({ smokePass: true, ciGreen: false })).toBe(false);
+  });
+});
+
+describe('worker-smoke failure-cause attribution', () => {
+  it('attributes cleanup-only failure to the harness when every scenario passes', () => {
+    const failed = {
+      ...report('FAIL', [scenario('scenario A', 'scenario A passes')]),
+      terminalCleanup: 'close_failed:runtime_operation_failed;presence=present',
+    };
+
+    expect(deriveWorkerSmokeFailureCause(failed)).toEqual(expect.objectContaining({
+      phase: 'harness',
+      action: 'close owned smoke terminal',
+      observed: expect.stringContaining('terminal_cleanup=close_failed:runtime_operation_failed'),
+    }));
   });
 });
 

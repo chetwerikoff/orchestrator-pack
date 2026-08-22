@@ -220,6 +220,12 @@ const harnessActions = new Set([
   'dispatch smoke prompt once',
   'wait for sealed smoke completion',
   'run runtime-neutral worker smoke',
+  'close owned smoke terminal',
+]);
+
+const cleanTerminalCleanupOutcomes = new Set([
+  'closed_owned_handle',
+  'closed_owned_handle_already_absent',
 ]);
 
 function causeCode(observed: string, result: SmokeReport['result']): string {
@@ -247,10 +253,19 @@ export function deriveWorkerSmokeFailureCause(
   report: SmokeReport,
 ): WorkerSmokeFailureCause | undefined {
   if (report.result === 'PASS') return undefined;
-  const scenario = report.scenarios.find((candidate) => candidate.outcome !== 'pass')
-    ?? report.scenarios[0];
-  const action = scenario?.action?.trim() || 'worker smoke harness';
-  const observed = scenario?.observed?.trim() || `result:${report.result.toLowerCase()}`;
+  const cleanupFailure = report.scenarios.length > 0
+    && report.scenarios.every((candidate) => candidate.outcome === 'pass')
+    && !cleanTerminalCleanupOutcomes.has(report.terminalCleanup?.trim() ?? '');
+  const scenario = cleanupFailure
+    ? undefined
+    : report.scenarios.find((candidate) => candidate.outcome !== 'pass')
+      ?? report.scenarios[0];
+  const action = cleanupFailure
+    ? 'close owned smoke terminal'
+    : scenario?.action?.trim() || 'worker smoke harness';
+  const observed = cleanupFailure
+    ? `terminal_cleanup=${report.terminalCleanup?.trim() || 'missing'}`
+    : scenario?.observed?.trim() || `result:${report.result.toLowerCase()}`;
   const code = causeCode(observed, report.result);
   return {
     phase: harnessActions.has(action) ? 'harness' : 'scenario',

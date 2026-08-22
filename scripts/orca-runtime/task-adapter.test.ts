@@ -451,3 +451,189 @@ describe('Issue #1441 stale/reused runtime identity', () => {
     expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'read')).toHaveLength(0);
   });
 });
+
+type ClosePresence = 'present' | 'absent' | 'mismatch' | 'unavailable';
+
+function boundedCloseFixture(input: {
+  readonly closeResponses: readonly OrcaJsonResponse[];
+  readonly presence: readonly ClosePresence[];
+}) {
+  const handle = 'retry-terminal';
+  const generation = 'retry-generation';
+  let closeCount = 0;
+  let presenceCount = 0;
+  let lastPresence: ClosePresence = 'absent';
+  const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+    const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+    if (operation === 'terminal create') {
+      return {
+        ok: true,
+        result: { terminal: { handle, incarnationId: generation, title: 'owned' } },
+      };
+    }
+    if (operation === 'worktree current') {
+      return {
+        ok: true,
+        result: { worktree: { path: '/tmp/worktree-1248', head: 'a'.repeat(40) } },
+      };
+    }
+    if (operation === 'terminal show') {
+      if (lastPresence === 'mismatch') {
+        return {
+          ok: true,
+          result: { terminal: { handle, incarnationId: 'other-generation', title: 'owned', worktreePath: '/tmp/worktree-1248' } },
+        };
+      }
+      return { ok: false, error: { code: 'tab_not_found', message: 'tab_not_found' } };
+    }
+    if (operation === 'terminal list') {
+      const state = input.presence[Math.min(presenceCount++, input.presence.length - 1)] ?? 'absent';
+      lastPresence = state;
+      if (state === 'unavailable') {
+        return {
+          ok: false,
+          error: { code: 'inventory_unavailable', message: 'inventory unavailable' },
+        };
+      }
+      if (state === 'absent') return { ok: true, result: { terminals: [] } };
+      return {
+        ok: true,
+        result: {
+          terminals: [{
+            handle,
+            incarnationId: state === 'mismatch' ? 'other-generation' : generation,
+            worktreeId: 'worktree-1248',
+            worktreePath: '/tmp/worktree-1248',
+            title: 'owned',
+            status: 'running',
+          }],
+        },
+      };
+    }
+    if (operation === 'terminal close') {
+      return input.closeResponses[closeCount++]
+        ?? { ok: false, error: { code: 'unexpected_close', message: 'unexpected close' } };
+    }
+    return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+  });
+  const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+  const spawned = adapter.spawnWorker({ title: 'owned', command: 'cursor-agent' });
+  if (spawned.status !== 'ok') throw new Error(`fixture spawn failed: ${spawned.reason}`);
+  return {
+    adapter,
+    worker: spawned.value.identity,
+    runJson,
+    closeCalls: () => closeCount,
+  };
+}
+
+describe('Orca task adapter bounded tab-not-found close retry', () => {
+  const tabNotFound = (): OrcaJsonResponse => ({
+    ok: false,
+    error: { code: 'runtime_error', message: 'tab_not_found' },
+  });
+
+  it('retries once for an exact present identity and succeeds', () => {
+    const fixture = boundedCloseFixture({
+      closeResponses: [tabNotFound(), { ok: true, result: {} }],
+      presence: ['present', 'present'],
+    });
+
+    expect(fixture.adapter.stopWorker(fixture.worker)).toEqual({
+      status: 'ok',
+      value: { stopped: true },
+    });
+    expect(fixture.closeCalls()).toBe(2);
+    expect(fixture.runJson.mock.calls
+      .filter((call) => call[0]?.[1] === 'close')
+      .every((call) => call[0]?.at(-1) === fixture.worker.id)).toBe(true);
+    expect(fixture.adapter.stopWorker(fixture.worker)).toEqual({
+      status: 'failed',
+      operation: 'stop_worker',
+      reason: 'worker_not_owned_by_runtime_instance',
+    });
+  });
+
+  it('accepts exact absence after the bounded retry fails', () => {
+    const fixture = boundedCloseFixture({
+      closeResponses: [tabNotFound(), {
+        ok: false,
+        error: { code: 'runtime_error', message: 'close_failed_again' },
+      }],
+      presence: ['present', 'present', 'absent'],
+    });
+
+    expect(fixture.adapter.stopWorker(fixture.worker)).toEqual({
+      status: 'ok',
+      value: { stopped: true },
+    });
+    expect(fixture.closeCalls()).toBe(2);
+  });
+
+  it('fails closed after the second close failure while the exact identity remains', () => {
+    const fixture = boundedCloseFixture({
+      closeResponses: [tabNotFound(), {
+        ok: false,
+        error: { code: 'runtime_error', message: 'close_failed_again' },
+      }],
+      presence: ['present', 'present', 'present'],
+    });
+
+    expect(fixture.adapter.stopWorker(fixture.worker)).toMatchObject({
+      status: 'failed',
+      operation: 'stop_worker',
+      reason: 'runtime_operation_failed',
+    });
+    expect(fixture.closeCalls()).toBe(2);
+    expect(fixture.adapter.stopWorker(fixture.worker)).toEqual({
+      status: 'failed',
+      operation: 'stop_worker',
+      reason: 'worker_not_owned_by_runtime_instance',
+    });
+  });
+
+  it('fails closed when post-error inventory is unavailable and does not retry', () => {
+    const fixture = boundedCloseFixture({
+      closeResponses: [tabNotFound()],
+      presence: ['present', 'unavailable'],
+    });
+
+    expect(fixture.adapter.stopWorker(fixture.worker)).toMatchObject({
+      status: 'failed',
+      operation: 'stop_worker',
+      reason: expect.stringContaining('unproven_already_absent;'),
+    });
+    expect(fixture.closeCalls()).toBe(1);
+  });
+
+  it('does not retry a different native error', () => {
+    const fixture = boundedCloseFixture({
+      closeResponses: [{
+        ok: false,
+        error: { code: 'runtime_error', message: 'permission_denied' },
+      }],
+      presence: ['present', 'present'],
+    });
+
+    expect(fixture.adapter.stopWorker(fixture.worker)).toMatchObject({
+      status: 'failed',
+      operation: 'stop_worker',
+      reason: 'runtime_operation_failed',
+    });
+    expect(fixture.closeCalls()).toBe(1);
+  });
+
+  it('rejects a stale generation after the first close error without retrying', () => {
+    const fixture = boundedCloseFixture({
+      closeResponses: [tabNotFound()],
+      presence: ['present', 'mismatch'],
+    });
+
+    expect(fixture.adapter.stopWorker(fixture.worker)).toMatchObject({
+      status: 'failed',
+      operation: 'stop_worker',
+      reason: expect.stringContaining('worker_generation_mismatch'),
+    });
+    expect(fixture.closeCalls()).toBe(1);
+  });
+});
