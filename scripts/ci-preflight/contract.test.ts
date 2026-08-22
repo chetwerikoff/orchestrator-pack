@@ -1,3 +1,6 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 60
+
 import { describe, expect, it } from 'vitest';
 import { TABLE, INVENTORY, WORKFLOW_BLOB_SHA, WORKFLOW_CONTENT_SHA256, workflowCoverage, workflowHashes, nativeOutput } from './contract.ts';
 import { directDependencyExecutable, pesterProbeEnvironment } from './cli.ts';
