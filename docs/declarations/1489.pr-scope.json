@@ -3,7 +3,8 @@
   "issue_number": 1489,
   "declared_paths": [
     "scripts/cursor-unsent-composer-submit.test.ts",
-    "scripts/cursor-unsent-composer-submit.ts"
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     ".github/",
@@ -19,7 +20,8 @@
   "allowed_roots": [
     "docs/declarations/",
     "scripts/cursor-unsent-composer-submit.test.ts",
-    "scripts/cursor-unsent-composer-submit.ts"
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "932f7ab3d394b4337100938abbafb42bf4464a7c"
+  "source_revision": "37b9baa346ac81cd2404a1e3ecd8b72111e1e71a"
 }
