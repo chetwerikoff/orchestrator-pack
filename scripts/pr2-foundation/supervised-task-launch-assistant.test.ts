@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import type { SupervisedWorkerStartResult } from './supervised-worker-start.ts';
 import {
+  createManagerTaskWithOrca,
   parseLaunchAssistantCli,
   prepareWorktreeWithOrca,
   resolveExecutorProfile,
+  resolveLiveExecutorProfile,
   runSupervisedTaskLaunchAssistant,
   type DispatchObservation,
   type EdgeResult,
@@ -22,6 +24,7 @@ const worker: RuntimeWorker = {
 function runtimeAdapter(input: {
   worker?: RuntimeWorker;
   liveness?: 'busy' | 'idle' | 'unknown' | 'gone';
+  livenessWorker?: RuntimeWorker['identity'];
   onSpawn?: () => void;
 } = {}): RuntimeAdapter {
   const target = input.worker ?? worker;
@@ -42,7 +45,7 @@ function runtimeAdapter(input: {
       changed: false,
       terminalState: 'running',
     } }),
-    liveness: () => ({ status, worker: target.identity }),
+    liveness: () => ({ status, worker: input.livenessWorker ?? target.identity }),
     stopWorker: () => ({ status: 'ok', value: { stopped: true } }),
   };
 }
@@ -159,14 +162,29 @@ describe('supervised Task launch assistant', () => {
     }
   });
 
-  it('rejects literal cursor/crossed profile values before Task/runtime effects', async () => {
+  it.each([
+    ['executor_profile_missing', { PACK_EXECUTOR_T2_MODEL: '' }],
+    ['executor_profile_malformed', { PACK_EXECUTOR_T2_MODEL: 'model with spaces' }],
+    ['executor_profile_agent_unsupported', { PACK_EXECUTOR_T2_AGENT: 'codex' }],
+    ['executor_profile_literal_cursor_unsupported', { PACK_EXECUTOR_T2_AGENT: 'cursor' }],
+  ] as const)('rejects invalid executor profile before effects: %s', async (cause, overrides) => {
     let worktrees = 0; let spawns = 0;
-    const input: LaunchInput = { ...launchInput('t2'), env: profileEnv({ PACK_EXECUTOR_T2_AGENT: 'cursor' }) };
+    const input: LaunchInput = { ...launchInput('t2'), env: profileEnv(overrides) };
     const result = await runSupervisedTaskLaunchAssistant(input, deps({
       onWorktree: () => { worktrees += 1; }, adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
     }));
-    expect(result).toMatchObject({ outcome: 'continue', stage: 'executor_profile', observedCause: 'executor_profile_literal_cursor_unsupported' });
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'executor_profile', observedCause: cause });
     expect(worktrees).toBe(0); expect(spawns).toBe(0);
+  });
+
+  it('checks live cursor model applicability before any follow-up child action', async () => {
+    const calls: string[][] = [];
+    const result = await resolveLiveExecutorProfile('t2', profileEnv(), async (args) => {
+      calls.push([...args]);
+      return { ok: true, stdout: 'other-model-low\n' };
+    });
+    expect(result).toMatchObject({ status: 'continue', cause: 'executor_profile_model_unavailable' });
+    expect(calls).toEqual([['cursor-agent', '--list-models']]);
   });
 
   it('manager proves exact current Run before Task membership/effects', async () => {
@@ -193,11 +211,38 @@ describe('supervised Task launch assistant', () => {
       managerBrief: 'private brief payload', worktreeName: 'manager-worktree', env: profileEnv() };
     const result = await runSupervisedTaskLaunchAssistant(input, deps({
       managerCreate: { status: 'continue', cause: 'manager_task_create_outcome_unknown', actor: 'provider', evidence: { requestId: 'req-1' },
-        nextAction: { kind: 'retry_manager_task_create', requestId: 'req-1', command: 'orca orchestration task-create --spec <same-manager-brief> --run run-1 --retry-request req-1 --json' } },
+        nextAction: { kind: 'retry_manager_task_create', requestId: 'req-1', replay: {
+          operation: 'orca_orchestration_task_create', runId: 'run-1', requestId: 'req-1', inputSource: 'caller_held_manager_brief',
+        } } },
     }));
     expect(result).toMatchObject({ outcome: 'continue', stage: 'manager_task', observedCause: 'manager_task_create_outcome_unknown',
-      nextAction: { kind: 'retry_manager_task_create', requestId: 'req-1' } });
+      nextAction: { kind: 'retry_manager_task_create', requestId: 'req-1', replay: { inputSource: 'caller_held_manager_brief' } } });
     expect(JSON.stringify(result)).not.toContain('private brief payload');
+  });
+
+  it('represents Task-create uncertainty as structured caller-held replay without a fake command', async () => {
+    const calls: string[][] = [];
+    const result = await createManagerTaskWithOrca('run-1', 'private brief payload', async (args) => {
+      calls.push([...args]);
+      return { ok: false, stdout: JSON.stringify({ ok: false, error: {
+        code: 'operation_unknown', data: { requestId: 'req-1' },
+      } }) };
+    });
+    expect(calls).toEqual([[
+      'orca', 'orchestration', 'task-create', '--spec', 'private brief payload', '--run', 'run-1', '--json',
+    ]]);
+    expect(result).toMatchObject({
+      status: 'continue', cause: 'manager_task_create_outcome_unknown',
+      nextAction: {
+        kind: 'retry_manager_task_create', requestId: 'req-1',
+        replay: {
+          operation: 'orca_orchestration_task_create', runId: 'run-1', requestId: 'req-1', inputSource: 'caller_held_manager_brief',
+        },
+      },
+    });
+    if (result.status === 'continue') expect(result.nextAction.command).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain('private brief payload');
+    expect(JSON.stringify(result)).not.toContain('<same-manager-brief>');
   });
 
   it('early non-null Dispatch creates no worktree or terminal and makes no start', async () => {
@@ -224,6 +269,13 @@ describe('supervised Task launch assistant', () => {
   ])('fails the machine-enforced terminal boundary: %s', async (cause, target, liveness) => {
     const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ adapter: runtimeAdapter({ worker: target, liveness }) }));
     expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare', observedCause: cause });
+  });
+
+  it('fails closed when liveness observes a recreated terminal generation', async () => {
+    const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({
+      adapter: runtimeAdapter({ livenessWorker: { ...worker.identity, generation: 'pty-2' } }),
+    }));
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare', observedCause: 'terminal_generation_mismatch' });
   });
 
   it('preserves worker-start provider mutation recovery as one exact replay action', async () => {
@@ -305,5 +357,13 @@ describe('supervised Task launch assistant', () => {
       workClass: 'manager', runId: 'run-1', taskId: 'task-1', worktreeSelector: 'id:w',
     });
     expect(() => parseLaunchAssistantCli(['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'smoke'])).toThrow(/work-class/u);
+  });
+
+  it.each([
+    ['partial issue number', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 't2', '--issue-number', '12abc']],
+    ['duplicate option', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 't2', '--task', 'task-1', '--task', 'task-2']],
+    ['unknown option', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 't2', '--unexpected', 'value']],
+  ] as const)('CLI rejects malformed invocation: %s', (_label, argv) => {
+    expect(() => parseLaunchAssistantCli(argv)).toThrow();
   });
 });
