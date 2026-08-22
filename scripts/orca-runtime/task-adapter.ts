@@ -86,7 +86,6 @@ function isRetryableTabNotFound(response: OrcaJsonResponse): boolean {
 export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   readonly #options: OrcaRuntimeAdapterOptions;
   readonly #ownedForStop = new Map<string, RuntimeWorkerIdentity>();
-  readonly #stopWorkspace = new Map<string, 'active' | string>();
   readonly #assignmentOwned = new Map<string, RuntimeWorkerIdentity>();
   readonly #unprovenOwnedPresence = new Map<string, UnprovenOwnedPresence>();
   readonly #runJson: typeof runOrcaJson;
@@ -113,7 +112,6 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     reason: string,
   ): RuntimeOperationFailure {
     this.#ownedForStop.delete(worker.id);
-    this.#stopWorkspace.delete(worker.id);
     this.#unprovenOwnedPresence.set(worker.id, { identity: worker, reason });
     return runtimeFailure('stop_worker', reason);
   }
@@ -251,7 +249,6 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (result.status === 'ok') {
       this.#unprovenOwnedPresence.delete(result.value.identity.id);
       this.#ownedForStop.set(result.value.identity.id, result.value.identity);
-      this.#stopWorkspace.set(result.value.identity.id, input.workspace ?? 'active');
     }
     return result;
   }
@@ -274,7 +271,6 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     }
     if (current.value === null) {
       this.#ownedForStop.delete(worker.id);
-      this.#stopWorkspace.delete(worker.id);
       return { status: 'ok', value: { stopped: true } };
     }
 
@@ -288,7 +284,6 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (!response.ok) {
       const presence = this.#findOwnedPresence(worker, options);
       if (presence.status === 'ok' && presence.value === null) {
-        this.#stopWorkspace.delete(worker.id);
         return { status: 'ok', value: { stopped: true } };
       }
       if (presence.status !== 'ok') {
@@ -304,13 +299,11 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
           options,
         );
         if (retry.ok) {
-          this.#stopWorkspace.delete(worker.id);
           return { status: 'ok', value: { stopped: true } };
         }
 
         const retryPresence = this.#findOwnedPresence(worker, options);
         if (retryPresence.status === 'ok' && retryPresence.value === null) {
-          this.#stopWorkspace.delete(worker.id);
           return { status: 'ok', value: { stopped: true } };
         }
         if (retryPresence.status !== 'ok') {
@@ -331,7 +324,6 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       );
     }
 
-    this.#stopWorkspace.delete(worker.id);
     return { status: 'ok', value: { stopped: true } };
   }
 
