@@ -27,5 +27,5 @@
     "scripts/lib/gh-wrapper.mjs",
     "scripts/lib/graphql-quota-github-read-inventory.json"
   ],
-  "source_revision": "25c65e4a2572f644f19b7ad4fe1e05fbce42876f"
+  "source_revision": "33ff311b8d863e3c89ec1e1ff690bcd48ffdbabe"
 }
