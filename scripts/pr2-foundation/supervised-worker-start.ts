@@ -92,15 +92,30 @@ function nonEmpty(value: unknown): string {
   return String(value ?? '').trim();
 }
 
+function providerText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function recoveryRequestIdField(
+  data: Record<string, unknown>,
+  name: 'orchestrationRequestId' | 'requestId',
+): { readonly present: boolean; readonly value: string } | null {
+  if (!Object.hasOwn(data, name)) return { present: false, value: '' };
+  const value = providerText(data[name]);
+  return value ? { present: true, value } : null;
+}
+
 function recoveryEvidence(error: unknown): SupervisedWorkerStartRecoveryEvidence | undefined {
   if (!isRecord(error) || !isRecord(error.data)) return undefined;
-  const orchestrationRequestId = nonEmpty(error.data.orchestrationRequestId);
-  const requestId = nonEmpty(error.data.requestId);
-  if (orchestrationRequestId && requestId && orchestrationRequestId !== requestId) return undefined;
-  const exactRequestId = orchestrationRequestId || requestId;
+  const orchestrationRequestId = recoveryRequestIdField(error.data, 'orchestrationRequestId');
+  const requestId = recoveryRequestIdField(error.data, 'requestId');
+  if (!orchestrationRequestId || !requestId) return undefined;
+  if (orchestrationRequestId.present && requestId.present
+    && orchestrationRequestId.value !== requestId.value) return undefined;
+  const exactRequestId = orchestrationRequestId.value || requestId.value;
   if (!exactRequestId) return undefined;
-  const dispatchId = nonEmpty(error.data.dispatchId);
-  const recoveryCommand = nonEmpty(error.data.recoveryCommand);
+  const dispatchId = providerText(error.data.dispatchId);
+  const recoveryCommand = providerText(error.data.recoveryCommand);
   return {
     requestId: exactRequestId,
     ...(dispatchId ? { dispatchId } : {}),
