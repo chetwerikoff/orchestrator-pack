@@ -6,6 +6,8 @@
     "scripts/lib/worker-smoke-findings-regressions.ts",
     "scripts/lib/worker-smoke-lifecycle.ts",
     "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orca-runtime/task-adapter.ts",
     "scripts/worker-smoke-cleanup-proof.ts",
     "scripts/worker-smoke-run.ts"
   ],
@@ -27,7 +29,6 @@
     "scripts/lib/pack-review-run-store.ts",
     "scripts/lib/review-start-claim-store.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
-    "scripts/orca-runtime/",
     "scripts/pack-review-carryover.test.ts",
     "scripts/pack-review-carryover.ts",
     "scripts/pack-review-delivery.cases.ts",
@@ -54,6 +55,8 @@
     "scripts/lib/worker-smoke-lifecycle-regressions-base.ts",
     "scripts/lib/worker-smoke-lifecycle.ts",
     "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orca-runtime/task-adapter.ts",
     "scripts/worker-smoke-cleanup-proof.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
