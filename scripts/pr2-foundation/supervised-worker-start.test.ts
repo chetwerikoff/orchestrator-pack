@@ -281,6 +281,22 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack',env),1416)).toBeNull();
   });
 
+  it.each([
+    ['numeric request id', {requestId:123,dispatchId:'dispatch-7',recoveryCommand:'orca orchestration worker-show --dispatch dispatch-7 --json'}],
+    ['object request id', {orchestrationRequestId:{id:'request-8'},dispatchId:'dispatch-8'}],
+    ['conflicting request ids', {orchestrationRequestId:'request-a',requestId:'request-b',dispatchId:'dispatch-9'}],
+  ] as const)('does not promote malformed recovery authority: %s', async(_label,data)=>{
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base};
+    const result=await runSupervisedWorkerStart({
+      repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
+      execute:async()=>({
+        ok:false,
+        stdout:JSON.stringify({ok:false,error:{code:'operation_unknown',message:'unknown outcome',data}}),
+      }),
+    });
+    expect(result).toEqual({ok:false,reason:'supervised_start_envelope_error',errorCode:'operation_unknown'});
+  });
+
   it('keeps malformed and code-less error envelopes on the generic invalid path', async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
     const malformed=await runSupervisedWorkerStart({
