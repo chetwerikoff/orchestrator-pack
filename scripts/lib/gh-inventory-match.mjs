@@ -14,6 +14,42 @@ export const PR_INFO_FROM_VIEW_FIELDS = Object.freeze([
   'url',
 ]);
 
+const PR_VIEW_REST_FIELDS = new Set([
+  'baseRefName',
+  'body',
+  'headRefName',
+  'headRefOid',
+  'isDraft',
+  'mergeCommit',
+  'mergeStateStatus',
+  'mergeable',
+  'mergedAt',
+  'number',
+  'state',
+  'title',
+  'url',
+]);
+
+const PR_CHECKS_REST_FIELDS = new Set([
+  'appId',
+  'bucket',
+  'completedAt',
+  'description',
+  'link',
+  'name',
+  'startedAt',
+  'state',
+  'workflow',
+]);
+
+/**
+ * @param {string[] | null} fields
+ * @param {Set<string>} supported
+ */
+function hasOnlySupportedFields(fields, supported) {
+  return Boolean(fields && fields.length > 0 && fields.every((field) => supported.has(field)));
+}
+
 /**
  * @param {string | boolean | undefined} searchFlag
  * @returns {number | null}
@@ -185,21 +221,10 @@ export function matchInventoryRoute(parsed) {
     if (!Number.isFinite(num) || num <= 0) {
       return null;
     }
-    const expected = [
-      'bucket',
-      'completedAt',
-      'description',
-      'link',
-      'name',
-      'startedAt',
-      'state',
-      'workflow',
-    ];
-    const expectedWithAppId = ['appId', ...expected];
-    const includeAppId = jsonFieldsEqual(parsed.jsonFields, expectedWithAppId);
-    if (!includeAppId && !jsonFieldsEqual(parsed.jsonFields, expected)) {
+    if (!hasOnlySupportedFields(parsed.jsonFields, PR_CHECKS_REST_FIELDS)) {
       return null;
     }
+    const includeAppId = parsed.jsonFields.includes('appId');
     if (parsed.jq) {
       return null;
     }
@@ -318,23 +343,7 @@ export function matchInventoryRoute(parsed) {
       return null;
     }
 
-    const allowedSets = [
-      ['baseRefName'],
-      ['body'],
-      ['body', 'number'],
-      ['baseRefName', 'headRefOid', 'number', 'state'],
-      ['headRefOid', 'headRefName'],
-      ['number', 'headRefOid', 'baseRefName', 'state'],
-      ['baseRefName', 'headRefName', 'headRefOid', 'isDraft', 'mergeable', 'number', 'state'],
-      ['mergedAt', 'state'],
-      ['state'],
-    ];
-    const normalizedAllowed = allowedSets.map((s) => [...s].sort());
-    const sorted = [...fields].sort();
-    const matched = normalizedAllowed.find(
-      (set) => set.length === sorted.length && set.every((f, i) => f === sorted[i]),
-    );
-    if (!matched) {
+    if (!hasOnlySupportedFields(fields, PR_VIEW_REST_FIELDS)) {
       return null;
     }
 
@@ -342,6 +351,7 @@ export function matchInventoryRoute(parsed) {
       'baseRefName': ['.baseRefName'],
       'body': ['.body'],
       'body,number': ["{number: .number, body: .body}", '{number: .number, body: .body}'],
+      'headRefOid': ['.headRefOid'],
     };
     const key = [...fields].sort().join(',');
     if (parsed.jq) {
@@ -355,6 +365,19 @@ export function matchInventoryRoute(parsed) {
   }
 
   return null;
+}
+
+/**
+ * Unsupported read shapes must not fall through to native gh, which may use
+ * GraphQL. Writes and unrelated commands retain passthrough behavior.
+ *
+ * @param {ReturnType<typeof parseGhArgv>} parsed
+ */
+export function isUnsupportedHighLevelRead(parsed) {
+  const [root, sub] = parsed.subcommand;
+  return root === 'pr'
+    && (sub === 'view' || sub === 'checks')
+    && matchInventoryRoute(parsed) === null;
 }
 
 /**

@@ -150,6 +150,9 @@ export function applyListedJq(value, jq) {
   if (normalized === '.body') {
     return value.body;
   }
+  if (normalized === '.headRefOid') {
+    return value.headRefOid;
+  }
   if (normalized === '.nameWithOwner') {
     return value.nameWithOwner;
   }
@@ -251,6 +254,30 @@ export function mapPullState(pull) {
 }
 
 /**
+ * Map REST pull mergeability to gh pr view's enum.
+ * @param {Record<string, unknown>} pull
+ */
+export function mapPullMergeable(pull) {
+  if (pull.mergeable === true) {
+    return 'MERGEABLE';
+  }
+  if (pull.mergeable === false) {
+    return 'CONFLICTING';
+  }
+  return 'UNKNOWN';
+}
+
+/**
+ * Map REST mergeable_state to gh pr view's mergeStateStatus enum.
+ * @param {Record<string, unknown>} pull
+ */
+export function mapPullMergeStateStatus(pull) {
+  const state = String(pull.mergeable_state ?? '').toUpperCase();
+  const supported = new Set(['BEHIND', 'BLOCKED', 'CLEAN', 'DIRTY', 'DRAFT', 'HAS_HOOKS', 'UNSTABLE', 'UNKNOWN']);
+  return supported.has(state) ? state : 'UNKNOWN';
+}
+
+/**
  * @param {Record<string, unknown>} pull
  * @param {string[]} fields
  */
@@ -266,6 +293,9 @@ export function mapPullToGhJson(pull, fields) {
     state: mapPullState(pull),
     mergedAt: pull.merged_at ?? null,
     body: pull.body ?? '',
+    mergeable: mapPullMergeable(pull),
+    mergeStateStatus: mapPullMergeStateStatus(pull),
+    mergeCommit: pull.merge_commit_sha ? { oid: pull.merge_commit_sha } : null,
   };
   return pickJsonFields(base, fields);
 }
