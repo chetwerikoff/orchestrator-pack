@@ -1,16 +1,18 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
-import { writeFileSync, unlinkSync } from 'node:fs';
+import { unlinkSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   acquireWatchLock,
   classifyCursorComposer,
   createUnsentComposerWatchState,
   cursorComposerLooksUnsent,
   QUIET_AFTER_PRINT_MS,
+  releaseWatchLock,
   submitUnsentCursorComposer,
   submitUnsentCursorComposerOnce,
-  WATCH_LOCK_PATH,
   type UnsentComposerSubmitDeps,
 } from './cursor-unsent-composer-submit.ts';
 import type { RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
@@ -49,10 +51,11 @@ function depsFor(
     })),
     submit: extra.submitResult ?? extra.submit ?? ((identity) => {
       submitted.push(identity);
-      return { status: 'dispatch_unknown' as const, reason: 'submit_witness_unavailable' };
+      return { status: 'dispatched' as const };
     }),
     now: extra.now,
     sleep: extra.sleep,
+    sentStorePath: extra.sentStorePath,
   };
 }
 
@@ -143,6 +146,18 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
     expect(classifyCursorComposer(`${POKE}\nGPT-please keep this\n${footer}`)).toBe('manual');
     expect(classifyCursorComposer(`${POKE}\nComposer note keep this\n${footer}`)).toBe('manual');
     expect(classifyCursorComposer(`${POKE}\n~/projects/foo\n${footer}`)).toBe('manual');
+  });
+
+  it('does not treat a user line that starts with one box glyph as the composer border', () => {
+    expect(classifyCursorComposer(`
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  →
+    ${POKE}
+    ▀ do not send this
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  Cursor Grok 4.6 High · 44.7% · 22 files edited                                                                                                    Run Everything
+  ~/projects/orchestrator-pack · main
+`)).toBe('manual');
   });
 
   it('does not submit an unboxed poke that still has a typed composer line above it', () => {
@@ -245,7 +260,7 @@ describe('submitUnsentCursorComposer', () => {
           submitted.push(identity);
           launches += 1;
           if (launches === 1) return { status: 'send_failed', reason: 'runtime_unavailable' };
-          return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
+          return { status: 'dispatched' };
         },
       },
     );
@@ -284,15 +299,73 @@ describe('submitUnsentCursorComposer', () => {
     expect(result.watch).toBe(false);
     expect(result.terminals[0]?.reason).toBe('enter_sent');
   });
+
+  it('retries any definitive send_failed and reports dispatch_unknown without Enter', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const state = createUnsentComposerWatchState();
+    let now = 0;
+    let launches = 0;
+    const localDeps = depsFor(
+      { term_unsent: [POKE, ...CURSOR_FOOTER] },
+      {
+        now: () => now,
+        submitResult: (identity) => {
+          submitted.push(identity);
+          launches += 1;
+          if (launches === 1) return { status: 'send_failed', reason: 'runtime_response_invalid' };
+          return { status: 'dispatched' };
+        },
+      },
+    );
+    submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    now = QUIET_AFTER_PRINT_MS;
+    const failed = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    const retry = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    expect(failed.terminals[0]?.reason).toBe('runtime_response_invalid');
+    expect(retry.terminals[0]?.reason).toBe('enter_sent');
+    expect(submitted).toHaveLength(2);
+  });
+
+  it('does not resend across a fresh --once state when the fingerprint was persisted', () => {
+    const sentStorePath = join(tmpdir(), `opk-unsent-sent-${process.pid}-${Date.now()}.json`);
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let now = 0;
+    const deps = depsFor(
+      { term_unsent: [POKE, ...CURSOR_FOOTER] },
+      {
+        submitted,
+        sentStorePath,
+        now: () => now,
+        sleep: (milliseconds) => {
+          now += milliseconds;
+        },
+      },
+    );
+    try {
+      submitUnsentCursorComposerOnce({ terminals: ['term_unsent'] }, deps, createUnsentComposerWatchState());
+      now = 0;
+      const again = submitUnsentCursorComposerOnce(
+        { terminals: ['term_unsent'] },
+        deps,
+        createUnsentComposerWatchState(),
+      );
+      expect(submitted).toHaveLength(1);
+      expect(again.terminals[0]?.reason).toBe('already_submitted');
+    } finally {
+      try { unlinkSync(sentStorePath); } catch { /* ignore */ }
+    }
+  });
 });
 
 describe('acquireWatchLock', () => {
   it('fails closed when another live process holds the lock', () => {
-    writeFileSync(WATCH_LOCK_PATH, `${process.pid}\n`);
+    const lockPath = join(tmpdir(), `opk-unsent-lock-${process.pid}-${Date.now()}.lock`);
+    acquireWatchLock(lockPath);
     try {
-      expect(() => acquireWatchLock()).toThrow(/already running/);
+      expect(() => acquireWatchLock(lockPath)).toThrow(/already running/);
     } finally {
-      try { unlinkSync(WATCH_LOCK_PATH); } catch { /* ignore */ }
+      releaseWatchLock();
+      try { unlinkSync(lockPath); } catch { /* ignore */ }
     }
   });
 });

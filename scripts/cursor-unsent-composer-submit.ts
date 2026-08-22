@@ -1,10 +1,9 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import './toolchain/native-entrypoint-preflight.ts';
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { processAlive } from './lib/cutover/activation-cordon.ts';
 import { runOrcaJson, type OrcaJsonResponse } from './orca-runtime/native.ts';
 import {
   type RuntimeAdapter,
@@ -13,6 +12,11 @@ import {
   type RuntimeWorkerIdentity,
 } from './runtime/contracts.ts';
 import { selectRuntimeAdapter } from './runtime/registry.ts';
+import {
+  releaseHeldFileLock,
+  replaceLockedFileContents,
+  tryAcquireHeldFileLock,
+} from './runtime/single-instance-lease.ts';
 
 const UNBOXED_BOX_CHROME = /^[▀▄]+$/u;
 const UNBOXED_CTRL_C = /^ctrl\+c to stop\b/iu;
@@ -21,12 +25,12 @@ const UNBOXED_CWD_FOOTER = /^~\//u;
 const EMPTY_COMPOSER = /^(?:→\s*)?Add a follow-up\b/iu;
 const LONE_ARROW = /^→$/u;
 const MACHINE_POKE = /^You have \d+ orchestration messages?\. Run `orca orchestration check --run [A-Za-z0-9_-]+`\.$/u;
-const BOX_TOP = /^\s*▄/u;
-const BOX_BOTTOM = /^\s*▀/u;
+const BOX_TOP = /^\s*▄{8,}\s*$/u;
+const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
 export const QUIET_AFTER_PRINT_MS = 10_000;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
-const LAUNCH_FAILED = 'runtime_unavailable';
+export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
 export type CursorComposerKind = 'empty' | 'machine_poke' | 'manual';
 
@@ -111,12 +115,60 @@ function workspaceSelectorsFromList(response: OrcaJsonResponse<unknown>): string
   return [...new Set(selectors)];
 }
 
+export function loadSubmittedFingerprints(path: string): Map<string, string> {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    if (!Array.isArray(parsed)) return new Map();
+    const loaded = new Map<string, string>();
+    for (const row of parsed) {
+      if (!row || typeof row !== 'object') continue;
+      const runtime = (row as { runtime?: unknown }).runtime;
+      const id = (row as { id?: unknown }).id;
+      const generation = (row as { generation?: unknown }).generation;
+      const fingerprint = (row as { fingerprint?: unknown }).fingerprint;
+      if (
+        typeof runtime === 'string' && runtime
+        && typeof id === 'string' && id
+        && typeof generation === 'string' && generation
+        && typeof fingerprint === 'string' && fingerprint
+      ) {
+        loaded.set(workerKey({ runtime, id, generation }), fingerprint);
+      }
+    }
+    return loaded;
+  } catch {
+    return new Map();
+  }
+}
+
+export function saveSubmittedFingerprints(path: string, submitted: ReadonlyMap<string, string>): void {
+  const rows = [...submitted.entries()].flatMap(([key, fingerprint]) => {
+    const [runtime, id, generation] = key.split('\u0000');
+    if (!runtime || !id || !generation) return [];
+    return [{ runtime, id, generation, fingerprint }];
+  });
+  writeFileSync(path, `${JSON.stringify(rows)}\n`);
+}
+
+function hydrateSubmitted(state: UnsentComposerWatchState, path: string | undefined): void {
+  if (!path) return;
+  for (const [key, value] of loadSubmittedFingerprints(path)) {
+    if (!state.submittedFingerprint.has(key)) state.submittedFingerprint.set(key, value);
+  }
+}
+
+function persistSubmitted(state: UnsentComposerWatchState, path: string | undefined): void {
+  if (!path) return;
+  saveSubmittedFingerprints(path, state.submittedFingerprint);
+}
+
 export interface UnsentComposerSubmitDeps {
   readonly listWorkers: () => { ok: true; workers: readonly RuntimeWorker[] } | { ok: false; reason: string };
   readonly read: (worker: RuntimeWorkerIdentity) => { ok: true; lines: readonly string[] } | { ok: false; reason: string };
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
+  readonly sentStorePath?: string;
 }
 
 export interface UnsentComposerSubmitInput {
@@ -206,12 +258,12 @@ function submitOne(
   }
   state.submittedFingerprint.set(key, fingerprint);
   const dispatched = deps.submit(identity);
-  if (dispatched.status === 'send_failed' && dispatched.reason === LAUNCH_FAILED) {
+  if (dispatched.status === 'send_failed') {
     state.submittedFingerprint.delete(key);
     return { ...base, ok: false, unsent: true, enter: false, reason: dispatched.reason };
   }
-  if (dispatched.status === 'send_failed') {
-    return { ...base, ok: false, unsent: true, enter: false, reason: dispatched.reason };
+  if (dispatched.status === 'dispatch_unknown') {
+    return { ...base, ok: true, unsent: true, enter: false, reason: dispatched.reason };
   }
   return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent' };
 }
@@ -221,6 +273,7 @@ export function submitUnsentCursorComposer(
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
 ): UnsentComposerSubmitResult {
+  hydrateSubmitted(state, deps.sentStorePath);
   const dryRun = Boolean(input.dryRun);
   const watch = Boolean(input.watch);
   const listed = deps.listWorkers();
@@ -244,6 +297,7 @@ export function submitUnsentCursorComposer(
     ? listed.workers
     : listed.workers.filter((worker) => requested.includes(worker.identity.id));
   const terminals = workers.map((worker) => submitOne(worker, { ...input, watch }, deps, state));
+  persistSubmitted(state, deps.sentStorePath);
   return {
     ok: terminals.every((row) => row.ok),
     dryRun,
@@ -270,28 +324,30 @@ export function submitUnsentCursorComposerOnce(
   return { ...second, watch: false };
 }
 
-export function acquireWatchLock(): void {
-  try {
-    const fd = openSync(WATCH_LOCK_PATH, 'wx');
-    try {
-      writeSync(fd, `${process.pid}\n`);
-    } finally {
-      closeSync(fd);
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    const existing = Number.parseInt(readFileSync(WATCH_LOCK_PATH, 'utf8').trim(), 10);
-    if (Number.isInteger(existing) && existing > 0 && processAlive(existing)) {
-      throw new Error(`already running pid=${existing}`);
-    }
-    unlinkSync(WATCH_LOCK_PATH);
-    acquireWatchLock();
+let heldLockFd: number | undefined;
+
+export function acquireWatchLock(lockPath = WATCH_LOCK_PATH): void {
+  const held = tryAcquireHeldFileLock(lockPath);
+  if (!held.acquired) {
+    throw new Error(held.reason === 'busy' ? 'already running' : `lock ${held.reason}`);
   }
+  heldLockFd = held.descriptor;
+  replaceLockedFileContents(held.descriptor, `${process.pid}\n`);
+}
+
+export function releaseWatchLock(): void {
+  if (heldLockFd === undefined) return;
+  try {
+    releaseHeldFileLock(heldLockFd);
+  } catch {
+    /* lock already released */
+  }
+  heldLockFd = undefined;
 }
 
 function installLockRelease(): void {
   const release = (): void => {
-    try { unlinkSync(WATCH_LOCK_PATH); } catch { /* lock file already gone */ }
+    releaseWatchLock();
   };
   process.on('exit', release);
   process.on('SIGINT', () => {
@@ -330,6 +386,7 @@ export function createAdapterSubmitDeps(adapter: RuntimeAdapter): UnsentComposer
       return { ok: true, lines: output.value.lines };
     },
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
+    sentStorePath: SENT_STORE_PATH,
   };
 }
 
@@ -372,7 +429,7 @@ function parseArgs(argv: readonly string[]): UnsentComposerSubmitInput & { reado
 }
 
 function shouldLogWatchTick(result: UnsentComposerSubmitResult): boolean {
-  return result.terminals.some((row) => row.enter || !row.ok);
+  return result.terminals.some((row) => row.enter || !row.ok || row.reason === 'submit_witness_unavailable');
 }
 
 function isDirectCliExecution(): boolean {
