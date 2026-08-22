@@ -2,9 +2,20 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1489,
   "declared_paths": [
+    "docs/orca-runtime-caller-census.md",
     "docs/orchestration-runbook.md",
     "docs/wake-supervisor-fleet-operator-reference.md",
-    "scripts/pr2-foundation/scheduler.ts"
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/runtime/caller-census.ts",
+    "scripts/runtime/contracts.ts",
+    "scripts/runtime/test-adapter.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     ".github/",
@@ -25,9 +36,14 @@
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/runtime/caller-census.ts",
+    "scripts/runtime/contracts.ts",
+    "scripts/runtime/test-adapter.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "r08"
+  "source_revision": "0f5708ec64bbe853917228d1bc8013e45742a815"
 }
