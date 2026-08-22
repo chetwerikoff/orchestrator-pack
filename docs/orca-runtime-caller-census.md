@@ -36,6 +36,7 @@ Worktree lifecycle remains the deliberate narrower exception documented in `docs
 | `scripts/runtime/single-instance-lease.ts` | singleton lease | `already-runtime-neutral` | PID/start-ticks/generation singleton ownership. |
 | `scripts/lib/review-start-claim-store.ts` | claim TOCTOU | `already-runtime-neutral` | Sole TypeScript claim lifecycle authority. |
 | `scripts/orchestrator-side-process-registry.json` | child selection | `already-runtime-neutral` | Contains only the Node scheduler child. |
+| `scripts/cursor-unsent-composer-submit.ts` | runtime composition, list, read, send | `use-runtime-interface` | One submitOnly dispatch for an exact stable Orca poke; ordinary typing is never submitted. |
 | `scripts/json-producers/worker-status-report.ts` | runtime composition, list | `use-runtime-interface` | Builds live worker status from `RuntimeAdapter.listWorkers`. |
 | `scripts/lib/operator-publication.ts` | send | `already-runtime-neutral` | Exact zero-or-one operator publication through `RuntimeAdapter.dispatchInput`. |
 | `scripts/lib/worker-degraded-ci-handoff.ts` | find, send | `already-runtime-neutral` | One exact freshness lookup before bounded publication. |

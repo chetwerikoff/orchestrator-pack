@@ -1,0 +1,39 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1489,
+  "declared_paths": [
+    "docs/orca-runtime-caller-census.md",
+    "docs/orchestration-runbook.md",
+    "docs/wake-supervisor-fleet-operator-reference.md",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/runtime/caller-census.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    ".github/",
+    ".orchestrator-pack/",
+    "credentials/",
+    "docs/worker-input-draft-submit.mjs",
+    "packages/core/",
+    "plugins/",
+    "prompts/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "docs/orca-runtime-caller-census.md",
+    "docs/orchestration-runbook.md",
+    "docs/wake-supervisor-fleet-operator-reference.md",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/runtime/caller-census.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "5531f04b442794094028d57e6a147c2c4bad4c3d"
+}
