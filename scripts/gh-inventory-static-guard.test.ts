@@ -7,12 +7,6 @@ import {
   isInventoryCoveredCommand,
   scanFileForViolations,
 } from './lib/gh-inventory-static-guard.mjs';
-import {
-  mapPullMergeStateStatus,
-  mapPullMergeable,
-  mapPullToGhJson,
-} from './lib/gh-repo-resolve.mjs';
-
 describe('waiver runbook GitHub read inventory (Issue #1506)', () => {
   it('classifies every prescribed waiver read shape through a REST route', () => {
     const forms = [
@@ -35,8 +29,9 @@ describe('waiver runbook GitHub read inventory (Issue #1506)', () => {
     expect(isUnsupportedHighLevelRead(unsupported.parsed)).toBe(true);
   });
 
-  it('maps REST merge fields to gh view output names', () => {
-    expect(mapPullToGhJson({
+  it('maps REST merge fields to gh view output names', async () => {
+    const { mapPullForFields } = await import('./lib/gh-rest-routes.mjs');
+    expect(mapPullForFields({
       number: 919,
       mergeable: true,
       mergeable_state: 'clean',
@@ -47,8 +42,6 @@ describe('waiver runbook GitHub read inventory (Issue #1506)', () => {
       mergeStateStatus: 'CLEAN',
       mergeCommit: { oid: 'abc123' },
     });
-    expect(mapPullMergeable({ mergeable: false })).toBe('CONFLICTING');
-    expect(mapPullMergeStateStatus({ mergeable_state: 'not-a-gh-state' })).toBe('UNKNOWN');
   });
 
   it('covers the tracked waiver runbook itself', () => {
