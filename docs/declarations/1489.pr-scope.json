@@ -4,6 +4,7 @@
   "declared_paths": [
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
@@ -21,7 +22,8 @@
     "docs/declarations/",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "37b9baa346ac81cd2404a1e3ecd8b72111e1e71a"
+  "source_revision": "185d3067fdd07f975cf3396410944e4a16a81efa"
 }
