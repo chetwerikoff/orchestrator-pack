@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 60
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -116,7 +118,7 @@ describe('WorkerAssignment compare-and-publish', () => {
     expect(currentWorkerAssignment(file, 1416)).toEqual(winners[0].assignment);
   });
 
-  it('reports assignment_store_busy distinctly at the exact-current fence with zero action', async () => {
+  it('reports assignment_store_busy as a proven pre-action failure with zero action', async () => {
     const { file } = fixture();
     const first = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-1'));
     if (!first.ok) throw new Error(first.reason);
@@ -131,10 +133,25 @@ describe('WorkerAssignment compare-and-publish', () => {
     const fenced = await withCurrentWorkerAssignmentFence(file, first.assignment, () => {
       effects += 1;
     });
-    expect(fenced).toEqual({ ok: false, reason: 'assignment_store_busy' });
+    expect(fenced).toEqual({ ok: false, reason: 'assignment_store_busy', actionEntered: false });
     expect(effects).toBe(0);
     release();
     await held;
+    expect(assignmentStillCurrent(file, first.assignment)).toBe(true);
+  });
+
+  it('marks generic fence failure as post-entry when the action has already begun', async () => {
+    const { file } = fixture();
+    const first = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-1'));
+    if (!first.ok) throw new Error(first.reason);
+
+    let effects = 0;
+    const fenced = await withCurrentWorkerAssignmentFence(file, first.assignment, () => {
+      effects += 1;
+      throw new Error('post-reservation-failure');
+    });
+    expect(fenced).toEqual({ ok: false, reason: 'assignment_fence_failed', actionEntered: true });
+    expect(effects).toBe(1);
     expect(assignmentStillCurrent(file, first.assignment)).toBe(true);
   });
 });

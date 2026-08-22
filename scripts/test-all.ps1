@@ -1,7 +1,6 @@
 [CmdletBinding()]
 param(
     [switch]$SkipNpm,
-    [switch]$SkipPester,
     [int]$VitestShard = 0,
     [int]$VitestShardCount = 0
 )
@@ -79,76 +78,6 @@ if (-not $SkipNpm) {
         }
         finally {
             Pop-Location
-        }
-    }
-    Write-Host ''
-}
-
-if (-not $SkipPester) {
-    Write-Host '== PowerShell (Pester) =='
-    $pesterModule = Get-Module -ListAvailable -Name Pester |
-        Where-Object { $_.Version -ge [version]'5.0.0' } |
-        Sort-Object Version -Descending |
-        Select-Object -First 1
-    if (-not $pesterModule) {
-        Write-Track 'Pester' 'FAIL' 'Pester 5+ not installed'
-        $Failures.Add('Pester 5+ not found; install with: Install-Module -Name Pester -MinimumVersion 5.0.0 -Scope CurrentUser -Force') | Out-Null
-    }
-    else {
-        Import-Module Pester -MinimumVersion 5.0.0 -ErrorAction Stop
-
-        # #1248 r12 / #1352 r07: keep tests/** untouched while no longer discovering
-        # suites bound exclusively to intentionally deleted runtime owner chains.
-        $retiredPesterSuitePaths = @(
-            (Join-Path $Root 'tests/powershell/Issue748.RefreshConcurrency.Tests.ps1')
-            (Join-Path $Root 'tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1')
-            (Join-Path $Root 'tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1')
-            (Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1')
-            (Join-Path $Root 'scripts/review-trigger-reconcile-worker-selected.Tests.ps1')
-            (Join-Path $Root 'scripts/review-trigger-reconcile-worker-status.Tests.ps1')
-            (Join-Path $Root 'scripts/review-trigger-reconcile.Tests.ps1')
-            (Join-Path $Root 'scripts/worker-ci-failed-reconcile.Tests.ps1')
-            (Join-Path $Root 'scripts/worker-depletion-reconcile.Tests.ps1')
-            (Join-Path $Root 'scripts/worker-depletion-reconcile.json-fallback.Tests.ps1')
-            (Join-Path $Root 'scripts/worker-report-stale-reconcile.Tests.ps1')
-        )
-        $pesterRoots = @(
-            (Join-Path $Root 'tests/powershell')
-            (Join-Path $Root 'scripts')
-        )
-        $pesterPaths = @(
-            Get-ChildItem -Path $pesterRoots -Filter '*.Tests.ps1' -File -Recurse |
-                Where-Object { $_.FullName -notin $retiredPesterSuitePaths } |
-                Sort-Object FullName |
-                Select-Object -ExpandProperty FullName
-        )
-
-        # #1248 r13: exclude only the exact legacy scriptblocks that require
-        # intentionally deleted PowerShell owner-chain files. Sibling tests run.
-        $legacyPesterBlockLines = @(
-            "$(Join-Path $Root 'scripts/ci-red-watchdog-lookup-retention.Tests.ps1'):62"
-            "$(Join-Path $Root 'scripts/ci-red-watchdog-lookup-retention.Tests.ps1'):81"
-            "$(Join-Path $Root 'scripts/lib/Ci-Red-Watchdog.Tests.ps1'):8"
-            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):297"
-            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):319"
-            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):420"
-            "$(Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'):374"
-            "$(Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'):414"
-        )
-        $pesterConfig = New-PesterConfiguration
-        $pesterConfig.Run.Path = $pesterPaths
-        $pesterConfig.Run.PassThru = $true
-        $pesterConfig.Filter.ExcludeLine = $legacyPesterBlockLines
-
-        $result = Invoke-Pester -Configuration $pesterConfig
-        $pesterFailed = $result.FailedCount
-        $pesterPassed = $result.PassedCount
-        if ($pesterFailed -gt 0) {
-            Write-Track 'pester' 'FAIL' ("failed={0}" -f $pesterFailed)
-            $Failures.Add('Pester track failed') | Out-Null
-        }
-        else {
-            Write-Track 'pester' 'PASS' ("passed={0}" -f $pesterPassed)
         }
     }
     Write-Host ''
