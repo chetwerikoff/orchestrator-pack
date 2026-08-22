@@ -458,7 +458,7 @@ describe('Issue #1441 stale/reused runtime identity', () => {
   });
 });
 
-type ClosePresence = 'present' | 'absent' | 'mismatch' | 'unavailable' | 'truncated';
+type ClosePresence = 'present' | 'absent' | 'mismatch' | 'unavailable' | 'truncated' | 'duplicate';
 
 function boundedCloseFixture(input: {
   readonly closeResponses: readonly OrcaJsonResponse[];
@@ -506,6 +506,19 @@ function boundedCloseFixture(input: {
       }
       if (state === 'truncated') {
         return { ok: true, result: { terminals: [], totalCount: 1, truncated: true } };
+      }
+      if (state === 'duplicate') {
+        return {
+          ok: true,
+          result: {
+            totalCount: 2,
+            truncated: false,
+            terminals: [
+              { handle, incarnationId: generation, worktreeId: 'worktree-1248', worktreePath: '/tmp/worktree-1248', title: 'owned', status: 'running' },
+              { handle, incarnationId: 'other-generation', worktreeId: 'worktree-1248', worktreePath: '/tmp/worktree-1248', title: 'replacement', status: 'running' },
+            ],
+          },
+        };
       }
       return {
         ok: true,
@@ -573,7 +586,7 @@ describe('Orca task adapter bounded tab-not-found close retry', () => {
         ok: false,
         error: { code: 'runtime_error', message: 'close_failed_again' },
       }],
-      presence: ['present', 'present', 'absent'],
+      presence: ['present', 'present', 'present', 'absent'],
     });
 
     expect(fixture.adapter.stopWorker(fixture.worker)).toEqual({
@@ -615,6 +628,33 @@ describe('Orca task adapter bounded tab-not-found close retry', () => {
       status: 'failed',
       operation: 'stop_worker',
       reason: expect.stringContaining('unproven_already_absent;'),
+    });
+    expect(fixture.closeCalls()).toBe(1);
+  });
+
+  it('fails closed when post-error inventory contains duplicate handles', () => {
+    const fixture = boundedCloseFixture({
+      closeResponses: [tabNotFound()],
+      presence: ['present', 'duplicate'],
+    });
+
+    expect(fixture.adapter.stopWorker(fixture.worker)).toMatchObject({
+      status: 'failed',
+      operation: 'stop_worker',
+      reason: expect.stringContaining('worker_identity_ambiguous'),
+    });
+    expect(fixture.closeCalls()).toBe(1);
+  });
+
+  it('falls through to a complete absence census after the primary lookup is unavailable', () => {
+    const fixture = boundedCloseFixture({
+      closeResponses: [tabNotFound()],
+      presence: ['present', 'unavailable', 'absent'],
+    });
+
+    expect(fixture.adapter.stopWorker(fixture.worker)).toEqual({
+      status: 'ok',
+      value: { stopped: true },
     });
     expect(fixture.closeCalls()).toBe(1);
   });

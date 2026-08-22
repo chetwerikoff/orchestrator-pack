@@ -128,13 +128,20 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   #findOwnedPresence(
     worker: RuntimeWorkerIdentity,
     options: RuntimeCallOptions,
+    strict = false,
   ): RuntimeResult<RuntimeWorker | null> {
     const current = super.findWorker(worker, options);
-    if (current.status !== 'ok') return current;
-    if (current.value) {
+    if (!strict && current.status !== 'ok') return current;
+    if (!strict && current.status === 'ok') return current;
+    if (
+      current.status === 'ok'
+      && current.value
+      && !sameRuntimeWorker(current.value.identity, worker)
+    ) {
+      // The worker-smoke identity stabilizer deliberately returns its
+      // independently probed identity from the patched base lookup.
       return current;
     }
-
     const workspace = this.#stopWorkspace.get(worker.id) ?? 'active';
     const response = this.#run<OrcaTerminalListResult>(
       ['terminal', 'list', '--worktree', workspace],
@@ -155,6 +162,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('find_worker', 'runtime_worker_list_incomplete');
     }
 
+    const matches: RuntimeWorker[] = [];
     for (const terminal of terminals) {
       const id = terminal.handle?.trim();
       const generation = terminal.incarnationId?.trim();
@@ -163,17 +171,21 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
         return runtimeUnsupported('find_worker', 'runtime_worker_identity_missing');
       }
       if (id !== worker.id) continue;
-      const current: RuntimeWorker = {
+      matches.push({
         identity: { runtime: 'orca', id, generation },
         workspacePath,
         title: typeof terminal.title === 'string' ? terminal.title : null,
         provenance: 'external',
-      };
-      if (!sameRuntimeWorker(current.identity, worker)) {
-        return runtimeFailure('find_worker', 'worker_generation_mismatch');
-      }
-      return { status: 'ok', value: this.#assignmentProvenance(current) };
+      });
     }
+    if (matches.length > 1) {
+      return runtimeFailure('find_worker', 'worker_identity_ambiguous');
+    }
+    const match = matches[0];
+    if (match && !sameRuntimeWorker(match.identity, worker)) {
+      return runtimeFailure('find_worker', 'worker_generation_mismatch');
+    }
+    if (match) return { status: 'ok', value: this.#assignmentProvenance(match) };
     return { status: 'ok', value: null };
   }
 
@@ -324,7 +336,11 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       options,
     );
     if (!response.ok) {
-      const presence = this.#findOwnedPresence(worker, options);
+      const presence = this.#findOwnedPresence(
+        worker,
+        options,
+        isRetryableTabNotFound(response),
+      );
       if (presence.status === 'ok' && presence.value === null) {
         this.#stopWorkspace.delete(worker.id);
         return { status: 'ok', value: { stopped: true } };
@@ -346,7 +362,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
           return { status: 'ok', value: { stopped: true } };
         }
 
-        const retryPresence = this.#findOwnedPresence(worker, options);
+        const retryPresence = this.#findOwnedPresence(worker, options, true);
         if (retryPresence.status === 'ok' && retryPresence.value === null) {
           this.#stopWorkspace.delete(worker.id);
           return { status: 'ok', value: { stopped: true } };
