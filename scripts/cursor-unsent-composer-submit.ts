@@ -184,7 +184,7 @@ export function loadSubmittedFingerprints(path: string): Map<string, string> {
 
 export function saveSubmittedFingerprints(path: string, submitted: ReadonlyMap<string, string>): void {
   saveWatchStore(path, {
-    submittedFingerprint: submitted,
+    submittedFingerprint: new Map(submitted),
     lastFingerprint: new Map(),
     lastChangedAt: new Map(),
   });
@@ -357,8 +357,7 @@ export function submitUnsentCursorComposer(
   }
   const requested = (input.terminals ?? []).map((handle) => handle.trim()).filter(Boolean);
   const workers = requested.length === 0
-    ? listed.workers
-    : listed.workers.filter((worker) => requested.includes(worker.identity.id));
+    ? listed.workers.filter((worker) => requested.includes(worker.identity.id));
   const terminals = workers.map((worker) => submitOne(worker, { ...input, watch }, deps, state));
   persistSubmitted(state, deps.sentStorePath);
   return {
