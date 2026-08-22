@@ -29,5 +29,5 @@
     "scripts/runtime/caller-census.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "3aaa8274a166f52e8f28d5f73d5071e383c88a7e"
+  "source_revision": "38011a2ff0851f132dfb23b1dbee7d84f18374a2"
 }
