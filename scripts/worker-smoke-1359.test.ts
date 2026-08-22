@@ -269,12 +269,11 @@ describe('Issue #1359 production worker-smoke reachability', () => {
     }
   });
 
-  it('converges the exact tab-not-found cleanup race to a clean smoke outcome', () => {
+  it('preserves the native close error and proves the owned handle remains present', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-close-failure-'));
     const handle = 'terminal-close-failure';
     const generation = 'generation-close-failure';
-    const message = 'tab_not_found';
-    let closeCalls = 0;
+    const message = 'close denied by runtime verbatim';
     const terminal: OrcaTerminalSummary = {
       handle,
       incarnationId: generation,
@@ -293,15 +292,11 @@ describe('Issue #1359 production worker-smoke reachability', () => {
         return ok({ terminal } as T);
       }
       if (args[0] === 'terminal' && args[1] === 'close') {
-        closeCalls += 1;
-        if (closeCalls === 1) {
-          return {
-            ok: false,
-            outcomeCategory: 'supported_operation_failure',
-            error: { code: 'runtime_error', message },
-          };
-        }
-        return ok({ closed: true } as T);
+        return {
+          ok: false,
+          outcomeCategory: 'supported_operation_failure',
+          error: { code: 'runtime_error', message },
+        };
       }
       throw new Error(args.join(' '));
     };
@@ -321,8 +316,11 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       if (spawned.status !== 'ok') return;
 
       const outcome = runtimeClose(adapter, spawned.value.identity, { cwd: root });
-      expect(outcome).toBe('closed_owned_handle');
-      expect(closeCalls).toBe(2);
+      expect(outcome).toContain('close_failed:runtime_operation_failed');
+      expect(outcome).toContain(`runtime_error=${JSON.stringify({ code: 'runtime_error', message })}`);
+      expect(outcome).toContain('presence=present');
+      expect(outcome).toContain(`handle=${handle}`);
+      expect(outcome).toContain(`generation=${generation}`);
     } finally {
       restore();
       rmSync(root, { recursive: true, force: true });
