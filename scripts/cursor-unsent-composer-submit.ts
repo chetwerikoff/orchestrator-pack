@@ -184,7 +184,7 @@ export function loadSubmittedFingerprints(path: string): Map<string, string> {
 
 export function saveSubmittedFingerprints(path: string, submitted: ReadonlyMap<string, string>): void {
   saveWatchStore(path, {
-    submittedFingerprint: submitted,
+    submittedFingerprint: new Map(submitted),
     lastFingerprint: new Map(),
     lastChangedAt: new Map(),
   });
