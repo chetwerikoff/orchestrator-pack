@@ -7,12 +7,27 @@ import { runProcessSync } from './kernel/subprocess.ts';
 import {
   PRE_TOPOLOGY_MAX_FILES,
   PRE_TOPOLOGY_MEASUREMENT_ESTIMATES,
+  resolvePreTopologyMeasurementPlan,
 } from './lib/vitest-pre-topology-measurement.mjs';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const cli = join(repoRoot, 'scripts', 'refresh-vitest-runtime-history.mjs');
 const testPath = 'scripts/legacy-runtime-history.test.ts';
 const failures = [];
+const expectedIssue1498Estimates = Object.freeze({
+  'scripts/lib/worker-assignment-store.test.ts': 60,
+  'scripts/pack-worker-report.test.ts': 60,
+  'scripts/pester-retirement-disposition.test.ts': 60,
+  'scripts/pester-retirement.test.ts': 60,
+  'scripts/pr2-foundation/post-review-smoke-preaction.test.ts': 60,
+  'scripts/pr2-foundation/post-review-smoke-race.test.ts': 60,
+  'scripts/pr2-foundation/post-review-smoke.test.ts': 60,
+  'scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts': 60,
+  'scripts/pr2-foundation/scheduler-post-review-smoke.test.ts': 60,
+  'scripts/vitest-ci-runner-control-flow.test.ts': 60,
+  'scripts/vitest-ci-runner.test.ts': 60,
+  'scripts/lib/worker-report-store.test.ts': 1,
+});
 
 function assert(condition, message) {
   if (!condition) failures.push(message);
@@ -38,6 +53,32 @@ function history({
   };
   if (contentSha !== undefined) value.contentSha = contentSha;
   return value;
+}
+
+{
+  const sourceConfig = JSON.parse(
+    readFileSync(join(repoRoot, 'scripts', 'vitest-ci-lanes.config.json'), 'utf8'),
+  );
+  const unresolved = Object.keys(expectedIssue1498Estimates).map((file) => ({ file }));
+  const plan = resolvePreTopologyMeasurementPlan(
+    { topology: { unresolvedGuardWeights: unresolved }, config: sourceConfig },
+    { maxFiles: Number.MAX_SAFE_INTEGER },
+  );
+  for (const [file, expected] of Object.entries(expectedIssue1498Estimates)) {
+    const source = readFileSync(join(repoRoot, file), 'utf8');
+    const directive = source.match(/@vitest-pre-topology-seconds\s+([1-9][0-9]*(?:\.[0-9]+)?)/)?.[1];
+    assert(PRE_TOPOLOGY_MEASUREMENT_ESTIMATES[file] === expected, `${file}: map estimate must be ${expected}`);
+    assert(Number(directive) === expected, `${file}: inline estimate must be ${expected}`);
+    const lane = sourceConfig.classification?.[file];
+    if (file === 'scripts/pester-retirement.test.ts') {
+      assert(lane === 'heavy', `${file}: lane must remain heavy`);
+      assert(plan.targets.includes(file), `${file}: heavy target must remain live-measured`);
+      assert(!(file in plan.measurements), `${file}: heavy target must not use fixed estimate`);
+    } else {
+      assert(lane === 'light', `${file}: lane must remain light`);
+      assert(plan.measurements[file] === expected, `${file}: light target must use fixed estimate`);
+    }
+  }
 }
 
 function runReconcile({ remote, proposed, trusted = true, extraProposedPath = null }) {

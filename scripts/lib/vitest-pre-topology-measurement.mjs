@@ -108,6 +108,19 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/lib/create-issue-stage-lifecycle-acceptance.test.ts': 120,
   'scripts/lib/create-issue-stage-lifecycle.test.ts': 120,
   'scripts/stage-slot-consumed.test.ts': 120,
+  // Issue #1498: restore #1418 fixed estimates without changing 32-file bound.
+  'scripts/lib/worker-assignment-store.test.ts': 60,
+  'scripts/pack-worker-report.test.ts': 60,
+  'scripts/pester-retirement-disposition.test.ts': 60,
+  'scripts/pester-retirement.test.ts': 60,
+  'scripts/pr2-foundation/post-review-smoke-preaction.test.ts': 60,
+  'scripts/pr2-foundation/post-review-smoke-race.test.ts': 60,
+  'scripts/pr2-foundation/post-review-smoke.test.ts': 60,
+  'scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts': 60,
+  'scripts/pr2-foundation/scheduler-post-review-smoke.test.ts': 60,
+  'scripts/vitest-ci-runner-control-flow.test.ts': 60,
+  'scripts/vitest-ci-runner.test.ts': 60,
+  'scripts/lib/worker-report-store.test.ts': 1,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
