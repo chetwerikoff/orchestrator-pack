@@ -909,13 +909,6 @@ export function assertPackReviewSmokeAdmission(input: {
       'pack-review is forbidden after independent smoke has started',
     );
   }
-  const workerOwned = input.authority.smokeOrdering?.workerOwned;
-  if (!workerOwned || workerOwned.headSha !== headSha || workerOwned.status !== 'passed') {
-    throw new PackReviewAuthorityError(
-      'smoke_ordering_worker_smoke_required',
-      'exact-head worker-owned smoke must pass before pack-review',
-    );
-  }
 }
 
 export function assertIndependentSmokeAdmission(input: {

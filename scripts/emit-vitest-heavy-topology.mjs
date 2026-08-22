@@ -6,6 +6,7 @@
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runProcessSync } from './kernel/subprocess.mjs';
 import {
   formatOversizedGuardFailures,
   topologyArtifactPath,
@@ -18,6 +19,7 @@ import {
   shouldMeasurePreTopology,
 } from './lib/vitest-pre-topology-measurement.mjs';
 import {
+  buildChangedPathManifest,
   normalizePrScopeMode,
   parseChangedPathManifestFromEnv,
 } from './lib/vitest-pr-scoped-selection.mjs';
@@ -51,6 +53,60 @@ function writeGhaOutput(topology) {
   );
 }
 
+function gitRevision(repoRoot, ref) {
+  const result = runProcessSync({
+    command: 'git',
+    args: ['rev-parse', '--verify', ref],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+  });
+  const sha = result.ok ? String(result.stdout ?? '').trim().toLowerCase() : '';
+  return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+
+function gitHeadParents(repoRoot) {
+  const result = runProcessSync({
+    command: 'git',
+    args: ['rev-list', '--parents', '-n', '1', 'HEAD'],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) return [];
+  return String(result.stdout ?? '')
+    .trim()
+    .split(/\s+/u)
+    .slice(1)
+    .filter((sha) => /^[0-9a-f]{40}$/u.test(sha));
+}
+
+function resolveChangedPathManifest(repoRoot) {
+  const fromEnv = parseChangedPathManifestFromEnv();
+  if (fromEnv) return fromEnv;
+  if (process.env.GITHUB_EVENT_NAME !== 'pull_request') return null;
+
+  const parents = gitHeadParents(repoRoot);
+  let baseSha;
+  let headSha;
+  if (parents.length === 2) {
+    [baseSha, headSha] = parents;
+  } else {
+    baseSha = process.env.GITHUB_BASE_REF
+      ? gitRevision(repoRoot, `origin/${process.env.GITHUB_BASE_REF}`)
+      : null;
+    headSha = gitRevision(repoRoot, 'HEAD');
+  }
+  if (!baseSha || !headSha) {
+    throw new Error('pull-request topology check cannot resolve exact base/head revisions');
+  }
+  const manifest = buildChangedPathManifest(repoRoot, baseSha, headSha);
+  if (!manifest.diffOk) {
+    throw new Error(
+      `pull-request topology check cannot compute changed paths: ${manifest.failureReason ?? 'unknown failure'}`,
+    );
+  }
+  return manifest;
+}
+
 function readChangedTestDirectives(repoRoot, changedFiles) {
   const directives = new Map();
   for (const file of changedFiles) {
@@ -73,14 +129,22 @@ async function withEphemeralChangedTestClassifications(repoRoot, changedFiles, a
   const estimates = {};
   let changed = false;
   for (const file of changedFiles) {
-    if (config.classification[file]) continue;
     const directive = directives.get(file);
     if (!directive) continue;
-    config.classification[file] = directive.lane;
+    const configuredLane = config.classification[file];
+    if (configuredLane) {
+      if (configuredLane !== directive.lane) {
+        throw new Error(
+          `changed test lane directive mismatch for ${file}: config=${configuredLane} directive=${directive.lane}`,
+        );
+      }
+    } else {
+      config.classification[file] = directive.lane;
+      changed = true;
+    }
     if (Number.isFinite(directive.estimateSeconds) && directive.estimateSeconds > 0) {
       estimates[file] = directive.estimateSeconds;
     }
-    changed = true;
   }
   if (changed) writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
   try {
@@ -91,7 +155,7 @@ async function withEphemeralChangedTestClassifications(repoRoot, changedFiles, a
 }
 
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
-const rawManifest = parseChangedPathManifestFromEnv();
+const rawManifest = resolveChangedPathManifest(repoRoot);
 const changedPathManifest = rawManifest
   ? {
       ...rawManifest,
