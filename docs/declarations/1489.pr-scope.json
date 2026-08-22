@@ -2,8 +2,9 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1489,
   "declared_paths": [
-    "scripts/cursor-unsent-composer-submit.test.ts",
-    "scripts/cursor-unsent-composer-submit.ts"
+    "docs/orchestration-runbook.md",
+    "docs/wake-supervisor-fleet-operator-reference.md",
+    "scripts/pr2-foundation/scheduler.ts"
   ],
   "denylist": [
     ".github/",
@@ -28,5 +29,5 @@
     "scripts/runtime/caller-census.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "8ab7f7c18576fe6e8ec6de26c4942cda3c7007d5"
+  "source_revision": "r08"
 }
