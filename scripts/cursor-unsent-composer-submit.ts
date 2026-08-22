@@ -115,51 +115,114 @@ function workspaceSelectorsFromList(response: OrcaJsonResponse<unknown>): string
   return [...new Set(selectors)];
 }
 
-export function loadSubmittedFingerprints(path: string): Map<string, string> {
+interface WatchStoreIdentityRow {
+  readonly runtime: string;
+  readonly id: string;
+  readonly generation: string;
+  readonly fingerprint: string;
+}
+
+interface WatchStore {
+  readonly submitted: readonly WatchStoreIdentityRow[];
+  readonly observations: readonly (WatchStoreIdentityRow & { readonly changedAt: number })[];
+}
+
+function identityFromKey(key: string, fingerprint: string): WatchStoreIdentityRow | undefined {
+  const [runtime, id, generation] = key.split('\u0000');
+  if (!runtime || !id || !generation) return undefined;
+  return { runtime, id, generation, fingerprint };
+}
+
+function readIdentityRow(row: unknown): WatchStoreIdentityRow | undefined {
+  if (!row || typeof row !== 'object') return undefined;
+  const runtime = (row as { runtime?: unknown }).runtime;
+  const id = (row as { id?: unknown }).id;
+  const generation = (row as { generation?: unknown }).generation;
+  const fingerprint = (row as { fingerprint?: unknown }).fingerprint;
+  if (
+    typeof runtime !== 'string' || !runtime
+    || typeof id !== 'string' || !id
+    || typeof generation !== 'string' || !generation
+    || typeof fingerprint !== 'string' || !fingerprint
+  ) return undefined;
+  return { runtime, id, generation, fingerprint };
+}
+
+export function loadWatchStore(path: string): WatchStore {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
-    if (!Array.isArray(parsed)) return new Map();
-    const loaded = new Map<string, string>();
-    for (const row of parsed) {
-      if (!row || typeof row !== 'object') continue;
-      const runtime = (row as { runtime?: unknown }).runtime;
-      const id = (row as { id?: unknown }).id;
-      const generation = (row as { generation?: unknown }).generation;
-      const fingerprint = (row as { fingerprint?: unknown }).fingerprint;
-      if (
-        typeof runtime === 'string' && runtime
-        && typeof id === 'string' && id
-        && typeof generation === 'string' && generation
-        && typeof fingerprint === 'string' && fingerprint
-      ) {
-        loaded.set(workerKey({ runtime, id, generation }), fingerprint);
-      }
+    if (Array.isArray(parsed)) {
+      return { submitted: parsed.flatMap((row) => readIdentityRow(row) ? [readIdentityRow(row)!] : []), observations: [] };
     }
-    return loaded;
+    if (!parsed || typeof parsed !== 'object') return { submitted: [], observations: [] };
+    const submittedRaw = (parsed as { submitted?: unknown }).submitted;
+    const observationsRaw = (parsed as { observations?: unknown }).observations;
+    const submitted = Array.isArray(submittedRaw)
+      ? submittedRaw.flatMap((row) => { const parsedRow = readIdentityRow(row); return parsedRow ? [parsedRow] : []; })
+      : [];
+    const observations = Array.isArray(observationsRaw)
+      ? observationsRaw.flatMap((row) => {
+        const parsedRow = readIdentityRow(row);
+        const changedAt = (row as { changedAt?: unknown }).changedAt;
+        if (!parsedRow || !Number.isFinite(changedAt)) return [];
+        return [{ ...parsedRow, changedAt: Number(changedAt) }];
+      })
+      : [];
+    return { submitted, observations };
   } catch {
-    return new Map();
+    return { submitted: [], observations: [] };
   }
 }
 
+export function loadSubmittedFingerprints(path: string): Map<string, string> {
+  const loaded = new Map<string, string>();
+  for (const row of loadWatchStore(path).submitted) {
+    loaded.set(workerKey(row), row.fingerprint);
+  }
+  return loaded;
+}
+
 export function saveSubmittedFingerprints(path: string, submitted: ReadonlyMap<string, string>): void {
-  const rows = [...submitted.entries()].flatMap(([key, fingerprint]) => {
-    const [runtime, id, generation] = key.split('\u0000');
-    if (!runtime || !id || !generation) return [];
-    return [{ runtime, id, generation, fingerprint }];
+  saveWatchStore(path, {
+    submittedFingerprint: submitted,
+    lastFingerprint: new Map(),
+    lastChangedAt: new Map(),
   });
-  writeFileSync(path, `${JSON.stringify(rows)}\n`);
+}
+
+function saveWatchStore(path: string, state: UnsentComposerWatchState): void {
+  const submitted = [...state.submittedFingerprint.entries()].flatMap(([key, fingerprint]) => {
+    const row = identityFromKey(key, fingerprint);
+    return row ? [row] : [];
+  });
+  const observations = [...state.lastFingerprint.entries()].flatMap(([key, fingerprint]) => {
+    const row = identityFromKey(key, fingerprint);
+    const changedAt = state.lastChangedAt.get(key);
+    if (!row || !Number.isFinite(changedAt)) return [];
+    return [{ ...row, changedAt: changedAt as number }];
+  });
+  writeFileSync(path, `${JSON.stringify({ submitted, observations })}\n`);
 }
 
 function hydrateSubmitted(state: UnsentComposerWatchState, path: string | undefined): void {
   if (!path) return;
-  for (const [key, value] of loadSubmittedFingerprints(path)) {
-    if (!state.submittedFingerprint.has(key)) state.submittedFingerprint.set(key, value);
+  const store = loadWatchStore(path);
+  for (const row of store.submitted) {
+    const key = workerKey(row);
+    if (!state.submittedFingerprint.has(key)) state.submittedFingerprint.set(key, row.fingerprint);
+  }
+  for (const row of store.observations) {
+    const key = workerKey(row);
+    if (!state.lastFingerprint.has(key)) {
+      state.lastFingerprint.set(key, row.fingerprint);
+      state.lastChangedAt.set(key, row.changedAt);
+    }
   }
 }
 
 function persistSubmitted(state: UnsentComposerWatchState, path: string | undefined): void {
   if (!path) return;
-  saveSubmittedFingerprints(path, state.submittedFingerprint);
+  saveWatchStore(path, state);
 }
 
 export interface UnsentComposerSubmitDeps {
@@ -388,6 +451,11 @@ export function createAdapterSubmitDeps(adapter: RuntimeAdapter): UnsentComposer
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
     sentStorePath: SENT_STORE_PATH,
   };
+}
+
+export async function runSupervisorUnsentComposerTick(): Promise<UnsentComposerSubmitResult> {
+  const adapter = await selectRuntimeAdapter();
+  return submitUnsentCursorComposer({ watch: true }, createAdapterSubmitDeps(adapter));
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {

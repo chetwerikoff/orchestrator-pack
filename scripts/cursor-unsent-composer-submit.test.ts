@@ -326,6 +326,26 @@ describe('submitUnsentCursorComposer', () => {
     expect(submitted).toHaveLength(2);
   });
 
+  it('keeps the 10s quiet window across a fresh scheduler tick process', () => {
+    const sentStorePath = join(tmpdir(), `opk-unsent-watch-${process.pid}-${Date.now()}.json`);
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let now = 0;
+    const deps = depsFor(
+      { term_unsent: [POKE, ...CURSOR_FOOTER] },
+      { submitted, sentStorePath, now: () => now },
+    );
+    try {
+      const first = submitUnsentCursorComposer({ watch: true }, deps, createUnsentComposerWatchState());
+      now = QUIET_AFTER_PRINT_MS;
+      const second = submitUnsentCursorComposer({ watch: true }, deps, createUnsentComposerWatchState());
+      expect(first.terminals[0]?.reason).toBe('waiting_stable');
+      expect(second.terminals[0]?.reason).toBe('enter_sent');
+      expect(submitted).toHaveLength(1);
+    } finally {
+      try { unlinkSync(sentStorePath); } catch { /* ignore */ }
+    }
+  });
+
   it('does not resend across a fresh --once state when the fingerprint was persisted', () => {
     const sentStorePath = join(tmpdir(), `opk-unsent-sent-${process.pid}-${Date.now()}.json`);
     const submitted: RuntimeWorkerIdentity[] = [];

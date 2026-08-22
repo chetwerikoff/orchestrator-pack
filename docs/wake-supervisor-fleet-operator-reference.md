@@ -61,13 +61,16 @@ proof and fails closed when that proof is missing.
 
 | `children[].id` | Script | Cadence (s) | Responsibility |
 | --- | --- | ---: | --- |
-| `pr2-scheduler` | `pr2-foundation/scheduler.ts` | 5 | Bounded fleet supervision and review-start scheduling |
+| `pr2-scheduler` | `pr2-foundation/scheduler.ts` | 5 | Bounded fleet supervision, review-start scheduling, and unsent Cursor poke submit |
 
 ### pr2-scheduler
 
 Runs one bounded `scheduler.ts tick` child at a time under the committed
 activation epoch. It owns the existing S1/S2 supervision and review-start
-phases; it is not a second scheduler or a daemon loop.
+phases, and after that tick it submits an exact stable Orca poke left unsent in
+a headed Cursor composer. It is not a second scheduler, registry child, or
+composer daemon. Quiet/fingerprint state persists so a restarted tick does not
+lose the 10-second window or resend.
 The child derives the canonical repository slug from the `origin` remote under
 its checked-out repository root; it does not require `OPK_REPOSITORY` or
 `GITHUB_REPOSITORY`. Its observer census is scoped to that exact worktree,
@@ -104,7 +107,9 @@ according to the registered five-second cadence.
 ### F2 — child crash or stall
 
 The supervisor restarts the affected registry child using the existing crash-backoff and
-side-effect-lock contracts. It must never revive a retired entrypoint.
+side-effect-lock contracts. That restart is also how a failed unsent-composer
+submit inside the tick is raised again. It must never revive a retired entrypoint
+or add a second composer process.
 
 ## Operator adoption
 
