@@ -5,19 +5,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { processAlive } from './lib/cutover/activation-cordon.ts';
-import { submitOrcaTerminalComposer } from './orca-runtime/compat.ts';
 import { runOrcaJson, type OrcaJsonResponse } from './orca-runtime/native.ts';
+import {
+  type RuntimeAdapter,
+  type RuntimeDispatchResult,
+  type RuntimeWorker,
+  type RuntimeWorkerIdentity,
+} from './runtime/contracts.ts';
+import { selectRuntimeAdapter } from './runtime/registry.ts';
 
-const CHROME_LINE = /^(?:Run Everything|Tip:|[▀▄]|~\s*\/|~\/|Cursor |GPT-|Composer |ctrl\+c to stop)/iu;
+const FOOTER_LINE = /^(?:[▀▄]|~\s*\/|~\/|Cursor |GPT-|Composer |Run Everything|ctrl\+c to stop)/iu;
 const EMPTY_COMPOSER = /^(?:→\s*)?Add a follow-up\b/iu;
 const LONE_ARROW = /^→$/u;
-const PASTED_DRAFT = /^(?:→\s*)?\[Pasted text\b/u;
 const MACHINE_POKE = /^You have \d+ orchestration messages?\. Run `orca orchestration check --run [A-Za-z0-9_-]+`\.$/u;
 const BOX_TOP = /^\s*▄/u;
 const BOX_BOTTOM = /^\s*▀/u;
 const DEFAULT_INTERVAL_MS = 2_000;
 export const QUIET_AFTER_PRINT_MS = 10_000;
-const LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
+export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
+const LAUNCH_FAILED = 'process_launch_failed';
 
 export type CursorComposerKind = 'empty' | 'machine_poke' | 'manual';
 
@@ -38,41 +44,27 @@ function trimNonEmpty(lines: readonly string[]): string[] {
   return lines.map((line) => line.trim()).filter(Boolean);
 }
 
-function outerMeaningfulLines(lines: readonly string[]): string[] {
-  return trimNonEmpty(lines).filter((line) => !CHROME_LINE.test(line) && !LONE_ARROW.test(line));
-}
-
-function boxedComposerLines(lines: readonly string[]): string[] {
+function composerContentLines(lines: readonly string[]): string[] {
   return trimNonEmpty(lines).filter((line) => !LONE_ARROW.test(line));
 }
 
-function isComposerManualLine(line: string): boolean {
-  if (EMPTY_COMPOSER.test(line) || MACHINE_POKE.test(line)) return false;
-  if (PASTED_DRAFT.test(line)) return true;
-  return /^→\s+\S/u.test(line);
+function unboxedComposerLines(preview: string): string[] {
+  const lines = composerContentLines(preview.split(/\r?\n/));
+  let end = lines.length;
+  while (end > 0 && FOOTER_LINE.test(lines[end - 1] ?? '')) end -= 1;
+  return lines.slice(0, end);
+}
+
+function classifyContent(lines: readonly string[]): CursorComposerKind {
+  if (lines.length === 0 || lines.every((line) => EMPTY_COMPOSER.test(line))) return 'empty';
+  if (lines.every((line) => MACHINE_POKE.test(line))) return 'machine_poke';
+  return 'manual';
 }
 
 export function classifyCursorComposer(preview: string): CursorComposerKind {
   const interior = composerInterior(preview);
-  if (interior) {
-    const lines = boxedComposerLines(interior);
-    if (lines.length === 0 || lines.every((line) => EMPTY_COMPOSER.test(line))) return 'empty';
-    if (lines.every((line) => MACHINE_POKE.test(line))) return 'machine_poke';
-    return 'manual';
-  }
-  const lines = outerMeaningfulLines(preview.split(/\r?\n/));
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index] ?? '';
-    if (EMPTY_COMPOSER.test(line)) return 'empty';
-    if (MACHINE_POKE.test(line)) {
-      let cursor = index - 1;
-      while (cursor >= 0 && MACHINE_POKE.test(lines[cursor] ?? '')) cursor -= 1;
-      if (cursor >= 0 && isComposerManualLine(lines[cursor] ?? '')) return 'manual';
-      return 'machine_poke';
-    }
-    return 'manual';
-  }
-  return 'empty';
+  if (interior) return classifyContent(composerContentLines(interior));
+  return classifyContent(unboxedComposerLines(preview));
 }
 
 export function cursorComposerLooksUnsent(preview: string): boolean {
@@ -81,43 +73,33 @@ export function cursorComposerLooksUnsent(preview: string): boolean {
 
 export function composerPokeFingerprint(preview: string): string {
   const interior = composerInterior(preview);
-  const source = interior ? boxedComposerLines(interior) : outerMeaningfulLines(preview.split(/\r?\n/));
+  const source = interior ? composerContentLines(interior) : unboxedComposerLines(preview);
   return source.filter((line) => MACHINE_POKE.test(line)).join('\n');
 }
 
-function previewFromRead(response: OrcaJsonResponse<unknown>): string {
-  const result = response.result;
-  if (!result || typeof result !== 'object') return '';
-  const terminal = 'terminal' in result && result.terminal && typeof result.terminal === 'object'
-    ? result.terminal as Record<string, unknown>
-    : result as Record<string, unknown>;
-  const tail = Array.isArray(terminal.tail)
-    ? terminal.tail.filter((row): row is string => typeof row === 'string')
-    : Array.isArray((result as { lines?: unknown }).lines)
-      ? (result as { lines: unknown[] }).lines.filter((row): row is string => typeof row === 'string')
-      : [];
-  return tail.join('\n');
+export function workerKey(identity: RuntimeWorkerIdentity): string {
+  return `${identity.runtime}\u0000${identity.id}\u0000${identity.generation}`;
 }
 
-function handlesFromList(response: OrcaJsonResponse<unknown>): string[] {
+function workspaceSelectorsFromList(response: OrcaJsonResponse<unknown>): string[] {
+  const selectors = ['active'];
   const result = response.result;
-  if (!result || typeof result !== 'object') return [];
-  const terminals = 'terminals' in result && Array.isArray(result.terminals)
-    ? result.terminals
+  if (!result || typeof result !== 'object') return selectors;
+  const worktrees = 'worktrees' in result && Array.isArray(result.worktrees)
+    ? result.worktrees
     : [];
-  const handles: string[] = [];
-  for (const row of terminals) {
+  for (const row of worktrees) {
     if (!row || typeof row !== 'object') continue;
-    const handle = (row as { handle?: unknown }).handle;
-    if (typeof handle === 'string' && handle.trim()) handles.push(handle.trim());
+    const path = (row as { path?: unknown }).path;
+    if (typeof path === 'string' && path.trim()) selectors.push(path.trim());
   }
-  return handles;
+  return [...new Set(selectors)];
 }
 
 export interface UnsentComposerSubmitDeps {
-  readonly list: () => OrcaJsonResponse<unknown>;
-  readonly read: (handle: string) => OrcaJsonResponse<unknown>;
-  readonly submit: (handle: string) => OrcaJsonResponse<unknown>;
+  readonly listWorkers: () => { ok: true; workers: readonly RuntimeWorker[] } | { ok: false; reason: string };
+  readonly read: (worker: RuntimeWorkerIdentity) => { ok: true; lines: readonly string[] } | { ok: false; reason: string };
+  readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
 }
@@ -137,6 +119,7 @@ export interface UnsentComposerWatchState {
 
 export interface UnsentComposerTerminalResult {
   readonly terminal: string;
+  readonly generation: string;
   readonly ok: boolean;
   readonly unsent: boolean;
   readonly enter: boolean;
@@ -158,105 +141,94 @@ export function createUnsentComposerWatchState(): UnsentComposerWatchState {
   };
 }
 
-const defaultDeps: UnsentComposerSubmitDeps = {
-  list: () => runOrcaJson(['terminal', 'list']),
-  read: (handle) => runOrcaJson(['terminal', 'read', '--terminal', handle]),
-  submit: (handle) => submitOrcaTerminalComposer(handle),
-};
-
-function clearObservation(state: UnsentComposerWatchState, handle: string, clearSubmitted: boolean): void {
-  state.lastFingerprint.delete(handle);
-  state.lastChangedAt.delete(handle);
-  if (clearSubmitted) state.submittedFingerprint.delete(handle);
+function clearObservation(state: UnsentComposerWatchState, key: string, clearSubmitted: boolean): void {
+  state.lastFingerprint.delete(key);
+  state.lastChangedAt.delete(key);
+  if (clearSubmitted) state.submittedFingerprint.delete(key);
 }
 
 function submitOne(
-  handle: string,
+  worker: RuntimeWorker,
   input: UnsentComposerSubmitInput,
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState,
 ): UnsentComposerTerminalResult {
-  const shown = deps.read(handle);
+  const identity = worker.identity;
+  const key = workerKey(identity);
+  const base = { terminal: identity.id, generation: identity.generation };
+  const shown = deps.read(identity);
   if (!shown.ok) {
-    return {
-      terminal: handle,
-      ok: false,
-      unsent: false,
-      enter: false,
-      reason: shown.error?.code ?? shown.error?.message ?? 'terminal_read_failed',
-    };
+    return { ...base, ok: false, unsent: false, enter: false, reason: shown.reason };
   }
-  const preview = previewFromRead(shown);
+  const preview = shown.lines.join('\n');
   const kind = classifyCursorComposer(preview);
   if (kind === 'empty') {
-    clearObservation(state, handle, true);
-    return { terminal: handle, ok: true, unsent: false, enter: false, reason: 'composer_empty' };
+    clearObservation(state, key, true);
+    return { ...base, ok: true, unsent: false, enter: false, reason: 'composer_empty' };
   }
   if (kind === 'manual') {
-    clearObservation(state, handle, false);
-    return { terminal: handle, ok: true, unsent: false, enter: false, reason: 'manual_input' };
+    clearObservation(state, key, false);
+    return { ...base, ok: true, unsent: false, enter: false, reason: 'manual_input' };
   }
   const fingerprint = composerPokeFingerprint(preview);
-  if (state.submittedFingerprint.get(handle) === fingerprint) {
-    return { terminal: handle, ok: true, unsent: true, enter: false, reason: 'already_submitted' };
+  if (state.submittedFingerprint.get(key) === fingerprint) {
+    return { ...base, ok: true, unsent: true, enter: false, reason: 'already_submitted' };
   }
   if (input.watch) {
     const now = deps.now?.() ?? Date.now();
-    if (state.lastFingerprint.get(handle) !== fingerprint) {
-      state.lastFingerprint.set(handle, fingerprint);
-      state.lastChangedAt.set(handle, now);
-      return { terminal: handle, ok: true, unsent: true, enter: false, reason: 'waiting_stable' };
+    if (state.lastFingerprint.get(key) !== fingerprint) {
+      state.lastFingerprint.set(key, fingerprint);
+      state.lastChangedAt.set(key, now);
+      return { ...base, ok: true, unsent: true, enter: false, reason: 'waiting_stable' };
     }
-    const quietFor = now - (state.lastChangedAt.get(handle) ?? now);
+    const quietFor = now - (state.lastChangedAt.get(key) ?? now);
     if (quietFor < QUIET_AFTER_PRINT_MS) {
-      return { terminal: handle, ok: true, unsent: true, enter: false, reason: 'waiting_stable' };
+      return { ...base, ok: true, unsent: true, enter: false, reason: 'waiting_stable' };
     }
   }
   if (input.dryRun) {
-    return { terminal: handle, ok: true, unsent: true, enter: false, reason: 'dry_run' };
+    return { ...base, ok: true, unsent: true, enter: false, reason: 'dry_run' };
   }
-  const submitted = deps.submit(handle);
-  if (!submitted.ok) {
-    return {
-      terminal: handle,
-      ok: false,
-      unsent: true,
-      enter: false,
-      reason: submitted.error?.code ?? submitted.error?.message ?? 'terminal_enter_failed',
-    };
+  state.submittedFingerprint.set(key, fingerprint);
+  const dispatched = deps.submit(identity);
+  if (dispatched.status === 'send_failed' && dispatched.reason === LAUNCH_FAILED) {
+    state.submittedFingerprint.delete(key);
+    return { ...base, ok: false, unsent: true, enter: false, reason: dispatched.reason };
   }
-  state.submittedFingerprint.set(handle, fingerprint);
-  return { terminal: handle, ok: true, unsent: true, enter: true, reason: 'enter_sent' };
+  if (dispatched.status === 'send_failed') {
+    return { ...base, ok: false, unsent: true, enter: false, reason: dispatched.reason };
+  }
+  return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent' };
 }
 
 export function submitUnsentCursorComposer(
   input: UnsentComposerSubmitInput = {},
-  deps: UnsentComposerSubmitDeps = defaultDeps,
+  deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
 ): UnsentComposerSubmitResult {
   const dryRun = Boolean(input.dryRun);
   const watch = Boolean(input.watch);
-  const requested = (input.terminals ?? []).map((handle) => handle.trim()).filter(Boolean);
-  let handles = requested;
-  if (handles.length === 0) {
-    const listed = deps.list();
-    if (!listed.ok) {
-      return {
+  const listed = deps.listWorkers();
+  if (!listed.ok) {
+    return {
+      ok: false,
+      dryRun,
+      watch,
+      terminals: [{
+        terminal: '',
+        generation: '',
         ok: false,
-        dryRun,
-        watch,
-        terminals: [{
-          terminal: '',
-          ok: false,
-          unsent: false,
-          enter: false,
-          reason: listed.error?.code ?? listed.error?.message ?? 'terminal_list_failed',
-        }],
-      };
-    }
-    handles = handlesFromList(listed);
+        unsent: false,
+        enter: false,
+        reason: listed.reason,
+      }],
+    };
   }
-  const terminals = handles.map((handle) => submitOne(handle, { ...input, watch }, deps, state));
+  const requested = (input.terminals ?? []).map((handle) => handle.trim()).filter(Boolean);
+  const workers = requested.length === 0
+    ? listed.workers
+    : listed.workers.filter((worker) => requested.includes(worker.identity.id));
+  const terminals = workers.map((worker) => submitOne(worker, { ...input, watch }, deps, state));
   return {
     ok: terminals.every((row) => row.ok),
     dryRun,
@@ -271,7 +243,7 @@ function sleepSync(milliseconds: number): void {
 
 export function submitUnsentCursorComposerOnce(
   input: UnsentComposerSubmitInput = {},
-  deps: UnsentComposerSubmitDeps = defaultDeps,
+  deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
 ): UnsentComposerSubmitResult {
   const first = submitUnsentCursorComposer({ ...input, watch: true }, deps, state);
@@ -283,9 +255,9 @@ export function submitUnsentCursorComposerOnce(
   return { ...second, watch: false };
 }
 
-function acquireWatchLock(): void {
+export function acquireWatchLock(): void {
   try {
-    const fd = openSync(LOCK_PATH, 'wx');
+    const fd = openSync(WATCH_LOCK_PATH, 'wx');
     try {
       writeSync(fd, `${process.pid}\n`);
     } finally {
@@ -293,15 +265,18 @@ function acquireWatchLock(): void {
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    const existing = Number.parseInt(readFileSync(LOCK_PATH, 'utf8').trim(), 10);
+    const existing = Number.parseInt(readFileSync(WATCH_LOCK_PATH, 'utf8').trim(), 10);
     if (Number.isInteger(existing) && existing > 0 && processAlive(existing)) {
       throw new Error(`already running pid=${existing}`);
     }
-    unlinkSync(LOCK_PATH);
+    unlinkSync(WATCH_LOCK_PATH);
     acquireWatchLock();
   }
+}
+
+function installLockRelease(): void {
   const release = (): void => {
-    try { unlinkSync(LOCK_PATH); } catch { /* lock file already gone */ }
+    try { unlinkSync(WATCH_LOCK_PATH); } catch { /* lock file already gone */ }
   };
   process.on('exit', release);
   process.on('SIGINT', () => {
@@ -312,6 +287,35 @@ function acquireWatchLock(): void {
     release();
     process.exit(143);
   });
+}
+
+export function createAdapterSubmitDeps(adapter: RuntimeAdapter): UnsentComposerSubmitDeps {
+  return {
+    listWorkers: () => {
+      const selectors = workspaceSelectorsFromList(runOrcaJson(['worktree', 'list']));
+      const workers: RuntimeWorker[] = [];
+      const seen = new Set<string>();
+      for (const workspace of selectors) {
+        const listed = adapter.listWorkers({ workspace });
+        if (listed.status !== 'ok') {
+          return { ok: false, reason: listed.reason };
+        }
+        for (const worker of listed.value) {
+          const key = workerKey(worker.identity);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          workers.push(worker);
+        }
+      }
+      return { ok: true, workers };
+    },
+    read: (worker) => {
+      const output = adapter.readBoundedOutput({ worker });
+      if (output.status !== 'ok') return { ok: false, reason: output.reason };
+      return { ok: true, lines: output.value.lines };
+    },
+    submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
+  };
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -361,19 +365,22 @@ function isDirectCliExecution(): boolean {
   return Boolean(script) && import.meta.url === pathToFileURL(script).href;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
+  acquireWatchLock();
+  installLockRelease();
+  const adapter = await selectRuntimeAdapter();
+  const deps = createAdapterSubmitDeps(adapter);
   if (parsed.once) {
-    const result = submitUnsentCursorComposerOnce({ ...parsed });
+    const result = submitUnsentCursorComposerOnce({ ...parsed }, deps);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (!result.ok) process.exitCode = 1;
     return;
   }
-  acquireWatchLock();
   const state = createUnsentComposerWatchState();
-  const sleep = defaultDeps.sleep ?? sleepSync;
+  const sleep = deps.sleep ?? sleepSync;
   for (;;) {
-    const result = submitUnsentCursorComposer({ ...parsed, watch: true }, defaultDeps, state);
+    const result = submitUnsentCursorComposer({ ...parsed, watch: true }, deps, state);
     if (shouldLogWatchTick(result)) {
       process.stdout.write(`${JSON.stringify(result)}\n`);
     }
@@ -384,7 +391,7 @@ function main(): void {
 
 if (isDirectCliExecution()) {
   try {
-    main();
+    await main();
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

@@ -1,16 +1,56 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
+import { writeFileSync, unlinkSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  acquireWatchLock,
   classifyCursorComposer,
   createUnsentComposerWatchState,
   cursorComposerLooksUnsent,
   QUIET_AFTER_PRINT_MS,
   submitUnsentCursorComposer,
   submitUnsentCursorComposerOnce,
+  WATCH_LOCK_PATH,
+  type UnsentComposerSubmitDeps,
 } from './cursor-unsent-composer-submit.ts';
+import type { RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 
 const POKE = 'You have 1 orchestration message. Run `orca orchestration check --run run_d613a86c140a`.';
+
+function worker(id: string, generation = 'g1'): RuntimeWorker {
+  return {
+    identity: { runtime: 'orca', id, generation },
+    workspacePath: '/tmp',
+    title: id,
+    provenance: 'external',
+  };
+}
+
+function depsFor(
+  linesById: Record<string, string[]>,
+  extra: Partial<UnsentComposerSubmitDeps> & {
+    submitted?: RuntimeWorkerIdentity[];
+    submitResult?: UnsentComposerSubmitDeps['submit'];
+  } = {},
+): UnsentComposerSubmitDeps {
+  const submitted = extra.submitted ?? [];
+  return {
+    listWorkers: extra.listWorkers ?? (() => ({
+      ok: true as const,
+      workers: Object.keys(linesById).map((id) => worker(id)),
+    })),
+    read: extra.read ?? ((identity) => ({
+      ok: true as const,
+      lines: linesById[identity.id] ?? ['→ Add a follow-up'],
+    })),
+    submit: extra.submitResult ?? extra.submit ?? ((identity) => {
+      submitted.push(identity);
+      return { status: 'dispatch_unknown' as const, reason: 'submit_witness_unavailable' };
+    }),
+    now: extra.now,
+    sleep: extra.sleep,
+  };
+}
 
 describe('classifyCursorComposer', () => {
   it('ignores an idle follow-up placeholder', () => {
@@ -35,13 +75,13 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 `)).toBe(false);
   });
 
-  it('sees an Orca mailbox poke sitting in the composer', () => {
+  it('fails closed when an unboxed poke sits under transcript history', () => {
     expect(cursorComposerLooksUnsent(`
 Почта обработана.
 ${POKE}
 Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 ~/projects/orchestrator-pack - main
-`)).toBe(true);
+`)).toBe(false);
   });
 
   it('sees the poke in a terminal-read composer block under an arrow', () => {
@@ -84,6 +124,15 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 `)).toBe('manual');
   });
 
+  it('does not submit an unboxed poke followed by chrome-looking user text', () => {
+    expect(classifyCursorComposer(`
+${POKE}
+Tip: do not send this
+Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
+~/projects/orchestrator-pack · main
+`)).toBe('manual');
+  });
+
   it('does not submit an unboxed poke that still has a typed composer line above it', () => {
     expect(classifyCursorComposer(`
 → разберись почему
@@ -94,141 +143,144 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
   });
 });
 
-function pokeRead(handle: string) {
-  return {
-    ok: true as const,
-    result: {
-      terminal: {
-        tail: handle === 'term_unsent'
-          ? [POKE, 'Run Everything']
-          : ['→ Add a follow-up', 'Run Everything'],
-      },
-    },
-  };
-}
-
 describe('submitUnsentCursorComposer', () => {
-  it('enters every unsent terminal and skips empty ones', () => {
-    const submitted: string[] = [];
+  it('enters every unsent worker and skips empty ones', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
     const result = submitUnsentCursorComposer(
       {},
-      {
-        list: () => ({
-          ok: true,
-          result: { terminals: [{ handle: 'term_empty' }, { handle: 'term_unsent' }] },
-        }),
-        read: pokeRead,
-        submit: (handle) => {
-          submitted.push(handle);
-          return { ok: true };
+      depsFor(
+        {
+          term_empty: ['→ Add a follow-up', 'Run Everything'],
+          term_unsent: [POKE, 'Run Everything'],
         },
-      },
+        { submitted },
+      ),
     );
     expect(result.ok).toBe(true);
     expect(result.watch).toBe(false);
-    expect(submitted).toEqual(['term_unsent']);
+    expect(submitted.map((row) => row.id)).toEqual(['term_unsent']);
+    expect(submitted[0]?.generation).toBe('g1');
     expect(result.terminals.map((row) => row.reason)).toEqual(['composer_empty', 'enter_sent']);
   });
 
-  it('skips ordinary typing even in one-shot mode', () => {
-    const submitted: string[] = [];
+  it('skips ordinary typing', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
     const result = submitUnsentCursorComposer(
       { terminals: ['term_typing'] },
-      {
-        list: () => ({ ok: true, result: { terminals: [] } }),
-        read: () => ({
-          ok: true,
-          result: { terminal: { tail: ['→ разберись почему', 'Run Everything'] } },
-        }),
-        submit: (handle) => {
-          submitted.push(handle);
-          return { ok: true };
-        },
-      },
+      depsFor(
+        { term_typing: ['→ разберись почему', 'Run Everything'] },
+        { submitted },
+      ),
     );
     expect(submitted).toEqual([]);
     expect(result.terminals[0]?.reason).toBe('manual_input');
   });
 
   it('waits 10s after the poke stops changing and does not resend', () => {
-    const submitted: string[] = [];
+    const submitted: RuntimeWorkerIdentity[] = [];
     const state = createUnsentComposerWatchState();
     let now = 0;
-    const deps = {
-      list: () => ({ ok: true, result: { terminals: [{ handle: 'term_unsent' }] } }),
-      read: () => pokeRead('term_unsent'),
-      now: () => now,
-      submit: (handle: string) => {
-        submitted.push(handle);
-        return { ok: true as const };
-      },
-    };
-    const first = submitUnsentCursorComposer({ watch: true }, deps, state);
+    const localDeps = depsFor(
+      { term_unsent: [POKE, 'Run Everything'] },
+      { submitted, now: () => now },
+    );
+    const first = submitUnsentCursorComposer({ watch: true }, localDeps, state);
     now = QUIET_AFTER_PRINT_MS - 1;
-    const beforeQuiet = submitUnsentCursorComposer({ watch: true }, deps, state);
+    const beforeQuiet = submitUnsentCursorComposer({ watch: true }, localDeps, state);
     now = QUIET_AFTER_PRINT_MS;
-    const second = submitUnsentCursorComposer({ watch: true }, deps, state);
-    const third = submitUnsentCursorComposer({ watch: true }, deps, state);
+    const second = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    const third = submitUnsentCursorComposer({ watch: true }, localDeps, state);
     expect(first.terminals[0]?.reason).toBe('waiting_stable');
     expect(beforeQuiet.terminals[0]?.reason).toBe('waiting_stable');
     expect(second.terminals[0]?.reason).toBe('enter_sent');
     expect(third.terminals[0]?.reason).toBe('already_submitted');
-    expect(submitted).toEqual(['term_unsent']);
+    expect(submitted.map((row) => row.id)).toEqual(['term_unsent']);
   });
 
-  it('aborts a poke if the composer becomes manual before it is stable', () => {
-    const submitted: string[] = [];
+  it('does not retry Enter after an ambiguous dispatch outcome', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
     const state = createUnsentComposerWatchState();
-    let poke = true;
-    const resultAfterTyping = (() => {
-      const deps = {
-        list: () => ({ ok: true, result: { terminals: [{ handle: 'term_unsent' }] } }),
-        read: () => (
-          poke
-            ? pokeRead('term_unsent')
-            : {
-                ok: true as const,
-                result: { terminal: { tail: ['→ разберись', 'Run Everything'] } },
-              }
-        ),
-        submit: (handle: string) => {
-          submitted.push(handle);
-          return { ok: true as const };
+    let now = 0;
+    const localDeps = depsFor(
+      { term_unsent: [POKE, 'Run Everything'] },
+      {
+        submitted,
+        now: () => now,
+        submitResult: (identity) => {
+          submitted.push(identity);
+          return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
         },
-      };
-      submitUnsentCursorComposer({ watch: true }, deps, state);
-      poke = false;
-      return submitUnsentCursorComposer({ watch: true }, deps, state);
-    })();
-    expect(submitted).toEqual([]);
-    expect(resultAfterTyping.terminals[0]?.reason).toBe('manual_input');
+      },
+    );
+    submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    now = QUIET_AFTER_PRINT_MS;
+    submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    const again = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    expect(submitted).toHaveLength(1);
+    expect(again.terminals[0]?.reason).toBe('already_submitted');
+  });
+
+  it('retries only a proven pre-side-effect launch failure', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const state = createUnsentComposerWatchState();
+    let now = 0;
+    let launches = 0;
+    const localDeps = depsFor(
+      { term_unsent: [POKE, 'Run Everything'] },
+      {
+        now: () => now,
+        submitResult: (identity) => {
+          submitted.push(identity);
+          launches += 1;
+          if (launches === 1) return { status: 'send_failed', reason: 'process_launch_failed' };
+          return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
+        },
+      },
+    );
+    submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    now = QUIET_AFTER_PRINT_MS;
+    const failed = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    const retry = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    expect(failed.terminals[0]?.reason).toBe('process_launch_failed');
+    expect(retry.terminals[0]?.reason).toBe('enter_sent');
+    expect(submitted).toHaveLength(2);
   });
 
   it('does not submit on the first --once read; waits the quiet window then re-reads', () => {
-    const submitted: string[] = [];
+    const submitted: RuntimeWorkerIdentity[] = [];
     let now = 0;
     let reads = 0;
     const result = submitUnsentCursorComposerOnce(
       { terminals: ['term_unsent'] },
-      {
-        list: () => ({ ok: true, result: { terminals: [] } }),
-        read: () => {
-          reads += 1;
-          return pokeRead('term_unsent');
+      depsFor(
+        { term_unsent: [POKE, 'Run Everything'] },
+        {
+          submitted,
+          now: () => now,
+          sleep: (milliseconds) => {
+            now += milliseconds;
+          },
+          read: (identity) => {
+            reads += 1;
+            return { ok: true as const, lines: identity.id === 'term_unsent' ? [POKE, 'Run Everything'] : ['→ Add a follow-up'] };
+          },
         },
-        now: () => now,
-        sleep: (milliseconds) => {
-          now += milliseconds;
-        },
-        submit: (handle) => {
-          submitted.push(handle);
-          return { ok: true };
-        },
-      },
+      ),
     );
     expect(reads).toBe(2);
-    expect(submitted).toEqual(['term_unsent']);
+    expect(submitted.map((row) => row.id)).toEqual(['term_unsent']);
     expect(result.watch).toBe(false);
     expect(result.terminals[0]?.reason).toBe('enter_sent');
+  });
+});
+
+describe('acquireWatchLock', () => {
+  it('fails closed when another live process holds the lock', () => {
+    writeFileSync(WATCH_LOCK_PATH, `${process.pid}\n`);
+    try {
+      expect(() => acquireWatchLock()).toThrow(/already running/);
+    } finally {
+      try { unlinkSync(WATCH_LOCK_PATH); } catch { /* ignore */ }
+    }
   });
 });
