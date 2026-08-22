@@ -6,16 +6,16 @@
     "scripts/vitest-runtime-history-reconcile-legacy.fixture.mjs"
   ],
   "denylist": [
-    ".github/workflows/**",
-    "credentials/**",
-    "packages/core/**",
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json",
-    "secrets/**",
-    "vendor/**"
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/**",
+    "docs/declarations/",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-runtime-history-reconcile-legacy.fixture.mjs"
   ],
