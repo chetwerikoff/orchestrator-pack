@@ -582,17 +582,25 @@ async function runComposerPass(): Promise<unknown> {
   return runSupervisorUnsentComposerTick();
 }
 
+async function runTickWithComposer(boundary: SchedulerBoundary): Promise<{ result: Awaited<ReturnType<typeof runSchedulerTick>>; composer: unknown }> {
+  const [scheduler, composer] = await Promise.allSettled([
+    runSchedulerTick(boundary),
+    runComposerPass(),
+  ]);
+  if (scheduler.status === 'rejected') throw scheduler.reason;
+  if (composer.status === 'rejected') throw composer.reason;
+  return { result: scheduler.value, composer: composer.value };
+}
+
 async function runSingleTick(): Promise<void> {
-  const { boundary } = await loadProductionBoundary(); const result = await runSchedulerTick(boundary);
-  const composer = await runComposerPass();
+  const { boundary } = await loadProductionBoundary(); const { result, composer } = await runTickWithComposer(boundary);
   process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result }, composer })}\n`);
 }
 async function runLoop(): Promise<void> {
   const { boundary, cadence } = await loadProductionBoundary();
   for (;;) {
     try {
-      const result = await runSchedulerTick(boundary);
-      const composer = await runComposerPass();
+      const { result, composer } = await runTickWithComposer(boundary);
       process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result }, composer })}\n`);
     }
     catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); }
