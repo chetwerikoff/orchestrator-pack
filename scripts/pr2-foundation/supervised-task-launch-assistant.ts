@@ -382,7 +382,7 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.env ? { env: { ...input.env } } : {}),
     cwd: input.cwd,
     adapter: deps.adapter,
-    orcaArgs: ['--task', taskId, '--terminal', terminal.identity.id, '--worktree', prepared.value.selector, '--agent', profile.orcaAgent],
+    orcaArgs: ['--task', taskId, '--terminal', terminal.identity.id, '--worktree', prepared.value.selector],
   });
   const startDone = deps.now();
   timings.push({
@@ -399,7 +399,7 @@ export async function runSupervisedTaskLaunchAssistant(
       'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2-foundation/supervised-worker-start.ts --',
       ...(input.issueNumber ? ['--issue-number', String(input.issueNumber)] : []),
       '--repository', quote(resources.repository), '--', '--task', quote(taskId),
-      '--terminal', quote(terminal.identity.id), '--worktree', quote(prepared.value.selector), '--agent', 'cursor',
+      '--terminal', quote(terminal.identity.id), '--worktree', quote(prepared.value.selector),
       '--retry-request', quote(requestId),
     ].join(' ') : undefined;
     return continued(input, 'supervised_start', {
