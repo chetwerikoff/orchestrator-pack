@@ -4,7 +4,7 @@
   "declared_paths": [
     "docs/declarations/",
     "scripts/finding-ledger-guard.mjs",
-    "scripts/finding-ledger-guard.occurrence-m3.test.ts"
+    "scripts/finding-ledger-guard.test.ts"
   ],
   "denylist": [
     ".github/workflows/",
@@ -16,7 +16,7 @@
   "allowed_roots": [
     "docs/declarations/",
     "scripts/finding-ledger-guard.mjs",
-    "scripts/finding-ledger-guard.occurrence-m3.test.ts"
+    "scripts/finding-ledger-guard.test.ts"
   ],
-  "source_revision": "25a97e099ecfc4e88effe37dcd3aae45ee35d291"
+  "source_revision": "b5fb50e93d5b474928b221910c023355baf3a928"
 }
