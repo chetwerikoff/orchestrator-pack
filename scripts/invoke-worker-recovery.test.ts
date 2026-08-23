@@ -44,6 +44,7 @@ async function fixture() {
     kind: 'local',
     provider: 'orca',
     bindingKey: 'dispatch-1',
+    role: 'worker',
   });
   if (!published.ok) throw new Error(published.reason);
   const base = new DeterministicRuntimeAdapter();
@@ -170,6 +171,7 @@ describe('assignment-fenced worker recovery entrypoint', () => {
       provider: 'browser-gpt',
       bindingKey: 'remote-2',
       expectedCurrent: { assignmentId: f.assignment.assignmentId, generation: f.assignment.generation },
+      role: 'worker',
     });
     if (!winner.ok) throw new Error(winner.reason);
     const adapter = runtimeWithResolution(f.base, { kind: 'gone', workerId: f.worker.identity.id });
