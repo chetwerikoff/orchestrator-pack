@@ -388,7 +388,7 @@ function rawFindingCount(text: string): number {
 }
 
 const CANONICAL_REVISION_LINE_RE = /^Read revision: #([1-9][0-9]*) (r[0-9]+)$/;
-const INVOCATION_ECHO_RE = /^INVOCATION_ID: (\S+)$/;
+const INVOCATION_ECHO_RE = /^INVOCATION_ID(?:_TO_ECHO)?: (\S+)$/;
 
 function parseCanonicalCaptureRevision(text: string): { issueNumber: number; sourceRevision: string; findingCount: number } | null {
   const lines = text.split(/\n/).map((line) => line.replace(/\r$/, ''));
