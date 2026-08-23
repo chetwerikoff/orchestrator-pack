@@ -86,7 +86,7 @@ describe('scheduler/composer concurrency settlement', () => {
         runSupervisorUnsentComposerTick(changingComposerDeps(submitted), createUnsentComposerWatchState()),
       ]);
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(submitted).toEqual([]);
+      expect(submitted).toEqual(['enter']);
       await vi.advanceTimersByTimeAsync(5_000);
       const settled = await phases;
       expect(settled[1]?.status).toBe('fulfilled');

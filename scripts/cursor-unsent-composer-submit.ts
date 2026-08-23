@@ -496,15 +496,15 @@ export async function runSupervisorUnsentComposerTick(
       sentStorePath: undefined,
     };
     let result = submitUnsentCursorComposer({ terminals: [worker.identity.id], watch: true }, workerDeps, state);
-    await persistAfterObservation();
-    if (result.terminals[0]?.reason === 'waiting_stable') {
+    while (result.terminals[0]?.reason === 'waiting_stable') {
+      await persistAfterObservation();
       const now = deps.now?.() ?? Date.now();
       const key = workerKey(worker.identity);
       const remaining = Math.max(0, QUIET_AFTER_PRINT_MS - (now - (state.lastChangedAt.get(key) ?? now)));
       await new Promise<void>((resolve) => setTimeout(resolve, Math.max(1, remaining)));
       result = submitUnsentCursorComposer({ terminals: [worker.identity.id], watch: true }, workerDeps, state);
-      await persistAfterObservation();
     }
+    await persistAfterObservation();
     return result.terminals[0] ?? {
       terminal: worker.identity.id,
       generation: worker.identity.generation,
