@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+
 import { describe, expect, it } from 'vitest';
 
 import {
