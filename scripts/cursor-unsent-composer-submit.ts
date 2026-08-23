@@ -482,6 +482,13 @@ export async function runSupervisorUnsentComposerTick(
       terminals: [{ terminal: '', generation: '', ok: false, unsent: false, enter: false, reason: listed.reason }],
     };
   }
+  let persistTail = Promise.resolve();
+  const persistAfterObservation = (): Promise<void> => {
+    persistTail = persistTail.then(() => {
+      persistSubmitted(state, deps.sentStorePath);
+    });
+    return persistTail;
+  };
   const runWorker = async (worker: RuntimeWorker): Promise<UnsentComposerTerminalResult> => {
     const workerDeps: UnsentComposerSubmitDeps = {
       ...deps,
@@ -489,12 +496,14 @@ export async function runSupervisorUnsentComposerTick(
       sentStorePath: undefined,
     };
     let result = submitUnsentCursorComposer({ terminals: [worker.identity.id], watch: true }, workerDeps, state);
-    while (result.terminals[0]?.reason === 'waiting_stable') {
+    await persistAfterObservation();
+    if (result.terminals[0]?.reason === 'waiting_stable') {
       const now = deps.now?.() ?? Date.now();
       const key = workerKey(worker.identity);
       const remaining = Math.max(0, QUIET_AFTER_PRINT_MS - (now - (state.lastChangedAt.get(key) ?? now)));
       await new Promise<void>((resolve) => setTimeout(resolve, Math.max(1, remaining)));
       result = submitUnsentCursorComposer({ terminals: [worker.identity.id], watch: true }, workerDeps, state);
+      await persistAfterObservation();
     }
     return result.terminals[0] ?? {
       terminal: worker.identity.id,
@@ -506,7 +515,7 @@ export async function runSupervisorUnsentComposerTick(
     };
   };
   const terminals = await Promise.all(listed.workers.map(runWorker));
-  persistSubmitted(state, deps.sentStorePath);
+  await persistTail;
   return { ok: terminals.every((row) => row.ok), dryRun: false, watch: true, terminals };
 }
 

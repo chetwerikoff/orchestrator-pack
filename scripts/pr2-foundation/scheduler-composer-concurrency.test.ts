@@ -1,5 +1,8 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
+import { readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createUnsentComposerWatchState,
@@ -74,7 +77,7 @@ describe('scheduler/composer concurrency settlement', () => {
     }
   });
 
-  it('keeps the changed-second-read follow-up independent of a slow fleet phase', async () => {
+  it('bounds the changed-second-read follow-up independently of a slow fleet phase', async () => {
     vi.useFakeTimers();
     try {
       const submitted: string[] = [];
@@ -83,12 +86,31 @@ describe('scheduler/composer concurrency settlement', () => {
         runSupervisorUnsentComposerTick(changingComposerDeps(submitted), createUnsentComposerWatchState()),
       ]);
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(submitted).toEqual(['enter']);
+      expect(submitted).toEqual([]);
       await vi.advanceTimersByTimeAsync(5_000);
       const settled = await phases;
       expect(settled[1]?.status).toBe('fulfilled');
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('persists the quiet observation before the bounded wait completes', async () => {
+    vi.useFakeTimers();
+    const sentStorePath = join(tmpdir(), `opk-composer-${process.pid}-${Date.now()}.json`);
+    try {
+      const pass = runSupervisorUnsentComposerTick(
+        { ...composerDeps([]), sentStorePath },
+        createUnsentComposerWatchState(),
+      );
+      await Promise.resolve();
+      const persisted = JSON.parse(readFileSync(sentStorePath, 'utf8')) as { observations?: unknown[] };
+      expect(persisted.observations).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(QUIET_AFTER_PRINT_MS);
+      await pass;
+    } finally {
+      vi.useRealTimers();
+      rmSync(sentStorePath, { force: true });
     }
   });
 

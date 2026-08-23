@@ -282,7 +282,7 @@ describe('submitUnsentCursorComposer', () => {
       expect(submitted.map((identity) => identity.id)).toEqual(['term_second']);
       await vi.advanceTimersByTimeAsync(1_000);
       await pass;
-      expect(submitted.map((identity) => identity.id)).toEqual(['term_second', 'term_first']);
+      expect(submitted.map((identity) => identity.id)).toEqual(['term_second']);
     } finally {
       vi.useRealTimers();
     }
