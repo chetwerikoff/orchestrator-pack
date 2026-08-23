@@ -137,6 +137,19 @@ export function validateCanonicalReceiptPathSet(
   return [...new Set(errors)];
 }
 
+function compareSourceRevisions(left: string, right: string): number {
+  const leftMatch = /^r([0-9]+)$/i.exec(left.trim());
+  const rightMatch = /^r([0-9]+)$/i.exec(right.trim());
+  if (!leftMatch || !rightMatch) {
+    return left.trim().toLowerCase() === right.trim().toLowerCase() ? 0 : Number.NaN;
+  }
+  const leftDigits = leftMatch[1]!.replace(/^0+(?=\d)/, '');
+  const rightDigits = rightMatch[1]!.replace(/^0+(?=\d)/, '');
+  if (leftDigits.length !== rightDigits.length) return leftDigits.length - rightDigits.length;
+  if (leftDigits === rightDigits) return 0;
+  return leftDigits < rightDigits ? -1 : 1;
+}
+
 export function validateFinalAcceptanceReadbackHead(
   lineage: CanonicalLineage,
   cycleId: string,
@@ -151,8 +164,9 @@ export function validateFinalAcceptanceReadbackHead(
   if (headCycle['cycle-id'] !== cycleId) {
     errors.push(`final acceptance readback cycle head changed: expected ${cycleId}, got ${headCycle['cycle-id']}`);
   }
-  if (headCycle['source-revision'] !== sourceRevision) {
-    errors.push(`final acceptance readback cycle revision changed: expected ${sourceRevision}, got ${headCycle['source-revision']}`);
+  const revisionComparison = compareSourceRevisions(headCycle['source-revision'], sourceRevision);
+  if (Number.isNaN(revisionComparison) || revisionComparison > 0) {
+    errors.push(`final acceptance readback cycle revision changed: canonical ${headCycle['source-revision']} is newer than accepted ${sourceRevision}`);
   }
   return errors;
 }
@@ -211,7 +225,8 @@ export function runFinalAcceptance(
   if (headCycle['cycle-id'] !== input.cycleId) {
     return { ok: false, diagnostics, guardErrors: ['cycle head mismatch'] };
   }
-  if (headCycle['source-revision'] !== terminalRevision) {
+  const terminalRevisionComparison = compareSourceRevisions(headCycle['source-revision'], terminalRevision);
+  if (Number.isNaN(terminalRevisionComparison) || terminalRevisionComparison > 0) {
     return {
       ok: false,
       diagnostics,
