@@ -1,0 +1,53 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1495,
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/orchestration-runbook.md",
+    "scripts/lib/worker-assignment-store.test.ts",
+    "scripts/lib/worker-assignment-store.ts",
+    "scripts/pr2-foundation/remote-worker-assignment.test.ts",
+    "scripts/pr2-foundation/remote-worker-assignment.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ],
+  "denylist": [
+    ".agent-orchestrator/",
+    ".ao/",
+    ".orca/",
+    "credentials/",
+    "docs/issue_queue_index.md",
+    "docs/issues_drafts/",
+    "packages/core/",
+    "scripts/json-producers/worker-status-report.ts",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/orca-runtime/",
+    "scripts/orchestrator-wake-supervisor.shared.ts",
+    "scripts/orchestrator-wake-supervisor.ts",
+    "scripts/pr2-foundation/fleet-assignment-binding.ts",
+    "scripts/pr2-foundation/fleet-nudge-actuator.test.ts",
+    "scripts/pr2-foundation/fleet-nudge-actuator.ts",
+    "scripts/pr2-foundation/fleet-nudge-production.ts",
+    "scripts/pr2-foundation/fleet-observer.test.ts",
+    "scripts/pr2-foundation/fleet-observer.ts",
+    "scripts/pr2-foundation/fleet-reconciliation-handoff.test.ts",
+    "scripts/pr2-foundation/fleet-reconciliation-handoff.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/runtime/",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/migration_notes.md",
+    "docs/orchestration-runbook.md",
+    "scripts/lib/worker-assignment-store.test.ts",
+    "scripts/lib/worker-assignment-store.ts",
+    "scripts/pr2-foundation/remote-worker-assignment.test.ts",
+    "scripts/pr2-foundation/remote-worker-assignment.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ],
+  "source_revision": "224e24c37b6e1259565f1cd447d888625f196cd8"
+}
