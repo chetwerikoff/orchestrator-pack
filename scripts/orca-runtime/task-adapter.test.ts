@@ -1,9 +1,38 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from '../runtime/task-lifecycle.ts';
 import type { OrcaJsonResponse } from './native.ts';
 import { OrcaRuntimeAdapter } from './adapter.ts';
 import { OrcaTaskRuntimeAdapter } from './task-adapter.ts';
+
+describe('Orca async transport envelope classification', () => {
+  it('classifies a non-zero child exit with an error envelope as a runtime response', async () => {
+    const directory = mkdtempSync(join(process.cwd(), '.tmp-orca-async-envelope-'));
+    const executable = join(directory, 'orca-fixture.mjs');
+    const envelope = JSON.stringify({
+      ok: false,
+      error: { code: 'runtime_error', message: 'supported operation failed' },
+    });
+    writeFileSync(
+      executable,
+      `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(envelope)});\nprocess.exitCode = 1;\n`,
+    );
+    chmodSync(executable, 0o755);
+
+    try {
+      const result = await new OrcaRuntimeAdapter({ executable }).listWorkersAsync();
+      expect(result).toEqual({
+        status: 'failed',
+        operation: 'list_workers',
+        reason: 'runtime_operation_failed',
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 function workspaceRunner() {
   return vi.fn((_command: string, args: readonly string[]) => {
