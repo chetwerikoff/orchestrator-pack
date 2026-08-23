@@ -56,6 +56,25 @@ function canonicalVerdict(
   ].join('\n');
 }
 
+function canonicalFindingsVerdict(options: {
+  revision?: string;
+  invocationId?: string;
+  findingCountLine?: string;
+  includeFindingRows?: boolean;
+} = {}): string {
+  const lines = [
+    `Read revision: #${ISSUE} ${options.revision ?? REVISION}`,
+    'review-economics-contract: v1',
+    'VERDICT: FINDINGS',
+    'SIMPLIFICATION_CLEAN',
+  ];
+  if (options.findingCountLine !== undefined) lines.push(options.findingCountLine);
+  lines.push(`INVOCATION_ID_TO_ECHO: ${options.invocationId ?? 'invocation-001'}`);
+  if (options.includeFindingRows !== false) lines.push('id: finding-one', 'id: finding-two');
+  lines.push('');
+  return lines.join('\n');
+}
+
 function comment(
   body = canonicalVerdict(),
   overrides: Record<string, unknown> = {},
@@ -345,6 +364,64 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       artifactAuthority: { kind: 'authoritative-github-artifact' },
     });
     expect(readFileSync(input.capturePath, 'utf8')).toBe(input.body);
+  });
+
+  describe('omitted FINDING_COUNT architectural FINDINGS', () => {
+    it('keeps artifactAuthority when id: rows are present', () => {
+      const body = canonicalFindingsVerdict();
+      const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+      const result = produce(input);
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+      const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+      expect(body).not.toMatch(/^FINDING_COUNT:/m);
+      expect(receipt.invocations[0]).toMatchObject({
+        terminalClassification: 'incident',
+        sendCount: 1,
+        artifactAuthority: { kind: 'authoritative-github-artifact' },
+      });
+      expect(receipt.invocations[0].capture.rawFindingCount).toBe(2);
+      expect(readFileSync(input.capturePath, 'utf8')).toBe(body);
+    });
+
+    it('fails closed when explicit FINDING_COUNT disagrees with id: count', () => {
+      const body = canonicalFindingsVerdict({ findingCountLine: 'FINDING_COUNT: 1' });
+      const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+      const result = produce(input);
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('cannot credential a capture without artifactAuthority');
+    });
+
+    it('fails closed when id: finding rows are omitted', () => {
+      const body = canonicalFindingsVerdict({ includeFindingRows: false });
+      const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+      const result = produce(input);
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('cannot credential a capture without artifactAuthority');
+    });
+
+    it('fails closed when explicit FINDING_COUNT is malformed', () => {
+      const body = canonicalFindingsVerdict({ findingCountLine: 'FINDING_COUNT: two' });
+      const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+      const result = produce(input);
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('cannot credential a capture without artifactAuthority');
+    });
+
+    it('fails closed when CLEAN omits FINDING_COUNT', () => {
+      const body = [
+        `Read revision: #${ISSUE} ${REVISION}`,
+        'review-economics-contract: v1',
+        'VERDICT: CLEAN',
+        'NO_FINDINGS',
+        'SIMPLIFICATION_CLEAN',
+        'INVOCATION_ID_TO_ECHO: invocation-001',
+        '',
+      ].join('\n');
+      const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+      const result = produce(input);
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('cannot credential a capture without artifactAuthority');
+    });
   });
 
   it('accepts receipt-missing/artifact-ok and preserves absent transport identity fields', () => {
