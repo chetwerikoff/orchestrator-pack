@@ -373,7 +373,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
   }
 
   async #runAsync<T>(args: readonly string[], options: RuntimeCallOptions = {}): Promise<OrcaJsonResponse<T>> {
-    const run = this.#options.runJsonAsync
+    const run: <U>(
+      input: readonly string[],
+      inputOptions: OrcaRunOptions,
+    ) => Promise<OrcaJsonResponse<U>> = this.#options.runJsonAsync
       ?? (this.#options.runJson && this.#options.runJson !== runOrcaJson
         ? async <U>(input: readonly string[], inputOptions: OrcaRunOptions) => this.#options.runJson!(input, inputOptions)
         : runOrcaJsonAsync);
