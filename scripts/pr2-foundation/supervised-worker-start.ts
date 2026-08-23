@@ -139,11 +139,13 @@ function rejectedStart(
   receipt?: SupervisedWorkerStartReceipt,
   errorCode?: string,
   recovery?: SupervisedWorkerStartRecoveryEvidence,
+  cause?: WorkerAssignmentStoreTrustCause,
 ): SupervisedWorkerStartResult {
   const resources = receipt ? residualResources(receipt) : undefined;
   return {
     ok: false,
     reason,
+    ...(cause ? { cause } : {}),
     ...(errorCode ? { errorCode } : {}),
     ...(recovery ? { recovery } : {}),
     ...(receipt ? { receipt } : {}),
@@ -450,7 +452,7 @@ export async function runSupervisedWorkerStart(input: {
         }),
       };
     }
-    return rejectedStart(published.reason, receipt);
+    return rejectedStart(published.reason, receipt, undefined, undefined, published.cause);
   }
   return { ok: true, reason: 'ready_and_assignment_bound', receipt, assignment: published.assignment };
 }
