@@ -75,6 +75,7 @@ function remoteInput(input: {
     bindingKey: 'browser-task-1',
     expectation: input.expectation,
     operatorAttested: input.operatorAttested ?? true,
+    role: 'worker',
     env: input.env,
     ...(input.adapter ? { adapter: input.adapter } : {}),
   };
@@ -237,5 +238,29 @@ describe('direct operator remote WorkerAssignment admission', () => {
     }));
     expect(result).toEqual({ ok: false, reason: 'assignment_stale' });
     expect(currentWorkerAssignment(file, 1416)).toEqual(first.assignment);
+  });
+
+  it('rejects invalid registration role before store publication', async () => {
+    const { env, file } = fixture();
+    for (const role of [undefined, '', ' worker ', 'Worker', 'ORCHESTRATOR', 'admin'] as const) {
+      const result = await publishOperatorRemoteWorkerAssignment({
+        ...remoteInput({ env, expectation: { kind: 'none' } }),
+        role,
+      });
+      expect(result).toEqual({ ok: false, reason: 'assignment_role_invalid' });
+    }
+    expect(currentWorkerAssignment(file, 1416)).toBeNull();
+  });
+
+  it('persists explicit orchestrator role on remote publication', async () => {
+    const { env, file } = fixture();
+    const result = await publishOperatorRemoteWorkerAssignment({
+      ...remoteInput({ env, expectation: { kind: 'none' } }),
+      role: 'orchestrator',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.assignment.role).toBe('orchestrator');
+    expect(currentWorkerAssignment(file, 1416)?.role).toBe('orchestrator');
   });
 });
