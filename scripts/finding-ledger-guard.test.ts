@@ -1490,6 +1490,105 @@ describe('receipt-backed occurrence M3 lookup uses capture finding id', () => {
     expect(result.errors.join('\n')).toContain('ambiguous capture finding id');
   });
 
+  it('still unknown/stale a T1-only locked architectural occurrence without m3-protected when disposition is rejected-as-false', () => {
+    const architecturalName = 'pass-01-architectural.capture.txt';
+    const captureIdentity = `sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:${architecturalName}`;
+    const occurrenceId = `${captureIdentity}:1`;
+    const result = checkFindingLedgerGuard(
+      [
+        markedFinding('SEC1', {
+          type: 'security',
+          evidence: 'A security issue is present in the proposed boundary.',
+        }),
+      ],
+      JSON.stringify({
+        version: 2,
+        counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
+        findings: [{
+          id: 'SEC1',
+          summary: 'security T1 architectural',
+          type: 'security',
+          occurrences: [occurrenceId],
+          defectDisposition: 'rejected-as-false',
+          rejectReason: 'the report misread the existing contract',
+          remedyDisposition: 'accepted',
+          'persistent-machinery': 'no',
+          protectedOccurrences: [{
+            occurrenceId,
+            architectPending: false,
+            architectRequired: false,
+            protectedActivation: null,
+          }],
+        }],
+      }),
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r3',
+        stageTerminalConfirmed: true,
+        captureMetadata: [
+          { name: architecturalName, timestampMs: 1_100, captureIdentity },
+        ],
+      } as never,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('unknown/stale architect contest state');
+  });
+
+  it('still unknown/stale a T3 AR + architectural-lens + architectural occurrence without m3-protected when disposition is rejected-as-false', () => {
+    const reviewName = 'pass-01-architectural-review-01.capture.txt';
+    const claudeLensName = 'pass-02-architectural-lens.capture.txt';
+    const architecturalName = 'pass-03-architectural.capture.txt';
+    const identityAr = `sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:${reviewName}`;
+    const identityClaude = `sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:${claudeLensName}`;
+    const identityTerminal = `sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:${architecturalName}`;
+    const occurrenceId = `${identityTerminal}:1`;
+    const finding = markedFinding('SEC1', {
+      type: 'security',
+      evidence: 'A security issue is present in the proposed boundary.',
+    });
+    const result = checkFindingLedgerGuard(
+      [
+        markedClean(),
+        markedClean(),
+        finding,
+      ],
+      JSON.stringify({
+        version: 2,
+        counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
+        findings: [{
+          id: 'SEC1',
+          summary: 'security T3 terminal architectural',
+          type: 'security',
+          occurrences: [occurrenceId],
+          defectDisposition: 'rejected-as-false',
+          rejectReason: 'the report misread the existing contract',
+          remedyDisposition: 'accepted',
+          'persistent-machinery': 'no',
+          protectedOccurrences: [{
+            occurrenceId,
+            architectPending: false,
+            architectRequired: false,
+            protectedActivation: null,
+          }],
+        }],
+      }),
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r3',
+        stageTerminalConfirmed: true,
+        captureMetadata: [
+          { name: reviewName, timestampMs: 1_100, captureIdentity: identityAr },
+          { name: claudeLensName, timestampMs: 1_110, captureIdentity: identityClaude },
+          { name: architecturalName, timestampMs: 1_120, captureIdentity: identityTerminal },
+        ],
+      } as never,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('unknown/stale architect contest state');
+  });
+
   it('still unknown/stale an unadjudicated architectural-lens protected finding without m3-protected', () => {
     const lensName = 'pass-02-architectural-lens.capture.txt';
     const captureIdentity = `sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:${lensName}`;
