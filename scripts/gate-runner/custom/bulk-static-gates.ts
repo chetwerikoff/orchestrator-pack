@@ -82,46 +82,6 @@ export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResu
   );
 }
 
-export function evaluateCoworkerDelegationThreshold(snapshot: SourceSnapshot): GateResult {
-  const gateId = 'coworker-delegation-threshold-drift';
-  const failures: string[] = [];
-  const unreachable: string[] = [];
-  const source = readSource(snapshot, 'AGENTS.md');
-  if (source.unreachable) unreachable.push(source.unreachable);
-  if (source.missing) {
-    failures.push('[FAIL] missing canonical policy: AGENTS.md');
-  } else if (source.text !== undefined && !/more than 400 lines/iu.test(source.text)) {
-    failures.push('[FAIL] AGENTS.md must state T1 volume floor of 400 lines');
-  }
-
-  if (failures.length === 0) {
-    const stale = ['more than 600 lines', 'total **more than 600', 'together total **more than 600'];
-    for (const path of ['AGENTS.md', 'CLAUDE.md']) {
-      const result = readSource(snapshot, path);
-      if (result.unreachable) unreachable.push(result.unreachable);
-      if (result.text === undefined) continue;
-      for (const literal of stale) {
-        if (result.text.includes(literal)) failures.push(`${path} still contains stale volume-floor literal: ${literal}`);
-      }
-    }
-  }
-
-  const failureStdout = failures.length === 0
-    ? undefined
-    : failures[0]!.startsWith('[FAIL]')
-      ? `${failures[0]}\n`
-      : `[FAIL] coworker delegation threshold drift:\n${failures.map((failure) => ` - ${failure}`).join('\n')}\n`;
-  return completeStaticGate(
-    gateId,
-    'Coworker delegation T1 volume-floor contract',
-    '[PASS] coworker delegation T1 floor is 400 with no stale 600 volume-floor literals in tracked policy files.\n',
-    snapshot,
-    failures,
-    unreachable,
-    failureStdout,
-  );
-}
-
 const REVIEW_010_ALLOWLIST = new Set([
   'scripts/ao-review.ps1',
   'scripts/check-review-producer-contract.ps1',
@@ -247,7 +207,6 @@ function registration(gateId: string, evaluate: (snapshot: SourceSnapshot) => Ga
 
 export const bulkStaticGateRegistrations: readonly GateRegistration[] = [
   registration('agents-report-contract', evaluateAgentsReportContract),
-  registration('coworker-delegation-threshold-drift', evaluateCoworkerDelegationThreshold),
   registration('review-010-vocabulary', evaluateReview010Vocabulary),
   registration('review-command-not-ao', evaluateReviewCommandNotAo),
   registration('verify-structure-contract', evaluateVerifyStructureContract),

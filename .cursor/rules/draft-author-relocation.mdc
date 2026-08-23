@@ -1,6 +1,6 @@
 ---
 description: Draft-author relocation — brief handoff, isolation, completion proof, engine selection
-alwaysApply: true
+alwaysApply: false
 ---
 
 # Draft-author relocation (Issue #579)

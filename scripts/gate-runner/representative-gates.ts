@@ -96,6 +96,10 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
         },
       ],
     },
+    {
+      kind: 'section-anchor',
+      roots: ['AGENTS.md', 'CLAUDE.md', '.cursor/rules'],
+    },
   ],
   passStdout: '[PASS] AGENTS.md moved-content guard (split layout and stable titles)\n',
   failHeading: '[FAIL] AGENTS.md moved-content guard:',

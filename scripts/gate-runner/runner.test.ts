@@ -16,7 +16,6 @@ describe('real gate runner dispatch', () => {
       'capture-redaction',
       'verify-required-files',
       'agents-report-contract',
-      'coworker-delegation-threshold-drift',
       'review-010-vocabulary',
       'review-command-not-ao',
       'verify-structure-contract',

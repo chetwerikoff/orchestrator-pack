@@ -1,7 +1,7 @@
 import { failGate, passGate, skipGate, type EvidenceObservation, type GateResult } from './contracts.ts';
 import type { SourceSnapshot } from './source-snapshot.ts';
 
-export type DeclarativeRuleKind = 'grep-inventory' | 'line-byte-budget' | 'file-presence' | 'file-absence' | 'static-source';
+export type DeclarativeRuleKind = 'grep-inventory' | 'line-byte-budget' | 'file-presence' | 'file-absence' | 'static-source' | 'section-anchor';
 
 export interface GrepInventoryRule {
   readonly kind: 'grep-inventory';
@@ -40,7 +40,12 @@ export interface StaticSourceRule {
   readonly assertions: readonly SourceAssertion[];
 }
 
-export type DeclarativeRule = GrepInventoryRule | LineByteBudgetRule | FilePresenceRule | FileAbsenceRule | StaticSourceRule;
+export interface SectionAnchorRule {
+  readonly kind: 'section-anchor';
+  readonly roots: readonly string[];
+}
+
+export type DeclarativeRule = GrepInventoryRule | LineByteBudgetRule | FilePresenceRule | FileAbsenceRule | StaticSourceRule | SectionAnchorRule;
 
 export interface DeclarativeGateDefinition {
   readonly gateId: string;
@@ -147,6 +152,82 @@ function evaluateStatic(rule: StaticSourceRule, snapshot: SourceSnapshot): RuleE
   return { failures, unavailable };
 }
 
+function githubHeadingSlug(heading: string): string {
+  return heading
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, '')
+    .replace(/\s+/gu, '-');
+}
+
+function headingSlugs(text: string): Set<string> {
+  const slugs = new Set<string>();
+  for (const line of text.split(/\r?\n/u)) {
+    const match = /^(#{1,6})\s+(\S.*)$/u.exec(line);
+    if (match) slugs.add(githubHeadingSlug(match[2]!));
+  }
+  return slugs;
+}
+
+function resolveLinkTarget(fromPath: string, rawTarget: string): { path: string; fragment: string } | undefined {
+  const trimmed = rawTarget.trim().replace(/^<|>$/gu, '');
+  if (/^(?:https?:|mailto:|javascript:)/iu.test(trimmed)) return undefined;
+  const hash = trimmed.indexOf('#');
+  const relative = hash >= 0 ? trimmed.slice(0, hash) : trimmed;
+  const fragment = hash >= 0 ? trimmed.slice(hash + 1) : '';
+  if (!fragment) return undefined;
+  const path = relative.length === 0
+    ? fromPath
+    : normalizePath(`${fromPath.includes('/') ? fromPath.slice(0, fromPath.lastIndexOf('/') + 1) : ''}${relative}`);
+  if (path.startsWith('../') || path.includes('/../')) {
+    const parts: string[] = [];
+    for (const part of path.split('/')) {
+      if (part === '..') parts.pop();
+      else if (part !== '.') parts.push(part);
+    }
+    return { path: parts.join('/'), fragment };
+  }
+  return { path, fragment };
+}
+
+function evaluateSectionAnchor(rule: SectionAnchorRule, snapshot: SourceSnapshot): RuleEvaluation {
+  const failures: string[] = [];
+  const unavailable: string[] = [];
+  const roots = rule.roots.map(normalizePath);
+  const sources = snapshot.paths.filter((path) => {
+    const normalized = normalizePath(path);
+    return roots.some((root) => normalized === root || (root.endsWith('/') ? normalized.startsWith(root) : normalized.startsWith(`${root}/`)));
+  });
+  for (const sourcePath of sources) {
+    const text = snapshot.files.get(normalizePath(sourcePath));
+    if (text === undefined) {
+      unavailable.push(`${sourcePath}: ${snapshot.unreadable.get(normalizePath(sourcePath)) ?? 'content unavailable'}`);
+      continue;
+    }
+    const markdownLinks = [...text.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/gu)];
+    for (const match of markdownLinks) {
+      const resolved = resolveLinkTarget(normalizePath(sourcePath), match[1]!);
+      if (resolved === undefined) continue;
+      if (!/\.(?:md|mdc)$/iu.test(resolved.path)) continue;
+      const targetText = snapshot.files.get(resolved.path);
+      if (targetText === undefined) {
+        if (snapshot.paths.includes(resolved.path) || snapshot.unreadable.has(resolved.path)) {
+          unavailable.push(`${resolved.path}: ${snapshot.unreadable.get(resolved.path) ?? 'content unavailable'}`);
+        } else {
+          failures.push(`${sourcePath} unresolved section link: ${match[1]} (missing ${resolved.path})`);
+        }
+        continue;
+      }
+      const slugs = headingSlugs(targetText);
+      const expected = decodeURIComponent(resolved.fragment).toLowerCase();
+      if (![...slugs].some((slug) => slug === expected || slug === githubHeadingSlug(decodeURIComponent(resolved.fragment)))) {
+        failures.push(`${sourcePath} unresolved section link: ${match[1]}`);
+      }
+    }
+  }
+  return { failures, unavailable };
+}
+
 export function evaluateRule(rule: DeclarativeRule, snapshot: SourceSnapshot): RuleEvaluation {
   switch (rule.kind) {
     case 'grep-inventory': return evaluateGrep(rule, snapshot);
@@ -154,6 +235,7 @@ export function evaluateRule(rule: DeclarativeRule, snapshot: SourceSnapshot): R
     case 'file-presence': return evaluatePresence(rule, snapshot);
     case 'file-absence': return evaluateAbsence(rule, snapshot);
     case 'static-source': return evaluateStatic(rule, snapshot);
+    case 'section-anchor': return evaluateSectionAnchor(rule, snapshot);
   }
 }
 

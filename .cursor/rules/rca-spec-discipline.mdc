@@ -1,6 +1,6 @@
 ---
 description: RCA spec discipline — positive-outcome acceptance, recurrence diagnostic, parked roots
-alwaysApply: true
+alwaysApply: false
 ---
 
 # RCA spec discipline (Issue #221)

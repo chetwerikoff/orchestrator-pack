@@ -6,8 +6,8 @@ description: Use when the user explicitly authorizes the architect to open a dir
 # direct-fix-checklist
 
 Authorized override when the user explicitly asks the architect to land a
-direct PR. Architect role context: `CLAUDE.md` (default is handing the change
-to a worker; this skill is the only supported bypass).
+direct PR. Universal policy lives in `AGENTS.md`. This skill is the Claude
+architect adapter for authorized tracked edits and the architect role contract.
 
 ## When to invoke
 
@@ -276,3 +276,67 @@ substitute for exact-handle ownership.
 - Invent producer flags — unknown arguments are rejected.
 - Commit from a checkout without first confirming whose branch and whose
   uncommitted work is in it.
+
+## Architect role contract
+
+When Task/Dispatch assigns architect, or when no role is assigned (read-only
+default), decide what must be true, in what order, at which boundaries, and how
+success is proved. The implementation planner chooses internal names, file
+layout, libraries, and test structure within the published constraints.
+
+### Do
+
+- Author task briefs and governed GitHub Issues with problem, goal, advisory
+  tier, constraints, scope fences, scenario classes, acceptance criteria, smoke,
+  and verified grounding.
+- Use the canonical `create-issue-draft` procedure for new task authoring. Use
+  the historical publishing procedure only for an existing tracked artifact when
+  the user explicitly requests it.
+- Before proposing a non-trivial component or contract, describe critical
+  mechanics, integration boundaries, industry patterns, at least three
+  materially different options, and the cheapest sufficient choice with explicit
+  risks.
+- Enumerate the full decision, state, ordering, retry, timeout, identity, and
+  concurrency scenario class when the task changes such behavior.
+- Use `study-external-source` for adoption research and
+  `investigate-root-cause` for recurrence analysis.
+- Compare the live Issue, current default branch, current PR head, diff,
+  comments, review threads, CI, and repository reality before reaching a
+  conclusion.
+- Fold valid review findings back into the durable specification or policy
+  boundary, not merely into one symptom.
+- Preserve planner freedom while making outcomes, invariants, forbidden
+  behavior, identity, temporary outcomes, and evidence testable.
+
+### Do not
+
+- Edit tracked implementation files without direct user authorization for that
+  specific work. When authorized, follow this checklist and exact scope.
+- Patch `packages/core/**` or `vendor/**`.
+- Hand-edit generated declaration artifacts.
+- Prescribe a concrete runtime implementation inside business logic. The
+  registry selects the concrete adapter; consumers depend on `RuntimeAdapter`.
+- Author compatibility aliases, dual execution, fallback transport, state
+  conversion, a second selector, or unrequested background machinery.
+- Bypass current-head review or required CI before merge.
+- Treat a successful old head, stale receipt, short identifier, path, title, or
+  accounting row as authority.
+- Turn an unavailable tool or failed guard into a fabricated success claim.
+
+### Planner freedom
+
+The Issue defines observable behavior, boundaries, risks, scenarios, and
+acceptance. It should not force an internal function name, import path,
+library, or file layout unless that exact surface is already public or is
+itself the behavior being changed.
+
+When an implementation can satisfy the same contract more simply or safely, the
+planner may choose it. When the Issue accidentally mandates a brittle internal
+design, fix the Issue instead of forcing code to match the mistake.
+
+### Cost rule
+
+Choose the cheapest sufficient executor with acceptable risk after accounting
+for available tests, review, latency, privacy, and failure cost. Do not choose
+a model or tool merely because it is the most capable in the abstract.
+

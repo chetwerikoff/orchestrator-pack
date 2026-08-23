@@ -12,7 +12,6 @@ import { formatGateRunnerReport, registeredGateIds, runGateRunner } from '../run
 import { captureSourceSnapshot, memorySnapshot, type SourceSnapshot } from '../source-snapshot.ts';
 import {
   evaluateAgentsReportContract,
-  evaluateCoworkerDelegationThreshold,
   evaluateReview010Vocabulary,
   evaluateReviewCommandNotAo,
   evaluateVerifyStructureContract,
@@ -21,7 +20,6 @@ import {
 } from './bulk-static-gates.ts';
 import { evaluateNodeBackedGate, nodeBackedGateCommands } from './node-backed-gates.ts';
 import { WAVE_3B_MIGRATION_INVENTORY_PATH, parseWave3bMigrationInventory, validateWave3bMigrationInventory, type Wave3bReplacementSurface } from '../wave-3b-migration-inventory.ts';
-
 interface Capture {
   readonly gateId: string;
   readonly legacyScript: string;
@@ -71,6 +69,11 @@ const frozenVerifySource = readFileSync(resolve(frozenFixtureRoot, 'verify-froze
 const verifyProvenance = JSON.parse(readFileSync(resolve(frozenFixtureRoot, 'verify-source-spans.json'), 'utf8')) as FrozenVerifyProvenance;
 const liveSnapshot = captureSourceSnapshot(repoRoot);
 const tempDirs: string[] = [];
+const RETIRED_LIVE_GATE_IDS = new Set(['coworker-delegation-threshold-drift']);
+
+function liveParityCaptures(captures: readonly Capture[] = wave3b.captures): Capture[] {
+  return captures.filter((capture) => !RETIRED_LIVE_GATE_IDS.has(capture.gateId));
+}
 
 function normalizeOutput(text: string): string {
   return text.replaceAll('\r\n', '\n');
@@ -192,11 +195,6 @@ function evaluateNegativeCapture(capture: Capture): GateResult {
   switch (capture.scenario) {
     case 'agents-removed-command':
       return evaluateAgentsReportContract(memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\na\u006f report\n' }));
-    case 'coworker-stale-600':
-      return evaluateCoworkerDelegationThreshold(memorySnapshot({
-        'AGENTS.md': 'more than 400 lines\n',
-        'CLAUDE.md': 'more than 600 lines\n',
-      }));
     case 'review-dead-argv':
       return evaluateReview010Vocabulary(memorySnapshot({ 'scripts/bad.mjs': 'const argv = ["review", "run"];\n' }));
     case 'review-command-ao-path':
@@ -383,7 +381,7 @@ describe('Wave 3.b per-entrypoint CLI parity', () => {
   });
 
   it('preserves positive exit class, gate stdout, and report semantics', () => {
-    const captures = wave3b.captures.filter((capture) => capture.exitCode === 0);
+    const captures = liveParityCaptures().filter((capture) => capture.exitCode === 0);
     const report = runGateRunner(repoRoot, captures.map((capture) => capture.gateId));
     const formatted = formatGateRunnerReport(report);
     expect(report.aggregate.exitCode, JSON.stringify(report.aggregate, null, 2)).toBe(0);
@@ -402,7 +400,7 @@ describe('Wave 3.b per-entrypoint CLI parity', () => {
     }
   });
 
-  it.each(wave3b.captures.filter((capture) => capture.exitCode !== 0))(
+  it.each(liveParityCaptures().filter((capture) => capture.exitCode !== 0))(
     'preserves negative exit class and diagnostics for $legacyScript ($case)',
     (capture) => {
       const result = evaluateNegativeCapture(capture);

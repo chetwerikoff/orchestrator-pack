@@ -3,7 +3,6 @@ import { captureSourceSnapshot, memorySnapshot } from '../source-snapshot.ts';
 import {
   bulkStaticGateRegistrations,
   evaluateAgentsReportContract,
-  evaluateCoworkerDelegationThreshold,
   evaluateReview010Vocabulary,
   evaluateVerifyStructureContract,
 } from './bulk-static-gates.ts';
@@ -33,13 +32,6 @@ describe('Wave 3.b bulk static gate ports', () => {
     const clean = memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\n' });
     expect(evaluateAgentsReportContract(clean).status).toBe('PASS');
     expect(evaluateAgentsReportContract(memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\na\u006f report\n' })).status).toBe('FAIL');
-  });
-
-  it('enforces the coworker 400-line floor and stale 600-literal exclusion', () => {
-    expect(evaluateCoworkerDelegationThreshold(memorySnapshot({ 'AGENTS.md': 'more than 400 lines', 'CLAUDE.md': '' })).status).toBe('PASS');
-    const failed = evaluateCoworkerDelegationThreshold(memorySnapshot({ 'AGENTS.md': 'more than 400 lines', 'CLAUDE.md': 'more than 600 lines' }));
-    expect(failed.status).toBe('FAIL');
-    expect(failed.legacyStdout).toBe('[FAIL] coworker delegation threshold drift:\n - CLAUDE.md still contains stale volume-floor literal: more than 600 lines\n');
   });
 
   it('detects dead AO review vocabulary outside the explicit compatibility allowlist', () => {

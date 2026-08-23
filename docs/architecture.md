@@ -217,3 +217,13 @@ operator work after merge. It is neither repository acceptance nor rollback.
 - current-head evidence;
 - immutable GitHub and audit history;
 - planner freedom inside observable constraints.
+
+## TS-first script authoring freeze
+
+Net-new files under `scripts/**` are authored in TypeScript on the tracked Node
+22 toolchain. PowerShell is frozen during the migration: add a net-new `.ps1`
+only when the task spec contains an explicit written justification for why
+TypeScript/Node is unsuitable for that specific file. Existing `.ps1` files and
+migration-defined wrappers/shims remain owned by Waves A and B (Issues #830 and
+#831). This freeze does not resurrect a second universal TS-first policy body in
+`AGENTS.md`.

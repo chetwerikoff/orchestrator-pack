@@ -1,6 +1,6 @@
 ---
 description: Flow-manager browser-turn operating contract for tracked Browser-GPT work
-alwaysApply: true
+alwaysApply: false
 ---
 
 # Flow-manager browser-turn monitoring (binding)

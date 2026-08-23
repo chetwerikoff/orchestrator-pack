@@ -56,6 +56,20 @@ describe('declarative rule kinds', () => {
     expect(evaluateDeclarativeGate(definition, memorySnapshot({ 'a.txt': 'required' })).status).toBe('PASS');
     expect(evaluateDeclarativeGate(definition, memorySnapshot({ 'a.txt': 'forbidden' })).status).toBe('FAIL');
   });
+
+  it('section-anchor assertion has positive and negative fixtures', () => {
+    const definition = gate({ kind: 'section-anchor', roots: ['AGENTS.md'] });
+    const passing = memorySnapshot({
+      'AGENTS.md': 'See [policy](docs/repository_policy.md#plan-first-execution)\n',
+      'docs/repository_policy.md': '## Plan-first execution\n',
+    });
+    expect(evaluateDeclarativeGate(definition, passing).status).toBe('PASS');
+    const failing = memorySnapshot({
+      'AGENTS.md': 'See [policy](docs/repository_policy.md#missing-heading)\n',
+      'docs/repository_policy.md': '## Plan-first execution\n',
+    });
+    expect(evaluateDeclarativeGate(definition, failing).status).toBe('FAIL');
+  });
 });
 
 describe('real representative declarative ports', () => {

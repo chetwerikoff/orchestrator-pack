@@ -127,3 +127,56 @@ excluded archive surface and are non-authoritative.
 
 Do not rewrite GitHub Issue, PR, review, CI, or audit history. Do not claim that a
 check ran or a runtime action occurred without exact read-back evidence.
+
+## Plan-first execution
+
+Before edits, inspect the live task, current default branch, current PR head, open
+review threads, and current CI. Write the shortest workable plan for the complete
+task, then execute through the plan rather than stopping at the first failed guard.
+
+A blocker is a reason to re-check evidence and try the legitimate alternative
+route. Report exact errors and remaining uncertainty. Never convert an unavailable
+check into a claim that the code passed.
+
+## Scope discipline
+
+- Link every branch and PR to its source Issue; PR bodies must include `Closes #N`,
+  `Fixes #N`, or `Resolves #N` in the first few lines.
+- Do not touch files outside the active declaration or Issue scope.
+- Every task needs explicit paths or a validated denylist.
+- Treat broad declarations such as `src/**` or `**/*` as suspicious; narrow them.
+- Normalize repository-relative paths before comparing them with scope.
+- Before every commit, inspect the complete status and diff.
+- Do not rewrite another task's declaration to make the current diff pass.
+- When a scope check reports a mismatch, fix the artifact or the diff; do not
+  broaden scope merely to silence the check.
+
+Pre-existing queued-task artifacts are historical inputs only. New tasks do not
+create a tracked draft or queue-index row unless the user explicitly requests the
+legacy publishing flow for an already-existing artifact.
+
+## Build the minimum
+
+Build the smallest implementation that satisfies the acceptance criteria. Avoid
+unrequested abstraction unless required by a public boundary, cross-platform
+contract, generated-drift prevention, risky-seam testability, or upgrade safety.
+Validation, security, data-loss prevention, identity checks, and required tests are
+not optional simplifications.
+
+## Verification
+
+Before finishing implementation, run the repository verification and reusable-pack
+checks from the current head:
+
+```powershell
+pwsh -NoProfile -File scripts/verify.ps1
+pwsh -NoProfile -File scripts/check-reusable.ps1
+```
+
+Also run the affected plugin and focused tests, Node 22 typecheck and policy lint,
+runtime-retirement scan, scope guard, and all required CI. A previous-head success
+does not prove the current head.
+
+New or changed TypeScript must use Node 22 and the repository's native execution
+policy. Do not introduce Node 20, emitted build artifacts, `tsx`, `ts-node`, or
+loader fallbacks.
