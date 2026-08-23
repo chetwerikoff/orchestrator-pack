@@ -6,12 +6,12 @@ import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { appendAuditJsonlLine, resolveAuditJsonlPolicy } from './audit-jsonl-retention.mjs';
-import { classifyArgv } from './gh-inventory-match.mjs';
+import { classifyArgv, isUnsupportedHighLevelRead } from './gh-inventory-match.mjs';
 import { exitCodeForPrChecks } from './gh-pr-checks.mjs';
 import { resolveRealGhBinary } from './gh-resolve-real-binary.mjs';
 import { tryGraphqlDegradedPassthrough } from './gh-graphql-degraded.mjs';
 import { executeRestRoute } from './gh-rest-routes.mjs';
-import { consumeGhApiRateLimitHeaders, REST_ERROR_MARKER } from './gh-repo-resolve.mjs';
+import { consumeGhApiRateLimitHeaders, pickJsonFields, REST_ERROR_MARKER } from './gh-repo-resolve.mjs';
 import {
   acquireGithubGovernorAdmission,
   formatGovernorDenialMessage,
@@ -29,7 +29,12 @@ function formatStdout(result, parsed, route) {
     return `${result.join('\n')}\n`;
   }
 
-  if (parsed.jq && (parsed.jq === '.baseRefName' || parsed.jq === '.body' || parsed.jq === '.nameWithOwner')) {
+  if (parsed.jq && (
+    parsed.jq === '.baseRefName'
+    || parsed.jq === '.body'
+    || parsed.jq === '.headRefOid'
+    || parsed.jq === '.nameWithOwner'
+  )) {
     if (typeof result === 'string' || typeof result === 'number') {
       return `${result}\n`;
     }
@@ -333,6 +338,10 @@ function main() {
 
   const { parsed, route } = classifyArgv(argv);
   if (!route) {
+    if (isUnsupportedHighLevelRead(parsed)) {
+      failRest('uncovered high-level read form');
+      return;
+    }
     passthrough(argv).catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`${message}\n`);
@@ -349,7 +358,10 @@ function main() {
   }
   try {
     const result = executeRestRoute(route.id, { realGh, parsed, route, cwd: process.cwd() });
-    const out = formatStdout(result, parsed, route);
+    const outputResult = route.id === 'pr-checks' && parsed.jsonFields
+      ? result.map((check) => pickJsonFields(check, parsed.jsonFields))
+      : result;
+    const out = formatStdout(outputResult, parsed, route);
     process.stdout.write(out);
     const status = route.id === 'pr-checks' ? exitCodeForPrChecks(result) : 0;
     const rateLimit = consumeGhApiRateLimitHeaders();

@@ -17,7 +17,8 @@
     ],
     "rules": [
       "AGENTS.md",
-      "prompts/investigate_root_cause.md"
+      "prompts/investigate_root_cause.md",
+      "docs/pack-review-waiver-merge-runbook.md"
     ]
   },
   "rows": [
@@ -113,11 +114,39 @@
       "ownerIssue": 530
     },
     {
+      "id": "pr-view-waiver-merge-fields",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr view N --json number,title,state,isDraft,mergeable,mergeStateStatus,headRefOid,body",
+      "routeId": "pr-view",
+      "ownerIssue": 1506
+    },
+    {
+      "id": "pr-view-waiver-head-sha",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr view N --json headRefOid -q .headRefOid",
+      "routeId": "pr-view",
+      "ownerIssue": 1506
+    },
+    {
+      "id": "pr-view-waiver-post-merge",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr view N --json state,mergedAt,mergeCommit",
+      "routeId": "pr-view",
+      "ownerIssue": 1506
+    },
+    {
       "id": "pr-checks-inventory",
       "ownerClass": "rest_inventory",
       "canonical": "gh pr checks N --json name,state,bucket,link,startedAt,completedAt,workflow,description",
       "routeId": "pr-checks",
       "ownerIssue": 431
+    },
+    {
+      "id": "pr-checks-waiver-subset",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr checks N --json name,state,bucket,description",
+      "routeId": "pr-checks",
+      "ownerIssue": 1506
     },
     {
       "id": "pr-diff-name-only",

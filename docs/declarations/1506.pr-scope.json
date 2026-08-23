@@ -1,0 +1,30 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1506,
+  "declared_paths": [
+    "scripts/check-gh-inventory-static.ps1",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-inventory-static-guard.mjs",
+    "scripts/lib/gh-rest-routes.mjs",
+    "scripts/lib/gh-wrapper.mjs",
+    "scripts/lib/graphql-quota-github-read-inventory.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/pack-review-waiver-merge-runbook.md",
+    "scripts/check-gh-inventory-static.ps1",
+    "scripts/gh-inventory-static-guard.test.ts",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-inventory-static-guard.mjs",
+    "scripts/lib/gh-rest-routes.mjs",
+    "scripts/lib/gh-wrapper.mjs",
+    "scripts/lib/graphql-quota-github-read-inventory.json"
+  ],
+  "source_revision": "da5f87b68d05ebab211489c961aa3d54a09e313e"
+}
