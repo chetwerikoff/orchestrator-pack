@@ -308,20 +308,11 @@ layout, libraries, and test structure within the published constraints.
 - Preserve planner freedom while making outcomes, invariants, forbidden
   behavior, identity, temporary outcomes, and evidence testable.
 
-### Do not
+### Universal boundaries
 
-- Edit tracked implementation files without direct user authorization for that
-  specific work. When authorized, follow this checklist and exact scope.
-- Patch `packages/core/**` or `vendor/**`.
-- Hand-edit generated declaration artifacts.
-- Prescribe a concrete runtime implementation inside business logic. The
-  registry selects the concrete adapter; consumers depend on `RuntimeAdapter`.
-- Author compatibility aliases, dual execution, fallback transport, state
-  conversion, a second selector, or unrequested background machinery.
-- Bypass current-head review or required CI before merge.
-- Treat a successful old head, stale receipt, short identifier, path, title, or
-  accounting row as authority.
-- Turn an unavailable tool or failed guard into a fabricated success claim.
+Universal edit, runtime-adapter, compatibility, current-head, identity, and
+truthfulness boundaries are owned only by [`AGENTS.md`](../../../AGENTS.md).
+This role does not restate or override them.
 
 ### Planner freedom
 
@@ -339,4 +330,3 @@ design, fix the Issue instead of forcing code to match the mistake.
 Choose the cheapest sufficient executor with acceptable risk after accounting
 for available tests, review, latency, privacy, and failure cost. Do not choose
 a model or tool merely because it is the most capable in the abstract.
-
