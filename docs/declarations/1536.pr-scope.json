@@ -1,0 +1,22 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1536,
+  "declared_paths": [
+    "docs/declarations/",
+    "scripts/finding-ledger-guard.mjs",
+    "scripts/finding-ledger-guard.test.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/finding-ledger-guard.mjs",
+    "scripts/finding-ledger-guard.test.ts"
+  ],
+  "source_revision": "f13e97c835834032101a2dff5122a139d1c34ae2"
+}
