@@ -124,10 +124,12 @@ import {
 } from './lib/pack-gpt-source-comment.ts';
 import type { PackGptSourceIdentity } from './lib/pack-gpt-source-comment-contract.ts';
 import {
+  captureBoundIssueSnapshot,
   computeBoundIssueSnapshotHash,
   loadValidatedBoundSnapshotBody,
   resolveBoundIssueSnapshot,
 } from './lib/reverify-bound-issue-snapshot.ts';
+import { extractClosingIssueNumber } from './pr-scope-contract.ts';
 import { parseComplexityTierFromIssueBody } from '../docs/review-cycle-cap.mjs';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import type { ResolvedScopeContext } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
@@ -164,6 +166,7 @@ interface StartInput {
   }) => void | Promise<void>;
   fixtureCurrentPrHeadSha?: string;
   fixturePrState?: string;
+  fixturePrBody?: string;
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
@@ -255,9 +258,9 @@ interface BindingRecord {
 }
 
 interface OperatorPackReviewStart {
-  repository: string;
-  issueNumber: number;
-  boundSnapshot: string;
+  repository?: string;
+  issueNumber?: number;
+  boundSnapshot?: string;
   reason: string;
 }
 
@@ -425,10 +428,7 @@ function positiveInteger(value: unknown, label: string): number | undefined {
   return number;
 }
 
-function resolveOperatorPackReviewStart(
-  input: DirectCliStartInput,
-  sessionId: string,
-): OperatorPackReviewStart | undefined {
+function resolveOperatorPackReviewStart(input: DirectCliStartInput): OperatorPackReviewStart | undefined {
   const raw = [
     input.operatorRepository,
     input.operatorIssueNumber,
@@ -436,29 +436,27 @@ function resolveOperatorPackReviewStart(
     input.operatorReason,
   ];
   if (raw.every((value) => value === undefined || value === null || value === '')) return undefined;
-  if (raw.some((value) => value === undefined || value === null || String(value).trim() === '')) {
-    throw new Error('operator pack-review start requires repository, Issue number, bound snapshot, and reason');
+  const reason = trim(input.operatorReason);
+  if (!reason) {
+    throw new Error('explicit operator pack-review start requires --operator-reason <text>');
   }
-  if (sessionId) throw new Error('operator pack-review start is valid only when the session binding is absent');
   const repository = trim(input.operatorRepository);
-  if (!/^[^/\s]+\/[^/\s]+$/.test(repository)) {
+  if (repository && !/^[^/\s]+\/[^/\s]+$/.test(repository)) {
     throw new Error('operator pack-review repository must be owner/name');
   }
-  const issueNumber = positiveInteger(input.operatorIssueNumber, 'operatorIssueNumber');
-  if (!issueNumber) throw new Error('operatorIssueNumber must be a positive integer');
+  const issueNumber = input.operatorIssueNumber === undefined
+    ? undefined
+    : positiveInteger(input.operatorIssueNumber, 'operatorIssueNumber');
   const boundSnapshot = trim(input.operatorBoundSnapshot).toLowerCase();
-  if (!/^sha256:[0-9a-f]{64}$/.test(boundSnapshot)) {
-    throw new Error('operatorBoundSnapshot must be an existing sha256:<64-hex> snapshot identity');
+  if (boundSnapshot && !/^sha256:[0-9a-f]{64}$/.test(boundSnapshot)) {
+    throw new Error('operatorBoundSnapshot must be sha256:<64-hex> when supplied');
   }
-  const reason = trim(input.operatorReason);
-  if (!reason) throw new Error('operatorReason must be non-empty');
-  const prNumber = positiveInteger(input.prNumber, 'prNumber');
-  if (!prNumber) throw new Error('operator pack-review start requires prNumber');
-  const headSha = trim(input.headSha).toLowerCase();
-  if (!/^[0-9a-f]{40}$/.test(headSha)) {
-    throw new Error('operator pack-review start requires a full 40-hex head SHA');
-  }
-  return { repository, issueNumber, boundSnapshot, reason };
+  return {
+    ...(repository ? { repository } : {}),
+    ...(issueNumber ? { issueNumber } : {}),
+    ...(boundSnapshot ? { boundSnapshot } : {}),
+    reason,
+  };
 }
 
 function advancePackReviewAuthority(
@@ -565,6 +563,68 @@ export async function resolveCurrentPrHead(
   return headSha.toLowerCase();
 }
 
+export async function resolveCurrentPrTarget(
+  repoRoot: string,
+  repoSlug: string,
+  prNumber: number,
+  runner: typeof runProcess = runProcess,
+): Promise<{ headSha: string; body: string }> {
+  const result = await runner({
+    command: 'gh',
+    args: ['pr', 'view', String(prNumber), '--repo', repoSlug, '--json', 'headRefOid,state,body'],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    allowEmptyStdout: false,
+    timeoutMs: 30_000,
+  });
+  const output = await requireProcess(result, `gh pr view ${prNumber}`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    throw new Error(`PR #${prNumber} returned invalid JSON`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`PR #${prNumber} returned invalid JSON`);
+  }
+  const row = parsed as Record<string, unknown>;
+  const headSha = trim(row.headRefOid);
+  const state = trim(row.state);
+  if (!/^[0-9a-f]{40}$/i.test(headSha)) throw new Error(`PR #${prNumber} returned invalid head SHA`);
+  if (state.toUpperCase() !== 'OPEN') throw new Error(`PR #${prNumber} is not open`);
+  if (typeof row.body !== 'string') throw new Error(`PR #${prNumber} returned invalid body`);
+  return { headSha: headSha.toLowerCase(), body: row.body };
+}
+
+async function resolveCurrentIssueBody(
+  repoRoot: string,
+  repoSlug: string,
+  issueNumber: number,
+  runner: typeof runProcess = runProcess,
+): Promise<string> {
+  const result = await runner({
+    command: 'gh',
+    args: ['issue', 'view', String(issueNumber), '--repo', repoSlug, '--json', 'body'],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    allowEmptyStdout: false,
+    timeoutMs: 30_000,
+  });
+  const output = await requireProcess(result, `gh issue view ${issueNumber} --json body`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    throw new Error(`Issue #${issueNumber} returned invalid JSON`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`Issue #${issueNumber} returned invalid JSON`);
+  }
+  const body = (parsed as Record<string, unknown>).body;
+  if (typeof body !== 'string') throw new Error(`Issue #${issueNumber} returned invalid body`);
+  return body;
+}
+
 async function resolveTarget(
   input: StartInput,
   trustedPackRoot: string,
@@ -583,48 +643,67 @@ async function resolveTarget(
   const harness = process.env.OPK_VITEST_HARNESS === '1';
   const fixtureIssueNumber = harness ? positiveInteger(input.fixtureIssueNumber, 'fixtureIssueNumber') : undefined;
   const harnessExplicit = harness && Boolean(input.prNumber && (input.headSha || fixtureCurrentHead));
-  const binding = sessionId && !harnessExplicit && !operatorStart ? resolveBindingFromCache(sessionId) : undefined;
-  if (!harnessExplicit && !binding && !operatorStart) {
-    throw new Error('pack review target requires an immutable session PR/Issue binding');
+  let binding: BindingRecord | undefined;
+  if (sessionId && !harnessExplicit) {
+    try {
+      binding = resolveBindingFromCache(sessionId);
+    } catch {
+      // Session binding is advisory diagnostics only. Explicit PR authority must not be vetoed by cache state.
+    }
   }
   const requestedPr = positiveInteger(input.prNumber, 'prNumber');
-  if (binding && requestedPr && binding.prNumber !== requestedPr) {
-    throw new Error(`pack review PR does not match session binding: requested #${requestedPr}, bound #${binding.prNumber}`);
-  }
   const prNumber = positiveInteger(requestedPr ?? binding?.prNumber, 'prNumber');
-  if (!prNumber) throw new Error('pack review runner could not resolve PR number');
+  if (!prNumber) {
+    throw new Error('pack review start requires --pr-number <n>; session binding cache is advisory only');
+  }
   const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || trustedPackRoot);
   if (!harness && !existsSync(join(sourceRepoRoot, '.git')) && !existsSync(join(sourceRepoRoot, 'HEAD'))) {
     throw new Error(`source repository root is not a git checkout: ${sourceRepoRoot}`);
   }
-  const requestedHead = trim(input.headSha || binding?.headSha).toLowerCase();
+  const requestedHead = trim(input.headSha).toLowerCase();
   const repoSlug = harnessExplicit
-    ? trim(input.fixtureRepoSlug) || trim(binding?.repoSlug) || 'fixture/orchestrator-pack'
-    : trim(binding?.repoSlug) || await resolveRepositorySlug(sourceRepoRoot);
+    ? trim(input.fixtureRepoSlug) || 'fixture/orchestrator-pack'
+    : await resolveRepositorySlug(sourceRepoRoot);
   if (harnessExplicit && trim(input.fixturePrState || 'OPEN').toUpperCase() !== 'OPEN') {
     throw new Error(`PR #${prNumber} is not open`);
   }
-  const liveHead = harnessExplicit
-    ? fixtureCurrentHead || requestedHead
-    : await resolveCurrentPrHead(sourceRepoRoot, repoSlug, prNumber);
+  const liveTarget = harnessExplicit
+    ? { headSha: fixtureCurrentHead || requestedHead, body: input.fixturePrBody ?? '' }
+    : await resolveCurrentPrTarget(sourceRepoRoot, repoSlug, prNumber);
+  const liveHead = liveTarget.headSha;
   if (!/^[0-9a-f]{40}$/.test(liveHead)) throw new Error(`review target head is not a full SHA for PR #${prNumber}`);
-  if (binding?.headSha && requestedHead && binding.headSha.toLowerCase() !== requestedHead) {
-    throw new Error('pack review head does not match session binding');
-  }
-  if (binding?.repoSlug && repoSlug && binding.repoSlug.toLowerCase() !== repoSlug.toLowerCase()) {
-    throw new Error('pack review repository does not match session binding');
-  }
-  if (operatorStart && operatorStart.repository.toLowerCase() !== repoSlug.toLowerCase()) {
+  if (operatorStart?.repository && operatorStart.repository.toLowerCase() !== repoSlug.toLowerCase()) {
     throw new Error(`pack review repository does not match operator target: requested ${operatorStart.repository}, live ${repoSlug}`);
   }
   if (requestedHead && requestedHead !== liveHead) {
     throw new Error(`review target head changed for PR #${prNumber}: requested ${requestedHead}, live ${liveHead}`);
   }
+
+  let issueNumber: number | undefined;
+  if (harness) {
+    const linkedIssue = input.fixturePrBody !== undefined
+      ? extractClosingIssueNumber(input.fixturePrBody)
+      : null;
+    issueNumber = linkedIssue ?? fixtureIssueNumber;
+    if (input.fixturePrBody !== undefined && !issueNumber) {
+      throw new Error(`PR #${prNumber} has no resolvable closing Issue; add 'Closes #<issue>' to the PR body and retry`);
+    }
+  } else {
+    issueNumber = extractClosingIssueNumber(liveTarget.body) ?? undefined;
+    if (!issueNumber) {
+      throw new Error(`PR #${prNumber} has no resolvable closing Issue; add 'Closes #<issue>' to the PR body and retry`);
+    }
+  }
+  if (operatorStart?.issueNumber && issueNumber && operatorStart.issueNumber !== issueNumber) {
+    throw new Error(
+      `pack review Issue mismatch: requested #${operatorStart.issueNumber}, PR #${prNumber} closes #${issueNumber}; use --operator-issue-number ${issueNumber} or omit it`,
+    );
+  }
   return {
     prNumber,
     headSha: liveHead,
     sessionId,
-    issueNumber: operatorStart?.issueNumber ?? fixtureIssueNumber ?? (binding?.issueNumber ? Number(binding.issueNumber) : undefined),
+    issueNumber,
     repoSlug,
     sourceRepoRoot,
     ...(operatorStart ? { operatorStart } : {}),
@@ -640,47 +719,92 @@ function parseAuthoritativeTier(body: string): PackReviewTier {
   return tier as PackReviewTier;
 }
 
-function resolveAuthoritativeReviewContext(input: StartInput, target: {
+async function resolveAuthoritativeReviewContext(input: StartInput, target: {
   prNumber: number;
   headSha: string;
   issueNumber?: number;
-}, projectId: string): AuthoritativeReviewContext {
-  let body: string | undefined = input.fixtureIssueBody;
-  let snapshotDigest = '';
+  repoSlug: string;
+  sourceRepoRoot: string;
+}, projectId: string): Promise<AuthoritativeReviewContext> {
+  const harness = process.env.OPK_VITEST_HARNESS === '1';
   const issueNumber = target.issueNumber ?? 0;
+  let body: string | undefined;
+  let snapshotDigest = '';
 
-  if (body !== undefined) {
+  const configuredSnapshotPath = trim(process.env.OPK_BOUND_ISSUE_SNAPSHOT_PATH);
+  const configuredSnapshotStore = trim(process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR);
+  const legacyHarnessDirectBody = harness
+    && input.fixtureIssueBody !== undefined
+    && !configuredSnapshotPath
+    && !configuredSnapshotStore;
+
+  if (legacyHarnessDirectBody) {
+    body = input.fixtureIssueBody;
     snapshotDigest = computeBoundIssueSnapshotHash(body);
   } else if (issueNumber > 0) {
-    let snapshotPath = trim(process.env.OPK_BOUND_ISSUE_SNAPSHOT_PATH);
-    if (!snapshotPath) {
-      const resolved = resolveBoundIssueSnapshot({
-        projectId,
-        prNumber: target.prNumber,
-        prHeadSha: target.headSha,
-        issueNumber,
-        storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
-      });
-      if (resolved.status !== 'found' || !resolved.snapshotPath) {
-        throw new Error(`authoritative bound Issue snapshot ${resolved.status}`);
-      }
-      snapshotPath = resolved.snapshotPath;
-    }
-    const snapshot = loadValidatedBoundSnapshotBody({
+    let resolvedSnapshot = resolveBoundIssueSnapshot({
       projectId,
       prNumber: target.prNumber,
       prHeadSha: target.headSha,
       issueNumber,
-      snapshotFilePath: snapshotPath,
       storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
     });
-    body = snapshot.body;
-    snapshotDigest = snapshot.snapshotHash;
+    if (resolvedSnapshot.status === 'corrupted') {
+      throw new Error(`authoritative bound Issue snapshot corrupted for PR #${target.prNumber} Issue #${issueNumber}`);
+    }
+    if (resolvedSnapshot.status === 'missing') {
+      if (!(harness && input.fixtureIssueBody === undefined)) {
+        const observedBody = input.fixtureIssueBody
+          ?? await resolveCurrentIssueBody(target.sourceRepoRoot, target.repoSlug, issueNumber);
+        const captured = captureBoundIssueSnapshot({
+          projectId,
+          prNumber: target.prNumber,
+          prHeadSha: target.headSha,
+          issueNumber,
+          issueBody: observedBody,
+          storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+        });
+        resolvedSnapshot = resolveBoundIssueSnapshot({
+          projectId,
+          prNumber: target.prNumber,
+          prHeadSha: target.headSha,
+          issueNumber,
+          storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+        });
+        if (resolvedSnapshot.status !== 'found' || !resolvedSnapshot.snapshotPath) {
+          throw new Error(
+            `bound Issue snapshot producer failed after capture; rerun: gh issue view ${issueNumber} --repo ${target.repoSlug} --json body`,
+          );
+        }
+        if (resolve(captured.snapshotPath) !== resolve(resolvedSnapshot.snapshotPath)) {
+          throw new Error('bound Issue snapshot producer/resolver path mismatch');
+        }
+      }
+    }
+    if (resolvedSnapshot.status === 'found' && resolvedSnapshot.snapshotPath) {
+      if (configuredSnapshotPath && resolve(configuredSnapshotPath) !== resolve(resolvedSnapshot.snapshotPath)) {
+        throw new Error(
+          `configured bound Issue snapshot path mismatch: requested ${configuredSnapshotPath}, authoritative ${resolvedSnapshot.snapshotPath}; unset OPK_BOUND_ISSUE_SNAPSHOT_PATH or point it at the authoritative artifact`,
+        );
+      }
+      const snapshot = loadValidatedBoundSnapshotBody({
+        projectId,
+        prNumber: target.prNumber,
+        prHeadSha: target.headSha,
+        issueNumber,
+        snapshotFilePath: configuredSnapshotPath || resolvedSnapshot.snapshotPath,
+        storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+      });
+      body = snapshot.body;
+      snapshotDigest = snapshot.snapshotHash;
+    }
   }
 
   if (body === undefined) {
-    if (process.env.OPK_VITEST_HARNESS !== '1') {
-      throw new Error('authoritative bound Issue snapshot unavailable');
+    if (!harness) {
+      throw new Error(
+        `authoritative bound Issue snapshot unavailable; produce it from: gh issue view ${issueNumber} --repo ${target.repoSlug} --json body`,
+      );
     }
     const fixtureTier = String(input.tier ?? 'T3').toUpperCase();
     if (!['T1', 'T2', 'T3'].includes(fixtureTier)) throw new Error('invalid fixture tier');
@@ -1743,8 +1867,13 @@ async function recoverStaleGptSourceComments(options: {
     return { recovered: false, reason: 'fixture_source_transport_missing' };
   }
 
-  const currentHead = options.input.fixtureCurrentPrHeadSha
-    ?? await resolveCurrentPrHead(options.input.sourceRepoRoot, options.repoSlug, options.run.prNumber);
+  let currentHead: string;
+  try {
+    currentHead = options.input.fixtureCurrentPrHeadSha
+      ?? await resolveCurrentPrHead(options.input.sourceRepoRoot, options.repoSlug, options.run.prNumber);
+  } catch (error) {
+    return { recovered: false, reason: `stale_source_unavailable:${describeError(error)}` };
+  }
   if (currentHead.toLowerCase() !== options.run.targetSha.toLowerCase()) {
     return { recovered: false, reason: 'stale_source_head_changed' };
   }
@@ -1784,8 +1913,13 @@ async function recoverStaleGptSourceComments(options: {
     }, { projectId: options.projectId, storeRoot: options.storeRoot });
   }
 
-  const finalHead = options.input.fixtureCurrentPrHeadSha
-    ?? await resolveCurrentPrHead(options.input.sourceRepoRoot, options.repoSlug, options.run.prNumber);
+  let finalHead: string;
+  try {
+    finalHead = options.input.fixtureCurrentPrHeadSha
+      ?? await resolveCurrentPrHead(options.input.sourceRepoRoot, options.repoSlug, options.run.prNumber);
+  } catch (error) {
+    return { recovered: false, reason: `stale_source_unavailable_after_census:${describeError(error)}` };
+  }
   if (finalHead.toLowerCase() !== options.run.targetSha.toLowerCase()) {
     return { recovered: false, reason: 'stale_source_head_changed_after_census' };
   }
@@ -2442,123 +2576,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   if (!reviewer && process.env.OPK_VITEST_HARNESS !== '1') {
     throw new Error('pack review reviewer selector did not resolve');
   }
-  const authoritative = resolveAuthoritativeReviewContext(input, target, projectId);
-  if (target.operatorStart && authoritative.snapshotDigest !== target.operatorStart.boundSnapshot) {
-    throw new Error(
-      `operator bound snapshot does not match authoritative review context: expected ${target.operatorStart.boundSnapshot}, got ${authoritative.snapshotDigest}`,
-    );
-  }
-  const operatorSurface = target.operatorStart
-    ? `operator_adjudicated;session-binding=absent;issue=${target.operatorStart.issueNumber};bound-snapshot=${target.operatorStart.boundSnapshot}`
-    : undefined;
-  const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
-  const retainedOpenCycle = readRetainedLegacyOpenCycle(projectId, target.prNumber);
-  let authority = initializePackReviewAuthority({
-    prNumber: target.prNumber,
-    headSha: target.headSha,
-    tier: authoritative.tier,
-    retainedOpenCycle,
-    options: authorityOptions,
-  });
-  try {
-    authority = reconcilePackReviewTier({
-      prNumber: target.prNumber,
-      tier: authoritative.tier,
-      options: authorityOptions,
-    });
-  } catch (error) {
-    return {
-      ok: false,
-      created: false,
-      reused: false,
-      reason: error instanceof Error ? error.message : String(error),
-      prNumber: target.prNumber,
-      headSha: target.headSha,
-      httpStatus: 409,
-    };
-  }
-  const priorAuthority = authority.currentHeadSha === target.headSha ? undefined : authority;
-  if (authority.currentHeadSha !== target.headSha) {
-    authority = observePackReviewHead({
-      prNumber: target.prNumber,
-      expectedTransitionSeq: authority.transitionSeq,
-      headSha: target.headSha,
-      options: authorityOptions,
-    });
-  } else if (target.operatorStart) {
-    authority = reopenPackReviewAuthorityForExplicitExtraReview({
-      prNumber: target.prNumber,
-      expectedTransitionSeq: authority.transitionSeq,
-      headSha: target.headSha,
-      options: authorityOptions,
-    });
-  }
-  if (!target.operatorStart
-      && authority.cycle
-      && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
-    return {
-      ok: false,
-      created: false,
-      reused: false,
-      reason: 'at_cap_continuation_required',
-      prNumber: target.prNumber,
-      headSha: target.headSha,
-      cycleId: authority.cycle.cycleId,
-      httpStatus: 409,
-    };
-  }
-  const legacyHarnessFixtureWithoutSmokePlan = process.env.OPK_VITEST_HARNESS === '1'
-    && authoritative.issueBody !== undefined
-    && !authoritative.issueBody.includes('```smoke-test-plan');
-  if (!target.operatorStart
-      && authoritative.issueBody !== undefined
-      && smokeOrderingRequired(authoritative.issueBody)
-      && !legacyHarnessFixtureWithoutSmokePlan) {
-    try {
-      assertPackReviewSmokeAdmission({ authority, headSha: target.headSha });
-    } catch (error) {
-      return {
-        ok: false,
-        created: false,
-        reused: false,
-        reason: error instanceof Error ? error.message : String(error),
-        prNumber: target.prNumber,
-        headSha: target.headSha,
-        httpStatus: 409,
-      };
-    }
-  }
-
-  const roundOrdinal = (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
-  const cardinality = selectPackReviewGptSourceCardinality({
-    reviewer: reviewer ?? 'codex',
-    tier: authoritative.tier,
-    roundOrdinal,
-  });
-  const gptRound: PackReviewGptRoundRecord | undefined = reviewer === 'gpt'
-    && (authoritative.snapshotDigest !== 'harness-unbound-fixture'
-      || input.tier !== undefined
-      || process.env.OPK_VITEST_HARNESS !== '1')
-    ? {
-        schema: 'pack-review-gpt-round/v1',
-        reviewer: 'gpt',
-        tier: authoritative.tier,
-        roundOrdinal,
-        cardinality,
-        issueNumber: authoritative.issueNumber,
-        boundIssueSnapshotDigest: authoritative.snapshotDigest,
-        sourceSlots: Array.from({ length: cardinality }, (_, index) => ({
-          slotId: `source-${String(index + 1).padStart(2, '0')}`,
-          ordinal: index + 1,
-          lifecycle: 'planned' as const,
-        })),
-      }
-    : undefined;
-  if (gptRound
-      && gptRound.cardinality > 1
-      && (trim(process.env.PACK_GPT_BROWSER_CHAT_URL) || !trim(process.env.PACK_GPT_BROWSER_PROJECT_URL))) {
-    throw new Error('plural GPT review requires PACK_GPT_BROWSER_PROJECT_URL and no fixed chat URL');
-  }
 
   const recoverableStaleGptFixture = process.env.OPK_VITEST_HARNESS === '1'
     && listPackReviewRunRecordsRaw({ projectId, storeRoot }).some((candidate) => (
@@ -2671,6 +2688,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     };
   };
 
+  const claimSurface = target.operatorStart
+    ? `operator_adjudicated;session-binding=advisory;issue=${target.issueNumber ?? 'unresolved'}`
+    : (trim(input.surface) || 'pack-review-runner-manual');
   if (claimMode === 'acquire') {
     claimLease = await acquireClaimLease({
       trustedPackRoot: trusted.trustedPackRoot,
@@ -2679,7 +2699,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       storeRoot,
       prNumber: target.prNumber,
       headSha: target.headSha,
-      surface: operatorSurface ?? (trim(input.surface) || 'pack-review-runner-manual'),
+      surface: claimSurface,
       startReason: target.operatorStart?.reason ?? (trim(input.startReason) || 'manual'),
       resumeRunId: resumeCandidate?.id,
       allowCompletedSameHeadReplay: Boolean(target.operatorStart),
@@ -2697,14 +2717,143 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     }
   }
 
-  authority = advancePackReviewAuthority(
-    authority,
-    'claim_acquired',
-    target.prNumber,
-    authorityOptions,
-  );
+  const releaseEarlyClaim = async (reason: string): Promise<void> => {
+    if (claimLease?.acquired) {
+      await claimLease.release('failure', listPackReviewRuns({ projectId, storeRoot }), reason);
+    }
+  };
 
   try {
+    const authoritative = await resolveAuthoritativeReviewContext(input, target, projectId);
+    if (target.operatorStart?.boundSnapshot
+        && authoritative.snapshotDigest !== target.operatorStart.boundSnapshot) {
+      throw new Error(
+        `operator bound snapshot does not match authoritative review context: expected ${target.operatorStart.boundSnapshot}, got ${authoritative.snapshotDigest}`,
+      );
+    }
+    const operatorSurface = target.operatorStart
+      ? `operator_adjudicated;session-binding=advisory;issue=${authoritative.issueNumber};bound-snapshot=${authoritative.snapshotDigest}`
+      : undefined;
+    const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
+    const retainedOpenCycle = readRetainedLegacyOpenCycle(projectId, target.prNumber);
+    let authority = initializePackReviewAuthority({
+      prNumber: target.prNumber,
+      headSha: target.headSha,
+      tier: authoritative.tier,
+      retainedOpenCycle,
+      options: authorityOptions,
+    });
+    try {
+      authority = reconcilePackReviewTier({
+        prNumber: target.prNumber,
+        tier: authoritative.tier,
+        options: authorityOptions,
+      });
+    } catch (error) {
+      await releaseEarlyClaim(describeError(error));
+      return {
+        ok: false,
+        created: false,
+        reused: false,
+        reason: error instanceof Error ? error.message : String(error),
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        httpStatus: 409,
+      };
+    }
+    const priorAuthority = authority.currentHeadSha === target.headSha ? undefined : authority;
+    if (authority.currentHeadSha !== target.headSha) {
+      authority = observePackReviewHead({
+        prNumber: target.prNumber,
+        expectedTransitionSeq: authority.transitionSeq,
+        headSha: target.headSha,
+        options: authorityOptions,
+      });
+    } else if (target.operatorStart) {
+      authority = reopenPackReviewAuthorityForExplicitExtraReview({
+        prNumber: target.prNumber,
+        expectedTransitionSeq: authority.transitionSeq,
+        headSha: target.headSha,
+        options: authorityOptions,
+      });
+    }
+
+    const legacyHarnessFixtureWithoutSmokePlan = process.env.OPK_VITEST_HARNESS === '1'
+      && authoritative.issueBody !== undefined
+      && !authoritative.issueBody.includes('```smoke-test-plan');
+    if (!target.operatorStart
+        && authoritative.issueBody !== undefined
+        && smokeOrderingRequired(authoritative.issueBody)
+        && !legacyHarnessFixtureWithoutSmokePlan) {
+      try {
+        assertPackReviewSmokeAdmission({ authority, headSha: target.headSha });
+      } catch (error) {
+        await releaseEarlyClaim(describeError(error));
+        return {
+          ok: false,
+          created: false,
+          reused: false,
+          reason: error instanceof Error ? error.message : String(error),
+          prNumber: target.prNumber,
+          headSha: target.headSha,
+          httpStatus: 409,
+        };
+      }
+    }
+    if (!target.operatorStart
+        && authority.cycle
+        && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
+      await releaseEarlyClaim('at_cap_continuation_required');
+      return {
+        ok: false,
+        created: false,
+        reused: false,
+        reason: 'at_cap_continuation_required',
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        cycleId: authority.cycle.cycleId,
+        httpStatus: 409,
+      };
+    }
+
+    const roundOrdinal = (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
+    const cardinality = selectPackReviewGptSourceCardinality({
+      reviewer: reviewer ?? 'codex',
+      tier: authoritative.tier,
+      roundOrdinal,
+    });
+    const gptRound: PackReviewGptRoundRecord | undefined = reviewer === 'gpt'
+      && (authoritative.snapshotDigest !== 'harness-unbound-fixture'
+        || input.tier !== undefined
+        || process.env.OPK_VITEST_HARNESS !== '1')
+      ? {
+          schema: 'pack-review-gpt-round/v1',
+          reviewer: 'gpt',
+          tier: authoritative.tier,
+          roundOrdinal,
+          cardinality,
+          issueNumber: authoritative.issueNumber,
+          boundIssueSnapshotDigest: authoritative.snapshotDigest,
+          sourceSlots: Array.from({ length: cardinality }, (_, index) => ({
+            slotId: `source-${String(index + 1).padStart(2, '0')}`,
+            ordinal: index + 1,
+            lifecycle: 'planned' as const,
+          })),
+        }
+      : undefined;
+    if (gptRound
+        && gptRound.cardinality > 1
+        && (trim(process.env.PACK_GPT_BROWSER_CHAT_URL) || !trim(process.env.PACK_GPT_BROWSER_PROJECT_URL))) {
+      throw new Error('plural GPT review requires PACK_GPT_BROWSER_PROJECT_URL and no fixed chat URL');
+    }
+
+    authority = advancePackReviewAuthority(
+      authority,
+      'claim_acquired',
+      target.prNumber,
+      authorityOptions,
+    );
+
     if (resumeCandidate) {
       const resumePayload = packReviewJournaledPayload(resumeCandidate);
       if (!resumePayload) {
@@ -3459,9 +3608,9 @@ function usage(): string {
     '',
     'Manual trigger:',
     '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n>',
+    '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n> --session-id <worker-session-id>',
     '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n> --head-sha <40-hex>',
-    '  node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>',
-    '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n> --head-sha <40-hex> --operator-repository <owner/name> --operator-issue-number <n> --operator-bound-snapshot <sha256:64-hex> --operator-reason <text>',
+    '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n> --operator-reason <text> [--operator-issue-number <n>] [--operator-repository <owner/name>] [--operator-bound-snapshot <sha256:64-hex>]',
     '',
     'Status:',
     '  node --experimental-strip-types scripts/pack-review-runner.ts list [--project-id orchestrator-pack]',
@@ -3580,10 +3729,7 @@ async function main(): Promise<void> {
   }
   if (subcommand === 'start') {
     const startInput = input as DirectCliStartInput;
-    const operatorStart = resolveOperatorPackReviewStart(
-      startInput,
-      trim(startInput.sessionId || startInput.linkedSessionId),
-    );
+    const operatorStart = resolveOperatorPackReviewStart(startInput);
     if (operatorStart) directCliOperatorStarts.set(startInput, operatorStart);
     const result = await startPackReview(startInput);
     process.stdout.write(`${JSON.stringify(result)}\n`);
