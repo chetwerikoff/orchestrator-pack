@@ -95,6 +95,55 @@ describe('scheduler/composer concurrency settlement', () => {
     }
   });
 
+  it('rechecks after the quiet deadline when the composer changes during verification', async () => {
+    vi.useFakeTimers();
+    try {
+      const submitted: string[] = [];
+      const target = {
+        runtime: 'orca' as const,
+        id: 'composer-race',
+        generation: 'generation-1',
+      };
+      const first = ['→ first orchestration payload', ...CURSOR_SCREEN.slice(1)];
+      const replacement = ['→ replacement orchestration payload', ...CURSOR_SCREEN.slice(1)];
+      let composer = first;
+      let reads = 0;
+      const deps: UnsentComposerSubmitDeps = {
+        listWorkers: () => ({ ok: true, workers: [{
+          identity: target,
+          workspacePath: '/tmp/composer-race',
+          title: 'composer-race',
+          provenance: 'external' as const,
+        }] }),
+        listWorkersAsync: async () => ({ ok: true, workers: [{
+          identity: target,
+          workspacePath: '/tmp/composer-race',
+          title: 'composer-race',
+          provenance: 'external' as const,
+        }] }),
+        read: () => ({ ok: true, lines: composer, source: 'screen' }),
+        readAsync: async () => {
+          reads += 1;
+          return { ok: true, lines: reads <= 2 ? first : composer, source: 'screen' };
+        },
+        submit: () => {
+          submitted.push(target.id);
+          return { status: 'dispatched' };
+        },
+      };
+      setTimeout(() => { composer = replacement; }, 4_005);
+      const pass = runSupervisorUnsentComposerTick(deps, createUnsentComposerWatchState());
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(5_005);
+      expect(submitted).toEqual([]);
+      await vi.advanceTimersByTimeAsync(QUIET_AFTER_PRINT_MS + 100);
+      expect(submitted).toEqual([target.id]);
+      await pass;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('persists the quiet observation before the bounded wait completes', async () => {
     vi.useFakeTimers();
     const sentStorePath = join(tmpdir(), `opk-composer-${process.pid}-${Date.now()}.json`);
@@ -111,6 +160,113 @@ describe('scheduler/composer concurrency settlement', () => {
     } finally {
       vi.useRealTimers();
       rmSync(sentStorePath, { force: true });
+    }
+  });
+
+  it('dispatches a late-arriving target while many unrelated async reads remain slow', async () => {
+    vi.useFakeTimers();
+    try {
+      const submitted: string[] = [];
+      const target = {
+        identity: { runtime: 'orca', id: 'late-target', generation: 'generation-1' },
+        workspacePath: '/tmp/late-target',
+        title: 'late-target',
+        provenance: 'external' as const,
+      };
+      const unrelated = Array.from({ length: 70 }, (_, index) => ({
+        identity: { runtime: 'orca', id: `unrelated-${index}`, generation: 'generation-1' },
+        workspacePath: `/tmp/unrelated-${index}`,
+        title: `unrelated-${index}`,
+        provenance: 'external' as const,
+      }));
+      const started: string[] = [];
+      const deps: UnsentComposerSubmitDeps = {
+        listWorkers: () => ({ ok: true, workers: [target, ...unrelated] }),
+        listWorkersAsync: async () => ({ ok: true, workers: [target, ...unrelated] }),
+        read: () => ({ ok: true, lines: CURSOR_SCREEN, source: 'screen' }),
+        readAsync: (identity) => new Promise((resolve) => {
+          started.push(identity.id);
+          setTimeout(() => resolve({ ok: true, lines: CURSOR_SCREEN, source: 'screen' }), identity.id === target.identity.id ? 100 : 70_000);
+        }),
+        submit: (identity) => {
+          submitted.push(identity.id);
+          return { status: 'dispatched' };
+        },
+      };
+      const pass = runSupervisorUnsentComposerTick(deps, createUnsentComposerWatchState());
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(started).toHaveLength(71);
+      await vi.advanceTimersByTimeAsync(QUIET_AFTER_PRINT_MS);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(submitted).toEqual([target.identity.id]);
+      await vi.advanceTimersByTimeAsync(150_000);
+      const settled = await pass;
+      expect(settled.terminals.find((row) => row.terminal === target.identity.id)?.reason).toBe('enter_sent');
+      expect(submitted.filter((id) => id === target.identity.id)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('polls a late composer arrival while fleet remains unresolved', async () => {
+    vi.useFakeTimers();
+    try {
+      const submitted: string[] = [];
+      const target = {
+        identity: { runtime: 'orca', id: 'late-target', generation: 'generation-1' },
+        workspacePath: '/tmp/late-target',
+        title: 'late-target',
+        provenance: 'external' as const,
+      };
+      const unrelated = Array.from({ length: 70 }, (_, index) => ({
+        identity: { runtime: 'orca', id: `unrelated-${index}`, generation: 'generation-1' },
+        workspacePath: `/tmp/unrelated-${index}`,
+        title: `unrelated-${index}`,
+        provenance: 'external' as const,
+      }));
+      const emptyClaude = ['prior transcript', '────────────────────────────────', '❯', '────────────────────────────────'];
+      let targetVisible = false;
+      let fleetComplete = false;
+      let enteredAt: number | undefined;
+      const targetChangeDelayMs = 10_000;
+      const targetChangedAt = Date.now() + targetChangeDelayMs;
+      const fleet = new Promise<void>((resolve) => setTimeout(() => { fleetComplete = true; resolve(); }, 70_000));
+      const deps: UnsentComposerSubmitDeps = {
+        listWorkers: () => ({ ok: true, workers: [target, ...unrelated] }),
+        listWorkersAsync: async () => ({ ok: true, workers: [target, ...unrelated] }),
+        read: () => ({ ok: true, lines: emptyClaude, source: 'screen' }),
+        readAsync: (identity) => new Promise((resolve) => {
+          setTimeout(() => resolve({
+            ok: true,
+            lines: identity.id === target.identity.id && targetVisible ? CURSOR_SCREEN : emptyClaude,
+            source: 'screen' as const,
+          }), 0);
+        }),
+        submit: (identity) => {
+          submitted.push(identity.id);
+          if (identity.id === target.identity.id) enteredAt = Date.now();
+          return { status: 'dispatched' };
+        },
+      };
+      setTimeout(() => { targetVisible = true; }, targetChangeDelayMs);
+      const pass = runSupervisorUnsentComposerTick(deps, createUnsentComposerWatchState(), { fleetSettled: fleet });
+      await vi.advanceTimersByTimeAsync(targetChangeDelayMs);
+      expect(fleetComplete).toBe(false);
+      const acceptedLatencyMs = QUIET_AFTER_PRINT_MS + 1_500;
+      await vi.advanceTimersByTimeAsync(acceptedLatencyMs);
+      await Promise.resolve();
+      expect(enteredAt).toBeDefined();
+      expect((enteredAt ?? 0) - targetChangedAt).toBeLessThanOrEqual(acceptedLatencyMs);
+      expect(submitted).toEqual([target.identity.id]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const settled = await pass;
+      expect(fleetComplete).toBe(true);
+      expect(settled.terminals.find((row) => row.terminal === target.identity.id)?.reason).toBe('enter_sent');
+      expect(submitted.filter((id) => id === target.identity.id)).toHaveLength(1);
+      expect(submitted.some((id) => id.startsWith('unrelated-'))).toBe(false);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

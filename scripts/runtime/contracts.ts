@@ -240,6 +240,16 @@ export interface RuntimeAdapter {
     options?: RuntimeCallOptions,
   ): RuntimeResult<readonly RuntimeWorker[]>;
 
+  /**
+   * Asynchronous all-workspace census for latency-sensitive scheduler paths.
+   * This is deliberately additive so unrelated lifecycle callers retain their
+   * synchronous contract.
+   */
+  listWorkersAsync?(
+    input?: { readonly workspace?: 'active' | string },
+    options?: RuntimeCallOptions,
+  ): PromiseLike<RuntimeResult<readonly RuntimeWorker[]>>;
+
   /** Resolve the current composite identity for one opaque runtime id. */
   findWorkerById(
     id: string,
@@ -307,6 +317,20 @@ export interface RuntimeAdapter {
     },
     options?: RuntimeCallOptions,
   ): RuntimeResult<RuntimeBoundedOutput>;
+
+  /**
+   * Asynchronous counterpart used when one slow terminal must not block
+   * observation of another terminal in the same scheduler pass.
+   */
+  readBoundedOutputAsync?(
+    input: {
+      readonly worker: RuntimeWorkerIdentity;
+      readonly previousToken?: RuntimeObservationToken | null;
+      readonly limit?: number;
+      readonly screen?: boolean;
+    },
+    options?: RuntimeCallOptions,
+  ): PromiseLike<RuntimeResult<RuntimeBoundedOutput>>;
 
   liveness(
     input: {
