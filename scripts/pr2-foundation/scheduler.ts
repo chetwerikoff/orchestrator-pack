@@ -582,15 +582,41 @@ async function runComposerPass(): Promise<unknown> {
   return runSupervisorUnsentComposerTick();
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function formatSchedulerError(error: unknown): string {
+  if (error instanceof AggregateError) {
+    return `${error.message}: ${error.errors.map(errorText).join('; ')}`;
+  }
+  return errorText(error);
+}
+
+function composerFailure(composer: unknown): string | undefined {
+  if (!composer || typeof composer !== 'object' || (composer as { ok?: unknown }).ok !== false) return undefined;
+  const terminals = (composer as { terminals?: unknown }).terminals;
+  if (!Array.isArray(terminals)) return 'composer_result_not_ok';
+  const reasons = terminals
+    .map((terminal) => terminal && typeof terminal === 'object' ? (terminal as { reason?: unknown }).reason : undefined)
+    .filter((reason): reason is string => typeof reason === 'string' && reason.length > 0);
+  return reasons.length > 0 ? reasons.join('; ') : 'composer_result_not_ok';
+}
+
 export function settleSchedulerAndComposer<T, C>(
   scheduler: PromiseSettledResult<T>,
   composer: PromiseSettledResult<C>,
 ): { result: T; composer: C } {
-  if (scheduler.status === 'rejected' && composer.status === 'rejected') {
-    throw new AggregateError([scheduler.reason, composer.reason], 'scheduler_and_composer_failed');
+  const composerReason = composer.status === 'rejected' ? composer.reason : composerFailure(composer.value);
+  if (scheduler.status === 'rejected' && composerReason !== undefined) {
+    const preservedComposerCause = composer.status === 'rejected'
+      ? composerReason
+      : `composer_pass_failed:${composerReason}`;
+    throw new AggregateError([scheduler.reason, preservedComposerCause], 'scheduler_and_composer_failed');
   }
   if (scheduler.status === 'rejected') throw scheduler.reason;
   if (composer.status === 'rejected') throw composer.reason;
+  if (composerReason !== undefined) throw new Error(`composer_pass_failed:${composerReason}`);
   return { result: scheduler.value, composer: composer.value };
 }
 
@@ -613,12 +639,12 @@ async function runLoop(): Promise<void> {
       const { result, composer } = await runTickWithComposer(boundary);
       process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result }, composer })}\n`);
     }
-    catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); }
+    catch (error) { process.stderr.write(`${formatSchedulerError(error)}\n`); }
     await new Promise((resolve) => setTimeout(resolve, cadence));
   }
 }
 
 if (process.argv[1]?.endsWith('scheduler.ts')) {
-  if (process.argv[2] === 'run') runLoop().catch((error) => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
-  else if (process.argv[2] === 'tick') runSingleTick().catch((error) => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
+  if (process.argv[2] === 'run') runLoop().catch((error) => { process.stderr.write(`${formatSchedulerError(error)}\n`); process.exitCode = 1; });
+  else if (process.argv[2] === 'tick') runSingleTick().catch((error) => { process.stderr.write(`${formatSchedulerError(error)}\n`); process.exitCode = 1; });
 }
