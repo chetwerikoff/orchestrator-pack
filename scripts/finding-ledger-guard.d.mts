@@ -39,7 +39,7 @@ export function detectProtectedSignalsInCapture(capture: string, options?: Findi
 export function detectUntypedFindingsInCapture(capture: string): CaptureFinding[];
 export function stripMarkdownFencedCodeBlocks(text: string): string;
 export function maskDelimitedMarkdownQuotes(text: string): string;
-export function extractFindingsScanText(capture: string, stage?: string | null): string;
+export function extractFindingsScanText(capture: string): string;
 export function mergeCaptureFindings(captures: string[]): { findings: CaptureFinding[]; errors: string[] };
 export function checkFindingLedgerGuard(captureOrCaptures: string | string[], ledgerText: string, options?: FindingLedgerGuardOptions): {
   ok: boolean; errors: string[]; ledger: ReturnType<typeof parseLedger>; captureFindings: CaptureFinding[]; protectedSignals: string[];
