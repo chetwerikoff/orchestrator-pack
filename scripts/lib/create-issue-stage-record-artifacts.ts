@@ -424,8 +424,10 @@ function parseCanonicalTerminalVerdict(
   if (
     exactCount('review-economics-contract: v1') !== 1
     || verdicts.length !== 1
-    || declaredFindingCounts.length !== 1
-    || declaredFindingCounts[0] !== revision.findingCount
+    || !(
+      declaredFindingCounts.length === 0
+      || (declaredFindingCounts.length === 1 && declaredFindingCounts[0] === revision.findingCount)
+    )
     || invocationIds.length !== 1
     || (cutCandidates === 0 ? simplificationClean !== 1 : simplificationClean !== 0)
   ) return null;
