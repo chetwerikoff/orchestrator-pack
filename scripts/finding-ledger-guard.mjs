@@ -159,7 +159,10 @@ export function detectUntypedFindingsInCapture(capture) {
 export function mergeCaptureFindings(captures) { return { findings: captures.flatMap((capture, index) => parseFindingBlocks(capture, index)), errors: [] }; }
 export function detectProtectedSignalsInCapture(capture) {
   const text = extractFindingsScanText(capture);
-  return Object.entries(PROTECTED_PATTERNS).filter(([, patterns]) => patterns.some((pattern) => pattern.test(text))).map(([type]) => type);
+  return Object.entries(PROTECTED_PATTERNS).filter(([type, patterns]) => {
+    const matchers = type === 'scope-violation' ? [/\btype:\s*scope-violation\b/i] : patterns;
+    return matchers.some((pattern) => pattern.test(text));
+  }).map(([type]) => type);
 }
 function parseCaptureName(name) {
   const match = CAPTURE_NAME_RE.exec(name ?? '');

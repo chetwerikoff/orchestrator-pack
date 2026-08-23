@@ -427,13 +427,36 @@ describe('finding ledger review economics #975', () => {
 
       const globalSignal = run(
         [cap('pass-01-architectural.capture.txt', 1_100, markedFinding('Q1', {
-          type: 'quality',
+          type: 'scope-violation',
           evidence: 'The proposed edit is out of scope under allowed_roots.',
         }))],
         [row('Q1')],
       );
       expect(globalSignal.ok).toBe(false);
       expect(globalSignal.errors.join('\n')).toContain('protected signal type: scope-violation present in capture but not addressed in the ledger');
+    });
+
+    it('does not treat denylist/out-of-scope prose in a typed spec finding as a protected scope-violation signal', () => {
+      const specProse = run(
+        [cap('pass-01-architectural.capture.txt', 1_100, markedFinding('Q1', {
+          type: 'spec',
+          evidence: 'Files out of scope. The denylist already names vendor/**.',
+          recommendation: 'Keep the denylist; do not invent a scope-violation row.',
+        }))],
+        [row('Q1', { type: 'spec' })],
+      );
+      expect(specProse.ok, specProse.errors.join('\n')).toBe(true);
+      expect(specProse.errors.join('\n')).not.toContain('protected signal type: scope-violation');
+
+      const typedStillProtected = run(
+        [cap('pass-01-architectural.capture.txt', 1_100, markedFinding('S1', {
+          type: 'scope-violation',
+          evidence: 'The proposed edit is out of scope under allowed_roots.',
+        }))],
+        [row('S1')],
+      );
+      expect(typedStillProtected.ok).toBe(false);
+      expect(typedStillProtected.errors.join('\n')).toContain('protected signal type: scope-violation present in capture but not addressed in the ledger');
     });
 
     it('requires architectPending at pre-lens when contest evidence is unknown or stale despite valid author activation', () => {
