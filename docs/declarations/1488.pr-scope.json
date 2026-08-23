@@ -1,0 +1,46 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1488,
+  "declared_paths": [
+    ".claude/skills/direct-fix-checklist/SKILL.md",
+    ".claude/skills/investigate-root-cause/SKILL.md",
+    ".cursor/rules/ascii-diagrams.mdc",
+    ".cursor/rules/draft-author-relocation.mdc",
+    ".cursor/rules/explain-like-im-five.mdc",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    ".cursor/rules/github-rest-over-graphql.mdc",
+    ".cursor/rules/graphify-graph-check.mdc",
+    ".cursor/rules/kb-consult.mdc",
+    ".cursor/rules/rca-spec-discipline.mdc",
+    ".cursor/rules/ts-first-script-authoring.mdc",
+    ".cursor/skills/switch-pack-reviewer/SKILL.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/architecture.md",
+    "docs/coworker-delegation.md",
+    "docs/coworker-read-delegation-audit.md",
+    "docs/declarations/1488.pr-scope.json",
+    "docs/orchestration-runbook.md",
+    "docs/repository_policy.md",
+    "scripts/gate-runner/"
+  ],
+  "denylist": [
+    ".ao/",
+    ".env",
+    ".local/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/",
+    ".cursor/rules/",
+    ".cursor/skills/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/",
+    "scripts/gate-runner/"
+  ],
+  "source_revision": "16e8dfbe114a2c7d3336507343e3cbe8c2d86048"
+}
