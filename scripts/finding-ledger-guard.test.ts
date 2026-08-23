@@ -1303,6 +1303,69 @@ describe('receipt-backed occurrence M3 lookup uses capture finding id', () => {
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
+  it('does not unknown/stale a locked T2 architectural lens occurrence without m3-protected when disposition is rejected-as-false', () => {
+    const findingId = 'precedence-safety-boundary-order-inverted-architectural';
+    const reviewName = 'pass-01-architectural-review-01.capture.txt';
+    const lensName = 'pass-02-architectural.capture.txt';
+    const identityAr = `sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:${reviewName}`;
+    const identityLens = `sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:${lensName}`;
+    const occurrenceAr = `${identityAr}:1`;
+    const occurrenceLens = `${identityLens}:1`;
+    const finding = markedFinding(findingId, {
+      type: 'security',
+      evidence: 'A security issue is present in the proposed boundary.',
+    });
+    const result = checkFindingLedgerGuard(
+      [
+        finding,
+        finding,
+      ],
+      JSON.stringify({
+        version: 2,
+        counts: { rawFindingCount: 2, distinctFindingCount: 2, processedDistinctCount: 2 },
+        findings: [
+          {
+            id: 'ROW-AR',
+            summary: 'security AR',
+            type: 'security',
+            occurrences: [occurrenceAr],
+            defectDisposition: 'rejected-as-false',
+            rejectReason: 'the report misread the existing contract',
+            remedyDisposition: 'accepted',
+            'persistent-machinery': 'no',
+          },
+          {
+            id: 'ROW-LENS',
+            summary: 'security T2 architectural lens',
+            type: 'security',
+            occurrences: [occurrenceLens],
+            defectDisposition: 'rejected-as-false',
+            rejectReason: 'the report misread the existing contract',
+            remedyDisposition: 'accepted',
+            'persistent-machinery': 'no',
+            protectedOccurrences: [{
+              occurrenceId: occurrenceLens,
+              architectPending: false,
+              architectRequired: false,
+              protectedActivation: null,
+            }],
+          },
+        ],
+      }),
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r3',
+        stageTerminalConfirmed: true,
+        captureMetadata: [
+          { name: reviewName, timestampMs: 1_100, captureIdentity: identityAr },
+          { name: lensName, timestampMs: 1_110, captureIdentity: identityLens },
+        ],
+      } as never,
+    );
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
   it('still fails closed when the same capture finding id is reused inside one capture', () => {
     const findingId = 'S1';
     const reviewName = 'pass-01-architectural-review-01.capture.txt';

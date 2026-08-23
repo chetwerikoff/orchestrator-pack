@@ -403,6 +403,10 @@ function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, p
     if (record.outcome === 'non-activate') return;
     if ((record.contest === 'none' || record.contest === 'contest-withdrawn') && !zeroSignal && activationValid) { if (row.defectDisposition !== 'addressed') errors.push(`review-economics: activated protected finding ${occurrence.occurrenceId} must be addressed`); return; }
   }
+  const lockedT2Architectural = occurrence.stage === 'architectural' && Boolean(occurrence.captureIdentity);
+  if (!record && lockedT2Architectural && row.defectDisposition === 'rejected-as-false') {
+    return;
+  }
   if (terminalOnly && activationValid) { if (row.defectDisposition !== 'addressed') errors.push(`review-economics: activated protected finding ${occurrence.occurrenceId} must be addressed`); return; }
   const lockedArchitecturalReview = occurrence.stage === 'architectural-review' && Boolean(occurrence.captureIdentity);
   if (!record && lockedArchitecturalReview && (row.defectDisposition === 'rejected-as-false' || activationValid)) {
