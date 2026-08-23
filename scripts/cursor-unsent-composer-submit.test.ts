@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
 import { unlinkSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -16,6 +16,7 @@ import {
   saveSubmittedFingerprints,
   submitUnsentCursorComposer,
   submitUnsentCursorComposerOnce,
+  runSupervisorUnsentComposerTick,
   workerKey,
   type UnsentComposerSubmitDeps,
 } from './cursor-unsent-composer-submit.ts';
@@ -206,6 +207,87 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 });
 
 describe('submitUnsentCursorComposer', () => {
+  it('runs one bounded second observation for the supervisor child', async () => {
+    vi.useFakeTimers();
+    try {
+      const submitted: RuntimeWorkerIdentity[] = [];
+      const state = createUnsentComposerWatchState();
+      const deps = depsFor(
+        { term_unsent: [POKE, ...CURSOR_FOOTER] },
+        { submitted },
+      );
+      const pass = runSupervisorUnsentComposerTick(deps, state);
+      await vi.advanceTimersByTimeAsync(QUIET_AFTER_PRINT_MS);
+      const result = await pass;
+      expect(result.terminals[0]?.reason).toBe('enter_sent');
+      expect(submitted).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sleeps only for the remaining persisted quiet window', async () => {
+    vi.useFakeTimers();
+    try {
+      const submitted: RuntimeWorkerIdentity[] = [];
+      const state = createUnsentComposerWatchState();
+      const identity = worker('term_unsent').identity;
+      state.lastFingerprint.set(workerKey(identity), POKE);
+      state.lastChangedAt.set(workerKey(identity), Date.now() - 4_000);
+      const deps = depsFor(
+        { term_unsent: [POKE, ...CURSOR_FOOTER] },
+        { submitted },
+      );
+      const pass = runSupervisorUnsentComposerTick(deps, state);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(submitted).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      await pass;
+      expect(submitted).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('services staggered terminal deadlines independently in one supervisor pass', async () => {
+    vi.useFakeTimers();
+    try {
+      const submitted: RuntimeWorkerIdentity[] = [];
+      const first = worker('term_first');
+      const second = worker('term_second');
+      const state = createUnsentComposerWatchState();
+      state.lastFingerprint.set(workerKey(first.identity), POKE);
+      state.lastChangedAt.set(workerKey(first.identity), Date.now() - 4_000);
+      let firstReads = 0;
+      const deps: UnsentComposerSubmitDeps = {
+        listWorkers: () => ({ ok: true, workers: [first, second] }),
+        read: (identity) => {
+          if (identity.id === first.identity.id) {
+            firstReads += 1;
+            return {
+              ok: true as const,
+              lines: firstReads === 1 ? [POKE, ...CURSOR_FOOTER] : ['→ changed payload', ...CURSOR_FOOTER],
+              source: 'screen' as const,
+            };
+          }
+          return { ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const };
+        },
+        submit: (identity) => {
+          submitted.push(identity);
+          return { status: 'dispatched' as const };
+        },
+      };
+      const pass = runSupervisorUnsentComposerTick(deps, state);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(submitted.map((identity) => identity.id)).toEqual(['term_second']);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await pass;
+      expect(submitted.map((identity) => identity.id)).toEqual(['term_second', 'term_first']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('uses rendered screen observation when stream output omits the composer', () => {
     const identity = worker('term_production').identity;
     const reads: Array<{ screen?: boolean }> = [];
