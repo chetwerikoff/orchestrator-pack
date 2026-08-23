@@ -1071,6 +1071,36 @@ describe('Issue #1556 pre-lens architectural-review routing', () => {
       expect(invocation.reviewLaneRouting).toEqual(receipt.reviewLane.routing);
     }
 
+    const lensEvidencePath = join(prepared.input.dir, 'lens-evidence.json');
+    writeFileSync(lensEvidencePath, JSON.stringify({
+      schema: STAGE_EVIDENCE_SCHEMA,
+      tier: 'T3',
+      stage: 'architectural-lens',
+      stageAttemptId: 'architectural-lens-attempt',
+    }));
+    const omittedLens = produceAcceptanceArtifacts({
+      reviewDir: prepared.input.dir,
+      outputDir: prepared.input.outputDir,
+      tierIntakePath: prepared.input.intakePath,
+      stageEvidencePaths: [prepared.input.reviewEvidencePath],
+      authorDispositionsPath: prepared.input.authorPath,
+      phase: 'pre-lens',
+      artifactSourceTransport: prepared.source,
+    });
+    expect(omittedLens.ok, omittedLens.errors.join('\n')).toBe(true);
+    expect(omittedLens.files).toContain('finding-disposition-ledger.json');
+
+    const passedLens = produceAcceptanceArtifacts({
+      reviewDir: prepared.input.dir,
+      outputDir: prepared.input.outputDir,
+      tierIntakePath: prepared.input.intakePath,
+      stageEvidencePaths: [prepared.input.reviewEvidencePath, lensEvidencePath],
+      authorDispositionsPath: prepared.input.authorPath,
+      phase: 'pre-lens',
+      artifactSourceTransport: prepared.source,
+    });
+    expect(passedLens.ok, passedLens.errors.join('\n')).toBe(true);
+
     const missingRoute = producePreLens(prepare('02'));
     expect(missingRoute.ok).toBe(false);
     expect(missingRoute.errors.join('\n')).toContain('missing immutable reviewLaneRouting evidence');

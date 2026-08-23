@@ -1553,18 +1553,37 @@ function stageEvidenceFilesInReviewDir(reviewDir: string): string[] {
   }
 }
 
+function isLaterLensEvidence(path: string, phase: 'pre-lens' | 'final-acceptance'): boolean {
+  if (phase !== 'pre-lens') return false;
+  try {
+    const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    return isRecord(value)
+      && value.schema === STAGE_EVIDENCE_SCHEMA
+      && value.stage === 'architectural-lens';
+  } catch {
+    return false;
+  }
+}
+
 function resolveCanonicalStageEvidencePaths(
   reviewDir: string,
   requestedPaths: readonly string[],
   errors: string[],
+  phase: 'pre-lens' | 'final-acceptance' = 'final-acceptance',
 ): string[] | null {
-  const canonicalPaths = stageEvidenceFilesInReviewDir(reviewDir);
+  const discoveredPaths = stageEvidenceFilesInReviewDir(reviewDir);
+  const ignored = new Set(discoveredPaths
+    .filter((path) => isLaterLensEvidence(path, phase))
+    .map((path) => resolve(path)));
+  const canonicalPaths = discoveredPaths.filter((path) => !ignored.has(resolve(path)));
   const canonicalSet = new Set(canonicalPaths.map((path) => resolve(path)));
-  const requestedSet = new Set(requestedPaths.map((path) => resolve(path)));
+  const requestedSet = new Set(requestedPaths
+    .map((path) => resolve(path))
+    .filter((path) => !ignored.has(path)));
   const missing = canonicalPaths.filter((path) => !requestedSet.has(resolve(path)));
   const unexpected = requestedPaths
     .map((path) => resolve(path))
-    .filter((path) => !canonicalSet.has(path));
+    .filter((path) => !canonicalSet.has(path) && !ignored.has(path));
   if (missing.length > 0) errors.push(`--stage-evidence omitted canonical stage evidence files: ${missing.join(', ')}`);
   if (unexpected.length > 0) errors.push(`--stage-evidence includes files outside the canonical review directory: ${[...new Set(unexpected)].join(', ')}`);
   return missing.length === 0 && unexpected.length === 0 ? canonicalPaths : null;
@@ -1630,7 +1649,7 @@ export function produceAcceptanceArtifacts(
   }
   const episodeId = deriveReviewEpisodeId(taskIdentity, episodeFirstRevision);
   const operatorWaiverEvidence = readOperatorWaiver(options.waiverPath);
-  const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(options.reviewDir, options.stageEvidencePaths, errors);
+  const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(options.reviewDir, options.stageEvidencePaths, errors, options.phase ?? 'final-acceptance');
   if (canonicalStageEvidencePaths === null) {
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)], reviewEpisodeId: episodeId };
   }
@@ -1857,7 +1876,7 @@ export function inspectAcceptanceArtifacts(
   }
 
   const coverageErrors: string[] = [];
-  const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(options.reviewDir, options.stageEvidencePaths, coverageErrors);
+  const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(options.reviewDir, options.stageEvidencePaths, coverageErrors, options.phase ?? 'final-acceptance');
   for (const error of coverageErrors) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: error });
   if (options.stageEvidencePaths.length === 0) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: 'no recorded stage evidence paths were supplied' });
   const stageEvidencePaths = canonicalStageEvidencePaths ?? options.stageEvidencePaths;
