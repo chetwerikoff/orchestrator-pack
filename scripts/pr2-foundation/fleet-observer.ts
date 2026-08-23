@@ -499,9 +499,15 @@ function livenessShapeValid(value: RuntimeLivenessResult, expected: RuntimeWorke
 async function beforeDeadline<T>(action: () => MaybePromise<T>, deadlineMs: number, now: () => number): Promise<BoundedCall<T>> {
   const remaining = Math.floor(deadlineMs - now());
   if (remaining <= 0) return { completed: false };
+  let actionResult: MaybePromise<T>;
+  try {
+    actionResult = action();
+  } catch {
+    return { completed: true, value: undefined as T };
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<BoundedCall<T>>((resolve) => { timer = setTimeout(() => resolve({ completed: false }), remaining); });
-  const operation = Promise.resolve().then(action).then((value): BoundedCall<T> => now() <= deadlineMs ? { completed: true, value } : { completed: false }).catch(() => ({ completed: true, value: undefined as T }));
+  const operation = Promise.resolve(actionResult).then((value): BoundedCall<T> => now() <= deadlineMs ? { completed: true, value } : { completed: false }).catch(() => ({ completed: true, value: undefined as T }));
   const result = await Promise.race([operation, timeout]);
   if (timer !== undefined) clearTimeout(timer);
   return result;
