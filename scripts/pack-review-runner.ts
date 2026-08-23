@@ -533,20 +533,36 @@ async function runGit(repoRoot: string, args: readonly string[], label: string):
   }), label);
 }
 
-async function resolveCurrentPrHead(repoRoot: string, repoSlug: string, prNumber: number): Promise<string> {
-  const result = await runProcess({
+export async function resolveCurrentPrHead(
+  repoRoot: string,
+  repoSlug: string,
+  prNumber: number,
+  runner: typeof runProcess = runProcess,
+): Promise<string> {
+  const result = await runner({
     command: 'gh',
-    args: ['pr', 'view', String(prNumber), '--repo', repoSlug, '--json', 'headRefOid,state', '--jq', '.headRefOid + " " + .state'],
+    args: ['pr', 'view', String(prNumber), '--repo', repoSlug, '--json', 'headRefOid,state'],
     cwd: repoRoot,
     inheritParentEnv: true,
     allowEmptyStdout: false,
     timeoutMs: 30_000,
   });
   const output = await requireProcess(result, `gh pr view ${prNumber}`);
-  const [headSha, state] = output.split(/\s+/, 2);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    throw new Error(`PR #${prNumber} returned invalid JSON`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`PR #${prNumber} returned invalid JSON`);
+  }
+  const row = parsed as Record<string, unknown>;
+  const headSha = trim(row.headRefOid);
+  const state = trim(row.state);
   if (!/^[0-9a-f]{40}$/i.test(headSha ?? '')) throw new Error(`PR #${prNumber} returned invalid head SHA`);
   if (String(state ?? '').toUpperCase() !== 'OPEN') throw new Error(`PR #${prNumber} is not open`);
-  return headSha!.toLowerCase();
+  return headSha.toLowerCase();
 }
 
 async function resolveTarget(

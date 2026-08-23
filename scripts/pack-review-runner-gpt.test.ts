@@ -14,7 +14,11 @@ import {
   parsePackGptReviewArgs,
   runPackGptReviewCommand,
 } from './pack-gpt-review.js';
-import { isRetryablePackReviewZeroSendCollision, startPackReview } from './pack-review-runner.js';
+import {
+  isRetryablePackReviewZeroSendCollision,
+  resolveCurrentPrHead,
+  startPackReview,
+} from './pack-review-runner.js';
 import type { CarryoverReplayResult } from './pack-review-carryover.js';
 import { readPackReviewAuthority } from './pack-review-state.js';
 import {
@@ -221,6 +225,52 @@ function writeSuccessfulGhFixture(binRoot: string): void {
 afterEach(() => {
   process.env = { ...originalEnv };
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe('pack-review current-head REST read', () => {
+  function processResult(stdout: string) {
+    return {
+      outcome: 'exit' as const,
+      ok: true,
+      exitCode: 0,
+      signal: null,
+      stdout,
+      stderr: '',
+      timedOut: false,
+      cancelled: false,
+    };
+  }
+
+  it('requests inventory-routable JSON without jq and parses the open head', async () => {
+    const invocations: Array<{ command: string; args?: readonly string[] }> = [];
+    const head = await resolveCurrentPrHead(repoRoot, 'chetwerikoff/orchestrator-pack', 1517, async (options) => {
+      invocations.push({ command: options.command, args: options.args });
+      return processResult(JSON.stringify({ headRefOid: HEAD_A, state: 'OPEN' }));
+    });
+
+    expect(head).toBe(HEAD_A);
+    expect(invocations).toEqual([{
+      command: 'gh',
+      args: [
+        'pr', 'view', '1517', '--repo', 'chetwerikoff/orchestrator-pack',
+        '--json', 'headRefOid,state',
+      ],
+    }]);
+  });
+
+  it('preserves malformed-head and non-open PR failures', async () => {
+    await expect(resolveCurrentPrHead(repoRoot, 'chetwerikoff/orchestrator-pack', 1517, async () => (
+      processResult(JSON.stringify({ headRefOid: 'short', state: 'OPEN' }))
+    ))).rejects.toThrow('PR #1517 returned invalid head SHA');
+
+    await expect(resolveCurrentPrHead(repoRoot, 'chetwerikoff/orchestrator-pack', 1517, async () => (
+      processResult(JSON.stringify({ headRefOid: HEAD_A, state: 'CLOSED' }))
+    ))).rejects.toThrow('PR #1517 is not open');
+
+    await expect(resolveCurrentPrHead(repoRoot, 'chetwerikoff/orchestrator-pack', 1517, async () => (
+      processResult('not-json')
+    ))).rejects.toThrow('PR #1517 returned invalid JSON');
+  });
 });
 
 
