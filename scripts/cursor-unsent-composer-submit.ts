@@ -472,22 +472,42 @@ export async function runSupervisorUnsentComposerTick(
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
 ): Promise<UnsentComposerSubmitResult> {
   const deps = providedDeps ?? createAdapterSubmitDeps(await selectRuntimeAdapter());
-  let result = submitUnsentCursorComposer({ watch: true }, deps, state);
-  for (let followUp = 0; followUp < 2; followUp += 1) {
-    if (!result.terminals.some((row) => row.reason === 'waiting_stable')) return result;
-    const now = deps.now?.() ?? Date.now();
-    const remaining = result.terminals
-      .filter((row) => row.reason === 'waiting_stable')
-      .map((row) => {
-        const key = [...state.lastChangedAt.keys()]
-          .find((candidate) => candidate.endsWith(`\u0000${row.terminal}\u0000${row.generation}`));
-        return Math.max(0, QUIET_AFTER_PRINT_MS - (now - (key ? (state.lastChangedAt.get(key) ?? now) : now)));
-      });
-    const delay = Math.max(1, Math.min(...remaining, QUIET_AFTER_PRINT_MS));
-    await new Promise<void>((resolve) => setTimeout(resolve, delay));
-    result = submitUnsentCursorComposer({ watch: true }, deps, state);
+  hydrateSubmitted(state, deps.sentStorePath);
+  const listed = deps.listWorkers();
+  if (!listed.ok) {
+    return {
+      ok: false,
+      dryRun: false,
+      watch: true,
+      terminals: [{ terminal: '', generation: '', ok: false, unsent: false, enter: false, reason: listed.reason }],
+    };
   }
-  return result;
+  const runWorker = async (worker: RuntimeWorker): Promise<UnsentComposerTerminalResult> => {
+    const workerDeps: UnsentComposerSubmitDeps = {
+      ...deps,
+      listWorkers: () => ({ ok: true, workers: [worker] }),
+      sentStorePath: undefined,
+    };
+    let result = submitUnsentCursorComposer({ terminals: [worker.identity.id], watch: true }, workerDeps, state);
+    while (result.terminals[0]?.reason === 'waiting_stable') {
+      const now = deps.now?.() ?? Date.now();
+      const key = workerKey(worker.identity);
+      const remaining = Math.max(0, QUIET_AFTER_PRINT_MS - (now - (state.lastChangedAt.get(key) ?? now)));
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.max(1, remaining)));
+      result = submitUnsentCursorComposer({ terminals: [worker.identity.id], watch: true }, workerDeps, state);
+    }
+    return result.terminals[0] ?? {
+      terminal: worker.identity.id,
+      generation: worker.identity.generation,
+      ok: false,
+      unsent: false,
+      enter: false,
+      reason: 'composer_result_missing',
+    };
+  };
+  const terminals = await Promise.all(listed.workers.map(runWorker));
+  persistSubmitted(state, deps.sentStorePath);
+  return { ok: terminals.every((row) => row.ok), dryRun: false, watch: true, terminals };
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
