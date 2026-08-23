@@ -1187,8 +1187,8 @@ describe('receipt-backed occurrence M3 lookup uses capture finding id', () => {
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
-  it('still fails closed when same capture finding id is reused outside an AR+lens pair', () => {
-    const findingId = 'S1';
+  it('does not treat two architectural-review captures sharing a capture finding id as ambiguous', () => {
+    const findingId = 'precedence-safety-boundary-order-inverted';
     const reviewOne = 'pass-01-architectural-review-01.capture.txt';
     const reviewTwo = 'pass-01-architectural-review-02.capture.txt';
     const identityOne = `sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:${reviewOne}`;
@@ -1239,6 +1239,118 @@ describe('receipt-backed occurrence M3 lookup uses capture finding id', () => {
         captureMetadata: [
           { name: reviewOne, timestampMs: 1_100, captureIdentity: identityOne },
           { name: reviewTwo, timestampMs: 1_110, captureIdentity: identityTwo },
+          { name: 'pass-02-architectural.capture.txt', timestampMs: 1_200 },
+        ],
+      } as never,
+    );
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('does not treat a T2 AR + pass-NN-architectural lens capture sharing a capture finding id as ambiguous', () => {
+    const findingId = 'precedence-safety-boundary-order-inverted';
+    const reviewName = 'pass-01-architectural-review-01.capture.txt';
+    const lensName = 'pass-02-architectural.capture.txt';
+    const identityAr = `sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:${reviewName}`;
+    const identityLens = `sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:${lensName}`;
+    const occurrenceAr = `${identityAr}:1`;
+    const occurrenceLens = `${identityLens}:1`;
+    const finding = markedFinding(findingId, {
+      type: 'security',
+      evidence: 'A security issue is present in the proposed boundary.',
+    });
+    const result = checkFindingLedgerGuard(
+      [
+        finding,
+        `${finding}\n${currentLens(findingId, { contest: 'none', outcome: 'non-activate' })}`,
+      ],
+      JSON.stringify({
+        version: 2,
+        counts: { rawFindingCount: 2, distinctFindingCount: 2, processedDistinctCount: 2 },
+        findings: [
+          {
+            id: 'ROW-AR',
+            summary: 'security AR',
+            type: 'security',
+            occurrences: [occurrenceAr],
+            defectDisposition: 'rejected-as-false',
+            rejectReason: 'the report misread the existing contract',
+            remedyDisposition: 'accepted',
+            'persistent-machinery': 'no',
+          },
+          {
+            id: 'ROW-LENS',
+            summary: 'security T2 architectural lens',
+            type: 'security',
+            occurrences: [occurrenceLens],
+            defectDisposition: 'rejected-as-false',
+            rejectReason: 'the report misread the existing contract',
+            remedyDisposition: 'accepted',
+            'persistent-machinery': 'no',
+          },
+        ],
+      }),
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r3',
+        stageTerminalConfirmed: true,
+        captureMetadata: [
+          { name: reviewName, timestampMs: 1_100, captureIdentity: identityAr },
+          { name: lensName, timestampMs: 1_110, captureIdentity: identityLens },
+        ],
+      } as never,
+    );
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('still fails closed when the same capture finding id is reused inside one capture', () => {
+    const findingId = 'S1';
+    const reviewName = 'pass-01-architectural-review-01.capture.txt';
+    const captureIdentity = `sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:${reviewName}`;
+    const occurrenceOne = `${captureIdentity}:1`;
+    const occurrenceTwo = `${captureIdentity}:2`;
+    const finding = markedFinding(findingId, {
+      type: 'security',
+      evidence: 'A security issue is present in the proposed boundary.',
+    });
+    const result = checkFindingLedgerGuard(
+      [
+        `${finding}\n${finding}`,
+        `${markedClean()}\n${currentLens(findingId, { contest: 'none', outcome: 'non-activate' })}`,
+      ],
+      JSON.stringify({
+        version: 2,
+        counts: { rawFindingCount: 2, distinctFindingCount: 2, processedDistinctCount: 2 },
+        findings: [
+          {
+            id: 'ROW-A',
+            summary: 'security A',
+            type: 'security',
+            occurrences: [occurrenceOne],
+            defectDisposition: 'rejected-as-false',
+            rejectReason: 'the report misread the existing contract',
+            remedyDisposition: 'accepted',
+            'persistent-machinery': 'no',
+          },
+          {
+            id: 'ROW-B',
+            summary: 'security B',
+            type: 'security',
+            occurrences: [occurrenceTwo],
+            defectDisposition: 'rejected-as-false',
+            rejectReason: 'the report misread the existing contract',
+            remedyDisposition: 'accepted',
+            'persistent-machinery': 'no',
+          },
+        ],
+      }),
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r3',
+        stageTerminalConfirmed: true,
+        captureMetadata: [
+          { name: reviewName, timestampMs: 1_100, captureIdentity },
           { name: 'pass-02-architectural.capture.txt', timestampMs: 1_200 },
         ],
       } as never,

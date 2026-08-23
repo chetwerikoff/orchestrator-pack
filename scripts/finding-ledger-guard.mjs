@@ -368,14 +368,13 @@ function resolveOccurrenceM3History(occurrenceId, records, issueRevision, errors
 function protectedSharingCaptureId(occurrence, ledger, occurrenceMap) {
   return ledger.findings.flatMap((candidate) => candidate.occurrences.map((id) => occurrenceMap.get(id)).filter((item) => item && PROTECTED_TYPES.has(item.type) && item.id === occurrence.id));
 }
-function isArchitecturalReviewLensPair(occurrences) {
-  if (occurrences.length !== 2) return false;
-  const stages = new Set(occurrences.map((item) => item.stage));
-  return stages.has('architectural-review') && stages.has('architectural-lens');
+function protectedOccurrencesShareCapture(left, right) {
+  if (left.captureIdentity && right.captureIdentity) return left.captureIdentity === right.captureIdentity;
+  return left.captureIndex === right.captureIndex;
 }
 function captureIdIsAmbiguous(occurrence, ledger, occurrenceMap) {
   const sharing = protectedSharingCaptureId(occurrence, ledger, occurrenceMap);
-  return sharing.length > 1 && !isArchitecturalReviewLensPair(sharing);
+  return sharing.filter((item) => protectedOccurrencesShareCapture(item, occurrence)).length > 1;
 }
 function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors, ledger, occurrenceMap }) {
   if (captureIdIsAmbiguous(occurrence, ledger, occurrenceMap)) {
