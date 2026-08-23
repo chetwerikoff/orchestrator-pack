@@ -23,8 +23,8 @@ import {
   type RuntimeWorkerTaskBindingOutcome,
 } from '../runtime/contracts.ts';
 import {
+  parseOrcaJsonOutput,
   runOrcaJson,
-  isOrcaSmokeControlPlaneCode,
   resolveOrcaExecutable,
   resolveOrcaOperation,
   type OrcaJsonResponse,
@@ -44,31 +44,6 @@ type AsyncExecError = Error & {
   readonly stdout?: string | Buffer;
   readonly stderr?: string | Buffer;
 };
-
-function parseOrcaJsonOutput<T>(
-  stdout: string | Buffer,
-  operation: OrcaJsonResponse['operation'],
-): OrcaJsonResponse<T> {
-  const normalized = String(stdout).trim();
-  try {
-    const parsed = JSON.parse(normalized) as OrcaJsonResponse<T>;
-    if (parsed.ok) return { ...parsed, operation };
-    return {
-      ...parsed,
-      operation,
-      outcomeCategory: isOrcaSmokeControlPlaneCode(parsed.error?.code)
-        ? 'recognized_control_plane_code'
-        : 'supported_operation_failure',
-    };
-  } catch {
-    return {
-      ok: false,
-      operation,
-      outcomeCategory: 'invalid_json',
-      error: { code: 'orca_invalid_json', message: normalized.slice(0, 500) },
-    };
-  }
-}
 
 async function runOrcaJsonAsync<T>(
   args: readonly string[],
