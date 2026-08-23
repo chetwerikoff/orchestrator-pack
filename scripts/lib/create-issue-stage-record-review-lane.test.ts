@@ -74,6 +74,23 @@ function routedFixture() {
   };
 }
 
+function architecturalLensReceipt(cycleId: string, sourceRevision = 'r01') {
+  return {
+    tier: 'T3',
+    stage: 'architectural-lens',
+    cycleId,
+    stageAttemptId: 'attempt-1',
+    policyVersion: 'single-source/v1',
+    sourceRevision,
+    outcome: 'complete',
+    reviewerCardinality: 1,
+    completedSourceCount: 1,
+    cycleBinding: { cycleId, sourceRevision, boundBeforeLaunch: true },
+    producerEvidence: 'verified',
+    tierTransition: 'none',
+  };
+}
+
 const routedTierIntake = {
   schema: 'tier-intake/v1' as const,
   producer: 'test',
@@ -682,6 +699,105 @@ describe('review-lane production activation', () => {
     });
     expect(publication.ok).toBe(false);
     expect(publication.diagnostics.map((item) => item.message).join('\n')).toContain('immutable cycle route');
+  });
+
+  it('publishes a single-source architectural lens receipt on a routed T3 cycle', () => {
+    const state = createMockGhState({ issue: { title: 't', body: issueBody, labels: [] } });
+    const transport = createMockTransport(state);
+    const cycle = startReviewCycle(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      stageAttemptId: 'attempt-1',
+      workdir: makeTempDir(),
+    });
+    expect(cycle.ok).toBe(true);
+    const publication = publishSettledStageRecord(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      receipt: architecturalLensReceipt(cycle.cycleId),
+      workdir: makeTempDir(),
+    });
+    expect(publication.ok).toBe(true);
+    expect(state.comments.some((comment) => comment.body.includes('architectural-lens'))).toBe(true);
+  });
+
+  it('keeps single-source non-lens receipts rejected on a routed cycle', () => {
+    const state = createMockGhState({ issue: { title: 't', body: issueBody, labels: [] } });
+    const transport = createMockTransport(state);
+    const cycle = startReviewCycle(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      stageAttemptId: 'attempt-1',
+      workdir: makeTempDir(),
+    });
+    expect(cycle.ok).toBe(true);
+    const publication = publishSettledStageRecord(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      receipt: {
+        ...architecturalLensReceipt(cycle.cycleId),
+        stage: 'competitive',
+      },
+      workdir: makeTempDir(),
+    });
+    expect(publication.ok).toBe(false);
+    expect(publication.diagnostics.map((item) => item.message).join('\n')).toContain('routed cycle head requires');
+  });
+
+  it('keeps cycle-id and source-revision binding mandatory for the routed lens', () => {
+    const state = createMockGhState({ issue: { title: 't', body: issueBody, labels: [] } });
+    const transport = createMockTransport(state);
+    const cycle = startReviewCycle(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      stageAttemptId: 'attempt-1',
+      workdir: makeTempDir(),
+    });
+    expect(cycle.ok).toBe(true);
+    const mismatchedReceipts = [
+      architecturalLensReceipt('wrong-cycle'),
+      architecturalLensReceipt(cycle.cycleId, 'wrong-revision'),
+    ];
+    const publications = mismatchedReceipts.map((receipt) => publishSettledStageRecord(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      receipt,
+      workdir: makeTempDir(),
+    }));
+    expect(publications[0]?.ok).toBe(false);
+    expect(publications[0]?.diagnostics.map((item) => item.message).join('\n')).toContain('cycleId does not match');
+    expect(publications[1]?.ok).toBe(false);
+    expect(publications[1]?.diagnostics.map((item) => item.message).join('\n')).toContain('sourceRevision does not match');
+  });
+
+  it('keeps an unrouted cycle and architectural lens receipt publishable', () => {
+    const state = createMockGhState({ issue: { title: 't', body: issueBody, labels: [] } });
+    const transport = createMockTransport(state);
+    const cycle = startReviewCycle(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      workdir: makeTempDir(),
+    });
+    expect(cycle.ok).toBe(true);
+    const publication = publishSettledStageRecord(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      receipt: architecturalLensReceipt(cycle.cycleId),
+      workdir: makeTempDir(),
+    });
+    expect(publication.ok).toBe(true);
   });
 
   it('requires capture identity on completed source verdict evidence', () => {
