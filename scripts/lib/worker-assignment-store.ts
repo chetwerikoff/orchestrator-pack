@@ -165,9 +165,17 @@ export function workerAssignmentMigrationBackupPath(file: string): string {
 }
 
 let migrationTestHookAfterBackup: (() => void) | undefined;
+type WorkerAssignmentAtomicReplaceTestPhase = 'before_write' | 'before_readback';
+let atomicReplaceTestHook: ((phase: WorkerAssignmentAtomicReplaceTestPhase) => void) | undefined;
 
 export function setWorkerAssignmentMigrationTestHook(afterBackupBeforeLiveReplace?: () => void): void {
   migrationTestHookAfterBackup = afterBackupBeforeLiveReplace;
+}
+
+export function setWorkerAssignmentAtomicReplaceTestHook(
+  hook?: (phase: WorkerAssignmentAtomicReplaceTestPhase) => void,
+): void {
+  atomicReplaceTestHook = hook;
 }
 
 function classifyAssignmentKey(
@@ -322,23 +330,30 @@ function atomicReplaceReadBackDetailed(
   mkdirSync(directory, { recursive: true });
   const temporary = path.join(directory, `.${randomUUID().replace(/-/g, '')}.tmp`);
   try {
+    atomicReplaceTestHook?.('before_write');
     writeFileSync(temporary, bytes, { encoding: 'utf8', mode: 0o600 });
     const fd = openSync(temporary, 'r');
     try { fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(temporary, file);
-    const readBack = readFileSync(file, 'utf8');
-    if (readBack !== bytes || !parseWorkerAssignmentStore(readBack)) return 'readback_failed';
-    try {
-      const dirFd = openSync(directory, 'r');
-      try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
-    } catch {
-      // Some platforms cannot fsync a directory. Exact file read-back above remains mandatory.
-    }
-    return 'ok';
   } catch {
     rmSync(temporary, { force: true });
     return 'write_failed';
   }
+  let readBack: string;
+  try {
+    atomicReplaceTestHook?.('before_readback');
+    readBack = readFileSync(file, 'utf8');
+  } catch {
+    return 'readback_failed';
+  }
+  if (readBack !== bytes || !parseWorkerAssignmentStore(readBack)) return 'readback_failed';
+  try {
+    const dirFd = openSync(directory, 'r');
+    try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+  } catch {
+    // Some platforms cannot fsync a directory. Exact file read-back above remains mandatory.
+  }
+  return 'ok';
 }
 
 function atomicReplaceReadBack(file: string, store: WorkerAssignmentStore): boolean {
@@ -445,7 +460,7 @@ interface PublishWorkerAssignmentInputBase {
   readonly bindingKey: string;
   readonly expectedCurrent?: WorkerAssignmentExpectation;
   readonly now?: () => Date;
-  readonly role?: WorkerAssignmentRole;
+  readonly role: WorkerAssignmentRole;
 }
 
 export function publishCurrentWorkerAssignment(
@@ -477,11 +492,11 @@ export async function publishCurrentWorkerAssignment(
   const key = workerAssignmentKey(taskId, bindingKey);
   const issueNumber = optionalIssueNumber(input.issueNumber);
   const expectedCurrent = input.expectedCurrent;
-  const role = input.role === undefined ? undefined : parseWorkerAssignmentRole(input.role);
+  const role = parseWorkerAssignmentRole(input.role);
   if (!projectId || !repository || !taskId || !provider || !bindingKey || !key
     || (input.issueNumber !== undefined && !Number.isFinite(issueNumber))
     || !validExpectation(expectedCurrent)
-    || (input.role !== undefined && role === null)) {
+    || role === null) {
     return { ok: false, reason: 'assignment_input_invalid' };
   }
 
@@ -518,7 +533,7 @@ export async function publishCurrentWorkerAssignment(
             provider,
             bindingKey,
             createdAtUtc: (input.now?.() ?? new Date()).toISOString(),
-            ...(role ? { role } : {}),
+            role,
           }
         : {
             schema: WORKER_ASSIGNMENT_SCHEMA,
@@ -532,7 +547,7 @@ export async function publishCurrentWorkerAssignment(
             provider,
             bindingKey,
             createdAtUtc: (input.now?.() ?? new Date()).toISOString(),
-            ...(role ? { role } : {}),
+            role,
           };
       const assignments: Record<string, WorkerAssignmentRecord> = { ...store.assignments };
       if (replacement && replacement.key !== key) delete assignments[replacement.key];
