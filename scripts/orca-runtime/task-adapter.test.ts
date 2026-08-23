@@ -446,6 +446,42 @@ describe('Issue #1489 rendered screen observation', () => {
     }
   });
 
+  it('uses the async all-workspace census and concurrent screen seam', async () => {
+    const runJsonAsync = vi.fn(async (args: readonly string[]): Promise<OrcaJsonResponse> => {
+      if (args[0] === 'terminal' && args[1] === 'list') return {
+        ok: true,
+        result: {
+          terminals: [
+            { handle: 'async-a', incarnationId: 'generation-a', worktreePath: '/tmp/a', title: 'a' },
+            { handle: 'async-b', incarnationId: 'generation-b', worktreePath: '/tmp/b', title: 'b' },
+          ],
+        },
+      };
+      if (args[0] === 'terminal' && args[1] === 'show') return {
+        ok: true,
+        result: { terminal: { handle: args[3], incarnationId: args[3] === 'async-a' ? 'generation-a' : 'generation-b', worktreePath: args[3] === 'async-a' ? '/tmp/a' : '/tmp/b' } },
+      };
+      return {
+        ok: true,
+        result: { terminal: { handle: args[3], status: 'running', tail: ['visible'], nextCursor: null, source: 'screen' } },
+      };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJsonAsync: runJsonAsync as never });
+    const listed = await adapter.listWorkersAsync?.();
+    expect(listed?.status).toBe('ok');
+    expect(runJsonAsync.mock.calls[0]?.[0]).toEqual(['terminal', 'list']);
+    const result = await adapter.readBoundedOutputAsync?.({
+      worker: { runtime: 'orca', id: 'async-a', generation: 'generation-a' },
+      screen: true,
+    });
+    expect(result?.status).toBe('ok');
+    expect(runJsonAsync.mock.calls.map(([args]) => args)).toEqual([
+      ['terminal', 'list'],
+      ['terminal', 'show', '--terminal', 'async-a'],
+      ['terminal', 'read', '--terminal', 'async-a', '--screen'],
+    ]);
+  });
+
   it('requests --screen and rejects a stream fallback', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       if (args[0] === 'terminal' && args[1] === 'show') return {

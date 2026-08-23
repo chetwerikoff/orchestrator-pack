@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   runtimeFailure,
   runtimeUnsupported,
@@ -22,6 +24,9 @@ import {
 } from '../runtime/contracts.ts';
 import {
   runOrcaJson,
+  isOrcaSmokeControlPlaneCode,
+  resolveOrcaExecutable,
+  resolveOrcaOperation,
   type OrcaJsonResponse,
   type OrcaRunOptions,
   type OrcaTerminalHandle,
@@ -32,8 +37,53 @@ import {
   type OrcaWorktreeShow,
 } from './native.ts';
 
+const execFileAsync = promisify(execFile);
+
+type AsyncExecError = Error & { readonly code?: string | number };
+
+async function runOrcaJsonAsync<T>(
+  args: readonly string[],
+  options: OrcaRunOptions = {},
+): Promise<OrcaJsonResponse<T>> {
+  const executable = options.executable ?? resolveOrcaExecutable(options.env);
+  const operation = resolveOrcaOperation(args);
+  let result: { stdout: string | Buffer; stderr: string | Buffer };
+  try {
+    result = await execFileAsync(executable, [...args, '--json'], {
+      cwd: options.cwd ?? process.cwd(),
+      env: options.inheritParentEnv === false ? { ...options.env } : { ...process.env, ...options.env },
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+      ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs, killSignal: options.killSignal ?? 'SIGKILL' }),
+    }) as { stdout: string | Buffer; stderr: string | Buffer };
+  } catch (error) {
+    const failure = error as AsyncExecError;
+    return {
+      ok: false,
+      operation,
+      outcomeCategory: failure.code === 'ETIMEDOUT' ? 'supported_operation_failure' : 'process_launch_failed',
+      error: {
+        code: failure.code === 'ETIMEDOUT' ? 'orca_operation_timeout' : 'orca_process_launch_failed',
+        message: failure.code === 'ETIMEDOUT'
+          ? `orca ${args.join(' ')} exceeded ${options.timeoutMs ?? 0}ms`
+          : error instanceof Error ? error.message : 'orca process launch failed',
+      },
+    };
+  }
+  const stdout = String(result.stdout ?? '').trim();
+  if (!stdout) return { ok: false, operation, outcomeCategory: 'empty_stdout', error: { code: 'orca_empty_stdout', message: String(result.stderr ?? '').trim() || `orca ${args.join(' ')} produced no output` } };
+  try {
+    const parsed = JSON.parse(stdout) as OrcaJsonResponse<T>;
+    if (parsed.ok) return { ...parsed, operation };
+    return { ...parsed, operation, outcomeCategory: isOrcaSmokeControlPlaneCode(parsed.error?.code) ? 'recognized_control_plane_code' : 'supported_operation_failure' };
+  } catch {
+    return { ok: false, operation, outcomeCategory: 'invalid_json', error: { code: 'orca_invalid_json', message: stdout.slice(0, 500) } };
+  }
+}
+
 export interface OrcaRuntimeAdapterOptions extends OrcaRunOptions {
   readonly runJson?: typeof runOrcaJson;
+  readonly runJsonAsync?: typeof runOrcaJsonAsync;
   readonly now?: () => number;
 }
 
@@ -322,6 +372,23 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     });
   }
 
+  async #runAsync<T>(args: readonly string[], options: RuntimeCallOptions = {}): Promise<OrcaJsonResponse<T>> {
+    const run: <U>(
+      input: readonly string[],
+      inputOptions: OrcaRunOptions,
+    ) => Promise<OrcaJsonResponse<U>> = this.#options.runJsonAsync
+      ?? (this.#options.runJson && this.#options.runJson !== runOrcaJson
+        ? async <U>(input: readonly string[], inputOptions: OrcaRunOptions) => this.#options.runJson!(input, inputOptions)
+        : runOrcaJsonAsync);
+    return run<T>(args, {
+      cwd: options.cwd ?? this.#options.cwd,
+      timeoutMs: options.timeoutMs ?? this.#options.timeoutMs,
+      executable: this.#options.executable,
+      env: this.#options.env,
+      killSignal: this.#options.killSignal,
+    });
+  }
+
   #rememberWorkspace(
     identity: RuntimeWorkerIdentity,
     workspaceSelector: 'active' | string,
@@ -583,6 +650,29 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const workers: RuntimeWorker[] = [];
     for (const terminal of terminals) {
       const normalized = this.#workerFromTerminal(terminal, workspace, 'list_workers');
+      if (normalized.status !== 'ok') return normalized;
+      workers.push(normalized.value);
+    }
+    return { status: 'ok', value: workers };
+  }
+
+  async listWorkersAsync(
+    _input: { readonly workspace?: 'active' | string } = {},
+    options: RuntimeCallOptions = {},
+  ): Promise<RuntimeResult<readonly RuntimeWorker[]>> {
+    const response = await this.#runAsync<{ terminals?: OrcaTerminalSummary[] }>(
+      ['terminal', 'list'],
+      options,
+    );
+    if (!response.ok) return runtimeFailure('list_workers', neutralFailureReason(response));
+    const terminals = response.result?.terminals;
+    if (!Array.isArray(terminals)) {
+      return runtimeUnsupported('list_workers', 'runtime_worker_list_shape_unsupported');
+    }
+    const workers: RuntimeWorker[] = [];
+    for (const terminal of terminals) {
+      const selector = terminal.worktreePath?.trim() || 'active';
+      const normalized = this.#workerFromTerminal(terminal, selector, 'list_workers');
       if (normalized.status !== 'ok') return normalized;
       workers.push(normalized.value);
     }
@@ -920,6 +1010,80 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!response.ok) {
       return runtimeFailure('read_bounded_output', neutralFailureReason(response));
     }
+    const normalized = normalizeTerminalRead(response.result, input.screen === true);
+    if (normalized.status !== 'ok') return normalized;
+    const changed = previous?.status === 'ok'
+      ? previous.value.nativeCursor !== normalized.value.nativeCursor
+      : normalized.value.lines.length > 0;
+    const observationToken = this.#observationToken(
+      input.worker,
+      normalized.value.nativeCursor,
+      changed,
+      input.previousToken,
+    );
+    return {
+      status: 'ok',
+      value: {
+        worker: input.worker,
+        lines: normalized.value.lines,
+        observationToken,
+        changed,
+        terminalState: normalized.value.terminalState,
+        source: normalized.value.source,
+      },
+    };
+  }
+
+  async readBoundedOutputAsync(
+    input: {
+      readonly worker: RuntimeWorkerIdentity;
+      readonly previousToken?: RuntimeObservationToken | null;
+      readonly limit?: number;
+      readonly screen?: boolean;
+    },
+    options: RuntimeCallOptions = {},
+  ): Promise<RuntimeResult<RuntimeBoundedOutput>> {
+    if (input.worker.runtime !== 'orca') {
+      return runtimeFailure('read_bounded_output', 'runtime_identity_mismatch');
+    }
+    let deadline: number | null = null;
+    if (options.timeoutMs !== undefined) {
+      const timeoutMs = Math.floor(options.timeoutMs);
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+        return runtimeFailure('read_bounded_output', 'runtime_timeout');
+      }
+      deadline = this.#now() + timeoutMs;
+    }
+    const previous = input.previousToken
+      ? this.#resolveObservation(input.worker, input.previousToken)
+      : null;
+    if (previous && previous.status !== 'ok') return previous;
+    const lookupOptions = deadline === null ? options : this.#boundedOptions(deadline, options);
+    if (!lookupOptions) return runtimeFailure('read_bounded_output', 'runtime_timeout');
+    const shown = await this.#runAsync<{ terminal?: OrcaTerminalSummary }>(
+      ['terminal', 'show', '--terminal', input.worker.id],
+      lookupOptions,
+    );
+    if (!shown.ok) return runtimeFailure('read_bounded_output', neutralFailureReason(shown));
+    const terminal = shown.result?.terminal;
+    if (!terminal) return runtimeFailure('read_bounded_output', 'runtime_worker_show_shape_unsupported');
+    const current = this.#workerFromTerminal(
+      terminal,
+      terminal.worktreePath?.trim() || 'active',
+      'find_worker_by_id',
+    );
+    if (current.status !== 'ok') return runtimeFailure('read_bounded_output', current.reason);
+    if (!sameRuntimeWorker(current.value.identity, input.worker)) {
+      return runtimeFailure('read_bounded_output', 'worker_generation_not_found');
+    }
+    const args = ['terminal', 'read', '--terminal', input.worker.id];
+    if (input.screen) args.push('--screen');
+    if (previous?.status === 'ok') args.push('--cursor', previous.value.nativeCursor);
+    if (input.limit !== undefined) args.push('--limit', String(input.limit));
+    const readOptions = deadline === null ? options : this.#boundedOptions(deadline, options);
+    if (!readOptions) return runtimeFailure('read_bounded_output', 'runtime_timeout');
+    const response = await this.#runAsync<OrcaTerminalReadResult>(args, readOptions);
+    if (!response.ok) return runtimeFailure('read_bounded_output', neutralFailureReason(response));
     const normalized = normalizeTerminalRead(response.result, input.screen === true);
     if (normalized.status !== 'ok') return normalized;
     const changed = previous?.status === 'ok'

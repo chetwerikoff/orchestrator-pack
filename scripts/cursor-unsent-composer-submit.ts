@@ -23,11 +23,15 @@ const UNBOXED_CTRL_C = /^ctrl\+c to stop\b/iu;
 const UNBOXED_STATUS_FOOTER = /^(?:Cursor|GPT-\S+|Composer)\s.+(?:\d+(?:\.\d+)?%|Run Everything)/iu;
 const UNBOXED_CWD_FOOTER = /^(?:~[/\\]|[A-Za-z]:[\\/]|\/)/u;
 const EMPTY_COMPOSER = /^(?:→\s*)?Add a follow-up\b/iu;
+const ORCHESTRATION_NOTICE = /^You have \d+ orchestration messages?\. Run `orca orchestration check --run \S+`\.$/iu;
 const LONE_ARROW = /^→$/u;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
 export const QUIET_AFTER_PRINT_MS = 5_000;
+const EMPTY_COMPOSER_RECHECK_MS = 1_000;
+// Reserve the observed adapter dispatch tail inside the user-facing deadline.
+const ASYNC_SUBMIT_RESERVE_MS = 250;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
@@ -51,7 +55,11 @@ function trimNonEmpty(lines: readonly string[]): string[] {
 }
 
 function composerContentLines(lines: readonly string[]): string[] {
-  return trimNonEmpty(lines).filter((line) => !LONE_ARROW.test(line));
+  const content = trimNonEmpty(lines).filter((line) => !LONE_ARROW.test(line));
+  // A live orchestration notice can be rendered inside the box after the
+  // user's text. Preserve a notice in the first line for compatibility with
+  // a user-entered poke, but exclude trailing notices from the fingerprint.
+  return content.filter((line, index) => index === 0 || !ORCHESTRATION_NOTICE.test(line));
 }
 
 function unboxedComposerLines(preview: string): string[] {
@@ -237,9 +245,16 @@ function persistSubmitted(state: UnsentComposerWatchState, path: string | undefi
 
 export interface UnsentComposerSubmitDeps {
   readonly listWorkers: () => { ok: true; workers: readonly RuntimeWorker[] } | { ok: false; reason: string };
+  readonly listWorkersAsync?: () => PromiseLike<
+    { ok: true; workers: readonly RuntimeWorker[] } | { ok: false; reason: string }
+  >;
   readonly read: (worker: RuntimeWorkerIdentity) =>
     | { ok: true; lines: readonly string[]; source: 'screen' }
     | { ok: false; reason: string };
+  readonly readAsync?: (worker: RuntimeWorkerIdentity) => PromiseLike<
+    | { ok: true; lines: readonly string[]; source: 'screen' }
+    | { ok: false; reason: string }
+  >;
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
@@ -257,6 +272,10 @@ export interface UnsentComposerWatchState {
   readonly lastFingerprint: Map<string, string>;
   readonly lastChangedAt: Map<string, number>;
   readonly submittedFingerprint: Map<string, string>;
+}
+
+export interface UnsentComposerSupervisorLifecycle {
+  readonly fleetSettled?: PromiseLike<unknown>;
 }
 
 export interface UnsentComposerTerminalResult {
@@ -288,16 +307,18 @@ function clearObservation(state: UnsentComposerWatchState, key: string): void {
   state.lastChangedAt.delete(key);
 }
 
-function submitOne(
+type ComposerReadResult = ReturnType<UnsentComposerSubmitDeps['read']>;
+
+function settleComposerObservation(
   worker: RuntimeWorker,
   input: UnsentComposerSubmitInput,
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState,
+  shown: ComposerReadResult,
 ): UnsentComposerTerminalResult {
   const identity = worker.identity;
   const key = workerKey(identity);
   const base = { terminal: identity.id, generation: identity.generation };
-  const shown = deps.read(identity);
   if (!shown.ok) {
     return { ...base, ok: false, unsent: false, enter: false, reason: shown.reason };
   }
@@ -337,6 +358,27 @@ function submitOne(
     return { ...base, ok: true, unsent: true, enter: false, reason: dispatched.reason };
   }
   return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent' };
+}
+
+function submitOne(
+  worker: RuntimeWorker,
+  input: UnsentComposerSubmitInput,
+  deps: UnsentComposerSubmitDeps,
+  state: UnsentComposerWatchState,
+): UnsentComposerTerminalResult {
+  return settleComposerObservation(worker, input, deps, state, deps.read(worker.identity));
+}
+
+async function submitOneAsync(
+  worker: RuntimeWorker,
+  input: UnsentComposerSubmitInput,
+  deps: UnsentComposerSubmitDeps,
+  state: UnsentComposerWatchState,
+): Promise<UnsentComposerTerminalResult> {
+  const shown = deps.readAsync
+    ? await deps.readAsync(worker.identity)
+    : deps.read(worker.identity);
+  return settleComposerObservation(worker, input, deps, state, shown);
 }
 
 export function submitUnsentCursorComposer(
@@ -436,6 +478,20 @@ export function createAdapterSubmitDeps(
   listWorkspaces: () => OrcaJsonResponse<unknown> = () => runOrcaJson(['worktree', 'list']),
 ): UnsentComposerSubmitDeps {
   return {
+    listWorkersAsync: async () => {
+      if (!adapter.listWorkersAsync) return { ok: false, reason: 'runtime_async_list_unsupported' };
+      const listed = await adapter.listWorkersAsync();
+      if (listed.status !== 'ok') return { ok: false, reason: listed.reason };
+      const workers: RuntimeWorker[] = [];
+      const seen = new Set<string>();
+      for (const worker of listed.value) {
+        const key = workerKey(worker.identity);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        workers.push(worker);
+      }
+      return { ok: true, workers };
+    },
     listWorkers: () => {
       const selectors = workspaceSelectorsFromList(listWorkspaces());
       const workers: RuntimeWorker[] = [];
@@ -454,6 +510,15 @@ export function createAdapterSubmitDeps(
       }
       return { ok: true, workers };
     },
+    readAsync: async (worker) => {
+      if (!adapter.readBoundedOutputAsync) return { ok: false, reason: 'runtime_async_read_unsupported' };
+      const output = await adapter.readBoundedOutputAsync({ worker, screen: true });
+      if (output.status !== 'ok') return { ok: false, reason: output.reason };
+      if (output.value.source !== 'screen') {
+        return { ok: false, reason: 'runtime_output_source_unobservable' };
+      }
+      return { ok: true, lines: output.value.lines, source: 'screen' };
+    },
     read: (worker) => {
       const output = adapter.readBoundedOutput({ worker, screen: true });
       if (output.status !== 'ok') return { ok: false, reason: output.reason };
@@ -470,10 +535,13 @@ export function createAdapterSubmitDeps(
 export async function runSupervisorUnsentComposerTick(
   providedDeps?: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
+  lifecycle: UnsentComposerSupervisorLifecycle = {},
 ): Promise<UnsentComposerSubmitResult> {
   const deps = providedDeps ?? createAdapterSubmitDeps(await selectRuntimeAdapter());
   hydrateSubmitted(state, deps.sentStorePath);
-  const listed = deps.listWorkers();
+  const listed = deps.listWorkersAsync
+    ? await deps.listWorkersAsync()
+    : deps.listWorkers();
   if (!listed.ok) {
     return {
       ok: false,
@@ -489,23 +557,57 @@ export async function runSupervisorUnsentComposerTick(
     });
     return persistTail;
   };
+  let fleetSettled = lifecycle.fleetSettled === undefined;
+  if (lifecycle.fleetSettled !== undefined) {
+    void Promise.resolve(lifecycle.fleetSettled).then(
+      () => { fleetSettled = true; },
+      () => { fleetSettled = true; },
+    );
+  }
   const runWorker = async (worker: RuntimeWorker): Promise<UnsentComposerTerminalResult> => {
     const workerDeps: UnsentComposerSubmitDeps = {
       ...deps,
       listWorkers: () => ({ ok: true, workers: [worker] }),
       sentStorePath: undefined,
     };
-    let result = submitUnsentCursorComposer({ terminals: [worker.identity.id], watch: true }, workerDeps, state);
-    while (result.terminals[0]?.reason === 'waiting_stable') {
-      await persistAfterObservation();
-      const now = deps.now?.() ?? Date.now();
-      const key = workerKey(worker.identity);
-      const remaining = Math.max(0, QUIET_AFTER_PRINT_MS - (now - (state.lastChangedAt.get(key) ?? now)));
-      await new Promise<void>((resolve) => setTimeout(resolve, Math.max(1, remaining)));
-      result = submitUnsentCursorComposer({ terminals: [worker.identity.id], watch: true }, workerDeps, state);
+    let result = deps.readAsync
+      ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
+      : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
+    while (result.reason === 'waiting_stable' || (result.reason === 'composer_empty' && !fleetSettled)) {
+      if (result.reason === 'composer_empty') {
+        await new Promise<void>((resolve) => setTimeout(resolve, EMPTY_COMPOSER_RECHECK_MS));
+      } else {
+        await persistAfterObservation();
+        const now = deps.now?.() ?? Date.now();
+        const key = workerKey(worker.identity);
+        const remaining = Math.max(0, QUIET_AFTER_PRINT_MS - (now - (state.lastChangedAt.get(key) ?? now)));
+        const quietTimer = new Promise<void>((resolve) => setTimeout(
+          resolve,
+          Math.max(1, remaining - (deps.readAsync ? ASYNC_SUBMIT_RESERVE_MS : 0)),
+        ));
+        if (deps.readAsync) {
+          // The read must happen after the quiet deadline. A read started
+          // alongside the timer can return an old fingerprint before the user
+          // edits the composer, then incorrectly bypass the stability check.
+          await quietTimer;
+          const shown = await deps.readAsync(worker.identity);
+          result = settleComposerObservation(
+            worker,
+            { terminals: [worker.identity.id], watch: true },
+            workerDeps,
+            state,
+            shown,
+          );
+          continue;
+        }
+        await quietTimer;
+      }
+      result = deps.readAsync
+        ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
+        : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
     }
     await persistAfterObservation();
-    return result.terminals[0] ?? {
+    return result ?? {
       terminal: worker.identity.id,
       generation: worker.identity.generation,
       ok: false,
