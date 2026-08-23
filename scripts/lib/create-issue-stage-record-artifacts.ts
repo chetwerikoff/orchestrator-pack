@@ -101,7 +101,7 @@ export interface ProduceAcceptanceArtifactsOptions {
   claudeProducerEvidencePaths?: string[];
   waiverPath?: string;
   outputDir?: string;
-  phase?: 'pre-lens' | 'final-acceptance';
+  phase?: 'pre-lens' | 'post-lens' | 'final-acceptance';
   operatorAdjudication?: OperatorAcceptanceAdjudication;
   /** Backward-compatible injection point; it is only a transport seam, never an authority seam. */
   operatorReferenceTransport?: GhTransport;
@@ -1501,7 +1501,7 @@ function relayEvidence(
 export function canonicalAcceptanceStages(
   tier: ReviewTier,
   intakeValue: unknown,
-  phase: 'pre-lens' | 'final-acceptance',
+  phase: 'pre-lens' | 'post-lens' | 'final-acceptance',
 ): ReviewStage[] {
   const intake = isRecord(intakeValue) ? intakeValue : {};
   const competitiveDecision = intake.competitiveDecision === 'required' || intake.competitiveDecision === 'skipped'
@@ -1509,9 +1509,14 @@ export function canonicalAcceptanceStages(
     : undefined;
   const competitiveRationale = optionalString(intake.competitiveRationale);
   const stages = canonicalStagePlan(tier, { competitiveDecision, competitiveRationale }).stages.map((entry) => entry.stage);
-  return tier === 'T3' && phase === 'pre-lens'
-    ? stages.filter((stage) => stage === 'competitive' || stage === 'architectural-review')
-    : stages;
+  if (tier === 'T3' && phase === 'pre-lens') {
+    return stages.filter((stage) => stage === 'competitive' || stage === 'architectural-review');
+  }
+  if (phase === 'post-lens' && tier === 'T3') {
+    return stages.filter((stage) => stage !== 'architectural');
+  }
+  if (phase === 'post-lens') return [];
+  return stages;
 }
 
 const PRODUCED_ARTIFACT_NAMES = new Set<string>(ACCEPTANCE_ARTIFACT_OUTPUT_NAMES);
@@ -1553,7 +1558,7 @@ function stageEvidenceFilesInReviewDir(reviewDir: string): string[] {
   }
 }
 
-function isLaterLensEvidence(path: string, phase: 'pre-lens' | 'final-acceptance'): boolean {
+function isLaterLensEvidence(path: string, phase: 'pre-lens' | 'post-lens' | 'final-acceptance'): boolean {
   if (phase !== 'pre-lens') return false;
   try {
     const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
@@ -1569,7 +1574,7 @@ function resolveCanonicalStageEvidencePaths(
   reviewDir: string,
   requestedPaths: readonly string[],
   errors: string[],
-  phase: 'pre-lens' | 'final-acceptance' = 'final-acceptance',
+  phase: 'pre-lens' | 'post-lens' | 'final-acceptance' = 'final-acceptance',
 ): string[] | null {
   const discoveredPaths = stageEvidenceFilesInReviewDir(reviewDir);
   const ignored = new Set(discoveredPaths
@@ -1766,7 +1771,7 @@ export function produceAcceptanceArtifacts(
         ledger,
         {
           reviewEconomics: true,
-          phase: options.phase ?? 'final-acceptance',
+          phase: options.phase as 'pre-lens' | 'final-acceptance',
           issueRevision: receipts.at(-1)?.sourceRevision ?? episodeFirstRevision,
           stageTerminalConfirmed,
           stageReceipts: receipts,
