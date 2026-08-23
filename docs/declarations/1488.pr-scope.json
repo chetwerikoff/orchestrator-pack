@@ -26,8 +26,7 @@
     "docs/read-delegation-audit.d.mts",
     "docs/read-delegation-audit.mjs",
     "docs/repository_policy.md",
-    "scripts/gate-runner/",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/gate-runner/"
   ],
   "denylist": [
     ".ao/",
@@ -45,8 +44,7 @@
     "AGENTS.md",
     "CLAUDE.md",
     "docs/",
-    "scripts/gate-runner/",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/gate-runner/"
   ],
-  "source_revision": "44aa1bd3e10ca0fde501266e799cc3a250bc798b"
+  "source_revision": "6ed7a3a0f4b39a83e9d6969b54706629c56b9110"
 }
