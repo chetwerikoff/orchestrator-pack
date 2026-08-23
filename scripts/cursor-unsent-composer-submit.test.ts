@@ -64,13 +64,13 @@ function depsFor(
 }
 
 describe('classifyCursorComposer', () => {
-  it('ignores an idle follow-up placeholder', () => {
-    expect(cursorComposerLooksUnsent(`
+  it('treats a visible transcript plus trailing placeholder as empty', () => {
+    expect(classifyCursorComposer(`
 wiki: skip(direct-instruction state/action)
 → Add a follow-up
 Cursor Grok 4.6 High · 40.6% · 22 files edited                                                                                                    Run Everything
 ~/projects/orchestrator-pack · main
-`)).toBe(false);
+`)).toBe('empty');
   });
 
   it('does not steal a Cursor pasted draft or ordinary typing', () => {
@@ -78,21 +78,21 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited                                
 → [Pasted text #1 +15 lines]
 GPT-5.6 Luna 272K Low · 26.5% Run Everything
 ~/orca/workspaces/orchestrator-pack/mgr-agents-ctx-decomp
-`)).toBe('manual');
-    expect(cursorComposerLooksUnsent(`
+`)).toBe('non_empty');
+    expect(classifyCursorComposer(`
 → разберись почему упал пайплайн
 Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 ~/projects/orchestrator-pack · main
-`)).toBe(false);
+`)).toBe('non_empty');
   });
 
   it('fails closed when an unboxed poke sits under transcript history', () => {
-    expect(cursorComposerLooksUnsent(`
+    expect(classifyCursorComposer(`
 Почта обработана.
 ${POKE}
 Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 ~/projects/orchestrator-pack - main
-`)).toBe(false);
+`)).toBe('non_empty');
   });
 
   it('sees the poke in a terminal-read composer block under an arrow', () => {
@@ -120,7 +120,19 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   Cursor Grok 4.6 High · 44.7% · 22 files edited                                                                                                    Run Everything
   ~/projects/orchestrator-pack · main
-`)).toBe('manual');
+`)).toBe('non_empty');
+  });
+
+  it('keeps boxed multi-line content non-empty when its last line resembles the placeholder', () => {
+    expect(classifyCursorComposer(`
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  →
+    real draft line
+    Add a follow-up
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  Cursor Grok 4.6 High · 44.7% · 22 files edited Run Everything
+  ~/projects/orchestrator-pack · main
+`)).toBe('non_empty');
   });
 
   it('does not treat chrome-looking typed text inside the composer box as UI chrome', () => {
@@ -132,7 +144,7 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   Cursor Grok 4.6 High · 44.7% · 22 files edited                                                                                                    Run Everything
   ~/projects/orchestrator-pack · main
-`)).toBe('manual');
+`)).toBe('non_empty');
   });
 
   it('does not submit an unboxed poke followed by chrome-looking user text', () => {
@@ -141,15 +153,15 @@ ${POKE}
 Tip: do not send this
 Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 ~/projects/orchestrator-pack · main
-`)).toBe('manual');
+`)).toBe('non_empty');
   });
 
   it('does not strip unboxed user text that only starts like Cursor footer chrome', () => {
     const footer = CURSOR_FOOTER.join('\n');
-    expect(classifyCursorComposer(`${POKE}\nCursor please keep this\n${footer}`)).toBe('manual');
-    expect(classifyCursorComposer(`${POKE}\nGPT-please keep this\n${footer}`)).toBe('manual');
-    expect(classifyCursorComposer(`${POKE}\nComposer note keep this\n${footer}`)).toBe('manual');
-    expect(classifyCursorComposer(`${POKE}\n~/projects/foo\n${footer}`)).toBe('manual');
+    expect(classifyCursorComposer(`${POKE}\nCursor please keep this\n${footer}`)).toBe('non_empty');
+    expect(classifyCursorComposer(`${POKE}\nGPT-please keep this\n${footer}`)).toBe('non_empty');
+    expect(classifyCursorComposer(`${POKE}\nComposer note keep this\n${footer}`)).toBe('non_empty');
+    expect(classifyCursorComposer(`${POKE}\n~/projects/foo\n${footer}`)).toBe('non_empty');
   });
 
   it('does not treat a user line that starts with one box glyph as the composer border', () => {
@@ -161,7 +173,7 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   Cursor Grok 4.6 High · 44.7% · 22 files edited                                                                                                    Run Everything
   ~/projects/orchestrator-pack · main
-`)).toBe('manual');
+`)).toBe('non_empty');
   });
 
   it('does not submit an unboxed poke that still has a typed composer line above it', () => {
@@ -170,7 +182,7 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 ${POKE}
 Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 ~/projects/orchestrator-pack · main
-`)).toBe('manual');
+`)).toBe('non_empty');
   });
 });
 
@@ -226,17 +238,39 @@ describe('submitUnsentCursorComposer', () => {
     expect(result.terminals.map((row) => row.reason)).toEqual(['composer_empty', 'enter_sent']);
   });
 
-  it('skips ordinary typing', () => {
+  it('never enters an idle transcript followed by the composer placeholder', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let now = 0;
+    const state = createUnsentComposerWatchState();
+    const localDeps = depsFor(
+      {
+        term_idle: [
+          'prior transcript line',
+          '→ Add a follow-up',
+          ...CURSOR_FOOTER,
+        ],
+      },
+      { submitted, now: () => now },
+    );
+    const first = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    now = QUIET_AFTER_PRINT_MS;
+    const second = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    expect(first.terminals[0]?.reason).toBe('composer_empty');
+    expect(second.terminals[0]?.reason).toBe('composer_empty');
+    expect(submitted).toHaveLength(0);
+  });
+
+  it('waits before submitting ordinary typing', () => {
     const submitted: RuntimeWorkerIdentity[] = [];
     const result = submitUnsentCursorComposer(
-      { terminals: ['term_typing'] },
+      { terminals: ['term_typing'], watch: true },
       depsFor(
         { term_typing: ['→ разберись почему', 'Run Everything'] },
         { submitted },
       ),
     );
     expect(submitted).toEqual([]);
-    expect(result.terminals[0]?.reason).toBe('manual_input');
+    expect(result.terminals[0]?.reason).toBe('waiting_stable');
   });
 
   it('waits 5s after the poke stops changing and does not resend', () => {
@@ -382,8 +416,11 @@ describe('submitUnsentCursorComposer', () => {
       expect(first.terminals[0]?.reason).toBe('waiting_stable');
       expect(second.terminals[0]?.reason).toBe('enter_sent');
       expect(empty.terminals[0]?.reason).toBe('composer_empty');
-      expect(repeated.terminals[0]?.reason).toBe('already_submitted');
-      expect(submitted).toHaveLength(1);
+      expect(repeated.terminals[0]?.reason).toBe('waiting_stable');
+      now += QUIET_AFTER_PRINT_MS;
+      const rearmed = submitUnsentCursorComposer({ watch: true }, deps, createUnsentComposerWatchState());
+      expect(rearmed.terminals[0]?.reason).toBe('enter_sent');
+      expect(submitted).toHaveLength(2);
     } finally {
       try { unlinkSync(sentStorePath); } catch { /* ignore */ }
     }

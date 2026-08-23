@@ -24,7 +24,6 @@ const UNBOXED_STATUS_FOOTER = /^(?:Cursor|GPT-\S+|Composer)\s.+(?:\d+(?:\.\d+)?%
 const UNBOXED_CWD_FOOTER = /^~\//u;
 const EMPTY_COMPOSER = /^(?:→\s*)?Add a follow-up\b/iu;
 const LONE_ARROW = /^→$/u;
-const MACHINE_POKE = /^You have \d+ orchestration messages?\. Run `orca orchestration check --run [A-Za-z0-9_-]+`\.$/u;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
@@ -32,7 +31,7 @@ export const QUIET_AFTER_PRINT_MS = 5_000;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
-export type CursorComposerKind = 'empty' | 'machine_poke' | 'manual';
+export type CursorComposerKind = 'empty' | 'non_empty';
 
 function composerInterior(preview: string): string[] | undefined {
   const raw = preview.split(/\r?\n/);
@@ -74,26 +73,31 @@ function unboxedComposerLines(preview: string): string[] {
   return lines.slice(0, end);
 }
 
-function classifyContent(lines: readonly string[]): CursorComposerKind {
-  if (lines.length === 0 || lines.every((line) => EMPTY_COMPOSER.test(line))) return 'empty';
-  if (lines.every((line) => MACHINE_POKE.test(line))) return 'machine_poke';
-  return 'manual';
+function classifyContent(
+  lines: readonly string[],
+  trailingPlaceholderMeansEmpty = false,
+): CursorComposerKind {
+  return lines.length === 0
+    || (EMPTY_COMPOSER.test(lines.at(-1) ?? '')
+      && (trailingPlaceholderMeansEmpty || lines.length === 1))
+    ? 'empty'
+    : 'non_empty';
 }
 
 export function classifyCursorComposer(preview: string): CursorComposerKind {
   const interior = composerInterior(preview);
   if (interior) return classifyContent(composerContentLines(interior));
-  return classifyContent(unboxedComposerLines(preview));
+  return classifyContent(unboxedComposerLines(preview), true);
 }
 
 export function cursorComposerLooksUnsent(preview: string): boolean {
-  return classifyCursorComposer(preview) === 'machine_poke';
+  return classifyCursorComposer(preview) === 'non_empty';
 }
 
 export function composerPokeFingerprint(preview: string): string {
   const interior = composerInterior(preview);
   const source = interior ? composerContentLines(interior) : unboxedComposerLines(preview);
-  return source.filter((line) => MACHINE_POKE.test(line)).join('\n');
+  return source.join('\n');
 }
 
 export function workerKey(identity: RuntimeWorkerIdentity): string {
@@ -301,11 +305,8 @@ function submitOne(
   const kind = classifyCursorComposer(preview);
   if (kind === 'empty') {
     clearObservation(state, key);
+    state.submittedFingerprint.delete(key);
     return { ...base, ok: true, unsent: false, enter: false, reason: 'composer_empty' };
-  }
-  if (kind === 'manual') {
-    clearObservation(state, key);
-    return { ...base, ok: true, unsent: false, enter: false, reason: 'manual_input' };
   }
   const fingerprint = composerPokeFingerprint(preview);
   if (state.submittedFingerprint.get(key) === fingerprint) {
