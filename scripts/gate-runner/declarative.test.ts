@@ -23,10 +23,29 @@ function gate(rule: DeclarativeGateDefinition['rules'][number]): DeclarativeGate
 }
 
 const movedClean = {
-  'AGENTS.md': '## Coworker CLI delegation\n## RTK read-exploration\n## RCA spec discipline',
+  'AGENTS.md': [
+    '## Coworker CLI delegation',
+    '## RTK read-exploration',
+    'See [worker](docs/orchestration-runbook.md#worker-lifecycle).',
+    'See [scope](docs/repository_policy.md#task-and-scope-authority).',
+    'See [verification](docs/repository_policy.md#local-verification).',
+    'See [RCA](.claude/skills/investigate-root-cause/SKILL.md#failure-response).',
+  ].join('\n'),
+  'CLAUDE.md': [
+    'See [architect](.claude/skills/direct-fix-checklist/SKILL.md#architect-role-contract).',
+    'See [author](.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).',
+    'See [RCA](.claude/skills/investigate-root-cause/SKILL.md#failure-response).',
+  ].join('\n'),
   'docs/coworker-delegation.md': 'PR diff recipe\ngit diff <base-ref>...HEAD > /tmp/review.diff\nRoot-cause work must read ~900 lines',
   'docs/tiering.md': '## Task complexity tier rubric\n### Failure-type lens (apply first)\n## Per-tier draft-review flow\n### Per-tier pipeline (ceilings, not quotas)',
   'docs/script-owned-review-pipeline.md': '## Event-driven review trigger\n## Orchestrator review-run coverage\n## Head ready for review\nevent-driven review trigger',
+  'docs/orchestration-runbook.md': '## Worker lifecycle\n',
+  'docs/repository_policy.md': '## Task and scope authority\n## Local verification\n',
+  '.claude/skills/investigate-root-cause/SKILL.md': '## Failure response\n',
+  '.claude/skills/direct-fix-checklist/SKILL.md': '## Architect role contract\n',
+  '.claude/skills/discuss-with-gpt/SKILL.md': '## Draft-author relocation\n',
+  '.cursor/rules/draft-author-relocation.mdc': 'See [author](../../.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).\n',
+  '.cursor/rules/flow-manager-browser-turn-monitoring.mdc': '## Launch and observation\n## Legacy state and diagnostic probe\n',
 };
 
 describe('declarative rule kinds', () => {
@@ -59,18 +78,40 @@ describe('declarative rule kinds', () => {
     expect(evaluateDeclarativeGate(definition, memorySnapshot({ 'a.txt': 'forbidden' })).status).toBe('FAIL');
   });
 
-  it('section-anchor assertion has positive and negative fixtures', () => {
+  it('static source exact-occurrence assertion rejects zero and duplicate pointers', () => {
+    const marker = '(docs/policy.md#target)';
+    const definition = gate({
+      kind: 'static-source',
+      assertions: [{ path: 'AGENTS.md', exactOccurrences: [{ marker, count: 1 }] }],
+    });
+
+    expect(evaluateDeclarativeGate(definition, memorySnapshot({ 'AGENTS.md': `See [policy]${marker}` })).status).toBe('PASS');
+
+    const missing = evaluateDeclarativeGate(definition, memorySnapshot({ 'AGENTS.md': 'no pointer' }));
+    expect(missing.status).toBe('FAIL');
+    expect(missing.details).toContain(`AGENTS.md must contain exactly 1 occurrence(s) of ${marker}; found 0`);
+
+    const duplicate = evaluateDeclarativeGate(
+      definition,
+      memorySnapshot({ 'AGENTS.md': `See [one]${marker}\nSee [two]${marker}` }),
+    );
+    expect(duplicate.status).toBe('FAIL');
+    expect(duplicate.details).toContain(`AGENTS.md must contain exactly 1 occurrence(s) of ${marker}; found 2`);
+  });
+
+  it('section-anchor assertion rejects a missing target heading', () => {
     const definition = gate({ kind: 'section-anchor', roots: ['AGENTS.md'] });
     const passing = memorySnapshot({
       'AGENTS.md': 'See [policy](docs/repository_policy.md#plan-first-execution)\n',
       'docs/repository_policy.md': '## Plan-first execution\n',
     });
     expect(evaluateDeclarativeGate(definition, passing).status).toBe('PASS');
-    const failing = memorySnapshot({
+    const failing = evaluateDeclarativeGate(definition, memorySnapshot({
       'AGENTS.md': 'See [policy](docs/repository_policy.md#missing-heading)\n',
       'docs/repository_policy.md': '## Plan-first execution\n',
-    });
-    expect(evaluateDeclarativeGate(definition, failing).status).toBe('FAIL');
+    }));
+    expect(failing.status).toBe('FAIL');
+    expect(failing.details).toContain('AGENTS.md unresolved section link: docs/repository_policy.md#missing-heading');
   });
 });
 
@@ -104,5 +145,16 @@ describe('real representative declarative ports', () => {
     }));
     expect(failed.status).toBe('FAIL');
     expect(failed.legacyStdout).toBe('[FAIL] AGENTS.md moved-content guard:\n - AGENTS.md still contains moved deep-dive anchor: ## Task complexity tier rubric\n');
+  });
+
+  it('real moved-content gate rejects a duplicate universal pointer', () => {
+    const duplicate = evaluateDeclarativeGate(agentRulesMovedContentGate, memorySnapshot({
+      ...movedClean,
+      'AGENTS.md': `${movedClean['AGENTS.md']}\nAgain (docs/orchestration-runbook.md#worker-lifecycle)`,
+    }));
+    expect(duplicate.status).toBe('FAIL');
+    expect(duplicate.details).toContain(
+      'AGENTS.md must contain exactly 1 occurrence(s) of (docs/orchestration-runbook.md#worker-lifecycle); found 2',
+    );
   });
 });
