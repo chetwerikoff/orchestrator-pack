@@ -3,7 +3,6 @@
   "issue_number": 1506,
   "declared_paths": [
     "scripts/check-gh-inventory-static.ps1",
-    "scripts/gh-inventory-static-guard.test.ts",
     "scripts/lib/gh-inventory-match.mjs",
     "scripts/lib/gh-inventory-static-guard.mjs",
     "scripts/lib/gh-rest-routes.mjs",
@@ -27,5 +26,5 @@
     "scripts/lib/gh-wrapper.mjs",
     "scripts/lib/graphql-quota-github-read-inventory.json"
   ],
-  "source_revision": "33ff311b8d863e3c89ec1e1ff690bcd48ffdbabe"
+  "source_revision": "da5f87b68d05ebab211489c961aa3d54a09e313e"
 }
