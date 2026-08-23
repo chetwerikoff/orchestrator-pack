@@ -20,7 +20,7 @@ const NO_FINDINGS_TOKEN = 'NO_FINDINGS';
 const REVIEWER_STAGES = new Set(['competitive', 'architectural-review', 'architectural', 'architectural-final']);
 const PROTECTED_PATTERNS = {
   security: [/\btype:\s*security\b/i, /\bsecurity\s+issue\b/i, /\bvulnerabilit(?:y|ies)\b/i],
-  'scope-violation': [/\btype:\s*scope-violation\b/i, /\bscope[- ]violation\b/i, /\bout of scope\b/i, /\bdenylist\b/i, /\ballowed_roots\b/i],
+  'scope-violation': [/\btype:\s*scope-violation\b/i, /\bscope[- ]violation\b/i, /\bout[- ]of[- ]scope\b/i, /\bdenylist\b/i, /\ballowed_roots\b/i],
 };
 const FINDING_FIELDS = new Set([
   'id', 'type', 'severity', 'title', 'evidence', 'recommendation',
