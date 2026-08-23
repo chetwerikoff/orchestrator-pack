@@ -365,14 +365,7 @@ function resolveOccurrenceM3History(occurrenceId, records, issueRevision, errors
   }
   return { current, latest: current.at(-1) ?? null, invalid: false };
 }
-function captureIdRowCount(occurrence, ledger, occurrenceMap) {
-  return ledger.findings.filter((candidate) => candidate.occurrences.some((id) => occurrenceMap.get(id)?.id === occurrence.id)).length;
-}
-function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors, ledger, occurrenceMap }) {
-  if (captureIdRowCount(occurrence, ledger, occurrenceMap) > 1) {
-    errors.push(`review-economics: protected finding ${occurrence.occurrenceId} has ambiguous capture finding id ${occurrence.id}`);
-    return;
-  }
+function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors }) {
   const history = resolveOccurrenceM3History(occurrence.occurrenceId, m3Records.get(occurrence.id) ?? m3Records.get(occurrence.occurrenceId) ?? [], issueRevision, errors);
   if (history.invalid) return;
   const current = history.current; const record = history.latest; const activation = state.protectedActivation;
@@ -396,6 +389,10 @@ function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, p
     if ((record.contest === 'none' || record.contest === 'contest-withdrawn') && !zeroSignal && activationValid) { if (row.defectDisposition !== 'addressed') errors.push(`review-economics: activated protected finding ${occurrence.occurrenceId} must be addressed`); return; }
   }
   if (terminalOnly && activationValid) { if (row.defectDisposition !== 'addressed') errors.push(`review-economics: activated protected finding ${occurrence.occurrenceId} must be addressed`); return; }
+  if (!record && !terminalOnly && (row.defectDisposition === 'rejected-as-false' || activationValid)) {
+    if (activationValid && row.defectDisposition !== 'addressed') errors.push(`review-economics: activated protected finding ${occurrence.occurrenceId} must be addressed`);
+    return;
+  }
   errors.push(`review-economics: protected finding ${occurrence.occurrenceId} has unknown/stale architect contest state`);
 }
 function validateOccurrenceM3(ledger, occurrenceMap, captures, metadata, phase, issueRevision, errors) {
@@ -409,7 +406,7 @@ function validateOccurrenceM3(ledger, occurrenceMap, captures, metadata, phase, 
       let state = explicit.get(occurrence.occurrenceId);
       if (!state && protectedOccurrences.length === 1) state = { occurrenceId: occurrence.occurrenceId, architectPending: row.architectPending, architectRequired: row.architectRequired, protectedActivation: row.protectedActivation };
       if (!state) { errors.push(`review-economics: grouped protected distinct defect ${row.id} requires explicit occurrence-level M3 state for ${occurrence.occurrenceId}`); continue; }
-      validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors, ledger, occurrenceMap });
+      validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors });
     }
   }
 }

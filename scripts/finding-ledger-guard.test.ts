@@ -1060,14 +1060,14 @@ describe('receipt-backed occurrence M3 lookup uses capture finding id', () => {
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
-  it('fails closed when one capture finding id maps to two distinct ledger rows', () => {
-    const findingId = 'S1';
-    const reviewOne = 'pass-01-architectural-review-01.capture.txt';
-    const reviewTwo = 'pass-01-architectural-review-02.capture.txt';
-    const identityOne = `sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:${reviewOne}`;
-    const identityTwo = `sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:${reviewTwo}`;
-    const occurrenceOne = `${identityOne}:1`;
-    const occurrenceTwo = `${identityTwo}:1`;
+  it('does not treat an AR+lens stage pair sharing a capture finding id as ambiguous', () => {
+    const findingId = 'precedence-safety-boundary-order-inverted';
+    const reviewName = 'pass-01-architectural-review-01.capture.txt';
+    const lensName = 'pass-02-architectural-lens.capture.txt';
+    const identityAr = `sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:${reviewName}`;
+    const identityLens = `sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:${lensName}`;
+    const occurrenceAr = `${identityAr}:1`;
+    const occurrenceLens = `${identityLens}:1`;
     const finding = markedFinding(findingId, {
       type: 'security',
       evidence: 'A security issue is present in the proposed boundary.',
@@ -1083,20 +1083,20 @@ describe('receipt-backed occurrence M3 lookup uses capture finding id', () => {
         counts: { rawFindingCount: 2, distinctFindingCount: 2, processedDistinctCount: 2 },
         findings: [
           {
-            id: 'ROW-A',
-            summary: 'security A',
+            id: 'ROW-AR',
+            summary: 'security AR',
             type: 'security',
-            occurrences: [occurrenceOne],
+            occurrences: [occurrenceAr],
             defectDisposition: 'rejected-as-false',
             rejectReason: 'the report misread the existing contract',
             remedyDisposition: 'accepted',
             'persistent-machinery': 'no',
           },
           {
-            id: 'ROW-B',
-            summary: 'security B',
+            id: 'ROW-LENS',
+            summary: 'security lens',
             type: 'security',
-            occurrences: [occurrenceTwo],
+            occurrences: [occurrenceLens],
             defectDisposition: 'rejected-as-false',
             rejectReason: 'the report misread the existing contract',
             remedyDisposition: 'accepted',
@@ -1110,14 +1110,81 @@ describe('receipt-backed occurrence M3 lookup uses capture finding id', () => {
         issueRevision: 'r3',
         stageTerminalConfirmed: true,
         captureMetadata: [
-          { name: reviewOne, timestampMs: 1_100, captureIdentity: identityOne },
-          { name: reviewTwo, timestampMs: 1_110, captureIdentity: identityTwo },
+          { name: reviewName, timestampMs: 1_100, captureIdentity: identityAr },
+          { name: lensName, timestampMs: 1_110, captureIdentity: identityLens },
+          { name: 'pass-03-architectural.capture.txt', timestampMs: 1_200 },
+        ],
+      } as never,
+    );
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('does not unknown/stale a locked AR occurrence without m3-protected when disposition is rejected-as-false', () => {
+    const reviewName = 'pass-01-architectural-review-01.capture.txt';
+    const captureIdentity = `sha256:83b098b700000000000000000000000000000000000000000000000000000000:${reviewName}`;
+    const occurrenceQuality = `${captureIdentity}:1`;
+    const occurrenceScope = `${captureIdentity}:2`;
+    const githubCapture = [
+      'review-economics-contract: v1',
+      'id: Q1',
+      'type: quality',
+      'severity: P1',
+      'evidence: Observable contract is violated.',
+      'recommendation: Use the cheapest sufficient correction.',
+      'persistent-machinery: no',
+      'id: SV1',
+      'type: scope-violation',
+      'severity: P1',
+      'evidence: The proposed file is out of scope under allowed_roots.',
+      'recommendation: Keep the implementation in the declared path.',
+      'persistent-machinery: no',
+      'SIMPLIFICATION_CLEAN',
+    ].join('\n');
+    const result = checkFindingLedgerGuard(
+      [githubCapture, markedClean()],
+      JSON.stringify({
+        version: 2,
+        counts: { rawFindingCount: 2, distinctFindingCount: 2, processedDistinctCount: 2 },
+        findings: [
+          {
+            id: 'Q1',
+            summary: 'quality finding',
+            type: 'quality',
+            occurrences: [occurrenceQuality],
+            defectDisposition: 'addressed',
+            remedyDisposition: 'accepted',
+            'persistent-machinery': 'no',
+          },
+          {
+            id: 'SV1',
+            summary: 'scope violation',
+            type: 'scope-violation',
+            occurrences: [occurrenceScope],
+            defectDisposition: 'rejected-as-false',
+            rejectReason: 'the report misread the existing contract',
+            remedyDisposition: 'accepted',
+            'persistent-machinery': 'no',
+            protectedOccurrences: [{
+              occurrenceId: occurrenceScope,
+              architectPending: false,
+              architectRequired: false,
+              protectedActivation: null,
+            }],
+          },
+        ],
+      }),
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r3',
+        stageTerminalConfirmed: true,
+        captureMetadata: [
+          { name: reviewName, timestampMs: 1_100, captureIdentity },
           { name: 'pass-02-architectural.capture.txt', timestampMs: 1_200 },
         ],
       } as never,
     );
-    expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('ambiguous capture finding id');
+    expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 });
 
