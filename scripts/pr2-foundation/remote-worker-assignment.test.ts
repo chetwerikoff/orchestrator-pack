@@ -151,6 +151,7 @@ describe('direct operator remote WorkerAssignment admission', () => {
       kind: 'local',
       provider: 'orca',
       bindingKey: 'dispatch-old',
+      role: 'worker',
     });
     if (!local.ok) throw new Error(local.reason);
     const result = await publishOperatorRemoteWorkerAssignment(remoteInput({
@@ -177,6 +178,7 @@ describe('direct operator remote WorkerAssignment admission', () => {
       kind: 'local',
       provider: 'orca',
       bindingKey: 'dispatch-live',
+      role: 'worker',
     });
     if (!local.ok) throw new Error(local.reason);
     const result = await publishOperatorRemoteWorkerAssignment(remoteInput({
@@ -202,6 +204,7 @@ describe('direct operator remote WorkerAssignment admission', () => {
       kind: 'local',
       provider: 'orca',
       bindingKey: 'dispatch-unknown',
+      role: 'worker',
     });
     if (!local.ok) throw new Error(local.reason);
     const result = await publishOperatorRemoteWorkerAssignment(remoteInput({
