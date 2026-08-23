@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -13,11 +13,59 @@ import {
   resolveTestBudgetMs,
 } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
 import { startPackReview } from './pack-review-runner.ts';
+import { resolveBoundIssueSnapshot } from './lib/reverify-bound-issue-snapshot.ts';
+import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 
 const roots: string[] = [];
+const originalEnv = { ...process.env };
+const HEAD_A = 'a'.repeat(40);
+const HEAD_B = 'b'.repeat(40);
+
+function cleanPayload(): string {
+  return JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] });
+}
+
+function issueBody(tier: 'T1' | 'T2' = 'T2', marker = ''): string {
+  return [
+    '```complexity-tier',
+    `tier: ${tier}`,
+    `advisory-prior: ${tier}`,
+    '```',
+    marker,
+  ].filter(Boolean).join('\n');
+}
+
+function setupHarness(storeRoot: string): void {
+  process.env.OPK_VITEST_HARNESS = '1';
+  process.env.PACK_REVIEWER = 'codex';
+  process.env.OPK_BASE_DIR = join(storeRoot, 'base');
+  process.env.OPK_REVIEW_CLAIM_DIR = join(storeRoot, 'base', 'projects', 'orchestrator-pack', 'review-start-claims');
+  process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = join(storeRoot, 'bound-issue-snapshots');
+}
+
+function startFixture(storeRoot: string, overrides: Record<string, unknown> = {}) {
+  return startPackReview({
+    projectId: 'orchestrator-pack',
+    storeRoot,
+    sourceRepoRoot: process.cwd(),
+    prNumber: 1529,
+    headSha: HEAD_A,
+    fixtureCurrentPrHeadSha: HEAD_A,
+    fixturePrState: 'OPEN',
+    fixturePrBody: 'Closes #1529',
+    fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+    fixturePostReviewHeadSha: HEAD_A,
+    fixtureIssueBody: issueBody(),
+    fixtureReviewStdout: cleanPayload(),
+    fixtureGithubReviewId: 1529,
+    fixtureRequiredStatusWriter: async () => {},
+    fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    ...overrides,
+  });
+}
 
 afterEach(() => {
-  delete process.env.OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS;
+  process.env = { ...originalEnv };
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -124,5 +172,144 @@ describe('Issue #898 effective reviewer budget contract', () => {
     });
     expect(resolveSoftDeadlineMs(600000, { OPK_CODEX_REVIEW_SOFT_DEADLINE_MS: 'not-a-number' })).toBe(510000);
     expect(resolveTestBudgetMs(600000, { OPK_CODEX_REVIEW_TEST_BUDGET_MS: 'not-a-number' })).toBe(120000);
+  });
+});
+
+describe('Issue #1529 economical PR-led pack-review starts', () => {
+  it('uses explicit PR authority even when session cache is corrupt and freezes the linked Issue snapshot', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-pr-led-'));
+    roots.push(storeRoot);
+    setupHarness(storeRoot);
+    const corruptCache = join(storeRoot, 'corrupt-session-cache.json');
+    process.env.OPK_PR_SESSION_BINDING_CACHE = corruptCache;
+    const body = issueBody('T2', 'winner-body');
+
+    const result = await startFixture(storeRoot, {
+      sessionId: 'stale-worker-session',
+      fixtureIssueBody: body,
+    });
+
+    expect(result).toMatchObject({ ok: true, created: true, reused: false });
+    const snapshot = resolveBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 1529,
+      prHeadSha: HEAD_A,
+      issueNumber: 1529,
+      storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+    });
+    expect(snapshot.status).toBe('found');
+    expect(snapshot.snapshotPath && readFileSync(snapshot.snapshotPath, 'utf8')).toContain('winner-body');
+  });
+
+  it('refuses a PR with no closing Issue instead of inferring one from caller/session data', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-no-issue-'));
+    roots.push(storeRoot);
+    setupHarness(storeRoot);
+
+    await expect(startFixture(storeRoot, {
+      fixturePrBody: 'Refs #1529',
+      fixtureIssueNumber: 1529,
+    })).rejects.toThrow(/no resolvable closing Issue/);
+  });
+
+  it('suppresses a repeated clean same-head model invocation', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-same-head-'));
+    roots.push(storeRoot);
+    setupHarness(storeRoot);
+    const invocationLog = join(storeRoot, 'invocations.jsonl');
+    process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
+
+    const first = await startFixture(storeRoot);
+    const second = await startFixture(storeRoot);
+
+    expect(first.ok).toBe(true);
+    expect(second).toMatchObject({ created: false, reused: true });
+    expect(readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).filter(Boolean)).toHaveLength(1);
+  });
+
+  it('serializes concurrent first starts before snapshot capture so one durable Issue body wins', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-race-'));
+    roots.push(storeRoot);
+    setupHarness(storeRoot);
+
+    const results = await Promise.all([
+      startFixture(storeRoot, { fixtureIssueBody: issueBody('T2', 'body-A') }),
+      startFixture(storeRoot, { fixtureIssueBody: issueBody('T2', 'body-B') }),
+    ]);
+    expect(results.filter((result) => result.created === true)).toHaveLength(1);
+
+    const snapshot = resolveBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 1529,
+      prHeadSha: HEAD_A,
+      issueNumber: 1529,
+      storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+    });
+    expect(snapshot.status).toBe('found');
+    const durable = snapshot.snapshotPath ? readFileSync(snapshot.snapshotPath, 'utf8') : '';
+    expect(durable.includes('body-A') || durable.includes('body-B')).toBe(true);
+    expect(durable.includes('body-A') && durable.includes('body-B')).toBe(false);
+  });
+
+  it('uses conflict-free carry-over on a new head without a second reviewer model call', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-carryover-'));
+    roots.push(storeRoot);
+    setupHarness(storeRoot);
+    const invocationLog = join(storeRoot, 'invocations.jsonl');
+    process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
+
+    const first = await startFixture(storeRoot);
+    expect(first.ok).toBe(true);
+
+    process.env.PACK_REVIEWER = 'gpt';
+    const replay: CarryoverReplayResult = {
+      kind: 'conflict_free_carryover',
+      sourceHeadSha: HEAD_A,
+      mainSha: 'c'.repeat(40),
+      targetHeadSha: HEAD_B,
+      mergeBaseSha: 'd'.repeat(40),
+      replayTreeSha: 'e'.repeat(40),
+      replayDigest: 'fixture-replay',
+    };
+    const second = await startFixture(storeRoot, {
+      headSha: HEAD_B,
+      fixtureCurrentPrHeadSha: HEAD_B,
+      fixturePostReviewHeadSha: HEAD_B,
+      fixtureCarryoverReplay: replay,
+      fixtureCarryoverSourceCleanRunId: String(first.runId),
+    });
+
+    expect(second.ok).toBe(true);
+    expect(readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).filter(Boolean)).toHaveLength(1);
+  });
+
+  it('does not invoke a reviewer for an automatic new-head start after the T1 cap is exhausted', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-cap-'));
+    roots.push(storeRoot);
+    setupHarness(storeRoot);
+    const invocationLog = join(storeRoot, 'invocations.jsonl');
+    process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
+    const finding = JSON.stringify({
+      verdict: 'findings',
+      findingCount: 1,
+      findings: [{ title: 'blocking', severity: 'blocking' }],
+    });
+
+    const first = await startFixture(storeRoot, {
+      fixtureIssueBody: issueBody('T1'),
+      fixtureReviewStdout: finding,
+      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+      fixtureBoundIssueSnapshotBytes: issueBody('T1'),
+    });
+    expect(first.ok).toBe(true);
+
+    const second = await startFixture(storeRoot, {
+      headSha: HEAD_B,
+      fixtureCurrentPrHeadSha: HEAD_B,
+      fixturePostReviewHeadSha: HEAD_B,
+      fixtureIssueBody: issueBody('T1'),
+    });
+    expect(second).toMatchObject({ ok: false, created: false, reason: 'at_cap_continuation_required' });
+    expect(readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).filter(Boolean)).toHaveLength(1);
   });
 });
