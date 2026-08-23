@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 1
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { formatGateRunnerReport, main, runGateRunner } from './runner.ts';

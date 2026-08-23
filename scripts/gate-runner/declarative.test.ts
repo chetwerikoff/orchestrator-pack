@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 1
 import { describe, expect, it } from 'vitest';
 import { evaluateDeclarativeGate, type DeclarativeGateDefinition } from './declarative.ts';
 import {
