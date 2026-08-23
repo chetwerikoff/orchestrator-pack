@@ -398,6 +398,30 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       expect(result.ok).toBe(false);
       expect(result.errors.join('\n')).toContain('cannot credential a capture without artifactAuthority');
     });
+
+    it('fails closed when explicit FINDING_COUNT is malformed', () => {
+      const body = canonicalFindingsVerdict({ findingCountLine: 'FINDING_COUNT: two' });
+      const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+      const result = produce(input);
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('cannot credential a capture without artifactAuthority');
+    });
+
+    it('fails closed when CLEAN omits FINDING_COUNT', () => {
+      const body = [
+        `Read revision: #${ISSUE} ${REVISION}`,
+        'review-economics-contract: v1',
+        'VERDICT: CLEAN',
+        'NO_FINDINGS',
+        'SIMPLIFICATION_CLEAN',
+        'INVOCATION_ID_TO_ECHO: invocation-001',
+        '',
+      ].join('\n');
+      const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+      const result = produce(input);
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('cannot credential a capture without artifactAuthority');
+    });
   });
 
   it('accepts receipt-missing/artifact-ok and preserves absent transport identity fields', () => {

@@ -414,20 +414,25 @@ function parseCanonicalTerminalVerdict(
     const match = /^VERDICT: (CLEAN|FINDINGS)$/.exec(line);
     return match ? [match[1]!] : [];
   });
-  const declaredFindingCounts = lines.flatMap((line) => {
+  const findingCountLines = lines.filter((line) => line.startsWith('FINDING_COUNT:'));
+  const declaredFindingCounts = findingCountLines.flatMap((line) => {
     const match = /^FINDING_COUNT: ([0-9]+)$/.exec(line);
     return match ? [Number(match[1])] : [];
   });
+  const omittedFindingCountOk = findingCountLines.length === 0
+    && verdicts.length === 1
+    && verdicts[0] === 'FINDINGS'
+    && revision.findingCount > 0;
+  const explicitFindingCountOk = findingCountLines.length === 1
+    && declaredFindingCounts.length === 1
+    && declaredFindingCounts[0] === revision.findingCount;
   const invocationIds = lines.filter((line) => INVOCATION_ECHO_RE.test(line));
   const cutCandidates = exactCount('simplification-cut-candidate: yes');
   const simplificationClean = exactCount('SIMPLIFICATION_CLEAN');
   if (
     exactCount('review-economics-contract: v1') !== 1
     || verdicts.length !== 1
-    || !(
-      declaredFindingCounts.length === 0
-      || (declaredFindingCounts.length === 1 && declaredFindingCounts[0] === revision.findingCount)
-    )
+    || !(omittedFindingCountOk || explicitFindingCountOk)
     || invocationIds.length !== 1
     || (cutCandidates === 0 ? simplificationClean !== 1 : simplificationClean !== 0)
   ) return null;
