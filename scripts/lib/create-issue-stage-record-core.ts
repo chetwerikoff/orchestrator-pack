@@ -742,13 +742,15 @@ export function publishSettledStageRecord(
     message,
   })));
   const cycleRoute = headCycle['routed-lane'];
+  const isArchitecturalLensReceipt = receipt.stage === 'architectural-lens'
+    && receipt.policyVersion === 'single-source/v1';
   if (receipt.policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION && !cycleRoute) {
     diagnostics.push({
       code: 'conflicting-remote-event',
       message: 'review-lane-routing/v1 requires an immutable routed cycle head',
     });
   }
-  if (cycleRoute) {
+  if (cycleRoute && !isArchitecturalLensReceipt) {
     if (receipt.policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) {
       diagnostics.push({
         code: 'conflicting-remote-event',
