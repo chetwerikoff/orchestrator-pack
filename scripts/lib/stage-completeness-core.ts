@@ -286,7 +286,7 @@ export interface StageCompletenessGuardOptions {
   stageReceipts?: unknown[];
   verifiedRelayEvidence?: unknown[];
   episodeAuthority?: ReviewEpisodeDerivationAuthorityV1;
-  phase?: 'pre-lens' | 'final-acceptance';
+  phase?: 'pre-lens' | 'post-lens' | 'final-acceptance';
 }
 export type LegacyStageCompletenessReceipt = {
   tier: string;
@@ -1024,16 +1024,20 @@ export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[],
     errors,
   };
 }
-function expectedStagesForPhase(state: ReviewEpisodeStateV1, phase: 'pre-lens' | 'final-acceptance'): ReviewStage[] {
+function expectedStagesForPhase(state: ReviewEpisodeStateV1, phase: 'pre-lens' | 'post-lens' | 'final-acceptance'): ReviewStage[] {
   if (state.tier === 'T3' && phase === 'pre-lens') {
     return state.canonicalStages.filter((stage) => stage === 'competitive' || stage === 'architectural-review');
   }
   if (state.tier === 'T2' && phase === 'pre-lens') {
     return state.canonicalStages.filter((stage) => stage === 'architectural-review');
   }
+  if (phase === 'post-lens' && state.tier === 'T3') {
+    return state.canonicalStages.filter((stage) => stage !== 'architectural');
+  }
+  if (phase === 'post-lens') return [];
   return state.canonicalStages;
 }
-export function validateReviewEpisodeTopology(state: ReviewEpisodeStateV1, phase: 'pre-lens' | 'final-acceptance'): string[] {
+export function validateReviewEpisodeTopology(state: ReviewEpisodeStateV1, phase: 'pre-lens' | 'post-lens' | 'final-acceptance'): string[] {
   const errors: string[] = [];
   if (!state.tier) return ['review episode tier is unresolved'];
   if (state.canonicalStages.length === 0) return ['review episode canonical stage plan is unresolved'];

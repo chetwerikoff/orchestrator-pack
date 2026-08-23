@@ -38,7 +38,7 @@ export type CanonicalReceiptInventoryOptions = {
 
 type ReceiptCliOptions = DraftTextGuardBaseOptions & CanonicalReceiptInventoryOptions & {
   relayEvidencePath?: string;
-  phase?: 'pre-lens' | 'final-acceptance';
+  phase?: 'pre-lens' | 'post-lens' | 'final-acceptance';
 };
 
 function readJson(path: string): unknown {
@@ -188,7 +188,7 @@ export function runCli(argv: string[]): number {
       return index + 1;
     }
     if (arg === '--phase') {
-      if (value !== 'pre-lens' && value !== 'final-acceptance') throw new Error('--phase must be pre-lens or final-acceptance');
+      if (value !== 'pre-lens' && value !== 'post-lens' && value !== 'final-acceptance') throw new Error('--phase must be pre-lens, post-lens, or final-acceptance');
       opts.phase = value;
       return index + 1;
     }
