@@ -121,10 +121,11 @@ export function validateWave3bMigrationInventory(
   censusEntries: readonly CensusOwnershipEntry[],
   registeredGateIds: ReadonlySet<string>,
   surface: Wave3bReplacementSurface,
+  options: { readonly pinLiveConstants?: boolean } = {},
 ): string[] {
   const failures: string[] = [];
   const digest = wave3bMigrationInventoryDigest(inventory);
-  if (digest !== EXPECTED_WAVE_3B_MIGRATION_INVENTORY_DIGEST) {
+  if ((options.pinLiveConstants ?? true) && digest !== EXPECTED_WAVE_3B_MIGRATION_INVENTORY_DIGEST) {
     failures.push(`Wave 3.b migration inventory digest drift: expected=${EXPECTED_WAVE_3B_MIGRATION_INVENTORY_DIGEST} actual=${digest}`);
   }
 

@@ -188,7 +188,7 @@ export async function generateCurrentHeadProjection(repoRoot: string, currentHea
   const census = await readCensusAtHead(repoRoot, measuredHead);
   const { TERMINAL_CENSUS_CLASSIFICATIONS, validateCensusSchema } = await import('./census.ts');
   const { evaluateCurrentCensus } = await import('./current-census.ts');
-  const schemaFailures = validateCensusSchema(census);
+  const schemaFailures = validateCensusSchema(census, { pinLiveConstants: false });
   if (schemaFailures.length > 0) throw new Error(`frozen gate census is invalid: ${schemaFailures.join('; ')}`);
   const frozenDigest = populationDigest(census.entries);
   if (frozenDigest !== census.generation.populationDigest) throw new Error(`frozen population digest mismatch: ${frozenDigest} != ${census.generation.populationDigest}`);
@@ -201,7 +201,7 @@ export async function generateCurrentHeadProjection(repoRoot: string, currentHea
   }
   const registeredGateIds = new Set<string>(['gate-census']);
   for (const entry of census.entries) for (const gateId of entry.gateIds ?? []) registeredGateIds.add(gateId);
-  const result = evaluateCurrentCensus(census, await treeSnapshot(repoRoot, measuredHead), registeredGateIds);
+  const result = evaluateCurrentCensus(census, await treeSnapshot(repoRoot, measuredHead), registeredGateIds, { pinLiveConstants: false });
   if (result.status !== 'PASS') throw new Error(`current-head gate census rejected: ${result.summary}; ${(result.details ?? []).join('; ')}`);
   return {
     version: 1,
