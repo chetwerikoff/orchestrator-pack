@@ -277,6 +277,7 @@ async function publishLocal(
     kind: 'local',
     provider: 'orca',
     bindingKey,
+    role: 'worker',
     ...(expectedCurrent ? { expectedCurrent } : {}),
   });
   expect(result.ok).toBe(true);
@@ -423,7 +424,7 @@ describe('scheduler bounded-child production composition', () => {
   });
 
   it('keeps remote assignments outside local S1/S2 actuation and escalates them durably', async () => {
-    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'idle' }], dispatches: [], sendCalls: 0 })); writeEpoch(epochPath, 'epoch-remote', 'nonce-remote'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-remote', 'nonce-remote'); expect((await publishCurrentWorkerAssignment({ file: resolveWorkerAssignmentStorePath('orchestrator-pack', env), repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1420, taskId: 'task-remote', kind: 'remote', provider: 'orca', bindingKey: 'dispatch-1' })).ok).toBe(true); const first = await runTick(env); expect(schedulerResult(first).orchestratorRequired).toBe(true); expect(handoff(env)).toMatchObject({ reason: 'remote_not_applicable', decision: 'orchestrator_required', issueNumber: 1420, taskId: 'task-remote' }); await runTick(env); expect(fixture(fixturePath).sendCalls).toBe(0); expect(fixture(fixturePath).dispatches).toHaveLength(0);
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'idle' }], dispatches: [], sendCalls: 0 })); writeEpoch(epochPath, 'epoch-remote', 'nonce-remote'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-remote', 'nonce-remote'); expect((await publishCurrentWorkerAssignment({ file: resolveWorkerAssignmentStorePath('orchestrator-pack', env), repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1420, taskId: 'task-remote', kind: 'remote', provider: 'orca', bindingKey: 'dispatch-1', role: 'worker' })).ok).toBe(true); const first = await runTick(env); expect(schedulerResult(first).orchestratorRequired).toBe(true); expect(handoff(env)).toMatchObject({ reason: 'remote_not_applicable', decision: 'orchestrator_required', issueNumber: 1420, taskId: 'task-remote' }); await runTick(env); expect(fixture(fixturePath).sendCalls).toBe(0); expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
   it('persists observer_untrusted handoff and returns non-success for an empty-census S1 failure', async () => {
