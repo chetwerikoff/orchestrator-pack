@@ -346,6 +346,7 @@ function buildInvocation(
     ...(terminalResultIdentity ? { terminalResultIdentity } : {}),
     ...(reviewerSource ? { reviewerSource } : {}),
     reviewerSlot,
+    ...(value.reviewLaneRouting !== undefined ? { reviewLaneRouting: value.reviewLaneRouting as unknown as ReviewerInvocationEnvelopeV1['reviewLaneRouting'] } : {}),
     reviewerOrdinal,
     attemptOrdinal,
     retryAttempt,
