@@ -55,7 +55,20 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
   rules: [
     {
       kind: 'file-presence',
-      paths: ['AGENTS.md', 'docs/coworker-delegation.md', 'docs/tiering.md', 'docs/script-owned-review-pipeline.md'],
+      paths: [
+        'AGENTS.md',
+        'CLAUDE.md',
+        'docs/coworker-delegation.md',
+        'docs/tiering.md',
+        'docs/script-owned-review-pipeline.md',
+        'docs/orchestration-runbook.md',
+        'docs/repository_policy.md',
+        '.claude/skills/investigate-root-cause/SKILL.md',
+        '.claude/skills/direct-fix-checklist/SKILL.md',
+        '.claude/skills/discuss-with-gpt/SKILL.md',
+        '.cursor/rules/draft-author-relocation.mdc',
+        '.cursor/rules/flow-manager-browser-turn-monitoring.mdc',
+      ],
     },
     {
       kind: 'static-source',
@@ -69,8 +82,37 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
             '**Worked example.**',
             'git diff <base-ref>...HEAD > /tmp/review.diff',
             '## Script-owned review pipeline (documentation)',
+            '## RCA spec discipline',
           ],
-          contains: ['## Coworker CLI delegation', '## RTK read-exploration', '## RCA spec discipline'],
+          contains: ['## Coworker CLI delegation', '## RTK read-exploration'],
+          exactOccurrences: [
+            { marker: '(docs/orchestration-runbook.md#worker-lifecycle)', count: 1 },
+            { marker: '(docs/repository_policy.md#task-and-scope-authority)', count: 1 },
+            { marker: '(docs/repository_policy.md#local-verification)', count: 1 },
+            { marker: '(.claude/skills/investigate-root-cause/SKILL.md#failure-response)', count: 1 },
+          ],
+        },
+        {
+          path: 'CLAUDE.md',
+          exactOccurrences: [
+            { marker: '(.claude/skills/direct-fix-checklist/SKILL.md#architect-role-contract)', count: 1 },
+            { marker: '(.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation)', count: 1 },
+            { marker: '(.claude/skills/investigate-root-cause/SKILL.md#failure-response)', count: 1 },
+          ],
+        },
+        {
+          path: '.cursor/rules/draft-author-relocation.mdc',
+          exactOccurrences: [
+            { marker: '(../../.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation)', count: 1 },
+          ],
+        },
+        {
+          path: '.cursor/rules/flow-manager-browser-turn-monitoring.mdc',
+          absent: ['## Stage and retry boundary', '## Publication and tab lifecycle', '## Session handoff'],
+          exactOccurrences: [
+            { marker: '## Launch and observation', count: 1 },
+            { marker: '## Legacy state and diagnostic probe', count: 1 },
+          ],
         },
         {
           path: 'docs/coworker-delegation.md',
