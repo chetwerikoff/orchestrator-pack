@@ -23,6 +23,7 @@
     "docs/coworker-read-delegation-audit.md",
     "docs/declarations/1488.pr-scope.json",
     "docs/orchestration-runbook.md",
+    "docs/read-delegation-audit.d.mts",
     "docs/read-delegation-audit.mjs",
     "docs/repository_policy.md",
     "scripts/gate-runner/"
@@ -45,5 +46,5 @@
     "docs/",
     "scripts/gate-runner/"
   ],
-  "source_revision": "98bdaae5be29352790f25ed5abd5ddcdc619e627"
+  "source_revision": "2ed35574529a4a5e59d97b86b533bf558f8838fa"
 }
