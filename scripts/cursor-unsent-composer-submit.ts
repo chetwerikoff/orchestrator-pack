@@ -28,7 +28,7 @@ const MACHINE_POKE = /^You have \d+ orchestration messages?\. Run `orca orchestr
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
-export const QUIET_AFTER_PRINT_MS = 10_000;
+export const QUIET_AFTER_PRINT_MS = 5_000;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
@@ -233,7 +233,9 @@ function persistSubmitted(state: UnsentComposerWatchState, path: string | undefi
 
 export interface UnsentComposerSubmitDeps {
   readonly listWorkers: () => { ok: true; workers: readonly RuntimeWorker[] } | { ok: false; reason: string };
-  readonly read: (worker: RuntimeWorkerIdentity) => { ok: true; lines: readonly string[] } | { ok: false; reason: string };
+  readonly read: (worker: RuntimeWorkerIdentity) =>
+    | { ok: true; lines: readonly string[]; source: 'screen' }
+    | { ok: false; reason: string };
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
@@ -277,10 +279,9 @@ export function createUnsentComposerWatchState(): UnsentComposerWatchState {
   };
 }
 
-function clearObservation(state: UnsentComposerWatchState, key: string, clearSubmitted: boolean): void {
+function clearObservation(state: UnsentComposerWatchState, key: string): void {
   state.lastFingerprint.delete(key);
   state.lastChangedAt.delete(key);
-  if (clearSubmitted) state.submittedFingerprint.delete(key);
 }
 
 function submitOne(
@@ -299,11 +300,11 @@ function submitOne(
   const preview = shown.lines.join('\n');
   const kind = classifyCursorComposer(preview);
   if (kind === 'empty') {
-    clearObservation(state, key, true);
+    clearObservation(state, key);
     return { ...base, ok: true, unsent: false, enter: false, reason: 'composer_empty' };
   }
   if (kind === 'manual') {
-    clearObservation(state, key, false);
+    clearObservation(state, key);
     return { ...base, ok: true, unsent: false, enter: false, reason: 'manual_input' };
   }
   const fingerprint = composerPokeFingerprint(preview);
@@ -429,10 +430,13 @@ function installLockRelease(): void {
   });
 }
 
-export function createAdapterSubmitDeps(adapter: RuntimeAdapter): UnsentComposerSubmitDeps {
+export function createAdapterSubmitDeps(
+  adapter: RuntimeAdapter,
+  listWorkspaces: () => OrcaJsonResponse<unknown> = () => runOrcaJson(['worktree', 'list']),
+): UnsentComposerSubmitDeps {
   return {
     listWorkers: () => {
-      const selectors = workspaceSelectorsFromList(runOrcaJson(['worktree', 'list']));
+      const selectors = workspaceSelectorsFromList(listWorkspaces());
       const workers: RuntimeWorker[] = [];
       const seen = new Set<string>();
       for (const workspace of selectors) {
@@ -450,9 +454,12 @@ export function createAdapterSubmitDeps(adapter: RuntimeAdapter): UnsentComposer
       return { ok: true, workers };
     },
     read: (worker) => {
-      const output = adapter.readBoundedOutput({ worker });
+      const output = adapter.readBoundedOutput({ worker, screen: true });
       if (output.status !== 'ok') return { ok: false, reason: output.reason };
-      return { ok: true, lines: output.value.lines };
+      if (output.value.source !== 'screen') {
+        return { ok: false, reason: 'runtime_output_source_unobservable' };
+      }
+      return { ok: true, lines: output.value.lines, source: 'screen' };
     },
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
     sentStorePath: SENT_STORE_PATH,

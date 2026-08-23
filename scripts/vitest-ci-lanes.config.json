@@ -46,6 +46,7 @@
     "scripts/contract-evidence-legacy-list-guard.test.ts": "heavy",
     "scripts/create-issue-parked-migration.test.ts": "light",
     "scripts/cursor-unsent-composer-submit.test.ts": "light",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts": "light",
     "scripts/cutover/issue-928.test.ts": "light",
     "scripts/estate-cut/issue-906-vertical-slice.test.ts": "light",
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "heavy",

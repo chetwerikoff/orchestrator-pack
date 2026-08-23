@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import {
   acquireWatchLock,
   classifyCursorComposer,
+  createAdapterSubmitDeps,
   createUnsentComposerWatchState,
   cursorComposerLooksUnsent,
   loadSubmittedFingerprints,
@@ -174,6 +175,38 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 });
 
 describe('submitUnsentCursorComposer', () => {
+  it('uses rendered screen observation when stream output omits the composer', () => {
+    const identity = worker('term_production').identity;
+    const reads: Array<{ screen?: boolean }> = [];
+    const adapter = {
+      listWorkers: () => ({ status: 'ok' as const, value: [worker('term_production')] }),
+      readBoundedOutput: (input: { screen?: boolean }) => {
+        reads.push(input);
+        return {
+          status: 'ok' as const,
+          value: {
+            worker: identity,
+            lines: input.screen ? [POKE, ...CURSOR_FOOTER] : ['stream output without composer'],
+            observationToken: { opaque: 'screen-frame' },
+            changed: false,
+            terminalState: 'running' as const,
+            source: input.screen ? 'screen' as const : 'stream' as const,
+          },
+        };
+      },
+      dispatchInput: () => ({ status: 'dispatched' as const }),
+    } as unknown as Parameters<typeof createAdapterSubmitDeps>[0];
+    let now = 0;
+    const deps = createAdapterSubmitDeps(adapter, () => ({ ok: true, result: {} }));
+    const state = createUnsentComposerWatchState();
+    const first = submitUnsentCursorComposer({ watch: true }, { ...deps, now: () => now }, state);
+    now = QUIET_AFTER_PRINT_MS;
+    const second = submitUnsentCursorComposer({ watch: true }, { ...deps, now: () => now }, state);
+    expect(first.terminals[0]?.reason).toBe('waiting_stable');
+    expect(second.terminals[0]?.reason).toBe('enter_sent');
+    expect(reads.map(({ screen }) => screen)).toEqual([true, true]);
+  });
+
   it('enters every unsent worker and skips empty ones', () => {
     const submitted: RuntimeWorkerIdentity[] = [];
     const result = submitUnsentCursorComposer(
@@ -206,7 +239,7 @@ describe('submitUnsentCursorComposer', () => {
     expect(result.terminals[0]?.reason).toBe('manual_input');
   });
 
-  it('waits 10s after the poke stops changing and does not resend', () => {
+  it('waits 5s after the poke stops changing and does not resend', () => {
     const submitted: RuntimeWorkerIdentity[] = [];
     const state = createUnsentComposerWatchState();
     let now = 0;
@@ -292,7 +325,7 @@ describe('submitUnsentCursorComposer', () => {
           },
           read: (identity) => {
             reads += 1;
-            return { ok: true as const, lines: identity.id === 'term_unsent' ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up'] };
+            return { ok: true as const, lines: identity.id === 'term_unsent' ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up'], source: 'screen' as const };
           },
         },
       ),
@@ -329,20 +362,27 @@ describe('submitUnsentCursorComposer', () => {
     expect(submitted).toHaveLength(2);
   });
 
-  it('keeps the 10s quiet window across a fresh scheduler tick process', () => {
+  it('keeps the 5s quiet window and no-resend watermark across fresh scheduler ticks', () => {
     const sentStorePath = join(tmpdir(), `opk-unsent-watch-${process.pid}-${Date.now()}.json`);
     const submitted: RuntimeWorkerIdentity[] = [];
     let now = 0;
+    const linesById = { term_unsent: [POKE, ...CURSOR_FOOTER] };
     const deps = depsFor(
-      { term_unsent: [POKE, ...CURSOR_FOOTER] },
+      linesById,
       { submitted, sentStorePath, now: () => now },
     );
     try {
       const first = submitUnsentCursorComposer({ watch: true }, deps, createUnsentComposerWatchState());
       now = QUIET_AFTER_PRINT_MS;
       const second = submitUnsentCursorComposer({ watch: true }, deps, createUnsentComposerWatchState());
+      linesById.term_unsent = ['→ Add a follow-up'];
+      const empty = submitUnsentCursorComposer({ watch: true }, deps, createUnsentComposerWatchState());
+      linesById.term_unsent = [POKE, ...CURSOR_FOOTER];
+      const repeated = submitUnsentCursorComposer({ watch: true }, deps, createUnsentComposerWatchState());
       expect(first.terminals[0]?.reason).toBe('waiting_stable');
       expect(second.terminals[0]?.reason).toBe('enter_sent');
+      expect(empty.terminals[0]?.reason).toBe('composer_empty');
+      expect(repeated.terminals[0]?.reason).toBe('already_submitted');
       expect(submitted).toHaveLength(1);
     } finally {
       try { unlinkSync(sentStorePath); } catch { /* ignore */ }
