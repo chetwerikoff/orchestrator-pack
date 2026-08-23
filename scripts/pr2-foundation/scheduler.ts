@@ -577,9 +577,9 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   };
 }
 
-async function runComposerPass(): Promise<unknown> {
+async function runComposerPass(fleetSettled: PromiseLike<unknown>): Promise<unknown> {
   const { runSupervisorUnsentComposerTick } = await import('../cursor-unsent-composer-submit.ts');
-  return runSupervisorUnsentComposerTick();
+  return runSupervisorUnsentComposerTick(undefined, undefined, { fleetSettled });
 }
 
 function errorText(error: unknown): string {
@@ -621,9 +621,10 @@ export function settleSchedulerAndComposer<T, C>(
 }
 
 async function runTickWithComposer(boundary: SchedulerBoundary): Promise<{ result: Awaited<ReturnType<typeof runSchedulerTick>>; composer: unknown }> {
+  const schedulerPhase = runSchedulerTick(boundary);
   const [scheduler, composer] = await Promise.allSettled([
-    runSchedulerTick(boundary),
-    runComposerPass(),
+    schedulerPhase,
+    runComposerPass(schedulerPhase),
   ]);
   return settleSchedulerAndComposer(scheduler, composer);
 }

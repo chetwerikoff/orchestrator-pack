@@ -22,6 +22,7 @@ import {
 } from '../runtime/contracts.ts';
 import {
   runOrcaJson,
+  runOrcaJsonAsync,
   type OrcaJsonResponse,
   type OrcaRunOptions,
   type OrcaTerminalHandle,
@@ -34,6 +35,7 @@ import {
 
 export interface OrcaRuntimeAdapterOptions extends OrcaRunOptions {
   readonly runJson?: typeof runOrcaJson;
+  readonly runJsonAsync?: typeof runOrcaJsonAsync;
   readonly now?: () => number;
 }
 
@@ -322,6 +324,17 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     });
   }
 
+  async #runAsync<T>(args: readonly string[], options: RuntimeCallOptions = {}): Promise<OrcaJsonResponse<T>> {
+    const run = this.#options.runJsonAsync ?? runOrcaJsonAsync;
+    return run<T>(args, {
+      cwd: options.cwd ?? this.#options.cwd,
+      timeoutMs: options.timeoutMs ?? this.#options.timeoutMs,
+      executable: this.#options.executable,
+      env: this.#options.env,
+      killSignal: this.#options.killSignal,
+    });
+  }
+
   #rememberWorkspace(
     identity: RuntimeWorkerIdentity,
     workspaceSelector: 'active' | string,
@@ -583,6 +596,29 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const workers: RuntimeWorker[] = [];
     for (const terminal of terminals) {
       const normalized = this.#workerFromTerminal(terminal, workspace, 'list_workers');
+      if (normalized.status !== 'ok') return normalized;
+      workers.push(normalized.value);
+    }
+    return { status: 'ok', value: workers };
+  }
+
+  async listWorkersAsync(
+    _input: { readonly workspace?: 'active' | string } = {},
+    options: RuntimeCallOptions = {},
+  ): Promise<RuntimeResult<readonly RuntimeWorker[]>> {
+    const response = await this.#runAsync<{ terminals?: OrcaTerminalSummary[] }>(
+      ['terminal', 'list'],
+      options,
+    );
+    if (!response.ok) return runtimeFailure('list_workers', neutralFailureReason(response));
+    const terminals = response.result?.terminals;
+    if (!Array.isArray(terminals)) {
+      return runtimeUnsupported('list_workers', 'runtime_worker_list_shape_unsupported');
+    }
+    const workers: RuntimeWorker[] = [];
+    for (const terminal of terminals) {
+      const selector = terminal.worktreePath?.trim() || 'active';
+      const normalized = this.#workerFromTerminal(terminal, selector, 'list_workers');
       if (normalized.status !== 'ok') return normalized;
       workers.push(normalized.value);
     }
@@ -920,6 +956,80 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!response.ok) {
       return runtimeFailure('read_bounded_output', neutralFailureReason(response));
     }
+    const normalized = normalizeTerminalRead(response.result, input.screen === true);
+    if (normalized.status !== 'ok') return normalized;
+    const changed = previous?.status === 'ok'
+      ? previous.value.nativeCursor !== normalized.value.nativeCursor
+      : normalized.value.lines.length > 0;
+    const observationToken = this.#observationToken(
+      input.worker,
+      normalized.value.nativeCursor,
+      changed,
+      input.previousToken,
+    );
+    return {
+      status: 'ok',
+      value: {
+        worker: input.worker,
+        lines: normalized.value.lines,
+        observationToken,
+        changed,
+        terminalState: normalized.value.terminalState,
+        source: normalized.value.source,
+      },
+    };
+  }
+
+  async readBoundedOutputAsync(
+    input: {
+      readonly worker: RuntimeWorkerIdentity;
+      readonly previousToken?: RuntimeObservationToken | null;
+      readonly limit?: number;
+      readonly screen?: boolean;
+    },
+    options: RuntimeCallOptions = {},
+  ): Promise<RuntimeResult<RuntimeBoundedOutput>> {
+    if (input.worker.runtime !== 'orca') {
+      return runtimeFailure('read_bounded_output', 'runtime_identity_mismatch');
+    }
+    let deadline: number | null = null;
+    if (options.timeoutMs !== undefined) {
+      const timeoutMs = Math.floor(options.timeoutMs);
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+        return runtimeFailure('read_bounded_output', 'runtime_timeout');
+      }
+      deadline = this.#now() + timeoutMs;
+    }
+    const previous = input.previousToken
+      ? this.#resolveObservation(input.worker, input.previousToken)
+      : null;
+    if (previous && previous.status !== 'ok') return previous;
+    const lookupOptions = deadline === null ? options : this.#boundedOptions(deadline, options);
+    if (!lookupOptions) return runtimeFailure('read_bounded_output', 'runtime_timeout');
+    const shown = await this.#runAsync<{ terminal?: OrcaTerminalSummary }>(
+      ['terminal', 'show', '--terminal', input.worker.id],
+      lookupOptions,
+    );
+    if (!shown.ok) return runtimeFailure('read_bounded_output', neutralFailureReason(shown));
+    const terminal = shown.result?.terminal;
+    if (!terminal) return runtimeFailure('read_bounded_output', 'runtime_worker_show_shape_unsupported');
+    const current = this.#workerFromTerminal(
+      terminal,
+      terminal.worktreePath?.trim() || 'active',
+      'find_worker_by_id',
+    );
+    if (current.status !== 'ok') return runtimeFailure('read_bounded_output', current.reason);
+    if (!sameRuntimeWorker(current.value.identity, input.worker)) {
+      return runtimeFailure('read_bounded_output', 'worker_generation_not_found');
+    }
+    const args = ['terminal', 'read', '--terminal', input.worker.id];
+    if (input.screen) args.push('--screen');
+    if (previous?.status === 'ok') args.push('--cursor', previous.value.nativeCursor);
+    if (input.limit !== undefined) args.push('--limit', String(input.limit));
+    const readOptions = deadline === null ? options : this.#boundedOptions(deadline, options);
+    if (!readOptions) return runtimeFailure('read_bounded_output', 'runtime_timeout');
+    const response = await this.#runAsync<OrcaTerminalReadResult>(args, readOptions);
+    if (!response.ok) return runtimeFailure('read_bounded_output', neutralFailureReason(response));
     const normalized = normalizeTerminalRead(response.result, input.screen === true);
     if (normalized.status !== 'ok') return normalized;
     const changed = previous?.status === 'ok'

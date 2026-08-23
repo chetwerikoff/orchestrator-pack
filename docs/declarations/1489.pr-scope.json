@@ -9,6 +9,7 @@
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/native.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
