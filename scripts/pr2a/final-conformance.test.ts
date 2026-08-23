@@ -1,14 +1,6 @@
 import { createHash } from 'node:crypto';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -127,7 +119,14 @@ function waitForCondition(predicate: () => boolean, timeoutMs = 30_000): Promise
   });
 }
 function waitForFiles(paths: string[], timeoutMs = 30_000): Promise<void> {
-  return waitForCondition(() => paths.every((file) => existsSync(file) && statSync(file).size > 0), timeoutMs);
+  return waitForCondition(() => paths.every((file) => {
+    try {
+      const value = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+      return value !== null && typeof value === 'object' && !Array.isArray(value);
+    } catch {
+      return false;
+    }
+  }), timeoutMs);
 }
 
 function spawnTsClaim(namespace: string, resultPath: string, startPath: string, releasePath: string): void {
