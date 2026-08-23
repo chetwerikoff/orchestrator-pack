@@ -586,14 +586,14 @@ export async function runSupervisorUnsentComposerTick(
           Math.max(1, remaining - (deps.readAsync ? ASYNC_SUBMIT_RESERVE_MS : 0)),
         ));
         if (deps.readAsync) {
-          const followUp = deps.readAsync(worker.identity);
-          await Promise.all([quietTimer, followUp]);
-          const shown = await followUp;
-          const fingerprint = shown.ok ? composerPokeFingerprint(shown.lines.join('\n')) : undefined;
-          const unchanged = fingerprint !== undefined && fingerprint === state.lastFingerprint.get(key);
+          // The read must happen after the quiet deadline. A read started
+          // alongside the timer can return an old fingerprint before the user
+          // edits the composer, then incorrectly bypass the stability check.
+          await quietTimer;
+          const shown = await deps.readAsync(worker.identity);
           result = settleComposerObservation(
             worker,
-            { terminals: [worker.identity.id], watch: !unchanged },
+            { terminals: [worker.identity.id], watch: true },
             workerDeps,
             state,
             shown,

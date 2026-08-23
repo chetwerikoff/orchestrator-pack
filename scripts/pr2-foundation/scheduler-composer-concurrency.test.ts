@@ -95,6 +95,55 @@ describe('scheduler/composer concurrency settlement', () => {
     }
   });
 
+  it('rechecks after the quiet deadline when the composer changes during verification', async () => {
+    vi.useFakeTimers();
+    try {
+      const submitted: string[] = [];
+      const target = {
+        runtime: 'orca' as const,
+        id: 'composer-race',
+        generation: 'generation-1',
+      };
+      const first = ['→ first orchestration payload', ...CURSOR_SCREEN.slice(1)];
+      const replacement = ['→ replacement orchestration payload', ...CURSOR_SCREEN.slice(1)];
+      let composer = first;
+      let reads = 0;
+      const deps: UnsentComposerSubmitDeps = {
+        listWorkers: () => ({ ok: true, workers: [{
+          identity: target,
+          workspacePath: '/tmp/composer-race',
+          title: 'composer-race',
+          provenance: 'external' as const,
+        }] }),
+        listWorkersAsync: async () => ({ ok: true, workers: [{
+          identity: target,
+          workspacePath: '/tmp/composer-race',
+          title: 'composer-race',
+          provenance: 'external' as const,
+        }] }),
+        read: () => ({ ok: true, lines: composer, source: 'screen' }),
+        readAsync: async () => {
+          reads += 1;
+          return { ok: true, lines: reads <= 2 ? first : composer, source: 'screen' };
+        },
+        submit: () => {
+          submitted.push(target.id);
+          return { status: 'dispatched' };
+        },
+      };
+      setTimeout(() => { composer = replacement; }, 4_005);
+      const pass = runSupervisorUnsentComposerTick(deps, createUnsentComposerWatchState());
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(5_005);
+      expect(submitted).toEqual([]);
+      await vi.advanceTimersByTimeAsync(QUIET_AFTER_PRINT_MS + 100);
+      expect(submitted).toEqual([target.id]);
+      await pass;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('persists the quiet observation before the bounded wait completes', async () => {
     vi.useFakeTimers();
     const sentStorePath = join(tmpdir(), `opk-composer-${process.pid}-${Date.now()}.json`);
@@ -147,7 +196,7 @@ describe('scheduler/composer concurrency settlement', () => {
       const pass = runSupervisorUnsentComposerTick(deps, createUnsentComposerWatchState());
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(100);
-      expect(started).toHaveLength(72);
+      expect(started).toHaveLength(71);
       await vi.advanceTimersByTimeAsync(QUIET_AFTER_PRINT_MS);
       await vi.advanceTimersByTimeAsync(100);
       expect(submitted).toEqual([target.identity.id]);
