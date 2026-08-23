@@ -227,6 +227,18 @@ describe('revision-aware final acceptance', () => {
     expect(errors.join('\n')).toContain('expected cycle-r100, got cycle-r101');
   });
 
+  it('accepts a later source revision on the same canonical cycle during final readback', () => {
+    const input = validHistoricalInput();
+
+    const errors = validateFinalAcceptanceReadbackHead(
+      input.lineage,
+      'cycle-r100',
+      'r101',
+    );
+
+    expect(errors).toEqual([]);
+  });
+
   it('requires the requested receipt set to equal canonical real paths', () => {
     const directory = mkdtempSync(join(tmpdir(), 'issue-1202-receipts-'));
     temporaryDirectories.push(directory);
