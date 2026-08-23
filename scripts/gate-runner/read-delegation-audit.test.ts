@@ -26,7 +26,7 @@ describe('read-delegation audit trigger', () => {
   });
 
   it('does not trigger from file count or a retired diff/log floor', () => {
-    const threeFilesAtOldFloor = [
+    const threeFilesAtOldFloor: Parameters<typeof didAskTriggerFire>[0] = [
       { kind: 'file', path: 'a.md', lines: 200 },
       { kind: 'file', path: 'b.md', lines: 200 },
       { kind: 'file', path: 'c.md', lines: 200 },
