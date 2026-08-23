@@ -577,9 +577,21 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   };
 }
 
+function settleUnobservableComposerPass(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const result = value as { readonly ok?: unknown; readonly terminals?: unknown };
+  if (result.ok !== false || !Array.isArray(result.terminals) || result.terminals.length === 0) return value;
+  const onlyUnobservable = result.terminals.every((terminal) => (
+    terminal && typeof terminal === 'object'
+      && (terminal as { readonly reason?: unknown }).reason === 'runtime_output_source_unobservable'
+  ));
+  return onlyUnobservable ? { ...result, ok: true } : value;
+}
+
 async function runComposerPass(fleetSettled: PromiseLike<unknown>): Promise<unknown> {
   const { runSupervisorUnsentComposerTick } = await import('../cursor-unsent-composer-submit.ts');
-  return runSupervisorUnsentComposerTick(undefined, undefined, { fleetSettled });
+  const result = await runSupervisorUnsentComposerTick(undefined, undefined, { fleetSettled });
+  return settleUnobservableComposerPass(result);
 }
 
 function errorText(error: unknown): string {

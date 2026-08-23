@@ -1,6 +1,5 @@
 import { accessSync, constants } from 'node:fs';
-import { execFile, spawnSync } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawnSync } from 'node:child_process';
 import { delimiter, join } from 'node:path';
 
 export const orcaWorkerSmokeContractEvidenceDir =
@@ -219,90 +218,6 @@ export function runOrcaJson<T>(
       operation,
       outcomeCategory: 'process_launch_failed',
       error: { code: 'orca_process_launch_failed', message: result.error.message },
-    };
-  }
-  const stdout = String(result.stdout ?? '').trim();
-  if (!stdout) {
-    return {
-      ok: false,
-      operation,
-      outcomeCategory: 'empty_stdout',
-      error: {
-        code: 'orca_empty_stdout',
-        message: String(result.stderr ?? '').trim() || `orca ${args.join(' ')} produced no output`,
-      },
-    };
-  }
-  try {
-    const parsed = JSON.parse(stdout) as OrcaJsonResponse<T>;
-    if (parsed.ok) return { ...parsed, operation };
-    return {
-      ...parsed,
-      operation,
-      outcomeCategory: isOrcaSmokeControlPlaneCode(parsed.error?.code)
-        ? 'recognized_control_plane_code'
-        : 'supported_operation_failure',
-    };
-  } catch {
-    return {
-      ok: false,
-      operation,
-      outcomeCategory: 'invalid_json',
-      error: { code: 'orca_invalid_json', message: stdout.slice(0, 500) },
-    };
-  }
-}
-
-const execFileAsync = promisify(execFile);
-
-type AsyncExecError = Error & {
-  readonly code?: string | number;
-  readonly stdout?: string | Buffer;
-  readonly stderr?: string | Buffer;
-};
-
-/** Non-blocking counterpart for latency-sensitive scheduler observations. */
-export async function runOrcaJsonAsync<T>(
-  args: readonly string[],
-  options: OrcaRunOptions = {},
-): Promise<OrcaJsonResponse<T>> {
-  const executable = options.executable ?? resolveOrcaExecutable(options.env);
-  const operation = resolveOrcaOperation(args);
-  let result: { stdout: string | Buffer; stderr: string | Buffer };
-  try {
-    result = await execFileAsync(executable, [...args, '--json'], {
-      cwd: options.cwd ?? process.cwd(),
-      env: options.inheritParentEnv === false
-        ? { ...options.env }
-        : { ...process.env, ...options.env },
-      encoding: 'utf8',
-      maxBuffer: 16 * 1024 * 1024,
-      ...(options.timeoutMs === undefined ? {} : {
-        timeout: options.timeoutMs,
-        killSignal: options.killSignal ?? 'SIGKILL',
-      }),
-    }) as { stdout: string | Buffer; stderr: string | Buffer };
-  } catch (error) {
-    const failure = error as AsyncExecError;
-    if (failure.code === 'ETIMEDOUT') {
-      return {
-        ok: false,
-        operation,
-        outcomeCategory: 'supported_operation_failure',
-        error: {
-          code: 'orca_operation_timeout',
-          message: `orca ${args.join(' ')} exceeded ${options.timeoutMs ?? 0}ms`,
-        },
-      };
-    }
-    return {
-      ok: false,
-      operation,
-      outcomeCategory: 'process_launch_failed',
-      error: {
-        code: 'orca_process_launch_failed',
-        message: error instanceof Error ? error.message : 'orca process launch failed',
-      },
     };
   }
   const stdout = String(result.stdout ?? '').trim();

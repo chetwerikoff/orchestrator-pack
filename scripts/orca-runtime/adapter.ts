@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   runtimeFailure,
   runtimeUnsupported,
@@ -22,7 +24,9 @@ import {
 } from '../runtime/contracts.ts';
 import {
   runOrcaJson,
-  runOrcaJsonAsync,
+  isOrcaSmokeControlPlaneCode,
+  resolveOrcaExecutable,
+  resolveOrcaOperation,
   type OrcaJsonResponse,
   type OrcaRunOptions,
   type OrcaTerminalHandle,
@@ -32,6 +36,50 @@ import {
   type OrcaWorktreeCurrent,
   type OrcaWorktreeShow,
 } from './native.ts';
+
+const execFileAsync = promisify(execFile);
+
+type AsyncExecError = Error & { readonly code?: string | number };
+
+async function runOrcaJsonAsync<T>(
+  args: readonly string[],
+  options: OrcaRunOptions = {},
+): Promise<OrcaJsonResponse<T>> {
+  const executable = options.executable ?? resolveOrcaExecutable(options.env);
+  const operation = resolveOrcaOperation(args);
+  let result: { stdout: string | Buffer; stderr: string | Buffer };
+  try {
+    result = await execFileAsync(executable, [...args, '--json'], {
+      cwd: options.cwd ?? process.cwd(),
+      env: options.inheritParentEnv === false ? { ...options.env } : { ...process.env, ...options.env },
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+      ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs, killSignal: options.killSignal ?? 'SIGKILL' }),
+    }) as { stdout: string | Buffer; stderr: string | Buffer };
+  } catch (error) {
+    const failure = error as AsyncExecError;
+    return {
+      ok: false,
+      operation,
+      outcomeCategory: failure.code === 'ETIMEDOUT' ? 'supported_operation_failure' : 'process_launch_failed',
+      error: {
+        code: failure.code === 'ETIMEDOUT' ? 'orca_operation_timeout' : 'orca_process_launch_failed',
+        message: failure.code === 'ETIMEDOUT'
+          ? `orca ${args.join(' ')} exceeded ${options.timeoutMs ?? 0}ms`
+          : error instanceof Error ? error.message : 'orca process launch failed',
+      },
+    };
+  }
+  const stdout = String(result.stdout ?? '').trim();
+  if (!stdout) return { ok: false, operation, outcomeCategory: 'empty_stdout', error: { code: 'orca_empty_stdout', message: String(result.stderr ?? '').trim() || `orca ${args.join(' ')} produced no output` } };
+  try {
+    const parsed = JSON.parse(stdout) as OrcaJsonResponse<T>;
+    if (parsed.ok) return { ...parsed, operation };
+    return { ...parsed, operation, outcomeCategory: isOrcaSmokeControlPlaneCode(parsed.error?.code) ? 'recognized_control_plane_code' : 'supported_operation_failure' };
+  } catch {
+    return { ok: false, operation, outcomeCategory: 'invalid_json', error: { code: 'orca_invalid_json', message: stdout.slice(0, 500) } };
+  }
+}
 
 export interface OrcaRuntimeAdapterOptions extends OrcaRunOptions {
   readonly runJson?: typeof runOrcaJson;
@@ -325,7 +373,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
   }
 
   async #runAsync<T>(args: readonly string[], options: RuntimeCallOptions = {}): Promise<OrcaJsonResponse<T>> {
-    const run = this.#options.runJsonAsync ?? runOrcaJsonAsync;
+    const run = this.#options.runJsonAsync
+      ?? (this.#options.runJson && this.#options.runJson !== runOrcaJson
+        ? async <U>(input: readonly string[], inputOptions: OrcaRunOptions) => this.#options.runJson!(input, inputOptions)
+        : runOrcaJsonAsync);
     return run<T>(args, {
       cwd: options.cwd ?? this.#options.cwd,
       timeoutMs: options.timeoutMs ?? this.#options.timeoutMs,
