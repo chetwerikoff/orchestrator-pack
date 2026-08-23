@@ -23,12 +23,15 @@ const UNBOXED_CTRL_C = /^ctrl\+c to stop\b/iu;
 const UNBOXED_STATUS_FOOTER = /^(?:Cursor|GPT-\S+|Composer)\s.+(?:\d+(?:\.\d+)?%|Run Everything)/iu;
 const UNBOXED_CWD_FOOTER = /^(?:~[/\\]|[A-Za-z]:[\\/]|\/)/u;
 const EMPTY_COMPOSER = /^(?:→\s*)?Add a follow-up\b/iu;
+const ORCHESTRATION_NOTICE = /^You have \d+ orchestration messages?\. Run `orca orchestration check --run \S+`\.$/iu;
 const LONE_ARROW = /^→$/u;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
 export const QUIET_AFTER_PRINT_MS = 5_000;
 const EMPTY_COMPOSER_RECHECK_MS = 1_000;
+// Reserve the observed adapter dispatch tail inside the user-facing deadline.
+const ASYNC_SUBMIT_RESERVE_MS = 250;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
@@ -52,7 +55,11 @@ function trimNonEmpty(lines: readonly string[]): string[] {
 }
 
 function composerContentLines(lines: readonly string[]): string[] {
-  return trimNonEmpty(lines).filter((line) => !LONE_ARROW.test(line));
+  const content = trimNonEmpty(lines).filter((line) => !LONE_ARROW.test(line));
+  // A live orchestration notice can be rendered inside the box after the
+  // user's text. Preserve a notice in the first line for compatibility with
+  // a user-entered poke, but exclude trailing notices from the fingerprint.
+  return content.filter((line, index) => index === 0 || !ORCHESTRATION_NOTICE.test(line));
 }
 
 function unboxedComposerLines(preview: string): string[] {
@@ -574,7 +581,26 @@ export async function runSupervisorUnsentComposerTick(
         const now = deps.now?.() ?? Date.now();
         const key = workerKey(worker.identity);
         const remaining = Math.max(0, QUIET_AFTER_PRINT_MS - (now - (state.lastChangedAt.get(key) ?? now)));
-        await new Promise<void>((resolve) => setTimeout(resolve, Math.max(1, remaining)));
+        const quietTimer = new Promise<void>((resolve) => setTimeout(
+          resolve,
+          Math.max(1, remaining - (deps.readAsync ? ASYNC_SUBMIT_RESERVE_MS : 0)),
+        ));
+        if (deps.readAsync) {
+          const followUp = deps.readAsync(worker.identity);
+          await Promise.all([quietTimer, followUp]);
+          const shown = await followUp;
+          const fingerprint = shown.ok ? composerPokeFingerprint(shown.lines.join('\n')) : undefined;
+          const unchanged = fingerprint !== undefined && fingerprint === state.lastFingerprint.get(key);
+          result = settleComposerObservation(
+            worker,
+            { terminals: [worker.identity.id], watch: !unchanged },
+            workerDeps,
+            state,
+            shown,
+          );
+          continue;
+        }
+        await quietTimer;
       }
       result = deps.readAsync
         ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
