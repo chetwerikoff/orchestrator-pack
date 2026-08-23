@@ -15,8 +15,8 @@ published Issue, current PR head, or current repository state.
 
 Apply authorities in this order. A lower row must not override a higher row.
 
-1. Direct top-level user instruction.
-2. External safety and capability boundaries.
+1. External safety and capability boundaries.
+2. Direct top-level user instruction.
 3. Live GitHub Issue and current Task/Dispatch identity.
 4. Current default-branch / PR-head state.
 5. This file — sole canon for universal project policy.
@@ -71,11 +71,12 @@ lease, witness, acknowledgement, or retry subsystem.
 
 ## Plan, scope, and verification
 
-Before the first side effect, workers, orchestrators, and managers follow
-[`docs/orchestration-runbook.md`](docs/orchestration-runbook.md) **Worker
-lifecycle**. Plan-first execution, scope discipline, verification, and
-minimum-build rules live in
-[`docs/repository_policy.md`](docs/repository_policy.md).
+Before the first side effect, workers, orchestrators, and managers follow the
+[`Worker lifecycle`](docs/orchestration-runbook.md#worker-lifecycle). Task and
+scope authority lives in
+[`Task and scope authority`](docs/repository_policy.md#task-and-scope-authority),
+and current-head verification lives in
+[`Local verification`](docs/repository_policy.md#local-verification).
 
 ## Coworker CLI delegation
 
@@ -156,11 +157,10 @@ claim about review, CI, smoke, branch identity, or local adoption.
 
 ## Worker lifecycle
 
-Workers as well as orchestrator/manager MUST read
-[`docs/orchestration-runbook.md`](docs/orchestration-runbook.md) **Worker
-lifecycle** before the first side effect. That runbook owns pre-flight, runtime
-identity, review/CI/handoff, required CI, `pack-worker-report`, PR-created
-handoff, review-cycle cap, and worker smoke.
+Workers as well as orchestrator/manager MUST read the **Worker lifecycle**
+section linked above before the first side effect. That runbook owns pre-flight,
+runtime identity, review/CI/handoff, required CI, `pack-worker-report`,
+PR-created handoff, review-cycle cap, and worker smoke.
 
 If `pack-worker-report` cannot prove the current repository, worker, PR, and
 head binding, **skip silently** for the report write only and continue the
@@ -172,7 +172,7 @@ Use the named skill on a matching direct request:
 
 | Skill | Trigger |
 |---|---|
-| `investigate-root-cause` | investigate, debug, why failed |
+| [`investigate-root-cause`](.claude/skills/investigate-root-cause/SKILL.md#failure-response) | investigate, debug, why failed |
 | `merge-with-local-adoption` | direct merge request |
 | `adversarial-draft-review` | challenge a draft with Codex |
 | `discuss-with-gpt` | discuss or challenge with GPT |
@@ -182,12 +182,3 @@ Use the named skill on a matching direct request:
 | `switch-pack-reviewer` | change the configured reviewer |
 
 Invocation detail lives in each owning skill body. This table is routing only.
-
-## RCA spec discipline
-
-Root-cause work must identify a recurrence-diagnostic mechanism and stop only
-at a cause whose removal prevents the observed class. Distinguish
-action-producing from observation-only behavior, preserve positive outcomes,
-and mark parked causes explicitly. Follow
-[`.claude/skills/investigate-root-cause/SKILL.md`](.claude/skills/investigate-root-cause/SKILL.md)
-and `prompts/investigate_root_cause.md`.
