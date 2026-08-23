@@ -70,7 +70,7 @@ activation epoch. It owns the existing S1/S2 supervision and review-start
 phases, and after that tick it submits an exact stable Orca poke left unsent in
 a headed Cursor composer. It is not a second scheduler, registry child, or
 composer daemon. Quiet/fingerprint state persists so a restarted tick does not
-lose the 10-second window or resend.
+lose the 5-second window or resend.
 The child derives the canonical repository slug from the `origin` remote under
 its checked-out repository root; it does not require `OPK_REPOSITORY` or
 `GITHUB_REPOSITORY`. Its observer census is scoped to that exact worktree,

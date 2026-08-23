@@ -279,10 +279,9 @@ export function createUnsentComposerWatchState(): UnsentComposerWatchState {
   };
 }
 
-function clearObservation(state: UnsentComposerWatchState, key: string, clearSubmitted: boolean): void {
+function clearObservation(state: UnsentComposerWatchState, key: string): void {
   state.lastFingerprint.delete(key);
   state.lastChangedAt.delete(key);
-  if (clearSubmitted) state.submittedFingerprint.delete(key);
 }
 
 function submitOne(
@@ -301,11 +300,11 @@ function submitOne(
   const preview = shown.lines.join('\n');
   const kind = classifyCursorComposer(preview);
   if (kind === 'empty') {
-    clearObservation(state, key, true);
+    clearObservation(state, key);
     return { ...base, ok: true, unsent: false, enter: false, reason: 'composer_empty' };
   }
   if (kind === 'manual') {
-    clearObservation(state, key, false);
+    clearObservation(state, key);
     return { ...base, ok: true, unsent: false, enter: false, reason: 'manual_input' };
   }
   const fingerprint = composerPokeFingerprint(preview);
