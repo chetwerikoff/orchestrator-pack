@@ -29,7 +29,7 @@ async function fixture() {
   const file = resolveWorkerAssignmentStorePath('orchestrator-pack', { ...process.env, OPK_BASE_DIR: root });
   const published = await publishCurrentWorkerAssignment({
     file, repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1416, taskId: 'task-1416',
-    kind: 'local', provider: 'orca', bindingKey: 'dispatch-1',
+    kind: 'local', provider: 'orca', bindingKey: 'dispatch-1', role: 'worker',
   });
   if (!published.ok) throw new Error(published.reason);
   const base = new DeterministicRuntimeAdapter();
