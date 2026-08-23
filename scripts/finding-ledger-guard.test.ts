@@ -1015,6 +1015,52 @@ describe('Issue #1171 terminal disposition matrix', () => {
   });
 });
 
+describe('receipt-backed occurrence M3 lookup uses capture finding id', () => {
+  it('resolves GitHub-identity occurrences from m3-protected id= finding lines', () => {
+    const findingId = 'SEC1';
+    const reviewName = 'pass-01-architectural-review-01.capture.txt';
+    const captureIdentity = `sha256:83b098b700000000000000000000000000000000000000000000000000000000:${reviewName}`;
+    const occurrenceId = `${captureIdentity}:1`;
+    const githubCapture = cap(reviewName, 1_100, markedFinding(findingId, {
+      type: 'security',
+      evidence: 'A security issue is present in the proposed boundary.',
+    }));
+    const localArchitectural = cap(
+      'pass-02-architectural.capture.txt',
+      1_200,
+      `${markedClean()}\n${currentLens(findingId, { contest: 'none', outcome: 'non-activate' })}`,
+    );
+    const result = checkFindingLedgerGuard(
+      [githubCapture.text, localArchitectural.text],
+      JSON.stringify({
+        version: 2,
+        counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
+        findings: [{
+          id: findingId,
+          summary: 'security boundary',
+          type: 'security',
+          occurrences: [occurrenceId],
+          defectDisposition: 'rejected-as-false',
+          rejectReason: 'the report misread the existing contract',
+          remedyDisposition: 'accepted',
+          'persistent-machinery': 'no',
+        }],
+      }),
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r3',
+        stageTerminalConfirmed: true,
+        captureMetadata: [
+          { name: githubCapture.name, timestampMs: githubCapture.timestampMs, captureIdentity },
+          { name: localArchitectural.name, timestampMs: localArchitectural.timestampMs },
+        ],
+      } as never,
+    );
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+});
+
 describe('legacy finding-ledger behavior remains default', () => {
   it('still rejects protected finding disposition rejected without #975 phase', () => {
     const result = checkFindingLedgerGuard(
