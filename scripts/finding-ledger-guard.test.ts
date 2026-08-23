@@ -459,6 +459,25 @@ describe('finding ledger review economics #975', () => {
       expect(typedStillProtected.errors.join('\n')).toContain('protected signal type: scope-violation present in capture but not addressed in the ledger');
     });
 
+    it('recognizes hyphenated out-of-scope as protected evidence', () => {
+      const result = finalRun(
+        [cap('pass-01-architectural.capture.txt', 1_100, markedFinding('S1', {
+          type: 'scope-violation',
+          evidence: 'The changed path is out-of-scope.',
+          recommendation: 'Keep the implementation within the declared scope.',
+        }))],
+        [row('S1', {
+          type: 'scope-violation',
+          protectedActivation: {
+            authority: 'author',
+            signal: 'The changed path is out-of-scope.',
+            whyNow: 'The current task owns that path change.',
+          },
+        })],
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    });
+
     it('requires architectPending at pre-lens when contest evidence is unknown or stale despite valid author activation', () => {
       const unknown = run(
         [cap('pass-01-architectural.capture.txt', 1_100, nonZero)],
