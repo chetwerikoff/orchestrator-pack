@@ -49,5 +49,5 @@
     "scripts/pr2-foundation/supervised-worker-start.test.ts",
     "scripts/pr2-foundation/supervised-worker-start.ts"
   ],
-  "source_revision": "224e24c37b6e1259565f1cd447d888625f196cd8"
+  "source_revision": "f09198ae6d8840100455521896bce47101e915e4"
 }
