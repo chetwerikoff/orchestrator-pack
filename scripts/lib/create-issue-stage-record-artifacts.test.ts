@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -297,6 +297,26 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
         publisherLogin: PUBLISHER,
       },
     });
+  });
+
+  it('leaves an already-published sibling completeness receipt byte-identical when produce fails', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    mkdirSync(input.outputDir, { recursive: true });
+    const receiptPath = join(input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json');
+    const receiptBytes = Buffer.from(`${JSON.stringify({
+      schema: 'stage-completeness-receipt/v1',
+      stageAttemptId: 'architectural-review-attempt',
+      stage: 'architectural-review',
+    }, null, 2)}\n`);
+    writeFileSync(receiptPath, receiptBytes);
+    const result = produce(input, transport({ census: [] }));
+    expect(result.ok).toBe(false);
+    expect(existsSync(receiptPath)).toBe(true);
+    expect(readFileSync(receiptPath)).toEqual(receiptBytes);
   });
 
   it('requires GitHub artifact authority for complete calls even with an opaque reviewerSource', () => {

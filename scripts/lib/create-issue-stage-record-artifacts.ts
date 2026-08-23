@@ -1509,8 +1509,7 @@ export function canonicalAcceptanceStages(
 const PRODUCED_ARTIFACT_NAMES = new Set<string>(ACCEPTANCE_ARTIFACT_OUTPUT_NAMES);
 
 function isProducedArtifactName(name: string): boolean {
-  return PRODUCED_ARTIFACT_NAMES.has(name)
-    || /^stage-completeness-receipt-[^/\\]+\.json$/.test(name);
+  return PRODUCED_ARTIFACT_NAMES.has(name);
 }
 
 function invalidateOutputArtifacts(outputDir: string): void {
