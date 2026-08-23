@@ -18,6 +18,13 @@ import {
   type StageCompletenessReceiptV1,
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
+import {
+  buildReviewLaneRouting,
+  classifyReviewLaneDeclaration,
+  normalizeReviewLaneDeclaration,
+  settleReviewLane,
+  type ReviewLaneAuthorDeclaration,
+} from './review-lane-routing.ts';
 
 vi.mock('../finding-ledger-guard.mjs', () => ({
   checkFindingLedgerGuard: vi.fn(() => ({ ok: true, errors: [] })),
@@ -951,5 +958,121 @@ describe('Issue #1385 round-two receipt regressions', () => {
     drifted[3]!.invocations![0]!.sourceRevision = 'r05';
     const driftedState = deriveReviewEpisodeState(drifted, relays, episodeAuthority);
     expect(driftedState.errors.join('\n')).toContain('sourceRevision mismatch');
+  });
+});
+
+
+describe('Issue #1556 pre-lens architectural-review routing', () => {
+  it('preserves immutable routing on every reviewer slot and rejects an omission', () => {
+    const prepare = (missingSlot?: string) => {
+      const input = fixture({ transportClassification: 'complete' });
+      rmSync(input.evidencePath);
+
+      writeFileSync(input.intakePath, JSON.stringify({
+        schema: 'tier-intake/v1',
+        producer: 'flow-manager',
+        taskIdentity: TASK,
+        kind: 'fresh',
+        priorTier: 'T3',
+        firstRevision: REVISION,
+        competitiveDecision: 'skipped',
+        competitiveRationale: 'competitive review was skipped for this pre-lens attempt',
+      }));
+
+      const declaration: ReviewLaneAuthorDeclaration = {
+        schema: 'review-lane-change-set/v1',
+        owner: 'issue-author',
+        entries: [{
+          kind: 'exact',
+          path: 'scripts/chatgpt-browser-turn/driver.ts',
+          behaviors: ['pure-review-lane-selection'],
+        }],
+      };
+      const normalized = normalizeReviewLaneDeclaration(declaration);
+      if (normalized.status !== 'usable') throw new Error('routing fixture input must be usable');
+      const routing = buildReviewLaneRouting(
+        { ...normalized, identity: `${REVISION}:${normalized.identity}` },
+        classifyReviewLaneDeclaration(declaration),
+        REVISION,
+        'architectural-review-attempt',
+        'disputed',
+      );
+      const sourceVerdicts = { '01': 'accept' as const, '02': 'accept' as const, '03': 'accept' as const };
+      const settlement = settleReviewLane(routing, sourceVerdicts);
+      const sourceVerdictEvidence = Object.fromEntries(input.reviewComments.map((reviewComment, index) => {
+        const slot = String(index + 1).padStart(2, '0');
+        const name = `pass-01-architectural-review-${slot}.capture.txt`;
+        const body = String(reviewComment.body);
+        const digest = createHash('sha256').update(body).digest('hex');
+        return [slot, {
+          producerEvidenceIdentity: `architectural-review-producer-${slot}`,
+          captureIdentity: `sha256:${digest}:${name}`,
+          terminalClassification: 'complete',
+          captureVerified: true,
+          digestMatches: true,
+          verdictText: 'NO_FINDINGS',
+          rawFindingCount: 0,
+        }];
+      }));
+      const reviewLane = {
+        routing,
+        finalRequiredSlots: settlement.finalRequiredSlots,
+        sourceVerdicts,
+        sourceVerdictEvidence,
+        conflictDecision: settlement.conflictDecision,
+        settlement,
+      };
+      const evidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, unknown>;
+      evidence.tier = 'T3';
+      evidence.policyVersion = 'review-lane-routing/v1';
+      evidence.reviewerCardinality = routing.reviewerCardinality;
+      evidence.cardinalityConfigIdentity = routing.cardinalityConfigIdentity;
+      evidence.reviewLane = reviewLane;
+      evidence.invocations = (evidence.invocations as Array<Record<string, unknown>>).map((invocation) => ({
+        ...invocation,
+        policyVersion: 'review-lane-routing/v1',
+        reviewerCardinality: routing.reviewerCardinality,
+        cardinalityConfigIdentity: routing.cardinalityConfigIdentity,
+        ...(String(invocation.reviewerSlot) === missingSlot ? {} : { reviewLaneRouting: routing }),
+      }));
+      writeFileSync(input.reviewEvidencePath, JSON.stringify(evidence));
+
+      return {
+        input,
+        source: transport({ census: [...input.reviewComments, comment(input.body)] }),
+        reviewLane,
+      };
+    };
+    const producePreLens = ({ input, source }: ReturnType<typeof prepare>) => produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: input.outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.reviewEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'pre-lens',
+      artifactSourceTransport: source,
+    });
+
+    const prepared = prepare();
+    const result = producePreLens(prepared);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(readFileSync(join(
+      prepared.input.outputDir,
+      'stage-completeness-receipt-architectural-review-attempt.json',
+    ), 'utf8'));
+    expect(receipt).toMatchObject({
+      policyVersion: 'review-lane-routing/v1',
+      reviewLane: prepared.reviewLane,
+    });
+    expect(receipt.invocations).toHaveLength(3);
+    expect(receipt.invocations.map((invocation: { reviewerSlot: string }) => invocation.reviewerSlot))
+      .toEqual(['01', '02', '03']);
+    for (const invocation of receipt.invocations) {
+      expect(invocation.reviewLaneRouting).toEqual(receipt.reviewLane.routing);
+    }
+
+    const missingRoute = producePreLens(prepare('02'));
+    expect(missingRoute.ok).toBe(false);
+    expect(missingRoute.errors.join('\n')).toContain('missing immutable reviewLaneRouting evidence');
   });
 });
