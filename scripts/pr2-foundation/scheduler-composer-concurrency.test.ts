@@ -34,6 +34,23 @@ function composerDeps(submitted: string[]): UnsentComposerSubmitDeps {
   };
 }
 
+function changingComposerDeps(submitted: string[]): UnsentComposerSubmitDeps {
+  let reads = 0;
+  return {
+    ...composerDeps(submitted),
+    read: () => {
+      reads += 1;
+      return {
+        ok: true,
+        lines: reads > 1
+          ? ['→ changed orchestration payload', ...CURSOR_SCREEN.slice(1)]
+          : CURSOR_SCREEN,
+        source: 'screen',
+      };
+    },
+  };
+}
+
 describe('scheduler/composer concurrency settlement', () => {
   it.each([
     ['fast', () => Promise.resolve()],
@@ -50,6 +67,24 @@ describe('scheduler/composer concurrency settlement', () => {
       ]);
       await vi.advanceTimersByTimeAsync(QUIET_AFTER_PRINT_MS);
       expect(submitted).toEqual(['enter']);
+      const settled = await phases;
+      expect(settled[1]?.status).toBe('fulfilled');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the changed-second-read follow-up independent of a slow fleet phase', async () => {
+    vi.useFakeTimers();
+    try {
+      const submitted: string[] = [];
+      const phases = Promise.allSettled([
+        new Promise<void>((_, reject) => setTimeout(() => reject(new Error('fleet timeout')), 15_000)),
+        runSupervisorUnsentComposerTick(changingComposerDeps(submitted), createUnsentComposerWatchState()),
+      ]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(submitted).toEqual(['enter']);
+      await vi.advanceTimersByTimeAsync(5_000);
       const settled = await phases;
       expect(settled[1]?.status).toBe('fulfilled');
     } finally {

@@ -226,6 +226,29 @@ describe('submitUnsentCursorComposer', () => {
     }
   });
 
+  it('sleeps only for the remaining persisted quiet window', async () => {
+    vi.useFakeTimers();
+    try {
+      const submitted: RuntimeWorkerIdentity[] = [];
+      const state = createUnsentComposerWatchState();
+      const identity = worker('term_unsent').identity;
+      state.lastFingerprint.set(workerKey(identity), POKE);
+      state.lastChangedAt.set(workerKey(identity), Date.now() - 4_000);
+      const deps = depsFor(
+        { term_unsent: [POKE, ...CURSOR_FOOTER] },
+        { submitted },
+      );
+      const pass = runSupervisorUnsentComposerTick(deps, state);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(submitted).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      await pass;
+      expect(submitted).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('uses rendered screen observation when stream output omits the composer', () => {
     const identity = worker('term_production').identity;
     const reads: Array<{ screen?: boolean }> = [];

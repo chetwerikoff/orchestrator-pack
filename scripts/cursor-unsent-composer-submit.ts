@@ -472,10 +472,22 @@ export async function runSupervisorUnsentComposerTick(
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
 ): Promise<UnsentComposerSubmitResult> {
   const deps = providedDeps ?? createAdapterSubmitDeps(await selectRuntimeAdapter());
-  const first = submitUnsentCursorComposer({ watch: true }, deps, state);
-  if (!first.terminals.some((row) => row.reason === 'waiting_stable')) return first;
-  await new Promise<void>((resolve) => setTimeout(resolve, QUIET_AFTER_PRINT_MS));
-  return submitUnsentCursorComposer({ watch: true }, deps, state);
+  let result = submitUnsentCursorComposer({ watch: true }, deps, state);
+  for (let followUp = 0; followUp < 2; followUp += 1) {
+    if (!result.terminals.some((row) => row.reason === 'waiting_stable')) return result;
+    const now = deps.now?.() ?? Date.now();
+    const remaining = result.terminals
+      .filter((row) => row.reason === 'waiting_stable')
+      .map((row) => {
+        const key = [...state.lastChangedAt.keys()]
+          .find((candidate) => candidate.endsWith(`\u0000${row.terminal}\u0000${row.generation}`));
+        return Math.max(0, QUIET_AFTER_PRINT_MS - (now - (key ? (state.lastChangedAt.get(key) ?? now) : now)));
+      });
+    const delay = Math.max(1, Math.min(...remaining, QUIET_AFTER_PRINT_MS));
+    await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    result = submitUnsentCursorComposer({ watch: true }, deps, state);
+  }
+  return result;
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
