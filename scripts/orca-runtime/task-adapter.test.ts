@@ -423,6 +423,29 @@ describe('Orca assignment resolution', () => {
 });
 
 describe('Issue #1489 rendered screen observation', () => {
+  it('accepts a cursorless screen frame and preserves its source witness', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      if (args[0] === 'terminal' && args[1] === 'show') return {
+        ok: true,
+        result: { terminal: { handle: 'screen-terminal', incarnationId: 'screen-generation', worktreePath: '/tmp/screen', status: 'running' } },
+      };
+      return {
+        ok: true,
+        result: { terminal: { handle: 'screen-terminal', status: 'running', tail: ['visible'], nextCursor: null, source: 'screen' } },
+      };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    const result = adapter.readBoundedOutput({
+      worker: { runtime: 'orca', id: 'screen-terminal', generation: 'screen-generation' },
+      screen: true,
+    });
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') {
+      expect(result.value.source).toBe('screen');
+      expect(result.value.lines).toEqual(['visible']);
+    }
+  });
+
   it('requests --screen and rejects a stream fallback', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       if (args[0] === 'terminal' && args[1] === 'show') return {

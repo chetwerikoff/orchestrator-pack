@@ -251,7 +251,9 @@ function normalizeTerminalRead(
     if (requireScreen && source !== 'screen') {
       return runtimeUnsupported('read_bounded_output', 'runtime_output_source_unobservable');
     }
-    const nativeCursor = current.nextCursor ?? current.latestCursor ?? null;
+    const nativeCursor = source === 'screen'
+      ? 'screen-frame'
+      : current.nextCursor ?? current.latestCursor ?? null;
     if (nativeCursor === null) {
       return runtimeUnsupported('read_bounded_output', 'runtime_output_progress_unavailable');
     }
@@ -274,13 +276,13 @@ function normalizeTerminalRead(
       && typeof result.nextCursor !== 'number')) {
     return runtimeUnsupported('read_bounded_output', 'runtime_output_shape_unsupported');
   }
-  if (result.nextCursor === null) {
-    return runtimeUnsupported('read_bounded_output', 'runtime_output_progress_unavailable');
-  }
   const resultSource = (result as { source?: unknown }).source;
   const source = resultSource === 'screen' || resultSource === 'stream' || resultSource === 'unknown'
     ? resultSource
     : 'unknown';
+  if (result.nextCursor === null && source !== 'screen') {
+    return runtimeUnsupported('read_bounded_output', 'runtime_output_progress_unavailable');
+  }
   if (requireScreen && source !== 'screen') {
     return runtimeUnsupported('read_bounded_output', 'runtime_output_source_unobservable');
   }
@@ -288,7 +290,7 @@ function normalizeTerminalRead(
     status: 'ok',
     value: {
       lines: result.lines,
-      nativeCursor: String(result.nextCursor),
+      nativeCursor: source === 'screen' ? 'screen-frame' : String(result.nextCursor),
       terminalState: 'unknown',
       source,
     },

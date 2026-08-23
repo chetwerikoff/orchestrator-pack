@@ -431,10 +431,13 @@ function installLockRelease(): void {
   });
 }
 
-export function createAdapterSubmitDeps(adapter: RuntimeAdapter): UnsentComposerSubmitDeps {
+export function createAdapterSubmitDeps(
+  adapter: RuntimeAdapter,
+  listWorkspaces: () => OrcaJsonResponse<unknown> = () => runOrcaJson(['worktree', 'list']),
+): UnsentComposerSubmitDeps {
   return {
     listWorkers: () => {
-      const selectors = workspaceSelectorsFromList(runOrcaJson(['worktree', 'list']));
+      const selectors = workspaceSelectorsFromList(listWorkspaces());
       const workers: RuntimeWorker[] = [];
       const seen = new Set<string>();
       for (const workspace of selectors) {
