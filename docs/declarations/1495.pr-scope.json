@@ -4,12 +4,22 @@
   "declared_paths": [
     "docs/migration_notes.md",
     "docs/orchestration-runbook.md",
+    "scripts/invoke-worker-recovery.test.ts",
+    "scripts/lib/worker-assignment-runtime.test.ts",
     "scripts/lib/worker-assignment-store.test.ts",
     "scripts/lib/worker-assignment-store.ts",
+    "scripts/pack-worker-report.test.ts",
+    "scripts/pr2-foundation/post-review-smoke-preaction.test.ts",
+    "scripts/pr2-foundation/post-review-smoke-race.test.ts",
+    "scripts/pr2-foundation/post-review-smoke.test.ts",
     "scripts/pr2-foundation/remote-worker-assignment.test.ts",
     "scripts/pr2-foundation/remote-worker-assignment.ts",
+    "scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts",
+    "scripts/pr2-foundation/scheduler-post-review-smoke.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/supervised-worker-start.test.ts",
-    "scripts/pr2-foundation/supervised-worker-start.ts"
+    "scripts/pr2-foundation/supervised-worker-start.ts",
+    "scripts/runtime/worker-recovery.test.ts"
   ],
   "denylist": [
     ".agent-orchestrator/",
@@ -34,7 +44,6 @@
     "scripts/pr2-foundation/fleet-reconciliation-handoff.test.ts",
     "scripts/pr2-foundation/fleet-reconciliation-handoff.ts",
     "scripts/pr2-foundation/scheduler.ts",
-    "scripts/runtime/",
     "scripts/vitest-ci-lanes.config.json",
     "secrets/",
     "vendor/"
@@ -42,12 +51,22 @@
   "allowed_roots": [
     "docs/migration_notes.md",
     "docs/orchestration-runbook.md",
+    "scripts/invoke-worker-recovery.test.ts",
+    "scripts/lib/worker-assignment-runtime.test.ts",
     "scripts/lib/worker-assignment-store.test.ts",
     "scripts/lib/worker-assignment-store.ts",
+    "scripts/pack-worker-report.test.ts",
+    "scripts/pr2-foundation/post-review-smoke-preaction.test.ts",
+    "scripts/pr2-foundation/post-review-smoke-race.test.ts",
+    "scripts/pr2-foundation/post-review-smoke.test.ts",
     "scripts/pr2-foundation/remote-worker-assignment.test.ts",
     "scripts/pr2-foundation/remote-worker-assignment.ts",
+    "scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts",
+    "scripts/pr2-foundation/scheduler-post-review-smoke.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/supervised-worker-start.test.ts",
-    "scripts/pr2-foundation/supervised-worker-start.ts"
+    "scripts/pr2-foundation/supervised-worker-start.ts",
+    "scripts/runtime/worker-recovery.test.ts"
   ],
   "source_revision": "f09198ae6d8840100455521896bce47101e915e4"
 }
