@@ -21,7 +21,7 @@ import {
 const UNBOXED_BOX_CHROME = /^[▀▄]+$/u;
 const UNBOXED_CTRL_C = /^ctrl\+c to stop\b/iu;
 const UNBOXED_STATUS_FOOTER = /^(?:Cursor|GPT-\S+|Composer)\s.+(?:\d+(?:\.\d+)?%|Run Everything)/iu;
-const UNBOXED_CWD_FOOTER = /^~\//u;
+const UNBOXED_CWD_FOOTER = /^(?:~[/\\]|[A-Za-z]:[\\/]|\/)/u;
 const EMPTY_COMPOSER = /^(?:→\s*)?Add a follow-up\b/iu;
 const LONE_ARROW = /^→$/u;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;

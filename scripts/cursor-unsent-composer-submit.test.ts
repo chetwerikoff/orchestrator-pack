@@ -164,6 +164,17 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 `)).toBe('non_empty');
   });
 
+  it.each([
+    ['Windows', 'C:\\Users\\dev\\repo · main'],
+    ['absolute Unix', '/workspaces/repo · main'],
+  ])('recognizes an unboxed Cursor composer with a %s cwd footer', (_platform, cwdFooter) => {
+    expect(classifyCursorComposer([
+      POKE,
+      'Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything',
+      cwdFooter,
+    ].join('\n'))).toBe('non_empty');
+  });
+
   it('does not strip unboxed user text that only starts like Cursor footer chrome', () => {
     const footer = CURSOR_FOOTER.join('\n');
     expect(classifyCursorComposer(`${POKE}\nCursor please keep this\n${footer}`)).toBe('non_empty');
