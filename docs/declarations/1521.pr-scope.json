@@ -19,5 +19,5 @@
     "scripts/lib/create-issue-stage-record-artifacts.test.ts",
     "scripts/lib/create-issue-stage-record-artifacts.ts"
   ],
-  "source_revision": "0233b50039ffa4583f05f09f3ea432eb4cd32d0f"
+  "source_revision": "b3db4a5c8f5a5944760c1b3d6bb92b99fe7ead2c"
 }
