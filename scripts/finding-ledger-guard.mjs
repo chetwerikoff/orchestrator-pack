@@ -512,6 +512,7 @@ function legacyCheck(captures, ledger, errors) {
   return occurrences;
 }
 
+/** @param {unknown} captureOrCaptures @param {string} ledgerText @param {{ phase?: 'pre-lens'|'post-lens'|'final-acceptance', [key: string]: unknown }} options */
 export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options = {}) {
   const remoteInputs = options.remoteAuthorities ?? (options.remoteAuthority ? [options.remoteAuthority] : []);
   if (options.requireRemoteAuthority === true) {
@@ -538,7 +539,7 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
   let episodeState;
   if (options.stageReceipts !== undefined) {
     episodeState = deriveReviewEpisodeState(options.stageReceipts, options.verifiedRelayEvidence ?? [], options.episodeAuthority);
-    errors.push(...episodeState.errors); errors.push(...validateReviewEpisodeTopology(episodeState, options.phase ?? 'final-acceptance'));
+    errors.push(...episodeState.errors); errors.push(...validateReviewEpisodeTopology(episodeState, /** @type {'pre-lens'|'post-lens'|'final-acceptance'} */ (options.phase ?? 'final-acceptance')));
     metadata = bindGovernedCaptureBytes(captures, metadata, episodeState, errors);
   } else if (options.enforceT3PreLensTopology === true) errors.push('review-economics: fresh T3 requires explicit stage-completeness-receipt/v1 authority');
   const occurrences = buildOccurrences(captures, metadata); validateGlobalProtectedFloor(captures, ledger.findings, errors); let economicsCounts;
