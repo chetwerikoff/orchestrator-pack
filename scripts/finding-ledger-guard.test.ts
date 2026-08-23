@@ -440,7 +440,7 @@ describe('finding ledger review economics #975', () => {
       const specProse = run(
         [cap('pass-01-architectural.capture.txt', 1_100, markedFinding('Q1', {
           type: 'spec',
-          evidence: 'Files out of scope. The denylist already names vendor/**.',
+          evidence: 'Files out of scope. The denylist already names vendor/**. No type: scope-violation finding exists.',
           recommendation: 'Keep the denylist; do not invent a scope-violation row.',
         }))],
         [row('Q1', { type: 'spec' })],

@@ -160,7 +160,7 @@ export function mergeCaptureFindings(captures) { return { findings: captures.fla
 export function detectProtectedSignalsInCapture(capture) {
   const text = extractFindingsScanText(capture);
   return Object.entries(PROTECTED_PATTERNS).filter(([type, patterns]) => {
-    const matchers = type === 'scope-violation' ? [/\btype:\s*scope-violation\b/i] : patterns;
+    const matchers = type === 'scope-violation' ? [/^\s*type:\s*scope-violation\b/im] : patterns;
     return matchers.some((pattern) => pattern.test(text));
   }).map(([type]) => type);
 }
