@@ -39,7 +39,36 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-type AsyncExecError = Error & { readonly code?: string | number };
+type AsyncExecError = Error & {
+  readonly code?: string | number;
+  readonly stdout?: string | Buffer;
+  readonly stderr?: string | Buffer;
+};
+
+function parseOrcaJsonOutput<T>(
+  stdout: string | Buffer,
+  operation: OrcaJsonResponse['operation'],
+): OrcaJsonResponse<T> {
+  const normalized = String(stdout).trim();
+  try {
+    const parsed = JSON.parse(normalized) as OrcaJsonResponse<T>;
+    if (parsed.ok) return { ...parsed, operation };
+    return {
+      ...parsed,
+      operation,
+      outcomeCategory: isOrcaSmokeControlPlaneCode(parsed.error?.code)
+        ? 'recognized_control_plane_code'
+        : 'supported_operation_failure',
+    };
+  } catch {
+    return {
+      ok: false,
+      operation,
+      outcomeCategory: 'invalid_json',
+      error: { code: 'orca_invalid_json', message: normalized.slice(0, 500) },
+    };
+  }
+}
 
 async function runOrcaJsonAsync<T>(
   args: readonly string[],
@@ -58,6 +87,22 @@ async function runOrcaJsonAsync<T>(
     }) as { stdout: string | Buffer; stderr: string | Buffer };
   } catch (error) {
     const failure = error as AsyncExecError;
+    const stdout = failure.stdout === undefined ? '' : String(failure.stdout).trim();
+    const childExited = typeof failure.code === 'number';
+    if (failure.code !== 'ETIMEDOUT' && failure.stdout !== undefined && (stdout || childExited)) {
+      if (!stdout) {
+        return {
+          ok: false,
+          operation,
+          outcomeCategory: 'empty_stdout',
+          error: {
+            code: 'orca_empty_stdout',
+            message: String(failure.stderr ?? '').trim() || `orca ${args.join(' ')} produced no output`,
+          },
+        };
+      }
+      return parseOrcaJsonOutput<T>(stdout, operation);
+    }
     return {
       ok: false,
       operation,
@@ -72,13 +117,7 @@ async function runOrcaJsonAsync<T>(
   }
   const stdout = String(result.stdout ?? '').trim();
   if (!stdout) return { ok: false, operation, outcomeCategory: 'empty_stdout', error: { code: 'orca_empty_stdout', message: String(result.stderr ?? '').trim() || `orca ${args.join(' ')} produced no output` } };
-  try {
-    const parsed = JSON.parse(stdout) as OrcaJsonResponse<T>;
-    if (parsed.ok) return { ...parsed, operation };
-    return { ...parsed, operation, outcomeCategory: isOrcaSmokeControlPlaneCode(parsed.error?.code) ? 'recognized_control_plane_code' : 'supported_operation_failure' };
-  } catch {
-    return { ok: false, operation, outcomeCategory: 'invalid_json', error: { code: 'orca_invalid_json', message: stdout.slice(0, 500) } };
-  }
+  return parseOrcaJsonOutput<T>(stdout, operation);
 }
 
 export interface OrcaRuntimeAdapterOptions extends OrcaRunOptions {
