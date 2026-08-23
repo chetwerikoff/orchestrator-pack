@@ -219,6 +219,27 @@ function fixture(file: string): FixtureState {
   return JSON.parse(readFileSync(file, 'utf8')) as FixtureState;
 }
 
+function waitForDispatches(file: string, count: number, timeoutMs = 30_000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    const timer = setInterval(() => {
+      try {
+        if ((fixture(file).dispatches?.length ?? 0) >= count) {
+          clearInterval(timer);
+          resolve();
+          return;
+        }
+      } catch {
+        // The fixture is being replaced by the child process; observe its next complete state.
+      }
+      if (Date.now() >= deadline) {
+        clearInterval(timer);
+        reject(new Error('timed out waiting for dispatches'));
+      }
+    }, 20);
+  });
+}
+
 function processEnv(root: string, fixturePath: string, epochPath: string, configPath: string, epochId: string, nonce: string): NodeJS.ProcessEnv {
   const runtimeCli = installOrcaFixture(root);
   return {
@@ -344,7 +365,7 @@ describe('scheduler bounded-child production composition', () => {
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1, maxConcurrency: 2 }));
     writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatches: [] }));
     writeEpoch(epochPath, 'epoch-1420', 'nonce-1420'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-1420', 'nonce-1420'); await publishLocal(env);
-    const first = await runTick(env); const second = await runTick(env); expect(fixture(fixturePath).dispatches).toHaveLength(1); const third = await runTick(env); expect(fixture(fixturePath).dispatches).toHaveLength(1);
+    const first = await runTick(env); const second = await runTick(env); await waitForDispatches(fixturePath, 1); expect(fixture(fixturePath).dispatches).toHaveLength(1); const third = await runTick(env); expect(fixture(fixturePath).dispatches).toHaveLength(1);
     const firstObserver = observerResult(first); const secondObserver = observerResult(second); const thirdObserver = observerResult(third);
     expect(firstObserver.schedulerGeneration).toBe(secondObserver.schedulerGeneration); expect(secondObserver.schedulerGeneration).toBe(thirdObserver.schedulerGeneration); expect([firstObserver.tickSequence, secondObserver.tickSequence, thirdObserver.tickSequence]).toEqual([1, 2, 3]);
     const secondNudge = schedulerResult(second).fleetNudge as Record<string, unknown>; expect(secondNudge.dispatched).toBe(0); expect(secondNudge.sendAttempts).toBe(1); const secondOutcomes = secondNudge.outcomes as Array<Record<string, unknown>>; expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true); const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>; expect(thirdNudge.dispatched).toBe(0);

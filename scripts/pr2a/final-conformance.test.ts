@@ -6,7 +6,6 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -127,7 +126,14 @@ function waitForCondition(predicate: () => boolean, timeoutMs = 30_000): Promise
   });
 }
 function waitForFiles(paths: string[], timeoutMs = 30_000): Promise<void> {
-  return waitForCondition(() => paths.every((file) => existsSync(file) && statSync(file).size > 0), timeoutMs);
+  return waitForCondition(() => paths.every((file) => {
+    try {
+      const value = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+      return value !== null && typeof value === 'object' && !Array.isArray(value);
+    } catch {
+      return false;
+    }
+  }), timeoutMs);
 }
 
 function spawnTsClaim(namespace: string, resultPath: string, startPath: string, releasePath: string): void {
