@@ -39,6 +39,7 @@ async function publish(file: string, input: {
     kind: input.kind ?? 'local',
     provider: input.provider ?? 'orca',
     bindingKey: input.bindingKey,
+    role: 'worker',
   });
   if (!result.ok) throw new Error(result.reason);
   return result.assignment;
