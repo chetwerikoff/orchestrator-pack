@@ -2,12 +2,8 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1506,
   "declared_paths": [
-    "scripts/check-gh-inventory-static.ps1",
-    "scripts/lib/gh-inventory-match.mjs",
-    "scripts/lib/gh-inventory-static-guard.mjs",
-    "scripts/lib/gh-rest-routes.mjs",
-    "scripts/lib/gh-wrapper.mjs",
-    "scripts/lib/graphql-quota-github-read-inventory.json"
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts"
   ],
   "denylist": [
     "credentials/",
@@ -24,7 +20,9 @@
     "scripts/lib/gh-inventory-static-guard.mjs",
     "scripts/lib/gh-rest-routes.mjs",
     "scripts/lib/gh-wrapper.mjs",
-    "scripts/lib/graphql-quota-github-read-inventory.json"
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts"
   ],
-  "source_revision": "da5f87b68d05ebab211489c961aa3d54a09e313e"
+  "source_revision": "2f32d4b9a8ae85d1e706c31b1c0d5caa95ddec01"
 }
