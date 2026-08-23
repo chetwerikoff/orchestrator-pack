@@ -26,10 +26,29 @@ const golden = JSON.parse(
 ) as { version: number; baseCommitSha: string; captures: Capture[] };
 
 const movedClean = {
-  'AGENTS.md': '## Coworker CLI delegation\n## RTK read-exploration\n## RCA spec discipline',
+  'AGENTS.md': [
+    '## Coworker CLI delegation',
+    '## RTK read-exploration',
+    '[Worker lifecycle](docs/orchestration-runbook.md#worker-lifecycle)',
+    '[Task and scope authority](docs/repository_policy.md#task-and-scope-authority)',
+    '[Local verification](docs/repository_policy.md#local-verification)',
+    '[Failure response](.claude/skills/investigate-root-cause/SKILL.md#failure-response)',
+  ].join('\n'),
+  'CLAUDE.md': [
+    '[Architect role contract](.claude/skills/direct-fix-checklist/SKILL.md#architect-role-contract)',
+    '[Draft-author relocation](.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation)',
+    '[Failure response](.claude/skills/investigate-root-cause/SKILL.md#failure-response)',
+  ].join('\n'),
   'docs/coworker-delegation.md': 'PR diff recipe\ngit diff <base-ref>...HEAD > /tmp/review.diff\nRoot-cause work must read ~900 lines',
   'docs/tiering.md': '## Task complexity tier rubric\n### Failure-type lens (apply first)\n## Per-tier draft-review flow\n### Per-tier pipeline (ceilings, not quotas)',
   'docs/script-owned-review-pipeline.md': '## Event-driven review trigger\n## Orchestrator review-run coverage\n## Head ready for review\nevent-driven review trigger',
+  'docs/orchestration-runbook.md': '## Worker lifecycle',
+  'docs/repository_policy.md': '## Task and scope authority\n## Local verification',
+  '.claude/skills/investigate-root-cause/SKILL.md': '## Failure response',
+  '.claude/skills/direct-fix-checklist/SKILL.md': '## Architect role contract',
+  '.claude/skills/discuss-with-gpt/SKILL.md': '## Draft-author relocation',
+  '.cursor/rules/draft-author-relocation.mdc': '[Draft-author relocation](../../.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation)',
+  '.cursor/rules/flow-manager-browser-turn-monitoring.mdc': '## Launch and observation\n## Legacy state and diagnostic probe',
 };
 
 function stableReader(files: Readonly<Record<string, string>>): CaptureReader {
