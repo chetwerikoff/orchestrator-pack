@@ -365,7 +365,14 @@ function resolveOccurrenceM3History(occurrenceId, records, issueRevision, errors
   }
   return { current, latest: current.at(-1) ?? null, invalid: false };
 }
-function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors }) {
+function captureIdRowCount(occurrence, ledger, occurrenceMap) {
+  return ledger.findings.filter((candidate) => candidate.occurrences.some((id) => occurrenceMap.get(id)?.id === occurrence.id)).length;
+}
+function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors, ledger, occurrenceMap }) {
+  if (captureIdRowCount(occurrence, ledger, occurrenceMap) > 1) {
+    errors.push(`review-economics: protected finding ${occurrence.occurrenceId} has ambiguous capture finding id ${occurrence.id}`);
+    return;
+  }
   const history = resolveOccurrenceM3History(occurrence.occurrenceId, m3Records.get(occurrence.id) ?? m3Records.get(occurrence.occurrenceId) ?? [], issueRevision, errors);
   if (history.invalid) return;
   const current = history.current; const record = history.latest; const activation = state.protectedActivation;
@@ -402,7 +409,7 @@ function validateOccurrenceM3(ledger, occurrenceMap, captures, metadata, phase, 
       let state = explicit.get(occurrence.occurrenceId);
       if (!state && protectedOccurrences.length === 1) state = { occurrenceId: occurrence.occurrenceId, architectPending: row.architectPending, architectRequired: row.architectRequired, protectedActivation: row.protectedActivation };
       if (!state) { errors.push(`review-economics: grouped protected distinct defect ${row.id} requires explicit occurrence-level M3 state for ${occurrence.occurrenceId}`); continue; }
-      validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors });
+      validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors, ledger, occurrenceMap });
     }
   }
 }
