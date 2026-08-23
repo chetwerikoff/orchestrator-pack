@@ -1024,6 +1024,37 @@ describe('Issue #1171 terminal disposition matrix', () => {
     expect(result.errors.join('\n')).toContain('blocked_terminal_findings');
   });
 
+  it('allows an activated protected terminal defect marked addressed', () => {
+    const capture = cap('pass-03-architectural.capture.txt', 1_300, `${markedFinding('F1', {
+      type: 'scope-violation',
+      evidence: 'The changed path is out of scope under allowed_roots.',
+    })}
+${currentLens('F1', {
+      outcome: 'activate',
+      evidence: 'The changed path is out of scope under allowed_roots.',
+      whyNow: 'The current revision requires this protected defect to be addressed.',
+    })}`);
+    const result = checkFindingLedgerGuard(capture.text, JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
+      findings: [{
+        ...row('F1', {
+          type: 'scope-violation',
+          defectDisposition: 'addressed',
+          remedyDisposition: 'accepted',
+        }),
+        occurrences: ['F1@0:1'],
+      }],
+    }), {
+      reviewEconomics: true,
+      phase: 'final-acceptance',
+      issueRevision: 'r3',
+      stageTerminalConfirmed: true,
+      captureMetadata: [{ name: capture.name, timestampMs: capture.timestampMs }],
+    } as never);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
   it('requires defect-side evidence for rejected-as-false terminal disposition', () => {
     const result = terminalLedger(row('F1', {
       defectDisposition: 'rejected-as-false',
