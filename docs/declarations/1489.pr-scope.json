@@ -45,5 +45,5 @@
     "scripts/runtime/test-adapter.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "b47f086c0f9b27065f69a6fdaaf1d5d97eb8510c"
+  "source_revision": "ec59fe5c767564bff00bb144b31c61c6d54fb22a"
 }
