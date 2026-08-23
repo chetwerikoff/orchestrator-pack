@@ -18,5 +18,5 @@
     "scripts/finding-ledger-guard.mjs",
     "scripts/finding-ledger-guard.test.ts"
   ],
-  "source_revision": "c1b4b926ced7e1a173ec91ae630e5825041d7cdf"
+  "source_revision": "b7aab2a0aabebbe9ada8647bf02bd7d68d000c48"
 }
