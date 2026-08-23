@@ -739,7 +739,7 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
     && !configuredSnapshotStore;
 
   if (legacyHarnessDirectBody) {
-    body = input.fixtureIssueBody;
+    body = input.fixtureIssueBody!;
     snapshotDigest = computeBoundIssueSnapshotHash(body);
   } else if (issueNumber > 0) {
     let resolvedSnapshot = resolveBoundIssueSnapshot({
@@ -2455,16 +2455,28 @@ async function commitAtCapTriage(input: {
     let issueBody = input.start.fixtureIssueBody;
     let boundIssueSnapshotBytes = input.start.fixtureBoundIssueSnapshotBytes;
     if (issueBody === undefined) {
-      const snapshotPath = trim(process.env.OPK_BOUND_ISSUE_SNAPSHOT_PATH);
-      if (!snapshotPath || !existsSync(snapshotPath) || !input.target.issueNumber) {
+      if (!input.target.issueNumber) throw new Error('bound issue snapshot unavailable');
+      const configuredSnapshotPath = trim(process.env.OPK_BOUND_ISSUE_SNAPSHOT_PATH);
+      const resolvedSnapshot = resolveBoundIssueSnapshot({
+        projectId: input.projectId,
+        prNumber: input.target.prNumber,
+        prHeadSha: input.target.headSha,
+        issueNumber: input.target.issueNumber,
+        storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+      });
+      if (resolvedSnapshot.status !== 'found' || !resolvedSnapshot.snapshotPath) {
         throw new Error('bound issue snapshot unavailable');
+      }
+      if (configuredSnapshotPath
+          && resolve(configuredSnapshotPath) !== resolve(resolvedSnapshot.snapshotPath)) {
+        throw new Error('configured bound issue snapshot does not match authoritative artifact');
       }
       const snapshot = loadValidatedBoundSnapshotBody({
         projectId: input.projectId,
         prNumber: input.target.prNumber,
         prHeadSha: input.target.headSha,
         issueNumber: input.target.issueNumber,
-        snapshotFilePath: snapshotPath,
+        snapshotFilePath: configuredSnapshotPath || resolvedSnapshot.snapshotPath,
         storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
       });
       issueBody = snapshot.body;
@@ -2816,6 +2828,8 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
 
+    carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
+    const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
     const roundOrdinal = (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
     const cardinality = selectPackReviewGptSourceCardinality({
       reviewer: reviewer ?? 'codex',
@@ -2823,6 +2837,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       roundOrdinal,
     });
     const gptRound: PackReviewGptRoundRecord | undefined = reviewer === 'gpt'
+      && !conflictFreeCarryover
       && (authoritative.snapshotDigest !== 'harness-unbound-fixture'
         || input.tier !== undefined
         || process.env.OPK_VITEST_HARNESS !== '1')
@@ -3059,7 +3074,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       worktree = await createReviewWorktree(target.sourceRepoRoot, storeRoot, run.id, target.headSha);
     }
     updatePackReviewRun(run.id, { reviewTargetRoot: worktree }, { projectId, storeRoot });
-    carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
     if (carryover?.replay.kind === 'merge_composite' && carryover.replay.bundle) {
       carryoverBundlePath = join(worktree, 'pack-review-carryover-bundle.json');
       writeFileSync(carryoverBundlePath, `${JSON.stringify(carryover.replay.bundle)}\n`, { encoding: 'utf8', mode: 0o600 });
