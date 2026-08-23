@@ -239,7 +239,7 @@ describe('submitUnsentCursorComposer', () => {
     expect(result.terminals[0]?.reason).toBe('manual_input');
   });
 
-  it('waits 10s after the poke stops changing and does not resend', () => {
+  it('waits 5s after the poke stops changing and does not resend', () => {
     const submitted: RuntimeWorkerIdentity[] = [];
     const state = createUnsentComposerWatchState();
     let now = 0;
@@ -362,7 +362,7 @@ describe('submitUnsentCursorComposer', () => {
     expect(submitted).toHaveLength(2);
   });
 
-  it('keeps the 10s quiet window across a fresh scheduler tick process', () => {
+  it('keeps the 5s quiet window across a fresh scheduler tick process', () => {
     const sentStorePath = join(tmpdir(), `opk-unsent-watch-${process.pid}-${Date.now()}.json`);
     const submitted: RuntimeWorkerIdentity[] = [];
     let now = 0;

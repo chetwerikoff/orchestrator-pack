@@ -28,7 +28,7 @@ const MACHINE_POKE = /^You have \d+ orchestration messages?\. Run `orca orchestr
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
-export const QUIET_AFTER_PRINT_MS = 10_000;
+export const QUIET_AFTER_PRINT_MS = 5_000;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
