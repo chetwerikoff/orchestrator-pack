@@ -1186,6 +1186,114 @@ describe('receipt-backed occurrence M3 lookup uses capture finding id', () => {
     );
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
+
+  it('still fails closed when same capture finding id is reused outside an AR+lens pair', () => {
+    const findingId = 'S1';
+    const reviewOne = 'pass-01-architectural-review-01.capture.txt';
+    const reviewTwo = 'pass-01-architectural-review-02.capture.txt';
+    const identityOne = `sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:${reviewOne}`;
+    const identityTwo = `sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:${reviewTwo}`;
+    const occurrenceOne = `${identityOne}:1`;
+    const occurrenceTwo = `${identityTwo}:1`;
+    const finding = markedFinding(findingId, {
+      type: 'security',
+      evidence: 'A security issue is present in the proposed boundary.',
+    });
+    const result = checkFindingLedgerGuard(
+      [
+        finding,
+        finding,
+        `${markedClean()}\n${currentLens(findingId, { contest: 'none', outcome: 'non-activate' })}`,
+      ],
+      JSON.stringify({
+        version: 2,
+        counts: { rawFindingCount: 2, distinctFindingCount: 2, processedDistinctCount: 2 },
+        findings: [
+          {
+            id: 'ROW-A',
+            summary: 'security A',
+            type: 'security',
+            occurrences: [occurrenceOne],
+            defectDisposition: 'rejected-as-false',
+            rejectReason: 'the report misread the existing contract',
+            remedyDisposition: 'accepted',
+            'persistent-machinery': 'no',
+          },
+          {
+            id: 'ROW-B',
+            summary: 'security B',
+            type: 'security',
+            occurrences: [occurrenceTwo],
+            defectDisposition: 'rejected-as-false',
+            rejectReason: 'the report misread the existing contract',
+            remedyDisposition: 'accepted',
+            'persistent-machinery': 'no',
+          },
+        ],
+      }),
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r3',
+        stageTerminalConfirmed: true,
+        captureMetadata: [
+          { name: reviewOne, timestampMs: 1_100, captureIdentity: identityOne },
+          { name: reviewTwo, timestampMs: 1_110, captureIdentity: identityTwo },
+          { name: 'pass-02-architectural.capture.txt', timestampMs: 1_200 },
+        ],
+      } as never,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('ambiguous capture finding id');
+  });
+
+  it('still unknown/stale an unadjudicated architectural-lens protected finding without m3-protected', () => {
+    const lensName = 'pass-02-architectural-lens.capture.txt';
+    const captureIdentity = `sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:${lensName}`;
+    const occurrenceId = `${captureIdentity}:1`;
+    const result = checkFindingLedgerGuard(
+      [
+        markedFinding('SEC1', {
+          type: 'security',
+          evidence: 'A security issue is present in the proposed boundary.',
+        }),
+        markedClean(),
+      ],
+      JSON.stringify({
+        version: 2,
+        counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
+        findings: [{
+          id: 'SEC1',
+          summary: 'security lens',
+          type: 'security',
+          occurrences: [occurrenceId],
+          defectDisposition: 'rejected-as-false',
+          rejectReason: 'the report misread the existing contract',
+          remedyDisposition: 'accepted',
+          'persistent-machinery': 'no',
+          protectedOccurrences: [{
+            occurrenceId,
+            architectPending: false,
+            architectRequired: false,
+            protectedActivation: null,
+          }],
+        }],
+      }),
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r3',
+        stageTerminalConfirmed: true,
+        captureMetadata: [
+          { name: lensName, timestampMs: 1_100, captureIdentity },
+          { name: 'pass-03-architectural.capture.txt', timestampMs: 1_200 },
+        ],
+      } as never,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('unknown/stale architect contest state');
+  });
+
 });
 
 describe('legacy finding-ledger behavior remains default', () => {

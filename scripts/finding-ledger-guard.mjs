@@ -365,7 +365,23 @@ function resolveOccurrenceM3History(occurrenceId, records, issueRevision, errors
   }
   return { current, latest: current.at(-1) ?? null, invalid: false };
 }
-function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors }) {
+function protectedSharingCaptureId(occurrence, ledger, occurrenceMap) {
+  return ledger.findings.flatMap((candidate) => candidate.occurrences.map((id) => occurrenceMap.get(id)).filter((item) => item && PROTECTED_TYPES.has(item.type) && item.id === occurrence.id));
+}
+function isArchitecturalReviewLensPair(occurrences) {
+  if (occurrences.length !== 2) return false;
+  const stages = new Set(occurrences.map((item) => item.stage));
+  return stages.has('architectural-review') && stages.has('architectural-lens');
+}
+function captureIdIsAmbiguous(occurrence, ledger, occurrenceMap) {
+  const sharing = protectedSharingCaptureId(occurrence, ledger, occurrenceMap);
+  return sharing.length > 1 && !isArchitecturalReviewLensPair(sharing);
+}
+function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors, ledger, occurrenceMap }) {
+  if (captureIdIsAmbiguous(occurrence, ledger, occurrenceMap)) {
+    errors.push(`review-economics: protected finding ${occurrence.occurrenceId} has ambiguous capture finding id ${occurrence.id}`);
+    return;
+  }
   const history = resolveOccurrenceM3History(occurrence.occurrenceId, m3Records.get(occurrence.id) ?? m3Records.get(occurrence.occurrenceId) ?? [], issueRevision, errors);
   if (history.invalid) return;
   const current = history.current; const record = history.latest; const activation = state.protectedActivation;
@@ -389,7 +405,8 @@ function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, p
     if ((record.contest === 'none' || record.contest === 'contest-withdrawn') && !zeroSignal && activationValid) { if (row.defectDisposition !== 'addressed') errors.push(`review-economics: activated protected finding ${occurrence.occurrenceId} must be addressed`); return; }
   }
   if (terminalOnly && activationValid) { if (row.defectDisposition !== 'addressed') errors.push(`review-economics: activated protected finding ${occurrence.occurrenceId} must be addressed`); return; }
-  if (!record && !terminalOnly && (row.defectDisposition === 'rejected-as-false' || activationValid)) {
+  const lockedArchitecturalReview = occurrence.stage === 'architectural-review' && Boolean(occurrence.captureIdentity);
+  if (!record && lockedArchitecturalReview && (row.defectDisposition === 'rejected-as-false' || activationValid)) {
     if (activationValid && row.defectDisposition !== 'addressed') errors.push(`review-economics: activated protected finding ${occurrence.occurrenceId} must be addressed`);
     return;
   }
@@ -406,7 +423,7 @@ function validateOccurrenceM3(ledger, occurrenceMap, captures, metadata, phase, 
       let state = explicit.get(occurrence.occurrenceId);
       if (!state && protectedOccurrences.length === 1) state = { occurrenceId: occurrence.occurrenceId, architectPending: row.architectPending, architectRequired: row.architectRequired, protectedActivation: row.protectedActivation };
       if (!state) { errors.push(`review-economics: grouped protected distinct defect ${row.id} requires explicit occurrence-level M3 state for ${occurrence.occurrenceId}`); continue; }
-      validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors });
+      validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors, ledger, occurrenceMap });
     }
   }
 }
