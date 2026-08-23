@@ -1106,3 +1106,89 @@ describe('Issue #1556 pre-lens architectural-review routing', () => {
     expect(missingRoute.errors.join('\n')).toContain('missing immutable reviewLaneRouting evidence');
   });
 });
+
+
+describe('Issue #1484 post-lens ledger production', () => {
+  it('includes the settled Claude lens receipt in the ledger before terminal GPT', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const intake = JSON.parse(readFileSync(input.intakePath, 'utf8')) as Record<string, unknown>;
+    intake.priorTier = 'T3';
+    intake.competitiveDecision = 'skipped';
+    intake.competitiveRationale = 'competitive review is not needed for this post-lens attempt';
+    writeFileSync(input.intakePath, JSON.stringify(intake));
+
+    const reviewEvidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, unknown>;
+    reviewEvidence.tier = 'T3';
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(reviewEvidence));
+
+    const lensCapturePath = join(input.dir, 'pass-02-architectural-lens.capture.txt');
+    const lensCapture = ['Claude lens review', ...Array.from({ length: 7 }, (_, index) => 'id: lens-finding-' + String(index + 1)), ''].join('\n');
+    writeFileSync(lensCapturePath, lensCapture);
+    const lensEvidence = {
+      schema: STAGE_EVIDENCE_SCHEMA,
+      tier: 'T3',
+      stage: 'architectural-lens',
+      stageAttemptId: 'architectural-lens-attempt',
+      stageSequence: 2,
+      cycleId: 'cycle-1385',
+      cycleBinding: { cycleId: 'cycle-1385', sourceRevision: REVISION, boundBeforeLaunch: true },
+      policyVersion: 'single-source/v1',
+      reviewerCardinality: 1,
+      cardinalityConfigIdentity: CONFIG,
+      sourceRevision: REVISION,
+      outcome: 'complete',
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+      settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+      claude: { kind: 'capture', provider: 'claude-cli', invocationId: 'lens-invocation', producingRunIdentity: 'lens-run', terminalResultIdentity: 'lens-terminal', producerEvidenceIdentity: 'lens-evidence', terminal: true, terminalClassification: 'complete', exitCode: 0, m3Status: 'recorded', capturePath: lensCapturePath },
+    };
+    writeFileSync(input.evidencePath, JSON.stringify(lensEvidence));
+    const lensDigest = createHash('sha256').update(lensCapture).digest('hex');
+    const lensIdentity = 'sha256:' + lensDigest + ':pass-02-architectural-lens.capture.txt';
+    writeFileSync(input.authorPath, JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      findings: Array.from({ length: 7 }, (_, index) => ({
+        id: 'lens-finding-' + String(index + 1),
+        type: 'quality',
+        occurrences: [lensIdentity + ':' + String(index + 1)],
+        defectDisposition: 'addressed',
+        remedyDisposition: 'accepted',
+        'persistent-machinery': 'no',
+        simplificationCutCandidate: false,
+      })),
+    }));
+    const producerEvidencePath = join(input.dir, 'claude-producer-evidence.json');
+    writeFileSync(producerEvidencePath, JSON.stringify([{
+      schema: 'claude-producer-evidence/v1',
+      evidenceIdentity: 'lens-evidence',
+      reviewEpisodeId: input.episode,
+      stageAttemptId: 'architectural-lens-attempt',
+      sourceRevision: REVISION,
+      invocationId: 'lens-invocation',
+      producingRunIdentity: 'lens-run',
+      terminalResultIdentity: 'lens-terminal',
+      terminal: true,
+      terminalClassification: 'complete',
+      exitCode: 0,
+      capture: { captureIdentity: lensIdentity, name: 'pass-02-architectural-lens.capture.txt', byteLength: Buffer.byteLength(lensCapture), sha256: lensDigest, rawFindingCount: 7 },
+      m3Status: 'recorded',
+    }]));
+
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: input.outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.reviewEvidencePath, input.evidencePath],
+      authorDispositionsPath: input.authorPath,
+      claudeProducerEvidencePaths: [producerEvidencePath],
+      artifactSourceTransport: transport({ census: input.reviewComments }),
+      phase: 'post-lens',
+    });
+
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const ledger = JSON.parse(readFileSync(join(input.outputDir, 'finding-disposition-ledger.json'), 'utf8'));
+    expect(ledger.counts.rawFindingCount).toBe(7);
+    const inventory = JSON.parse(readFileSync(join(input.outputDir, 'review-episode-inventory.json'), 'utf8'));
+    expect(inventory.stageReceiptIds).toHaveLength(2);
+    expect(result.files).toContain('stage-completeness-receipt-architectural-lens-attempt.json');
+  });
+});

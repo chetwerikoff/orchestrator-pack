@@ -46,7 +46,7 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   stageEvidencePaths: string[];
   authorDispositionsPath?: string;
   claudeProducerEvidencePaths: string[];
-  phase?: 'pre-lens' | 'final-acceptance';
+  phase?: 'pre-lens' | 'post-lens' | 'final-acceptance';
   operatorIssueNumber?: string;
   operatorSourceRevision?: string;
   operatorVerdictUrl?: string;
@@ -182,7 +182,7 @@ export function stageFinalizeUsage(): string {
     '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
-    `  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]`,
+    `  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|post-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]`,
     `  create-issue-stage-finalize.ts check-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--json]`,
   ].join('\n');
 }
@@ -273,7 +273,7 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
       case '--phase': {
         requireArtifactCommand(arg);
         const phase = String(argv[++i] ?? '');
-        if (phase !== 'pre-lens' && phase !== 'final-acceptance') throw new Error('--phase must be pre-lens or final-acceptance');
+        if (phase !== 'pre-lens' && phase !== 'post-lens' && phase !== 'final-acceptance') throw new Error('--phase must be pre-lens, post-lens, or final-acceptance');
         opts.phase = phase;
         break;
       }
