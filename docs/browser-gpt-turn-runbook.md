@@ -1,10 +1,12 @@
 # Browser-GPT turn runbook
 
-This is the portable manager procedure for a tracked Browser-GPT turn. The
-normative mechanics live in
-[the flow-manager carrier](../.cursor/rules/flow-manager-browser-turn-monitoring.mdc).
-The canonical create-issue skills own workflow, roles, stages, receipts, and
-review policy. The transport
+This runbook owns the portable manager procedure and operational mechanics for a
+tracked Browser-GPT turn. The non-always-loaded
+[flow-manager carrier](../.cursor/rules/flow-manager-browser-turn-monitoring.mdc)
+retains only the manager-review canon fragments selected literally by the
+create-issue workflow: **Launch and observation** and **Legacy state and
+diagnostic probe**. The canonical create-issue skills own workflow, roles,
+stages, receipts, and review policy. The transport
 [README](../scripts/chatgpt-browser-turn/README.md) owns CLI arguments,
 result fields, and implementation-local boundaries. The existing
 [long-running-child runbook](flow-manager-long-running-child-runbook.md) owns
@@ -46,7 +48,7 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
    `export DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR="<CHROME_USER_DATA_DIR>"`.
    If launch reports
    `discuss-with-gpt: operator configuration missing`, the mandatory
-   configuration is not resolved; this can also happen with a copied but
+   configuration is not resolved; this can also occur with a copied but
    incomplete config. Verify both `projectUrl` and `chromeUserDataDir`, or
    both environment-variable equivalents.
 4. Load the gitignored local configuration and confirm the configured headed
@@ -136,8 +138,9 @@ The valid child `turn-result/v1` is the turn authority; for long turns the
 launcher terminal envelope represents that settled child result. The handoff
 receipt only acknowledges accepted detached launch and is not completion
 authority. A stable final page reply is sufficient; PID, shell state, silence,
-log growth, and observation heartbeats are not completion authority. Follow the carrier's invocation-local
-ownership, marker, stage, revision, and retry rules.
+log growth, and observation heartbeats are not completion authority. Follow the
+current workflow for stage/revision policy and this runbook for invocation-local
+ownership, marker attribution, retry/no-resend, publication, and cleanup.
 
 If a result, page, or conversation binding is lost after a possible send, do
 not infer non-delivery. Re-resolve the current target from `${CHAT_URL}`,
@@ -266,10 +269,10 @@ as `input_invalid` rather than mixing canon revisions inside one
 
 | Changed contract in a PR | Same-PR documentation obligation |
 | --- | --- |
-| browser launch, observation, attribution, retry/no-resend, publication, cleanup, probe, handoff | update the canonical carrier and audit this runbook |
-| CLI option, result field, or component boundary | update the transport README; update carrier/runbook when operator behavior changes |
+| browser launch, observation, attribution, retry/no-resend, publication, cleanup, probe, handoff | update this runbook; update the flow-manager carrier only when one of its two selected canon fragments changes |
+| CLI option, result field, or component boundary | update the transport README; update this runbook when operator behavior changes |
 | author role or author invocation | update the owning skill and author template when needed |
-| reviewer role, direct publication, receipt, or invocation identity | update the owning skill/canon; do not copy a normative reviewer prompt into this runbook |
+| reviewer role, direct publication, receipt, or invocation identity | update the owning skill/canon; update a selected carrier fragment only when its canonical reviewer input must change; do not copy a normative reviewer prompt into this runbook |
 | local configuration, launcher prerequisite, or setup procedure | update this runbook and the owning reference |
 | link or Issue authority supersession | repair all in-scope pointers and present-tense authority wording |
 
