@@ -379,8 +379,27 @@ function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
-function rawFindingCount(text: string): number {
-  const withoutFences = text.replace(/```[\s\S]*?```/g, '');
+const FINDING_PAYLOAD_FIELDS = [
+  /^\s*id:\s*\S+/im,
+  /^\s*type:\s*\S+/im,
+  /^\s*severity:\s*\S+/im,
+  /^\s*evidence:\s*\S+/im,
+  /^\s*recommendation:\s*\S+/im,
+  /^\s*persistent-machinery:\s*(?:yes|no)\s*$/im,
+];
+
+function stripMarkdownFencedCodeBlocksExceptFindingPayloads(text: string): string {
+  return text.replace(/```([^\n]*)\n([\s\S]*?)```/g, (block, info: string, body: string) => {
+    const isFindingPayload = info.trim().toLowerCase() === 'text'
+      && FINDING_PAYLOAD_FIELDS.every((field) => field.test(body));
+    return isFindingPayload ? body : '\n'.repeat((block.match(/\n/g) ?? []).length);
+  });
+}
+
+function rawFindingCount(text: string, captureName = ''): number {
+  const withoutFences = /pass-\d+-architectural-lens\.capture\.txt$/i.test(captureName)
+    ? stripMarkdownFencedCodeBlocksExceptFindingPayloads(text)
+    : text.replace(/```[\s\S]*?```/g, '');
   return withoutFences
     .split(/\r?\n/)
     .filter((line) => !/^\s*>/.test(line))
@@ -751,7 +770,7 @@ function materializeAuthoritativeCapture(
     name,
     byteLength: Buffer.byteLength(verifiedText),
     sha256: digest,
-    rawFindingCount: rawFindingCount(verifiedText),
+    rawFindingCount: rawFindingCount(verifiedText, name),
   };
   captureTexts.set(identity, verifiedText);
   try { captureTimestamps.set(identity, statSync(target).mtimeMs); } catch {
@@ -1182,7 +1201,7 @@ function captureFromEvidence(
     name,
     byteLength: Buffer.byteLength(text),
     sha256: digest,
-    rawFindingCount: rawFindingCount(text),
+    rawFindingCount: rawFindingCount(text, name),
   };
 }
 

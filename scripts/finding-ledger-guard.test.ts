@@ -178,6 +178,59 @@ function currentLens(
 }
 
 describe('finding ledger review economics #975', () => {
+  it('counts structured findings in text-fenced Claude lens payloads only', () => {
+    const capture = [
+      'review-economics-contract: v1',
+      '',
+      '```text',
+      'id: LENS1',
+      'type: quality',
+      'severity: P1',
+      'title: Fenced lens finding',
+      'evidence: Observable lens defect.',
+      'recommendation: Use the cheapest sufficient correction.',
+      'persistent-machinery: no',
+      '```',
+      '',
+      '```markdown',
+      'id: EXAMPLE',
+      'type: quality',
+      'severity: P1',
+      'evidence: Illustrative prose only.',
+      'recommendation: Do not count this example.',
+      'persistent-machinery: no',
+      '```',
+    ].join('\n');
+    const result = checkFindingLedgerGuard(
+      [capture],
+      JSON.stringify({
+        version: 2,
+        counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
+        findings: [{
+          id: 'LENS1',
+          summary: 'Fenced lens finding',
+          type: 'quality',
+          occurrences: ['LENS1@0:1'],
+          defectDisposition: 'addressed',
+          remedyDisposition: 'accepted',
+          'persistent-machinery': 'no',
+          simplificationCutCandidate: false,
+        }],
+      }),
+      {
+        reviewEconomics: true,
+        phase: 'pre-lens',
+        issueRevision: 'r3',
+        stageTerminalConfirmed: true,
+        captureMetadata: [{ name: 'pass-02-architectural-lens.capture.txt', timestampMs: 1_100 }],
+      } as never,
+    );
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.economicsCounts?.rawFindingCount).toBe(1);
+    expect(result.captureFindings).toHaveLength(1);
+    expect(result.captureFindings[0]?.id).toBe('LENS1');
+  });
+
   describe('real raw Codex companion validation', () => {
     it('validates finding-bearing and clean companion-schema results before transcription', () => {
       const result = run(
