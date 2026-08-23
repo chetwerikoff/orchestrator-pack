@@ -26,6 +26,14 @@ const CURSOR_FOOTER = [
   'Cursor Grok 4.6 High · 40.6% · 22 files edited                                                                                                    Run Everything',
   '~/projects/orchestrator-pack · main',
 ];
+const EMPTY_CLAUDE_SCREEN = [
+  'prior transcript line',
+  'new task? /clear to save context',
+  '────────────────────────────────',
+  '❯',
+  '────────────────────────────────',
+  '⏵⏵ bypass permissions on (shift+tab to cycle)',
+];
 
 function worker(id: string, generation = 'g1'): RuntimeWorker {
   return {
@@ -260,12 +268,38 @@ describe('submitUnsentCursorComposer', () => {
     expect(submitted).toHaveLength(0);
   });
 
+  it('submits a filled Cursor composer but never an empty Claude composer', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let now = 0;
+    const state = createUnsentComposerWatchState();
+    const localDeps = depsFor(
+      {
+        term_cursor: [
+          '▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄',
+          '→',
+          POKE,
+          '▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀',
+          ...CURSOR_FOOTER,
+        ],
+        term_claude: EMPTY_CLAUDE_SCREEN,
+      },
+      { submitted, now: () => now },
+    );
+    const first = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    now = QUIET_AFTER_PRINT_MS;
+    const second = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+
+    expect(first.terminals.map((row) => row.reason)).toEqual(['waiting_stable', 'composer_empty']);
+    expect(second.terminals.map((row) => row.reason)).toEqual(['enter_sent', 'composer_empty']);
+    expect(submitted.map((row) => row.id)).toEqual(['term_cursor']);
+  });
+
   it('waits before submitting ordinary typing', () => {
     const submitted: RuntimeWorkerIdentity[] = [];
     const result = submitUnsentCursorComposer(
       { terminals: ['term_typing'], watch: true },
       depsFor(
-        { term_typing: ['→ разберись почему', 'Run Everything'] },
+        { term_typing: ['→ разберись почему', ...CURSOR_FOOTER] },
         { submitted },
       ),
     );

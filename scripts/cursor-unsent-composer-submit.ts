@@ -70,7 +70,7 @@ function unboxedComposerLines(preview: string): string[] {
   ) {
     return lines.slice(0, end - 2);
   }
-  return lines.slice(0, end);
+  return [];
 }
 
 function classifyContent(
