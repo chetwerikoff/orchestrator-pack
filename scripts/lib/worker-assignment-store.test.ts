@@ -36,6 +36,7 @@ function publishInput(file: string, bindingKey: string) {
     kind: 'local' as const,
     provider: 'orca',
     bindingKey,
+    role: 'worker' as const,
   };
 }
 
@@ -162,6 +163,7 @@ import {
   migrateWorkerAssignmentStoreIfNeeded,
   parseWorkerAssignmentStore,
   readWorkerAssignmentStore,
+  setWorkerAssignmentAtomicReplaceTestHook,
   setWorkerAssignmentMigrationTestHook,
   workerAssignmentKey,
   workerAssignmentMigrationBackupPath,
@@ -207,6 +209,7 @@ function writeLegacy(file: string, bytes: string): void {
 describe('WorkerAssignment legacy key migration and role compatibility', () => {
   afterEach(() => {
     setWorkerAssignmentMigrationTestHook();
+    setWorkerAssignmentAtomicReplaceTestHook();
   });
 
   it('treats missing and empty canonical stores as ordinary with no backup', async () => {
@@ -384,6 +387,22 @@ describe('WorkerAssignment legacy key migration and role compatibility', () => {
     expect(readFileSync(other, 'utf8')).toBe(bytes);
   });
 
+  it.each([
+    ['before_write', 'migration_write_failed'],
+    ['before_readback', 'migration_readback_failed'],
+  ] as const)('classifies %s migration failure precisely and preserves the exact backup', async (phase, cause) => {
+    const { file } = fixture();
+    const bytes = legacyBytes(2);
+    writeLegacy(file, bytes);
+    setWorkerAssignmentAtomicReplaceTestHook((currentPhase) => {
+      if (currentPhase === phase) throw new Error(`injected-${phase}`);
+    });
+    const migrated = await migrateWorkerAssignmentStoreIfNeeded(file);
+    expect(migrated).toMatchObject({ ok: false, reason: 'assignment_store_untrusted', cause });
+    expect(readFileSync(workerAssignmentMigrationBackupPath(file), 'utf8')).toBe(bytes);
+    if (phase === 'before_write') expect(readFileSync(file, 'utf8')).toBe(bytes);
+  });
+
   it('serializes concurrent mutations against a migration-required store', async () => {
     const { file } = fixture();
     writeLegacy(file, legacyBytes(4));
@@ -409,14 +428,17 @@ describe('WorkerAssignment legacy key migration and role compatibility', () => {
     expect(Object.prototype.hasOwnProperty.call(live!.assignments[workerAssignmentKey('task-1', 'dispatch-1')], 'role')).toBe(false);
   });
 
-  it('persists explicit roles on new rows and never defaults absent roles', async () => {
+  it('requires explicit roles on new rows and never defaults absent persisted roles', async () => {
     const { file } = fixture();
-    const without = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-none'));
-    expect(without.ok).toBe(true);
-    if (!without.ok) throw new Error(without.reason);
-    expect(Object.prototype.hasOwnProperty.call(without.assignment, 'role')).toBe(false);
+    const { role: _role, ...missingRole } = publishInput(file, 'dispatch-none');
+    const without = await publishCurrentWorkerAssignment(missingRole as never);
+    expect(without).toEqual({ ok: false, reason: 'assignment_input_invalid' });
     const invalid = await publishCurrentWorkerAssignment({ ...publishInput(file, 'dispatch-bad'), role: 'Worker' as never });
     expect(invalid).toEqual({ ok: false, reason: 'assignment_input_invalid' });
+    const withWorkerRole = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-worker'));
+    expect(withWorkerRole.ok).toBe(true);
+    if (!withWorkerRole.ok) throw new Error(withWorkerRole.reason);
+    expect(withWorkerRole.assignment.role).toBe('worker');
     const withRole = await publishCurrentWorkerAssignment({
       ...publishInput(file, 'dispatch-role'),
       issueNumber: 1417,
