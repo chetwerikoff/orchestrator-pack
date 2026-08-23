@@ -6,9 +6,11 @@ alwaysApply: false
 # Flow-manager browser-turn monitoring
 
 This non-always-loaded carrier retains only the two manager-review canon sections
-that `create-issue-draft` selects literally. Portable launch, retry, publication,
-cleanup, probe, incident, and handoff procedure lives in
+that `create-issue-draft` selects literally. Portable Browser-GPT launch, retry,
+publication, cleanup, probe, incident, and handoff procedure lives in
 [`docs/browser-gpt-turn-runbook.md`](../../docs/browser-gpt-turn-runbook.md).
+Long-running child mechanics remain owned by
+[`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md).
 
 ## Launch and observation
 
