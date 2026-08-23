@@ -1,6 +1,6 @@
 /**
  * Stop-time coworker read-delegation audit (Issue #255).
- * Vitest: scripts/read-delegation-audit.test.ts
+ * Vitest: scripts/gate-runner/read-delegation-audit.test.ts
  *
  * Tolerant compliance signal at work-unit completion — never blocks reads.
  */
@@ -32,14 +32,8 @@ import {
   READ_CLASSIFICATIONS,
 } from './read-delegation-classifier.mjs';
 
-/** T1 single-question volume floor (canonical; drift-checked in tracked policy). */
-export const T1_VOLUME_FLOOR = 400;
-
-/** Diff/log trigger floor (independent of T1). */
-export const DIFF_LOG_FLOOR = 200;
-
-/** File-count leg requires co-occurring combined lines at T1 (folded T2). */
-export const T2_MIN_FILES = 3;
+/** Single combined delegable-corpus floor. Policy delegates only above this value. */
+export const T1_VOLUME_FLOOR = 600;
 
 export const SURFACES = ['cursor', 'claude'];
 
@@ -245,22 +239,24 @@ export function didAskTriggerFire(reads) {
   const fileCount = countDelegableFiles(reads);
   const diffLogLines = aggregateDiffLogLines(reads);
   const rawFileLines = aggregateAllFileLines(reads);
+  const delegableLines = fileLines + diffLogLines;
+  const rawDelegableLines = rawFileLines + diffLogLines;
 
-  const t1 = fileLines > T1_VOLUME_FLOOR;
-  const t2 = fileCount >= T2_MIN_FILES && fileLines >= T1_VOLUME_FLOOR;
-  const diffLog = diffLogLines > DIFF_LOG_FLOOR;
-  const rawT1 = rawFileLines > T1_VOLUME_FLOOR;
+  const t1 = delegableLines > T1_VOLUME_FLOOR;
+  const rawT1 = rawDelegableLines > T1_VOLUME_FLOOR;
 
   return {
-    fired: t1 || t2 || diffLog,
-    rawFired: rawT1 || t2 || diffLog,
+    fired: t1,
+    rawFired: rawT1,
     t1,
-    t2,
-    diffLog,
+    t2: false,
+    diffLog: false,
     fileLines,
     rawFileLines,
     fileCount,
     diffLogLines,
+    delegableLines,
+    rawDelegableLines,
   };
 }
 
