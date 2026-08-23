@@ -169,6 +169,17 @@ function parseCaptureName(name) {
   if (!match) return { pass: 0, stage: 'architectural', slot: null };
   return { pass: Number(match[1]), stage: match[2].toLowerCase(), slot: match[3] ?? null };
 }
+function namedCaptureStage(name) {
+  const match = CAPTURE_NAME_RE.exec(String(name ?? ''));
+  return match ? match[2].toLowerCase() : null;
+}
+function isLockedT2ArchitecturalOccurrence(occurrence, metadata) {
+  if (occurrence.stage !== 'architectural' || !occurrence.captureIdentity) return false;
+  const name = String(metadata?.[occurrence.captureIndex]?.name ?? '');
+  if (!/^pass-\d+-architectural\.capture\.txt$/i.test(name) || namedCaptureStage(name) !== 'architectural') return false;
+  const stages = new Set((Array.isArray(metadata) ? metadata : []).map((item) => namedCaptureStage(item?.name)).filter(Boolean));
+  return stages.has('architectural-review') && !stages.has('architectural-lens');
+}
 function hasExactToken(text, token) { return String(text ?? '').split(/\r?\n/).some((line) => line.trim() === token); }
 function protectedEvidenceMatches(type, text) { return (PROTECTED_PATTERNS[type] ?? []).some((pattern) => pattern.test(String(text ?? ''))); }
 
@@ -376,7 +387,7 @@ function captureIdIsAmbiguous(occurrence, ledger, occurrenceMap) {
   const sharing = protectedSharingCaptureId(occurrence, ledger, occurrenceMap);
   return sharing.filter((item) => protectedOccurrencesShareCapture(item, occurrence)).length > 1;
 }
-function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors, ledger, occurrenceMap }) {
+function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors, ledger, occurrenceMap, metadata }) {
   if (captureIdIsAmbiguous(occurrence, ledger, occurrenceMap)) {
     errors.push(`review-economics: protected finding ${occurrence.occurrenceId} has ambiguous capture finding id ${occurrence.id}`);
     return;
@@ -403,6 +414,10 @@ function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, p
     if (record.outcome === 'non-activate') return;
     if ((record.contest === 'none' || record.contest === 'contest-withdrawn') && !zeroSignal && activationValid) { if (row.defectDisposition !== 'addressed') errors.push(`review-economics: activated protected finding ${occurrence.occurrenceId} must be addressed`); return; }
   }
+  const lockedT2Architectural = isLockedT2ArchitecturalOccurrence(occurrence, metadata);
+  if (!record && lockedT2Architectural && row.defectDisposition === 'rejected-as-false' && !activationValid) {
+    return;
+  }
   if (terminalOnly && activationValid) { if (row.defectDisposition !== 'addressed') errors.push(`review-economics: activated protected finding ${occurrence.occurrenceId} must be addressed`); return; }
   const lockedArchitecturalReview = occurrence.stage === 'architectural-review' && Boolean(occurrence.captureIdentity);
   if (!record && lockedArchitecturalReview && (row.defectDisposition === 'rejected-as-false' || activationValid)) {
@@ -422,7 +437,7 @@ function validateOccurrenceM3(ledger, occurrenceMap, captures, metadata, phase, 
       let state = explicit.get(occurrence.occurrenceId);
       if (!state && protectedOccurrences.length === 1) state = { occurrenceId: occurrence.occurrenceId, architectPending: row.architectPending, architectRequired: row.architectRequired, protectedActivation: row.protectedActivation };
       if (!state) { errors.push(`review-economics: grouped protected distinct defect ${row.id} requires explicit occurrence-level M3 state for ${occurrence.occurrenceId}`); continue; }
-      validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors, ledger, occurrenceMap });
+      validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors, ledger, occurrenceMap, metadata });
     }
   }
 }
