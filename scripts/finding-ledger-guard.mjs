@@ -366,7 +366,7 @@ function resolveOccurrenceM3History(occurrenceId, records, issueRevision, errors
   return { current, latest: current.at(-1) ?? null, invalid: false };
 }
 function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors }) {
-  const history = resolveOccurrenceM3History(occurrence.occurrenceId, m3Records.get(occurrence.occurrenceId) ?? [], issueRevision, errors);
+  const history = resolveOccurrenceM3History(occurrence.occurrenceId, m3Records.get(occurrence.id) ?? m3Records.get(occurrence.occurrenceId) ?? [], issueRevision, errors);
   if (history.invalid) return;
   const current = history.current; const record = history.latest; const activation = state.protectedActivation;
   const activationValid = Boolean(activation?.authority && activation?.signal && activation?.whyNow && protectedEvidenceMatches(occurrence.type, activation.signal));
