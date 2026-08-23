@@ -9,11 +9,11 @@ import { ghApiEndpointFromApiTokens } from './gh-api-endpoint.mjs';
 import { isGraphqlPassthroughArgv } from './gh-graphql-degraded.mjs';
 import { classifyArgv } from './gh-inventory-match.mjs';
 
-const WRITE_VERBS = new Set(['merge', 'comment', 'create', 'close', 'edit', 'review']);
+const WRITE_VERBS = new Set(['merge', 'comment', 'create', 'close', 'edit', 'review', 'ready', 'update-branch']);
 
 /** @type {RegExp[]} */
 const RULE_SURFACE_READ_PATTERNS = [
-  /\bgh\s+pr\s+(?!merge|comment|create|close|edit|review)[^\n`]+/gi,
+  /\bgh\s+pr\s+(?!merge|comment|create|close|edit|review|ready|update-branch)[^\n`]+/gi,
   /\bgh\s+issue\s+(?!merge|comment|create|close|edit|review)[^\n`]+/gi,
   /\bgh\s+repo\s+view[^\n`]+/gi,
 ];
@@ -68,7 +68,7 @@ function trimRuleSurfaceCommand(fragment) {
     .replace(/\s+or the worker.*$/i, '')
     .replace(/\s+or equivalent.*$/i, '')
     .replace(/\s+not session.*$/i, '')
-    .replace(/[).]+$/u, '')
+    .replace(/[)."'`]+$/u, '')
     .trim();
 }
 

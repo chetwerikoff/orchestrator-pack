@@ -39,7 +39,8 @@ $reconcileRoots = @(
 $ruleSurfaceRoots = @(
     (Join-Path $Root 'AGENTS.md'),
     (Join-Path $Root 'CLAUDE.md'),
-    (Join-Path $Root 'prompts/investigate_root_cause.md')
+    (Join-Path $Root 'prompts/investigate_root_cause.md'),
+    (Join-Path $Root 'docs/pack-review-waiver-merge-runbook.md')
 )
 
 $violations = @()

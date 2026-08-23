@@ -14,6 +14,45 @@ import { aggregateChecks, extractActionsRunId, mergeCheckContexts } from './gh-p
 const RUNTIME_HISTORY_REPO = 'chetwerikoff/orchestrator-pack';
 
 /**
+ * @param {Record<string, unknown>} pull
+ */
+function mapPullMergeable(pull) {
+  if (pull.mergeable === true) {
+    return 'MERGEABLE';
+  }
+  if (pull.mergeable === false) {
+    return 'CONFLICTING';
+  }
+  return 'UNKNOWN';
+}
+
+/**
+ * @param {Record<string, unknown>} pull
+ */
+function mapPullMergeStateStatus(pull) {
+  const state = String(pull.mergeable_state ?? '').toUpperCase();
+  const supported = new Set(['BEHIND', 'BLOCKED', 'CLEAN', 'DIRTY', 'DRAFT', 'HAS_HOOKS', 'UNSTABLE', 'UNKNOWN']);
+  return supported.has(state) ? state : 'UNKNOWN';
+}
+
+/**
+ * Projection for the waiver runbook's additional pull fields. Keep the
+ * underlying gh-repo mapper unchanged for callers outside this route.
+ *
+ * @param {Record<string, unknown>} pull
+ * @param {string[]} fields
+ */
+export function mapPullForFields(pull, fields) {
+  const mapped = mapPullToGhJson(pull, fields);
+  return pickJsonFields({
+    ...mapped,
+    mergeable: mapPullMergeable(pull),
+    mergeStateStatus: mapPullMergeStateStatus(pull),
+    mergeCommit: pull.merge_commit_sha ? { oid: pull.merge_commit_sha } : null,
+  }, fields);
+}
+
+/**
  * @param {string} realGh
  * @param {{ slug: string, host: string }} repo
  * @param {number} issueNumber
@@ -167,7 +206,10 @@ function fetchPullByReference(realGh, repo, ref, cwd) {
  */
 export function routePrView(realGh, repo, prRef, fields, jq, cwd) {
   const pull = fetchPullByReference(realGh, repo, prRef, cwd);
-  const mapped = mapPullToGhJson(pull, fields);
+  const mapped = mapPullForFields(pull, fields);
+  if (jq === '.headRefOid') {
+    return mapped.headRefOid;
+  }
   return applyListedJq(mapped, jq);
 }
 
