@@ -1015,6 +1015,112 @@ describe('Issue #1171 terminal disposition matrix', () => {
   });
 });
 
+describe('receipt-backed occurrence M3 lookup uses capture finding id', () => {
+  it('resolves GitHub-identity occurrences from m3-protected id= finding lines', () => {
+    const findingId = 'SEC1';
+    const reviewName = 'pass-01-architectural-review-01.capture.txt';
+    const captureIdentity = `sha256:83b098b700000000000000000000000000000000000000000000000000000000:${reviewName}`;
+    const occurrenceId = `${captureIdentity}:1`;
+    const githubCapture = cap(reviewName, 1_100, markedFinding(findingId, {
+      type: 'security',
+      evidence: 'A security issue is present in the proposed boundary.',
+    }));
+    const localArchitectural = cap(
+      'pass-02-architectural.capture.txt',
+      1_200,
+      `${markedClean()}\n${currentLens(findingId, { contest: 'none', outcome: 'non-activate' })}`,
+    );
+    const result = checkFindingLedgerGuard(
+      [githubCapture.text, localArchitectural.text],
+      JSON.stringify({
+        version: 2,
+        counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
+        findings: [{
+          id: findingId,
+          summary: 'security boundary',
+          type: 'security',
+          occurrences: [occurrenceId],
+          defectDisposition: 'rejected-as-false',
+          rejectReason: 'the report misread the existing contract',
+          remedyDisposition: 'accepted',
+          'persistent-machinery': 'no',
+        }],
+      }),
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r3',
+        stageTerminalConfirmed: true,
+        captureMetadata: [
+          { name: githubCapture.name, timestampMs: githubCapture.timestampMs, captureIdentity },
+          { name: localArchitectural.name, timestampMs: localArchitectural.timestampMs },
+        ],
+      } as never,
+    );
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('fails closed when one capture finding id maps to two distinct ledger rows', () => {
+    const findingId = 'S1';
+    const reviewOne = 'pass-01-architectural-review-01.capture.txt';
+    const reviewTwo = 'pass-01-architectural-review-02.capture.txt';
+    const identityOne = `sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:${reviewOne}`;
+    const identityTwo = `sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:${reviewTwo}`;
+    const occurrenceOne = `${identityOne}:1`;
+    const occurrenceTwo = `${identityTwo}:1`;
+    const finding = markedFinding(findingId, {
+      type: 'security',
+      evidence: 'A security issue is present in the proposed boundary.',
+    });
+    const result = checkFindingLedgerGuard(
+      [
+        finding,
+        finding,
+        `${markedClean()}\n${currentLens(findingId, { contest: 'none', outcome: 'non-activate' })}`,
+      ],
+      JSON.stringify({
+        version: 2,
+        counts: { rawFindingCount: 2, distinctFindingCount: 2, processedDistinctCount: 2 },
+        findings: [
+          {
+            id: 'ROW-A',
+            summary: 'security A',
+            type: 'security',
+            occurrences: [occurrenceOne],
+            defectDisposition: 'rejected-as-false',
+            rejectReason: 'the report misread the existing contract',
+            remedyDisposition: 'accepted',
+            'persistent-machinery': 'no',
+          },
+          {
+            id: 'ROW-B',
+            summary: 'security B',
+            type: 'security',
+            occurrences: [occurrenceTwo],
+            defectDisposition: 'rejected-as-false',
+            rejectReason: 'the report misread the existing contract',
+            remedyDisposition: 'accepted',
+            'persistent-machinery': 'no',
+          },
+        ],
+      }),
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r3',
+        stageTerminalConfirmed: true,
+        captureMetadata: [
+          { name: reviewOne, timestampMs: 1_100, captureIdentity: identityOne },
+          { name: reviewTwo, timestampMs: 1_110, captureIdentity: identityTwo },
+          { name: 'pass-02-architectural.capture.txt', timestampMs: 1_200 },
+        ],
+      } as never,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('ambiguous capture finding id');
+  });
+});
+
 describe('legacy finding-ledger behavior remains default', () => {
   it('still rejects protected finding disposition rejected without #975 phase', () => {
     const result = checkFindingLedgerGuard(
