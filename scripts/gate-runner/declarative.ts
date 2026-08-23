@@ -28,11 +28,17 @@ export interface FileAbsenceRule {
   readonly paths: readonly string[];
 }
 
+export interface ExactOccurrenceAssertion {
+  readonly marker: string;
+  readonly count: number;
+}
+
 export interface SourceAssertion {
   readonly path: string;
   readonly contains?: readonly string[];
   readonly absent?: readonly string[];
   readonly absentFailurePrefix?: string;
+  readonly exactOccurrences?: readonly ExactOccurrenceAssertion[];
 }
 
 export interface StaticSourceRule {
@@ -127,6 +133,18 @@ function evaluateAbsence(rule: FileAbsenceRule, snapshot: SourceSnapshot): RuleE
   return { failures, unavailable: [] };
 }
 
+function countLiteralOccurrences(text: string, marker: string): number {
+  if (marker.length === 0) return 0;
+  let count = 0;
+  let cursor = 0;
+  while (true) {
+    const index = text.indexOf(marker, cursor);
+    if (index < 0) return count;
+    count += 1;
+    cursor = index + marker.length;
+  }
+}
+
 function evaluateStatic(rule: StaticSourceRule, snapshot: SourceSnapshot): RuleEvaluation {
   const failures: string[] = [];
   const unavailable: string[] = [];
@@ -146,6 +164,14 @@ function evaluateStatic(rule: StaticSourceRule, snapshot: SourceSnapshot): RuleE
         failures.push(assertion.absentFailurePrefix
           ? `${assertion.absentFailurePrefix}: ${marker}`
           : `${path} contains forbidden content: ${marker}`);
+      }
+    }
+    for (const occurrence of assertion.exactOccurrences ?? []) {
+      const actual = countLiteralOccurrences(text, occurrence.marker);
+      if (actual !== occurrence.count) {
+        failures.push(
+          `${path} must contain exactly ${occurrence.count} occurrence(s) of ${occurrence.marker}; found ${actual}`,
+        );
       }
     }
   }
