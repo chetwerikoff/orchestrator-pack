@@ -28,6 +28,7 @@ async function fixture() {
     kind: 'remote',
     provider: 'browser-gpt',
     bindingKey: 'remote-1418',
+    role: 'worker',
   });
   if (!published.ok) throw new Error(published.reason);
   const reportStorePath = path.join(root, 'worker-report-store.json');
