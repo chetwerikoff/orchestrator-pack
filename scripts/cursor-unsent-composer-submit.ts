@@ -467,9 +467,15 @@ export function createAdapterSubmitDeps(
   };
 }
 
-export async function runSupervisorUnsentComposerTick(): Promise<UnsentComposerSubmitResult> {
-  const adapter = await selectRuntimeAdapter();
-  return submitUnsentCursorComposer({ watch: true }, createAdapterSubmitDeps(adapter));
+export async function runSupervisorUnsentComposerTick(
+  providedDeps?: UnsentComposerSubmitDeps,
+  state: UnsentComposerWatchState = createUnsentComposerWatchState(),
+): Promise<UnsentComposerSubmitResult> {
+  const deps = providedDeps ?? createAdapterSubmitDeps(await selectRuntimeAdapter());
+  const first = submitUnsentCursorComposer({ watch: true }, deps, state);
+  if (!first.terminals.some((row) => row.reason === 'waiting_stable')) return first;
+  await new Promise<void>((resolve) => setTimeout(resolve, QUIET_AFTER_PRINT_MS));
+  return submitUnsentCursorComposer({ watch: true }, deps, state);
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {

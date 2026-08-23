@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
 import { unlinkSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -16,6 +16,7 @@ import {
   saveSubmittedFingerprints,
   submitUnsentCursorComposer,
   submitUnsentCursorComposerOnce,
+  runSupervisorUnsentComposerTick,
   workerKey,
   type UnsentComposerSubmitDeps,
 } from './cursor-unsent-composer-submit.ts';
@@ -206,6 +207,25 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 });
 
 describe('submitUnsentCursorComposer', () => {
+  it('runs one bounded second observation for the supervisor child', async () => {
+    vi.useFakeTimers();
+    try {
+      const submitted: RuntimeWorkerIdentity[] = [];
+      const state = createUnsentComposerWatchState();
+      const deps = depsFor(
+        { term_unsent: [POKE, ...CURSOR_FOOTER] },
+        { submitted },
+      );
+      const pass = runSupervisorUnsentComposerTick(deps, state);
+      await vi.advanceTimersByTimeAsync(QUIET_AFTER_PRINT_MS);
+      const result = await pass;
+      expect(result.terminals[0]?.reason).toBe('enter_sent');
+      expect(submitted).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('uses rendered screen observation when stream output omits the composer', () => {
     const identity = worker('term_production').identity;
     const reads: Array<{ screen?: boolean }> = [];

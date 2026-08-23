@@ -1,9 +1,62 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createUnsentComposerWatchState,
+  QUIET_AFTER_PRINT_MS,
+  runSupervisorUnsentComposerTick,
+  type UnsentComposerSubmitDeps,
+} from '../cursor-unsent-composer-submit.ts';
 import { formatSchedulerError, settleSchedulerAndComposer } from './scheduler.ts';
 
+const CURSOR_SCREEN = [
+  '→ stable orchestration payload',
+  'Cursor Grok 4.6 High · 40.6% Run Everything',
+  '~/projects/orchestrator-pack · main',
+];
+
+function composerDeps(submitted: string[]): UnsentComposerSubmitDeps {
+  return {
+    listWorkers: () => ({
+      ok: true,
+      workers: [{
+        identity: { runtime: 'orca', id: 'cursor-worker', generation: 'generation-1' },
+        workspacePath: '/tmp',
+        title: 'cursor-worker',
+        provenance: 'external',
+      }],
+    }),
+    read: () => ({ ok: true, lines: CURSOR_SCREEN, source: 'screen' }),
+    submit: () => {
+      submitted.push('enter');
+      return { status: 'dispatched' };
+    },
+  };
+}
+
 describe('scheduler/composer concurrency settlement', () => {
+  it.each([
+    ['fast', () => Promise.resolve()],
+    ['slow', () => new Promise<void>((resolve) => setTimeout(resolve, 20))],
+    ['failed', () => Promise.reject(new Error('fleet failed'))],
+    ['timed out', () => new Promise<void>((_, reject) => setTimeout(() => reject(new Error('fleet timeout')), 20))],
+  ] as const)('dispatches a stable Cursor composer within 5s when the fleet tick is %s', async (_name, fleetTick) => {
+    vi.useFakeTimers();
+    try {
+      const submitted: string[] = [];
+      const phases = Promise.allSettled([
+        Promise.resolve().then(fleetTick),
+        runSupervisorUnsentComposerTick(composerDeps(submitted), createUnsentComposerWatchState()),
+      ]);
+      await vi.advanceTimersByTimeAsync(QUIET_AFTER_PRINT_MS);
+      expect(submitted).toEqual(['enter']);
+      const settled = await phases;
+      expect(settled[1]?.status).toBe('fulfilled');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('preserves both failures when both concurrent phases reject', () => {
     const schedulerFailure = new Error('fleet failed');
     const composerFailure = new Error('composer failed');
