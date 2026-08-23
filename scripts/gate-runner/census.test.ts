@@ -32,6 +32,7 @@ describe('terminal gate population census after Issue #906', () => {
     const census = loadCensus(repoRoot);
     expect(census.version).toBe(2);
     expect(validateCensusSchema(census).join('\n')).toBe('');
+    expect(validateCensusSchema(census, { pinLiveConstants: false }).join('\n')).toBe('');
     expect(census.entries.some((entry) => entry.classification === 'deferred-to-named-wave')).toBe(false);
     expect(census.entries.filter((entry) => entry.classification === 'retired-in-bulk')).toHaveLength(186);
     expect(census.entries.filter((entry) => entry.classification === 'kept-in-pr1')).toHaveLength(22);

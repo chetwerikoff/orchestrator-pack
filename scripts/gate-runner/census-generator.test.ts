@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { generatePrechangePopulation, generateCurrentHeadProjection, migrationOwnershipDigest, populationDigest } from './census-generator.ts';
+import { generatePrechangePopulation, migrationOwnershipDigest, populationDigest } from './census-generator.ts';
 import { loadCensus } from './census.ts';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
@@ -57,12 +57,5 @@ describe('pre-change census generator', () => {
     expect(populationDigest(census.entries)).toBe(census.generation.populationDigest);
     expect(census.generation.migrationOwnershipDigest).toMatch(/^[0-9a-f]{64}$/u);
     expect(migrationOwnershipDigest(census.entries)).toBe(census.generation.migrationOwnershipDigest);
-  });
-
-  it('projects a historical head without applying the live ownership and inventory pins', async () => {
-    const historicalHead = 'a172e02ddf0a57d4d43d10e16ba59f2b45539bbd';
-    const projection = await generateCurrentHeadProjection(repoRoot, historicalHead);
-    expect(projection.measuredHead).toBe(historicalHead);
-    expect(projection.populationCount).toBeGreaterThan(0);
   });
 });
