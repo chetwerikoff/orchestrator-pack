@@ -721,7 +721,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
   it('allows the first stage receipt revision to differ from the immutable episode first revision when the canonical cycle binds it', () => {
     const input = fixture({ intakeRevision: 'r03', sourceRevision: 'r04', transportClassification: 'incident' });
     const live = canonicalVerdict('r04');
-    const result = produce(input, transport({ census: [...input.reviewComments, comment(live)], reread: comment(live) }));
+    const result = produce(input, transport({ census: [...input.reviewComments, comment(live)] }));
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
