@@ -125,6 +125,10 @@ function okEnvelope(result: Record<string, unknown>): string {
   return JSON.stringify({ ok: true, result });
 }
 
+function repoListEnvelope(repos: readonly Record<string, unknown>[]): string {
+  return okEnvelope({ repos });
+}
+
 describe('supervised Task launch assistant', () => {
   it.each(['manager', 't1', 't2', 't3'] as const)('reaches ready only through supervised-start for %s', async (workClass) => {
     let supervised = 0;
@@ -335,6 +339,58 @@ describe('supervised Task launch assistant', () => {
     }
   });
 
+  it('resolves the GitHub slug to the exact Orca repository selector before create', async () => {
+    const calls: string[][] = [];
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
+    }, async (args) => {
+      calls.push([...args]);
+      if (args[1] === 'repo') return {
+        ok: true,
+        stdout: repoListEnvelope([{
+          id: 'orca-repo-1',
+          repoIcon: { label: 'chetwerikoff/orchestrator-pack' },
+          gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' },
+        }]),
+      };
+      return { ok: true, stdout: okEnvelope({
+        worktree: { id: 'orca-repo-1::wt', path: '/tmp/wt' },
+        setupReceipt: { requested: 'run', hookFound: false, state: 'not_configured' },
+      }) };
+    });
+    expect(result).toMatchObject({ status: 'ok', value: { id: 'orca-repo-1::wt' } });
+    expect(calls[0]).toEqual(['orca', 'repo', 'list', '--json']);
+    expect(calls[1]).toEqual([
+      'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
+      '--issue', '1479', '--setup', 'run', '--json',
+    ]);
+  });
+
+  it.each([
+    ['absent', repoListEnvelope([{ id: 'other', repoIcon: { label: 'other/repo' } }]), 'worktree_repository_resolution_absent'],
+    ['ambiguous', repoListEnvelope([
+      { id: 'orca-repo-1', repoIcon: { label: 'chetwerikoff/orchestrator-pack' } },
+      { id: 'orca-repo-2', gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' } },
+    ]), 'worktree_repository_resolution_ambiguous'],
+    ['malformed', '{not-json', 'worktree_repository_resolution_malformed'],
+  ] as const)('continues before fresh worktree effects when Orca repository resolution is %s', async (_label, stdout, cause) => {
+    const calls: string[][] = [];
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
+    }, async (args) => {
+      calls.push([...args]);
+      return { ok: true, stdout };
+    });
+    expect(result).toMatchObject({
+      status: 'continue', cause,
+      nextAction: {
+        kind: 'reconcile_worktree_setup',
+        note: 'reconcile the exact registered Orca repository for the validated GitHub owner/repo before creating a fresh worktree',
+      },
+    });
+    expect(calls).toEqual([['orca', 'repo', 'list', '--json']]);
+  });
+
   it('accepts fresh Orca worktree creation when setup is explicitly not configured', async () => {
     const calls: readonly string[][] = [];
     const mutableCalls = calls as string[][];
@@ -342,13 +398,16 @@ describe('supervised Task launch assistant', () => {
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
     }, async (args) => {
       mutableCalls.push([...args]);
+      if (args[1] === 'repo') return { ok: true, stdout: repoListEnvelope([{
+        id: 'orca-repo-1', repoIcon: { label: 'chetwerikoff/orchestrator-pack' },
+      }]) };
       return { ok: true, stdout: okEnvelope({
         worktree: { id: 'repo::wt', path: '/tmp/wt' },
         setupReceipt: { requested: 'run', hookFound: false, state: 'not_configured' },
       }) };
     });
     expect(result).toMatchObject({ status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' } });
-    expect(mutableCalls).toHaveLength(1);
+    expect(mutableCalls).toHaveLength(2);
   });
 
   it('waits for the exact fresh setup terminal to exit successfully', async () => {
@@ -357,6 +416,9 @@ describe('supervised Task launch assistant', () => {
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', baseBranch: 'main',
     }, async (args) => {
       calls.push([...args]);
+      if (args[1] === 'repo') return { ok: true, stdout: repoListEnvelope([{
+        id: 'orca-repo-1', repoIcon: { label: 'chetwerikoff/orchestrator-pack' },
+      }]) };
       if (args[1] === 'worktree') return { ok: true, stdout: okEnvelope({
         worktree: { id: 'repo::wt', path: '/tmp/wt' },
         setupReceipt: { requested: 'run', hookFound: true, state: 'running', terminalHandle: 'setup-term' },
@@ -366,16 +428,20 @@ describe('supervised Task launch assistant', () => {
       } }) };
     });
     expect(result).toMatchObject({ status: 'ok', value: { setupWitness: 'same_invocation_complete' } });
-    expect(calls[1]).toEqual(['orca', 'terminal', 'wait', '--terminal', 'setup-term', '--for', 'exit', '--timeout-ms', '120000', '--json']);
+    expect(calls[2]).toEqual(['orca', 'terminal', 'wait', '--terminal', 'setup-term', '--for', 'exit', '--timeout-ms', '120000', '--json']);
   });
 
   it('fails closed when fresh setup exits non-zero', async () => {
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
-    }, async (args) => args[1] === 'worktree'
-      ? { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::wt', path: '/tmp/wt' },
-        setupReceipt: { requested: 'run', hookFound: true, state: 'running', terminalHandle: 'setup-term' } }) }
-      : { ok: true, stdout: okEnvelope({ wait: { handle: 'setup-term', satisfied: true, status: 'exited', exitCode: 1 } }) });
+    }, async (args) => args[1] === 'repo'
+      ? { ok: true, stdout: repoListEnvelope([{
+        id: 'orca-repo-1', repoIcon: { label: 'chetwerikoff/orchestrator-pack' },
+      }]) }
+      : args[1] === 'worktree'
+        ? { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::wt', path: '/tmp/wt' },
+          setupReceipt: { requested: 'run', hookFound: true, state: 'running', terminalHandle: 'setup-term' } }) }
+        : { ok: true, stdout: okEnvelope({ wait: { handle: 'setup-term', satisfied: true, status: 'exited', exitCode: 1 } }) });
     expect(result).toMatchObject({ status: 'continue', cause: 'worktree_setup_wait_not_successful', evidence: { exitCode: 1 } });
   });
 

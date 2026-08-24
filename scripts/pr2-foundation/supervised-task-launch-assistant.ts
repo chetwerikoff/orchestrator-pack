@@ -595,12 +595,13 @@ function resultRecord(value: Record<string, unknown> | null): Record<string, unk
 function worktreeContinue(
   cause: string,
   evidence: Readonly<Record<string, unknown>> = {},
+  note = 'obtain a supported setup-complete/proven-reuse witness; never infer readiness from path/head',
 ): EdgeResult<PreparedWorktree> {
   return {
     status: 'continue', cause, actor: 'provider', evidence,
     nextAction: {
       kind: 'reconcile_worktree_setup',
-      note: 'obtain a supported setup-complete/proven-reuse witness; never infer readiness from path/head',
+      note,
     },
   };
 }
@@ -625,8 +626,35 @@ export async function prepareWorktreeWithOrca(
     return worktreeContinue('worktree_reuse_readiness_unproven', { worktreeId: id, worktreePath: path });
   }
 
+  const repository = request.repository.trim().toLowerCase();
+  const listed = resultRecord(envelope(await execute([
+    'orca', 'repo', 'list', '--json',
+  ])));
+  const repos = listed?.repos;
+  const repositoryResolutionNote = 'reconcile the exact registered Orca repository for the validated GitHub owner/repo before creating a fresh worktree';
+  if (!Array.isArray(repos) || repos.some((repo) => !record(repo))) {
+    return worktreeContinue('worktree_repository_resolution_malformed', { repository }, repositoryResolutionNote);
+  }
+  const canonicalKey = `github.com/${repository}`;
+  const matches = repos.filter((repo) => {
+    const repoRecord = record(repo) ? repo : null;
+    const repoIcon = repoRecord && record(repoRecord.repoIcon) ? repoRecord.repoIcon : null;
+    const gitRemoteIdentity = repoRecord && record(repoRecord.gitRemoteIdentity) ? repoRecord.gitRemoteIdentity : null;
+    return text(repoIcon?.label) === repository || text(gitRemoteIdentity?.canonicalKey) === canonicalKey;
+  });
+  if (matches.length === 0) {
+    return worktreeContinue('worktree_repository_resolution_absent', { repository, matchCount: 0 }, repositoryResolutionNote);
+  }
+  if (matches.length !== 1) {
+    return worktreeContinue('worktree_repository_resolution_ambiguous', { repository, matchCount: matches.length }, repositoryResolutionNote);
+  }
+  const repositoryId = record(matches[0]) ? text(matches[0].id) : '';
+  if (!repositoryId) {
+    return worktreeContinue('worktree_repository_resolution_id_unusable', { repository, matchCount: 1 }, repositoryResolutionNote);
+  }
+
   const created = resultRecord(envelope(await execute([
-    'orca', 'worktree', 'create', '--repo', request.repository, '--name', request.worktreeName!,
+    'orca', 'worktree', 'create', '--repo', `id:${repositoryId}`, '--name', request.worktreeName!,
     ...(request.baseBranch ? ['--base-branch', request.baseBranch] : []),
     ...(request.issueNumber ? ['--issue', String(request.issueNumber)] : ['--no-parent']),
     '--setup', 'run', '--json',
