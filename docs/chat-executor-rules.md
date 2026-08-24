@@ -124,15 +124,20 @@ If the required evidence is absent, do not demand it as though it exists. Use we
 
 A blocking finding that depends on an impossible or unproven witness must be withdrawn or explicitly adjudicated; it must not generate another implementation round whose only purpose is to manufacture evidence the production path does not supply.
 
-## 8. CI and review stay current-head bound
+## 8. CI, smoke, and review authority stay current-head bound
 
-CI and review conclusions apply to the exact PR head they evaluated.
+Required CI and smoke conclusions apply only to the exact PR head they evaluated. Review authority is also current-head bound, but reviewer invocation and review authority are not the same event: the pack-owned runner may establish current-head authority through an exact authority-selected conflict-free carry-over from an authorized clean source head without invoking the reviewer model again.
+
+For a pack-review start, the PR number is the canonical target. The live PR supplies the current head and its closing reference supplies the Issue. Session-binding cache state is advisory correlation only; missing, corrupt, stale, or disagreeing cache data cannot veto a valid PR-led start or replace the linked Issue. If the exact bound Issue snapshot is missing, the runner freezes it only after acquiring its existing start claim.
 
 After every new commit or history rewrite:
 
 - earlier-head CI is stale;
-- earlier-head clean review is stale;
-- obtain fresh checks and review before claiming the new head is ready for review or merge.
+- earlier-head smoke is stale;
+- an earlier-head review result does not directly authorize the new head;
+- the earlier clean result may contribute only through an explicit current-head authority path such as exact conflict-free carry-over; otherwise the current head requires its normal review path.
+
+A persisted clean terminal for the exact same head suppresses a redundant automatic/common reviewer-model invocation. A cycle already at cap also suppresses further automatic/common model calls. Neither case weakens current-head CI or smoke. Smoke admission remains required for a new head before an at-cap refusal, so cap exhaustion cannot hide absent or failed current-head smoke evidence.
 
 Missing, pending, cancelled, failed, or earlier-head required checks are not green for the current head.
 
@@ -149,7 +154,7 @@ Follow `/AGENTS.md` merge authority. Do not merge unless the direct top-level us
 Immediately before an authorized merge:
 
 1. read the current PR state and exact head;
-2. confirm required CI and review are acceptable for that head;
+2. confirm required CI and review authority are acceptable for that head;
 3. use `expected_head_sha` or equivalent expected-head protection when the available merge API supports it;
 4. perform the merge;
 5. read the merge result back.
@@ -173,8 +178,9 @@ For a normal standalone implementation, completion means:
 [ ] PR diff/changed files match the task scope
 [ ] important published results were read back
 [ ] required CI is green for the current PR head
+[ ] required smoke is current-head bound when the task declares it
 [ ] no known current material review finding remains unresolved
-[ ] current-head review is acceptable
+[ ] current-head review authority is acceptable
 [ ] the user is told the PR/head/CI/review state and any concrete limitation
 ```
 
@@ -192,6 +198,6 @@ Merge is part of completion only when the user explicitly requested it and repos
 >
 > Treat real conflicts and ambiguity as exceptions when they actually occur.
 >
-> Use current-head CI and review.
+> Use current-head CI, smoke, and review authority.
 >
 > Report truthfully, or merge only when explicitly authorized and allowed.
