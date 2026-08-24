@@ -1,11 +1,13 @@
 // @vitest-ci-lane parked
 // @vitest-pre-topology-seconds 120
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { runProcessSync } from './kernel/subprocess.ts';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readProcessIdentity } from './lib/cutover/activation-cordon.ts';
+import { FileEpochAuthority } from './lib/cutover/activation-epoch-authority.ts';
+import { sha256Bytes } from './lib/cutover/stable-stringify.ts';
 import { supervisorChildExitTransition } from './lib/orchestrator-side-process-supervisor.ts';
 import { EMPTY_CRASH_BACKOFF_STATE, type CrashBackoffPolicy } from './runtime/crash-backoff.ts';
 
@@ -125,6 +127,111 @@ describe('Issue #1484 truthful supervisor status', () => {
       expect(readFileSync(statusPath, 'utf8')).toBe(before);
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('runs the shipped supervisor loop in a separate process through cadence/backoff to the terminal fuse', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1484-supervisor-loop-'));
+    try {
+      const fakeRepo = path.join(root, 'repo');
+      const stateDir = path.join(root, 'state');
+      const schedulerDir = path.join(fakeRepo, 'scripts', 'pr2-foundation');
+      const schedulerPath = path.join(schedulerDir, 'scheduler.ts');
+      const targetRegistryPath = path.join(root, 'target-registry.json');
+      const projectedRegistryPath = path.join(stateDir, 'projected-registry.json');
+      const epochAuthorityPath = path.join(root, 'epoch-authority.json');
+      mkdirSync(schedulerDir, { recursive: true });
+      writeFileSync(
+        schedulerPath,
+        "process.stderr.write('scheduler exploded\\n'); process.exitCode = 7;\n",
+        'utf8',
+      );
+      const registry = {
+        schemaVersion: 2,
+        requiredChildIds: ['pr2-scheduler'],
+        children: [{
+          id: 'pr2-scheduler',
+          runtime: 'node',
+          script: 'pr2-foundation/scheduler.ts',
+          sideEffecting: true,
+          cadenceSeconds: 1,
+        }],
+      };
+      writeFileSync(targetRegistryPath, `${JSON.stringify(registry)}\n`, 'utf8');
+      const epochId = 'epoch-1484-supervisor-loop';
+      const nonce = 'nonce-1484-supervisor-loop';
+      new FileEpochAuthority(epochAuthorityPath).commit(null, {
+        epochId,
+        nonce,
+        hostId: 'test-host',
+        repoRoot: fakeRepo,
+        installedCommitSha: 'a'.repeat(40),
+        snapshotDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        importDigests: { reconcile: 'import-r', reevaluation: 'import-e', reportStateSeed: 'import-s' },
+        registryHash: sha256Bytes(readFileSync(targetRegistryPath)),
+        preCommitLogDigest: 'phase-one-fixture',
+        commitAt: new Date().toISOString(),
+      });
+
+      const result = runProcessSync({
+        command: process.execPath,
+        args: [
+          '--experimental-strip-types',
+          supervisorScript,
+          'run',
+          '--state-dir', stateDir,
+          '--repo-root', fakeRepo,
+          '--epoch-authority', epochAuthorityPath,
+          '--epoch-id', epochId,
+          '--nonce', nonce,
+          '--target-registry', targetRegistryPath,
+          '--projected-registry', projectedRegistryPath,
+        ],
+        cwd: repoRoot,
+        inheritParentEnv: true,
+        env: {
+          OPK_SUPERVISOR_CRASH_RAPID_EXIT_THRESHOLD_MS: '1000',
+          OPK_SUPERVISOR_CRASH_MAX_RAPID_EXITS: '1',
+          OPK_SUPERVISOR_CRASH_TERMINAL_RAPID_EXITS: '2',
+          OPK_SUPERVISOR_CRASH_BASE_BACKOFF_MS: '1',
+          OPK_SUPERVISOR_CRASH_MAX_BACKOFF_MS: '1',
+        },
+        timeoutMs: 15_000,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.timedOut).toBe(false);
+      const status = JSON.parse(readFileSync(
+        path.join(stateDir, 'typescript-supervisor-status.json'),
+        'utf8',
+      )) as {
+        schemaVersion: number;
+        childPid: number | null;
+        childStartTicks: string | null;
+        childGeneration: number;
+        childRestarts: number;
+        restartState: string;
+        refusalReason: string | null;
+        crashBackoff: { terminal: boolean; rapidExits: number; terminalReason: string | null };
+      };
+      expect(status).toMatchObject({
+        schemaVersion: 2,
+        childPid: null,
+        childStartTicks: null,
+        childGeneration: 2,
+        childRestarts: 2,
+        restartState: 'refused',
+        crashBackoff: {
+          terminal: true,
+          rapidExits: 2,
+          terminalReason: 'crash_loop:2_rapid_exits',
+        },
+      });
+      expect(status.refusalReason).toContain('scheduler_child_');
+      expect(status.refusalReason).toContain('scheduler exploded');
+      expect(status.refusalReason).not.toBe(status.crashBackoff.terminalReason);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
