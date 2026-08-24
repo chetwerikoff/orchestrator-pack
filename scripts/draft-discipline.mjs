@@ -170,6 +170,7 @@ function parseSmokeScenarioLine(line, nextLine = '') {
         expected: bullet.slice(colonIndex + 1).trim(),
       };
     }
+    return null;
   }
   const semicolonIndex = bullet.indexOf(';');
   if (semicolonIndex > 0) {

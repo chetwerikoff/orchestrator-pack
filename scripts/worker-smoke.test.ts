@@ -242,6 +242,19 @@ describe('runtime-neutral worker smoke', () => {
     });
   });
 
+  it('rejects a reserved expected-only dash bullet', () => {
+    const markdown = [
+      '```smoke-test-plan',
+      '- expected: the page loads',
+      '```',
+    ].join('\n');
+
+    expect(parseSmokeTestPlan(markdown)).toEqual({
+      requirement: 'required',
+      scenarios: [],
+    });
+  });
+
   it('parses YAML-ish nested action and expected lines', () => {
     const markdown = [
       '```smoke-test-plan',
