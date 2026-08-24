@@ -38,6 +38,8 @@ type OrcaWorkerShowResult = Readonly<{
   worker?: Readonly<{
     agent_terminal_handle?: string | null;
     worktree_id?: string | null;
+    state?: string | null;
+    stage?: string | null;
   }>;
   terminal?: Readonly<{ handle?: string | null }> | null;
   observation?: Readonly<{ exactWorker?: boolean; status?: string }>;
@@ -78,6 +80,27 @@ function attachNativeRuntimeError(
 function isRetryableTabNotFound(response: OrcaJsonResponse): boolean {
   return response.error?.code?.trim() === 'runtime_error'
     && response.error?.message?.trim() === 'tab_not_found';
+}
+
+function normalizedWorkerLifecycle(result: OrcaWorkerShowResult | undefined): {
+  readonly observationStatus: string;
+  readonly workerState: string;
+  readonly workerStage: string;
+} {
+  return {
+    observationStatus: String(result?.observation?.status ?? '').trim().toLowerCase(),
+    workerState: String(result?.worker?.state ?? '').trim().toLowerCase(),
+    workerStage: String(result?.worker?.stage ?? '').trim().toLowerCase(),
+  };
+}
+
+function isAuthoritativeActiveWorkerLifecycle(result: OrcaWorkerShowResult | undefined): boolean {
+  const lifecycle = normalizedWorkerLifecycle(result);
+  const liveObservation = lifecycle.observationStatus === 'live'
+    || lifecycle.observationStatus === 'running';
+  const acceptedStage = lifecycle.workerStage === 'input_accepted'
+    || lifecycle.workerStage === 'remote_input_accepted';
+  return liveObservation && lifecycle.workerState === 'ready' && acceptedStage;
 }
 
 /**
@@ -236,7 +259,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     );
     if (!shown.ok) return runtimeFailure('resolve_assignment_worker', neutralFailureReason(shown));
     const exact = shown.result?.observation?.exactWorker === true;
-    const observationStatus = String(shown.result?.observation?.status ?? '').trim().toLowerCase();
+    const { observationStatus } = normalizedWorkerLifecycle(shown.result);
     if (!exact) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
@@ -253,11 +276,13 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
         : { kind: 'gone' as const };
       return { status: 'ok', value };
     }
-    // Current Orca emits live/exited for exact non-gone observations. Missing,
-    // unverifiable, identity-changed, unknown, or future ambiguous statuses are
-    // not exact current-target evidence and must not be upgraded to resolved.
-    if (observationStatus !== 'live' && observationStatus !== 'exited') {
-      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    // Exact terminal presence is deliberately weaker than active Dispatch
+    // authority. Upstream Orca's worker lifecycle uses state=ready after
+    // input_accepted; the installed capture may report observation.status=running
+    // while newer Orca reports live. Any settled/exited/unknown/contradictory
+    // combination is non-active and therefore cannot authorize S2.
+    if (!isAuthoritativeActiveWorkerLifecycle(shown.result)) {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_inactive');
     }
     const terminalHandle = String(
       shown.result?.terminal?.handle
