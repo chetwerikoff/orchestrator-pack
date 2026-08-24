@@ -1,0 +1,45 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1532,
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "scripts/lib/operator-primary-target.test.ts",
+    "scripts/lib/operator-primary-target.ts",
+    "scripts/lib/worker-assignment-store.ts",
+    "scripts/operator-primary-binding.test.ts",
+    "scripts/operator-primary-binding.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    ".ao/",
+    ".github/",
+    ".orca/",
+    "package-lock.json",
+    "package.json",
+    "packages/core/",
+    "scripts/ao-legacy-runtime/",
+    "scripts/lib/operator-publication.ts",
+    "scripts/lib/worker-degraded-ci-handoff.ts",
+    "scripts/orca-runtime/",
+    "scripts/pr2-foundation/fleet-escalation-delivery.test.ts",
+    "scripts/pr2-foundation/fleet-escalation-delivery.ts",
+    "scripts/pr2-foundation/fleet-escalation-proof.ts",
+    "scripts/pr2-foundation/fleet-reconciliation-handoff.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/vitest-runtime-history.json",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/migration_notes.md",
+    "docs/orca-runtime-boundary.md",
+    "docs/orchestration-runbook.md",
+    "scripts/lib/operator-primary-target.test.ts",
+    "scripts/lib/operator-primary-target.ts",
+    "scripts/lib/worker-assignment-store.test.ts",
+    "scripts/lib/worker-assignment-store.ts",
+    "scripts/operator-primary-binding.test.ts",
+    "scripts/operator-primary-binding.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "3f072fb90b1b54f3fa8677f5c8b1ef9ec6c29a43"
+}
