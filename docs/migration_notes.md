@@ -354,7 +354,8 @@ not delete arbitrary workspaces, credentials, unrelated state, or audit evidence
 ### Rollback
 
 Rollback is a source-control revert of the hard-cut changes followed by the normal
-supported adoption/recycle path. Do not convert old state, restore a fallback transport, or reinterpret an old short identifier as runtime authority.
+current-head verification for the reverted tree. Do not convert old state, restore a
+fallback transport, or reinterpret an old short identifier as runtime authority.
 Existing GitHub review, CI, Issue, PR, and audit history remains immutable evidence.
 
 ## First-time supervisor activation (Issue #1422)
