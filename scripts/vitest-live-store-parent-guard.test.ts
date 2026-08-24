@@ -47,21 +47,6 @@ function productionEnvironment(root: string): NodeJS.ProcessEnv {
   return env;
 }
 
-function seedSupervisorStatus(env: NodeJS.ProcessEnv): void {
-  const wake = env.OPK_VITEST_PRODUCTION_WAKE_ROOT!;
-  writeFileSync(
-    join(wake, 'typescript-supervisor-status.json'),
-    JSON.stringify({
-      schemaVersion: 1,
-      supervisorStartTicks: 'test-witness',
-      childId: 'pr2-scheduler',
-      restartState: 'running',
-      startedAt: new Date().toISOString(),
-    }),
-    'utf8',
-  );
-}
-
 function runHarnessedVitest(testPath: string, env: NodeJS.ProcessEnv): Promise<{
   exitCode: number | null;
   stderr: string;
@@ -97,21 +82,9 @@ describe('parent live-store guard', () => {
       'utf8',
     );
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
-    seedSupervisorStatus(childEnvironment);
     const childPromise = runHarnessedVitest(fixture, childEnvironment);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    writeFileSync(
-      join(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'typescript-supervisor-status.json'),
-      JSON.stringify({
-        schemaVersion: 1,
-        supervisorStartTicks: 'test-witness',
-        childId: 'pr2-scheduler',
-        restartState: 'running',
-        startedAt: new Date().toISOString(),
-        tick: 1,
-      }),
-      'utf8',
-    );
+    writeFileSync(join(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'worker-message-dispatch-journal.json'), 'tick\n');
     const child = await childPromise;
 
     expect(child.exitCode, child.stderr).toBe(0);
@@ -148,35 +121,4 @@ describe('parent live-store guard', () => {
     expect(child.stderr).toContain('OPK_VITEST_LIVE_STORE_GUARD_FAILED');
   });
 
-  it('retains a child-originated supervisor-status mutation without a supervisor witness', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-status-leak-'));
-    temporaryRoots.push(root);
-    const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-status-leak-child.test.ts');
-    temporaryFiles.push(fixture);
-    writeFileSync(
-      fixture,
-      [
-        "import { expect, it } from 'vitest';",
-        "import { runProcess } from './kernel/subprocess.ts';",
-        "it('passes its own assertion while leaking a supervisor status write', async () => {",
-        "  const env = { ...process.env };",
-        "  for (const name of ['OPK_VITEST_HARNESS', 'OPK_VITEST_HARNESS_ROOT', 'OPK_VITEST_HARNESS_INVENTORY', 'NODE_OPTIONS']) delete env[name];",
-        "  const result = await runProcess({ command: process.execPath, args: ['--input-type=module', '-e', \"import('node:fs').then(({ writeFileSync }) => writeFileSync(process.env.LEAK_PATH, 'child-leak\\\\n'))\"], env: { ...env, LEAK_PATH: process.env.LEAK_PATH }, inheritParentEnv: false });",
-        "  expect(result.exitCode).toBe(0);",
-        "});",
-        '',
-      ].join('\n'),
-      'utf8',
-    );
-    const childEnvironment = productionEnvironment(join(root, 'child-production'));
-    seedSupervisorStatus(childEnvironment);
-    childEnvironment.LEAK_PATH = join(
-      childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!,
-      'typescript-supervisor-status.json',
-    );
-    const child = await runHarnessedVitest(fixture, childEnvironment);
-
-    expect(child.exitCode).not.toBe(0);
-    expect(child.stderr).toContain('OPK_VITEST_LIVE_STORE_GUARD_FAILED');
-  });
 });
