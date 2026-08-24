@@ -15,7 +15,10 @@ import type {
   FoundationInertObservation,
   GreenfieldFoundationObservation,
 } from './types.ts';
-import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
+import {
+  processIdentityMatches,
+  readSupervisorStatus,
+} from '../orchestrator-side-process-supervisor.ts';
 import { readMigrationJournal } from '../../pr2-foundation/migration-journal.ts';
 import { resolveWakeSupervisorStateRoot } from '../../pr2-foundation/wake-supervisor-state-root.ts';
 import { assertFoundationInert } from '../../pr2-foundation/scheduler.ts';
@@ -369,16 +372,12 @@ export function observeGreenfieldControlPlane(input: {
     const status = readSupervisorStatus({ stateDir: input.paths.supervisorStateDir });
     supervisorStatusPresent = status !== null;
     if (status) {
-      if (status.schemaVersion !== 1 || status.childId !== 'pr2-scheduler' || typeof status.restartState !== 'string') {
+      if (status.schemaVersion !== 2 || status.childId !== 'pr2-scheduler' || typeof status.restartState !== 'string') {
         throw new Error('greenfield_registered_child_unknown');
       }
-      supervisorAlive = Number.isInteger(status.supervisorPid)
-        && status.supervisorPid > 1
-        && processAliveStrict(status.supervisorPid);
-      childAlive = Number.isInteger(status.childPid)
-        && status.childPid !== null
-        && status.childPid > 1
-        && processAliveStrict(status.childPid);
+      supervisorAlive = processIdentityMatches(status.supervisorPid, status.supervisorStartTicks);
+      childAlive = status.childPid !== null
+        && processIdentityMatches(status.childPid, status.childStartTicks);
       if (supervisorAlive || childAlive) throw new Error('greenfield_registered_child_alive');
     }
     const singleInstanceLeasePath = path.join(input.paths.supervisorStateDir, 'typescript-supervisor.lock');
@@ -462,13 +461,12 @@ function observeFoundationInertInputInternal(input: {
     }
   }
   const status = readSupervisorStatus({ stateDir: input.paths.supervisorStateDir });
-  const supervisorPid = Number(status?.supervisorPid ?? 0);
-  const childPid = Number(status?.childPid ?? 0);
-  const supervisorAlive = Number.isInteger(supervisorPid) && supervisorPid > 1
-    ? processAliveStrict(supervisorPid)
+  const statusV2 = status?.schemaVersion === 2 ? status : null;
+  const supervisorAlive = statusV2
+    ? processIdentityMatches(statusV2.supervisorPid, statusV2.supervisorStartTicks)
     : false;
-  const childAlive = Number.isInteger(childPid) && childPid > 1
-    ? processAliveStrict(childPid)
+  const childAlive = statusV2?.childPid !== null && statusV2?.childPid !== undefined
+    ? processIdentityMatches(statusV2.childPid, statusV2.childStartTicks)
     : false;
   const singleInstanceLeasePath = path.join(input.paths.supervisorStateDir, 'typescript-supervisor.lock');
   const singleInstanceLeasePresent = readLiveSingleInstanceLease(singleInstanceLeasePath) !== null;
@@ -482,14 +480,14 @@ function observeFoundationInertInputInternal(input: {
     && fileDigestOrAbsent(path.join(input.repoRoot, 'scripts', 'orchestrator-side-process-registry.json'))
       !== fileDigestOrAbsent(input.paths.projectedRegistryPath);
   const supervisorChanged = greenfield
-    ? supervisorAlive || childAlive || singleInstanceLeasePresent
+    ? status !== null || singleInstanceLeasePresent
     : status !== null;
   return {
     registryChanged,
     supervisorChanged,
     schedulerRegistered: supervisorChanged,
     schedulerRunning: supervisorAlive || childAlive,
-    schedulerClaimAcquirer: supervisorAlive && status?.restartState === 'running',
+    schedulerClaimAcquirer: supervisorAlive && childAlive && statusV2?.restartState === 'running',
     activationEpochEnforced: authority.currentEpochId !== null,
     liveStoreOpened: writerCount !== 0,
     legacyStarterDisabled: existsSync(path.join(input.repoRoot, 'scripts', 'orchestrator-wake-supervisor.ps1')),
