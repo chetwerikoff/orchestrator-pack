@@ -462,6 +462,8 @@ function observeFoundationInertInputInternal(input: {
   }
   const status = readSupervisorStatus({ stateDir: input.paths.supervisorStateDir });
   const statusV2 = status?.schemaVersion === 2 ? status : null;
+  const statusV2ShapeValid = statusV2?.childId === 'pr2-scheduler'
+    && typeof statusV2.restartState === 'string';
   const supervisorAlive = statusV2
     ? processIdentityMatches(statusV2.supervisorPid, statusV2.supervisorStartTicks)
     : false;
@@ -480,7 +482,10 @@ function observeFoundationInertInputInternal(input: {
     && fileDigestOrAbsent(path.join(input.repoRoot, 'scripts', 'orchestrator-side-process-registry.json'))
       !== fileDigestOrAbsent(input.paths.projectedRegistryPath);
   const supervisorChanged = greenfield
-    ? status !== null || singleInstanceLeasePresent
+    ? (status !== null && (!statusV2 || !statusV2ShapeValid))
+      || supervisorAlive
+      || childAlive
+      || singleInstanceLeasePresent
     : status !== null;
   return {
     registryChanged,
