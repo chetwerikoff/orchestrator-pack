@@ -50,7 +50,7 @@
     "CLAUDE.md",
     "docs/",
     "scripts/gate-runner/",
-    "scripts/toolchain/"
+    "scripts/toolchain/NODE_22_OPERATOR_RUNBOOK.md"
   ],
   "source_revision": "6ed7a3a0f4b39a83e9d6969b54706629c56b9110"
 }
