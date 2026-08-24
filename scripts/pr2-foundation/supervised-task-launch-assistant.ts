@@ -4,7 +4,7 @@ import '../toolchain/native-entrypoint-preflight.ts';
 import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
-import type { RuntimeAdapter, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
+import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
 import { runSupervisedWorkerStart, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
 
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
@@ -370,7 +370,7 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(prepared.value.path ? { worktreePath: prepared.value.path } : {}),
   };
 
-  let terminal: ReturnType<RuntimeAdapter['spawnWorker']> extends { status: 'ok'; value: infer T } ? T : never;
+  let terminal: RuntimeWorker | undefined;
   if (providerMode) {
     const terminalStartedAt = deps.now();
     const terminalFinishedAt = deps.now();
@@ -431,7 +431,7 @@ export async function runSupervisedTaskLaunchAssistant(
     orcaArgs: providerMode
       ? ['--task', taskId, '--worktree', 'new-top-level', '--repo', prepared.value.repositorySelector ?? '',
         '--name', input.worktreeName ?? '', '--agent', profile.orcaAgent, '--model', profile.model, '--effort', profile.effort, '--setup', 'run']
-      : ['--task', taskId, '--terminal', terminal.identity.id, '--worktree', prepared.value.selector],
+      : ['--task', taskId, '--terminal', terminal!.identity.id, '--worktree', prepared.value.selector],
   });
   const startDone = deps.now();
   timings.push({
@@ -448,8 +448,12 @@ export async function runSupervisedTaskLaunchAssistant(
     const retry = requestId ? [
       'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2-foundation/supervised-worker-start.ts --',
       ...(input.issueNumber ? ['--issue-number', String(input.issueNumber)] : []),
-      '--repository', quote(resources.repository), '--', '--task', quote(taskId),
-      '--terminal', quote(terminal.identity.id), '--worktree', quote(prepared.value.selector),
+      '--repository', quote(resources.repository), '--role', input.workClass === 'manager' ? 'orchestrator' : 'worker',
+      ...(providerMode ? ['--mode', 'provider_new_top_level'] : []), '--', '--task', quote(taskId),
+      ...(providerMode
+        ? ['--worktree', 'new-top-level', '--repo', quote(prepared.value.repositorySelector ?? ''), '--name', quote(input.worktreeName ?? ''),
+          '--agent', 'cursor', '--model', quote(profile.model), '--effort', quote(profile.effort), '--setup', 'run']
+        : ['--terminal', quote(terminal!.identity.id), '--worktree', quote(prepared.value.selector)]),
       '--retry-request', quote(requestId),
     ].join(' ') : undefined;
     return continued(input, 'supervised_start', {
