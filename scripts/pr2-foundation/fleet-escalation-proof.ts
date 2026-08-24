@@ -221,7 +221,7 @@ export async function runFleetEscalationProof(): Promise<FleetEscalationProofV1>
           schedulerGeneration: generation,
           tickSequence,
           reason,
-          role: 'orchestrator',
+          role: 'worker',
           issueNumber: 1260,
           taskId: assignment.assignment.taskId,
           assignmentId: assignment.assignment.assignmentId,
