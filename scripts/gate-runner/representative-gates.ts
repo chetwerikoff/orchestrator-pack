@@ -58,6 +58,7 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
       paths: [
         'AGENTS.md',
         'CLAUDE.md',
+        'docs/browser-gpt-turn-runbook.md',
         'docs/coworker-delegation.md',
         'docs/tiering.md',
         'docs/script-owned-review-pipeline.md',
@@ -129,6 +130,27 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
           exactOccurrences: [
             { marker: '## Launch and observation', count: 1 },
             { marker: '## Legacy state and diagnostic probe', count: 1 },
+            { marker: '(../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight)', count: 1 },
+            { marker: '(../../docs/browser-gpt-turn-runbook.md#prepare-one-turn)', count: 1 },
+            { marker: '(../../docs/browser-gpt-turn-runbook.md#launch)', count: 1 },
+            { marker: '(../../docs/browser-gpt-turn-runbook.md#observe-and-settle)', count: 1 },
+            { marker: '(../../docs/browser-gpt-turn-runbook.md#publication-and-tab-lifecycle)', count: 1 },
+            { marker: '(../../docs/browser-gpt-turn-runbook.md#incident-handling)', count: 1 },
+            { marker: '(../../docs/browser-gpt-turn-runbook.md#one-shot-diagnosis)', count: 1 },
+            { marker: '(../../docs/browser-gpt-turn-runbook.md#shift-handoffclose)', count: 1 },
+          ],
+        },
+        {
+          path: 'docs/browser-gpt-turn-runbook.md',
+          contains: [
+            '## Start-of-shift preflight',
+            '## Prepare one turn',
+            '## Launch',
+            '## Observe and settle',
+            '## Publication and tab lifecycle',
+            '## Incident handling',
+            '## One-shot diagnosis',
+            '## Shift handoff/close',
           ],
         },
         {
