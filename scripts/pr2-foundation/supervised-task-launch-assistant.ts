@@ -432,7 +432,8 @@ export async function runSupervisedTaskLaunchAssistant(
     role: input.workClass === 'manager' ? 'orchestrator' : 'worker',
     orcaArgs: providerMode
       ? ['--task', taskId, '--worktree', 'new-top-level', '--repo', prepared.value.repositorySelector ?? '',
-        '--name', input.worktreeName ?? '', '--agent', profile.orcaAgent, '--model', profile.model, '--effort', profile.effort, '--setup', 'run', '--json']
+        '--name', input.worktreeName ?? '', ...(input.baseBranch ? ['--base-branch', input.baseBranch] : []),
+        '--agent', profile.orcaAgent, '--model', profile.model, '--effort', profile.effort, '--setup', 'run', '--json']
       : ['--task', taskId, '--terminal', terminal!.identity.id, '--worktree', prepared.value.selector],
   });
   const startDone = deps.now();
@@ -459,6 +460,7 @@ export async function runSupervisedTaskLaunchAssistant(
       ...(providerMode ? ['--mode', 'provider_new_top_level'] : []), '--', '--task', quote(taskId),
       ...(providerMode
         ? ['--worktree', 'new-top-level', '--repo', quote(prepared.value.repositorySelector ?? ''), '--name', quote(input.worktreeName ?? ''),
+          ...(input.baseBranch ? ['--base-branch', quote(input.baseBranch)] : []),
           '--agent', 'cursor', '--model', quote(profile.model), '--effort', quote(profile.effort), '--setup', 'run']
         : ['--terminal', quote(terminal!.identity.id), '--worktree', quote(prepared.value.selector)]),
       '--retry-request', quote(requestId),

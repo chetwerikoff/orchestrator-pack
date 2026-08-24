@@ -159,7 +159,7 @@ describe('supervised Task launch assistant', () => {
     const calls: string[][] = [];
     let spawns = 0;
     const result = await runSupervisedTaskLaunchAssistant({
-      ...launchInput('t2'), startMode: 'provider_new_top_level',
+      ...launchInput('t2'), startMode: 'provider_new_top_level', baseBranch: 'feature/base',
     }, {
       ...deps({ adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }) }),
       prepareWorktree: async () => ({ status: 'ok', value: {
@@ -173,7 +173,7 @@ describe('supervised Task launch assistant', () => {
     expect(result.outcome).toBe('ready');
     expect(spawns).toBe(0);
     expect(calls).toEqual([[
-      '--task', 'task-1', '--worktree', 'new-top-level', '--repo', 'id:orca-repo-1', '--name', 'issue-1479',
+      '--task', 'task-1', '--worktree', 'new-top-level', '--repo', 'id:orca-repo-1', '--name', 'issue-1479', '--base-branch', 'feature/base',
       '--agent', 'cursor', '--model', 'model', '--effort', 'medium', '--setup', 'run', '--json',
     ]]);
   });
@@ -380,6 +380,19 @@ describe('supervised Task launch assistant', () => {
       resources: { dispatchId: 'dispatch-provider', receipt, residualResources },
       evidence: { dispatchId: 'dispatch-provider', receipt, residualResources },
     });
+  });
+
+  it('preserves provider base branch on retry action', async () => {
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('t2'), startMode: 'provider_new_top_level', baseBranch: 'feature/base',
+    }, deps({ supervised: {
+      ok: false, reason: 'supervised_start_envelope_error', recovery: { requestId: 'request-base' },
+    } }));
+    expect(result).toMatchObject({ outcome: 'continue', nextAction: { kind: 'retry_supervised_start' } });
+    if (result.outcome === 'continue') {
+      expect(result.nextAction.command).toContain('--base-branch');
+      expect(result.nextAction.command).toContain("'feature/base'");
+    }
   });
 
   it('preserves worker-start provider mutation recovery as one exact replay action', async () => {
