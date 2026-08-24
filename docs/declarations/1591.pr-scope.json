@@ -5,6 +5,7 @@
     "docs/orchestration-runbook.md",
     "scripts/lib/pack-gpt-source-comment-runner.cases.ts",
     "scripts/lib/pack-review-run-store.ts",
+    "scripts/merge-triage-evidence.ts",
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner-issue-1591.test.ts",
     "scripts/pack-review-runner-issue-898.test.ts",
