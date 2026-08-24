@@ -15,6 +15,8 @@ import {
   saveSubmittedFingerprints,
   submitUnsentCursorComposer,
   submitUnsentCursorComposerOnce,
+  submitUnsentCursorComposerDeliveryForTerminal,
+  submitOrcaMessageDeliveryPointer,
   submitUnsentCursorComposerOnceForWorker,
   runSupervisorUnsentComposerTick,
   workerKey,
@@ -23,6 +25,7 @@ import {
 import type { RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 
 const POKE = 'You have 1 orchestration message. Run `orca orchestration check --run run_d613a86c140a`.';
+const DISPATCH_POKE = 'You have 1 orchestration message. Run `orca orchestration check`.';
 const CURSOR_FOOTER = [
   'Cursor Grok 4.6 High · 40.6% · 22 files edited                                                                                                    Run Everything',
   '~/projects/orchestrator-pack · main',
@@ -75,6 +78,17 @@ function depsFor(
 }
 
 describe('classifyCursorComposer', () => {
+  it('treats narrow Running chrome inside the composer box as empty', () => {
+    expect(classifyCursorComposer(`
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+→ Add a follow-up
+ctrl+c to stop
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+Cursor Grok 4.6 High · 10.4% Run Everything
+~/projects/orchestrator-pack · main
+`)).toBe('empty');
+  });
+
   it('treats a visible transcript plus trailing placeholder as empty', () => {
     expect(classifyCursorComposer(`
 wiki: skip(direct-instruction state/action)
@@ -118,6 +132,27 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   Cursor Grok 4.6 High · 44.7% · 22 files edited                                                                                                    Run Everything
+  ~/projects/orchestrator-pack · main
+    `)).toBe(true);
+  });
+
+  it('sees the poke when Cursor renders arrow and pointer on one line', () => {
+    expect(cursorComposerLooksUnsent(`
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → ${POKE}
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  GPT-5.6 Luna 272K High Run Everything
+  ~/projects/orchestrator-pack · main
+`)).toBe(true);
+  });
+
+  it('accepts one exact pointer soft-wrapped by a narrow Cursor composer', () => {
+    expect(cursorComposerLooksUnsent(`
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → You have 1 orchestration message. Run \`orca orchestration check --run run_3b
+d1ac011935\`.
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  GPT-5.6 Luna 272K High Run Everything
   ~/projects/orchestrator-pack · main
 `)).toBe(true);
   });
@@ -642,6 +677,253 @@ describe('submitUnsentCursorComposer', () => {
 });
 
 describe('delivery-triggered composer submission', () => {
+  it('submits an exact pointer soft-wrapped by a narrow Cursor composer', async () => {
+    const target = worker('term_wrapped_pointer');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor({}, {
+      submitted,
+      liveness: () => 'busy',
+      read: () => ({
+        ok: true as const,
+        lines: [
+          '▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄',
+          '→ You have 1 orchestration message. Run `orca orchestration check --run run_3b',
+          'd1ac011935`.',
+          '▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀',
+          ...CURSOR_FOOTER,
+        ],
+        source: 'screen' as const,
+      }),
+    }));
+
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(submitted).toEqual([target.identity, target.identity]);
+  });
+
+  it('writes and queues one unread Orca message after asynchronous rendering', async () => {
+    const target = worker('term_message_delivery');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let reads = 0;
+    let writes = 0;
+    let consumed = false;
+    let rendered = false;
+    let releaseRender: (() => void) | undefined;
+    const renderReady = new Promise<void>((resolve) => {
+      releaseRender = () => {
+        rendered = true;
+        resolve();
+      };
+    });
+    const submitDeps = depsFor({}, {
+      submitted,
+      liveness: () => 'busy',
+      read: () => {
+        reads += 1;
+        return {
+          ok: true as const,
+          lines: rendered ? [DISPATCH_POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        };
+      },
+      sleepAsync: async () => renderReady,
+    });
+    const deps = {
+      lookupMessage: () => ({
+        ok: true as const,
+        message: {
+          id: 'msg_delivery',
+          runId: 'run_d613a86c140a',
+          recipient: 'dispatch:ctx_delivery',
+          consumed,
+        },
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: (identity: RuntimeWorkerIdentity, pointer: string) => {
+        expect(identity).toEqual(target.identity);
+        expect(pointer).toBe(DISPATCH_POKE);
+        writes += 1;
+        return { status: 'dispatched' as const };
+      },
+      submitDeps,
+    };
+
+    const pending = submitOrcaMessageDeliveryPointer('msg_delivery', deps);
+    await Promise.resolve();
+    expect(reads).toBe(2);
+    expect(writes).toBe(1);
+    expect(submitted).toHaveLength(0);
+    releaseRender?.();
+    const result = await pending;
+
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(reads).toBe(3);
+    expect(submitted).toEqual([target.identity, target.identity]);
+
+    consumed = true;
+    const duplicate = await submitOrcaMessageDeliveryPointer('msg_delivery', deps);
+    expect(duplicate.terminals[0]?.reason).toBe('delivery_already_consumed');
+    expect(reads).toBe(3);
+    expect(writes).toBe(1);
+    expect(submitted).toHaveLength(2);
+  });
+
+  it('writes a run-bound pointer for a coordinator recipient', async () => {
+    const target = worker('term_run_delivery');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let written = '';
+    let reads = 0;
+    const result = await submitOrcaMessageDeliveryPointer('msg_run', {
+      lookupMessage: () => ({
+        ok: true as const,
+        message: {
+          id: 'msg_run',
+          runId: 'run_d613a86c140a',
+          recipient: 'run:run_d613a86c140a',
+          consumed: false,
+        },
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: (_identity, pointer) => {
+        written = pointer;
+        return { status: 'dispatched' as const };
+      },
+      submitDeps: depsFor({}, {
+        submitted,
+        liveness: () => 'idle',
+        read: () => ({
+          ok: true as const,
+          lines: reads++ === 0 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [POKE, ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+    });
+
+    expect(written).toBe(POKE);
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(submitted).toEqual([target.identity]);
+  });
+
+  it('does not write a pointer over human composer text for an unread message', async () => {
+    const target = worker('term_message_human');
+    let writes = 0;
+    const result = await submitOrcaMessageDeliveryPointer('msg_human', {
+      lookupMessage: () => ({
+        ok: true as const,
+        message: { id: 'msg_human', runId: 'run_human', recipient: 'run:run_human', consumed: false },
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => {
+        writes += 1;
+        return { status: 'dispatched' as const };
+      },
+      submitDeps: depsFor({ [target.identity.id]: ['→ operator draft', ...CURSOR_FOOTER] }),
+    });
+
+    expect(result.terminals[0]?.reason).toBe('composer_not_empty_before_delivery');
+    expect(writes).toBe(0);
+  });
+
+  it('resolves one exact terminal before asynchronous rendering and duplicate no-effect', async () => {
+    const target = worker('term_exact_delivery');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const resolved: string[] = [];
+    let reads = 0;
+    let releaseRender: (() => void) | undefined;
+    let pointerVisible = true;
+    const renderReady = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    const deps = depsFor(
+      { [target.identity.id]: [] },
+      {
+        submitted,
+        liveness: () => 'busy',
+        read: (identity) => {
+          reads += 1;
+          expect(identity).toEqual(target.identity);
+          return {
+            ok: true as const,
+            lines: reads === 1 || !pointerVisible
+              ? ['→ Add a follow-up', ...CURSOR_FOOTER]
+              : [POKE, ...CURSOR_FOOTER],
+            source: 'screen' as const,
+          };
+        },
+        sleepAsync: async () => renderReady,
+        submitResult: (identity) => {
+          submitted.push(identity);
+          if (submitted.length === 2) pointerVisible = false;
+          return { status: 'dispatched' as const };
+        },
+      },
+    );
+    const resolver = {
+      findWorkerById: (id: string) => {
+        resolved.push(id);
+        return { status: 'ok' as const, value: target };
+      },
+    };
+
+    const pending = submitUnsentCursorComposerDeliveryForTerminal(target.identity.id, resolver, deps);
+    await Promise.resolve();
+    expect(resolved).toEqual([target.identity.id]);
+    expect(reads).toBe(1);
+    expect(submitted).toHaveLength(0);
+    releaseRender?.();
+    const first = await pending;
+    expect(first.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(reads).toBe(2);
+    expect(submitted).toEqual([target.identity, target.identity]);
+
+    const duplicate = await submitUnsentCursorComposerDeliveryForTerminal(target.identity.id, resolver, deps);
+    expect(duplicate.terminals[0]?.reason).toBe('composer_empty');
+    expect(submitted).toHaveLength(2);
+  });
+
+  it('refuses unresolved exact-terminal identity before screen or Enter effects', async () => {
+    let reads = 0;
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const result = await submitUnsentCursorComposerDeliveryForTerminal('term_replaced', {
+      findWorkerById: () => ({ status: 'failed', reason: 'runtime_identity_ambiguous' }),
+    }, depsFor({}, {
+      submitted,
+      read: () => {
+        reads += 1;
+        return { ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const };
+      },
+    }));
+
+    expect(result).toMatchObject({
+      ok: false,
+      terminals: [{ terminal: 'term_replaced', enter: false, reason: 'runtime_identity_ambiguous' }],
+    });
+    expect(reads).toBe(0);
+    expect(submitted).toHaveLength(0);
+  });
+
+  it('refuses human or mixed composer text through the exact-terminal boundary', async () => {
+    const human = worker('term_exact_human');
+    const mixed = worker('term_exact_mixed');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const resolver = {
+      findWorkerById: (id: string) => ({
+        status: 'ok' as const,
+        value: id === human.identity.id ? human : mixed,
+      }),
+    };
+    const deps = depsFor({
+      [human.identity.id]: ['→ operator draft', ...CURSOR_FOOTER],
+      [mixed.identity.id]: [POKE, 'operator draft', ...CURSOR_FOOTER],
+    }, { submitted });
+
+    const humanResult = await submitUnsentCursorComposerDeliveryForTerminal(human.identity.id, resolver, deps);
+    const mixedResult = await submitUnsentCursorComposerDeliveryForTerminal(mixed.identity.id, resolver, deps);
+
+    expect(humanResult.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
+    expect(mixedResult.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
+    expect(submitted).toHaveLength(0);
+  });
+
   it('reads and submits immediately while the target is Running', async () => {
     const target = worker('term_busy_transition');
     const submitted: RuntimeWorkerIdentity[] = [];

@@ -1,38 +1,23 @@
 {
-  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1587,
+  "iteration_id": "pr-scope",
+  "iteration_id_source": "explicit",
+  "supersedes": null,
+  "created_at": "2026-08-24T19:53:57Z",
+  "baseline": {
+    "commit_sha": "24a1fdaca06df28ba63635e7beb2847b15ba8661",
+    "worktree_dirty": true,
+    "active_scope_hash": "sha256:76637d335a6ce8fccbafb9a1fa0af0090b4bb2bc906469c216768ea9fd2ba219"
+  },
   "declared_paths": [
     "docs/declarations/1587.pr-scope.json",
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/lib/pack-review-worker-notification.ts",
+    "scripts/launch-watch/watch.test.ts",
     "scripts/orca-runtime/adapter.ts",
-    "scripts/orca-runtime/task-adapter.test.ts",
-    "scripts/runtime/caller-census.ts",
-    "scripts/runtime/contracts.ts",
-    "scripts/worker-message-submit-reconcile.test.ts",
-    "scripts/worker-smoke-run.ts"
+    "scripts/runtime/caller-census.ts"
   ],
-  "denylist": [
-    "credentials/",
-    "packages/core/",
-    "plugins/",
-    "secrets/",
-    "vendor/"
-  ],
-  "allowed_roots": [
-    "docs/declarations/1587.pr-scope.json",
-    "docs/orchestration-runbook.md",
-    "scripts/cursor-unsent-composer-submit.test.ts",
-    "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/lib/pack-review-worker-notification.ts",
-    "scripts/orca-runtime/adapter.ts",
-    "scripts/orca-runtime/task-adapter.test.ts",
-    "scripts/runtime/caller-census.ts",
-    "scripts/runtime/contracts.ts",
-    "scripts/worker-message-submit-reconcile.test.ts",
-    "scripts/worker-smoke-run.ts"
-  ],
-  "source_revision": "f7f05b50cc689060408a3a62b031ead79f78bc4e"
+  "declared_globs": [],
+  "amendments": []
 }
