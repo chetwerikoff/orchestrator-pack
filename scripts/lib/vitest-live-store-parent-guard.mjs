@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, watch } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, lstatSync, readdirSync, readFileSync, watch } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   assertHarnessWritePathSafe,
@@ -12,6 +13,14 @@ import {
 } from './vitest-live-store-harness.mjs';
 
 const MAX_PARENT_WATCHERS = 512;
+// Residual: pathname-only exemption; fs.watch cannot prove writer provenance,
+// so same-path child bypass of this journal is accepted.
+const EXTERNALLY_MUTABLE_STORE_PATHS = new Map([
+  ['wake-supervisor-runtime-state', new Set(['worker-message-dispatch-journal.json'])],
+]);
+const EXTERNALLY_MUTABLE_JOURNAL_STORE_ID = 'wake-supervisor-runtime-state';
+const EXTERNALLY_MUTABLE_JOURNAL_PATH = 'worker-message-dispatch-journal.json';
+const JOURNAL_ATOMIC_TEMP_PATH = /^\.[0-9a-f]{32}\.tmp$/i;
 const POWERSHELL_PATH_PARAMETERS = new Set([
   'literalpath', 'path', 'filepath', 'statepath', 'storepath', 'journalpath',
   'watchpath', 'lockpath', 'statefile', 'clipath', 'auditroot', 'namespace',
@@ -56,6 +65,66 @@ function nearestExistingDirectory(candidate) {
 function transientFailureId(failure) {
   const suffix = ':transient_write_observed';
   return failure.endsWith(suffix) ? failure.slice(0, -suffix.length) : '';
+}
+
+function storeRelativePath(store, candidate) {
+  return relative(store.defaultPath, candidate).replaceAll('\\', '/');
+}
+
+function externallyMutablePath(match) {
+  if (!match?.store) return false;
+  const allowed = EXTERNALLY_MUTABLE_STORE_PATHS.get(match.storeId);
+  if (!allowed) return false;
+  return allowed.has(storeRelativePath(match.store, match.candidate));
+}
+
+function externallyMutableJournalSidecarPath(match) {
+  if (match?.storeId !== EXTERNALLY_MUTABLE_JOURNAL_STORE_ID || !match.store) return false;
+  const relativePath = storeRelativePath(match.store, match.candidate);
+  return relativePath === `${EXTERNALLY_MUTABLE_JOURNAL_PATH}.lock`
+    || JOURNAL_ATOMIC_TEMP_PATH.test(relativePath);
+}
+
+function snapshotTree(root) {
+  const snapshot = new Map();
+  const visit = (candidate) => {
+    let stat;
+    try {
+      stat = lstatSync(candidate);
+    } catch {
+      snapshot.set(candidate, 'missing');
+      return;
+    }
+    if (stat.isDirectory()) {
+      snapshot.set(candidate, 'directory');
+      let entries;
+      try {
+        entries = readdirSync(candidate);
+      } catch {
+        snapshot.set(candidate, 'directory:unreadable');
+        return;
+      }
+      for (const entry of entries) visit(join(candidate, entry));
+      return;
+    }
+    if (stat.isFile()) {
+      try {
+        const digest = createHash('sha256').update(readFileSync(candidate)).digest('hex');
+        snapshot.set(candidate, `file:${digest}`);
+      } catch {
+        snapshot.set(candidate, 'file:unreadable');
+      }
+      return;
+    }
+    snapshot.set(candidate, `other:${stat.mode}:${stat.size}`);
+  };
+  visit(root);
+  return snapshot;
+}
+
+function changedSnapshotPaths(before, after) {
+  const paths = new Set([...before.keys(), ...after.keys()]);
+  return [...paths].filter((path) => before.get(path) !== after.get(path));
 }
 
 function normalizePowerShellValue(value) {
@@ -339,9 +408,23 @@ export function startParentLiveStoreGuard(env = process.env) {
     ...fences.filter((fence) => fence.watchTransient !== false).map((fence) => fence.rootPath),
     ...roots,
   ]);
-  const exactTouches = new Set();
+  const beforeSnapshots = new Map(
+    stores.map((store) => [store.id, snapshotTree(store.defaultPath)]),
+  );
+  const exactTouches = new Map();
+  const observedExternalTouches = new Map();
+  const observedJournalSidecars = new Map();
   const watchers = [];
   const watched = new Set();
+
+  const addTouch = (touches, storeId, path) => {
+    let paths = touches.get(storeId);
+    if (!paths) {
+      paths = new Set();
+      touches.set(storeId, paths);
+    }
+    paths.add(path);
+  };
 
   const armTree = (root) => {
     const anchor = nearestExistingDirectory(root);
@@ -352,9 +435,21 @@ export function startParentLiveStoreGuard(env = process.env) {
         if (!filename) return;
         const candidate = canonicalizeStorePath(join(anchor, String(filename)));
         const match = classifyLiveStorePath(candidate, env);
-        if (match) exactTouches.add(match.storeId);
+        if (match) {
+          const path = storeRelativePath(match.store, match.candidate);
+          if (externallyMutablePath(match)) addTouch(observedExternalTouches, match.storeId, path);
+          else if (externallyMutableJournalSidecarPath(match)) {
+            addTouch(observedJournalSidecars, match.storeId, path);
+          } else addTouch(exactTouches, match.storeId, path);
+        }
 
-        if (existsSync(candidate)) {
+        let candidateIsDirectory = false;
+        try {
+          candidateIsDirectory = lstatSync(candidate).isDirectory();
+        } catch {
+          // A concurrent delete is still covered by the event already observed.
+        }
+        if (candidateIsDirectory) {
           armTree(candidate);
           try {
             for (const entry of readdirSync(candidate, { withFileTypes: true })) {
@@ -387,11 +482,41 @@ export function startParentLiveStoreGuard(env = process.env) {
         baselineFailures = Array.isArray(error.failures) ? [...error.failures] : [];
       }
 
+      const changedPathsByStore = new Map(
+        stores.map((store) => [
+          store.id,
+          changedSnapshotPaths(
+            beforeSnapshots.get(store.id) ?? new Map(),
+            snapshotTree(store.defaultPath),
+          ).map((path) => storeRelativePath(store, path)),
+        ]),
+      );
+      const externallySettledStores = new Set();
+      for (const store of stores) {
+        const observed = observedExternalTouches.get(store.id);
+        const changed = changedPathsByStore.get(store.id) ?? [];
+        if (observed?.has(EXTERNALLY_MUTABLE_JOURNAL_PATH)
+          && changed.every((path) => path === EXTERNALLY_MUTABLE_JOURNAL_PATH)) {
+          externallySettledStores.add(store.id);
+        }
+      }
+      for (const [storeId, sidecars] of observedJournalSidecars) {
+        if (!externallySettledStores.has(storeId)) {
+          for (const path of sidecars) addTouch(exactTouches, storeId, path);
+        }
+      }
+
       const retained = baselineFailures.filter((failure) => {
+        const text = String(failure);
+        const snapshotId = text.endsWith(':snapshot_changed')
+          ? text.slice(0, -':snapshot_changed'.length)
+          : '';
+        if (snapshotId && externallySettledStores.has(snapshotId)) return false;
         const id = transientFailureId(String(failure));
+        if (id && externallySettledStores.has(id)) return false;
         return !id || exactTouches.has(id);
       });
-      for (const id of exactTouches) {
+      for (const id of exactTouches.keys()) {
         const failure = `${id}:transient_write_observed`;
         if (!retained.includes(failure)) retained.push(failure);
       }

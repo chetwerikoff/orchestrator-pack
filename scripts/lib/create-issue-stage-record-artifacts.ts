@@ -35,9 +35,11 @@ import {
 import { canonicalStagePlan } from './create-issue-stage-topology.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
 import { readEvidenceWaiverProducerEvidence } from './create-issue-stage-record-receipt.ts';
+import { extractMarker } from './create-issue-stage-record-marker.ts';
+import { buildCanonicalLineage, deriveCanonicalCycleLineage } from './create-issue-stage-record-lineage.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
-import { defaultGhTransport } from './create-issue-stage-record-gh.ts';
-import type { GhTransport, PartialMissingSourceWitness, ProducerEvidence } from './create-issue-stage-record-types.ts';
+import { defaultGhTransport, fetchRepositoryOwnerLogin, parseJournalEvents } from './create-issue-stage-record-gh.ts';
+import type { CanonicalLineage, GhTransport, PartialMissingSourceWitness, ProducerEvidence, TrustedComment } from './create-issue-stage-record-types.ts';
 
 export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
 export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
@@ -93,6 +95,11 @@ export interface OperatorAcceptanceAdjudication {
   reason: string;
 }
 
+export interface AcceptanceArtifactPublicationHooks {
+  /** Deterministic test-only failure seam. Production callers leave this unset. */
+  afterInstall?: (event: { file: string; target: string; installIndex: number }) => void;
+}
+
 export interface ProduceAcceptanceArtifactsOptions {
   reviewDir: string;
   tierIntakePath: string;
@@ -107,6 +114,7 @@ export interface ProduceAcceptanceArtifactsOptions {
   operatorReferenceTransport?: GhTransport;
   artifactSourceTransport?: GhTransport;
   repositoryFullName?: string;
+  publicationHooks?: AcceptanceArtifactPublicationHooks;
 }
 
 interface OperatorNarrowingHint {
@@ -124,15 +132,19 @@ interface AuthoritativeIssueComment {
   createdAt: string;
   updatedAt: string;
   userLogin: string | null;
+  authorAssociation: string | null;
   htmlUrl: string;
   issueUrl: string;
 }
 
-interface AuthoritativeIssueCensus {
+interface IssueCommentCensus {
   repositoryFullName: string;
   issueNumber: number;
-  publisherLogin: string;
   comments: AuthoritativeIssueComment[];
+}
+
+interface AuthoritativeIssueCensus extends IssueCommentCensus {
+  publisherLogin: string;
 }
 
 interface ArtifactAuthorityContext {
@@ -408,7 +420,7 @@ function rawFindingCount(text: string, captureName = ''): number {
 }
 
 const CANONICAL_REVISION_LINE_RE = /^Read revision: #([1-9][0-9]*) (r[0-9]+)$/;
-const INVOCATION_ECHO_RE = /^INVOCATION_ID(?:_TO_ECHO)?: (\S+)$/;
+const INVOCATION_ECHO_RE = /^INVOCATION_ID_TO_ECHO: (\S+)$/;
 
 function parseCanonicalCaptureRevision(text: string): { issueNumber: number; sourceRevision: string; findingCount: number } | null {
   const lines = text.split(/\n/).map((line) => line.replace(/\r$/, ''));
@@ -611,25 +623,26 @@ function parseAuthoritativeIssueComment(
   const createdAt = typeof raw.created_at === 'string' ? raw.created_at : null;
   const updatedAt = typeof raw.updated_at === 'string' ? raw.updated_at : null;
   const userLogin = typeof user?.login === 'string' && user.login.trim() !== '' ? user.login.trim() : null;
+  const authorAssociation = typeof raw.author_association === 'string' && raw.author_association.trim() !== ''
+    ? raw.author_association.trim()
+    : null;
   const htmlUrl = typeof raw.html_url === 'string' ? raw.html_url : null;
   const issueUrl = typeof raw.issue_url === 'string' ? raw.issue_url : null;
   if (!Number.isSafeInteger(id) || id < 1 || body === null || !createdAt || !updatedAt || !htmlUrl || !issueUrl) {
     errors.push(temporaryError(unavailableClassification, `${label} lacks authoritative identity/source fields`));
     return null;
   }
-  return { id, body, createdAt, updatedAt, userLogin, htmlUrl, issueUrl };
+  return { id, body, createdAt, updatedAt, userLogin, authorAssociation, htmlUrl, issueUrl };
 }
 
-function authoritativeIssueCommentCensus(
+function issueCommentCensus(
   transport: GhTransport,
   repositoryFullName: string,
   issueNumber: number,
   errors: string[],
-): AuthoritativeIssueCensus | null {
+): IssueCommentCensus | null {
   const parsedRepo = parseRepositoryFullName(repositoryFullName, errors);
   if (!parsedRepo) return null;
-  const publisherLogin = authenticatedGithubPrincipal(transport, errors);
-  if (!publisherLogin) return null;
   const comments: AuthoritativeIssueComment[] = [];
   const pageSize = 100;
   const maxPages = 100;
@@ -660,11 +673,76 @@ function authoritativeIssueCommentCensus(
       comments.push(parsed);
     }
     if (rawPage.length < pageSize) {
-      return { repositoryFullName: parsedRepo.fullName, issueNumber, publisherLogin, comments };
+      return { repositoryFullName: parsedRepo.fullName, issueNumber, comments };
     }
   }
   errors.push(temporaryError('source-unavailable', `Issue comment census exceeded ${maxPages} pages without proving completeness`));
   return null;
+}
+
+function authoritativeIssueCommentCensus(
+  transport: GhTransport,
+  repositoryFullName: string,
+  issueNumber: number,
+  errors: string[],
+): AuthoritativeIssueCensus | null {
+  const publisherLogin = authenticatedGithubPrincipal(transport, errors);
+  if (!publisherLogin) return null;
+  const census = issueCommentCensus(transport, repositoryFullName, issueNumber, errors);
+  return census ? { ...census, publisherLogin } : null;
+}
+
+function canonicalIssueCommentLineage(
+  transport: GhTransport,
+  repositoryFullName: string,
+  issueNumber: number,
+  errors: string[],
+): CanonicalLineage | null {
+  let ownerLogin: string;
+  try {
+    ownerLogin = fetchRepositoryOwnerLogin(transport, repositoryFullName);
+  } catch (error) {
+    errors.push(temporaryError(
+      'source-unavailable',
+      `canonical Issue-comment lineage could not resolve repository owner: ${error instanceof Error ? error.message : String(error)}`,
+    ));
+    return null;
+  }
+  const census = issueCommentCensus(transport, repositoryFullName, issueNumber, errors);
+  if (!census) return null;
+  const trustedJournalComments: TrustedComment[] = [];
+  for (const comment of census.comments) {
+    if (!extractMarker(comment.body)) continue;
+    if (!comment.userLogin || !comment.authorAssociation) {
+      errors.push(temporaryError(
+        'source-unavailable',
+        `journal-marked comment ${comment.id} is missing required trust fields`,
+      ));
+      return null;
+    }
+    if (!sameGithubLogin(comment.userLogin, ownerLogin)) continue;
+    if (comment.updatedAt !== comment.createdAt) continue;
+    trustedJournalComments.push({
+      id: comment.id,
+      body: comment.body,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+      userLogin: comment.userLogin,
+      authorAssociation: comment.authorAssociation,
+    });
+  }
+  const parsed = parseJournalEvents(trustedJournalComments);
+  if (parsed.diagnostics.length > 0) {
+    errors.push(...parsed.diagnostics.map((diagnostic) => `canonical Issue-comment journal ${diagnostic.code}: ${diagnostic.message}`));
+    return null;
+  }
+  const lineage = buildCanonicalLineage(parsed.events);
+  const blockingLineageDiagnostics = lineage.diagnostics.filter((diagnostic) => diagnostic.code !== 'duplicate-remote-event');
+  if (blockingLineageDiagnostics.length > 0) {
+    errors.push(...blockingLineageDiagnostics.map((diagnostic) => `canonical cycle lineage ${diagnostic.code}: ${diagnostic.message}`));
+    return null;
+  }
+  return lineage;
 }
 
 function invocationRequiresAuthoritativeArtifact(invocation: JsonRecord): boolean {
@@ -1626,31 +1704,103 @@ function publishArtifactSet(
   outputDir: string,
   files: readonly string[],
   contents: ReadonlyMap<string, string>,
+  hooks?: AcceptanceArtifactPublicationHooks,
 ): void {
   const parentDir = dirname(outputDir);
   mkdirSync(parentDir, { recursive: true });
   const stagingDir = mkdtempSync(join(parentDir, `.${basename(outputDir)}.tmp-`));
-  const movedTargets: string[] = [];
+  const backups = new Map<string, string>();
+  const originallyAbsent = new Set<string>();
   try {
-    for (const file of files) writeFileSync(join(stagingDir, file), contents.get(file) ?? '');
+    for (const file of files) writeFileSync(join(stagingDir, file), contents.get(file) ?? '', { flag: 'wx' });
     mkdirSync(outputDir, { recursive: true });
+
+    for (const [index, file] of files.entries()) {
+      const target = join(outputDir, file);
+      const staged = join(stagingDir, file);
+      if (!existsSync(target)) {
+        originallyAbsent.add(target);
+        continue;
+      }
+      const targetStat = lstatSync(target);
+      if (!targetStat.isFile()) throw new Error(`cannot replace non-file artifact target: ${target}`);
+      const currentBytes = readFileSync(target);
+      const candidateBytes = readFileSync(staged);
+      if (file.startsWith('stage-completeness-receipt-') && !currentBytes.equals(candidateBytes)) {
+        throw new Error(`conflicting immutable stage receipt target: ${target}`);
+      }
+      if (currentBytes.equals(candidateBytes)) continue;
+      const backup = join(stagingDir, `.backup-${index}`);
+      writeFileSync(backup, currentBytes, { flag: 'wx' });
+      backups.set(target, backup);
+    }
+
+    let installIndex = 0;
     for (const file of files) {
       const target = join(outputDir, file);
-      if (existsSync(target)) {
-        const targetStat = lstatSync(target);
-        if (!targetStat.isFile()) throw new Error(`cannot replace non-file artifact target: ${target}`);
-        unlinkSync(target);
-      }
-      renameSync(join(stagingDir, file), target);
-      movedTargets.push(target);
+      const staged = join(stagingDir, file);
+      if (existsSync(target) && readFileSync(target).equals(readFileSync(staged))) continue;
+      if (existsSync(target)) unlinkSync(target);
+      renameSync(staged, target);
+      installIndex += 1;
+      hooks?.afterInstall?.({ file, target, installIndex });
     }
   } catch (error) {
-    for (const target of movedTargets.reverse()) {
-      try { unlinkSync(target); } catch { /* Preserve original publication failure. */ }
+    const rollbackErrors: string[] = [];
+    for (const file of [...files].reverse()) {
+      const target = join(outputDir, file);
+      const backup = backups.get(target);
+      try {
+        if (backup && existsSync(backup)) {
+          if (existsSync(target)) unlinkSync(target);
+          renameSync(backup, target);
+        } else if (originallyAbsent.has(target) && existsSync(target)) {
+          unlinkSync(target);
+        }
+      } catch (rollbackError) {
+        rollbackErrors.push(`${target}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      const original = error instanceof Error ? error.message : String(error);
+      throw new Error(`${original}; rollback failed: ${rollbackErrors.join('; ')}`);
     }
     throw error;
   } finally {
     rmSync(stagingDir, { recursive: true, force: true });
+  }
+}
+
+function validateReceiptCycleLineage(
+  receipts: readonly ProducedStageReceipt[],
+  lineage: CanonicalLineage,
+  errors: string[],
+): void {
+  const head = lineage.head;
+  if (!head || head.logical.schema !== 'create-issue-review-cycle/v1') {
+    errors.push('canonical cycle lineage has no admitted head cycle');
+    return;
+  }
+  const derived = deriveCanonicalCycleLineage(lineage, head.logical['cycle-id']);
+  errors.push(...derived.errors.map((error) => `canonical cycle lineage: ${error}`));
+  const byCycleId = new Map(derived.entries.map((entry) => [entry.cycleId, entry]));
+  let previousPosition = -1;
+  for (const receipt of receipts) {
+    const cycle = byCycleId.get(receipt.cycleId);
+    if (!cycle) {
+      errors.push(`stage receipt ${receipt.stageReceiptId} cycle ${receipt.cycleId} is off canonical predecessor lineage`);
+      continue;
+    }
+    if (cycle.sourceRevision !== receipt.sourceRevision) {
+      errors.push(`stage receipt ${receipt.stageReceiptId} sourceRevision ${receipt.sourceRevision} does not match canonical cycle revision ${cycle.sourceRevision}`);
+    }
+    if (receipt.cycleBinding.cycleId !== receipt.cycleId || receipt.cycleBinding.sourceRevision !== receipt.sourceRevision || receipt.cycleBinding.boundBeforeLaunch !== true) {
+      errors.push(`stage receipt ${receipt.stageReceiptId} does not preserve its admitted cycleBinding`);
+    }
+    if (cycle.position < previousPosition) {
+      errors.push(`stage receipt ${receipt.stageReceiptId} moves backward on canonical cycle lineage`);
+    }
+    previousPosition = Math.max(previousPosition, cycle.position);
   }
 }
 
@@ -1663,7 +1813,6 @@ export function produceAcceptanceArtifacts(
   options: ProduceAcceptanceArtifactsOptions,
 ): AcceptanceArtifactResult {
   const outputDir = options.outputDir ?? options.reviewDir;
-  invalidateOutputArtifacts(outputDir);
   const errors: string[] = [];
   const intake = loadTierIntake(options.tierIntakePath, errors);
   const taskIdentity = intake && requiredString(intake.taskIdentity, 'tier-intake.taskIdentity', errors);
@@ -1684,6 +1833,18 @@ export function produceAcceptanceArtifacts(
   const validStageInputs = stageInputs.filter((entry): entry is { path: string; value: JsonRecord } => entry.value !== null);
   const taskIssueMatch = /^issue:([1-9][0-9]*)$/.exec(taskIdentity);
   const repositoryFullName = options.repositoryFullName ?? 'chetwerikoff/orchestrator-pack';
+  const artifactSourceTransport = options.artifactSourceTransport ?? options.operatorReferenceTransport ?? defaultGhTransport();
+  let canonicalLineage: CanonicalLineage | undefined;
+  if (!taskIssueMatch) {
+    errors.push('canonical cycle lineage requires tier-intake taskIdentity issue:<N>');
+  } else {
+    canonicalLineage = canonicalIssueCommentLineage(
+      artifactSourceTransport,
+      repositoryFullName,
+      Number(taskIssueMatch[1]),
+      errors,
+    ) ?? undefined;
+  }
   let artifactContext: ArtifactAuthorityContext | undefined;
   if (stageInputsRequireAuthoritativeCensus(validStageInputs.map((entry) => entry.value))) {
     if (!taskIssueMatch) {
@@ -1697,11 +1858,10 @@ export function produceAcceptanceArtifacts(
         issueNumber,
         errors,
       );
-      const transport = options.artifactSourceTransport ?? options.operatorReferenceTransport ?? defaultGhTransport();
       const census = errors.length === 0
-        ? authoritativeIssueCommentCensus(transport, repositoryFullName, issueNumber, errors)
+        ? authoritativeIssueCommentCensus(artifactSourceTransport, repositoryFullName, issueNumber, errors)
         : null;
-      if (census) artifactContext = { transport, census, ...(operatorHint ? { operatorHint } : {}) };
+      if (census) artifactContext = { transport: artifactSourceTransport, census, ...(operatorHint ? { operatorHint } : {}) };
     }
   } else if (options.operatorAdjudication) {
     errors.push('operator verdict URL hint cannot create an acceptance path when no invocation requires authoritative artifact resolution');
@@ -1737,8 +1897,7 @@ export function produceAcceptanceArtifacts(
     .filter((receipt): receipt is ProducedStageReceipt => receipt !== null)
     .sort((left, right) => left.stageSequence - right.stageSequence);
   const tier = receipts[0]?.tier;
-  const cycleIds = new Set(receipts.map((receipt) => receipt.cycleId));
-  if (cycleIds.size > 1) errors.push('stage evidence mixes cycle identities');
+  if (canonicalLineage) validateReceiptCycleLineage(receipts, canonicalLineage, errors);
   if (!tier) errors.push('no completed-stage evidence was supplied');
   for (let index = 0; index < receipts.length; index += 1) {
     const receipt = receipts[index]!;
@@ -1845,7 +2004,7 @@ export function produceAcceptanceArtifacts(
   artifactContents.set('review-episode-inventory.json', JSON.stringify(authority!.receiptInventory, null, 2) + '\n');
   artifactContents.set('acceptance-artifacts.json', JSON.stringify(manifest, null, 2) + '\n');
   try {
-    publishArtifactSet(outputDir, files, artifactContents);
+    publishArtifactSet(outputDir, files, artifactContents, options.publicationHooks);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {

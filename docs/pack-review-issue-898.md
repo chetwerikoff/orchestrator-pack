@@ -22,6 +22,24 @@ The existing sibling-variable behavior is intentionally unchanged. Without expli
 
 A fallback attempt plus one fresh retry can spend approximately twenty minutes before repeated-timeout escalation. Under the live override, the corresponding path can spend approximately eighty minutes. A `timed_out / timeout_no_verdict` head consumes no review-cycle slot unless authoritative findings are attached.
 
+## PR-led review-start authority
+
+A pack-review start names the PR. The live PR supplies the open/current-head check and its closing reference supplies the Issue identity. A caller-supplied operator Issue may corroborate that identity, but a mismatch refuses rather than overriding the PR. A PR without one resolvable closing Issue refuses with an actionable remedy.
+
+Session-binding cache data is advisory correlation only. Missing, empty, corrupt, stale, or disagreeing cache data cannot veto a valid PR-led start and cannot substitute a different repository, head, or Issue. When the bound Issue snapshot for the exact PR/head/Issue tuple is absent, the runner acquires the existing start claim before reading and freezing the live Issue body. Concurrent first starts therefore serialize on the existing claim and converge on one durable snapshot; the reviewer consumes those same frozen bytes.
+
+## Reviewer invocation economy versus current-head authority
+
+A reviewer-model process having run is not itself review authority, and valid current-head review authority does not always require a new model invocation.
+
+- A persisted clean terminal for the exact same PR head suppresses a duplicate automatic/common reviewer invocation.
+- An authority-selected exact conflict-free replay from an authorized clean source head may produce a `conflict_free_carryover` terminal for the new head with zero reviewer-model calls.
+- Once the frozen cycle is at cap, automatic/common starts do not spend another reviewer-model call; triage remains authoritative.
+- An explicit operator extra review is recorded as `non_consuming_explicit`, so it does not consume an automatic cap slot. Its exact clean terminal can still be a valid clean source for later authority decisions.
+- A conflicted merge below cap still requires the focused resolution review, and genuinely new content below cap follows the normal review path.
+
+These are invocation-economy rules, not evidence carry-over for unrelated gates. Required CI and declared smoke remain exact-current-head evidence. A new head must obtain its own smoke result even when review authority is established by conflict-free carry-over or when the cycle is already at cap. Smoke admission is evaluated before an at-cap automatic refusal so a cap cannot hide missing or failed current-head smoke.
+
 ## Conflict-only clean carry-over
 
 A prior clean verdict for `H0` is never enough to publish a whole-head clean verdict for a conflict-resolved `H1`.
@@ -108,4 +126,4 @@ pwsh -NoProfile -File scripts/verify.ps1
 pwsh -NoProfile -File scripts/check-reusable.ps1
 ```
 
-The final diff must remain inside Issue #898 `allowed-roots` and must not touch denied roots, workflows, kernel timer primitives, core/vendor code, reviewer model/prompt policy, or retired machinery.
+The final diff must remain inside the active Issue `allowed-roots` (plus the producer-generated declaration required by repository scope policy) and must not touch denied roots, workflows, kernel timer primitives, core/vendor code, reviewer model/prompt policy, or retired machinery.

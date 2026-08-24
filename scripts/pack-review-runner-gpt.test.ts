@@ -444,7 +444,7 @@ describe('Issue #1417 direct-CLI operator-only pack-review start', () => {
       startReason: 'direct operator recovery for the exact blocked review',
     });
     expect(explicitRun?.surface).toContain('operator_adjudicated');
-    expect(explicitRun?.surface).toContain('session-binding=absent');
+    expect(explicitRun?.surface).toContain('session-binding=advisory');
     expect(explicitRun?.surface).toContain('issue=1341');
     expect(explicitRun?.surface).toContain(snapshot);
   });
@@ -478,16 +478,18 @@ describe('Issue #1417 direct-CLI operator-only pack-review start', () => {
     expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
   });
 
-  it('preserves the exact legacy missing-binding failure without operator input', async () => {
-    const storeRoot = tempRoot('opk-1341-no-input-');
-    delete process.env.OPK_VITEST_HARNESS;
+  it('requires an explicit PR number when no operator target is supplied', async () => {
+    const storeRoot = tempRoot('opk-1341-no-pr-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
     await expect(startPackReview({
       projectId: 'orchestrator-pack',
       storeRoot,
       sourceRepoRoot: repoRoot,
-      prNumber: 1341,
       headSha: HEAD_A,
-    })).rejects.toThrow('pack review target requires an immutable session PR/Issue binding');
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+    })).rejects.toThrow('pack review start requires --pr-number <n>');
     expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([]);
   });
 });
@@ -1178,7 +1180,9 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     process.env.PACK_GPT_BROWSER_CHAT_URL = 'https://chatgpt.com/c/fixed';
     process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
 
-    await expect(startPackReview(pluralStart(storeRoot, capture))).rejects.toThrow(/plural GPT review requires/);
+    const result = await startPackReview(pluralStart(storeRoot, capture));
+    expect(result).toMatchObject({ ok: false, created: false, reused: false });
+    expect(String(result.reason)).toMatch(/plural GPT review requires/);
     expect(engagementCount(invocationLog)).toBe(0);
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
@@ -1197,7 +1201,6 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
         'source-03': [{ stdout: cleanTerminalPayload() }],
       },
     }));
-
     const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
     expect(run?.reviewRound?.sourceSlots.map((slot) => slot.terminalClass)).toEqual([
       'reviewer_output_malformed',

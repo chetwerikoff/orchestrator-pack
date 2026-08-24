@@ -1,3 +1,5 @@
+// @vitest-ci-lane heavy
+// @vitest-pre-topology-seconds 1
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -5,6 +7,7 @@ import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import {
+  ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
   AUTHOR_DISPOSITIONS_SCHEMA,
   STAGE_EVIDENCE_SCHEMA,
   inspectAcceptanceArtifacts,
@@ -15,6 +18,8 @@ import {
   deriveReviewEpisodeState,
   validateReviewEpisodeTopology,
   type CaptureIdentityV1,
+  type ReviewEpisodeDerivationAuthorityV1,
+  type ReviewerInvocationEnvelopeV1,
   type StageCompletenessReceiptV1,
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
@@ -36,6 +41,7 @@ const TASK = `issue:${ISSUE}`;
 const REVISION = 'r01';
 const CONFIG = 'env:OPK_GPT_REVIEWER_CARDINALITY';
 const COMMENT_ID = 5194504082;
+const CYCLE_COMMENT_ID = COMMENT_ID + 900;
 const PUBLISHER = 'chetwerikoff';
 const CREATED_AT = '2026-08-07T04:00:00Z';
 const tempDirs: string[] = [];
@@ -94,9 +100,34 @@ function comment(
     body,
     created_at: CREATED_AT,
     updated_at: CREATED_AT,
+    author_association: 'OWNER',
     user: { login: PUBLISHER },
     ...overrides,
   };
+}
+
+function cycleComment(
+  sourceRevision = REVISION,
+  cycleId = 'cycle-1385',
+  predecessorCycleId = 'none',
+  id = CYCLE_COMMENT_ID,
+): Record<string, unknown> {
+  const eventKey = `${cycleId}-${sourceRevision}`;
+  const payload = {
+    schema: 'create-issue-review-cycle/v1',
+    'event-key': eventKey,
+    'cycle-id': cycleId,
+    'predecessor-cycle-id': predecessorCycleId,
+    'source-revision': sourceRevision,
+    tier: 'T2',
+    'public-actor': 'other-flow-manager',
+  };
+  return comment([
+    `<!-- opk-create-issue-journal:create-issue-review-cycle/v1:${eventKey} -->`,
+    '```json',
+    JSON.stringify(payload, null, 2),
+    '```',
+  ].join('\n'), { id });
 }
 
 interface TransportOptions {
@@ -107,17 +138,27 @@ interface TransportOptions {
   rereadFailure?: boolean;
   secondPageFailure?: boolean;
   beforeReread?: () => void;
+  cycleComments?: Array<Record<string, unknown>>;
 }
 
 function transport(options: TransportOptions = {}) {
   const principal = options.principal === undefined ? PUBLISHER : options.principal;
-  const census = options.census ?? [comment()];
+  const suppliedCensus = options.census ?? [comment()];
+  const observedRevision = suppliedCensus.flatMap((item) => {
+    const match = typeof item.body === 'string' ? /^Read revision: #[1-9][0-9]* (r[0-9]+)$/m.exec(item.body) : null;
+    return match?.[1] ? [match[1]] : [];
+  })[0] ?? REVISION;
+  const journalComments = options.cycleComments ?? [cycleComment(observedRevision)];
+  const census = [...suppliedCensus, ...journalComments];
   const runGh = vi.fn((argv: string[]) => {
     if (argv[2] === 'user') {
       if (principal === null) return { exitCode: 1, stdout: '', stderr: 'principal unavailable' };
       return { exitCode: 0, stdout: `${principal}\n`, stderr: '' };
     }
     const target = argv[2] ?? '';
+    if (target === `repos/${REPOSITORY}`) {
+      return { exitCode: 0, stdout: `${PUBLISHER}\n`, stderr: '' };
+    }
     if (target.includes(`/issues/${ISSUE}/comments?per_page=100&page=1`)) {
       if (options.censusFailure) return { exitCode: 1, stdout: '', stderr: 'census unavailable' };
       return { exitCode: 0, stdout: JSON.stringify(census), stderr: '' };
@@ -306,6 +347,8 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const result = produce(input, source);
     expect(result.ok, result.errors.join('\n')).toBe(true);
     expect(source.runGh.mock.calls.map((call) => call[0][2])).toEqual([
+      `repos/${REPOSITORY}`,
+      `repos/${REPOSITORY}/issues/${ISSUE}/comments?per_page=100&page=1`,
       'user',
       `repos/${REPOSITORY}/issues/${ISSUE}/comments?per_page=100&page=1`,
       ...input.reviewComments.map((item) => `repos/${REPOSITORY}/issues/comments/${String(item.id)}`),
@@ -325,24 +368,102 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     });
   });
 
-  it('leaves an already-published sibling completeness receipt byte-identical when produce fails', () => {
+  it('restores every pre-existing acceptance artifact after each injected install failure', () => {
     const input = fixture({
       transportClassification: 'complete',
       withTurnResult: true,
       withCapture: true,
     });
-    mkdirSync(input.outputDir, { recursive: true });
-    const receiptPath = join(input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json');
-    const receiptBytes = Buffer.from(`${JSON.stringify({
-      schema: 'stage-completeness-receipt/v1',
-      stageAttemptId: 'architectural-review-attempt',
-      stage: 'architectural-review',
-    }, null, 2)}\n`);
-    writeFileSync(receiptPath, receiptBytes);
-    const result = produce(input, transport({ census: [] }));
-    expect(result.ok).toBe(false);
-    expect(existsSync(receiptPath)).toBe(true);
-    expect(readFileSync(receiptPath)).toEqual(receiptBytes);
+    const initial = produce(input);
+    expect(initial.ok, initial.errors.join('\n')).toBe(true);
+
+    const receiptNames = readdirSync(input.outputDir)
+      .filter((name) => name.startsWith('stage-completeness-receipt-'))
+      .sort();
+    const receiptBytes = new Map(receiptNames.map((name) => [name, readFileSync(join(input.outputDir, name))]));
+    const digest = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
+    const targetNames = [...receiptNames, ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES].sort();
+
+    for (let failAfter = 1; failAfter <= ACCEPTANCE_ARTIFACT_OUTPUT_NAMES.length; failAfter += 1) {
+      rmSync(input.outputDir, { recursive: true, force: true });
+      mkdirSync(input.outputDir, { recursive: true });
+      for (const [name, bytes] of receiptBytes) writeFileSync(join(input.outputDir, name), bytes);
+      for (const name of ACCEPTANCE_ARTIFACT_OUTPUT_NAMES) {
+        writeFileSync(join(input.outputDir, name), `pre-attempt-${failAfter}-${name}\n`);
+      }
+      const before = new Map(targetNames.map((name) => [name, digest(join(input.outputDir, name))]));
+      let observedInstallIndex = 0;
+      const source = transport({ census: [...input.reviewComments, comment(input.body)] });
+      const result = produceAcceptanceArtifacts({
+        reviewDir: input.dir,
+        outputDir: input.outputDir,
+        tierIntakePath: input.intakePath,
+        stageEvidencePaths: [input.reviewEvidencePath, input.evidencePath],
+        authorDispositionsPath: input.authorPath,
+        phase: 'final-acceptance',
+        artifactSourceTransport: source,
+        publicationHooks: {
+          afterInstall: ({ installIndex }) => {
+            observedInstallIndex = installIndex;
+            if (installIndex === failAfter) throw new Error(`injected install failure ${installIndex}`);
+          },
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain(`injected install failure ${failAfter}`);
+      expect(observedInstallIndex).toBe(failAfter);
+      expect(readdirSync(input.outputDir).sort()).toEqual(targetNames);
+      for (const name of targetNames) {
+        expect(digest(join(input.outputDir, name))).toBe(before.get(name));
+      }
+      expect(readdirSync(input.dir).filter((name) => name.startsWith('.output.tmp-'))).toEqual([]);
+    }
+  });
+
+  it('republishes identical bytes without new invocations and rejects conflicting published receipts', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    const first = produce(input);
+    expect(first.ok, first.errors.join('\n')).toBe(true);
+
+    const publishedNames = readdirSync(input.outputDir).sort();
+    const publishedBytes = new Map(
+      publishedNames.map((name) => [name, readFileSync(join(input.outputDir, name))]),
+    );
+    const firstReceipt = JSON.parse(
+      readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'),
+    );
+
+    const rerun = produce(input, transport({ census: [...input.reviewComments, comment(input.body)] }));
+    expect(rerun.ok, rerun.errors.join('\n')).toBe(true);
+    expect(readdirSync(input.outputDir).sort()).toEqual(publishedNames);
+    for (const name of publishedNames) {
+      expect(readFileSync(join(input.outputDir, name))).toEqual(publishedBytes.get(name));
+    }
+    const rerunReceipt = JSON.parse(
+      readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'),
+    );
+    expect(rerunReceipt.invocations).toEqual(firstReceipt.invocations);
+    expect(rerunReceipt.invocations).toHaveLength(1);
+
+    const receiptPath = join(input.outputDir, 'stage-completeness-receipt-attempt-001.json');
+    writeFileSync(receiptPath, JSON.stringify({ ...firstReceipt, conflicting: true }) + '\n');
+    const conflictingNames = readdirSync(input.outputDir).sort();
+    const conflictingBytes = new Map(
+      conflictingNames.map((name) => [name, readFileSync(join(input.outputDir, name))]),
+    );
+    const conflict = produce(input, transport({ census: [...input.reviewComments, comment(input.body)] }));
+    expect(conflict.ok).toBe(false);
+    expect(conflict.errors.join('\n')).toContain('conflicting immutable stage receipt target');
+    expect(readdirSync(input.outputDir).sort()).toEqual(conflictingNames);
+    for (const name of conflictingNames) {
+      expect(readFileSync(join(input.outputDir, name))).toEqual(conflictingBytes.get(name));
+    }
+    expect(readdirSync(input.dir).filter((name) => name.startsWith('.output.tmp-'))).toEqual([]);
   });
 
   it('requires GitHub artifact authority for complete calls even with an opaque reviewerSource', () => {
@@ -522,7 +643,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.errors.join('\n')).toMatch(expected as RegExp);
   });
 
-  it('ignores an unrelated authorless comment while preserving the complete census', () => {
+  it('ignores an unrelated authorless non-journal comment when deriving canonical lineage', () => {
     const input = fixture({ transportClassification: 'incident' });
     const authorlessNoiseId = COMMENT_ID + 90;
     const authorlessNoise = comment('unrelated historical note\n', {
@@ -534,6 +655,21 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.ok, result.errors.join('\n')).toBe(true);
     const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
     expect(receipt.invocations[0].artifactAuthority.commentId).toBe(COMMENT_ID);
+  });
+
+  it.each([
+    ['author login', { user: null }],
+    ['author association', { author_association: null }],
+  ])('fails closed when a journal-marked comment lacks %s', (_label, overrides) => {
+    const input = fixture({ transportClassification: 'incident' });
+    const untrustedJournal = { ...cycleComment(), ...overrides };
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(input.body)],
+      cycleComments: [untrustedJournal],
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.temporary).toBe('source-unavailable');
+    expect(result.errors.join('\n')).toContain('journal-marked comment');
   });
 
   it('fails closed when the canonical invocation candidate itself has no author', () => {
@@ -680,12 +816,11 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(manifest.operatorAdjudication).toBeUndefined();
   });
 
-  it('rejects a first stage receipt that re-roots the intake revision', () => {
+  it('allows the first stage receipt revision to differ from the immutable episode first revision when the canonical cycle binds it', () => {
     const input = fixture({ intakeRevision: 'r03', sourceRevision: 'r04', transportClassification: 'incident' });
     const live = canonicalVerdict('r04');
-    const result = produce(input, transport({ census: [...input.reviewComments, comment(live)], reread: comment(live) }));
-    expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('first stage receipt sourceRevision must equal episodeFirstRevision');
+    const result = produce(input, transport({ census: [...input.reviewComments, comment(live)] }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
   it('contributes the authoritative capture exactly once to governance, relay, and ledger', () => {
@@ -740,7 +875,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
-  it('still credentials an INVOCATION_ID comment (comment 5381523513 class)', () => {
+  it('rejects an INVOCATION_ID-only comment as non-canonical invocation evidence', () => {
     const input = fixture({
       transportClassification: 'complete',
       withTurnResult: true,
@@ -750,7 +885,8 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(input.body).toMatch(/^INVOCATION_ID: invocation-001$/m);
     expect(input.body).not.toMatch(/INVOCATION_ID_TO_ECHO:/);
     const result = produce(input);
-    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
   });
 
   it('check-artifacts still requires capture and turn-result evidence for successful transport', () => {

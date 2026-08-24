@@ -1,0 +1,20 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1597,
+  "declared_paths": [
+    "scripts/draft-discipline.mjs",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    ".github/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/draft-discipline.mjs",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "7ce06fe53fe010abf23cab9c1af79ece469d07dc"
+}

@@ -147,8 +147,20 @@ pack checkout**, never from the reviewed worktree:
 node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n>
 ```
 
-Optional head pin: `--head-sha <40-hex>`. Status: `... list`. `--session-id` is
-for worker PRs; a direct architect PR needs only `--pr-number`.
+`--pr-number` is the canonical target for both worker and direct architect PRs.
+Optional head pin: `--head-sha <40-hex>`. Optional `--session-id` is advisory
+worker correlation only: it does not replace `--pr-number` and missing, corrupt,
+stale, or disagreeing session-cache data cannot veto a valid PR-led start. The
+live PR supplies the current head and its closing reference supplies the Issue.
+A PR without one resolvable closing Issue refuses; an optional
+`--operator-issue-number <n>` must agree with that linked Issue rather than
+overriding it.
+
+If the exact bound Issue snapshot is missing, the runner acquires the existing
+start claim first and freezes the live Issue body under that claim. An explicit
+operator extra review requires `--operator-reason <text>`; repository, Issue, and
+bound-snapshot operator arguments are optional corroborators and must agree when
+supplied. Status: `... list`.
 
 The reviewer engine is selected by the `PACK_REVIEWER` env var (`codex | claude |
 gpt`), resolved in `scripts/lib/resolve-pack-reviewer.ts` and bound into the
@@ -156,17 +168,26 @@ reviewer child by the runner. To change it, use the `switch-pack-reviewer` skill
 do not invoke a reviewer plugin directly; the runner owns claim, cap, head
 binding, and is the sole GitHub publisher.
 
-Merging requires an operator-requested pack review at the **current head** under
-the configured `PACK_REVIEWER`, with material findings fixed or rebutted and
-required CI green. The requirement is the review, not any one engine.
+Reviewer invocation and review authority are distinct. A persisted clean terminal
+for the exact same head suppresses a redundant automatic/common model call; an
+exact authority-selected conflict-free carry-over may establish current-head review
+authority with zero model calls; and an at-cap cycle suppresses another
+automatic/common model call. None of these cases carries CI or smoke to a new
+head. Required CI and declared smoke remain exact-current-head, and new-head smoke
+is checked before an at-cap automatic refusal.
 
-**Verdict contract** — the runner needs a valid verdict JSON object, either as
-the whole stdout or on one parseable non-empty line (it scans lines in reverse
-and takes the first valid payload):
+Merging requires an operator-requested pack review authority at the **current
+head** under the configured runner contract, with material findings fixed or
+rebutted and required CI green. The requirement is current-head authority, not a
+new model process when the runner has validly suppressed one.
+
+**Verdict contract** — when a reviewer model is invoked, the runner needs a valid
+verdict JSON object, either as the whole stdout or on one parseable non-empty line
+(it scans lines in reverse and takes the first valid payload):
 
 | Reviewer stdout | Meaning |
 |-----------------|---------|
-| `{"verdict":"clean","findingCount":0,"findings":[]}` | Clean — safe to merge after CI |
+| `{"verdict":"clean","findingCount":0,"findings":[]}` | Clean — safe to merge after current-head gates |
 | `{"verdict":"findings",...}` with matching `findingCount` | Actionable findings — fix or rebut before merge |
 | Empty stdout | **Not** clean — the run failed |
 | Prose narration ("No concrete bugs…") | **Not** clean — no valid verdict payload |

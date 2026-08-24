@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
+import { checkSmokeTestPlan, resolveSmokeRequirement } from '../draft-discipline.mjs';
 import {
   deriveReviewEpisodeState,
   type ReviewEpisodeDerivationAuthorityV1,
@@ -190,6 +191,14 @@ export function executeFinalAcceptanceGuards(
 
   if (!input.cycleId.trim()) errors.push('cycleId is required');
   if (!input.issueRevision.trim()) errors.push('issueRevision is required');
+  const currentIssueBody = input.currentIssueBody ?? input.issueBody;
+  const smokeRequirement = resolveSmokeRequirement(currentIssueBody);
+  if (smokeRequirement.requirement !== 'legacy-exempt') {
+    const smokePlanResult = checkSmokeTestPlan(currentIssueBody);
+    if (!smokePlanResult.ok) {
+      errors.push(...smokePlanResult.errors.map((item) => `smoke-test-plan: ${item}`));
+    }
+  }
 
   const tierEvidence = input.tierTransitionEvidence
     ?? (input.tierReceiptPath
@@ -308,8 +317,7 @@ export function executeFinalAcceptanceGuards(
     }).map((item) => `cycle-binding: ${item}`));
   }
 
-  const currentBody = input.currentIssueBody ?? input.issueBody;
-  if (!currentBody.includes(input.issueRevision)) {
+  if (!currentIssueBody.includes(input.issueRevision)) {
     errors.push('issue revision drift detected before final acceptance');
   }
 

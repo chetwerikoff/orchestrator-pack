@@ -125,6 +125,8 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // until runtime-history harvest records measured weights for these new files.
   'scripts/port-stage-evidence/producer.test.ts': 120,
   'scripts/verify.test.ts': 120,
+  // Issue #1582 adds deterministic live-store parent-guard coverage.
+  'scripts/vitest-live-store-parent-guard.test.ts': 120,
   // Issue #1439 adds deterministic light lifecycle/admission contract suites.
   // Fixed estimates preserve the bounded pre-topology producer until runtime-history harvest records them.
   'scripts/lib/create-issue-stage-lifecycle-acceptance.test.ts': 120,
