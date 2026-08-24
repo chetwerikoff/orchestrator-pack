@@ -80,6 +80,10 @@ interface SchedulerPublishedHandoff {
   readonly required: boolean;
   readonly record?: FleetReconciliationHandoff;
 }
+interface SchedulerFleetIdentity {
+  readonly schedulerGeneration: string;
+  readonly tickSequence: number;
+}
 
 export interface SchedulerBoundary {
   listCandidates(): ActivatedSchedulerCandidate[];
@@ -299,7 +303,7 @@ function publishRequiredHandoff(
 async function evaluateFleetEscalation(
   boundary: SchedulerBoundary,
   handoff: SchedulerPublishedHandoff,
-  observer: FleetObserverResult,
+  identity: SchedulerFleetIdentity,
 ): Promise<FleetEscalationInvocationResultV1 | undefined> {
   if (!handoff.required || !boundary.fleetEscalation) return undefined;
   return boundary.fleetEscalation({
@@ -309,28 +313,31 @@ async function evaluateFleetEscalation(
       projectId: String(boundary.projectId ?? ''),
       repository: String(boundary.repository ?? ''),
       activationLineage: String(boundary.activationLineage ?? ''),
-      schedulerGeneration: observer.schedulerGeneration,
-      tickSequence: observer.tickSequence,
+      schedulerGeneration: identity.schedulerGeneration,
+      tickSequence: identity.tickSequence,
     },
   });
 }
 
-function failObserverTickWithHandoff(
+function publishObserverFailureHandoff(
   boundary: SchedulerBoundary,
   observer: SchedulerFleetObserver,
   tickSequence: number,
   reason: 'observer_timeout' | 'observer_threw',
-): never {
+): { readonly handoff: SchedulerPublishedHandoff; readonly identity: SchedulerFleetIdentity } {
   const schedulerGeneration = String(observer.schedulerGeneration ?? '').trim();
   if (!schedulerGeneration) throw new Error(`scheduler_observer_identity_unavailable:${reason}`);
   if (!boundary.publishHandoff) throw new Error('scheduler_reconciliation_handoff_unavailable:observer_untrusted');
-  const handoff = boundary.publishHandoff({
+  const published = boundary.publishHandoff({
     reason: 'observer_untrusted',
     schedulerGeneration,
     tickSequence,
   });
-  if (!handoff.ok) throw new Error(`scheduler_reconciliation_handoff_failed:${handoff.reason ?? 'observer_untrusted'}`);
-  throw new Error(`scheduler_observer_untrusted:${reason}`);
+  if (!published.ok) throw new Error(`scheduler_reconciliation_handoff_failed:${published.reason ?? 'observer_untrusted'}`);
+  return {
+    handoff: { required: true, ...(published.record ? { record: published.record } : {}) },
+    identity: { schedulerGeneration, tickSequence },
+  };
 }
 
 export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.ProcessEnv = process.env): Promise<{
@@ -361,13 +368,27 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
       .catch(() => ({ status: 'failed' as const }));
     const completed = await Promise.race([attempt, timeout]);
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-    if (completed.status === 'timeout') {
+    if (completed.status !== 'complete') {
       observerBoundary.cancel?.();
-      failObserverTickWithHandoff(boundary, observerBoundary, requestedTickSequence, 'observer_timeout');
-    }
-    if (completed.status === 'failed') {
-      observerBoundary.cancel?.();
-      failObserverTickWithHandoff(boundary, observerBoundary, requestedTickSequence, 'observer_threw');
+      const observerFailure = publishObserverFailureHandoff(
+        boundary,
+        observerBoundary,
+        requestedTickSequence,
+        completed.status === 'timeout' ? 'observer_timeout' : 'observer_threw',
+      );
+      orchestratorRequired = observerFailure.handoff.required;
+      fleetEscalation = await evaluateFleetEscalation(
+        boundary,
+        observerFailure.handoff,
+        observerFailure.identity,
+      );
+      return {
+        attempted: 0,
+        started: 0,
+        skipped: 0,
+        ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
+        ...(fleetEscalation ? { fleetEscalation } : {}),
+      };
     }
     observer = completed.value;
   }
@@ -388,7 +409,15 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     orchestratorRequired = handoff.required;
     fleetEscalation = await evaluateFleetEscalation(boundary, handoff, observer);
     if (fleetNudge.status === 'failed') {
-      throw new Error(`scheduler_fleet_phase_failed:${fleetNudge.result}`);
+      return {
+        attempted: 0,
+        started: 0,
+        skipped: 0,
+        observer,
+        fleetNudge,
+        ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
+        ...(fleetEscalation ? { fleetEscalation } : {}),
+      };
     }
   }
   let attempted = 0; let started = 0; let skipped = 0;

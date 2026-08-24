@@ -54,6 +54,20 @@ const HANDOFF_KEYS = new Set([
   'payloadDigest',
 ]);
 
+const FORBIDDEN_CANONICAL_CONTENT_PATTERNS = [
+  /Bearer\s+/u,
+  /ghp_/u,
+  /gho_/u,
+  /ghu_/u,
+  /ghs_/u,
+  /ghr_/u,
+  /github_pat_/u,
+  /sk-/u,
+  /AKIA[0-9A-Z]{16}/u,
+  /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^:\s/]+:[^@\s]+@/u,
+  /\b(?:token|password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*[^\s",}]+/iu,
+] as const;
+
 export type FleetEscalationDecision =
   | 'no_escalation'
   | 'invalid_evidence'
@@ -229,6 +243,10 @@ function validateEvidence(
   return { ok: true, evidence };
 }
 
+function containsForbiddenCanonicalContent(text: string): boolean {
+  return FORBIDDEN_CANONICAL_CONTENT_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 export function canonicalFleetEscalationContent(
   evidence: FleetReconciliationHandoff,
 ): CanonicalContent | null {
@@ -249,7 +267,9 @@ export function canonicalFleetEscalationContent(
   };
   const text = JSON.stringify(content);
   const bytes = Buffer.byteLength(text, 'utf8');
-  if (bytes < 1 || bytes > MAX_FLEET_ESCALATION_CONTENT_BYTES) return null;
+  if (bytes < 1
+    || bytes > MAX_FLEET_ESCALATION_CONTENT_BYTES
+    || containsForbiddenCanonicalContent(text)) return null;
   return {
     content,
     text,

@@ -24,7 +24,7 @@ Malformed, contradictory, stale-lineage, wrong-tick, unsupported, uncommitted, o
 
 `FleetEscalationContentV1` is deterministic UTF-8 JSON derived only from bounded durable reconciliation facts: project/repository identity, activation lineage, scheduler generation, tick sequence, upstream decision/reason, and optional durable role/Issue/Task/assignment metadata already present in the handoff.
 
-The canonical digest domain deliberately excludes the S3 invocation id, handoff recording time, raw runtime identity, terminal/session/title/path/PID/pane data, prompts/replies/transcripts, credentials/authenticated URLs, transport-private identifiers, and scheduler stdout serialization state. Equivalent accepted durable reconciliation evidence therefore produces byte-identical content and digest.
+The canonical digest domain deliberately excludes the S3 invocation id, handoff recording time, raw runtime identity, terminal/session/title/path/PID/pane data, prompts/replies/transcripts, credentials/authenticated URLs, transport-private identifiers, and scheduler stdout serialization state. Credential-, token-, or authenticated-URL-shaped canonical metadata is rejected fail-closed before target resolution/publication rather than emitted. Equivalent accepted durable reconciliation evidence therefore produces byte-identical content and digest.
 
 ## Exact operator target
 
@@ -54,15 +54,14 @@ S3 has no retry, resend, fallback channel, queue, acknowledgement protocol, resu
 
 ## Scheduler result surface
 
-The only S3 result witness is the normal scheduler caller surface. When the S3 phase is evaluated, `runSchedulerTick(...)` exposes the constructed `FleetEscalationInvocationResultV1` as `fleetEscalation`.
+The only S3 result witness is the normal scheduler caller surface. When the S3 phase is evaluated, `runSchedulerTick(...)` exposes the constructed `FleetEscalationInvocationResultV1` as `fleetEscalation`. Observer timeout/throw and failed S2 ticks that successfully commit/read back an `orchestrator_required` handoff also close through S3 exactly once and return before the review-start loop, so an entered publication result is never discarded by a later guaranteed scheduler throw.
 
 `runSingleTick` and `runLoop` may later serialize that already-constructed scheduler return to stdout. Output serialization success/failure is outside S3 publication truth, cannot rewrite `submitted | pre_dispatch_failure | ambiguous`, and creates no retry authority. There is no `evidenceRecording` dimension or separate recorder lifecycle.
 
 The dedicated proof command is:
 
 ```text
-node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
-  --script scripts/pr2-foundation/fleet-escalation-proof.ts --
+node --experimental-strip-types scripts/pr2-foundation/fleet-escalation-proof.ts
 ```
 
 On success it emits exactly one terminal `fleet-escalation-proof/v1` JSON record. The proof traverses the real scheduler -> S3 -> landed #1532 target producer -> current `publishOperatorMessageOnce(...)` boundary while injecting side-effect-free local runtime/state dependencies so no external operator message is sent. Its required evidence includes:

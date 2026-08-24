@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
@@ -27,9 +27,11 @@ import {
   canonicalFleetEscalationContent,
   closeFleetEscalationTargetFence,
   runFleetEscalationDelivery,
+  type FleetEscalationInvocationResultV1,
   type FleetEscalationSchedulerIdentityV1,
 } from './fleet-escalation-delivery.ts';
 import { runFleetEscalationProof } from './fleet-escalation-proof.ts';
+import { runSchedulerTick, type SchedulerBoundary } from './scheduler.ts';
 
 const roots: string[] = [];
 const projectId = 'orchestrator-pack';
@@ -66,6 +68,7 @@ function handoff(
   reason: FleetReconciliationReason = 'target_unresolved',
   tickSequence = 1,
   recordedAt = '2026-08-24T00:00:00.000Z',
+  metadata: { taskId?: string; assignmentId?: string } = {},
 ): FleetReconciliationHandoff {
   const published = publishFleetReconciliationHandoff({
     file: path.join(root, `handoff-${tickSequence}-${reason}.json`),
@@ -77,13 +80,101 @@ function handoff(
     reason,
     role: 'worker',
     issueNumber: 1260,
-    taskId: 'task-1260',
-    assignmentId: 'assignment-1260',
+    taskId: metadata.taskId ?? 'task-1260',
+    assignmentId: metadata.assignmentId ?? 'assignment-1260',
     assignmentGeneration: 1,
     now: () => new Date(recordedAt),
   });
   if (!published.ok) throw new Error(published.reason);
   return published.record;
+}
+
+function epochEnv(root: string): NodeJS.ProcessEnv {
+  const authority = path.join(root, 'epoch.json');
+  const epochId = 'epoch-1260-test';
+  const nonce = 'nonce-1260-test';
+  writeFileSync(authority, JSON.stringify({
+    schemaVersion: 1,
+    currentEpochId: epochId,
+    records: [{
+      epochId,
+      nonce,
+      hostId: 'host-1260-test',
+      repoRoot: process.cwd(),
+      installedCommitSha: 'a'.repeat(40),
+      snapshotDigests: {},
+      importDigests: {},
+      registryHash: 'a',
+      preCommitLogDigest: 'b',
+      commitAt: '2026-08-24T00:00:00.000Z',
+    }],
+  }), 'utf8');
+  return {
+    ...process.env,
+    ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authority,
+    ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
+    ORCHESTRATOR_CUTOVER_NONCE: nonce,
+  };
+}
+
+function completeObserver(tickSequence: number) {
+  return {
+    result: 'census-published-observer-only' as const,
+    status: 'complete' as const,
+    snapshotCommitted: true,
+    snapshotPath: '/tmp/observer-snapshot.json',
+    schedulerGeneration,
+    tickSequence,
+    effectiveBudgetMs: 100,
+    schedulerReturnedWithinBudget: true,
+    staleCompletionRejected: false,
+    fleetCapFailClosed: false,
+    goneSemanticsClosed: true,
+    exceptionCollisionRejected: false,
+    zeroActuation: true as const,
+  };
+}
+
+function targetUnresolvedNudge(tickSequence: number) {
+  return {
+    result: 'target-binding-unresolved-fail-closed' as const,
+    status: 'complete' as const,
+    schedulerGeneration,
+    tickSequence,
+    effectiveS2BudgetMs: 100,
+    settlementReserveMs: 10,
+    candidateOrder: ['unit-1260'],
+    outcomes: [{ unitRef: 'unit-1260', class: 'idle' as const, outcome: 'target_unresolved' as const }],
+    claimStarts: 0,
+    sendAttempts: 0,
+    dispatched: 0,
+    returnedWithinBudget: true,
+    targetBindingAvailable: false,
+  };
+}
+
+function syntheticEscalation(
+  publication: FleetEscalationInvocationResultV1['publication'],
+  tickSequence = 1,
+  reason: FleetReconciliationReason = 'target_unresolved',
+): FleetEscalationInvocationResultV1 {
+  const attempted = publication !== 'not_attempted';
+  return {
+    schema: 'fleet-escalation-invocation-result/v1',
+    result: 'operator-escalation-only',
+    ...expected(tickSequence),
+    decision: attempted ? 'publish_attempted' : 'invalid_target',
+    publication,
+    reconciliationDecision: 'orchestrator_required',
+    reason,
+    invocationId: `synthetic-${publication}-${tickSequence}`,
+    route: 'operator-primary',
+    contentDigest: attempted ? 'd'.repeat(64) : null,
+    contentBytes: attempted ? 128 : 0,
+    attemptCount: attempted ? 1 : 0,
+    diagnostics: [],
+    retryAuthority: 'none',
+  };
 }
 
 function worker(): RuntimeWorker {
@@ -194,6 +285,40 @@ describe('fleet escalation delivery', () => {
     expect(first?.text).not.toContain('recordedAtUtc');
     expect(first?.text).not.toContain('invocation');
     expect(first?.bytes).toBeLessThanOrEqual(4_096);
+  });
+
+  it('fails closed before target resolution for digest-valid credential/token/authenticated-URL metadata', async () => {
+    const root = tempRoot();
+    let adapterSelections = 0;
+    const sensitive = [
+      { taskId: 'Bearer synthetic-secret-token' },
+      { taskId: 'ghp_abcdefghijklmnopqrstuvwxyz1234567890' },
+      { taskId: 'token=synthetic-secret' },
+      { assignmentId: 'https://user:password@example.invalid/reconciliation' },
+    ];
+    for (const [index, metadata] of sensitive.entries()) {
+      const tickSequence = index + 1;
+      const evidence = handoff(root, 'target_unresolved', tickSequence, '2026-08-24T00:00:00.000Z', metadata);
+      expect(canonicalFleetEscalationContent(evidence)).toBeNull();
+      const result = await runFleetEscalationDelivery({
+        evidence,
+        committedReadBack: true,
+        expected: expected(tickSequence),
+        assignmentStorePath: path.join(root, 'unused-assignments.json'),
+        selectAdapter: async () => {
+          adapterSelections += 1;
+          return adapterFixture().adapter;
+        },
+        invocationId: `sensitive-${index}`,
+      });
+      expect(result).toMatchObject({
+        decision: 'invalid_evidence',
+        publication: 'not_attempted',
+        attemptCount: 0,
+      });
+      expect(result.diagnostics).toContain('content_invalid');
+    }
+    expect(adapterSelections).toBe(0);
   });
 
   it('rejects uncommitted, corrupted, and mismatched evidence before target resolution', async () => {
@@ -358,6 +483,185 @@ describe('fleet escalation delivery', () => {
     expect(fixture.calls.dispatch).toBe(2);
     expect(first.retryAuthority).toBe('none');
     expect(second.retryAuthority).toBe('none');
+  });
+
+  it.each(['timeout', 'throw'] as const)(
+    'routes observer %s handoff through S3 exactly once and returns the caller-visible result',
+    async (mode) => {
+      const root = tempRoot();
+      let handoffCalls = 0;
+      let escalationCalls = 0;
+      let cancelCalls = 0;
+      const boundary: SchedulerBoundary = {
+        projectId,
+        repository,
+        activationLineage,
+        schedulerIntervalMs: 4,
+        listCandidates: () => { throw new Error('review_loop_must_not_run'); },
+        readCurrentPr: async () => { throw new Error('read_pr_must_not_run'); },
+        readChecks: async () => { throw new Error('read_checks_must_not_run'); },
+        listReviewRuns: () => [],
+        start: async () => { throw new Error('start_must_not_run'); },
+        fleetObserver: {
+          schedulerGeneration,
+          getEffectiveBudgetMs: () => 1,
+          cancel: () => { cancelCalls += 1; },
+          tick: mode === 'timeout'
+            ? async () => new Promise<never>(() => {})
+            : async () => { throw new Error('synthetic_observer_throw'); },
+        },
+        publishHandoff: ({ reason, tickSequence }) => {
+          handoffCalls += 1;
+          const record = handoff(root, reason, tickSequence);
+          return { ok: true, record };
+        },
+        fleetEscalation: async ({ evidence, expected: identity }) => {
+          escalationCalls += 1;
+          expect(evidence?.reason).toBe('observer_untrusted');
+          expect(identity.tickSequence).toBe(1);
+          return syntheticEscalation('submitted', identity.tickSequence, 'observer_untrusted');
+        },
+      };
+      const result = await runSchedulerTick(boundary, epochEnv(root));
+      expect(result).toMatchObject({
+        attempted: 0,
+        started: 0,
+        skipped: 0,
+        orchestratorRequired: true,
+        fleetEscalation: {
+          reason: 'observer_untrusted',
+          publication: 'submitted',
+          attemptCount: 1,
+        },
+      });
+      expect(handoffCalls).toBe(1);
+      expect(escalationCalls).toBe(1);
+      expect(cancelCalls).toBe(1);
+    },
+  );
+
+  it('returns the S3 result when S2 fails after the admitted handoff instead of throwing it away', async () => {
+    const root = tempRoot();
+    let escalationCalls = 0;
+    const boundary: SchedulerBoundary = {
+      projectId,
+      repository,
+      activationLineage,
+      listCandidates: () => { throw new Error('review_loop_must_not_run'); },
+      readCurrentPr: async () => { throw new Error('read_pr_must_not_run'); },
+      readChecks: async () => { throw new Error('read_checks_must_not_run'); },
+      listReviewRuns: () => [],
+      start: async () => { throw new Error('start_must_not_run'); },
+      fleetObserver: {
+        schedulerGeneration,
+        tick: async (input) => completeObserver(input.tickSequence ?? 1),
+      },
+      fleetNudgeActuator: {
+        tick: async (input) => ({
+          result: 'observer-untrusted',
+          status: 'failed',
+          schedulerGeneration,
+          tickSequence: input.tickSequence,
+          effectiveS2BudgetMs: 1,
+          settlementReserveMs: 1,
+          candidateOrder: [],
+          outcomes: [],
+          claimStarts: 0,
+          sendAttempts: 0,
+          dispatched: 0,
+          returnedWithinBudget: true,
+          targetBindingAvailable: false,
+        }),
+      },
+      publishHandoff: ({ reason, tickSequence }) => ({
+        ok: true,
+        record: handoff(root, reason, tickSequence),
+      }),
+      fleetEscalation: async ({ expected: identity }) => {
+        escalationCalls += 1;
+        return syntheticEscalation('submitted', identity.tickSequence, 'observer_untrusted');
+      },
+    };
+    const result = await runSchedulerTick(boundary, epochEnv(root));
+    expect(result).toMatchObject({
+      attempted: 0,
+      started: 0,
+      skipped: 0,
+      orchestratorRequired: true,
+      fleetNudge: { status: 'failed', result: 'observer-untrusted' },
+      fleetEscalation: { publication: 'submitted', attemptCount: 1 },
+    });
+    expect(escalationCalls).toBe(1);
+  });
+
+  it('keeps review candidate order, reads, decisions, counters, and start sequence independent of S3 outcome', async () => {
+    const outcomes = [
+      syntheticEscalation('submitted'),
+      syntheticEscalation('pre_dispatch_failure'),
+      syntheticEscalation('ambiguous'),
+      syntheticEscalation('not_attempted'),
+    ];
+    let baselineEvents: string[] | undefined;
+    for (const outcome of outcomes) {
+      const root = tempRoot();
+      const events: string[] = [];
+      const head = 'c'.repeat(40);
+      const boundary: SchedulerBoundary = {
+        projectId,
+        repository,
+        activationLineage,
+        listCandidates: () => {
+          events.push('listCandidates');
+          return [{ sessionId: 'worker-1260', repoSlug: repository, prNumber: 1609, boundHeadSha: head }];
+        },
+        readCurrentPr: async () => {
+          events.push('readCurrentPr');
+          return { number: 1609, headRefOid: head, state: 'OPEN', isDraft: false, body: 'Closes #1260' };
+        },
+        readChecks: async () => {
+          events.push('readChecks');
+          return [
+            { name: 'verify orchestrator-pack structure', state: 'success' },
+            { name: 'pr scope guard', state: 'success' },
+            { name: 'run pack contract tests', state: 'success' },
+            { name: 'self-architect lint', state: 'success' },
+          ];
+        },
+        listReviewRuns: () => {
+          events.push('listReviewRuns');
+          return [];
+        },
+        start: async () => {
+          events.push('start');
+          return { ok: true };
+        },
+        fleetObserver: {
+          schedulerGeneration,
+          tick: async (input) => {
+            events.push('fleetObserver');
+            return completeObserver(input.tickSequence ?? 1);
+          },
+        },
+        fleetNudgeActuator: {
+          tick: async (input) => {
+            events.push('fleetNudge');
+            return targetUnresolvedNudge(input.tickSequence);
+          },
+        },
+        publishHandoff: ({ reason, tickSequence }) => {
+          events.push('publishHandoff');
+          return { ok: true, record: handoff(root, reason, tickSequence) };
+        },
+        fleetEscalation: async () => {
+          events.push('fleetEscalation');
+          return outcome;
+        },
+      };
+      const result = await runSchedulerTick(boundary, epochEnv(root));
+      expect(result).toMatchObject({ attempted: 1, started: 1, skipped: 0 });
+      if (baselineEvents === undefined) baselineEvents = [...events];
+      else expect(events).toEqual(baselineEvents);
+    }
   });
 
   it('returns the production-wired proof through the real scheduler result surface', async () => {

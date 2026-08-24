@@ -40,8 +40,7 @@ The implementation base contains the required landings:
 3. Run the production-wired proof:
 
    ```bash
-   node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
-     --script scripts/pr2-foundation/fleet-escalation-proof.ts --
+   node --experimental-strip-types scripts/pr2-foundation/fleet-escalation-proof.ts
    ```
 
    It must emit exactly one terminal `fleet-escalation-proof/v1` JSON record with
