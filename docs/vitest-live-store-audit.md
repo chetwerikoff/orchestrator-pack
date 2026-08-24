@@ -43,7 +43,7 @@ and operation only; they do not print file contents or resolved live paths.
 The wrapper establishes every override before importing Vitest, installs the Node
 preload and PowerShell child shim, starts the live-store guard, and always runs post-check
 and cleanup in `finally` semantics. The shim validates the original PowerShell
-a rgv/environment through the inventory, then launches the real executable without
+argv/environment through the inventory, then launches the real executable without
 rewriting named parameters while streaming stdio and forwarding termination signals.
 When both the child and the guard fail, both failures remain visible and the invocation
 is non-zero.
@@ -68,10 +68,10 @@ Inventoried non-excluded classes:
 3. worker-status store;
 4. review delivery lifecycle, handoff admission, report-state seed, and re-evaluation watch;
 5. pack worker-report store and PR↔session binding cache;
-6. review-start and worker-nudge claim namespaces under the AO base directory;
+6. review-start and worker-nudge claim namespaces under the pack state root;
 7. mechanical Node transport files.
 
-The wake-supervisor state root and default AO base root are also protected as root
+The wake-supervisor state root and pack state root are also protected as root
 classes, so an unlisted basename beneath either production root cannot silently write
 just because its leaf is new.
 
