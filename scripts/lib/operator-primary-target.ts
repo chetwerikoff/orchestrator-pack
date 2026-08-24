@@ -26,12 +26,16 @@ export const OPERATOR_PRIMARY_PRE_ACTION_FAILURES = [
 export type OperatorPrimaryPreActionFailure =
   (typeof OPERATOR_PRIMARY_PRE_ACTION_FAILURES)[number];
 
+type OperatorPrimaryNonThenable<T> = T extends { readonly then: unknown } ? never : T;
+
 export interface OperatorPrimarySyncActionResult<T> {
   readonly kind: 'operator-primary-sync-result';
-  readonly value: T;
+  readonly value: OperatorPrimaryNonThenable<T>;
 }
 
-export function operatorPrimarySyncResult<T>(value: T): OperatorPrimarySyncActionResult<T> {
+export function operatorPrimarySyncResult<T>(
+  value: OperatorPrimaryNonThenable<T>,
+): OperatorPrimarySyncActionResult<T> {
   return { kind: 'operator-primary-sync-result', value };
 }
 
@@ -70,11 +74,29 @@ function validRuntimeIdentity(identity: RuntimeWorkerIdentity | null | undefined
     && typeof identity.generation === 'string' && identity.generation.trim());
 }
 
+function hasCallableThen(value: unknown): boolean {
+  if ((typeof value !== 'object' || value === null) && typeof value !== 'function') return false;
+  try {
+    return typeof (value as { readonly then?: unknown }).then === 'function';
+  } catch {
+    return true;
+  }
+}
+
 function isSyncActionResult<T>(value: unknown): value is OperatorPrimarySyncActionResult<T> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const candidate = value as { readonly kind?: unknown; readonly then?: unknown };
-  return candidate.kind === 'operator-primary-sync-result'
-    && typeof candidate.then !== 'function';
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const candidate = value as {
+      readonly kind?: unknown;
+      readonly value?: unknown;
+      readonly then?: unknown;
+    };
+    return candidate.kind === 'operator-primary-sync-result'
+      && typeof candidate.then !== 'function'
+      && !hasCallableThen(candidate.value);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -119,7 +141,13 @@ export async function withCurrentOperatorPrimaryTarget<T>(
       return operatorPrimaryLockedResult<LockedTargetResult<T>>(preActionFailure('runtime_unavailable'));
     }
     if (resolved.status !== 'ok') {
-      return operatorPrimaryLockedResult<LockedTargetResult<T>>(preActionFailure('runtime_unavailable'));
+      return operatorPrimaryLockedResult<LockedTargetResult<T>>(
+        preActionFailure(
+          resolved.reason === 'assignment_target_unresolved'
+            ? 'target_unresolved'
+            : 'runtime_unavailable',
+        ),
+      );
     }
     if (resolved.value.kind === 'gone') {
       return operatorPrimaryLockedResult<LockedTargetResult<T>>(preActionFailure('target_not_current'));
