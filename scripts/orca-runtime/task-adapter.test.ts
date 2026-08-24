@@ -571,6 +571,64 @@ describe('Issue #1441 stale/reused runtime identity', () => {
   });
 });
 
+describe('Issue #1587 accepted terminal-send evidence', () => {
+  it('separates accepted write-only and submit-only witnesses from delivery success', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'terminal show') {
+        return {
+          ok: true,
+          result: {
+            terminal: {
+              handle: 'busy-agent',
+              incarnationId: 'generation-1587',
+              worktreePath: '/tmp/worktree-1587',
+              title: 'busy-agent',
+              status: 'running',
+            },
+          },
+        };
+      }
+      if (operation === 'terminal list') {
+        return {
+          ok: true,
+          result: {
+            terminals: [{
+              handle: 'busy-agent',
+              incarnationId: 'generation-1587',
+              worktreePath: '/tmp/worktree-1587',
+              title: 'busy-agent',
+              status: 'running',
+            }],
+            totalCount: 1,
+            truncated: false,
+          },
+        };
+      }
+      if (operation === 'terminal send') {
+        return { ok: true, result: { send: { accepted: true } } };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    const worker = { runtime: 'orca', id: 'busy-agent', generation: 'generation-1587' } as const;
+
+    expect(adapter.dispatchInput({ worker, text: 'exact pointer', writeOnly: true })).toEqual({
+      status: 'dispatch_unknown',
+      reason: 'submit_witness_unavailable',
+      witness: { operation: 'write', accepted: true, source: 'runtime-response' },
+    });
+    expect(adapter.dispatchInput({ worker, submitOnly: true })).toEqual({
+      status: 'dispatched',
+      witness: { operation: 'submit', accepted: true, source: 'runtime-response' },
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'send').map((call) => call[0])).toEqual([
+      ['terminal', 'send', '--terminal', 'busy-agent', '--text', 'exact pointer'],
+      ['terminal', 'send', '--terminal', 'busy-agent', '--enter'],
+    ]);
+  });
+});
+
 type ClosePresence = 'present' | 'absent' | 'mismatch' | 'unavailable' | 'truncated' | 'duplicate';
 
 function boundedCloseFixture(input: {

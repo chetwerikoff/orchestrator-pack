@@ -64,6 +64,7 @@ export interface WorkerNotificationOptions {
 
 interface JournalAdmission {
   duplicate: boolean;
+  ambiguous?: boolean;
   deliveryId: string;
   journalPath: string;
 }
@@ -171,6 +172,19 @@ async function admitNotification(input: {
   const findingsHash = hashed(input.request.message);
   return withJournalLock(input.journalPath, 3, () => {
     const journal = readJournal(input.journalPath);
+    const existing = Object.values(journal)
+      .map((value) => asRecord(value))
+      .find((record) => record
+        && trim(record.deterministicKey) === deliveryKey
+        && trim(record.findingsHash) === findingsHash);
+    if (existing) {
+      return {
+        duplicate: true,
+        ambiguous: trim(existing.dispatchOutcome) !== DISPATCH_OUTCOME_DISPATCHED,
+        deliveryId: trim(existing.deliveryId),
+        journalPath: input.journalPath,
+      };
+    }
     const deterministic = evaluateDeterministicJournalAdmission(journal, {
       deterministicKey: deliveryKey,
       findingsHash,
@@ -232,11 +246,9 @@ async function finalizeJournal(admission: JournalAdmission, outcome: string): Pr
 }
 
 function submitCursorComposerOnceAfterDelivery(adapter: RuntimeAdapter, worker: RuntimeWorker): void {
-  try {
-    submitUnsentCursorComposerOnceForWorker(worker, createAdapterSubmitDeps(adapter));
-  } catch {
+  void submitUnsentCursorComposerOnceForWorker(worker, createAdapterSubmitDeps(adapter)).catch(() => {
     // Composer submission is an auxiliary bounded reaction; notification settlement remains authoritative.
-  }
+  });
 }
 
 async function finalizeBoth(input: {
@@ -460,8 +472,11 @@ export async function sendPackReviewWorkerNotification(
     return { state: 'pre_dispatch_failure', reason: error instanceof Error ? error.message : 'journal_register_failed' };
   }
   if (admission.duplicate) {
-    await finalizeWorkerNudgeClaim(claim, 'SENT', { duplicateNoOp: true });
-    return { state: 'submitted', reason: 'journal_duplicate_no_op' };
+    await finalizeWorkerNudgeClaim(claim, admission.ambiguous ? 'UNCERTAIN' : 'SENT', { duplicateNoOp: true });
+    return {
+      state: admission.ambiguous ? 'ambiguous' : 'submitted',
+      reason: 'journal_duplicate_no_op',
+    };
   }
 
   const fenced = await withSideEffectFence({
@@ -478,6 +493,7 @@ export async function sendPackReviewWorkerNotification(
       const result = adapter.dispatchInput({
         worker: worker.identity,
         text: options.request.message,
+        writeOnly: true,
       }, { cwd: worker.workspacePath });
       return { marked: true as const, result };
     },

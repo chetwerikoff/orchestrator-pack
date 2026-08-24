@@ -125,10 +125,20 @@ export type RuntimeResult<T> =
   | { readonly status: 'ok'; readonly value: T }
   | RuntimeOperationFailure;
 
+export interface RuntimeDispatchWitness {
+  readonly operation: 'write' | 'submit';
+  readonly accepted: true;
+  readonly source: 'runtime-response';
+}
+
 export type RuntimeDispatchResult =
-  | { readonly status: 'dispatched' }
+  | { readonly status: 'dispatched'; readonly witness?: RuntimeDispatchWitness }
   | { readonly status: 'send_failed'; readonly reason: string }
-  | { readonly status: 'dispatch_unknown'; readonly reason: string };
+  | {
+      readonly status: 'dispatch_unknown';
+      readonly reason: string;
+      readonly witness?: RuntimeDispatchWitness;
+    };
 
 /** Liveness is deliberately total and has no fifth error result. */
 export interface RuntimeLivenessResult {
@@ -289,6 +299,7 @@ export interface RuntimeAdapter {
       readonly worker: RuntimeWorkerIdentity;
       readonly text?: string;
       readonly submitOnly?: boolean;
+      readonly writeOnly?: boolean;
     },
     options?: RuntimeCallOptions,
   ): RuntimeDispatchResult;
