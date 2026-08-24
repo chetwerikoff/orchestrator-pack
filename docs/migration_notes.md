@@ -1,5 +1,74 @@
 # Migration notes
 
+## S3 fleet escalation delivery (Issue #1260)
+
+### What changed
+
+The existing bounded TypeScript scheduler now consumes the exact current
+`fleet-reconciliation-handoff/v1` record only after that same scheduler invocation
+successfully commits and reads it back. Every current `orchestrator_required`
+reason is inherited from S1/S2 reconciliation without reclassification. S3 renders
+bounded deterministic content from durable reconciliation facts and makes at most
+one call to the existing `publishOperatorMessageOnce(...)` seam, only inside the
+landed #1532 `withCurrentOperatorPrimaryTarget(...)` synchronous target action.
+
+The scheduler returns the S3 result as `fleetEscalation`; there is no second
+recorder, result store, journal, acknowledgement, retry queue, fallback transport,
+or dedup lifecycle. `submitted` means only that the runtime submit attempt was
+accepted. `ambiguous` never authorizes a resend. A separately admitted explicit
+invocation may therefore duplicate an alert.
+
+The implementation base contains the required landings:
+
+- #1245 / PR #1264: `54cf33decf062a7f38fa5a8a02d02053f5089db1`;
+- #1258 / PR #1278: `c83c27d9a1d87a5e8136deef76abaa014b5a105c`;
+- #1259 / PR #1357: `6cce14b7379a80e5999179476432e6c6e0bcadd8`;
+- #1352 / PR #1378: `936e8bd4530aa25085a7a3299efd1588fdf814b4`;
+- #1420 / PR #1421: `8c70a1fc70fceeb998bbab077408bbc07e9d93eb`;
+- #1440 / PR #1446: `7250a03a2b1b5dc429da39596d965f409c1ad449`;
+- #1532 / PR #1585: `c1a6680a96af28a5b33711d73dbacf2297b82b24`.
+
+### Operator adoption
+
+1. Adopt the merged #1260 revision through the normal PACK deployment/recycle path.
+   Do not add an AO/PowerShell escalation route, second scheduler, daemon, queue,
+   retry journal, or result store.
+2. Confirm the current machine-local `operator-primary` designation with the
+   canonical #1532 `show` command before expecting a positive S3 send. Repository
+   history proving #1532 is landed does **not** prove that a particular host
+   currently has a valid designation.
+3. Run the production-wired proof:
+
+   ```bash
+   node --experimental-strip-types scripts/pr2-foundation/fleet-escalation-proof.ts
+   ```
+
+   It must emit exactly one terminal `fleet-escalation-proof/v1` JSON record with
+   `producer: "orchestrator-pack"`, `datum: "$.fleetEscalation.result"`,
+   `expected: "operator-escalation-only"`,
+   `productionBoundary: "scheduler-to-current-operator-publication-seam"`,
+   `resultSurface: "runSchedulerTick-return"`, zero forbidden actuator calls,
+   zero AO/PowerShell calls, and `retryAuthority: "none"`. The proof injects a
+   side-effect-free runtime target and does not send an external operator message.
+4. Observe one real eligible reconciliation event after adoption and inspect the
+   returned scheduler `fleetEscalation` result. Treat `submitted` as accepted
+   submit only, `pre_dispatch_failure` as definite pre-submit failure, and
+   `ambiguous` as possible submit with resend forbidden. Do not infer delivery,
+   acknowledgement, processing, or completion from any of these values.
+5. Confirm S3 remains notification-only: no worker/process/workspace remediation,
+   assignment or operator-primary mutation, review start/publication, merge, label,
+   or unrelated GitHub mutation is authorized by the S3 result.
+
+See `docs/fleet-escalation-delivery.md` for the complete input, target, publication,
+result-surface, duplicate-invocation, and non-remediation contract.
+
+### Rollback
+
+Rollback is an ordinary source-control revert of #1260 followed by the normal PACK
+adoption/recycle path. S3 owns no durable retry/dedup/result state, so no state
+migration or cleanup is required. Do not preserve S3 by adding a compatibility
+router, retry service, alternate target selector, or second result lifecycle.
+
 ## PACK operator-primary logical binding (Issue #1532)
 
 ### What changed
