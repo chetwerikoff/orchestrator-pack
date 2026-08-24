@@ -6,6 +6,7 @@
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/lib/pack-review-worker-notification.ts",
     "scripts/worker-message-submit-reconcile.test.ts"
   ],
   "denylist": [
@@ -23,5 +24,5 @@
     "scripts/lib/pack-review-worker-notification.ts",
     "scripts/worker-message-submit-reconcile.test.ts"
   ],
-  "source_revision": "0d018a6e1e9b7cf4fd6ac60cab3002fe417f65ea"
+  "source_revision": "860a9559334940cea3babedb2cd8e5b5c709b32c"
 }
