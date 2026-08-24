@@ -1,14 +1,23 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { RuntimeAdapter } from './runtime/contracts.ts';
 import {
+  currentWorkerAssignmentByDeliverable,
   publishCurrentWorkerAssignment,
   readOperatorPrimaryBinding,
   resolveWorkerAssignmentStorePath,
+  workerAssignmentKey,
+  WORKER_ASSIGNMENT_SCHEMA,
+  WORKER_ASSIGNMENT_STORE_SCHEMA,
 } from './lib/worker-assignment-store.ts';
+import {
+  operatorPrimarySyncResult,
+  withCurrentOperatorPrimaryTarget,
+} from './lib/operator-primary-target.ts';
 import {
   parseOperatorPrimaryBindingArgs,
   runOperatorPrimaryBindingCommand,
@@ -40,6 +49,51 @@ async function publish(file: string, taskId: string, bindingKey: string, issueNu
   if (!result.ok) throw new Error(result.reason);
   return result.assignment;
 }
+
+/**
+ * Minimal pre-#1532 v1 parser/writer fixture. The historical writer knew only
+ * schema/revision/assignments at the store level, so its rewrite deliberately
+ * drops any unknown top-level field after validating the historical assignment
+ * identity needed by that writer.
+ */
+function rewriteWithPre1532WorkerAssignmentStore(raw: string): string {
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  if (parsed.schema !== WORKER_ASSIGNMENT_STORE_SCHEMA
+    || !Number.isInteger(parsed.revision) || Number(parsed.revision) < 0
+    || !parsed.assignments || typeof parsed.assignments !== 'object' || Array.isArray(parsed.assignments)) {
+    throw new Error('pre-1532 store fixture rejected store shape');
+  }
+
+  const assignments = parsed.assignments as Record<string, unknown>;
+  for (const [key, value] of Object.entries(assignments)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('pre-1532 store fixture rejected assignment row');
+    }
+    const row = value as Record<string, unknown>;
+    if (row.schema !== WORKER_ASSIGNMENT_SCHEMA
+      || typeof row.taskId !== 'string'
+      || typeof row.bindingKey !== 'string'
+      || typeof row.assignmentId !== 'string'
+      || !Number.isInteger(row.generation) || Number(row.generation) <= 0
+      || workerAssignmentKey(row.taskId, row.bindingKey) !== key) {
+      throw new Error('pre-1532 store fixture rejected assignment identity');
+    }
+  }
+
+  return `${JSON.stringify({
+    schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
+    revision: Number(parsed.revision) + 1,
+    assignments,
+  }, null, 2)}\n`;
+}
+
+const malformedPointerOverrides: ReadonlyArray<readonly [string, Readonly<Record<string, unknown>>]> = [
+  ['string assignment generation', { assignmentGeneration: '1' }],
+  ['boolean assignment generation', { assignmentGeneration: true }],
+  ['non-string task id', { taskId: 1532 }],
+  ['non-string binding key', { bindingKey: ['dispatch-1532'] }],
+  ['non-string assignment id', { assignmentId: { value: 'wa-1' } }],
+];
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -158,7 +212,7 @@ describe('operator-primary binding CLI', () => {
     });
   });
 
-  it('retires only the exact current pointer and show then proves absence for downgrade', async () => {
+  it('retires the exact pointer and proves the post-retire store through a pre-#1532 writer', async () => {
     const { env, file } = fixture();
     const assignment = await publish(file, 'task-1532', 'dispatch-1532', 1532);
     await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
@@ -178,7 +232,49 @@ describe('operator-primary binding CLI', () => {
     expect(await runOperatorPrimaryBindingCommand(retire, env)).toEqual({ ok: true, binding: null });
     expect(await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs(['show']), env))
       .toEqual({ ok: true, status: 'binding_absent', binding: null });
+
+    const postRetireBytes = readFileSync(file, 'utf8');
+    const historicalRewrite = rewriteWithPre1532WorkerAssignmentStore(postRetireBytes);
+    writeFileSync(file, historicalRewrite);
+
+    expect(readOperatorPrimaryBinding(file)).toEqual({ ok: true, status: 'binding_absent', binding: null });
+    expect(currentWorkerAssignmentByDeliverable(file, assignment.taskId, assignment.bindingKey)).toEqual(assignment);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).not.toHaveProperty('operatorPrimary');
   });
+
+  it.each(malformedPointerOverrides)(
+    'fails closed on persisted operator-primary with %s',
+    async (_label, override) => {
+      const { file } = fixture();
+      const assignment = await publish(file, 'task-1532', 'dispatch-1532', 1532);
+      const store = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+      store.operatorPrimary = {
+        route: 'operator-primary',
+        taskId: assignment.taskId,
+        bindingKey: assignment.bindingKey,
+        assignmentId: assignment.assignmentId,
+        assignmentGeneration: assignment.generation,
+        ...override,
+      };
+      writeFileSync(file, `${JSON.stringify(store, null, 2)}\n`);
+
+      let calls = 0;
+      const result = await withCurrentOperatorPrimaryTarget(
+        { file, adapter: {} as RuntimeAdapter, timeoutMs: 250 },
+        () => {
+          calls += 1;
+          return operatorPrimarySyncResult('unexpected');
+        },
+      );
+      expect(result).toEqual({ ok: false, actionEntered: false, reason: 'assignment_untrusted' });
+      expect(calls).toBe(0);
+      expect(readOperatorPrimaryBinding(file)).toEqual({
+        ok: false,
+        reason: 'assignment_store_untrusted',
+        cause: 'store_shape_invalid',
+      });
+    },
+  );
 
   it('rejects malformed/duplicate CLI flags instead of guessing', () => {
     expect(() => parseOperatorPrimaryBindingArgs(['show', '--project-id']))
