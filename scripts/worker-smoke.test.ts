@@ -30,6 +30,7 @@ import {
   finalSmokeCommentSnapshotMatches,
   findVerifiedSmokeReceiptWitness,
   parsePaginatedSmokeComments,
+  publishPrComment,
   resolveSmokeTarget,
   runGateCheck,
   resolveSmokeExecutorProfile,
@@ -718,6 +719,38 @@ function runChild(
     stderr: result.stderr,
   };
 }
+
+describe('publishPrComment', () => {
+  it('publishes via gh api --input temp file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-publish-'));
+    const bin = join(root, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const argvFile = join(root, 'argv.json');
+    const payloadFile = join(root, 'payload.json');
+    executable(join(bin, 'gh'), `#!/usr/bin/env node
+const { readFileSync, writeFileSync } = require('node:fs');
+writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)), 'utf8');
+const idx = process.argv.indexOf('--input');
+if (idx !== -1) {
+  writeFileSync(${JSON.stringify(payloadFile)}, readFileSync(process.argv[idx + 1], 'utf8'), 'utf8');
+}
+`);
+    const body = 'hello\nworld';
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath ?? ''}`;
+    try {
+      publishPrComment(1586, body, root);
+      const argv = JSON.parse(readFileSync(argvFile, 'utf8'));
+      expect(argv).toEqual(['api', 'repos/chetwerikoff/orchestrator-pack/issues/1586/comments', '--method', 'POST', '--input', expect.stringMatching(/worker-smoke-comment-[^/]+\/body\.md$/u)]);
+      const payload = JSON.parse(readFileSync(payloadFile, 'utf8'));
+      expect(payload.body).toBe(body);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('worker-smoke consolidated gate regressions', () => {
   it('uses the canonical closing grammar and rejects missing, repeated, and mismatched relations', () => {

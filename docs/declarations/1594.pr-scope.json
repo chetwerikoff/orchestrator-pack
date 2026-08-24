@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1594,
+  "declared_paths": [
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    "agent-orchestrator.yaml",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/",
+    "scripts/"
+  ],
+  "source_revision": "dfda936a6df08f16ee587d8d6d2ab715ddc7087d"
+}
