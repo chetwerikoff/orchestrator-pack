@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { parseSmokeTestPlan } from './draft-discipline.mjs';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -207,6 +208,58 @@ describe('runtime-neutral worker smoke', () => {
     const result = checkSmokeTestPlan(issueBody);
     expect(result.ok).toBe(true);
     expect(result.plan?.scenarios).toHaveLength(1);
+  });
+
+  it('parses dash bullets whose action and expected result are split by the first colon', () => {
+    const markdown = [
+      '```smoke-test-plan',
+      '- Open the deployment page: the page loads successfully',
+      '- Select the release: the release details are visible',
+      '```',
+    ].join('\n');
+
+    expect(parseSmokeTestPlan(markdown)).toEqual({
+      requirement: 'required',
+      scenarios: [
+        { action: 'Open the deployment page', expected: 'the page loads successfully' },
+        { action: 'Select the release', expected: 'the release details are visible' },
+      ],
+    });
+  });
+
+  it('parses YAML-ish nested action and expected lines', () => {
+    const markdown = [
+      '```smoke-test-plan',
+      'scenarios:',
+      '  - action: open the deployment page',
+      '    expected: the page loads successfully',
+      '  - action: select the release',
+      '    expected: the release details are visible',
+      '```',
+    ].join('\n');
+
+    expect(parseSmokeTestPlan(markdown)).toEqual({
+      requirement: 'required',
+      scenarios: [
+        { action: 'open the deployment page', expected: 'the page loads successfully' },
+        { action: 'select the release', expected: 'the release details are visible' },
+      ],
+    });
+  });
+
+  it('keeps parsing the existing pipe-delimited form', () => {
+    const markdown = [
+      '```smoke-test-plan',
+      '- action: open the deployment page | expected: the page loads successfully',
+      '```',
+    ].join('\n');
+
+    expect(parseSmokeTestPlan(markdown)).toEqual({
+      requirement: 'required',
+      scenarios: [
+        { action: 'open the deployment page', expected: 'the page loads successfully' },
+      ],
+    });
   });
 
   it('binds child PASS observations to exact plan tuples before immediate gate coverage', () => {

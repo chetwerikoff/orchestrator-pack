@@ -143,21 +143,33 @@ export function detectDeferralWithoutBlock(markdown) {
   return DEFERRAL_WITHOUT_BLOCK_PATTERNS.some((pattern) => pattern.test(withoutParkedBlocks));
 }
 
-function parseSmokeScenarioLine(line) {
+function parseSmokeScenarioLine(line, nextLine = '') {
   const trimmed = line.trim();
   if (!trimmed.startsWith('-')) {
     return null;
   }
-  const actionMatch = trimmed.match(/action:\s*(.+?)(?:\s*\|\s*expected:\s*(.+))?$/i);
+  const bullet = trimmed.replace(/^-\s*/, '');
+  const actionMatch = bullet.match(/action:\s*(.*?)(?:\s*\|\s*expected:\s*(.*))?$/i);
   if (actionMatch) {
+    const nestedExpectedMatch = nextLine.match(/^\s+expected:\s*(.*)$/i);
     return {
       action: actionMatch[1].trim(),
-      expected: (actionMatch[2] ?? '').trim(),
+      expected: (actionMatch[2] ?? nestedExpectedMatch?.[1] ?? '').trim(),
     };
   }
-  const parts = trimmed.replace(/^-\s*/, '').split(/\s*\|\s*/);
+  const parts = bullet.split(/\s*\|\s*/);
   if (parts.length >= 2) {
     return { action: parts[0].trim(), expected: parts[1].trim() };
+  }
+  const colonIndex = bullet.indexOf(':');
+  if (colonIndex > 0) {
+    const action = bullet.slice(0, colonIndex).trim();
+    if (!/^(?:action|expected)$/i.test(action)) {
+      return {
+        action,
+        expected: bullet.slice(colonIndex + 1).trim(),
+      };
+    }
   }
   return null;
 }
@@ -179,8 +191,9 @@ export function parseSmokeTestPlan(markdown) {
   }
 
   const scenarios = [];
-  for (const line of raw.split(/\r?\n/u)) {
-    const scenario = parseSmokeScenarioLine(line);
+  const lines = raw.split(/\r?\n/u);
+  for (const [index, line] of lines.entries()) {
+    const scenario = parseSmokeScenarioLine(line, lines[index + 1]);
     if (scenario?.action && scenario.expected) {
       scenarios.push(scenario);
     }
