@@ -582,12 +582,8 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (!rawPath) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_path_missing');
     }
-    const expectedHeadSha = input.cleanupWorkspace?.expectedHeadSha;
-    if (false && expectedHeadSha) {
-      // unreachable; keeps this block structurally separate from assignment resolution
-    }
-    const expectedWorkspaceHeadSha = input.expectedHeadSha.trim().toLowerCase();
-    if (!expectedWorkspaceHeadSha) {
+    const expectedHeadSha = input.expectedHeadSha.trim().toLowerCase();
+    if (!expectedHeadSha) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_expected_head_missing');
     }
     const requestedPath = resolve(rawPath);
@@ -609,7 +605,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('remove_workspace', 'runtime_workspace_path_mismatch');
     }
     const observedHeadSha = worktree?.head?.trim().toLowerCase();
-    if (observedHeadSha !== expectedWorkspaceHeadSha) {
+    if (observedHeadSha !== expectedHeadSha) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_head_mismatch');
     }
 
