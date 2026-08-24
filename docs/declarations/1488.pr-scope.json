@@ -22,6 +22,7 @@
     "docs/coworker-delegation.md",
     "docs/coworker-read-delegation-audit.md",
     "docs/declarations/1488.pr-scope.json",
+    "docs/migration_notes.md",
     "docs/orchestration-runbook.md",
     "docs/read-delegation-audit.d.mts",
     "docs/read-delegation-audit.mjs",
