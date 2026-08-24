@@ -251,14 +251,12 @@ type PublishedSource = { identity: PackGptSourceIdentity; payload: string };
 
 function sourceComment(publication: PublishedSource, id: number): PackGptSourceGithubComment {
   const timestamp = '2026-08-24T00:00:00.000Z';
+  const body = formatPackGptSourceCommentEnvelope(publication.identity, publication.payload);
+  const pr = publication.identity.prNumber;
   return {
-    id,
-    body: formatPackGptSourceCommentEnvelope(publication.identity, publication.payload),
-    url: `https://github.com/${REPO}/pull/${publication.identity.prNumber}#issuecomment-${id}`,
-    issueUrl: `https://api.github.com/repos/${REPO}/issues/${publication.identity.prNumber}`,
-    actorLogin: 'browser-gpt-bot',
-    createdAt: timestamp,
-    updatedAt: timestamp,
+    id, body, actorLogin: 'browser-gpt-bot', createdAt: timestamp, updatedAt: timestamp,
+    url: `https://github.com/${REPO}/pull/${pr}#issuecomment-${id}`,
+    issueUrl: `https://api.github.com/repos/${REPO}/issues/${pr}`,
   };
 }
 
@@ -285,15 +283,11 @@ function finalReviewTransport(capture: { body: string; posts: number }): GithubR
       capture.posts += 1;
       const id = 9000 + capture.posts;
       const url = `https://github.com/${REPO}/pull/1591#pullrequestreview-${id}`;
-      reviews.push({
-        id,
-        state: 'COMMENTED',
-        userLogin: 'pack-runner-bot',
-        submittedAt: new Date().toISOString(),
-        body,
-        commitId,
-        url,
-      });
+      const review: GithubReviewSummary = {
+        id, body, commitId, url,
+        state: 'COMMENTED', userLogin: 'pack-runner-bot', submittedAt: new Date().toISOString(),
+      };
+      reviews.push(review);
       return { id, url };
     },
     dismissReview: async () => {},
