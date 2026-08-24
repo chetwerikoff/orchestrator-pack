@@ -47,6 +47,16 @@ const movedClean = {
     'See [author](.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).',
     'See [RCA](.claude/skills/investigate-root-cause/SKILL.md).',
   ].join('\n'),
+  'docs/browser-gpt-turn-runbook.md': [
+    '## Start-of-shift preflight',
+    '## Prepare one turn',
+    '## Launch',
+    '## Observe and settle',
+    '## Publication and tab lifecycle',
+    '## Incident handling',
+    '## One-shot diagnosis',
+    '## Shift handoff/close',
+  ].join('\n'),
   'docs/coworker-delegation.md': 'PR diff recipe\ngit diff <base-ref>...HEAD > /tmp/review.diff\nRoot-cause work must read ~900 lines',
   'docs/tiering.md': '## Task complexity tier rubric\n### Failure-type lens (apply first)\n## Per-tier draft-review flow\n### Per-tier pipeline (ceilings, not quotas)',
   'docs/script-owned-review-pipeline.md': '## Event-driven review trigger\n## Orchestrator review-run coverage\n## Head ready for review\nevent-driven review trigger',
@@ -68,7 +78,18 @@ const movedClean = {
   '.claude/skills/switch-pack-reviewer/SKILL.md': '# switch-pack-reviewer\n',
   '.claude/skills/direct-fix-checklist/SKILL.md': '## Architect role contract\n',
   '.cursor/rules/draft-author-relocation.mdc': 'See [author](../../.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).\n',
-  '.cursor/rules/flow-manager-browser-turn-monitoring.mdc': '## Launch and observation\n## Legacy state and diagnostic probe\n',
+  '.cursor/rules/flow-manager-browser-turn-monitoring.mdc': [
+    'See [preflight](../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight).',
+    'See [prepare](../../docs/browser-gpt-turn-runbook.md#prepare-one-turn).',
+    'See [launch](../../docs/browser-gpt-turn-runbook.md#launch).',
+    'See [observe](../../docs/browser-gpt-turn-runbook.md#observe-and-settle).',
+    'See [publication](../../docs/browser-gpt-turn-runbook.md#publication-and-tab-lifecycle).',
+    'See [incident](../../docs/browser-gpt-turn-runbook.md#incident-handling).',
+    'See [diagnosis](../../docs/browser-gpt-turn-runbook.md#one-shot-diagnosis).',
+    'See [handoff](../../docs/browser-gpt-turn-runbook.md#shift-handoffclose).',
+    '## Launch and observation',
+    '## Legacy state and diagnostic probe',
+  ].join('\n'),
 };
 
 describe('declarative rule kinds', () => {
@@ -192,6 +213,36 @@ describe('real representative declarative ports', () => {
     expect(missingSkill.status).toBe('FAIL');
     expect(missingSkill.details).toContain(
       'AGENTS.md must contain exactly 1 occurrence(s) of (.claude/skills/merge-with-local-adoption/SKILL.md); found 0',
+    );
+  });
+
+  it('real moved-content gate protects the Browser-GPT owner, headings, and pointer cardinality', () => {
+    const { ['docs/browser-gpt-turn-runbook.md']: _removed, ...missingOwner } = movedClean;
+    const missing = evaluateDeclarativeGate(agentRulesMovedContentGate, memorySnapshot(missingOwner));
+    expect(missing.status).toBe('FAIL');
+    expect(missing.details).toContain('missing required file: docs/browser-gpt-turn-runbook.md');
+
+    const renamed = evaluateDeclarativeGate(agentRulesMovedContentGate, memorySnapshot({
+      ...movedClean,
+      'docs/browser-gpt-turn-runbook.md': movedClean['docs/browser-gpt-turn-runbook.md'].replace(
+        '## Incident handling',
+        '## Incident recovery',
+      ),
+    }));
+    expect(renamed.status).toBe('FAIL');
+    expect(renamed.details).toContain('docs/browser-gpt-turn-runbook.md missing required content: ## Incident handling');
+    expect(renamed.details).toContain(
+      '.cursor/rules/flow-manager-browser-turn-monitoring.mdc unresolved section link: ../../docs/browser-gpt-turn-runbook.md#incident-handling',
+    );
+
+    const marker = '(../../docs/browser-gpt-turn-runbook.md#launch)';
+    const duplicate = evaluateDeclarativeGate(agentRulesMovedContentGate, memorySnapshot({
+      ...movedClean,
+      '.cursor/rules/flow-manager-browser-turn-monitoring.mdc': `${movedClean['.cursor/rules/flow-manager-browser-turn-monitoring.mdc']}\nAgain ${marker}`,
+    }));
+    expect(duplicate.status).toBe('FAIL');
+    expect(duplicate.details).toContain(
+      `.cursor/rules/flow-manager-browser-turn-monitoring.mdc must contain exactly 1 occurrence(s) of ${marker}; found 2`,
     );
   });
 });
