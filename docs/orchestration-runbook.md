@@ -156,7 +156,7 @@ The gitignored local configuration file is a store, not the live process environ
 `agent` selects an already-supported invocation/lifecycle path:
 
 - Cursor/Orca implementation work uses the existing local Cursor/Orca launch path. New manager/T1/T2/T3 starts use the supervised Task launch assistant below; initial delivery still ends at the existing PACK supervised-start boundary and publishes the current local WorkerAssignment only after Orca returns a proven ready receipt.
-- GPT/Browser-GPT implementation work uses the existing standalone chat-implementer contract in `docs/chat-executor-rules.md` and the Browser-GPT turn mechanics in `docs/browser-gpt-turn-runbook.md`. That path is not an AO-managed Orca worker start and does not synthesize or publish an Orca WorkerAssignment.
+- GPT/Browser-GPT implementation work uses the existing standalone chat-implementer contract in `docs/chat-executor-rules.md` and the Browser-GPT turn mechanics in `docs/browser-gpt-turn-runbook.md`. That path does not use the Orca-managed supervised worker lifecycle and does not synthesize or publish an Orca WorkerAssignment.
 - Changing a profile between those already-supported executor paths changes only which existing path subsequent work uses; it does not create a new selector or lifecycle authority.
 - Smoke complexity selects only between the routine-smoke and complex-smoke executor profiles; it does not create a task tier or change smoke admission, evidence, ownership, or lifecycle rules.
 
