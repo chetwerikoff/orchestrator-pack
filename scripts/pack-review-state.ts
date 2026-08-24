@@ -1091,6 +1091,7 @@ export function commitPackReviewTriage(input: {
     nextPhase: 'triage_committed',
     mutate(current) {
       let automaticEvidencePredicate: 'intersection' | 'no_intersection' | undefined;
+      let automaticFindingResolution: Record<string, unknown> | undefined;
       if (input.triage.source === 'automatic') {
         if (input.triage.verdict !== 'PENDING_OPERATOR' && !current.evidence) {
           throw new PackReviewAuthorityError('triage_invalid', 'automatic triage lacks selected evidence');
@@ -1111,8 +1112,24 @@ export function commitPackReviewTriage(input: {
             || value.predicateResult === 'no_intersection'
             ? value.predicateResult
             : undefined;
+          const resolution = value.findingResolution;
+          automaticFindingResolution = resolution && typeof resolution === 'object' && !Array.isArray(resolution)
+            ? resolution as Record<string, unknown>
+            : undefined;
         }
         const workerOwned = current.smokeOrdering?.workerOwned;
+        const resolution = automaticFindingResolution;
+        const finalFixResolutionBound = resolution?.predicateResult === 'resolved'
+          && resolution.findingSnapshotDigest === input.triage.findingSnapshotDigest
+          && resolution.priorReviewedHeadSha === current.terminal?.targetSha
+          && resolution.currentHeadSha === current.currentHeadSha
+          && Number.isInteger(Number(resolution.findingCount))
+          && Number(resolution.findingCount) > 0
+          && Number(resolution.unboundFindingCount) === 0
+          && Array.isArray(resolution.findingPaths)
+          && Array.isArray(resolution.finalFixChangedPaths)
+          && Array.isArray(resolution.unresolvedFindingPaths)
+          && resolution.unresolvedFindingPaths.length === 0;
         const finalFixSettlement = input.triage.verdict === 'DEFER'
           && current.cycle?.state === 'at_cap_continuation_required'
           && current.cycle.consumedHeadShas.length === current.cycle.frozenCap
@@ -1120,11 +1137,12 @@ export function commitPackReviewTriage(input: {
           && current.terminal.targetSha !== current.currentHeadSha
           && workerOwned?.headSha === current.currentHeadSha
           && workerOwned.status === 'passed'
-          && automaticEvidencePredicate === 'no_intersection';
+          && automaticEvidencePredicate === 'no_intersection'
+          && finalFixResolutionBound;
         if (input.triage.verdict === 'DEFER' && !finalFixSettlement) {
           throw new PackReviewAuthorityError(
             'triage_invalid',
-            'automatic DEFER requires final-cap continuation, exact-head worker smoke PASS, and no-intersection evidence',
+            'automatic DEFER requires final-cap continuation, exact-head worker smoke PASS, no-intersection scope evidence, and exact finding-resolution evidence',
           );
         }
       } else if (!['BLOCK', 'DEFER'].includes(input.triage.verdict)) {
