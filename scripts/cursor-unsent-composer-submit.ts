@@ -277,7 +277,11 @@ export interface UnsentComposerSubmitDeps {
   readonly observeLiveness?: (
     worker: RuntimeWorkerIdentity,
     observationWindowMs?: number,
-  ) => RuntimeLivenessResult | PromiseLike<RuntimeLivenessResult>;
+  ) => RuntimeLivenessResult;
+  readonly waitForIdle?: (
+    worker: RuntimeWorkerIdentity,
+    observationWindowMs?: number,
+  ) => PromiseLike<RuntimeLivenessResult>;
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
@@ -406,7 +410,7 @@ function gateComposerLiveness(
   deps: UnsentComposerSubmitDeps,
 ): ComposerLivenessGate {
   if (!deps.observeLiveness) return { allowAmbiguousRetry: false };
-  const live = deps.observeLiveness(worker.identity) as RuntimeLivenessResult;
+  const live = deps.observeLiveness(worker.identity);
   const base = { terminal: worker.identity.id, generation: worker.identity.generation };
   if (!sameRuntimeWorker(live.worker, worker.identity)) {
     return {
@@ -433,8 +437,8 @@ async function gateComposerLivenessAsync(
   worker: RuntimeWorker,
   deps: UnsentComposerSubmitDeps,
 ): Promise<ComposerLivenessGate> {
-  if (!deps.observeLiveness) return { allowAmbiguousRetry: false };
-  const live = await Promise.resolve(deps.observeLiveness(worker.identity, COMPOSER_IDLE_WAIT_MS));
+  if (!deps.waitForIdle) return { allowAmbiguousRetry: false };
+  const live = await deps.waitForIdle(worker.identity, COMPOSER_IDLE_WAIT_MS);
   const base = { terminal: worker.identity.id, generation: worker.identity.generation };
   if (!sameRuntimeWorker(live.worker, worker.identity)) {
     return {
@@ -655,6 +659,10 @@ export function createAdapterSubmitDeps(
       worker,
       observationWindowMs,
     }),
+    waitForIdle: (worker, observationWindowMs = COMPOSER_IDLE_WAIT_MS) => Promise.resolve(liveness({
+      worker,
+      observationWindowMs,
+    })),
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
     sentStorePath: SENT_STORE_PATH,
   };

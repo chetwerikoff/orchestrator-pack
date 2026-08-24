@@ -63,7 +63,7 @@ function depsFor(
       lines: linesById[identity.id] ?? ['→ Add a follow-up'],
     })),
     observeLiveness: extra.liveness,
-    observeLivenessAsync: extra.observeLivenessAsync,
+    waitForIdle: extra.waitForIdle,
     submit: extra.submitResult ?? extra.submit ?? ((identity) => {
       submitted.push(identity);
       return { status: 'dispatched' as const };
@@ -652,7 +652,7 @@ describe('liveness-gated composer submission', () => {
       { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
       {
         submitted,
-        liveness: async (identity) => {
+        waitForIdle: async (identity) => {
           if (phase === 'busy') await new Promise<void>((resolve) => { releaseBusy = resolve; });
           return { status: phase, worker: identity };
         },
@@ -709,11 +709,11 @@ describe('liveness-gated composer submission', () => {
     const mixed = worker('term_mixed_idle');
     const result = await submitUnsentCursorComposerOnceForWorker(human, {
       ...depsFor({ [human.identity.id]: ['→ разберись почему', ...CURSOR_FOOTER] }, { submitted }),
-      observeLiveness: (identity) => ({ status: 'idle', worker: identity }),
+      waitForIdle: (identity) => Promise.resolve({ status: 'idle', worker: identity }),
     });
     const mixedResult = await submitUnsentCursorComposerOnceForWorker(mixed, {
       ...depsFor({ [mixed.identity.id]: [POKE, 'не отправляй это', ...CURSOR_FOOTER] }, { submitted }),
-      observeLiveness: (identity) => ({ status: 'idle', worker: identity }),
+      waitForIdle: (identity) => Promise.resolve({ status: 'idle', worker: identity }),
     });
     expect(result.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
     expect(mixedResult.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
@@ -728,7 +728,7 @@ describe('liveness-gated composer submission', () => {
     state.ambiguousSubmittedFingerprints.set(workerKey(target.identity), new Set([POKE]));
     const result = await submitUnsentCursorComposerOnceForWorker(target, {
       ...depsFor({ [target.identity.id]: [POKE, ...CURSOR_FOOTER] }, { submitted }),
-      observeLiveness: (identity) => ({ status: 'idle', worker: identity }),
+      waitForIdle: (identity) => Promise.resolve({ status: 'idle', worker: identity }),
     }, state);
     expect(result.terminals[0]?.reason).toBe('enter_sent');
     expect(submitted).toHaveLength(1);
