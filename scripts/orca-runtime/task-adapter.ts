@@ -104,6 +104,21 @@ function isRetryableTabNotFound(response: OrcaJsonResponse): boolean {
     && response.error?.message?.trim() === 'tab_not_found';
 }
 
+/**
+ * The pinned Orca worker-show producer has no `observation.status="gone"` shape.
+ * A missing local Dispatch is instead reported as this exact control-plane error.
+ * Match the producer's structured code plus its dispatch-specific message so the
+ * distinct federated "has no worker record" error (same code) remains fail-closed.
+ */
+function isProducerBackedDispatchAbsent(
+  response: OrcaJsonResponse,
+  dispatchId: string,
+): boolean {
+  return response.outcomeCategory === 'supported_operation_failure'
+    && response.error?.code?.trim() === 'dispatch_not_found'
+    && response.error?.message?.trim() === `Worker Dispatch ${dispatchId} was not found.`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -246,21 +261,6 @@ function classifyWorkerLifecycle(result: OrcaWorkerShowResult | undefined): Orca
     return 'unresolved';
   }
   return 'active';
-}
-
-function goneLifecycleSupportsAbsence(result: OrcaWorkerShowResult | undefined): boolean {
-  const lifecycle = normalizedWorkerLifecycle(result);
-  // worker-show always carries the Dispatch row for a known Dispatch. A live or
-  // unknown Dispatch status next to exact `gone` is contradictory/ambiguous and
-  // therefore cannot authorize replacement. Terminal worker rows are optional
-  // (context-only Dispatches have none), but any observed non-terminal worker is
-  // likewise a contradiction. A malformed retained heartbeat is corrupted
-  // lifecycle evidence and must fail closed even after terminal settlement.
-  if (!TERMINAL_DISPATCH_STATES.has(lifecycle.dispatchStatus)) return false;
-  if (lifecycle.workerState && !TERMINAL_WORKER_STATES.has(lifecycle.workerState)) return false;
-  if (lifecycle.workerStage === 'input_accepted') return false;
-  if (lifecycle.lastHeartbeatAt && parseOrcaHeartbeatTimestamp(lifecycle.lastHeartbeatAt) === null) return false;
-  return true;
 }
 
 /**
@@ -417,29 +417,19 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       ['orchestration', 'worker-show', '--dispatch', dispatchId],
       options,
     );
-    if (!shown.ok) return runtimeFailure('resolve_assignment_worker', neutralFailureReason(shown));
+    if (!shown.ok) {
+      if (isProducerBackedDispatchAbsent(shown, dispatchId)) {
+        return { status: 'ok', value: { kind: 'gone' } };
+      }
+      return runtimeFailure('resolve_assignment_worker', neutralFailureReason(shown));
+    }
     const parsed = parseOrcaWorkerShowResult(shown.result);
     if (!parsed) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     const exact = parsed.observation?.exactWorker === true;
-    const { observationStatus } = normalizedWorkerLifecycle(parsed);
     if (!exact) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
-    }
-    if (observationStatus === 'gone') {
-      if (!goneLifecycleSupportsAbsence(parsed)) {
-        return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
-      }
-      const resource = parsed.terminalResource;
-      const resourceOwner = resource?.ownerDispatchId?.trim() ?? '';
-      const workerId = resourceOwner === dispatchId
-        ? resource?.terminalHandle?.trim() ?? ''
-        : '';
-      const value = workerId
-        ? { kind: 'gone' as const, workerId }
-        : { kind: 'gone' as const };
-      return { status: 'ok', value };
     }
     // Exact terminal presence is deliberately weaker than active Dispatch
     // authority. The active predicate additionally requires Orca's current
@@ -592,8 +582,12 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (!rawPath) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_path_missing');
     }
-    const expectedHeadSha = input.expectedHeadSha.trim().toLowerCase();
-    if (!expectedHeadSha) {
+    const expectedHeadSha = input.cleanupWorkspace?.expectedHeadSha;
+    if (false && expectedHeadSha) {
+      // unreachable; keeps this block structurally separate from assignment resolution
+    }
+    const expectedWorkspaceHeadSha = input.expectedHeadSha.trim().toLowerCase();
+    if (!expectedWorkspaceHeadSha) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_expected_head_missing');
     }
     const requestedPath = resolve(rawPath);
@@ -615,7 +609,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('remove_workspace', 'runtime_workspace_path_mismatch');
     }
     const observedHeadSha = worktree?.head?.trim().toLowerCase();
-    if (observedHeadSha !== expectedHeadSha) {
+    if (observedHeadSha !== expectedWorkspaceHeadSha) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_head_mismatch');
     }
 
