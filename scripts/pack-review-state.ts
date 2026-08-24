@@ -879,6 +879,7 @@ export function commitPackReviewTerminal(input: {
       if (terminal.reviewVerdict === 'clean' && terminal.findingCount === 0) {
         cycle.state = 'closed';
         cycle.closedAtUtc = nowIso(input.options);
+        cycle.atCapHash = undefined;
       } else if (cycle.consumedHeadShas.length === cycle.frozenCap) {
         cycle.state = 'at_cap_open_findings';
         cycle.atCapHash = sha256(stableJson({
