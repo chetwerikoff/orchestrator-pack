@@ -476,6 +476,7 @@ export async function sendPackReviewWorkerNotification(
       const result = adapter.dispatchInput({
         worker: worker.identity,
         text: options.request.message,
+        writeOnly: true,
       }, { cwd: worker.workspacePath });
       return { marked: true as const, result };
     },

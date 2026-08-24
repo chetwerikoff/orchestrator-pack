@@ -55,13 +55,13 @@ describe('worker message submission through the runtime boundary', () => {
       provenance: 'external' as const,
     };
     const pointer = 'You have 1 orchestration message. Run `orca orchestration check --run run_event_pointer`.';
-    const calls: Array<{ text?: string; submitOnly?: boolean }> = [];
+    const calls: Array<{ text?: string; submitOnly?: boolean; writeOnly?: boolean }> = [];
     let reads = 0;
     const adapter = {
       id: 'orca',
       findWorkerById: () => ({ status: 'ok' as const, value: worker }),
       liveness: () => ({ status: 'idle' as const, worker: identity }),
-      dispatchInput: (input: { text?: string; submitOnly?: boolean }) => {
+      dispatchInput: (input: { text?: string; submitOnly?: boolean; writeOnly?: boolean }) => {
         calls.push(input);
         return input.submitOnly
           ? { status: 'dispatched' as const }
@@ -116,6 +116,7 @@ describe('worker message submission through the runtime boundary', () => {
       expect(calls).toHaveLength(2);
       expect(calls[0]?.text).toBe('event delivery');
       expect(calls[0]?.submitOnly).toBeUndefined();
+      expect(calls[0]?.writeOnly).toBe(true);
       expect(calls[1]).toMatchObject({ submitOnly: true, worker: identity });
     } finally {
       rmSync(root, { recursive: true, force: true });

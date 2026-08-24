@@ -36,9 +36,9 @@ const EMPTY_CLAUDE_SCREEN = [
   '⏵⏵ bypass permissions on (shift+tab to cycle)',
 ];
 
-function worker(id: string, generation = 'g1'): RuntimeWorker {
+function worker(id: string, generation = 'g1', runtime: 'orca' | 'codex' = 'orca'): RuntimeWorker {
   return {
-    identity: { runtime: 'orca', id, generation },
+    identity: { runtime, id, generation },
     workspacePath: '/tmp',
     title: id,
     provenance: 'external',
@@ -667,6 +667,27 @@ describe('delivery-triggered composer submission', () => {
     expect(duplicate.terminals[0]?.reason).toBe('already_submitted');
     expect(reads).toBe(2);
     expect(submitted).toHaveLength(1);
+  });
+
+  it('applies the same immediate one-read/one-submit contract to Codex', async () => {
+    const target = worker('term_codex_busy', 'codex-generation', 'codex');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let reads = 0;
+    const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor(
+      { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
+      {
+        submitted,
+        read: (identity) => {
+          expect(identity).toEqual(target.identity);
+          reads += 1;
+          return { ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const };
+        },
+      },
+    ));
+
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(reads).toBe(1);
+    expect(submitted).toEqual([target.identity]);
   });
 
   it('uses the immediate idle path for exactly one screen read and Enter', async () => {

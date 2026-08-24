@@ -9,6 +9,7 @@ import {
   type RuntimeBoundedOutput,
   type RuntimeCallOptions,
   type RuntimeDispatchResult,
+  type RuntimeDispatchWitness,
   type RuntimeInboxCheckResult,
   type RuntimeInboxMessage,
   type RuntimeLivenessResult,
@@ -140,6 +141,12 @@ interface OrcaInboxDeliveryShape {
 interface OrcaInboxCheckShape extends OrcaInboxDeliveryShape {
   readonly count?: unknown;
   readonly delivery?: unknown;
+}
+
+interface OrcaTerminalSendResult {
+  readonly send?: {
+    readonly accepted?: unknown;
+  };
 }
 
 const OBSERVATION_TOKEN_PREFIX = 'opk-orca-output-v3.';
@@ -941,10 +948,17 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');
     if (!input.writeOnly) args.push('--enter');
-    const response = this.#run(args, options);
-    if (response.ok) {
-      return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
+    const response = this.#run<OrcaTerminalSendResult>(args, options);
+    if (response.ok && response.result?.send?.accepted === true) {
+      const witness: RuntimeDispatchWitness = {
+        operation: input.writeOnly ? 'write' : 'submit',
+        accepted: true,
+        source: 'runtime-response',
+      };
+      if (input.submitOnly) return { status: 'dispatched', witness };
+      return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable', witness };
     }
+    if (response.ok) return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
     const reason = neutralFailureReason(response);
     return response.outcomeCategory === 'process_launch_failed'
       ? { status: 'send_failed', reason }

@@ -7,7 +7,12 @@
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/lib/pack-review-worker-notification.ts",
-    "scripts/worker-message-submit-reconcile.test.ts"
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/runtime/contracts.ts",
+    "scripts/worker-message-submit-reconcile.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
   ],
   "denylist": [
     "credentials/",
@@ -22,7 +27,12 @@
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/lib/pack-review-worker-notification.ts",
-    "scripts/worker-message-submit-reconcile.test.ts"
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/runtime/contracts.ts",
+    "scripts/worker-message-submit-reconcile.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "860a9559334940cea3babedb2cd8e5b5c709b32c"
+  "source_revision": "59928623100f293239b95fca5a21377cd98dad40"
 }
