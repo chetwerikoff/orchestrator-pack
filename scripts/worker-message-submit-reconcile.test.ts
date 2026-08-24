@@ -6,6 +6,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { RuntimeAdapter } from './runtime/contracts.ts';
 import { sendPackReviewWorkerNotification } from './lib/pack-review-worker-notification.ts';
+import {
+  createAdapterSubmitDeps,
+  submitUnsentCursorComposerOnceForWorker,
+} from './cursor-unsent-composer-submit.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 
 describe('worker message submission through the runtime boundary', () => {
@@ -41,7 +45,7 @@ describe('worker message submission through the runtime boundary', () => {
     }
   });
 
-  it('reacts once to a completed notification delivery with one exact composer submit', async () => {
+  it('waits for tui-idle before one exact composer submit', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'opk-worker-event-submit-'));
     const identity = { runtime: 'orca', id: 'event-worker', generation: `generation-${Date.now()}` } as const;
     const worker = {
@@ -53,9 +57,11 @@ describe('worker message submission through the runtime boundary', () => {
     const pointer = 'You have 1 orchestration message. Run `orca orchestration check --run run_event_pointer`.';
     const calls: Array<{ text?: string; submitOnly?: boolean }> = [];
     let reads = 0;
+    let liveness: 'busy' | 'idle' = 'busy';
     const adapter = {
       id: 'orca',
       findWorkerById: () => ({ status: 'ok' as const, value: worker }),
+      liveness: () => ({ status: liveness, worker: identity }),
       dispatchInput: (input: { text?: string; submitOnly?: boolean }) => {
         calls.push(input);
         return input.submitOnly
@@ -93,10 +99,20 @@ describe('worker message submission through the runtime boundary', () => {
       });
 
       expect(result).toMatchObject({ state: 'ambiguous', reason: 'dispatch_unknown' });
-      expect(reads).toBe(1);
-      expect(calls).toHaveLength(2);
+      expect(reads).toBe(0);
+      expect(calls).toHaveLength(1);
       expect(calls[0]?.text).toBe('event delivery');
       expect(calls[0]?.submitOnly).toBeUndefined();
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      liveness = 'idle';
+      const recovered = submitUnsentCursorComposerOnceForWorker(
+        worker,
+        createAdapterSubmitDeps(adapter),
+      );
+      expect(recovered.terminals[0]?.reason).toBe('enter_sent');
+      expect(reads).toBe(1);
+      expect(calls).toHaveLength(2);
       expect(calls[1]).toMatchObject({ submitOnly: true, worker: identity });
     } finally {
       rmSync(root, { recursive: true, force: true });

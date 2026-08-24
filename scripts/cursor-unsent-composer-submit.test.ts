@@ -15,6 +15,7 @@ import {
   saveSubmittedFingerprints,
   submitUnsentCursorComposer,
   submitUnsentCursorComposerOnce,
+  submitUnsentCursorComposerOnceForWorker,
   runSupervisorUnsentComposerTick,
   workerKey,
   type UnsentComposerSubmitDeps,
@@ -61,6 +62,7 @@ function depsFor(
       ok: true as const,
       lines: linesById[identity.id] ?? ['→ Add a follow-up'],
     })),
+    liveness: extra.liveness,
     submit: extra.submitResult ?? extra.submit ?? ((identity) => {
       submitted.push(identity);
       return { status: 'dispatched' as const };
@@ -264,6 +266,10 @@ describe('submitUnsentCursorComposer', () => {
           },
         };
       },
+      liveness: (input: { worker: RuntimeWorkerIdentity; observationWindowMs: number }) => ({
+        status: 'idle' as const,
+        worker: input.worker,
+      }),
       dispatchInput: () => ({ status: 'dispatched' as const }),
     } as unknown as Parameters<typeof createAdapterSubmitDeps>[0];
     const deps = createAdapterSubmitDeps(adapter, () => ({ ok: true, result: {} }));
@@ -631,6 +637,91 @@ describe('submitUnsentCursorComposer', () => {
     } finally {
       try { unlinkSync(sentStorePath); } catch { /* ignore */ }
     }
+  });
+});
+
+describe('liveness-gated composer submission', () => {
+  it('waits for the asynchronous busy-to-idle transition before one read and Enter', async () => {
+    const target = worker('term_busy_transition');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let phase: 'busy' | 'idle' = 'busy';
+    let reads = 0;
+    const deps = depsFor(
+      { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
+      {
+        submitted,
+        liveness: (identity) => ({ status: phase, worker: identity }),
+        read: () => {
+          reads += 1;
+          return { ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const };
+        },
+      },
+    );
+    const state = createUnsentComposerWatchState();
+
+    const busy = submitUnsentCursorComposerOnceForWorker(target, deps, state);
+    expect(busy.terminals[0]).toMatchObject({ reason: 'tui_busy_deferred', enter: false });
+    expect(reads).toBe(0);
+    expect(submitted).toHaveLength(0);
+    expect(state.submittedFingerprint).toHaveLength(0);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    phase = 'idle';
+    const idle = submitUnsentCursorComposerOnceForWorker(target, deps, state);
+    expect(idle.terminals[0]?.reason).toBe('enter_sent');
+    expect(reads).toBe(1);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it('uses the immediate idle path for exactly one screen read and Enter', () => {
+    const target = worker('term_idle_immediate');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let reads = 0;
+    const result = submitUnsentCursorComposerOnceForWorker(target, depsFor(
+      { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
+      {
+        submitted,
+        liveness: (identity) => ({ status: 'idle', worker: identity }),
+        read: () => {
+          reads += 1;
+          return { ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const };
+        },
+      },
+    ));
+    expect(result.terminals[0]?.reason).toBe('enter_sent');
+    expect(reads).toBe(1);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it('refuses human and mixed composer text after idle without Enter', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const human = worker('term_human_idle');
+    const mixed = worker('term_mixed_idle');
+    const result = submitUnsentCursorComposerOnceForWorker(human, {
+      ...depsFor({ [human.identity.id]: ['→ разберись почему', ...CURSOR_FOOTER] }, { submitted }),
+      liveness: (identity) => ({ status: 'idle', worker: identity }),
+    });
+    const mixedResult = submitUnsentCursorComposerOnceForWorker(mixed, {
+      ...depsFor({ [mixed.identity.id]: [POKE, 'не отправляй это', ...CURSOR_FOOTER] }, { submitted }),
+      liveness: (identity) => ({ status: 'idle', worker: identity }),
+    });
+    expect(result.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
+    expect(mixedResult.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
+    expect(submitted).toHaveLength(0);
+  });
+
+  it('releases a persisted ambiguous pointer only after an exact idle identity', () => {
+    const target = worker('term_legacy_ambiguous');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const state = createUnsentComposerWatchState();
+    state.submittedFingerprint.set(workerKey(target.identity), POKE);
+    state.ambiguousSubmittedFingerprints.set(workerKey(target.identity), new Set([POKE]));
+    const result = submitUnsentCursorComposerOnceForWorker(target, {
+      ...depsFor({ [target.identity.id]: [POKE, ...CURSOR_FOOTER] }, { submitted }),
+      liveness: (identity) => ({ status: 'idle', worker: identity }),
+    }, state);
+    expect(result.terminals[0]?.reason).toBe('enter_sent');
+    expect(submitted).toHaveLength(1);
   });
 });
 

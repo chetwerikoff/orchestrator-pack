@@ -6,8 +6,10 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runOrcaJson, type OrcaJsonResponse } from './orca-runtime/native.ts';
 import {
+  sameRuntimeWorker,
   type RuntimeAdapter,
   type RuntimeDispatchResult,
+  type RuntimeLivenessResult,
   type RuntimeWorker,
   type RuntimeWorkerIdentity,
 } from './runtime/contracts.ts';
@@ -29,6 +31,7 @@ const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
 const EMPTY_COMPOSER_RECHECK_MS = 1_000;
+const COMPOSER_IDLE_WAIT_MS = 30_000;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
@@ -271,6 +274,7 @@ export interface UnsentComposerSubmitDeps {
     | { ok: true; lines: readonly string[]; source: 'screen' }
     | { ok: false; reason: string }
   >;
+  readonly liveness?: (worker: RuntimeWorkerIdentity) => RuntimeLivenessResult;
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
@@ -333,6 +337,7 @@ function settleComposerObservation(
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState,
   shown: ComposerReadResult,
+  allowAmbiguousRetry = false,
 ): UnsentComposerTerminalResult {
   const identity = worker.identity;
   const key = workerKey(identity);
@@ -358,9 +363,10 @@ function settleComposerObservation(
       reason: 'composer_not_orchestration_pointer',
     };
   }
+  const ambiguous = state.ambiguousSubmittedFingerprints.get(key)?.has(fingerprint) ?? false;
   if (
-    state.submittedFingerprint.get(key) === fingerprint
-    || state.ambiguousSubmittedFingerprints.get(key)?.has(fingerprint)
+    (state.submittedFingerprint.get(key) === fingerprint && !(allowAmbiguousRetry && ambiguous))
+    || (ambiguous && !allowAmbiguousRetry)
   ) {
     return { ...base, ok: true, unsent: true, enter: false, reason: 'already_submitted' };
   }
@@ -379,7 +385,45 @@ function settleComposerObservation(
     state.ambiguousSubmittedFingerprints.set(key, fingerprints);
     return { ...base, ok: true, unsent: true, enter: false, reason: dispatched.reason };
   }
+  if (dispatched.status === 'dispatched') {
+    const fingerprints = state.ambiguousSubmittedFingerprints.get(key);
+    fingerprints?.delete(fingerprint);
+    if (fingerprints?.size === 0) state.ambiguousSubmittedFingerprints.delete(key);
+  }
   return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent' };
+}
+
+type ComposerLivenessGate = {
+  readonly deferred?: UnsentComposerTerminalResult;
+  readonly allowAmbiguousRetry: boolean;
+};
+
+function gateComposerLiveness(
+  worker: RuntimeWorker,
+  deps: UnsentComposerSubmitDeps,
+): ComposerLivenessGate {
+  if (!deps.liveness) return { allowAmbiguousRetry: false };
+  const live = deps.liveness(worker.identity);
+  const base = { terminal: worker.identity.id, generation: worker.identity.generation };
+  if (!sameRuntimeWorker(live.worker, worker.identity)) {
+    return {
+      allowAmbiguousRetry: false,
+      deferred: { ...base, ok: false, unsent: false, enter: false, reason: 'runtime_liveness_identity_mismatch' },
+    };
+  }
+  if (live.status === 'busy') {
+    return {
+      allowAmbiguousRetry: false,
+      deferred: { ...base, ok: true, unsent: true, enter: false, reason: 'tui_busy_deferred' },
+    };
+  }
+  if (live.status !== 'idle') {
+    return {
+      allowAmbiguousRetry: false,
+      deferred: { ...base, ok: false, unsent: false, enter: false, reason: 'runtime_liveness_' + live.status },
+    };
+  }
+  return { allowAmbiguousRetry: true };
 }
 
 function submitOne(
@@ -388,7 +432,9 @@ function submitOne(
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState,
 ): UnsentComposerTerminalResult {
-  return settleComposerObservation(worker, input, deps, state, deps.read(worker.identity));
+  const gate = gateComposerLiveness(worker, deps);
+  if (gate.deferred) return gate.deferred;
+  return settleComposerObservation(worker, input, deps, state, deps.read(worker.identity), gate.allowAmbiguousRetry);
 }
 
 async function submitOneAsync(
@@ -397,10 +443,12 @@ async function submitOneAsync(
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState,
 ): Promise<UnsentComposerTerminalResult> {
+  const gate = gateComposerLiveness(worker, deps);
+  if (gate.deferred) return gate.deferred;
   const shown = deps.readAsync
     ? await deps.readAsync(worker.identity)
     : deps.read(worker.identity);
-  return settleComposerObservation(worker, input, deps, state, shown);
+  return settleComposerObservation(worker, input, deps, state, shown, gate.allowAmbiguousRetry);
 }
 
 export function submitUnsentCursorComposer(
@@ -561,6 +609,10 @@ export function createAdapterSubmitDeps(
       }
       return { ok: true, lines: output.value.lines, source: 'screen' };
     },
+    liveness: (worker) => adapter.liveness({
+      worker,
+      observationWindowMs: COMPOSER_IDLE_WAIT_MS,
+    }),
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
     sentStorePath: SENT_STORE_PATH,
   };
