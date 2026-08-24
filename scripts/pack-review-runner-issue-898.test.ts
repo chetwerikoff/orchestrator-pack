@@ -485,7 +485,6 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
       targetSha: HEAD_B,
       reviewVerdict: 'clean',
       terminalSource: 'conflict_free_carryover',
-      sourceCleanRunId: undefined,
     });
     expect(authority?.cycle).toMatchObject({
       state: 'closed',
