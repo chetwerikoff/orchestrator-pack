@@ -1,3 +1,4 @@
+// @vitest-pre-topology-seconds 120
 import {
   chmodSync,
   existsSync,
