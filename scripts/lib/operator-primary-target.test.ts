@@ -6,7 +6,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { withCrashRecoverableFileLock } from '../pr2-foundation/journal-lock.ts';
-import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
+import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
 import {
   attachWorkerAssignmentIssueNumber,
   bindOperatorPrimary,
@@ -20,6 +20,7 @@ import {
 } from './worker-assignment-store.ts';
 import {
   operatorPrimarySyncResult,
+  type OperatorPrimarySyncActionResult,
   withCurrentOperatorPrimaryTarget,
 } from './operator-primary-target.ts';
 
@@ -322,6 +323,24 @@ describe('operator-primary runtime snapshot fence', () => {
     expect(calls).toBe(0);
   });
 
+  it('maps the production assignment_target_unresolved failure to target_unresolved', async () => {
+    const { file } = await boundFixture();
+    const adapter = runtime();
+    vi.mocked(adapter.resolveAssignmentWorker!).mockReturnValue({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'assignment_target_unresolved',
+    });
+    let calls = 0;
+    const result = await withCurrentOperatorPrimaryTarget({ file, adapter, timeoutMs: 250 }, () => {
+      calls += 1;
+      return operatorPrimarySyncResult('unexpected');
+    });
+    expect(result).toEqual({ ok: false, actionEntered: false, reason: 'target_unresolved' });
+    expect(adapter.findWorker).not.toHaveBeenCalled();
+    expect(calls).toBe(0);
+  });
+
   it.each([
     ['runtime_unavailable', runtime({ resolveFailure: true })],
     ['target_not_current', runtime({ resolved: 'gone' })],
@@ -424,6 +443,26 @@ describe('operator-primary runtime snapshot fence', () => {
     });
   });
 
+  it('rejects a Promise payload hidden inside a forged synchronous receipt', async () => {
+    const { file } = await boundFixture();
+    let calls = 0;
+    const unsafeAction = (() => {
+      calls += 1;
+      return {
+        kind: 'operator-primary-sync-result',
+        value: Promise.resolve('late-effect'),
+      };
+    }) as unknown as (
+      target: RuntimeWorkerIdentity,
+    ) => OperatorPrimarySyncActionResult<string>;
+    const result = await withCurrentOperatorPrimaryTarget(
+      { file, adapter: runtime(), timeoutMs: 250 },
+      unsafeAction,
+    );
+    expect(result).toEqual({ ok: false, actionEntered: true, reason: 'action_result_invalid' });
+    expect(calls).toBe(1);
+  });
+
   it('authorizes a fresh snapshot on each invocation and never persists runtime identity', async () => {
     const { file } = await boundFixture();
     const first = worker('terminal-a', 'incarnation-a');
@@ -499,7 +538,7 @@ describe('operator-primary runtime snapshot fence', () => {
   });
 });
 
-// Compile-negative contract proof: Promise/thenable actions are not assignable.
+// Compile-negative contract proof: Promise/thenable actions and payloads are not assignable.
 if (false) {
   const input = { file: '/tmp/never', adapter: {} as RuntimeAdapter, timeoutMs: 100 };
   // @ts-expect-error async callbacks are outside the synchronous fence contract.
@@ -508,4 +547,10 @@ if (false) {
   void withCurrentOperatorPrimaryTarget(input, () => Promise.resolve(operatorPrimarySyncResult('promise')));
   // @ts-expect-error thenable-returning callbacks are outside the synchronous fence contract.
   void withCurrentOperatorPrimaryTarget(input, () => ({ then: () => undefined }));
+  // @ts-expect-error Promise payloads cannot be wrapped inside the synchronous receipt.
+  void operatorPrimarySyncResult(Promise.resolve('promise-payload'));
+  // @ts-expect-error custom thenable payloads cannot be wrapped inside the synchronous receipt.
+  void operatorPrimarySyncResult({ then: () => undefined });
+  // @ts-expect-error the closed receipt type cannot represent a Promise payload.
+  void ({ kind: 'operator-primary-sync-result', value: Promise.resolve('payload') } satisfies OperatorPrimarySyncActionResult<Promise<string>>);
 }
