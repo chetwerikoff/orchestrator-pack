@@ -167,6 +167,8 @@ interface StartInput {
   fixtureCurrentPrHeadSha?: string;
   fixturePrState?: string;
   fixturePrBody?: string;
+  fixturePrBodyAfterClaim?: string;
+  fixturePostReviewPrBody?: string;
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
@@ -644,18 +646,20 @@ async function resolveTarget(
   const fixtureIssueNumber = harness ? positiveInteger(input.fixtureIssueNumber, 'fixtureIssueNumber') : undefined;
   const harnessExplicit = harness && Boolean(input.prNumber && (input.headSha || fixtureCurrentHead));
   let binding: BindingRecord | undefined;
-  if (sessionId && !harnessExplicit) {
+  if (sessionId) {
     try {
       binding = resolveBindingFromCache(sessionId);
     } catch {
-      // Session binding is advisory diagnostics only. Explicit PR authority must not be vetoed by cache state.
+      // Session binding is advisory only. Missing/corrupt/ambiguous cache state cannot veto explicit PR authority.
     }
   }
   const requestedPr = positiveInteger(input.prNumber, 'prNumber');
-  const prNumber = positiveInteger(requestedPr ?? binding?.prNumber, 'prNumber');
-  if (!prNumber) {
-    throw new Error('pack review start requires --pr-number <n>; session binding cache is advisory only');
+  if (!requestedPr) {
+    throw new Error(
+      'pack review start requires --pr-number <n>; obtain it for the current branch with: gh pr view --json number --jq .number',
+    );
   }
+  const prNumber = requestedPr;
   const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || trustedPackRoot);
   if (!harness && !existsSync(join(sourceRepoRoot, '.git')) && !existsSync(join(sourceRepoRoot, 'HEAD'))) {
     throw new Error(`source repository root is not a git checkout: ${sourceRepoRoot}`);
@@ -673,10 +677,14 @@ async function resolveTarget(
   const liveHead = liveTarget.headSha;
   if (!/^[0-9a-f]{40}$/.test(liveHead)) throw new Error(`review target head is not a full SHA for PR #${prNumber}`);
   if (operatorStart?.repository && operatorStart.repository.toLowerCase() !== repoSlug.toLowerCase()) {
-    throw new Error(`pack review repository does not match operator target: requested ${operatorStart.repository}, live ${repoSlug}`);
+    throw new Error(
+      `pack review repository does not match operator target: requested ${operatorStart.repository}, live ${repoSlug}; omit --operator-repository or set it to ${repoSlug}`,
+    );
   }
   if (requestedHead && requestedHead !== liveHead) {
-    throw new Error(`review target head changed for PR #${prNumber}: requested ${requestedHead}, live ${liveHead}`);
+    throw new Error(
+      `review target head changed for PR #${prNumber}: requested ${requestedHead}, live ${liveHead}; rerun with --head-sha ${liveHead} or omit --head-sha`,
+    );
   }
 
   let issueNumber: number | undefined;
@@ -698,6 +706,24 @@ async function resolveTarget(
     throw new Error(
       `pack review Issue mismatch: requested #${operatorStart.issueNumber}, PR #${prNumber} closes #${issueNumber}; use --operator-issue-number ${issueNumber} or omit it`,
     );
+  }
+  if (binding) {
+    const mismatches: string[] = [];
+    if (binding.prNumber !== prNumber) mismatches.push(`PR cache=#${binding.prNumber} requested=#${prNumber}`);
+    if (binding.headSha && binding.headSha.toLowerCase() !== liveHead.toLowerCase()) {
+      mismatches.push(`head cache=${binding.headSha} live=${liveHead}`);
+    }
+    if (binding.repoSlug && binding.repoSlug.toLowerCase() !== repoSlug.toLowerCase()) {
+      mismatches.push(`repository cache=${binding.repoSlug} live=${repoSlug}`);
+    }
+    if (binding.issueNumber && issueNumber && binding.issueNumber !== issueNumber) {
+      mismatches.push(`Issue cache=#${binding.issueNumber} PR-linked=#${issueNumber}`);
+    }
+    if (mismatches.length > 0) {
+      process.stderr.write(
+        `[pack-review diagnostic] session binding advisory mismatch for ${sessionId}: ${mismatches.join('; ')}\n`,
+      );
+    }
   }
   return {
     prNumber,
@@ -936,14 +962,34 @@ export async function assertBoundHeadStillCurrent(options: {
   repoSlug: string;
   prNumber: number;
   boundHeadSha: string;
+  boundIssueNumber?: number;
   fixturePostReviewHeadSha?: string;
+  fixturePostReviewPrBody?: string;
 }): Promise<void> {
-  const current = options.fixturePostReviewHeadSha
-    ?? await resolveCurrentPrHead(options.repoRoot, options.repoSlug, options.prNumber);
+  let current: string;
+  let currentBody: string | undefined;
+  if (options.fixturePostReviewHeadSha !== undefined || options.fixturePostReviewPrBody !== undefined) {
+    current = options.fixturePostReviewHeadSha ?? options.boundHeadSha;
+    currentBody = options.fixturePostReviewPrBody;
+  } else if (options.boundIssueNumber) {
+    const target = await resolveCurrentPrTarget(options.repoRoot, options.repoSlug, options.prNumber);
+    current = target.headSha;
+    currentBody = target.body;
+  } else {
+    current = await resolveCurrentPrHead(options.repoRoot, options.repoSlug, options.prNumber);
+  }
   if (current.toLowerCase() !== options.boundHeadSha.toLowerCase()) {
     throw new Error(
-      `review target head changed after reviewer returned: bound ${options.boundHeadSha}, current ${current}`,
+      `review target head changed after reviewer returned: bound ${options.boundHeadSha}, current ${current}; rerun with --head-sha ${current} or omit --head-sha`,
     );
+  }
+  if (options.boundIssueNumber && currentBody !== undefined) {
+    const currentIssueNumber = extractClosingIssueNumber(currentBody) ?? undefined;
+    if (currentIssueNumber !== options.boundIssueNumber) {
+      throw new Error(
+        `review target Issue changed for PR #${options.prNumber}: bound #${options.boundIssueNumber}, current ${currentIssueNumber ? `#${currentIssueNumber}` : 'unresolved'}; restore the PR closing reference to #${options.boundIssueNumber} or restart against the current PR-linked Issue`,
+      );
+    }
   }
 }
 
@@ -1717,7 +1763,11 @@ async function runGptSourceBatch(options: {
             repoSlug: options.target.repoSlug,
             prNumber: options.target.prNumber,
             boundHeadSha: options.target.headSha,
+            boundIssueNumber: options.target.issueNumber,
             fixturePostReviewHeadSha: options.input.fixturePostReviewHeadSha ?? options.input.fixtureCurrentPrHeadSha,
+            fixturePostReviewPrBody: options.input.fixturePostReviewPrBody
+              ?? options.input.fixturePrBodyAfterClaim
+              ?? options.input.fixturePrBody,
           });
         }
         resolution = sourceTransport
@@ -2736,11 +2786,37 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   };
 
   try {
+    try {
+      await assertBoundHeadStillCurrent({
+        repoRoot: target.sourceRepoRoot,
+        repoSlug: target.repoSlug,
+        prNumber: target.prNumber,
+        boundHeadSha: target.headSha,
+        boundIssueNumber: target.issueNumber,
+        fixturePostReviewHeadSha: process.env.OPK_VITEST_HARNESS === '1'
+          ? (input.fixtureCurrentPrHeadSha ?? target.headSha)
+          : undefined,
+        fixturePostReviewPrBody: process.env.OPK_VITEST_HARNESS === '1'
+          ? (input.fixturePrBodyAfterClaim ?? input.fixturePrBody)
+          : undefined,
+      });
+    } catch (error) {
+      await releaseEarlyClaim(describeError(error));
+      return {
+        ok: false,
+        created: false,
+        reused: false,
+        reason: describeError(error),
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        httpStatus: 409,
+      };
+    }
     const authoritative = await resolveAuthoritativeReviewContext(input, target, projectId);
     if (target.operatorStart?.boundSnapshot
         && authoritative.snapshotDigest !== target.operatorStart.boundSnapshot) {
       throw new Error(
-        `operator bound snapshot does not match authoritative review context: expected ${target.operatorStart.boundSnapshot}, got ${authoritative.snapshotDigest}`,
+        `operator bound snapshot mismatch: requested ${target.operatorStart.boundSnapshot}, authoritative ${authoritative.snapshotDigest}; omit --operator-bound-snapshot or set it to ${authoritative.snapshotDigest} after verifying the authoritative Issue snapshot`,
       );
     }
     const operatorSurface = target.operatorStart
@@ -2812,7 +2888,11 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         };
       }
     }
+
+    carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
+    const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
     if (!target.operatorStart
+        && !conflictFreeCarryover
         && authority.cycle
         && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
       await releaseEarlyClaim('at_cap_continuation_required');
@@ -2828,8 +2908,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
 
-    carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
-    const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
     const roundOrdinal = (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
     const cardinality = selectPackReviewGptSourceCardinality({
       reviewer: reviewer ?? 'codex',
@@ -2889,7 +2967,11 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
             repoSlug: target.repoSlug,
             prNumber: target.prNumber,
             boundHeadSha: target.headSha,
+            boundIssueNumber: target.issueNumber,
             fixturePostReviewHeadSha: input.fixturePostReviewHeadSha,
+            fixturePostReviewPrBody: input.fixturePostReviewPrBody
+              ?? input.fixturePrBodyAfterClaim
+              ?? input.fixturePrBody,
           });
         }
         authority = advancePackReviewAuthority(
@@ -2930,7 +3012,11 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           repoSlug: target.repoSlug,
           prNumber: target.prNumber,
           boundHeadSha: target.headSha,
+          boundIssueNumber: target.issueNumber,
           fixturePostReviewHeadSha: input.fixturePostReviewHeadSha,
+          fixturePostReviewPrBody: input.fixturePostReviewPrBody
+            ?? input.fixturePrBodyAfterClaim
+            ?? input.fixturePrBody,
         });
       }
       const resumed = await resumePackReviewVerdictDelivery({
@@ -3290,7 +3376,11 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           repoSlug: target.repoSlug,
           prNumber: target.prNumber,
           boundHeadSha: target.headSha,
+          boundIssueNumber: target.issueNumber,
           fixturePostReviewHeadSha: input.fixturePostReviewHeadSha,
+          fixturePostReviewPrBody: input.fixturePostReviewPrBody
+            ?? input.fixturePrBodyAfterClaim
+            ?? input.fixturePrBody,
         });
       }
     } catch (error) {
@@ -3453,7 +3543,11 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         repoSlug: target.repoSlug,
         prNumber: target.prNumber,
         boundHeadSha: target.headSha,
+        boundIssueNumber: target.issueNumber,
         fixturePostReviewHeadSha: input.fixturePostReviewHeadSha,
+        fixturePostReviewPrBody: input.fixturePostReviewPrBody
+          ?? input.fixturePrBodyAfterClaim
+          ?? input.fixturePrBody,
       });
     }
     const delivered = await deliverPackReviewVerdict({
