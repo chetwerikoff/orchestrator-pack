@@ -1,8 +1,15 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.ts';
 import {
@@ -23,6 +30,7 @@ import {
   createPackReviewRun,
   getPackReviewRun,
   listPackReviewRuns,
+  setPackReviewRunTerminal,
   updatePackReviewRun,
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.ts';
@@ -38,6 +46,7 @@ import type {
   GithubReviewSummary,
   GithubReviewTransport,
 } from './lib/github-review-reconciliation.ts';
+import { computeBoundIssueSnapshotHash } from './lib/reverify-bound-issue-snapshot.ts';
 
 const REPO = 'chetwerikoff/orchestrator-pack';
 const HEAD_A = 'a'.repeat(40);
@@ -76,6 +85,16 @@ function harness(storeRoot: string): void {
   process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = join(storeRoot, 'bound-issue-snapshots');
 }
 
+function writeSuccessfulGhFixture(binRoot: string): void {
+  if (process.platform === 'win32') {
+    writeFileSync(join(binRoot, 'gh.cmd'), '@echo off\r\nexit /b 0\r\n', 'utf8');
+    return;
+  }
+  const fixture = join(binRoot, 'gh');
+  writeFileSync(fixture, '#!/usr/bin/env node\nprocess.exitCode = 0;\n', 'utf8');
+  chmodSync(fixture, 0o755);
+}
+
 afterEach(() => {
   process.env = { ...originalEnv };
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -105,7 +124,10 @@ function normalStart(storeRoot: string, overrides: Record<string, unknown> = {})
   });
 }
 
-function directOperatorStart(storeRoot: string): ReturnType<typeof runProcessSync> {
+function directOperatorStart(storeRoot: string, headSha = HEAD_A): ReturnType<typeof runProcessSync> {
+  const binRoot = tempRoot('opk-1591-gh-bin-');
+  writeSuccessfulGhFixture(binRoot);
+  const capture = join(storeRoot, `operator-${headSha.slice(0, 1)}-review.json`);
   return runProcessSync({
     command: process.execPath,
     args: [
@@ -113,7 +135,7 @@ function directOperatorStart(storeRoot: string): ReturnType<typeof runProcessSyn
       join(repoRoot, 'scripts', 'pack-review-runner.ts'),
       'start',
       '--pr-number', '1591',
-      '--head-sha', HEAD_A,
+      '--head-sha', headSha,
       '--operator-repository', REPO,
       '--operator-issue-number', '1591',
       '--operator-reason', 'manual chat review',
@@ -124,24 +146,29 @@ function directOperatorStart(storeRoot: string): ReturnType<typeof runProcessSyn
       ...process.env,
       OPK_VITEST_HARNESS: '1',
       PACK_REVIEWER: 'codex',
+      PACK_REVIEW_GITHUB_REVIEW_CAPTURE_FILE: capture,
+      PATH: `${binRoot}${delimiter}${process.env.PATH ?? ''}`,
     },
     input: JSON.stringify({
       projectId: PROJECT,
       storeRoot,
       sourceRepoRoot: repoRoot,
-      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureCurrentPrHeadSha: headSha,
       fixturePrState: 'OPEN',
       fixturePrBody: 'Closes #1591',
-      fixturePostReviewHeadSha: HEAD_A,
+      fixturePostReviewHeadSha: headSha,
       fixturePostReviewPrBody: 'Closes #1591',
       fixtureRepoSlug: REPO,
       fixtureIssueBody: issueBody(),
       fixtureIssueNumber: 1591,
       fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
       fixtureGithubReviewId: 1592,
-      fixtureRequiredStatusWriter: async () => {},
     }),
   });
+}
+
+function parseLastJson(stdout: string): Record<string, unknown> {
+  return JSON.parse(stdout.trim().split(/\r?\n/).filter(Boolean).at(-1)!) as Record<string, unknown>;
 }
 
 describe('Issue #1591 launcher-independent consuming semantics', () => {
@@ -153,7 +180,7 @@ describe('Issue #1591 launcher-independent consuming semantics', () => {
     expect(listPackReviewRuns({ projectId: PROJECT, storeRoot })).toHaveLength(1);
 
     const manual = directOperatorStart(storeRoot);
-    const result = JSON.parse(manual.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1)!) as Record<string, unknown>;
+    const result = parseLastJson(manual.stdout);
     expect(result.created).toBe(false);
     expect(result.reused).toBe(true);
     expect(String(result.reason)).toMatch(/terminal_run_exists|claimed/);
@@ -162,7 +189,7 @@ describe('Issue #1591 launcher-independent consuming semantics', () => {
     expect(runs[0]?.automaticBudgetDisposition).toBe('consume');
   });
 
-  it('does not let a manual/chat launch bypass final-cap admission', async () => {
+  it('does not let a manual/chat launch bypass final-cap admission on a new head', async () => {
     const storeRoot = tempRoot();
     harness(storeRoot);
     const first = await normalStart(storeRoot, {
@@ -177,8 +204,8 @@ describe('Issue #1591 launcher-independent consuming semantics', () => {
     expect(first.ok).toBe(true);
     expect(readPackReviewAuthority(1591, { storeRoot })?.cycle?.state).toBe('at_cap_open_findings');
 
-    const manual = directOperatorStart(storeRoot);
-    const result = JSON.parse(manual.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1)!) as Record<string, unknown>;
+    const manual = directOperatorStart(storeRoot, HEAD_B);
+    const result = parseLastJson(manual.stdout);
     expect(result).toMatchObject({
       ok: false,
       created: false,
@@ -216,7 +243,7 @@ describe('Issue #1591 launcher-independent consuming semantics', () => {
       sourceRepoRoot: repoRoot,
       canonicalRepository: REPO,
       automaticBudgetDisposition: 'non_consuming_explicit',
-    })).toThrow(/new runs must consume normal review budget/);
+    })).toThrow(/legacy-read-only|cannot be produced/);
   });
 });
 
@@ -281,7 +308,7 @@ function threeSourceRound(startedAt: string): PackReviewGptRoundRecord {
     roundOrdinal: 1,
     cardinality: 3,
     issueNumber: 1591,
-    boundIssueSnapshotDigest: 'fixture-1591',
+    boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(issueBody()),
     sourceSlots: [1, 2, 3].map((ordinal) => ({
       slotId: `source-${String(ordinal).padStart(2, '0')}`,
       ordinal,
@@ -299,6 +326,12 @@ function recoverableRun(storeRoot: string, startedAt: Date): {
   runId: string;
   publications: Map<string, PublishedSource>;
 } {
+  initializePackReviewAuthority({
+    prNumber: 1591,
+    headSha: HEAD_A,
+    tier: 'T1',
+    options: { storeRoot, now: startedAt },
+  });
   const round = threeSourceRound(startedAt.toISOString());
   const created = createPackReviewRun({
     projectId: PROJECT,
@@ -338,14 +371,19 @@ function recoverableRun(storeRoot: string, startedAt: Date): {
   return { runId: created.run.id, publications };
 }
 
-function reconcileInput(storeRoot: string, publications: Map<string, PublishedSource>, capture: { body: string; posts: number }) {
+function reconcileInput(
+  storeRoot: string,
+  publications: Map<string, PublishedSource>,
+  capture: { body: string; posts: number },
+  headSha = HEAD_A,
+) {
   return {
     repoSlug: REPO,
     sourceRepoRoot: repoRoot,
     projectId: PROJECT,
     storeRoot,
     prNumber: 1591,
-    fixtureCurrentPrHeadSha: HEAD_A,
+    fixtureCurrentPrHeadSha: headSha,
     fixtureGptSourceCommentTransport: sourceTransport(publications),
     fixtureGithubReviewTransport: finalReviewTransport(capture),
     fixtureRequiredStatusWriter: async () => {},
@@ -383,7 +421,7 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     expect(capture.posts).toBe(0);
   });
 
-  it('settles a stale 2/3 round degraded, publishes the marker, and consumes one cap unit', async () => {
+  it('settles stale 2/3 degraded, publishes the marker, and commits one cap unit', async () => {
     const storeRoot = tempRoot();
     harness(storeRoot);
     const startedAt = new Date(Date.now() - 3 * 60_000);
@@ -407,6 +445,7 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     const authority = readPackReviewAuthority(1591, { storeRoot });
     expect(authority?.cycle?.consumedHeadShas).toEqual([HEAD_A]);
     expect(authority?.smokeOrdering?.reviewSettledHeadSha).toBe(HEAD_A);
+    expect(authority?.publication?.status).toBe('succeeded');
   });
 
   it('keeps a late third source audit-only after degraded settlement', async () => {
@@ -418,6 +457,8 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     await reconcileStalePackReviewRuns(reconcileInput(storeRoot, publications, capture));
     const settled = getPackReviewRun(runId, { projectId: PROJECT, storeRoot })!;
     const third = settled.reviewRound!.sourceSlots[2]!;
+    expect(third.lifecycle).toBe('planned');
+
     publications.set(third.slotId, {
       identity: {
         repository: REPO,
@@ -429,11 +470,11 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
       },
       payload: 'NO_FINDINGS',
     });
-
     await reconcileStalePackReviewRuns({
       ...reconcileInput(storeRoot, publications, capture),
       immediate: true,
     });
+
     const after = getPackReviewRun(runId, { projectId: PROJECT, storeRoot });
     expect(after?.reviewRound?.settledSourceCount).toBe(2);
     expect(after?.reviewRound?.sourceSlots[2]?.lifecycle).toBe('planned');
@@ -457,98 +498,177 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
   });
 });
 
-describe('Issue #1591 exact-head final-cap settlement', () => {
-  function seedContinuation(storeRoot: string) {
-    const opts = { storeRoot, now: new Date('2026-08-24T00:00:00.000Z') };
-    let authority = initializePackReviewAuthority({
-      prNumber: 1591,
-      headSha: HEAD_A,
-      tier: 'T1',
-      options: opts,
-    });
-    authority = commitPackReviewTerminal({
-      prNumber: 1591,
-      expectedTransitionSeq: authority.transitionSeq,
-      terminal: {
-        schemaVersion: 1,
-        terminalContractVersion: 2,
-        terminalSource: 'normal',
-        runId: 'final-review-a',
-        targetSha: HEAD_A,
-        reviewVerdict: 'findings',
-        findingCount: 1,
-        findingsDigest: 'blocking-a',
-      },
-      status: 'changes_requested',
+function seedFinalCapContinuation(storeRoot: string, smoke: 'passed' | 'failed' = 'passed') {
+  const opts = { storeRoot, now: new Date('2026-08-24T00:00:00.000Z') };
+  const run = createPackReviewRun({
+    projectId: PROJECT,
+    storeRoot,
+    prNumber: 1591,
+    headSha: HEAD_A,
+    trustedPackRoot: repoRoot,
+    sourceRepoRoot: repoRoot,
+    canonicalRepository: REPO,
+  }).run;
+  setPackReviewRunTerminal(run.id, 'changes_requested', {
+    reviewVerdict: 'findings',
+    findingCount: 1,
+    findings: [{ title: 'blocking', severity: 'blocking' }],
+  }, { projectId: PROJECT, storeRoot });
+
+  let authority = initializePackReviewAuthority({
+    prNumber: 1591,
+    headSha: HEAD_A,
+    tier: 'T1',
+    options: opts,
+  });
+  authority = commitPackReviewTerminal({
+    prNumber: 1591,
+    expectedTransitionSeq: authority.transitionSeq,
+    terminal: {
+      schemaVersion: 1,
+      terminalContractVersion: 2,
+      terminalSource: 'normal',
+      runId: run.id,
+      targetSha: HEAD_A,
+      reviewVerdict: 'findings',
       findingCount: 1,
-      options: opts,
-    });
-    authority = observePackReviewHead({
-      prNumber: 1591,
-      expectedTransitionSeq: authority.transitionSeq,
-      headSha: HEAD_B,
-      options: opts,
-    });
-    return { authority, opts };
-  }
+      findingsDigest: 'blocking-a',
+    },
+    status: 'changes_requested',
+    findingCount: 1,
+    options: opts,
+  });
+  authority = observePackReviewHead({
+    prNumber: 1591,
+    expectedTransitionSeq: authority.transitionSeq,
+    headSha: HEAD_B,
+    options: opts,
+  });
+  authority = commitSmokeOrderingTransition({
+    prNumber: 1591,
+    expectedTransitionSeq: authority.transitionSeq,
+    actor: 'worker-owned',
+    headSha: HEAD_B,
+    status: 'started',
+    options: opts,
+  });
+  authority = commitSmokeOrderingTransition({
+    prNumber: 1591,
+    expectedTransitionSeq: authority.transitionSeq,
+    actor: 'worker-owned',
+    headSha: HEAD_B,
+    status: smoke,
+    ...(smoke === 'failed' ? { failureKind: 'finding' as const } : {}),
+    options: opts,
+  });
+  return { authority, opts, run };
+}
 
-  function selectNoIntersectionEvidence(storeRoot: string, authority: NonNullable<ReturnType<typeof readPackReviewAuthority>>) {
-    const expectedEvidenceKey = 'final-fix-current-head';
-    const evidenceId = `mte-${expectedEvidenceKey}`;
-    const staged = stagePackReviewImmutableRecord({
-      kind: 'evidence',
-      key: evidenceId,
-      value: {
-        schema: 'merge-triage-evidence/v1',
-        evidenceId,
-        expectedEvidenceKey,
-        pathId: 'scope-denylist-current-head/v1',
-        producer: 'scripts/merge-triage-evidence.ts',
-        tuple: {
-          prNumber: 1591,
-          cycleId: authority.cycle!.cycleId,
-          currentHeadSha: authority.currentHeadSha,
-        },
-        changedPaths: ['scripts/pack-review-runner.ts'],
-        denylistPatterns: ['packages/core/**'],
-        matchedPaths: [],
-        predicateResult: 'no_intersection',
-        producedAtUtc: '2026-08-24T00:00:00.000Z',
-      },
-      options: { storeRoot },
-    });
-    return selectPackReviewEvidence({
-      prNumber: 1591,
-      expectedTransitionSeq: authority.transitionSeq,
+function selectNoIntersectionEvidence(
+  storeRoot: string,
+  authority: NonNullable<ReturnType<typeof readPackReviewAuthority>>,
+) {
+  const expectedEvidenceKey = 'final-fix-current-head';
+  const evidenceId = `mte-${expectedEvidenceKey}`;
+  const staged = stagePackReviewImmutableRecord({
+    kind: 'evidence',
+    key: evidenceId,
+    value: {
+      schema: 'merge-triage-evidence/v1',
+      evidenceId,
       expectedEvidenceKey,
-      selectedEvidenceId: evidenceId,
-      selectedEvidenceDigest: staged.digest,
-      options: { storeRoot },
-    });
-  }
+      pathId: 'scope-denylist-current-head/v1',
+      producer: 'scripts/merge-triage-evidence.ts',
+      tuple: {
+        prNumber: 1591,
+        cycleId: authority.cycle!.cycleId,
+        currentHeadSha: authority.currentHeadSha,
+      },
+      changedPaths: ['scripts/pack-review-runner.ts'],
+      denylistPatterns: ['packages/core/**'],
+      matchedPaths: [],
+      predicateResult: 'no_intersection',
+      producedAtUtc: '2026-08-24T00:00:00.000Z',
+    },
+    options: { storeRoot },
+  });
+  return selectPackReviewEvidence({
+    prNumber: 1591,
+    expectedTransitionSeq: authority.transitionSeq,
+    expectedEvidenceKey,
+    selectedEvidenceId: evidenceId,
+    selectedEvidenceDigest: staged.digest,
+    options: { storeRoot },
+  });
+}
 
-  it('settles only after worker-owned PASS on the exact continuation head and does not cover a later head', () => {
+describe('Issue #1591 exact-head final-cap settlement', () => {
+  it('settles through scoped reconcile after exact-head worker smoke without cap+1 review', async () => {
     const storeRoot = tempRoot();
-    const seeded = seedContinuation(storeRoot);
-    let authority = seeded.authority;
-    expect(authority.cycle?.state).toBe('at_cap_continuation_required');
-    authority = commitSmokeOrderingTransition({
+    harness(storeRoot);
+    const seeded = seedFinalCapContinuation(storeRoot);
+    expect(seeded.authority.cycle?.state).toBe('at_cap_continuation_required');
+    const runCount = listPackReviewRuns({ projectId: PROJECT, storeRoot }).length;
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: REPO,
+      sourceRepoRoot: repoRoot,
+      projectId: PROJECT,
+      storeRoot,
       prNumber: 1591,
-      expectedTransitionSeq: authority.transitionSeq,
-      actor: 'worker-owned',
-      headSha: HEAD_B,
-      status: 'started',
-      options: seeded.opts,
+      immediate: true,
+      fixtureCurrentPrHeadSha: HEAD_B,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureIssueBody: issueBody(),
+      fixtureIssueNumber: 1591,
+      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+      fixtureBoundIssueSnapshotBytes: issueBody(),
     });
-    authority = commitSmokeOrderingTransition({
+
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        finalCapSettlement: true,
+        settled: true,
+        headSha: HEAD_B,
+        reason: 'final_cap_fix_settled',
+      }),
+    ]));
+    expect(listPackReviewRuns({ projectId: PROJECT, storeRoot })).toHaveLength(runCount);
+    const authority = readPackReviewAuthority(1591, { storeRoot });
+    expect(authority?.smokeOrdering?.reviewSettledHeadSha).toBe(HEAD_B);
+    expect(authority?.cycle?.reviewStageComplete).toBe(true);
+  });
+
+  it('does not settle when worker smoke failed', async () => {
+    const storeRoot = tempRoot();
+    harness(storeRoot);
+    seedFinalCapContinuation(storeRoot, 'failed');
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: REPO,
+      sourceRepoRoot: repoRoot,
+      projectId: PROJECT,
+      storeRoot,
       prNumber: 1591,
-      expectedTransitionSeq: authority.transitionSeq,
-      actor: 'worker-owned',
-      headSha: HEAD_B,
-      status: 'passed',
-      options: seeded.opts,
+      immediate: true,
+      fixtureCurrentPrHeadSha: HEAD_B,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureIssueBody: issueBody(),
+      fixtureIssueNumber: 1591,
     });
-    authority = selectNoIntersectionEvidence(storeRoot, authority);
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        finalCapSettlement: true,
+        settled: false,
+        reason: 'final_cap_settlement_worker_smoke_required',
+      }),
+    ]));
+  });
+
+  it('binds automatic final settlement to the exact head and does not cover a later commit', () => {
+    const storeRoot = tempRoot();
+    const seeded = seedFinalCapContinuation(storeRoot);
+    let authority = selectNoIntersectionEvidence(storeRoot, seeded.authority);
     authority = commitPackReviewTriage({
       prNumber: 1591,
       expectedTransitionSeq: authority.transitionSeq,
@@ -561,7 +681,6 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
       options: seeded.opts,
     });
     expect(authority.smokeOrdering?.reviewSettledHeadSha).toBe(HEAD_B);
-    expect(authority.cycle?.reviewStageComplete).toBe(true);
 
     authority = observePackReviewHead({
       prNumber: 1591,
@@ -574,27 +693,10 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
     expect(authority.smokeOrdering?.reviewSettledHeadSha).not.toBe(HEAD_C);
   });
 
-  it('rejects automatic final settlement when worker smoke failed', () => {
+  it('rejects automatic DEFER when exact-head worker smoke failed', () => {
     const storeRoot = tempRoot();
-    const seeded = seedContinuation(storeRoot);
-    let authority = commitSmokeOrderingTransition({
-      prNumber: 1591,
-      expectedTransitionSeq: seeded.authority.transitionSeq,
-      actor: 'worker-owned',
-      headSha: HEAD_B,
-      status: 'started',
-      options: seeded.opts,
-    });
-    authority = commitSmokeOrderingTransition({
-      prNumber: 1591,
-      expectedTransitionSeq: authority.transitionSeq,
-      actor: 'worker-owned',
-      headSha: HEAD_B,
-      status: 'failed',
-      failureKind: 'finding',
-      options: seeded.opts,
-    });
-    authority = selectNoIntersectionEvidence(storeRoot, authority);
+    const seeded = seedFinalCapContinuation(storeRoot, 'failed');
+    const authority = selectNoIntersectionEvidence(storeRoot, seeded.authority);
     expect(() => commitPackReviewTriage({
       prNumber: 1591,
       expectedTransitionSeq: authority.transitionSeq,
@@ -605,6 +707,10 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
         committedAtUtc: '2026-08-24T00:01:00.000Z',
       },
       options: seeded.opts,
-    })).toThrow(/automatic DEFER requires final-cap continuation, exact-head worker smoke PASS, and canonical no-intersection evidence/);
+    })).toThrow(/automatic DEFER requires final-cap continuation, exact-head worker smoke PASS, and no-intersection evidence/);
   });
+});
+
+it('keeps the focused fixture self-contained', () => {
+  expect(existsSync(repoRoot)).toBe(true);
 });
