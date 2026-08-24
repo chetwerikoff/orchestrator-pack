@@ -4,6 +4,8 @@ import { runProcessSync } from './kernel/subprocess.ts';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readProcessIdentity } from './lib/cutover/activation-cordon.ts';
+import { supervisorChildExitTransition } from './lib/orchestrator-side-process-supervisor.ts';
+import { EMPTY_CRASH_BACKOFF_STATE, type CrashBackoffPolicy } from './runtime/crash-backoff.ts';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const observerBridge = path.join(repoRoot, 'scripts/lib/Orchestrator-WakeSupervisor.ps1');
@@ -122,5 +124,53 @@ describe('Issue #1484 truthful supervisor status', () => {
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
     }
+  });
+
+  it('accumulates repeated child failures to the existing fuse while retaining the concrete cause', () => {
+    const policy: CrashBackoffPolicy = {
+      rapidExitThresholdMs: 1_000,
+      maxRapidExitsBeforeBackoff: 2,
+      terminalRapidExits: 3,
+      baseBackoffMs: 10,
+      maxBackoffMs: 100,
+    };
+    let crashBackoff = EMPTY_CRASH_BACKOFF_STATE;
+    let transition = supervisorChildExitTransition({
+      previous: crashBackoff,
+      startedAtMs: 1_000,
+      exitedAtMs: 1_001,
+      result: { ok: false, outcome: 'exit_nonzero', stderr: 'scheduler exploded', exitCode: 7 },
+      policy,
+    });
+    expect(transition.restartState).toBe('waiting-restart');
+    expect(transition.refusalReason).toBe('scheduler_child_exit_nonzero:scheduler exploded');
+    crashBackoff = transition.crashBackoff;
+
+    transition = supervisorChildExitTransition({
+      previous: crashBackoff,
+      startedAtMs: 2_000,
+      exitedAtMs: 2_001,
+      result: { ok: false, outcome: 'exit_nonzero', stderr: 'scheduler exploded', exitCode: 7 },
+      policy,
+    });
+    expect(transition.restartState).toBe('waiting-restart');
+    crashBackoff = transition.crashBackoff;
+
+    transition = supervisorChildExitTransition({
+      previous: crashBackoff,
+      startedAtMs: 3_000,
+      exitedAtMs: 3_001,
+      result: { ok: false, outcome: 'exit_nonzero', stderr: 'scheduler exploded', exitCode: 7 },
+      policy,
+    });
+
+    expect(transition.restartState).toBe('refused');
+    expect(transition.crashBackoff).toMatchObject({
+      terminal: true,
+      rapidExits: 3,
+      terminalReason: 'crash_loop:3_rapid_exits',
+    });
+    expect(transition.refusalReason).toBe('scheduler_child_exit_nonzero:scheduler exploded');
+    expect(transition.refusalReason).not.toBe(transition.crashBackoff.terminalReason);
   });
 });
