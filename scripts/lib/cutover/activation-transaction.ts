@@ -511,7 +511,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
   };
 }
 
-async function waitForStartedSupervisor(request: ActivationRequest, nonce: string, expectedPid: number): Promise<{ supervisorPid: number; childGeneration: number }> {
+export async function waitForStartedSupervisor(request: ActivationRequest, nonce: string, expectedPid: number): Promise<{ supervisorPid: number; childGeneration: number }> {
   const deadline = Date.now() + 10_000;
   do {
     const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
