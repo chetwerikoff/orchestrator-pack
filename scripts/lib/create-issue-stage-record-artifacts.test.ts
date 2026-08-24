@@ -15,6 +15,8 @@ import {
   deriveReviewEpisodeState,
   validateReviewEpisodeTopology,
   type CaptureIdentityV1,
+  type ReviewEpisodeDerivationAuthorityV1,
+  type ReviewerInvocationEnvelopeV1,
   type StageCompletenessReceiptV1,
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
@@ -36,6 +38,7 @@ const TASK = `issue:${ISSUE}`;
 const REVISION = 'r01';
 const CONFIG = 'env:OPK_GPT_REVIEWER_CARDINALITY';
 const COMMENT_ID = 5194504082;
+const CYCLE_COMMENT_ID = COMMENT_ID + 900;
 const PUBLISHER = 'chetwerikoff';
 const CREATED_AT = '2026-08-07T04:00:00Z';
 const tempDirs: string[] = [];
@@ -94,9 +97,34 @@ function comment(
     body,
     created_at: CREATED_AT,
     updated_at: CREATED_AT,
+    author_association: 'OWNER',
     user: { login: PUBLISHER },
     ...overrides,
   };
+}
+
+function cycleComment(
+  sourceRevision = REVISION,
+  cycleId = 'cycle-1385',
+  predecessorCycleId = 'none',
+  id = CYCLE_COMMENT_ID,
+): Record<string, unknown> {
+  const eventKey = `${cycleId}-${sourceRevision}`;
+  const payload = {
+    schema: 'create-issue-review-cycle/v1',
+    'event-key': eventKey,
+    'cycle-id': cycleId,
+    'predecessor-cycle-id': predecessorCycleId,
+    'source-revision': sourceRevision,
+    tier: 'T2',
+    'public-actor': 'other-flow-manager',
+  };
+  return comment([
+    `<!-- opk-create-issue-journal:create-issue-review-cycle/v1:${eventKey} -->`,
+    '```json',
+    JSON.stringify(payload, null, 2),
+    '```',
+  ].join('\n'), { id });
 }
 
 interface TransportOptions {
@@ -107,17 +135,27 @@ interface TransportOptions {
   rereadFailure?: boolean;
   secondPageFailure?: boolean;
   beforeReread?: () => void;
+  cycleComments?: Array<Record<string, unknown>>;
 }
 
 function transport(options: TransportOptions = {}) {
   const principal = options.principal === undefined ? PUBLISHER : options.principal;
-  const census = options.census ?? [comment()];
+  const suppliedCensus = options.census ?? [comment()];
+  const observedRevision = suppliedCensus.flatMap((item) => {
+    const match = typeof item.body === 'string' ? /^Read revision: #[1-9][0-9]* (r[0-9]+)$/m.exec(item.body) : null;
+    return match?.[1] ? [match[1]] : [];
+  })[0] ?? REVISION;
+  const journalComments = options.cycleComments ?? [cycleComment(observedRevision)];
+  const census = [...suppliedCensus, ...journalComments];
   const runGh = vi.fn((argv: string[]) => {
     if (argv[2] === 'user') {
       if (principal === null) return { exitCode: 1, stdout: '', stderr: 'principal unavailable' };
       return { exitCode: 0, stdout: `${principal}\n`, stderr: '' };
     }
     const target = argv[2] ?? '';
+    if (target === `repos/${REPOSITORY}`) {
+      return { exitCode: 0, stdout: `${PUBLISHER}\n`, stderr: '' };
+    }
     if (target.includes(`/issues/${ISSUE}/comments?per_page=100&page=1`)) {
       if (options.censusFailure) return { exitCode: 1, stdout: '', stderr: 'census unavailable' };
       return { exitCode: 0, stdout: JSON.stringify(census), stderr: '' };
@@ -306,6 +344,8 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const result = produce(input, source);
     expect(result.ok, result.errors.join('\n')).toBe(true);
     expect(source.runGh.mock.calls.map((call) => call[0][2])).toEqual([
+      `repos/${REPOSITORY}`,
+      `repos/${REPOSITORY}/issues/${ISSUE}/comments?per_page=100&page=1`,
       'user',
       `repos/${REPOSITORY}/issues/${ISSUE}/comments?per_page=100&page=1`,
       ...input.reviewComments.map((item) => `repos/${REPOSITORY}/issues/comments/${String(item.id)}`),
@@ -522,7 +562,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.errors.join('\n')).toMatch(expected as RegExp);
   });
 
-  it('ignores an unrelated authorless comment while preserving the complete census', () => {
+  it('fails closed when an unrelated authorless comment makes the trusted journal census incomplete', () => {
     const input = fixture({ transportClassification: 'incident' });
     const authorlessNoiseId = COMMENT_ID + 90;
     const authorlessNoise = comment('unrelated historical note\n', {
@@ -531,17 +571,15 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       user: null,
     });
     const result = produce(input, transport({ census: [...input.reviewComments, authorlessNoise, comment(input.body)] }));
-    expect(result.ok, result.errors.join('\n')).toBe(true);
-    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
-    expect(receipt.invocations[0].artifactAuthority.commentId).toBe(COMMENT_ID);
+    expect(result.ok).toBe(false);
+    expect(result.temporary).toBe('source-unavailable');
   });
 
   it('fails closed when the canonical invocation candidate itself has no author', () => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport({ census: [...input.reviewComments, comment(input.body, { user: null })] }));
     expect(result.ok).toBe(false);
-    expect(result.temporary).toBe('provenance-unresolved');
-    expect(result.errors.join('\n')).toContain('canonical artifact candidate has no authoritative comment-author login');
+    expect(result.temporary).toBe('source-unavailable');
   });
 
   it('filters provenance before uniqueness and compares GitHub logins case-insensitively', () => {
@@ -680,12 +718,11 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(manifest.operatorAdjudication).toBeUndefined();
   });
 
-  it('rejects a first stage receipt that re-roots the intake revision', () => {
+  it('allows the first stage receipt revision to differ from the immutable episode first revision when the canonical cycle binds it', () => {
     const input = fixture({ intakeRevision: 'r03', sourceRevision: 'r04', transportClassification: 'incident' });
     const live = canonicalVerdict('r04');
     const result = produce(input, transport({ census: [...input.reviewComments, comment(live)], reread: comment(live) }));
-    expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('first stage receipt sourceRevision must equal episodeFirstRevision');
+    expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
   it('contributes the authoritative capture exactly once to governance, relay, and ledger', () => {
@@ -740,7 +777,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
-  it('still credentials an INVOCATION_ID comment (comment 5381523513 class)', () => {
+  it('rejects an INVOCATION_ID-only comment as non-canonical invocation evidence', () => {
     const input = fixture({
       transportClassification: 'complete',
       withTurnResult: true,
@@ -750,7 +787,8 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(input.body).toMatch(/^INVOCATION_ID: invocation-001$/m);
     expect(input.body).not.toMatch(/INVOCATION_ID_TO_ECHO:/);
     const result = produce(input);
-    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
   });
 
   it('check-artifacts still requires capture and turn-result evidence for successful transport', () => {
