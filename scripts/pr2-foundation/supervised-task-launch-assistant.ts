@@ -435,7 +435,7 @@ export async function runSupervisedTaskLaunchAssistant(
     orcaArgs: providerMode
       ? ['--task', taskId, '--worktree', 'new-top-level', '--repo', prepared.value.repositorySelector ?? '',
         '--name', input.worktreeName ?? '', ...(input.baseBranch ? ['--base-branch', input.baseBranch] : []),
-        '--agent', profile.orcaAgent, '--model', profile.model, '--effort', profile.effort, '--setup', 'run', '--json']
+        '--agent', profile.orcaAgent, '--model', profile.modelId, '--setup', 'run', '--json']
       : ['--task', taskId, '--terminal', terminal!.identity.id, '--worktree', prepared.value.selector],
   });
   const startDone = deps.now();
@@ -463,7 +463,7 @@ export async function runSupervisedTaskLaunchAssistant(
       ...(providerMode
         ? ['--worktree', 'new-top-level', '--repo', quote(prepared.value.repositorySelector ?? ''), '--name', quote(input.worktreeName ?? ''),
           ...(input.baseBranch ? ['--base-branch', quote(input.baseBranch)] : []),
-          '--agent', 'cursor', '--model', quote(profile.model), '--effort', quote(profile.effort), '--setup', 'run']
+          '--agent', 'cursor', '--model', quote(profile.modelId), '--setup', 'run']
         : ['--terminal', quote(terminal!.identity.id), '--worktree', quote(prepared.value.selector)]),
       '--retry-request', quote(requestId),
     ].join(' ') : undefined;
@@ -476,6 +476,8 @@ export async function runSupervisedTaskLaunchAssistant(
         ...(receiptDispatchId || supervised.recovery?.dispatchId
           ? { dispatchId: receiptDispatchId || supervised.recovery?.dispatchId } : {}),
         ...(recoveryCommand ? { recoveryCommand } : {}),
+        ...(supervised.errorMessage ? { errorMessage: supervised.errorMessage } : {}),
+        ...(supervised.nextSteps ? { nextSteps: supervised.nextSteps } : {}),
         ...providerEvidence,
       },
       nextAction: requestId ? {

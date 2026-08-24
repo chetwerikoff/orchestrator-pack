@@ -120,10 +120,10 @@ describe('supervised worker start exact assignment admission',()=>{
     const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',issueNumber:1416,
       repository:'chetwerikoff/orchestrator-pack',env,adapter:adapter({kind:'gone'}),
       orcaArgs:['--task','task_new','--worktree','new-top-level','--repo','id:repo-1','--name','new-worktree',
-        '--agent','cursor','--model','model','--effort','medium','--setup','run'],
+        '--agent','cursor','--model','model-medium','--setup','run'],
       execute:async()=>({ok:true,stdout:envelope({taskId:'task_new',dispatchId:'dispatch_new',state:'ready',
         worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
-        setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model',effort:'medium'},effective:{agent:'cursor',model:'model',effort:'medium'}},
+        setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model-medium'},effective:{agent:'cursor',model:'model-medium'}},
         effects:[{kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
           {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
           {kind:'dispatch_input',role:'agent',id:'term-provider',state:'accepted'}]})}),
@@ -270,7 +270,7 @@ describe('supervised worker start exact assignment admission',()=>{
         stdout:JSON.stringify({ok:false,error:{code:'agent_unconfigured',message:'agent is not configured'}}),
       }),
     });
-    expect(result).toEqual({ok:false,reason:'supervised_start_envelope_error',errorCode:'agent_unconfigured'});
+    expect(result).toEqual({ok:false,reason:'supervised_start_envelope_error',errorCode:'agent_unconfigured',errorMessage:'agent is not configured'});
   });
 
   it('preserves exact Orca mutation recovery fields without promoting the failed start', async()=>{
@@ -281,12 +281,13 @@ describe('supervised worker start exact assignment admission',()=>{
         ok:false,
         stdout:JSON.stringify({ok:false,error:{
           code:'operation_unknown',message:'accepted before restart',
-          data:{requestId:'request-7',dispatchId:'dispatch-7',recoveryCommand:'orca orchestration worker-show --dispatch dispatch-7 --json'},
+          data:{requestId:'request-7',dispatchId:'dispatch-7',recoveryCommand:'orca orchestration worker-show --dispatch dispatch-7 --json',nextSteps:[' inspect logs ','retry once']},
         }}),
       }),
     });
     expect(pending).toEqual({
-      ok:false,reason:'supervised_start_envelope_error',errorCode:'operation_unknown',
+      ok:false,reason:'supervised_start_envelope_error',errorCode:'operation_unknown',errorMessage:'accepted before restart',
+      nextSteps:['inspect logs','retry once'],
       recovery:{requestId:'request-7',dispatchId:'dispatch-7',recoveryCommand:'orca orchestration worker-show --dispatch dispatch-7 --json'},
     });
     const transportUnknown=await runSupervisedWorkerStart({role:'worker',
@@ -297,7 +298,7 @@ describe('supervised worker start exact assignment admission',()=>{
       }),
     });
     expect(transportUnknown).toEqual({
-      ok:false,reason:'supervised_start_envelope_error',errorCode:'runtime_timeout',recovery:{requestId:'request-8'},
+      ok:false,reason:'supervised_start_envelope_error',errorCode:'runtime_timeout',errorMessage:'timeout',recovery:{requestId:'request-8'},
     });
     expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack',env),1416)).toBeNull();
   });
@@ -315,7 +316,18 @@ describe('supervised worker start exact assignment admission',()=>{
         stdout:JSON.stringify({ok:false,error:{code:'operation_unknown',message:'unknown outcome',data}}),
       }),
     });
-    expect(result).toEqual({ok:false,reason:'supervised_start_envelope_error',errorCode:'operation_unknown'});
+    expect(result).toEqual({ok:false,reason:'supervised_start_envelope_error',errorCode:'operation_unknown',errorMessage:'unknown outcome'});
+  });
+
+  it('bounds provider error message and next-step evidence', async()=>{
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base};
+    const result=await runSupervisedWorkerStart({role:'worker',
+      repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
+      execute:async()=>({ok:false,stdout:JSON.stringify({ok:false,error:{code:'provider_failed',
+        message:'  provider message  ',data:{nextSteps:[' first ',7,'x'.repeat(513),...Array.from({length:9},(_,i)=>`keep-${i}`)]}}})}),
+    });
+    expect(result).toEqual({ok:false,reason:'supervised_start_envelope_error',errorCode:'provider_failed',
+      errorMessage:'provider message',nextSteps:['first','keep-0','keep-1','keep-2','keep-3','keep-4','keep-5','keep-6']});
   });
 
   it('keeps malformed and code-less error envelopes on the generic invalid path', async()=>{
@@ -429,16 +441,30 @@ describe('supervised worker start exact assignment admission',()=>{
     },
   );
 
+  it.each([
+    ['split model and effort', ['--model','model','--effort','medium']],
+    ['mixed model and effort', ['--model','model-medium','--effort','medium']],
+    ['incomplete model', ['--model']],
+  ] as const)('rejects provider model composition before mutation: %s', async(_label,modelFlags)=>{
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base}; let calls=0;
+    const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',repository:'chetwerikoff/orchestrator-pack',env,
+      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','new-worktree','--agent','cursor',...modelFlags,'--setup','run'],
+      execute:async()=>{ calls+=1; return {ok:true,stdout:''}; },
+    });
+    expect(result).toEqual({ok:false,reason:'supervised_start_provider_request_invalid'});
+    expect(calls).toBe(0);
+  });
+
   it('accepts provider new-top-level ready receipt with setup running and publishes one assignment', async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base}; let calls=0;
     const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',repository:'chetwerikoff/orchestrator-pack',env,
-      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','new-worktree','--agent','cursor','--model','model','--effort','medium','--setup','run'],
+      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','new-worktree','--agent','cursor','--model','model-medium','--setup','run'],
       execute:async(args)=>{ calls+=1; expect(args).toContain('--json'); return {ok:true,stdout:envelope({
         taskId:'task_1',dispatchId:'dispatch_provider',state:'ready',
         worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},
         terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
         setup:{requested:'run',effective:'run',state:'running'},
-        launch:{requested:{agent:'cursor',model:'model',effort:'medium'},effective:{agent:'cursor',model:'model',effort:'medium'}},
+        launch:{requested:{agent:'cursor',model:'model-medium'},effective:{agent:'cursor',model:'model-medium'}},
         effects:[
           {kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
           {kind:'setup',action:'running',state:'running'},
@@ -462,10 +488,10 @@ describe('supervised worker start exact assignment admission',()=>{
   ] as const)('rejects provider receipt evidence before assignment publication: %s', async(_label,override)=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
     const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',repository:'chetwerikoff/orchestrator-pack',env,
-      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','new-worktree','--agent','cursor','--model','model','--effort','medium','--setup','run'],
+      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','new-worktree','--agent','cursor','--model','model-medium','--setup','run'],
       execute:async()=>({ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_provider',state:'ready',
         worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
-        setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model',effort:'medium'},effective:{agent:'cursor',model:'model',effort:'medium'}},
+        setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model-medium'},effective:{agent:'cursor',model:'model-medium'}},
         effects:[{kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
           {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
           {kind:'dispatch_input',role:'agent',id:'term-provider',state:'accepted'}],...override})}),

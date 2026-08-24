@@ -84,6 +84,10 @@ export interface SupervisedWorkerStartResult {
   readonly cause?: WorkerAssignmentStoreTrustCause;
   /** Exact provider error code from a structurally valid Orca error envelope. */
   readonly errorCode?: string;
+  /** Bounded provider message from a structurally valid Orca error envelope. */
+  readonly errorMessage?: string;
+  /** Bounded provider next-step strings from Orca error.data, when present. */
+  readonly nextSteps?: readonly string[];
   /** Exact non-secret provider recovery fields from Orca error.data, when present. */
   readonly recovery?: SupervisedWorkerStartRecoveryEvidence;
   readonly receipt?: SupervisedWorkerStartReceipt;
@@ -106,6 +110,21 @@ function nonEmpty(value: unknown): string {
 
 function providerText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function providerErrorMessage(error: unknown): string | undefined {
+  const message = isRecord(error) ? providerText(error.message) : '';
+  return message.length >= 1 && message.length <= 2048 ? message : undefined;
+}
+
+function providerNextSteps(error: unknown): readonly string[] | undefined {
+  if (!isRecord(error) || !isRecord(error.data) || !Array.isArray(error.data.nextSteps)) return undefined;
+  const steps = error.data.nextSteps
+    .filter((step): step is string => typeof step === 'string')
+    .map((step) => step.trim())
+    .filter((step) => step.length >= 1 && step.length <= 512)
+    .slice(0, 8);
+  return steps.length > 0 ? steps : undefined;
 }
 
 function recoveryRequestIdField(
@@ -146,6 +165,8 @@ function rejectedStart(
   errorCode?: string,
   recovery?: SupervisedWorkerStartRecoveryEvidence,
   cause?: WorkerAssignmentStoreTrustCause,
+  providerMessage?: string,
+  providerSteps?: readonly string[],
 ): SupervisedWorkerStartResult {
   const resources = receipt ? residualResources(receipt) : undefined;
   return {
@@ -153,6 +174,8 @@ function rejectedStart(
     reason,
     ...(cause ? { cause } : {}),
     ...(errorCode ? { errorCode } : {}),
+    ...(providerMessage ? { errorMessage: providerMessage } : {}),
+    ...(providerSteps && providerSteps.length > 0 ? { nextSteps: providerSteps } : {}),
     ...(recovery ? { recovery } : {}),
     ...(receipt ? { receipt } : {}),
     ...(resources ? { residualResources: resources } : {}),
@@ -218,10 +241,9 @@ function validateProviderTopLevelReceipt(
   const name = providerOption(args, '--name');
   const agent = providerOption(args, '--agent');
   const model = providerOption(args, '--model');
-  const effort = providerOption(args, '--effort');
   const setupRequest = providerOption(args, '--setup');
   if (worktreeSelector !== 'new-top-level' || !repository?.startsWith('id:')
-    || !name || agent !== 'cursor' || !model || !effort || setupRequest !== 'run') {
+    || !name || agent !== 'cursor' || !model || args.includes('--effort') || setupRequest !== 'run') {
     return 'supervised_start_provider_request_invalid';
   }
 
@@ -238,10 +260,10 @@ function validateProviderTopLevelReceipt(
   if (!requested || !effective
     || providerLaunchField(requested, 'agent') !== agent
     || providerLaunchField(requested, 'model') !== model
-    || providerLaunchField(requested, 'effort') !== effort
+    || providerLaunchField(requested, 'effort')
     || providerLaunchField(effective, 'agent') !== agent
     || providerLaunchField(effective, 'model') !== model
-    || providerLaunchField(effective, 'effort') !== effort) {
+    || providerLaunchField(effective, 'effort')) {
     return 'supervised_start_provider_launch_mismatch';
   }
   return null;
@@ -403,7 +425,7 @@ export async function runSupervisedWorkerStart(input: {
       || !providerOption(args, '--name')
       || providerOption(args, '--agent') !== 'cursor'
       || !providerOption(args, '--model')
-      || !providerOption(args, '--effort')
+      || args.includes('--effort')
       || providerOption(args, '--setup') !== 'run')) {
     return { ok: false, reason: 'supervised_start_provider_request_invalid' };
   }
@@ -495,10 +517,12 @@ export async function runSupervisedWorkerStart(input: {
     }
     const errorRecord = isRecord(parsed.error) ? parsed.error : null;
     const errorCode = nonEmpty(errorRecord?.code);
+    const errorMessage = providerErrorMessage(errorRecord);
+    const nextSteps = providerNextSteps(errorRecord);
     const recovery = recoveryEvidence(errorRecord);
     if (!isRecord(parsed.result)) {
       return errorCode
-        ? rejectedStart('supervised_start_envelope_error', undefined, errorCode, recovery)
+        ? rejectedStart('supervised_start_envelope_error', undefined, errorCode, recovery, undefined, errorMessage, nextSteps)
         : rejectedStart('supervised_start_receipt_invalid');
     }
     envelope = parsed as OrcaWorkerStartEnvelope;
@@ -507,12 +531,14 @@ export async function runSupervisedWorkerStart(input: {
   }
   const receipt = envelope.result as SupervisedWorkerStartReceipt;
   const errorCode = nonEmpty(envelope.error?.code);
+  const errorMessage = providerErrorMessage(envelope.error);
+  const nextSteps = providerNextSteps(envelope.error);
   const recovery = recoveryEvidence(envelope.error);
   if (envelope.ok !== true) {
-    return rejectedStart('supervised_start_envelope_not_ok', receipt, errorCode || undefined, recovery);
+    return rejectedStart('supervised_start_envelope_not_ok', receipt, errorCode || undefined, recovery, undefined, errorMessage, nextSteps);
   }
   if (!execution.ok || receipt.state !== 'ready') {
-    return rejectedStart(`supervised_start_${receipt.state || 'failed'}`, receipt, errorCode || undefined, recovery);
+    return rejectedStart(`supervised_start_${receipt.state || 'failed'}`, receipt, errorCode || undefined, recovery, undefined, errorMessage, nextSteps);
   }
   const taskId = String(receipt.taskId ?? '').trim();
   const dispatchId = String(receipt.dispatchId ?? '').trim();

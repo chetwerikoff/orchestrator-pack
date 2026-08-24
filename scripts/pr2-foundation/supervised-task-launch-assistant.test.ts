@@ -94,8 +94,8 @@ function providerReadyStart(taskId: string): SupervisedWorkerStartResult {
       terminal: { handle: 'term-provider' },
       setup: { requested: 'run', effective: 'run', state: 'running' },
       launch: {
-        requested: { agent: 'cursor', model: 'model', effort: 'medium' },
-        effective: { agent: 'cursor', model: 'model', effort: 'medium' },
+        requested: { agent: 'cursor', model: 'model-medium' },
+        effective: { agent: 'cursor', model: 'model-medium' },
       },
       effects: [
         { kind: 'worktree', action: 'created_top_level', id: 'orca-repo-1::/tmp/created-worktree' },
@@ -174,7 +174,7 @@ describe('supervised Task launch assistant', () => {
     expect(spawns).toBe(0);
     expect(calls).toEqual([[
       '--task', 'task-1', '--worktree', 'new-top-level', '--repo', 'id:orca-repo-1', '--name', 'issue-1479', '--base-branch', 'feature/base',
-      '--agent', 'cursor', '--model', 'model', '--effort', 'medium', '--setup', 'run', '--json',
+      '--agent', 'cursor', '--model', 'model-medium', '--setup', 'run', '--json',
     ]]);
     if (result.outcome === 'ready') {
       expect(result.resources.providerAgentTerminalId).toBe('term-provider');
@@ -377,12 +377,12 @@ describe('supervised Task launch assistant', () => {
     };
     const residualResources = [{ kind: 'terminal', action: 'reused_agent_terminal', id: 'term-provider' }];
     const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ supervised: {
-      ok: false, reason: 'supervised_start_envelope_error', receipt, residualResources,
+      ok: false, reason: 'supervised_start_envelope_error', errorMessage: 'provider message', nextSteps: ['inspect logs'], receipt, residualResources,
     } }));
     expect(result).toMatchObject({
       outcome: 'continue', stage: 'supervised_start',
       resources: { dispatchId: 'dispatch-provider', receipt, residualResources },
-      evidence: { dispatchId: 'dispatch-provider', receipt, residualResources },
+      evidence: { dispatchId: 'dispatch-provider', receipt, residualResources, errorMessage: 'provider message', nextSteps: ['inspect logs'] },
     });
   });
 
@@ -396,6 +396,8 @@ describe('supervised Task launch assistant', () => {
     if (result.outcome === 'continue') {
       expect(result.nextAction.command).toContain('--base-branch');
       expect(result.nextAction.command).toContain("'feature/base'");
+      expect(result.nextAction.command).toContain("--model 'model-medium'");
+      expect(result.nextAction.command).not.toContain('--effort');
     }
   });
 
