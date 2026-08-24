@@ -665,6 +665,30 @@ and declared smoke stay exact-current-head. On a new head, smoke admission is ch
 before an at-cap automatic refusal; conflict-free carry-over may remove the model
 call but not the current-head smoke or CI obligation.
 
+#### Pack-review recovery recipe
+
+Recover an interrupted or stale GPT review through the existing scoped runner; do
+not start a replacement same-head review merely because a browser/runner child
+stopped:
+
+```text
+node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
+  --source-repo-root <path> --repo-slug <owner/repo> \
+  --pr-number <PR_NUMBER> --immediate
+```
+
+The reconciler first re-reads credentialed GitHub source comments. For a frozen
+three-source round, 3/3 settles normally; 2/3 remains waiting before the existing
+shared stale/grace threshold and may settle once after that threshold as
+`Sources: 2/3 (degraded after timeout)`. Fewer than two usable sources after the
+threshold remains incomplete and reports the missing-source action. A late third
+source does not reopen an already settled 2/3 round or consume another cap unit.
+Every ordinary manual/chat/automatic start uses the same consuming review budget;
+there is no launcher-specific same-head extra-review bypass. At final cap, fix the
+blocking findings, obtain exact-head worker-owned smoke PASS, then rerun the scoped
+`reconcile --immediate`; settlement stays on that exact head and does not invoke a
+cap+1 full review.
+
 ### Required CI
 
 Use protected-branch required checks when configured. Otherwise require every
