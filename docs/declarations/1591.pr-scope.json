@@ -3,10 +3,13 @@
   "issue_number": 1591,
   "declared_paths": [
     "docs/orchestration-runbook.md",
+    "scripts/lib/pack-gpt-source-comment-runner.cases.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner-issue-1591.test.ts",
+    "scripts/pack-review-runner-issue-898.test.ts",
     "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
     "scripts/pack-review-state.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
