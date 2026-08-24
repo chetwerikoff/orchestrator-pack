@@ -1,4 +1,4 @@
-// @vitest-ci-lane light
+// @vitest-ci-lane heavy
 // @vitest-pre-topology-seconds 1
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
