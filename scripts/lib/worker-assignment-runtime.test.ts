@@ -67,6 +67,10 @@ function runtimeWith(
   return { adapter, worker: spawned.value };
 }
 
+function currentOrcaHeartbeat(ageMs = 60_000): string {
+  return new Date(Date.now() - ageMs).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/u, '');
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -148,7 +152,7 @@ describe('WorkerAssignment runtime target truth', () => {
 });
 
 describe('real Orca assignment target resolution', () => {
-  it('resolves exact live Dispatch only after an authoritative dispatch-specific heartbeat', async () => {
+  it('resolves exact live Dispatch only after a current producer-shaped dispatch heartbeat', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-active' });
     const activeWorker = {
@@ -158,9 +162,9 @@ describe('real Orca assignment target resolution', () => {
     } as const;
     const activeDispatch = {
       status: 'dispatched',
-      last_heartbeat_at: '2026-08-24T14:00:00.000Z',
+      last_heartbeat_at: currentOrcaHeartbeat(),
     } as const;
-    const activeObservation = { exactWorker: true, status: 'running' } as const;
+    const activeObservation = { exactWorker: true, status: 'live' } as const;
     const activeTerminal = {
       handle: 'term-active',
       incarnationId: 'generation-active',
@@ -259,11 +263,38 @@ describe('real Orca assignment target resolution', () => {
     expect(runJson.mock.calls.every((call) => call[0]?.slice(0, 2).join(' ') === 'orchestration worker-show')).toBe(true);
   });
 
-  it('preserves exact gone and its producer-backed Dispatch-owned terminal handle', async () => {
+  it('keeps exact gone plus dispatched heartbeat non-replaceable', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-gone-but-dispatched' });
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        dispatch: { status: 'dispatched', last_heartbeat_at: currentOrcaHeartbeat() },
+        worker: {
+          agent_terminal_handle: 'term-gone-but-dispatched',
+          state: 'succeeded',
+          stage: 'settled',
+        },
+        observation: { exactWorker: true, status: 'gone' },
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'target_unresolved' });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+    })).toEqual({ status: 'target_unresolved' });
+  });
+
+  it('preserves exact gone only with terminal producer lifecycle and Dispatch-owned terminal handle', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-exact-gone' });
     const goneResult = {
-      worker: { agent_terminal_handle: 'term-owned' },
+      dispatch: { status: 'completed', last_heartbeat_at: currentOrcaHeartbeat(15 * 60 * 1_000) },
+      worker: { agent_terminal_handle: 'term-owned', state: 'succeeded', stage: 'settled' },
       terminal: null,
       observation: { exactWorker: true, status: 'gone' },
       terminalResource: {
@@ -329,7 +360,7 @@ describe('real Orca assignment target resolution', () => {
     const nullActiveResult = {
       dispatch: {
         status: 'dispatched',
-        last_heartbeat_at: '2026-08-24T14:00:00.000Z',
+        last_heartbeat_at: currentOrcaHeartbeat(),
       },
       worker: {
         agent_terminal_handle: null,
