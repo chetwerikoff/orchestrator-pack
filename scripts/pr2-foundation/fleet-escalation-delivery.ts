@@ -55,7 +55,7 @@ const HANDOFF_KEYS = new Set([
 ]);
 
 const FORBIDDEN_CANONICAL_CONTENT_PATTERNS = [
-  /Bearer\s+/u,
+  /Bearer\s+/iu,
   /ghp_/u,
   /gho_/u,
   /ghu_/u,
