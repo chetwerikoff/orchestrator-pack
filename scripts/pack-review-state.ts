@@ -867,7 +867,9 @@ export function commitPackReviewTerminal(input: {
       };
       const cycle = current.cycle;
       if (!cycle || explicit) return current;
-      if (terminalConsumesCapSlot({ ...input, automaticBudgetDisposition: terminal.automaticBudgetDisposition })
+      const consumesAutomaticReviewBudget = terminal.terminalSource !== 'conflict_free_carryover';
+      if (consumesAutomaticReviewBudget
+          && terminalConsumesCapSlot({ ...input, automaticBudgetDisposition: terminal.automaticBudgetDisposition })
           && !cycle.consumedHeadShas.includes(terminal.targetSha)) {
         if (cycle.consumedHeadShas.length >= cycle.frozenCap) {
           throw new PackReviewAuthorityError('cap_exhausted', 'terminal cannot consume an extra head');
@@ -877,6 +879,7 @@ export function commitPackReviewTerminal(input: {
       if (terminal.reviewVerdict === 'clean' && terminal.findingCount === 0) {
         cycle.state = 'closed';
         cycle.closedAtUtc = nowIso(input.options);
+        cycle.atCapHash = undefined;
       } else if (cycle.consumedHeadShas.length === cycle.frozenCap) {
         cycle.state = 'at_cap_open_findings';
         cycle.atCapHash = sha256(stableJson({

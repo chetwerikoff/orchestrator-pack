@@ -86,10 +86,20 @@ export interface WorkerAssignmentExpectation {
   readonly generation: number;
 }
 
+/** Persistence-safe PACK project-level designation; runtime identity never belongs here. */
+export interface OperatorPrimaryBindingV1 {
+  readonly route: 'operator-primary';
+  readonly taskId: string;
+  readonly bindingKey: string;
+  readonly assignmentId: string;
+  readonly assignmentGeneration: number;
+}
+
 export interface WorkerAssignmentStore {
   readonly schema: typeof WORKER_ASSIGNMENT_STORE_SCHEMA;
   readonly revision: number;
   readonly assignments: Readonly<Record<string, WorkerAssignmentRecord>>;
+  readonly operatorPrimary?: OperatorPrimaryBindingV1;
 }
 
 type PublishWorkerAssignmentResult<T extends WorkerAssignmentRecord = WorkerAssignmentRecord> =
@@ -109,6 +119,63 @@ export type CurrentWorkerAssignmentFenceResult<T> =
       readonly reason: 'assignment_stale' | 'assignment_store_busy' | 'assignment_fence_failed';
       /** True only after the fenced action itself has been entered. */
       readonly actionEntered: boolean;
+    };
+
+export type OperatorPrimaryBindingReadResult =
+  | {
+      readonly ok: true;
+      readonly status: 'binding_absent';
+      readonly binding: null;
+    }
+  | {
+      readonly ok: true;
+      readonly status: 'binding_current';
+      readonly binding: OperatorPrimaryBindingV1;
+      readonly assignment: WorkerAssignmentRecord;
+    }
+  | {
+      readonly ok: true;
+      readonly status: 'binding_stale';
+      readonly binding: OperatorPrimaryBindingV1;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: 'assignment_store_untrusted';
+      readonly cause: WorkerAssignmentStoreTrustCause;
+    };
+
+export type OperatorPrimaryBindingMutationResult =
+  | { readonly ok: true; readonly binding: OperatorPrimaryBindingV1 | null }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | 'binding_input_invalid'
+        | 'binding_absent'
+        | 'binding_stale'
+        | 'binding_conflict'
+        | 'remote_not_applicable'
+        | 'assignment_store_untrusted'
+        | 'binding_store_busy'
+        | 'binding_write_failed';
+      readonly cause?: WorkerAssignmentStoreTrustCause;
+    };
+
+export interface OperatorPrimaryLockedResult<T> {
+  readonly kind: 'operator-primary-locked-result';
+  readonly value: T;
+}
+
+export type CurrentOperatorPrimaryAssignmentFenceResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | 'binding_absent'
+        | 'binding_stale'
+        | 'assignment_untrusted'
+        | 'remote_not_applicable'
+        | 'binding_store_busy'
+        | 'binding_fence_failed';
     };
 
 function bounded(value: unknown, max: number): string {
@@ -160,6 +227,84 @@ function validAssignment(value: unknown): value is WorkerAssignmentRecord {
     && roleValid;
 }
 
+function normalizeOperatorPrimaryBinding(value: unknown): OperatorPrimaryBindingV1 | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const keys = Object.keys(raw).sort();
+  const expectedKeys = ['assignmentGeneration', 'assignmentId', 'bindingKey', 'route', 'taskId'];
+  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+    return null;
+  }
+  const rawTaskId = raw.taskId;
+  const rawBindingKey = raw.bindingKey;
+  const rawAssignmentId = raw.assignmentId;
+  const rawAssignmentGeneration = raw.assignmentGeneration;
+  if (typeof rawTaskId !== 'string'
+    || typeof rawBindingKey !== 'string'
+    || typeof rawAssignmentId !== 'string'
+    || typeof rawAssignmentGeneration !== 'number') {
+    return null;
+  }
+  const taskId = bounded(rawTaskId, 160);
+  const bindingKey = bounded(rawBindingKey, 240);
+  const assignmentId = bounded(rawAssignmentId, 160);
+  const assignmentGeneration = rawAssignmentGeneration;
+  if (raw.route !== 'operator-primary' || !taskId || !bindingKey || !assignmentId
+    || !Number.isInteger(assignmentGeneration) || assignmentGeneration <= 0) {
+    return null;
+  }
+  return {
+    route: 'operator-primary',
+    taskId,
+    bindingKey,
+    assignmentId,
+    assignmentGeneration,
+  };
+}
+
+function sameOperatorPrimaryBinding(
+  left: OperatorPrimaryBindingV1 | undefined,
+  right: OperatorPrimaryBindingV1,
+): boolean {
+  return Boolean(left
+    && left.route === right.route
+    && left.taskId === right.taskId
+    && left.bindingKey === right.bindingKey
+    && left.assignmentId === right.assignmentId
+    && left.assignmentGeneration === right.assignmentGeneration);
+}
+
+function bindingForAssignment(assignment: WorkerAssignmentRecord): OperatorPrimaryBindingV1 {
+  return {
+    route: 'operator-primary',
+    taskId: assignment.taskId,
+    bindingKey: assignment.bindingKey,
+    assignmentId: assignment.assignmentId,
+    assignmentGeneration: assignment.generation,
+  };
+}
+
+function assignmentForOperatorPrimaryBinding(
+  store: WorkerAssignmentStore,
+  binding: OperatorPrimaryBindingV1,
+): WorkerAssignmentRecord | null {
+  const key = workerAssignmentKey(binding.taskId, binding.bindingKey);
+  if (!key) return null;
+  const assignment = store.assignments[key];
+  if (!assignment
+    || assignment.assignmentId !== binding.assignmentId
+    || assignment.generation !== binding.assignmentGeneration
+    || assignment.taskId !== binding.taskId
+    || assignment.bindingKey !== binding.bindingKey) {
+    return null;
+  }
+  return assignment;
+}
+
+export function operatorPrimaryLockedResult<T>(value: T): OperatorPrimaryLockedResult<T> {
+  return { kind: 'operator-primary-locked-result', value };
+}
+
 export function workerAssignmentMigrationBackupPath(file: string): string {
   return `${file}${WORKER_ASSIGNMENT_MIGRATION_BACKUP_SUFFIX}`;
 }
@@ -206,11 +351,17 @@ export function inspectWorkerAssignmentStore(raw: string): WorkerAssignmentStore
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { ok: false, cause: 'store_shape_invalid' };
   }
-  const store = parsed as Partial<WorkerAssignmentStore>;
+  const store = parsed as Partial<WorkerAssignmentStore> & { readonly operatorPrimary?: unknown };
   if (store.schema !== WORKER_ASSIGNMENT_STORE_SCHEMA
     || !Number.isInteger(store.revision) || Number(store.revision) < 0
     || !store.assignments || typeof store.assignments !== 'object' || Array.isArray(store.assignments)) {
     return { ok: false, cause: 'store_shape_invalid' };
+  }
+  let operatorPrimary: OperatorPrimaryBindingV1 | undefined;
+  if (Object.prototype.hasOwnProperty.call(store, 'operatorPrimary')) {
+    const normalized = normalizeOperatorPrimaryBinding(store.operatorPrimary);
+    if (!normalized) return { ok: false, cause: 'store_shape_invalid' };
+    operatorPrimary = normalized;
   }
   const entries = Object.entries(store.assignments);
   if (entries.length > MAX_WORKER_ASSIGNMENTS) {
@@ -233,6 +384,7 @@ export function inspectWorkerAssignmentStore(raw: string): WorkerAssignmentStore
       schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
       revision: Number(store.revision),
       assignments,
+      ...(operatorPrimary ? { operatorPrimary } : {}),
     },
   };
 }
@@ -278,6 +430,16 @@ function untrustedStoreResult(cause: WorkerAssignmentStoreTrustCause): {
   readonly cause: WorkerAssignmentStoreTrustCause;
 } {
   return { ok: false, reason: 'assignment_store_untrusted', cause };
+}
+
+export function readOperatorPrimaryBinding(file: string): OperatorPrimaryBindingReadResult {
+  const inspected = inspectWorkerAssignmentStoreFile(file);
+  if (!inspected.ok) return untrustedStoreResult(inspected.cause);
+  const binding = inspected.store.operatorPrimary;
+  if (!binding) return { ok: true, status: 'binding_absent', binding: null };
+  const assignment = assignmentForOperatorPrimaryBinding(inspected.store, binding);
+  if (!assignment) return { ok: true, status: 'binding_stale', binding };
+  return { ok: true, status: 'binding_current', binding, assignment };
 }
 
 export function currentWorkerAssignment(
@@ -395,6 +557,7 @@ function migrateWorkerAssignmentStoreLocked(file: string): MigratedStoreResult {
     schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
     revision: inspected.store.revision + 1,
     assignments: inspected.store.assignments,
+    ...(inspected.store.operatorPrimary ? { operatorPrimary: inspected.store.operatorPrimary } : {}),
   };
   if (Buffer.byteLength(serializeWorkerAssignmentStore(next), 'utf8') > MAX_WORKER_ASSIGNMENT_STORE_BYTES) {
     return untrustedStoreResult('migration_result_too_large');
@@ -556,6 +719,7 @@ export async function publishCurrentWorkerAssignment(
         schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
         revision: store.revision + 1,
         assignments,
+        ...(store.operatorPrimary ? { operatorPrimary: store.operatorPrimary } : {}),
       };
       return atomicReplaceReadBack(input.file, next)
         ? { ok: true, assignment } as const
@@ -605,6 +769,7 @@ export async function attachWorkerAssignmentIssueNumber(input: {
         schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
         revision: store.revision + 1,
         assignments: { ...store.assignments, [key]: assignment },
+        ...(store.operatorPrimary ? { operatorPrimary: store.operatorPrimary } : {}),
       };
       return atomicReplaceReadBack(input.file, next)
         ? { ok: true, assignment } as const
@@ -670,6 +835,140 @@ export async function withCurrentWorkerAssignmentFence<T>(
         ? 'assignment_store_busy'
         : 'assignment_fence_failed',
       actionEntered,
+    };
+  }
+}
+
+function validBindingMutationInput(taskIdValue: unknown, bindingKeyValue: unknown): {
+  readonly taskId: string;
+  readonly bindingKey: string;
+  readonly key: string;
+} | null {
+  const taskId = bounded(taskIdValue, 160);
+  const bindingKey = bounded(bindingKeyValue, 240);
+  const key = workerAssignmentKey(taskId, bindingKey);
+  return taskId && bindingKey && key ? { taskId, bindingKey, key } : null;
+}
+
+export async function bindOperatorPrimary(input: {
+  readonly file: string;
+  readonly taskId: string;
+  readonly bindingKey: string;
+  /** Omit for initial bind; provide the exact observed pointer for CAS replacement. */
+  readonly expectedCurrent?: OperatorPrimaryBindingV1;
+}): Promise<OperatorPrimaryBindingMutationResult> {
+  const selected = validBindingMutationInput(input.taskId, input.bindingKey);
+  const expectedCurrent = input.expectedCurrent === undefined
+    ? undefined
+    : normalizeOperatorPrimaryBinding(input.expectedCurrent);
+  if (!selected || expectedCurrent === null) {
+    return { ok: false, reason: 'binding_input_invalid' };
+  }
+  try {
+    return await withCrashRecoverableFileLock(`${input.file}.lock`, 10, () => {
+      const migrated = migrateWorkerAssignmentStoreLocked(input.file);
+      if (!migrated.ok) {
+        return { ok: false, reason: 'assignment_store_untrusted', cause: migrated.cause } as const;
+      }
+      const store = migrated.store;
+      if (expectedCurrent === undefined) {
+        if (store.operatorPrimary) return { ok: false, reason: 'binding_conflict' } as const;
+      } else if (!sameOperatorPrimaryBinding(store.operatorPrimary, expectedCurrent)) {
+        return { ok: false, reason: store.operatorPrimary ? 'binding_conflict' : 'binding_absent' } as const;
+      }
+      const assignment = store.assignments[selected.key];
+      if (!assignment) return { ok: false, reason: 'binding_stale' } as const;
+      if (assignment.kind !== 'local') return { ok: false, reason: 'remote_not_applicable' } as const;
+      const binding = bindingForAssignment(assignment);
+      if (store.operatorPrimary && sameOperatorPrimaryBinding(store.operatorPrimary, binding)) {
+        return { ok: true, binding } as const;
+      }
+      const next: WorkerAssignmentStore = {
+        schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
+        revision: store.revision + 1,
+        assignments: store.assignments,
+        operatorPrimary: binding,
+      };
+      return atomicReplaceReadBack(input.file, next)
+        ? { ok: true, binding } as const
+        : { ok: false, reason: 'binding_write_failed' } as const;
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error && error.message === 'journal_busy'
+        ? 'binding_store_busy'
+        : 'binding_write_failed',
+    };
+  }
+}
+
+export async function retireOperatorPrimary(input: {
+  readonly file: string;
+  readonly expectedCurrent: OperatorPrimaryBindingV1;
+}): Promise<OperatorPrimaryBindingMutationResult> {
+  const expectedCurrent = normalizeOperatorPrimaryBinding(input.expectedCurrent);
+  if (!expectedCurrent) return { ok: false, reason: 'binding_input_invalid' };
+  try {
+    return await withCrashRecoverableFileLock(`${input.file}.lock`, 10, () => {
+      const migrated = migrateWorkerAssignmentStoreLocked(input.file);
+      if (!migrated.ok) {
+        return { ok: false, reason: 'assignment_store_untrusted', cause: migrated.cause } as const;
+      }
+      const store = migrated.store;
+      if (!store.operatorPrimary) return { ok: false, reason: 'binding_absent' } as const;
+      if (!sameOperatorPrimaryBinding(store.operatorPrimary, expectedCurrent)) {
+        return { ok: false, reason: 'binding_conflict' } as const;
+      }
+      const next: WorkerAssignmentStore = {
+        schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
+        revision: store.revision + 1,
+        assignments: store.assignments,
+      };
+      return atomicReplaceReadBack(input.file, next)
+        ? { ok: true, binding: null } as const
+        : { ok: false, reason: 'binding_write_failed' } as const;
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error && error.message === 'journal_busy'
+        ? 'binding_store_busy'
+        : 'binding_write_failed',
+    };
+  }
+}
+
+/**
+ * Hold the assignment-store serialization lock while the exact current PACK
+ * operator-primary assignment is used by one structurally synchronous caller.
+ * This fences PACK logical mutation only; it makes no provider remap claim.
+ */
+export async function withCurrentOperatorPrimaryAssignment<T>(
+  file: string,
+  action: (assignment: WorkerAssignmentRecord) => OperatorPrimaryLockedResult<T>,
+): Promise<CurrentOperatorPrimaryAssignmentFenceResult<T>> {
+  try {
+    return await withCrashRecoverableFileLock(`${file}.lock`, 1, () => {
+      const inspected = inspectWorkerAssignmentStoreFile(file);
+      if (!inspected.ok) return { ok: false, reason: 'assignment_untrusted' } as const;
+      const binding = inspected.store.operatorPrimary;
+      if (!binding) return { ok: false, reason: 'binding_absent' } as const;
+      const assignment = assignmentForOperatorPrimaryBinding(inspected.store, binding);
+      if (!assignment) return { ok: false, reason: 'binding_stale' } as const;
+      if (assignment.kind !== 'local') return { ok: false, reason: 'remote_not_applicable' } as const;
+      const result = action(assignment);
+      if (!result || result.kind !== 'operator-primary-locked-result') {
+        throw new Error('operator_primary_locked_result_invalid');
+      }
+      return { ok: true, value: result.value } as const;
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error && error.message === 'journal_busy'
+        ? 'binding_store_busy'
+        : 'binding_fence_failed',
     };
   }
 }
