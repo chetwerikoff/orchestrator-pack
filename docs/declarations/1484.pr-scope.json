@@ -10,7 +10,8 @@
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/orchestrator-wake-supervisor.test.ts",
-    "scripts/orchestrator-wake-supervisor.ts"
+    "scripts/orchestrator-wake-supervisor.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts"
   ],
   "denylist": [
     ".agent-orchestrator/**",
@@ -43,5 +44,5 @@
     "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "27d6143b5c38d4608002e0bb6a62acfdbc7a3d50"
+  "source_revision": "3f660de61eb6b0e1780c7189dc695747f2d30c5a"
 }
