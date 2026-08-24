@@ -336,13 +336,17 @@ describe('Orca task adapter destructive operations', () => {
 });
 
 describe('Orca assignment resolution', () => {
-  it('accepts the authoritative active running + ready + input_accepted lifecycle', () => {
+  it('accepts exact live Dispatch only after an authoritative dispatch-specific heartbeat', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
       if (operation === 'orchestration worker-show') {
         return {
           ok: true,
           result: {
+            dispatch: {
+              status: 'dispatched',
+              last_heartbeat_at: '2026-08-24T14:00:00.000Z',
+            },
             worker: {
               agent_terminal_handle: 'term-active',
               worktree_id: 'repo::active',
@@ -390,6 +394,30 @@ describe('Orca assignment resolution', () => {
     ]);
   });
 
+  it('rejects ready + input_accepted with no heartbeat because prompt acceptance is not activity proof', () => {
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        dispatch: { status: 'dispatched', last_heartbeat_at: null },
+        worker: {
+          agent_terminal_handle: 'term-never-started',
+          state: 'ready',
+          stage: 'input_accepted',
+        },
+        terminal: { handle: 'term-never-started' },
+        observation: { exactWorker: true, status: 'live' },
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-never-started' })).toEqual({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'assignment_target_unresolved',
+    });
+    expect(runJson).toHaveBeenCalledTimes(1);
+  });
+
   it('freezes the captured running + succeeded + settled lifecycle as inactive, never gone', () => {
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
@@ -429,6 +457,23 @@ describe('Orca assignment resolution', () => {
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
 
     expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-contradictory' })).toEqual({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'assignment_target_unresolved',
+    });
+  });
+
+  it('fails closed on malformed lifecycle fields before granting gone absence', () => {
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        worker: { agent_terminal_handle: 'term-malformed', state: 7 },
+        observation: { exactWorker: true, status: 'gone' },
+      },
+    } as unknown as OrcaJsonResponse));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-malformed' })).toEqual({
       status: 'failed',
       operation: 'resolve_assignment_worker',
       reason: 'assignment_target_unresolved',
@@ -500,6 +545,10 @@ describe('Orca assignment resolution', () => {
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
       result: {
+        dispatch: {
+          status: 'dispatched',
+          last_heartbeat_at: '2026-08-24T14:00:00.000Z',
+        },
         worker: {
           agent_terminal_handle: null,
           state: 'ready',
