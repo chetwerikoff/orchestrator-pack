@@ -6,9 +6,16 @@ alwaysApply: false
 # Flow-manager browser-turn monitoring
 
 This non-always-loaded carrier retains only the two manager-review canon sections
-that `create-issue-draft` selects literally. Portable Browser-GPT launch, retry,
-publication, cleanup, probe, incident, and handoff procedure lives in
-[`docs/browser-gpt-turn-runbook.md`](../../docs/browser-gpt-turn-runbook.md).
+that `create-issue-draft` selects literally. Portable Browser-GPT manager mechanics
+are owned by the runbook sections for
+[start-of-shift preflight](../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight),
+[turn preparation](../../docs/browser-gpt-turn-runbook.md#prepare-one-turn),
+[launch](../../docs/browser-gpt-turn-runbook.md#launch),
+[observation and settlement](../../docs/browser-gpt-turn-runbook.md#observe-and-settle),
+[publication and cleanup](../../docs/browser-gpt-turn-runbook.md#publication-and-tab-lifecycle),
+[incident handling](../../docs/browser-gpt-turn-runbook.md#incident-handling),
+[one-shot diagnosis](../../docs/browser-gpt-turn-runbook.md#one-shot-diagnosis), and
+[handoff/close](../../docs/browser-gpt-turn-runbook.md#shift-handoffclose).
 Long-running child mechanics remain owned by
 [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md).
 
