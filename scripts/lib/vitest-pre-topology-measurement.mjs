@@ -120,6 +120,8 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1579: preserve the existing #1495 60s light-test directive after merge
   // until generated measured runtime history binds the current file content.
   'scripts/lib/worker-assignment-runtime.test.ts': 60,
+  // Issue #1583: parent live-store guard regressions are bounded light coverage.
+  'scripts/vitest-live-store-parent-guard.test.ts': 120,
   // Issue #1415 adds deterministic light contract suites for the Node verifier
   // and exact-head port-stage evidence. Keep the bounded topology producer stable
   // until runtime-history harvest records measured weights for these new files.

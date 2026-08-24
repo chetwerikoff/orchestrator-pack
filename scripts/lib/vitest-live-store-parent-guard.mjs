@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, watch } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, watch } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   assertHarnessWritePathSafe,
@@ -12,8 +12,6 @@ import {
 } from './vitest-live-store-harness.mjs';
 
 const MAX_PARENT_WATCHERS = 512;
-// Authorized pathname-only residual: fs.watch cannot prove writer provenance,
-// so a same-path child write is indistinguishable from a supervisor tick.
 const EXTERNALLY_MUTABLE_STORE_PATHS = new Map([
   ['wake-supervisor-runtime-state', new Set(['worker-message-dispatch-journal.json'])],
 ]);
@@ -69,6 +67,55 @@ function externallyMutablePath(match) {
   if (!allowed) return false;
   const relativePath = relative(match.store.defaultPath, match.candidate).replaceAll('\\', '/');
   return allowed.has(relativePath);
+}
+
+function processParentPid(pid) {
+  if (process.platform !== 'linux') return null;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const closing = stat.lastIndexOf(')');
+    if (closing < 0) return null;
+    const fields = stat.slice(closing + 2).split(' ');
+    const parentPid = Number(fields[1]);
+    return Number.isInteger(parentPid) && parentPid > 0 ? parentPid : null;
+  } catch {
+    return null;
+  }
+}
+
+function isDescendantOf(pid, ancestorPid) {
+  if (process.platform !== 'linux' || !Number.isInteger(ancestorPid) || ancestorPid <= 1) return null;
+  let current = pid;
+  const visited = new Set();
+  while (current > 1 && !visited.has(current)) {
+    if (current === ancestorPid) return true;
+    visited.add(current);
+    const parentPid = processParentPid(current);
+    if (parentPid === null) return false;
+    current = parentPid;
+  }
+  return false;
+}
+
+function journalLockWriter(candidate, env) {
+  if (!candidate.endsWith('.lock')) return '';
+  const journal = candidate.slice(0, -'.lock'.length);
+  const match = classifyLiveStorePath(journal, env);
+  if (!externallyMutablePath(match)) return '';
+  try {
+    const owner = JSON.parse(readFileSync(candidate, 'utf8'));
+    const pid = Number(owner?.pid);
+    if (owner?.schemaVersion !== 1
+      || typeof owner.nonce !== 'string'
+      || owner.nonce.length === 0
+      || !Number.isInteger(pid)
+      || pid <= 1
+      || isDescendantOf(pid, process.pid) !== false
+      || process.kill(pid, 0) !== true) return '';
+    return match.storeId;
+  } catch {
+    return '';
+  }
 }
 
 function normalizePowerShellValue(value) {
@@ -354,6 +401,7 @@ export function startParentLiveStoreGuard(env = process.env) {
   ]);
   const exactTouches = new Set();
   const observedExternalTouches = new Set();
+  const externalWriterWitnesses = new Map();
   const watchers = [];
   const watched = new Set();
 
@@ -365,10 +413,18 @@ export function startParentLiveStoreGuard(env = process.env) {
       const handle = watch(anchor, { persistent: false }, (_eventType, filename) => {
         if (!filename) return;
         const candidate = canonicalizeStorePath(join(anchor, String(filename)));
+        const writerStoreId = journalLockWriter(candidate, env);
+        if (writerStoreId) {
+          externalWriterWitnesses.set(writerStoreId, { path: candidate.slice(0, -'.lock'.length) });
+        }
         const match = classifyLiveStorePath(candidate, env);
-        if (match) {
-          if (externallyMutablePath(match)) observedExternalTouches.add(match.storeId);
-          else exactTouches.add(match.storeId);
+        if (match && !candidate.endsWith('.lock')) {
+          const witness = externalWriterWitnesses.get(match.storeId);
+          if (externallyMutablePath(match) && witness?.path === candidate) {
+            observedExternalTouches.add(match.storeId);
+          } else {
+            exactTouches.add(match.storeId);
+          }
         }
 
         if (existsSync(candidate)) {
