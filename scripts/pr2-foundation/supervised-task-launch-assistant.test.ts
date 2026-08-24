@@ -91,7 +91,7 @@ function providerReadyStart(taskId: string): SupervisedWorkerStartResult {
       dispatchId: 'dispatch-1',
       state: 'ready',
       worktree: { id: 'orca-repo-1::/tmp/created-worktree', path: '/tmp/created-worktree' },
-      terminal: { handle: 'term-provider', runtime: 'orca', generation: 'generation-1' },
+      terminal: { handle: 'term-provider' },
       setup: { requested: 'run', effective: 'run', state: 'running' },
       launch: {
         requested: { agent: 'cursor', model: 'model', effort: 'medium' },
@@ -176,6 +176,10 @@ describe('supervised Task launch assistant', () => {
       '--task', 'task-1', '--worktree', 'new-top-level', '--repo', 'id:orca-repo-1', '--name', 'issue-1479', '--base-branch', 'feature/base',
       '--agent', 'cursor', '--model', 'model', '--effort', 'medium', '--setup', 'run', '--json',
     ]]);
+    if (result.outcome === 'ready') {
+      expect(result.resources.providerAgentTerminalId).toBe('term-provider');
+      expect(result.resources.terminal).toBeUndefined();
+    }
   });
 
   it.each(['manager', 't1', 't2', 't3'] as const)('reaches ready only through supervised-start for %s', async (workClass) => {

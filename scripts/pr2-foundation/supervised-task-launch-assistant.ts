@@ -32,6 +32,7 @@ export interface LaunchResources {
   readonly worktreeSelector?: string;
   readonly worktreePath?: string;
   readonly terminal?: RuntimeWorkerIdentity;
+  readonly providerAgentTerminalId?: string;
   readonly dispatchId?: string;
   readonly receipt?: SupervisedWorkerStartReceipt;
   readonly residualResources?: readonly unknown[];
@@ -80,7 +81,8 @@ export interface ReadyResult {
     readonly worktreeId: string;
     readonly worktreeSelector: string;
     readonly worktreePath: string;
-    readonly terminal: RuntimeWorkerIdentity;
+    readonly terminal?: RuntimeWorkerIdentity;
+    readonly providerAgentTerminalId?: string;
     readonly dispatchId: string;
   };
   readonly supervisedStart: SupervisedWorkerStartResult & { readonly ok: true };
@@ -518,16 +520,24 @@ export async function runSupervisedTaskLaunchAssistant(
     }, resources, startedAtMs, timings, deps.now);
     const runtime = text(providerTerminal?.runtime);
     const generation = text(providerTerminal?.generation);
-    resources = { ...resources, worktreeId, worktreePath,
+    resources = { ...resources, worktreeId, worktreePath, providerAgentTerminalId: terminalId,
       ...(runtime && generation ? { terminal: { runtime, id: terminalId, generation } } : {}) };
   }
   resources = { ...resources, dispatchId };
+  const readyResources: ReadyResult['resources'] = {
+    ...resources,
+    taskId,
+    worktreeId: resources.worktreeId!,
+    worktreeSelector: resources.worktreeSelector!,
+    worktreePath: resources.worktreePath!,
+    dispatchId,
+  };
   const finishedAtMs = deps.now();
   return {
     schema: LAUNCH_ASSISTANT_SCHEMA,
     outcome: 'ready',
     workClass: input.workClass,
-    resources: resources as ReadyResult['resources'],
+    resources: readyResources,
     supervisedStart: supervised as ReadyResult['supervisedStart'],
     startedAtMs,
     finishedAtMs,
