@@ -13,7 +13,7 @@ Hook entry: [`scripts/invoke-read-delegation-audit-stop.ts`](../scripts/invoke-r
 | Invariant | Rule |
 |-----------|------|
 | **Both surfaces** | Runs on Claude `Stop` and Cursor `stop`; same flag verdict per equivalence class. |
-| **Work unit** | One inbound user message / AO task delivery → bounded by the next inbound request. Reads aggregate inside the unit (anti-chunking). |
+| **Work unit** | One inbound user message / task delivery → bounded by the next inbound request. Reads aggregate inside the unit (anti-chunking). |
 | **Triggers** | T1 **delegable** file-read floor is the single ordinary threshold in `AGENTS.md` (**more than 600 lines**). File-count does not introduce a second numeric policy trigger. Index-served in-tree source lines do not count toward T1. |
 | **Tolerant signal** | Emits a compliance finding; never blocks. |
 | **Not flagged** (still in denominator) | Machine-observed `coworker ask --profile code`; edit of any file in unit; excepted reason in status. |
@@ -104,9 +104,9 @@ Use the same absolute-path prefix rule as Cursor for both `Invoke-TypeScriptCli.
 
 **Verify:** same JSONL artifact append as Cursor after a fresh no-side-effect Claude session completes one ordinary >600-line work unit (`reviewerPath:false`, `inDenominator:true`).
 
-### 4. Restart AO
+### 4. Reload affected sessions
 
-`ao stop` then `ao start` so workers load recalibrated thresholds from `agentRulesFile`.
+Start a fresh Claude/Cursor session or recycle only the affected managed session through its currently supported runtime/session mechanism so it reloads the updated tracked policy and hook wiring.
 
 ### 5. Phase-2 probe (informational)
 
