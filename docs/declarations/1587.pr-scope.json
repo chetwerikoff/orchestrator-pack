@@ -7,7 +7,10 @@
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts"
+    "scripts/lib/pack-review-worker-notification.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/worker-message-submit-reconcile.test.ts"
   ],
   "denylist": [
     "credentials/",
@@ -22,7 +25,10 @@
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts"
+    "scripts/lib/pack-review-worker-notification.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/worker-message-submit-reconcile.test.ts"
   ],
-  "source_revision": "r02"
+  "source_revision": "7ec68a74d4a6abb490a01592a4dcbc947844c56e"
 }
