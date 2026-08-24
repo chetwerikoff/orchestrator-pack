@@ -57,11 +57,19 @@ describe('worker message submission through the runtime boundary', () => {
     const pointer = 'You have 1 orchestration message. Run `orca orchestration check --run run_event_pointer`.';
     const calls: Array<{ text?: string; submitOnly?: boolean }> = [];
     let reads = 0;
-    let livenessCalls = 0;
+    let resolveLivenessStarted!: () => void;
+    let resolveLiveness!: () => void;
+    const livenessStarted = new Promise<void>((resolve) => { resolveLivenessStarted = resolve; });
+    const livenessComplete = new Promise<void>((resolve) => { resolveLiveness = resolve; });
     const adapter = {
       id: 'orca',
       findWorkerById: () => ({ status: 'ok' as const, value: worker }),
-      liveness: () => ({ status: livenessCalls++ === 0 ? 'busy' : 'idle', worker: identity }),
+      liveness: () => ({ status: 'unknown' as const, worker: identity }),
+      livenessAsync: async () => {
+        resolveLivenessStarted();
+        await livenessComplete;
+        return { status: 'idle' as const, worker: identity };
+      },
       dispatchInput: (input: { text?: string; submitOnly?: boolean }) => {
         calls.push(input);
         return input.submitOnly
@@ -117,7 +125,10 @@ describe('worker message submission through the runtime boundary', () => {
       expect(calls[0]?.text).toBe('event delivery');
       expect(calls[0]?.submitOnly).toBeUndefined();
 
-      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      await livenessStarted;
+      expect(reads).toBe(0);
+      resolveLiveness();
+      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(reads).toBe(1);
       expect(calls).toHaveLength(2);
       expect(calls[1]).toMatchObject({ submitOnly: true, worker: identity });
