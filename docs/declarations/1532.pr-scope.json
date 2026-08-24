@@ -3,11 +3,13 @@
   "issue_number": 1532,
   "declared_paths": [
     "docs/migration_notes.md",
+    "docs/orca-runtime-caller-census.md",
     "scripts/lib/operator-primary-target.test.ts",
     "scripts/lib/operator-primary-target.ts",
     "scripts/lib/worker-assignment-store.ts",
     "scripts/operator-primary-binding.test.ts",
     "scripts/operator-primary-binding.ts",
+    "scripts/runtime/caller-census.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
@@ -34,6 +36,7 @@
   "allowed_roots": [
     "docs/migration_notes.md",
     "docs/orca-runtime-boundary.md",
+    "docs/orca-runtime-caller-census.md",
     "docs/orchestration-runbook.md",
     "scripts/lib/operator-primary-target.test.ts",
     "scripts/lib/operator-primary-target.ts",
@@ -41,7 +44,8 @@
     "scripts/lib/worker-assignment-store.ts",
     "scripts/operator-primary-binding.test.ts",
     "scripts/operator-primary-binding.ts",
+    "scripts/runtime/caller-census.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "81ed031d710cafe2110a27a3b4f9de664f8f9968"
+  "source_revision": "01d96dc66a8547d2c15572ab9e36f9f253a42083"
 }
