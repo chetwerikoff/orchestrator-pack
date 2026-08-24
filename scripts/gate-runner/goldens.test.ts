@@ -50,6 +50,16 @@ const movedClean = {
     '[Draft-author relocation](.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation)',
     '[RCA](.claude/skills/investigate-root-cause/SKILL.md)',
   ].join('\n'),
+  'docs/browser-gpt-turn-runbook.md': [
+    '## Start-of-shift preflight',
+    '## Prepare one turn',
+    '## Launch',
+    '## Observe and settle',
+    '## Publication and tab lifecycle',
+    '## Incident handling',
+    '## One-shot diagnosis',
+    '## Shift handoff/close',
+  ].join('\n'),
   'docs/coworker-delegation.md': 'PR diff recipe\ngit diff <base-ref>...HEAD > /tmp/review.diff\nRoot-cause work must read ~900 lines',
   'docs/tiering.md': '## Task complexity tier rubric\n### Failure-type lens (apply first)\n## Per-tier draft-review flow\n### Per-tier pipeline (ceilings, not quotas)',
   'docs/script-owned-review-pipeline.md': '## Event-driven review trigger\n## Orchestrator review-run coverage\n## Head ready for review\nevent-driven review trigger',
@@ -71,7 +81,18 @@ const movedClean = {
   '.claude/skills/switch-pack-reviewer/SKILL.md': '# switch-pack-reviewer',
   '.claude/skills/direct-fix-checklist/SKILL.md': '## Architect role contract',
   '.cursor/rules/draft-author-relocation.mdc': '[Draft-author relocation](../../.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation)',
-  '.cursor/rules/flow-manager-browser-turn-monitoring.mdc': '## Launch and observation\n## Legacy state and diagnostic probe',
+  '.cursor/rules/flow-manager-browser-turn-monitoring.mdc': [
+    '[Preflight](../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight)',
+    '[Prepare](../../docs/browser-gpt-turn-runbook.md#prepare-one-turn)',
+    '[Launch](../../docs/browser-gpt-turn-runbook.md#launch)',
+    '[Observe](../../docs/browser-gpt-turn-runbook.md#observe-and-settle)',
+    '[Publication](../../docs/browser-gpt-turn-runbook.md#publication-and-tab-lifecycle)',
+    '[Incident](../../docs/browser-gpt-turn-runbook.md#incident-handling)',
+    '[Diagnosis](../../docs/browser-gpt-turn-runbook.md#one-shot-diagnosis)',
+    '[Handoff](../../docs/browser-gpt-turn-runbook.md#shift-handoffclose)',
+    '## Launch and observation',
+    '## Legacy state and diagnostic probe',
+  ].join('\n'),
 };
 
 function stableReader(files: Readonly<Record<string, string>>): CaptureReader {
