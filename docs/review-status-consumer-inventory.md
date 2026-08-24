@@ -16,7 +16,7 @@ runtime identity when a runtime-bound action is required.
 | `scripts/lib/Get-WorkerStatusDecisionSessions.ps1` | shared status/report overlay reader | exposes typed live, stale, unknown, and terminal states |
 | `scripts/lib/WorkerReportStore.ps1` | durable worker report store | reports are evidence, not effect authority |
 | `scripts/lib/WorkerStatusStore.ps1` | pack-owned status projection | exact repository/worker/head binding required |
-| `scripts/pack-review-runner.ts` | review start/list/status authority | claims and runs bind to exact PR head |
+| `scripts/pack-review-runner.ts` | review start/list/status authority | PR/head and linked Issue are authoritative; session binding is advisory |
 | `scripts/lib/review-start-claim-store.ts` | duplicate-suppression and ownership claim store | stale or mismatched claims cannot authorize start |
 | `scripts/lib/worker-status-store.mjs` | TypeScript status projection | preserves unknown and stale outcomes |
 
@@ -31,11 +31,22 @@ runtime identity when a runtime-bound action is required.
    typed non-effect outcome.
 5. Worker-facing consumers skip a report write when binding cannot be proved; they
    do not substitute an unrelated runtime status.
-6. Review starts require one current-head owner, an eligible handoff state, no
-   terminal same-head clean result, and no active same-head claim or run.
-7. Terminated-inclusive reads are allowed only for explicit recovery or seeding
+6. A pack-review start names the PR. The live PR supplies the current head and its
+   closing reference supplies the Issue. Session-binding cache data may be recorded
+   for diagnostics or worker correlation, but it cannot veto that live target or
+   substitute a different Issue.
+7. Review starts require one current-head owner, an eligible handoff state, no
+   terminal same-head clean result, and no active same-head claim or run. A duplicate
+   same-head clean start therefore performs no new reviewer-model invocation.
+8. Terminated-inclusive reads are allowed only for explicit recovery or seeding
    contracts. They never make a terminal record live again.
-8. A previous-head status, review, CI result, or receipt is not current-head evidence.
+9. Previous-head worker status, CI, smoke, or publication receipts are not
+   current-head evidence. A prior clean review may contribute only through the
+   pack-review authority's exact conflict-free carry-over proof; that proof creates
+   current-head review authority without requiring another reviewer invocation.
+10. Review authority and reviewer invocation are different facts. At-cap admission
+   and exact conflict-free carry-over may suppress an automatic/common model call,
+   but they never carry CI or smoke evidence to a new head.
 
 ## Status classes
 
@@ -55,6 +66,12 @@ Review computation, delivery observation, and publication are separate. The sing
 publication owner validates the terminal verdict and exact target before one bounded
 dispatch attempt. A comment URL, partial transport response, or operator-visible
 receipt is not a substitute for authoritative reread.
+
+A model process having run is not itself review authority. Conversely, an
+exact-current-head terminal selected by the authority store may be valid without a
+new model process when the runner proves conflict-free carry-over from an authorized
+clean source head. Required CI and declared smoke remain exact-current-head gates in
+both cases.
 
 ## Verification
 
