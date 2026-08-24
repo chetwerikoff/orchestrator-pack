@@ -1,0 +1,40 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1529,
+  "declared_paths": [
+    ".claude/skills/direct-fix-checklist/SKILL.md",
+    "AGENTS.md",
+    "docs/chat-executor-rules.md",
+    "docs/pack-review-issue-898.md",
+    "docs/review-status-consumer-inventory.md",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-issue-898.test.ts",
+    "scripts/pack-review-runner.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".github/",
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/direct-fix-checklist/SKILL.md",
+    "AGENTS.md",
+    "docs/chat-executor-rules.md",
+    "docs/pack-review-issue-898.md",
+    "docs/review-status-consumer-inventory.md",
+    "scripts/lib/reverify-bound-issue-snapshot.test.ts",
+    "scripts/lib/reverify-bound-issue-snapshot.ts",
+    "scripts/pack-review-carryover.test.ts",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-issue-898.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts"
+  ],
+  "source_revision": "7f250c31de338ab9a5af05ff650fb9c69798b2e3"
+}
