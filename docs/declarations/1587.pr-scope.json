@@ -1,0 +1,26 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1587,
+  "declared_paths": [
+    "docs/declarations/1587.pr-scope.json",
+    "docs/orca-runtime-caller-census.md",
+    "docs/orchestration-runbook.md",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts"
+  ],
+  "denylist": [
+    "packages/core/",
+    "plugins/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1587.pr-scope.json",
+    "docs/orca-runtime-caller-census.md",
+    "docs/orchestration-runbook.md",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts"
+  ],
+  "source_revision": "r02"
+}
