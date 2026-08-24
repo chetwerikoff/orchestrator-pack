@@ -27,8 +27,7 @@ export interface SupervisorOptions {
   restartDelayMs?: number;
 }
 
-export interface SupervisorStatus {
-  schemaVersion: 1;
+interface SupervisorStatusBase {
   epochId: string;
   nonce: string;
   supervisorPid: number;
@@ -46,6 +45,20 @@ export interface SupervisorStatus {
   refusalReason: string | null;
   crashBackoff: CrashBackoffState;
 }
+
+/** Current truthful-liveness status. A running child is live only with matching startTicks. */
+export interface SupervisorStatus extends SupervisorStatusBase {
+  schemaVersion: 2;
+  childStartTicks: string | null;
+}
+
+/** Persisted pre-#1484 status is readable for diagnosis but never proves current liveness. */
+export interface LegacySupervisorStatus extends SupervisorStatusBase {
+  schemaVersion: 1;
+  childStartTicks?: never;
+}
+
+export type SupervisorStatusRecord = SupervisorStatus | LegacySupervisorStatus;
 
 function statusPath(options: Pick<SupervisorOptions, 'stateDir'>): string {
   return path.join(options.stateDir, 'typescript-supervisor-status.json');
@@ -67,10 +80,33 @@ function writeStatus(options: SupervisorOptions, value: SupervisorStatus): void 
   writeDurableJson(statusPath(options), value);
 }
 
-export function readSupervisorStatus(options: Pick<SupervisorOptions, 'stateDir'>): SupervisorStatus | null {
+export function readSupervisorStatus(options: Pick<SupervisorOptions, 'stateDir'>): SupervisorStatusRecord | null {
   const file = statusPath(options);
   if (!existsSync(file)) return null;
-  return JSON.parse(readFileSync(file, 'utf8')) as SupervisorStatus;
+  return JSON.parse(readFileSync(file, 'utf8')) as SupervisorStatusRecord;
+}
+
+export function processIdentityMatches(pid: number, startTicks: string | null | undefined): boolean {
+  if (!Number.isInteger(pid) || pid <= 1 || typeof startTicks !== 'string' || !startTicks.trim()) return false;
+  try {
+    return readProcessIdentity(pid).startTicks === startTicks;
+  } catch {
+    return false;
+  }
+}
+
+export function isLiveSupervisorStatus(status: SupervisorStatusRecord | null): status is SupervisorStatus {
+  return Boolean(
+    status
+    && status.schemaVersion === 2
+    && processIdentityMatches(status.supervisorPid, status.supervisorStartTicks),
+  );
+}
+
+export function isLiveRunningSupervisorChild(status: SupervisorStatus): boolean {
+  return status.restartState === 'running'
+    && status.childPid !== null
+    && processIdentityMatches(status.childPid, status.childStartTicks);
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -84,13 +120,12 @@ function delay(milliseconds: number): Promise<void> {
  */
 export async function runSupervisor(options: SupervisorOptions): Promise<never> {
   const self = readProcessIdentity(process.pid);
-  if (!self) throw new Error('supervisor_process_identity_unreadable');
   const lease = acquireSingleInstanceLease({
     lockDir: supervisorLockPath(options),
     metadata: { epochId: options.epochId, nonce: options.nonce },
   });
   const state: SupervisorStatus = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     epochId: options.epochId,
     nonce: options.nonce,
     supervisorPid: process.pid,
@@ -99,6 +134,7 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
     registrySource: path.resolve(options.targetRegistryPath),
     childId: 'pr2-scheduler',
     childPid: null,
+    childStartTicks: null,
     childGeneration: 0,
     childRestarts: 0,
     restartState: 'starting',
@@ -117,6 +153,7 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
     } catch (error) {
       state.restartState = 'refused';
       state.childPid = null;
+      state.childStartTicks = null;
       state.refusalReason = error instanceof Error ? error.message : String(error);
       writeStatus(options, state);
       throw error;
@@ -143,7 +180,7 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
       if (!beforeRestart.restartAllowed) {
         if (beforeRestart.reason === 'terminal') {
           state.restartState = 'refused';
-          state.refusalReason = beforeRestart.terminalReason ?? 'supervisor_child_terminal_crash_loop';
+          state.refusalReason ??= beforeRestart.terminalReason ?? 'supervisor_child_terminal_crash_loop';
           writeStatus(options, state);
           throw new Error(state.refusalReason);
         }
@@ -158,6 +195,8 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
       const schedulerPath = path.join(options.repoRoot, 'scripts', child.script);
       currentAbort = new AbortController();
       state.childGeneration += 1;
+      state.childPid = null;
+      state.childStartTicks = null;
       state.restartState = 'starting';
       writeStatus(options, state);
       let childStartedAtMs = 0;
@@ -177,6 +216,11 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
         onSpawn: (pid) => {
           childStartedAtMs = Date.now();
           state.childPid = pid;
+          try {
+            state.childStartTicks = readProcessIdentity(pid).startTicks;
+          } catch {
+            state.childStartTicks = null;
+          }
           state.lastChildStartAt = new Date(childStartedAtMs).toISOString();
           state.restartState = 'running';
           writeStatus(options, state);
@@ -184,6 +228,7 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
       });
       currentAbort = null;
       state.childPid = null;
+      state.childStartTicks = null;
       if (stopping) break;
       state.childRestarts += 1;
       const exitedAtMs = Date.now();
@@ -201,17 +246,19 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
         terminalReason: crash.terminalReason,
       };
       state.restartState = crash.terminal ? 'refused' : 'waiting-restart';
-      state.refusalReason = crash.terminal
-        ? crash.terminalReason
-        : result.ok
-          ? null
-          : `scheduler_child_${result.outcome}:${result.error ?? result.stderr ?? result.exitCode ?? 'unknown'}`;
+      const concreteCause = result.ok
+        ? null
+        : `scheduler_child_${result.outcome}:${result.error ?? result.stderr ?? result.exitCode ?? 'unknown'}`;
+      state.refusalReason = concreteCause ?? (crash.terminal ? crash.terminalReason : null);
       writeStatus(options, state);
-      if (crash.terminal) throw new Error(crash.terminalReason ?? 'supervisor_child_terminal_crash_loop');
+      if (crash.terminal) {
+        throw new Error(state.refusalReason ?? crash.terminalReason ?? 'supervisor_child_terminal_crash_loop');
+      }
       const cadenceDelay = options.restartDelayMs ?? verified.cadenceSeconds * 1_000;
       await delay(Math.max(cadenceDelay, crash.waitMs));
     }
     state.childPid = null;
+    state.childStartTicks = null;
     state.restartState = 'stopping';
     writeStatus(options, state);
   } finally {
