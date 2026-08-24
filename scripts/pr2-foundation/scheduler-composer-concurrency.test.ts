@@ -103,6 +103,39 @@ describe('scheduler/composer concurrency settlement', () => {
     expect(result.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
   });
 
+  it('rechecks a mixed composer while fleet remains unresolved', async () => {
+    vi.useFakeTimers();
+    try {
+      const submitted: string[] = [];
+      let pointerVisible = false;
+      const base = composerDeps(submitted);
+      const deps: UnsentComposerSubmitDeps = {
+        ...base,
+        read: () => ({
+          ok: true,
+          lines: pointerVisible ? CURSOR_SCREEN : ['→ human draft', ...CURSOR_SCREEN],
+          source: 'screen',
+        }),
+      };
+      const fleet = new Promise<void>(() => {});
+      const pass = runSupervisorUnsentComposerTick(
+        deps,
+        createUnsentComposerWatchState(),
+        { fleetSettled: fleet },
+      );
+
+      await Promise.resolve();
+      expect(submitted).toEqual([]);
+      pointerVisible = true;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(submitted).toEqual(['enter']);
+      const settled = await pass;
+      expect(settled.terminals[0]?.reason).toBe('enter_sent');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('dispatches a late-arriving target while many unrelated async reads remain slow', async () => {
     vi.useFakeTimers();
     try {

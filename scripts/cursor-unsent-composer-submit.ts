@@ -129,6 +129,7 @@ interface WatchStoreIdentityRow {
   readonly id: string;
   readonly generation: string;
   readonly fingerprint: string;
+  readonly ambiguous?: boolean;
 }
 
 interface WatchStore {
@@ -148,13 +149,14 @@ function readIdentityRow(row: unknown): WatchStoreIdentityRow | undefined {
   const id = (row as { id?: unknown }).id;
   const generation = (row as { generation?: unknown }).generation;
   const fingerprint = (row as { fingerprint?: unknown }).fingerprint;
+  const ambiguous = (row as { ambiguous?: unknown }).ambiguous;
   if (
     typeof runtime !== 'string' || !runtime
     || typeof id !== 'string' || !id
     || typeof generation !== 'string' || !generation
     || typeof fingerprint !== 'string' || !fingerprint
   ) return undefined;
-  return { runtime, id, generation, fingerprint };
+  return { runtime, id, generation, fingerprint, ...(ambiguous === true ? { ambiguous: true } : {}) };
 }
 
 export function loadWatchStore(path: string): WatchStore {
@@ -194,6 +196,7 @@ export function loadSubmittedFingerprints(path: string): Map<string, string> {
 export function saveSubmittedFingerprints(path: string, submitted: ReadonlyMap<string, string>): void {
   saveWatchStore(path, {
     submittedFingerprint: submitted,
+    ambiguousSubmittedFingerprint: new Map(),
     lastFingerprint: new Map(),
     lastChangedAt: new Map(),
   });
@@ -201,6 +204,7 @@ export function saveSubmittedFingerprints(path: string, submitted: ReadonlyMap<s
 
 interface PersistableWatchState {
   readonly submittedFingerprint: ReadonlyMap<string, string>;
+  readonly ambiguousSubmittedFingerprint: ReadonlyMap<string, string>;
   readonly lastFingerprint: ReadonlyMap<string, string>;
   readonly lastChangedAt: ReadonlyMap<string, number>;
 }
@@ -208,7 +212,10 @@ interface PersistableWatchState {
 function saveWatchStore(path: string, state: PersistableWatchState): void {
   const submitted = [...state.submittedFingerprint.entries()].flatMap(([key, fingerprint]) => {
     const row = identityFromKey(key, fingerprint);
-    return row ? [row] : [];
+    if (!row) return [];
+    return state.ambiguousSubmittedFingerprint.get(key) === fingerprint
+      ? [{ ...row, ambiguous: true }]
+      : [row];
   });
   const observations = [...state.lastFingerprint.entries()].flatMap(([key, fingerprint]) => {
     const row = identityFromKey(key, fingerprint);
@@ -225,6 +232,7 @@ function hydrateSubmitted(state: UnsentComposerWatchState, path: string | undefi
   for (const row of store.submitted) {
     const key = workerKey(row);
     if (!state.submittedFingerprint.has(key)) state.submittedFingerprint.set(key, row.fingerprint);
+    if (row.ambiguous) state.ambiguousSubmittedFingerprint.set(key, row.fingerprint);
   }
   for (const row of store.observations) {
     const key = workerKey(row);
@@ -269,6 +277,7 @@ export interface UnsentComposerWatchState {
   readonly lastFingerprint: Map<string, string>;
   readonly lastChangedAt: Map<string, number>;
   readonly submittedFingerprint: Map<string, string>;
+  readonly ambiguousSubmittedFingerprint: Map<string, string>;
 }
 
 export interface UnsentComposerSupervisorLifecycle {
@@ -296,6 +305,7 @@ export function createUnsentComposerWatchState(): UnsentComposerWatchState {
     lastFingerprint: new Map(),
     lastChangedAt: new Map(),
     submittedFingerprint: new Map(),
+    ambiguousSubmittedFingerprint: new Map(),
   };
 }
 
@@ -323,7 +333,7 @@ function settleComposerObservation(
   const kind = classifyCursorComposer(preview);
   if (kind === 'empty') {
     clearObservation(state, key);
-    state.submittedFingerprint.delete(key);
+    if (!state.ambiguousSubmittedFingerprint.has(key)) state.submittedFingerprint.delete(key);
     return { ...base, ok: true, unsent: false, enter: false, reason: 'composer_empty' };
   }
   const fingerprint = composerPokeFingerprint(preview);
@@ -344,12 +354,15 @@ function settleComposerObservation(
     return { ...base, ok: true, unsent: true, enter: false, reason: 'dry_run' };
   }
   state.submittedFingerprint.set(key, fingerprint);
+  state.ambiguousSubmittedFingerprint.delete(key);
   const dispatched = deps.submit(identity);
   if (dispatched.status === 'send_failed') {
     state.submittedFingerprint.delete(key);
+    state.ambiguousSubmittedFingerprint.delete(key);
     return { ...base, ok: false, unsent: true, enter: false, reason: dispatched.reason };
   }
   if (dispatched.status === 'dispatch_unknown') {
+    state.ambiguousSubmittedFingerprint.set(key, fingerprint);
     return { ...base, ok: true, unsent: true, enter: false, reason: dispatched.reason };
   }
   return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent' };
@@ -563,7 +576,10 @@ export async function runSupervisorUnsentComposerTick(
     let result = deps.readAsync
       ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
       : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
-    while (result.reason === 'composer_empty' && !fleetSettled) {
+    while (
+      (result.reason === 'composer_empty' || result.reason === 'composer_not_orchestration_pointer')
+      && !fleetSettled
+    ) {
       await new Promise<void>((resolve) => setTimeout(resolve, EMPTY_COMPOSER_RECHECK_MS));
       result = deps.readAsync
         ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)

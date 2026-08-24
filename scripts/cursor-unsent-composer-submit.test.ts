@@ -428,6 +428,30 @@ describe('submitUnsentCursorComposer', () => {
     expect(submitted).toHaveLength(1);
   });
 
+  it('does not rearm the same pointer after dispatch_unknown through an empty composer', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const state = createUnsentComposerWatchState();
+    const linesById = { term_unsent: [POKE, ...CURSOR_FOOTER] };
+    const localDeps = depsFor(linesById, {
+      submitted,
+      submitResult: (identity) => {
+        submitted.push(identity);
+        return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
+      },
+    });
+
+    const ambiguous = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    linesById.term_unsent = ['→ Add a follow-up', ...CURSOR_FOOTER];
+    const empty = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    linesById.term_unsent = [POKE, ...CURSOR_FOOTER];
+    const repeated = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+
+    expect(ambiguous.terminals[0]?.reason).toBe('submit_witness_unavailable');
+    expect(empty.terminals[0]?.reason).toBe('composer_empty');
+    expect(repeated.terminals[0]?.reason).toBe('already_submitted');
+    expect(submitted).toHaveLength(1);
+  });
+
   it('retries only a proven pre-side-effect launch failure', () => {
     const submitted: RuntimeWorkerIdentity[] = [];
     const state = createUnsentComposerWatchState();
