@@ -1,3 +1,4 @@
+// @vitest-ci-lane heavy
 // @vitest-pre-topology-seconds 120
 import {
   chmodSync,

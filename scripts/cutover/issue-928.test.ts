@@ -1,3 +1,4 @@
+// @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
