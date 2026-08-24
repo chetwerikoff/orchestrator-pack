@@ -153,6 +153,7 @@ General turns remain content-neutral. The #1431 create-Issue direct-publication
 wrapper is the narrow exception: it verifies exact tracked reviewer bytes at the
 existing pre-browser stable-input seam. That gate creates no new store, manifest,
 queue, lease, runtime selector, or completion authority.
+
 ### Composer timing (Issue #1188)
 
 Composer interaction uses two phases. The readiness phase starts immediately
