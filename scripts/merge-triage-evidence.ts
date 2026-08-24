@@ -25,6 +25,18 @@ export interface MergeTriageEvidenceTuple {
   inputDigest: string;
 }
 
+export interface MergeTriageFindingResolutionEvidence {
+  findingSnapshotDigest: string;
+  priorReviewedHeadSha: string;
+  currentHeadSha: string;
+  findingCount: number;
+  findingPaths: string[];
+  unboundFindingCount: number;
+  finalFixChangedPaths: string[];
+  unresolvedFindingPaths: string[];
+  predicateResult: 'resolved' | 'unresolved';
+}
+
 export interface MergeTriageEvidenceRecord {
   schema: typeof MERGE_TRIAGE_EVIDENCE_SCHEMA;
   evidenceId: string;
@@ -36,6 +48,7 @@ export interface MergeTriageEvidenceRecord {
   denylistPatterns: string[];
   matchedPaths: string[];
   predicateResult: 'intersection' | 'no_intersection';
+  findingResolution?: MergeTriageFindingResolutionEvidence;
   producedAtUtc: string;
 }
 
@@ -57,6 +70,12 @@ function fullSha(value: unknown, label: string): string {
   const sha = nonEmpty(value, label).toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`merge_triage_evidence_invalid: ${label}`);
   return sha;
+}
+
+function fullDigest(value: unknown, label: string): string {
+  const digest = nonEmpty(value, label).toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error(`merge_triage_evidence_invalid: ${label}`);
+  return digest;
 }
 
 function positiveInteger(value: unknown, label: string): number {
@@ -87,7 +106,6 @@ export function parseIssueDenylist(issueBody: string): string[] {
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith('#'))
     .map(normalizeChangedPath);
-  if (patterns.length === 0) throw new Error('merge_triage_evidence_invalid: empty denylist');
   return [...new Set(patterns)].sort();
 }
 
@@ -119,6 +137,39 @@ function globToRegExp(pattern: string): RegExp {
 export function pathMatchesDenylist(path: string, patterns: readonly string[]): boolean {
   const normalized = normalizeChangedPath(path);
   return patterns.some((pattern) => globToRegExp(normalizeChangedPath(pattern)).test(normalized));
+}
+
+export function buildMergeTriageFindingResolutionEvidence(input: {
+  findingSnapshotDigest: string;
+  priorReviewedHeadSha: string;
+  currentHeadSha: string;
+  findingCount: number;
+  findingPaths: readonly string[];
+  finalFixChangedPaths: readonly string[];
+}): MergeTriageFindingResolutionEvidence {
+  const findingCount = positiveInteger(input.findingCount, 'findingResolution.findingCount');
+  const normalizedFindingPathRows = input.findingPaths.map(normalizeChangedPath);
+  if (normalizedFindingPathRows.length > findingCount) {
+    throw new Error('merge_triage_evidence_invalid: findingResolution.findingPaths exceeds findingCount');
+  }
+  const findingPaths = [...new Set(normalizedFindingPathRows)].sort();
+  const finalFixChangedPaths = [...new Set(input.finalFixChangedPaths.map(normalizeChangedPath))].sort();
+  const changed = new Set(finalFixChangedPaths);
+  const unresolvedFindingPaths = findingPaths.filter((path) => !changed.has(path));
+  const unboundFindingCount = findingCount - normalizedFindingPathRows.length;
+  return {
+    findingSnapshotDigest: fullDigest(input.findingSnapshotDigest, 'findingResolution.findingSnapshotDigest'),
+    priorReviewedHeadSha: fullSha(input.priorReviewedHeadSha, 'findingResolution.priorReviewedHeadSha'),
+    currentHeadSha: fullSha(input.currentHeadSha, 'findingResolution.currentHeadSha'),
+    findingCount,
+    findingPaths,
+    unboundFindingCount,
+    finalFixChangedPaths,
+    unresolvedFindingPaths,
+    predicateResult: unboundFindingCount === 0 && unresolvedFindingPaths.length === 0
+      ? 'resolved'
+      : 'unresolved',
+  };
 }
 
 export function deriveMergeTriageEvidenceTuple(input: {
@@ -158,6 +209,7 @@ export function buildMergeTriageEvidenceRecord(input: {
   tuple: MergeTriageEvidenceTuple;
   changedPaths: readonly string[];
   denylistPatterns: readonly string[];
+  findingResolution?: MergeTriageFindingResolutionEvidence;
   producedAtUtc?: string;
 }): MergeTriageEvidenceRecord {
   nonEmpty(input.tuple.repository, 'tuple.repository');
@@ -192,6 +244,7 @@ export function buildMergeTriageEvidenceRecord(input: {
     denylistPatterns,
     matchedPaths,
     predicateResult: matchedPaths.length > 0 ? 'intersection' : 'no_intersection',
+    ...(input.findingResolution ? { findingResolution: structuredClone(input.findingResolution) } : {}),
     producedAtUtc: input.producedAtUtc ?? new Date().toISOString(),
   };
 }
@@ -201,12 +254,14 @@ export function produceMergeTriageEvidence(input: {
   changedPaths: readonly string[];
   issueBody: string;
   options: PackReviewAuthorityOptions;
+  findingResolution?: MergeTriageFindingResolutionEvidence;
   producedAtUtc?: string;
 }): { record: MergeTriageEvidenceRecord; digest: string; created: boolean } {
   const record = buildMergeTriageEvidenceRecord({
     tuple: input.tuple,
     changedPaths: input.changedPaths,
     denylistPatterns: parseIssueDenylist(input.issueBody),
+    findingResolution: input.findingResolution,
     producedAtUtc: input.producedAtUtc,
   });
   const staged = stagePackReviewImmutableRecord({
