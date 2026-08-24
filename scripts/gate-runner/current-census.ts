@@ -1,5 +1,5 @@
 import { failGate, passGate, type GateResult } from './contracts.ts';
-import { evaluateCensus, type GateCensus } from './census.ts';
+import { evaluateCensus, type CensusSchemaOptions, type GateCensus } from './census.ts';
 import type { SourceSnapshot } from './source-snapshot.ts';
 
 function snapshotFile(snapshot: SourceSnapshot, path: string): string {
@@ -77,8 +77,9 @@ export function evaluateCurrentCensus(
   census: GateCensus,
   snapshot: SourceSnapshot,
   registeredGateIds: ReadonlySet<string>,
+  schemaOptions?: CensusSchemaOptions,
 ): GateResult {
-  const historical = evaluateCensus(census, snapshot, registeredGateIds);
+  const historical = evaluateCensus(census, snapshot, registeredGateIds, schemaOptions);
   if (historical.status === 'PASS') return historical;
   const remaining = (historical.details ?? []).filter((detail) => !isAdmittedNodeMigrationFailure(detail, snapshot));
   if (remaining.length > 0) return failGate('gate-census', 'Gate population census reconciliation failed.', historical.evidence, remaining);

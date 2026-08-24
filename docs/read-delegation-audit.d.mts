@@ -112,9 +112,7 @@ export type AuditVerdict = {
   advisoryExcludedLines?: number;
 };
 
-export declare const T1_VOLUME_FLOOR: 400;
-export declare const DIFF_LOG_FLOOR: 200;
-export declare const T2_MIN_FILES: 3;
+export declare const T1_VOLUME_FLOOR: 600;
 export declare const SURFACES: readonly ['cursor', 'claude'];
 export declare const AUDIT_SCHEMA_VERSION: 4;
 export declare const REVIEW_HOOK_CAPABILITY_RECORD_PATH: string;

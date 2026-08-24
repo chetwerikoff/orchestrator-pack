@@ -1,17 +1,22 @@
 ---
-description: Flow-manager browser-turn operating contract for tracked Browser-GPT work
-alwaysApply: true
+description: Flow-manager Browser-GPT canon fragments for tracked review prompts
+alwaysApply: false
 ---
 
-# Flow-manager browser-turn monitoring (binding)
+# Flow-manager browser-turn monitoring
 
-This file is the canonical tracked manager-facing carrier for Browser-GPT
-launch, observation, attribution, retry, publication, cleanup, diagnosis, and
-handoff mechanics. The portable operator procedure is
-[`docs/browser-gpt-turn-runbook.md`](../../docs/browser-gpt-turn-runbook.md).
-Workflow and role rules remain in the canonical skills; CLI and result-schema
-reference remains in [`scripts/chatgpt-browser-turn/README.md`](../../scripts/chatgpt-browser-turn/README.md).
-Applicable long-running launcher internals remain in
+This non-always-loaded carrier retains only the two manager-review canon sections
+that `create-issue-draft` selects literally. Portable Browser-GPT manager mechanics
+are owned by the runbook sections for
+[start-of-shift preflight](../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight),
+[turn preparation](../../docs/browser-gpt-turn-runbook.md#prepare-one-turn),
+[launch](../../docs/browser-gpt-turn-runbook.md#launch),
+[observation and settlement](../../docs/browser-gpt-turn-runbook.md#observe-and-settle),
+[publication and cleanup](../../docs/browser-gpt-turn-runbook.md#publication-and-tab-lifecycle),
+[incident handling](../../docs/browser-gpt-turn-runbook.md#incident-handling),
+[one-shot diagnosis](../../docs/browser-gpt-turn-runbook.md#one-shot-diagnosis), and
+[handoff/close](../../docs/browser-gpt-turn-runbook.md#shift-handoffclose).
+Long-running child mechanics remain owned by
 [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md).
 
 ## Launch and observation
@@ -75,96 +80,6 @@ emits `turn-result/v1`; the long-running adapter additionally owns the terminal
 envelope and handoff receipt. A direct event is invocation-local, must be
 retained and reported, and must not gate siblings or the account.
 
-## Stage and retry boundary
-
-Stage cardinality and order belong to the canonical create-issue workflow and
-are not redefined here. Relay or adjudication starts
-only after every launched invocation is terminal, no retry runs or remains
-eligible, and frozen revision checks match. Partial, blocked, and incident
-attempts remain ordered evidence.
-
-For every plural T2/T3 reviewer `stageAttemptId`, ordinary preparation reads the
-selected manager-review canon exactly once and materializes every sibling's
-unmarked transport input before the first sibling launch. Each sibling differs
-only through its declared bound invocation context. After the first launch,
-later sibling input is not re-prepared from a newer canon in that attempt.
-State-light still independently regenerates current canon immediately before
-each browser effect; selected-section drift therefore refuses the already-
-materialized older sibling input rather than allowing mixed-canon stage
-credentialing. This is an ephemeral preparation rule only: it adds no persisted
-snapshot, source manifest, store, identity, retry path, or second gate.
-
-The fixed preparation topology is: T1 = one GPT lens; T2 = three concurrent
-GPT architectural-review slots, then one GPT lens; T3 = three concurrent GPT
-competitive slots only when the flow-manager/architect records genuine need,
-then three concurrent GPT architectural-review slots, one Claude lens, and one
-GPT lens. Concurrent browser starts are staggered by 10–15 seconds. T3 stages
-run in that order, and a journaled competitive-stage skip is legal. These
-counts replace older single-source or configurable-cardinality wording.
-
-One paced retry under the same slot and `stageAttemptId` is legal only for a
-proven pre-send quota/composer/fill failure with `send_count: 0`. It uses
-`attemptOrdinal: 2` and `retryAttempt: true`, consumes the only retry, and may
-settle blocked/exhausted. A possible or confirmed send, post-send failure,
-ambiguous delivery, output conflict, missing terminal result, or
-`send_count: 1` forbids resend. A zero-send result with unused eligibility
-keeps the attempt unsettled until retry or explicit abandonment.
-
-## Publication and tab lifecycle
-
-Direct target-Issue publication and receipt-only manager output follow the
-canonical create-issue workflow. The reviewer is the normal publisher of its
-own complete verdict/findings comment; the manager consumes the receipt and
-owns only later workflow/disposition actions. Final output publication must
-succeed before the exact retained invocation page may close. After send with no
-publication, preserve the reachable page; release only this browser client. A
-lost page receives no later close authority. Never close or commandeer a
-foreign, sibling, or orphan tab by URL, target id, age, focus, metadata, or
-liveness.
-
-For an eligible direct `turn-result/v1` carrying
-`post_settlement_target.disposition: preserved_after_settlement`, the operator
-**MUST** perform this sequence exactly once:
-
-1. retain the complete direct final result;
-2. preserve the byte-verified probe export result and harvested file;
-3. verify `preserved_after_settlement` and that the helper made no close attempt;
-4. prevent reuse, navigation, or send on the target during harvest and close;
-5. invoke `npm run browser-gpt-post-settlement-close --` with the same configured profile/CDP namespace and those exact artifacts; and
-6. record the structured `browser-gpt-post-settlement-close/v1` result before advancing.
-
-The explicit command is the only later close authority. `closed` and
-`already_absent` are terminal cleanup outcomes; launcher envelopes and every
-ineligible, uncertain, or other non-`closed` path remain manual browser-UI
-cleanup. They cannot authorize resend, close retry, target substitution,
-compatibility inference, or harvest deletion.
-
-## Observation loss and incident attribution
-
-Missing `turn-result/v1`, `page_or_browser_lost_after_send`,
-`fresh_conversation_landing_mismatch`, `owned_conversation_identity_mismatch`,
-or an owned turn with no returned result is not proof of non-delivery.
-Non-delivery is proven only by observing the conversation and finding no user
-node containing the owned prompt. After post-send observation loss, re-resolve
-the current target from the conversation URL, continue sanctioned observation,
-and harvest the answer with the exact caller-owned `--invocation-id` for that
-attempt. A saved target id may be stale and is not authoritative. Escalate only
-after the probe shows no delivery or sanctioned observation is unavailable.
-Every blocker names the exact probe and its observed result. Probe mechanics
-remain owned by Issues #1272 and #1122.
-
-A failure belongs to the current work only when it is reproducible and
-causally linked to the current head/diff. Clean-base reproduction,
-`stale_digest_pin`, and live-fleet `snapshot_changed` for `${OPK_BASE}`,
-`${WAKE_STATE}`, or temporary class fences are not current-work evidence.
-Rerun once after fleet quiescence; report a current-work blocker only if it
-still reproduces and remains head/diff-causal. Do not rebind `TMPDIR` or
-`OPK_BASE_DIR` after failure outside the sanctioned
-`scripts/lib/vitest-live-store-harness.mjs` flow to make a guard pass without
-frozen `OPK_VITEST_PRODUCTION_TMP` /
-`OPK_VITEST_PRODUCTION_OPK_BASE` roots and an active production-store guard.
-The existing `applyOpkVitestHarnessEnv` redirection is valid isolation.
-
 ## Legacy state and diagnostic probe
 
 The legacy `scripts/chatgpt-browser-turn.ts` prompt-bearing `turn` is not a
@@ -199,89 +114,3 @@ For contract-evidence authoring, `binding-id` uses
 `scripts/contract-evidence-producer-registry.json`; repo-owned examples include
 `orchestrator-pack` and `orchestrator-pack-scripts`. This is authoring
 guidance, not validator documentation.
-
-## Same-PR maintenance and handoff
-
-Keep this carrier, the runbook, workflow skills, and implementation reference
-synchronized in the same PR:
-
-| Changed contract | Same-PR documentation obligation |
-| --- | --- |
-| launch, observation, attribution, retry, publication, cleanup, probe, handoff | update this carrier and audit the runbook |
-| CLI option, result field, or component boundary | update the transport README; update carrier/runbook when operator behavior changes |
-| role, direct publication, receipt, or invocation identity | update the owning skill; reviewer prompt prose stays generated from its manager-review canon rather than copied into this carrier/runbook |
-| local configuration or setup prerequisite | update the runbook and owning reference |
-| link or Issue authority supersession | repair all in-scope pointers and current-authority wording |
-
-Duplicate recoverable text is not a reason to reintroduce global recovery/clear
-machinery. Source-preserving receipts and relay verification govern what may
-progress.
-
-## Sanctioned one-shot page probe
-
-When direct page diagnosis or exact-owned-turn harvest is genuinely needed, use
-only the canonical one-shot utility:
-
-```bash
-npm run browser-gpt-page-probe -- list --cdp http://127.0.0.1:9222
-npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --target-id <exact-target-id>
-npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --url <exact-conversation-url> --open-if-missing true
-npm run browser-gpt-page-probe -- liveness --cdp http://127.0.0.1:9222
-npm run browser-gpt-page-probe -- export --cdp http://127.0.0.1:9222 --target-id <exact-target-id> --role assistant --ordinal <n> --message-id <id> --representation innerText --expected-byte-length <bytes> --expected-sha256 <sha256> --output <new-file>
-npm run browser-gpt-page-probe -- harvest --cdp http://127.0.0.1:9222 --profile <configured-profile> --invocation-id <caller-owned-invocation-id> --output <new-file>
-```
-
-The exact URL form remains existing-target-only unless `--open-if-missing true`
-is explicitly supplied. Without acquisition it reuses exactly one normalized
-match without creating or closing anything. With explicit acquisition it may
-create one page, waits for exact normalized conversation identity and bounded
-readable SPA state, then closes only the valid target identity returned by that
-same invocation. A redirect or same-path cross-host result is `surface_unknown`
-with `conversation_identity_mismatch`. Duplicate matches, malformed or timed-out
-creation, cleanup failure, and every reused-page path fail closed without
-guessed or delayed cleanup.
-
-`liveness` is a single passive census with immediate `MAX_TARGETS` fan-out and
-independent target deadlines. It reports responsive, unresponsive, or
-unavailable rows and exact unresponsive IDs; it never creates, closes,
-navigates, sends, reloads, or infers process death. Every operation runs once
-and exits with no watch loop, daemon, retry, background owner, or retained
-state.
-
-The four diagnostic-only operations (`list`, `inspect`, `export`, `liveness`)
-have no workflow authority:
-
-- `generation_in_progress: false` is not completion evidence;
-- node counts, hashes, witnesses, liveness rows, acquisition metadata, and an exported node file do not authorize publication, completion, retry, resend, cleanup, admission, recovery, review capture, or stage progression;
-- use inspection output to select exactly one node representation for optional offline export; never request or construct a transcript dump;
-- exported text may be sensitive. The caller supplies a new path in an existing directory and owns protection and cleanup of the resulting file.
-
-`harvest` is different only in that it may recover and publish the exact owned
-turn identified by the supplied invocation; its output remains
-`workflow_authority: none` and therefore cannot itself advance a stage, grant a
-resend, or authorize unrelated cleanup.
-
-Do not replace this command with raw CDP WebSocket scripts, Playwright snippets,
-`salvage-*.mjs`, caller-supplied selectors/JavaScript, a watch loop, or a second
-supported probe.
-
-## Forbidden duplicate monitoring and authority
-
-- No independent 5–10 or 10–15 minute watchdog layered over the helper.
-- No periodic browser-tab sweeper that closes tabs it did not open.
-- No reporting "still running" from shell/PID/log state alone.
-- No probe-driven takeover, helper bypass, resend, or workflow progression.
-- No flow-manager consolidation or content judgment over sibling reviewer output.
-
-The one-shot page probe diagnoses an already-open page, may explicitly acquire
-one page under the zero-match ownership contract, or may harvest only the exact
-owned turn for a caller-supplied invocation. It is not a fallback state machine
-or browser-turn owner.
-
-## Session handoff
-
-Never end a flow-manager turn with only “background job running”. Report the
-Issue and revision, the caller-owned invocation id, the owned chat URL when
-known, the helper result or latest direct observation, the
-`reviewEpisodeId`/`stageAttemptId`/slot when applicable, any direct incident
-surfaced by the helper, and the next legal flow action.

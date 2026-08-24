@@ -1,5 +1,41 @@
 # Migration notes
 
+## Policy-context routing reduction (Issue #1488)
+
+### What changed
+
+`AGENTS.md` is the sole universal project-policy canon, Claude and Cursor surfaces
+route task-specific mechanics to their owning skills/runbooks, and the ordinary
+coworker read-delegation threshold is now the single prose trigger of **more than
+600 lines**. Cursor constant context is reduced to `AGENTS.md` plus the shortened
+always-applied ASCII rule; other Cursor rules are scoped by globs, descriptions,
+or named skills.
+
+### Operator adoption
+
+1. Pull the merged #1488 revision into each operator checkout or managed session
+   that consumes the tracked policy surfaces.
+2. Resync the existing machine-local mirrors of `AGENTS.md` through the supported
+   external sync step: `~/agent-rules/coworker-policy.md`, generated
+   `~/.codex/AGENTS.md`, and the `~/.cursor-global` symlink target when present.
+   Do not hand-edit those mirrors as a substitute for the normal sync.
+3. Recycle only affected Claude/Cursor sessions or managed pack consumers through
+   the currently supported deployment/session mechanism so they load the updated
+   tracked policy and hook wiring.
+4. Existing Claude/Cursor read-delegation Stop/stop hooks remain owned by
+   `docs/coworker-read-delegation-audit.md`; #1488 does not introduce a second
+   hook or local configuration source. Where those hooks are installed, verify one
+   fresh ordinary >600-line work unit appends the expected audit verdict after the
+   affected session has reloaded the new revision.
+
+### Rollback
+
+Revert the #1488 change, resync the same tracked-policy mirrors from the reverted
+checkout, and recycle the affected sessions or managed pack consumers through the
+same supported deployment/session mechanism. Do not preserve the new routing or
+threshold by adding a compatibility copy, second policy registry, or alternate
+hook.
+
 ## Continuation-safe supervised Task launch assistant (Issue #1479)
 
 ### What changed

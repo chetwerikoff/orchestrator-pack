@@ -156,7 +156,7 @@ The gitignored local configuration file is a store, not the live process environ
 `agent` selects an already-supported invocation/lifecycle path:
 
 - Cursor/Orca implementation work uses the existing local Cursor/Orca launch path. New manager/T1/T2/T3 starts use the supervised Task launch assistant below; initial delivery still ends at the existing PACK supervised-start boundary and publishes the current local WorkerAssignment only after Orca returns a proven ready receipt.
-- GPT/Browser-GPT implementation work uses the existing standalone chat-implementer contract in `docs/chat-executor-rules.md` and the Browser-GPT turn mechanics in `docs/browser-gpt-turn-runbook.md`. That path is not an AO-managed Orca worker start and does not synthesize or publish an Orca WorkerAssignment.
+- GPT/Browser-GPT implementation work uses the existing standalone chat-implementer contract in `docs/chat-executor-rules.md` and the Browser-GPT turn mechanics in `docs/browser-gpt-turn-runbook.md`. That path does not use the Orca-managed supervised worker lifecycle and does not synthesize or publish an Orca WorkerAssignment.
 - Changing a profile between those already-supported executor paths changes only which existing path subsequent work uses; it does not create a new selector or lifecycle authority.
 - Smoke complexity selects only between the routine-smoke and complex-smoke executor profiles; it does not create a task tier or change smoke admission, evidence, ownership, or lifecycle rules.
 
@@ -616,3 +616,97 @@ After landing the production implementation:
 11. verify the latest `fleet-reconciliation-handoff/v1` is readable before treating silence as healthy.
 
 Do not claim live machine supervision before this read-back.
+
+## Worker lifecycle
+
+Workers, orchestrators, and managers read this section before the first side
+effect. Direct user authority may override a repository stop rule, but a tier
+mismatch remains reportable evidence.
+
+### Worker pre-flight
+
+Before implementation, re-read the live task and apply the T1/T2/T3
+failure-type rubric. When reality exceeds the assigned tier, stop and escalate
+upward; never silently proceed.
+
+### Runtime identity
+
+Runtime effects require an adapter-produced `{ runtime, id, generation }`
+identity. Resolve the exact target through the registered runtime adapter.
+Missing, stale, malformed, reused, or mismatched identity performs no effect.
+Never reinterpret a session-like string, title, branch, path, or process ID as
+authority.
+
+### Review / CI / handoff contract
+
+Local Codex PR review is active through the pack-owned review runner. GitHub PR
+review is the authoritative verdict; the pack run store is operational state.
+
+- automatic and common starts use `scripts/pack-review-runner.ts`;
+- manual Browser-GPT review uses
+  `npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>`;
+- review start/list/status use the pack runner, run store, and claim authority;
+- no concrete runtime transport is a fallback review path;
+- terminal review JSON on stdout must be non-empty and valid;
+- one clean terminal result for the same PR head is not re-invoked.
+
+### Required CI
+
+Use protected-branch required checks when configured. Otherwise require every
+pack merge-contract check for the current PR head. CI is not green while a
+required check is failed, pending, cancelled, or missing.
+
+**Self-fix is primary.** Do **not** run `pack-worker-report --state ready_for_review`
+while required CI is not green. A red head remains `fixing_ci`; a pending head
+stays engaged until green, red, or an evidence-backed degraded-CI handoff.
+
+Green CI alone is not exit. The worker must finish review and handoff
+obligations for the same head.
+
+### Worker report store
+
+Report lifecycle state through the pack-owned command:
+
+```text
+pack-worker-report --state <ready_for_review|fixing_ci|addressing_reviews|completed|blocked>
+```
+
+If the report command cannot prove the current repository, worker, PR, and head
+binding, **skip silently** for the report write only and continue the required
+task. Do not substitute comments for durable report state.
+
+### PR-created handoff
+
+Worker self-drive is primary. After PR creation, continue through current-head
+CI, review feedback, smoke, and handoff. Do not idle in a transient state. On
+delivered findings use `addressing_reviews`, then `fixing_ci` as needed, and
+return to `ready_for_review` only after required checks are green.
+
+Failure, timeout, cancellation, ambiguity, or missing evidence never becomes
+clean or successful. **Must not** idle with open findings or silently disengage
+without a current-head handoff.
+
+### Review-cycle cap
+
+Use the tracked review-cycle authority. First clean head yields
+`clean_early_stop`; reaching the tier cap with open findings yields
+`at_cap_open_findings` for architect/operator triage. A cap never converts
+findings into approval.
+
+### Worker smoke
+
+Run the task's declared smoke plan against the current head. Smoke evidence
+must be bound to the exact code, configuration, identity, and lifecycle under
+test. A harness failure is investigated; it is not overwritten with a synthetic
+pass.
+
+### Operator adoption handoff
+
+When work changes operator-facing configuration, runtime selection, supervised
+processes, environment variables, or tracked policy delivery, add a precise
+`## Operator adoption` section to the PR body and update the active migration
+notes. Workers document adoption but do not mutate the operator's machine
+unless the direct user orders it.
+
+A cosmetic documentation-only change may state `No operator adoption required`.
+Do not describe a removed compatibility route as rollback or adoption.

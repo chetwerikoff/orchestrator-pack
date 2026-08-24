@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 1
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -30,10 +32,11 @@ describe('terminal gate population census after Issue #906', () => {
     const census = loadCensus(repoRoot);
     expect(census.version).toBe(2);
     expect(validateCensusSchema(census).join('\n')).toBe('');
+    expect(validateCensusSchema(census, { pinLiveConstants: false }).join('\n')).toBe('');
     expect(census.entries.some((entry) => entry.classification === 'deferred-to-named-wave')).toBe(false);
     expect(census.entries.filter((entry) => entry.classification === 'retired-in-bulk')).toHaveLength(186);
     expect(census.entries.filter((entry) => entry.classification === 'kept-in-pr1')).toHaveLength(22);
-    expect(census.entries.filter((entry) => entry.classification === 'retired-with-reason')).toHaveLength(26);
+    expect(census.entries.filter((entry) => entry.classification === 'retired-with-reason')).toHaveLength(28);
   });
 
   it('requires every kept-in-pr1 row to cite C, D, or G', () => {

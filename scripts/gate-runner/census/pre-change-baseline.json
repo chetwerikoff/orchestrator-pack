@@ -474,11 +474,12 @@
       "sourceKind": "check-script",
       "sourcePath": "scripts/check-coworker-delegation-threshold-drift.ps1",
       "marker": "check-coworker-delegation-threshold-drift.ps1",
-      "classification": "ported-custom",
-      "gateIds": [
-        "coworker-delegation-threshold-drift"
-      ],
-      "portedInWave": "3.b"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "Issue #1488 deletes the live coworker-delegation-threshold-drift gate so the ordinary coworker read-delegation floor can remain project prose at more than 600 lines without a machine-enforced literal.",
+        "replacement": "AGENTS.md states the ordinary more-than-600-lines coworker read-delegation threshold as unprotected project prose; no replacement numeric gate is registered."
+      }
     },
     {
       "id": "check-script:scripts/check-cursor-agent-tui-shim.ps1",
@@ -2420,11 +2421,12 @@
       "sourceKind": "verify-script-member",
       "sourcePath": "scripts/verify.ps1",
       "marker": "scripts/check-coworker-delegation-threshold-drift.ps1",
-      "classification": "ported-custom",
-      "gateIds": [
-        "coworker-delegation-threshold-drift"
-      ],
-      "portedInWave": "3.b"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "Issue #1488 deletes the live coworker-delegation-threshold-drift gate so the ordinary coworker read-delegation floor can remain project prose at more than 600 lines without a machine-enforced literal.",
+        "replacement": "AGENTS.md states the ordinary more-than-600-lines coworker read-delegation threshold as unprotected project prose; no replacement numeric gate is registered."
+      }
     },
     {
       "id": "verify-script:scripts/check-cursor-agent-tui-shim.ps1",

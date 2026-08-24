@@ -4,9 +4,9 @@
 
 These rules apply to standalone implementers and reviewers working through a chat environment where the conversation, shell/container, filesystem, GitHub connector, GitHub Actions, and tool calls may have different authentication, persistence, network access, or timeout behavior.
 
-They supplement `/AGENTS.md`; they do not replace it. `/AGENTS.md` remains authoritative for repository scope, Issue/PR linking, verification, review-cycle limits, merge policy, and the AO-managed worker lifecycle.
+They supplement `/AGENTS.md`; they do not replace it. `/AGENTS.md` remains authoritative for repository scope, Issue/PR linking, verification, review-cycle limits, merge policy, and the pack-owned worker lifecycle described by the current runbook.
 
-These rules do **not** define or replace AO-managed worker claim, lease, recovery, coordination, or lifecycle mechanisms.
+These rules do **not** define or replace the pack-owned worker/runtime lifecycle contracts referenced by `/AGENTS.md`.
 
 ## 2. Start with live sources
 
@@ -144,7 +144,7 @@ Use GitHub review/thread state and explicit reviewer/operator decisions directly
 
 ## 9. Merge
 
-Follow `/AGENTS.md` merge authority. An AO-managed worker must not merge.
+Follow `/AGENTS.md` merge authority. Do not merge unless the direct top-level user explicitly orders it.
 
 Immediately before an authorized merge:
 

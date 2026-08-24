@@ -1,6 +1,6 @@
 ---
 description: Prefer GitHub REST over GraphQL for reads; forbid gh api graphql when REST serves the datum
-alwaysApply: true
+alwaysApply: false
 ---
 <!-- generated from ~/agent-rules/*.md — do not hand-edit; re-run the generator to resync -->
 

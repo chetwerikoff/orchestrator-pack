@@ -15,7 +15,7 @@ coworker ask --profile code --allow-code \
 
 ## Worked example (read delegation)
 
-Root-cause work must read ~900 lines across `AGENTS.md`, a config file, and a runtime log. The 400-line and 3-file (≥400 combined) triggers fire.
+Root-cause work must read ~900 lines across `AGENTS.md`, a config file, and a runtime log. The 600-line trigger fires.
 
 **Correct:** scrub the log fence-clean, then
 `coworker ask --profile code --paths AGENTS.md <config> <scrubbed-log> --question "extract the evidence relevant to ..."`

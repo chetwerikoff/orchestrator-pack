@@ -13,3 +13,16 @@ Issue #221 / #237 loaders (canonical text lives in that file):
 - **5-Whys stop condition** — reject "returned/logged X" and imprecise defer records as **terminal root cause**; continue to field-level facts.
 - **parked root** — defer suspected root causes only via the structured `parked-root-cause` block in draft authoring (see `create-issue-draft`).
 - **design-analysis block** — conditional on build-class durable fixes in §6: five elements (critical mechanics, industry practices, architecture sketch, ≥3 cost-rule options, full-class scenario enumeration when element-5-eligible); mandatory element 5 on recurrence when block applies; skips operator/config/one-line fixes; long matrices to OS temp; recommends scenario-matrix handoff to `create-issue-draft` (enforcement is companion, not bound here).
+
+## Failure response
+
+When a review finding, CI failure, or stuck loop exposes a class of defect:
+
+1. reproduce from exact artifacts and current identities;
+2. separate infrastructure failure from product failure;
+3. apply recurrence-oriented causal analysis;
+4. fix the narrowest durable contract, authority, or mechanism that prevents the
+   class;
+5. add scenario and evidence coverage;
+6. verify the current head and record remaining uncertainty.
+

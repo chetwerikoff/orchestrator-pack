@@ -21,23 +21,6 @@
       }
     },
     {
-      "id": "check-script:scripts/check-coworker-delegation-threshold-drift.ps1",
-      "sourceKind": "check-script",
-      "sourcePath": "scripts/check-coworker-delegation-threshold-drift.ps1",
-      "marker": "check-coworker-delegation-threshold-drift.ps1",
-      "classification": "ported-custom",
-      "gateIds": [
-        "coworker-delegation-threshold-drift"
-      ],
-      "portedInWave": "3.b",
-      "replacement": {
-        "kind": "registered-gate",
-        "gateIds": [
-          "coworker-delegation-threshold-drift"
-        ]
-      }
-    },
-    {
       "id": "check-script:scripts/check-external-output-shape-guard.ps1",
       "sourceKind": "check-script",
       "sourcePath": "scripts/check-external-output-shape-guard.ps1",
@@ -583,24 +566,6 @@
         "ownerId": "check-script:scripts/check-agents-report-contract.ps1",
         "gateIds": [
           "agents-report-contract"
-        ]
-      }
-    },
-    {
-      "id": "verify-script:scripts/check-coworker-delegation-threshold-drift.ps1",
-      "sourceKind": "verify-script-member",
-      "sourcePath": "scripts/verify.ps1",
-      "marker": "scripts/check-coworker-delegation-threshold-drift.ps1",
-      "classification": "ported-custom",
-      "gateIds": [
-        "coworker-delegation-threshold-drift"
-      ],
-      "portedInWave": "3.b",
-      "replacement": {
-        "kind": "standalone-owner",
-        "ownerId": "check-script:scripts/check-coworker-delegation-threshold-drift.ps1",
-        "gateIds": [
-          "coworker-delegation-threshold-drift"
         ]
       }
     },

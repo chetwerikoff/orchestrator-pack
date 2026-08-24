@@ -122,7 +122,7 @@ export const CENSUS_PATH = 'scripts/gate-runner/census/pre-change-baseline.json'
 export const CENSUS_GENERATION_PATH = 'scripts/gate-runner/census/generation.json';
 
 const EXPECTED_BASE_COMMIT = 'b7394065b9ee1b046abb4cf29aff456df1935571';
-const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = 'bf64da9af43ab2a44a4259508bfaaf8d62646578f001dee5d14caab70cc31500';
+const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '9aaecf6193874fcfa0b21e7e004af512d734e544a65e3550ec03c815cc3036c4';
 const EXPECTED_SOURCE_HASHES = {
   'scripts/verify.ps1': '6bf8b3459885d603fa112d56c1a5afff6e472c2676c71eeb3e1510f0553562c9',
   'scripts/check-reusable.ps1': 'dafb1766d1d7b60181527dbb24593051270d21814291909000355541da26e0eb',
@@ -716,7 +716,15 @@ function validateHeader(census: GateCensus, failures: string[]): void {
   }
 }
 
-export function validateCensusSchema(census: GateCensus): string[] {
+export type CensusSchemaOptions = {
+  /** When false, skip live-tree digest pins so a historical git blob can be checked for self-consistency. */
+  readonly pinLiveConstants?: boolean;
+};
+
+export function validateCensusSchema(
+  census: GateCensus,
+  options: CensusSchemaOptions = {},
+): string[] {
   const failures: string[] = [];
   validateHeader(census, failures);
   if (census.populationCount !== census.entries.length) failures.push(`populationCount=${census.populationCount} does not match entries=${census.entries.length}`);
@@ -801,7 +809,7 @@ export function validateCensusSchema(census: GateCensus): string[] {
   if (census.generation?.migrationOwnershipDigest !== ownershipDigest) {
     failures.push(`generated migration ownership digest drift: committed=${census.generation?.migrationOwnershipDigest ?? '<missing>'} actual=${ownershipDigest}`);
   }
-  if (ownershipDigest !== EXPECTED_MIGRATION_OWNERSHIP_DIGEST) {
+  if ((options.pinLiveConstants ?? true) && ownershipDigest !== EXPECTED_MIGRATION_OWNERSHIP_DIGEST) {
     failures.push(`frozen migration ownership digest drift: expected=${EXPECTED_MIGRATION_OWNERSHIP_DIGEST} actual=${ownershipDigest}`);
   }
   for (const [path, hash] of Object.entries(census.sourceHashes)) {
@@ -835,8 +843,9 @@ export function evaluateCensus(
   census: GateCensus,
   snapshot: SourceSnapshot,
   registeredGateIds: ReadonlySet<string>,
+  schemaOptions: CensusSchemaOptions = {},
 ): GateResult {
-  const failures = validateCensusSchema(census);
+  const failures = validateCensusSchema(census, schemaOptions);
   const inventoryText = snapshot.files.get(WAVE_3B_MIGRATION_INVENTORY_PATH);
   if (inventoryText === undefined) {
     failures.push(`Wave 3.b migration inventory is missing: ${WAVE_3B_MIGRATION_INVENTORY_PATH}`);
@@ -853,6 +862,7 @@ export function evaluateCensus(
           contractMarkers: VERIFY_CONTRACT_MARKERS,
           promptGlob: VERIFY_PROMPT_GLOB,
         },
+        { pinLiveConstants: schemaOptions.pinLiveConstants },
       ));
     } catch (error) {
       failures.push(`Wave 3.b migration inventory is invalid: ${error instanceof Error ? error.message : String(error)}`);

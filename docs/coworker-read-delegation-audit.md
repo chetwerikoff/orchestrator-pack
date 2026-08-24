@@ -13,8 +13,8 @@ Hook entry: [`scripts/invoke-read-delegation-audit-stop.ts`](../scripts/invoke-r
 | Invariant | Rule |
 |-----------|------|
 | **Both surfaces** | Runs on Claude `Stop` and Cursor `stop`; same flag verdict per equivalence class. |
-| **Work unit** | One inbound user message / AO task delivery → bounded by the next inbound request. Reads aggregate inside the unit (anti-chunking). |
-| **Triggers** | T1 **delegable** file-read floor **>400 lines**; diff/log **>200 lines** (independent of T1). File-count fires only with **≥400 combined delegable lines** (folded T2). Index-served in-tree source lines do not count toward T1/T2. |
+| **Work unit** | One inbound user message / task delivery → bounded by the next inbound request. Reads aggregate inside the unit (anti-chunking). |
+| **Triggers** | T1 **delegable** file-read floor is the single ordinary threshold in `AGENTS.md` (**more than 600 lines**). File-count does not introduce a second numeric policy trigger. Index-served in-tree source lines do not count toward T1. |
 | **Tolerant signal** | Emits a compliance finding; never blocks. |
 | **Not flagged** (still in denominator) | Machine-observed `coworker ask --profile code`; edit of any file in unit; excepted reason in status. |
 | **Excluded from denominator** | Code-class (`--allow-code`) reads; actual review executions carrying a trusted per-work-unit marker from the tracked review wrapper; **index-served** Cursor reads of tracked first-party source-code under committed allowed roots (Issue #309). Ambient machine-global reviewer env such as `PACK_REVIEWER` / `REVIEW_COMMAND` never excludes an ordinary unit. |
@@ -77,7 +77,7 @@ orchestrator-pack checkout root (for example
 `/home/you/orchestrator-pack/scripts/lib/Invoke-TypeScriptCli.ts` and
 `/home/you/orchestrator-pack/scripts/invoke-read-delegation-audit-stop.ts`).
 
-**Verify:** complete one fresh no-side-effect Cursor worker turn with an ordinary >400-line read; confirm
+**Verify:** complete one fresh no-side-effect Cursor worker turn with an ordinary >600-line read; confirm
 `~/.orchestrator-pack/read-delegation-audit.jsonl` gains a `work_unit_verdict` line with `reviewerPath:false` and `inDenominator:true`. The stop
 hook passes `transcript_path` in its stdin JSON; the handler derives reads/edits/shell events
 from that transcript when `workUnits` / `events` are not pre-populated.
@@ -102,11 +102,11 @@ Add a `Stop` hook (file is gitignored — operator-local only):
 Use the same absolute-path prefix rule as Cursor for both `Invoke-TypeScriptCli.ts` and
 `invoke-read-delegation-audit-stop.ts` under your checkout root.
 
-**Verify:** same JSONL artifact append as Cursor after a fresh no-side-effect Claude session completes one ordinary >400-line work unit (`reviewerPath:false`, `inDenominator:true`).
+**Verify:** same JSONL artifact append as Cursor after a fresh no-side-effect Claude session completes one ordinary >600-line work unit (`reviewerPath:false`, `inDenominator:true`).
 
-### 4. Restart AO
+### 4. Reload affected sessions
 
-`ao stop` then `ao start` so workers load recalibrated thresholds from `agentRulesFile`.
+Start a fresh Claude/Cursor session or recycle only the affected managed session through its currently supported runtime/session mechanism so it reloads the updated tracked policy and hook wiring.
 
 ### 5. Phase-2 probe (informational)
 

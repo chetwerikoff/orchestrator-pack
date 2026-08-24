@@ -6,7 +6,7 @@ Issue #853 moves supervised-child liveness production to a shared TypeScript run
 
 `scripts/kernel/side-process-liveness.ts` is the only implementation of the new bounded-call and intra-step heartbeat behavior.
 
-When a registered supervised child invokes `gh` or `ao`:
+When a registered supervised child invokes a tracked external transport such as `gh`:
 
 1. the existing thin shell/PowerShell transport dispatches the command through the TS runtime;
 2. the runtime applies the child-specific timeout from `scripts/orchestrator-side-process-liveness-contract.json`;
@@ -48,7 +48,7 @@ Every Issue #853 runtime `expected:` label is checked against one of two proof s
 - either regression anchor is not wired;
 - a timeout or local-compute gap exceeds its safety budget;
 - a child no longer reports terminal outcomes through the shared progress helper;
-- the `gh`, `ao`, or terminal transport bypasses the shared TS runtime;
+- the declared `gh`, bounded runtime, or terminal-outcome transport bypasses the shared TS runtime;
 - declared evidence paths disappear.
 
 The mandatory regression anchors are `review-ready-report-state-seed` and `review-trigger-reeval`.
