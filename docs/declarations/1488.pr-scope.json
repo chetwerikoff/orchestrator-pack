@@ -19,6 +19,7 @@
     "CLAUDE.md",
     "docs/architecture.md",
     "docs/browser-gpt-turn-runbook.md",
+    "docs/chat-executor-rules.md",
     "docs/coworker-delegation.md",
     "docs/coworker-read-delegation-audit.md",
     "docs/declarations/1488.pr-scope.json",
