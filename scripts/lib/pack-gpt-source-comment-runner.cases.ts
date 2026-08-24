@@ -7,6 +7,7 @@ import {
   reconcileStalePackReviewRuns,
   startPackReview,
 } from '../pack-review-runner.ts';
+import { initializePackReviewAuthority } from '../pack-review-state.ts';
 import {
   createPackReviewRun,
   getPackReviewRun,
@@ -23,6 +24,7 @@ import type {
   PackGptSourceGithubComment,
 } from './pack-gpt-source-comment.ts';
 import { buildGptReviewPrompt } from './pack-pr-review-contract.ts';
+import { computeBoundIssueSnapshotHash } from './reverify-bound-issue-snapshot.ts';
 import type {
   GithubReviewSummary,
   GithubReviewTransport,
@@ -178,7 +180,7 @@ function threeSlotRound(): PackReviewGptRoundRecord {
     roundOrdinal: 1,
     cardinality: 3,
     issueNumber: 1435,
-    boundIssueSnapshotDigest: 'fixture-snapshot',
+    boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(ISSUE_BODY),
     sourceSlots: [1, 2, 3].map((ordinal) => ({
       slotId: `source-${String(ordinal).padStart(2, '0')}`,
       ordinal,
@@ -192,6 +194,12 @@ function startedStaleRun(storeRoot: string): {
   publications: Map<string, PublishedSource>;
 } {
   const staleAt = new Date('2026-08-16T00:00:00Z');
+  initializePackReviewAuthority({
+    prNumber: 1436,
+    headSha: HEAD,
+    tier: 'T1',
+    options: { storeRoot, now: staleAt },
+  });
   const created = createPackReviewRun({
     projectId: 'orchestrator-pack',
     storeRoot,
@@ -500,6 +508,10 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
         workerWrites.push(request);
         return { state: 'delivered' as const, reason: 'fixture' };
       },
+      fixtureIssueBody: ISSUE_BODY,
+      fixtureIssueNumber: 1435,
+      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+      fixtureBoundIssueSnapshotBytes: ISSUE_BODY,
       resolveRepositorySlug: async () => REPO,
     });
 
