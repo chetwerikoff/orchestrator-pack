@@ -85,6 +85,8 @@ interface SchedulerFleetIdentity {
   readonly tickSequence: number;
 }
 
+type SchedulerObserverFailure = 'observer_timeout' | 'observer_threw';
+
 export interface SchedulerBoundary {
   listCandidates(): ActivatedSchedulerCandidate[];
   readCurrentPr(candidate: ActivatedSchedulerCandidate): Promise<SchedulerCurrentPr>;
@@ -323,7 +325,7 @@ function publishObserverFailureHandoff(
   boundary: SchedulerBoundary,
   observer: SchedulerFleetObserver,
   tickSequence: number,
-  reason: 'observer_timeout' | 'observer_threw',
+  reason: SchedulerObserverFailure,
 ): { readonly handoff: SchedulerPublishedHandoff; readonly identity: SchedulerFleetIdentity } {
   const schedulerGeneration = String(observer.schedulerGeneration ?? '').trim();
   if (!schedulerGeneration) throw new Error(`scheduler_observer_identity_unavailable:${reason}`);
@@ -345,6 +347,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
   started: number;
   skipped: number;
   observer?: FleetObserverResult;
+  observerFailure?: SchedulerObserverFailure;
   fleetNudge?: FleetNudgeResult;
   orchestratorRequired?: boolean;
   fleetEscalation?: FleetEscalationInvocationResultV1;
@@ -370,7 +373,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
     if (completed.status !== 'complete') {
       observerBoundary.cancel?.();
-      const observerFailureReason = completed.status === 'timeout' ? 'observer_timeout' : 'observer_threw';
+      const observerFailureReason: SchedulerObserverFailure = completed.status === 'timeout' ? 'observer_timeout' : 'observer_threw';
       const observerFailure = publishObserverFailureHandoff(
         boundary,
         observerBoundary,
@@ -388,6 +391,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         attempted: 0,
         started: 0,
         skipped: 0,
+        observerFailure: observerFailureReason,
         ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
         fleetEscalation,
       };
@@ -685,7 +689,8 @@ export function formatSchedulerError(error: unknown): string {
   return errorText(error);
 }
 
-function schedulerFleetPhaseFailure(result: Awaited<ReturnType<typeof runSchedulerTick>>): string | null {
+export function schedulerFleetPhaseFailure(result: Awaited<ReturnType<typeof runSchedulerTick>>): string | null {
+  if (result.observerFailure) return `scheduler_observer_untrusted:${result.observerFailure}`;
   if (result.fleetNudge?.status !== 'failed') return null;
   return `scheduler_fleet_phase_failed:${result.fleetNudge.result}`;
 }
