@@ -419,9 +419,9 @@ describe('supervised worker start exact assignment admission',()=>{
         setup:{requested:'run',effective:'run',state:'running'},
         launch:{requested:{agent:'cursor',model:'model',effort:'medium'},effective:{agent:'cursor',model:'model',effort:'medium'}},
         effects:[
-          {kind:'worktree',action:'created',id:'repo-1::/tmp/new-worktree'},
+          {kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
           {kind:'setup',action:'running',state:'running'},
-          {kind:'terminal',role:'agent',action:'created',id:'term-provider'},
+          {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
           {kind:'dispatch_input',role:'agent',id:'term-provider',state:'accepted'},
         ],
       })}; },
@@ -434,6 +434,10 @@ describe('supervised worker start exact assignment admission',()=>{
   it.each([
     ['missing setup', { setup: undefined }],
     ['mismatched launch', { launch:{requested:{agent:'cursor',model:'other',effort:'medium'},effective:{agent:'cursor',model:'other',effort:'medium'}} }],
+    ['missing accepted dispatch input', { effects:[
+      {kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
+      {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
+    ] }],
   ] as const)('rejects provider receipt evidence before assignment publication: %s', async(_label,override)=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
     const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',repository:'chetwerikoff/orchestrator-pack',env,
@@ -441,7 +445,9 @@ describe('supervised worker start exact assignment admission',()=>{
       execute:async()=>({ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_provider',state:'ready',
         worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
         setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model',effort:'medium'},effective:{agent:'cursor',model:'model',effort:'medium'}},
-        effects:[{kind:'worktree',action:'created',id:'repo-1::/tmp/new-worktree'},{kind:'terminal',role:'agent',action:'created',id:'term-provider'}],...override})}),
+        effects:[{kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
+          {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
+          {kind:'dispatch_input',role:'agent',id:'term-provider',state:'accepted'}],...override})}),
     });
     expect(result.ok).toBe(false);
     expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack',env),1416)).toBeNull();

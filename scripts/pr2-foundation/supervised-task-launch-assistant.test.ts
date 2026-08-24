@@ -98,9 +98,9 @@ function providerReadyStart(taskId: string): SupervisedWorkerStartResult {
         effective: { agent: 'cursor', model: 'model', effort: 'medium' },
       },
       effects: [
-        { kind: 'worktree', action: 'created', id: 'orca-repo-1::/tmp/created-worktree' },
+        { kind: 'worktree', action: 'created_top_level', id: 'orca-repo-1::/tmp/created-worktree' },
         { kind: 'setup', action: 'running', state: 'running' },
-        { kind: 'terminal', role: 'agent', action: 'created', id: 'term-provider' },
+        { kind: 'terminal', role: 'agent', action: 'reused_agent_terminal', id: 'term-provider' },
         { kind: 'dispatch_input', role: 'agent', id: 'term-provider', state: 'accepted' },
       ],
     },
@@ -366,6 +366,22 @@ describe('supervised Task launch assistant', () => {
     });
   });
 
+  it('preserves provider receipt and residual resources on handled worker-start failure', async () => {
+    const receipt = {
+      taskId: 'task-1', dispatchId: 'dispatch-provider', state: 'unknown', stage: 'launching',
+      setup: { requested: 'run', state: 'running' }, effects: [{ kind: 'worktree', action: 'created_top_level', id: 'repo::wt' }],
+    };
+    const residualResources = [{ kind: 'terminal', action: 'reused_agent_terminal', id: 'term-provider' }];
+    const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ supervised: {
+      ok: false, reason: 'supervised_start_envelope_error', receipt, residualResources,
+    } }));
+    expect(result).toMatchObject({
+      outcome: 'continue', stage: 'supervised_start',
+      resources: { dispatchId: 'dispatch-provider', receipt, residualResources },
+      evidence: { dispatchId: 'dispatch-provider', receipt, residualResources },
+    });
+  });
+
   it('preserves worker-start provider mutation recovery as one exact replay action', async () => {
     const recoveryCommand = 'orca orchestration worker-show --dispatch dispatch-accepted --json';
     const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ supervised: {
@@ -414,10 +430,26 @@ describe('supervised Task launch assistant', () => {
     ]);
   });
 
+  it('does not authorize a requested slug from mutable repoIcon.label when canonical identity disagrees', async () => {
+    const calls: string[][] = [];
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
+    }, async (args) => {
+      calls.push([...args]);
+      return { ok: true, stdout: repoListEnvelope([{
+        id: 'wrong-repo', repoIcon: { label: 'chetwerikoff/orchestrator-pack' },
+        gitRemoteIdentity: { canonicalKey: 'github.com/other/repo' },
+      }]) };
+    });
+    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_repository_resolution_absent' });
+    expect(calls).toEqual([['orca', 'repo', 'list', '--json']]);
+  });
+
   it.each([
     ['absent', repoListEnvelope([{ id: 'other', repoIcon: { label: 'other/repo' } }]), 'worktree_repository_resolution_absent'],
     ['ambiguous', repoListEnvelope([
-      { id: 'orca-repo-1', repoIcon: { label: 'chetwerikoff/orchestrator-pack' } },
+      { id: 'orca-repo-1', repoIcon: { label: 'stale/label' },
+        gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' } },
       { id: 'orca-repo-2', gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' } },
     ]), 'worktree_repository_resolution_ambiguous'],
     ['malformed', '{not-json', 'worktree_repository_resolution_malformed'],
@@ -447,7 +479,8 @@ describe('supervised Task launch assistant', () => {
     }, async (args) => {
       mutableCalls.push([...args]);
       if (args[1] === 'repo') return { ok: true, stdout: repoListEnvelope([{
-        id: 'orca-repo-1', repoIcon: { label: 'chetwerikoff/orchestrator-pack' },
+        id: 'orca-repo-1', repoIcon: { label: 'stale/label' },
+        gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' },
       }]) };
       return { ok: true, stdout: okEnvelope({
         worktree: { id: 'repo::wt', path: '/tmp/wt' },
@@ -465,7 +498,8 @@ describe('supervised Task launch assistant', () => {
     }, async (args) => {
       calls.push([...args]);
       if (args[1] === 'repo') return { ok: true, stdout: repoListEnvelope([{
-        id: 'orca-repo-1', repoIcon: { label: 'chetwerikoff/orchestrator-pack' },
+        id: 'orca-repo-1', repoIcon: { label: 'stale/label' },
+        gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' },
       }]) };
       if (args[1] === 'worktree') return { ok: true, stdout: okEnvelope({
         worktree: { id: 'repo::wt', path: '/tmp/wt' },
@@ -484,7 +518,8 @@ describe('supervised Task launch assistant', () => {
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
     }, async (args) => args[1] === 'repo'
       ? { ok: true, stdout: repoListEnvelope([{
-        id: 'orca-repo-1', repoIcon: { label: 'chetwerikoff/orchestrator-pack' },
+        id: 'orca-repo-1', repoIcon: { label: 'stale/label' },
+        gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' },
       }]) }
       : args[1] === 'worktree'
         ? { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::wt', path: '/tmp/wt' },

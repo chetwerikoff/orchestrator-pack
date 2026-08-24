@@ -189,12 +189,20 @@ function validateProviderTopLevelReceipt(
   const effects = receipt.effects;
   if (!Array.isArray(effects)) return 'supervised_start_effect_witness_unavailable';
   const worktreeEffects = effects.filter((raw) => isRecord(raw)
-    && providerText(raw.kind) === 'worktree' && providerText(raw.action) === 'created');
+    && providerText(raw.kind) === 'worktree'
+    && (providerText(raw.action) === 'created' || providerText(raw.action) === 'created_top_level'));
   const terminalEffects = effects.filter((raw) => isRecord(raw)
     && providerText(raw.kind) === 'terminal' && providerText(raw.role) === 'agent'
-    && (providerText(raw.action) === 'created' || providerText(raw.action) === 'created_agent_terminal'));
+    && (providerText(raw.action) === 'created'
+      || providerText(raw.action) === 'created_agent_terminal'
+      || providerText(raw.action) === 'reused_agent_terminal'));
+  const dispatchInputEffects = effects.filter((raw) => isRecord(raw)
+    && providerText(raw.kind) === 'dispatch_input'
+    && providerText(raw.role) === 'agent'
+    && providerText(raw.state) === 'accepted');
   const worktreeEffect = isRecord(worktreeEffects[0]) ? worktreeEffects[0] : null;
   const terminalEffect = isRecord(terminalEffects[0]) ? terminalEffects[0] : null;
+  const dispatchInputEffect = isRecord(dispatchInputEffects[0]) ? dispatchInputEffects[0] : null;
   const worktreeId = providerText(worktree?.id) || providerText(worktreeEffect?.id);
   const worktreePath = providerText(worktree?.path) || worktreeId.split('::').slice(1).join('::').trim();
   const terminalHandle = providerText(terminal?.handle) || providerText(terminal?.id) || providerText(terminalEffect?.id);
@@ -202,6 +210,8 @@ function validateProviderTopLevelReceipt(
   if (providerText(worktreeEffect?.id) !== worktreeId) return 'supervised_start_provider_worktree_mismatch';
   if (!terminalHandle || terminalEffects.length !== 1) return 'supervised_start_provider_placement_missing';
   if (providerText(terminalEffect?.id) !== terminalHandle) return 'supervised_start_provider_terminal_mismatch';
+  if (dispatchInputEffects.length !== 1) return 'supervised_start_provider_dispatch_input_missing';
+  if (providerText(dispatchInputEffect?.id) !== terminalHandle) return 'supervised_start_provider_dispatch_input_mismatch';
 
   const worktreeSelector = providerOption(args, '--worktree');
   const repository = providerOption(args, '--repo');

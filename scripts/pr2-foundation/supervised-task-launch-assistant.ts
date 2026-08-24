@@ -5,7 +5,7 @@ import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
-import { runSupervisedWorkerStart, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
+import { runSupervisedWorkerStart, type SupervisedWorkerStartReceipt, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
 
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
 export const LAUNCH_WORK_CLASSES = ['manager', 't1', 't2', 't3'] as const;
@@ -33,6 +33,8 @@ export interface LaunchResources {
   readonly worktreePath?: string;
   readonly terminal?: RuntimeWorkerIdentity;
   readonly dispatchId?: string;
+  readonly receipt?: SupervisedWorkerStartReceipt;
+  readonly residualResources?: readonly unknown[];
 }
 
 export interface NextAction {
@@ -445,6 +447,11 @@ export async function runSupervisedTaskLaunchAssistant(
   if (!supervised.ok || supervised.reason !== 'ready_and_assignment_bound' || !supervised.assignment) {
     const requestId = supervised.recovery?.requestId;
     const recoveryCommand = supervised.recovery?.recoveryCommand;
+    const receiptDispatchId = text(supervised.receipt?.dispatchId);
+    const providerEvidence = {
+      ...(supervised.receipt ? { receipt: supervised.receipt } : {}),
+      ...(supervised.residualResources ? { residualResources: supervised.residualResources } : {}),
+    };
     const retry = requestId ? [
       'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2-foundation/supervised-worker-start.ts --',
       ...(input.issueNumber ? ['--issue-number', String(input.issueNumber)] : []),
@@ -462,8 +469,10 @@ export async function runSupervisedTaskLaunchAssistant(
       evidence: {
         ...(supervised.errorCode ? { errorCode: supervised.errorCode } : {}),
         ...(requestId ? { requestId } : {}),
-        ...(supervised.recovery?.dispatchId ? { dispatchId: supervised.recovery.dispatchId } : {}),
+        ...(receiptDispatchId || supervised.recovery?.dispatchId
+          ? { dispatchId: receiptDispatchId || supervised.recovery?.dispatchId } : {}),
         ...(recoveryCommand ? { recoveryCommand } : {}),
+        ...providerEvidence,
       },
       nextAction: requestId ? {
         kind: 'retry_supervised_start', requestId, command: retry,
@@ -473,7 +482,12 @@ export async function runSupervisedTaskLaunchAssistant(
         ...(recoveryCommand ? { recoveryCommand } : {}),
         note: 'reconcile the non-ready start; never fall through to a fresh mutation',
       },
-    }, { ...resources, ...(supervised.recovery?.dispatchId ? { dispatchId: supervised.recovery.dispatchId } : {}) }, startedAtMs, timings, deps.now);
+    }, {
+      ...resources,
+      ...(receiptDispatchId || supervised.recovery?.dispatchId
+        ? { dispatchId: receiptDispatchId || supervised.recovery?.dispatchId } : {}),
+      ...providerEvidence,
+    }, startedAtMs, timings, deps.now);
   }
 
   const dispatchId = text(supervised.receipt?.dispatchId);
@@ -488,9 +502,11 @@ export async function runSupervisedTaskLaunchAssistant(
     const providerTerminal = receipt && record(receipt.terminal) ? receipt.terminal
       : receipt && record((receipt as Record<string, unknown>).agentTerminal) ? (receipt as Record<string, unknown>).agentTerminal as Record<string, unknown> : null;
     const effects = receipt && Array.isArray(receipt.effects) ? receipt.effects : [];
-    const worktreeEffect = effects.find((effect) => record(effect) && text(effect.kind) === 'worktree' && text(effect.action) === 'created');
+    const worktreeEffect = effects.find((effect) => record(effect) && text(effect.kind) === 'worktree'
+      && (text(effect.action) === 'created' || text(effect.action) === 'created_top_level'));
     const terminalEffect = effects.find((effect) => record(effect) && text(effect.kind) === 'terminal' && text(effect.role) === 'agent'
-      && (text(effect.action) === 'created' || text(effect.action) === 'created_agent_terminal'));
+      && (text(effect.action) === 'created' || text(effect.action) === 'created_agent_terminal'
+        || text(effect.action) === 'reused_agent_terminal'));
     const worktreeId = text(worktree?.id) || (record(worktreeEffect) ? text(worktreeEffect.id) : '');
     const worktreePath = text(worktree?.path) || worktreeId.split('::').slice(1).join('::').trim();
     const terminalId = text(providerTerminal?.handle) || text(providerTerminal?.id) || (record(terminalEffect) ? text(terminalEffect.id) : '');
@@ -688,9 +704,8 @@ export async function prepareWorktreeWithOrca(
   const canonicalKey = `github.com/${repository}`;
   const matches = repos.filter((repo) => {
     const repoRecord = record(repo) ? repo : null;
-    const repoIcon = repoRecord && record(repoRecord.repoIcon) ? repoRecord.repoIcon : null;
     const gitRemoteIdentity = repoRecord && record(repoRecord.gitRemoteIdentity) ? repoRecord.gitRemoteIdentity : null;
-    return text(repoIcon?.label) === repository || text(gitRemoteIdentity?.canonicalKey) === canonicalKey;
+    return text(gitRemoteIdentity?.canonicalKey).toLowerCase() === canonicalKey;
   });
   if (matches.length === 0) {
     return worktreeContinue('worktree_repository_resolution_absent', { repository, matchCount: 0 }, repositoryResolutionNote);
