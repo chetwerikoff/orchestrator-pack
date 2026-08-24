@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { parseSmokeTestPlan } from './draft-discipline.mjs';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -207,6 +208,117 @@ describe('runtime-neutral worker smoke', () => {
     const result = checkSmokeTestPlan(issueBody);
     expect(result.ok).toBe(true);
     expect(result.plan?.scenarios).toHaveLength(1);
+  });
+
+  it('parses dash bullets whose action and expected result are split by the first colon', () => {
+    const markdown = [
+      '```smoke-test-plan',
+      '- Open the deployment page: the page loads successfully',
+      '- Select the release: the release details are visible',
+      '```',
+    ].join('\n');
+
+    expect(parseSmokeTestPlan(markdown)).toEqual({
+      requirement: 'required',
+      scenarios: [
+        { action: 'Open the deployment page', expected: 'the page loads successfully' },
+        { action: 'Select the release', expected: 'the release details are visible' },
+      ],
+    });
+  });
+
+  it('parses natural-language transaction labels as colon-delimited bullets', () => {
+    const markdown = [
+      '```smoke-test-plan',
+      '- Verify transaction: the record persists',
+      '```',
+    ].join('\n');
+
+    expect(parseSmokeTestPlan(markdown)).toEqual({
+      requirement: 'required',
+      scenarios: [
+        { action: 'Verify transaction', expected: 'the record persists' },
+      ],
+    });
+  });
+
+  it('rejects a reserved expected-only dash bullet', () => {
+    const markdown = [
+      '```smoke-test-plan',
+      '- expected: the page loads',
+      '```',
+    ].join('\n');
+
+    expect(parseSmokeTestPlan(markdown)).toEqual({
+      requirement: 'required',
+      scenarios: [],
+    });
+  });
+
+  it('parses YAML-ish nested action and expected lines', () => {
+    const markdown = [
+      '```smoke-test-plan',
+      'scenarios:',
+      '  - action: open the deployment page',
+      '    expected: the page loads successfully',
+      '  - action: select the release',
+      '    expected: the release details are visible',
+      '```',
+    ].join('\n');
+
+    expect(parseSmokeTestPlan(markdown)).toEqual({
+      requirement: 'required',
+      scenarios: [
+        { action: 'open the deployment page', expected: 'the page loads successfully' },
+        { action: 'select the release', expected: 'the release details are visible' },
+      ],
+    });
+  });
+
+  it('keeps parsing the existing pipe-delimited form', () => {
+    const markdown = [
+      '```smoke-test-plan',
+      '- action: open the deployment page | expected: the page loads successfully',
+      '```',
+    ].join('\n');
+
+    expect(parseSmokeTestPlan(markdown)).toEqual({
+      requirement: 'required',
+      scenarios: [
+        { action: 'open the deployment page', expected: 'the page loads successfully' },
+      ],
+    });
+  });
+
+  it('parses every dash bullet in the live #1532 smoke-test-plan fence', () => {
+    const markdown = [
+      '```smoke-test-plan',
+      '- Start from a valid historical v1 WorkerAssignment store with no pointer: read succeeds; operator-primary target use returns binding_absent; callback count remains 0.',
+      '- Publish one exact current local WorkerAssignment; explicitly bind it; read back the exact logical pointer and prove no runtime identity fields exist in persisted bytes or CLI show output.',
+      '- Exercise attachWorkerAssignmentIssueNumber on a bound store; prove the pointer is byte/value-equivalent afterward.',
+      '- Publish/replace an unrelated assignment while a primary exists; prove the pointer is unchanged.',
+      '- Replace the designated assignment through the existing assignment writer; prove the old pointer remains present and target use returns binding_stale rather than binding_absent; no automatic transfer occurs.',
+      '- Exercise explicit replace with the exact expected primary and prove CAS succeeds once; stale/concurrent expectation fails closed.',
+      '- Exercise explicit retire with exact expectation and prove pointer absence by read-back; stale retire fails closed.',
+      '- Prove remote assignment cannot be positively bound.',
+      '- Positive runtime seam: current local binding -> resolveAssignmentWorker -> exact findWorker/sameRuntimeWorker -> one synchronous receipt-returning callback with the exact snapshot; no raw identity is persisted/logged as authority.',
+      '- Negative runtime seam: gone/unresolved/mismatch/ABA observed by available production surfaces -> target_not_current/target_unresolved and zero callback.',
+      '- Provider remap after successful snapshot is not represented as fenced; test uses only available evidence and asserts the callback receives the already-authorized snapshot without claiming bindingKey remained mapped through effect.',
+      '- Reject timeoutMs <=0, non-integer, non-finite, or >5000 as deadline_invalid; prove no runtime call/action occurs.',
+      '- Exhaust the wrapper-observed outer remainder before the second required top-level adapter call and prove deadline_exhausted; separately prove no test asserts a hard total wall-clock bound over Orca resolveAssignmentWorker internals.',
+      '- Compile-negative TypeScript proof rejects an async function, Promise-returning function, and thenable-returning function as the public action; the positive action returns only the closed synchronous receipt.',
+      '- Hold the store lock from another owner and prove binding_store_busy with zero callback.',
+      '- Throw from the synchronous action after entry and prove result diagnostics preserve actionEntered=true rather than laundering the attempt into a zero-effect failure.',
+      '- Restart process-level fixture with logical pointer only; freshly resolve the current runtime snapshot and prove no cached runtime identity is loaded from disk.',
+      '- Downgrade rehearsal: retire current binding, exact read-back proves pointer absence, then feed the resulting historical-compatible v1 store to an older pre-#1532 parser/writer fixture; no operator-primary state remains to be silently erased.',
+      '- Instrument forbidden paths during bind/resolve-only tests and prove zero publication, nudge/remediation, spawn/stop/remove, review, merge, GitHub, alternate transport, retry, or fallback calls.',
+      '```',
+    ].join('\n');
+
+    const parsed = parseSmokeTestPlan(markdown);
+    expect(parsed?.requirement).toBe('required');
+    expect(parsed?.scenarios).toHaveLength(19);
+    expect(parsed?.scenarios.every((scenario) => scenario.action.length > 0 && scenario.expected.length > 0)).toBe(true);
   });
 
   it('binds child PASS observations to exact plan tuples before immediate gate coverage', () => {
