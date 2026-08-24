@@ -35,10 +35,11 @@ import {
 import { canonicalStagePlan } from './create-issue-stage-topology.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
 import { readEvidenceWaiverProducerEvidence } from './create-issue-stage-record-receipt.ts';
-import { deriveCanonicalCycleLineage } from './create-issue-stage-record-lineage.ts';
+import { extractMarker } from './create-issue-stage-record-marker.ts';
+import { buildCanonicalLineage, deriveCanonicalCycleLineage } from './create-issue-stage-record-lineage.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
-import { defaultGhTransport, loadIssueJournalCensus } from './create-issue-stage-record-gh.ts';
-import type { CanonicalLineage, GhTransport, PartialMissingSourceWitness, ProducerEvidence } from './create-issue-stage-record-types.ts';
+import { defaultGhTransport, fetchRepositoryOwnerLogin, parseJournalEvents } from './create-issue-stage-record-gh.ts';
+import type { CanonicalLineage, GhTransport, PartialMissingSourceWitness, ProducerEvidence, TrustedComment } from './create-issue-stage-record-types.ts';
 
 export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
 export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
@@ -94,6 +95,11 @@ export interface OperatorAcceptanceAdjudication {
   reason: string;
 }
 
+export interface AcceptanceArtifactPublicationHooks {
+  /** Deterministic test-only failure seam. Production callers leave this unset. */
+  afterInstall?: (event: { file: string; target: string; installIndex: number }) => void;
+}
+
 export interface ProduceAcceptanceArtifactsOptions {
   reviewDir: string;
   tierIntakePath: string;
@@ -108,6 +114,7 @@ export interface ProduceAcceptanceArtifactsOptions {
   operatorReferenceTransport?: GhTransport;
   artifactSourceTransport?: GhTransport;
   repositoryFullName?: string;
+  publicationHooks?: AcceptanceArtifactPublicationHooks;
 }
 
 interface OperatorNarrowingHint {
@@ -125,15 +132,19 @@ interface AuthoritativeIssueComment {
   createdAt: string;
   updatedAt: string;
   userLogin: string | null;
+  authorAssociation: string | null;
   htmlUrl: string;
   issueUrl: string;
 }
 
-interface AuthoritativeIssueCensus {
+interface IssueCommentCensus {
   repositoryFullName: string;
   issueNumber: number;
-  publisherLogin: string;
   comments: AuthoritativeIssueComment[];
+}
+
+interface AuthoritativeIssueCensus extends IssueCommentCensus {
+  publisherLogin: string;
 }
 
 interface ArtifactAuthorityContext {
@@ -612,25 +623,26 @@ function parseAuthoritativeIssueComment(
   const createdAt = typeof raw.created_at === 'string' ? raw.created_at : null;
   const updatedAt = typeof raw.updated_at === 'string' ? raw.updated_at : null;
   const userLogin = typeof user?.login === 'string' && user.login.trim() !== '' ? user.login.trim() : null;
+  const authorAssociation = typeof raw.author_association === 'string' && raw.author_association.trim() !== ''
+    ? raw.author_association.trim()
+    : null;
   const htmlUrl = typeof raw.html_url === 'string' ? raw.html_url : null;
   const issueUrl = typeof raw.issue_url === 'string' ? raw.issue_url : null;
   if (!Number.isSafeInteger(id) || id < 1 || body === null || !createdAt || !updatedAt || !htmlUrl || !issueUrl) {
     errors.push(temporaryError(unavailableClassification, `${label} lacks authoritative identity/source fields`));
     return null;
   }
-  return { id, body, createdAt, updatedAt, userLogin, htmlUrl, issueUrl };
+  return { id, body, createdAt, updatedAt, userLogin, authorAssociation, htmlUrl, issueUrl };
 }
 
-function authoritativeIssueCommentCensus(
+function issueCommentCensus(
   transport: GhTransport,
   repositoryFullName: string,
   issueNumber: number,
   errors: string[],
-): AuthoritativeIssueCensus | null {
+): IssueCommentCensus | null {
   const parsedRepo = parseRepositoryFullName(repositoryFullName, errors);
   if (!parsedRepo) return null;
-  const publisherLogin = authenticatedGithubPrincipal(transport, errors);
-  if (!publisherLogin) return null;
   const comments: AuthoritativeIssueComment[] = [];
   const pageSize = 100;
   const maxPages = 100;
@@ -661,11 +673,76 @@ function authoritativeIssueCommentCensus(
       comments.push(parsed);
     }
     if (rawPage.length < pageSize) {
-      return { repositoryFullName: parsedRepo.fullName, issueNumber, publisherLogin, comments };
+      return { repositoryFullName: parsedRepo.fullName, issueNumber, comments };
     }
   }
   errors.push(temporaryError('source-unavailable', `Issue comment census exceeded ${maxPages} pages without proving completeness`));
   return null;
+}
+
+function authoritativeIssueCommentCensus(
+  transport: GhTransport,
+  repositoryFullName: string,
+  issueNumber: number,
+  errors: string[],
+): AuthoritativeIssueCensus | null {
+  const publisherLogin = authenticatedGithubPrincipal(transport, errors);
+  if (!publisherLogin) return null;
+  const census = issueCommentCensus(transport, repositoryFullName, issueNumber, errors);
+  return census ? { ...census, publisherLogin } : null;
+}
+
+function canonicalIssueCommentLineage(
+  transport: GhTransport,
+  repositoryFullName: string,
+  issueNumber: number,
+  errors: string[],
+): CanonicalLineage | null {
+  let ownerLogin: string;
+  try {
+    ownerLogin = fetchRepositoryOwnerLogin(transport, repositoryFullName);
+  } catch (error) {
+    errors.push(temporaryError(
+      'source-unavailable',
+      `canonical Issue-comment lineage could not resolve repository owner: ${error instanceof Error ? error.message : String(error)}`,
+    ));
+    return null;
+  }
+  const census = issueCommentCensus(transport, repositoryFullName, issueNumber, errors);
+  if (!census) return null;
+  const trustedJournalComments: TrustedComment[] = [];
+  for (const comment of census.comments) {
+    if (!extractMarker(comment.body)) continue;
+    if (!comment.userLogin || !comment.authorAssociation) {
+      errors.push(temporaryError(
+        'source-unavailable',
+        `journal-marked comment ${comment.id} is missing required trust fields`,
+      ));
+      return null;
+    }
+    if (!sameGithubLogin(comment.userLogin, ownerLogin)) continue;
+    if (comment.updatedAt !== comment.createdAt) continue;
+    trustedJournalComments.push({
+      id: comment.id,
+      body: comment.body,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+      userLogin: comment.userLogin,
+      authorAssociation: comment.authorAssociation,
+    });
+  }
+  const parsed = parseJournalEvents(trustedJournalComments);
+  if (parsed.diagnostics.length > 0) {
+    errors.push(...parsed.diagnostics.map((diagnostic) => `canonical Issue-comment journal ${diagnostic.code}: ${diagnostic.message}`));
+    return null;
+  }
+  const lineage = buildCanonicalLineage(parsed.events);
+  const blockingLineageDiagnostics = lineage.diagnostics.filter((diagnostic) => diagnostic.code !== 'duplicate-remote-event');
+  if (blockingLineageDiagnostics.length > 0) {
+    errors.push(...blockingLineageDiagnostics.map((diagnostic) => `canonical cycle lineage ${diagnostic.code}: ${diagnostic.message}`));
+    return null;
+  }
+  return lineage;
 }
 
 function invocationRequiresAuthoritativeArtifact(invocation: JsonRecord): boolean {
@@ -1627,6 +1704,7 @@ function publishArtifactSet(
   outputDir: string,
   files: readonly string[],
   contents: ReadonlyMap<string, string>,
+  hooks?: AcceptanceArtifactPublicationHooks,
 ): void {
   const parentDir = dirname(outputDir);
   mkdirSync(parentDir, { recursive: true });
@@ -1657,12 +1735,15 @@ function publishArtifactSet(
       backups.set(target, backup);
     }
 
+    let installIndex = 0;
     for (const file of files) {
       const target = join(outputDir, file);
       const staged = join(stagingDir, file);
       if (existsSync(target) && readFileSync(target).equals(readFileSync(staged))) continue;
       if (existsSync(target)) unlinkSync(target);
       renameSync(staged, target);
+      installIndex += 1;
+      hooks?.afterInstall?.({ file, target, installIndex });
     }
   } catch (error) {
     const rollbackErrors: string[] = [];
@@ -1757,28 +1838,12 @@ export function produceAcceptanceArtifacts(
   if (!taskIssueMatch) {
     errors.push('canonical cycle lineage requires tier-intake taskIdentity issue:<N>');
   } else {
-    try {
-      const journal = loadIssueJournalCensus(
-        artifactSourceTransport,
-        repositoryFullName,
-        Number(taskIssueMatch[1]),
-      );
-      if (!journal.fetched.commentsComplete) {
-        errors.push(temporaryError('source-unavailable', 'canonical Issue-comment census is incomplete'));
-      }
-      if (journal.parsed.diagnostics.length > 0) {
-        errors.push(...journal.parsed.diagnostics.map((diagnostic) => `canonical Issue-comment journal ${diagnostic.code}: ${diagnostic.message}`));
-      }
-      const blockingLineageDiagnostics = journal.lineage.diagnostics.filter((diagnostic) => diagnostic.code !== 'duplicate-remote-event');
-      if (blockingLineageDiagnostics.length > 0) {
-        errors.push(...blockingLineageDiagnostics.map((diagnostic) => `canonical cycle lineage ${diagnostic.code}: ${diagnostic.message}`));
-      }
-      if (journal.fetched.commentsComplete && journal.parsed.diagnostics.length === 0 && blockingLineageDiagnostics.length === 0) {
-        canonicalLineage = journal.lineage;
-      }
-    } catch (error) {
-      errors.push(temporaryError('source-unavailable', `canonical Issue-comment lineage could not be loaded: ${error instanceof Error ? error.message : String(error)}`));
-    }
+    canonicalLineage = canonicalIssueCommentLineage(
+      artifactSourceTransport,
+      repositoryFullName,
+      Number(taskIssueMatch[1]),
+      errors,
+    ) ?? undefined;
   }
   let artifactContext: ArtifactAuthorityContext | undefined;
   if (stageInputsRequireAuthoritativeCensus(validStageInputs.map((entry) => entry.value))) {
@@ -1939,7 +2004,7 @@ export function produceAcceptanceArtifacts(
   artifactContents.set('review-episode-inventory.json', JSON.stringify(authority!.receiptInventory, null, 2) + '\n');
   artifactContents.set('acceptance-artifacts.json', JSON.stringify(manifest, null, 2) + '\n');
   try {
-    publishArtifactSet(outputDir, files, artifactContents);
+    publishArtifactSet(outputDir, files, artifactContents, options.publicationHooks);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
