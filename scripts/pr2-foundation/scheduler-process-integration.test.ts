@@ -102,6 +102,12 @@ switch (operation) {
     const worker = matches.length === 1 ? matches[0] : null;
     out(worker
       ? { ok: true, result: {
+          dispatch: {
+            status: worker.dispatchStatus ?? 'dispatched',
+            last_heartbeat_at: worker.lastHeartbeatAt === undefined
+              ? '2026-08-24T14:00:00.000Z'
+              : worker.lastHeartbeatAt,
+          },
           worker: {
             agent_terminal_handle: worker.id,
             state: worker.state ?? 'ready',
@@ -226,6 +232,8 @@ interface FixtureState {
     state?: string;
     stage?: string;
     observationStatus?: string;
+    dispatchStatus?: string;
+    lastHeartbeatAt?: string | null;
   }>;
   dispatchOutcome?: string;
   dispatches?: Array<{ workerId: string; message: string }>;
@@ -402,6 +410,17 @@ describe('scheduler bounded-child production composition', () => {
     const next = fixture(fixturePath); next.workers = next.workers.map((worker) => ({ ...worker, liveness: 'idle' })); writeFileSync(fixturePath, JSON.stringify(next));
     const second = await runTick(env); const secondCensus = (observerResult(second).snapshot as Record<string, unknown>).census as Array<Record<string, unknown>>; expect(secondCensus[0]?.class).toBe('idle'); const secondNudge = schedulerResult(second).fleetNudge as Record<string, unknown>; expect(secondNudge.dispatched).toBe(0); expect(secondNudge.sendAttempts).toBe(1); const secondOutcomes = secondNudge.outcomes as Array<Record<string, unknown>>; expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true); expect(fixture(fixturePath).dispatches).toHaveLength(1);
     const third = await runTick(env); expect((schedulerResult(third).fleetNudge as Record<string, unknown>).dispatched).toBe(0); expect(fixture(fixturePath).dispatches).toHaveLength(1);
+  });
+
+  it('never sends to ready + input_accepted without a dispatch heartbeat in a separate scheduler process', async () => {
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1, maxConcurrency: 2 }));
+    writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'never-started-worker', generation: 'generation-never-started', bindingKey: 'dispatch-never-started', lines: ['prompt only'], liveness: 'idle', state: 'ready', stage: 'input_accepted', observationStatus: 'live', lastHeartbeatAt: null }], dispatches: [], sendCalls: 0 }));
+    writeEpoch(epochPath, 'epoch-never-started', 'nonce-never-started'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-never-started', 'nonce-never-started'); await publishLocal(env, 'dispatch-never-started', 'task-never-started');
+    const first = await runTick(env); const second = await runTick(env);
+    expect(fixture(fixturePath).sendCalls ?? 0).toBe(0); expect(fixture(fixturePath).dispatches).toHaveLength(0);
+    expect(schedulerResult(first).orchestratorRequired).toBe(true); expect(schedulerResult(second).orchestratorRequired).toBe(true);
+    expect(handoff(env)).toMatchObject({ reason: 'target_unresolved', decision: 'orchestrator_required', issueNumber: 1420, taskId: 'task-never-started' });
   });
 
   it('never sends to the captured running + succeeded + settled Dispatch in a separate scheduler process', async () => {
