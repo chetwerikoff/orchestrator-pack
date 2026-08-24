@@ -177,6 +177,7 @@
     "scripts/verify.test.ts": "light",
     "scripts/vitest-ci-runner-control-flow.test.ts": "light",
     "scripts/vitest-ci-runner.test.ts": "light",
+    "scripts/vitest-live-store-parent-guard.test.ts": "light",
     "scripts/worker-message-submit-reconcile.test.ts": "heavy",
     "scripts/worker-smoke-1359.test.ts": "light",
     "scripts/worker-smoke-entrypoint-1359.test.ts": "light",
