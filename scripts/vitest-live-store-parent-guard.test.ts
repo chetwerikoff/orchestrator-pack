@@ -87,7 +87,7 @@ describe('parent live-store guard', () => {
     temporaryFiles.push(fixture);
     writeFileSync(
       fixture,
-      "import { expect, it } from 'vitest'; it('passes', async () => { await new Promise((resolve) => setTimeout(resolve, 150)); expect(true).toBe(true); });\n",
+      "import { expect, it } from 'vitest'; it('passes', async () => { await new Promise((resolve) => setTimeout(resolve, 400)); expect(true).toBe(true); });\n",
       'utf8',
     );
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
@@ -106,7 +106,7 @@ describe('parent live-store guard', () => {
     temporaryFiles.push(fixture);
     writeFileSync(
       fixture,
-      "import { expect, it } from 'vitest'; it('passes', async () => { await new Promise((resolve) => setTimeout(resolve, 150)); expect(true).toBe(true); });\n",
+      "import { expect, it } from 'vitest'; it('passes', async () => { await new Promise((resolve) => setTimeout(resolve, 400)); expect(true).toBe(true); });\n",
       'utf8',
     );
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
