@@ -54,8 +54,10 @@ function nearestExistingDirectory(candidate) {
 }
 
 function transientFailureId(failure) {
-  const suffix = ':transient_write_observed';
-  return failure.endsWith(suffix) ? failure.slice(0, -suffix.length) : '';
+  for (const suffix of [':transient_write_observed', ':snapshot_changed']) {
+    if (failure.endsWith(suffix)) return failure.slice(0, -suffix.length);
+  }
+  return '';
 }
 
 function normalizePowerShellValue(value) {
