@@ -17,7 +17,6 @@ import {
   workerAssignmentKey,
   WORKER_ASSIGNMENT_SCHEMA,
   WORKER_ASSIGNMENT_STORE_SCHEMA,
-  type OperatorPrimaryBindingV1,
 } from './worker-assignment-store.ts';
 import {
   operatorPrimarySyncResult,
@@ -83,25 +82,6 @@ function runtime(input: {
     liveness: () => ({ status: 'idle', worker: worker().identity }),
     stopWorker: () => ({ status: 'ok', value: { stopped: true } }),
   };
-}
-
-async function publishLocal(file: string, input: {
-  readonly issueNumber?: number;
-  readonly taskId?: string;
-  readonly bindingKey?: string;
-  readonly expectedCurrent?: { readonly assignmentId: string; readonly generation: number };
-} = {}) {
-  return publishCurrentWorkerAssignment({
-    file,
-    repository: 'chetwerikoff/orchestrator-pack',
-    ...(input.issueNumber === undefined ? {} : { issueNumber: input.issueNumber }),
-    taskId: input.taskId ?? 'task-1532',
-    kind: 'local',
-    provider: 'orca',
-    bindingKey: input.bindingKey ?? 'dispatch-1532',
-    role: 'worker',
-    ...(input.expectedCurrent ? { expectedCurrent: input.expectedCurrent } : {}),
-  } as Parameters<typeof publishCurrentWorkerAssignment>[0]);
 }
 
 async function boundFixture() {
@@ -281,6 +261,67 @@ describe('operator-primary runtime snapshot fence', () => {
     expect(adapter.findWorker).toHaveBeenCalledTimes(1);
   });
 
+  it('returns remote_not_applicable for a structurally valid persisted remote designation', async () => {
+    const { file } = fixture();
+    const remote = await publishCurrentWorkerAssignment({
+      file,
+      repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 42,
+      taskId: 'task-remote',
+      kind: 'remote',
+      provider: 'browser-gpt',
+      bindingKey: 'remote-binding',
+      role: 'worker',
+    });
+    if (!remote.ok) throw new Error(remote.reason);
+    const store = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    store.operatorPrimary = {
+      route: 'operator-primary',
+      taskId: remote.assignment.taskId,
+      bindingKey: remote.assignment.bindingKey,
+      assignmentId: remote.assignment.assignmentId,
+      assignmentGeneration: remote.assignment.generation,
+    };
+    writeFileSync(file, `${JSON.stringify(store, null, 2)}\n`);
+
+    let calls = 0;
+    const result = await withCurrentOperatorPrimaryTarget({ file, adapter: runtime(), timeoutMs: 250 }, () => {
+      calls += 1;
+      return operatorPrimarySyncResult('unexpected');
+    });
+    expect(result).toEqual({ ok: false, actionEntered: false, reason: 'remote_not_applicable' });
+    expect(calls).toBe(0);
+  });
+
+  it('returns runtime_unavailable when the registered adapter omits assignment resolution', async () => {
+    const { file } = await boundFixture();
+    const { resolveAssignmentWorker: _omitted, ...adapter } = runtime();
+    let calls = 0;
+    const result = await withCurrentOperatorPrimaryTarget({ file, adapter, timeoutMs: 250 }, () => {
+      calls += 1;
+      return operatorPrimarySyncResult('unexpected');
+    });
+    expect(result).toEqual({ ok: false, actionEntered: false, reason: 'runtime_unavailable' });
+    expect(calls).toBe(0);
+  });
+
+  it('returns target_unresolved for a resolved worker with malformed composite identity', async () => {
+    const { file } = await boundFixture();
+    const malformed: RuntimeWorker = {
+      ...worker('terminal-malformed', 'incarnation-malformed'),
+      identity: { runtime: 'orca', id: '', generation: 'incarnation-malformed' },
+    };
+    const adapter = runtime({ resolved: malformed, found: malformed });
+    let calls = 0;
+    const result = await withCurrentOperatorPrimaryTarget({ file, adapter, timeoutMs: 250 }, () => {
+      calls += 1;
+      return operatorPrimarySyncResult('unexpected');
+    });
+    expect(result).toEqual({ ok: false, actionEntered: false, reason: 'target_unresolved' });
+    expect(adapter.findWorker).not.toHaveBeenCalled();
+    expect(calls).toBe(0);
+  });
+
   it.each([
     ['runtime_unavailable', runtime({ resolveFailure: true })],
     ['target_not_current', runtime({ resolved: 'gone' })],
@@ -294,6 +335,24 @@ describe('operator-primary runtime snapshot fence', () => {
       return operatorPrimarySyncResult('unexpected');
     });
     expect(result).toEqual({ ok: false, actionEntered: false, reason });
+    expect(calls).toBe(0);
+  });
+
+  it('maps an unexpected pre-action logical-fence fault to binding_fence_failed', async () => {
+    const { file } = await boundFixture();
+    const adapter = runtime();
+    Object.defineProperty(adapter, 'resolveAssignmentWorker', {
+      configurable: true,
+      get() {
+        throw new Error('injected capability access fault');
+      },
+    });
+    let calls = 0;
+    const result = await withCurrentOperatorPrimaryTarget({ file, adapter, timeoutMs: 250 }, () => {
+      calls += 1;
+      return operatorPrimarySyncResult('unexpected');
+    });
+    expect(result).toEqual({ ok: false, actionEntered: false, reason: 'binding_fence_failed' });
     expect(calls).toBe(0);
   });
 
