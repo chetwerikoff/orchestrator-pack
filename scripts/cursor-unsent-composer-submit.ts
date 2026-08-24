@@ -28,10 +28,7 @@ const LONE_ARROW = /^→$/u;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
-export const QUIET_AFTER_PRINT_MS = 5_000;
 const EMPTY_COMPOSER_RECHECK_MS = 1_000;
-// Reserve the observed adapter dispatch tail inside the user-facing deadline.
-const ASYNC_SUBMIT_RESERVE_MS = 250;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
@@ -132,6 +129,7 @@ interface WatchStoreIdentityRow {
   readonly id: string;
   readonly generation: string;
   readonly fingerprint: string;
+  readonly ambiguous?: boolean;
 }
 
 interface WatchStore {
@@ -151,13 +149,14 @@ function readIdentityRow(row: unknown): WatchStoreIdentityRow | undefined {
   const id = (row as { id?: unknown }).id;
   const generation = (row as { generation?: unknown }).generation;
   const fingerprint = (row as { fingerprint?: unknown }).fingerprint;
+  const ambiguous = (row as { ambiguous?: unknown }).ambiguous;
   if (
     typeof runtime !== 'string' || !runtime
     || typeof id !== 'string' || !id
     || typeof generation !== 'string' || !generation
     || typeof fingerprint !== 'string' || !fingerprint
   ) return undefined;
-  return { runtime, id, generation, fingerprint };
+  return { runtime, id, generation, fingerprint, ...(ambiguous === true ? { ambiguous: true } : {}) };
 }
 
 export function loadWatchStore(path: string): WatchStore {
@@ -197,6 +196,7 @@ export function loadSubmittedFingerprints(path: string): Map<string, string> {
 export function saveSubmittedFingerprints(path: string, submitted: ReadonlyMap<string, string>): void {
   saveWatchStore(path, {
     submittedFingerprint: submitted,
+    ambiguousSubmittedFingerprints: new Map(),
     lastFingerprint: new Map(),
     lastChangedAt: new Map(),
   });
@@ -204,15 +204,26 @@ export function saveSubmittedFingerprints(path: string, submitted: ReadonlyMap<s
 
 interface PersistableWatchState {
   readonly submittedFingerprint: ReadonlyMap<string, string>;
+  readonly ambiguousSubmittedFingerprints: ReadonlyMap<string, ReadonlySet<string>>;
   readonly lastFingerprint: ReadonlyMap<string, string>;
   readonly lastChangedAt: ReadonlyMap<string, number>;
 }
 
 function saveWatchStore(path: string, state: PersistableWatchState): void {
-  const submitted = [...state.submittedFingerprint.entries()].flatMap(([key, fingerprint]) => {
+  const submittedRows = new Map<string, WatchStoreIdentityRow>();
+  for (const [key, fingerprint] of state.submittedFingerprint.entries()) {
     const row = identityFromKey(key, fingerprint);
-    return row ? [row] : [];
-  });
+    if (!row) continue;
+    const ambiguous = state.ambiguousSubmittedFingerprints.get(key)?.has(fingerprint) ?? false;
+    submittedRows.set(`${key}\u0000${fingerprint}`, ambiguous ? { ...row, ambiguous: true } : row);
+  }
+  for (const [key, fingerprints] of state.ambiguousSubmittedFingerprints.entries()) {
+    for (const fingerprint of fingerprints) {
+      const row = identityFromKey(key, fingerprint);
+      if (row) submittedRows.set(`${key}\u0000${fingerprint}`, { ...row, ambiguous: true });
+    }
+  }
+  const submitted = [...submittedRows.values()];
   const observations = [...state.lastFingerprint.entries()].flatMap(([key, fingerprint]) => {
     const row = identityFromKey(key, fingerprint);
     const changedAt = state.lastChangedAt.get(key);
@@ -228,6 +239,11 @@ function hydrateSubmitted(state: UnsentComposerWatchState, path: string | undefi
   for (const row of store.submitted) {
     const key = workerKey(row);
     if (!state.submittedFingerprint.has(key)) state.submittedFingerprint.set(key, row.fingerprint);
+    if (row.ambiguous) {
+      const fingerprints = state.ambiguousSubmittedFingerprints.get(key) ?? new Set<string>();
+      fingerprints.add(row.fingerprint);
+      state.ambiguousSubmittedFingerprints.set(key, fingerprints);
+    }
   }
   for (const row of store.observations) {
     const key = workerKey(row);
@@ -272,6 +288,7 @@ export interface UnsentComposerWatchState {
   readonly lastFingerprint: Map<string, string>;
   readonly lastChangedAt: Map<string, number>;
   readonly submittedFingerprint: Map<string, string>;
+  readonly ambiguousSubmittedFingerprints: Map<string, Set<string>>;
 }
 
 export interface UnsentComposerSupervisorLifecycle {
@@ -299,6 +316,7 @@ export function createUnsentComposerWatchState(): UnsentComposerWatchState {
     lastFingerprint: new Map(),
     lastChangedAt: new Map(),
     submittedFingerprint: new Map(),
+    ambiguousSubmittedFingerprints: new Map(),
   };
 }
 
@@ -326,24 +344,25 @@ function settleComposerObservation(
   const kind = classifyCursorComposer(preview);
   if (kind === 'empty') {
     clearObservation(state, key);
-    state.submittedFingerprint.delete(key);
+    if (!state.ambiguousSubmittedFingerprints.has(key)) state.submittedFingerprint.delete(key);
     return { ...base, ok: true, unsent: false, enter: false, reason: 'composer_empty' };
   }
   const fingerprint = composerPokeFingerprint(preview);
-  if (state.submittedFingerprint.get(key) === fingerprint) {
-    return { ...base, ok: true, unsent: true, enter: false, reason: 'already_submitted' };
+  if (!ORCHESTRATION_NOTICE.test(fingerprint)) {
+    clearObservation(state, key);
+    return {
+      ...base,
+      ok: true,
+      unsent: true,
+      enter: false,
+      reason: 'composer_not_orchestration_pointer',
+    };
   }
-  if (input.watch) {
-    const now = deps.now?.() ?? Date.now();
-    if (state.lastFingerprint.get(key) !== fingerprint) {
-      state.lastFingerprint.set(key, fingerprint);
-      state.lastChangedAt.set(key, now);
-      return { ...base, ok: true, unsent: true, enter: false, reason: 'waiting_stable' };
-    }
-    const quietFor = now - (state.lastChangedAt.get(key) ?? now);
-    if (quietFor < QUIET_AFTER_PRINT_MS) {
-      return { ...base, ok: true, unsent: true, enter: false, reason: 'waiting_stable' };
-    }
+  if (
+    state.submittedFingerprint.get(key) === fingerprint
+    || state.ambiguousSubmittedFingerprints.get(key)?.has(fingerprint)
+  ) {
+    return { ...base, ok: true, unsent: true, enter: false, reason: 'already_submitted' };
   }
   if (input.dryRun) {
     return { ...base, ok: true, unsent: true, enter: false, reason: 'dry_run' };
@@ -355,6 +374,9 @@ function settleComposerObservation(
     return { ...base, ok: false, unsent: true, enter: false, reason: dispatched.reason };
   }
   if (dispatched.status === 'dispatch_unknown') {
+    const fingerprints = state.ambiguousSubmittedFingerprints.get(key) ?? new Set<string>();
+    fingerprints.add(fingerprint);
+    state.ambiguousSubmittedFingerprints.set(key, fingerprints);
     return { ...base, ok: true, unsent: true, enter: false, reason: dispatched.reason };
   }
   return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent' };
@@ -428,13 +450,25 @@ export function submitUnsentCursorComposerOnce(
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
 ): UnsentComposerSubmitResult {
-  const first = submitUnsentCursorComposer({ ...input, watch: true }, deps, state);
-  if (!first.terminals.some((row) => row.reason === 'waiting_stable')) {
-    return { ...first, watch: false };
-  }
-  (deps.sleep ?? sleepSync)(QUIET_AFTER_PRINT_MS);
-  const second = submitUnsentCursorComposer({ ...input, watch: true }, deps, state);
-  return { ...second, watch: false };
+  const result = submitUnsentCursorComposer({ ...input, watch: true }, deps, state);
+  return { ...result, watch: false };
+}
+
+/** One bounded observation for the exact worker that just received a notification. */
+export function submitUnsentCursorComposerOnceForWorker(
+  worker: RuntimeWorker,
+  deps: UnsentComposerSubmitDeps,
+  state: UnsentComposerWatchState = createUnsentComposerWatchState(),
+): UnsentComposerSubmitResult {
+  hydrateSubmitted(state, deps.sentStorePath);
+  const terminal = submitOne(worker, { watch: true }, deps, state);
+  persistSubmitted(state, deps.sentStorePath);
+  return {
+    ok: terminal.ok,
+    dryRun: false,
+    watch: false,
+    terminals: [terminal],
+  };
 }
 
 let heldLockFd: number | undefined;
@@ -573,35 +607,11 @@ export async function runSupervisorUnsentComposerTick(
     let result = deps.readAsync
       ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
       : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
-    while (result.reason === 'waiting_stable' || (result.reason === 'composer_empty' && !fleetSettled)) {
-      if (result.reason === 'composer_empty') {
-        await new Promise<void>((resolve) => setTimeout(resolve, EMPTY_COMPOSER_RECHECK_MS));
-      } else {
-        await persistAfterObservation();
-        const now = deps.now?.() ?? Date.now();
-        const key = workerKey(worker.identity);
-        const remaining = Math.max(0, QUIET_AFTER_PRINT_MS - (now - (state.lastChangedAt.get(key) ?? now)));
-        const quietTimer = new Promise<void>((resolve) => setTimeout(
-          resolve,
-          Math.max(1, remaining - (deps.readAsync ? ASYNC_SUBMIT_RESERVE_MS : 0)),
-        ));
-        if (deps.readAsync) {
-          // The read must happen after the quiet deadline. A read started
-          // alongside the timer can return an old fingerprint before the user
-          // edits the composer, then incorrectly bypass the stability check.
-          await quietTimer;
-          const shown = await deps.readAsync(worker.identity);
-          result = settleComposerObservation(
-            worker,
-            { terminals: [worker.identity.id], watch: true },
-            workerDeps,
-            state,
-            shown,
-          );
-          continue;
-        }
-        await quietTimer;
-      }
+    while (
+      (result.reason === 'composer_empty' || result.reason === 'composer_not_orchestration_pointer')
+      && !fleetSettled
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, EMPTY_COMPOSER_RECHECK_MS));
       result = deps.readAsync
         ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
         : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
@@ -665,7 +675,8 @@ function shouldLogWatchTick(result: UnsentComposerSubmitResult): boolean {
 
 function isDirectCliExecution(): boolean {
   const script = process.argv[1];
-  return Boolean(script) && import.meta.url === pathToFileURL(script).href;
+  if (!script) return false;
+  return import.meta.url === pathToFileURL(script).href;
 }
 
 async function main(): Promise<void> {

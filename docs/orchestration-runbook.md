@@ -493,9 +493,9 @@ S1 observation
 
 The existing `liveCandidates()` path remains limited to `ready_for_review` workers with PR/head binding. Do not widen it to managers or pre-handoff workers.
 
-The registered production owner remains `scripts/lib/orchestrator-side-process-supervisor.ts::runSupervisor` with the existing `pr2-scheduler` child. Do not replace bounded `scheduler.ts tick` children with `runLoop()`, another daemon, timer, watcher, or watchdog.
+The registered production owner remains `scripts/lib/orchestrator-side-process-supervisor.ts::runSupervisor` with the existing `pr2-scheduler` child. Do not replace bounded `scheduler.ts tick` children with `runLoop()`, another daemon, timer, watcher, or watchdog. The periodic scheduler tick owns fleet supervision only; it does not read Cursor composer screens.
 
-The same `pr2-scheduler` tick runs fleet supervision and the unsent Cursor composer pass concurrently. The composer pass submits only the exact Orca mailbox poke after 5 seconds of unchanged text, and the tick waits for both passes to settle before preserving the fleet error. A fleet-phase failure therefore cannot cancel or skip the submit pass. Quiet and submitted fingerprints persist across tick processes. A crashed tick is restarted by the existing supervisor crash-backoff; do not add a second registry child or a long-lived CLI watcher beside a live supervisor. Manual/smoke CLI remains `node --experimental-strip-types scripts/cursor-unsent-composer-submit.ts` (`--once` for one scan).
+After the existing pack-side worker-notification delivery event settles successfully, that delivery path may run one bounded target submit-only pass for the exact worker that received the notification. The pass reads that worker's composer once and presses Enter only for one or more exact Orca mailbox-pointer lines; repeated, ambiguous, human, or mixed text has no effect. Identity and persisted fingerprint guards remain authoritative. A delivery-event failure does not create a composer side effect. A crashed scheduler is restarted by the existing supervisor crash-backoff; do not add a second registry child, daemon, timer, watcher, or long-lived CLI watcher beside a live supervisor. Manual/smoke CLI remains `node --experimental-strip-types scripts/cursor-unsent-composer-submit.ts` (`--once` for one bounded scan).
 
 ## Durable `orchestrator_required` handoff
 

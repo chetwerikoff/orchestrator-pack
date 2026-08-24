@@ -13,6 +13,7 @@ import type {
 import { getPackReviewRun } from './pack-review-run-store.ts';
 import { runProcess } from '../kernel/subprocess.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
+import { createAdapterSubmitDeps, submitUnsentCursorComposerOnceForWorker } from '../cursor-unsent-composer-submit.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import { withSideEffectFence } from '../runtime/side-effect-fence.ts';
 import { withJournalLock } from '../pr2-foundation/journal-lock.ts';
@@ -228,6 +229,14 @@ async function finalizeJournal(admission: JournalAdmission, outcome: string): Pr
     if (!finalized.ok) throw new Error(finalized.reason);
     writeJournal(admission.journalPath, finalized.journal);
   });
+}
+
+function submitCursorComposerOnceAfterDelivery(adapter: RuntimeAdapter, worker: RuntimeWorker): void {
+  try {
+    submitUnsentCursorComposerOnceForWorker(worker, createAdapterSubmitDeps(adapter));
+  } catch {
+    // Composer submission is an auxiliary bounded reaction; notification settlement remains authoritative.
+  }
 }
 
 async function finalizeBoth(input: {
@@ -502,6 +511,7 @@ export async function sendPackReviewWorkerNotification(
       journalOutcome: DISPATCH_OUTCOME_DISPATCHED,
       claimOutcome: 'SENT',
     });
+    if (completed.ok) submitCursorComposerOnceAfterDelivery(adapter, worker);
     return {
       state: 'submitted',
       reason: completed.ok ? 'runtime_dispatch_submitted' : `runtime_dispatch_submitted:${completed.reason}`,
@@ -515,6 +525,7 @@ export async function sendPackReviewWorkerNotification(
       claimOutcome: 'UNCERTAIN',
       extra: { reason: dispatch.reason },
     });
+    if (completed.ok) submitCursorComposerOnceAfterDelivery(adapter, worker);
     return { state: 'ambiguous', reason: completed.ok ? 'dispatch_unknown' : completed.reason };
   }
   const completed = await finalizeBoth({
