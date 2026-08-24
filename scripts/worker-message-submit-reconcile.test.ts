@@ -118,6 +118,22 @@ describe('worker message submission through the runtime boundary', () => {
       expect(calls[0]?.submitOnly).toBeUndefined();
       expect(calls[0]?.writeOnly).toBe(true);
       expect(calls[1]).toMatchObject({ submitOnly: true, worker: identity });
+
+      const duplicate = await sendPackReviewWorkerNotification({
+        trustedPackRoot: process.cwd(),
+        workerId: identity.id,
+        expectedWorkerGeneration: identity.generation,
+        prNumber: 1587,
+        projectId: 'orchestrator-pack',
+        adapter,
+        journalPath: path.join(root, 'dispatch.json'),
+        claimNamespace: path.join(root, 'claims'),
+        sideEffectFencePath: path.join(root, 'dispatch.lock'),
+        request: { message: 'event delivery', idempotencyKey: `event-worker-${identity.generation}` },
+      });
+
+      expect(duplicate).toMatchObject({ state: 'ambiguous', reason: 'journal_duplicate_no_op' });
+      expect(calls).toHaveLength(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

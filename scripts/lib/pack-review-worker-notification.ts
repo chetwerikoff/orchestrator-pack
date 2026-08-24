@@ -64,6 +64,7 @@ export interface WorkerNotificationOptions {
 
 interface JournalAdmission {
   duplicate: boolean;
+  ambiguous?: boolean;
   deliveryId: string;
   journalPath: string;
 }
@@ -171,6 +172,19 @@ async function admitNotification(input: {
   const findingsHash = hashed(input.request.message);
   return withJournalLock(input.journalPath, 3, () => {
     const journal = readJournal(input.journalPath);
+    const existing = Object.values(journal)
+      .map((value) => asRecord(value))
+      .find((record) => record
+        && trim(record.deterministicKey) === deliveryKey
+        && trim(record.findingsHash) === findingsHash);
+    if (existing) {
+      return {
+        duplicate: true,
+        ambiguous: trim(existing.dispatchOutcome) !== DISPATCH_OUTCOME_DISPATCHED,
+        deliveryId: trim(existing.deliveryId),
+        journalPath: input.journalPath,
+      };
+    }
     const deterministic = evaluateDeterministicJournalAdmission(journal, {
       deterministicKey: deliveryKey,
       findingsHash,
@@ -458,8 +472,11 @@ export async function sendPackReviewWorkerNotification(
     return { state: 'pre_dispatch_failure', reason: error instanceof Error ? error.message : 'journal_register_failed' };
   }
   if (admission.duplicate) {
-    await finalizeWorkerNudgeClaim(claim, 'SENT', { duplicateNoOp: true });
-    return { state: 'submitted', reason: 'journal_duplicate_no_op' };
+    await finalizeWorkerNudgeClaim(claim, admission.ambiguous ? 'UNCERTAIN' : 'SENT', { duplicateNoOp: true });
+    return {
+      state: admission.ambiguous ? 'ambiguous' : 'submitted',
+      reason: 'journal_duplicate_no_op',
+    };
   }
 
   const fenced = await withSideEffectFence({
