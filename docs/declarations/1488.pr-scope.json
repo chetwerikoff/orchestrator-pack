@@ -23,12 +23,15 @@
     "docs/coworker-delegation.md",
     "docs/coworker-read-delegation-audit.md",
     "docs/declarations/1488.pr-scope.json",
+    "docs/fleet-liveness-contract.md",
     "docs/migration_notes.md",
     "docs/orchestration-runbook.md",
     "docs/read-delegation-audit.d.mts",
     "docs/read-delegation-audit.mjs",
     "docs/repository_policy.md",
-    "scripts/gate-runner/"
+    "docs/vitest-live-store-audit.md",
+    "scripts/gate-runner/",
+    "scripts/toolchain/NODE_22_OPERATOR_RUNBOOK.md"
   ],
   "denylist": [
     ".ao/",
@@ -46,7 +49,8 @@
     "AGENTS.md",
     "CLAUDE.md",
     "docs/",
-    "scripts/gate-runner/"
+    "scripts/gate-runner/",
+    "scripts/toolchain/"
   ],
   "source_revision": "6ed7a3a0f4b39a83e9d6969b54706629c56b9110"
 }
