@@ -421,6 +421,51 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     }
   });
 
+  it('republishes identical bytes without new invocations and rejects conflicting published receipts', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    const first = produce(input);
+    expect(first.ok, first.errors.join('\n')).toBe(true);
+
+    const publishedNames = readdirSync(input.outputDir).sort();
+    const publishedBytes = new Map(
+      publishedNames.map((name) => [name, readFileSync(join(input.outputDir, name))]),
+    );
+    const firstReceipt = JSON.parse(
+      readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'),
+    );
+
+    const rerun = produce(input, transport({ census: [...input.reviewComments, comment(input.body)] }));
+    expect(rerun.ok, rerun.errors.join('\n')).toBe(true);
+    expect(readdirSync(input.outputDir).sort()).toEqual(publishedNames);
+    for (const name of publishedNames) {
+      expect(readFileSync(join(input.outputDir, name))).toEqual(publishedBytes.get(name));
+    }
+    const rerunReceipt = JSON.parse(
+      readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'),
+    );
+    expect(rerunReceipt.invocations).toEqual(firstReceipt.invocations);
+    expect(rerunReceipt.invocations).toHaveLength(1);
+
+    const receiptPath = join(input.outputDir, 'stage-completeness-receipt-attempt-001.json');
+    writeFileSync(receiptPath, JSON.stringify({ ...firstReceipt, conflicting: true }) + '\n');
+    const conflictingNames = readdirSync(input.outputDir).sort();
+    const conflictingBytes = new Map(
+      conflictingNames.map((name) => [name, readFileSync(join(input.outputDir, name))]),
+    );
+    const conflict = produce(input, transport({ census: [...input.reviewComments, comment(input.body)] }));
+    expect(conflict.ok).toBe(false);
+    expect(conflict.errors.join('\n')).toContain('conflicting immutable stage receipt target');
+    expect(readdirSync(input.outputDir).sort()).toEqual(conflictingNames);
+    for (const name of conflictingNames) {
+      expect(readFileSync(join(input.outputDir, name))).toEqual(conflictingBytes.get(name));
+    }
+    expect(readdirSync(input.dir).filter((name) => name.startsWith('.output.tmp-'))).toEqual([]);
+  });
+
   it('requires GitHub artifact authority for complete calls even with an opaque reviewerSource', () => {
     const input = fixture({
       transportClassification: 'complete',
