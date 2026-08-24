@@ -139,6 +139,7 @@ async function setLocalAssignment(
     kind: 'local',
     provider: 'orca',
     bindingKey,
+    role: 'worker',
     ...(expectedCurrent ? { expectedCurrent } : {}),
   });
   if (!publication.ok) throw new Error(publication.reason);

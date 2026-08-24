@@ -189,6 +189,7 @@ async function publishLocal(file: string, bindingKey: string): Promise<WorkerAss
     kind: 'local',
     provider: 'orca',
     bindingKey,
+    role: 'worker',
   });
   if (!result.ok) throw new Error(result.reason);
   return result.assignment;
@@ -365,6 +366,7 @@ describe('Issue #1418 r10 partial smoke-start production races', () => {
           kind: 'local',
           provider: 'orca',
           bindingKey: 'dispatch-unrelated-issue',
+          role: 'worker',
         });
       },
       onDispatch: () => {

@@ -78,14 +78,14 @@ Issue #1441 makes three existing authorities explicit at their consumers:
 
 A structurally valid Orca supervised-start error envelope also preserves its exact non-empty `error.code` in structured failure evidence. It remains a failed start and never publishes a successful assignment.
 
-The assignment-store change is intentionally a hard cut. A pre-upgrade `worker-assignment/v1` store whose object keys are `issue-<N>` is unreadable after this revision. There is no migration, dual-key lookup, compatibility alias, promotion, second store, or in-process conversion. This fail-closed state prevents stale pre-upgrade assignment facts from authorizing runtime effects under the new key contract.
+Issue #1495 replaces that unreadable hard cut with a closed, lossless migration: recognized `issue-<N>` keys are re-keyed to canonical `task-dispatch-*` keys after an exact sibling backup, while unknown keys and corrupt stores still fail closed. There is still no dual-key lookup, alias, promotion, second live store, or heuristic repair.
 
 For concurrent Browser-GPT author/reviewer batches, a REST-visible sibling publication proves that the batch publication transport functioned, but it does not prove that a silent sibling payload crossed the composer. The silent sibling is therefore classified `possible-or-actual`, resend is forbidden, and the slot settles as an incident carrying its invocation identity. With zero REST-visible publications, no slot is classified as delivered. Stage-level `partial` settlement remains owned by #1439.
 
 ### Operator adoption
 
 1. Adopt the merged PACK revision through the normal supported pack deployment/recycle path.
-2. Before starting new supervised work, retire or reset the operator-owned generated `worker-assignments.json` returned by `resolveWorkerAssignmentStorePath`. Do not hand-convert `issue-<N>` records or preserve them through an alias.
+2. Do not hand-edit `worker-assignments.json`. The first mutating WorkerAssignment path against a recognized `issue-<N>` or mixed store creates an exact `*.pre-task-dispatch-migration` backup, rewrites canonical `task-dispatch-*` keys once, then continues the ordinary compare-and-publish. Confirm the live store is canonical and the backup matches the original bytes. Supply an explicit `--role worker|orchestrator` on local supervised start and remote registration; missing or invalid role fails before Orca/store mutation. Pre-role rows stay readable with `role` absent.
 3. Start one brief-only supervised worker without `--issue-number`. Confirm the ready receipt contains the expected `taskId` and non-empty `dispatchId`, and that the store contains exactly one canonical task/dispatch key with no Issue metadata yet.
 4. After the Issue is published, attach its positive Issue number through the tracked assignment-store path and confirm the canonical key, assignment id, and generation are unchanged. Issue-scoped scheduler/fleet behavior may begin only after this metadata exists.
 5. Exercise one stale/remapped Orca target. Confirm a changed generation, `exactWorker: false`, missing current identity, or ambiguous observation performs no send/read/stop/reassignment effect and returns the existing unresolved/fenced result.
@@ -97,7 +97,7 @@ Do not change credentials, local browser profiles/CDP state, or other generated 
 
 ### Rollback
 
-Rollback is a source-control revert followed by the normal supported adoption/recycle path. Do not try to make old and new WorkerAssignment key formats live simultaneously. Generated assignment state must match the code revision that owns it; when moving across this hard-cut boundary, retire/reset that generated store instead of converting it in process.
+Rollback is a source-control revert followed by the normal supported adoption/recycle path. If a migration backup exists beside the live store, it is recovery evidence for the pre-canonical bytes, not a second live authority. Restore only by replacing the live file with those exact backup bytes under operator control; do not run a second migrator, dual-key reader, or hand conversion.
 
 ## Runtime-neutral hard cut (Issue #1352)
 

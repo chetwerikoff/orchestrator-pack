@@ -151,6 +151,7 @@ async function publishLocal(
     kind: 'local',
     provider: 'orca',
     bindingKey,
+    role: 'worker',
     ...(expectedCurrent ? { expectedCurrent } : {}),
   });
   if (!result.ok) throw new Error(result.reason);
@@ -170,6 +171,7 @@ async function publishRemote(
     kind: 'remote',
     provider: 'browser-gpt',
     bindingKey,
+    role: 'worker',
     ...(expectedCurrent ? { expectedCurrent } : {}),
   });
   if (!result.ok) throw new Error(result.reason);
@@ -217,7 +219,6 @@ function dependencies(input: {
     ...(input.runAttempt ? { runAttempt: input.runAttempt } : {}),
   };
 }
-
 function remoteActuationRecords(options: PackReviewAuthorityOptions) {
   return listPackReviewImmutableRecords('evidence', options)
     .filter((record) => (

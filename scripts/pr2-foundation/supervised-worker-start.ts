@@ -3,12 +3,17 @@ import {
   attachWorkerAssignmentIssueNumber,
   currentWorkerAssignment,
   currentWorkerAssignmentByDeliverable,
+  inspectWorkerAssignmentStore,
+  parseWorkerAssignmentRole,
   publishCurrentWorkerAssignment,
   resolveWorkerAssignmentStorePath,
   type WorkerAssignment,
   type WorkerAssignmentExpectation,
   type WorkerAssignmentRecord,
+  type WorkerAssignmentRole,
+  type WorkerAssignmentStoreTrustCause,
 } from '../lib/worker-assignment-store.ts';
+import { existsSync, readFileSync } from 'node:fs';
 import { admitCurrentWorkerAssignmentReplacement } from '../lib/worker-assignment-runtime.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter } from '../runtime/contracts.ts';
@@ -70,6 +75,7 @@ export interface SupervisedWorkerStartRecoveryEvidence {
 export interface SupervisedWorkerStartResult {
   readonly ok: boolean;
   readonly reason: string;
+  readonly cause?: WorkerAssignmentStoreTrustCause;
   /** Exact provider error code from a structurally valid Orca error envelope. */
   readonly errorCode?: string;
   /** Exact non-secret provider recovery fields from Orca error.data, when present. */
@@ -133,11 +139,13 @@ function rejectedStart(
   receipt?: SupervisedWorkerStartReceipt,
   errorCode?: string,
   recovery?: SupervisedWorkerStartRecoveryEvidence,
+  cause?: WorkerAssignmentStoreTrustCause,
 ): SupervisedWorkerStartResult {
   const resources = receipt ? residualResources(receipt) : undefined;
   return {
     ok: false,
     reason,
+    ...(cause ? { cause } : {}),
     ...(errorCode ? { errorCode } : {}),
     ...(recovery ? { recovery } : {}),
     ...(receipt ? { receipt } : {}),
@@ -271,6 +279,7 @@ export async function runSupervisedWorkerStart(input: {
   readonly issueNumber?: number;
   readonly repository: string;
   readonly projectId?: string;
+  readonly role?: WorkerAssignmentRole | string;
   readonly orcaArgs: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
@@ -279,10 +288,14 @@ export async function runSupervisedWorkerStart(input: {
   readonly inspect?: (args: readonly string[]) => Promise<ChildResult>;
 }): Promise<SupervisedWorkerStartResult> {
   const repository = input.repository.trim().toLowerCase();
+  const role = parseWorkerAssignmentRole(input.role);
   if (!repository
     || (input.issueNumber !== undefined
       && (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0))) {
     return { ok: false, reason: 'supervised_start_input_invalid' };
+  }
+  if (!role) {
+    return { ok: false, reason: 'assignment_role_invalid' };
   }
   const args = [...input.orcaArgs];
   if (args.length === 0 || args[0] !== '--task' || !String(args[1] ?? '').trim()) {
@@ -296,6 +309,17 @@ export async function runSupervisedWorkerStart(input: {
   }
 
   const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
+  if (existsSync(file)) {
+    let raw: string;
+    try { raw = readFileSync(file, 'utf8'); }
+    catch {
+      return { ok: false, reason: 'assignment_store_untrusted', cause: 'json_invalid' };
+    }
+    const inspected = inspectWorkerAssignmentStore(raw);
+    if (!inspected.ok) {
+      return { ok: false, reason: 'assignment_store_untrusted', cause: inspected.cause };
+    }
+  }
   const expectedCurrent = input.issueNumber === undefined
     ? null
     : currentWorkerAssignment(file, input.issueNumber);
@@ -406,6 +430,7 @@ export async function runSupervisedWorkerStart(input: {
     provider: 'orca',
     bindingKey: dispatchId,
     expectedCurrent: expectedCurrentForPublish(expectedCurrent),
+    role,
   };
   const published = input.issueNumber === undefined
     ? await publishCurrentWorkerAssignment(publishBase)
@@ -427,7 +452,7 @@ export async function runSupervisedWorkerStart(input: {
         }),
       };
     }
-    return rejectedStart(published.reason, receipt);
+    return rejectedStart(published.reason, receipt, undefined, undefined, published.cause);
   }
   return { ok: true, reason: 'ready_and_assignment_bound', receipt, assignment: published.assignment };
 }
@@ -473,21 +498,30 @@ function optionValue(args: readonly string[], name: string): string {
   return index >= 0 ? String(args[index + 1] ?? '').trim() : '';
 }
 
+function countFlag(args: readonly string[], name: string): number {
+  return args.filter((arg) => arg === name).length;
+}
+
 function parseStartCli(argv: readonly string[]): {
   issueNumber?: number;
   repository: string;
   projectId?: string;
+  role?: string;
   orcaArgs: string[];
 } {
   const separator = argv.indexOf('--');
-  if (separator < 0) throw new Error('usage: supervised-worker-start [--issue-number N] --repository owner/repo [--project-id id] -- --task task_id --terminal handle --worktree selector ...');
+  if (separator < 0) throw new Error('usage: supervised-worker-start [--issue-number N] --repository owner/repo [--project-id id] --role worker|orchestrator -- --task task_id --terminal handle --worktree selector ...');
   const own = argv.slice(0, separator);
   const orcaArgs = argv.slice(separator + 1);
+  if (countFlag(own, '--role') !== 1) {
+    throw new Error('exactly one --role worker|orchestrator is required');
+  }
   const issueNumberRaw = optionValue(own, '--issue-number');
   return {
     ...(issueNumberRaw ? { issueNumber: Number(issueNumberRaw) } : {}),
     repository: optionValue(own, '--repository'),
     ...(optionValue(own, '--project-id') ? { projectId: optionValue(own, '--project-id') } : {}),
+    role: optionValue(own, '--role'),
     orcaArgs,
   };
 }

@@ -102,7 +102,7 @@ afterEach(()=>{ for(const value of roots.splice(0)) rmSync(value,{recursive:true
 describe('supervised worker start exact assignment admission',()=>{
   it('requires one exact pre-created terminal and worktree selector before invoking Orca',async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base}; let calls=0;
-    const result=await runSupervisedWorkerStart({
+    const result=await runSupervisedWorkerStart({role:'worker',
       issueNumber:1416, repository:'chetwerikoff/orchestrator-pack', env,
       orcaArgs:['--task','task_1','--agent','codex'],
       execute:async()=>{calls+=1;return{ok:true,stdout:envelope({taskId:'task_1',dispatchId:'d',state:'ready'})}},
@@ -113,7 +113,7 @@ describe('supervised worker start exact assignment admission',()=>{
 
   it('canonicalizes the requested producer placement and publishes only after a matching real-shape ready receipt',async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
-    const result=await runSupervisedWorkerStart({
+    const result=await runSupervisedWorkerStart({role:'worker',
       issueNumber:1416, repository:'chetwerikoff/orchestrator-pack', env, orcaArgs:args(),
       inspect:inspectPlacement(),
       execute:async()=>({ok:true,stdout:envelope({
@@ -129,7 +129,7 @@ describe('supervised worker start exact assignment admission',()=>{
 
   it('accepts producer reused_agent_terminal only when it names the exact requested terminal',async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
-    const result=await runSupervisedWorkerStart({
+    const result=await runSupervisedWorkerStart({role:'worker',
       issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
       execute:async()=>({ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_1',state:'ready',effects:producerEffects({terminalAction:'reused_agent_terminal'})})}),
     });
@@ -142,7 +142,7 @@ describe('supervised worker start exact assignment admission',()=>{
     ['supervised_start_terminal_action_mismatch', producerEffects({terminalAction:'created'})],
   ] as const)('rejects producer placement mismatch %s before assignment publication',async(reason,effects)=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
-    const result=await runSupervisedWorkerStart({
+    const result=await runSupervisedWorkerStart({role:'worker',
       issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
       execute:async()=>({ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_1',state:'ready',effects})}),
     });
@@ -152,7 +152,7 @@ describe('supervised worker start exact assignment admission',()=>{
 
   it('fails closed before worker-start when terminal and worktree producer readbacks do not bind to each other',async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base}; let starts=0;
-    const result=await runSupervisedWorkerStart({
+    const result=await runSupervisedWorkerStart({role:'worker',
       issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),
       inspect:inspectPlacement({terminalWorktree:'repo::other'}),
       execute:async()=>{starts+=1;return{ok:true,stdout:envelope({taskId:'task_1',dispatchId:'d',state:'ready',effects:producerEffects()})}},
@@ -163,7 +163,7 @@ describe('supervised worker start exact assignment admission',()=>{
 
   it('fails closed when the ready receipt omits producer terminal/worktree identity witnesses',async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
-    const result=await runSupervisedWorkerStart({
+    const result=await runSupervisedWorkerStart({role:'worker',
       issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
       execute:async()=>({ok:true,stdout:envelope({taskId:'task_1',dispatchId:'d',state:'ready',effects:[]})}),
     });
@@ -172,9 +172,9 @@ describe('supervised worker start exact assignment admission',()=>{
 
   it.each(['busy','idle'] as const)('returns skipped_live and does not invoke start when current local target is %s',async(liveness)=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base}; const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
-    const old=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,taskId:'task_1',kind:'local',provider:'orca',bindingKey:'dispatch_old'});
+    const old=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,taskId:'task_1',kind:'local',provider:'orca',bindingKey:'dispatch_old',role:'worker'});
     if(!old.ok)throw new Error(old.reason); let calls=0;
-    const result=await runSupervisedWorkerStart({
+    const result=await runSupervisedWorkerStart({role:'worker',
       issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),adapter:adapter({kind:'resolved',worker},liveness),
       execute:async()=>{calls+=1;return{ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_new',state:'ready',effects:producerEffects()})}},
     });
@@ -183,9 +183,9 @@ describe('supervised worker start exact assignment admission',()=>{
 
   it('separate operator successor advances generation only after affirmative current-local gone evidence',async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base}; const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
-    const old=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,taskId:'task_1',kind:'local',provider:'orca',bindingKey:'dispatch_old'});
+    const old=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,taskId:'task_1',kind:'local',provider:'orca',bindingKey:'dispatch_old',role:'worker'});
     if(!old.ok)throw new Error(old.reason);
-    const result=await runSupervisedWorkerStart({
+    const result=await runSupervisedWorkerStart({role:'worker',
       issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),adapter:adapter({kind:'gone'}),inspect:inspectPlacement(),
       execute:async()=>({ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_new',state:'ready',effects:producerEffects()})}),
     });
@@ -195,13 +195,13 @@ describe('supervised worker start exact assignment admission',()=>{
 
   it('exposes a non-authoritative operator-manual residual when reassignment wins after ready',async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base}; const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
-    const old=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,taskId:'task_1',kind:'local',provider:'orca',bindingKey:'dispatch_old'});
+    const old=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,taskId:'task_1',kind:'local',provider:'orca',bindingKey:'dispatch_old',role:'worker'});
     if(!old.ok)throw new Error(old.reason); let winnerId='';
     const effects=producerEffects();
-    const result=await runSupervisedWorkerStart({
+    const result=await runSupervisedWorkerStart({role:'worker',
       issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),adapter:adapter({kind:'gone'}),inspect:inspectPlacement(),
       execute:async()=>{
-        const winner=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,taskId:'task_1',kind:'remote',provider:'browser-gpt',bindingKey:'remote-winner',expectedCurrent:{assignmentId:old.assignment.assignmentId,generation:old.assignment.generation}});
+        const winner=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,taskId:'task_1',kind:'remote',provider:'browser-gpt',bindingKey:'remote-winner',expectedCurrent:{assignmentId:old.assignment.assignmentId,generation:old.assignment.generation},role:'worker'});
         if(!winner.ok)throw new Error(winner.reason); winnerId=winner.assignment.assignmentId;
         return{ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_residual',state:'ready',effects})};
       },
@@ -217,7 +217,7 @@ describe('supervised worker start exact assignment admission',()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base}; const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
     let release!:()=>void; let held:Promise<unknown>|undefined;
     const effects=producerEffects();
-    const run=runSupervisedWorkerStart({
+    const run=runSupervisedWorkerStart({role:'worker',
       issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
       execute:async()=>{
         held=withCrashRecoverableFileLock(`${file}.lock`,1,async()=>{await new Promise<void>((resolve)=>{release=resolve})});
@@ -233,16 +233,16 @@ describe('supervised worker start exact assignment admission',()=>{
 
   it('rejects malformed/failed/mismatched ready receipts without publication',async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base}; const inspect=inspectPlacement();
-    const mismatch=await runSupervisedWorkerStart({issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args('task_expected'),inspect,execute:async()=>({ok:true,stdout:envelope({taskId:'other',dispatchId:'d',state:'ready',effects:producerEffects()})})});
+    const mismatch=await runSupervisedWorkerStart({role:'worker',issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args('task_expected'),inspect,execute:async()=>({ok:true,stdout:envelope({taskId:'other',dispatchId:'d',state:'ready',effects:producerEffects()})})});
     expect(mismatch).toMatchObject({ok:false,reason:'supervised_start_task_mismatch'});
-    const failed=await runSupervisedWorkerStart({issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect,execute:async()=>({ok:false,stdout:envelope({taskId:'task_1',dispatchId:'d',state:'outcome_unknown'},false)})});
+    const failed=await runSupervisedWorkerStart({role:'worker',issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect,execute:async()=>({ok:false,stdout:envelope({taskId:'task_1',dispatchId:'d',state:'outcome_unknown'},false)})});
     expect(failed).toMatchObject({ok:false,reason:'supervised_start_envelope_not_ok'});
     expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack',env),1416)).toBeNull();
   });
 
   it('preserves an exact Orca error code instead of laundering it into an invalid receipt', async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
-    const result=await runSupervisedWorkerStart({
+    const result=await runSupervisedWorkerStart({role:'worker',
       repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
       execute:async()=>({
         ok:false,
@@ -254,7 +254,7 @@ describe('supervised worker start exact assignment admission',()=>{
 
   it('preserves exact Orca mutation recovery fields without promoting the failed start', async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
-    const pending=await runSupervisedWorkerStart({
+    const pending=await runSupervisedWorkerStart({role:'worker',
       repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
       execute:async()=>({
         ok:false,
@@ -268,7 +268,7 @@ describe('supervised worker start exact assignment admission',()=>{
       ok:false,reason:'supervised_start_envelope_error',errorCode:'operation_unknown',
       recovery:{requestId:'request-7',dispatchId:'dispatch-7',recoveryCommand:'orca orchestration worker-show --dispatch dispatch-7 --json'},
     });
-    const transportUnknown=await runSupervisedWorkerStart({
+    const transportUnknown=await runSupervisedWorkerStart({role:'worker',
       repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
       execute:async()=>({
         ok:false,
@@ -287,7 +287,7 @@ describe('supervised worker start exact assignment admission',()=>{
     ['conflicting request ids', {orchestrationRequestId:'request-a',requestId:'request-b',dispatchId:'dispatch-9'}],
   ] as const)('does not promote malformed recovery authority: %s', async(_label,data)=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
-    const result=await runSupervisedWorkerStart({
+    const result=await runSupervisedWorkerStart({role:'worker',
       repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
       execute:async()=>({
         ok:false,
@@ -299,12 +299,12 @@ describe('supervised worker start exact assignment admission',()=>{
 
   it('keeps malformed and code-less error envelopes on the generic invalid path', async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
-    const malformed=await runSupervisedWorkerStart({
+    const malformed=await runSupervisedWorkerStart({role:'worker',
       repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
       execute:async()=>({ok:false,stdout:'{not-json'}),
     });
     expect(malformed).toEqual({ok:false,reason:'supervised_start_receipt_invalid'});
-    const codeLess=await runSupervisedWorkerStart({
+    const codeLess=await runSupervisedWorkerStart({role:'worker',
       repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
       execute:async()=>({ok:false,stdout:JSON.stringify({ok:false,error:{message:'missing code'}})}),
     });
@@ -313,7 +313,7 @@ describe('supervised worker start exact assignment admission',()=>{
 
   it('publishes a brief-only successful start under the sole taskId+dispatchId key and attaches Issue metadata without rekeying', async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
-    const result=await runSupervisedWorkerStart({
+    const result=await runSupervisedWorkerStart({role:'worker',
       repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args('brief-task'),inspect:inspectPlacement(),
       execute:async()=>({ok:true,stdout:envelope({taskId:'brief-task',dispatchId:'dispatch-1441',state:'ready',effects:producerEffects()})}),
     });
@@ -334,7 +334,7 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(Object.keys(readWorkerAssignmentStore(file)!.assignments)).toEqual([key]);
   });
 
-  it('fails closed on a pre-hard-cut issue-N store and never converts it', async()=>{
+  it('migrates a recognized issue-N store then publishes the new assignment with an explicit role', async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
     const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
     mkdirSync(path.dirname(file),{recursive:true});
@@ -345,12 +345,77 @@ describe('supervised worker start exact assignment admission',()=>{
     };
     const oldBytes=`${JSON.stringify({schema:'orchestrator-pack/worker-assignment-store/v1',revision:1,assignments:{'issue-1441':oldAssignment}},null,2)}\n`;
     writeFileSync(file,oldBytes);
-    expect(parseWorkerAssignmentStore(oldBytes)).toBeNull();
-    const result=await runSupervisedWorkerStart({
+    const parsed=parseWorkerAssignmentStore(oldBytes);
+    expect(parsed).not.toBeNull();
+    expect(Object.keys(parsed!.assignments)).toEqual([workerAssignmentKey('old-task','dispatch-old')]);
+    const result=await runSupervisedWorkerStart({role:'worker',
       repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args('brief-task'),inspect:inspectPlacement(),
       execute:async()=>({ok:true,stdout:envelope({taskId:'brief-task',dispatchId:'dispatch-1441',state:'ready',effects:producerEffects()})}),
     });
-    expect(result).toMatchObject({ok:false,reason:'assignment_store_untrusted'});
+    expect(result.ok).toBe(true);
+    if(!result.ok||!result.assignment)throw new Error('expected assignment');
+    expect(result.assignment.role).toBe('worker');
+    const live=readWorkerAssignmentStore(file);
+    expect(Object.keys(live!.assignments).sort()).toEqual([
+      workerAssignmentKey('brief-task','dispatch-1441'),
+      workerAssignmentKey('old-task','dispatch-old'),
+    ].sort());
+    expect(live!.assignments[workerAssignmentKey('old-task','dispatch-old')]).toEqual(oldAssignment);
+    expect(Object.prototype.hasOwnProperty.call(live!.assignments[workerAssignmentKey('old-task','dispatch-old')],'role')).toBe(false);
+    expect(readFileSync(`${file}.pre-task-dispatch-migration`,'utf8')).toBe(oldBytes);
+  });
+
+  it('preserves the concrete migration cause when registration fails after a ready local receipt', async()=>{
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base};
+    const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
+    mkdirSync(path.dirname(file),{recursive:true});
+    const oldAssignment={
+      schema:'orchestrator-pack/worker-assignment/v1',projectId:'orchestrator-pack',repository:'chetwerikoff/orchestrator-pack',
+      issueNumber:1441,taskId:'old-task',assignmentId:'wa-old',generation:1,kind:'local',provider:'orca',bindingKey:'dispatch-old',
+      createdAtUtc:'2026-08-17T00:00:00.000Z',
+    };
+    const oldBytes=`${JSON.stringify({schema:'orchestrator-pack/worker-assignment-store/v1',revision:1,assignments:{'issue-1441':oldAssignment}},null,2)}\n`;
+    writeFileSync(file,oldBytes);
+    writeFileSync(`${file}.pre-task-dispatch-migration`,'conflicting-backup');
+    const effects=producerEffects();
+    const result=await runSupervisedWorkerStart({role:'worker',
+      repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args('brief-task'),inspect:inspectPlacement(),
+      execute:async()=>({ok:true,stdout:envelope({taskId:'brief-task',dispatchId:'dispatch-1441',state:'ready',effects})}),
+    });
+    expect(result).toMatchObject({
+      ok:false,
+      reason:'assignment_store_untrusted',
+      cause:'migration_backup_conflict',
+      receipt:{taskId:'brief-task',dispatchId:'dispatch-1441',state:'ready'},
+      residualResources:effects,
+    });
     expect(readFileSync(file,'utf8')).toBe(oldBytes);
+  });
+
+  it.each([undefined,'',' worker ','Worker','ORCHESTRATOR','admin'] as const)(
+    'rejects role %j before inspect/start',
+    async(role)=>{
+      const base=root(); const env={...process.env,OPK_BASE_DIR:base}; let inspects=0; let starts=0;
+      const result=await runSupervisedWorkerStart({
+        ...(role===undefined?{}:{role}),
+        repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),
+        inspect:async()=>{inspects+=1;return{ok:true,stdout:''}},
+        execute:async()=>{starts+=1;return{ok:true,stdout:''}},
+      });
+      expect(result).toEqual({ok:false,reason:'assignment_role_invalid'});
+      expect(inspects).toBe(0);
+      expect(starts).toBe(0);
+    },
+  );
+
+  it('accepts explicit orchestrator role on an otherwise valid start', async()=>{
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base};
+    const result=await runSupervisedWorkerStart({role:'orchestrator',
+      repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),inspect:inspectPlacement(),
+      execute:async()=>({ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_1',state:'ready',effects:producerEffects()})}),
+    });
+    expect(result.ok).toBe(true);
+    if(!result.ok||!result.assignment)throw new Error('expected assignment');
+    expect(result.assignment.role).toBe('orchestrator');
   });
 });

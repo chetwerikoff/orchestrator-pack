@@ -1,3 +1,6 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 60
+
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -39,6 +42,7 @@ async function publish(file: string, input: {
     kind: input.kind ?? 'local',
     provider: input.provider ?? 'orca',
     bindingKey: input.bindingKey,
+    role: 'worker',
   });
   if (!result.ok) throw new Error(result.reason);
   return result.assignment;
