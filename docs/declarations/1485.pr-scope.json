@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1485,
+  "declared_paths": [
+    "docs/browser-gpt-turn-runbook.md",
+    "scripts/chatgpt-browser-turn/README.md"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/state-light-session.test.ts",
+    "scripts/chatgpt-browser-turn/terminal-witness.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/browser-gpt-turn-runbook.md",
+    "scripts/chatgpt-browser-turn/README.md"
+  ],
+  "source_revision": "9b3745f3abb5c68f0dba25dcdfe3e50046e1012b"
+}
