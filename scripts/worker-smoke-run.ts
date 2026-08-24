@@ -132,7 +132,6 @@ const SMOKE_PROFILE_FIELDS = {
 
 const SUPPORTED_SMOKE_AGENTS = new Map([
   ['cursor', 'agent'],
-  ['codex', 'codex'],
 ]);
 const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
 

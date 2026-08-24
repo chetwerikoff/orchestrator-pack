@@ -6,10 +6,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runOrcaJson, type OrcaJsonResponse } from './orca-runtime/native.ts';
 import {
-  sameRuntimeWorker,
   type RuntimeAdapter,
   type RuntimeDispatchResult,
-  type RuntimeLivenessResult,
   type RuntimeWorker,
   type RuntimeWorkerIdentity,
 } from './runtime/contracts.ts';
@@ -30,8 +28,6 @@ const LONE_ARROW = /^→$/u;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
-const EMPTY_COMPOSER_RECHECK_MS = 1_000;
-const DEFAULT_LIVENESS_WINDOW_MS = 60_000;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
@@ -274,10 +270,6 @@ export interface UnsentComposerSubmitDeps {
     | { ok: true; lines: readonly string[]; source: 'screen' }
     | { ok: false; reason: string }
   >;
-  readonly observeLiveness?: (
-    worker: RuntimeWorkerIdentity,
-    observationWindowMs?: number,
-  ) => RuntimeLivenessResult;
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
@@ -296,10 +288,6 @@ export interface UnsentComposerWatchState {
   readonly lastChangedAt: Map<string, number>;
   readonly submittedFingerprint: Map<string, string>;
   readonly ambiguousSubmittedFingerprints: Map<string, Set<string>>;
-}
-
-export interface UnsentComposerSupervisorLifecycle {
-  readonly fleetSettled?: PromiseLike<unknown>;
 }
 
 export interface UnsentComposerTerminalResult {
@@ -396,48 +384,13 @@ function settleComposerObservation(
   return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent' };
 }
 
-type ComposerLivenessGate = {
-  readonly deferred?: UnsentComposerTerminalResult;
-  readonly allowAmbiguousRetry: boolean;
-};
-
-function gateComposerLiveness(
-  worker: RuntimeWorker,
-  deps: UnsentComposerSubmitDeps,
-): ComposerLivenessGate {
-  if (!deps.observeLiveness) return { allowAmbiguousRetry: false };
-  const live = deps.observeLiveness(worker.identity);
-  const base = { terminal: worker.identity.id, generation: worker.identity.generation };
-  if (!sameRuntimeWorker(live.worker, worker.identity)) {
-    return {
-      allowAmbiguousRetry: false,
-      deferred: { ...base, ok: false, unsent: false, enter: false, reason: 'runtime_liveness_identity_mismatch' },
-    };
-  }
-  if (live.status === 'busy') {
-    return {
-      allowAmbiguousRetry: false,
-      deferred: { ...base, ok: true, unsent: true, enter: false, reason: 'tui_busy_deferred' },
-    };
-  }
-  if (live.status !== 'idle') {
-    return {
-      allowAmbiguousRetry: false,
-      deferred: { ...base, ok: false, unsent: false, enter: false, reason: 'runtime_liveness_' + live.status },
-    };
-  }
-  return { allowAmbiguousRetry: true };
-}
-
 function submitOne(
   worker: RuntimeWorker,
   input: UnsentComposerSubmitInput,
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState,
 ): UnsentComposerTerminalResult {
-  const gate = gateComposerLiveness(worker, deps);
-  if (gate.deferred) return gate.deferred;
-  return settleComposerObservation(worker, input, deps, state, deps.read(worker.identity), gate.allowAmbiguousRetry);
+  return settleComposerObservation(worker, input, deps, state, deps.read(worker.identity));
 }
 
 async function submitOneAsync(
@@ -446,12 +399,10 @@ async function submitOneAsync(
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState,
 ): Promise<UnsentComposerTerminalResult> {
-  const gate = gateComposerLiveness(worker, deps);
-  if (gate.deferred) return gate.deferred;
   const shown = deps.readAsync
     ? await deps.readAsync(worker.identity)
     : deps.read(worker.identity);
-  return settleComposerObservation(worker, input, deps, state, shown, gate.allowAmbiguousRetry);
+  return settleComposerObservation(worker, input, deps, state, shown);
 }
 
 export function submitUnsentCursorComposer(
@@ -572,7 +523,6 @@ export function createAdapterSubmitDeps(
   adapter: RuntimeAdapter,
   listWorkspaces: () => OrcaJsonResponse<unknown> = () => runOrcaJson(['worktree', 'list']),
 ): UnsentComposerSubmitDeps {
-  const liveness = adapter.liveness.bind(adapter);
   return {
     listWorkersAsync: async () => {
       if (!adapter.listWorkersAsync) return { ok: false, reason: 'runtime_async_list_unsupported' };
@@ -623,10 +573,6 @@ export function createAdapterSubmitDeps(
       }
       return { ok: true, lines: output.value.lines, source: 'screen' };
     },
-    observeLiveness: (worker, observationWindowMs = DEFAULT_LIVENESS_WINDOW_MS) => liveness({
-      worker,
-      observationWindowMs,
-    }),
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
     sentStorePath: SENT_STORE_PATH,
   };
@@ -635,7 +581,6 @@ export function createAdapterSubmitDeps(
 export async function runSupervisorUnsentComposerTick(
   providedDeps?: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
-  lifecycle: UnsentComposerSupervisorLifecycle = {},
 ): Promise<UnsentComposerSubmitResult> {
   const deps = providedDeps ?? createAdapterSubmitDeps(await selectRuntimeAdapter());
   hydrateSubmitted(state, deps.sentStorePath);
@@ -657,31 +602,15 @@ export async function runSupervisorUnsentComposerTick(
     });
     return persistTail;
   };
-  let fleetSettled = lifecycle.fleetSettled === undefined;
-  if (lifecycle.fleetSettled !== undefined) {
-    void Promise.resolve(lifecycle.fleetSettled).then(
-      () => { fleetSettled = true; },
-      () => { fleetSettled = true; },
-    );
-  }
   const runWorker = async (worker: RuntimeWorker): Promise<UnsentComposerTerminalResult> => {
     const workerDeps: UnsentComposerSubmitDeps = {
       ...deps,
       listWorkers: () => ({ ok: true, workers: [worker] }),
       sentStorePath: undefined,
     };
-    let result = deps.readAsync
+    const result = deps.readAsync
       ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
       : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
-    while (
-      (result.reason === 'composer_empty' || result.reason === 'composer_not_orchestration_pointer')
-      && !fleetSettled
-    ) {
-      await new Promise<void>((resolve) => setTimeout(resolve, EMPTY_COMPOSER_RECHECK_MS));
-      result = deps.readAsync
-        ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
-        : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
-    }
     await persistAfterObservation();
     return result ?? {
       terminal: worker.identity.id,

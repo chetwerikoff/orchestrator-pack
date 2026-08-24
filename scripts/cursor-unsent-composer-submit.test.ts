@@ -62,7 +62,6 @@ function depsFor(
       ok: true as const,
       lines: linesById[identity.id] ?? ['→ Add a follow-up'],
     })),
-    observeLiveness: extra.liveness,
     submit: extra.submitResult ?? extra.submit ?? ((identity) => {
       submitted.push(identity);
       return { status: 'dispatched' as const };
@@ -266,10 +265,6 @@ describe('submitUnsentCursorComposer', () => {
           },
         };
       },
-      liveness: (input: { worker: RuntimeWorkerIdentity; observationWindowMs: number }) => ({
-        status: 'idle' as const,
-        worker: input.worker,
-      }),
       dispatchInput: () => ({ status: 'dispatched' as const }),
     } as unknown as Parameters<typeof createAdapterSubmitDeps>[0];
     const deps = createAdapterSubmitDeps(adapter, () => ({ ok: true, result: {} }));
@@ -690,7 +685,7 @@ describe('delivery-triggered composer submission', () => {
     expect(submitted).toEqual([target.identity]);
   });
 
-  it('uses the immediate idle path for exactly one screen read and Enter', async () => {
+  it('uses the immediate path for exactly one screen read and Enter', async () => {
     const target = worker('term_idle_immediate');
     const submitted: RuntimeWorkerIdentity[] = [];
     let reads = 0;
@@ -698,7 +693,6 @@ describe('delivery-triggered composer submission', () => {
       { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
       {
         submitted,
-        liveness: (identity) => ({ status: 'idle', worker: identity }),
         read: () => {
           reads += 1;
           return { ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const };
@@ -710,7 +704,7 @@ describe('delivery-triggered composer submission', () => {
     expect(submitted).toHaveLength(1);
   });
 
-  it('refuses human and mixed composer text after idle without Enter', async () => {
+  it('refuses human and mixed composer text without Enter', async () => {
     const submitted: RuntimeWorkerIdentity[] = [];
     const human = worker('term_human_idle');
     const mixed = worker('term_mixed_idle');

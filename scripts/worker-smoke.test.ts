@@ -178,15 +178,6 @@ describe('smoke executor profiles', () => {
     expect(profile.command).toBe("agent --model 'fixture-complex-model-fixture-complex-effort'");
   });
 
-  it('maps the configured Codex agent name onto the shared smoke launch surface', () => {
-    const profile = resolveSmokeExecutorProfile('complex', {
-      ...env,
-      PACK_EXECUTOR_SMOKE_COMPLEX_AGENT: 'codex',
-    });
-    expect(profile.agent).toBe('codex');
-    expect(profile.command).toBe("codex --model 'fixture-complex-model-fixture-complex-effort'");
-  });
-
   it.each([
     ['routine', 'PACK_EXECUTOR_SMOKE_ROUTINE_MODEL'],
     ['complex', 'PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT'],
