@@ -235,10 +235,20 @@ function normalizeOperatorPrimaryBinding(value: unknown): OperatorPrimaryBinding
   if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
     return null;
   }
-  const taskId = bounded(raw.taskId, 160);
-  const bindingKey = bounded(raw.bindingKey, 240);
-  const assignmentId = bounded(raw.assignmentId, 160);
-  const assignmentGeneration = Number(raw.assignmentGeneration);
+  const rawTaskId = raw.taskId;
+  const rawBindingKey = raw.bindingKey;
+  const rawAssignmentId = raw.assignmentId;
+  const rawAssignmentGeneration = raw.assignmentGeneration;
+  if (typeof rawTaskId !== 'string'
+    || typeof rawBindingKey !== 'string'
+    || typeof rawAssignmentId !== 'string'
+    || typeof rawAssignmentGeneration !== 'number') {
+    return null;
+  }
+  const taskId = bounded(rawTaskId, 160);
+  const bindingKey = bounded(rawBindingKey, 240);
+  const assignmentId = bounded(rawAssignmentId, 160);
+  const assignmentGeneration = rawAssignmentGeneration;
   if (raw.route !== 'operator-primary' || !taskId || !bindingKey || !assignmentId
     || !Number.isInteger(assignmentGeneration) || assignmentGeneration <= 0) {
     return null;
