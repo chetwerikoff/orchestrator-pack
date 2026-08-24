@@ -105,7 +105,7 @@ switch (operation) {
           dispatch: {
             status: worker.dispatchStatus ?? 'dispatched',
             last_heartbeat_at: worker.lastHeartbeatAt === undefined
-              ? '2026-08-24T14:00:00.000Z'
+              ? (state.defaultHeartbeatAt ??= new Date().toISOString())
               : worker.lastHeartbeatAt,
           },
           worker: {
