@@ -3934,12 +3934,14 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       }
       let persistedRun = getPackReviewRun(run.id, { projectId, storeRoot });
       if (!persistedRun) throw new Error(`pack review run ${run.id} disappeared before GPT settlement`);
-      const usableSourceCount = gptUsableSourceCount(persistedRun.reviewRound);
-      if (persistedRun.reviewRound?.cardinality >= 3
-          && usableSourceCount === persistedRun.reviewRound.cardinality
-          && persistedRun.reviewRound.settledSourceCount === undefined) {
+      const persistedRound = persistedRun.reviewRound;
+      if (!persistedRound) throw new Error(`pack review run ${run.id} lost its GPT round before settlement`);
+      const usableSourceCount = gptUsableSourceCount(persistedRound);
+      if (persistedRound.cardinality >= 3
+          && usableSourceCount === persistedRound.cardinality
+          && persistedRound.settledSourceCount === undefined) {
         updatePackReviewRun(run.id, {
-          reviewRound: { ...persistedRun.reviewRound, settledSourceCount: usableSourceCount },
+          reviewRound: { ...persistedRound, settledSourceCount: usableSourceCount },
         }, { projectId, storeRoot });
         persistedRun = getPackReviewRun(run.id, { projectId, storeRoot });
         if (!persistedRun) throw new Error(`pack review run ${run.id} disappeared while freezing GPT source count`);
