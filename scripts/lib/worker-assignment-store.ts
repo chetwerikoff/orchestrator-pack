@@ -851,7 +851,7 @@ export async function bindOperatorPrimary(input: {
   const expectedCurrent = input.expectedCurrent === undefined
     ? undefined
     : normalizeOperatorPrimaryBinding(input.expectedCurrent);
-  if (!selected || (input.expectedCurrent !== undefined && !expectedCurrent)) {
+  if (!selected || expectedCurrent === null) {
     return { ok: false, reason: 'binding_input_invalid' };
   }
   try {
