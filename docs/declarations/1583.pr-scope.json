@@ -41,5 +41,5 @@
     "tests/README.md",
     "tests/worker-status-store-live-rca.ts"
   ],
-  "source_revision": "ecbe15168531959a5d65a67854ebd4764f1c680e"
+  "source_revision": "7adef9fd925d9712cc0e7319e480f380f39a0266"
 }
