@@ -7,6 +7,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readProcessIdentity } from './lib/cutover/activation-cordon.ts';
 import { FileEpochAuthority } from './lib/cutover/activation-epoch-authority.ts';
+import {
+  observeGreenfieldFoundationInertProof,
+  type CanonicalFoundationPaths,
+} from './lib/cutover/foundation-observation.ts';
 import { sha256Bytes } from './lib/cutover/stable-stringify.ts';
 import { supervisorChildExitTransition } from './lib/orchestrator-side-process-supervisor.ts';
 import { EMPTY_CRASH_BACKOFF_STATE, type CrashBackoffPolicy } from './runtime/crash-backoff.ts';
@@ -28,6 +32,30 @@ function runStatus(stateDir: string) {
     cwd: repoRoot,
     inheritParentEnv: true,
   });
+}
+
+function greenfieldPaths(root: string): { repoRoot: string; paths: CanonicalFoundationPaths } {
+  const fakeRepo = path.join(root, 'repo');
+  const stateRoot = path.join(root, 'state');
+  const supervisorStateDir = path.join(stateRoot, 'supervisor');
+  mkdirSync(path.join(fakeRepo, 'scripts'), { recursive: true });
+  mkdirSync(supervisorStateDir, { recursive: true });
+  return {
+    repoRoot: fakeRepo,
+    paths: {
+      stateRoot,
+      supervisorStateDir,
+      epochAuthorityPath: path.join(stateRoot, 'epoch-authority.json'),
+      evidencePath: path.join(stateRoot, 'foundation-923-adoption.json'),
+      configPath: path.join(stateRoot, 'foundation-config.json'),
+      appStatePath: path.join(stateRoot, 'app-state.json'),
+      cordonPath: path.join(stateRoot, 'cordon.json'),
+      phaseOnePath: path.join(stateRoot, 'phase-one.json'),
+      followupPath: path.join(stateRoot, 'followups.json'),
+      projectedRegistryPath: path.join(supervisorStateDir, 'projected-registry.json'),
+      snapshotDir: path.join(stateRoot, 'snapshots'),
+    },
+  };
 }
 
 describe('Issue #948 wake-supervisor observer bridge', () => {
@@ -281,5 +309,118 @@ describe('Issue #1484 truthful supervisor status', () => {
     });
     expect(transition.refusalReason).toBe('scheduler_child_exit_nonzero:scheduler exploded');
     expect(transition.refusalReason).not.toBe(transition.crashBackoff.terminalReason);
+  });
+});
+
+describe('Issue #1484 cutover supervisor identity consumers', () => {
+  it('treats a valid dead v2 status as inert greenfield history', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1484-greenfield-dead-v2-'));
+    try {
+      const fixture = greenfieldPaths(root);
+      writeFileSync(path.join(fixture.paths.supervisorStateDir, 'typescript-supervisor-status.json'), `${JSON.stringify({
+        schemaVersion: 2,
+        supervisorPid: 999_991,
+        supervisorStartTicks: 'dead-supervisor',
+        childId: 'pr2-scheduler',
+        childPid: 999_992,
+        childStartTicks: 'dead-child',
+        childGeneration: 4,
+        childRestarts: 4,
+        restartState: 'running',
+        refusalReason: null,
+        crashBackoff: EMPTY_CRASH_BACKOFF_STATE,
+        updatedAt: new Date().toISOString(),
+      })}\n`, 'utf8');
+
+      expect(observeGreenfieldFoundationInertProof(fixture)).toMatchObject({
+        result: 'greenfield-dormant-layer-not-active',
+        observations: {
+          supervisorChanged: false,
+          schedulerRegistered: false,
+          schedulerRunning: false,
+          schedulerClaimAcquirer: false,
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not promote a PID-reused v2 child to live greenfield authority', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1484-greenfield-pid-reuse-'));
+    try {
+      const fixture = greenfieldPaths(root);
+      const identity = readProcessIdentity(process.pid);
+      writeFileSync(path.join(fixture.paths.supervisorStateDir, 'typescript-supervisor-status.json'), `${JSON.stringify({
+        schemaVersion: 2,
+        supervisorPid: process.pid,
+        supervisorStartTicks: `${identity.startTicks}-stale`,
+        childId: 'pr2-scheduler',
+        childPid: process.pid,
+        childStartTicks: `${identity.startTicks}-stale-child`,
+        childGeneration: 2,
+        childRestarts: 1,
+        restartState: 'running',
+        refusalReason: null,
+        crashBackoff: EMPTY_CRASH_BACKOFF_STATE,
+        updatedAt: new Date().toISOString(),
+      })}\n`, 'utf8');
+
+      expect(observeGreenfieldFoundationInertProof(fixture)).toMatchObject({
+        result: 'greenfield-dormant-layer-not-active',
+        observations: {
+          supervisorChanged: false,
+          schedulerRunning: false,
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a live v2 process generation and keeps legacy v1 fail-closed', () => {
+    const identity = readProcessIdentity(process.pid);
+    for (const [label, status] of [
+      ['live-v2', {
+        schemaVersion: 2,
+        supervisorPid: process.pid,
+        supervisorStartTicks: identity.startTicks,
+        childId: 'pr2-scheduler',
+        childPid: process.pid,
+        childStartTicks: identity.startTicks,
+        childGeneration: 1,
+        childRestarts: 0,
+        restartState: 'running',
+        refusalReason: null,
+        crashBackoff: EMPTY_CRASH_BACKOFF_STATE,
+        updatedAt: new Date().toISOString(),
+      }],
+      ['legacy-v1', {
+        schemaVersion: 1,
+        supervisorPid: 999_993,
+        supervisorStartTicks: 'legacy-dead',
+        childPid: null,
+        childGeneration: 0,
+        childRestarts: 0,
+        restartState: 'running',
+        refusalReason: null,
+        crashBackoff: EMPTY_CRASH_BACKOFF_STATE,
+        updatedAt: new Date().toISOString(),
+      }],
+    ] as const) {
+      const root = mkdtempSync(path.join(tmpdir(), `opk-1484-greenfield-${label}-`));
+      try {
+        const fixture = greenfieldPaths(root);
+        writeFileSync(
+          path.join(fixture.paths.supervisorStateDir, 'typescript-supervisor-status.json'),
+          `${JSON.stringify(status)}\n`,
+          'utf8',
+        );
+        expect(() => observeGreenfieldFoundationInertProof(fixture))
+          .toThrow('foundation_inert_proof_unobservable:supervisor_changed');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
   });
 });
