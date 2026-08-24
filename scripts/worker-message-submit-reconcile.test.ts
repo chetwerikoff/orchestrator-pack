@@ -45,7 +45,7 @@ describe('worker message submission through the runtime boundary', () => {
     }
   });
 
-  it('waits for tui-idle before one exact composer submit', async () => {
+  it('performs one immediate exact composer submit while Running', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'opk-worker-event-submit-'));
     const identity = { runtime: 'orca', id: 'event-worker', generation: `generation-${Date.now()}` } as const;
     const worker = {
@@ -111,14 +111,11 @@ describe('worker message submission through the runtime boundary', () => {
       });
 
       expect(result).toMatchObject({ state: 'ambiguous', reason: 'dispatch_unknown' });
-      expect(reads).toBe(0);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.text).toBe('event delivery');
-      expect(calls[0]?.submitOnly).toBeUndefined();
-
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await Promise.resolve();
       expect(reads).toBe(1);
       expect(calls).toHaveLength(2);
+      expect(calls[0]?.text).toBe('event delivery');
+      expect(calls[0]?.submitOnly).toBeUndefined();
       expect(calls[1]).toMatchObject({ submitOnly: true, worker: identity });
     } finally {
       rmSync(root, { recursive: true, force: true });

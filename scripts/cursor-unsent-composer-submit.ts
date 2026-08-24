@@ -31,7 +31,7 @@ const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
 const EMPTY_COMPOSER_RECHECK_MS = 1_000;
-const COMPOSER_IDLE_WAIT_MS = 60_000;
+const DEFAULT_LIVENESS_WINDOW_MS = 60_000;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
@@ -278,10 +278,6 @@ export interface UnsentComposerSubmitDeps {
     worker: RuntimeWorkerIdentity,
     observationWindowMs?: number,
   ) => RuntimeLivenessResult;
-  readonly waitForIdle?: (
-    worker: RuntimeWorkerIdentity,
-    observationWindowMs?: number,
-  ) => PromiseLike<RuntimeLivenessResult>;
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
@@ -433,34 +429,6 @@ function gateComposerLiveness(
   return { allowAmbiguousRetry: true };
 }
 
-async function gateComposerLivenessAsync(
-  worker: RuntimeWorker,
-  deps: UnsentComposerSubmitDeps,
-): Promise<ComposerLivenessGate> {
-  if (!deps.waitForIdle) return { allowAmbiguousRetry: false };
-  const live = await deps.waitForIdle(worker.identity, COMPOSER_IDLE_WAIT_MS);
-  const base = { terminal: worker.identity.id, generation: worker.identity.generation };
-  if (!sameRuntimeWorker(live.worker, worker.identity)) {
-    return {
-      allowAmbiguousRetry: false,
-      deferred: { ...base, ok: false, unsent: false, enter: false, reason: 'runtime_liveness_identity_mismatch' },
-    };
-  }
-  if (live.status === 'busy') {
-    return {
-      allowAmbiguousRetry: false,
-      deferred: { ...base, ok: true, unsent: true, enter: false, reason: 'tui_busy_deferred' },
-    };
-  }
-  if (live.status !== 'idle') {
-    return {
-      allowAmbiguousRetry: false,
-      deferred: { ...base, ok: false, unsent: false, enter: false, reason: 'runtime_liveness_' + live.status },
-    };
-  }
-  return { allowAmbiguousRetry: true };
-}
-
 function submitOne(
   worker: RuntimeWorker,
   input: UnsentComposerSubmitInput,
@@ -537,31 +505,31 @@ export function submitUnsentCursorComposerOnce(
   return { ...result, watch: false };
 }
 
-/** One bounded observation for the exact worker that just received a notification. */
-export function submitUnsentCursorComposerOnceForWorker(
+/** One immediate composer observation for the exact worker that just received a notification. */
+export async function submitUnsentCursorComposerOnceForWorker(
   worker: RuntimeWorker,
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
 ): Promise<UnsentComposerSubmitResult> {
   hydrateSubmitted(state, deps.sentStorePath);
-  return gateComposerLivenessAsync(worker, deps).then(async (gate) => {
-    const terminal = gate.deferred
-      ?? settleComposerObservation(
-        worker,
-        { watch: true },
-        deps,
-        state,
-        deps.readAsync ? await deps.readAsync(worker.identity) : deps.read(worker.identity),
-        gate.allowAmbiguousRetry,
-      );
-    persistSubmitted(state, deps.sentStorePath);
-    return {
-      ok: terminal.ok,
-      dryRun: false,
-      watch: false,
-      terminals: [terminal],
-    };
-  });
+  const shown = deps.readAsync
+    ? await deps.readAsync(worker.identity)
+    : deps.read(worker.identity);
+  const terminal = settleComposerObservation(
+    worker,
+    { watch: true },
+    deps,
+    state,
+    shown,
+    true,
+  );
+  persistSubmitted(state, deps.sentStorePath);
+  return {
+    ok: terminal.ok,
+    dryRun: false,
+    watch: false,
+    terminals: [terminal],
+  };
 }
 
 let heldLockFd: number | undefined;
@@ -655,14 +623,10 @@ export function createAdapterSubmitDeps(
       }
       return { ok: true, lines: output.value.lines, source: 'screen' };
     },
-    observeLiveness: (worker, observationWindowMs = COMPOSER_IDLE_WAIT_MS) => liveness({
+    observeLiveness: (worker, observationWindowMs = DEFAULT_LIVENESS_WINDOW_MS) => liveness({
       worker,
       observationWindowMs,
     }),
-    waitForIdle: (worker, observationWindowMs = COMPOSER_IDLE_WAIT_MS) => Promise.resolve(liveness({
-      worker,
-      observationWindowMs,
-    })),
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
     sentStorePath: SENT_STORE_PATH,
   };
