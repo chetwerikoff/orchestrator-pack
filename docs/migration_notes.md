@@ -1,5 +1,87 @@
 # Migration notes
 
+## PACK operator-primary logical binding (Issue #1532)
+
+### What changed
+
+`operator-primary` is now one explicit PACK project-level designation of one
+current local `WorkerAssignment`. The designation is the optional
+`operatorPrimary` pointer inside the existing `worker-assignment-store/v1`; no
+second target store, registry, cache, lease, daemon, watcher, queue, retry service,
+or native Orca role was added. The durable pointer contains only persistence-safe
+`taskId`, provider `bindingKey`, assignment id, and PACK logical assignment
+generation. Raw runtime id/generation, terminal state, output, process/pane/session
+identity, workspace/title, and adapter-private evidence remain memory-only.
+
+`scripts/lib/operator-primary-target.ts::withCurrentOperatorPrimaryTarget` resolves
+the exact current local assignment through the registered RuntimeAdapter, keeps the
+adapter-produced runtime identity only in memory, immediately exact-revalidates it
+with `findWorker`/`sameRuntimeWorker`, and admits one structurally synchronous
+receipt-returning caller action while the existing WorkerAssignment-store lock is
+held. That lock fences PACK logical rebinding/replacement only. The exact target is
+a freshly resolved/revalidated snapshot; PACK does not claim to fence a provider
+`bindingKey` remap after that snapshot.
+
+### Operator adoption
+
+1. Adopt the merged #1532 PACK revision through the normal supported deployment or
+   recycle path. Do not hand-edit `worker-assignments.json` and do not create a
+   second role/target file.
+2. Read the current persistence-safe designation through the canonical Node 22
+   wrapper:
+
+   ```bash
+   node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+     --script scripts/operator-primary-binding.ts -- show
+   ```
+
+3. Select the intended **current local** WorkerAssignment from existing
+   authoritative assignment evidence, then bind it explicitly. The command accepts
+   logical Task/provider-binding identity only; it never accepts a terminal/runtime
+   id:
+
+   ```bash
+   node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+     --script scripts/operator-primary-binding.ts -- \
+     bind --task-id <task-id> --binding-key <provider-binding-key> \
+     --operator-attested
+   ```
+
+4. Run `show` again and confirm `status: "binding_current"` with the exact logical
+   pointer expected. For an intentional rebind, use `replace` with the complete
+   pointer returned by the prior `show` as the `--expected-*` CAS expectation plus
+   the new `--task-id`/`--binding-key`. Never blind-overwrite a current binding.
+5. Before enabling the #1260 S3 consumer, point-revise #1260 to the landed #1532
+   commit and exact `withCurrentOperatorPrimaryTarget` / `operatorPrimarySyncResult`
+   exports, closed pre-action vocabulary, snapshot-freshness rule, synchronous
+   receipt/fence rule, adoption assumption, rollback rule, and current-head focused
+   proof command. #1532 itself performs no publication or retry.
+
+### Rollback
+
+A pre-#1532 writer can parse the same v1 store but does not preserve the new
+optional pointer on rewrite. Therefore rollback while `operatorPrimary` is present
+is unsupported. Before starting an older writer, capture the exact current logical
+pointer with `show`, retire exactly that pointer under the #1532-capable binary,
+and read back `binding_absent`:
+
+```bash
+node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+  --script scripts/operator-primary-binding.ts -- \
+  retire \
+  --expected-task-id <task-id> \
+  --expected-binding-key <provider-binding-key> \
+  --expected-assignment-id <assignment-id> \
+  --expected-assignment-generation <generation> \
+  --operator-attested
+node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+  --script scripts/operator-primary-binding.ts -- show
+```
+
+Only after the exact read-back proves pointer absence may the operator adopt/recycle
+to an older revision. Do not preserve the role through a compatibility alias,
+second store, schema bridge, or heuristic selector.
+
 ## Policy-context routing reduction (Issue #1488)
 
 ### What changed
