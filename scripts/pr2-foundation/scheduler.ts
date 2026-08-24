@@ -44,8 +44,14 @@ import { createProductionFleetNudgeEffects } from './fleet-nudge-production.ts';
 import {
   publishFleetReconciliationHandoff,
   resolveFleetReconciliationHandoffPath,
+  type FleetReconciliationHandoff,
   type FleetReconciliationReason,
 } from './fleet-reconciliation-handoff.ts';
+import {
+  runFleetEscalationDelivery,
+  type FleetEscalationInvocationInput,
+  type FleetEscalationInvocationResultV1,
+} from './fleet-escalation-delivery.ts';
 
 export interface DormantSchedulerState {
   component: 'pr2-foundation-scheduler';
@@ -63,9 +69,16 @@ export interface SchedulerCurrentPr { number: number; headRefOid: string; state:
 
 type SchedulerFleetObserver = Pick<FleetObserver, 'tick'> & Partial<Pick<FleetObserver, 'getEffectiveBudgetMs' | 'cancel' | 'schedulerGeneration' | 'snapshotPath'>>;
 type SchedulerFleetNudgeActuator = { tick(input: FleetNudgeTickInput): Promise<FleetNudgeResult> };
+type SchedulerFleetEscalation = (
+  input: Pick<FleetEscalationInvocationInput, 'evidence' | 'committedReadBack' | 'expected'>,
+) => Promise<FleetEscalationInvocationResultV1>;
 interface SchedulerAssignmentReconciliation {
   readonly reason: FleetReconciliationReason;
   readonly assignment?: WorkerAssignment;
+}
+interface SchedulerPublishedHandoff {
+  readonly required: boolean;
+  readonly record?: FleetReconciliationHandoff;
 }
 
 export interface SchedulerBoundary {
@@ -78,6 +91,8 @@ export interface SchedulerBoundary {
   schedulerIntervalMs?: number;
   fleetObserver?: SchedulerFleetObserver;
   fleetNudgeActuator?: SchedulerFleetNudgeActuator;
+  fleetEscalation?: SchedulerFleetEscalation;
+  projectId?: string;
   activationLineage?: string;
   repository?: string;
   unresolvedReason?: FleetReconciliationReason;
@@ -88,7 +103,7 @@ export interface SchedulerBoundary {
     schedulerGeneration: string;
     tickSequence: number;
     unitRef?: string;
-  }) => { ok: boolean; reason?: string };
+  }) => { ok: boolean; reason?: string; record?: FleetReconciliationHandoff };
 }
 
 const schedulerTickSequences = new WeakMap<object, number>();
@@ -209,7 +224,8 @@ async function ghJson(repoRoot: string, args: string[]): Promise<unknown> {
 
 export function productionSchedulerBoundary(input: {
   repoRoot: string; projectId?: string; env?: NodeJS.ProcessEnv; fleetObserver?: SchedulerFleetObserver;
-  fleetNudgeActuator?: SchedulerFleetNudgeActuator; schedulerIntervalMs?: number; activationLineage?: string;
+  fleetNudgeActuator?: SchedulerFleetNudgeActuator; fleetEscalation?: SchedulerFleetEscalation;
+  schedulerIntervalMs?: number; activationLineage?: string;
   repository?: string; unresolvedReason?: FleetReconciliationReason; assignmentReconciliation?: SchedulerAssignmentReconciliation;
   fleetBindings?: readonly FleetAssignmentBinding[];
   reconcilePostReviewSmoke?: SchedulerBoundary['reconcilePostReviewSmoke'];
@@ -222,7 +238,9 @@ export function productionSchedulerBoundary(input: {
     readChecks: async (candidate) => ghJson(input.repoRoot, ['pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'name,state,conclusion,status']) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
     listReviewRuns: () => listPackReviewRuns({ projectId }),
     fleetNudgeActuator: input.fleetNudgeActuator ?? createTargetUnresolvedFleetNudgeActuator(),
+    projectId,
     ...(input.fleetObserver ? { fleetObserver: input.fleetObserver } : {}),
+    ...(input.fleetEscalation ? { fleetEscalation: input.fleetEscalation } : {}),
     ...(input.schedulerIntervalMs === undefined ? {} : { schedulerIntervalMs: input.schedulerIntervalMs }),
     ...(input.activationLineage ? { activationLineage: input.activationLineage } : {}),
     ...(input.repository ? { repository: input.repository } : {}),
@@ -248,7 +266,11 @@ function reconciliationReason(boundary: SchedulerBoundary, outcome: string): Fle
   return null;
 }
 
-function publishRequiredHandoff(boundary: SchedulerBoundary, observer: FleetObserverResult, fleetNudge: FleetNudgeResult): boolean {
+function publishRequiredHandoff(
+  boundary: SchedulerBoundary,
+  observer: FleetObserverResult,
+  fleetNudge: FleetNudgeResult,
+): SchedulerPublishedHandoff {
   const candidate = fleetNudge.outcomes.find((row) => reconciliationReason(boundary, row.outcome) !== null);
   let reason: FleetReconciliationReason | null = null;
   let unitRef: string | undefined;
@@ -262,7 +284,7 @@ function publishRequiredHandoff(boundary: SchedulerBoundary, observer: FleetObse
   } else if (boundary.assignmentReconciliation) {
     reason = boundary.assignmentReconciliation.reason;
   }
-  if (!reason) return false;
+  if (!reason) return { required: false };
   if (!boundary.publishHandoff) throw new Error(`scheduler_reconciliation_handoff_unavailable:${reason}`);
   const result = boundary.publishHandoff({
     reason,
@@ -271,7 +293,26 @@ function publishRequiredHandoff(boundary: SchedulerBoundary, observer: FleetObse
     ...(unitRef ? { unitRef } : {}),
   });
   if (!result.ok) throw new Error(`scheduler_reconciliation_handoff_failed:${result.reason ?? reason}`);
-  return true;
+  return { required: true, ...(result.record ? { record: result.record } : {}) };
+}
+
+async function evaluateFleetEscalation(
+  boundary: SchedulerBoundary,
+  handoff: SchedulerPublishedHandoff,
+  observer: FleetObserverResult,
+): Promise<FleetEscalationInvocationResultV1 | undefined> {
+  if (!handoff.required || !boundary.fleetEscalation) return undefined;
+  return boundary.fleetEscalation({
+    evidence: handoff.record ?? null,
+    committedReadBack: handoff.record !== undefined,
+    expected: {
+      projectId: String(boundary.projectId ?? ''),
+      repository: String(boundary.repository ?? ''),
+      activationLineage: String(boundary.activationLineage ?? ''),
+      schedulerGeneration: observer.schedulerGeneration,
+      tickSequence: observer.tickSequence,
+    },
+  });
 }
 
 function failObserverTickWithHandoff(
@@ -293,10 +334,19 @@ function failObserverTickWithHandoff(
 }
 
 export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.ProcessEnv = process.env): Promise<{
-  attempted: number; started: number; skipped: number; observer?: FleetObserverResult; fleetNudge?: FleetNudgeResult; orchestratorRequired?: boolean;
+  attempted: number;
+  started: number;
+  skipped: number;
+  observer?: FleetObserverResult;
+  fleetNudge?: FleetNudgeResult;
+  orchestratorRequired?: boolean;
+  fleetEscalation?: FleetEscalationInvocationResultV1;
 }> {
   assertSchedulerEpoch(env);
-  let observer: FleetObserverResult | undefined; let fleetNudge: FleetNudgeResult | undefined; let orchestratorRequired = false;
+  let observer: FleetObserverResult | undefined;
+  let fleetNudge: FleetNudgeResult | undefined;
+  let fleetEscalation: FleetEscalationInvocationResultV1 | undefined;
+  let orchestratorRequired = false;
   const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000; const requestedTickSequence = nextSchedulerTickSequence(boundary);
   if (boundary.fleetObserver) {
     const observerBoundary = boundary.fleetObserver; const observerStartMs = Date.now();
@@ -334,7 +384,9 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         claimStarts: 0, sendAttempts: 0, dispatched: 0, returnedWithinBudget: true, targetBindingAvailable: false,
       };
     }
-    orchestratorRequired = publishRequiredHandoff(boundary, observer, fleetNudge);
+    const handoff = publishRequiredHandoff(boundary, observer, fleetNudge);
+    orchestratorRequired = handoff.required;
+    fleetEscalation = await evaluateFleetEscalation(boundary, handoff, observer);
     if (fleetNudge.status === 'failed') {
       throw new Error(`scheduler_fleet_phase_failed:${fleetNudge.result}`);
     }
@@ -354,7 +406,15 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     if (!decision.eligible) { skipped += 1; continue; }
     assertSchedulerEpoch(env); const result = await boundary.start(candidate, freshHead); if (result.ok) started += 1; else skipped += 1;
   }
-  return { attempted, started, skipped, ...(observer ? { observer } : {}), ...(fleetNudge ? { fleetNudge } : {}), ...(orchestratorRequired ? { orchestratorRequired: true } : {}) };
+  return {
+    attempted,
+    started,
+    skipped,
+    ...(observer ? { observer } : {}),
+    ...(fleetNudge ? { fleetNudge } : {}),
+    ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
+    ...(fleetEscalation ? { fleetEscalation } : {}),
+  };
 }
 
 function productionObserverBoundary(observer: FleetObserver): SchedulerFleetObserver {
@@ -549,8 +609,13 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       reason,
       ...assignmentMetadata,
     });
-    return result.ok ? { ok: true } : { ok: false, reason: result.reason };
+    return result.ok ? { ok: true, record: result.record } : { ok: false, reason: result.reason };
   };
+  const fleetEscalation: SchedulerFleetEscalation = (invocation) => runFleetEscalationDelivery({
+    ...invocation,
+    assignmentStorePath,
+    selectAdapter: () => selectRuntimeAdapter({ env }),
+  });
   const postReviewSmoke = createProductionPostReviewSmokeReconciler({
     projectId,
     repoRoot,
@@ -564,6 +629,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       env,
       fleetObserver: productionObserverBoundary(fleetObserver),
       fleetNudgeActuator,
+      fleetEscalation,
       schedulerIntervalMs: cadence,
       activationLineage,
       repository,
