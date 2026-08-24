@@ -73,7 +73,7 @@ The command intentionally exits non-zero after printing usage because required b
 After installing Node 22 or changing `PATH`, restart every long-lived process that can launch pack TypeScript:
 
 - the wake supervisor and all surviving children;
-- AO daemon/project sessions and service wrappers;
+- managed pack sessions and service wrappers that launch pack TypeScript;
 - operator shells, scheduled jobs, and tmux sessions used to start pack commands.
 
 A process started before the `PATH` change can continue resolving an old Node binary even when a fresh interactive shell passes the check.
