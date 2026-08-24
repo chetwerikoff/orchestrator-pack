@@ -577,23 +577,6 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   };
 }
 
-function settleUnobservableComposerPass(value: unknown): unknown {
-  if (!value || typeof value !== 'object') return value;
-  const result = value as { readonly ok?: unknown; readonly terminals?: unknown };
-  if (result.ok !== false || !Array.isArray(result.terminals) || result.terminals.length === 0) return value;
-  const onlyUnobservable = result.terminals.every((terminal) => (
-    terminal && typeof terminal === 'object'
-      && (terminal as { readonly reason?: unknown }).reason === 'runtime_output_source_unobservable'
-  ));
-  return onlyUnobservable ? { ...result, ok: true } : value;
-}
-
-async function runComposerPass(fleetSettled: PromiseLike<unknown>): Promise<unknown> {
-  const { runSupervisorUnsentComposerTick } = await import('../cursor-unsent-composer-submit.ts');
-  const result = await runSupervisorUnsentComposerTick(undefined, undefined, { fleetSettled });
-  return settleUnobservableComposerPass(result);
-}
-
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -605,52 +588,17 @@ export function formatSchedulerError(error: unknown): string {
   return errorText(error);
 }
 
-function composerFailure(composer: unknown): string | undefined {
-  if (!composer || typeof composer !== 'object' || (composer as { ok?: unknown }).ok !== false) return undefined;
-  const terminals = (composer as { terminals?: unknown }).terminals;
-  if (!Array.isArray(terminals)) return 'composer_result_not_ok';
-  const reasons = terminals
-    .map((terminal) => terminal && typeof terminal === 'object' ? (terminal as { reason?: unknown }).reason : undefined)
-    .filter((reason): reason is string => typeof reason === 'string' && reason.length > 0);
-  return reasons.length > 0 ? reasons.join('; ') : 'composer_result_not_ok';
-}
-
-export function settleSchedulerAndComposer<T, C>(
-  scheduler: PromiseSettledResult<T>,
-  composer: PromiseSettledResult<C>,
-): { result: T; composer: C } {
-  const composerReason = composer.status === 'rejected' ? composer.reason : composerFailure(composer.value);
-  if (scheduler.status === 'rejected' && composerReason !== undefined) {
-    const preservedComposerCause = composer.status === 'rejected'
-      ? composerReason
-      : `composer_pass_failed:${composerReason}`;
-    throw new AggregateError([scheduler.reason, preservedComposerCause], 'scheduler_and_composer_failed');
-  }
-  if (scheduler.status === 'rejected') throw scheduler.reason;
-  if (composer.status === 'rejected') throw composer.reason;
-  if (composerReason !== undefined) throw new Error(`composer_pass_failed:${composerReason}`);
-  return { result: scheduler.value, composer: composer.value };
-}
-
-async function runTickWithComposer(boundary: SchedulerBoundary): Promise<{ result: Awaited<ReturnType<typeof runSchedulerTick>>; composer: unknown }> {
-  const schedulerPhase = runSchedulerTick(boundary);
-  const [scheduler, composer] = await Promise.allSettled([
-    schedulerPhase,
-    runComposerPass(schedulerPhase),
-  ]);
-  return settleSchedulerAndComposer(scheduler, composer);
-}
-
 async function runSingleTick(): Promise<void> {
-  const { boundary } = await loadProductionBoundary(); const { result, composer } = await runTickWithComposer(boundary);
-  process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result }, composer })}\n`);
+  const { boundary } = await loadProductionBoundary();
+  const result = await runSchedulerTick(boundary);
+  process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
 }
 async function runLoop(): Promise<void> {
   const { boundary, cadence } = await loadProductionBoundary();
   for (;;) {
     try {
-      const { result, composer } = await runTickWithComposer(boundary);
-      process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result }, composer })}\n`);
+      const result = await runSchedulerTick(boundary);
+      process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
     }
     catch (error) { process.stderr.write(`${formatSchedulerError(error)}\n`); }
     await new Promise((resolve) => setTimeout(resolve, cadence));

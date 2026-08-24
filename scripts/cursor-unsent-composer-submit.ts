@@ -454,6 +454,23 @@ export function submitUnsentCursorComposerOnce(
   return { ...result, watch: false };
 }
 
+/** One bounded observation for the exact worker that just received a notification. */
+export function submitUnsentCursorComposerOnceForWorker(
+  worker: RuntimeWorker,
+  deps: UnsentComposerSubmitDeps,
+  state: UnsentComposerWatchState = createUnsentComposerWatchState(),
+): UnsentComposerSubmitResult {
+  hydrateSubmitted(state, deps.sentStorePath);
+  const terminal = submitOne(worker, { watch: true }, deps, state);
+  persistSubmitted(state, deps.sentStorePath);
+  return {
+    ok: terminal.ok,
+    dryRun: false,
+    watch: false,
+    terminals: [terminal],
+  };
+}
+
 let heldLockFd: number | undefined;
 
 export function acquireWatchLock(lockPath = WATCH_LOCK_PATH): void {
@@ -658,7 +675,8 @@ function shouldLogWatchTick(result: UnsentComposerSubmitResult): boolean {
 
 function isDirectCliExecution(): boolean {
   const script = process.argv[1];
-  return Boolean(script) && import.meta.url === pathToFileURL(script).href;
+  if (!script) return false;
+  return import.meta.url === pathToFileURL(script).href;
 }
 
 async function main(): Promise<void> {
