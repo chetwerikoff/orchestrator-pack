@@ -7,7 +7,7 @@ import path from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { stableStringify } from '../lib/cutover/stable-stringify.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
-import { activateCutover, assertNoExternalLegacyReferences, recomputeClosure, productionActivationBoundary, type ActivationBoundary } from '../lib/cutover/activation-transaction.ts';
+import { activateCutover, assertNoExternalLegacyReferences, recomputeClosure, waitForStartedSupervisor, type ActivationBoundary } from '../lib/cutover/activation-transaction.ts';
 import { abandonPreImportCordon } from '../lib/cutover/activation-transaction.ts';
 import { isExecutableLegacyReference } from '../lib/cutover/activation-transaction.ts';
 import { createCordon, findLegacySupervisorIdentities, markImportBegun, readCordonState } from '../lib/cutover/activation-cordon.ts';
@@ -948,20 +948,20 @@ describe('[pack-review-4] regression coverage', () => {
     };
 
     writeJson(statusPath, runningStatus);
-    await expect(productionActivationBoundary.startTypeScriptSupervisor(request, nonce)).resolves.toEqual({
+    await expect(waitForStartedSupervisor(request, nonce, process.pid)).resolves.toEqual({
       supervisorPid: process.pid,
       childGeneration: 5,
     });
 
     const { childStartTicks: _childStartTicks, ...legacyStatus } = runningStatus;
     writeJson(statusPath, { ...legacyStatus, schemaVersion: 1 });
-    await expect(productionActivationBoundary.startTypeScriptSupervisor(request, nonce))
+    await expect(waitForStartedSupervisor(request, nonce, process.pid))
       .rejects.toThrow(/typescript_supervisor_status_v1_unsupported/);
 
     writeJson(statusPath, { ...runningStatus, childStartTicks: `${identity.startTicks}-reused` });
     vi.useFakeTimers();
     try {
-      const rejected = expect(productionActivationBoundary.startTypeScriptSupervisor(request, nonce))
+      const rejected = expect(waitForStartedSupervisor(request, nonce, process.pid))
         .rejects.toThrow(/typescript_supervisor_scheduler_not_ready/);
       await vi.advanceTimersByTimeAsync(10_100);
       await rejected;
