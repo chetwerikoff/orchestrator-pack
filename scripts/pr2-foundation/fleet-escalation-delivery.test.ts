@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { runProcess } from '../kernel/subprocess.ts';
 import {
   OPERATOR_PRIMARY_PRE_ACTION_FAILURES,
   type OperatorPrimaryTargetFenceResult,
@@ -376,13 +376,16 @@ describe('fleet escalation delivery', () => {
     expect('evidenceRecording' in proof.fleetEscalation).toBe(false);
   });
 
-  it('proof CLI emits exactly one terminal JSON record and no external-send evidence', () => {
-    const result = spawnSync(
-      process.execPath,
-      ['--experimental-strip-types', 'scripts/pr2-foundation/fleet-escalation-proof.ts'],
-      { cwd: process.cwd(), encoding: 'utf8' },
-    );
-    expect(result.status).toBe(0);
+  it('proof CLI emits exactly one terminal JSON record and no external-send evidence', async () => {
+    const result = await runProcess({
+      command: process.execPath,
+      args: ['--experimental-strip-types', 'scripts/pr2-foundation/fleet-escalation-proof.ts'],
+      cwd: process.cwd(),
+      inheritParentEnv: true,
+      allowEmptyStdout: false,
+      timeoutMs: 30_000,
+    });
+    expect(result.ok).toBe(true);
     expect(result.stderr).toBe('');
     const lines = result.stdout.trim().split(/\r?\n/u);
     expect(lines).toHaveLength(1);
