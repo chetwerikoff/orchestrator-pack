@@ -111,13 +111,13 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
 
     expect(authority).toContain('owns the complete assigned manager goal, not the last command');
     expect(authority).toContain('recovery is allowed by default');
-    expect(authority).toContain('retain the same manager Task and Dispatch through `task_ready`');
+    expect(authority.replace(/\s+/g, ' ')).toContain('retain the same manager Task and Dispatch through `task_ready`');
     expect(authority).toContain('reread authoritative state and the owning source');
     expect(authority.replace(/\s+/g, ' ')).toContain(
       'It must correct manager-owned pre-invocation input, artifact, metadata, configuration, or invocation before consumption when that boundary exists',
     );
     expect(authority).not.toContain('It may\ncorrect manager-owned pre-invocation input');
-    expect(authority).toContain('rerun or reinvoke only when the owning action\'s existing contract permits');
+    expect(authority.replace(/\s+/g, ' ')).toContain('rerun or reinvoke only when the owning action\'s existing contract permits');
     expect(authority).toContain('An error message without a ready-made remedy requires source inspection');
   });
 
