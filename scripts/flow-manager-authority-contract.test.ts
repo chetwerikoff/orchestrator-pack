@@ -223,7 +223,7 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
     expect(authority).toContain('hand the existing normal worker-repair route only the failing action\nand authoritative evidence already held');
     expect(authority).toContain('receiving worker/author owns repair\nscope, reproducer design, and focused regression proof');
     expect(authority).toContain('Direct-fix remains legal only when the current top-level user has\nexplicitly authorized that specific direct-PR change');
-    expect(authority).toContain('original manager remains nonterminal in the same Task\nand Dispatch');
+    expect(authority.replace(/\s+/g, ' ')).toContain('original manager remains nonterminal in the same Task and Dispatch');
     expect(authority).toContain('No repair-packet schema, firefighter service, scheduler, queue, lease, watcher');
   });
 });
