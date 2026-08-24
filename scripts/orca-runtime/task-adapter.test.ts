@@ -334,6 +334,105 @@ describe('Orca task adapter destructive operations', () => {
 });
 
 describe('Orca assignment resolution', () => {
+  it('accepts the authoritative active running + ready + input_accepted lifecycle', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'orchestration worker-show') {
+        return {
+          ok: true,
+          result: {
+            worker: {
+              agent_terminal_handle: 'term-active',
+              worktree_id: 'repo::active',
+              state: 'ready',
+              stage: 'input_accepted',
+            },
+            terminal: { handle: 'term-active' },
+            observation: { exactWorker: true, status: 'running' },
+          },
+        };
+      }
+      if (operation === 'terminal show') {
+        return {
+          ok: true,
+          result: {
+            terminal: {
+              handle: 'term-active',
+              incarnationId: 'generation-active',
+              worktreePath: '/tmp/worktree-active',
+              title: 'active worker',
+              status: 'running',
+            },
+          },
+        };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-active' })).toEqual({
+      status: 'ok',
+      value: {
+        kind: 'resolved',
+        worker: {
+          identity: { runtime: 'orca', id: 'term-active', generation: 'generation-active' },
+          workspacePath: '/tmp/worktree-active',
+          title: 'active worker',
+          provenance: 'internal',
+        },
+      },
+    });
+    expect(runJson.mock.calls.map((call) => call[0]?.slice(0, 2))).toEqual([
+      ['orchestration', 'worker-show'],
+      ['terminal', 'show'],
+    ]);
+  });
+
+  it('freezes the captured running + succeeded + settled lifecycle as inactive, never gone', () => {
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        worker: {
+          agent_terminal_handle: 'term-settled',
+          worktree_id: 'repo::settled',
+          state: 'succeeded',
+          stage: 'settled',
+        },
+        terminal: { handle: 'term-settled' },
+        observation: { exactWorker: true, status: 'running' },
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-settled' })).toEqual({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'assignment_target_inactive',
+    });
+    expect(runJson).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects contradictory gone plus active lifecycle evidence instead of granting absence', () => {
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        worker: {
+          agent_terminal_handle: 'term-contradictory',
+          state: 'ready',
+          stage: 'input_accepted',
+        },
+        observation: { exactWorker: true, status: 'gone' },
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-contradictory' })).toEqual({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'assignment_target_unresolved',
+    });
+  });
+
   it('preserves authoritative exact-target gone and producer-backed Dispatch terminal association', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-1']);
@@ -395,11 +494,15 @@ describe('Orca assignment resolution', () => {
     },
   );
 
-  it('requires a terminal handle on an exact non-gone observation', () => {
+  it('requires a terminal handle on an exact active observation', () => {
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
       result: {
-        worker: { agent_terminal_handle: null },
+        worker: {
+          agent_terminal_handle: null,
+          state: 'ready',
+          stage: 'input_accepted',
+        },
         terminal: null,
         observation: { exactWorker: true, status: 'live' },
       },
