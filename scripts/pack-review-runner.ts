@@ -3948,27 +3948,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       }
       run = persistedRun;
       const diagnostics = gptRoundDiagnostics(run.reviewRound);
-      const incompletePluralRound = (run.reviewRound?.cardinality ?? 0) >= 3
-        && gptUsableSourceCount(run.reviewRound) < (run.reviewRound?.cardinality ?? 0);
-      if (incompletePluralRound) {
-        run = updatePackReviewRun(run.id, {
-          status: 'reviewing',
-          latestRunStatus: 'reviewing',
-          failureReason: undefined,
-        }, { projectId, storeRoot });
-        const runs = listPackReviewRuns({ projectId, storeRoot });
-        if (claimLease) await claimLease.release('run_started', runs);
-        return {
-          ok: false,
-          created: true,
-          reused: false,
-          reason: `gpt_sources_waiting_for_grace:${gptUsableSourceCount(run.reviewRound)}/${run.reviewRound?.cardinality}; next_action=run scoped reconcile now or after grace`,
-          nextAction: 'run scoped reconcile --pr-number for this PR; 2/3 settlement becomes eligible only after the shared grace threshold',
-          runId: run.id,
-          status: run.status,
-          httpStatus: 202,
-        };
-      }
       payload = validatePersistedGptReviewPayload(run.id, payload, { projectId, storeRoot });
       const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
         repoRoot: target.sourceRepoRoot,
