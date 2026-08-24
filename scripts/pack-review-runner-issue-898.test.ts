@@ -208,7 +208,6 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
 
     await expect(startFixture(storeRoot, {
       fixturePrBody: 'Refs #1529',
-      fixtureIssueNumber: 1529,
     })).rejects.toThrow(/no resolvable closing Issue/);
   });
 
