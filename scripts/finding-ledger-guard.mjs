@@ -119,11 +119,32 @@ export function parseLedger(ledgerText) {
 }
 
 export function stripMarkdownFencedCodeBlocks(text) { return String(text ?? '').replace(/```[\s\S]*?```/g, (block) => '\n'.repeat((block.match(/\n/g) ?? []).length)); }
+const FINDING_PAYLOAD_FIELDS = [
+  /^\s*id:\s*\S+/im,
+  /^\s*type:\s*\S+/im,
+  /^\s*severity:\s*\S+/im,
+  /^\s*evidence:\s*\S+/im,
+  /^\s*recommendation:\s*\S+/im,
+  /^\s*persistent-machinery:\s*(?:yes|no)\s*$/im,
+];
+function stripMarkdownFencedCodeBlocksExceptFindingPayloads(text) {
+  return String(text ?? '').replace(/```([^\n]*)\n([\s\S]*?)```/g, (block, info, body) => {
+    const isFindingPayload = info.trim().toLowerCase() === 'text'
+      && FINDING_PAYLOAD_FIELDS.every((field) => field.test(body));
+    return isFindingPayload ? body : '\n'.repeat((block.match(/\n/g) ?? []).length);
+  });
+}
 export function maskDelimitedMarkdownQuotes(text) { return String(text ?? '').split(/\r?\n/).map((line) => /^\s*>/.test(line) ? '' : line).join('\n'); }
-export function extractFindingsScanText(capture) { return maskDelimitedMarkdownQuotes(stripMarkdownFencedCodeBlocks(String(capture ?? ''))); }
+export function extractFindingsScanText(capture, stage = null) {
+  const text = String(capture ?? '');
+  const scannable = stage === 'architectural-lens'
+    ? stripMarkdownFencedCodeBlocksExceptFindingPayloads(text)
+    : stripMarkdownFencedCodeBlocks(text);
+  return maskDelimitedMarkdownQuotes(scannable);
+}
 
 function parseFindingBlocks(capture, captureIndex = 0, captureIdentity = null, stage = null) {
-  const lines = extractFindingsScanText(capture).split(/\r?\n/); const findings = []; let current = null;
+  const lines = extractFindingsScanText(capture, stage).split(/\r?\n/); const findings = []; let current = null;
   function flush() {
     if (!current) return;
     current.ordinal = findings.length + 1;
@@ -157,8 +178,8 @@ export function detectUntypedFindingsInCapture(capture) {
   return result.filter((candidate) => !typed.some((finding) => finding.anchor === candidate.anchor));
 }
 export function mergeCaptureFindings(captures) { return { findings: captures.flatMap((capture, index) => parseFindingBlocks(capture, index)), errors: [] }; }
-export function detectProtectedSignalsInCapture(capture) {
-  const text = extractFindingsScanText(capture);
+export function detectProtectedSignalsInCapture(capture, stage = null) {
+  const text = extractFindingsScanText(capture, stage);
   return Object.entries(PROTECTED_PATTERNS).filter(([type, patterns]) => {
     const matchers = type === 'scope-violation' ? [/^\s*type:\s*scope-violation\b/im] : patterns;
     return matchers.some((pattern) => pattern.test(text));
@@ -272,7 +293,7 @@ function bindGovernedCaptureBytes(captures, metadata, episodeState, errors) {
     if (meta.name !== governed.name) errors.push(`review-economics: capture ${governed.captureIdentity} name mismatch`);
     if (Buffer.byteLength(text) !== governed.byteLength) errors.push(`review-economics: capture ${governed.captureIdentity} byteLength mismatch`);
     if (sha256(text) !== governed.sha256) errors.push(`review-economics: capture ${governed.captureIdentity} sha256 mismatch`);
-    if (parseFindingBlocks(text).length !== governed.rawFindingCount) errors.push(`review-economics: capture ${governed.captureIdentity} rawFindingCount mismatch`);
+    if (parseFindingBlocks(text, 0, null, namedCaptureStage(governed.name)).length !== governed.rawFindingCount) errors.push(`review-economics: capture ${governed.captureIdentity} rawFindingCount mismatch`);
     normalized.push({ ...meta, name: governed.name, captureIdentity: governed.captureIdentity });
   }
   for (const identity of byIdentity.keys()) if (!seen.has(identity)) errors.push(`review-economics: governed capture ${identity} has no supplied immutable text`);
@@ -483,20 +504,20 @@ function validateLegacyM3(rows, occurrences, captures, metadata, phase, issueRev
     errors.push(`review-economics: protected finding ${row.id} has unknown/stale architect contest state`);
   }
 }
-function validateGlobalProtectedFloor(captures, rows, errors) {
-  const signaled = new Set(captures.flatMap((capture) => detectProtectedSignalsInCapture(capture)));
+function validateGlobalProtectedFloor(captures, rows, errors, metadata = []) {
+  const signaled = new Set(captures.flatMap((capture, index) => detectProtectedSignalsInCapture(capture, namedCaptureStage(metadata[index]?.name))));
   for (const type of signaled) if (!rows.some((row) => row.type === type)) errors.push(`protected signal type: ${type} present in capture but not addressed in the ledger`);
 }
 function validateM5(captures, metadata, rows, adoptionTimestampMs, phase, errors) {
   const postAdoptionReviewers = captures.map((text, index) => ({ text, index, meta: metadata[index] ?? {}, parsed: parseCaptureName(metadata[index]?.name) })).filter((item) => REVIEWER_STAGES.has(item.parsed.stage) && (!Number.isFinite(adoptionTimestampMs) || Number(item.meta.timestampMs ?? 0) >= adoptionTimestampMs));
   for (const item of postAdoptionReviewers) {
-    const blocks = parseFindingBlocks(item.text); const candidates = blocks.filter((block) => block.candidateText !== undefined);
+    const blocks = parseFindingBlocks(item.text, item.index, null, item.parsed.stage); const candidates = blocks.filter((block) => block.candidateText !== undefined);
     for (const block of candidates) { const value = String(block.candidateText).trim().toLowerCase(); if (value !== 'yes' && value !== 'no') errors.push(`review-economics: invalid simplification-cut-candidate for ${block.id}`); }
     const hasCandidate = candidates.some((block) => String(block.candidateText).trim().toLowerCase() === 'yes'); const clean = hasExactToken(item.text, M5_CLEAN_TOKEN);
     if (hasCandidate && clean) errors.push(`review-economics: capture ${item.meta.name} cannot claim SIMPLIFICATION_CLEAN with a cut candidate`);
     if (!hasCandidate && !clean) errors.push(`review-economics: capture ${item.meta.name} without cut candidate must carry SIMPLIFICATION_CLEAN`);
   }
-  const latestCandidateById = latestByStableId(postAdoptionReviewers.flatMap((item) => parseFindingBlocks(item.text, item.index)), metadata);
+  const latestCandidateById = latestByStableId(postAdoptionReviewers.flatMap((item) => parseFindingBlocks(item.text, item.index, null, item.parsed.stage)), metadata);
   for (const row of rows) { const raw = latestCandidateById.get(row.id); if (!raw) continue; const rawCandidate = String(raw.candidateText ?? 'no').trim().toLowerCase() === 'yes'; if (rawCandidate !== row.simplificationCutCandidate) errors.push(`review-economics: simplification-cut-candidate raw/ledger mismatch for ${row.id}`); }
   if (phase === 'final-acceptance') {
     const architectural = postAdoptionReviewers.filter((item) => item.parsed.stage === 'architectural');
@@ -542,7 +563,7 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
     errors.push(...episodeState.errors); errors.push(...validateReviewEpisodeTopology(episodeState, /** @type {'pre-lens'|'post-lens'|'final-acceptance'} */ (options.phase ?? 'final-acceptance')));
     metadata = bindGovernedCaptureBytes(captures, metadata, episodeState, errors);
   } else if (options.enforceT3PreLensTopology === true) errors.push('review-economics: fresh T3 requires explicit stage-completeness-receipt/v1 authority');
-  const occurrences = buildOccurrences(captures, metadata); validateGlobalProtectedFloor(captures, ledger.findings, errors); let economicsCounts;
+  const occurrences = buildOccurrences(captures, metadata); validateGlobalProtectedFloor(captures, ledger.findings, errors, metadata); let economicsCounts;
   if (ledger.version >= 2 || options.stageReceipts !== undefined) {
     const occurrenceValidation = validateOccurrenceLedger(ledger, occurrences, errors); economicsCounts = occurrenceValidation.counts;
     validateTerminalDispositionMatrix(ledger, occurrences, metadata, options.phase ?? 'final-acceptance', errors);

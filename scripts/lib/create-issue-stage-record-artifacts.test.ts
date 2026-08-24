@@ -1122,7 +1122,36 @@ describe('Issue #1484 post-lens ledger production', () => {
     writeFileSync(input.reviewEvidencePath, JSON.stringify(reviewEvidence));
 
     const lensCapturePath = join(input.dir, 'pass-02-architectural-lens.capture.txt');
-    const lensCapture = ['Claude lens review', ...Array.from({ length: 7 }, (_, index) => 'id: lens-finding-' + String(index + 1)), ''].join('\n');
+    const lensCapture = [
+      'review-economics-contract: v1',
+      '',
+      '```text',
+      'stage: architectural-lens (Claude, single independent lens)',
+      '```',
+      '',
+      ...Array.from({ length: 7 }, (_, index) => [
+        '```text',
+        'id: lens-finding-' + String(index + 1),
+        'type: quality',
+        'severity: P1',
+        'title: Lens finding ' + String(index + 1),
+        'evidence: Observable lens defect.',
+        'recommendation: Use the cheapest sufficient correction.',
+        'persistent-machinery: no',
+        '```',
+        '',
+      ]).flat(),
+      'Example prose follows:',
+      '```markdown',
+      'id: example-only',
+      'type: quality',
+      'severity: P1',
+      'evidence: This is illustrative prose.',
+      'recommendation: Do not count this example.',
+      'persistent-machinery: no',
+      '```',
+      '',
+    ].join('\n');
     writeFileSync(lensCapturePath, lensCapture);
     const lensEvidence = {
       schema: STAGE_EVIDENCE_SCHEMA,
