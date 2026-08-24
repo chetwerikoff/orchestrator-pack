@@ -149,7 +149,7 @@ function parseSmokeScenarioLine(line, nextLine = '') {
     return null;
   }
   const bullet = trimmed.replace(/^-\s*/, '');
-  const actionMatch = bullet.match(/action:\s*(.*?)(?:\s*\|\s*expected:\s*(.*))?$/i);
+  const actionMatch = bullet.match(/^action:\s*(.*?)(?:\s*\|\s*expected:\s*(.*))?$/i);
   if (actionMatch) {
     const nestedExpectedMatch = nextLine.match(/^\s+expected:\s*(.*)$/i);
     return {
@@ -170,6 +170,16 @@ function parseSmokeScenarioLine(line, nextLine = '') {
         expected: bullet.slice(colonIndex + 1).trim(),
       };
     }
+  }
+  const semicolonIndex = bullet.indexOf(';');
+  if (semicolonIndex > 0) {
+    return {
+      action: bullet.slice(0, semicolonIndex).trim(),
+      expected: bullet.slice(semicolonIndex + 1).trim(),
+    };
+  }
+  if (bullet) {
+    return { action: bullet, expected: bullet };
   }
   return null;
 }
