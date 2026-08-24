@@ -10,6 +10,7 @@
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner-issue-898.test.ts",
     "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
     "scripts/pack-review-state.ts"
   ],
   "denylist": [
