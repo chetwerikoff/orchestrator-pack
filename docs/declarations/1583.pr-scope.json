@@ -3,6 +3,7 @@
   "issue_number": 1583,
   "declared_paths": [
     "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-live-store-parent-guard.test.ts"
   ],
@@ -40,5 +41,5 @@
     "tests/README.md",
     "tests/worker-status-store-live-rca.ts"
   ],
-  "source_revision": "4dd8080ba4d163022b2dd47cd445076d8c17c0d6"
+  "source_revision": "499886a2bb92dcdedca4bb8e5345af6881ccbd52"
 }
