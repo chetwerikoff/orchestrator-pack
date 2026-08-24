@@ -18,6 +18,7 @@ import {
 } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import {
+  buildMergeTriageFindingResolutionEvidence,
   deriveMergeTriageEvidenceTuple,
   produceMergeTriageEvidence,
   selectMergeTriageEvidence,
@@ -1473,12 +1474,19 @@ function updateGptRoundSlot(
 ): PackReviewGptRoundRecord {
   const persisted = getPackReviewRun(runId, options);
   const base = persisted?.reviewRound ?? round;
+  if (base.settledSourceCount !== undefined) return base;
   const slots = base.sourceSlots.map((slot) => slot.slotId === slotId ? { ...slot, ...patch } : slot);
   if (slots.filter((slot) => slot.slotId === slotId).length !== 1) {
     throw new Error(`unknown GPT source slot ${slotId}`);
   }
   const next = { ...base, sourceSlots: slots };
-  updatePackReviewRun(runId, { reviewRound: next }, options);
+  try {
+    updatePackReviewRun(runId, { reviewRound: next }, options);
+  } catch (error) {
+    const latest = getPackReviewRun(runId, options)?.reviewRound;
+    if (latest?.settledSourceCount !== undefined) return latest;
+    throw error;
+  }
   return getPackReviewRun(runId, options)?.reviewRound ?? next;
 }
 
@@ -1863,10 +1871,17 @@ async function runGptSourceBatch(options: {
       terminalResult,
       ...(payload ? { payload } : {}),
     }, { projectId: options.projectId, storeRoot: options.storeRoot });
+    const persistedSlot = round.sourceSlots.find((slot) => slot.slotId === slotId);
+    if (!persistedSlot) throw new Error(`unknown GPT source slot ${slotId}`);
+    const acceptedPayload = persistedSlot.lifecycle === 'terminal'
+      && (persistedSlot.terminalClass === 'complete_clean' || persistedSlot.terminalClass === 'complete_findings')
+      && persistedSlot.payload
+      ? persistedSlot.payload as ReviewPayload
+      : undefined;
     if (options.input.fixtureAfterGptSourceSlotTerminal) {
       await options.input.fixtureAfterGptSourceSlotTerminal({ slotId, round });
     }
-    return { slot: round.sourceSlots.find((slot) => slot.slotId === slotId)!, payload };
+    return { slot: persistedSlot, payload: acceptedPayload };
   }));
 
   const findings: ReviewPayloadFinding[] = [];
@@ -3061,6 +3076,26 @@ async function commitAtCapTriage(input: {
       ['diff', '--name-only', `${input.baseRef}...${input.target.headSha}`],
       'changed path capture',
     )).split(/\r?\n/).map((path) => path.trim()).filter(Boolean);
+    let findingResolution: ReturnType<typeof buildMergeTriageFindingResolutionEvidence> | undefined;
+    if (input.allowFinalSettlement) {
+      const priorReviewedHeadSha = input.authority.terminal?.targetSha;
+      if (!priorReviewedHeadSha || priorReviewedHeadSha === input.authority.currentHeadSha) {
+        throw new Error('final-cap finding resolution requires the prior reviewed findings head');
+      }
+      const finalFixChangedPaths = input.start.fixtureChangedPaths ?? (await runGit(
+        input.target.sourceRepoRoot,
+        ['diff', '--name-only', `${priorReviewedHeadSha}..${input.authority.currentHeadSha}`],
+        'final-cap fix changed path capture',
+      )).split(/\r?\n/).map((path) => path.trim()).filter(Boolean);
+      findingResolution = buildMergeTriageFindingResolutionEvidence({
+        findingSnapshotDigest,
+        priorReviewedHeadSha,
+        currentHeadSha: input.authority.currentHeadSha,
+        findingCount: input.payload.findingCount,
+        findingPaths: input.payload.findings.map((finding) => trim(finding.filePath)).filter(Boolean),
+        finalFixChangedPaths,
+      });
+    }
     tuple = deriveMergeTriageEvidenceTuple({
       repository: input.target.repoSlug,
       prNumber: input.target.prNumber,
@@ -3070,13 +3105,18 @@ async function commitAtCapTriage(input: {
       producerExecutableBytes: readFileSync(join(input.trustedPackRoot, 'scripts', 'merge-triage-evidence.ts')),
       boundIssueSnapshotBytes,
       changedPathCaptureBytes: changedPaths.join('\n'),
-      input: { baseRef: input.baseRef, issueNumber: input.target.issueNumber ?? null },
+      input: {
+        baseRef: input.baseRef,
+        issueNumber: input.target.issueNumber ?? null,
+        ...(findingResolution ? { findingResolution } : {}),
+      },
     });
     produceMergeTriageEvidence({
       tuple,
       changedPaths,
       issueBody,
       options: { storeRoot: input.storeRoot },
+      findingResolution,
     });
     selection = selectMergeTriageEvidence({ tuple, options: { storeRoot: input.storeRoot } });
   } catch {
@@ -3095,10 +3135,13 @@ async function commitAtCapTriage(input: {
     input.authority = readPackReviewAuthority(input.target.prNumber, { storeRoot: input.storeRoot })!;
   }
   const current = readPackReviewAuthority(input.target.prNumber, { storeRoot: input.storeRoot })!;
+  const findingResolution = selection.evidence?.findingResolution;
   const verdict = input.allowFinalSettlement
     && selection.kind === 'selected'
     && selection.verdict === 'PENDING_ARCHITECT'
     && selection.evidence?.predicateResult === 'no_intersection'
+    && findingResolution?.predicateResult === 'resolved'
+    && findingResolution.findingSnapshotDigest === findingSnapshotDigest
     ? 'DEFER'
     : selection.verdict;
   return commitPackReviewTriage({
@@ -3949,6 +3992,28 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       run = persistedRun;
       const diagnostics = gptRoundDiagnostics(run.reviewRound);
       payload = validatePersistedGptReviewPayload(run.id, payload, { projectId, storeRoot });
+      if (hasPersistedPackReviewVerdict(run)) {
+        const concurrentAuthority = readPackReviewAuthority(target.prNumber, authorityOptions);
+        const published = concurrentAuthority?.currentHeadSha === target.headSha
+          && concurrentAuthority.terminal?.runId === run.id
+          && concurrentAuthority.publication?.terminalRunId === run.id
+          && concurrentAuthority.publication.status === 'succeeded';
+        terminal = true;
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: true,
+          created: true,
+          reused: false,
+          recovered: true,
+          reason: published ? 'concurrent_reconcile_settled' : 'concurrent_reconcile_owns_delivery',
+          runId: run.id,
+          status: run.status,
+          httpStatus: 200,
+          ...(run.githubReviewId !== undefined ? { githubReviewId: run.githubReviewId } : {}),
+          ...(run.githubReviewUrl ? { githubReviewUrl: run.githubReviewUrl } : {}),
+        };
+      }
       const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
         repoRoot: target.sourceRepoRoot,
         repoSlug: target.repoSlug,
