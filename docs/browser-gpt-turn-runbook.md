@@ -103,13 +103,19 @@ direct-publication identity/output arguments and the required canon context:
 
 ```bash
   --reviewer-source-output "${REVIEWER_SOURCE_OUTPUT}" \
-  --reviewer-source direct-publication/v1 \
+  --reviewer-source slot-01#capture=direct-publication/v1 \
   --repository "${REPOSITORY}" \
   --issue-number "${ISSUE_NUMBER}" \
   --source-revision "${EXPECTED_REVISION}" \
   --stage "${STAGE}" \
   --source-slot "${SLOT}"
 ```
+
+The left-hand source token (`slot-01`) is the independent per-slot identity.
+Concurrent slots must use distinct left-hand ids (`slot-01`, `slot-02`,
+`slot-03`). A retry of the same slot must reuse that slot's exact
+`reviewerSource` identity, including the same left-hand id; do not mint a new
+source identity for the retry.
 
 The long-running adapter refuses missing direct-publication context before it
 spawns the detached child. State-light independently regenerates current
