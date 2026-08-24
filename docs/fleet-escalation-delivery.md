@@ -61,7 +61,8 @@ The only S3 result witness is the normal scheduler caller surface. When the S3 p
 The dedicated proof command is:
 
 ```text
-node --experimental-strip-types scripts/pr2-foundation/fleet-escalation-proof.ts
+node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+  --script scripts/pr2-foundation/fleet-escalation-proof.ts --
 ```
 
 On success it emits exactly one terminal `fleet-escalation-proof/v1` JSON record. The proof traverses the real scheduler -> S3 -> landed #1532 target producer -> current `publishOperatorMessageOnce(...)` boundary while injecting side-effect-free local runtime/state dependencies so no external operator message is sent. Its required evidence includes:
