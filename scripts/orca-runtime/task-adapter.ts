@@ -63,6 +63,22 @@ type OrcaTerminalListResult = Readonly<{
 
 type OrcaAssignmentActivity = 'active' | 'inactive' | 'unresolved';
 
+// Pinned Orca producer contract evidence (stablyai/orca@
+// f5fd7303ab00bcfeff72c92f2bc33ba9364cd622):
+// - orchestration-worker-control.ts emits `live` and documents legacy `running`
+//   as the same compatibility-boundary liveness observation;
+// - lifecycle-reconciliation.ts authorizes heartbeat messages against the exact
+//   assignee before dispatch-completion.ts records last_heartbeat_at, and that
+//   write is guarded by status='dispatched';
+// - coordinator-task-dispatch.ts defines stale Dispatch liveness as 10 minutes
+//   (two documented five-minute heartbeat intervals).
+// PACK reuses those producer semantics instead of inventing a separate TTL.
+const ORCA_DISPATCH_HEARTBEAT_STALE_AFTER_MS = 10 * 60 * 1_000;
+const ORCA_SQLITE_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/u;
+const ORCA_RFC3339_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/u;
+const ORCA_TERMINAL_WORKER_STATES = new Set(['failed', 'succeeded', 'stopped', 'abandoned']);
+const ORCA_TERMINAL_DISPATCH_STATES = new Set(['completed', 'failed', 'circuit_broken']);
+
 function failureDetail(failure: RuntimeOperationFailure): string {
   return `${failure.operation}:${failure.status}:${failure.reason}`;
 }
@@ -169,6 +185,45 @@ function normalizedWorkerLifecycle(result: OrcaWorkerShowResult | undefined): {
   };
 }
 
+function utcTimestampFromMatch(match: RegExpMatchArray): number | null {
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const millisecond = Number((match[7] ?? '').padEnd(3, '0') || '0');
+  if (year < 1970) return null;
+  const value = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  if (!Number.isFinite(value)) return null;
+  const parsed = new Date(value);
+  if (
+    parsed.getUTCFullYear() !== year
+    || parsed.getUTCMonth() !== month - 1
+    || parsed.getUTCDate() !== day
+    || parsed.getUTCHours() !== hour
+    || parsed.getUTCMinutes() !== minute
+    || parsed.getUTCSeconds() !== second
+    || parsed.getUTCMilliseconds() !== millisecond
+  ) return null;
+  return value;
+}
+
+function parseOrcaHeartbeatTimestamp(value: string): number | null {
+  const sqlite = value.match(ORCA_SQLITE_UTC_TIMESTAMP);
+  if (sqlite) return utcTimestampFromMatch(sqlite);
+  const rfc3339 = value.match(ORCA_RFC3339_UTC_TIMESTAMP);
+  if (rfc3339) return utcTimestampFromMatch(rfc3339);
+  return null;
+}
+
+function hasCurrentDispatchHeartbeat(lastHeartbeatAt: string, nowMs = Date.now()): boolean {
+  const heartbeatMs = parseOrcaHeartbeatTimestamp(lastHeartbeatAt);
+  return heartbeatMs !== null
+    && heartbeatMs <= nowMs
+    && nowMs - heartbeatMs <= ORCA_DISPATCH_HEARTBEAT_STALE_AFTER_MS;
+}
+
 function classifyWorkerLifecycle(result: OrcaWorkerShowResult | undefined): OrcaAssignmentActivity {
   const lifecycle = normalizedWorkerLifecycle(result);
   if (lifecycle.observationStatus === 'exited') return 'inactive';
@@ -176,32 +231,36 @@ function classifyWorkerLifecycle(result: OrcaWorkerShowResult | undefined): Orca
     return 'unresolved';
   }
 
-  if (['failed', 'succeeded', 'stopped', 'abandoned'].includes(lifecycle.workerState)) {
-    return 'inactive';
-  }
-  if (['completed', 'failed', 'circuit_broken'].includes(lifecycle.dispatchStatus)) {
-    return 'inactive';
-  }
+  if (ORCA_TERMINAL_WORKER_STATES.has(lifecycle.workerState)) return 'inactive';
+  if (ORCA_TERMINAL_DISPATCH_STATES.has(lifecycle.dispatchStatus)) return 'inactive';
 
-  // Authoritative Orca contract: worker-show exposes the current Dispatch row,
-  // and dispatch-specific heartbeats are recorded only for status=dispatched
-  // after exact lifecycle authority succeeds. `ready/input_accepted` alone is
-  // only prompt-injection acceptance and is therefore not positive activity.
+  // `ready/input_accepted` is only prompt-injection acceptance. Positive S2
+  // authority additionally requires the current dispatched row plus a fresh,
+  // producer-authorized heartbeat under the pinned Orca contract above.
   if (
     lifecycle.workerState !== 'ready'
     || lifecycle.workerStage !== 'input_accepted'
     || lifecycle.dispatchStatus !== 'dispatched'
-    || !lifecycle.lastHeartbeatAt
+    || !hasCurrentDispatchHeartbeat(lifecycle.lastHeartbeatAt)
   ) {
     return 'unresolved';
   }
   return 'active';
 }
 
-function goneContradictsActiveLifecycle(result: OrcaWorkerShowResult | undefined): boolean {
+function goneLifecycleSupportsAbsence(result: OrcaWorkerShowResult | undefined): boolean {
   const lifecycle = normalizedWorkerLifecycle(result);
-  return lifecycle.workerState === 'ready'
-    || lifecycle.workerStage === 'input_accepted';
+  // worker-show always carries the Dispatch row for a known Dispatch. A live or
+  // unknown Dispatch status next to exact `gone` is contradictory/ambiguous and
+  // therefore cannot authorize replacement. Terminal worker rows are optional
+  // (context-only Dispatches have none), but any observed non-terminal worker is
+  // likewise a contradiction. A malformed retained heartbeat is corrupted
+  // lifecycle evidence and must fail closed even after terminal settlement.
+  if (!ORCA_TERMINAL_DISPATCH_STATES.has(lifecycle.dispatchStatus)) return false;
+  if (lifecycle.workerState && !ORCA_TERMINAL_WORKER_STATES.has(lifecycle.workerState)) return false;
+  if (lifecycle.workerStage === 'input_accepted') return false;
+  if (lifecycle.lastHeartbeatAt && parseOrcaHeartbeatTimestamp(lifecycle.lastHeartbeatAt) === null) return false;
+  return true;
 }
 
 /**
@@ -369,7 +428,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     if (observationStatus === 'gone') {
-      if (goneContradictsActiveLifecycle(parsed)) {
+      if (!goneLifecycleSupportsAbsence(parsed)) {
         return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
       }
       const resource = parsed.terminalResource;
@@ -384,8 +443,9 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     }
     // Exact terminal presence is deliberately weaker than active Dispatch
     // authority. The active predicate additionally requires Orca's current
-    // dispatch row plus an accepted exact-assignee heartbeat; missing, unknown,
-    // unsupported, or contradictory lifecycle facts remain fail-closed.
+    // dispatch row plus a fresh accepted exact-assignee heartbeat; missing,
+    // stale, malformed, unsupported, or contradictory lifecycle facts remain
+    // fail-closed.
     const activity = classifyWorkerLifecycle(parsed);
     if (activity === 'unresolved') {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
