@@ -19,19 +19,22 @@ or named skills.
    external sync step: `~/agent-rules/coworker-policy.md`, generated
    `~/.codex/AGENTS.md`, and the `~/.cursor-global` symlink target when present.
    Do not hand-edit those mirrors as a substitute for the normal sync.
-3. Restart AO with `ao stop` followed by `ao start` so workers reload the updated
-   `agentRulesFile` and the recalibrated coworker threshold.
+3. Recycle only affected Claude/Cursor sessions or managed pack consumers through
+   the currently supported deployment/session mechanism so they load the updated
+   tracked policy and hook wiring.
 4. Existing Claude/Cursor read-delegation Stop/stop hooks remain owned by
    `docs/coworker-read-delegation-audit.md`; #1488 does not introduce a second
    hook or local configuration source. Where those hooks are installed, verify one
    fresh ordinary >600-line work unit appends the expected audit verdict after the
-   restart.
+   affected session has reloaded the new revision.
 
 ### Rollback
 
 Revert the #1488 change, resync the same tracked-policy mirrors from the reverted
-checkout, and restart AO again. Do not preserve the new routing or threshold by
-adding a compatibility copy, second policy registry, or alternate hook.
+checkout, and recycle the affected sessions or managed pack consumers through the
+same supported deployment/session mechanism. Do not preserve the new routing or
+threshold by adding a compatibility copy, second policy registry, or alternate
+hook.
 
 ## Continuation-safe supervised Task launch assistant (Issue #1479)
 
