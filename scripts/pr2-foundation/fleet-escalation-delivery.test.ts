@@ -31,7 +31,7 @@ import {
   type FleetEscalationSchedulerIdentityV1,
 } from './fleet-escalation-delivery.ts';
 import { runFleetEscalationProof } from './fleet-escalation-proof.ts';
-import { runSchedulerTick, type SchedulerBoundary } from './scheduler.ts';
+import { runSchedulerTick, schedulerFleetPhaseFailure, type SchedulerBoundary } from './scheduler.ts';
 
 const roots: string[] = [];
 const projectId = 'orchestrator-pack';
@@ -293,6 +293,8 @@ describe('fleet escalation delivery', () => {
     let adapterSelections = 0;
     const sensitive = [
       { taskId: 'Bearer synthetic-secret-token' },
+      { taskId: 'bearer synthetic-secret-token' },
+      { taskId: 'bEaReR synthetic-secret-token' },
       { taskId: 'ghp_abcdefghijklmnopqrstuvwxyz1234567890' },
       { taskId: 'token=synthetic-secret' },
       { assignmentId: 'https://user:password@example.invalid/reconciliation' },
@@ -487,7 +489,7 @@ describe('fleet escalation delivery', () => {
   });
 
   it.each(['timeout', 'throw'] as const)(
-    'routes observer %s handoff through S3 exactly once and returns the caller-visible result',
+    'routes observer %s handoff through S3 exactly once and preserves the process failure signal',
     async (mode) => {
       const root = tempRoot();
       let handoffCalls = 0;
@@ -523,11 +525,13 @@ describe('fleet escalation delivery', () => {
           return syntheticEscalation('submitted', identity.tickSequence, 'observer_untrusted');
         },
       };
+      const observerFailure = mode === 'timeout' ? 'observer_timeout' : 'observer_threw';
       const result = await runSchedulerTick(boundary, epochEnv(root));
       expect(result).toMatchObject({
         attempted: 0,
         started: 0,
         skipped: 0,
+        observerFailure,
         orchestratorRequired: true,
         fleetEscalation: {
           reason: 'observer_untrusted',
@@ -535,6 +539,10 @@ describe('fleet escalation delivery', () => {
           attemptCount: 1,
         },
       });
+      const serialized = JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } });
+      expect(serialized).toContain('"fleetEscalation"');
+      expect(serialized).toContain(`"observerFailure":"${observerFailure}"`);
+      expect(schedulerFleetPhaseFailure(result)).toBe(`scheduler_observer_untrusted:${observerFailure}`);
       expect(handoffCalls).toBe(1);
       expect(escalationCalls).toBe(1);
       expect(cancelCalls).toBe(1);
