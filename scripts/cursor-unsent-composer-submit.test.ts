@@ -15,6 +15,7 @@ import {
   saveSubmittedFingerprints,
   submitUnsentCursorComposer,
   submitUnsentCursorComposerOnce,
+  submitUnsentCursorComposerOnceForWorker,
   runSupervisorUnsentComposerTick,
   workerKey,
   type UnsentComposerSubmitDeps,
@@ -35,9 +36,9 @@ const EMPTY_CLAUDE_SCREEN = [
   '⏵⏵ bypass permissions on (shift+tab to cycle)',
 ];
 
-function worker(id: string, generation = 'g1'): RuntimeWorker {
+function worker(id: string, generation = 'g1', runtime: 'orca' | 'codex' = 'orca'): RuntimeWorker {
   return {
-    identity: { runtime: 'orca', id, generation },
+    identity: { runtime, id, generation },
     workspacePath: '/tmp',
     title: id,
     provenance: 'external',
@@ -61,6 +62,7 @@ function depsFor(
       ok: true as const,
       lines: linesById[identity.id] ?? ['→ Add a follow-up'],
     })),
+    observeLiveness: extra.liveness,
     submit: extra.submitResult ?? extra.submit ?? ((identity) => {
       submitted.push(identity);
       return { status: 'dispatched' as const };
@@ -264,6 +266,10 @@ describe('submitUnsentCursorComposer', () => {
           },
         };
       },
+      liveness: (input: { worker: RuntimeWorkerIdentity; observationWindowMs: number }) => ({
+        status: 'idle' as const,
+        worker: input.worker,
+      }),
       dispatchInput: () => ({ status: 'dispatched' as const }),
     } as unknown as Parameters<typeof createAdapterSubmitDeps>[0];
     const deps = createAdapterSubmitDeps(adapter, () => ({ ok: true, result: {} }));
@@ -631,6 +637,105 @@ describe('submitUnsentCursorComposer', () => {
     } finally {
       try { unlinkSync(sentStorePath); } catch { /* ignore */ }
     }
+  });
+});
+
+describe('delivery-triggered composer submission', () => {
+  it('reads and submits immediately while the target is Running', async () => {
+    const target = worker('term_busy_transition');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let reads = 0;
+    const deps = depsFor(
+      { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
+      {
+        submitted,
+        read: () => {
+          reads += 1;
+          return { ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const };
+        },
+      },
+    );
+    const state = createUnsentComposerWatchState();
+
+    const pending = submitUnsentCursorComposerOnceForWorker(target, deps, state);
+    const idle = await pending;
+    expect(idle.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(reads).toBe(1);
+    expect(submitted).toHaveLength(1);
+
+    const duplicate = await submitUnsentCursorComposerOnceForWorker(target, deps, state);
+    expect(duplicate.terminals[0]?.reason).toBe('already_submitted');
+    expect(reads).toBe(2);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it('applies the same immediate one-read/one-submit contract to Codex', async () => {
+    const target = worker('term_codex_busy', 'codex-generation', 'codex');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let reads = 0;
+    const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor(
+      { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
+      {
+        submitted,
+        read: (identity) => {
+          expect(identity).toEqual(target.identity);
+          reads += 1;
+          return { ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const };
+        },
+      },
+    ));
+
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(reads).toBe(1);
+    expect(submitted).toEqual([target.identity]);
+  });
+
+  it('uses the immediate idle path for exactly one screen read and Enter', async () => {
+    const target = worker('term_idle_immediate');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let reads = 0;
+    const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor(
+      { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
+      {
+        submitted,
+        liveness: (identity) => ({ status: 'idle', worker: identity }),
+        read: () => {
+          reads += 1;
+          return { ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const };
+        },
+      },
+    ));
+    expect(result.terminals[0]?.reason).toBe('enter_sent');
+    expect(reads).toBe(1);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it('refuses human and mixed composer text after idle without Enter', async () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const human = worker('term_human_idle');
+    const mixed = worker('term_mixed_idle');
+    const result = await submitUnsentCursorComposerOnceForWorker(human, {
+      ...depsFor({ [human.identity.id]: ['→ разберись почему', ...CURSOR_FOOTER] }, { submitted }),
+    });
+    const mixedResult = await submitUnsentCursorComposerOnceForWorker(mixed, {
+      ...depsFor({ [mixed.identity.id]: [POKE, 'не отправляй это', ...CURSOR_FOOTER] }, { submitted }),
+    });
+    expect(result.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
+    expect(mixedResult.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
+    expect(submitted).toHaveLength(0);
+  });
+
+  it('releases a persisted ambiguous pointer only after an exact idle identity', async () => {
+    const target = worker('term_legacy_ambiguous');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const state = createUnsentComposerWatchState();
+    state.submittedFingerprint.set(workerKey(target.identity), POKE);
+    state.ambiguousSubmittedFingerprints.set(workerKey(target.identity), new Set([POKE]));
+    const result = await submitUnsentCursorComposerOnceForWorker(target, {
+      ...depsFor({ [target.identity.id]: [POKE, ...CURSOR_FOOTER] }, { submitted }),
+    }, state);
+    expect(result.terminals[0]?.reason).toBe('enter_sent');
+    expect(submitted).toHaveLength(1);
   });
 });
 

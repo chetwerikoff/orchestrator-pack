@@ -28,7 +28,6 @@ const LONE_ARROW = /^→$/u;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
-const EMPTY_COMPOSER_RECHECK_MS = 1_000;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
@@ -260,6 +259,7 @@ function persistSubmitted(state: UnsentComposerWatchState, path: string | undefi
 }
 
 export interface UnsentComposerSubmitDeps {
+  readonly [key: string]: unknown;
   readonly listWorkers: () => { ok: true; workers: readonly RuntimeWorker[] } | { ok: false; reason: string };
   readonly listWorkersAsync?: () => PromiseLike<
     { ok: true; workers: readonly RuntimeWorker[] } | { ok: false; reason: string }
@@ -289,10 +289,6 @@ export interface UnsentComposerWatchState {
   readonly lastChangedAt: Map<string, number>;
   readonly submittedFingerprint: Map<string, string>;
   readonly ambiguousSubmittedFingerprints: Map<string, Set<string>>;
-}
-
-export interface UnsentComposerSupervisorLifecycle {
-  readonly fleetSettled?: PromiseLike<unknown>;
 }
 
 export interface UnsentComposerTerminalResult {
@@ -333,6 +329,7 @@ function settleComposerObservation(
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState,
   shown: ComposerReadResult,
+  allowAmbiguousRetry = false,
 ): UnsentComposerTerminalResult {
   const identity = worker.identity;
   const key = workerKey(identity);
@@ -358,9 +355,10 @@ function settleComposerObservation(
       reason: 'composer_not_orchestration_pointer',
     };
   }
+  const ambiguous = state.ambiguousSubmittedFingerprints.get(key)?.has(fingerprint) ?? false;
   if (
-    state.submittedFingerprint.get(key) === fingerprint
-    || state.ambiguousSubmittedFingerprints.get(key)?.has(fingerprint)
+    (state.submittedFingerprint.get(key) === fingerprint && !(allowAmbiguousRetry && ambiguous))
+    || (ambiguous && !allowAmbiguousRetry)
   ) {
     return { ...base, ok: true, unsent: true, enter: false, reason: 'already_submitted' };
   }
@@ -378,6 +376,11 @@ function settleComposerObservation(
     fingerprints.add(fingerprint);
     state.ambiguousSubmittedFingerprints.set(key, fingerprints);
     return { ...base, ok: true, unsent: true, enter: false, reason: dispatched.reason };
+  }
+  if (dispatched.status === 'dispatched') {
+    const fingerprints = state.ambiguousSubmittedFingerprints.get(key);
+    fingerprints?.delete(fingerprint);
+    if (fingerprints?.size === 0) state.ambiguousSubmittedFingerprints.delete(key);
   }
   return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent' };
 }
@@ -454,14 +457,24 @@ export function submitUnsentCursorComposerOnce(
   return { ...result, watch: false };
 }
 
-/** One bounded observation for the exact worker that just received a notification. */
-export function submitUnsentCursorComposerOnceForWorker(
+/** One immediate composer observation for the exact worker that just received a notification. */
+export async function submitUnsentCursorComposerOnceForWorker(
   worker: RuntimeWorker,
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
-): UnsentComposerSubmitResult {
+): Promise<UnsentComposerSubmitResult> {
   hydrateSubmitted(state, deps.sentStorePath);
-  const terminal = submitOne(worker, { watch: true }, deps, state);
+  const shown = deps.readAsync
+    ? await deps.readAsync(worker.identity)
+    : deps.read(worker.identity);
+  const terminal = settleComposerObservation(
+    worker,
+    { watch: true },
+    deps,
+    state,
+    shown,
+    true,
+  );
   persistSubmitted(state, deps.sentStorePath);
   return {
     ok: terminal.ok,
@@ -569,7 +582,6 @@ export function createAdapterSubmitDeps(
 export async function runSupervisorUnsentComposerTick(
   providedDeps?: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
-  lifecycle: UnsentComposerSupervisorLifecycle = {},
 ): Promise<UnsentComposerSubmitResult> {
   const deps = providedDeps ?? createAdapterSubmitDeps(await selectRuntimeAdapter());
   hydrateSubmitted(state, deps.sentStorePath);
@@ -591,31 +603,15 @@ export async function runSupervisorUnsentComposerTick(
     });
     return persistTail;
   };
-  let fleetSettled = lifecycle.fleetSettled === undefined;
-  if (lifecycle.fleetSettled !== undefined) {
-    void Promise.resolve(lifecycle.fleetSettled).then(
-      () => { fleetSettled = true; },
-      () => { fleetSettled = true; },
-    );
-  }
   const runWorker = async (worker: RuntimeWorker): Promise<UnsentComposerTerminalResult> => {
     const workerDeps: UnsentComposerSubmitDeps = {
       ...deps,
       listWorkers: () => ({ ok: true, workers: [worker] }),
       sentStorePath: undefined,
     };
-    let result = deps.readAsync
+    const result = deps.readAsync
       ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
       : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
-    while (
-      (result.reason === 'composer_empty' || result.reason === 'composer_not_orchestration_pointer')
-      && !fleetSettled
-    ) {
-      await new Promise<void>((resolve) => setTimeout(resolve, EMPTY_COMPOSER_RECHECK_MS));
-      result = deps.readAsync
-        ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
-        : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
-    }
     await persistAfterObservation();
     return result ?? {
       terminal: worker.identity.id,

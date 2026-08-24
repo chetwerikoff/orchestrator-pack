@@ -6,6 +6,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { RuntimeAdapter } from './runtime/contracts.ts';
 import { sendPackReviewWorkerNotification } from './lib/pack-review-worker-notification.ts';
+import {
+  createAdapterSubmitDeps,
+  submitUnsentCursorComposerOnceForWorker,
+} from './cursor-unsent-composer-submit.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 
 describe('worker message submission through the runtime boundary', () => {
@@ -41,7 +45,7 @@ describe('worker message submission through the runtime boundary', () => {
     }
   });
 
-  it('reacts once to a completed notification delivery with one exact composer submit', async () => {
+  it('performs one immediate exact composer submit while Running', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'opk-worker-event-submit-'));
     const identity = { runtime: 'orca', id: 'event-worker', generation: `generation-${Date.now()}` } as const;
     const worker = {
@@ -51,12 +55,13 @@ describe('worker message submission through the runtime boundary', () => {
       provenance: 'external' as const,
     };
     const pointer = 'You have 1 orchestration message. Run `orca orchestration check --run run_event_pointer`.';
-    const calls: Array<{ text?: string; submitOnly?: boolean }> = [];
+    const calls: Array<{ text?: string; submitOnly?: boolean; writeOnly?: boolean }> = [];
     let reads = 0;
     const adapter = {
       id: 'orca',
       findWorkerById: () => ({ status: 'ok' as const, value: worker }),
-      dispatchInput: (input: { text?: string; submitOnly?: boolean }) => {
+      liveness: () => ({ status: 'idle' as const, worker: identity }),
+      dispatchInput: (input: { text?: string; submitOnly?: boolean; writeOnly?: boolean }) => {
         calls.push(input);
         return input.submitOnly
           ? { status: 'dispatched' as const }
@@ -76,6 +81,19 @@ describe('worker message submission through the runtime boundary', () => {
           },
         };
       },
+      readBoundedOutputAsync: async (input: { screen?: boolean }) => ({
+        status: 'ok' as const,
+        value: {
+          worker: identity,
+          lines: (reads += 1) && input.screen
+            ? [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main']
+            : [],
+          observationToken: { opaque: 'event-screen' },
+          changed: true,
+          terminalState: 'running' as const,
+          source: 'screen' as const,
+        },
+      }),
     } as unknown as RuntimeAdapter;
 
     try {
@@ -93,11 +111,29 @@ describe('worker message submission through the runtime boundary', () => {
       });
 
       expect(result).toMatchObject({ state: 'ambiguous', reason: 'dispatch_unknown' });
+      await Promise.resolve();
       expect(reads).toBe(1);
       expect(calls).toHaveLength(2);
       expect(calls[0]?.text).toBe('event delivery');
       expect(calls[0]?.submitOnly).toBeUndefined();
+      expect(calls[0]?.writeOnly).toBe(true);
       expect(calls[1]).toMatchObject({ submitOnly: true, worker: identity });
+
+      const duplicate = await sendPackReviewWorkerNotification({
+        trustedPackRoot: process.cwd(),
+        workerId: identity.id,
+        expectedWorkerGeneration: identity.generation,
+        prNumber: 1587,
+        projectId: 'orchestrator-pack',
+        adapter,
+        journalPath: path.join(root, 'dispatch.json'),
+        claimNamespace: path.join(root, 'claims'),
+        sideEffectFencePath: path.join(root, 'dispatch.lock'),
+        request: { message: 'event delivery', idempotencyKey: `event-worker-${identity.generation}` },
+      });
+
+      expect(duplicate).toMatchObject({ state: 'ambiguous', reason: 'journal_duplicate_no_op' });
+      expect(calls).toHaveLength(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
