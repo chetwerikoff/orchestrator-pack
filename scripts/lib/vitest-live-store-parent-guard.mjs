@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, watch } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, watch } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   assertHarnessWritePathSafe,
@@ -13,7 +13,7 @@ import {
 
 const MAX_PARENT_WATCHERS = 512;
 const EXTERNALLY_MUTABLE_STORE_PATHS = new Map([
-  ['wake-supervisor-runtime-state', new Set(['worker-message-dispatch-journal.json'])],
+  ['wake-supervisor-runtime-state', new Set(['typescript-supervisor-status.json'])],
 ]);
 const POWERSHELL_PATH_PARAMETERS = new Set([
   'literalpath', 'path', 'filepath', 'statepath', 'storepath', 'journalpath',
@@ -67,6 +67,20 @@ function externallyMutablePath(match) {
   if (!allowed) return false;
   const relativePath = relative(match.store.defaultPath, match.candidate).replaceAll('\\', '/');
   return allowed.has(relativePath);
+}
+
+function supervisorStatusWitness(candidate) {
+  try {
+    const status = JSON.parse(readFileSync(candidate, 'utf8'));
+    return status?.schemaVersion === 1
+      && typeof status.supervisorStartTicks === 'string'
+      && status.supervisorStartTicks.length > 0
+      && status.childId === 'pr2-scheduler'
+      && ['starting', 'running', 'waiting-restart', 'stopping', 'refused'].includes(status.restartState)
+      && typeof status.startedAt === 'string';
+  } catch {
+    return false;
+  }
 }
 
 function normalizePowerShellValue(value) {
@@ -365,7 +379,9 @@ export function startParentLiveStoreGuard(env = process.env) {
         const candidate = canonicalizeStorePath(join(anchor, String(filename)));
         const match = classifyLiveStorePath(candidate, env);
         if (match) {
-          if (externallyMutablePath(match)) observedExternalTouches.add(match.storeId);
+          if (externallyMutablePath(match) && supervisorStatusWitness(candidate)) {
+            observedExternalTouches.add(match.storeId);
+          }
           else exactTouches.add(match.storeId);
         }
 
