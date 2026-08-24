@@ -62,13 +62,14 @@ function depsFor(
       ok: true as const,
       lines: linesById[identity.id] ?? ['→ Add a follow-up'],
     })),
-    observeLiveness: extra.liveness,
+    liveness: extra.liveness,
     submit: extra.submitResult ?? extra.submit ?? ((identity) => {
       submitted.push(identity);
       return { status: 'dispatched' as const };
     }),
     now: extra.now,
     sleep: extra.sleep,
+    sleepAsync: extra.sleepAsync,
     sentStorePath: extra.sentStorePath,
   };
 }
@@ -649,6 +650,7 @@ describe('delivery-triggered composer submission', () => {
       { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
       {
         submitted,
+        liveness: () => 'busy',
         read: () => {
           reads += 1;
           return { ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const };
@@ -661,15 +663,51 @@ describe('delivery-triggered composer submission', () => {
     const idle = await pending;
     expect(idle.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
     expect(reads).toBe(1);
-    expect(submitted).toHaveLength(1);
+    expect(submitted).toHaveLength(2);
 
     const duplicate = await submitUnsentCursorComposerOnceForWorker(target, deps, state);
     expect(duplicate.terminals[0]?.reason).toBe('already_submitted');
     expect(reads).toBe(2);
-    expect(submitted).toHaveLength(1);
+    expect(submitted).toHaveLength(2);
   });
 
-  it('applies the same immediate one-read/one-submit contract to Codex', async () => {
+  it('retries once after asynchronous Cursor rendering, then queues while Running', async () => {
+    const target = worker('term_busy_render_race');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let reads = 0;
+    let releaseRender: (() => void) | undefined;
+    const renderReady = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    const pending = submitUnsentCursorComposerOnceForWorker(target, depsFor(
+      { [target.identity.id]: [] },
+      {
+        submitted,
+        liveness: () => 'busy',
+        read: () => {
+          reads += 1;
+          return {
+            ok: true as const,
+            lines: reads === 1 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [POKE, ...CURSOR_FOOTER],
+            source: 'screen' as const,
+          };
+        },
+        sleepAsync: async () => renderReady,
+      },
+    ));
+
+    await Promise.resolve();
+    expect(reads).toBe(1);
+    expect(submitted).toHaveLength(0);
+    releaseRender?.();
+    const result = await pending;
+
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(reads).toBe(2);
+    expect(submitted).toEqual([target.identity, target.identity]);
+  });
+
+  it('applies the same immediate busy-queue contract to Codex', async () => {
     const target = worker('term_codex_busy', 'codex-generation', 'codex');
     const submitted: RuntimeWorkerIdentity[] = [];
     let reads = 0;
@@ -677,6 +715,7 @@ describe('delivery-triggered composer submission', () => {
       { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
       {
         submitted,
+        liveness: () => 'busy',
         read: (identity) => {
           expect(identity).toEqual(target.identity);
           reads += 1;
@@ -687,7 +726,7 @@ describe('delivery-triggered composer submission', () => {
 
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
     expect(reads).toBe(1);
-    expect(submitted).toEqual([target.identity]);
+    expect(submitted).toEqual([target.identity, target.identity]);
   });
 
   it('uses the immediate idle path for exactly one screen read and Enter', async () => {
@@ -698,7 +737,7 @@ describe('delivery-triggered composer submission', () => {
       { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
       {
         submitted,
-        liveness: (identity) => ({ status: 'idle', worker: identity }),
+        liveness: () => 'idle',
         read: () => {
           reads += 1;
           return { ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const };
@@ -708,6 +747,18 @@ describe('delivery-triggered composer submission', () => {
     expect(result.terminals[0]?.reason).toBe('enter_sent');
     expect(reads).toBe(1);
     expect(submitted).toHaveLength(1);
+  });
+
+  it('does not submit when exact-worker liveness becomes unknown', async () => {
+    const target = worker('term_identity_unknown');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor(
+      { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
+      { submitted, liveness: () => 'unknown' },
+    ));
+
+    expect(result.terminals[0]).toMatchObject({ reason: 'worker_unknown', enter: false });
+    expect(submitted).toHaveLength(0);
   });
 
   it('refuses human and mixed composer text after idle without Enter', async () => {

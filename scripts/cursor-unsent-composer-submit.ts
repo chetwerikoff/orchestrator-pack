@@ -8,6 +8,7 @@ import { runOrcaJson, type OrcaJsonResponse } from './orca-runtime/native.ts';
 import {
   type RuntimeAdapter,
   type RuntimeDispatchResult,
+  type RuntimeLiveness,
   type RuntimeWorker,
   type RuntimeWorkerIdentity,
 } from './runtime/contracts.ts';
@@ -28,6 +29,8 @@ const LONE_ARROW = /^→$/u;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
+const DELIVERY_RENDER_GRACE_MS = 250;
+const DELIVERY_LIVENESS_WINDOW_MS = 25;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
@@ -272,6 +275,9 @@ export interface UnsentComposerSubmitDeps {
     | { ok: false; reason: string }
   >;
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
+  readonly liveness?: (worker: RuntimeWorkerIdentity, observationWindowMs: number) =>
+    RuntimeLiveness;
+  readonly sleepAsync?: (milliseconds: number) => PromiseLike<void>;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
   readonly sentStorePath?: string;
@@ -330,6 +336,7 @@ function settleComposerObservation(
   state: UnsentComposerWatchState,
   shown: ComposerReadResult,
   allowAmbiguousRetry = false,
+  submitCount = 1,
 ): UnsentComposerTerminalResult {
   const identity = worker.identity;
   const key = workerKey(identity);
@@ -366,7 +373,13 @@ function settleComposerObservation(
     return { ...base, ok: true, unsent: true, enter: false, reason: 'dry_run' };
   }
   state.submittedFingerprint.set(key, fingerprint);
-  const dispatched = deps.submit(identity);
+  const dispatches: RuntimeDispatchResult[] = [deps.submit(identity)];
+  for (let count = 1; count < submitCount && dispatches[0]?.status !== 'send_failed'; count += 1) {
+    dispatches.push(deps.submit(identity));
+  }
+  const dispatched = dispatches.find((result) => result.status === 'send_failed')
+    ?? dispatches.find((result) => result.status === 'dispatch_unknown')
+    ?? dispatches.at(-1)!;
   if (dispatched.status === 'send_failed') {
     state.submittedFingerprint.delete(key);
     return { ...base, ok: false, unsent: true, enter: false, reason: dispatched.reason };
@@ -457,16 +470,49 @@ export function submitUnsentCursorComposerOnce(
   return { ...result, watch: false };
 }
 
-/** One immediate composer observation for the exact worker that just received a notification. */
+function sleepAsync(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function isExactOrchestrationPointer(shown: ComposerReadResult): boolean {
+  if (!shown.ok) return false;
+  return ORCHESTRATION_NOTICE.test(composerPokeFingerprint(shown.lines.join('\n')));
+}
+
+/** Immediate delivery-scoped observation plus one bounded render-race retry. */
 export async function submitUnsentCursorComposerOnceForWorker(
   worker: RuntimeWorker,
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
 ): Promise<UnsentComposerSubmitResult> {
-  hydrateSubmitted(state, deps.sentStorePath);
-  const shown = deps.readAsync
+  let shown = deps.readAsync
     ? await deps.readAsync(worker.identity)
     : deps.read(worker.identity);
+  if (shown.ok && classifyCursorComposer(shown.lines.join('\n')) === 'empty') {
+    await (deps.sleepAsync ?? sleepAsync)(DELIVERY_RENDER_GRACE_MS);
+    shown = deps.readAsync
+      ? await deps.readAsync(worker.identity)
+      : deps.read(worker.identity);
+  }
+  const exactPointer = isExactOrchestrationPointer(shown);
+  const liveness = exactPointer
+    ? deps.liveness?.(worker.identity, DELIVERY_LIVENESS_WINDOW_MS) ?? 'unknown'
+    : 'unknown';
+  if (exactPointer && deps.liveness && (liveness === 'gone' || liveness === 'unknown')) {
+    return {
+      ok: true,
+      dryRun: false,
+      watch: false,
+      terminals: [{
+        terminal: worker.identity.id,
+        generation: worker.identity.generation,
+        ok: true,
+        unsent: true,
+        enter: false,
+        reason: `worker_${liveness}`,
+      }],
+    };
+  }
   const terminal = settleComposerObservation(
     worker,
     { watch: true },
@@ -474,8 +520,8 @@ export async function submitUnsentCursorComposerOnceForWorker(
     state,
     shown,
     true,
+    liveness === 'busy' ? 2 : 1,
   );
-  persistSubmitted(state, deps.sentStorePath);
   return {
     ok: terminal.ok,
     dryRun: false,
@@ -575,6 +621,7 @@ export function createAdapterSubmitDeps(
       return { ok: true, lines: output.value.lines, source: 'screen' };
     },
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
+    liveness: (worker, observationWindowMs) => adapter.liveness({ worker, observationWindowMs }).status,
     sentStorePath: SENT_STORE_PATH,
   };
 }
