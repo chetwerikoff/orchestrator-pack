@@ -109,12 +109,13 @@ function epochEnv(root: string): NodeJS.ProcessEnv {
       commitAt: '2026-08-24T00:00:00.000Z',
     }],
   }), 'utf8');
-  return {
+  const schedulerEnv: NodeJS.ProcessEnv = {
     ...process.env,
     ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authority,
     ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
     ORCHESTRATOR_CUTOVER_NONCE: nonce,
   };
+  return schedulerEnv;
 }
 
 function completeObserver(tickSequence: number) {
