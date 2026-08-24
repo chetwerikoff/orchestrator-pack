@@ -82,6 +82,31 @@ function readyStart(taskId: string): SupervisedWorkerStartResult {
   } as unknown as SupervisedWorkerStartResult;
 }
 
+function providerReadyStart(taskId: string): SupervisedWorkerStartResult {
+  const result = readyStart(taskId);
+  return {
+    ...result,
+    receipt: {
+      taskId,
+      dispatchId: 'dispatch-1',
+      state: 'ready',
+      worktree: { id: 'orca-repo-1::/tmp/created-worktree', path: '/tmp/created-worktree' },
+      terminal: { handle: 'term-provider', runtime: 'orca', generation: 'generation-1' },
+      setup: { requested: 'run', effective: 'run', state: 'running' },
+      launch: {
+        requested: { agent: 'cursor', model: 'model', effort: 'medium' },
+        effective: { agent: 'cursor', model: 'model', effort: 'medium' },
+      },
+      effects: [
+        { kind: 'worktree', action: 'created', id: 'orca-repo-1::/tmp/created-worktree' },
+        { kind: 'setup', action: 'running', state: 'running' },
+        { kind: 'terminal', role: 'agent', action: 'created', id: 'term-provider' },
+        { kind: 'dispatch_input', role: 'agent', id: 'term-provider', state: 'accepted' },
+      ],
+    },
+  } as unknown as SupervisedWorkerStartResult;
+}
+
 function deps(input: {
   adapter?: RuntimeAdapter;
   dispatch?: DispatchObservation[];
@@ -116,7 +141,7 @@ function deps(input: {
 function launchInput(workClass: LaunchInput['workClass'] = 't2'): LaunchInput {
   return {
     repository: 'chetwerikoff/orchestrator-pack', workClass, issueNumber: 1479,
-    taskId: 'task-1', worktreeName: 'issue-1479', env: profileEnv(),
+    taskId: 'task-1', worktreeName: 'issue-1479', env: profileEnv(), startMode: 'exact_terminal_worktree',
     ...(workClass === 'manager' ? { runId: 'run-1' } : {}),
   };
 }
@@ -130,6 +155,29 @@ function repoListEnvelope(repos: readonly Record<string, unknown>[]): string {
 }
 
 describe('supervised Task launch assistant', () => {
+  it('uses exactly one provider worker-start composition without low-level worktree or RuntimeAdapter spawn', async () => {
+    const calls: string[][] = [];
+    let spawns = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('t2'), startMode: 'provider_new_top_level',
+    }, {
+      ...deps({ adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }) }),
+      prepareWorktree: async () => ({ status: 'ok', value: {
+        selector: 'new-top-level', repositorySelector: 'id:orca-repo-1', setupWitness: 'provider_top_level',
+      } }),
+      runSupervisedStart: async (start) => {
+        calls.push([...start.orcaArgs]);
+        return providerReadyStart('task-1');
+      },
+    });
+    expect(result.outcome).toBe('ready');
+    expect(spawns).toBe(0);
+    expect(calls).toEqual([[
+      '--task', 'task-1', '--worktree', 'new-top-level', '--repo', 'id:orca-repo-1', '--name', 'issue-1479',
+      '--agent', 'cursor', '--model', 'model', '--effort', 'medium', '--setup', 'run',
+    ]]);
+  });
+
   it.each(['manager', 't1', 't2', 't3'] as const)('reaches ready only through supervised-start for %s', async (workClass) => {
     let supervised = 0;
     const result = await runSupervisedTaskLaunchAssistant(launchInput(workClass), deps({ onSupervised: () => { supervised += 1; } }));
@@ -464,7 +512,7 @@ describe('supervised Task launch assistant', () => {
   it('records a timing for a direct handled stage failure', async () => {
     const result = await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack', workClass: 'manager', taskId: 'task-1',
-      worktreeName: 'issue-1479', env: profileEnv(),
+      worktreeName: 'issue-1479', env: profileEnv(), startMode: 'exact_terminal_worktree',
     }, deps());
     expect(result).toMatchObject({ outcome: 'continue', stage: 'manager_run', observedCause: 'manager_run_required' });
     if (result.outcome === 'continue') {

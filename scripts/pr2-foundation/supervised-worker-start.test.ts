@@ -408,6 +408,45 @@ describe('supervised worker start exact assignment admission',()=>{
     },
   );
 
+  it('accepts provider new-top-level ready receipt with setup running and publishes one assignment', async()=>{
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base}; let calls=0;
+    const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',repository:'chetwerikoff/orchestrator-pack',env,
+      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','new-worktree','--agent','cursor','--model','model','--effort','medium','--setup','run'],
+      execute:async(args)=>{ calls+=1; expect(args).toContain('--json'); return {ok:true,stdout:envelope({
+        taskId:'task_1',dispatchId:'dispatch_provider',state:'ready',
+        worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},
+        terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
+        setup:{requested:'run',effective:'run',state:'running'},
+        launch:{requested:{agent:'cursor',model:'model',effort:'medium'},effective:{agent:'cursor',model:'model',effort:'medium'}},
+        effects:[
+          {kind:'worktree',action:'created',id:'repo-1::/tmp/new-worktree'},
+          {kind:'setup',action:'running',state:'running'},
+          {kind:'terminal',role:'agent',action:'created',id:'term-provider'},
+          {kind:'dispatch_input',role:'agent',id:'term-provider',state:'accepted'},
+        ],
+      })}; },
+    });
+    expect(result).toMatchObject({ok:true,reason:'ready_and_assignment_bound',receipt:{setup:{state:'running'}},assignment:{taskId:'task_1',bindingKey:'dispatch_provider'}});
+    expect(calls).toBe(1);
+    expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack',env),1416)).toBeNull();
+  });
+
+  it.each([
+    ['missing setup', { setup: undefined }],
+    ['mismatched launch', { launch:{requested:{agent:'cursor',model:'other',effort:'medium'},effective:{agent:'cursor',model:'other',effort:'medium'}} }],
+  ] as const)('rejects provider receipt evidence before assignment publication: %s', async(_label,override)=>{
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base};
+    const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',repository:'chetwerikoff/orchestrator-pack',env,
+      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','new-worktree','--agent','cursor','--model','model','--effort','medium','--setup','run'],
+      execute:async()=>({ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_provider',state:'ready',
+        worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
+        setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model',effort:'medium'},effective:{agent:'cursor',model:'model',effort:'medium'}},
+        effects:[{kind:'worktree',action:'created',id:'repo-1::/tmp/new-worktree'},{kind:'terminal',role:'agent',action:'created',id:'term-provider'}],...override})}),
+    });
+    expect(result.ok).toBe(false);
+    expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack',env),1416)).toBeNull();
+  });
+
   it('accepts explicit orchestrator role on an otherwise valid start', async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
     const result=await runSupervisedWorkerStart({role:'orchestrator',

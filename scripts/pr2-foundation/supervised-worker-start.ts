@@ -24,9 +24,15 @@ export interface SupervisedWorkerStartReceipt {
   readonly dispatchId?: string;
   readonly state?: string;
   readonly stage?: string;
+  readonly setup?: unknown;
+  readonly launch?: unknown;
+  readonly worktree?: unknown;
+  readonly terminal?: unknown;
   readonly effects?: readonly unknown[];
   readonly residualResources?: readonly unknown[];
 }
+
+export type WorkerStartMode = 'exact_terminal_worktree' | 'provider_new_top_level';
 
 interface OrcaWorkerStartEnvelope {
   readonly ok?: boolean;
@@ -162,6 +168,76 @@ function exactOption(args: readonly string[], name: string): string | null {
   return value && !value.startsWith('--') ? value : null;
 }
 
+function providerOption(args: readonly string[], name: string): string | null {
+  return exactOption(args, name);
+}
+
+function providerLaunchField(value: unknown, name: 'agent' | 'model' | 'effort'): string {
+  return isRecord(value) ? providerText(value[name]) : '';
+}
+
+function validateProviderTopLevelReceipt(
+  receipt: SupervisedWorkerStartReceipt,
+  args: readonly string[],
+): string | null {
+  const worktree = isRecord(receipt.worktree) ? receipt.worktree : null;
+  const terminal = isRecord(receipt.terminal) ? receipt.terminal
+    : isRecord((receipt as Record<string, unknown>).agentTerminal)
+      ? (receipt as Record<string, unknown>).agentTerminal as Record<string, unknown>
+      : null;
+  const worktreeId = providerText(worktree?.id);
+  const worktreePath = providerText(worktree?.path);
+  const terminalHandle = providerText(terminal?.handle) || providerText(terminal?.id);
+  if (!worktreeId || !worktreePath || !terminalHandle) return 'supervised_start_provider_placement_missing';
+
+  const effects = receipt.effects;
+  if (!Array.isArray(effects)) return 'supervised_start_effect_witness_unavailable';
+  const worktreeEffects = effects.filter((raw) => isRecord(raw)
+    && providerText(raw.kind) === 'worktree' && providerText(raw.action) === 'created');
+  const terminalEffects = effects.filter((raw) => isRecord(raw)
+    && providerText(raw.kind) === 'terminal' && providerText(raw.role) === 'agent'
+    && (providerText(raw.action) === 'created' || providerText(raw.action) === 'created_agent_terminal'));
+  if (worktreeEffects.length !== 1 || providerText(worktreeEffects[0]?.id) !== worktreeId) {
+    return 'supervised_start_provider_worktree_mismatch';
+  }
+  if (terminalEffects.length !== 1 || providerText(terminalEffects[0]?.id) !== terminalHandle) {
+    return 'supervised_start_provider_terminal_mismatch';
+  }
+
+  const worktreeSelector = providerOption(args, '--worktree');
+  const repository = providerOption(args, '--repo');
+  const name = providerOption(args, '--name');
+  const agent = providerOption(args, '--agent');
+  const model = providerOption(args, '--model');
+  const effort = providerOption(args, '--effort');
+  const setupRequest = providerOption(args, '--setup');
+  if (worktreeSelector !== 'new-top-level' || !repository?.startsWith('id:')
+    || !name || agent !== 'cursor' || !model || !effort || setupRequest !== 'run') {
+    return 'supervised_start_provider_request_invalid';
+  }
+
+  const setup = isRecord(receipt.setup) ? receipt.setup : null;
+  const setupState = providerText(setup?.state);
+  const setupRequested = providerText(setup?.requested);
+  if (setupRequested !== 'run' || !['running', 'succeeded', 'not_configured'].includes(setupState)) {
+    return 'supervised_start_provider_setup_invalid';
+  }
+
+  const launch = isRecord(receipt.launch) ? receipt.launch : null;
+  const requested = launch && isRecord(launch.requested) ? launch.requested : null;
+  const effective = launch && isRecord(launch.effective) ? launch.effective : null;
+  if (!requested || !effective
+    || providerLaunchField(requested, 'agent') !== agent
+    || providerLaunchField(requested, 'model') !== model
+    || providerLaunchField(requested, 'effort') !== effort
+    || providerLaunchField(effective, 'agent') !== agent
+    || providerLaunchField(effective, 'model') !== model
+    || providerLaunchField(effective, 'effort') !== effort) {
+    return 'supervised_start_provider_launch_mismatch';
+  }
+  return null;
+}
+
 function expectedCurrentForPublish(
   current: WorkerAssignment | null,
 ): WorkerAssignmentExpectation | undefined {
@@ -276,6 +352,7 @@ function validateReceiptPlacement(
 }
 
 export async function runSupervisedWorkerStart(input: {
+  readonly mode?: WorkerStartMode;
   readonly issueNumber?: number;
   readonly repository: string;
   readonly projectId?: string;
@@ -289,6 +366,10 @@ export async function runSupervisedWorkerStart(input: {
 }): Promise<SupervisedWorkerStartResult> {
   const repository = input.repository.trim().toLowerCase();
   const role = parseWorkerAssignmentRole(input.role);
+  const mode = input.mode ?? 'exact_terminal_worktree';
+  if (mode !== 'exact_terminal_worktree' && mode !== 'provider_new_top_level') {
+    return { ok: false, reason: 'supervised_start_mode_invalid' };
+  }
   if (!repository
     || (input.issueNumber !== undefined
       && (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0))) {
@@ -304,8 +385,18 @@ export async function runSupervisedWorkerStart(input: {
   const requestedTaskId = String(args[1]).trim();
   const terminal = exactOption(args, '--terminal');
   const worktree = exactOption(args, '--worktree');
-  if (!terminal || !worktree) {
+  if (mode === 'exact_terminal_worktree' && (!terminal || !worktree)) {
     return { ok: false, reason: 'supervised_start_exact_terminal_worktree_required' };
+  }
+  if (mode === 'provider_new_top_level'
+    && (terminal || worktree !== 'new-top-level'
+      || !providerOption(args, '--repo')?.startsWith('id:')
+      || !providerOption(args, '--name')
+      || providerOption(args, '--agent') !== 'cursor'
+      || !providerOption(args, '--model')
+      || !providerOption(args, '--effort')
+      || providerOption(args, '--setup') !== 'run')) {
+    return { ok: false, reason: 'supervised_start_provider_request_invalid' };
   }
 
   const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
@@ -362,11 +453,13 @@ export async function runSupervisedWorkerStart(input: {
     });
     return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error };
   });
-  const placement = await resolvePlacementWitness({
-    terminalSelector: terminal,
-    worktreeSelector: worktree,
-    inspect,
-  });
+  const placement = mode === 'exact_terminal_worktree'
+    ? await resolvePlacementWitness({
+      terminalSelector: terminal!,
+      worktreeSelector: worktree!,
+      inspect,
+    })
+    : { ok: true as const, witness: undefined };
   if (!placement.ok) return { ok: false, reason: placement.reason };
 
   if (!args.includes('--json')) args.push('--json');
@@ -418,7 +511,9 @@ export async function runSupervisedWorkerStart(input: {
   if (taskId !== requestedTaskId) {
     return rejectedStart('supervised_start_task_mismatch', receipt);
   }
-  const placementReason = validateReceiptPlacement(receipt, placement.witness);
+  const placementReason = mode === 'exact_terminal_worktree'
+    ? validateReceiptPlacement(receipt, placement.witness!)
+    : validateProviderTopLevelReceipt(receipt, args);
   if (placementReason) return rejectedStart(placementReason, receipt);
 
   const publishBase = {
@@ -503,6 +598,7 @@ function countFlag(args: readonly string[], name: string): number {
 }
 
 function parseStartCli(argv: readonly string[]): {
+  mode?: WorkerStartMode;
   issueNumber?: number;
   repository: string;
   projectId?: string;
@@ -516,8 +612,14 @@ function parseStartCli(argv: readonly string[]): {
   if (countFlag(own, '--role') !== 1) {
     throw new Error('exactly one --role worker|orchestrator is required');
   }
+  if (countFlag(own, '--mode') > 1) throw new Error('at most one --mode is allowed');
+  const modeRaw = optionValue(own, '--mode');
+  if (modeRaw && modeRaw !== 'exact_terminal_worktree' && modeRaw !== 'provider_new_top_level') {
+    throw new Error('--mode must be exact_terminal_worktree|provider_new_top_level');
+  }
   const issueNumberRaw = optionValue(own, '--issue-number');
   return {
+    ...(optionValue(own, '--mode') ? { mode: optionValue(own, '--mode') as WorkerStartMode } : {}),
     ...(issueNumberRaw ? { issueNumber: Number(issueNumberRaw) } : {}),
     repository: optionValue(own, '--repository'),
     ...(optionValue(own, '--project-id') ? { projectId: optionValue(own, '--project-id') } : {}),

@@ -5,7 +5,7 @@ import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
-import { runSupervisedWorkerStart, type SupervisedWorkerStartResult } from './supervised-worker-start.ts';
+import { runSupervisedWorkerStart, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
 
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
 export const LAUNCH_WORK_CLASSES = ['manager', 't1', 't2', 't3'] as const;
@@ -98,14 +98,17 @@ export interface ExecutorProfile {
   readonly launchCommand: string;
   readonly modelId: string;
   readonly orcaAgent: 'cursor';
+  readonly model: string;
+  readonly effort: string;
   readonly names: readonly [string, string, string];
 }
 
 export interface PreparedWorktree {
-  readonly id: string;
+  readonly id?: string;
   readonly selector: string;
-  readonly path: string;
-  readonly setupWitness: 'same_invocation_complete' | 'proven_reuse';
+  readonly path?: string;
+  readonly repositorySelector?: string;
+  readonly setupWitness: 'same_invocation_complete' | 'proven_reuse' | 'provider_top_level';
 }
 
 export interface WorktreePreparationRequest {
@@ -115,6 +118,7 @@ export interface WorktreePreparationRequest {
   readonly worktreeSelector?: string;
   readonly worktreeName?: string;
   readonly baseBranch?: string;
+  readonly providerTopLevel?: boolean;
 }
 
 export type DispatchObservation = { readonly kind: 'absent' }
@@ -132,6 +136,7 @@ export interface LaunchInput {
   readonly baseBranch?: string;
   readonly env?: Readonly<NodeJS.ProcessEnv>;
   readonly cwd?: string;
+  readonly startMode?: WorkerStartMode;
 }
 
 export interface LaunchDependencies {
@@ -193,7 +198,7 @@ export function resolveExecutorProfile(
   const modelId = `${values[1]}-${values[2]}`;
   return {
     status: 'ok',
-    value: { names, modelId, launchCommand: `cursor-agent --model ${quote(modelId)}`, orcaAgent: 'cursor' },
+    value: { names, modelId, model: values[1], effort: values[2], launchCommand: `cursor-agent --model ${quote(modelId)}`, orcaAgent: 'cursor' },
     evidence: { profileVariables: names, executable: 'cursor-agent' },
   };
 }
@@ -286,6 +291,12 @@ export async function runSupervisedTaskLaunchAssistant(
   const profileEdge = await checkpoint('executor_profile', timings, deps.now, () => deps.resolveProfile(input.workClass, input.env ?? process.env));
   if (profileEdge.status !== 'ok') return continued(input, 'executor_profile', profileEdge, resources, startedAtMs, timings, deps.now);
   const profile = profileEdge.value;
+  if (input.startMode && input.startMode !== 'exact_terminal_worktree' && input.startMode !== 'provider_new_top_level') {
+    return continued(input, 'executor_profile', {
+      cause: 'supervised_start_mode_invalid', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'repair_executor_profile', note: 'select a supported worker-start composition mode' },
+    }, resources, startedAtMs, timings, deps.now);
+  }
 
   let taskId = input.taskId?.trim() ?? '';
   if (input.workClass === 'manager') {
@@ -341,6 +352,7 @@ export async function runSupervisedTaskLaunchAssistant(
     nextAction: { kind: 'reconcile_dispatch', note: 'reconcile the existing Dispatch; create no new worktree terminal/start' },
   }, { ...resources, ...(early.value.dispatchId ? { dispatchId: early.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
 
+  const providerMode = input.startMode !== 'exact_terminal_worktree';
   const prepared = await checkpoint('worktree_prepare', timings, deps.now, () => deps.prepareWorktree({
     repository: resources.repository,
     ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
@@ -348,49 +360,57 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.worktreeSelector ? { worktreeSelector: input.worktreeSelector } : {}),
     ...(input.worktreeName ? { worktreeName: input.worktreeName } : {}),
     ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
+    ...(providerMode ? { providerTopLevel: true } : {}),
   }));
   if (prepared.status !== 'ok') return continued(input, 'worktree_prepare', prepared, resources, startedAtMs, timings, deps.now);
   resources = {
     ...resources,
-    worktreeId: prepared.value.id,
+    ...(prepared.value.id ? { worktreeId: prepared.value.id } : {}),
     worktreeSelector: prepared.value.selector,
-    worktreePath: prepared.value.path,
+    ...(prepared.value.path ? { worktreePath: prepared.value.path } : {}),
   };
 
-  const terminalStartedAt = deps.now();
-  const spawn = deps.adapter.spawnWorker({
-    title: `opk-${input.workClass}-${taskId}`,
-    command: profile.launchCommand,
-    workspace: prepared.value.path,
-  });
-  let terminalCause = '';
-  let liveness: ReturnType<RuntimeAdapter['liveness']> | null = null;
-  if (spawn.status !== 'ok') terminalCause = `terminal_spawn_${spawn.status}`;
-  else if (!text(spawn.value.identity.runtime) || !text(spawn.value.identity.id) || !text(spawn.value.identity.generation)) terminalCause = 'terminal_identity_invalid';
-  else {
-    resources = { ...resources, terminal: spawn.value.identity };
-    if (spawn.value.provenance !== 'internal') terminalCause = 'terminal_provenance_external';
-    else if (spawn.value.workspacePath !== prepared.value.path) terminalCause = 'terminal_workspace_mismatch';
-    else if (spawn.value.identity.runtime !== deps.adapter.id) terminalCause = 'terminal_runtime_mismatch';
+  let terminal: ReturnType<RuntimeAdapter['spawnWorker']> extends { status: 'ok'; value: infer T } ? T : never;
+  if (providerMode) {
+    const terminalStartedAt = deps.now();
+    const terminalFinishedAt = deps.now();
+    timings.push({ stage: 'terminal_prepare', startedAtMs: terminalStartedAt, finishedAtMs: terminalFinishedAt,
+      elapsedMs: Math.max(0, terminalFinishedAt - terminalStartedAt), outcome: 'passed' });
+  } else {
+    if (!prepared.value.path) return continued(input, 'terminal_prepare', {
+      cause: 'terminal_workspace_missing', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'remediate_terminal', note: 'reconcile the exact prepared worktree path before creating a terminal' },
+    }, resources, startedAtMs, timings, deps.now);
+    const terminalStartedAt = deps.now();
+    const spawn = deps.adapter.spawnWorker({
+      title: `opk-${input.workClass}-${taskId}`,
+      command: profile.launchCommand,
+      workspace: prepared.value.path,
+    });
+    let terminalCause = '';
+    let liveness: ReturnType<RuntimeAdapter['liveness']> | null = null;
+    if (spawn.status !== 'ok') terminalCause = `terminal_spawn_${spawn.status}`;
+    else if (!text(spawn.value.identity.runtime) || !text(spawn.value.identity.id) || !text(spawn.value.identity.generation)) terminalCause = 'terminal_identity_invalid';
     else {
-      liveness = deps.adapter.liveness({ worker: spawn.value.identity, observationWindowMs: 1_000 });
-      if (!sameIdentity(liveness.worker, spawn.value.identity)) terminalCause = 'terminal_generation_mismatch';
-      else if (liveness.status !== 'idle') terminalCause = `terminal_liveness_${liveness.status}`;
+      resources = { ...resources, terminal: spawn.value.identity };
+      if (spawn.value.provenance !== 'internal') terminalCause = 'terminal_provenance_external';
+      else if (spawn.value.workspacePath !== prepared.value.path) terminalCause = 'terminal_workspace_mismatch';
+      else if (spawn.value.identity.runtime !== deps.adapter.id) terminalCause = 'terminal_runtime_mismatch';
+      else {
+        liveness = deps.adapter.liveness({ worker: spawn.value.identity, observationWindowMs: 1_000 });
+        if (!sameIdentity(liveness.worker, spawn.value.identity)) terminalCause = 'terminal_generation_mismatch';
+        else if (liveness.status !== 'idle') terminalCause = `terminal_liveness_${liveness.status}`;
+      }
     }
+    const terminalFinishedAt = deps.now();
+    timings.push({ stage: 'terminal_prepare', startedAtMs: terminalStartedAt, finishedAtMs: terminalFinishedAt,
+      elapsedMs: Math.max(0, terminalFinishedAt - terminalStartedAt), outcome: terminalCause ? 'continued' : 'passed' });
+    if (terminalCause || spawn.status !== 'ok') return continued(input, 'terminal_prepare', {
+      cause: terminalCause, actor: 'orchestrator', evidence: { liveness: liveness?.status ?? 'not_observed' },
+      nextAction: { kind: 'remediate_terminal', note: 'remediate the owned fresh terminal; never reuse a foreign/pre-existing or non-idle target' },
+    }, resources, startedAtMs, timings, deps.now);
+    terminal = spawn.value;
   }
-  const terminalFinishedAt = deps.now();
-  timings.push({
-    stage: 'terminal_prepare',
-    startedAtMs: terminalStartedAt,
-    finishedAtMs: terminalFinishedAt,
-    elapsedMs: Math.max(0, terminalFinishedAt - terminalStartedAt),
-    outcome: terminalCause ? 'continued' : 'passed',
-  });
-  if (terminalCause || spawn.status !== 'ok') return continued(input, 'terminal_prepare', {
-    cause: terminalCause, actor: 'orchestrator', evidence: { liveness: liveness?.status ?? 'not_observed' },
-    nextAction: { kind: 'remediate_terminal', note: 'remediate the owned fresh terminal; never reuse a foreign/pre-existing or non-idle target' },
-  }, resources, startedAtMs, timings, deps.now);
-  const terminal = spawn.value;
 
   const final = await checkpoint('dispatch_admission_final', timings, deps.now, () => deps.observeDispatch(taskId));
   if (final.status !== 'ok') return continued(input, 'dispatch_admission_final', final, resources, startedAtMs, timings, deps.now);
@@ -405,8 +425,13 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
     ...(input.env ? { env: { ...input.env } } : {}),
     cwd: input.cwd,
-    adapter: deps.adapter,
-    orcaArgs: ['--task', taskId, '--terminal', terminal.identity.id, '--worktree', prepared.value.selector],
+    ...(providerMode ? {} : { adapter: deps.adapter }),
+    mode: providerMode ? 'provider_new_top_level' : 'exact_terminal_worktree',
+    role: input.workClass === 'manager' ? 'orchestrator' : 'worker',
+    orcaArgs: providerMode
+      ? ['--task', taskId, '--worktree', 'new-top-level', '--repo', prepared.value.repositorySelector ?? '',
+        '--name', input.worktreeName ?? '', '--agent', profile.orcaAgent, '--model', profile.model, '--effort', profile.effort, '--setup', 'run']
+      : ['--task', taskId, '--terminal', terminal.identity.id, '--worktree', prepared.value.selector],
   });
   const startDone = deps.now();
   timings.push({
@@ -453,6 +478,22 @@ export async function runSupervisedTaskLaunchAssistant(
     nextAction: { kind: 'reconcile_supervised_start', note: 'reconcile the provider receipt; setup/terminal liveness alone is never ready' },
   }, resources, startedAtMs, timings, deps.now);
 
+  if (providerMode) {
+    const receipt = supervised.receipt;
+    const worktree = receipt && record(receipt.worktree) ? receipt.worktree : null;
+    const providerTerminal = receipt && record(receipt.terminal) ? receipt.terminal
+      : receipt && record((receipt as Record<string, unknown>).agentTerminal) ? (receipt as Record<string, unknown>).agentTerminal as Record<string, unknown> : null;
+    const worktreeId = text(worktree?.id);
+    const worktreePath = text(worktree?.path);
+    const terminalId = text(providerTerminal?.handle) || text(providerTerminal?.id);
+    const runtime = text(providerTerminal?.runtime);
+    const generation = text(providerTerminal?.generation);
+    if (!worktreeId || !worktreePath || !terminalId || !runtime || !generation) return continued(input, 'supervised_start', {
+      cause: 'supervised_start_provider_placement_missing', actor: 'provider', evidence: {},
+      nextAction: { kind: 'reconcile_supervised_start', note: 'reconcile provider-owned worktree and terminal identity from the ready receipt' },
+    }, resources, startedAtMs, timings, deps.now);
+    resources = { ...resources, worktreeId, worktreePath, terminal: { runtime, id: terminalId, generation } };
+  }
   resources = { ...resources, dispatchId };
   const finishedAtMs = deps.now();
   return {
@@ -651,6 +692,13 @@ export async function prepareWorktreeWithOrca(
   const repositoryId = record(matches[0]) ? text(matches[0].id) : '';
   if (!repositoryId) {
     return worktreeContinue('worktree_repository_resolution_id_unusable', { repository, matchCount: 1 }, repositoryResolutionNote);
+  }
+  if (request.providerTopLevel) {
+    return {
+      status: 'ok',
+      value: { selector: 'new-top-level', repositorySelector: `id:${repositoryId}`, setupWitness: 'provider_top_level' },
+      evidence: { repository, repositorySelector: `id:${repositoryId}` },
+    };
   }
 
   const created = resultRecord(envelope(await execute([
