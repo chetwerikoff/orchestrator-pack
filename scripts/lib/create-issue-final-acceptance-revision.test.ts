@@ -7,6 +7,7 @@ import {
   validateFinalAcceptanceReadbackHead,
   validateCanonicalReceiptPathSet,
 } from './create-issue-final-acceptance.ts';
+import { executeFinalAcceptanceGuards } from './create-issue-final-acceptance-contract.ts';
 import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
 import { validateHistoricalReceiptsAgainstLineage } from './create-issue-stage-record-receipt.ts';
 import {
@@ -133,6 +134,40 @@ function validHistoricalInput(): {
 }
 
 describe('revision-aware final acceptance', () => {
+  it('preserves the existing grandfathered smoke-plan exemption at final acceptance', () => {
+    const grandfatheredBody = [
+      '<!-- source-revision: r09 -->',
+      '```behavior-kind',
+      'action-producing',
+      '```',
+      '```smoke-plan-floor',
+      'grandfathered: true',
+      '```',
+    ].join('\n');
+    const run = (body: string) => executeFinalAcceptanceGuards({
+      issueBody: body,
+      terminalSourceBody: body,
+      currentIssueBody: body,
+      issueRevision: 'r09',
+      cycleId: 'cycle-r09',
+      reviewDir: '/fixture/review',
+      stageReceiptPaths: [],
+      stageReceiptValues: [],
+      capturePaths: [],
+    });
+
+    const grandfathered = run(grandfatheredBody);
+    expect(grandfathered.errors.filter((error) => error.startsWith('smoke-test-plan:'))).toEqual([]);
+
+    const nonGrandfathered = run(grandfatheredBody.replace(
+      '```smoke-plan-floor\ngrandfathered: true\n```',
+      '',
+    ));
+    expect(nonGrandfathered.errors).toContain(
+      'smoke-test-plan: action-producing task lacks a ```smoke-test-plan``` block',
+    );
+  });
+
   it('accepts opaque historical revisions on one canonical predecessor lineage', () => {
     const input = validHistoricalInput();
     const errors = validateHistoricalReceiptsAgainstLineage({

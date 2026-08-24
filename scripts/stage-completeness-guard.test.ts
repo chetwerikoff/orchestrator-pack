@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 1
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,58 +27,92 @@ import {
   deriveAdmission,
 } from './lib/create-issue-stage-topology.ts';
 
-vi.mock('./lib/create-issue-stage-record-gh.ts', () => ({
-  defaultGhTransport: () => {
-    const repository = 'chetwerikoff/orchestrator-pack';
-    const issueNumber = 1287;
-    const createdAt = '2026-08-07T04:00:00Z';
-    const publisherLogin = 'chetwerikoff';
-    const invocationIds = [
-      'competitive-attempt-invocation-1',
-      'competitive-attempt-invocation-2',
-      'competitive-attempt-invocation-3',
-      'architectural-review-attempt-invocation-1',
-      'architectural-review-attempt-invocation-2',
-      'architectural-review-attempt-invocation-3',
-    ];
-    const comments = invocationIds.map((invocationId, index) => {
-      const id = 7000000001 + index;
-      return {
-        id,
-        html_url: `https://github.com/${repository}/issues/${issueNumber}#issuecomment-${id}`,
+vi.mock('./lib/create-issue-stage-record-gh.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/create-issue-stage-record-gh.ts')>();
+  return {
+    ...actual,
+    defaultGhTransport: () => {
+      const repository = 'chetwerikoff/orchestrator-pack';
+      const issueNumber = 1287;
+      const createdAt = '2026-08-07T04:00:00Z';
+      const publisherLogin = 'chetwerikoff';
+      const invocationIds = [
+        'competitive-attempt-invocation-1',
+        'competitive-attempt-invocation-2',
+        'competitive-attempt-invocation-3',
+        'architectural-review-attempt-invocation-1',
+        'architectural-review-attempt-invocation-2',
+        'architectural-review-attempt-invocation-3',
+      ];
+      const invocationComments = invocationIds.map((invocationId, index) => {
+        const id = 7000000001 + index;
+        return {
+          id,
+          html_url: `https://github.com/${repository}/issues/${issueNumber}#issuecomment-${id}`,
+          issue_url: `https://api.github.com/repos/${repository}/issues/${issueNumber}`,
+          body: [
+            `Read revision: #${issueNumber} r01`,
+            'review-economics-contract: v1',
+            'NO_FINDINGS',
+            'SIMPLIFICATION_CLEAN',
+            `INVOCATION_ID_TO_ECHO: ${invocationId}`,
+            '',
+          ].join('\n'),
+          created_at: createdAt,
+          updated_at: createdAt,
+          author_association: 'OWNER',
+          user: { login: publisherLogin },
+        };
+      });
+      const cycleId = 'cycle-1287-fixture';
+      const cycleEventKey = `${cycleId}-r01`;
+      const cycleComment = {
+        id: 7000000100,
+        html_url: `https://github.com/${repository}/issues/${issueNumber}#issuecomment-7000000100`,
         issue_url: `https://api.github.com/repos/${repository}/issues/${issueNumber}`,
         body: [
-          `Read revision: #${issueNumber} r01`,
-          'review-economics-contract: v1',
-          'NO_FINDINGS',
-          'SIMPLIFICATION_CLEAN',
-          `INVOCATION_ID: ${invocationId}`,
-          '',
+          `<!-- opk-create-issue-journal:create-issue-review-cycle/v1:${cycleEventKey} -->`,
+          '```json',
+          JSON.stringify({
+            schema: 'create-issue-review-cycle/v1',
+            'event-key': cycleEventKey,
+            'cycle-id': cycleId,
+            'predecessor-cycle-id': 'none',
+            'source-revision': 'r01',
+            tier: 'T3',
+            'public-actor': 'other-flow-manager',
+          }, null, 2),
+          '```',
         ].join('\n'),
         created_at: createdAt,
         updated_at: createdAt,
+        author_association: 'OWNER',
         user: { login: publisherLogin },
       };
-    });
-    return {
-      runGh: (argv: string[]) => {
-        if (argv[2] === 'user') return { exitCode: 0, stdout: `${publisherLogin}\n`, stderr: '' };
-        const target = argv[2] ?? '';
-        if (target === `repos/${repository}/issues/${issueNumber}/comments?per_page=100&page=1`) {
-          return { exitCode: 0, stdout: JSON.stringify(comments), stderr: '' };
-        }
-        if (target.startsWith(`repos/${repository}/issues/comments/`)) {
-          const id = Number(target.split('/').at(-1));
-          const match = comments.find((comment) => comment.id === id);
-          return match
-            ? { exitCode: 0, stdout: JSON.stringify(match), stderr: '' }
-            : { exitCode: 1, stdout: '', stderr: 'comment not found' };
-        }
-        return { exitCode: 1, stdout: '', stderr: `unexpected gh call: ${argv.join(' ')}` };
-      },
-    };
-  },
-}));
+      const comments = [...invocationComments, cycleComment];
+      return {
+        runGh: (argv: string[]) => {
+          if (argv[2] === 'user') return { exitCode: 0, stdout: `${publisherLogin}\n`, stderr: '' };
+          const target = argv[2] ?? '';
+          if (target === `repos/${repository}`) {
+            return { exitCode: 0, stdout: `${publisherLogin}\n`, stderr: '' };
+          }
+          if (target === `repos/${repository}/issues/${issueNumber}/comments?per_page=100&page=1`) {
+            return { exitCode: 0, stdout: JSON.stringify(comments), stderr: '' };
+          }
+          if (target.startsWith(`repos/${repository}/issues/comments/`)) {
+            const id = Number(target.split('/').at(-1));
+            const match = comments.find((comment) => comment.id === id);
+            return match
+              ? { exitCode: 0, stdout: JSON.stringify(match), stderr: '' }
+              : { exitCode: 1, stdout: '', stderr: 'comment not found' };
+          }
+          return { exitCode: 1, stdout: '', stderr: `unexpected gh call: ${argv.join(' ')}` };
+        },
+      };
+    },
+  };
+});
 
 const TASK = 'issue:1150';
 const REVISION = 'r09';
@@ -92,7 +128,7 @@ function canonicalAcceptanceArtifact(invocationId: string): string {
     'review-economics-contract: v1',
     'NO_FINDINGS',
     'SIMPLIFICATION_CLEAN',
-    `INVOCATION_ID: ${invocationId}`,
+    `INVOCATION_ID_TO_ECHO: ${invocationId}`,
     '',
   ].join('\n');
 }
@@ -377,18 +413,20 @@ describe('Issue #1150 stage authority', () => {
       .toMatch(/non-complete result cannot credential a capture without artifactAuthority/);
   });
 
-  it('keeps the first receipt at the intake root while allowing later stages to bind a newer revision', () => {
+  it('keeps immutable episode identity while allowing receipt source revisions to advance', () => {
     const fixture = preLens();
     const laterRevision = structuredClone(fixture.receipts);
     laterRevision[1]!.sourceRevision = 'r10';
     laterRevision[1]!.invocations = laterRevision[1]!.invocations!.map((item) => ({ ...item, sourceRevision: 'r10' }));
     expect(deriveReviewEpisodeState(laterRevision, fixture.relay, authority(laterRevision)).errors).toEqual([]);
 
-    const reRootedFirst = structuredClone(laterRevision);
-    reRootedFirst[0]!.sourceRevision = 'r10';
-    reRootedFirst[0]!.invocations = reRootedFirst[0]!.invocations!.map((item) => ({ ...item, sourceRevision: 'r10' }));
-    expect(deriveReviewEpisodeState(reRootedFirst, fixture.relay, authority(reRootedFirst)).errors.join('\n'))
-      .toContain('first stage receipt sourceRevision must equal episodeFirstRevision');
+    const advancedFirst = structuredClone(laterRevision);
+    advancedFirst[0]!.sourceRevision = 'r10';
+    advancedFirst[0]!.invocations = advancedFirst[0]!.invocations!.map((item) => ({ ...item, sourceRevision: 'r10' }));
+    const advancedState = deriveReviewEpisodeState(advancedFirst, fixture.relay, authority(advancedFirst));
+    expect(advancedState.errors, advancedState.errors.join('\n')).toEqual([]);
+    expect(advancedFirst[0]!.episodeFirstRevision).toBe(REVISION);
+    expect(advancedFirst[0]!.reviewEpisodeId).toBe(EPISODE);
   });
 
   it('rejects missing slots, mismatched snapshots, and later-root re-anchoring', () => {
