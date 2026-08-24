@@ -263,7 +263,7 @@ describe('real Orca assignment target resolution', () => {
     expect(runJson.mock.calls.every((call) => call[0]?.slice(0, 2).join(' ') === 'orchestration worker-show')).toBe(true);
   });
 
-  it('keeps exact gone plus dispatched heartbeat non-replaceable', async () => {
+  it('keeps invented gone plus dispatched heartbeat non-replaceable', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-gone-but-dispatched' });
     const runJson = vi.fn((): OrcaJsonResponse => ({
@@ -289,36 +289,52 @@ describe('real Orca assignment target resolution', () => {
     })).toEqual({ status: 'target_unresolved' });
   });
 
-  it('preserves exact gone only with terminal producer lifecycle and Dispatch-owned terminal handle', async () => {
+  it('admits replacement only for the pinned local dispatch_not_found producer envelope', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-exact-gone' });
-    const goneResult = {
-      dispatch: { status: 'completed', last_heartbeat_at: currentOrcaHeartbeat(15 * 60 * 1_000) },
-      worker: { agent_terminal_handle: 'term-owned', state: 'succeeded', stage: 'settled' },
-      terminal: null,
-      observation: { exactWorker: true, status: 'gone' },
-      terminalResource: {
-        terminalHandle: 'term-owned',
-        worktreeId: 'repo::worktree',
-        originDispatchId: 'dispatch-exact-gone',
-        ownerDispatchId: 'dispatch-exact-gone',
-      },
-    } as const;
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-exact-gone']);
       return {
-        ok: true,
-        result: goneResult,
+        ok: false,
+        outcomeCategory: 'supported_operation_failure',
+        error: {
+          code: 'dispatch_not_found',
+          message: 'Worker Dispatch dispatch-exact-gone was not found.',
+        },
       };
     });
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
 
     expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
-      .toEqual({ status: 'gone', assignment, workerId: 'term-owned' });
+      .toEqual({ status: 'gone', assignment });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+    })).toEqual({ status: 'replaceable', assignment });
+  });
+
+  it('does not grant replacement for federated no-worker-record dispatch_not_found', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-federated-missing-worker' });
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: false,
+      outcomeCategory: 'supported_operation_failure',
+      error: {
+        code: 'dispatch_not_found',
+        message: 'Federated Worker Dispatch dispatch-federated-missing-worker has no worker record.',
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'target_unresolved' });
+    expect(await admitCurrentWorkerAssignmentReplacement({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'target_unresolved' });
   });
 
   it.each([false, undefined] as const)(
-    'does not upgrade gone to exact absence when exactWorker=%s',
+    'does not upgrade invented gone to exact absence when exactWorker=%s',
     async (exactWorker) => {
       const file = assignmentFile();
       const assignment = await publish(file, { bindingKey: `dispatch-not-exact-${String(exactWorker)}` });
