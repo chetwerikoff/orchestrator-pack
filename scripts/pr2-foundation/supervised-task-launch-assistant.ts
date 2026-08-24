@@ -487,16 +487,21 @@ export async function runSupervisedTaskLaunchAssistant(
     const worktree = receipt && record(receipt.worktree) ? receipt.worktree : null;
     const providerTerminal = receipt && record(receipt.terminal) ? receipt.terminal
       : receipt && record((receipt as Record<string, unknown>).agentTerminal) ? (receipt as Record<string, unknown>).agentTerminal as Record<string, unknown> : null;
-    const worktreeId = text(worktree?.id);
-    const worktreePath = text(worktree?.path);
-    const terminalId = text(providerTerminal?.handle) || text(providerTerminal?.id);
-    const runtime = text(providerTerminal?.runtime);
-    const generation = text(providerTerminal?.generation);
-    if (!worktreeId || !worktreePath || !terminalId || !runtime || !generation) return continued(input, 'supervised_start', {
+    const effects = receipt && Array.isArray(receipt.effects) ? receipt.effects : [];
+    const worktreeEffect = effects.find((effect) => record(effect) && text(effect.kind) === 'worktree' && text(effect.action) === 'created');
+    const terminalEffect = effects.find((effect) => record(effect) && text(effect.kind) === 'terminal' && text(effect.role) === 'agent'
+      && (text(effect.action) === 'created' || text(effect.action) === 'created_agent_terminal'));
+    const worktreeId = text(worktree?.id) || (record(worktreeEffect) ? text(worktreeEffect.id) : '');
+    const worktreePath = text(worktree?.path) || worktreeId.split('::').slice(1).join('::').trim();
+    const terminalId = text(providerTerminal?.handle) || text(providerTerminal?.id) || (record(terminalEffect) ? text(terminalEffect.id) : '');
+    if (!worktreeId || !worktreePath || !terminalId) return continued(input, 'supervised_start', {
       cause: 'supervised_start_provider_placement_missing', actor: 'provider', evidence: {},
       nextAction: { kind: 'reconcile_supervised_start', note: 'reconcile provider-owned worktree and terminal identity from the ready receipt' },
     }, resources, startedAtMs, timings, deps.now);
-    resources = { ...resources, worktreeId, worktreePath, terminal: { runtime, id: terminalId, generation } };
+    const runtime = text(providerTerminal?.runtime);
+    const generation = text(providerTerminal?.generation);
+    resources = { ...resources, worktreeId, worktreePath,
+      ...(runtime && generation ? { terminal: { runtime, id: terminalId, generation } } : {}) };
   }
   resources = { ...resources, dispatchId };
   const finishedAtMs = deps.now();
