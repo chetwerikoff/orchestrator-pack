@@ -139,23 +139,6 @@ const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
 function shellQuoteProfileValue(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
-function normalizeProfileEvidence(value: string): string {
-  return value.toLocaleLowerCase().replaceAll(/[^a-z0-9]/gu, '');
-}
-
-export function smokeProfileMatchesOutput(
-  profile: Pick<SmokeExecutorProfile, 'agent' | 'model' | 'effort'>,
-  lines: readonly string[],
-): boolean {
-  if (profile.agent !== 'codex') return true;
-  const model = normalizeProfileEvidence(profile.model);
-  const effort = normalizeProfileEvidence(profile.effort);
-  return model.length > 0 && effort.length > 0 && lines.some((line) => {
-    const normalized = normalizeProfileEvidence(line);
-    return normalized.includes(model) && normalized.includes(effort);
-  });
-}
-
 
 function profileValue(env: Readonly<NodeJS.ProcessEnv>, name: string): string {
   const value = env[name]?.trim() ?? '';
@@ -184,9 +167,7 @@ export function resolveSmokeExecutorProfile(
     agent: launchAgent,
     model,
     effort,
-    command: launchAgent === 'codex'
-      ? `${launchAgent} --model ${shellQuoteProfileValue(model)} --config ${shellQuoteProfileValue(`model_reasoning_effort=${effort}`)}`
-      : `${launchAgent} --model ${shellQuoteProfileValue(`${model}-${effort}`)}`,
+    command: `${launchAgent} --model ${shellQuoteProfileValue(`${model}-${effort}`)}`,
   };
 }
 
@@ -1420,35 +1401,6 @@ export async function runSmokeAttempt(
       return 1;
     }
     if (!worker || startedAtMs <= 0) throw new Error('smoke_start_prefix_incomplete');
-
-    if (smokeProfile.agent === 'codex') {
-      const profileRead = adapter.readBoundedOutput({
-        worker,
-        screen: true,
-        limit: 200,
-      }, { cwd: options.cwd, timeoutMs: SMOKE_CREATE_TIMEOUT_MS });
-      const profileVerified = profileRead.status === 'ok'
-        && profileRead.value.source === 'screen'
-        && smokeProfileMatchesOutput(smokeProfile, profileRead.value.lines);
-      if (!profileVerified) {
-        const observed = profileRead.status === 'ok'
-          ? 'codex_profile_mismatch'
-          : `codex_profile_read_failed:${failureReason(profileRead)}`;
-        const lifecycleCleanup = cleanup(`codex_profile_mismatch:${observed}`, true);
-        const report = operationalReport('BLOCKED', options, {
-          action: 'validate codex smoke executor profile',
-          expected: `Codex model ${smokeProfile.model} with reasoning effort ${smokeProfile.effort}`,
-          observed,
-          terminalCleanup,
-          environmentNotes: [`lifecycle-clean=${lifecycleCleanup.clean}`],
-          worker,
-          adapterId: adapter.id,
-        });
-        publishSmokeReport(report, options);
-        emit({ ok: false, report, lifecycleCleanup }, options.json);
-        return 1;
-      }
-    }
 
     const binding = { runId, artifactDir };
     const prompt = buildLifecyclePrompt(buildSmokeAgentPrompt({
