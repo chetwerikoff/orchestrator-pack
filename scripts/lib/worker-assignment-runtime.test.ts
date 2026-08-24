@@ -15,6 +15,7 @@ import {
   type WorkerAssignment,
 } from './worker-assignment-store.ts';
 import {
+  admitCurrentWorkerAssignmentReplacement,
   resolveCurrentWorkerAssignmentBindings,
   resolveCurrentWorkerAssignmentTarget,
 } from './worker-assignment-runtime.ts';
@@ -147,6 +148,81 @@ describe('WorkerAssignment runtime target truth', () => {
 });
 
 describe('real Orca assignment target resolution', () => {
+  it('resolves the authoritative active running + ready + input_accepted Dispatch', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-active' });
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'orchestration worker-show') {
+        return {
+          ok: true,
+          result: {
+            worker: {
+              agent_terminal_handle: 'term-active',
+              state: 'ready',
+              stage: 'input_accepted',
+            },
+            terminal: { handle: 'term-active' },
+            observation: { exactWorker: true, status: 'running' },
+          },
+        };
+      }
+      if (operation === 'terminal show') {
+        return {
+          ok: true,
+          result: {
+            terminal: {
+              handle: 'term-active',
+              incarnationId: 'generation-active',
+              worktreePath: '/tmp/worktree-active',
+              title: 'active',
+              status: 'running',
+            },
+          },
+        };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    const result = resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter });
+    expect(result.status).toBe('resolved');
+    if (result.status === 'resolved') {
+      expect(result.worker.identity).toEqual({
+        runtime: 'orca',
+        id: 'term-active',
+        generation: 'generation-active',
+      });
+    }
+  });
+
+  it('keeps captured running + succeeded + settled non-active and non-replaceable', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-settled' });
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        worker: {
+          agent_terminal_handle: 'term-settled',
+          state: 'succeeded',
+          stage: 'settled',
+        },
+        terminal: { handle: 'term-settled' },
+        observation: { exactWorker: true, status: 'running' },
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'target_unresolved' });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+    })).toEqual({ status: 'target_unresolved' });
+    expect(runJson.mock.calls.every((call) => call[0]?.slice(0, 2).join(' ') === 'orchestration worker-show')).toBe(true);
+  });
+
   it('preserves exact gone and its producer-backed Dispatch-owned terminal handle', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-exact-gone' });
@@ -210,13 +286,17 @@ describe('real Orca assignment target resolution', () => {
     },
   );
 
-  it('requires a terminal handle for an exact live target', async () => {
+  it('requires a terminal handle for an exact active target', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-live-no-terminal' });
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
       result: {
-        worker: { agent_terminal_handle: null },
+        worker: {
+          agent_terminal_handle: null,
+          state: 'ready',
+          stage: 'input_accepted',
+        },
         terminal: null,
         observation: { exactWorker: true, status: 'live' },
       },
