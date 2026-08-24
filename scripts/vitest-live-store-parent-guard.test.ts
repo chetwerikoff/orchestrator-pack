@@ -1,18 +1,9 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-
-vi.mock('node:fs', async () => {
-  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
-  return {
-    ...actual,
-    watch: () => ({ close() {} }),
-  };
-});
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { repoRoot } from './lib/vitest-live-store-harness.mjs';
-import { startParentLiveStoreGuard } from './lib/vitest-live-store-parent-guard.mjs';
 import { runProcess } from './kernel/subprocess.ts';
 
 const temporaryRoots: string[] = [];
@@ -80,32 +71,53 @@ afterEach(() => {
 });
 
 describe('parent live-store guard', () => {
-  it('ignores an unobserved external wake-store snapshot change around a passing harness child', async () => {
+  it('ignores an observed external wake-store tick around a passing harness child', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-regression-'));
     temporaryRoots.push(root);
-    const productionEnv = productionEnvironment(root);
     const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-passing-child.test.ts');
     temporaryFiles.push(fixture);
     writeFileSync(
       fixture,
-      "import { expect, it } from 'vitest'; it('passes', () => expect(true).toBe(true));\n",
+      "import { expect, it } from 'vitest'; it('passes', async () => { await new Promise((resolve) => setTimeout(resolve, 150)); expect(true).toBe(true); });\n",
       'utf8',
     );
-    const guard = startParentLiveStoreGuard(productionEnv);
+    const childEnvironment = productionEnvironment(join(root, 'child-production'));
+    const childPromise = runHarnessedVitest(fixture, childEnvironment);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    writeFileSync(join(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'external-tick.json'), 'tick\n');
+    const child = await childPromise;
 
-    try {
-      const childPromise = runHarnessedVitest(
-        fixture,
-        productionEnvironment(join(root, 'child-production')),
-      );
-      await new Promise((resolve) => setTimeout(resolve, 25));
-      writeFileSync(join(productionEnv.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'external-tick.json'), 'tick\n');
-      const child = await childPromise;
+    expect(child.exitCode, child.stderr).toBe(0);
+  });
 
-      expect(child.exitCode, child.stderr).toBe(0);
-      expect(() => guard.stop()).not.toThrow();
-    } finally {
-      try { guard.stop(); } catch {}
-    }
+  it('retains a child-originated live-store mutation when the watcher observes it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-leak-'));
+    temporaryRoots.push(root);
+    const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-leak-child.test.ts');
+    temporaryFiles.push(fixture);
+    writeFileSync(
+      fixture,
+      [
+        "import { expect, it } from 'vitest';",
+        "import { runProcess } from './kernel/subprocess.ts';",
+        "it('passes its own assertion while leaking a production write', async () => {",
+        "  const env = { ...process.env };",
+        "  for (const name of ['OPK_VITEST_HARNESS', 'OPK_VITEST_HARNESS_ROOT', 'OPK_VITEST_HARNESS_INVENTORY', 'NODE_OPTIONS']) delete env[name];",
+        "  const result = await runProcess({ command: process.execPath, args: ['--input-type=module', '-e', \"import('node:fs').then(({ writeFileSync }) => writeFileSync(process.env.LEAK_PATH, 'leak\\\\n'))\"], env: { ...env, LEAK_PATH: process.env.LEAK_PATH }, inheritParentEnv: false });",
+        "  expect(result.exitCode).toBe(0);",
+        "});",
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const childEnvironment = productionEnvironment(join(root, 'child-production'));
+    childEnvironment.LEAK_PATH = join(
+      childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!,
+      'worker-status-store.json',
+    );
+    const child = await runHarnessedVitest(fixture, childEnvironment);
+
+    expect(child.exitCode).not.toBe(0);
+    expect(child.stderr).toContain('OPK_VITEST_LIVE_STORE_GUARD_FAILED');
   });
 });

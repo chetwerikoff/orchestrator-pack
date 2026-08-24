@@ -12,6 +12,7 @@ import {
 } from './vitest-live-store-harness.mjs';
 
 const MAX_PARENT_WATCHERS = 512;
+const EXTERNALLY_MUTABLE_STORE_IDS = new Set(['wake-supervisor-runtime-state']);
 const POWERSHELL_PATH_PARAMETERS = new Set([
   'literalpath', 'path', 'filepath', 'statepath', 'storepath', 'journalpath',
   'watchpath', 'lockpath', 'statefile', 'clipath', 'auditroot', 'namespace',
@@ -354,7 +355,7 @@ export function startParentLiveStoreGuard(env = process.env) {
         if (!filename) return;
         const candidate = canonicalizeStorePath(join(anchor, String(filename)));
         const match = classifyLiveStorePath(candidate, env);
-        if (match) exactTouches.add(match.storeId);
+        if (match && !EXTERNALLY_MUTABLE_STORE_IDS.has(match.storeId)) exactTouches.add(match.storeId);
 
         if (existsSync(candidate)) {
           armTree(candidate);
