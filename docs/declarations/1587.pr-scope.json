@@ -11,8 +11,7 @@
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/runtime/contracts.ts",
     "scripts/worker-message-submit-reconcile.test.ts",
-    "scripts/worker-smoke-run.ts",
-    "scripts/worker-smoke.test.ts"
+    "scripts/worker-smoke-run.ts"
   ],
   "denylist": [
     "credentials/",
@@ -31,8 +30,7 @@
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/runtime/contracts.ts",
     "scripts/worker-message-submit-reconcile.test.ts",
-    "scripts/worker-smoke-run.ts",
-    "scripts/worker-smoke.test.ts"
+    "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "221ece97ff297b3aceb10ee03faf898fb4e8c34e"
+  "source_revision": "128484bb3ff43d513d7e5e0145548e1224f70eb4"
 }
