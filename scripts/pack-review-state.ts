@@ -635,14 +635,11 @@ export function observePackReviewHead(input: {
     ...input,
     nextPhase: 'head_observed',
     mutate(current) {
-      // Same-head observe is the legal extra-review reopen: this transition
-      // still rewinds phase to head_observed without resetting cycle, triage,
-      // or automatic budget.
+      // Same-head observe rewinds the phase without resetting cycle, triage, or budget.
       if (current.currentHeadSha === headSha) return current;
       const completed = current.cycle?.reviewStageComplete === true
         || (current.cycle?.state === 'closed'
-          && current.publication?.status === 'succeeded'
-          && current.terminal?.automaticBudgetDisposition !== 'non_consuming_explicit');
+          && current.publication?.status === 'succeeded');
       if (completed && current.cycle && current.cycle.reviewStageComplete !== true) {
         current.cycle.reviewStageComplete = true;
         current.cycle.reviewStageCompletedAtUtc = current.publication?.recordedAtUtc ?? nowIso(input.options);
@@ -709,7 +706,6 @@ export function terminalConsumesCapSlot(terminal: {
   stale?: boolean;
   automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
 }): boolean {
-  if (terminal.automaticBudgetDisposition === 'non_consuming_explicit') return false;
   if (terminal.superseded || terminal.stale || terminal.reaperKilled) return false;
   const status = String(terminal.status).toLowerCase();
   const findings = Number(terminal.findingCount ?? 0);
@@ -849,9 +845,7 @@ export function commitPackReviewTerminal(input: {
       if (terminal.targetSha !== current.currentHeadSha) {
         throw new PackReviewAuthorityError('terminal_head_stale', terminal.targetSha);
       }
-      const explicit = terminal.automaticBudgetDisposition === 'non_consuming_explicit';
-      if (!explicit
-          && current.terminal?.targetSha === terminal.targetSha
+      if (current.terminal?.targetSha === terminal.targetSha
           && current.terminal.reviewVerdict === 'findings'
           && terminal.reviewVerdict === 'clean') {
         throw new PackReviewAuthorityError('terminal_precedence_conflict', 'findings outrank clean');
@@ -866,7 +860,7 @@ export function commitPackReviewTerminal(input: {
         reviewStatus: input.status,
       };
       const cycle = current.cycle;
-      if (!cycle || explicit) return current;
+      if (!cycle) return current;
       const consumesAutomaticReviewBudget = terminal.terminalSource !== 'conflict_free_carryover';
       if (consumesAutomaticReviewBudget
           && terminalConsumesCapSlot({ ...input, automaticBudgetDisposition: terminal.automaticBudgetDisposition })
@@ -1077,11 +1071,9 @@ function markReviewStageComplete(
 
 function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boolean {
   if (authority.cycle?.reviewStageComplete === true) return true;
-  if (authority.cycle?.state === 'closed'
-      && authority.terminal?.automaticBudgetDisposition !== 'non_consuming_explicit') return true;
+  if (authority.cycle?.state === 'closed') return true;
   const reviewStatus = authority.terminal?.reviewStatus;
-  if (authority.terminal?.automaticBudgetDisposition !== 'non_consuming_explicit'
-      && (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented')) return true;
+  if (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented') return true;
   return (authority.cycle?.state === 'at_cap_open_findings'
       || authority.cycle?.state === 'at_cap_continuation_required')
     && authority.triage?.source === 'architect'
@@ -1098,30 +1090,51 @@ export function commitPackReviewTriage(input: {
     ...input,
     nextPhase: 'triage_committed',
     mutate(current) {
+      let automaticEvidencePredicate: 'intersection' | 'no_intersection' | undefined;
       if (input.triage.source === 'automatic') {
-        if (input.triage.verdict === 'DEFER') {
-          throw new PackReviewAuthorityError('triage_invalid', 'automatic DEFER is not authoritative');
-        }
         if (input.triage.verdict !== 'PENDING_OPERATOR' && !current.evidence) {
           throw new PackReviewAuthorityError('triage_invalid', 'automatic triage lacks selected evidence');
         }
         if (current.evidence) {
           const evidenceRecords = listPackReviewImmutableRecordsUnlocked('evidence', input.options);
-          if (evidenceRecords.some((entry) => entry.malformed)
-              || !evidenceRecords.some((entry) => canonicalEvidenceRecordMatches(
-                entry.value,
-                current.evidence!.expectedEvidenceKey,
-                current.evidence!.selectedEvidenceId,
-                current,
-              ) && entry.digest === current.evidence!.selectedEvidenceDigest)) {
+          const canonical = evidenceRecords.filter((entry) => canonicalEvidenceRecordMatches(
+            entry.value,
+            current.evidence!.expectedEvidenceKey,
+            current.evidence!.selectedEvidenceId,
+            current,
+          ) && entry.digest === current.evidence!.selectedEvidenceDigest);
+          if (evidenceRecords.some((entry) => entry.malformed) || canonical.length !== 1) {
             throw new PackReviewAuthorityError('triage_invalid', 'automatic triage evidence is not canonical');
           }
+          const value = canonical[0]!.value as Record<string, unknown>;
+          automaticEvidencePredicate = value.predicateResult === 'intersection'
+            || value.predicateResult === 'no_intersection'
+            ? value.predicateResult
+            : undefined;
+        }
+        const workerOwned = current.smokeOrdering?.workerOwned;
+        const finalFixSettlement = input.triage.verdict === 'DEFER'
+          && current.cycle?.state === 'at_cap_continuation_required'
+          && current.cycle.consumedHeadShas.length === current.cycle.frozenCap
+          && current.terminal?.reviewVerdict === 'findings'
+          && current.terminal.targetSha !== current.currentHeadSha
+          && workerOwned?.headSha === current.currentHeadSha
+          && workerOwned.status === 'passed'
+          && automaticEvidencePredicate === 'no_intersection';
+        if (input.triage.verdict === 'DEFER' && !finalFixSettlement) {
+          throw new PackReviewAuthorityError(
+            'triage_invalid',
+            'automatic DEFER requires final-cap continuation, exact-head worker smoke PASS, and no-intersection evidence',
+          );
         }
       } else if (!['BLOCK', 'DEFER'].includes(input.triage.verdict)) {
         throw new PackReviewAuthorityError('triage_invalid', 'architect verdict must be BLOCK or DEFER');
       }
       current.triage = { ...input.triage };
-      if (current.publication?.status === 'succeeded' && reviewObligationsSettled(current)) {
+      const automaticFinalFixSettlement = input.triage.source === 'automatic'
+        && input.triage.verdict === 'DEFER';
+      if (automaticFinalFixSettlement
+          || (current.publication?.status === 'succeeded' && reviewObligationsSettled(current))) {
         markReviewStageComplete(current, input.triage.committedAtUtc);
         current.smokeOrdering = {
           ...current.smokeOrdering,
