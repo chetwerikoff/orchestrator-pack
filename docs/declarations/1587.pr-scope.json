@@ -32,5 +32,5 @@
     "scripts/worker-message-submit-reconcile.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "920b511e2ca49edcb189037b40b44eb0bfc68cde"
+  "source_revision": "d600affba7b2c16efd09e475230055b3db679532"
 }
