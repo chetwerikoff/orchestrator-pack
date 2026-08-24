@@ -311,7 +311,7 @@ describe('real Orca assignment target resolution', () => {
       file,
       expected: assignment,
       adapter,
-    })).toEqual({ status: 'replaceable', assignment });
+    })).toEqual({ status: 'replaceable', expected: assignment });
   });
 
   it('does not grant replacement for federated no-worker-record dispatch_not_found', async () => {
