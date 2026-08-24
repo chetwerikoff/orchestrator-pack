@@ -1,0 +1,22 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1579,
+  "declared_paths": [
+    "scripts/lib/vitest-pre-topology-measurement.mjs"
+  ],
+  "denylist": [
+    ".github/",
+    "credentials/",
+    "packages/core/",
+    "scripts/emit-vitest-heavy-topology.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs"
+  ],
+  "source_revision": "r01"
+}
