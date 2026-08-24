@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -13,6 +13,7 @@ import {
   resolveTestBudgetMs,
 } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
 import { startPackReview } from './pack-review-runner.ts';
+import { readPackReviewAuthority } from './pack-review-state.ts';
 import { resolveBoundIssueSnapshot } from './lib/reverify-bound-issue-snapshot.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 
@@ -55,6 +56,7 @@ function startFixture(storeRoot: string, overrides: Record<string, unknown> = {}
     fixturePrBody: 'Closes #1529',
     fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
     fixturePostReviewHeadSha: HEAD_A,
+    fixturePostReviewPrBody: 'Closes #1529',
     fixtureIssueBody: issueBody(),
     fixtureReviewStdout: cleanPayload(),
     fixtureGithubReviewId: 1529,
@@ -201,6 +203,59 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
     expect(snapshot.snapshotPath && readFileSync(snapshot.snapshotPath, 'utf8')).toContain('winner-body');
   });
 
+  it('requires an explicit PR even when the advisory session cache has one', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-cache-cannot-select-'));
+    roots.push(storeRoot);
+    setupHarness(storeRoot);
+    const cachePath = join(storeRoot, 'session-cache.json');
+    process.env.OPK_PR_SESSION_BINDING_CACHE = cachePath;
+    writeFileSync(cachePath, JSON.stringify({
+      records: {
+        current: {
+          sessionId: 'worker-1529',
+          prNumber: 1529,
+          headSha: HEAD_A,
+          repoSlug: 'chetwerikoff/orchestrator-pack',
+          issueNumber: 1529,
+          superseded: false,
+        },
+      },
+    }));
+
+    await expect(startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      sessionId: 'worker-1529',
+      headSha: HEAD_A,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+    })).rejects.toThrow(/requires --pr-number/);
+  });
+
+  it('treats a mismatching valid session binding as advisory when an explicit PR is supplied', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-cache-advisory-'));
+    roots.push(storeRoot);
+    setupHarness(storeRoot);
+    const cachePath = join(storeRoot, 'session-cache.json');
+    process.env.OPK_PR_SESSION_BINDING_CACHE = cachePath;
+    writeFileSync(cachePath, JSON.stringify({
+      records: {
+        stale: {
+          sessionId: 'worker-1529',
+          prNumber: 999,
+          headSha: HEAD_B,
+          repoSlug: 'other/repository',
+          issueNumber: 999,
+          superseded: false,
+        },
+      },
+    }));
+
+    const result = await startFixture(storeRoot, { sessionId: 'worker-1529' });
+    expect(result).toMatchObject({ ok: true, created: true, reused: false });
+  });
+
   it('refuses a PR with no closing Issue instead of inferring one from caller/session data', async () => {
     const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-no-issue-'));
     roots.push(storeRoot);
@@ -209,6 +264,40 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
     await expect(startFixture(storeRoot, {
       fixturePrBody: 'Refs #1529',
     })).rejects.toThrow(/no resolvable closing Issue/);
+  });
+
+  it('rejects a changed PR-linked Issue under the claim before snapshot capture or run creation', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-issue-drift-under-claim-'));
+    roots.push(storeRoot);
+    setupHarness(storeRoot);
+
+    const result = await startFixture(storeRoot, {
+      fixturePrBodyAfterClaim: 'Closes #1530',
+    });
+
+    expect(result).toMatchObject({ ok: false, created: false, reused: false, httpStatus: 409 });
+    expect(String(result.reason)).toContain('review target Issue changed');
+    expect(resolveBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 1529,
+      prHeadSha: HEAD_A,
+      issueNumber: 1529,
+      storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+    }).status).toBe('missing');
+  });
+
+  it('rejects a changed PR-linked Issue after review before terminal publication', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-issue-drift-post-review-'));
+    roots.push(storeRoot);
+    setupHarness(storeRoot);
+
+    const result = await startFixture(storeRoot, {
+      fixturePrBodyAfterClaim: 'Closes #1529',
+      fixturePostReviewPrBody: 'Closes #1530',
+    });
+
+    expect(result).toMatchObject({ ok: false, created: true, reused: false, httpStatus: 409 });
+    expect(String(result.reason)).toContain('review target Issue changed');
   });
 
   it('suppresses a repeated clean same-head model invocation', async () => {
@@ -280,6 +369,62 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
 
     expect(second.ok).toBe(true);
     expect(readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).filter(Boolean)).toHaveLength(1);
+  });
+
+  it('allows zero-call conflict-free carry-over to settle a new head after the T1 cap is exhausted', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-at-cap-carryover-'));
+    roots.push(storeRoot);
+    setupHarness(storeRoot);
+    const invocationLog = join(storeRoot, 'invocations.jsonl');
+    process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
+    const finding = JSON.stringify({
+      verdict: 'findings',
+      findingCount: 1,
+      findings: [{ title: 'blocking', severity: 'blocking' }],
+    });
+
+    const first = await startFixture(storeRoot, {
+      fixtureIssueBody: issueBody('T1'),
+      fixtureReviewStdout: finding,
+      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+      fixtureBoundIssueSnapshotBytes: issueBody('T1'),
+    });
+    expect(first.ok).toBe(true);
+    expect(readPackReviewAuthority(1529, { storeRoot })?.cycle).toMatchObject({
+      state: 'at_cap_open_findings',
+      consumedHeadShas: [HEAD_A],
+    });
+
+    const replay: CarryoverReplayResult = {
+      kind: 'conflict_free_carryover',
+      sourceHeadSha: HEAD_A,
+      mainSha: 'c'.repeat(40),
+      targetHeadSha: HEAD_B,
+      mergeBaseSha: 'd'.repeat(40),
+      replayTreeSha: 'e'.repeat(40),
+      replayDigest: 'fixture-at-cap-replay',
+    };
+    const second = await startFixture(storeRoot, {
+      headSha: HEAD_B,
+      fixtureCurrentPrHeadSha: HEAD_B,
+      fixturePostReviewHeadSha: HEAD_B,
+      fixtureIssueBody: issueBody('T1'),
+      fixtureCarryoverReplay: replay,
+      fixtureCarryoverSourceCleanRunId: 'fixture-explicit-clean-source',
+    });
+
+    expect(second).toMatchObject({ ok: true, created: true, reused: false });
+    expect(readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).filter(Boolean)).toHaveLength(1);
+    const authority = readPackReviewAuthority(1529, { storeRoot });
+    expect(authority?.terminal).toMatchObject({
+      targetSha: HEAD_B,
+      reviewVerdict: 'clean',
+      terminalSource: 'conflict_free_carryover',
+    });
+    expect(authority?.cycle).toMatchObject({
+      state: 'closed',
+      consumedHeadShas: [HEAD_A],
+    });
   });
 
   it('does not invoke a reviewer for an automatic new-head start after the T1 cap is exhausted', async () => {
