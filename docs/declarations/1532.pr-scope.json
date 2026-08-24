@@ -14,6 +14,7 @@
     ".ao/",
     ".github/",
     ".orca/",
+    "credentials/",
     "package-lock.json",
     "package.json",
     "packages/core/",
@@ -27,6 +28,7 @@
     "scripts/pr2-foundation/fleet-reconciliation-handoff.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/vitest-runtime-history.json",
+    "secrets/",
     "vendor/"
   ],
   "allowed_roots": [
@@ -41,5 +43,5 @@
     "scripts/operator-primary-binding.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "3f072fb90b1b54f3fa8677f5c8b1ef9ec6c29a43"
+  "source_revision": "81ed031d710cafe2110a27a3b4f9de664f8f9968"
 }
