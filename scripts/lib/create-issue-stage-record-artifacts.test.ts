@@ -7,6 +7,7 @@ import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import {
+  ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
   AUTHOR_DISPOSITIONS_SCHEMA,
   STAGE_EVIDENCE_SCHEMA,
   inspectAcceptanceArtifacts,
@@ -367,24 +368,57 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     });
   });
 
-  it('leaves an already-published sibling completeness receipt byte-identical when produce fails', () => {
+  it('restores every pre-existing acceptance artifact after each injected install failure', () => {
     const input = fixture({
       transportClassification: 'complete',
       withTurnResult: true,
       withCapture: true,
     });
-    mkdirSync(input.outputDir, { recursive: true });
-    const receiptPath = join(input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json');
-    const receiptBytes = Buffer.from(`${JSON.stringify({
-      schema: 'stage-completeness-receipt/v1',
-      stageAttemptId: 'architectural-review-attempt',
-      stage: 'architectural-review',
-    }, null, 2)}\n`);
-    writeFileSync(receiptPath, receiptBytes);
-    const result = produce(input, transport({ census: [] }));
-    expect(result.ok).toBe(false);
-    expect(existsSync(receiptPath)).toBe(true);
-    expect(readFileSync(receiptPath)).toEqual(receiptBytes);
+    const initial = produce(input);
+    expect(initial.ok, initial.errors.join('\n')).toBe(true);
+
+    const receiptNames = readdirSync(input.outputDir)
+      .filter((name) => name.startsWith('stage-completeness-receipt-'))
+      .sort();
+    const receiptBytes = new Map(receiptNames.map((name) => [name, readFileSync(join(input.outputDir, name))]));
+    const digest = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
+    const targetNames = [...receiptNames, ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES].sort();
+
+    for (let failAfter = 1; failAfter <= ACCEPTANCE_ARTIFACT_OUTPUT_NAMES.length; failAfter += 1) {
+      rmSync(input.outputDir, { recursive: true, force: true });
+      mkdirSync(input.outputDir, { recursive: true });
+      for (const [name, bytes] of receiptBytes) writeFileSync(join(input.outputDir, name), bytes);
+      for (const name of ACCEPTANCE_ARTIFACT_OUTPUT_NAMES) {
+        writeFileSync(join(input.outputDir, name), `pre-attempt-${failAfter}-${name}\n`);
+      }
+      const before = new Map(targetNames.map((name) => [name, digest(join(input.outputDir, name))]));
+      let observedInstallIndex = 0;
+      const source = transport({ census: [...input.reviewComments, comment(input.body)] });
+      const result = produceAcceptanceArtifacts({
+        reviewDir: input.dir,
+        outputDir: input.outputDir,
+        tierIntakePath: input.intakePath,
+        stageEvidencePaths: [input.reviewEvidencePath, input.evidencePath],
+        authorDispositionsPath: input.authorPath,
+        phase: 'final-acceptance',
+        artifactSourceTransport: source,
+        publicationHooks: {
+          afterInstall: ({ installIndex }) => {
+            observedInstallIndex = installIndex;
+            if (installIndex === failAfter) throw new Error(`injected install failure ${installIndex}`);
+          },
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain(`injected install failure ${failAfter}`);
+      expect(observedInstallIndex).toBe(failAfter);
+      expect(readdirSync(input.outputDir).sort()).toEqual(targetNames);
+      for (const name of targetNames) {
+        expect(digest(join(input.outputDir, name))).toBe(before.get(name));
+      }
+      expect(readdirSync(input.dir).filter((name) => name.startsWith('.output.tmp-'))).toEqual([]);
+    }
   });
 
   it('requires GitHub artifact authority for complete calls even with an opaque reviewerSource', () => {
@@ -564,7 +598,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.errors.join('\n')).toMatch(expected as RegExp);
   });
 
-  it('fails closed when an unrelated authorless comment makes the trusted journal census incomplete', () => {
+  it('ignores an unrelated authorless non-journal comment when deriving canonical lineage', () => {
     const input = fixture({ transportClassification: 'incident' });
     const authorlessNoiseId = COMMENT_ID + 90;
     const authorlessNoise = comment('unrelated historical note\n', {
@@ -573,15 +607,32 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       user: null,
     });
     const result = produce(input, transport({ census: [...input.reviewComments, authorlessNoise, comment(input.body)] }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+    expect(receipt.invocations[0].artifactAuthority.commentId).toBe(COMMENT_ID);
+  });
+
+  it.each([
+    ['author login', { user: null }],
+    ['author association', { author_association: null }],
+  ])('fails closed when a journal-marked comment lacks %s', (_label, overrides) => {
+    const input = fixture({ transportClassification: 'incident' });
+    const untrustedJournal = { ...cycleComment(), ...overrides };
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(input.body)],
+      cycleComments: [untrustedJournal],
+    }));
     expect(result.ok).toBe(false);
     expect(result.temporary).toBe('source-unavailable');
+    expect(result.errors.join('\n')).toContain('journal-marked comment');
   });
 
   it('fails closed when the canonical invocation candidate itself has no author', () => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport({ census: [...input.reviewComments, comment(input.body, { user: null })] }));
     expect(result.ok).toBe(false);
-    expect(result.temporary).toBe('source-unavailable');
+    expect(result.temporary).toBe('provenance-unresolved');
+    expect(result.errors.join('\n')).toContain('canonical artifact candidate has no authoritative comment-author login');
   });
 
   it('filters provenance before uniqueness and compares GitHub logins case-insensitively', () => {
