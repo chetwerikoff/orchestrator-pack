@@ -295,9 +295,11 @@ describe('fleet escalation delivery', () => {
       { taskId: 'Bearer synthetic-secret-token' },
       { taskId: 'bearer synthetic-secret-token' },
       { taskId: 'bEaReR synthetic-secret-token' },
+      { taskId: 'Basic dXNlcjpwYXNz' },
       { taskId: 'ghp_abcdefghijklmnopqrstuvwxyz1234567890' },
       { taskId: 'token=synthetic-secret' },
       { assignmentId: 'https://user:password@example.invalid/reconciliation' },
+      { assignmentId: 'https://example.invalid/reconciliation?signature=synthetic-signed-secret' },
     ];
     for (const [index, metadata] of sensitive.entries()) {
       const tickSequence = index + 1;
