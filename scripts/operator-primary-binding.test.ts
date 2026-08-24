@@ -126,6 +126,38 @@ describe('operator-primary binding CLI', () => {
     expect(replaced).toMatchObject({ ok: true, binding: { taskId: second.taskId, bindingKey: second.bindingKey } });
   });
 
+  it('preserves the exact pointer across an unrelated WorkerAssignment replacement', async () => {
+    const { env, file } = fixture();
+    const primary = await publish(file, 'task-primary', 'dispatch-primary', 1532);
+    await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
+      'bind', '--task-id', primary.taskId, '--binding-key', primary.bindingKey, '--operator-attested',
+    ]), env);
+    const before = readOperatorPrimaryBinding(file);
+    if (!before.ok || before.status !== 'binding_current') throw new Error('expected current binding');
+
+    const unrelated = await publish(file, 'task-unrelated', 'dispatch-unrelated', 1533);
+    const replacement = await publishCurrentWorkerAssignment({
+      file,
+      repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1533,
+      taskId: 'task-unrelated',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'dispatch-unrelated-v2',
+      role: 'worker',
+      expectedCurrent: {
+        assignmentId: unrelated.assignmentId,
+        generation: unrelated.generation,
+      },
+    });
+    expect(replacement.ok).toBe(true);
+    expect(readOperatorPrimaryBinding(file)).toMatchObject({
+      ok: true,
+      status: 'binding_current',
+      binding: before.binding,
+    });
+  });
+
   it('retires only the exact current pointer and show then proves absence for downgrade', async () => {
     const { env, file } = fixture();
     const assignment = await publish(file, 'task-1532', 'dispatch-1532', 1532);
