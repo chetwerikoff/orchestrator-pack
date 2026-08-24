@@ -57,6 +57,8 @@ type OrcaTerminalListResult = Readonly<{
   truncated?: boolean;
 }>;
 
+type OrcaAssignmentActivity = 'active' | 'inactive' | 'unresolved';
+
 function failureDetail(failure: RuntimeOperationFailure): string {
   return `${failure.operation}:${failure.status}:${failure.reason}`;
 }
@@ -94,13 +96,23 @@ function normalizedWorkerLifecycle(result: OrcaWorkerShowResult | undefined): {
   };
 }
 
-function isAuthoritativeActiveWorkerLifecycle(result: OrcaWorkerShowResult | undefined): boolean {
+function classifyWorkerLifecycle(result: OrcaWorkerShowResult | undefined): OrcaAssignmentActivity {
   const lifecycle = normalizedWorkerLifecycle(result);
-  const liveObservation = lifecycle.observationStatus === 'live'
-    || lifecycle.observationStatus === 'running';
+  if (lifecycle.observationStatus === 'exited') return 'inactive';
+  if (lifecycle.observationStatus !== 'live' && lifecycle.observationStatus !== 'running') {
+    return 'unresolved';
+  }
+  if (!lifecycle.workerState || !lifecycle.workerStage) return 'unresolved';
   const acceptedStage = lifecycle.workerStage === 'input_accepted'
     || lifecycle.workerStage === 'remote_input_accepted';
-  return liveObservation && lifecycle.workerState === 'ready' && acceptedStage;
+  return lifecycle.workerState === 'ready' && acceptedStage ? 'active' : 'inactive';
+}
+
+function goneContradictsActiveLifecycle(result: OrcaWorkerShowResult | undefined): boolean {
+  const lifecycle = normalizedWorkerLifecycle(result);
+  return lifecycle.workerState === 'ready'
+    || lifecycle.workerStage === 'input_accepted'
+    || lifecycle.workerStage === 'remote_input_accepted';
 }
 
 /**
@@ -264,6 +276,9 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     if (observationStatus === 'gone') {
+      if (goneContradictsActiveLifecycle(shown.result)) {
+        return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+      }
       const resource = shown.result?.terminalResource;
       const resourceOwner = String(resource?.ownerDispatchId ?? '').trim();
       const workerId = String(
@@ -279,9 +294,13 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     // Exact terminal presence is deliberately weaker than active Dispatch
     // authority. Upstream Orca's worker lifecycle uses state=ready after
     // input_accepted; the installed capture may report observation.status=running
-    // while newer Orca reports live. Any settled/exited/unknown/contradictory
-    // combination is non-active and therefore cannot authorize S2.
-    if (!isAuthoritativeActiveWorkerLifecycle(shown.result)) {
+    // while newer Orca reports live. Missing/unknown lifecycle facts remain
+    // unresolved, while known settled/exited lifecycle facts are explicitly inactive.
+    const activity = classifyWorkerLifecycle(shown.result);
+    if (activity === 'unresolved') {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
+    if (activity === 'inactive') {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_inactive');
     }
     const terminalHandle = String(
