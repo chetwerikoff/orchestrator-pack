@@ -28,10 +28,7 @@ const LONE_ARROW = /^→$/u;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
-export const QUIET_AFTER_PRINT_MS = 5_000;
 const EMPTY_COMPOSER_RECHECK_MS = 1_000;
-// Reserve the observed adapter dispatch tail inside the user-facing deadline.
-const ASYNC_SUBMIT_RESERVE_MS = 250;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
@@ -330,20 +327,19 @@ function settleComposerObservation(
     return { ...base, ok: true, unsent: false, enter: false, reason: 'composer_empty' };
   }
   const fingerprint = composerPokeFingerprint(preview);
+  if (!ORCHESTRATION_NOTICE.test(fingerprint)) {
+    clearObservation(state, key);
+    state.submittedFingerprint.delete(key);
+    return {
+      ...base,
+      ok: true,
+      unsent: true,
+      enter: false,
+      reason: 'composer_not_orchestration_pointer',
+    };
+  }
   if (state.submittedFingerprint.get(key) === fingerprint) {
     return { ...base, ok: true, unsent: true, enter: false, reason: 'already_submitted' };
-  }
-  if (input.watch) {
-    const now = deps.now?.() ?? Date.now();
-    if (state.lastFingerprint.get(key) !== fingerprint) {
-      state.lastFingerprint.set(key, fingerprint);
-      state.lastChangedAt.set(key, now);
-      return { ...base, ok: true, unsent: true, enter: false, reason: 'waiting_stable' };
-    }
-    const quietFor = now - (state.lastChangedAt.get(key) ?? now);
-    if (quietFor < QUIET_AFTER_PRINT_MS) {
-      return { ...base, ok: true, unsent: true, enter: false, reason: 'waiting_stable' };
-    }
   }
   if (input.dryRun) {
     return { ...base, ok: true, unsent: true, enter: false, reason: 'dry_run' };
@@ -428,13 +424,8 @@ export function submitUnsentCursorComposerOnce(
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
 ): UnsentComposerSubmitResult {
-  const first = submitUnsentCursorComposer({ ...input, watch: true }, deps, state);
-  if (!first.terminals.some((row) => row.reason === 'waiting_stable')) {
-    return { ...first, watch: false };
-  }
-  (deps.sleep ?? sleepSync)(QUIET_AFTER_PRINT_MS);
-  const second = submitUnsentCursorComposer({ ...input, watch: true }, deps, state);
-  return { ...second, watch: false };
+  const result = submitUnsentCursorComposer({ ...input, watch: true }, deps, state);
+  return { ...result, watch: false };
 }
 
 let heldLockFd: number | undefined;
@@ -573,35 +564,8 @@ export async function runSupervisorUnsentComposerTick(
     let result = deps.readAsync
       ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
       : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
-    while (result.reason === 'waiting_stable' || (result.reason === 'composer_empty' && !fleetSettled)) {
-      if (result.reason === 'composer_empty') {
-        await new Promise<void>((resolve) => setTimeout(resolve, EMPTY_COMPOSER_RECHECK_MS));
-      } else {
-        await persistAfterObservation();
-        const now = deps.now?.() ?? Date.now();
-        const key = workerKey(worker.identity);
-        const remaining = Math.max(0, QUIET_AFTER_PRINT_MS - (now - (state.lastChangedAt.get(key) ?? now)));
-        const quietTimer = new Promise<void>((resolve) => setTimeout(
-          resolve,
-          Math.max(1, remaining - (deps.readAsync ? ASYNC_SUBMIT_RESERVE_MS : 0)),
-        ));
-        if (deps.readAsync) {
-          // The read must happen after the quiet deadline. A read started
-          // alongside the timer can return an old fingerprint before the user
-          // edits the composer, then incorrectly bypass the stability check.
-          await quietTimer;
-          const shown = await deps.readAsync(worker.identity);
-          result = settleComposerObservation(
-            worker,
-            { terminals: [worker.identity.id], watch: true },
-            workerDeps,
-            state,
-            shown,
-          );
-          continue;
-        }
-        await quietTimer;
-      }
+    while (result.reason === 'composer_empty' && !fleetSettled) {
+      await new Promise<void>((resolve) => setTimeout(resolve, EMPTY_COMPOSER_RECHECK_MS));
       result = deps.readAsync
         ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
         : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
