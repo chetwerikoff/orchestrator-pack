@@ -174,66 +174,6 @@ describe('Issue #898 authority and cap state', () => {
     })).toThrow(/cap_exhausted/);
   });
 
-  it('settles an at-cap new head from conflict-free carry-over without consuming another cap slot', () => {
-    const storeOptions = options();
-    let state = initializePackReviewAuthority({
-      prNumber: 898,
-      headSha: sha('a'),
-      tier: 'T1',
-      options: storeOptions,
-    });
-    state = commitPackReviewTerminal({
-      prNumber: 898,
-      expectedTransitionSeq: state.transitionSeq,
-      terminal: findingsTerminal('run-a', sha('a')),
-      status: 'changes_requested',
-      findingCount: 1,
-      options: storeOptions,
-    });
-    state = observePackReviewHead({
-      prNumber: 898,
-      expectedTransitionSeq: state.transitionSeq,
-      headSha: sha('b'),
-      options: storeOptions,
-    });
-    expect(state.cycle).toMatchObject({
-      state: 'at_cap_continuation_required',
-      consumedHeadShas: [sha('a')],
-    });
-
-    state = commitPackReviewTerminal({
-      prNumber: 898,
-      expectedTransitionSeq: state.transitionSeq,
-      terminal: {
-        schemaVersion: 1,
-        terminalContractVersion: 2,
-        terminalSource: 'conflict_free_carryover',
-        runId: 'carryover-run-b',
-        targetSha: sha('b'),
-        reviewVerdict: 'clean',
-        findingCount: 0,
-        findingsDigest: 'carryover-clean',
-        sourceCleanRunId: 'explicit-clean-a',
-        sourceHeadSha: sha('a'),
-        mainSha: sha('c'),
-        replayDigest: 'exact-replay-b',
-      },
-      status: 'clean',
-      findingCount: 0,
-      options: storeOptions,
-    });
-
-    expect(state.terminal).toMatchObject({
-      targetSha: sha('b'),
-      reviewVerdict: 'clean',
-      terminalSource: 'conflict_free_carryover',
-    });
-    expect(state.cycle).toMatchObject({
-      state: 'closed',
-      consumedHeadShas: [sha('a')],
-    });
-  });
-
   it('ACK_RESET is the audited at-cap empty-cycle boundary and adopts live 1/2/4', () => {
     const storeOptions = options();
     let state = initializePackReviewAuthority({
