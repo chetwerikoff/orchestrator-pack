@@ -867,7 +867,9 @@ export function commitPackReviewTerminal(input: {
       };
       const cycle = current.cycle;
       if (!cycle || explicit) return current;
-      if (terminalConsumesCapSlot({ ...input, automaticBudgetDisposition: terminal.automaticBudgetDisposition })
+      const consumesAutomaticReviewBudget = terminal.terminalSource !== 'conflict_free_carryover';
+      if (consumesAutomaticReviewBudget
+          && terminalConsumesCapSlot({ ...input, automaticBudgetDisposition: terminal.automaticBudgetDisposition })
           && !cycle.consumedHeadShas.includes(terminal.targetSha)) {
         if (cycle.consumedHeadShas.length >= cycle.frozenCap) {
           throw new PackReviewAuthorityError('cap_exhausted', 'terminal cannot consume an extra head');
