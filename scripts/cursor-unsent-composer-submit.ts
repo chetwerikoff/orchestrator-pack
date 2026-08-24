@@ -259,6 +259,7 @@ function persistSubmitted(state: UnsentComposerWatchState, path: string | undefi
 }
 
 export interface UnsentComposerSubmitDeps {
+  readonly [key: string]: unknown;
   readonly listWorkers: () => { ok: true; workers: readonly RuntimeWorker[] } | { ok: false; reason: string };
   readonly listWorkersAsync?: () => PromiseLike<
     { ok: true; workers: readonly RuntimeWorker[] } | { ok: false; reason: string }
