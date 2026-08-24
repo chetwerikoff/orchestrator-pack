@@ -84,7 +84,7 @@ describe('parent live-store guard', () => {
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
     const childPromise = runHarnessedVitest(fixture, childEnvironment);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    writeFileSync(join(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'external-tick.json'), 'tick\n');
+    writeFileSync(join(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'worker-message-dispatch-journal.json'), 'tick\n');
     const child = await childPromise;
 
     expect(child.exitCode, child.stderr).toBe(0);
@@ -113,7 +113,7 @@ describe('parent live-store guard', () => {
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
     childEnvironment.LEAK_PATH = join(
       childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!,
-      'worker-status-store.json',
+      'unclassified-child-leak.json',
     );
     const child = await runHarnessedVitest(fixture, childEnvironment);
 
