@@ -40,7 +40,8 @@ The implementation base contains the required landings:
 3. Run the production-wired proof:
 
    ```bash
-   node --experimental-strip-types scripts/pr2-foundation/fleet-escalation-proof.ts
+   node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+     --script scripts/pr2-foundation/fleet-escalation-proof.ts --
    ```
 
    It must emit exactly one terminal `fleet-escalation-proof/v1` JSON record with
@@ -353,8 +354,7 @@ not delete arbitrary workspaces, credentials, unrelated state, or audit evidence
 ### Rollback
 
 Rollback is a source-control revert of the hard-cut changes followed by the normal
-current-head verification for the reverted tree. Do not convert old state, restore a
-fallback transport, or reinterpret an old short identifier as runtime authority.
+supported adoption/recycle path. Do not convert old state, restore a fallback transport, or reinterpret an old short identifier as runtime authority.
 Existing GitHub review, CI, Issue, PR, and audit history remains immutable evidence.
 
 ## First-time supervisor activation (Issue #1422)
