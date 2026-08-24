@@ -35,6 +35,10 @@ type UnprovenOwnedPresence = Readonly<{
 }>;
 
 type OrcaWorkerShowResult = Readonly<{
+  dispatch?: Readonly<{
+    status?: string | null;
+    last_heartbeat_at?: string | null;
+  }>;
   worker?: Readonly<{
     agent_terminal_handle?: string | null;
     worktree_id?: string | null;
@@ -84,15 +88,84 @@ function isRetryableTabNotFound(response: OrcaJsonResponse): boolean {
     && response.error?.message?.trim() === 'tab_not_found';
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasNullableStringField(record: Record<string, unknown>, field: string): boolean {
+  return !(field in record) || record[field] === null || typeof record[field] === 'string';
+}
+
+/**
+ * Runtime shape boundary for `orca orchestration worker-show --dispatch`.
+ * The generic JSON transport is intentionally not trusted to make the payload
+ * typed: malformed lifecycle fields must fail closed before any absence or S2
+ * authority is derived from them.
+ */
+function parseOrcaWorkerShowResult(input: unknown): OrcaWorkerShowResult | null {
+  if (!isRecord(input)) return null;
+
+  const observation = input.observation;
+  if (
+    !isRecord(observation)
+    || typeof observation.exactWorker !== 'boolean'
+    || typeof observation.status !== 'string'
+  ) {
+    return null;
+  }
+
+  const dispatch = input.dispatch;
+  if (dispatch !== undefined) {
+    if (
+      !isRecord(dispatch)
+      || !hasNullableStringField(dispatch, 'status')
+      || !hasNullableStringField(dispatch, 'last_heartbeat_at')
+    ) return null;
+  }
+
+  const worker = input.worker;
+  if (worker !== undefined) {
+    if (
+      !isRecord(worker)
+      || !hasNullableStringField(worker, 'agent_terminal_handle')
+      || !hasNullableStringField(worker, 'worktree_id')
+      || !hasNullableStringField(worker, 'state')
+      || !hasNullableStringField(worker, 'stage')
+    ) return null;
+  }
+
+  const terminal = input.terminal;
+  if (terminal !== undefined && terminal !== null) {
+    if (!isRecord(terminal) || !hasNullableStringField(terminal, 'handle')) return null;
+  }
+
+  const resource = input.terminalResource;
+  if (resource !== undefined && resource !== null) {
+    if (
+      !isRecord(resource)
+      || !hasNullableStringField(resource, 'terminalHandle')
+      || !hasNullableStringField(resource, 'worktreeId')
+      || !hasNullableStringField(resource, 'originDispatchId')
+      || !hasNullableStringField(resource, 'ownerDispatchId')
+    ) return null;
+  }
+
+  return input as OrcaWorkerShowResult;
+}
+
 function normalizedWorkerLifecycle(result: OrcaWorkerShowResult | undefined): {
   readonly observationStatus: string;
   readonly workerState: string;
   readonly workerStage: string;
+  readonly dispatchStatus: string;
+  readonly lastHeartbeatAt: string;
 } {
   return {
-    observationStatus: String(result?.observation?.status ?? '').trim().toLowerCase(),
-    workerState: String(result?.worker?.state ?? '').trim().toLowerCase(),
-    workerStage: String(result?.worker?.stage ?? '').trim().toLowerCase(),
+    observationStatus: result?.observation?.status?.trim().toLowerCase() ?? '',
+    workerState: result?.worker?.state?.trim().toLowerCase() ?? '',
+    workerStage: result?.worker?.stage?.trim().toLowerCase() ?? '',
+    dispatchStatus: result?.dispatch?.status?.trim().toLowerCase() ?? '',
+    lastHeartbeatAt: result?.dispatch?.last_heartbeat_at?.trim() ?? '',
   };
 }
 
@@ -102,17 +175,33 @@ function classifyWorkerLifecycle(result: OrcaWorkerShowResult | undefined): Orca
   if (lifecycle.observationStatus !== 'live' && lifecycle.observationStatus !== 'running') {
     return 'unresolved';
   }
-  if (!lifecycle.workerState || !lifecycle.workerStage) return 'unresolved';
-  const acceptedStage = lifecycle.workerStage === 'input_accepted'
-    || lifecycle.workerStage === 'remote_input_accepted';
-  return lifecycle.workerState === 'ready' && acceptedStage ? 'active' : 'inactive';
+
+  if (['failed', 'succeeded', 'stopped', 'abandoned'].includes(lifecycle.workerState)) {
+    return 'inactive';
+  }
+  if (['completed', 'failed', 'circuit_broken'].includes(lifecycle.dispatchStatus)) {
+    return 'inactive';
+  }
+
+  // Authoritative Orca contract: worker-show exposes the current Dispatch row,
+  // and dispatch-specific heartbeats are recorded only for status=dispatched
+  // after exact lifecycle authority succeeds. `ready/input_accepted` alone is
+  // only prompt-injection acceptance and is therefore not positive activity.
+  if (
+    lifecycle.workerState !== 'ready'
+    || lifecycle.workerStage !== 'input_accepted'
+    || lifecycle.dispatchStatus !== 'dispatched'
+    || !lifecycle.lastHeartbeatAt
+  ) {
+    return 'unresolved';
+  }
+  return 'active';
 }
 
 function goneContradictsActiveLifecycle(result: OrcaWorkerShowResult | undefined): boolean {
   const lifecycle = normalizedWorkerLifecycle(result);
   return lifecycle.workerState === 'ready'
-    || lifecycle.workerStage === 'input_accepted'
-    || lifecycle.workerStage === 'remote_input_accepted';
+    || lifecycle.workerStage === 'input_accepted';
 }
 
 /**
@@ -265,49 +354,48 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     }
     const dispatchId = input.bindingKey.trim();
     if (!dispatchId) return runtimeFailure('resolve_assignment_worker', 'assignment_binding_missing');
-    const shown = this.#run<OrcaWorkerShowResult>(
+    const shown = this.#run<unknown>(
       ['orchestration', 'worker-show', '--dispatch', dispatchId],
       options,
     );
     if (!shown.ok) return runtimeFailure('resolve_assignment_worker', neutralFailureReason(shown));
-    const exact = shown.result?.observation?.exactWorker === true;
-    const { observationStatus } = normalizedWorkerLifecycle(shown.result);
+    const parsed = parseOrcaWorkerShowResult(shown.result);
+    if (!parsed) {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
+    const exact = parsed.observation?.exactWorker === true;
+    const { observationStatus } = normalizedWorkerLifecycle(parsed);
     if (!exact) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     if (observationStatus === 'gone') {
-      if (goneContradictsActiveLifecycle(shown.result)) {
+      if (goneContradictsActiveLifecycle(parsed)) {
         return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
       }
-      const resource = shown.result?.terminalResource;
-      const resourceOwner = String(resource?.ownerDispatchId ?? '').trim();
-      const workerId = String(
-        resourceOwner === dispatchId
-          ? resource?.terminalHandle
-          : '',
-      ).trim();
+      const resource = parsed.terminalResource;
+      const resourceOwner = resource?.ownerDispatchId?.trim() ?? '';
+      const workerId = resourceOwner === dispatchId
+        ? resource?.terminalHandle?.trim() ?? ''
+        : '';
       const value = workerId
         ? { kind: 'gone' as const, workerId }
         : { kind: 'gone' as const };
       return { status: 'ok', value };
     }
     // Exact terminal presence is deliberately weaker than active Dispatch
-    // authority. Upstream Orca's worker lifecycle uses state=ready after
-    // input_accepted; the installed capture may report observation.status=running
-    // while newer Orca reports live. Missing/unknown lifecycle facts remain
-    // unresolved, while known settled/exited lifecycle facts are explicitly inactive.
-    const activity = classifyWorkerLifecycle(shown.result);
+    // authority. The active predicate additionally requires Orca's current
+    // dispatch row plus an accepted exact-assignee heartbeat; missing, unknown,
+    // unsupported, or contradictory lifecycle facts remain fail-closed.
+    const activity = classifyWorkerLifecycle(parsed);
     if (activity === 'unresolved') {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     if (activity === 'inactive') {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_inactive');
     }
-    const terminalHandle = String(
-      shown.result?.terminal?.handle
-        ?? shown.result?.worker?.agent_terminal_handle
-        ?? '',
-    ).trim();
+    const terminalHandle = parsed.terminal?.handle?.trim()
+      ?? parsed.worker?.agent_terminal_handle?.trim()
+      ?? '';
     if (!terminalHandle) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
