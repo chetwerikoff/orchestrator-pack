@@ -10,8 +10,10 @@
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts"
   ],
   "denylist": [
+    "credentials/",
     "packages/core/",
     "plugins/",
+    "secrets/",
     "vendor/"
   ],
   "allowed_roots": [
