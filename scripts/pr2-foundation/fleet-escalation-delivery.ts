@@ -55,7 +55,7 @@ const HANDOFF_KEYS = new Set([
 ]);
 
 const FORBIDDEN_CANONICAL_CONTENT_PATTERNS = [
-  /Bearer\s+/iu,
+  /\b(?:Basic|Bearer)\s+\S+/iu,
   /ghp_/u,
   /gho_/u,
   /ghu_/u,
@@ -64,7 +64,7 @@ const FORBIDDEN_CANONICAL_CONTENT_PATTERNS = [
   /github_pat_/u,
   /(?:^|[^A-Za-z0-9])sk-/u,
   /AKIA[0-9A-Z]{16}/u,
-  /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^:\s/]+:[^@\s]+@/u,
+  /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s",}]+/u,
   /\b(?:token|password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*[^\s",}]+/iu,
 ] as const;
 
