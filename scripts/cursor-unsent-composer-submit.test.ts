@@ -404,6 +404,30 @@ describe('submitUnsentCursorComposer', () => {
     expect(again.terminals[0]?.reason).toBe('already_submitted');
   });
 
+  it('does not resubmit the same pointer after dispatch_unknown through mixed text', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const state = createUnsentComposerWatchState();
+    const linesById = { term_unsent: [POKE, ...CURSOR_FOOTER] };
+    const localDeps = depsFor(linesById, {
+      submitted,
+      submitResult: (identity) => {
+        submitted.push(identity);
+        return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
+      },
+    });
+
+    const ambiguous = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    linesById.term_unsent = [POKE, 'не отправляй это', ...CURSOR_FOOTER];
+    const mixed = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+    linesById.term_unsent = [POKE, ...CURSOR_FOOTER];
+    const repeated = submitUnsentCursorComposer({ watch: true }, localDeps, state);
+
+    expect(ambiguous.terminals[0]?.reason).toBe('submit_witness_unavailable');
+    expect(mixed.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
+    expect(repeated.terminals[0]?.reason).toBe('already_submitted');
+    expect(submitted).toHaveLength(1);
+  });
+
   it('retries only a proven pre-side-effect launch failure', () => {
     const submitted: RuntimeWorkerIdentity[] = [];
     const state = createUnsentComposerWatchState();

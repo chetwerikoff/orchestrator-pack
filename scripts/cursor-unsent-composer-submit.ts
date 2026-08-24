@@ -329,7 +329,6 @@ function settleComposerObservation(
   const fingerprint = composerPokeFingerprint(preview);
   if (!ORCHESTRATION_NOTICE.test(fingerprint)) {
     clearObservation(state, key);
-    state.submittedFingerprint.delete(key);
     return {
       ...base,
       ok: true,
