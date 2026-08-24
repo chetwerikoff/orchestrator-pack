@@ -174,7 +174,7 @@ describe('supervised Task launch assistant', () => {
     expect(spawns).toBe(0);
     expect(calls).toEqual([[
       '--task', 'task-1', '--worktree', 'new-top-level', '--repo', 'id:orca-repo-1', '--name', 'issue-1479',
-      '--agent', 'cursor', '--model', 'model', '--effort', 'medium', '--setup', 'run',
+      '--agent', 'cursor', '--model', 'model', '--effort', 'medium', '--setup', 'run', '--json',
     ]]);
   });
 

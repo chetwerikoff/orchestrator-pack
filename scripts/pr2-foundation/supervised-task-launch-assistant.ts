@@ -430,7 +430,7 @@ export async function runSupervisedTaskLaunchAssistant(
     role: input.workClass === 'manager' ? 'orchestrator' : 'worker',
     orcaArgs: providerMode
       ? ['--task', taskId, '--worktree', 'new-top-level', '--repo', prepared.value.repositorySelector ?? '',
-        '--name', input.worktreeName ?? '', '--agent', profile.orcaAgent, '--model', profile.model, '--effort', profile.effort, '--setup', 'run']
+        '--name', input.worktreeName ?? '', '--agent', profile.orcaAgent, '--model', profile.model, '--effort', profile.effort, '--setup', 'run', '--json']
       : ['--task', taskId, '--terminal', terminal!.identity.id, '--worktree', prepared.value.selector],
   });
   const startDone = deps.now();
