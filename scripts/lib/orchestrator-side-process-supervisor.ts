@@ -9,6 +9,7 @@ import {
   EMPTY_CRASH_BACKOFF_STATE,
   recordChildExit,
   restartDecisionAt,
+  type CrashBackoffPolicy,
   type CrashBackoffState,
 } from '../runtime/crash-backoff.ts';
 import {
@@ -60,6 +61,21 @@ export interface LegacySupervisorStatus extends SupervisorStatusBase {
 
 export type SupervisorStatusRecord = SupervisorStatus | LegacySupervisorStatus;
 
+export interface SupervisorChildProcessResult {
+  readonly ok: boolean;
+  readonly outcome: string;
+  readonly error?: string | null;
+  readonly stderr?: string | null;
+  readonly exitCode?: number | null;
+}
+
+export interface SupervisorChildExitTransition {
+  readonly crashBackoff: CrashBackoffState;
+  readonly restartState: 'waiting-restart' | 'refused';
+  readonly refusalReason: string | null;
+  readonly waitMs: number;
+}
+
 function statusPath(options: Pick<SupervisorOptions, 'stateDir'>): string {
   return path.join(options.stateDir, 'typescript-supervisor-status.json');
 }
@@ -107,6 +123,43 @@ export function isLiveRunningSupervisorChild(status: SupervisorStatus): boolean 
   return status.restartState === 'running'
     && status.childPid !== null
     && processIdentityMatches(status.childPid, status.childStartTicks);
+}
+
+/**
+ * One pure application of the existing crash-backoff policy to a completed
+ * scheduler child. Production and tests share this transition so terminal fuse
+ * classification cannot overwrite the concrete child failure that triggered it.
+ */
+export function supervisorChildExitTransition(input: {
+  readonly previous: CrashBackoffState;
+  readonly startedAtMs: number;
+  readonly exitedAtMs: number;
+  readonly result: SupervisorChildProcessResult;
+  readonly policy?: CrashBackoffPolicy;
+}): SupervisorChildExitTransition {
+  const crash = recordChildExit({
+    previous: input.previous,
+    startedAtMs: input.startedAtMs,
+    exitedAtMs: input.exitedAtMs,
+    progressObserved: input.result.ok,
+    ...(input.policy ? { policy: input.policy } : {}),
+  });
+  const crashBackoff: CrashBackoffState = {
+    rapidExits: crash.rapidExits,
+    backoffUntilMs: crash.backoffUntilMs,
+    lastExitMs: crash.lastExitMs,
+    terminal: crash.terminal,
+    terminalReason: crash.terminalReason,
+  };
+  const concreteCause = input.result.ok
+    ? null
+    : `scheduler_child_${input.result.outcome}:${input.result.error ?? input.result.stderr ?? input.result.exitCode ?? 'unknown'}`;
+  return {
+    crashBackoff,
+    restartState: crash.terminal ? 'refused' : 'waiting-restart',
+    refusalReason: concreteCause ?? (crash.terminal ? crash.terminalReason : null),
+    waitMs: crash.waitMs,
+  };
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -231,31 +284,21 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
       state.childStartTicks = null;
       if (stopping) break;
       state.childRestarts += 1;
-      const exitedAtMs = Date.now();
-      const crash = recordChildExit({
+      const transition = supervisorChildExitTransition({
         previous: state.crashBackoff,
         startedAtMs: childStartedAtMs,
-        exitedAtMs,
-        progressObserved: result.ok,
+        exitedAtMs: Date.now(),
+        result,
       });
-      state.crashBackoff = {
-        rapidExits: crash.rapidExits,
-        backoffUntilMs: crash.backoffUntilMs,
-        lastExitMs: crash.lastExitMs,
-        terminal: crash.terminal,
-        terminalReason: crash.terminalReason,
-      };
-      state.restartState = crash.terminal ? 'refused' : 'waiting-restart';
-      const concreteCause = result.ok
-        ? null
-        : `scheduler_child_${result.outcome}:${result.error ?? result.stderr ?? result.exitCode ?? 'unknown'}`;
-      state.refusalReason = concreteCause ?? (crash.terminal ? crash.terminalReason : null);
+      state.crashBackoff = transition.crashBackoff;
+      state.restartState = transition.restartState;
+      state.refusalReason = transition.refusalReason;
       writeStatus(options, state);
-      if (crash.terminal) {
-        throw new Error(state.refusalReason ?? crash.terminalReason ?? 'supervisor_child_terminal_crash_loop');
+      if (transition.crashBackoff.terminal) {
+        throw new Error(state.refusalReason ?? transition.crashBackoff.terminalReason ?? 'supervisor_child_terminal_crash_loop');
       }
       const cadenceDelay = options.restartDelayMs ?? verified.cadenceSeconds * 1_000;
-      await delay(Math.max(cadenceDelay, crash.waitMs));
+      await delay(Math.max(cadenceDelay, transition.waitMs));
     }
     state.childPid = null;
     state.childStartTicks = null;
