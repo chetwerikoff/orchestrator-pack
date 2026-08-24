@@ -27,23 +27,46 @@ const movedClean = {
     '## Coworker CLI delegation',
     '## RTK read-exploration',
     'See [worker](docs/orchestration-runbook.md#worker-lifecycle).',
-    'See [scope](docs/repository_policy.md#task-and-scope-authority).',
+    'See [plan](docs/repository_policy.md#plan-first-execution).',
+    'See [task scope](docs/repository_policy.md#task-and-scope-authority).',
+    'See [scope discipline](docs/repository_policy.md#scope-discipline).',
+    'See [minimum](docs/repository_policy.md#build-the-minimum).',
     'See [verification](docs/repository_policy.md#local-verification).',
-    'See [RCA](.claude/skills/investigate-root-cause/SKILL.md#failure-response).',
+    'See [coworker](docs/coworker-delegation.md).',
+    'See [RCA](.claude/skills/investigate-root-cause/SKILL.md).',
+    'See [merge](.claude/skills/merge-with-local-adoption/SKILL.md).',
+    'See [adversary](.claude/skills/adversarial-draft-review/SKILL.md).',
+    'See [GPT](.claude/skills/discuss-with-gpt/SKILL.md).',
+    'See [author](.claude/skills/create-issue-draft/SKILL.md).',
+    'See [external](.claude/skills/study-external-source/SKILL.md).',
+    'See [publish](.claude/skills/publish-issue-draft/SKILL.md).',
+    'See [reviewer](.claude/skills/switch-pack-reviewer/SKILL.md).',
   ].join('\n'),
   'CLAUDE.md': [
     'See [architect](.claude/skills/direct-fix-checklist/SKILL.md#architect-role-contract).',
     'See [author](.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).',
-    'See [RCA](.claude/skills/investigate-root-cause/SKILL.md#failure-response).',
+    'See [RCA](.claude/skills/investigate-root-cause/SKILL.md).',
   ].join('\n'),
   'docs/coworker-delegation.md': 'PR diff recipe\ngit diff <base-ref>...HEAD > /tmp/review.diff\nRoot-cause work must read ~900 lines',
   'docs/tiering.md': '## Task complexity tier rubric\n### Failure-type lens (apply first)\n## Per-tier draft-review flow\n### Per-tier pipeline (ceilings, not quotas)',
   'docs/script-owned-review-pipeline.md': '## Event-driven review trigger\n## Orchestrator review-run coverage\n## Head ready for review\nevent-driven review trigger',
   'docs/orchestration-runbook.md': '## Worker lifecycle\n',
-  'docs/repository_policy.md': '## Task and scope authority\n## Local verification\n',
-  '.claude/skills/investigate-root-cause/SKILL.md': '## Failure response\n',
-  '.claude/skills/direct-fix-checklist/SKILL.md': '## Architect role contract\n',
+  'docs/repository_policy.md': [
+    '## Plan-first execution',
+    '## Task and scope authority',
+    '## Scope discipline',
+    '## Build the minimum',
+    '## Local verification',
+  ].join('\n'),
+  '.claude/skills/investigate-root-cause/SKILL.md': '# investigate-root-cause\n',
+  '.claude/skills/merge-with-local-adoption/SKILL.md': '# merge-with-local-adoption\n',
+  '.claude/skills/adversarial-draft-review/SKILL.md': '# adversarial-draft-review\n',
   '.claude/skills/discuss-with-gpt/SKILL.md': '## Draft-author relocation\n',
+  '.claude/skills/create-issue-draft/SKILL.md': '# create-issue-draft\n',
+  '.claude/skills/study-external-source/SKILL.md': '# study-external-source\n',
+  '.claude/skills/publish-issue-draft/SKILL.md': '# publish-issue-draft\n',
+  '.claude/skills/switch-pack-reviewer/SKILL.md': '# switch-pack-reviewer\n',
+  '.claude/skills/direct-fix-checklist/SKILL.md': '## Architect role contract\n',
   '.cursor/rules/draft-author-relocation.mdc': 'See [author](../../.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).\n',
   '.cursor/rules/flow-manager-browser-turn-monitoring.mdc': '## Launch and observation\n## Legacy state and diagnostic probe\n',
 };
@@ -155,6 +178,20 @@ describe('real representative declarative ports', () => {
     expect(duplicate.status).toBe('FAIL');
     expect(duplicate.details).toContain(
       'AGENTS.md must contain exactly 1 occurrence(s) of (docs/orchestration-runbook.md#worker-lifecycle); found 2',
+    );
+  });
+
+  it('real moved-content gate rejects a missing skill routing pointer', () => {
+    const missingSkill = evaluateDeclarativeGate(agentRulesMovedContentGate, memorySnapshot({
+      ...movedClean,
+      'AGENTS.md': movedClean['AGENTS.md'].replace(
+        'See [merge](.claude/skills/merge-with-local-adoption/SKILL.md).\n',
+        '',
+      ),
+    }));
+    expect(missingSkill.status).toBe('FAIL');
+    expect(missingSkill.details).toContain(
+      'AGENTS.md must contain exactly 1 occurrence(s) of (.claude/skills/merge-with-local-adoption/SKILL.md); found 0',
     );
   });
 });

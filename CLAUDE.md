@@ -15,7 +15,7 @@ tracked implementation files.
 - Draft-author role:
   [`.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation`](.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).
 - RCA / failure response:
-  [`.claude/skills/investigate-root-cause/SKILL.md#failure-response`](.claude/skills/investigate-root-cause/SKILL.md#failure-response).
+  [`.claude/skills/investigate-root-cause/SKILL.md`](.claude/skills/investigate-root-cause/SKILL.md).
 - Direct tracked fixes and operator-requested review routing:
   [`.claude/skills/direct-fix-checklist/SKILL.md`](.claude/skills/direct-fix-checklist/SKILL.md).
 - Merge:

@@ -34,6 +34,10 @@ Only an external safety boundary, missing external permission or capability,
 genuine impossibility, or unresolved target ambiguity can stop a direct user
 instruction. Preserve facts and final read-back; never fabricate success.
 
+When adding literals, prompts, paths, policies, commands, schemas, or state
+transitions, choose one owning authority and point to it rather than copying the
+same rule into multiple runtime surfaces.
+
 ## Edit boundaries
 
 Do not patch or vendor-modify an upstream orchestration core.
@@ -72,11 +76,16 @@ lease, witness, acknowledgement, or retry subsystem.
 ## Plan, scope, and verification
 
 Before the first side effect, workers, orchestrators, and managers follow the
-[`Worker lifecycle`](docs/orchestration-runbook.md#worker-lifecycle). Task and
-scope authority lives in
+[`Worker lifecycle`](docs/orchestration-runbook.md#worker-lifecycle).
+
+Repository execution policy is split by concern and remains one hop away here:
+[`Plan-first execution`](docs/repository_policy.md#plan-first-execution),
 [`Task and scope authority`](docs/repository_policy.md#task-and-scope-authority),
-and current-head verification lives in
+[`Scope discipline`](docs/repository_policy.md#scope-discipline),
+[`Build the minimum`](docs/repository_policy.md#build-the-minimum), and
 [`Local verification`](docs/repository_policy.md#local-verification).
+Those owning sections carry the detailed procedure; do not reconstruct or
+duplicate it in this file.
 
 ## Coworker CLI delegation
 
@@ -168,17 +177,17 @@ required task.
 
 ## Auto-invoked skills
 
-Use the named skill on a matching direct request:
+Use the named skill on a matching direct request. This table answers only
+**what to load**; the linked skill body owns the action, procedure, safety, and
+invocation detail.
 
 | Skill | Trigger |
 |---|---|
-| [`investigate-root-cause`](.claude/skills/investigate-root-cause/SKILL.md#failure-response) | investigate, debug, why failed |
-| `merge-with-local-adoption` | direct merge request |
-| `adversarial-draft-review` | challenge a draft with Codex |
-| `discuss-with-gpt` | discuss or challenge with GPT |
-| `create-issue-draft` | author a new task or handoff |
-| `study-external-source` | study an external repository or URL |
-| `publish-issue-draft` | publish an existing tracked draft |
-| `switch-pack-reviewer` | change the configured reviewer |
-
-Invocation detail lives in each owning skill body. This table is routing only.
+| [`investigate-root-cause`](.claude/skills/investigate-root-cause/SKILL.md) | investigate, debug, why failed |
+| [`merge-with-local-adoption`](.claude/skills/merge-with-local-adoption/SKILL.md) | direct merge request |
+| [`adversarial-draft-review`](.claude/skills/adversarial-draft-review/SKILL.md) | challenge a draft with Codex |
+| [`discuss-with-gpt`](.claude/skills/discuss-with-gpt/SKILL.md) | discuss or challenge with GPT |
+| [`create-issue-draft`](.claude/skills/create-issue-draft/SKILL.md) | author a new task or handoff |
+| [`study-external-source`](.claude/skills/study-external-source/SKILL.md) | study an external repository or URL |
+| [`publish-issue-draft`](.claude/skills/publish-issue-draft/SKILL.md) | publish an existing tracked draft |
+| [`switch-pack-reviewer`](.claude/skills/switch-pack-reviewer/SKILL.md) | change the configured reviewer |

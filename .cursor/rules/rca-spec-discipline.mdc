@@ -1,14 +1,17 @@
 ---
-description: RCA spec discipline — positive-outcome acceptance, recurrence diagnostic, parked roots
+description: RCA routing adapter for Cursor; canonical behavior lives in named skills
 alwaysApply: false
 ---
 
-# RCA spec discipline (Issue #221)
+# RCA routing adapter (Issue #221)
 
-Authoring and investigation rules live in the canonical worker rules and skills — do not duplicate them here.
+This file is a Cursor activation hint only. It defines no RCA or Issue-authoring
+policy. Universal project routing remains in [`AGENTS.md`](../../AGENTS.md);
+task-specific behavior lives in the owning skills.
 
-- **Worker rules:** [`AGENTS.md`](../../AGENTS.md) — **RCA spec discipline** section (`behavior-kind`, `positive-outcome`, `parked-root-cause`).
-- **Root-cause procedure:** [`prompts/investigate_root_cause.md`](../../prompts/investigate_root_cause.md) — **recurrence-diagnostic**, **5-Whys stop condition**, **terminal root cause** rejection.
-- **Draft authoring:** [`.claude/skills/create-issue-draft/SKILL.md`](../../.claude/skills/create-issue-draft/SKILL.md) and **publish-issue-draft** (mechanical `check-draft-discipline` guards).
-
-Architecture decision: §T in [`docs/issues_drafts/00-architecture-decisions.md`](../../docs/issues_drafts/00-architecture-decisions.md).
+- Investigation and failure response:
+  [`investigate-root-cause`](../../.claude/skills/investigate-root-cause/SKILL.md).
+- Issue/draft discipline for `behavior-kind`, `positive-outcome`, and
+  `parked-root-cause`:
+  [`create-issue-draft`](../../.claude/skills/create-issue-draft/SKILL.md) and
+  [`publish-issue-draft`](../../.claude/skills/publish-issue-draft/SKILL.md).
