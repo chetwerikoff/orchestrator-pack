@@ -1,3 +1,5 @@
+// @vitest-ci-lane parked
+// @vitest-pre-topology-seconds 120
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { runProcessSync } from './kernel/subprocess.ts';
