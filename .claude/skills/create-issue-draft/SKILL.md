@@ -877,7 +877,7 @@ The flow-manager must not:
 - perform a destructive, cross-task, merge, or runtime effect without existing direct authority and exact composite identity;
 - reopen a consumed semantic stage slot.
 
-Do not replace this denylist with action categories, a scenario matrix, a wait inventory, or another closed allowlist.
+Do not replace this denylist with action categories, per-error action lists, or another closed allowlist.
 
 ### Stage result is not parent-manager completion
 
