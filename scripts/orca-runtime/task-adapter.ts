@@ -73,11 +73,11 @@ type OrcaAssignmentActivity = 'active' | 'inactive' | 'unresolved';
 // - coordinator-task-dispatch.ts defines stale Dispatch liveness as 10 minutes
 //   (two documented five-minute heartbeat intervals).
 // PACK reuses those producer semantics instead of inventing a separate TTL.
-const ORCA_DISPATCH_HEARTBEAT_STALE_AFTER_MS = 10 * 60 * 1_000;
-const ORCA_SQLITE_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/u;
-const ORCA_RFC3339_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/u;
-const ORCA_TERMINAL_WORKER_STATES = new Set(['failed', 'succeeded', 'stopped', 'abandoned']);
-const ORCA_TERMINAL_DISPATCH_STATES = new Set(['completed', 'failed', 'circuit_broken']);
+const DISPATCH_HEARTBEAT_STALE_AFTER_MS = 10 * 60 * 1_000;
+const SQLITE_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/u;
+const RFC3339_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/u;
+const TERMINAL_WORKER_STATES = new Set(['failed', 'succeeded', 'stopped', 'abandoned']);
+const TERMINAL_DISPATCH_STATES = new Set(['completed', 'failed', 'circuit_broken']);
 
 function failureDetail(failure: RuntimeOperationFailure): string {
   return `${failure.operation}:${failure.status}:${failure.reason}`;
@@ -210,9 +210,9 @@ function utcTimestampFromMatch(match: RegExpMatchArray): number | null {
 }
 
 function parseOrcaHeartbeatTimestamp(value: string): number | null {
-  const sqlite = value.match(ORCA_SQLITE_UTC_TIMESTAMP);
+  const sqlite = value.match(SQLITE_UTC_TIMESTAMP);
   if (sqlite) return utcTimestampFromMatch(sqlite);
-  const rfc3339 = value.match(ORCA_RFC3339_UTC_TIMESTAMP);
+  const rfc3339 = value.match(RFC3339_UTC_TIMESTAMP);
   if (rfc3339) return utcTimestampFromMatch(rfc3339);
   return null;
 }
@@ -221,7 +221,7 @@ function hasCurrentDispatchHeartbeat(lastHeartbeatAt: string, nowMs = Date.now()
   const heartbeatMs = parseOrcaHeartbeatTimestamp(lastHeartbeatAt);
   return heartbeatMs !== null
     && heartbeatMs <= nowMs
-    && nowMs - heartbeatMs <= ORCA_DISPATCH_HEARTBEAT_STALE_AFTER_MS;
+    && nowMs - heartbeatMs <= DISPATCH_HEARTBEAT_STALE_AFTER_MS;
 }
 
 function classifyWorkerLifecycle(result: OrcaWorkerShowResult | undefined): OrcaAssignmentActivity {
@@ -231,8 +231,8 @@ function classifyWorkerLifecycle(result: OrcaWorkerShowResult | undefined): Orca
     return 'unresolved';
   }
 
-  if (ORCA_TERMINAL_WORKER_STATES.has(lifecycle.workerState)) return 'inactive';
-  if (ORCA_TERMINAL_DISPATCH_STATES.has(lifecycle.dispatchStatus)) return 'inactive';
+  if (TERMINAL_WORKER_STATES.has(lifecycle.workerState)) return 'inactive';
+  if (TERMINAL_DISPATCH_STATES.has(lifecycle.dispatchStatus)) return 'inactive';
 
   // `ready/input_accepted` is only prompt-injection acceptance. Positive S2
   // authority additionally requires the current dispatched row plus a fresh,
@@ -256,8 +256,8 @@ function goneLifecycleSupportsAbsence(result: OrcaWorkerShowResult | undefined):
   // (context-only Dispatches have none), but any observed non-terminal worker is
   // likewise a contradiction. A malformed retained heartbeat is corrupted
   // lifecycle evidence and must fail closed even after terminal settlement.
-  if (!ORCA_TERMINAL_DISPATCH_STATES.has(lifecycle.dispatchStatus)) return false;
-  if (lifecycle.workerState && !ORCA_TERMINAL_WORKER_STATES.has(lifecycle.workerState)) return false;
+  if (!TERMINAL_DISPATCH_STATES.has(lifecycle.dispatchStatus)) return false;
+  if (lifecycle.workerState && !TERMINAL_WORKER_STATES.has(lifecycle.workerState)) return false;
   if (lifecycle.workerStage === 'input_accepted') return false;
   if (lifecycle.lastHeartbeatAt && parseOrcaHeartbeatTimestamp(lifecycle.lastHeartbeatAt) === null) return false;
   return true;
