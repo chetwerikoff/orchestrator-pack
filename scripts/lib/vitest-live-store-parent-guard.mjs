@@ -12,8 +12,8 @@ import {
 } from './vitest-live-store-harness.mjs';
 
 const MAX_PARENT_WATCHERS = 512;
-// Authorized pathname-only residual: fs.watch cannot prove writer provenance,
-// so a same-path child write is indistinguishable from a supervisor tick.
+// Residual: pathname-only exemption; fs.watch cannot prove writer provenance,
+// so same-path child bypass of this journal is accepted.
 const EXTERNALLY_MUTABLE_STORE_PATHS = new Map([
   ['wake-supervisor-runtime-state', new Set(['worker-message-dispatch-journal.json'])],
 ]);
