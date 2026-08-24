@@ -62,7 +62,7 @@ const FORBIDDEN_CANONICAL_CONTENT_PATTERNS = [
   /ghs_/u,
   /ghr_/u,
   /github_pat_/u,
-  /sk-/u,
+  /(?:^|[^A-Za-z0-9])sk-/u,
   /AKIA[0-9A-Z]{16}/u,
   /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^:\s/]+:[^@\s]+@/u,
   /\b(?:token|password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*[^\s",}]+/iu,
