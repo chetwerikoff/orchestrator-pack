@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
-import { unlinkSync } from 'node:fs';
+import { readFileSync, unlinkSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -450,6 +450,44 @@ describe('submitUnsentCursorComposer', () => {
     expect(empty.terminals[0]?.reason).toBe('composer_empty');
     expect(repeated.terminals[0]?.reason).toBe('already_submitted');
     expect(submitted).toHaveLength(1);
+  });
+
+  it('preserves every ambiguous pointer across distinct pointers and fresh state', () => {
+    const sentStorePath = join(tmpdir(), `opk-unsent-ambiguous-${process.pid}-${Date.now()}.json`);
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const pointerB = 'You have 1 orchestration message. Run `orca orchestration check --run run_pointer_b`.';
+    const linesById = { term_unsent: [POKE, ...CURSOR_FOOTER] };
+    let dispatches = 0;
+    const localDeps = depsFor(linesById, {
+      submitted,
+      sentStorePath,
+      submitResult: (identity) => {
+        submitted.push(identity);
+        dispatches += 1;
+        return dispatches === 1
+          ? { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' }
+          : { status: 'dispatched' };
+      },
+    });
+
+    try {
+      const first = submitUnsentCursorComposer({ watch: true }, localDeps, createUnsentComposerWatchState());
+      linesById.term_unsent = [pointerB, ...CURSOR_FOOTER];
+      const second = submitUnsentCursorComposer({ watch: true }, localDeps, createUnsentComposerWatchState());
+      const persisted = JSON.parse(readFileSync(sentStorePath, 'utf8')) as {
+        submitted: Array<{ fingerprint: string; ambiguous?: boolean }>;
+      };
+      expect(persisted.submitted).toContainEqual(expect.objectContaining({ fingerprint: POKE, ambiguous: true }));
+      linesById.term_unsent = [POKE, ...CURSOR_FOOTER];
+      const repeated = submitUnsentCursorComposer({ watch: true }, localDeps, createUnsentComposerWatchState());
+
+      expect(first.terminals[0]?.reason).toBe('submit_witness_unavailable');
+      expect(second.terminals[0]?.reason).toBe('enter_sent');
+      expect(repeated.terminals[0]?.reason).toBe('already_submitted');
+      expect(submitted).toHaveLength(2);
+    } finally {
+      try { unlinkSync(sentStorePath); } catch { /* ignore */ }
+    }
   });
 
   it('retries only a proven pre-side-effect launch failure', () => {
