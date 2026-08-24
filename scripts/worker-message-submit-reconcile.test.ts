@@ -45,7 +45,7 @@ describe('worker message submission through the runtime boundary', () => {
     }
   });
 
-  it('performs one immediate exact composer submit while Running', async () => {
+  it('awaits one render-race retry, then queues the exact pointer while Running', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'opk-worker-event-submit-'));
     const identity = { runtime: 'orca', id: 'event-worker', generation: `generation-${Date.now()}` } as const;
     const worker = {
@@ -60,7 +60,7 @@ describe('worker message submission through the runtime boundary', () => {
     const adapter = {
       id: 'orca',
       findWorkerById: () => ({ status: 'ok' as const, value: worker }),
-      liveness: () => ({ status: 'idle' as const, worker: identity }),
+      liveness: () => ({ status: 'busy' as const, worker: identity }),
       dispatchInput: (input: { text?: string; submitOnly?: boolean; writeOnly?: boolean }) => {
         calls.push(input);
         return input.submitOnly
@@ -81,19 +81,22 @@ describe('worker message submission through the runtime boundary', () => {
           },
         };
       },
-      readBoundedOutputAsync: async (input: { screen?: boolean }) => ({
-        status: 'ok' as const,
-        value: {
-          worker: identity,
-          lines: (reads += 1) && input.screen
-            ? [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main']
-            : [],
-          observationToken: { opaque: 'event-screen' },
-          changed: true,
-          terminalState: 'running' as const,
-          source: 'screen' as const,
-        },
-      }),
+      readBoundedOutputAsync: async (input: { screen?: boolean }) => {
+        reads += 1;
+        return {
+          status: 'ok' as const,
+          value: {
+            worker: identity,
+            lines: input.screen && reads > 1
+              ? [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main']
+              : ['→ Add a follow-up', 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'],
+            observationToken: { opaque: `event-screen-${reads}` },
+            changed: true,
+            terminalState: 'running' as const,
+            source: 'screen' as const,
+          },
+        };
+      },
     } as unknown as RuntimeAdapter;
 
     try {
@@ -112,12 +115,13 @@ describe('worker message submission through the runtime boundary', () => {
 
       expect(result).toMatchObject({ state: 'ambiguous', reason: 'dispatch_unknown' });
       await Promise.resolve();
-      expect(reads).toBe(1);
-      expect(calls).toHaveLength(2);
+      expect(reads).toBe(2);
+      expect(calls).toHaveLength(3);
       expect(calls[0]?.text).toBe('event delivery');
       expect(calls[0]?.submitOnly).toBeUndefined();
       expect(calls[0]?.writeOnly).toBe(true);
       expect(calls[1]).toMatchObject({ submitOnly: true, worker: identity });
+      expect(calls[2]).toMatchObject({ submitOnly: true, worker: identity });
 
       const duplicate = await sendPackReviewWorkerNotification({
         trustedPackRoot: process.cwd(),
@@ -133,7 +137,7 @@ describe('worker message submission through the runtime boundary', () => {
       });
 
       expect(duplicate).toMatchObject({ state: 'ambiguous', reason: 'journal_duplicate_no_op' });
-      expect(calls).toHaveLength(2);
+      expect(calls).toHaveLength(3);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
