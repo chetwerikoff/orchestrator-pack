@@ -717,7 +717,7 @@ describe('[pack-review-4] regression coverage', () => {
       },
     } as ActivationRequest;
     writeJson(path.join(root, 'typescript-supervisor-status.json'), {
-      schemaVersion: 1,
+      schemaVersion: 2,
       epochId: core.epochId,
       nonce: core.nonce,
       supervisorPid: process.pid,
@@ -726,6 +726,7 @@ describe('[pack-review-4] regression coverage', () => {
       registrySource: request.paths.targetRegistryPath,
       childId: 'pr2-scheduler',
       childPid: null,
+      childStartTicks: null,
       childGeneration: 3,
       childRestarts: 2,
       restartState: 'waiting-restart',

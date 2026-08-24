@@ -151,19 +151,28 @@ describe('real Orca assignment target resolution', () => {
   it('resolves the authoritative active running + ready + input_accepted Dispatch', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-active' });
+    const activeWorker = {
+      agent_terminal_handle: 'term-active',
+      state: 'ready',
+      stage: 'input_accepted',
+    } as const;
+    const activeObservation = { exactWorker: true, status: 'running' } as const;
+    const activeTerminal = {
+      handle: 'term-active',
+      incarnationId: 'generation-active',
+      worktreePath: '/tmp/worktree-active',
+      title: 'active',
+      status: 'running',
+    } as const;
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
       if (operation === 'orchestration worker-show') {
         return {
           ok: true,
           result: {
-            worker: {
-              agent_terminal_handle: 'term-active',
-              state: 'ready',
-              stage: 'input_accepted',
-            },
+            worker: activeWorker,
             terminal: { handle: 'term-active' },
-            observation: { exactWorker: true, status: 'running' },
+            observation: activeObservation,
           },
         };
       }
@@ -171,13 +180,7 @@ describe('real Orca assignment target resolution', () => {
         return {
           ok: true,
           result: {
-            terminal: {
-              handle: 'term-active',
-              incarnationId: 'generation-active',
-              worktreePath: '/tmp/worktree-active',
-              title: 'active',
-              status: 'running',
-            },
+            terminal: activeTerminal,
           },
         };
       }
@@ -199,17 +202,18 @@ describe('real Orca assignment target resolution', () => {
   it('keeps captured running + succeeded + settled non-active and non-replaceable', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-settled' });
+    const settledResult = {
+      worker: {
+        agent_terminal_handle: 'term-settled',
+        state: 'succeeded',
+        stage: 'settled',
+      },
+      terminal: { handle: 'term-settled' },
+      observation: { exactWorker: true, status: 'running' },
+    } as const;
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
-      result: {
-        worker: {
-          agent_terminal_handle: 'term-settled',
-          state: 'succeeded',
-          stage: 'settled',
-        },
-        terminal: { handle: 'term-settled' },
-        observation: { exactWorker: true, status: 'running' },
-      },
+      result: settledResult,
     }));
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
 
@@ -226,21 +230,22 @@ describe('real Orca assignment target resolution', () => {
   it('preserves exact gone and its producer-backed Dispatch-owned terminal handle', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-exact-gone' });
+    const goneResult = {
+      worker: { agent_terminal_handle: 'term-owned' },
+      terminal: null,
+      observation: { exactWorker: true, status: 'gone' },
+      terminalResource: {
+        terminalHandle: 'term-owned',
+        worktreeId: 'repo::worktree',
+        originDispatchId: 'dispatch-exact-gone',
+        ownerDispatchId: 'dispatch-exact-gone',
+      },
+    } as const;
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-exact-gone']);
       return {
         ok: true,
-        result: {
-          worker: { agent_terminal_handle: 'term-owned' },
-          terminal: null,
-          observation: { exactWorker: true, status: 'gone' },
-          terminalResource: {
-            terminalHandle: 'term-owned',
-            worktreeId: 'repo::worktree',
-            originDispatchId: 'dispatch-exact-gone',
-            ownerDispatchId: 'dispatch-exact-gone',
-          },
-        },
+        result: goneResult,
       };
     });
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
@@ -289,17 +294,18 @@ describe('real Orca assignment target resolution', () => {
   it('requires a terminal handle for an exact active target', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-live-no-terminal' });
+    const nullActiveResult = {
+      worker: {
+        agent_terminal_handle: null,
+        state: 'ready',
+        stage: 'input_accepted',
+      },
+      terminal: null,
+      observation: { exactWorker: true, status: 'live' },
+    } as const;
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
-      result: {
-        worker: {
-          agent_terminal_handle: null,
-          state: 'ready',
-          stage: 'input_accepted',
-        },
-        terminal: null,
-        observation: { exactWorker: true, status: 'live' },
-      },
+      result: nullActiveResult,
     }));
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
     expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))

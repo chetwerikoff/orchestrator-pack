@@ -2,6 +2,7 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1484,
   "declared_paths": [
+    "scripts/cutover/issue-928.test.ts",
     "scripts/lib/cutover/activation-recovery.ts",
     "scripts/lib/cutover/activation-transaction.ts",
     "scripts/lib/cutover/foundation-observation.ts",
@@ -11,21 +12,22 @@
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/orchestrator-wake-supervisor.test.ts",
     "scripts/orchestrator-wake-supervisor.ts",
+    "scripts/pr2-foundation/foundation.test.ts",
     "scripts/pr2-foundation/scheduler-process-integration.test.ts"
   ],
   "denylist": [
-    ".agent-orchestrator/**",
-    ".ao/**",
-    "~/.local/state/**",
-    "credentials/**",
-    "packages/core/**",
-    "secrets/**",
-    "vendor/**"
+    ".agent-orchestrator/",
+    ".ao/",
+    "~/.local/state/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     "docs/orchestration-runbook.md",
     "scripts/cutover/issue-928.test.ts",
-    "scripts/fixtures/orchestrator-wake-supervisor/**",
+    "scripts/fixtures/orchestrator-wake-supervisor/",
     "scripts/lib/cutover/activation-recovery.ts",
     "scripts/lib/cutover/activation-transaction.ts",
     "scripts/lib/cutover/foundation-observation.ts",
@@ -41,8 +43,9 @@
     "scripts/pr2-foundation/fleet-nudge-actuator.test.ts",
     "scripts/pr2-foundation/fleet-nudge-actuator.ts",
     "scripts/pr2-foundation/fleet-nudge-production.ts",
+    "scripts/pr2-foundation/foundation.test.ts",
     "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "3f660de61eb6b0e1780c7189dc695747f2d30c5a"
+  "source_revision": "049580e5ae321687d9c00893c949df3f14996210"
 }
