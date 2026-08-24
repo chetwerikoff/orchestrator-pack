@@ -119,6 +119,13 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Resolves current logical local ownership through RuntimeAdapter and treats busy/idle liveness as replacement-blocking live evidence.',
   },
   {
+    surface: 'scripts/lib/operator-primary-target.ts',
+    operations: ['find'],
+    kind: 'runtime-port',
+    disposition: 'already-runtime-neutral',
+    note: 'Issue #1532 resolves an explicit logical operator-primary assignment through RuntimeAdapter, then immediately exact-revalidates the in-memory runtime snapshot before one synchronous caller action.',
+  },
+  {
     surface: 'scripts/pr2-foundation/remote-worker-assignment.ts',
     operations: ['runtime-composition'],
     kind: 'runtime-port',
