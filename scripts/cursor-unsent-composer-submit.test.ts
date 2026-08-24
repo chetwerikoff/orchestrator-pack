@@ -652,7 +652,7 @@ describe('liveness-gated composer submission', () => {
       { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
       {
         submitted,
-        observeLivenessAsync: async (identity) => {
+        liveness: async (identity) => {
           if (phase === 'busy') await new Promise<void>((resolve) => { releaseBusy = resolve; });
           return { status: phase, worker: identity };
         },

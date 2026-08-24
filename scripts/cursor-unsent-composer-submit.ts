@@ -31,7 +31,7 @@ const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
 const EMPTY_COMPOSER_RECHECK_MS = 1_000;
-const COMPOSER_IDLE_WAIT_MS = 30_000;
+const COMPOSER_IDLE_WAIT_MS = 60_000;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 
@@ -277,11 +277,7 @@ export interface UnsentComposerSubmitDeps {
   readonly observeLiveness?: (
     worker: RuntimeWorkerIdentity,
     observationWindowMs?: number,
-  ) => RuntimeLivenessResult;
-  readonly observeLivenessAsync?: (
-    worker: RuntimeWorkerIdentity,
-    observationWindowMs?: number,
-  ) => PromiseLike<RuntimeLivenessResult>;
+  ) => RuntimeLivenessResult | PromiseLike<RuntimeLivenessResult>;
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
@@ -410,7 +406,7 @@ function gateComposerLiveness(
   deps: UnsentComposerSubmitDeps,
 ): ComposerLivenessGate {
   if (!deps.observeLiveness) return { allowAmbiguousRetry: false };
-  const live = deps.observeLiveness(worker.identity);
+  const live = deps.observeLiveness(worker.identity) as RuntimeLivenessResult;
   const base = { terminal: worker.identity.id, generation: worker.identity.generation };
   if (!sameRuntimeWorker(live.worker, worker.identity)) {
     return {
@@ -437,10 +433,8 @@ async function gateComposerLivenessAsync(
   worker: RuntimeWorker,
   deps: UnsentComposerSubmitDeps,
 ): Promise<ComposerLivenessGate> {
-  if (!deps.observeLiveness && !deps.observeLivenessAsync) return { allowAmbiguousRetry: false };
-  const live = deps.observeLivenessAsync
-    ? await deps.observeLivenessAsync(worker.identity, COMPOSER_IDLE_WAIT_MS)
-    : await Promise.resolve(deps.observeLiveness!(worker.identity, COMPOSER_IDLE_WAIT_MS));
+  if (!deps.observeLiveness) return { allowAmbiguousRetry: false };
+  const live = await Promise.resolve(deps.observeLiveness(worker.identity, COMPOSER_IDLE_WAIT_MS));
   const base = { terminal: worker.identity.id, generation: worker.identity.generation };
   if (!sameRuntimeWorker(live.worker, worker.identity)) {
     return {
@@ -661,16 +655,6 @@ export function createAdapterSubmitDeps(
       worker,
       observationWindowMs,
     }),
-    observeLivenessAsync: (worker, observationWindowMs = COMPOSER_IDLE_WAIT_MS) => {
-      const asyncLiveness = (adapter as RuntimeAdapter & {
-        livenessAsync?: (
-          input: { worker: RuntimeWorkerIdentity; observationWindowMs: number },
-        ) => PromiseLike<RuntimeLivenessResult>;
-      }).livenessAsync;
-      return asyncLiveness
-        ? asyncLiveness({ worker, observationWindowMs })
-        : Promise.resolve(liveness({ worker, observationWindowMs }));
-    },
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
     sentStorePath: SENT_STORE_PATH,
   };
