@@ -14,7 +14,11 @@ import { OrcaTaskRuntimeAdapter } from './task-adapter.ts';
 // - orchestration-worker-control.ts emits `live` and normalizes legacy `running` to it;
 // - lifecycle-reconciliation.ts authorizes the exact assignee before recordHeartbeat;
 // - dispatch-completion.ts writes heartbeat only while status='dispatched';
-// - coordinator-task-dispatch.ts declares 10 minutes as two heartbeat intervals.
+// - coordinator-task-dispatch.ts declares 10 minutes as two heartbeat intervals;
+// - worker-show does not emit observation.status='gone': an absent local Dispatch
+//   is the supported `dispatch_not_found` error `Worker Dispatch <id> was not found.`;
+// - the federated no-worker-record path deliberately reuses that error code with a
+//   different message and is not local Dispatch-absence authority.
 // The timestamp below uses Orca's SQLite datetime('now') storage shape rather
 // than a hand-invented worker-show timestamp format.
 function currentOrcaHeartbeat(ageMs = 60_000): string {
@@ -479,7 +483,7 @@ describe('Orca assignment resolution', () => {
     expect(runJson).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects gone plus dispatched heartbeat even when worker lifecycle itself is settled', () => {
+  it('rejects invented gone plus dispatched heartbeat instead of treating it as producer absence', () => {
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
       result: {
@@ -501,7 +505,7 @@ describe('Orca assignment resolution', () => {
     });
   });
 
-  it('fails closed on malformed lifecycle fields before granting gone absence', () => {
+  it('fails closed on malformed lifecycle fields instead of granting absence', () => {
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
       result: {
@@ -518,33 +522,43 @@ describe('Orca assignment resolution', () => {
     });
   });
 
-  it('preserves exact gone only with terminal producer lifecycle and Dispatch-owned terminal association', () => {
+  it('maps only the pinned local dispatch_not_found producer envelope to logical gone', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-1']);
       return {
-        ok: true,
-        result: {
-          dispatch: { status: 'completed', last_heartbeat_at: currentOrcaHeartbeat(15 * 60 * 1_000) },
-          worker: { agent_terminal_handle: 'term-owned', state: 'succeeded', stage: 'settled' },
-          terminal: null,
-          observation: { exactWorker: true, status: 'gone' },
-          terminalResource: {
-            terminalHandle: 'term-owned',
-            worktreeId: 'repo::worktree',
-            originDispatchId: 'dispatch-1',
-            ownerDispatchId: 'dispatch-1',
-          },
+        ok: false,
+        outcomeCategory: 'supported_operation_failure',
+        error: {
+          code: 'dispatch_not_found',
+          message: 'Worker Dispatch dispatch-1 was not found.',
         },
       };
     });
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
     expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
       status: 'ok',
-      value: { kind: 'gone', workerId: 'term-owned' },
+      value: { kind: 'gone' },
     });
   });
 
-  it('does not reinterpret gone when exactWorker is not true', () => {
+  it('does not grant absence for federated no-worker-record dispatch_not_found', () => {
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: false,
+      outcomeCategory: 'supported_operation_failure',
+      error: {
+        code: 'dispatch_not_found',
+        message: 'Federated Worker Dispatch dispatch-1 has no worker record.',
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'runtime_operation_failed',
+    });
+  });
+
+  it('does not reinterpret invented gone when exactWorker is not true', () => {
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
       result: {
