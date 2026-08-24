@@ -9,6 +9,7 @@
     "scripts/lib/pack-review-worker-notification.ts",
     "scripts/orca-runtime/adapter.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/runtime/caller-census.ts",
     "scripts/runtime/contracts.ts",
     "scripts/worker-message-submit-reconcile.test.ts",
     "scripts/worker-smoke-run.ts"
@@ -28,9 +29,10 @@
     "scripts/lib/pack-review-worker-notification.ts",
     "scripts/orca-runtime/adapter.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/runtime/caller-census.ts",
     "scripts/runtime/contracts.ts",
     "scripts/worker-message-submit-reconcile.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "d600affba7b2c16efd09e475230055b3db679532"
+  "source_revision": "f7f05b50cc689060408a3a62b031ead79f78bc4e"
 }
