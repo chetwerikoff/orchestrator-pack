@@ -232,11 +232,9 @@ async function finalizeJournal(admission: JournalAdmission, outcome: string): Pr
 }
 
 function submitCursorComposerOnceAfterDelivery(adapter: RuntimeAdapter, worker: RuntimeWorker): void {
-  try {
-    submitUnsentCursorComposerOnceForWorker(worker, createAdapterSubmitDeps(adapter));
-  } catch {
+  void submitUnsentCursorComposerOnceForWorker(worker, createAdapterSubmitDeps(adapter)).catch(() => {
     // Composer submission is an auxiliary bounded reaction; notification settlement remains authoritative.
-  }
+  });
 }
 
 async function finalizeBoth(input: {

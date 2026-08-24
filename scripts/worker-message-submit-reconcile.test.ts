@@ -57,11 +57,11 @@ describe('worker message submission through the runtime boundary', () => {
     const pointer = 'You have 1 orchestration message. Run `orca orchestration check --run run_event_pointer`.';
     const calls: Array<{ text?: string; submitOnly?: boolean }> = [];
     let reads = 0;
-    let liveness: 'busy' | 'idle' = 'busy';
+    let livenessCalls = 0;
     const adapter = {
       id: 'orca',
       findWorkerById: () => ({ status: 'ok' as const, value: worker }),
-      liveness: () => ({ status: liveness, worker: identity }),
+      liveness: () => ({ status: livenessCalls++ === 0 ? 'busy' : 'idle', worker: identity }),
       dispatchInput: (input: { text?: string; submitOnly?: boolean }) => {
         calls.push(input);
         return input.submitOnly
@@ -82,6 +82,19 @@ describe('worker message submission through the runtime boundary', () => {
           },
         };
       },
+      readBoundedOutputAsync: async (input: { screen?: boolean }) => ({
+        status: 'ok' as const,
+        value: {
+          worker: identity,
+          lines: (reads += 1) && input.screen
+            ? [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main']
+            : [],
+          observationToken: { opaque: 'event-screen' },
+          changed: true,
+          terminalState: 'running' as const,
+          source: 'screen' as const,
+        },
+      }),
     } as unknown as RuntimeAdapter;
 
     try {
@@ -104,13 +117,7 @@ describe('worker message submission through the runtime boundary', () => {
       expect(calls[0]?.text).toBe('event delivery');
       expect(calls[0]?.submitOnly).toBeUndefined();
 
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
-      liveness = 'idle';
-      const recovered = submitUnsentCursorComposerOnceForWorker(
-        worker,
-        createAdapterSubmitDeps(adapter),
-      );
-      expect(recovered.terminals[0]?.reason).toBe('enter_sent');
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
       expect(reads).toBe(1);
       expect(calls).toHaveLength(2);
       expect(calls[1]).toMatchObject({ submitOnly: true, worker: identity });
