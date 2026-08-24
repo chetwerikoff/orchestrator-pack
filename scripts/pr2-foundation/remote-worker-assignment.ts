@@ -1,11 +1,16 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
 import '../toolchain/native-entrypoint-preflight.ts';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   currentWorkerAssignment,
+  inspectWorkerAssignmentStore,
+  parseWorkerAssignmentRole,
   publishCurrentWorkerAssignment,
   resolveWorkerAssignmentStorePath,
   type WorkerAssignmentExpectation,
+  type WorkerAssignmentRole,
+  type WorkerAssignmentStoreTrustCause,
 } from '../lib/worker-assignment-store.ts';
 import { admitCurrentWorkerAssignmentReplacement } from '../lib/worker-assignment-runtime.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
@@ -17,7 +22,7 @@ export type RemoteWorkerAssignmentExpectation =
 
 export type RemoteWorkerAssignmentResult =
   | { readonly ok: true; readonly reason: 'remote_assignment_published'; readonly assignment: import('../lib/worker-assignment-store.ts').WorkerAssignment }
-  | { readonly ok: false; readonly reason: string };
+  | { readonly ok: false; readonly reason: string; readonly cause?: WorkerAssignmentStoreTrustCause };
 
 function bounded(value: unknown, max: number): string {
   const text = String(value ?? '').trim();
@@ -39,6 +44,7 @@ export async function publishOperatorRemoteWorkerAssignment(input: {
   readonly expectation: RemoteWorkerAssignmentExpectation;
   /** Direct invocation is the trust root; this explicit bit prevents accidental library-path use. */
   readonly operatorAttested: boolean;
+  readonly role?: WorkerAssignmentRole | string;
   readonly projectId?: string;
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
@@ -48,6 +54,8 @@ export async function publishOperatorRemoteWorkerAssignment(input: {
   const taskId = bounded(input.taskId, 160);
   const provider = bounded(input.provider, 80).toLowerCase();
   const bindingKey = bounded(input.bindingKey, 240);
+  const role = parseWorkerAssignmentRole(input.role);
+  if (!role) return { ok: false, reason: 'assignment_role_invalid' };
   if (!input.operatorAttested) return { ok: false, reason: 'operator_attestation_required' };
   if (!repository || !Number.isInteger(input.issueNumber) || input.issueNumber <= 0
     || !taskId || !provider || !bindingKey) {
@@ -61,6 +69,13 @@ export async function publishOperatorRemoteWorkerAssignment(input: {
   }
 
   const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
+  if (existsSync(file)) {
+    let raw: string;
+    try { raw = readFileSync(file, 'utf8'); }
+    catch { return { ok: false, reason: 'assignment_store_untrusted', cause: 'json_invalid' }; }
+    const inspected = inspectWorkerAssignmentStore(raw);
+    if (!inspected.ok) return { ok: false, reason: 'assignment_store_untrusted', cause: inspected.cause };
+  }
   const current = currentWorkerAssignment(file, input.issueNumber);
   if (input.expectation.kind === 'none') {
     if (current) return { ok: false, reason: 'assignment_stale' };
@@ -106,8 +121,15 @@ export async function publishOperatorRemoteWorkerAssignment(input: {
     provider,
     bindingKey,
     expectedCurrent: exactExpectation(input.expectation),
+    role,
   });
-  if (!published.ok) return { ok: false, reason: published.reason };
+  if (!published.ok) {
+    return {
+      ok: false,
+      reason: published.reason,
+      ...(published.cause ? { cause: published.cause } : {}),
+    };
+  }
   return { ok: true, reason: 'remote_assignment_published', assignment: published.assignment };
 }
 
@@ -120,6 +142,7 @@ interface ParsedCli {
   readonly projectId?: string;
   readonly expectation: RemoteWorkerAssignmentExpectation;
   readonly operatorAttested: boolean;
+  readonly role: string;
 }
 
 function value(args: readonly string[], name: string): string {
@@ -141,7 +164,7 @@ export function parseRemoteWorkerAssignmentArgs(argv: readonly string[]): Parsed
   }
   const knownValueFlags = new Set([
     '--repository', '--issue-number', '--task-id', '--provider', '--binding-key', '--project-id',
-    '--expected-assignment-id', '--expected-generation',
+    '--expected-assignment-id', '--expected-generation', '--role',
   ]);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
@@ -152,6 +175,10 @@ export function parseRemoteWorkerAssignmentArgs(argv: readonly string[]): Parsed
     if (arg === '--expect-none' || arg === '--operator-attested') continue;
     throw new Error(`unknown argument: ${arg}`);
   }
+  const roleFlags = args.filter((arg) => arg === '--role').length;
+  if (roleFlags !== 1) {
+    throw new Error('exactly one --role worker|orchestrator is required');
+  }
   const projectId = value(args, '--project-id');
   return {
     repository: value(args, '--repository'),
@@ -159,6 +186,7 @@ export function parseRemoteWorkerAssignmentArgs(argv: readonly string[]): Parsed
     taskId: value(args, '--task-id'),
     provider: value(args, '--provider'),
     bindingKey: value(args, '--binding-key'),
+    role: value(args, '--role'),
     ...(projectId ? { projectId } : {}),
     expectation: expectNone
       ? { kind: 'none' }

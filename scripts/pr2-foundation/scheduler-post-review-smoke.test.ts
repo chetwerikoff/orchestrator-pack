@@ -111,6 +111,7 @@ async function publishLocal(
     provider: 'orca',
     kind: 'local',
     bindingKey: dispatchKey,
+    role: 'worker',
     ...(expectedCurrent ? { expectedCurrent } : {}),
   });
   if (!result.ok) throw new Error(result.reason);

@@ -81,7 +81,7 @@ function completeReview(f: Fixture): void {
 async function assignLocal(f: Fixture, bindingKey: string, previous?: Pick<WorkerAssignment, 'assignmentId' | 'generation'>): Promise<WorkerAssignment> {
   const result = await publishCurrentWorkerAssignment({
     file: f.assignmentFile, repository: REPO, issueNumber: TASK_ISSUE, taskId: 'task-production-smoke',
-    kind: 'local', provider: 'orca', bindingKey, ...(previous ? { expectedCurrent: previous } : {}),
+    kind: 'local', provider: 'orca', bindingKey, role: 'worker', ...(previous ? { expectedCurrent: previous } : {}),
   });
   if (!result.ok) throw new Error(result.reason);
   return result.assignment;

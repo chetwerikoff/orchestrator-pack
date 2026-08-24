@@ -21,6 +21,37 @@ export const MAX_WORKER_ASSIGNMENTS = 256 as const;
 export const MAX_WORKER_ASSIGNMENT_STORE_BYTES = 262_144 as const;
 
 export type WorkerAssignmentKind = 'local' | 'remote';
+export type WorkerAssignmentRole = 'worker' | 'orchestrator';
+
+export type WorkerAssignmentStoreTrustCause =
+  | 'store_too_large'
+  | 'json_invalid'
+  | 'store_shape_invalid'
+  | 'assignment_count_exceeded'
+  | 'assignment_row_invalid'
+  | 'legacy_identity_missing'
+  | 'legacy_key_mismatch'
+  | 'canonical_key_mismatch'
+  | 'unknown_key_format'
+  | 'migration_destination_collision'
+  | 'migration_result_too_large'
+  | 'migration_backup_failed'
+  | 'migration_backup_conflict'
+  | 'migration_write_failed'
+  | 'migration_readback_failed';
+
+export type WorkerAssignmentStoreInspectResult =
+  | {
+      readonly ok: true;
+      readonly store: WorkerAssignmentStore;
+      readonly needsMigration: boolean;
+    }
+  | { readonly ok: false; readonly cause: WorkerAssignmentStoreTrustCause };
+
+export const WORKER_ASSIGNMENT_CANONICAL_KEY_PREFIX = 'task-dispatch-' as const;
+export const WORKER_ASSIGNMENT_MIGRATION_BACKUP_SUFFIX = '.pre-task-dispatch-migration' as const;
+const LEGACY_WORKER_ASSIGNMENT_KEY = /^issue-[1-9][0-9]{0,9}$/;
+const CANONICAL_WORKER_ASSIGNMENT_KEY = /^task-dispatch-[0-9a-f]{64}$/;
 
 interface WorkerAssignmentBase {
   readonly schema: typeof WORKER_ASSIGNMENT_SCHEMA;
@@ -34,6 +65,8 @@ interface WorkerAssignmentBase {
   /** Persistence-safe provider lifecycle key. For Orca this is the Dispatch id, never a terminal/runtime id. */
   readonly bindingKey: string;
   readonly createdAtUtc: string;
+  /** Present only on post-cutover publications. Pre-role rows remain readable with the field absent. */
+  readonly role?: WorkerAssignmentRole;
 }
 
 /** Existing Issue-scoped assignment shape retained for all numbered consumers. */
@@ -61,7 +94,11 @@ export interface WorkerAssignmentStore {
 
 type PublishWorkerAssignmentResult<T extends WorkerAssignmentRecord = WorkerAssignmentRecord> =
   | { readonly ok: true; readonly assignment: T }
-  | { readonly ok: false; readonly reason: string };
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      readonly cause?: WorkerAssignmentStoreTrustCause;
+    };
 
 export type AttachWorkerAssignmentIssueResult = PublishWorkerAssignmentResult<WorkerAssignment>;
 
@@ -99,10 +136,15 @@ export function workerAssignmentKey(taskIdValue: unknown, bindingKeyValue: unkno
   return `task-dispatch-${digest}`;
 }
 
+export function parseWorkerAssignmentRole(value: unknown): WorkerAssignmentRole | null {
+  return value === 'worker' || value === 'orchestrator' ? value : null;
+}
+
 function validAssignment(value: unknown): value is WorkerAssignmentRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const row = value as Partial<WorkerAssignmentRecord>;
+  const row = value as Partial<WorkerAssignmentRecord> & { readonly role?: unknown };
   const issueNumber = optionalIssueNumber(row.issueNumber);
+  const roleValid = !('role' in row) || parseWorkerAssignmentRole(row.role) !== null;
   return row.schema === WORKER_ASSIGNMENT_SCHEMA
     && Boolean(bounded(row.projectId, 80))
     && Boolean(bounded(row.repository, 240))
@@ -114,7 +156,95 @@ function validAssignment(value: unknown): value is WorkerAssignmentRecord {
     && Boolean(bounded(row.provider, 80))
     && Boolean(bounded(row.bindingKey, 240))
     && typeof row.createdAtUtc === 'string'
-    && Number.isFinite(Date.parse(row.createdAtUtc));
+    && Number.isFinite(Date.parse(row.createdAtUtc))
+    && roleValid;
+}
+
+export function workerAssignmentMigrationBackupPath(file: string): string {
+  return `${file}${WORKER_ASSIGNMENT_MIGRATION_BACKUP_SUFFIX}`;
+}
+
+let migrationTestHookAfterBackup: (() => void) | undefined;
+type WorkerAssignmentAtomicReplaceTestPhase = 'before_write' | 'before_readback';
+let atomicReplaceTestHook: ((phase: WorkerAssignmentAtomicReplaceTestPhase) => void) | undefined;
+
+export function setWorkerAssignmentMigrationTestHook(afterBackupBeforeLiveReplace?: () => void): void {
+  migrationTestHookAfterBackup = afterBackupBeforeLiveReplace;
+}
+
+export function setWorkerAssignmentAtomicReplaceTestHook(
+  hook?: (phase: WorkerAssignmentAtomicReplaceTestPhase) => void,
+): void {
+  atomicReplaceTestHook = hook;
+}
+
+function classifyAssignmentKey(
+  key: string,
+  row: WorkerAssignmentRecord,
+): { readonly ok: true; readonly dest: string; readonly legacy: boolean } | { readonly ok: false; readonly cause: WorkerAssignmentStoreTrustCause } {
+  const dest = workerAssignmentKey(row.taskId, row.bindingKey);
+  if (!dest) return { ok: false, cause: 'legacy_identity_missing' };
+  if (key === dest) return { ok: true, dest, legacy: false };
+  if (LEGACY_WORKER_ASSIGNMENT_KEY.test(key)) {
+    const encoded = Number(key.slice('issue-'.length));
+    if (!Number.isInteger(row.issueNumber) || Number(row.issueNumber) <= 0) {
+      return { ok: false, cause: 'legacy_identity_missing' };
+    }
+    if (Number(row.issueNumber) !== encoded) return { ok: false, cause: 'legacy_key_mismatch' };
+    return { ok: true, dest, legacy: true };
+  }
+  if (CANONICAL_WORKER_ASSIGNMENT_KEY.test(key)) return { ok: false, cause: 'canonical_key_mismatch' };
+  return { ok: false, cause: 'unknown_key_format' };
+}
+
+export function inspectWorkerAssignmentStore(raw: string): WorkerAssignmentStoreInspectResult {
+  if (Buffer.byteLength(raw, 'utf8') > MAX_WORKER_ASSIGNMENT_STORE_BYTES) {
+    return { ok: false, cause: 'store_too_large' };
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return { ok: false, cause: 'json_invalid' }; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, cause: 'store_shape_invalid' };
+  }
+  const store = parsed as Partial<WorkerAssignmentStore>;
+  if (store.schema !== WORKER_ASSIGNMENT_STORE_SCHEMA
+    || !Number.isInteger(store.revision) || Number(store.revision) < 0
+    || !store.assignments || typeof store.assignments !== 'object' || Array.isArray(store.assignments)) {
+    return { ok: false, cause: 'store_shape_invalid' };
+  }
+  const entries = Object.entries(store.assignments);
+  if (entries.length > MAX_WORKER_ASSIGNMENTS) {
+    return { ok: false, cause: 'assignment_count_exceeded' };
+  }
+  const assignments: Record<string, WorkerAssignmentRecord> = {};
+  let needsMigration = false;
+  for (const [key, value] of entries) {
+    if (!validAssignment(value)) return { ok: false, cause: 'assignment_row_invalid' };
+    const classified = classifyAssignmentKey(key, value);
+    if (!classified.ok) return classified;
+    if (classified.legacy) needsMigration = true;
+    if (assignments[classified.dest]) return { ok: false, cause: 'migration_destination_collision' };
+    assignments[classified.dest] = value;
+  }
+  return {
+    ok: true,
+    needsMigration,
+    store: {
+      schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
+      revision: Number(store.revision),
+      assignments,
+    },
+  };
+}
+
+function inspectWorkerAssignmentStoreFile(file: string): WorkerAssignmentStoreInspectResult & { readonly raw?: string | null } {
+  if (!existsSync(file)) {
+    return { ok: true, store: emptyWorkerAssignmentStore(), needsMigration: false, raw: null };
+  }
+  let raw: string;
+  try { raw = readFileSync(file, 'utf8'); } catch { return { ok: false, cause: 'json_invalid' }; }
+  const inspected = inspectWorkerAssignmentStore(raw);
+  return inspected.ok ? { ...inspected, raw } : inspected;
 }
 
 export function resolveWorkerAssignmentStorePath(
@@ -133,29 +263,21 @@ export function emptyWorkerAssignmentStore(): WorkerAssignmentStore {
 }
 
 export function parseWorkerAssignmentStore(raw: string): WorkerAssignmentStore | null {
-  if (Buffer.byteLength(raw, 'utf8') > MAX_WORKER_ASSIGNMENT_STORE_BYTES) return null;
-  let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { return null; }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  const store = parsed as Partial<WorkerAssignmentStore>;
-  if (store.schema !== WORKER_ASSIGNMENT_STORE_SCHEMA
-    || !Number.isInteger(store.revision) || Number(store.revision) < 0
-    || !store.assignments || typeof store.assignments !== 'object' || Array.isArray(store.assignments)) return null;
-  const entries = Object.entries(store.assignments);
-  if (entries.length > MAX_WORKER_ASSIGNMENTS) return null;
-  const assignments: Record<string, WorkerAssignmentRecord> = {};
-  for (const [key, value] of entries) {
-    if (!validAssignment(value)) return null;
-    const expectedKey = workerAssignmentKey(value.taskId, value.bindingKey);
-    if (!expectedKey || key !== expectedKey) return null;
-    assignments[key] = value;
-  }
-  return { schema: WORKER_ASSIGNMENT_STORE_SCHEMA, revision: Number(store.revision), assignments };
+  const inspected = inspectWorkerAssignmentStore(raw);
+  return inspected.ok ? inspected.store : null;
 }
 
 export function readWorkerAssignmentStore(file: string): WorkerAssignmentStore | null {
-  if (!existsSync(file)) return emptyWorkerAssignmentStore();
-  try { return parseWorkerAssignmentStore(readFileSync(file, 'utf8')); } catch { return null; }
+  const inspected = inspectWorkerAssignmentStoreFile(file);
+  return inspected.ok ? inspected.store : null;
+}
+
+function untrustedStoreResult(cause: WorkerAssignmentStoreTrustCause): {
+  readonly ok: false;
+  readonly reason: 'assignment_store_untrusted';
+  readonly cause: WorkerAssignmentStoreTrustCause;
+} {
+  return { ok: false, reason: 'assignment_store_untrusted', cause };
 }
 
 export function currentWorkerAssignment(
@@ -194,29 +316,109 @@ export function listCurrentWorkerAssignments(file: string): readonly WorkerAssig
   return assignments ? assignments.filter(isNumberedAssignment) : null;
 }
 
-function atomicReplaceReadBack(file: string, store: WorkerAssignmentStore): boolean {
-  const bytes = `${JSON.stringify(store, null, 2)}\n`;
-  if (Buffer.byteLength(bytes, 'utf8') > MAX_WORKER_ASSIGNMENT_STORE_BYTES) return false;
+function serializeWorkerAssignmentStore(store: WorkerAssignmentStore): string {
+  return `${JSON.stringify(store, null, 2)}\n`;
+}
+
+function atomicReplaceReadBackDetailed(
+  file: string,
+  store: WorkerAssignmentStore,
+): 'ok' | 'too_large' | 'write_failed' | 'readback_failed' {
+  const bytes = serializeWorkerAssignmentStore(store);
+  if (Buffer.byteLength(bytes, 'utf8') > MAX_WORKER_ASSIGNMENT_STORE_BYTES) return 'too_large';
   const directory = path.dirname(file);
   mkdirSync(directory, { recursive: true });
   const temporary = path.join(directory, `.${randomUUID().replace(/-/g, '')}.tmp`);
   try {
+    atomicReplaceTestHook?.('before_write');
     writeFileSync(temporary, bytes, { encoding: 'utf8', mode: 0o600 });
     const fd = openSync(temporary, 'r');
     try { fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(temporary, file);
-    const readBack = readFileSync(file, 'utf8');
-    if (readBack !== bytes || !parseWorkerAssignmentStore(readBack)) return false;
-    try {
-      const dirFd = openSync(directory, 'r');
-      try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
-    } catch {
-      // Some platforms cannot fsync a directory. Exact file read-back above remains mandatory.
-    }
-    return true;
   } catch {
     rmSync(temporary, { force: true });
-    return false;
+    return 'write_failed';
+  }
+  let readBack: string;
+  try {
+    atomicReplaceTestHook?.('before_readback');
+    readBack = readFileSync(file, 'utf8');
+  } catch {
+    return 'readback_failed';
+  }
+  if (readBack !== bytes || !parseWorkerAssignmentStore(readBack)) return 'readback_failed';
+  try {
+    const dirFd = openSync(directory, 'r');
+    try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+  } catch {
+    // Some platforms cannot fsync a directory. Exact file read-back above remains mandatory.
+  }
+  return 'ok';
+}
+
+function atomicReplaceReadBack(file: string, store: WorkerAssignmentStore): boolean {
+  return atomicReplaceReadBackDetailed(file, store) === 'ok';
+}
+
+function writeExactMigrationBackup(backupFile: string, exactBytes: string): 'ok' | 'conflict' | 'failed' {
+  try {
+    if (existsSync(backupFile)) {
+      return readFileSync(backupFile, 'utf8') === exactBytes ? 'ok' : 'conflict';
+    }
+    mkdirSync(path.dirname(backupFile), { recursive: true });
+    writeFileSync(backupFile, exactBytes, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    const fd = openSync(backupFile, 'r');
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+    return readFileSync(backupFile, 'utf8') === exactBytes ? 'ok' : 'failed';
+  } catch {
+    return 'failed';
+  }
+}
+
+type MigratedStoreResult =
+  | { readonly ok: true; readonly store: WorkerAssignmentStore }
+  | {
+      readonly ok: false;
+      readonly reason: 'assignment_store_untrusted';
+      readonly cause: WorkerAssignmentStoreTrustCause;
+    };
+
+function migrateWorkerAssignmentStoreLocked(file: string): MigratedStoreResult {
+  const inspected = inspectWorkerAssignmentStoreFile(file);
+  if (!inspected.ok) return untrustedStoreResult(inspected.cause);
+  if (!inspected.needsMigration || inspected.raw == null) return { ok: true, store: inspected.store };
+  const backup = writeExactMigrationBackup(workerAssignmentMigrationBackupPath(file), inspected.raw);
+  if (backup === 'conflict') return untrustedStoreResult('migration_backup_conflict');
+  if (backup !== 'ok') return untrustedStoreResult('migration_backup_failed');
+  migrationTestHookAfterBackup?.();
+  const next: WorkerAssignmentStore = {
+    schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
+    revision: inspected.store.revision + 1,
+    assignments: inspected.store.assignments,
+  };
+  if (Buffer.byteLength(serializeWorkerAssignmentStore(next), 'utf8') > MAX_WORKER_ASSIGNMENT_STORE_BYTES) {
+    return untrustedStoreResult('migration_result_too_large');
+  }
+  const replaced = atomicReplaceReadBackDetailed(file, next);
+  if (replaced === 'too_large') return untrustedStoreResult('migration_result_too_large');
+  if (replaced === 'write_failed') return untrustedStoreResult('migration_write_failed');
+  if (replaced === 'readback_failed') return untrustedStoreResult('migration_readback_failed');
+  return { ok: true, store: next };
+}
+
+export async function migrateWorkerAssignmentStoreIfNeeded(file: string): Promise<
+  | MigratedStoreResult
+  | { readonly ok: false; readonly reason: 'assignment_store_busy' | 'assignment_publish_failed' }
+> {
+  try {
+    return await withCrashRecoverableFileLock(`${file}.lock`, 10, () => migrateWorkerAssignmentStoreLocked(file));
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error && error.message === 'journal_busy'
+        ? 'assignment_store_busy'
+        : 'assignment_publish_failed',
+    };
   }
 }
 
@@ -258,6 +460,7 @@ interface PublishWorkerAssignmentInputBase {
   readonly bindingKey: string;
   readonly expectedCurrent?: WorkerAssignmentExpectation;
   readonly now?: () => Date;
+  readonly role: WorkerAssignmentRole;
 }
 
 export function publishCurrentWorkerAssignment(
@@ -274,8 +477,9 @@ export function publishCurrentWorkerAssignment(
  * assignment for this deliverable" (and, when issueNumber is present, no other
  * assignment already claiming that Issue). A normal explicit replacement may
  * change deliverable identity; the old canonical key is removed while holding
- * the same publication lock. This is not compatibility rekeying: unreadable
- * pre-hard-cut `issue-<N>` stores are never parsed or converted.
+ * the same publication lock. Recognized pre-cutover `issue-<N>` stores are
+ * backed up and re-keyed to canonical `task-dispatch-*` keys once before the
+ * compare-and-publish write. Unknown or corrupt stores still fail closed.
  */
 export async function publishCurrentWorkerAssignment(
   input: PublishWorkerAssignmentInputBase & { readonly issueNumber?: number },
@@ -288,16 +492,19 @@ export async function publishCurrentWorkerAssignment(
   const key = workerAssignmentKey(taskId, bindingKey);
   const issueNumber = optionalIssueNumber(input.issueNumber);
   const expectedCurrent = input.expectedCurrent;
+  const role = parseWorkerAssignmentRole(input.role);
   if (!projectId || !repository || !taskId || !provider || !bindingKey || !key
     || (input.issueNumber !== undefined && !Number.isFinite(issueNumber))
-    || !validExpectation(expectedCurrent)) {
+    || !validExpectation(expectedCurrent)
+    || role === null) {
     return { ok: false, reason: 'assignment_input_invalid' };
   }
 
   try {
     return await withCrashRecoverableFileLock(`${input.file}.lock`, 10, () => {
-      const store = readWorkerAssignmentStore(input.file);
-      if (!store) return { ok: false, reason: 'assignment_store_untrusted' } as const;
+      const migrated = migrateWorkerAssignmentStoreLocked(input.file);
+      if (!migrated.ok) return migrated;
+      const store = migrated.store;
 
       const replacement = expectedCurrent ? expectedEntry(store, expectedCurrent) : null;
       if (expectedCurrent && !replacement) {
@@ -326,6 +533,7 @@ export async function publishCurrentWorkerAssignment(
             provider,
             bindingKey,
             createdAtUtc: (input.now?.() ?? new Date()).toISOString(),
+            role,
           }
         : {
             schema: WORKER_ASSIGNMENT_SCHEMA,
@@ -339,6 +547,7 @@ export async function publishCurrentWorkerAssignment(
             provider,
             bindingKey,
             createdAtUtc: (input.now?.() ?? new Date()).toISOString(),
+            role,
           };
       const assignments: Record<string, WorkerAssignmentRecord> = { ...store.assignments };
       if (replacement && replacement.key !== key) delete assignments[replacement.key];
@@ -375,8 +584,9 @@ export async function attachWorkerAssignmentIssueNumber(input: {
   if (!key) return { ok: false, reason: 'assignment_input_invalid' };
   try {
     return await withCrashRecoverableFileLock(`${input.file}.lock`, 10, () => {
-      const store = readWorkerAssignmentStore(input.file);
-      if (!store) return { ok: false, reason: 'assignment_store_untrusted' } as const;
+      const migrated = migrateWorkerAssignmentStoreLocked(input.file);
+      if (!migrated.ok) return migrated;
+      const store = migrated.store;
       const current = store.assignments[key];
       if (!sameAssignment(current ?? null, input.expected)) {
         return { ok: false, reason: 'assignment_stale' } as const;

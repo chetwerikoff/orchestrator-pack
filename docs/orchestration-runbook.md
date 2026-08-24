@@ -302,7 +302,7 @@ scripts/pr2-foundation/supervised-worker-start.ts::runSupervisedWorkerStart
 
 That lower-level boundary calls supported Orca `orchestration worker-start` with structured JSON output. It publishes a current local WorkerAssignment only after Orca returns a proven `ready` receipt with both `taskId` and `dispatchId`. Failed, malformed, or outcome-unknown startup does not create a successful assignment. A structurally valid Orca error envelope with a non-empty `error.code` remains non-success and exposes that exact code. When Orca also supplies structured mutation-recovery fields in `error.data`, the boundary preserves the exact request id and optional accepted Dispatch/recovery command so the assistant can return the one legal recovery action without inventing retry state.
 
-`--issue-number` may be omitted when the GitHub Issue is not yet available for manager authoring. The assignment is then stored under the one canonical deliverable key derived from `(taskId, dispatchId)` with no Issue metadata. After publication, attach the positive Issue number to that same record; the canonical key, assignment id, and generation do not change. Do not use an `issue-<N>` key, alias, promotion, dual lookup, or conversion path.
+`--issue-number` may be omitted when the GitHub Issue is not yet available for manager authoring. The assignment is then stored under the one canonical deliverable key derived from `(taskId, dispatchId)` with no Issue metadata. After publication, attach the positive Issue number to that same record; the canonical key, assignment id, and generation do not change. Local supervised start and remote registration require exactly one explicit `--role worker|orchestrator` before any Orca or store mutation. Recognized pre-cutover `issue-<N>` stores are migrated once through the existing assignment lock and atomic replace path after an exact sibling backup; unknown keys remain untrusted. Do not invent an `issue-<N>` alias, dual lookup, or second writer.
 
 The assistant consumes `PACK_EXECUTOR_*` only during pre-spawn launch validation.
 `supervised-worker-start` itself remains executor-profile neutral and does not read
@@ -315,7 +315,7 @@ The minimum current assignment authority is:
 scripts/lib/worker-assignment-store.ts
 ```
 
-A durable assignment contains only persistence-safe logical facts: project/repository, optional published Issue metadata, Task, assignment id, monotonically advancing assignment generation, `kind`, `provider`, provider lifecycle `bindingKey`, and timestamp. For current local Orca workers the binding key is the Orca **Dispatch id**. The sole assignment-store key is derived from the stable `(taskId, dispatchId)` deliverable identity. A pre-#1441 generated store using `issue-<N>` object keys is intentionally unreadable after the hard cut; the operator retires/resets that generated `worker-assignments.json` instead of migrating or dual-resolving it.
+A durable assignment contains only persistence-safe logical facts: project/repository, optional published Issue metadata, Task, assignment id, monotonically advancing assignment generation, `kind`, `provider`, provider lifecycle `bindingKey`, optional registration `role` (`worker` or `orchestrator`), and timestamp. For current local Orca workers the binding key is the Orca **Dispatch id**. The sole live assignment-store key is derived from the stable `(taskId, dispatchId)` deliverable identity. A recognized pre-#1441 `issue-<N>` store is read as the canonical key census and migrated once on the next mutation after an exact backup; it is not dual-resolved and not repaired if keys are unknown or rows are corrupt. New publications persist the caller-supplied role; migrated pre-role rows keep `role` absent.
 
 It must never contain raw `RuntimeWorkerIdentity`, runtime id/generation, terminal handle, `RuntimeObservationToken`, output, prompt/reply, workspace path, title, PID, or adapter-private fields.
 
@@ -605,7 +605,7 @@ After landing the production implementation:
 
 1. adopt the merged PACK revision through the existing supported operator deployment path;
 2. preserve the registered side-process supervisor and `pr2-scheduler` child shape;
-3. retire/reset the pre-#1441 generated `worker-assignments.json` before new assignment publication; do not convert, alias, or dual-resolve `issue-<N>` records;
+3. let the first mutating WorkerAssignment path migrate a recognized pre-#1441 `issue-<N>` store (exact `*.pre-task-dispatch-migration` backup, then one canonical rewrite); do not hand-convert, alias, or dual-resolve records; pass explicit `--role worker|orchestrator` on registration;
 4. start new Cursor/Orca manager/T1/T2/T3 work through the supervised Task launch assistant; treat only `outcome=ready`/`ready_and_assignment_bound` as started, and execute only the exact `nextAction` for handled continuations or provider recovery;
 5. for one manager authoring launch without an Issue, confirm the assignment is task/Dispatch-keyed with absent Issue metadata, then attach the Issue only after publication without changing the deliverable key/id/generation;
 6. verify one stale/remapped runtime identity fences without a stale-handle effect and one Orca error envelope preserves its exact non-empty `error.code` and any structured mutation-recovery request id while remaining non-success;
