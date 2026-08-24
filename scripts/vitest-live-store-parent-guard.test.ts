@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -65,6 +65,15 @@ function runHarnessedVitest(testPath: string, env: NodeJS.ProcessEnv): Promise<{
   }).then((result) => ({ exitCode: result.exitCode, stderr: result.stderr }));
 }
 
+function writeAtomicJournal(wakeRoot: string): void {
+  const journal = join(wakeRoot, 'worker-message-dispatch-journal.json');
+  const temporary = join(wakeRoot, `.${'a'.repeat(32)}.tmp`);
+  writeFileSync(`${journal}.lock`, 'lock\n', 'utf8');
+  writeFileSync(temporary, 'tick\n', 'utf8');
+  renameSync(temporary, journal);
+  rmSync(`${journal}.lock`, { force: true });
+}
+
 afterEach(() => {
   for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
   for (const file of temporaryFiles.splice(0)) rmSync(file, { force: true });
@@ -88,6 +97,50 @@ describe('parent live-store guard', () => {
     const child = await childPromise;
 
     expect(child.exitCode, child.stderr).toBe(0);
+  });
+
+  it('ignores the observed atomic external journal transaction around a passing child', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-atomic-journal-'));
+    temporaryRoots.push(root);
+    const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-atomic-journal-child.test.ts');
+    temporaryFiles.push(fixture);
+    writeFileSync(
+      fixture,
+      "import { expect, it } from 'vitest'; it('passes', async () => { await new Promise((resolve) => setTimeout(resolve, 150)); expect(true).toBe(true); });\n",
+      'utf8',
+    );
+    const childEnvironment = productionEnvironment(join(root, 'child-production'));
+    const childPromise = runHarnessedVitest(fixture, childEnvironment);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    writeAtomicJournal(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!);
+    const child = await childPromise;
+
+    expect(child.exitCode, child.stderr).toBe(0);
+  });
+
+  it('retains a live-store mutation outside the journal transaction', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-journal-and-leak-'));
+    temporaryRoots.push(root);
+    const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-journal-and-leak-child.test.ts');
+    temporaryFiles.push(fixture);
+    writeFileSync(
+      fixture,
+      "import { expect, it } from 'vitest'; it('passes', async () => { await new Promise((resolve) => setTimeout(resolve, 150)); expect(true).toBe(true); });\n",
+      'utf8',
+    );
+    const childEnvironment = productionEnvironment(join(root, 'child-production'));
+    const childPromise = runHarnessedVitest(fixture, childEnvironment);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    writeAtomicJournal(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!);
+    writeFileSync(
+      join(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'unrelated-live-store-leak.json'),
+      'leak\n',
+      'utf8',
+    );
+    const child = await childPromise;
+
+    expect(child.exitCode).not.toBe(0);
+    expect(child.stderr).toContain('OPK_VITEST_LIVE_STORE_GUARD_FAILED');
   });
 
   it('retains a child-originated live-store mutation when the watcher observes it', async () => {
