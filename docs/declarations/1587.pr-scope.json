@@ -23,5 +23,5 @@
     "scripts/lib/pack-review-worker-notification.ts",
     "scripts/worker-message-submit-reconcile.test.ts"
   ],
-  "source_revision": "5e5a37317e0fff4a6dacafe7f638dab1631354dc"
+  "source_revision": "89bad9a2a5fc85751a94e4fffcb7f8ff56228c3a"
 }
