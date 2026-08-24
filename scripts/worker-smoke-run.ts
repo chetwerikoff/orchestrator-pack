@@ -483,13 +483,13 @@ export function fetchLivePrHead(
   return String(head.sha ?? '').trim().toLowerCase();
 }
 
-function publishPrComment(prNumber: number, body: string, repoRoot: string): void {
+export function publishPrComment(prNumber: number, body: string, repoRoot: string): void {
   const tempDir = mkdtempSync(join(tmpdir(), 'worker-smoke-comment-'));
   const bodyFile = join(tempDir, 'body.md');
   try {
-    writeFileSync(bodyFile, body, 'utf8');
-    requireProcessOutput('gh pr comment', runSmokeGhSync(
-      ['pr', 'comment', String(prNumber), '--body-file', bodyFile], repoRoot,
+    writeFileSync(bodyFile, JSON.stringify({ body }), 'utf8');
+    requireProcessOutput('gh api issue comment', runSmokeGhSync(
+      ['api', `repos/${TRUSTED_REPOSITORY_SLUG}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot,
     ));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
