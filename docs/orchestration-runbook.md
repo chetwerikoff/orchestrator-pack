@@ -642,13 +642,28 @@ authority.
 Local Codex PR review is active through the pack-owned review runner. GitHub PR
 review is the authoritative verdict; the pack run store is operational state.
 
-- automatic and common starts use `scripts/pack-review-runner.ts`;
+- automatic and common starts use `scripts/pack-review-runner.ts` and name the PR;
+- the live PR supplies the current head and its closing reference supplies the Issue;
+- session-binding cache data is advisory correlation only and cannot veto a valid
+  PR-led start or substitute a different repository, head, or Issue;
+- a missing exact bound Issue snapshot is captured only after the existing start
+  claim is acquired, so concurrent first starts freeze one durable Issue body;
 - manual Browser-GPT review uses
   `npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>`;
 - review start/list/status use the pack runner, run store, and claim authority;
 - no concrete runtime transport is a fallback review path;
 - terminal review JSON on stdout must be non-empty and valid;
-- one clean terminal result for the same PR head is not re-invoked.
+- one clean terminal result for the exact same PR head suppresses a redundant
+  automatic/common reviewer-model invocation;
+- exact authority-selected conflict-free carry-over may establish current-head
+  review authority without another reviewer-model invocation;
+- an at-cap cycle suppresses further automatic/common reviewer-model calls;
+- reviewer invocation and current-head review authority are different facts.
+
+Review-call suppression never carries unrelated evidence across heads. Required CI
+and declared smoke stay exact-current-head. On a new head, smoke admission is checked
+before an at-cap automatic refusal; conflict-free carry-over may remove the model
+call but not the current-head smoke or CI obligation.
 
 ### Required CI
 
@@ -691,14 +706,16 @@ without a current-head handoff.
 Use the tracked review-cycle authority. First clean head yields
 `clean_early_stop`; reaching the tier cap with open findings yields
 `at_cap_open_findings` for architect/operator triage. A cap never converts
-findings into approval.
+findings into approval and never authorizes another automatic/common
+reviewer-model call.
 
 ### Worker smoke
 
 Run the task's declared smoke plan against the current head. Smoke evidence
 must be bound to the exact code, configuration, identity, and lifecycle under
 test. A harness failure is investigated; it is not overwritten with a synthetic
-pass.
+pass. Review carry-over, same-head clean suppression, and cap exhaustion do not
+carry smoke evidence to another head.
 
 ### Operator adoption handoff
 
