@@ -423,8 +423,10 @@ export async function runSupervisedWorkerStart(input: {
   const expectedCurrent = input.issueNumber === undefined
     ? null
     : currentWorkerAssignment(file, input.issueNumber);
-  if (expectedCurrent
-    && (expectedCurrent.repository !== repository || expectedCurrent.taskId !== requestedTaskId)) {
+  if (expectedCurrent?.repository !== undefined && expectedCurrent.repository !== repository) {
+    return { ok: false, reason: 'assignment_stale' };
+  }
+  if (expectedCurrent && expectedCurrent.taskId !== requestedTaskId && expectedCurrent.kind !== 'local') {
     return { ok: false, reason: 'assignment_stale' };
   }
   if (expectedCurrent?.kind === 'local') {

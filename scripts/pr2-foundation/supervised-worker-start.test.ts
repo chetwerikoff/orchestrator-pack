@@ -111,6 +111,27 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(calls).toBe(0);
   });
 
+  it('permits provider replacement of a different-task local assignment after exact gone admission',async()=>{
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base};
+    const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
+    const old=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,
+      taskId:'task_old',kind:'local',provider:'orca',bindingKey:'dispatch_old',role:'worker'});
+    if(!old.ok)throw new Error(old.reason);
+    const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',issueNumber:1416,
+      repository:'chetwerikoff/orchestrator-pack',env,adapter:adapter({kind:'gone'}),
+      orcaArgs:['--task','task_new','--worktree','new-top-level','--repo','id:repo-1','--name','new-worktree',
+        '--agent','cursor','--model','model','--effort','medium','--setup','run'],
+      execute:async()=>({ok:true,stdout:envelope({taskId:'task_new',dispatchId:'dispatch_new',state:'ready',
+        worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
+        setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model',effort:'medium'},effective:{agent:'cursor',model:'model',effort:'medium'}},
+        effects:[{kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
+          {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
+          {kind:'dispatch_input',role:'agent',id:'term-provider',state:'accepted'}]})}),
+    });
+    expect(result).toMatchObject({ok:true,reason:'ready_and_assignment_bound',assignment:{taskId:'task_new',bindingKey:'dispatch_new',generation:2}});
+    expect(currentWorkerAssignment(file,1416)?.taskId).toBe('task_new');
+  });
+
   it('canonicalizes the requested producer placement and publishes only after a matching real-shape ready receipt',async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
     const result=await runSupervisedWorkerStart({role:'worker',
