@@ -113,7 +113,10 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
     expect(authority).toContain('recovery is allowed by default');
     expect(authority).toContain('retain the same manager Task and Dispatch through `task_ready`');
     expect(authority).toContain('reread authoritative state and the owning source');
-    expect(authority).toContain('correct manager-owned pre-invocation input');
+    expect(authority.replace(/\s+/g, ' ')).toContain(
+      'It must correct manager-owned pre-invocation input, artifact, metadata, configuration, or invocation before consumption when that boundary exists',
+    );
+    expect(authority).not.toContain('It may\ncorrect manager-owned pre-invocation input');
     expect(authority).toContain('rerun or reinvoke only when the owning action\'s existing contract permits');
     expect(authority).toContain('An error message without a ready-made remedy requires source inspection');
   });
@@ -137,10 +140,10 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
       expect(denySection).toContain(expected);
     }
     expect(denySection).toContain('exact composite identity');
-    expect(denySection).toContain('Do not replace this denylist with action categories');
+    expect(denySection.replace(/\s+/g, ' ')).toContain(
+      'Do not replace this denylist with action categories, scenario matrices, wait inventories, per-error action lists, or another closed allowlist.',
+    );
     expect(denySection).not.toContain('self-authorized-action-set');
-    expect(denySection).not.toContain('scenario matrix');
-    expect(denySection).not.toContain('wait inventory');
   });
 
   it('keeps stage-local blocked/refused nonterminal and leaves whole-task completion to #1486', () => {
@@ -188,6 +191,9 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
     expect(authority).toContain('withGhDeadline');
     expect(authority).toContain('const publicationDeadline = Date.now() + GH_TIMEOUT_MS');
     expect(authority).toContain('ambiguous or timed-out\n  publication does not auto-resend');
+    expect(authority.replace(/\s+/g, ' ')).toContain(
+      'A deadline miss remains visible evidence on the existing owning surface with its cause, remedy and owner when already known, and the next legal routing action; it does not become parent-manager completion, permission to invent another wait, or a new retry authority.',
+    );
     expect(ghTransport).toContain('export const GH_TIMEOUT_MS = 10_000;');
     expect(ghTransport).toContain('runGh(argv: string[], timeoutMs = GH_TIMEOUT_MS)');
     expect(ghTransport).toContain('remainingMs');
