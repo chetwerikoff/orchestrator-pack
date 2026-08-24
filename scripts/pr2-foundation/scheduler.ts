@@ -370,11 +370,12 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
     if (completed.status !== 'complete') {
       observerBoundary.cancel?.();
+      const observerFailureReason = completed.status === 'timeout' ? 'observer_timeout' : 'observer_threw';
       const observerFailure = publishObserverFailureHandoff(
         boundary,
         observerBoundary,
         requestedTickSequence,
-        completed.status === 'timeout' ? 'observer_timeout' : 'observer_threw',
+        observerFailureReason,
       );
       orchestratorRequired = observerFailure.handoff.required;
       fleetEscalation = await evaluateFleetEscalation(
@@ -382,12 +383,13 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         observerFailure.handoff,
         observerFailure.identity,
       );
+      if (!fleetEscalation) throw new Error(`scheduler_observer_untrusted:${observerFailureReason}`);
       return {
         attempted: 0,
         started: 0,
         skipped: 0,
         ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
-        ...(fleetEscalation ? { fleetEscalation } : {}),
+        fleetEscalation,
       };
     }
     observer = completed.value;
@@ -683,10 +685,17 @@ export function formatSchedulerError(error: unknown): string {
   return errorText(error);
 }
 
+function schedulerFleetPhaseFailure(result: Awaited<ReturnType<typeof runSchedulerTick>>): string | null {
+  if (result.fleetNudge?.status !== 'failed') return null;
+  return `scheduler_fleet_phase_failed:${result.fleetNudge.result}`;
+}
+
 async function runSingleTick(): Promise<void> {
   const { boundary } = await loadProductionBoundary();
   const result = await runSchedulerTick(boundary);
   process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
+  const failure = schedulerFleetPhaseFailure(result);
+  if (failure) throw new Error(failure);
 }
 async function runLoop(): Promise<void> {
   const { boundary, cadence } = await loadProductionBoundary();
@@ -694,6 +703,8 @@ async function runLoop(): Promise<void> {
     try {
       const result = await runSchedulerTick(boundary);
       process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
+      const failure = schedulerFleetPhaseFailure(result);
+      if (failure) throw new Error(failure);
     }
     catch (error) { process.stderr.write(`${formatSchedulerError(error)}\n`); }
     await new Promise((resolve) => setTimeout(resolve, cadence));
