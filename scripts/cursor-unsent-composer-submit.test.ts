@@ -62,7 +62,7 @@ function depsFor(
       ok: true as const,
       lines: linesById[identity.id] ?? ['→ Add a follow-up'],
     })),
-    liveness: extra.liveness,
+    observeLiveness: extra.liveness,
     submit: extra.submitResult ?? extra.submit ?? ((identity) => {
       submitted.push(identity);
       return { status: 'dispatched' as const };
@@ -699,11 +699,11 @@ describe('liveness-gated composer submission', () => {
     const mixed = worker('term_mixed_idle');
     const result = submitUnsentCursorComposerOnceForWorker(human, {
       ...depsFor({ [human.identity.id]: ['→ разберись почему', ...CURSOR_FOOTER] }, { submitted }),
-      liveness: (identity) => ({ status: 'idle', worker: identity }),
+      observeLiveness: (identity) => ({ status: 'idle', worker: identity }),
     });
     const mixedResult = submitUnsentCursorComposerOnceForWorker(mixed, {
       ...depsFor({ [mixed.identity.id]: [POKE, 'не отправляй это', ...CURSOR_FOOTER] }, { submitted }),
-      liveness: (identity) => ({ status: 'idle', worker: identity }),
+      observeLiveness: (identity) => ({ status: 'idle', worker: identity }),
     });
     expect(result.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
     expect(mixedResult.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
@@ -718,7 +718,7 @@ describe('liveness-gated composer submission', () => {
     state.ambiguousSubmittedFingerprints.set(workerKey(target.identity), new Set([POKE]));
     const result = submitUnsentCursorComposerOnceForWorker(target, {
       ...depsFor({ [target.identity.id]: [POKE, ...CURSOR_FOOTER] }, { submitted }),
-      liveness: (identity) => ({ status: 'idle', worker: identity }),
+      observeLiveness: (identity) => ({ status: 'idle', worker: identity }),
     }, state);
     expect(result.terminals[0]?.reason).toBe('enter_sent');
     expect(submitted).toHaveLength(1);

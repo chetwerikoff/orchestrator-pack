@@ -274,7 +274,7 @@ export interface UnsentComposerSubmitDeps {
     | { ok: true; lines: readonly string[]; source: 'screen' }
     | { ok: false; reason: string }
   >;
-  readonly liveness?: (worker: RuntimeWorkerIdentity) => RuntimeLivenessResult;
+  readonly observeLiveness?: (worker: RuntimeWorkerIdentity) => RuntimeLivenessResult;
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
@@ -402,8 +402,8 @@ function gateComposerLiveness(
   worker: RuntimeWorker,
   deps: UnsentComposerSubmitDeps,
 ): ComposerLivenessGate {
-  if (!deps.liveness) return { allowAmbiguousRetry: false };
-  const live = deps.liveness(worker.identity);
+  if (!deps.observeLiveness) return { allowAmbiguousRetry: false };
+  const live = deps.observeLiveness(worker.identity);
   const base = { terminal: worker.identity.id, generation: worker.identity.generation };
   if (!sameRuntimeWorker(live.worker, worker.identity)) {
     return {
@@ -559,6 +559,7 @@ export function createAdapterSubmitDeps(
   adapter: RuntimeAdapter,
   listWorkspaces: () => OrcaJsonResponse<unknown> = () => runOrcaJson(['worktree', 'list']),
 ): UnsentComposerSubmitDeps {
+  const liveness = adapter.liveness.bind(adapter);
   return {
     listWorkersAsync: async () => {
       if (!adapter.listWorkersAsync) return { ok: false, reason: 'runtime_async_list_unsupported' };
@@ -609,7 +610,7 @@ export function createAdapterSubmitDeps(
       }
       return { ok: true, lines: output.value.lines, source: 'screen' };
     },
-    liveness: (worker) => adapter.liveness({
+    observeLiveness: (worker) => liveness({
       worker,
       observationWindowMs: COMPOSER_IDLE_WAIT_MS,
     }),
