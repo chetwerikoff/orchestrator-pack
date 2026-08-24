@@ -2226,6 +2226,157 @@ async function resumeRecoveredGptDelivery(options: {
   });
 }
 
+async function commitRecoveredGptAuthority(options: {
+  run: PackReviewRunRecord;
+  input: ReconcileStalePackReviewRunsInput;
+  projectId: string;
+  storeRoot: string;
+  repoSlug: string;
+}): Promise<PackReviewAuthorityDocument> {
+  const round = options.run.reviewRound;
+  if (!round || round.reviewer !== 'gpt') {
+    throw new Error(`recovered pack review run ${options.run.id} has no GPT round`);
+  }
+  if (options.run.automaticBudgetDisposition !== 'consume') {
+    throw new Error('legacy non-consuming GPT recovery cannot create new review authority');
+  }
+  const journaled = packReviewJournaledPayload(options.run);
+  if (!journaled) throw new Error(`recovered pack review run ${options.run.id} has no journaled payload`);
+  const payload = validatePersistedGptReviewPayload(
+    options.run.id,
+    journaled as ReviewPayload,
+    { projectId: options.projectId, storeRoot: options.storeRoot },
+  );
+  const authorityOptions: PackReviewAuthorityOptions = { storeRoot: options.storeRoot };
+  let authority = readPackReviewAuthority(options.run.prNumber, authorityOptions);
+  if (!authority) throw new Error(`recovered pack review authority missing for PR #${options.run.prNumber}`);
+  if (authority.currentHeadSha !== options.run.targetSha) {
+    throw new Error('recovered pack review authority head does not match the recovered run');
+  }
+  if (authority.cycle?.frozenTier !== round.tier) {
+    throw new Error('recovered pack review tier does not match frozen authority');
+  }
+
+  const target = {
+    prNumber: options.run.prNumber,
+    headSha: options.run.targetSha,
+    issueNumber: round.issueNumber,
+    repoSlug: options.repoSlug,
+    sourceRepoRoot: options.input.sourceRepoRoot,
+  };
+  const recoveryStart: StartInput = {
+    projectId: options.projectId,
+    prNumber: options.run.prNumber,
+    headSha: options.run.targetSha,
+    sourceRepoRoot: options.input.sourceRepoRoot,
+    baseRef: options.input.baseRef ?? DEFAULT_BASE_REF,
+    fixtureCurrentPrHeadSha: options.input.fixtureCurrentPrHeadSha,
+    fixtureIssueBody: options.input.fixtureIssueBody,
+    fixtureIssueNumber: round.issueNumber,
+    fixtureChangedPaths: options.input.fixtureChangedPaths,
+    fixtureBoundIssueSnapshotBytes: options.input.fixtureBoundIssueSnapshotBytes,
+  };
+  const authoritative = await resolveAuthoritativeReviewContext(
+    recoveryStart,
+    target,
+    options.projectId,
+  );
+  if (authoritative.tier !== round.tier
+      || authoritative.snapshotDigest !== round.boundIssueSnapshotDigest) {
+    throw new Error('recovered GPT round no longer matches its authoritative Issue snapshot');
+  }
+
+  const existingTerminal = authority.terminal;
+  if (existingTerminal?.targetSha === options.run.targetSha
+      && existingTerminal.runId !== options.run.id) {
+    throw new Error('another same-head pack review terminal is already authoritative');
+  }
+  if (existingTerminal?.runId === options.run.id) return authority;
+
+  authority = advancePackReviewAuthority(
+    authority,
+    'review_or_bundle_staged',
+    options.run.prNumber,
+    authorityOptions,
+  );
+  authority = commitPackReviewTerminal({
+    prNumber: options.run.prNumber,
+    expectedTransitionSeq: authority.transitionSeq,
+    terminal: terminalV2FromPayload({
+      runId: options.run.id,
+      targetSha: options.run.targetSha,
+      verdict: payload.verdict,
+      findingCount: payload.findingCount,
+      findings: payload.findings,
+      automaticBudgetDisposition: options.run.automaticBudgetDisposition,
+    }),
+    status: classifyPackReviewPayload(payload).terminalStatus,
+    findingCount: payload.findingCount,
+    options: authorityOptions,
+  });
+  const trusted = resolveTrustedRunnerPaths();
+  return commitAtCapTriage({
+    start: recoveryStart,
+    target,
+    projectId: options.projectId,
+    baseRef: options.input.baseRef ?? DEFAULT_BASE_REF,
+    trustedPackRoot: trusted.trustedPackRoot,
+    storeRoot: options.storeRoot,
+    authority,
+    payload,
+  });
+}
+
+async function settleRecoveredGptDelivery(options: {
+  run: PackReviewRunRecord;
+  input: ReconcileStalePackReviewRunsInput;
+  projectId: string;
+  storeRoot: string;
+  repoSlug: string;
+  writeRequiredStatus: PackReviewRequiredStatusWriter;
+}): Promise<Awaited<ReturnType<typeof resumePackReviewVerdictDelivery>>> {
+  await commitRecoveredGptAuthority(options);
+  const latestRun = getPackReviewRun(options.run.id, {
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
+  }) ?? options.run;
+  const resumed = await resumeRecoveredGptDelivery({ ...options, run: latestRun });
+  const authorityOptions: PackReviewAuthorityOptions = { storeRoot: options.storeRoot };
+  const currentAuthority = readPackReviewAuthority(options.run.prNumber, authorityOptions);
+  if (!currentAuthority
+      || currentAuthority.currentHeadSha !== options.run.targetSha
+      || currentAuthority.terminal?.runId !== options.run.id) {
+    throw new Error('pack review authority changed before recovered publication');
+  }
+  const publicationStatus = resumed.reason === 'completed' ? 'succeeded' : 'failed';
+  const publicationDigest = sha256Bytes(JSON.stringify({
+    status: resumed.status,
+    deliveryReason: resumed.reason,
+    githubReviewId: resumed.githubReviewId,
+    githubReviewUrl: resumed.githubReviewUrl,
+  }));
+  const existing = currentAuthority.publication;
+  if (!(existing?.headSha === options.run.targetSha
+      && existing.terminalRunId === options.run.id
+      && existing.status === publicationStatus
+      && existing.publicationDigest === publicationDigest)) {
+    recordPackReviewPublication({
+      prNumber: options.run.prNumber,
+      expectedTransitionSeq: currentAuthority.transitionSeq,
+      nextPhase: publicationStatus === 'succeeded' ? 'external_published' : currentAuthority.phase,
+      publication: {
+        headSha: options.run.targetSha,
+        terminalRunId: options.run.id,
+        status: publicationStatus,
+        publicationDigest,
+        recordedAtUtc: new Date().toISOString(),
+      },
+      options: authorityOptions,
+    });
+  }
+  return resumed;
+}
+
 async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsInput, options: {
   projectId: string;
   storeRoot: string;
@@ -2533,6 +2684,47 @@ export async function reconcileStalePackReviewRuns(
         headSha: run.targetSha,
         request,
       }));
+
+    if (unfinishedTerminal
+        && run.reviewRound?.reviewer === 'gpt'
+        && packReviewDeliveryNeedsResume(run)) {
+      try {
+        const resumed = await settleRecoveredGptDelivery({
+          run,
+          input,
+          projectId,
+          storeRoot,
+          repoSlug,
+          writeRequiredStatus: statusWriter,
+        });
+        results.push({
+          runId: run.id,
+          terminalized: false,
+          statusReconciled: resumed.reason === 'completed',
+          recovered: true,
+          degraded: run.reviewRound?.settledSourceCount === 2,
+          settledSourceCount: run.reviewRound?.settledSourceCount,
+          reason: resumed.reason === 'completed'
+            ? 'gpt_journaled_delivery_resumed'
+            : `gpt_journaled_delivery_${resumed.reason}`,
+          deliveryReason: resumed.reason,
+          status: resumed.status,
+          ...(resumed.githubReviewId !== undefined ? { githubReviewId: resumed.githubReviewId } : {}),
+          ...(resumed.githubReviewUrl ? { githubReviewUrl: resumed.githubReviewUrl } : {}),
+        });
+      } catch (error) {
+        results.push({
+          runId: run.id,
+          terminalized: false,
+          statusReconciled: false,
+          recovered: true,
+          reason: `gpt_journaled_delivery_resume_failed:${describeError(error)}`,
+          nextAction: 'fix the reported authority or delivery blocker, then rerun scoped reconcile',
+        });
+      }
+      continue;
+    }
+
     if (activeStale || immediateActive) {
       const recovery = await recoverStaleGptSourceComments({
         run,
@@ -2546,7 +2738,7 @@ export async function reconcileStalePackReviewRuns(
           getPackReviewRun(run.id, { projectId, storeRoot }) ?? run,
         );
         try {
-          const resumed = await resumeRecoveredGptDelivery({
+          const resumed = await settleRecoveredGptDelivery({
             run: recoveredRun,
             input,
             projectId,
