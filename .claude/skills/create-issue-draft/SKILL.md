@@ -736,7 +736,7 @@ M4 inventory of review-added mechanisms as `keep`, `simplify`, `defer`, or `cut`
 ## T3 pre-lens aggregation
 
 After the selected three-source `competitive` stage (if frozen intake marks it
-required) and the three-source `architectural-review` stage are settled, fully
+`required`) and the three-source `architectural-review` stage are settled, fully
 relayed, and dispositioned:
 
 - union every `simplification-cut-candidate: yes` occurrence across all
@@ -854,13 +854,16 @@ that specific retry or reinvocation.
 
 On a recoverable guard, helper, schema, input, path, metadata, or configuration
 failure, the flow-manager must reread authoritative state and the owning source,
-inspect the failing boundary, and continue the same assigned goal. It may
-correct manager-owned pre-invocation input, metadata, configuration, or other
-manager-owned recoverable state through existing authority. It may rerun or reinvoke only when the owning action's existing contract permits
-it; otherwise it routes or waits for the existing external authority/evidence.
-The flow-manager must retain the same manager Task and Dispatch through `task_ready`
-unless the existing #1486 external termination boundary ends the still-incomplete
-Task.
+inspect the failing boundary, determine whether the failure is recoverable without
+violating the denylist and whether the owning action exposes a legal correction,
+retry, or reinvocation path, and continue the same assigned goal. It must correct
+manager-owned pre-invocation input, artifact, metadata, configuration, or invocation
+before consumption when that boundary exists, or correct other manager-owned
+recoverable state through existing authority. It may rerun or reinvoke only when
+the owning action's existing contract permits it; otherwise it routes or waits for
+the existing external authority/evidence. The flow-manager must retain the same
+manager Task and Dispatch through `task_ready` unless the existing #1486 external
+termination boundary ends the still-incomplete Task.
 
 An error message without a ready-made remedy requires source inspection. It is
 not authority to hand debugging to the coordinator or to invent a new recovery
@@ -877,7 +880,7 @@ The flow-manager must not:
 - perform a destructive, cross-task, merge, or runtime effect without existing direct authority and exact composite identity;
 - reopen a consumed semantic stage slot.
 
-Do not replace this denylist with action categories, per-error action lists, or another closed allowlist.
+Do not replace this denylist with action categories, scenario matrices, wait inventories, per-error action lists, or another closed allowlist.
 
 ### Stage result is not parent-manager completion
 
@@ -927,11 +930,13 @@ full comment census, `withGhDeadline`, and
 `const publicationDeadline = Date.now() + GH_TIMEOUT_MS`; ambiguous or timed-out
   publication does not auto-resend.
 
-A deadline miss remains visible evidence on the existing owning surface. When
-reconciliation classifies a condition as `orchestrator_required`, use the
-existing durable `fleet-reconciliation-handoff/v1`; this section adds no writer,
-queue, acknowledgement, retry, or lifecycle authority. If no legal manager
-action is currently available, leave visible bounded-wait or
+A deadline miss remains visible evidence on the existing owning surface with its
+cause, remedy and owner when already known, and the next legal routing action; it
+does not become parent-manager completion, permission to invent another wait, or
+a new retry authority. When reconciliation classifies a condition as
+`orchestrator_required`, use the existing durable `fleet-reconciliation-handoff/v1`;
+this section adds no writer, queue, acknowledgement, retry, or lifecycle authority.
+If no legal manager action is currently available, leave visible bounded-wait or
 routing evidence rather than silently idling or completing the parent Task.
 
 ### Existing escalation and published-exception authority
