@@ -956,7 +956,8 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
         source: 'runtime-response',
       };
       if (input.submitOnly) return { status: 'dispatched', witness };
-      return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable', witness };
+      if (input.writeOnly) return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable', witness };
+      return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
     }
     if (response.ok) return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
     const reason = neutralFailureReason(response);
