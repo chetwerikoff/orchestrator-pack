@@ -423,6 +423,7 @@ describe('Orca assignment resolution', () => {
             worktreeId: 'repo::worktree',
             originDispatchId: 'dispatch-1',
             ownerDispatchId: 'dispatch-1',
+            releaseState: ' RELEASED ',
           },
         },
       };

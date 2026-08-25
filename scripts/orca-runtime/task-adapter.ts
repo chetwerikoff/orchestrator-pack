@@ -241,11 +241,9 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (!exact) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
-    const resourceReleaseState = String(
-      shown.result?.terminalResource?.releaseState ?? '',
-    ).trim().toLowerCase();
     if (observationStatus === 'gone'
-      || (observationStatus === 'exited' && resourceReleaseState === 'released')) {
+      || (observationStatus === 'exited'
+        && shown.result?.terminalResource?.releaseState === 'released')) {
       const resource = shown.result?.terminalResource;
       const resourceOwner = String(resource?.ownerDispatchId ?? '').trim();
       const workerId = String(
