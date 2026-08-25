@@ -182,6 +182,45 @@ describe('revision-aware final acceptance', () => {
     expect(errors).toEqual([]);
   });
 
+  it('accepts a canonical predecessor receipt without a republished stage event', () => {
+    const input = validHistoricalInput();
+    const predecessorEventKey = 'cycle-r09:competitive:attempt-1';
+    const events = [...input.lineage.eventsByKey.values()].filter(
+      (event) => event.eventKey !== predecessorEventKey,
+    );
+    const lineage = buildCanonicalLineage(events);
+
+    const errors = validateHistoricalReceiptsAgainstLineage({
+      receiptValues: input.receipts,
+      receiptPaths: input.receipts.map((_, index) => `/canonical/receipt-${index + 1}.json`),
+      cycleId: 'cycle-r100',
+      issueRevision: 'r100',
+      lineage,
+    });
+
+    expect(errors).toEqual([]);
+  });
+
+  it('still requires a published stage event for the current cycle terminal receipt', () => {
+    const input = validHistoricalInput();
+    const terminalEventKey = 'cycle-r100:architectural:attempt-4';
+    const lineage = buildCanonicalLineage(
+      [...input.lineage.eventsByKey.values()].filter((event) => event.eventKey !== terminalEventKey),
+    );
+
+    const errors = validateHistoricalReceiptsAgainstLineage({
+      receiptValues: input.receipts,
+      receiptPaths: input.receipts.map((_, index) => `/canonical/receipt-${index + 1}.json`),
+      cycleId: 'cycle-r100',
+      issueRevision: 'r100',
+      lineage,
+    });
+
+    expect(errors).toContain(
+      '/canonical/receipt-4.json (stage=architectural, attempt=attempt-4, cycle=cycle-r100, revision=r100): no canonical published stage event cycle-r100:architectural:attempt-4',
+    );
+  });
+
   it('rejects a receipt from an unrelated cycle and names its evidence', () => {
     const input = validHistoricalInput();
     const foreign = receipt('foreign-cycle', 'r09', 2, 'architectural-review');
