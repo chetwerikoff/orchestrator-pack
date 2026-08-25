@@ -6,9 +6,6 @@
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/launch-watch/watch.test.ts",
-    "scripts/orca-runtime/adapter.ts",
-    "scripts/runtime/caller-census.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts"
   ],
@@ -24,9 +21,6 @@
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/launch-watch/watch.test.ts",
-    "scripts/orca-runtime/adapter.ts",
-    "scripts/runtime/caller-census.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts"
   ],

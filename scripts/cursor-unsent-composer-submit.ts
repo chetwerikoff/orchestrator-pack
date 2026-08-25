@@ -34,6 +34,7 @@ const DELIVERY_LIVENESS_WINDOW_MS = 25;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
 export const ORCHESTRATION_RECONCILE_LEDGER_PATH = join(tmpdir(), 'opk-orchestration-mail-reconcile.json');
+export const ORCHESTRATION_RECONCILE_LOCK_PATH = join(tmpdir(), 'opk-orchestration-mail-reconcile.lock');
 const ORCHESTRATION_RECONCILE_WINDOW_MS = 60_000;
 
 export type CursorComposerKind = 'empty' | 'non_empty';
@@ -764,34 +765,45 @@ export function createOrcaMessageSubmitDeps(
 /** Reconcile unread Orca mail without inspecting composer screens globally. */
 export async function runOrchestrationMailReconcileTick(
   deps: DeliveryMessageSubmitDeps,
-  options: { readonly ledgerPath?: string; readonly now?: () => number } = {},
+  options: { readonly ledgerPath?: string; readonly lockPath?: string; readonly now?: () => number } = {},
 ): Promise<OrchestrationMailReconcileResult> {
   const ledgerPath = options.ledgerPath ?? ORCHESTRATION_RECONCILE_LEDGER_PATH;
-  const now = options.now ?? Date.now;
-  const current = now();
-  const ledger: Record<string, number> = (() => {
-    try { return JSON.parse(readFileSync(ledgerPath, 'utf8')) as Record<string, number>; } catch { return {}; }
-  })();
-  const response = runOrcaJson<OrcaInboxFullResult>(['orchestration', 'inbox', '--full']);
-  if (!response.ok) return { ok: false, attempted: 0, nudged: 0, skipped: 0, reasons: [response.error?.code ?? 'orchestration_inbox_unavailable'] };
-  const unread = (response.result?.messages ?? []).filter((row) => {
-    const id = row.id?.trim() ?? '';
-    return id && !(row.read === 1 || row.read === true);
-  });
-  const unreadIds = new Set(unread.map((row) => row.id!.trim()));
-  for (const id of Object.keys(ledger)) if (!unreadIds.has(id) || current - ledger[id]! >= ORCHESTRATION_RECONCILE_WINDOW_MS) delete ledger[id];
-  const reasons: string[] = [];
-  let nudged = 0; let skipped = 0;
-  for (const row of unread) {
-    const id = row.id!.trim();
-    if (ledger[id] !== undefined) { skipped += 1; continue; }
-    const result = await submitOrcaMessageDeliveryPointer(id, deps);
-    if (result.terminals[0]?.enter || result.terminals[0]?.reason === 'dispatch_unknown' || result.terminals[0]?.reason === 'send_failed') nudged += 1;
-    ledger[id] = current;
-    if (result.terminals[0]?.reason) reasons.push(`${id}:${result.terminals[0].reason}`);
+  const lockPath = options.lockPath ?? ORCHESTRATION_RECONCILE_LOCK_PATH;
+  const held = tryAcquireHeldFileLock(lockPath);
+  if (!held.acquired) return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [`reconcile_lock_${held.reason}`] };
+  try {
+    const now = options.now ?? Date.now;
+    const current = now();
+    const ledger: Record<string, number> = (() => {
+      try { return JSON.parse(readFileSync(ledgerPath, 'utf8')) as Record<string, number>; } catch { return {}; }
+    })();
+    const response = runOrcaJson<OrcaInboxFullResult>(['orchestration', 'inbox', '--full']);
+    if (!response.ok) return { ok: false, attempted: 0, nudged: 0, skipped: 0, reasons: [response.error?.code ?? 'orchestration_inbox_unavailable'] };
+    const unread = (response.result?.messages ?? []).filter((row) => {
+      const id = row.id?.trim() ?? '';
+      return id && !(row.read === 1 || row.read === true);
+    });
+    const unreadIds = new Set(unread.map((row) => row.id!.trim()));
+    for (const id of Object.keys(ledger)) {
+      if (!unreadIds.has(id) || current - ledger[id]! >= ORCHESTRATION_RECONCILE_WINDOW_MS) delete ledger[id];
+    }
+    const reasons: string[] = [];
+    let nudged = 0; let skipped = 0;
+    for (const row of unread) {
+      const id = row.id!.trim();
+      if (ledger[id] !== undefined) { skipped += 1; continue; }
+      const result = await submitOrcaMessageDeliveryPointer(id, deps);
+      if (result.terminals[0]?.enter || result.terminals[0]?.reason === 'dispatch_unknown' || result.terminals[0]?.reason === 'send_failed') nudged += 1;
+      // Record every attempted delivery, including ambiguous outcomes, so a
+      // periodic tick cannot hammer one unread message.
+      ledger[id] = current;
+      if (result.terminals[0]?.reason) reasons.push(`${id}:${result.terminals[0].reason}`);
+    }
+    replaceLockedFileContents(held.descriptor, `${JSON.stringify(ledger)}\n`);
+    return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$/u.test(reason)), attempted: unread.length, nudged, skipped, reasons };
+  } finally {
+    releaseHeldFileLock(held.descriptor);
   }
-  writeFileSync(ledgerPath, `${JSON.stringify(ledger)}\n`);
-  return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$/u.test(reason)), attempted: unread.length, nudged, skipped, reasons };
 }
 
 let heldLockFd: number | undefined;
