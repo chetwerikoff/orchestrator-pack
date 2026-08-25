@@ -78,6 +78,10 @@ lease, witness, acknowledgement, or retry subsystem.
 Before the first side effect, workers, orchestrators, and managers follow the
 [`Worker lifecycle`](docs/orchestration-runbook.md#worker-lifecycle).
 
+- Before `AwaitShell`, read `~/.cursor/projects/<slug>/terminals/<shell_id>.txt`; an `exit_code:` in its tail proves the job is over.
+- Cap each `block_until_ms` at `300000`; re-check and re-await instead of issuing one long block.
+- A `pattern` cannot rescue a dead job because it writes no further lines.
+
 Repository execution policy is split by concern and remains one hop away here:
 [`Plan-first execution`](docs/repository_policy.md#plan-first-execution),
 [`Task and scope authority`](docs/repository_policy.md#task-and-scope-authority),
