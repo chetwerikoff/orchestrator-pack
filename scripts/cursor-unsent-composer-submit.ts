@@ -701,7 +701,7 @@ export async function submitOrcaMessageDeliveryPointer(
     : `orca orchestration check --run ${found.message.runId}`;
   const pointer = `You have 1 orchestration message. Run \`${check}\`.`;
   const written = deps.writePointer(worker.identity, pointer);
-  if (written.status === 'send_failed') {
+  if (written.status !== 'dispatched') {
     return deliveryNoEffect(written.reason ?? 'pointer_write_failed', worker, false);
   }
   return submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps);
@@ -788,10 +788,11 @@ export async function runOrchestrationMailReconcileTick(
       if (!unreadIds.has(id) || current - ledger[id]! >= ORCHESTRATION_RECONCILE_WINDOW_MS) delete ledger[id];
     }
     const reasons: string[] = [];
-    let nudged = 0; let skipped = 0;
+    let attempted = 0; let nudged = 0; let skipped = 0;
     for (const row of unread) {
       const id = row.id!.trim();
       if (ledger[id] !== undefined) { skipped += 1; continue; }
+      attempted += 1;
       const result = await submitOrcaMessageDeliveryPointer(id, deps);
       if (result.terminals[0]?.enter || result.terminals[0]?.reason === 'dispatch_unknown' || result.terminals[0]?.reason === 'send_failed') nudged += 1;
       // Record every attempted delivery, including ambiguous outcomes, so a
@@ -800,7 +801,7 @@ export async function runOrchestrationMailReconcileTick(
       if (result.terminals[0]?.reason) reasons.push(`${id}:${result.terminals[0].reason}`);
     }
     replaceLockedFileContents(held.descriptor, `${JSON.stringify(ledger)}\n`);
-    return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$/u.test(reason)), attempted: unread.length, nudged, skipped, reasons };
+    return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$/u.test(reason)), attempted, nudged, skipped, reasons };
   } finally {
     releaseHeldFileLock(held.descriptor);
   }
