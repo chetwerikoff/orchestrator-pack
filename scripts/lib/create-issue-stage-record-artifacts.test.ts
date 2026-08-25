@@ -1,7 +1,7 @@
 // @vitest-ci-lane heavy
 // @vitest-pre-topology-seconds 1
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -477,6 +477,25 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
     expect(existsSync(join(input.outputDir, 'acceptance-artifacts.json'))).toBe(false);
+  });
+
+  it('keeps the published pass-01 architectural capture for a later stage attempt', () => {
+    const input = fixture({ transportClassification: 'incident', withCapture: true });
+    const publishedPath = join(input.dir, 'pass-01-architectural.capture.txt');
+    renameSync(input.capturePath, publishedPath);
+    input.capturePath = publishedPath;
+    input.invocation.capturePath = publishedPath;
+    input.invocation.stageAttemptId = 'attempt-002';
+    input.evidence.stageAttemptId = 'attempt-002';
+    writeFileSync(input.evidencePath, JSON.stringify(input.evidence));
+
+    const result = produce(input);
+
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(
+      readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-002.json'), 'utf8'),
+    );
+    expect(receipt.invocations[0].capture.name).toBe('pass-01-architectural.capture.txt');
   });
 
   it('bridges realistic direct_publication_owned_parent_missing without inventing transport success', () => {
