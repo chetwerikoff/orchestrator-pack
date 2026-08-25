@@ -297,10 +297,10 @@ function failObserverTickWithHandoff(
 }
 
 export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.ProcessEnv = process.env): Promise<{
-  attempted: number; started: number; skipped: number; observer?: FleetObserverResult; fleetNudge?: FleetNudgeResult; orchestratorRequired?: boolean;
+  attempted: number; started: number; skipped: number; observer?: FleetObserverResult; fleetNudge?: FleetNudgeResult; orchestrationMailReconcile?: import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult; orchestratorRequired?: boolean;
 }> {
   assertSchedulerEpoch(env);
-  let observer: FleetObserverResult | undefined; let fleetNudge: FleetNudgeResult | undefined; let orchestratorRequired = false;
+  let observer: FleetObserverResult | undefined; let fleetNudge: FleetNudgeResult | undefined; let orchestrationMailReconcile: import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult | undefined; let orchestratorRequired = false;
   const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000; const requestedTickSequence = nextSchedulerTickSequence(boundary);
   if (boundary.fleetObserver) {
     const observerBoundary = boundary.fleetObserver; const observerStartMs = Date.now();
@@ -343,7 +343,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
       throw new Error(`scheduler_fleet_phase_failed:${fleetNudge.result}`);
     }
   }
-  if (boundary.orchestrationMailReconcile) await boundary.orchestrationMailReconcile();
+  if (boundary.orchestrationMailReconcile) orchestrationMailReconcile = await boundary.orchestrationMailReconcile();
   let attempted = 0; let started = 0; let skipped = 0;
   for (const candidate of boundary.listCandidates()) {
     attempted += 1; assertSchedulerEpoch(env); const fresh = await boundary.readCurrentPr(candidate); const freshHead = String(fresh.headRefOid ?? '').trim().toLowerCase();
@@ -359,7 +359,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     if (!decision.eligible) { skipped += 1; continue; }
     assertSchedulerEpoch(env); const result = await boundary.start(candidate, freshHead); if (result.ok) started += 1; else skipped += 1;
   }
-  return { attempted, started, skipped, ...(observer ? { observer } : {}), ...(fleetNudge ? { fleetNudge } : {}), ...(orchestratorRequired ? { orchestratorRequired: true } : {}) };
+  return { attempted, started, skipped, ...(observer ? { observer } : {}), ...(fleetNudge ? { fleetNudge } : {}), ...(orchestrationMailReconcile ? { orchestrationMailReconcile } : {}), ...(orchestratorRequired ? { orchestratorRequired: true } : {}) };
 }
 
 function productionObserverBoundary(observer: FleetObserver): SchedulerFleetObserver {
