@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runProcessSync } from './kernel/subprocess.ts';
 import {
+  buildSmokeAgentPrompt,
   checkSmokeTestPlan,
   ensureSmokeRunArtifactDir,
   evaluateReadyForReviewCombinations,
@@ -27,6 +28,7 @@ import type { RuntimeDispatchResult, RuntimeWorkerIdentity } from './runtime/con
 import {
   bindSmokeReportToPlan,
   establishRuntimeSmokeDelivery,
+  emit,
   exactClosingIssue,
   finalSmokeCommentSnapshotMatches,
   findVerifiedSmokeReceiptWitness,
@@ -200,6 +202,21 @@ describe('smoke executor profiles', () => {
       ...env, PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'model with spaces',
     })).toThrow('smoke_profile_malformed');
     expect(() => resolveSmokeExecutorProfile('routine', env)).not.toThrow();
+  });
+});
+
+describe('worker smoke output', () => {
+  it('serializes object verdicts in the documented non-JSON mode', () => {
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      emit({ ok: true, report: { result: 'PASS' } }, false);
+      expect(JSON.parse(String(output.mock.calls[0]?.[0]))).toEqual({
+        ok: true,
+        report: { result: 'PASS' },
+      });
+    } finally {
+      output.mockRestore();
+    }
   });
 });
 
@@ -1129,5 +1146,27 @@ if (endpoint === 'user') {
       comment(2, { ...report('PASS', [scenario('B', 'B passes')]), terminalHandle: second.value.identity.id }),
     ];
     expect(coverage(comments, body).accepting).toBe(true);
+  });
+});
+
+
+
+describe('buildSmokeAgentPrompt selected declaration artifact', () => {
+  it('skips docs/declarations/<issue>.pr-scope.json from product path accounting', () => {
+    const prompt = buildSmokeAgentPrompt({
+      issueNumber: 1260,
+      issueBody: ['```smoke-test-plan', 'scenarios:', '  - action: scan paths | expected: only seven allowed paths', '```'].join('\n'),
+      prNumber: 1609,
+      headSha: 'a'.repeat(40),
+      plan: {
+        requirement: 'required',
+        scenarios: [{ action: 'scan paths', expected: 'only seven allowed paths' }],
+      },
+    });
+
+    expect(prompt).toContain('docs/declarations/1260.pr-scope.json');
+    expect(prompt).toMatch(/skipped from product changed-path accounting/u);
+    expect(prompt).toMatch(/selectedArtifactPath/u);
+    expect(prompt).toMatch(/Do not FAIL an exact-scope or allowed-path scenario solely because that file appears in git diff/u);
   });
 });
