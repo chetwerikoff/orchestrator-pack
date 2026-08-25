@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1635,
+  "declared_paths": [
+    "scripts/worker-smoke-1359.test.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".github/",
+    "credentials/",
+    "docs/issues_drafts/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/worker-smoke-lifecycle-base.ts",
+    "scripts/lib/worker-smoke-lifecycle.ts",
+    "scripts/worker-smoke-1359.test.ts",
+    "scripts/worker-smoke-cleanup-proof.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "source_revision": "c78e24f714c1a0854fdbd274cff366516997bdec"
+}
