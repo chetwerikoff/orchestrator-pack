@@ -132,7 +132,10 @@ import {
   resolveBoundIssueSnapshot,
 } from './lib/reverify-bound-issue-snapshot.ts';
 import { extractClosingIssueNumber } from './pr-scope-contract.ts';
-import { parseComplexityTierFromIssueBody } from '../docs/review-cycle-cap.mjs';
+import {
+  parseComplexityTierFromIssueBody,
+  resolveTierAndCap,
+} from '../docs/review-cycle-cap.mjs';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import type { ResolvedScopeContext } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 export { resolveRepositorySlug };
@@ -754,8 +757,17 @@ async function resolveTarget(
   };
 }
 
-function parseAuthoritativeTier(body: string): PackReviewTier {
+export function parseAuthoritativeTier(body: string): PackReviewTier {
   const parsed = parseComplexityTierFromIssueBody(body);
+  if (parsed.kind === 'missing') {
+    if (/```complexity-tier\b/i.test(body)) {
+      throw new Error('authoritative Issue tier is invalid');
+    }
+    return resolveTierAndCap({ issueBody: body }).tier as PackReviewTier;
+  }
+  if (parsed.kind === 'no-tier') {
+    return resolveTierAndCap({ issueBody: body }).tier as PackReviewTier;
+  }
   const tier = String(parsed.kind === 'tier' ? parsed.tier : '').toUpperCase();
   if (parsed.kind !== 'tier' || !['T1', 'T2', 'T3'].includes(tier)) {
     throw new Error(`authoritative Issue tier is ${parsed.kind === 'invalid' ? 'invalid' : 'missing'}`);
