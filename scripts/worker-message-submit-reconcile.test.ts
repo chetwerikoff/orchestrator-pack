@@ -115,7 +115,7 @@ describe('worker message submission through the runtime boundary', () => {
 
       expect(result).toMatchObject({ state: 'ambiguous', reason: 'dispatch_unknown' });
       await Promise.resolve();
-      expect(reads).toBe(2);
+      expect(reads).toBe(3);
       expect(calls).toHaveLength(3);
       expect(calls[0]?.text).toBe('event delivery');
       expect(calls[0]?.submitOnly).toBeUndefined();

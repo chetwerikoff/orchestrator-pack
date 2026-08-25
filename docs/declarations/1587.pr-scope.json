@@ -7,7 +7,8 @@
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
-    "scripts/pr2-foundation/scheduler.ts"
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/worker-message-submit-reconcile.test.ts"
   ],
   "denylist": [
     "credentials/",
@@ -26,7 +27,8 @@
     "scripts/orca-runtime/adapter.ts",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
-    "scripts/runtime/caller-census.ts"
+    "scripts/runtime/caller-census.ts",
+    "scripts/worker-message-submit-reconcile.test.ts"
   ],
   "source_revision": "a8b4405fd44b5135784c6c1cf1ed71acbb85ba09"
 }
