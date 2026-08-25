@@ -16,5 +16,5 @@
     "scripts/lib/worker-smoke-core-base.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "5ecb6e4d73e61a786364693886fa52220fe87e0d"
+  "source_revision": "db50a8367f63b926310b71bb6eac4b3e3ca4b2c9"
 }
