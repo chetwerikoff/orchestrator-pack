@@ -1119,17 +1119,24 @@ export function commitPackReviewTriage(input: {
         }
         const workerOwned = current.smokeOrdering?.workerOwned;
         const resolution = automaticFindingResolution;
+        const findingCount = Number(resolution?.findingCount);
+        const blockingFindingCount = Number(resolution?.blockingFindingCount);
+        const nonBlockingFindingCount = Number(resolution?.nonBlockingFindingCount);
+        const unresolvedBlockingFindingCount = Number(resolution?.unresolvedBlockingFindingCount);
         const finalFixResolutionBound = resolution?.predicateResult === 'resolved'
+          && resolution.resolutionBasis === 'explicit_current_head_finding_selection'
           && resolution.findingSnapshotDigest === input.triage.findingSnapshotDigest
           && resolution.priorReviewedHeadSha === current.terminal?.targetSha
           && resolution.currentHeadSha === current.currentHeadSha
-          && Number.isInteger(Number(resolution.findingCount))
-          && Number(resolution.findingCount) > 0
-          && Number(resolution.unboundFindingCount) === 0
-          && Array.isArray(resolution.findingPaths)
-          && Array.isArray(resolution.finalFixChangedPaths)
-          && Array.isArray(resolution.unresolvedFindingPaths)
-          && resolution.unresolvedFindingPaths.length === 0;
+          && Number.isInteger(findingCount)
+          && findingCount > 0
+          && Number.isInteger(blockingFindingCount)
+          && blockingFindingCount >= 0
+          && blockingFindingCount <= findingCount
+          && Number.isInteger(nonBlockingFindingCount)
+          && nonBlockingFindingCount === findingCount - blockingFindingCount
+          && Number.isInteger(unresolvedBlockingFindingCount)
+          && unresolvedBlockingFindingCount === 0;
         const finalFixSettlement = input.triage.verdict === 'DEFER'
           && current.cycle?.state === 'at_cap_continuation_required'
           && current.cycle.consumedHeadShas.length === current.cycle.frozenCap
