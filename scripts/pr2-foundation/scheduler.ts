@@ -93,6 +93,9 @@ export interface SchedulerBoundary {
   }) => { ok: boolean; reason?: string };
 }
 
+// Assignment lookup is a per-call budget; the resolver processes every persisted
+// row and returns explicit reconciliation evidence instead of silently skipping it.
+const ASSIGNMENT_RESOLUTION_CALL_TIMEOUT_MS = 250;
 const schedulerTickSequences = new WeakMap<object, number>();
 function nextSchedulerTickSequence(boundary: SchedulerBoundary): number {
   const next = (schedulerTickSequences.get(boundary) ?? 0) + 1;
@@ -492,7 +495,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   try {
     const runtime = await selectRuntimeAdapter({ env });
     const resolution = repository
-      ? resolveCurrentWorkerAssignmentBindings({ file: assignmentStorePath, repository, adapter: runtime })
+      ? resolveCurrentWorkerAssignmentBindings({ file: assignmentStorePath, repository, adapter: runtime, timeoutMs: ASSIGNMENT_RESOLUTION_CALL_TIMEOUT_MS })
       : { status: 'assignment_untrusted' as const, bindings: [] as const, reconciliations: [] as const };
     const built = resolution.status === 'ok' ? buildFleetAssignmentBindings(resolution.bindings) : null;
     if (resolution.status === 'ok' && built) {

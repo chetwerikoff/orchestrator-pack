@@ -722,7 +722,11 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     : `orca orchestration check --run ${message.runId}`;
   const pointer = `You have 1 orchestration message. Run \`${check}\`.`;
   const written = deps.writePointer(worker.identity, pointer);
-  if (written.status !== 'dispatched') {
+  const pointerWriteAccepted = written.status === 'dispatched'
+    || (written.status === 'dispatch_unknown'
+      && written.witness?.operation === 'write'
+      && written.witness.accepted === true);
+  if (!pointerWriteAccepted) {
     return deliveryNoEffect(written.reason ?? 'pointer_write_failed', worker, false);
   }
   // The pointer write is the only reconcile effect; unread state does not

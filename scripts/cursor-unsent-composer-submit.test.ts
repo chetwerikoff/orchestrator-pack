@@ -803,6 +803,27 @@ describe('delivery-triggered composer submission', () => {
     expect(submitted).toEqual([]);
   });
 
+  it('accepts an explicit write witness reported with dispatch_unknown', async () => {
+    const target = worker('term_write_witness');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const result = await submitOrcaMessageDeliveryPointer('msg_write_witness', {
+      lookupMessage: () => ({
+        ok: true as const,
+        message: { id: 'msg_write_witness', runId: 'run_d613a86c140a', recipient: 'run:run_d613a86c140a', consumed: false },
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => ({
+        status: 'dispatch_unknown' as const,
+        reason: 'submit_witness_unavailable',
+        witness: { operation: 'write' as const, accepted: true as const, source: 'runtime-response' as const },
+      }),
+      submitDeps: depsFor({ [target.identity.id]: ['→ Add a follow-up', ...CURSOR_FOOTER] }, { submitted }),
+    });
+
+    expect(result.terminals[0]).toMatchObject({ reason: 'pointer_queued', enter: false });
+    expect(submitted).toEqual([]);
+  });
+
   it('does not re-Enter an already queued native pointer for unread mail', async () => {
     const target = worker('term_native_queued');
     const submitted: RuntimeWorkerIdentity[] = [];
