@@ -305,6 +305,7 @@ export function buildSmokeAgentPrompt(input: {
     'For a manager Dispatch, publish through: node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2-foundation/supervised-worker-start.ts -- --repository <owner/repo> --role orchestrator -- --task <exact-task-id> --terminal <owned-terminal-handle> --worktree <owned-worktree-selector> --json. Preserve one exact Task/Dispatch identity and never create a duplicate manager.',
     'If an old numbered WorkerAssignment for this Issue conflicts, publish the new exact pair as a brief assignment without --issue-number; do not force replacement of stale or externally retained ownership, and use the returned taskId/dispatchId/assignmentId/generation read-back as evidence.',
     'When the live Issue tier-intake is T3, use T3 for the corrected start-cycle continuation; stage-local refusals do not authorize a new Task/Dispatch, and an existing task_ready result must be reconciled rather than restarted.',
+    'Do not delegate the declared smoke scenario to another worker or wait on an orchestration mailbox; execute its bounded CLI actions in this smoke terminal, and use the supervised assignment writer only to publish the one exact Task/Dispatch evidence required by the scenario.',
     'Invoke pack review only when a listed smoke scenario explicitly requires one live pack-review manager turn; do not start any other review.',
     'When finished, emit exactly one fenced block:',
     '',

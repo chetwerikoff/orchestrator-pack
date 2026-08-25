@@ -1188,5 +1188,6 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
     expect(prompt).toContain("failed, closed, or stale evidence is not a precreated Task");
     expect(prompt).toContain("When the live Issue tier-intake is T3, use T3");
     expect(prompt).toContain("publish the new exact pair as a brief assignment without --issue-number");
+    expect(prompt).toContain("Do not delegate the declared smoke scenario to another worker or wait on an orchestration mailbox");
   });
 });
