@@ -30,10 +30,10 @@ export interface MergeTriageFindingResolutionEvidence {
   priorReviewedHeadSha: string;
   currentHeadSha: string;
   findingCount: number;
-  findingPaths: string[];
-  unboundFindingCount: number;
-  finalFixChangedPaths: string[];
-  unresolvedFindingPaths: string[];
+  blockingFindingCount: number;
+  nonBlockingFindingCount: number;
+  unresolvedBlockingFindingCount: number;
+  resolutionBasis: 'explicit_current_head_finding_selection';
   predicateResult: 'resolved' | 'unresolved';
 }
 
@@ -81,6 +81,12 @@ function fullDigest(value: unknown, label: string): string {
 function positiveInteger(value: unknown, label: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`merge_triage_evidence_invalid: ${label}`);
+  return parsed;
+}
+
+function nonNegativeInteger(value: unknown, label: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`merge_triage_evidence_invalid: ${label}`);
   return parsed;
 }
 
@@ -144,31 +150,34 @@ export function buildMergeTriageFindingResolutionEvidence(input: {
   priorReviewedHeadSha: string;
   currentHeadSha: string;
   findingCount: number;
-  findingPaths: readonly string[];
-  finalFixChangedPaths: readonly string[];
+  blockingFindingCount: number;
+  unresolvedBlockingFindingCount: number;
 }): MergeTriageFindingResolutionEvidence {
   const findingCount = positiveInteger(input.findingCount, 'findingResolution.findingCount');
-  const normalizedFindingPathRows = input.findingPaths.map(normalizeChangedPath);
-  if (normalizedFindingPathRows.length > findingCount) {
-    throw new Error('merge_triage_evidence_invalid: findingResolution.findingPaths exceeds findingCount');
+  const blockingFindingCount = nonNegativeInteger(
+    input.blockingFindingCount,
+    'findingResolution.blockingFindingCount',
+  );
+  const unresolvedBlockingFindingCount = nonNegativeInteger(
+    input.unresolvedBlockingFindingCount,
+    'findingResolution.unresolvedBlockingFindingCount',
+  );
+  if (blockingFindingCount > findingCount) {
+    throw new Error('merge_triage_evidence_invalid: findingResolution.blockingFindingCount exceeds findingCount');
   }
-  const findingPaths = [...new Set(normalizedFindingPathRows)].sort();
-  const finalFixChangedPaths = [...new Set(input.finalFixChangedPaths.map(normalizeChangedPath))].sort();
-  const changed = new Set(finalFixChangedPaths);
-  const unresolvedFindingPaths = findingPaths.filter((path) => !changed.has(path));
-  const unboundFindingCount = findingCount - normalizedFindingPathRows.length;
+  if (unresolvedBlockingFindingCount > blockingFindingCount) {
+    throw new Error('merge_triage_evidence_invalid: findingResolution.unresolvedBlockingFindingCount exceeds blockingFindingCount');
+  }
   return {
     findingSnapshotDigest: fullDigest(input.findingSnapshotDigest, 'findingResolution.findingSnapshotDigest'),
     priorReviewedHeadSha: fullSha(input.priorReviewedHeadSha, 'findingResolution.priorReviewedHeadSha'),
     currentHeadSha: fullSha(input.currentHeadSha, 'findingResolution.currentHeadSha'),
     findingCount,
-    findingPaths,
-    unboundFindingCount,
-    finalFixChangedPaths,
-    unresolvedFindingPaths,
-    predicateResult: unboundFindingCount === 0 && unresolvedFindingPaths.length === 0
-      ? 'resolved'
-      : 'unresolved',
+    blockingFindingCount,
+    nonBlockingFindingCount: findingCount - blockingFindingCount,
+    unresolvedBlockingFindingCount,
+    resolutionBasis: 'explicit_current_head_finding_selection',
+    predicateResult: unresolvedBlockingFindingCount === 0 ? 'resolved' : 'unresolved',
   };
 }
 
