@@ -317,11 +317,11 @@ function produce(
   });
 }
 
-function validOperatorHint(body: string, revision = REVISION) {
+function validOperatorHint(body: string, revision = REVISION, commentId = COMMENT_ID) {
   return {
     issueNumber: ISSUE,
     sourceRevision: revision,
-    verdictUrl: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID}`,
+    verdictUrl: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${commentId}`,
     verdictSha256: createHash('sha256').update(body).digest('hex'),
     verdictByteLength: Buffer.byteLength(body),
     verdictFindingCount: 0,
@@ -549,6 +549,29 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       const result = produce(input);
       expect(result.ok).toBe(false);
       expect(result.errors.join('\n')).toContain('cannot credential a capture without artifactAuthority');
+    });
+
+    it('credentials an architectural-clean VERDICT: NO_FINDINGS capture', () => {
+      const body = [
+        `Read revision: #${ISSUE} ${REVISION}`,
+        'review-economics-contract: v1',
+        'VERDICT: NO_FINDINGS',
+        'SIMPLIFICATION_CLEAN',
+        'FINDING_COUNT: 0',
+        'INVOCATION_ID_TO_ECHO: invocation-001',
+        '',
+      ].join('\n');
+      const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+      const result = produce(input);
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+      const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+      expect(receipt.invocations[0]).toMatchObject({
+        terminalClassification: 'incident',
+        sendCount: 1,
+        artifactAuthority: { kind: 'authoritative-github-artifact' },
+      });
+      expect(receipt.invocations[0].capture.rawFindingCount).toBe(0);
+      expect(readFileSync(input.capturePath, 'utf8')).toBe(body);
     });
   });
 
@@ -814,6 +837,28 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const manifest = JSON.parse(readFileSync(join(input.outputDir, 'acceptance-artifacts.json'), 'utf8'));
     expect(manifest.acceptanceBasis).toBe('authoritative-github-artifact');
     expect(manifest.operatorAdjudication).toBeUndefined();
+  });
+
+  it('accepts a distinct published author-state hint after unique canonical resolution', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const authorState = [
+      'm3-protected: id=published-author-state | revision=r01 | contest=none | outcome=non-activate',
+      'author-state: published-author-state',
+      'revision: r01',
+      '',
+    ].join('\n');
+    const authorStateId = COMMENT_ID + 500;
+    const result = produce(
+      input,
+      transport({ census: [...input.reviewComments, comment(input.body), comment(authorState, { id: authorStateId })] }),
+      validOperatorHint(authorState, REVISION, authorStateId),
+    );
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const manifest = JSON.parse(readFileSync(join(input.outputDir, 'acceptance-artifacts.json'), 'utf8'));
+    expect(manifest.publishedAuthorState).toEqual({
+      sha256: createHash('sha256').update(authorState).digest('hex'),
+      byteLength: Buffer.byteLength(authorState),
+    });
   });
 
   it('allows the first stage receipt revision to differ from the immutable episode first revision when the canonical cycle binds it', () => {

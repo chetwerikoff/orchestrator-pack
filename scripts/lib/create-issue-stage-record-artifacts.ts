@@ -450,7 +450,7 @@ function parseCanonicalTerminalVerdict(
   const lines = text.split(/\r?\n/).map((line) => line.trim());
   const exactCount = (token: string): number => lines.filter((line) => line === token).length;
   const verdicts = lines.flatMap((line) => {
-    const match = /^VERDICT: (CLEAN|FINDINGS)$/.exec(line);
+    const match = /^VERDICT: (CLEAN|FINDINGS|NO_FINDINGS)$/.exec(line);
     return match ? [match[1]!] : [];
   });
   const findingCountLines = lines.filter((line) => line.startsWith('FINDING_COUNT:'));
@@ -476,7 +476,9 @@ function parseCanonicalTerminalVerdict(
     || (cutCandidates === 0 ? simplificationClean !== 1 : simplificationClean !== 0)
   ) return null;
   if (revision.findingCount === 0) {
-    if (verdicts[0] !== 'CLEAN' || exactCount('NO_FINDINGS') !== 1) return null;
+    const cleanVerdict = verdicts[0] === 'CLEAN' && exactCount('NO_FINDINGS') === 1;
+    const noFindingsVerdict = verdicts[0] === 'NO_FINDINGS' && exactCount('NO_FINDINGS') === 0;
+    if (!cleanVerdict && !noFindingsVerdict) return null;
   } else if (verdicts[0] !== 'FINDINGS' || exactCount('NO_FINDINGS') !== 0) {
     return null;
   }
@@ -1088,17 +1090,6 @@ function resolveAuthoritativeArtifact(
   if (censusComment.createdAt !== censusComment.updatedAt) {
     errors.push(`authoritative GitHub artifact was edited: ${censusComment.htmlUrl}`);
     return null;
-  }
-  const hint = context.operatorHint;
-  if (hint && stage === 'architectural') {
-    if (
-      hint.sourceRevision !== sourceRevision
-      || hint.commentId !== censusComment.id
-      || hint.commentUrl !== censusComment.htmlUrl
-    ) {
-      errors.push('operator verdict URL hint does not identify the uniquely resolved canonical invocation artifact');
-      return null;
-    }
   }
   const comment = rereadAuthoritativeIssueComment(
     context,
@@ -2049,6 +2040,14 @@ export function produceAcceptanceArtifacts(
     reviewEpisodeId: episodeId,
     acceptanceBasis: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
     files,
+    ...(artifactContext?.publishedAuthorState
+      ? {
+        publishedAuthorState: {
+          sha256: artifactContext.publishedAuthorState.sha256,
+          byteLength: artifactContext.publishedAuthorState.byteLength,
+        },
+      }
+      : {}),
     derivedFrom: {
       tierIntake: resolve(options.tierIntakePath),
       stageEvidence: canonicalStageEvidencePaths.map((path) => resolve(path)),
