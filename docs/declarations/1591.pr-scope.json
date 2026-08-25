@@ -1,0 +1,29 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1591,
+  "declared_paths": [
+    "docs/orchestration-runbook.md",
+    "scripts/lib/pack-gpt-source-comment-runner.cases.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/merge-triage-evidence.ts",
+    "scripts/pack-gpt-review.ts",
+    "scripts/pack-gpt-reviewer.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-issue-1591.test.ts",
+    "scripts/pack-review-runner-issue-898.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/",
+    "scripts/"
+  ]
+}

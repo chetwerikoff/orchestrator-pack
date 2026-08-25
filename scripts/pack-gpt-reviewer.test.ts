@@ -9,6 +9,7 @@ import {
   runGptPackReview,
   type GptReviewDependencies,
 } from './lib/pack-gpt-reviewer.ts';
+import { runPackGptReviewCommand } from './pack-gpt-review.ts';
 import {
   normalizePackReviewer,
   packReviewerSelectorErrorMessage,
@@ -256,5 +257,30 @@ describe('GPT pack reviewer adapter', () => {
       delete process.env.PACK_GPT_REVIEWER_FIXTURE_REPLY;
       delete process.env.PACK_GPT_FIXTURE_PR_NUMBER;
     }
+  });
+
+  it('forwards the configured stale-run grace to the public review command', async () => {
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '20';
+    let observedTimeout: unknown;
+    const execution = await runPackGptReviewCommand({
+      prNumber: 1608,
+    }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: async (input) => {
+        observedTimeout = input.timeoutSeconds;
+        return {
+          created: false,
+          reused: false,
+          reason: 'fixture_timeout_capture',
+          prNumber: 1608,
+          headSha: 'a'.repeat(40),
+          status: 'pending',
+        };
+      },
+    });
+
+    expect(execution.exitCode).toBe(1);
+    expect(observedTimeout).toBe(1_200);
   });
 });
