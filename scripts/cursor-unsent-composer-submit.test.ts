@@ -18,6 +18,7 @@ import {
   submitUnsentCursorComposerDeliveryForTerminal,
   submitOrcaMessageDeliveryPointer,
   submitUnsentCursorComposerOnceForWorker,
+  buildDeliveryPointer,
   runOrchestrationMailReconcileTick,
   runSupervisorUnsentComposerTick,
   workerKey,
@@ -27,6 +28,8 @@ import type { RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.t
 
 const POKE = 'You have 1 orchestration message. Run `orca orchestration check --run run_d613a86c140a`.';
 const DISPATCH_POKE = 'You have 1 orchestration message. Run `orca orchestration check`.';
+const TERMINAL_HANDLE = 'term_cc95818d-ce98-465a-a806-f1a73d7d33bf';
+const TERMINAL_POKE = `You have 1 orchestration message. Run \`orca orchestration check --terminal ${TERMINAL_HANDLE}\`.`;
 const CURSOR_FOOTER = [
   'Cursor Grok 4.6 High · 40.6% · 22 files edited                                                                                                    Run Everything',
   '~/projects/orchestrator-pack · main',
@@ -677,6 +680,43 @@ describe('submitUnsentCursorComposer', () => {
   });
 });
 
+describe('buildDeliveryPointer', () => {
+  it('emits the bare check pointer for dispatch recipients', () => {
+    expect(buildDeliveryPointer({
+      id: 'msg_dispatch',
+      runId: 'run_d613a86c140a',
+      recipient: 'dispatch:ctx_delivery',
+      consumed: false,
+    })).toBe(DISPATCH_POKE);
+  });
+
+  it('emits a run-qualified pointer for run recipients', () => {
+    expect(buildDeliveryPointer({
+      id: 'msg_run',
+      runId: 'run_d613a86c140a',
+      recipient: 'run:run_d613a86c140a',
+      consumed: false,
+    })).toBe(POKE);
+  });
+
+  it('emits a terminal-qualified pointer for terminal-handle recipients', () => {
+    expect(buildDeliveryPointer({
+      id: 'msg_terminal',
+      runId: 'run_d613a86c140a',
+      recipient: TERMINAL_HANDLE,
+      consumed: false,
+    })).toBe(TERMINAL_POKE);
+  });
+
+  it.each([
+    ['dispatch', DISPATCH_POKE],
+    ['run', POKE],
+    ['terminal', TERMINAL_POKE],
+  ])('recognizes the %s pointer as an exact orchestration notice', (_label, pointer) => {
+    expect(cursorComposerLooksUnsent(`${pointer}\n${CURSOR_FOOTER.join('\n')}`)).toBe(true);
+  });
+});
+
 describe('delivery-triggered composer submission', () => {
   it('submits an exact pointer soft-wrapped by a narrow Cursor composer', async () => {
     const target = worker('term_wrapped_pointer');
@@ -799,6 +839,42 @@ describe('delivery-triggered composer submission', () => {
     });
 
     expect(written).toBe(POKE);
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(submitted).toEqual([target.identity]);
+  });
+
+  it('writes a terminal-qualified pointer for a terminal-handle recipient', async () => {
+    const target = worker(TERMINAL_HANDLE);
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let written = '';
+    let reads = 0;
+    const result = await submitOrcaMessageDeliveryPointer('msg_terminal', {
+      lookupMessage: () => ({
+        ok: true as const,
+        message: {
+          id: 'msg_terminal',
+          runId: 'run_d613a86c140a',
+          recipient: TERMINAL_HANDLE,
+          consumed: false,
+        },
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: (_identity, pointer) => {
+        written = pointer;
+        return { status: 'dispatched' as const };
+      },
+      submitDeps: depsFor({}, {
+        submitted,
+        liveness: () => 'idle',
+        read: () => ({
+          ok: true as const,
+          lines: reads++ === 0 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [TERMINAL_POKE, ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+    });
+
+    expect(written).toBe(TERMINAL_POKE);
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
     expect(submitted).toEqual([target.identity]);
   });

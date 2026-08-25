@@ -24,7 +24,7 @@ const UNBOXED_CTRL_C = /^ctrl\+c to stop\b/iu;
 const UNBOXED_STATUS_FOOTER = /^(?:Cursor|GPT-\S+|Composer)\s.+(?:\d+(?:\.\d+)?%|Run Everything)/iu;
 const UNBOXED_CWD_FOOTER = /^(?:~[/\\]|[A-Za-z]:[\\/]|\/)/u;
 const EMPTY_COMPOSER = /^(?:→\s*)?Add a follow-up\b/iu;
-const ORCHESTRATION_NOTICE = /^You have \d+ orchestration messages?\. Run `orca orchestration check(?: --run \S+)?`\.$/iu;
+const ORCHESTRATION_NOTICE = /^You have \d+ orchestration messages?\. Run `orca orchestration check(?: --run \S+| --terminal \S+)?`\.$/iu;
 const LONE_ARROW = /^→$/u;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
@@ -552,10 +552,14 @@ function isExactOrchestrationPointer(shown: ComposerReadResult): boolean {
   return exactOrchestrationPointerFingerprint(shown.lines.join('\n')) !== undefined;
 }
 
-function buildDeliveryPointer(message: DeliveryMessage): string {
+export function buildDeliveryPointer(message: DeliveryMessage): string {
   const check = message.recipient.startsWith('dispatch:')
     ? 'orca orchestration check'
-    : `orca orchestration check --run ${message.runId}`;
+    : message.recipient.startsWith('run:')
+      ? `orca orchestration check --run ${message.runId}`
+      : message.recipient.startsWith('term_')
+        ? `orca orchestration check --terminal ${message.recipient}`
+        : `orca orchestration check --run ${message.runId}`;
   return `You have 1 orchestration message. Run \`${check}\`.`;
 }
 
