@@ -41,6 +41,11 @@ describe('Issue #1647 authoritative tier resolution', () => {
       .toThrow('authoritative Issue tier is invalid');
   });
 
+  it('rejects an unterminated complexity-tier fence instead of defaulting', () => {
+    expect(() => parseAuthoritativeTier('```complexity-tier\ntier: T3'))
+      .toThrow('authoritative Issue tier is invalid');
+  });
+
   it('allows pack-review to produce a verdict for a firefighter Issue without a tier fence', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1647-tierless-'));
     roots.push(parent);

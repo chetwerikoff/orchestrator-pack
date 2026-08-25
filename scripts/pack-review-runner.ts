@@ -741,7 +741,13 @@ async function resolveTarget(
 
 export function parseAuthoritativeTier(body: string): PackReviewTier {
   const parsed = parseComplexityTierFromIssueBody(body);
-  if (parsed.kind === 'missing' || parsed.kind === 'no-tier') {
+  if (parsed.kind === 'missing') {
+    if (/```complexity-tier\b/i.test(body)) {
+      throw new Error('authoritative Issue tier is invalid');
+    }
+    return resolveTierAndCap({ issueBody: body }).tier as PackReviewTier;
+  }
+  if (parsed.kind === 'no-tier') {
     return resolveTierAndCap({ issueBody: body }).tier as PackReviewTier;
   }
   const tier = String(parsed.kind === 'tier' ? parsed.tier : '').toUpperCase();
