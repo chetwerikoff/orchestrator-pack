@@ -46,6 +46,7 @@ type OrcaWorkerShowResult = Readonly<{
     worktreeId?: string | null;
     originDispatchId?: string | null;
     ownerDispatchId?: string | null;
+    releaseState?: string | null;
   }> | null;
 }>;
 
@@ -240,7 +241,9 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (!exact) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
-    if (observationStatus === 'gone') {
+    if (observationStatus === 'gone'
+      || (observationStatus === 'exited'
+        && shown.result?.terminalResource?.releaseState === 'released')) {
       const resource = shown.result?.terminalResource;
       const resourceOwner = String(resource?.ownerDispatchId ?? '').trim();
       const workerId = String(
