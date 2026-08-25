@@ -15,6 +15,7 @@ import {
   type WorkerAssignment,
 } from './worker-assignment-store.ts';
 import {
+  admitCurrentWorkerAssignmentReplacement,
   resolveCurrentWorkerAssignmentBindings,
   resolveCurrentWorkerAssignmentTarget,
 } from './worker-assignment-runtime.ts';
@@ -64,6 +65,10 @@ function runtimeWith(
     value: vi.fn(() => resolution),
   });
   return { adapter, worker: spawned.value };
+}
+
+function currentOrcaHeartbeat(ageMs = 60_000): string {
+  return new Date(Date.now() - ageMs).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/u, '');
 }
 
 afterEach(() => {
@@ -147,34 +152,189 @@ describe('WorkerAssignment runtime target truth', () => {
 });
 
 describe('real Orca assignment target resolution', () => {
-  it('preserves exact gone and its producer-backed Dispatch-owned terminal handle', async () => {
+  it('resolves exact live Dispatch only after a current producer-shaped dispatch heartbeat', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-active' });
+    const activeWorker = {
+      agent_terminal_handle: 'term-active',
+      state: 'ready',
+      stage: 'input_accepted',
+    } as const;
+    const activeDispatch = {
+      status: 'dispatched',
+      last_heartbeat_at: currentOrcaHeartbeat(),
+    } as const;
+    const activeObservation = { exactWorker: true, status: 'live' } as const;
+    const activeTerminal = {
+      handle: 'term-active',
+      incarnationId: 'generation-active',
+      worktreePath: '/tmp/worktree-active',
+      title: 'active',
+      status: 'running',
+    } as const;
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'orchestration worker-show') {
+        return {
+          ok: true,
+          result: {
+            dispatch: activeDispatch,
+            worker: activeWorker,
+            terminal: { handle: 'term-active' },
+            observation: activeObservation,
+          },
+        };
+      }
+      if (operation === 'terminal show') {
+        return {
+          ok: true,
+          result: {
+            terminal: activeTerminal,
+          },
+        };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    const result = resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter });
+    expect(result.status).toBe('resolved');
+    if (result.status === 'resolved') {
+      expect(result.worker.identity).toEqual({
+        runtime: 'orca',
+        id: 'term-active',
+        generation: 'generation-active',
+      });
+    }
+  });
+
+  it('keeps ready + input_accepted without heartbeat unresolved and non-replaceable', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-no-heartbeat' });
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        dispatch: { status: 'dispatched', last_heartbeat_at: null },
+        worker: {
+          agent_terminal_handle: 'term-no-heartbeat',
+          state: 'ready',
+          stage: 'input_accepted',
+        },
+        terminal: { handle: 'term-no-heartbeat' },
+        observation: { exactWorker: true, status: 'live' },
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'target_unresolved' });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+    })).toEqual({ status: 'target_unresolved' });
+  });
+
+  it('keeps captured running + succeeded + settled non-active and non-replaceable', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-settled' });
+    const settledResult = {
+      worker: {
+        agent_terminal_handle: 'term-settled',
+        state: 'succeeded',
+        stage: 'settled',
+      },
+      terminal: { handle: 'term-settled' },
+      observation: { exactWorker: true, status: 'running' },
+    } as const;
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: settledResult,
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'target_unresolved' });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+    })).toEqual({ status: 'target_unresolved' });
+    expect(runJson.mock.calls.every((call) => call[0]?.slice(0, 2).join(' ') === 'orchestration worker-show')).toBe(true);
+  });
+
+  it('keeps invented gone plus dispatched heartbeat non-replaceable', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-gone-but-dispatched' });
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        dispatch: { status: 'dispatched', last_heartbeat_at: currentOrcaHeartbeat() },
+        worker: {
+          agent_terminal_handle: 'term-gone-but-dispatched',
+          state: 'succeeded',
+          stage: 'settled',
+        },
+        observation: { exactWorker: true, status: 'gone' },
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'target_unresolved' });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+    })).toEqual({ status: 'target_unresolved' });
+  });
+
+  it('admits replacement only for the pinned local dispatch_not_found producer envelope', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-exact-gone' });
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-exact-gone']);
       return {
-        ok: true,
-        result: {
-          worker: { agent_terminal_handle: 'term-owned' },
-          terminal: null,
-          observation: { exactWorker: true, status: 'gone' },
-          terminalResource: {
-            terminalHandle: 'term-owned',
-            worktreeId: 'repo::worktree',
-            originDispatchId: 'dispatch-exact-gone',
-            ownerDispatchId: 'dispatch-exact-gone',
-          },
+        ok: false,
+        outcomeCategory: 'supported_operation_failure',
+        error: {
+          code: 'dispatch_not_found',
+          message: 'Worker Dispatch dispatch-exact-gone was not found.',
         },
       };
     });
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
 
     expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
-      .toEqual({ status: 'gone', assignment, workerId: 'term-owned' });
+      .toEqual({ status: 'gone', assignment });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+    })).toEqual({ status: 'replaceable', expected: assignment });
+  });
+
+  it('does not grant replacement for federated no-worker-record dispatch_not_found', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-federated-missing-worker' });
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: false,
+      outcomeCategory: 'supported_operation_failure',
+      error: {
+        code: 'dispatch_not_found',
+        message: 'Federated Worker Dispatch dispatch-federated-missing-worker has no worker record.',
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'target_unresolved' });
+    expect(await admitCurrentWorkerAssignmentReplacement({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'target_unresolved' });
   });
 
   it.each([false, undefined] as const)(
-    'does not upgrade gone to exact absence when exactWorker=%s',
+    'does not upgrade invented gone to exact absence when exactWorker=%s',
     async (exactWorker) => {
       const file = assignmentFile();
       const assignment = await publish(file, { bindingKey: `dispatch-not-exact-${String(exactWorker)}` });
@@ -210,16 +370,25 @@ describe('real Orca assignment target resolution', () => {
     },
   );
 
-  it('requires a terminal handle for an exact live target', async () => {
+  it('requires a terminal handle for an exact active target', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-live-no-terminal' });
+    const nullActiveResult = {
+      dispatch: {
+        status: 'dispatched',
+        last_heartbeat_at: currentOrcaHeartbeat(),
+      },
+      worker: {
+        agent_terminal_handle: null,
+        state: 'ready',
+        stage: 'input_accepted',
+      },
+      terminal: null,
+      observation: { exactWorker: true, status: 'live' },
+    } as const;
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
-      result: {
-        worker: { agent_terminal_handle: null },
-        terminal: null,
-        observation: { exactWorker: true, status: 'live' },
-      },
+      result: nullActiveResult,
     }));
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
     expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))

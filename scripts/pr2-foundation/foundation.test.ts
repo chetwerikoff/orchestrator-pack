@@ -1,3 +1,5 @@
+// @vitest-ci-lane heavy
+// @vitest-pre-topology-seconds 120
 import {
   chmodSync,
   existsSync,
@@ -519,7 +521,7 @@ describe('[AC2] production foundation admission', () => {
     }
   });
 
-  it('admits a stale dead-PID supervisor status in greenfield mode', () => {
+  it('rejects a legacy v1 supervisor status in greenfield mode', () => {
     const home = mkdtempSync(path.join(repoRoot, '.opk-1422-greenfield-stale-status-home-'));
     try {
       const canonical = canonicalFoundationPaths(repoRoot, home);
@@ -532,17 +534,9 @@ describe('[AC2] production foundation admission', () => {
         childPid: 2147483646,
       });
 
-      const observation = observeGreenfieldFoundationObservation({ repoRoot, paths: canonical });
-      const proof = observeGreenfieldFoundationInertProof({ repoRoot, paths: canonical });
-
-      expect(observation.controlPlane.supervisorStatusPresent).toBe(true);
-      expect(observation.controlPlane.supervisorAlive).toBe(false);
-      expect(observation.controlPlane.childAlive).toBe(false);
-      expect(proof.result).toBe('greenfield-dormant-layer-not-active');
-      expect(proof.observations.supervisorChanged).toBe(false);
-      expect(proof.observations.schedulerRegistered).toBe(false);
-      writeJson(canonical.configPath, DEFAULT_FOUNDATION_CONFIG);
-      expect(() => observeFoundationInertProof({ repoRoot, paths: canonical }))
+      expect(() => observeGreenfieldFoundationObservation({ repoRoot, paths: canonical }))
+        .toThrow('greenfield_registered_child_unknown');
+      expect(() => observeGreenfieldFoundationInertProof({ repoRoot, paths: canonical }))
         .toThrow('foundation_inert_proof_unobservable:supervisor_changed');
     } finally {
       rmSync(home, { recursive: true, force: true });

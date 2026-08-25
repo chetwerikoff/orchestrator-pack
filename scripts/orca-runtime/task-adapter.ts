@@ -35,9 +35,15 @@ type UnprovenOwnedPresence = Readonly<{
 }>;
 
 type OrcaWorkerShowResult = Readonly<{
+  dispatch?: Readonly<{
+    status?: string | null;
+    last_heartbeat_at?: string | null;
+  }>;
   worker?: Readonly<{
     agent_terminal_handle?: string | null;
     worktree_id?: string | null;
+    state?: string | null;
+    stage?: string | null;
   }>;
   terminal?: Readonly<{ handle?: string | null }> | null;
   observation?: Readonly<{ exactWorker?: boolean; status?: string }>;
@@ -55,6 +61,24 @@ type OrcaTerminalListResult = Readonly<{
   totalCount?: number;
   truncated?: boolean;
 }>;
+
+type OrcaAssignmentActivity = 'active' | 'inactive' | 'unresolved';
+
+// Pinned Orca producer contract evidence (stablyai/orca@
+// f5fd7303ab00bcfeff72c92f2bc33ba9364cd622):
+// - orchestration-worker-control.ts emits `live` and documents legacy `running`
+//   as the same compatibility-boundary liveness observation;
+// - lifecycle-reconciliation.ts authorizes heartbeat messages against the exact
+//   assignee before dispatch-completion.ts records last_heartbeat_at, and that
+//   write is guarded by status='dispatched';
+// - coordinator-task-dispatch.ts defines stale Dispatch liveness as 10 minutes
+//   (two documented five-minute heartbeat intervals).
+// PACK reuses those producer semantics instead of inventing a separate TTL.
+const DISPATCH_HEARTBEAT_STALE_AFTER_MS = 10 * 60 * 1_000;
+const SQLITE_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/u;
+const RFC3339_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/u;
+const TERMINAL_WORKER_STATES = new Set(['failed', 'succeeded', 'stopped', 'abandoned']);
+const TERMINAL_DISPATCH_STATES = new Set(['completed', 'failed', 'circuit_broken']);
 
 function failureDetail(failure: RuntimeOperationFailure): string {
   return `${failure.operation}:${failure.status}:${failure.reason}`;
@@ -79,6 +103,165 @@ function attachNativeRuntimeError(
 function isRetryableTabNotFound(response: OrcaJsonResponse): boolean {
   return response.error?.code?.trim() === 'runtime_error'
     && response.error?.message?.trim() === 'tab_not_found';
+}
+
+/**
+ * The pinned Orca worker-show producer has no `observation.status="gone"` shape.
+ * A missing local Dispatch is instead reported as this exact control-plane error.
+ * Match the producer's structured code plus its dispatch-specific message so the
+ * distinct federated "has no worker record" error (same code) remains fail-closed.
+ */
+function isProducerBackedDispatchAbsent(
+  response: OrcaJsonResponse,
+  dispatchId: string,
+): boolean {
+  return response.outcomeCategory === 'supported_operation_failure'
+    && response.error?.code?.trim() === 'dispatch_not_found'
+    && response.error?.message?.trim() === `Worker Dispatch ${dispatchId} was not found.`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasNullableStringField(record: Record<string, unknown>, field: string): boolean {
+  return !(field in record) || record[field] === null || typeof record[field] === 'string';
+}
+
+/**
+ * Runtime shape boundary for `orca orchestration worker-show --dispatch`.
+ * The generic JSON transport is intentionally not trusted to make the payload
+ * typed: malformed lifecycle fields must fail closed before any absence or S2
+ * authority is derived from them.
+ */
+function parseOrcaWorkerShowResult(input: unknown): OrcaWorkerShowResult | null {
+  if (!isRecord(input)) return null;
+
+  const observation = input.observation;
+  if (
+    !isRecord(observation)
+    || typeof observation.exactWorker !== 'boolean'
+    || typeof observation.status !== 'string'
+  ) {
+    return null;
+  }
+
+  const dispatch = input.dispatch;
+  if (dispatch !== undefined) {
+    if (
+      !isRecord(dispatch)
+      || !hasNullableStringField(dispatch, 'status')
+      || !hasNullableStringField(dispatch, 'last_heartbeat_at')
+    ) return null;
+  }
+
+  const worker = input.worker;
+  if (worker !== undefined) {
+    if (
+      !isRecord(worker)
+      || !hasNullableStringField(worker, 'agent_terminal_handle')
+      || !hasNullableStringField(worker, 'worktree_id')
+      || !hasNullableStringField(worker, 'state')
+      || !hasNullableStringField(worker, 'stage')
+    ) return null;
+  }
+
+  const terminal = input.terminal;
+  if (terminal !== undefined && terminal !== null) {
+    if (!isRecord(terminal) || !hasNullableStringField(terminal, 'handle')) return null;
+  }
+
+  const resource = input.terminalResource;
+  if (resource !== undefined && resource !== null) {
+    if (
+      !isRecord(resource)
+      || !hasNullableStringField(resource, 'terminalHandle')
+      || !hasNullableStringField(resource, 'worktreeId')
+      || !hasNullableStringField(resource, 'originDispatchId')
+      || !hasNullableStringField(resource, 'ownerDispatchId')
+    ) return null;
+  }
+
+  return input as OrcaWorkerShowResult;
+}
+
+function normalizedWorkerLifecycle(result: OrcaWorkerShowResult | undefined): {
+  readonly observationStatus: string;
+  readonly workerState: string;
+  readonly workerStage: string;
+  readonly dispatchStatus: string;
+  readonly lastHeartbeatAt: string;
+} {
+  return {
+    observationStatus: result?.observation?.status?.trim().toLowerCase() ?? '',
+    workerState: result?.worker?.state?.trim().toLowerCase() ?? '',
+    workerStage: result?.worker?.stage?.trim().toLowerCase() ?? '',
+    dispatchStatus: result?.dispatch?.status?.trim().toLowerCase() ?? '',
+    lastHeartbeatAt: result?.dispatch?.last_heartbeat_at?.trim() ?? '',
+  };
+}
+
+function utcTimestampFromMatch(match: RegExpMatchArray): number | null {
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const millisecond = Number((match[7] ?? '').padEnd(3, '0') || '0');
+  if (year < 1970) return null;
+  const value = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  if (!Number.isFinite(value)) return null;
+  const parsed = new Date(value);
+  if (
+    parsed.getUTCFullYear() !== year
+    || parsed.getUTCMonth() !== month - 1
+    || parsed.getUTCDate() !== day
+    || parsed.getUTCHours() !== hour
+    || parsed.getUTCMinutes() !== minute
+    || parsed.getUTCSeconds() !== second
+    || parsed.getUTCMilliseconds() !== millisecond
+  ) return null;
+  return value;
+}
+
+function parseOrcaHeartbeatTimestamp(value: string): number | null {
+  const sqlite = value.match(SQLITE_UTC_TIMESTAMP);
+  if (sqlite) return utcTimestampFromMatch(sqlite);
+  const rfc3339 = value.match(RFC3339_UTC_TIMESTAMP);
+  if (rfc3339) return utcTimestampFromMatch(rfc3339);
+  return null;
+}
+
+function hasCurrentDispatchHeartbeat(lastHeartbeatAt: string, nowMs = Date.now()): boolean {
+  const heartbeatMs = parseOrcaHeartbeatTimestamp(lastHeartbeatAt);
+  return heartbeatMs !== null
+    && heartbeatMs <= nowMs
+    && nowMs - heartbeatMs <= DISPATCH_HEARTBEAT_STALE_AFTER_MS;
+}
+
+function classifyWorkerLifecycle(result: OrcaWorkerShowResult | undefined): OrcaAssignmentActivity {
+  const lifecycle = normalizedWorkerLifecycle(result);
+  if (lifecycle.observationStatus === 'exited') return 'inactive';
+  if (lifecycle.observationStatus !== 'live' && lifecycle.observationStatus !== 'running') {
+    return 'unresolved';
+  }
+
+  if (TERMINAL_WORKER_STATES.has(lifecycle.workerState)) return 'inactive';
+  if (TERMINAL_DISPATCH_STATES.has(lifecycle.dispatchStatus)) return 'inactive';
+
+  // `ready/input_accepted` is only prompt-injection acceptance. Positive S2
+  // authority additionally requires the current dispatched row plus a fresh,
+  // producer-authorized heartbeat under the pinned Orca contract above.
+  if (
+    lifecycle.workerState !== 'ready'
+    || lifecycle.workerStage !== 'input_accepted'
+    || lifecycle.dispatchStatus !== 'dispatched'
+    || !hasCurrentDispatchHeartbeat(lifecycle.lastHeartbeatAt)
+  ) {
+    return 'unresolved';
+  }
+  return 'active';
 }
 
 /**
@@ -231,20 +414,28 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     }
     const dispatchId = input.bindingKey.trim();
     if (!dispatchId) return runtimeFailure('resolve_assignment_worker', 'assignment_binding_missing');
-    const shown = this.#run<OrcaWorkerShowResult>(
+    const shown = this.#run<unknown>(
       ['orchestration', 'worker-show', '--dispatch', dispatchId],
       options,
     );
-    if (!shown.ok) return runtimeFailure('resolve_assignment_worker', neutralFailureReason(shown));
-    const exact = shown.result?.observation?.exactWorker === true;
-    const observationStatus = String(shown.result?.observation?.status ?? '').trim().toLowerCase();
+    if (!shown.ok) {
+      if (isProducerBackedDispatchAbsent(shown, dispatchId)) {
+        return { status: 'ok', value: { kind: 'gone' } };
+      }
+      return runtimeFailure('resolve_assignment_worker', neutralFailureReason(shown));
+    }
+    const parsed = parseOrcaWorkerShowResult(shown.result);
+    if (!parsed) {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
+    const exact = parsed.observation?.exactWorker === true;
     if (!exact) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
-    if (observationStatus === 'gone'
-      || (observationStatus === 'exited'
-        && shown.result?.terminalResource?.releaseState === 'released')) {
-      const resource = shown.result?.terminalResource;
+    const observationStatus = parsed.observation?.status?.trim().toLowerCase() ?? '';
+    if (observationStatus === 'exited'
+      && parsed.terminalResource?.releaseState === 'released') {
+      const resource = parsed.terminalResource;
       const resourceOwner = String(resource?.ownerDispatchId ?? '').trim();
       const workerId = String(
         resourceOwner === dispatchId
@@ -256,17 +447,21 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
         : { kind: 'gone' as const };
       return { status: 'ok', value };
     }
-    // Current Orca emits live/exited for exact non-gone observations. Missing,
-    // unverifiable, identity-changed, unknown, or future ambiguous statuses are
-    // not exact current-target evidence and must not be upgraded to resolved.
-    if (observationStatus !== 'live' && observationStatus !== 'exited') {
+    // Exact terminal presence is deliberately weaker than active Dispatch
+    // authority. The active predicate additionally requires Orca's current
+    // dispatch row plus a fresh accepted exact-assignee heartbeat; missing,
+    // stale, malformed, unsupported, or contradictory lifecycle facts remain
+    // fail-closed.
+    const activity = classifyWorkerLifecycle(parsed);
+    if (activity === 'unresolved') {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
-    const terminalHandle = String(
-      shown.result?.terminal?.handle
-        ?? shown.result?.worker?.agent_terminal_handle
-        ?? '',
-    ).trim();
+    if (activity === 'inactive') {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_inactive');
+    }
+    const terminalHandle = parsed.terminal?.handle?.trim()
+      ?? parsed.worker?.agent_terminal_handle?.trim()
+      ?? '';
     if (!terminalHandle) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
