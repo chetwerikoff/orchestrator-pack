@@ -1,7 +1,7 @@
 // @vitest-ci-lane heavy
 // @vitest-pre-topology-seconds 1
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -479,6 +479,25 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(existsSync(join(input.outputDir, 'acceptance-artifacts.json'))).toBe(false);
   });
 
+  it('keeps the published pass-01 architectural capture for a later stage attempt', () => {
+    const input = fixture({ transportClassification: 'incident', withCapture: true });
+    const publishedPath = join(input.dir, 'pass-01-architectural.capture.txt');
+    renameSync(input.capturePath, publishedPath);
+    input.capturePath = publishedPath;
+    input.invocation.capturePath = publishedPath;
+    input.invocation.stageAttemptId = 'attempt-002';
+    input.evidence.stageAttemptId = 'attempt-002';
+    writeFileSync(input.evidencePath, JSON.stringify(input.evidence));
+
+    const result = produce(input);
+
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(
+      readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-002.json'), 'utf8'),
+    );
+    expect(receipt.invocations[0].capture.name).toBe('pass-01-architectural.capture.txt');
+  });
+
   it('bridges realistic direct_publication_owned_parent_missing without inventing transport success', () => {
     const input = fixture({ transportClassification: 'incident', withTurnResult: true, withCapture: false });
     const result = produce(input);
@@ -549,6 +568,50 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       const result = produce(input);
       expect(result.ok).toBe(false);
       expect(result.errors.join('\n')).toContain('cannot credential a capture without artifactAuthority');
+    });
+
+    it('credentials an architectural-clean VERDICT: NO_FINDINGS capture', () => {
+      const body = [
+        `Read revision: #${ISSUE} ${REVISION}`,
+        'review-economics-contract: v1',
+        'VERDICT: NO_FINDINGS',
+        'SIMPLIFICATION_CLEAN',
+        'FINDING_COUNT: 0',
+        'INVOCATION_ID_TO_ECHO: invocation-001',
+        '',
+      ].join('\n');
+      const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+      const result = produce(input);
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+      const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+      expect(receipt.invocations[0]).toMatchObject({
+        terminalClassification: 'incident',
+        sendCount: 1,
+        artifactAuthority: { kind: 'authoritative-github-artifact' },
+      });
+      expect(receipt.invocations[0].capture.rawFindingCount).toBe(0);
+      expect(readFileSync(input.capturePath, 'utf8')).toBe(body);
+    });
+
+    it('credentials VERDICT: NO_FINDINGS with a standalone NO_FINDINGS token', () => {
+      const body = [
+        `Read revision: #${ISSUE} ${REVISION}`,
+        'review-economics-contract: v1',
+        'VERDICT: NO_FINDINGS',
+        'NO_FINDINGS',
+        'SIMPLIFICATION_CLEAN',
+        'FINDING_COUNT: 0',
+        'INVOCATION_ID_TO_ECHO: invocation-001',
+        '',
+      ].join('\n');
+      const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+      const result = produce(input);
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+      const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+      expect(receipt.invocations[0].artifactAuthority).toMatchObject({
+        kind: 'authoritative-github-artifact',
+      });
+      expect(receipt.invocations[0].capture.rawFindingCount).toBe(0);
     });
   });
 
