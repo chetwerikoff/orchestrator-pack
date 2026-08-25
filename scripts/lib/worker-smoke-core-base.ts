@@ -300,6 +300,8 @@ export function buildSmokeAgentPrompt(input: {
     'Execute only the smoke scenarios below against the current worktree.',
     `Selected CI scope artifact: docs/declarations/${input.issueNumber}.pr-scope.json is generated evidence. It is skipped from product changed-path accounting (same rule as scripts/pr-scope-check.ts selectedArtifactPath). Do not FAIL an exact-scope or allowed-path scenario solely because that file appears in git diff when every other changed path matches the Issue allowed-roots / declared implementation set.`,
     'Do not edit tracked implementation files, commit, push, merge, alter the Issue, or call pack-worker-report.',
+    'When a listed scenario requires a supervised-start ready receipt or WorkerAssignment, use the existing pack boundary scripts/pr2-foundation/supervised-worker-start.ts with the exact precreated Task, owned terminal, and owned worktree; do not substitute raw Orca orchestration worker-start because it bypasses WorkerAssignment publication.',
+    'For a manager Dispatch, publish through: node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2-foundation/supervised-worker-start.ts -- --repository <owner/repo> --role orchestrator --issue-number <N> -- --task <exact-task-id> --terminal <owned-terminal-handle> --worktree <owned-worktree-selector> --json. Preserve one exact Task/Dispatch identity and never create a duplicate manager.',
     'Invoke pack review only when a listed smoke scenario explicitly requires one live pack-review manager turn; do not start any other review.',
     'When finished, emit exactly one fenced block:',
     '',
