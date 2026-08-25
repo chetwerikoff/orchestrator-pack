@@ -775,6 +775,27 @@ function expectedCaptureName(
     : `pass-${pass}-architectural.capture.txt`;
 }
 
+function authoritativeCaptureName(
+  reviewDir: string,
+  stage: Exclude<ReviewStage, 'architectural-lens'>,
+  stageSequence: number,
+  reviewerSlot: string,
+  assertedCapturePath: unknown,
+): string {
+  const expected = expectedCaptureName(stage, stageSequence, reviewerSlot);
+  const publishedArchitecturalPath = resolve(reviewDir, 'pass-01-architectural.capture.txt');
+  if (
+    stage === 'architectural'
+    && stageSequence === 2
+    && typeof assertedCapturePath === 'string'
+    && resolve(reviewDir, assertedCapturePath) === publishedArchitecturalPath
+    && existsSync(publishedArchitecturalPath)
+  ) {
+    return 'pass-01-architectural.capture.txt';
+  }
+  return expected;
+}
+
 function materializeAuthoritativeCapture(
   reviewDir: string,
   name: string,
@@ -1100,7 +1121,7 @@ function resolveAuthoritativeArtifact(
     errors,
   );
   if (!comment) return null;
-  const name = expectedCaptureName(stage, stageSequence, reviewerSlot);
+  const name = authoritativeCaptureName(reviewDir, stage, stageSequence, reviewerSlot, invocation.capturePath);
   const materialized = materializeAuthoritativeCapture(
     reviewDir,
     name,
