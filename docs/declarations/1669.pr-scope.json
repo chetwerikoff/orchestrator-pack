@@ -3,6 +3,9 @@
   "issue_number": 1669,
   "declared_paths": [
     "AGENTS.md",
+    "scripts/gate-runner/declarative.test.ts",
+    "scripts/gate-runner/goldens.test.ts",
+    "scripts/gate-runner/representative-gates.ts",
     "scripts/gate-runner/runner.test.ts"
   ],
   "denylist": [
@@ -15,5 +18,5 @@
     "AGENTS.md",
     "scripts/"
   ],
-  "source_revision": "0633db58a387cb16e21d4396d5642ea887435fe5"
+  "source_revision": "6c0d6f157c7cf99ec218f6e40bcbea2f506a86e0"
 }
