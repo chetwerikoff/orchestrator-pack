@@ -31,7 +31,7 @@ import {
   type FleetEscalationSchedulerIdentityV1,
 } from './fleet-escalation-delivery.ts';
 import { runFleetEscalationProof } from './fleet-escalation-proof.ts';
-import { runSchedulerTick, schedulerFleetPhaseFailure, type SchedulerBoundary } from './scheduler.ts';
+import { runSchedulerTick, schedulerFleetPhaseFailure, writeSchedulerTickResult, type SchedulerBoundary } from './scheduler.ts';
 
 const roots: string[] = [];
 const projectId = 'orchestrator-pack';
@@ -194,19 +194,21 @@ function sameIdentity(left: RuntimeWorkerIdentity, right: RuntimeWorkerIdentity)
 function adapterFixture(input: {
   dispatch?: RuntimeDispatchResult;
   throwDispatch?: boolean;
+  remapBeforeDispatch?: boolean;
   bindingKey?: string;
 } = {}): { adapter: RuntimeAdapter; calls: { dispatch: number; forbidden: number } } {
   const target = worker();
+  let providerTargetPresent = true;
   const calls = { dispatch: 0, forbidden: 0 };
   const adapter: RuntimeAdapter = {
     id: 'orca',
     readiness: () => ({ status: 'ok', value: { ready: true, workspacePath: target.workspacePath } }),
     listWorkers: () => ({ status: 'ok', value: [target] }),
-    findWorkerById: (id) => ({ status: 'ok', value: id === target.identity.id ? target : null }),
-    findWorker: (identity) => ({ status: 'ok', value: sameIdentity(identity, target.identity) ? target : null }),
+    findWorkerById: (id) => ({ status: 'ok', value: providerTargetPresent && id === target.identity.id ? target : null }),
+    findWorker: (identity) => ({ status: 'ok', value: providerTargetPresent && sameIdentity(identity, target.identity) ? target : null }),
     resolveAssignmentWorker: ({ provider, bindingKey }) => ({
       status: 'ok',
-      value: provider === 'orca' && bindingKey === (input.bindingKey ?? 'binding-1260')
+      value: providerTargetPresent && provider === 'orca' && bindingKey === (input.bindingKey ?? 'binding-1260')
         ? { kind: 'resolved', worker: target }
         : { kind: 'gone' },
     }),
@@ -216,6 +218,7 @@ function adapterFixture(input: {
     },
     dispatchInput: () => {
       calls.dispatch += 1;
+      if (input.remapBeforeDispatch) providerTargetPresent = false;
       if (input.throwDispatch) throw new Error('synthetic_dispatch_throw');
       return input.dispatch ?? { status: 'dispatched' };
     },
@@ -272,6 +275,48 @@ function invocation(
     selectAdapter: async () => adapter,
     invocationId,
   } as const;
+}
+
+function schedulerEscalationBoundary(
+  root: string,
+  assignmentStorePath: string,
+  adapter: RuntimeAdapter,
+  onEscalation?: () => void,
+): SchedulerBoundary {
+  return {
+    projectId,
+    repository,
+    activationLineage,
+    listCandidates: () => { throw new Error('review_loop_must_not_run'); },
+    readCurrentPr: async () => { throw new Error('read_pr_must_not_run'); },
+    readChecks: async () => { throw new Error('read_checks_must_not_run'); },
+    listReviewRuns: () => [],
+    start: async () => { throw new Error('start_must_not_run'); },
+    fleetObserver: {
+      schedulerGeneration,
+      tick: async (input) => completeObserver(input.tickSequence ?? 1),
+    },
+    fleetNudgeActuator: {
+      tick: async (input) => ({
+        ...targetUnresolvedNudge(input.tickSequence),
+        result: 'observer-untrusted' as const,
+        status: 'failed' as const,
+        outcomes: [],
+      }),
+    },
+    publishHandoff: ({ reason, tickSequence }) => ({
+      ok: true,
+      record: handoff(root, reason, tickSequence),
+    }),
+    fleetEscalation: async (input) => {
+      onEscalation?.();
+      return runFleetEscalationDelivery({
+        ...input,
+        assignmentStorePath,
+        selectAdapter: async () => adapter,
+      });
+    },
+  };
 }
 
 describe('fleet escalation delivery', () => {
@@ -409,6 +454,25 @@ describe('fleet escalation delivery', () => {
     expect(result.attemptCount).toBe(1);
     expect(result.retryAuthority).toBe('none');
     expect(result.diagnostics).toContain('publication_threw');
+    expect(fixture.calls.dispatch).toBe(1);
+  });
+
+  it.each([
+    [{ status: 'dispatched' } as RuntimeDispatchResult, 'submitted'],
+    [{ status: 'send_failed', reason: 'provider-remapped' } as RuntimeDispatchResult, 'pre_dispatch_failure'],
+    [{ status: 'dispatch_unknown', reason: 'provider-remapped' } as RuntimeDispatchResult, 'ambiguous'],
+  ] as const)('preserves the publication class across a provider remap before dispatch (%s)', async (dispatch, expectedPublication) => {
+    const root = tempRoot();
+    const assignmentStorePath = await operatorAssignment(root);
+    const fixture = adapterFixture({ dispatch, remapBeforeDispatch: true });
+    const result = await runFleetEscalationDelivery(invocation(
+      handoff(root),
+      assignmentStorePath,
+      fixture.adapter,
+    ));
+    expect(result.publication).toBe(expectedPublication);
+    expect(result.attemptCount).toBe(1);
+    expect(result.retryAuthority).toBe('none');
     expect(fixture.calls.dispatch).toBe(1);
   });
 
@@ -603,6 +667,44 @@ describe('fleet escalation delivery', () => {
       fleetEscalation: { publication: 'submitted', attemptCount: 1 },
     });
     expect(escalationCalls).toBe(1);
+  });
+
+  it.each([
+    ['not_attempted', undefined],
+    ['submitted', { status: 'dispatched' } as RuntimeDispatchResult],
+    ['pre_dispatch_failure', { status: 'send_failed', reason: 'synthetic-send-failure' } as RuntimeDispatchResult],
+    ['ambiguous', { status: 'dispatch_unknown', reason: 'synthetic-unknown' } as RuntimeDispatchResult],
+  ] as const)('returns each real S3 terminal class through runSchedulerTick (%s)', async (expectedPublication, dispatch) => {
+    const root = tempRoot();
+    const assignmentStorePath = expectedPublication === 'not_attempted'
+      ? path.join(root, 'missing-worker-assignments.json')
+      : await operatorAssignment(root);
+    const fixture = dispatch === undefined ? adapterFixture() : adapterFixture({ dispatch });
+    const result = await runSchedulerTick(
+      schedulerEscalationBoundary(root, assignmentStorePath, fixture.adapter),
+      epochEnv(root),
+    );
+    expect(result.fleetEscalation?.publication).toBe(expectedPublication);
+    expect(result.fleetEscalation?.attemptCount).toBe(expectedPublication === 'not_attempted' ? 0 : 1);
+    expect(result.fleetEscalation?.retryAuthority).toBe('none');
+  });
+
+  it('does not re-invoke S3 when outer scheduler stdout serialization fails', async () => {
+    const root = tempRoot();
+    const assignmentStorePath = await operatorAssignment(root);
+    const fixture = adapterFixture({ dispatch: { status: 'dispatched' } });
+    let escalationCalls = 0;
+    const result = await runSchedulerTick(
+      schedulerEscalationBoundary(root, assignmentStorePath, fixture.adapter, () => { escalationCalls += 1; }),
+      epochEnv(root),
+    );
+    expect(result.fleetEscalation?.publication).toBe('submitted');
+    expect(escalationCalls).toBe(1);
+    expect(() => writeSchedulerTickResult(result, () => {
+      throw new Error('synthetic_stdout_write_failure');
+    })).toThrow('synthetic_stdout_write_failure');
+    expect(escalationCalls).toBe(1);
+    expect(fixture.calls.dispatch).toBe(1);
   });
 
   it('keeps review candidate order, reads, decisions, counters, and start sequence independent of S3 outcome', async () => {

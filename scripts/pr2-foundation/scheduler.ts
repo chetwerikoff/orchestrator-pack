@@ -722,10 +722,17 @@ export function schedulerFleetPhaseFailure(result: Awaited<ReturnType<typeof run
   return `scheduler_fleet_phase_failed:${result.fleetNudge.result}`;
 }
 
+export function writeSchedulerTickResult(
+  result: Awaited<ReturnType<typeof runSchedulerTick>>,
+  write: (value: string) => void = (value) => { process.stdout.write(value); },
+): void {
+  write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
+}
+
 async function runSingleTick(): Promise<void> {
   const { boundary } = await loadProductionBoundary();
   const result = await runSchedulerTick(boundary);
-  process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
+  writeSchedulerTickResult(result);
   const failure = schedulerFleetPhaseFailure(result);
   if (failure) throw new Error(failure);
 }
@@ -734,7 +741,7 @@ async function runLoop(): Promise<void> {
   for (;;) {
     try {
       const result = await runSchedulerTick(boundary);
-      process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
+      writeSchedulerTickResult(result);
       const failure = schedulerFleetPhaseFailure(result);
       if (failure) throw new Error(failure);
     }
