@@ -22,6 +22,7 @@ import {
   type FleetNudgeTickInput,
 } from './fleet-nudge-actuator.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
+import { createAdapterSubmitDeps, createOrcaMessageSubmitDeps, runOrchestrationMailReconcileTick } from '../cursor-unsent-composer-submit.ts';
 import {
   isRowStale,
   readWorkerStatusStoreFile,
@@ -94,6 +95,7 @@ export interface SchedulerBoundary {
   listReviewRuns(): ReturnType<typeof listPackReviewRuns>;
   start(candidate: ActivatedSchedulerCandidate, freshHeadSha: string): Promise<{ ok: boolean; reason?: string }>;
   reconcilePostReviewSmoke?: (candidate: ActivatedSchedulerCandidate, fresh: SchedulerCurrentPr) => Promise<PostReviewSmokeOutcome>;
+  orchestrationMailReconcile?: () => Promise<import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult>;
   schedulerIntervalMs?: number;
   fleetObserver?: SchedulerFleetObserver;
   fleetNudgeActuator?: SchedulerFleetNudgeActuator;
@@ -112,6 +114,9 @@ export interface SchedulerBoundary {
   }) => { ok: boolean; reason?: string; record?: FleetReconciliationHandoff };
 }
 
+// Assignment lookup is a per-call budget; the resolver processes every persisted
+// row and returns explicit reconciliation evidence instead of silently skipping it.
+const ASSIGNMENT_RESOLUTION_CALL_TIMEOUT_MS = 250;
 const schedulerTickSequences = new WeakMap<object, number>();
 function nextSchedulerTickSequence(boundary: SchedulerBoundary): number {
   const next = (schedulerTickSequences.get(boundary) ?? 0) + 1;
@@ -235,6 +240,7 @@ export function productionSchedulerBoundary(input: {
   repository?: string; unresolvedReason?: FleetReconciliationReason; assignmentReconciliation?: SchedulerAssignmentReconciliation;
   fleetBindings?: readonly FleetAssignmentBinding[];
   reconcilePostReviewSmoke?: SchedulerBoundary['reconcilePostReviewSmoke'];
+  orchestrationMailReconcile?: SchedulerBoundary['orchestrationMailReconcile'];
   publishHandoff?: SchedulerBoundary['publishHandoff'];
 }): SchedulerBoundary {
   const env = input.env ?? process.env; const projectId = input.projectId ?? 'orchestrator-pack';
@@ -254,6 +260,7 @@ export function productionSchedulerBoundary(input: {
     ...(input.assignmentReconciliation ? { assignmentReconciliation: input.assignmentReconciliation } : {}),
     ...(input.fleetBindings ? { fleetBindings: input.fleetBindings } : {}),
     ...(input.reconcilePostReviewSmoke ? { reconcilePostReviewSmoke: input.reconcilePostReviewSmoke } : {}),
+    ...(input.orchestrationMailReconcile ? { orchestrationMailReconcile: input.orchestrationMailReconcile } : {}),
     ...(input.publishHandoff ? { publishHandoff: input.publishHandoff } : {}),
     start: async (candidate, freshHeadSha) => {
       const result = await startPackReview({ projectId, linkedSessionId: candidate.sessionId, prNumber: candidate.prNumber, headSha: freshHeadSha, sourceRepoRoot: input.repoRoot, startReason: 'scheduler', surface: 'pr2-scheduler', claimMode: 'acquire' });
@@ -351,11 +358,13 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
   fleetNudge?: FleetNudgeResult;
   orchestratorRequired?: boolean;
   fleetEscalation?: FleetEscalationInvocationResultV1;
+  orchestrationMailReconcile?: import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult;
 }> {
   assertSchedulerEpoch(env);
   let observer: FleetObserverResult | undefined;
   let fleetNudge: FleetNudgeResult | undefined;
   let fleetEscalation: FleetEscalationInvocationResultV1 | undefined;
+  let orchestrationMailReconcile: import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult | undefined;
   let orchestratorRequired = false;
   const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000; const requestedTickSequence = nextSchedulerTickSequence(boundary);
   if (boundary.fleetObserver) {
@@ -426,6 +435,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
       };
     }
   }
+  if (boundary.orchestrationMailReconcile) orchestrationMailReconcile = await boundary.orchestrationMailReconcile();
   let attempted = 0; let started = 0; let skipped = 0;
   for (const candidate of boundary.listCandidates()) {
     attempted += 1; assertSchedulerEpoch(env); const fresh = await boundary.readCurrentPr(candidate); const freshHead = String(fresh.headRefOid ?? '').trim().toLowerCase();
@@ -449,6 +459,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     ...(fleetNudge ? { fleetNudge } : {}),
     ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
     ...(fleetEscalation ? { fleetEscalation } : {}),
+    ...(orchestrationMailReconcile ? { orchestrationMailReconcile } : {}),
   };
 }
 
@@ -563,6 +574,16 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   const repoRoot = process.cwd(); const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env; const projectId = 'orchestrator-pack';
   const epoch = assertSchedulerEpoch(env); const activationLineage = schedulerActivationLineage(epoch);
   const assignmentStorePath = resolveWorkerAssignmentStorePath(projectId, env); const storedAssignments = listCurrentWorkerAssignments(assignmentStorePath);
+  const executeOrchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () => {
+    const runtime = await selectRuntimeAdapter({ env });
+    const deps = createAdapterSubmitDeps(runtime);
+    return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps));
+  };
+  let preloadedOrchestrationMailReconcile: Promise<import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult> | undefined =
+    executeOrchestrationMailReconcile();
+  // Let the inbox-gated reconcile begin before the synchronous assignment
+  // binding lookup can consume the scheduler's entire startup window.
+  await Promise.resolve();
   const repository = await resolveRepositoryFromRepoRoot(repoRoot);
   const scopedAssignment = storedAssignments?.find((assignment) => assignment.repository === repository);
   let fleetObserver: FleetObserver; let fleetNudgeActuator: SchedulerFleetNudgeActuator = createTargetUnresolvedFleetNudgeActuator();
@@ -572,7 +593,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   try {
     const runtime = await selectRuntimeAdapter({ env });
     const resolution = repository
-      ? resolveCurrentWorkerAssignmentBindings({ file: assignmentStorePath, repository, adapter: runtime })
+      ? resolveCurrentWorkerAssignmentBindings({ file: assignmentStorePath, repository, adapter: runtime, timeoutMs: ASSIGNMENT_RESOLUTION_CALL_TIMEOUT_MS })
       : { status: 'assignment_untrusted' as const, bindings: [] as const, reconciliations: [] as const };
     const built = resolution.status === 'ok' ? buildFleetAssignmentBindings(resolution.bindings) : null;
     if (resolution.status === 'ok' && built) {
@@ -651,6 +672,11 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     assignmentStorePath,
     selectAdapter: () => selectRuntimeAdapter({ env }),
   });
+  const orchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () => {
+    const preloaded = preloadedOrchestrationMailReconcile;
+    preloadedOrchestrationMailReconcile = undefined;
+    return await (preloaded ?? executeOrchestrationMailReconcile());
+  };
   const postReviewSmoke = createProductionPostReviewSmokeReconciler({
     projectId,
     repoRoot,
@@ -672,6 +698,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       ...(assignmentReconciliation ? { assignmentReconciliation } : {}),
       fleetBindings,
       reconcilePostReviewSmoke: postReviewSmoke,
+      orchestrationMailReconcile,
       publishHandoff,
     }),
     cadence,

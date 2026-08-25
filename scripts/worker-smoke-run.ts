@@ -214,8 +214,9 @@ function parseArgs(argv: readonly string[]): CliOptions {
   return options;
 }
 
-function emit(value: unknown, json: boolean): void {
-  process.stdout.write(json ? `${JSON.stringify(value)}\n` : `${String(value)}\n`);
+export function emit(value: unknown, json: boolean): void {
+  const output = json || (typeof value === 'object' && value !== null) ? JSON.stringify(value) : String(value);
+  process.stdout.write(`${output}\n`);
 }
 
 function readIssueBody(path: string): string {

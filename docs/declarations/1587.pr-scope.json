@@ -3,14 +3,11 @@
   "issue_number": 1587,
   "declared_paths": [
     "docs/declarations/1587.pr-scope.json",
-    "docs/orca-runtime-caller-census.md",
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/lib/pack-review-worker-notification.ts",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
-    "scripts/pr2-foundation/scheduler.ts",
-    "scripts/worker-message-submit-reconcile.test.ts"
+    "scripts/pr2-foundation/scheduler.ts"
   ],
   "denylist": [
     "credentials/",
@@ -21,14 +18,15 @@
   ],
   "allowed_roots": [
     "docs/declarations/1587.pr-scope.json",
-    "docs/orca-runtime-caller-census.md",
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/launch-watch/watch.test.ts",
     "scripts/lib/pack-review-worker-notification.ts",
+    "scripts/orca-runtime/adapter.ts",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
-    "scripts/worker-message-submit-reconcile.test.ts"
+    "scripts/runtime/caller-census.ts"
   ],
-  "source_revision": "ee98c1a31560631dbb56fb45b16d306dd2fd8815"
+  "source_revision": "a8b4405fd44b5135784c6c1cf1ed71acbb85ba09"
 }
