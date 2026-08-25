@@ -534,7 +534,7 @@ function validateGlobalProtectedFloor(captures, rows, errors, metadata = []) {
   const signaled = new Set(captures.flatMap((capture, index) => detectProtectedSignalsInCapture(capture, namedCaptureStage(metadata[index]?.name))));
   for (const type of signaled) if (!rows.some((row) => row.type === type)) errors.push(`protected signal type: ${type} present in capture but not addressed in the ledger`);
 }
-function validateM5(captures, metadata, rows, adoptionTimestampMs, phase, errors) {
+function validateM5(captures, metadata, rows, adoptionTimestampMs, phase, errors, issueRevision, publishedAuthorState) {
   const postAdoptionReviewers = captures.map((text, index) => ({ text, index, meta: metadata[index] ?? {}, parsed: parseCaptureName(metadata[index]?.name) })).filter((item) => REVIEWER_STAGES.has(item.parsed.stage) && (!Number.isFinite(adoptionTimestampMs) || Number(item.meta.timestampMs ?? 0) >= adoptionTimestampMs));
   for (const item of postAdoptionReviewers) {
     const blocks = parseFindingBlocks(item.text, item.index, null, item.parsed.stage); const candidates = blocks.filter((block) => block.candidateText !== undefined);
@@ -547,6 +547,17 @@ function validateM5(captures, metadata, rows, adoptionTimestampMs, phase, errors
   for (const row of rows) { const raw = latestCandidateById.get(row.id); if (!raw) continue; const rawCandidate = String(raw.candidateText ?? 'no').trim().toLowerCase() === 'yes'; if (rawCandidate !== row.simplificationCutCandidate) errors.push(`review-economics: simplification-cut-candidate raw/ledger mismatch for ${row.id}`); }
   if (phase === 'final-acceptance') {
     const architectural = postAdoptionReviewers.filter((item) => item.parsed.stage === 'architectural');
+    const publishedAuthorStateHasCurrentM3 = publishedAuthorState !== undefined
+      && String(publishedAuthorState.text ?? '').split(/\r?\n/).some((line) => {
+        const match = M3_LINE_RE.exec(line.trim());
+        return match !== null && match[2].trim() === issueRevision;
+      });
+    if (publishedAuthorStateHasCurrentM3) architectural.push({
+      text: '',
+      index: -1,
+      meta: { timestampMs: Number.MAX_SAFE_INTEGER },
+      parsed: { stage: 'architectural' },
+    });
     if (architectural.length === 0) { errors.push('review-economics: pre-adoption M5 anchor cannot satisfy final acceptance'); return; }
     const latestArchitectural = architectural.sort((a, b) => Number(a.meta.timestampMs ?? 0) - Number(b.meta.timestampMs ?? 0)).at(-1);
     const latestLens = captures.map((text, index) => ({ text, meta: metadata[index] ?? {}, parsed: parseCaptureName(metadata[index]?.name) })).filter((item) => item.parsed.stage === 'architectural-lens').sort((a, b) => Number(a.meta.timestampMs ?? 0) - Number(b.meta.timestampMs ?? 0)).at(-1);
@@ -600,7 +611,7 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
     validateM2Legacy(ledger.findings, occurrences, metadata, Number(options.adoptionTimestampMs), errors);
     validateLegacyM3(ledger.findings, occurrences, captures, metadata, options.phase ?? 'final-acceptance', options.issueRevision ?? '', errors);
   }
-  validateM5(captures, metadata, ledger.findings, Number(options.adoptionTimestampMs), options.phase ?? 'final-acceptance', errors);
+  validateM5(captures, metadata, ledger.findings, Number(options.adoptionTimestampMs), options.phase ?? 'final-acceptance', errors, options.issueRevision ?? '', options.publishedAuthorState);
   const architecturalReviewIndices = metadata.map((meta, index) => ({ meta, index, parsed: parseCaptureName(meta.name) })).filter((item) => item.parsed.stage === 'architectural-review').map((item) => item.index);
   const candidateOccurrences = occurrences.filter((item) => architecturalReviewIndices.includes(item.captureIndex) && String(item.candidateText ?? '').trim().toLowerCase() === 'yes').map((item) => item.occurrenceId);
   const simplificationAggregate = architecturalReviewIndices.length > 0 ? {
