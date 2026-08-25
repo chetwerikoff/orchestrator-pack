@@ -852,11 +852,11 @@ identity, recovery is allowed by default unless the short role denylist below
 forbids it or the owning action's existing invocation/retry contract forbids
 that specific retry or reinvocation.
 
-On a recoverable guard, helper, schema, input, path, metadata, or configuration
-failure, the flow-manager must reread authoritative state and the owning source,
-inspect the failing boundary, determine whether the failure is recoverable without
-violating the denylist and whether the owning action exposes a legal correction,
-retry, or reinvocation path, and continue the same assigned goal. It must correct
+On a guard, helper, schema, input, path, metadata, or configuration failure, the
+flow-manager must reread authoritative state and the owning source, inspect the
+failing boundary, determine whether the failure is recoverable without violating
+the denylist and whether the owning action exposes a legal correction, retry, or
+reinvocation path, and continue the same assigned goal. It must correct
 manager-owned pre-invocation input, artifact, metadata, configuration, or invocation
 before consumption when that boundary exists, or correct other manager-owned
 recoverable state through existing authority. It may rerun or reinvoke only when
@@ -995,9 +995,8 @@ and authoritative evidence already held. The receiving worker/author owns repair
 scope, reproducer design, and focused regression proof under the existing role
 boundary. Direct-fix remains legal only when the current top-level user has
 explicitly authorized that specific direct-PR change. The original manager
-remains nonterminal in the same Task
-and Dispatch while the repair route executes; it resumes through the same
-assignment after authoritative repair evidence is available.
+remains nonterminal in the same Task and Dispatch while repair is routed, waits
+for authoritative repaired-head evidence, and resumes only from that evidence.
 
 No repair-packet schema, firefighter service, scheduler, queue, lease, watcher,
 store, protocol, new direct-fix authorization, or other recovery machinery is
