@@ -16,5 +16,5 @@
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "8114e745417ece1c88310326f22121eaffc5ba0f"
+  "source_revision": "1dcd09a0acb478b38eb6592a29cc268acbb3ed3f"
 }
