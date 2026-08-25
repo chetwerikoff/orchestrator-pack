@@ -3,7 +3,7 @@
   "issue_number": 1628,
   "declared_paths": [
     "scripts/lib/worker-smoke-core-base.ts",
-    "scripts/lib/worker-smoke-selected-artifact-prompt.test.ts"
+    "scripts/worker-smoke.test.ts"
   ],
   "denylist": [
     ".ao/",
@@ -14,7 +14,7 @@
   ],
   "allowed_roots": [
     "scripts/lib/worker-smoke-core-base.ts",
-    "scripts/lib/worker-smoke-selected-artifact-prompt.test.ts"
+    "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "3dc2bb9a32f2da3ffb3cc31f6cab9d3206992bed"
+  "source_revision": "5ecb6e4d73e61a786364693886fa52220fe87e0d"
 }
