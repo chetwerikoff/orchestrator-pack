@@ -466,6 +466,37 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(readdirSync(input.dir).filter((name) => name.startsWith('.output.tmp-'))).toEqual([]);
   });
 
+  it('refreshes derived receipt chain fields without treating the target as conflicting', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    const initial = produce(input);
+    expect(initial.ok, initial.errors.join('\n')).toBe(true);
+    const captureBytes = readFileSync(input.capturePath);
+    const receiptPath = join(input.outputDir, 'stage-completeness-receipt-attempt-001.json');
+    const initialReceipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    const priorReceiptId = `${input.episode}:stage-receipt:0001`;
+    writeFileSync(receiptPath, JSON.stringify({
+      ...initialReceipt,
+      stageReceiptId: priorReceiptId,
+      previousStageReceiptId: null,
+      receiptCensus: [priorReceiptId],
+      stageSequence: 1,
+    }) + '\n');
+
+    const refreshed = produce(input, transport({ census: [...input.reviewComments, comment(input.body)] }));
+
+    expect(refreshed.ok, refreshed.errors.join('\n')).toBe(true);
+    const refreshedReceipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    expect(refreshedReceipt.stageReceiptId).toBe(initialReceipt.stageReceiptId);
+    expect(refreshedReceipt.stageSequence).toBe(initialReceipt.stageSequence);
+    expect(refreshedReceipt.previousStageReceiptId).toBe(initialReceipt.previousStageReceiptId);
+    expect(refreshedReceipt.receiptCensus).toEqual(initialReceipt.receiptCensus);
+    expect(readFileSync(input.capturePath)).toEqual(captureBytes);
+  });
+
   it('requires GitHub artifact authority for complete calls even with an opaque reviewerSource', () => {
     const input = fixture({
       transportClassification: 'complete',
