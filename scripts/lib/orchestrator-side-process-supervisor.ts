@@ -9,6 +9,7 @@ import {
   EMPTY_CRASH_BACKOFF_STATE,
   recordChildExit,
   restartDecisionAt,
+  type CrashBackoffPolicy,
   type CrashBackoffState,
 } from '../runtime/crash-backoff.ts';
 import {
@@ -27,8 +28,7 @@ export interface SupervisorOptions {
   restartDelayMs?: number;
 }
 
-export interface SupervisorStatus {
-  schemaVersion: 1;
+interface SupervisorStatusBase {
   epochId: string;
   nonce: string;
   supervisorPid: number;
@@ -45,6 +45,35 @@ export interface SupervisorStatus {
   cordonReason: 'post-cas-epoch-owner';
   refusalReason: string | null;
   crashBackoff: CrashBackoffState;
+}
+
+/** Current truthful-liveness status. A running child is live only with matching startTicks. */
+export interface SupervisorStatus extends SupervisorStatusBase {
+  schemaVersion: 2;
+  childStartTicks: string | null;
+}
+
+/** Persisted pre-#1484 status is readable for diagnosis but never proves current liveness. */
+export interface LegacySupervisorStatus extends SupervisorStatusBase {
+  schemaVersion: 1;
+  childStartTicks?: never;
+}
+
+export type SupervisorStatusRecord = SupervisorStatus | LegacySupervisorStatus;
+
+export interface SupervisorChildProcessResult {
+  readonly ok: boolean;
+  readonly outcome: string;
+  readonly error?: string | null;
+  readonly stderr?: string | null;
+  readonly exitCode?: number | null;
+}
+
+export interface SupervisorChildExitTransition {
+  readonly crashBackoff: CrashBackoffState;
+  readonly restartState: 'waiting-restart' | 'refused';
+  readonly refusalReason: string | null;
+  readonly waitMs: number;
 }
 
 function statusPath(options: Pick<SupervisorOptions, 'stateDir'>): string {
@@ -67,10 +96,70 @@ function writeStatus(options: SupervisorOptions, value: SupervisorStatus): void 
   writeDurableJson(statusPath(options), value);
 }
 
-export function readSupervisorStatus(options: Pick<SupervisorOptions, 'stateDir'>): SupervisorStatus | null {
+export function readSupervisorStatus(options: Pick<SupervisorOptions, 'stateDir'>): SupervisorStatusRecord | null {
   const file = statusPath(options);
   if (!existsSync(file)) return null;
-  return JSON.parse(readFileSync(file, 'utf8')) as SupervisorStatus;
+  return JSON.parse(readFileSync(file, 'utf8')) as SupervisorStatusRecord;
+}
+
+export function processIdentityMatches(pid: number, startTicks: string | null | undefined): boolean {
+  if (!Number.isInteger(pid) || pid <= 1 || typeof startTicks !== 'string' || !startTicks.trim()) return false;
+  try {
+    return readProcessIdentity(pid).startTicks === startTicks;
+  } catch {
+    return false;
+  }
+}
+
+export function isLiveSupervisorStatus(status: SupervisorStatusRecord | null): status is SupervisorStatus {
+  return Boolean(
+    status
+    && status.schemaVersion === 2
+    && processIdentityMatches(status.supervisorPid, status.supervisorStartTicks),
+  );
+}
+
+export function isLiveRunningSupervisorChild(status: SupervisorStatus): boolean {
+  return status.restartState === 'running'
+    && status.childPid !== null
+    && processIdentityMatches(status.childPid, status.childStartTicks);
+}
+
+/**
+ * One pure application of the existing crash-backoff policy to a completed
+ * scheduler child. Production and tests share this transition so terminal fuse
+ * classification cannot overwrite the concrete child failure that triggered it.
+ */
+export function supervisorChildExitTransition(input: {
+  readonly previous: CrashBackoffState;
+  readonly startedAtMs: number;
+  readonly exitedAtMs: number;
+  readonly result: SupervisorChildProcessResult;
+  readonly policy?: CrashBackoffPolicy;
+}): SupervisorChildExitTransition {
+  const crash = recordChildExit({
+    previous: input.previous,
+    startedAtMs: input.startedAtMs,
+    exitedAtMs: input.exitedAtMs,
+    progressObserved: input.result.ok,
+    ...(input.policy ? { policy: input.policy } : {}),
+  });
+  const crashBackoff: CrashBackoffState = {
+    rapidExits: crash.rapidExits,
+    backoffUntilMs: crash.backoffUntilMs,
+    lastExitMs: crash.lastExitMs,
+    terminal: crash.terminal,
+    terminalReason: crash.terminalReason,
+  };
+  const concreteCause = input.result.ok
+    ? null
+    : `scheduler_child_${input.result.outcome}:${input.result.error ?? input.result.stderr ?? input.result.exitCode ?? 'unknown'}`;
+  return {
+    crashBackoff,
+    restartState: crash.terminal ? 'refused' : 'waiting-restart',
+    refusalReason: concreteCause ?? (crash.terminal ? crash.terminalReason : null),
+    waitMs: crash.waitMs,
+  };
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -84,13 +173,12 @@ function delay(milliseconds: number): Promise<void> {
  */
 export async function runSupervisor(options: SupervisorOptions): Promise<never> {
   const self = readProcessIdentity(process.pid);
-  if (!self) throw new Error('supervisor_process_identity_unreadable');
   const lease = acquireSingleInstanceLease({
     lockDir: supervisorLockPath(options),
     metadata: { epochId: options.epochId, nonce: options.nonce },
   });
   const state: SupervisorStatus = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     epochId: options.epochId,
     nonce: options.nonce,
     supervisorPid: process.pid,
@@ -99,6 +187,7 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
     registrySource: path.resolve(options.targetRegistryPath),
     childId: 'pr2-scheduler',
     childPid: null,
+    childStartTicks: null,
     childGeneration: 0,
     childRestarts: 0,
     restartState: 'starting',
@@ -117,6 +206,7 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
     } catch (error) {
       state.restartState = 'refused';
       state.childPid = null;
+      state.childStartTicks = null;
       state.refusalReason = error instanceof Error ? error.message : String(error);
       writeStatus(options, state);
       throw error;
@@ -143,7 +233,7 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
       if (!beforeRestart.restartAllowed) {
         if (beforeRestart.reason === 'terminal') {
           state.restartState = 'refused';
-          state.refusalReason = beforeRestart.terminalReason ?? 'supervisor_child_terminal_crash_loop';
+          state.refusalReason ??= beforeRestart.terminalReason ?? 'supervisor_child_terminal_crash_loop';
           writeStatus(options, state);
           throw new Error(state.refusalReason);
         }
@@ -158,6 +248,8 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
       const schedulerPath = path.join(options.repoRoot, 'scripts', child.script);
       currentAbort = new AbortController();
       state.childGeneration += 1;
+      state.childPid = null;
+      state.childStartTicks = null;
       state.restartState = 'starting';
       writeStatus(options, state);
       let childStartedAtMs = 0;
@@ -177,6 +269,11 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
         onSpawn: (pid) => {
           childStartedAtMs = Date.now();
           state.childPid = pid;
+          try {
+            state.childStartTicks = readProcessIdentity(pid).startTicks;
+          } catch {
+            state.childStartTicks = null;
+          }
           state.lastChildStartAt = new Date(childStartedAtMs).toISOString();
           state.restartState = 'running';
           writeStatus(options, state);
@@ -184,34 +281,27 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
       });
       currentAbort = null;
       state.childPid = null;
+      state.childStartTicks = null;
       if (stopping) break;
       state.childRestarts += 1;
-      const exitedAtMs = Date.now();
-      const crash = recordChildExit({
+      const transition = supervisorChildExitTransition({
         previous: state.crashBackoff,
         startedAtMs: childStartedAtMs,
-        exitedAtMs,
-        progressObserved: result.ok,
+        exitedAtMs: Date.now(),
+        result,
       });
-      state.crashBackoff = {
-        rapidExits: crash.rapidExits,
-        backoffUntilMs: crash.backoffUntilMs,
-        lastExitMs: crash.lastExitMs,
-        terminal: crash.terminal,
-        terminalReason: crash.terminalReason,
-      };
-      state.restartState = crash.terminal ? 'refused' : 'waiting-restart';
-      state.refusalReason = crash.terminal
-        ? crash.terminalReason
-        : result.ok
-          ? null
-          : `scheduler_child_${result.outcome}:${result.error ?? result.stderr ?? result.exitCode ?? 'unknown'}`;
+      state.crashBackoff = transition.crashBackoff;
+      state.restartState = transition.restartState;
+      state.refusalReason = transition.refusalReason;
       writeStatus(options, state);
-      if (crash.terminal) throw new Error(crash.terminalReason ?? 'supervisor_child_terminal_crash_loop');
+      if (transition.crashBackoff.terminal) {
+        throw new Error(state.refusalReason ?? transition.crashBackoff.terminalReason ?? 'supervisor_child_terminal_crash_loop');
+      }
       const cadenceDelay = options.restartDelayMs ?? verified.cadenceSeconds * 1_000;
-      await delay(Math.max(cadenceDelay, crash.waitMs));
+      await delay(Math.max(cadenceDelay, transition.waitMs));
     }
     state.childPid = null;
+    state.childStartTicks = null;
     state.restartState = 'stopping';
     writeStatus(options, state);
   } finally {
