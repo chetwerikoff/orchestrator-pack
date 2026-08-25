@@ -1,0 +1,22 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1617,
+  "declared_paths": [
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orca-runtime/task-adapter.ts"
+  ],
+  "denylist": [
+    ".agent-orchestrator/",
+    ".ao/",
+    "~/.local/state/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orca-runtime/task-adapter.ts"
+  ],
+  "source_revision": "e16b8833f7ffb3345655f0778fe2c2af6976edab"
+}
