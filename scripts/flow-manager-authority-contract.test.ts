@@ -111,6 +111,12 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
 
     expect(authority).toContain('owns the complete assigned manager goal, not the last command');
     expect(authority).toContain('recovery is allowed by default');
+    expect(authority.replace(/\s+/g, ' ')).toContain(
+      'On a guard, helper, schema, input, path, metadata, or configuration failure, the flow-manager must reread authoritative state and the owning source',
+    );
+    expect(authority).not.toContain(
+      'On a recoverable guard, helper, schema, input, path, metadata, or configuration',
+    );
     expect(authority.replace(/\s+/g, ' ')).toContain('retain the same manager Task and Dispatch through `task_ready`');
     expect(authority).toContain('reread authoritative state and the owning source');
     expect(authority.replace(/\s+/g, ' ')).toContain(
@@ -229,7 +235,10 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
     expect(authority).toContain('hand the existing normal worker-repair route only the failing action\nand authoritative evidence already held');
     expect(authority).toContain('receiving worker/author owns repair\nscope, reproducer design, and focused regression proof');
     expect(authority).toContain('Direct-fix remains legal only when the current top-level user has\nexplicitly authorized that specific direct-PR change');
-    expect(authority.replace(/\s+/g, ' ')).toContain('original manager remains nonterminal in the same Task and Dispatch');
+    expect(authority.replace(/\s+/g, ' ')).toContain(
+      'original manager remains nonterminal in the same Task and Dispatch while repair is routed, waits for authoritative repaired-head evidence, and resumes only from that evidence',
+    );
+    expect(authority).not.toContain('authoritative repair evidence is available');
     expect(authority).toContain('No repair-packet schema, firefighter service, scheduler, queue, lease, watcher');
   });
 });
