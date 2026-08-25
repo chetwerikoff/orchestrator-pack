@@ -3,7 +3,9 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveReviewerBudgetDecision } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
 import { startPackReview } from './pack-review-runner.ts';
+import { packReviewRunStaleMinutes } from './lib/pack-review-run-store.ts';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.ts';
 
 type StartReview = (input: Parameters<typeof startPackReview>[0]) => ReturnType<typeof startPackReview>;
@@ -42,6 +44,13 @@ function positiveInteger(value: unknown, label: string): number {
     throw new Error(`${label} must be a positive integer`);
   }
   return number;
+}
+
+export function resolvePackGptReviewTimeoutSeconds(): number {
+  return Math.max(
+    resolveReviewerBudgetDecision().runnerTimeoutSeconds,
+    packReviewRunStaleMinutes() * 60,
+  );
 }
 
 export function packGptReviewUsage(): string {
@@ -94,7 +103,7 @@ export async function runPackGptReviewCommand(
   try {
     const result = await startReview({
       prNumber: positiveInteger(options.prNumber, 'prNumber'),
-      timeoutSeconds: options.timeoutSeconds,
+      timeoutSeconds: options.timeoutSeconds ?? resolvePackGptReviewTimeoutSeconds(),
       startReason: 'manual-browser-gpt',
       surface: 'pack-gpt-review',
       onRunStarted: ({ prNumber, headSha, runId, timeoutSeconds }) => {

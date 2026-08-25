@@ -13,15 +13,8 @@ import {
   resolveTestBudgetMs,
 } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
 import { startPackReview } from './pack-review-runner.ts';
-import {
-  commitPackReviewTerminal,
-  readPackReviewAuthority,
-  reopenPackReviewAuthorityForExplicitExtraReview,
-} from './pack-review-state.ts';
-import {
-  createPackReviewRun,
-  setPackReviewRunTerminal,
-} from './lib/pack-review-run-store.ts';
+import { readPackReviewAuthority } from './pack-review-state.ts';
+import { createPackReviewRun } from './lib/pack-review-run-store.ts';
 import { resolveBoundIssueSnapshot } from './lib/reverify-bound-issue-snapshot.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 
@@ -379,8 +372,8 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
     expect(readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).filter(Boolean)).toHaveLength(1);
   });
 
-  it('allows at-cap explicit clean evidence to settle an exact new-head carry-over with zero model calls', async () => {
-    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-at-cap-explicit-carryover-'));
+  it('does not let the legacy explicit replay knobs create a second same-head review', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-at-cap-explicit-disabled-'));
     roots.push(storeRoot);
     setupHarness(storeRoot);
     const invocationLog = join(storeRoot, 'invocations.jsonl');
@@ -404,13 +397,7 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
       consumedHeadShas: [HEAD_A],
     });
 
-    const reopened = reopenPackReviewAuthorityForExplicitExtraReview({
-      prNumber: 1529,
-      expectedTransitionSeq: atCap!.transitionSeq,
-      headSha: HEAD_A,
-      options: { storeRoot },
-    });
-    const explicitRun = createPackReviewRun({
+    const legacyAttempt = createPackReviewRun({
       projectId: 'orchestrator-pack',
       storeRoot,
       prNumber: 1529,
@@ -423,73 +410,20 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
       canonicalRepository: 'chetwerikoff/orchestrator-pack',
       automaticBudgetDisposition: 'non_consuming_explicit',
       allowCompletedSameHeadReplay: true,
-    }).run;
-    setPackReviewRunTerminal(explicitRun.id, 'up_to_date', {
-      reviewVerdict: 'clean',
-      findingCount: 0,
-      findings: [],
-    }, { projectId: 'orchestrator-pack', storeRoot });
-    commitPackReviewTerminal({
-      prNumber: 1529,
-      expectedTransitionSeq: reopened.transitionSeq,
-      terminal: {
-        schemaVersion: 1,
-        terminalContractVersion: 2,
-        terminalSource: 'normal',
-        automaticBudgetDisposition: 'non_consuming_explicit',
-        runId: explicitRun.id,
-        targetSha: HEAD_A,
-        reviewVerdict: 'clean',
-        findingCount: 0,
-        findingsDigest: 'fixture-explicit-clean',
-      },
-      status: 'up_to_date',
-      findingCount: 0,
-      options: { storeRoot },
     });
-    const explicitAuthority = readPackReviewAuthority(1529, { storeRoot });
-    expect(explicitAuthority?.terminal).toMatchObject({
-      runId: explicitRun.id,
-      targetSha: HEAD_A,
-      reviewVerdict: 'clean',
-      automaticBudgetDisposition: 'non_consuming_explicit',
+
+    expect(legacyAttempt).toMatchObject({
+      created: false,
+      reused: true,
+      reason: 'terminal_run_exists',
     });
-    expect(explicitAuthority?.cycle).toMatchObject({
+    expect(legacyAttempt.run.id).toBe(String(first.runId));
+    expect(legacyAttempt.run.automaticBudgetDisposition).toBe('consume');
+    expect(readPackReviewAuthority(1529, { storeRoot })?.cycle).toMatchObject({
       state: 'at_cap_open_findings',
       consumedHeadShas: [HEAD_A],
     });
-
-    const replay: CarryoverReplayResult = {
-      kind: 'conflict_free_carryover',
-      sourceHeadSha: HEAD_A,
-      mainSha: 'c'.repeat(40),
-      targetHeadSha: HEAD_B,
-      mergeBaseSha: 'd'.repeat(40),
-      replayTreeSha: 'e'.repeat(40),
-      replayDigest: 'fixture-at-cap-replay',
-    };
-    const beforeCarryoverCalls = readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).filter(Boolean).length;
-    const second = await startFixture(storeRoot, {
-      headSha: HEAD_B,
-      fixtureCurrentPrHeadSha: HEAD_B,
-      fixturePostReviewHeadSha: HEAD_B,
-      fixtureIssueBody: issueBody('T1'),
-      fixtureCarryoverReplay: replay,
-      fixtureCarryoverSourceCleanRunId: explicitRun.id,
-    });
-
-    expect(second).toMatchObject({ ok: true, created: true, reused: false });
-    expect(readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).filter(Boolean)).toHaveLength(beforeCarryoverCalls);
-    const authority = readPackReviewAuthority(1529, { storeRoot });
-    expect(authority?.terminal).toMatchObject({
-      targetSha: HEAD_B,
-      reviewVerdict: 'clean',
-      terminalSource: 'conflict_free_carryover',
-    });
-    expect(authority?.cycle).toMatchObject({
-      state: 'closed',
-      consumedHeadShas: [HEAD_A],
-    });
+    expect(readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).filter(Boolean)).toHaveLength(1);
   });
 
   it('does not invoke a reviewer for an automatic new-head start after the T1 cap is exhausted', async () => {
