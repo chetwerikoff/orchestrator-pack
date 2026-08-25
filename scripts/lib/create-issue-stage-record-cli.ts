@@ -69,6 +69,13 @@ interface FinalAcceptanceCliOptions extends JournalTailCliOptions {
   relayEvidencePaths: string[];
   claudeProducerEvidencePaths: string[];
   externalPassReceiptPath?: string;
+  operatorIssueNumber?: string;
+  operatorSourceRevision?: string;
+  operatorVerdictUrl?: string;
+  operatorVerdictSha256?: string;
+  operatorVerdictByteLength?: string;
+  operatorFindingCount?: string;
+  operatorReason?: string;
 }
 
 function finishJournalArgvParse<T extends { json: boolean }>(
@@ -125,7 +132,16 @@ function requiredAcceptanceArtifactInput(
   return parseRequiredNonEmptyString(typeof value === 'string' ? value : undefined, descriptor.flag);
 }
 
-function operatorAcceptanceAdjudication(opts: StageFinalizeCliOptions) {
+function operatorAcceptanceAdjudication(opts: {
+  phase?: StageFinalizeCliOptions['phase'];
+  operatorIssueNumber?: string;
+  operatorSourceRevision?: string;
+  operatorVerdictUrl?: string;
+  operatorVerdictSha256?: string;
+  operatorVerdictByteLength?: string;
+  operatorFindingCount?: string;
+  operatorReason?: string;
+}) {
   const values = [
     opts.operatorIssueNumber,
     opts.operatorSourceRevision,
@@ -316,7 +332,7 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
 function finalAcceptanceUsage(): string {
   return [
     'Usage:',
-    '  create-issue-final-acceptance.ts --repo <owner/name> --issue-number <n> --cycle-id <id> --issue-body <path> --issue-revision <rNN> --review-dir <path> --stage-receipt <path>... [--capture <path>...] [--ledger <path>] [--relay-evidence <path>...] [--claude-producer-evidence <path>...] [--external-pass-receipt <path>] [--public-actor <actor>] [--workdir <path>] [--json]',
+    '  create-issue-final-acceptance.ts --repo <owner/name> --issue-number <n> --cycle-id <id> --issue-body <path> --issue-revision <rNN> --review-dir <path> --stage-receipt <path>... [--capture <path>...] [--ledger <path>] [--relay-evidence <path>...] [--claude-producer-evidence <path>...] [--external-pass-receipt <path>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--public-actor <actor>] [--workdir <path>] [--json]',
   ].join('\n');
 }
 
@@ -373,6 +389,27 @@ function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
         break;
       case '--external-pass-receipt':
         opts.externalPassReceiptPath = String(argv[++i] ?? '');
+        break;
+      case '--operator-issue-number':
+        opts.operatorIssueNumber = String(argv[++i] ?? '');
+        break;
+      case '--operator-source-revision':
+        opts.operatorSourceRevision = String(argv[++i] ?? '');
+        break;
+      case '--operator-verdict-url':
+        opts.operatorVerdictUrl = String(argv[++i] ?? '');
+        break;
+      case '--operator-verdict-sha256':
+        opts.operatorVerdictSha256 = String(argv[++i] ?? '');
+        break;
+      case '--operator-verdict-byte-length':
+        opts.operatorVerdictByteLength = String(argv[++i] ?? '');
+        break;
+      case '--operator-finding-count':
+        opts.operatorFindingCount = String(argv[++i] ?? '');
+        break;
+      case '--operator-reason':
+        opts.operatorReason = String(argv[++i] ?? '');
         break;
       default:
         i = finalizeJournalArgvIndex(arg, argv, i, opts, finalAcceptanceUsage());
@@ -485,6 +522,7 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       relayEvidencePaths: opts.relayEvidencePaths,
       claudeProducerEvidencePaths: opts.claudeProducerEvidencePaths,
       externalPassReceiptPath: opts.externalPassReceiptPath,
+      operatorAdjudication: operatorAcceptanceAdjudication({ ...opts, phase: 'final-acceptance' }),
       publicActor: opts.publicActor,
       workdir: opts.workdir,
     });

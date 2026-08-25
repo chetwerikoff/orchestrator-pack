@@ -39,7 +39,6 @@ import {
   initializePackReviewAuthority,
   observePackReviewHead,
   readPackReviewAuthority,
-  reopenPackReviewAuthorityForExplicitExtraReview,
   recordPackReviewPublication,
   selectPackReviewEvidence,
   selectPackReviewGptSourceCardinality,
@@ -59,6 +58,7 @@ import {
   type ClaimResult,
 } from './lib/review-start-claim-store.ts';
 import {
+  PACK_REVIEW_ACTIVE_STATUSES,
   createPackReviewRun,
   getPackReviewRun,
   hasPersistedPackReviewVerdict,
@@ -68,12 +68,14 @@ import {
   listPackReviewRunRecordsRaw,
   listPackReviewRuns,
   packReviewLogsDir,
+  packReviewRunStaleMinutes,
   packReviewWorktreesDir,
   resolvePackReviewRunOrder,
   resolvePackReviewRunStoreRoot,
   setPackReviewRunTerminal,
   terminalizePackReviewStaleRun,
   updatePackReviewRun,
+  updatePackReviewRunIf,
   validatePersistedPackReviewGptAggregate,
   type PackReviewGptRoundRecord,
   type PackReviewRunRecord,
@@ -130,7 +132,10 @@ import {
   resolveBoundIssueSnapshot,
 } from './lib/reverify-bound-issue-snapshot.ts';
 import { extractClosingIssueNumber } from './pr-scope-contract.ts';
-import { parseComplexityTierFromIssueBody } from '../docs/review-cycle-cap.mjs';
+import {
+  parseComplexityTierFromIssueBody,
+  resolveTierAndCap,
+} from '../docs/review-cycle-cap.mjs';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import type { ResolvedScopeContext } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 export { resolveRepositorySlug };
@@ -230,12 +235,28 @@ export interface ReconcileStalePackReviewRunsInput {
   sourceRepoRoot: string;
   projectId?: string;
   storeRoot?: string;
+  prNumber?: number;
+  immediate?: boolean;
+  baseRef?: string;
   fixtureCurrentPrHeadSha?: string;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
+  fixtureBeforeGptRoundFreeze?: (event: {
+    runId: string;
+    usableSourceCount: number;
+    requiredSourceCount: number;
+  }) => void | Promise<void>;
+  fixtureAfterGptRoundFreeze?: (event: {
+    runId: string;
+    settledSourceCount: number;
+  }) => void | Promise<void>;
   fixtureGithubReviewId?: number;
   fixtureGithubReviewTransport?: GithubReviewTransport;
   fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
   fixtureWorkerNotifier?: PackReviewWorkerNotifier;
+  fixtureIssueBody?: string;
+  fixtureIssueNumber?: number;
+  fixtureChangedPaths?: string[];
+  fixtureBoundIssueSnapshotBytes?: string;
   resolveRepositorySlug?: (repoRoot: string) => Promise<string>;
   beforeStaleStatusWrite?: (run: PackReviewRunRecord) => void | Promise<void>;
   fixturePauseBeforeStaleStatusWrite?: () => void | Promise<void>;
@@ -736,8 +757,17 @@ async function resolveTarget(
   };
 }
 
-function parseAuthoritativeTier(body: string): PackReviewTier {
+export function parseAuthoritativeTier(body: string): PackReviewTier {
   const parsed = parseComplexityTierFromIssueBody(body);
+  if (parsed.kind === 'missing') {
+    if (/```complexity-tier\b/i.test(body)) {
+      throw new Error('authoritative Issue tier is invalid');
+    }
+    return resolveTierAndCap({ issueBody: body }).tier as PackReviewTier;
+  }
+  if (parsed.kind === 'no-tier') {
+    return resolveTierAndCap({ issueBody: body }).tier as PackReviewTier;
+  }
   const tier = String(parsed.kind === 'tier' ? parsed.tier : '').toUpperCase();
   if (parsed.kind !== 'tier' || !['T1', 'T2', 'T3'].includes(tier)) {
     throw new Error(`authoritative Issue tier is ${parsed.kind === 'invalid' ? 'invalid' : 'missing'}`);
@@ -935,6 +965,60 @@ function gptRoundDiagnostics(round: PackReviewGptRoundRecord | undefined): {
   return { harvestIncidents, nonHarvestIncompleteSources };
 }
 
+function gptUsableSourceCount(round: PackReviewGptRoundRecord | undefined): number {
+  return round?.sourceSlots.filter((slot) => (
+    slot.lifecycle === 'terminal'
+    && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
+  )).length ?? 0;
+}
+
+function freezeGptRoundSourceCount(
+  runId: string,
+  requiredSourceCount: number,
+  options: { projectId: string; storeRoot: string },
+): PackReviewGptRoundRecord | null {
+  const updated = updatePackReviewRunIf(
+    runId,
+    (records) => {
+      const current = records.find((record) => record.id === runId);
+      const round = current?.reviewRound;
+      return Boolean(round
+        && round.reviewer === 'gpt'
+        && round.settledSourceCount === undefined
+        && gptUsableSourceCount(round) >= requiredSourceCount);
+    },
+    (existing) => {
+      const round = existing.reviewRound;
+      if (!round || round.reviewer !== 'gpt') return {};
+      return {
+        reviewRound: {
+          ...round,
+          settledSourceCount: gptUsableSourceCount(round),
+        },
+      };
+    },
+    options,
+  );
+  const latest = updated ?? getPackReviewRun(runId, options);
+  return latest?.reviewRound?.settledSourceCount !== undefined
+    ? latest.reviewRound
+    : null;
+}
+
+function gptRoundGraceExpired(run: PackReviewRunRecord, now = Date.now()): boolean {
+  const round = run.reviewRound;
+  if (!round || round.cardinality < 3) return true;
+  const admissions = round.sourceSlots
+    .map((slot) => Date.parse(trim(slot.admissionStartedAtUtc)))
+    .filter((value) => Number.isFinite(value));
+  const createdAt = Date.parse(run.createdAt);
+  const anchor = admissions.length > 0
+    ? Math.min(...admissions)
+    : createdAt;
+  if (!Number.isFinite(anchor)) return false;
+  return now - anchor >= packReviewRunStaleMinutes() * 60_000;
+}
+
 function validatePersistedGptReviewPayload(
   runId: string,
   payload: ReviewPayload,
@@ -1014,6 +1098,9 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
     `Head: \`${run.targetSha}\``,
     '',
   ];
+  if (run.reviewRound?.cardinality === 3 && run.reviewRound.settledSourceCount === 2) {
+    lines.push('Sources: 2/3 (degraded after timeout)', '');
+  }
   if (payload.findings.length === 0) {
     lines.push(hasHarvestIncident ? 'No accepted review findings.' : 'No findings.', '');
   } else {
@@ -1441,12 +1528,19 @@ function updateGptRoundSlot(
 ): PackReviewGptRoundRecord {
   const persisted = getPackReviewRun(runId, options);
   const base = persisted?.reviewRound ?? round;
+  if (base.settledSourceCount !== undefined) return base;
   const slots = base.sourceSlots.map((slot) => slot.slotId === slotId ? { ...slot, ...patch } : slot);
   if (slots.filter((slot) => slot.slotId === slotId).length !== 1) {
     throw new Error(`unknown GPT source slot ${slotId}`);
   }
   const next = { ...base, sourceSlots: slots };
-  updatePackReviewRun(runId, { reviewRound: next }, options);
+  try {
+    updatePackReviewRun(runId, { reviewRound: next }, options);
+  } catch (error) {
+    const latest = getPackReviewRun(runId, options)?.reviewRound;
+    if (latest?.settledSourceCount !== undefined) return latest;
+    throw error;
+  }
   return getPackReviewRun(runId, options)?.reviewRound ?? next;
 }
 
@@ -1831,10 +1925,17 @@ async function runGptSourceBatch(options: {
       terminalResult,
       ...(payload ? { payload } : {}),
     }, { projectId: options.projectId, storeRoot: options.storeRoot });
+    const persistedSlot = round.sourceSlots.find((slot) => slot.slotId === slotId);
+    if (!persistedSlot) throw new Error(`unknown GPT source slot ${slotId}`);
+    const acceptedPayload = persistedSlot.lifecycle === 'terminal'
+      && (persistedSlot.terminalClass === 'complete_clean' || persistedSlot.terminalClass === 'complete_findings')
+      && persistedSlot.payload
+      ? persistedSlot.payload as ReviewPayload
+      : undefined;
     if (options.input.fixtureAfterGptSourceSlotTerminal) {
       await options.input.fixtureAfterGptSourceSlotTerminal({ slotId, round });
     }
-    return { slot: round.sourceSlots.find((slot) => slot.slotId === slotId)!, payload };
+    return { slot: persistedSlot, payload: acceptedPayload };
   }));
 
   const findings: ReviewPayloadFinding[] = [];
@@ -1898,23 +1999,52 @@ async function findUnresolvedSameHeadRepositoryIdentity(options: {
   return null;
 }
 
+interface GptSourceRecoveryResult {
+  recovered: boolean;
+  reason: string;
+  hydratedSourceCount: number;
+  usableSourceCount: number;
+  graceExpired: boolean;
+  nextAction?: string;
+}
+
 async function recoverStaleGptSourceComments(options: {
   run: PackReviewRunRecord;
   input: ReconcileStalePackReviewRunsInput;
   projectId: string;
   storeRoot: string;
   repoSlug: string;
-}): Promise<{ recovered: boolean; reason: string }> {
+}): Promise<GptSourceRecoveryResult> {
   const initialRound = options.run.reviewRound;
   if (!initialRound || initialRound.reviewer !== 'gpt') {
-    return { recovered: false, reason: 'not_gpt_round' };
+    return {
+      recovered: false,
+      reason: 'not_gpt_round',
+      hydratedSourceCount: 0,
+      usableSourceCount: 0,
+      graceExpired: true,
+    };
   }
-  const recoverable = initialRound.sourceSlots.filter((slot) => (
-    slot.lifecycle === 'invocation_started' && Boolean(trim(slot.invocationId))
-  ));
-  if (recoverable.length === 0) return { recovered: false, reason: 'no_started_gpt_source' };
-  if (process.env.OPK_VITEST_HARNESS === '1' && !options.input.fixtureGptSourceCommentTransport) {
-    return { recovered: false, reason: 'fixture_source_transport_missing' };
+  if (hasPersistedPackReviewVerdict(options.run)) {
+    return {
+      recovered: false,
+      reason: 'gpt_round_already_settled',
+      hydratedSourceCount: 0,
+      usableSourceCount: gptUsableSourceCount(initialRound),
+      graceExpired: true,
+    };
+  }
+  const resumeFrozenRound = initialRound.settledSourceCount !== undefined;
+  if (process.env.OPK_VITEST_HARNESS === '1'
+      && !resumeFrozenRound
+      && !options.input.fixtureGptSourceCommentTransport) {
+    return {
+      recovered: false,
+      reason: 'fixture_source_transport_missing',
+      hydratedSourceCount: 0,
+      usableSourceCount: gptUsableSourceCount(initialRound),
+      graceExpired: gptRoundGraceExpired(options.run),
+    };
   }
 
   let currentHead: string;
@@ -1922,45 +2052,74 @@ async function recoverStaleGptSourceComments(options: {
     currentHead = options.input.fixtureCurrentPrHeadSha
       ?? await resolveCurrentPrHead(options.input.sourceRepoRoot, options.repoSlug, options.run.prNumber);
   } catch (error) {
-    return { recovered: false, reason: `stale_source_unavailable:${describeError(error)}` };
+    return {
+      recovered: false,
+      reason: `gpt_source_unavailable:${describeError(error)}`,
+      hydratedSourceCount: 0,
+      usableSourceCount: gptUsableSourceCount(initialRound),
+      graceExpired: gptRoundGraceExpired(options.run),
+      nextAction: 'rerun scoped reconcile when GitHub is reachable',
+    };
   }
   if (currentHead.toLowerCase() !== options.run.targetSha.toLowerCase()) {
-    return { recovered: false, reason: 'stale_source_head_changed' };
+    return {
+      recovered: false,
+      reason: 'gpt_source_head_changed',
+      hydratedSourceCount: 0,
+      usableSourceCount: gptUsableSourceCount(initialRound),
+      graceExpired: gptRoundGraceExpired(options.run),
+      nextAction: 'run review for the current PR head',
+    };
   }
-  const transport = options.input.fixtureGptSourceCommentTransport
-    ?? createPackGptSourceCommentTransport({
-      repoRoot: options.input.sourceRepoRoot,
-      repoSlug: options.repoSlug,
-      prNumber: options.run.prNumber,
-    });
+
   let round = initialRound;
-  for (const slot of round.sourceSlots) {
-    if (slot.lifecycle === 'terminal') continue;
-    const invocationId = trim(slot.invocationId);
-    if (slot.lifecycle !== 'invocation_started' || !invocationId) {
-      return { recovered: false, reason: `source_slot_not_recoverable:${slot.slotId}` };
+  let hydratedSourceCount = 0;
+  const unresolved: string[] = [];
+  if (!resumeFrozenRound) {
+    const transport = options.input.fixtureGptSourceCommentTransport
+      ?? createPackGptSourceCommentTransport({
+        repoRoot: options.input.sourceRepoRoot,
+        repoSlug: options.repoSlug,
+        prNumber: options.run.prNumber,
+      });
+    for (const snapshotSlot of round.sourceSlots) {
+      const currentSlot = round.sourceSlots.find((slot) => slot.slotId === snapshotSlot.slotId)!;
+      if (currentSlot.lifecycle === 'terminal') continue;
+      const invocationId = trim(currentSlot.invocationId);
+      if (currentSlot.lifecycle !== 'invocation_started' || !invocationId) {
+        unresolved.push(`${currentSlot.slotId}:not_started`);
+        continue;
+      }
+      const identity = gptSourceIdentity({
+        repoSlug: options.repoSlug,
+        prNumber: options.run.prNumber,
+        headSha: options.run.targetSha,
+        runId: options.run.id,
+        slotId: currentSlot.slotId,
+        invocationId,
+      });
+      let resolution: PackGptSourceCommentResolution;
+      try {
+        resolution = await resolvePackGptSourceComment({ identity, transport });
+      } catch (error) {
+        unresolved.push(`${currentSlot.slotId}:${describeError(error)}`);
+        continue;
+      }
+      if (resolution.kind !== 'credentialed') {
+        unresolved.push(`${currentSlot.slotId}:${resolution.reason}`);
+        continue;
+      }
+      const payload = resolution.payload as unknown as ReviewPayload;
+      round = updateGptRoundSlot(options.run.id, round, currentSlot.slotId, {
+        lifecycle: 'terminal',
+        terminalClass: payload.verdict === 'clean' && payload.findingCount === 0
+          ? 'complete_clean'
+          : 'complete_findings',
+        terminalResult: credentialedSourceTerminal({ identity, resolution }),
+        payload,
+      }, { projectId: options.projectId, storeRoot: options.storeRoot });
+      hydratedSourceCount += 1;
     }
-    const identity = gptSourceIdentity({
-      repoSlug: options.repoSlug,
-      prNumber: options.run.prNumber,
-      headSha: options.run.targetSha,
-      runId: options.run.id,
-      slotId: slot.slotId,
-      invocationId,
-    });
-    const resolution = await resolvePackGptSourceComment({ identity, transport });
-    if (resolution.kind !== 'credentialed') {
-      return { recovered: false, reason: `${resolution.reason}:${slot.slotId}` };
-    }
-    const payload = resolution.payload as unknown as ReviewPayload;
-    round = updateGptRoundSlot(options.run.id, round, slot.slotId, {
-      lifecycle: 'terminal',
-      terminalClass: payload.verdict === 'clean' && payload.findingCount === 0
-        ? 'complete_clean'
-        : 'complete_findings',
-      terminalResult: credentialedSourceTerminal({ identity, resolution }),
-      payload,
-    }, { projectId: options.projectId, storeRoot: options.storeRoot });
   }
 
   let finalHead: string;
@@ -1968,18 +2127,96 @@ async function recoverStaleGptSourceComments(options: {
     finalHead = options.input.fixtureCurrentPrHeadSha
       ?? await resolveCurrentPrHead(options.input.sourceRepoRoot, options.repoSlug, options.run.prNumber);
   } catch (error) {
-    return { recovered: false, reason: `stale_source_unavailable_after_census:${describeError(error)}` };
+    return {
+      recovered: false,
+      reason: `gpt_source_unavailable_after_census:${describeError(error)}`,
+      hydratedSourceCount,
+      usableSourceCount: gptUsableSourceCount(round),
+      graceExpired: gptRoundGraceExpired({ ...options.run, reviewRound: round }),
+      nextAction: 'rerun scoped reconcile when GitHub is reachable',
+    };
   }
   if (finalHead.toLowerCase() !== options.run.targetSha.toLowerCase()) {
-    return { recovered: false, reason: 'stale_source_head_changed_after_census' };
+    return {
+      recovered: false,
+      reason: 'gpt_source_head_changed_after_census',
+      hydratedSourceCount,
+      usableSourceCount: gptUsableSourceCount(round),
+      graceExpired: gptRoundGraceExpired({ ...options.run, reviewRound: round }),
+      nextAction: 'run review for the current PR head',
+    };
   }
 
+  let persisted = getPackReviewRun(options.run.id, {
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
+  }) ?? { ...options.run, reviewRound: round };
+  round = persisted.reviewRound ?? round;
+  let usableSourceCount = gptUsableSourceCount(round);
+  const graceExpired = gptRoundGraceExpired(persisted);
+  const requiredSourceCount = round.settledSourceCount
+    ?? (round.cardinality >= 3
+      ? (graceExpired ? 2 : round.cardinality)
+      : round.cardinality);
+  if (usableSourceCount < requiredSourceCount) {
+    const reason = round.cardinality >= 3 && !graceExpired
+      ? `gpt_sources_waiting_for_grace:${usableSourceCount}/${round.cardinality}`
+      : `gpt_sources_incomplete_after_grace:${usableSourceCount}/${round.cardinality}`;
+    return {
+      recovered: false,
+      reason,
+      hydratedSourceCount,
+      usableSourceCount,
+      graceExpired,
+      nextAction: round.cardinality >= 3 && !graceExpired
+        ? 'rerun scoped reconcile after the shared grace threshold or when the missing source publishes'
+        : `reconcile or retry the missing source work (${unresolved.join(', ') || 'missing source comment'})`,
+    };
+  }
+
+  if (round.cardinality >= 3 && round.settledSourceCount === undefined) {
+    if (options.input.fixtureBeforeGptRoundFreeze) {
+      await options.input.fixtureBeforeGptRoundFreeze({
+        runId: options.run.id,
+        usableSourceCount,
+        requiredSourceCount,
+      });
+    }
+    const frozen = freezeGptRoundSourceCount(
+      options.run.id,
+      requiredSourceCount,
+      { projectId: options.projectId, storeRoot: options.storeRoot },
+    );
+    if (!frozen) {
+      return {
+        recovered: false,
+        reason: 'gpt_source_quorum_changed_before_freeze',
+        hydratedSourceCount,
+        usableSourceCount,
+        graceExpired,
+        nextAction: 'rerun scoped reconcile against the latest persisted GPT source census',
+      };
+    }
+    round = frozen;
+    usableSourceCount = gptUsableSourceCount(round);
+    if (options.input.fixtureAfterGptRoundFreeze) {
+      await options.input.fixtureAfterGptRoundFreeze({
+        runId: options.run.id,
+        settledSourceCount: round.settledSourceCount!,
+      });
+    }
+  }
+
+  persisted = getPackReviewRun(options.run.id, {
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
+  }) ?? persisted;
+  round = persisted.reviewRound ?? round;
+  usableSourceCount = gptUsableSourceCount(round);
   const findings: ReviewPayloadFinding[] = [];
   for (const slot of round.sourceSlots) {
     if (slot.lifecycle !== 'terminal'
-      || (slot.terminalClass !== 'complete_clean' && slot.terminalClass !== 'complete_findings')) {
-      return { recovered: false, reason: `source_slot_incomplete:${slot.slotId}` };
-    }
+      || (slot.terminalClass !== 'complete_clean' && slot.terminalClass !== 'complete_findings')) continue;
     const payload = slot.payload as ReviewPayload;
     findings.push(...payload.findings.map((finding) => ({ ...finding, sourceSlotId: slot.slotId })));
   }
@@ -1993,7 +2230,14 @@ async function recoverStaleGptSourceComments(options: {
     storeRoot: options.storeRoot,
   });
   if (!persistedBeforeAggregate) {
-    return { recovered: false, reason: 'recovered_run_missing_before_aggregate' };
+    return {
+      recovered: false,
+      reason: 'recovered_run_missing_before_aggregate',
+      hydratedSourceCount,
+      usableSourceCount,
+      graceExpired,
+      nextAction: 'rerun scoped reconcile',
+    };
   }
   assertCredentialedGptSourceAuthority(persistedBeforeAggregate);
   validatePersistedPackReviewGptAggregate(options.run.id, {
@@ -2010,12 +2254,22 @@ async function recoverStaleGptSourceComments(options: {
     journalOutcome: {
       state: 'persisted',
       recordedAtUtc: new Date().toISOString(),
-      reason: 'gpt_source_comments_recovered',
+      reason: usableSourceCount < round.cardinality
+        ? 'gpt_source_comments_recovered_degraded'
+        : 'gpt_source_comments_recovered',
       idempotencyKey: `verdict:${options.run.id}:${options.run.targetSha}`,
       attempts: 1,
     },
   }, { projectId: options.projectId, storeRoot: options.storeRoot });
-  return { recovered: true, reason: 'gpt_source_comments_recovered_for_resume' };
+  return {
+    recovered: true,
+    reason: usableSourceCount < round.cardinality
+      ? 'gpt_source_comments_recovered_degraded_for_resume'
+      : 'gpt_source_comments_recovered_for_resume',
+    hydratedSourceCount,
+    usableSourceCount,
+    graceExpired,
+  };
 }
 
 async function resumeRecoveredGptDelivery(options: {
@@ -2072,6 +2326,295 @@ async function resumeRecoveredGptDelivery(options: {
   });
 }
 
+async function commitRecoveredGptAuthority(options: {
+  run: PackReviewRunRecord;
+  input: ReconcileStalePackReviewRunsInput;
+  projectId: string;
+  storeRoot: string;
+  repoSlug: string;
+}): Promise<PackReviewAuthorityDocument> {
+  const round = options.run.reviewRound;
+  if (!round || round.reviewer !== 'gpt') {
+    throw new Error(`recovered pack review run ${options.run.id} has no GPT round`);
+  }
+  if (options.run.automaticBudgetDisposition !== 'consume') {
+    throw new Error('legacy non-consuming GPT recovery cannot create new review authority');
+  }
+  const journaled = packReviewJournaledPayload(options.run);
+  if (!journaled) throw new Error(`recovered pack review run ${options.run.id} has no journaled payload`);
+  const payload = validatePersistedGptReviewPayload(
+    options.run.id,
+    journaled as ReviewPayload,
+    { projectId: options.projectId, storeRoot: options.storeRoot },
+  );
+  const authorityOptions: PackReviewAuthorityOptions = { storeRoot: options.storeRoot };
+  let authority = readPackReviewAuthority(options.run.prNumber, authorityOptions);
+  if (!authority) throw new Error(`recovered pack review authority missing for PR #${options.run.prNumber}`);
+  if (authority.currentHeadSha !== options.run.targetSha) {
+    throw new Error('recovered pack review authority head does not match the recovered run');
+  }
+  if (authority.cycle?.frozenTier !== round.tier) {
+    throw new Error('recovered pack review tier does not match frozen authority');
+  }
+
+  const target = {
+    prNumber: options.run.prNumber,
+    headSha: options.run.targetSha,
+    issueNumber: round.issueNumber,
+    repoSlug: options.repoSlug,
+    sourceRepoRoot: options.input.sourceRepoRoot,
+  };
+  const recoveryStart: StartInput = {
+    projectId: options.projectId,
+    prNumber: options.run.prNumber,
+    headSha: options.run.targetSha,
+    sourceRepoRoot: options.input.sourceRepoRoot,
+    baseRef: options.input.baseRef ?? DEFAULT_BASE_REF,
+    fixtureCurrentPrHeadSha: options.input.fixtureCurrentPrHeadSha,
+    fixtureIssueBody: options.input.fixtureIssueBody,
+    fixtureIssueNumber: round.issueNumber,
+    fixtureChangedPaths: options.input.fixtureChangedPaths,
+    fixtureBoundIssueSnapshotBytes: options.input.fixtureBoundIssueSnapshotBytes,
+  };
+  const authoritative = await resolveAuthoritativeReviewContext(
+    recoveryStart,
+    target,
+    options.projectId,
+  );
+  if (authoritative.tier !== round.tier
+      || authoritative.snapshotDigest !== round.boundIssueSnapshotDigest) {
+    throw new Error('recovered GPT round no longer matches its authoritative Issue snapshot');
+  }
+
+  const existingTerminal = authority.terminal;
+  if (existingTerminal?.targetSha === options.run.targetSha
+      && existingTerminal.runId !== options.run.id) {
+    throw new Error('another same-head pack review terminal is already authoritative');
+  }
+  if (existingTerminal?.runId === options.run.id) return authority;
+
+  authority = advancePackReviewAuthority(
+    authority,
+    'review_or_bundle_staged',
+    options.run.prNumber,
+    authorityOptions,
+  );
+  authority = commitPackReviewTerminal({
+    prNumber: options.run.prNumber,
+    expectedTransitionSeq: authority.transitionSeq,
+    terminal: terminalV2FromPayload({
+      runId: options.run.id,
+      targetSha: options.run.targetSha,
+      verdict: payload.verdict,
+      findingCount: payload.findingCount,
+      findings: payload.findings,
+      automaticBudgetDisposition: options.run.automaticBudgetDisposition,
+    }),
+    status: classifyPackReviewPayload(payload).terminalStatus,
+    findingCount: payload.findingCount,
+    options: authorityOptions,
+  });
+  const trusted = resolveTrustedRunnerPaths();
+  return commitAtCapTriage({
+    start: recoveryStart,
+    target,
+    projectId: options.projectId,
+    baseRef: options.input.baseRef ?? DEFAULT_BASE_REF,
+    trustedPackRoot: trusted.trustedPackRoot,
+    storeRoot: options.storeRoot,
+    authority,
+    payload,
+  });
+}
+
+async function settleRecoveredGptDelivery(options: {
+  run: PackReviewRunRecord;
+  input: ReconcileStalePackReviewRunsInput;
+  projectId: string;
+  storeRoot: string;
+  repoSlug: string;
+  writeRequiredStatus: PackReviewRequiredStatusWriter;
+}): Promise<Awaited<ReturnType<typeof resumePackReviewVerdictDelivery>>> {
+  await commitRecoveredGptAuthority(options);
+  const latestRun = getPackReviewRun(options.run.id, {
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
+  }) ?? options.run;
+  const resumed = await resumeRecoveredGptDelivery({ ...options, run: latestRun });
+  const authorityOptions: PackReviewAuthorityOptions = { storeRoot: options.storeRoot };
+  const currentAuthority = readPackReviewAuthority(options.run.prNumber, authorityOptions);
+  if (!currentAuthority
+      || currentAuthority.currentHeadSha !== options.run.targetSha
+      || currentAuthority.terminal?.runId !== options.run.id) {
+    throw new Error('pack review authority changed before recovered publication');
+  }
+  const publicationStatus = resumed.reason === 'completed' ? 'succeeded' : 'failed';
+  const publicationDigest = sha256Bytes(JSON.stringify({
+    status: resumed.status,
+    deliveryReason: resumed.reason,
+    githubReviewId: resumed.githubReviewId,
+    githubReviewUrl: resumed.githubReviewUrl,
+  }));
+  const existing = currentAuthority.publication;
+  if (!(existing?.headSha === options.run.targetSha
+      && existing.terminalRunId === options.run.id
+      && existing.status === publicationStatus
+      && existing.publicationDigest === publicationDigest)) {
+    recordPackReviewPublication({
+      prNumber: options.run.prNumber,
+      expectedTransitionSeq: currentAuthority.transitionSeq,
+      nextPhase: publicationStatus === 'succeeded' ? 'external_published' : currentAuthority.phase,
+      publication: {
+        headSha: options.run.targetSha,
+        terminalRunId: options.run.id,
+        status: publicationStatus,
+        publicationDigest,
+        recordedAtUtc: new Date().toISOString(),
+      },
+      options: authorityOptions,
+    });
+  }
+  return resumed;
+}
+
+async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsInput, options: {
+  projectId: string;
+  storeRoot: string;
+  repoSlug: string;
+}): Promise<Record<string, unknown> | null> {
+  const prNumber = input.prNumber;
+  if (!prNumber) return null;
+  let authority = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
+  if (!authority?.cycle || authority.cycle.state !== 'at_cap_continuation_required') return null;
+  const currentHead = input.fixtureCurrentPrHeadSha
+    ?? await resolveCurrentPrHead(input.sourceRepoRoot, options.repoSlug, prNumber);
+  if (currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
+    return {
+      prNumber,
+      finalCapSettlement: true,
+      settled: false,
+      reason: 'final_cap_settlement_head_not_observed',
+      nextAction: 'observe the current PR head, then rerun scoped reconcile',
+    };
+  }
+  const workerOwned = authority.smokeOrdering?.workerOwned;
+  if (workerOwned?.headSha !== authority.currentHeadSha || workerOwned.status !== 'passed') {
+    return {
+      prNumber,
+      headSha: authority.currentHeadSha,
+      finalCapSettlement: true,
+      settled: false,
+      reason: 'final_cap_settlement_worker_smoke_required',
+      nextAction: 'run worker-owned smoke on the exact current head, then rerun scoped reconcile',
+    };
+  }
+  const priorRun = authority.terminal?.runId
+    ? getPackReviewRun(authority.terminal.runId, { projectId: options.projectId, storeRoot: options.storeRoot })
+    : null;
+  if (!priorRun || priorRun.reviewVerdict !== 'findings' || !authority.terminal) {
+    return {
+      prNumber,
+      headSha: authority.currentHeadSha,
+      finalCapSettlement: true,
+      settled: false,
+      reason: 'final_cap_settlement_prior_findings_missing',
+      nextAction: 'rerun or reconcile the final capped review before settling the fix head',
+    };
+  }
+
+  let issueNumber = input.fixtureIssueNumber;
+  let fixturePrBody: string | undefined;
+  if (!issueNumber) {
+    const target = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
+    if (target.headSha !== authority.currentHeadSha) {
+      return {
+        prNumber,
+        finalCapSettlement: true,
+        settled: false,
+        reason: 'final_cap_settlement_head_changed',
+        nextAction: 'observe the current PR head and rerun scoped reconcile',
+      };
+    }
+    fixturePrBody = target.body;
+    issueNumber = extractClosingIssueNumber(target.body) ?? undefined;
+  }
+  if (!issueNumber) {
+    return {
+      prNumber,
+      headSha: authority.currentHeadSha,
+      finalCapSettlement: true,
+      settled: false,
+      reason: 'final_cap_settlement_issue_unresolved',
+      nextAction: 'restore the PR closing Issue reference and rerun scoped reconcile',
+    };
+  }
+  const settlementStart: StartInput = {
+    projectId: options.projectId,
+    prNumber,
+    headSha: authority.currentHeadSha,
+    sourceRepoRoot: input.sourceRepoRoot,
+    baseRef: input.baseRef ?? DEFAULT_BASE_REF,
+    fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+    fixtureIssueBody: input.fixtureIssueBody,
+    fixtureIssueNumber: issueNumber,
+    fixtureChangedPaths: input.fixtureChangedPaths,
+    fixtureBoundIssueSnapshotBytes: input.fixtureBoundIssueSnapshotBytes,
+    ...(fixturePrBody ? { fixturePrBody } : {}),
+  };
+  const target = {
+    prNumber,
+    headSha: authority.currentHeadSha,
+    issueNumber,
+    repoSlug: options.repoSlug,
+    sourceRepoRoot: input.sourceRepoRoot,
+  };
+  try {
+    await resolveAuthoritativeReviewContext(settlementStart, target, options.projectId);
+    const trusted = resolveTrustedRunnerPaths();
+    authority = await commitAtCapTriage({
+      start: settlementStart,
+      target,
+      projectId: options.projectId,
+      baseRef: input.baseRef ?? DEFAULT_BASE_REF,
+      trustedPackRoot: trusted.trustedPackRoot,
+      storeRoot: options.storeRoot,
+      authority,
+      payload: {
+        verdict: 'findings',
+        findingCount: priorRun.findingCount ?? priorRun.findings.length,
+        findings: priorRun.findings as ReviewPayloadFinding[],
+      },
+      allowFinalSettlement: true,
+    });
+  } catch (error) {
+    return {
+      prNumber,
+      headSha: authority.currentHeadSha,
+      finalCapSettlement: true,
+      settled: false,
+      reason: `final_cap_settlement_incomplete:${describeError(error)}`,
+      nextAction: 'fix the reported blocker, rerun worker-owned smoke if the head changed, then rerun scoped reconcile',
+    };
+  }
+  const settled = authority.smokeOrdering?.reviewSettledHeadSha === authority.currentHeadSha;
+  return {
+    prNumber,
+    headSha: authority.currentHeadSha,
+    finalCapSettlement: true,
+    settled,
+    reason: settled
+      ? 'final_cap_fix_settled'
+      : authority.triage?.verdict === 'BLOCK'
+        ? 'final_cap_settlement_blocked'
+        : 'final_cap_settlement_incomplete',
+    ...(settled ? {} : {
+      nextAction: authority.triage?.verdict === 'BLOCK'
+        ? 'resolve the blocking current-head evidence, rerun worker-owned smoke, then rerun scoped reconcile'
+        : 'complete the current-head finding-resolution evidence, then rerun scoped reconcile',
+    }),
+  };
+}
+
 export async function reconcileStalePackReviewRuns(
   input: ReconcileStalePackReviewRunsInput,
 ): Promise<{ ok: true; results: Array<Record<string, unknown>> }> {
@@ -2086,7 +2629,9 @@ export async function reconcileStalePackReviewRuns(
     return identity.ok ? { ...record, canonicalRepository: identity.slug } : record;
   };
   const readBoundRecords = async (): Promise<PackReviewRunRecord[]> => Promise.all(
-    listPackReviewRunRecordsRaw({ projectId, storeRoot }).map(bindRepositoryIdentity),
+    listPackReviewRunRecordsRaw({ projectId, storeRoot })
+      .filter((record) => !input.prNumber || record.prNumber === input.prNumber)
+      .map(bindRepositoryIdentity),
   );
   const records = await readBoundRecords();
   const results: Array<Record<string, unknown>> = [];
@@ -2186,7 +2731,10 @@ export async function reconcileStalePackReviewRuns(
   for (const candidate of records) {
     const activeStale = isPackReviewRunStale(candidate);
     const unfinishedTerminal = isPackReviewUnfinishedTerminalRun(candidate);
-    if (!activeStale && !unfinishedTerminal) continue;
+    const immediateActive = input.immediate === true
+      && PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status)
+      && candidate.reviewRound?.reviewer === 'gpt';
+    if (!activeStale && !unfinishedTerminal && !immediateActive) continue;
 
     const unresolvedIdentity = await findUnresolvedSameHeadRepositoryIdentity({
       projectId,
@@ -2236,7 +2784,48 @@ export async function reconcileStalePackReviewRuns(
         headSha: run.targetSha,
         request,
       }));
-    if (activeStale) {
+
+    if (unfinishedTerminal
+        && run.reviewRound?.reviewer === 'gpt'
+        && packReviewDeliveryNeedsResume(run)) {
+      try {
+        const resumed = await settleRecoveredGptDelivery({
+          run,
+          input,
+          projectId,
+          storeRoot,
+          repoSlug,
+          writeRequiredStatus: statusWriter,
+        });
+        results.push({
+          runId: run.id,
+          terminalized: false,
+          statusReconciled: resumed.reason === 'completed',
+          recovered: true,
+          degraded: run.reviewRound?.settledSourceCount === 2,
+          settledSourceCount: run.reviewRound?.settledSourceCount,
+          reason: resumed.reason === 'completed'
+            ? 'gpt_journaled_delivery_resumed'
+            : `gpt_journaled_delivery_${resumed.reason}`,
+          deliveryReason: resumed.reason,
+          status: resumed.status,
+          ...(resumed.githubReviewId !== undefined ? { githubReviewId: resumed.githubReviewId } : {}),
+          ...(resumed.githubReviewUrl ? { githubReviewUrl: resumed.githubReviewUrl } : {}),
+        });
+      } catch (error) {
+        results.push({
+          runId: run.id,
+          terminalized: false,
+          statusReconciled: false,
+          recovered: true,
+          reason: `gpt_journaled_delivery_resume_failed:${describeError(error)}`,
+          nextAction: 'fix the reported authority or delivery blocker, then rerun scoped reconcile',
+        });
+      }
+      continue;
+    }
+
+    if (activeStale || immediateActive) {
       const recovery = await recoverStaleGptSourceComments({
         run,
         input,
@@ -2249,7 +2838,7 @@ export async function reconcileStalePackReviewRuns(
           getPackReviewRun(run.id, { projectId, storeRoot }) ?? run,
         );
         try {
-          const resumed = await resumeRecoveredGptDelivery({
+          const resumed = await settleRecoveredGptDelivery({
             run: recoveredRun,
             input,
             projectId,
@@ -2262,6 +2851,8 @@ export async function reconcileStalePackReviewRuns(
             terminalized: false,
             statusReconciled: resumed.reason === 'completed',
             recovered: true,
+            degraded: recoveredRun.reviewRound?.settledSourceCount === 2,
+            settledSourceCount: recoveredRun.reviewRound?.settledSourceCount,
             reason: resumed.reason === 'completed'
               ? 'gpt_source_comments_recovered_and_delivered'
               : `gpt_source_comments_recovered_delivery_${resumed.reason}`,
@@ -2277,20 +2868,45 @@ export async function reconcileStalePackReviewRuns(
             statusReconciled: false,
             recovered: true,
             reason: `gpt_source_comments_recovered_delivery_failed:${describeError(error)}`,
+            nextAction: 'rerun scoped reconcile to resume final delivery',
           });
         }
         continue;
       }
-      const terminalizationResult = terminalizePackReviewStaleRun(run.id, { projectId, storeRoot });
-      terminalized = terminalizationResult.changed;
-      run = await bindRepositoryIdentity(
-        getPackReviewRun(run.id, { projectId, storeRoot }) ?? terminalizationResult.run,
-      );
+      if (immediateActive && !activeStale) {
+        results.push({
+          runId: run.id,
+          terminalized: false,
+          statusReconciled: false,
+          hydratedSourceCount: recovery.hydratedSourceCount,
+          usableSourceCount: recovery.usableSourceCount,
+          graceExpired: recovery.graceExpired,
+          reason: recovery.reason,
+          nextAction: recovery.nextAction ?? 'let the current review continue and rerun scoped reconcile if needed',
+        });
+        continue;
+      }
+      if (activeStale) {
+        const terminalizationResult = terminalizePackReviewStaleRun(run.id, { projectId, storeRoot });
+        terminalized = terminalizationResult.changed;
+        run = await bindRepositoryIdentity(
+          getPackReviewRun(run.id, { projectId, storeRoot }) ?? terminalizationResult.run,
+        );
+        if (recovery.nextAction) {
+          results.push({
+            runId: run.id,
+            terminalized,
+            statusReconciled: false,
+            recoveryReason: recovery.reason,
+            nextAction: recovery.nextAction,
+          });
+        }
+      }
     }
 
     if (!isPackReviewUnfinishedTerminalRun(run)) continue;
 
-    const currentOrder = resolvePackReviewRunOrder(records, run);
+    const currentOrder = resolvePackReviewRunOrder(await readBoundRecords(), run);
     if (currentOrder.kind === 'ambiguous') {
       results.push({
         runId: run.id,
@@ -2370,6 +2986,11 @@ export async function reconcileStalePackReviewRuns(
       statusReconciled: outcome.state === 'succeeded',
       reason: outcome.reason,
     });
+  }
+
+  if (input.immediate && input.prNumber) {
+    const settlement = await reconcileFinalCapSettlement(input, { projectId, storeRoot, repoSlug });
+    if (settlement) results.push(settlement);
   }
 
   return { ok: true, results };
@@ -2489,6 +3110,7 @@ async function commitAtCapTriage(input: {
   storeRoot: string;
   authority: PackReviewAuthorityDocument;
   payload: ReviewPayload;
+  allowFinalSettlement?: boolean;
 }): Promise<PackReviewAuthorityDocument> {
   const cycle = input.authority.cycle;
   if (!cycle || !['at_cap_open_findings', 'at_cap_continuation_required'].includes(cycle.state)) {
@@ -2548,15 +3170,21 @@ async function commitAtCapTriage(input: {
       producerExecutableBytes: readFileSync(join(input.trustedPackRoot, 'scripts', 'merge-triage-evidence.ts')),
       boundIssueSnapshotBytes,
       changedPathCaptureBytes: changedPaths.join('\n'),
-      input: { baseRef: input.baseRef, issueNumber: input.target.issueNumber ?? null },
-    });
-    produceMergeTriageEvidence({
-      tuple,
-      changedPaths,
-      issueBody,
-      options: { storeRoot: input.storeRoot },
+      input: {
+        baseRef: input.baseRef,
+        issueNumber: input.target.issueNumber ?? null,
+      },
     });
     selection = selectMergeTriageEvidence({ tuple, options: { storeRoot: input.storeRoot } });
+    if (selection.kind === 'missing' && selection.reason === 'evidence_missing') {
+      produceMergeTriageEvidence({
+        tuple,
+        changedPaths,
+        issueBody,
+        options: { storeRoot: input.storeRoot },
+      });
+      selection = selectMergeTriageEvidence({ tuple, options: { storeRoot: input.storeRoot } });
+    }
   } catch {
     // Missing or malformed trusted inputs remain an audited pending-operator result.
   }
@@ -2573,11 +3201,20 @@ async function commitAtCapTriage(input: {
     input.authority = readPackReviewAuthority(input.target.prNumber, { storeRoot: input.storeRoot })!;
   }
   const current = readPackReviewAuthority(input.target.prNumber, { storeRoot: input.storeRoot })!;
+  const findingResolution = selection.evidence?.findingResolution;
+  const verdict = input.allowFinalSettlement
+    && selection.kind === 'selected'
+    && selection.verdict === 'PENDING_ARCHITECT'
+    && selection.evidence?.predicateResult === 'no_intersection'
+    && findingResolution?.predicateResult === 'resolved'
+    && findingResolution.findingSnapshotDigest === findingSnapshotDigest
+    ? 'DEFER'
+    : selection.verdict;
   return commitPackReviewTriage({
     prNumber: input.target.prNumber,
     expectedTransitionSeq: current.transitionSeq,
     triage: {
-      verdict: selection.verdict,
+      verdict,
       source: 'automatic',
       findingSnapshotDigest,
       committedAtUtc: new Date().toISOString(),
@@ -2652,6 +3289,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     sourceRepoRoot: target.sourceRepoRoot,
     projectId,
     storeRoot,
+    prNumber: target.prNumber,
     fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
     fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
     ...(recoverableStaleGptFixture ? {
@@ -2664,17 +3302,15 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
   });
   const claimMode = input.claimMode ?? 'acquire';
-  const resumeCandidate = target.operatorStart
-    ? null
-    : await findJournaledDeliveryResumeCandidate({
-        projectId,
-        storeRoot,
-        prNumber: target.prNumber,
-        headSha: target.headSha,
-        repoSlug: target.repoSlug,
-        sourceRepoRoot: target.sourceRepoRoot,
-        resolveSlug,
-      });
+  const resumeCandidate = await findJournaledDeliveryResumeCandidate({
+    projectId,
+    storeRoot,
+    prNumber: target.prNumber,
+    headSha: target.headSha,
+    repoSlug: target.repoSlug,
+    sourceRepoRoot: target.sourceRepoRoot,
+    resolveSlug,
+  });
   const githubReviewTransport = createGithubReviewTransport({
     repoRoot: target.sourceRepoRoot,
     repoSlug: target.repoSlug,
@@ -2764,7 +3400,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       surface: claimSurface,
       startReason: target.operatorStart?.reason ?? (trim(input.startReason) || 'manual'),
       resumeRunId: resumeCandidate?.id,
-      allowCompletedSameHeadReplay: Boolean(target.operatorStart),
     });
     if (!claimLease.acquired) {
       return {
@@ -2857,20 +3492,12 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         headSha: target.headSha,
         options: authorityOptions,
       });
-    } else if (target.operatorStart) {
-      authority = reopenPackReviewAuthorityForExplicitExtraReview({
-        prNumber: target.prNumber,
-        expectedTransitionSeq: authority.transitionSeq,
-        headSha: target.headSha,
-        options: authorityOptions,
-      });
     }
 
     const legacyHarnessFixtureWithoutSmokePlan = process.env.OPK_VITEST_HARNESS === '1'
       && authoritative.issueBody !== undefined
       && !authoritative.issueBody.includes('```smoke-test-plan');
-    if (!target.operatorStart
-        && authoritative.issueBody !== undefined
+    if (authoritative.issueBody !== undefined
         && smokeOrderingRequired(authoritative.issueBody)
         && !legacyHarnessFixtureWithoutSmokePlan) {
       try {
@@ -2891,8 +3518,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
 
     carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
     const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
-    if (!target.operatorStart
-        && !conflictFreeCarryover
+    if (!conflictFreeCarryover
         && authority.cycle
         && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
       await releaseEarlyClaim('at_cap_continuation_required');
@@ -2901,6 +3527,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         created: false,
         reused: false,
         reason: 'at_cap_continuation_required',
+        nextAction: 'fix the final findings, run worker-owned smoke on the exact current head, then run scoped reconcile --immediate',
         prNumber: target.prNumber,
         headSha: target.headSha,
         cycleId: authority.cycle.cycleId,
@@ -3106,8 +3733,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       sourceRepoRoot: target.sourceRepoRoot,
       canonicalRepository: target.repoSlug,
       legacyRepositoryBySourceRoot,
-      automaticBudgetDisposition: target.operatorStart ? 'non_consuming_explicit' : 'consume',
-      allowCompletedSameHeadReplay: Boolean(target.operatorStart),
+      automaticBudgetDisposition: 'consume',
       ...(gptRound ? { reviewRound: gptRound } : {}),
     });
     run = created.run;
@@ -3415,12 +4041,48 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       if (input.fixtureBeforeGptAggregateSettlement) {
         await input.fixtureBeforeGptAggregateSettlement({ runId: run.id, payload });
       }
-      payload = validatePersistedGptReviewPayload(run.id, payload, { projectId, storeRoot });
-      const persistedRun = getPackReviewRun(run.id, { projectId, storeRoot });
+      let persistedRun = getPackReviewRun(run.id, { projectId, storeRoot });
       if (!persistedRun) throw new Error(`pack review run ${run.id} disappeared before GPT settlement`);
+      const persistedRound = persistedRun.reviewRound;
+      if (!persistedRound) throw new Error(`pack review run ${run.id} lost its GPT round before settlement`);
+      const usableSourceCount = gptUsableSourceCount(persistedRound);
+      if (persistedRound.cardinality >= 3
+          && usableSourceCount === persistedRound.cardinality
+          && persistedRound.settledSourceCount === undefined) {
+        const frozen = freezeGptRoundSourceCount(
+          run.id,
+          persistedRound.cardinality,
+          { projectId, storeRoot },
+        );
+        if (!frozen) throw new Error(`pack review run ${run.id} could not freeze its complete GPT source census`);
+        persistedRun = getPackReviewRun(run.id, { projectId, storeRoot });
+        if (!persistedRun) throw new Error(`pack review run ${run.id} disappeared while freezing GPT source count`);
+      }
       run = persistedRun;
-
       const diagnostics = gptRoundDiagnostics(run.reviewRound);
+      payload = validatePersistedGptReviewPayload(run.id, payload, { projectId, storeRoot });
+      if (hasPersistedPackReviewVerdict(run)) {
+        const concurrentAuthority = readPackReviewAuthority(target.prNumber, authorityOptions);
+        const published = concurrentAuthority?.currentHeadSha === target.headSha
+          && concurrentAuthority.terminal?.runId === run.id
+          && concurrentAuthority.publication?.terminalRunId === run.id
+          && concurrentAuthority.publication.status === 'succeeded';
+        terminal = true;
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: true,
+          created: true,
+          reused: false,
+          recovered: true,
+          reason: published ? 'concurrent_reconcile_settled' : 'concurrent_reconcile_owns_delivery',
+          runId: run.id,
+          status: run.status,
+          httpStatus: 200,
+          ...(run.githubReviewId !== undefined ? { githubReviewId: run.githubReviewId } : {}),
+          ...(run.githubReviewUrl ? { githubReviewUrl: run.githubReviewUrl } : {}),
+        };
+      }
       const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
         repoRoot: target.sourceRepoRoot,
         repoSlug: target.repoSlug,
@@ -3523,18 +4185,16 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       findingCount: payload.findingCount,
       options: authorityOptions,
     });
-    if (!target.operatorStart) {
-      authority = await commitAtCapTriage({
-        start: input,
-        target,
-        projectId,
-        baseRef,
-        trustedPackRoot: trusted.trustedPackRoot,
-        storeRoot,
-        authority,
-        payload,
-      });
-    }
+    authority = await commitAtCapTriage({
+      start: input,
+      target,
+      projectId,
+      baseRef,
+      trustedPackRoot: trusted.trustedPackRoot,
+      storeRoot,
+      authority,
+      payload,
+    });
 
     const deliveryRun = run;
     if (!(process.env.OPK_VITEST_HARNESS === '1' && input.fixturePostReviewHeadSha === undefined)) {
@@ -3723,8 +4383,8 @@ function usage(): string {
     'Status:',
     '  node --experimental-strip-types scripts/pack-review-runner.ts list [--project-id orchestrator-pack]',
     '',
-    'Stale reconciliation:',
-    '  node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root <path> --repo-slug owner/name',
+    'Recovery / settlement:',
+    '  node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root <path> --repo-slug owner/name [--pr-number <n>] [--immediate]',
     '',
     'Audited cap reset:',
     '  node --experimental-strip-types scripts/pack-review-runner.ts reset --pr-number <n> --actor <id> --reason <text> --nonce <value>',
@@ -3765,6 +4425,10 @@ function parseArgs(argv: string[]): Record<string, unknown> {
     const flag = argv[index]!;
     if (flag === '--help' || flag === '-h') {
       result.help = true;
+      continue;
+    }
+    if (flag === '--immediate') {
+      result.immediate = true;
       continue;
     }
     const key = keyByFlag[flag];
@@ -3825,12 +4489,19 @@ async function main(): Promise<void> {
       sourceRepoRoot,
       projectId,
       storeRoot: trim(input.storeRoot) || undefined,
+      prNumber: positiveInteger(input.prNumber, 'prNumber'),
+      immediate: input.immediate === true,
+      baseRef: trim(input.baseRef) || DEFAULT_BASE_REF,
       fixtureCurrentPrHeadSha: (input as StartInput).fixtureCurrentPrHeadSha,
       fixtureGptSourceCommentTransport: (input as StartInput).fixtureGptSourceCommentTransport,
       fixtureGithubReviewId: (input as StartInput).fixtureGithubReviewId,
       fixtureGithubReviewTransport: (input as StartInput).fixtureGithubReviewTransport,
       fixtureRequiredStatusWriter: (input as StartInput).fixtureRequiredStatusWriter,
       fixtureWorkerNotifier: (input as StartInput).fixtureWorkerNotifier,
+      fixtureIssueBody: (input as StartInput).fixtureIssueBody,
+      fixtureIssueNumber: (input as StartInput).fixtureIssueNumber,
+      fixtureChangedPaths: (input as StartInput).fixtureChangedPaths,
+      fixtureBoundIssueSnapshotBytes: (input as StartInput).fixtureBoundIssueSnapshotBytes,
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;

@@ -1,9 +1,10 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { executeFinalAcceptanceGuards, FINAL_ACCEPTANCE_CONTRACT_VERSION } from './create-issue-final-acceptance-contract.ts';
-import { runFinalAcceptance, validatePublishBodyBinding } from './create-issue-final-acceptance.ts';
+import { resolvePublishedAuthorState, runFinalAcceptance, validatePublishBodyBinding } from './create-issue-final-acceptance.ts';
 import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
 import {
   logicalEventsEqual,
@@ -722,6 +723,28 @@ describe('create-issue-stage-finalize integration', () => {
 describe('create-issue-final-acceptance contract parity', () => {
   it('exports the shared contract version', () => {
     expect(FINAL_ACCEPTANCE_CONTRACT_VERSION).toBe('create-issue-final-acceptance-contract/v1');
+  });
+
+  it('resolves operator-pinned published author state from the trusted Issue census', () => {
+    const body = [
+      'm3-protected: id=published-author-state | revision=r01 | contest=none | outcome=non-activate',
+      'author-state: published-author-state',
+      'revision: r01',
+      '',
+    ].join('\n');
+    const sha256 = createHash('sha256').update(body).digest('hex');
+    const resolved = resolvePublishedAuthorState({
+      issueNumber: 1192,
+      sourceRevision: 'r01',
+      verdictUrl: 'https://github.com/chetwerikoff/orchestrator-pack/issues/1192#issuecomment-42',
+      verdictSha256: sha256,
+      verdictByteLength: Buffer.byteLength(body),
+      verdictFindingCount: 0,
+      reason: 'published author state is the canonical adjudication',
+    }, 'chetwerikoff/orchestrator-pack', 1192, [trusted(42, body, 'chetwerikoff', '2026-08-26T00:00:00Z')]);
+
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.state).toEqual({ text: body, sha256, byteLength: Buffer.byteLength(body) });
   });
 
   it('requires direct guard execution inputs instead of a PASS receipt shortcut', () => {

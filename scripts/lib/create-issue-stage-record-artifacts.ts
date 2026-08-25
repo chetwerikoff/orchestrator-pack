@@ -1763,6 +1763,52 @@ function isSafeFileComponent(value: string): boolean {
     && !value.includes('..');
 }
 
+const DERIVED_STAGE_RECEIPT_FIELDS = new Set([
+  'stageReceiptId',
+  'previousStageReceiptId',
+  'receiptCensus',
+  'stageSequence',
+]);
+
+export function stageReceiptPayloadsMatchExceptDerivedChain(
+  currentBytes: Buffer,
+  candidateBytes: Buffer,
+): boolean {
+  const matches = (current: unknown, candidate: unknown, topLevel = false): boolean => {
+    if (Array.isArray(current) || Array.isArray(candidate)) {
+      if (!Array.isArray(current) || !Array.isArray(candidate) || current.length !== candidate.length) return false;
+      return current.every((item, index) => matches(item, candidate[index], false));
+    }
+    if (isRecord(current) || isRecord(candidate)) {
+      if (!isRecord(current) || !isRecord(candidate)) return false;
+      const invocation = !topLevel && current.schema === 'reviewer-invocation-envelope/v1' && candidate.schema === 'reviewer-invocation-envelope/v1';
+      const keys = new Set([...Object.keys(current), ...Object.keys(candidate)]);
+      for (const key of keys) {
+        if (topLevel && DERIVED_STAGE_RECEIPT_FIELDS.has(key)) continue;
+        const currentHasKey = Object.prototype.hasOwnProperty.call(current, key);
+        const candidateHasKey = Object.prototype.hasOwnProperty.call(candidate, key);
+        if (topLevel && key === 'invocations' && (!currentHasKey || !candidateHasKey)) {
+          const present = currentHasKey ? current[key] : candidate[key];
+          if (Array.isArray(present) && present.length === 0) continue;
+        }
+        if (invocation && key === 'reviewerSource' && (!currentHasKey || !candidateHasKey)) continue;
+        if (!currentHasKey || !candidateHasKey || !matches(current[key], candidate[key], false)) return false;
+      }
+      return true;
+    }
+    return Object.is(current, candidate);
+  };
+
+  try {
+    const current = JSON.parse(currentBytes.toString('utf8')) as unknown;
+    const candidate = JSON.parse(candidateBytes.toString('utf8')) as unknown;
+    if (!isRecord(current) || !isRecord(candidate)) return false;
+    return matches(current, candidate, true);
+  } catch {
+    return false;
+  }
+}
+
 function publishArtifactSet(
   outputDir: string,
   files: readonly string[],
@@ -1789,7 +1835,11 @@ function publishArtifactSet(
       if (!targetStat.isFile()) throw new Error(`cannot replace non-file artifact target: ${target}`);
       const currentBytes = readFileSync(target);
       const candidateBytes = readFileSync(staged);
-      if (file.startsWith('stage-completeness-receipt-') && !currentBytes.equals(candidateBytes)) {
+      if (
+        file.startsWith('stage-completeness-receipt-')
+        && !currentBytes.equals(candidateBytes)
+        && !stageReceiptPayloadsMatchExceptDerivedChain(currentBytes, candidateBytes)
+      ) {
         throw new Error(`conflicting immutable stage receipt target: ${target}`);
       }
       if (currentBytes.equals(candidateBytes)) continue;

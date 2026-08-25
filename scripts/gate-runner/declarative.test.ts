@@ -26,6 +26,9 @@ const movedClean = {
   'AGENTS.md': [
     '## Coworker CLI delegation',
     '## RTK read-exploration',
+    'Before `AwaitShell`, read `~/.cursor/projects/<slug>/terminals/<shell_id>.txt`; an `exit_code:` in its tail proves the job is over.',
+    'Cap each `block_until_ms` at `300000`; re-check and re-await instead of issuing one long block.',
+    'A `pattern` cannot rescue a dead job because it writes no further lines.',
     'See [worker](docs/orchestration-runbook.md#worker-lifecycle).',
     'See [plan](docs/repository_policy.md#plan-first-execution).',
     'See [task scope](docs/repository_policy.md#task-and-scope-authority).',
@@ -182,7 +185,18 @@ describe('real representative declarative ports', () => {
     expect(failed.details).toContain('missing required file: docs/tiering.md');
   });
 
-  it('real moved-content gate proves static-source positive and negative paths with legacy wording', () => {
+  it('real moved-content gate proves AwaitShell guidance positive and negative paths', () => {
+    const awaitShellRule = 'Before `AwaitShell`, read `~/.cursor/projects/<slug>/terminals/<shell_id>.txt`; an `exit_code:` in its tail proves the job is over.';
+    expect(evaluateDeclarativeGate(agentRulesMovedContentGate, memorySnapshot(movedClean)).status).toBe('PASS');
+    const missingAwaitShellRule = evaluateDeclarativeGate(agentRulesMovedContentGate, memorySnapshot({
+      ...movedClean,
+      'AGENTS.md': movedClean['AGENTS.md'].replace(`${awaitShellRule}\n`, ''),
+    }));
+    expect(missingAwaitShellRule.status).toBe('FAIL');
+    expect(missingAwaitShellRule.details).toContain(`AGENTS.md missing required content: ${awaitShellRule}`);
+  });
+
+  it('real moved-content gate preserves the moved-content negative path', () => {
     const failed = evaluateDeclarativeGate(agentRulesMovedContentGate, memorySnapshot({
       ...movedClean,
       'AGENTS.md': `${movedClean['AGENTS.md']}\n## Task complexity tier rubric`,

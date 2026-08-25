@@ -310,7 +310,11 @@ export function validateHistoricalReceiptsAgainstLineage(
       diagnostic.code === 'duplicate-remote-event' && diagnostic.eventKey === eventKey
     ));
     if (!event || event.schema !== STAGE_SCHEMA) {
-      errors.push(`${label}: no canonical published stage event ${eventKey}`);
+      // A predecessor receipt may have been admitted before the cycle advanced;
+      // publish-stage must not re-admit it under the strict current-cycle contract.
+      if (event || cycle.cycleId === input.cycleId) {
+        errors.push(`${label}: no canonical published stage event ${eventKey}`);
+      }
     } else {
       const logical = event.logical as StageEventLogical;
       const mismatches = stageEventMismatches(receipt, logical);

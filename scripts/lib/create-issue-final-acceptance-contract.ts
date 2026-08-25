@@ -20,6 +20,12 @@ import type { CanonicalLineage } from './create-issue-stage-record-types.ts';
 export const FINAL_ACCEPTANCE_CONTRACT_VERSION = 'create-issue-final-acceptance-contract/v1';
 const SOURCE_REVISION_MARKER_RE = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i;
 
+export interface PublishedAuthorState {
+  text: string;
+  sha256: string;
+  byteLength: number;
+}
+
 export interface FinalAcceptanceGuardInput {
   issueBody: string;
   /** Immutable body artifact supplied to the terminal reviewer. */
@@ -42,6 +48,7 @@ export interface FinalAcceptanceGuardInput {
   canonicalLineage?: CanonicalLineage;
   tierIntakePath?: string;
   externalPassReceiptPath?: string;
+  publishedAuthorState?: PublishedAuthorState;
   readText?: (path: string) => string;
   readJson?: (path: string) => unknown;
 }
@@ -301,6 +308,7 @@ export function executeFinalAcceptanceGuards(
         timestampMs: index + 1,
       })),
       repoRoot: process.cwd(),
+      ...(input.publishedAuthorState ? { publishedAuthorState: input.publishedAuthorState } : {}),
     });
     if (!ledgerResult.ok) errors.push(...ledgerResult.errors.map((item) => `finding-ledger: ${item}`));
   }

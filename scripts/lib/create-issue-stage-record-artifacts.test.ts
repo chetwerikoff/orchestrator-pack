@@ -12,6 +12,7 @@ import {
   STAGE_EVIDENCE_SCHEMA,
   inspectAcceptanceArtifacts,
   produceAcceptanceArtifacts,
+  stageReceiptPayloadsMatchExceptDerivedChain,
 } from './create-issue-stage-record-artifacts.ts';
 import {
   deriveReviewEpisodeId,
@@ -341,6 +342,37 @@ function inspect(input: ReturnType<typeof fixture>) {
 }
 
 describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
+  it('accepts an omitted invocations field when the persisted value is empty', () => {
+    const receipt = (invocations?: unknown) => ({
+      schema: 'stage-completeness-receipt/v1',
+      stable: 'same',
+      ...(invocations === undefined ? {} : { invocations }),
+    });
+    const bytes = (value: unknown) => Buffer.from(JSON.stringify(value));
+    expect(stageReceiptPayloadsMatchExceptDerivedChain(
+      bytes(receipt([])),
+      bytes(receipt()),
+    )).toBe(true);
+  });
+
+  it('continues rejecting non-empty invocation payload differences and tampered reviewerSource', () => {
+    const invocation = {
+      schema: 'reviewer-invocation-envelope/v1',
+      terminal: true,
+      reviewerSource: 'original-source',
+    };
+    const receipt = (invocations: unknown) => ({ schema: 'stage-completeness-receipt/v1', invocations });
+    const bytes = (value: unknown) => Buffer.from(JSON.stringify(value));
+    expect(stageReceiptPayloadsMatchExceptDerivedChain(
+      bytes(receipt([invocation])),
+      bytes(receipt([{ ...invocation, terminal: false }])),
+    )).toBe(false);
+    expect(stageReceiptPayloadsMatchExceptDerivedChain(
+      bytes(receipt([invocation])),
+      bytes(receipt([{ ...invocation, reviewerSource: 'tampered-source' }])),
+    )).toBe(false);
+  });
+
   it('accepts receipt-ok/artifact-ok only after census, principal proof, and reread', () => {
     const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
     const source = transport({ census: [...input.reviewComments, comment(input.body)] });
@@ -464,6 +496,63 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       expect(readFileSync(join(input.outputDir, name))).toEqual(conflictingBytes.get(name));
     }
     expect(readdirSync(input.dir).filter((name) => name.startsWith('.output.tmp-'))).toEqual([]);
+  });
+
+  it('refreshes derived receipt chain fields without treating the target as conflicting', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    const initial = produce(input);
+    expect(initial.ok, initial.errors.join('\n')).toBe(true);
+    const captureBytes = readFileSync(input.capturePath);
+    const receiptPath = join(input.outputDir, 'stage-completeness-receipt-attempt-001.json');
+    const initialReceipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    const priorReceiptId = `${input.episode}:stage-receipt:0001`;
+    writeFileSync(receiptPath, JSON.stringify({
+      ...initialReceipt,
+      stageReceiptId: priorReceiptId,
+      previousStageReceiptId: null,
+      receiptCensus: [priorReceiptId],
+      stageSequence: 1,
+    }) + '\n');
+
+    const refreshed = produce(input, transport({ census: [...input.reviewComments, comment(input.body)] }));
+
+    expect(refreshed.ok, refreshed.errors.join('\n')).toBe(true);
+    const refreshedReceipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    expect(refreshedReceipt.stageReceiptId).toBe(initialReceipt.stageReceiptId);
+    expect(refreshedReceipt.stageSequence).toBe(initialReceipt.stageSequence);
+    expect(refreshedReceipt.previousStageReceiptId).toBe(initialReceipt.previousStageReceiptId);
+    expect(refreshedReceipt.receiptCensus).toEqual(initialReceipt.receiptCensus);
+    expect(readFileSync(input.capturePath)).toEqual(captureBytes);
+  });
+
+  it('refreshes optional reviewer source metadata on a legacy receipt', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    const initial = produce(input);
+    expect(initial.ok, initial.errors.join('\n')).toBe(true);
+    const receiptPath = join(input.outputDir, 'stage-completeness-receipt-attempt-001.json');
+    const initialReceipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    for (const invocation of initialReceipt.invocations) delete invocation.reviewerSource;
+    writeFileSync(receiptPath, JSON.stringify(initialReceipt) + '\n');
+
+    const refreshed = produce(input, transport({ census: [...input.reviewComments, comment(input.body)] }));
+
+    expect(refreshed.ok, refreshed.errors.join('\n')).toBe(true);
+    const refreshedReceipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    expect(refreshedReceipt.invocations.every((invocation: Record<string, unknown>) => typeof invocation.reviewerSource === 'string')).toBe(true);
+
+    refreshedReceipt.invocations[0].reviewerSource = 'tampered-reviewer-source';
+    writeFileSync(receiptPath, JSON.stringify(refreshedReceipt) + '\n');
+    const conflict = produce(input, transport({ census: [...input.reviewComments, comment(input.body)] }));
+    expect(conflict.ok).toBe(false);
+    expect(conflict.errors.join('\n')).toContain('conflicting immutable stage receipt target');
   });
 
   it('requires GitHub artifact authority for complete calls even with an opaque reviewerSource', () => {

@@ -206,7 +206,7 @@ function protectedEvidenceMatches(type, text) { return (PROTECTED_PATTERNS[type]
 
 function parseM3Lines(captures, metadata, errors, publishedAuthorState) {
   const result = new Map();
-  const append = (text, captureIndex, stageOverride, timestampMs) => {
+  const append = (text, captureIndex, stageOverride, timestampMs, source = 'capture') => {
     for (const line of String(text).split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!/^m3-protected:/i.test(trimmed)) continue;
@@ -224,6 +224,7 @@ function parseM3Lines(captures, metadata, errors, publishedAuthorState) {
         stage: stageOverride ?? parseCaptureName(publishedCaptureName).stage,
         captureIndex,
         timestampMs,
+        source,
       };
       const list = result.get(record.id) ?? []; list.push(record); result.set(record.id, list);
     }
@@ -240,7 +241,7 @@ function parseM3Lines(captures, metadata, errors, publishedAuthorState) {
     else if (sha256(text) !== expectedSha256) errors.push('review-economics: published author-state sha256 does not match supplied bytes');
     if (!Number.isSafeInteger(expectedByteLength) || expectedByteLength < 0) errors.push('review-economics: published author-state byteLength must be a non-negative integer');
     else if (Buffer.byteLength(text) !== expectedByteLength) errors.push('review-economics: published author-state byteLength does not match supplied bytes');
-    append(text, captures.length, undefined, Number.MAX_SAFE_INTEGER);
+    append(text, captures.length, undefined, Number.MAX_SAFE_INTEGER, 'published-author-state');
   }
   return result;
 }
@@ -454,7 +455,10 @@ function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, p
     if (!state.architectPending && !record) errors.push(`review-economics: protected finding ${occurrence.occurrenceId} requires architect-pending before lens progression`);
     return;
   }
-  if (state.architectPending) { errors.push(`review-economics: protected finding ${occurrence.occurrenceId} must clear architect-pending before final acceptance`); return; }
+  if (state.architectPending && record?.source !== 'published-author-state') {
+    errors.push(`review-economics: protected finding ${occurrence.occurrenceId} must clear architect-pending before final acceptance`);
+    return;
+  }
   if (contestRemainsOpen(current)) { errors.push(`review-economics: protected finding ${occurrence.occurrenceId} remains under current contest`); return; }
   if (record) {
     if (record.outcome === 'activate') {
