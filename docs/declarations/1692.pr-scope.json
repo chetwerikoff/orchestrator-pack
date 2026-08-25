@@ -22,7 +22,8 @@
     "scripts/lib/create-issue-final-acceptance-revision.test.ts",
     "scripts/lib/create-issue-final-acceptance.ts",
     "scripts/lib/create-issue-stage-record-cli.ts",
-    "scripts/lib/create-issue-stage-record.test.ts"
+    "scripts/lib/create-issue-stage-record.test.ts",
+    "scripts/toolchain/create-issue-final-acceptance.test.ts"
   ],
-  "source_revision": "54b72414dfddae176902002606200e7b9ee39359"
+  "source_revision": "b5d72b5efaf239ce424b8a71ff438ca106035bde"
 }
