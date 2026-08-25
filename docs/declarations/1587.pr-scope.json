@@ -8,7 +8,9 @@
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/launch-watch/watch.test.ts",
     "scripts/orca-runtime/adapter.ts",
-    "scripts/runtime/caller-census.ts"
+    "scripts/runtime/caller-census.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts"
   ],
   "denylist": [
     "credentials/",
@@ -24,7 +26,9 @@
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/launch-watch/watch.test.ts",
     "scripts/orca-runtime/adapter.ts",
-    "scripts/runtime/caller-census.ts"
+    "scripts/runtime/caller-census.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts"
   ],
   "source_revision": "24a1fdaca06df28ba63635e7beb2847b15ba8661"
 }

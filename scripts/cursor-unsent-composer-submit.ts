@@ -33,6 +33,8 @@ const DELIVERY_RENDER_GRACE_MS = 250;
 const DELIVERY_LIVENESS_WINDOW_MS = 25;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
+export const ORCHESTRATION_RECONCILE_LEDGER_PATH = join(tmpdir(), 'opk-orchestration-mail-reconcile.json');
+const ORCHESTRATION_RECONCILE_WINDOW_MS = 60_000;
 
 export type CursorComposerKind = 'empty' | 'non_empty';
 
@@ -343,6 +345,14 @@ interface DeliveryMessageSubmitDeps {
     pointer: string,
   ) => RuntimeDispatchResult;
   readonly submitDeps: UnsentComposerSubmitDeps;
+}
+
+export interface OrchestrationMailReconcileResult {
+  readonly ok: boolean;
+  readonly attempted: number;
+  readonly nudged: number;
+  readonly skipped: number;
+  readonly reasons: readonly string[];
 }
 
 export interface UnsentComposerWatchState {
@@ -696,7 +706,7 @@ export async function submitOrcaMessageDeliveryPointer(
   return submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps);
 }
 
-function createOrcaMessageSubmitDeps(
+export function createOrcaMessageSubmitDeps(
   adapter: RuntimeAdapter,
   submitDeps = createAdapterSubmitDeps(adapter),
 ): DeliveryMessageSubmitDeps {
@@ -748,6 +758,40 @@ function createOrcaMessageSubmitDeps(
     writePointer: (worker, pointer) => adapter.dispatchInput({ worker, text: pointer, writeOnly: true }),
     submitDeps,
   };
+}
+
+
+/** Reconcile unread Orca mail without inspecting composer screens globally. */
+export async function runOrchestrationMailReconcileTick(
+  deps: DeliveryMessageSubmitDeps,
+  options: { readonly ledgerPath?: string; readonly now?: () => number } = {},
+): Promise<OrchestrationMailReconcileResult> {
+  const ledgerPath = options.ledgerPath ?? ORCHESTRATION_RECONCILE_LEDGER_PATH;
+  const now = options.now ?? Date.now;
+  const current = now();
+  const ledger: Record<string, number> = (() => {
+    try { return JSON.parse(readFileSync(ledgerPath, 'utf8')) as Record<string, number>; } catch { return {}; }
+  })();
+  const response = runOrcaJson<OrcaInboxFullResult>(['orchestration', 'inbox', '--full']);
+  if (!response.ok) return { ok: false, attempted: 0, nudged: 0, skipped: 0, reasons: [response.error?.code ?? 'orchestration_inbox_unavailable'] };
+  const unread = (response.result?.messages ?? []).filter((row) => {
+    const id = row.id?.trim() ?? '';
+    return id && !(row.read === 1 || row.read === true);
+  });
+  const unreadIds = new Set(unread.map((row) => row.id!.trim()));
+  for (const id of Object.keys(ledger)) if (!unreadIds.has(id) || current - ledger[id]! >= ORCHESTRATION_RECONCILE_WINDOW_MS) delete ledger[id];
+  const reasons: string[] = [];
+  let nudged = 0; let skipped = 0;
+  for (const row of unread) {
+    const id = row.id!.trim();
+    if (ledger[id] !== undefined) { skipped += 1; continue; }
+    const result = await submitOrcaMessageDeliveryPointer(id, deps);
+    if (result.terminals[0]?.enter || result.terminals[0]?.reason === 'dispatch_unknown' || result.terminals[0]?.reason === 'send_failed') nudged += 1;
+    ledger[id] = current;
+    if (result.terminals[0]?.reason) reasons.push(`${id}:${result.terminals[0].reason}`);
+  }
+  writeFileSync(ledgerPath, `${JSON.stringify(ledger)}\n`);
+  return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$/u.test(reason)), attempted: unread.length, nudged, skipped, reasons };
 }
 
 let heldLockFd: number | undefined;
@@ -902,12 +946,14 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 function parseArgs(argv: readonly string[]): UnsentComposerSubmitInput & {
   readonly once: boolean;
   readonly delivery: boolean;
+  readonly reconcile: boolean;
   readonly messageId: string;
 } {
   const terminals: string[] = [];
   let dryRun = false;
   let once = false;
   let delivery = false;
+  let reconcile = false;
   let messageId = '';
   let intervalMs = DEFAULT_INTERVAL_MS;
   for (let index = 0; index < argv.length; index += 1) {
@@ -929,6 +975,10 @@ function parseArgs(argv: readonly string[]): UnsentComposerSubmitInput & {
       delivery = true;
       continue;
     }
+    if (token === '--reconcile') {
+      reconcile = true;
+      continue;
+    }
     if (token === '--message-id') {
       messageId = argv[++index]?.trim() ?? '';
       continue;
@@ -943,7 +993,7 @@ function parseArgs(argv: readonly string[]): UnsentComposerSubmitInput & {
     }
     throw new Error(`unknown argument: ${token}`);
   }
-  return { terminals, dryRun, once, delivery, messageId, intervalMs };
+  return { terminals, dryRun, once, delivery, reconcile, messageId, intervalMs };
 }
 
 function shouldLogWatchTick(result: UnsentComposerSubmitResult): boolean {
@@ -960,6 +1010,15 @@ async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
   const adapter = await selectRuntimeAdapter();
   const deps = createAdapterSubmitDeps(adapter);
+  if (parsed.reconcile) {
+    acquireWatchLock();
+    installLockRelease();
+    const result = await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(adapter, deps));
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if (!result.ok) process.exitCode = 1;
+    releaseWatchLock();
+    return;
+  }
   if (parsed.delivery) {
     if (parsed.dryRun || parsed.once || (parsed.messageId && parsed.terminals?.length)) {
       throw new Error('delivery mode requires one --message-id or one --terminal and cannot combine with --dry-run or --once');

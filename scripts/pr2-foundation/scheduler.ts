@@ -22,6 +22,7 @@ import {
   type FleetNudgeTickInput,
 } from './fleet-nudge-actuator.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
+import { createAdapterSubmitDeps, createOrcaMessageSubmitDeps, runOrchestrationMailReconcileTick, acquireWatchLock, releaseWatchLock } from '../cursor-unsent-composer-submit.ts';
 import {
   isRowStale,
   readWorkerStatusStoreFile,
@@ -75,6 +76,7 @@ export interface SchedulerBoundary {
   listReviewRuns(): ReturnType<typeof listPackReviewRuns>;
   start(candidate: ActivatedSchedulerCandidate, freshHeadSha: string): Promise<{ ok: boolean; reason?: string }>;
   reconcilePostReviewSmoke?: (candidate: ActivatedSchedulerCandidate, fresh: SchedulerCurrentPr) => Promise<PostReviewSmokeOutcome>;
+  orchestrationMailReconcile?: () => Promise<import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult>;
   schedulerIntervalMs?: number;
   fleetObserver?: SchedulerFleetObserver;
   fleetNudgeActuator?: SchedulerFleetNudgeActuator;
@@ -213,6 +215,7 @@ export function productionSchedulerBoundary(input: {
   repository?: string; unresolvedReason?: FleetReconciliationReason; assignmentReconciliation?: SchedulerAssignmentReconciliation;
   fleetBindings?: readonly FleetAssignmentBinding[];
   reconcilePostReviewSmoke?: SchedulerBoundary['reconcilePostReviewSmoke'];
+  orchestrationMailReconcile?: SchedulerBoundary['orchestrationMailReconcile'];
   publishHandoff?: SchedulerBoundary['publishHandoff'];
 }): SchedulerBoundary {
   const env = input.env ?? process.env; const projectId = input.projectId ?? 'orchestrator-pack';
@@ -230,6 +233,7 @@ export function productionSchedulerBoundary(input: {
     ...(input.assignmentReconciliation ? { assignmentReconciliation: input.assignmentReconciliation } : {}),
     ...(input.fleetBindings ? { fleetBindings: input.fleetBindings } : {}),
     ...(input.reconcilePostReviewSmoke ? { reconcilePostReviewSmoke: input.reconcilePostReviewSmoke } : {}),
+    ...(input.orchestrationMailReconcile ? { orchestrationMailReconcile: input.orchestrationMailReconcile } : {}),
     ...(input.publishHandoff ? { publishHandoff: input.publishHandoff } : {}),
     start: async (candidate, freshHeadSha) => {
       const result = await startPackReview({ projectId, linkedSessionId: candidate.sessionId, prNumber: candidate.prNumber, headSha: freshHeadSha, sourceRepoRoot: input.repoRoot, startReason: 'scheduler', surface: 'pr2-scheduler', claimMode: 'acquire' });
@@ -339,6 +343,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
       throw new Error(`scheduler_fleet_phase_failed:${fleetNudge.result}`);
     }
   }
+  if (boundary.orchestrationMailReconcile) await boundary.orchestrationMailReconcile();
   let attempted = 0; let started = 0; let skipped = 0;
   for (const candidate of boundary.listCandidates()) {
     attempted += 1; assertSchedulerEpoch(env); const fresh = await boundary.readCurrentPr(candidate); const freshHead = String(fresh.headRefOid ?? '').trim().toLowerCase();
@@ -551,6 +556,13 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     });
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   };
+  const orchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () => {
+    const runtime = await selectRuntimeAdapter({ env });
+    const deps = createAdapterSubmitDeps(runtime);
+    acquireWatchLock();
+    try { return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps)); }
+    finally { releaseWatchLock(); }
+  };
   const postReviewSmoke = createProductionPostReviewSmokeReconciler({
     projectId,
     repoRoot,
@@ -571,6 +583,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       ...(assignmentReconciliation ? { assignmentReconciliation } : {}),
       fleetBindings,
       reconcilePostReviewSmoke: postReviewSmoke,
+      orchestrationMailReconcile,
       publishHandoff,
     }),
     cadence,

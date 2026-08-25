@@ -476,6 +476,10 @@ For one concurrent plural batch, classify each slot from the REST publication ce
 
 Do not add a second observer, completion store, delivery-status store, reconciliation pass, retry service, or fallback transport around this rule.
 
+## Scheduler inbox reconciliation
+
+The existing scheduler tick performs an inbox-gated orchestration-mail reconcile after fleet supervision and before review processing. It reads unread Orca messages by exact `message_id`, resolves only each message's exact recipient, and reuses the delivery pointer/Enter behavior; it never performs global composer polling. A temporary approximately 60-second message-id ledger suppresses repeated nudges while a message remains unread, prunes consumed messages, and records ambiguous dispatch outcomes; Orca read state remains authoritative across process restarts. Manual smoke may invoke `node --experimental-strip-types scripts/cursor-unsent-composer-submit.ts --reconcile`.
+
 ## Scheduler phases
 
 `runSchedulerTick` remains two phases.
