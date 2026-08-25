@@ -473,6 +473,16 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   const repoRoot = process.cwd(); const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env; const projectId = 'orchestrator-pack';
   const epoch = assertSchedulerEpoch(env); const activationLineage = schedulerActivationLineage(epoch);
   const assignmentStorePath = resolveWorkerAssignmentStorePath(projectId, env); const storedAssignments = listCurrentWorkerAssignments(assignmentStorePath);
+  const executeOrchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () => {
+    const runtime = await selectRuntimeAdapter({ env });
+    const deps = createAdapterSubmitDeps(runtime);
+    return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps));
+  };
+  let preloadedOrchestrationMailReconcile: Promise<import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult> | undefined =
+    executeOrchestrationMailReconcile();
+  // Let the inbox-gated reconcile begin before the synchronous assignment
+  // binding lookup can consume the scheduler's entire startup window.
+  await Promise.resolve();
   const repository = await resolveRepositoryFromRepoRoot(repoRoot);
   const scopedAssignment = storedAssignments?.find((assignment) => assignment.repository === repository);
   let fleetObserver: FleetObserver; let fleetNudgeActuator: SchedulerFleetNudgeActuator = createTargetUnresolvedFleetNudgeActuator();
@@ -557,9 +567,9 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   };
   const orchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () => {
-    const runtime = await selectRuntimeAdapter({ env });
-    const deps = createAdapterSubmitDeps(runtime);
-    return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps));
+    const preloaded = preloadedOrchestrationMailReconcile;
+    preloadedOrchestrationMailReconcile = undefined;
+    return await (preloaded ?? executeOrchestrationMailReconcile());
   };
   const postReviewSmoke = createProductionPostReviewSmokeReconciler({
     projectId,

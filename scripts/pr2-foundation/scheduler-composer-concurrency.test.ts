@@ -70,5 +70,9 @@ describe('event-driven composer submission', () => {
     expect(source).toContain('const result = await runSchedulerTick(boundary);');
     expect(source).toContain('orchestrationMailReconcile');
     expect(source).toContain('runOrchestrationMailReconcileTick');
+    expect(source.indexOf('const executeOrchestrationMailReconcile')).toBeLessThan(
+      source.indexOf('const repository = await resolveRepositoryFromRepoRoot'),
+    );
+    expect(source).toContain('preloadedOrchestrationMailReconcile');
   });
 });
