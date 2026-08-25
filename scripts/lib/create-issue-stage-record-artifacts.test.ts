@@ -497,6 +497,32 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(readFileSync(input.capturePath)).toEqual(captureBytes);
   });
 
+  it('refreshes optional reviewer source metadata on a legacy receipt', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    const initial = produce(input);
+    expect(initial.ok, initial.errors.join('\n')).toBe(true);
+    const receiptPath = join(input.outputDir, 'stage-completeness-receipt-attempt-001.json');
+    const initialReceipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    for (const invocation of initialReceipt.invocations) delete invocation.reviewerSource;
+    writeFileSync(receiptPath, JSON.stringify(initialReceipt) + '\n');
+
+    const refreshed = produce(input, transport({ census: [...input.reviewComments, comment(input.body)] }));
+
+    expect(refreshed.ok, refreshed.errors.join('\n')).toBe(true);
+    const refreshedReceipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    expect(refreshedReceipt.invocations.every((invocation: Record<string, unknown>) => typeof invocation.reviewerSource === 'string')).toBe(true);
+
+    refreshedReceipt.invocations[0].reviewerSource = 'tampered-reviewer-source';
+    writeFileSync(receiptPath, JSON.stringify(refreshedReceipt) + '\n');
+    const conflict = produce(input, transport({ census: [...input.reviewComments, comment(input.body)] }));
+    expect(conflict.ok).toBe(false);
+    expect(conflict.errors.join('\n')).toContain('conflicting immutable stage receipt target');
+  });
+
   it('requires GitHub artifact authority for complete calls even with an opaque reviewerSource', () => {
     const input = fixture({
       transportClassification: 'complete',
