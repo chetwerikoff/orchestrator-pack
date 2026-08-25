@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import './toolchain/native-entrypoint-preflight.ts';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -673,6 +673,19 @@ function deliveryNoEffect(
   };
 }
 
+function deliveryMessageFromInboxRow(row: OrcaInboxMessageRow):
+  | { readonly ok: true; readonly message: DeliveryMessage }
+  | { readonly ok: false; readonly reason: string } {
+  const id = row.id?.trim() ?? '';
+  const runId = row.run_id?.trim() ?? '';
+  const recipient = row.to_handle?.trim() ?? '';
+  if (!id || !runId || !recipient) return { ok: false, reason: 'orchestration_message_binding_incomplete' };
+  return {
+    ok: true,
+    message: { id, runId, recipient, consumed: row.read === 1 || row.read === true },
+  };
+}
+
 /** Bind one Orca message to one exact recipient, write its pointer, then submit it. */
 export async function submitOrcaMessageDeliveryPointer(
   messageId: string,
@@ -682,8 +695,15 @@ export async function submitOrcaMessageDeliveryPointer(
   if (!id) return deliveryNoEffect('orchestration_message_id_missing', undefined, false);
   const found = deps.lookupMessage(id);
   if (!found.ok) return deliveryNoEffect(found.reason, undefined, false);
-  if (found.message.consumed) return deliveryNoEffect('delivery_already_consumed');
-  const resolved = deps.resolveWorker(found.message);
+  return submitOrcaMessageDeliveryPointerForMessage(found.message, deps);
+}
+
+async function submitOrcaMessageDeliveryPointerForMessage(
+  message: DeliveryMessage,
+  deps: DeliveryMessageSubmitDeps,
+): Promise<UnsentComposerSubmitResult> {
+  if (message.consumed) return deliveryNoEffect('delivery_already_consumed');
+  const resolved = deps.resolveWorker(message);
   if (!resolved.ok) return deliveryNoEffect(resolved.reason, undefined, false);
   if (resolved.worker === null) return deliveryNoEffect('worker_gone');
   const worker = resolved.worker;
@@ -697,9 +717,9 @@ export async function submitOrcaMessageDeliveryPointer(
     }
     return deliveryNoEffect('composer_not_empty_before_delivery', worker);
   }
-  const check = found.message.recipient.startsWith('dispatch:')
+  const check = message.recipient.startsWith('dispatch:')
     ? 'orca orchestration check'
-    : `orca orchestration check --run ${found.message.runId}`;
+    : `orca orchestration check --run ${message.runId}`;
   const pointer = `You have 1 orchestration message. Run \`${check}\`.`;
   const written = deps.writePointer(worker.identity, pointer);
   if (written.status !== 'dispatched') {
@@ -772,6 +792,7 @@ export async function runOrchestrationMailReconcileTick(
   const lockPath = options.lockPath ?? ORCHESTRATION_RECONCILE_LOCK_PATH;
   const held = tryAcquireHeldFileLock(lockPath);
   if (!held.acquired) return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [`reconcile_lock_${held.reason}`] };
+  replaceLockedFileContents(held.descriptor, `${process.pid}\n`);
   try {
     const now = options.now ?? Date.now;
     const current = now();
@@ -785,6 +806,13 @@ export async function runOrchestrationMailReconcileTick(
       return id && !(row.read === 1 || row.read === true);
     });
     const unreadIds = new Set(unread.map((row) => row.id!.trim()));
+    const unreadRowsById = new Map<string, OrcaInboxMessageRow[]>();
+    for (const row of unread) {
+      const id = row.id!.trim();
+      const rows = unreadRowsById.get(id) ?? [];
+      rows.push(row);
+      unreadRowsById.set(id, rows);
+    }
     for (const id of Object.keys(ledger)) {
       if (!unreadIds.has(id) || current - ledger[id]! >= ORCHESTRATION_RECONCILE_WINDOW_MS) delete ledger[id];
     }
@@ -794,14 +822,25 @@ export async function runOrchestrationMailReconcileTick(
       const id = row.id!.trim();
       if (ledger[id] !== undefined) { skipped += 1; continue; }
       attempted += 1;
-      const result = await submitOrcaMessageDeliveryPointer(id, deps);
+      const rows = unreadRowsById.get(id) ?? [];
+      const found = rows.length === 1
+        ? deliveryMessageFromInboxRow(rows[0]!)
+        : { ok: false as const, reason: 'orchestration_message_ambiguous' };
+      const result = found.ok
+        ? await submitOrcaMessageDeliveryPointerForMessage(found.message, deps)
+        : deliveryNoEffect(found.reason, undefined, false);
       if (result.terminals[0]?.enter || result.terminals[0]?.reason === 'dispatch_unknown' || result.terminals[0]?.reason === 'send_failed') nudged += 1;
       // Record every attempted delivery, including ambiguous outcomes, so a
       // periodic tick cannot hammer one unread message.
       ledger[id] = current;
       if (result.terminals[0]?.reason) reasons.push(`${id}:${result.terminals[0].reason}`);
     }
-    replaceLockedFileContents(held.descriptor, `${JSON.stringify(ledger)}\n`);
+    const ledgerDescriptor = openSync(ledgerPath, constants.O_CREAT | constants.O_RDWR, 0o600);
+    try {
+      replaceLockedFileContents(ledgerDescriptor, `${JSON.stringify(ledger)}\n`);
+    } finally {
+      closeSync(ledgerDescriptor);
+    }
     return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$/u.test(reason)), attempted, nudged, skipped, reasons };
   } finally {
     releaseHeldFileLock(held.descriptor);
@@ -1025,12 +1064,9 @@ async function main(): Promise<void> {
   const adapter = await selectRuntimeAdapter();
   const deps = createAdapterSubmitDeps(adapter);
   if (parsed.reconcile) {
-    acquireWatchLock();
-    installLockRelease();
     const result = await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(adapter, deps));
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (!result.ok) process.exitCode = 1;
-    releaseWatchLock();
     return;
   }
   if (parsed.delivery) {
