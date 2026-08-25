@@ -397,6 +397,46 @@ describe('Orca assignment resolution', () => {
     });
   });
 
+  it('does not classify an exact exited target as gone while its terminal remains owned', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      if (args[0] === 'terminal' && args[1] === 'show') {
+        return {
+          ok: true,
+          result: {
+            terminal: {
+              handle: 'term-owned',
+              incarnationId: 'generation-1',
+              worktreePath: '/tmp/worktree',
+            },
+          },
+        };
+      }
+      expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-1']);
+      return {
+        ok: true,
+        result: {
+          worker: { agent_terminal_handle: 'term-owned' },
+          terminal: null,
+          observation: { exactWorker: true, status: 'exited' },
+          terminalResource: {
+            terminalHandle: 'term-owned',
+            worktreeId: 'repo::worktree',
+            originDispatchId: 'dispatch-1',
+            ownerDispatchId: 'dispatch-1',
+          },
+        },
+      };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
+      status: 'ok',
+      value: {
+        kind: 'resolved',
+        worker: { identity: { runtime: 'orca', id: 'term-owned', generation: 'generation-1' } },
+      },
+    });
+  });
+
   it('does not reinterpret gone when exactWorker is not true', () => {
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
