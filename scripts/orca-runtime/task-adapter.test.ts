@@ -954,3 +954,53 @@ describe('Orca task adapter bounded tab-not-found close retry', () => {
     expect(fixture.closeCalls()).toBe(1);
   });
 });
+
+
+describe('Orca readiness path fallback', () => {
+  const registered = {
+    path: '/home/che/orca/workspaces/orchestrator-pack/wrk-ff-smoke-decl-path-skip',
+    head: 'a'.repeat(40),
+    linkedIssue: null,
+  };
+
+  it('does not call worktree show when worktree current succeeds', () => {
+    const runJson = vi.fn((args: readonly string[]) => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'worktree current') {
+        return { ok: true, result: { worktree: registered } };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.readiness({ cwd: registered.path })).toMatchObject({
+      status: 'ok',
+      value: { ready: true, workspacePath: registered.path, headSha: registered.head },
+    });
+    expect(runJson.mock.calls.map((call) => call[0])).toEqual([['worktree', 'current']]);
+  });
+
+  it('resolves a registered worktree via show path:cwd when current returns selector_not_found', () => {
+    const runJson = vi.fn((args: readonly string[]) => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'worktree current') {
+        return {
+          ok: false,
+          error: {
+            code: 'selector_not_found',
+            message: `No Orca-managed worktree contains the current directory: ${registered.path}`,
+          },
+        };
+      }
+      if (operation === 'worktree show') {
+        expect(args).toEqual(['worktree', 'show', '--worktree', `path:${registered.path}`]);
+        return { ok: true, result: { worktree: registered } };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.readiness({ cwd: registered.path })).toMatchObject({
+      status: 'ok',
+      value: { ready: true, workspacePath: registered.path, headSha: registered.head },
+    });
+  });
+});
