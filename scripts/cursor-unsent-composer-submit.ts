@@ -712,9 +712,9 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     : deps.submitDeps.read(worker.identity);
   if (!shown.ok) return deliveryNoEffect(shown.reason, worker, false);
   if (classifyCursorComposer(shown.lines.join('\n')) !== 'empty') {
-    if (isExactOrchestrationPointer(shown)) {
-      return submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps);
-    }
+    // A native Orca pointer already in the follow-up queue is delivered;
+    // unread mail is not proof that another Enter is needed.
+    if (isExactOrchestrationPointer(shown)) return deliveryNoEffect('already_submitted', worker);
     return deliveryNoEffect('composer_not_empty_before_delivery', worker);
   }
   const check = message.recipient.startsWith('dispatch:')
@@ -725,7 +725,9 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   if (written.status !== 'dispatched') {
     return deliveryNoEffect(written.reason ?? 'pointer_write_failed', worker, false);
   }
-  return submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps);
+  // Native Orca submits a newly written follow-up pointer; do not synthesize
+  // an Enter, even if the next observation still shows the queued pointer.
+  return deliveryNoEffect('pointer_queued', worker);
 }
 
 export function createOrcaMessageSubmitDeps(
