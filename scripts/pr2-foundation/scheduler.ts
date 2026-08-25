@@ -22,7 +22,7 @@ import {
   type FleetNudgeTickInput,
 } from './fleet-nudge-actuator.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
-import { createAdapterSubmitDeps, createOrcaMessageSubmitDeps, runOrchestrationMailReconcileTick, acquireWatchLock, releaseWatchLock } from '../cursor-unsent-composer-submit.ts';
+import { createAdapterSubmitDeps, createOrcaMessageSubmitDeps, runOrchestrationMailReconcileTick } from '../cursor-unsent-composer-submit.ts';
 import {
   isRowStale,
   readWorkerStatusStoreFile,
@@ -559,9 +559,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   const orchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () => {
     const runtime = await selectRuntimeAdapter({ env });
     const deps = createAdapterSubmitDeps(runtime);
-    acquireWatchLock();
-    try { return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps)); }
-    finally { releaseWatchLock(); }
+    return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps));
   };
   const postReviewSmoke = createProductionPostReviewSmokeReconciler({
     projectId,

@@ -36,6 +36,7 @@ export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit
 export const ORCHESTRATION_RECONCILE_LEDGER_PATH = join(tmpdir(), 'opk-orchestration-mail-reconcile.json');
 export const ORCHESTRATION_RECONCILE_LOCK_PATH = join(tmpdir(), 'opk-orchestration-mail-reconcile.lock');
 const ORCHESTRATION_RECONCILE_WINDOW_MS = 60_000;
+const ORCA_COMMAND_TIMEOUT_MS = 10_000;
 
 export type CursorComposerKind = 'empty' | 'non_empty';
 
@@ -713,7 +714,7 @@ export function createOrcaMessageSubmitDeps(
 ): DeliveryMessageSubmitDeps {
   return {
     lookupMessage: (messageId) => {
-      const response = runOrcaJson<OrcaInboxFullResult>(['orchestration', 'inbox', '--full']);
+      const response = runOrcaJson<OrcaInboxFullResult>(['orchestration', 'inbox', '--full'], { timeoutMs: ORCA_COMMAND_TIMEOUT_MS });
       if (!response.ok) return { ok: false, reason: response.error?.code ?? 'orchestration_inbox_unavailable' };
       const matches = (response.result?.messages ?? []).filter((message) => message.id?.trim() === messageId);
       if (matches.length !== 1) {
@@ -747,7 +748,7 @@ export function createOrcaMessageSubmitDeps(
       if (message.recipient.startsWith('run:')) {
         const runId = message.recipient.slice('run:'.length).trim();
         if (runId !== message.runId) return { ok: false, reason: 'orchestration_message_run_mismatch' };
-        const response = runOrcaJson<OrcaRunShowResult>(['orchestration', 'run-show', '--id', runId]);
+        const response = runOrcaJson<OrcaRunShowResult>(['orchestration', 'run-show', '--id', runId], { timeoutMs: ORCA_COMMAND_TIMEOUT_MS });
         if (!response.ok) return { ok: false, reason: response.error?.code ?? 'orchestration_run_unavailable' };
         handle = response.result?.run?.coordinator_handle?.trim() ?? '';
       }
@@ -777,7 +778,7 @@ export async function runOrchestrationMailReconcileTick(
     const ledger: Record<string, number> = (() => {
       try { return JSON.parse(readFileSync(ledgerPath, 'utf8')) as Record<string, number>; } catch { return {}; }
     })();
-    const response = runOrcaJson<OrcaInboxFullResult>(['orchestration', 'inbox', '--full']);
+    const response = runOrcaJson<OrcaInboxFullResult>(['orchestration', 'inbox', '--full'], { timeoutMs: ORCA_COMMAND_TIMEOUT_MS });
     if (!response.ok) return { ok: false, attempted: 0, nudged: 0, skipped: 0, reasons: [response.error?.code ?? 'orchestration_inbox_unavailable'] };
     const unread = (response.result?.messages ?? []).filter((row) => {
       const id = row.id?.trim() ?? '';
