@@ -700,7 +700,7 @@ describe('delivery-triggered composer submission', () => {
     expect(submitted).toEqual([target.identity, target.identity]);
   });
 
-  it('writes and queues one unread Orca message after asynchronous rendering', async () => {
+  it('writes one unread Orca pointer without a synthetic Enter', async () => {
     const target = worker('term_message_delivery');
     const submitted: RuntimeWorkerIdentity[] = [];
     let reads = 0;
@@ -749,22 +749,22 @@ describe('delivery-triggered composer submission', () => {
 
     const pending = submitOrcaMessageDeliveryPointer('msg_delivery', deps);
     await Promise.resolve();
-    expect(reads).toBe(2);
+    expect(reads).toBe(1);
     expect(writes).toBe(1);
     expect(submitted).toHaveLength(0);
     releaseRender?.();
     const result = await pending;
 
-    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
-    expect(reads).toBe(3);
-    expect(submitted).toEqual([target.identity, target.identity]);
+    expect(result.terminals[0]).toMatchObject({ reason: 'pointer_queued', enter: false });
+    expect(reads).toBe(1);
+    expect(submitted).toEqual([]);
 
     consumed = true;
     const duplicate = await submitOrcaMessageDeliveryPointer('msg_delivery', deps);
     expect(duplicate.terminals[0]?.reason).toBe('delivery_already_consumed');
-    expect(reads).toBe(3);
+    expect(reads).toBe(1);
     expect(writes).toBe(1);
-    expect(submitted).toHaveLength(2);
+    expect(submitted).toHaveLength(0);
   });
 
   it('writes a run-bound pointer for a coordinator recipient', async () => {
@@ -799,8 +799,47 @@ describe('delivery-triggered composer submission', () => {
     });
 
     expect(written).toBe(POKE);
-    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
-    expect(submitted).toEqual([target.identity]);
+    expect(result.terminals[0]).toMatchObject({ reason: 'pointer_queued', enter: false });
+    expect(submitted).toEqual([]);
+  });
+
+  it('accepts an explicit write witness reported with dispatch_unknown', async () => {
+    const target = worker('term_write_witness');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const result = await submitOrcaMessageDeliveryPointer('msg_write_witness', {
+      lookupMessage: () => ({
+        ok: true as const,
+        message: { id: 'msg_write_witness', runId: 'run_d613a86c140a', recipient: 'run:run_d613a86c140a', consumed: false },
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => ({
+        status: 'dispatch_unknown' as const,
+        reason: 'submit_witness_unavailable',
+        witness: { operation: 'write' as const, accepted: true as const, source: 'runtime-response' as const },
+      }),
+      submitDeps: depsFor({ [target.identity.id]: ['→ Add a follow-up', ...CURSOR_FOOTER] }, { submitted }),
+    });
+
+    expect(result.terminals[0]).toMatchObject({ reason: 'pointer_queued', enter: false });
+    expect(submitted).toEqual([]);
+  });
+
+  it('does not re-Enter an already queued native pointer for unread mail', async () => {
+    const target = worker('term_native_queued');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let writes = 0;
+    const result = await submitOrcaMessageDeliveryPointer('msg_native_queued', {
+      lookupMessage: () => ({
+        ok: true as const,
+        message: { id: 'msg_native_queued', runId: 'run_d613a86c140a', recipient: 'run:run_d613a86c140a', consumed: false },
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => { writes += 1; return { status: 'dispatched' as const }; },
+      submitDeps: depsFor({ [target.identity.id]: [POKE, ...CURSOR_FOOTER] }, { submitted }),
+    });
+    expect(result.terminals[0]).toMatchObject({ reason: 'already_submitted', enter: false });
+    expect(writes).toBe(0);
+    expect(submitted).toHaveLength(0);
   });
 
   it('does not write a pointer over human composer text for an unread message', async () => {
