@@ -5,6 +5,11 @@ const skill = readFileSync(
   new URL('../../.claude/skills/create-issue-draft/SKILL.md', import.meta.url),
   'utf8',
 );
+const standaloneSkill = readFileSync(
+  new URL('../../.claude/skills/discuss-with-gpt/SKILL.md', import.meta.url),
+  'utf8',
+);
+const normalizedStandaloneSkill = standaloneSkill.replace(/\s+/g, ' ');
 const startMarker = '## Downstream test-task authoring floor — Issue #1195';
 const endMarker = '## Mechanical commands';
 const start = skill.indexOf(startMarker);
@@ -112,5 +117,28 @@ describe('Issue #1195 downstream test-task authoring floor', () => {
     expect(authoringFloor).toContain('producer wording comes before any validator');
     expect(normalizedFloor).toContain('validate this static floor');
     expect(authoringFloor).not.toContain('introduce a required diagnostic grammar');
+  });
+});
+
+describe('standalone discuss-with-gpt terminal read-back contract', () => {
+  it('requires authoritative artifact read-back before reporting terminal state', () => {
+    expect(normalizedStandaloneSkill).toContain(
+      'Before reporting any standalone terminal state, re-read the newest artifact',
+    );
+    expect(normalizedStandaloneSkill).toContain(
+      '`~/.local/state/discuss-with-gpt/<draft-slug>/`',
+    );
+    expect(normalizedStandaloneSkill).toContain(
+      'The on-disk record outranks agent recollection and any earlier tool refusal',
+    );
+    expect(normalizedStandaloneSkill).toContain(
+      'A preflight refusal on one invocation path is not a terminal state while a `completed_valid` artifact exists for that PASS_ID',
+    );
+  });
+
+  it('binds the standalone flow terminal step to the read-back', () => {
+    expect(normalizedStandaloneSkill).toContain(
+      '4. Validate PASS_ID/SHA and packet shape; record the durable state/artifact, then re-read the newest artifact before reporting any standalone terminal state.',
+    );
   });
 });
