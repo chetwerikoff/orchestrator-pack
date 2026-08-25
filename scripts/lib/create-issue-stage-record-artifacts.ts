@@ -477,7 +477,7 @@ function parseCanonicalTerminalVerdict(
   ) return null;
   if (revision.findingCount === 0) {
     const cleanVerdict = verdicts[0] === 'CLEAN' && exactCount('NO_FINDINGS') === 1;
-    const noFindingsVerdict = verdicts[0] === 'NO_FINDINGS' && exactCount('NO_FINDINGS') === 0;
+    const noFindingsVerdict = verdicts[0] === 'NO_FINDINGS' && exactCount('NO_FINDINGS') <= 1;
     if (!cleanVerdict && !noFindingsVerdict) return null;
   } else if (verdicts[0] !== 'FINDINGS' || exactCount('NO_FINDINGS') !== 0) {
     return null;
