@@ -118,6 +118,7 @@
     "scripts/pr-session-binding-cache.test.ts": "light",
     "scripts/pr2-foundation/binding-cache.test.ts": "light",
     "scripts/pr2-foundation/foundation.test.ts": "heavy",
+    "scripts/pr2-foundation/fleet-escalation-delivery.test.ts": "light",
     "scripts/pr2-foundation/fleet-nudge-actuator.test.ts": "postMergeWallclock",
     "scripts/pr2-foundation/fleet-observer.test.ts": "postMergeWallclock",
     "scripts/pr2-foundation/fleet-reconciliation-handoff.test.ts": "light",

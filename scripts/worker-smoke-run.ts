@@ -8,7 +8,7 @@ import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-con
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   buildSmokeAgentPrompt,
   buildSmokeGhChildEnv,
@@ -635,6 +635,25 @@ export function runtimeClose(
     return `close_failed:${result.reason}${runtimeError};presence=present;runtime=${worker.runtime};handle=${worker.id};generation=${worker.generation}`;
   }
   return `close_failed:${result.reason}${runtimeError};presence=unproven;presence_error=${failureReason(presence)}`;
+}
+
+export function runtimeCloseBoundHandle(
+  adapter: RuntimeAdapter,
+  handle: string,
+  options: Pick<CliOptions, 'cwd'>,
+): string {
+  const resolved = adapter.findWorkerById(handle, { cwd: options.cwd });
+  if (resolved.status !== 'ok') {
+    return `close_failed:${resolved.reason};presence=unproven;presence_error=${failureReason(resolved)}`;
+  }
+  if (resolved.value === null) {
+    return 'close_failed:worker_not_found;presence=unproven';
+  }
+  const workspacePath = resolved.value.workspacePath;
+  if (resolve(workspacePath) !== resolve(options.cwd)) {
+    return 'close_failed:worker_workspace_mismatch;presence=unproven';
+  }
+  return runtimeClose(adapter, resolved.value.identity, options);
 }
 
 function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scenarioCount: number): string {
@@ -1333,7 +1352,7 @@ export async function runSmokeAttempt(
     const admission = preflightSmokeLifecycle({
       repoRoot: options.cwd,
       runId,
-      closeBoundHandle: () => 'close_failed:cross_process_identity_not_adopted',
+      closeBoundHandle: (handle) => runtimeCloseBoundHandle(adapter, handle, options),
     });
     if (!admission.admitted) {
       const report = operationalReport('BLOCKED', options, {
