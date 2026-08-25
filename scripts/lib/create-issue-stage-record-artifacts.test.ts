@@ -550,6 +550,29 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       expect(result.ok).toBe(false);
       expect(result.errors.join('\n')).toContain('cannot credential a capture without artifactAuthority');
     });
+
+    it('credentials an architectural-clean VERDICT: NO_FINDINGS capture', () => {
+      const body = [
+        `Read revision: #${ISSUE} ${REVISION}`,
+        'review-economics-contract: v1',
+        'VERDICT: NO_FINDINGS',
+        'SIMPLIFICATION_CLEAN',
+        'FINDING_COUNT: 0',
+        'INVOCATION_ID_TO_ECHO: invocation-001',
+        '',
+      ].join('\n');
+      const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+      const result = produce(input);
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+      const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+      expect(receipt.invocations[0]).toMatchObject({
+        terminalClassification: 'incident',
+        sendCount: 1,
+        artifactAuthority: { kind: 'authoritative-github-artifact' },
+      });
+      expect(receipt.invocations[0].capture.rawFindingCount).toBe(0);
+      expect(readFileSync(input.capturePath, 'utf8')).toBe(body);
+    });
   });
 
   it('accepts receipt-missing/artifact-ok and preserves absent transport identity fields', () => {
