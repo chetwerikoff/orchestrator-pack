@@ -1880,4 +1880,88 @@ describe('published author-state M3 bridge', () => {
     );
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
+
+  it('clears pending state from the published r07 M3 bundle across all four attempts', () => {
+    const protectedOccurrences = [
+      {
+        id: 'sha256:215afa06e428c2d6d569d4f9850c36613107c1f2909430091490f8263a5825b2:pass-01-competitive-01.capture.txt:3',
+        findingId: 'C1', type: 'scope-violation', ordinal: 3, timestampMs: 1_100,
+        name: 'pass-01-competitive-01.capture.txt',
+        evidence: 'The proposed path is out of scope under allowed_roots.',
+      },
+      {
+        id: 'sha256:c4c7e99270edf124453d2d8199a7897e6e7c14e7f4b147ebe61e88456b7480a1:pass-01-competitive-02.capture.txt:3',
+        findingId: 'C2', type: 'scope-violation', ordinal: 3, timestampMs: 1_200,
+        name: 'pass-01-competitive-02.capture.txt',
+        evidence: 'The proposed path is out of scope under allowed_roots.',
+      },
+      {
+        id: 'sha256:09db790ddda8c9b8abd13693a8f883d14415bb35872c29bed7926de458fd96db:pass-02-architectural-review-01.capture.txt:1',
+        findingId: 'A1', type: 'scope-violation', ordinal: 1, timestampMs: 1_300,
+        name: 'pass-02-architectural-review-01.capture.txt',
+        evidence: 'The proposed path is out of scope under allowed_roots.',
+      },
+      {
+        id: 'sha256:523b8be7a22db5c5fe85b483d86f3dc1b079929c4a54b4cebd796d87925abc5a:pass-03-architectural-lens.capture.txt:8',
+        findingId: 'L8', type: 'scope-violation', ordinal: 8, timestampMs: 1_400,
+        name: 'pass-03-architectural-lens.capture.txt',
+        evidence: 'The proposed path is out of scope under allowed_roots.',
+      },
+    ] as const;
+    const captures = protectedOccurrences.map((item) => {
+      const filler = Array.from({ length: item.ordinal - 1 }, (_, index) => markedFinding(`FILLER-${item.findingId}-${index}`, { type: 'quality' })).join('\n');
+      return cap(item.name, item.timestampMs, `${filler}${filler ? '\n' : ''}${markedFinding(item.findingId, { type: item.type, evidence: item.evidence })}`);
+    }).concat([cap('pass-04-architectural.capture.txt', 1_500, markedClean())]);
+    const captureIdentity = (item: (typeof protectedOccurrences)[number]) => item.id.replace(/:\d+$/, '');
+    const fillerRows = protectedOccurrences.flatMap((item) => Array.from({ length: item.ordinal - 1 }, (_, index) => row(`FILLER-${item.findingId}-${index}`, {
+      type: 'quality',
+      defectDisposition: 'addressed',
+      remedyDisposition: 'accepted',
+      occurrences: [`${captureIdentity(item)}:${index + 1}`],
+    })));
+    const protectedRows = protectedOccurrences.map((item) => row(item.findingId, {
+      type: item.type,
+      defectDisposition: 'addressed',
+      remedyDisposition: 'accepted',
+      occurrences: [item.id],
+      protectedOccurrences: [{ occurrenceId: item.id, architectPending: true, architectRequired: false, protectedActivation: null }],
+    }));
+    const rows = [...fillerRows, ...protectedRows];
+    const ledger = JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 15, distinctFindingCount: 15, processedDistinctCount: 15 },
+      findings: rows,
+    });
+    const captureMetadata = captures.map((capture) => ({
+      name: capture.name,
+      timestampMs: capture.timestampMs,
+      ...(protectedOccurrences.find((item) => item.name === capture.name)
+        ? { captureIdentity: protectedOccurrences.find((item) => item.name === capture.name)!.id.replace(/:\d+$/, '') }
+        : {}),
+    }));
+    const publishedAuthorState = protectedOccurrences
+      .map((item) => currentLens(item.id, { revision: 'r07', outcome: 'non-activate' }))
+      .join('\n');
+    const options = {
+      reviewEconomics: true,
+      phase: 'final-acceptance',
+      issueRevision: 'r07',
+      stageTerminalConfirmed: true,
+      captureMetadata,
+    };
+    const withoutPublishedState = checkFindingLedgerGuard(captures.map((capture) => capture.text), ledger, options as never);
+    expect(withoutPublishedState.ok).toBe(false);
+    expect(withoutPublishedState.errors.join('\n')).toContain('architect-pending');
+
+    const result = checkFindingLedgerGuard(captures.map((capture) => capture.text), ledger, {
+      ...options,
+      publishedAuthorState: {
+        text: publishedAuthorState,
+        sha256: createHash('sha256').update(publishedAuthorState).digest('hex'),
+        byteLength: Buffer.byteLength(publishedAuthorState),
+      },
+    } as never);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
 });
