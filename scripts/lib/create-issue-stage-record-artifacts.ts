@@ -450,7 +450,7 @@ function parseCanonicalTerminalVerdict(
   const lines = text.split(/\r?\n/).map((line) => line.trim());
   const exactCount = (token: string): number => lines.filter((line) => line === token).length;
   const verdicts = lines.flatMap((line) => {
-    const match = /^VERDICT: (CLEAN|FINDINGS)$/.exec(line);
+    const match = /^VERDICT: (CLEAN|FINDINGS|NO_FINDINGS)$/.exec(line);
     return match ? [match[1]!] : [];
   });
   const findingCountLines = lines.filter((line) => line.startsWith('FINDING_COUNT:'));
@@ -476,7 +476,9 @@ function parseCanonicalTerminalVerdict(
     || (cutCandidates === 0 ? simplificationClean !== 1 : simplificationClean !== 0)
   ) return null;
   if (revision.findingCount === 0) {
-    if (verdicts[0] !== 'CLEAN' || exactCount('NO_FINDINGS') !== 1) return null;
+    const cleanVerdict = verdicts[0] === 'CLEAN' && exactCount('NO_FINDINGS') === 1;
+    const noFindingsVerdict = verdicts[0] === 'NO_FINDINGS' && exactCount('NO_FINDINGS') === 0;
+    if (!cleanVerdict && !noFindingsVerdict) return null;
   } else if (verdicts[0] !== 'FINDINGS' || exactCount('NO_FINDINGS') !== 0) {
     return null;
   }
