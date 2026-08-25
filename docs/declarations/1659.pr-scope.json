@@ -19,5 +19,5 @@
     "scripts/lib/create-issue-final-acceptance-revision.test.ts",
     "scripts/lib/create-issue-final-acceptance.ts"
   ],
-  "source_revision": "0b451d5e38b64e9254349ef8548ab5946cd7a53b"
+  "source_revision": "5d8da12a84d7cf351254c867940244e53e1ed447"
 }
