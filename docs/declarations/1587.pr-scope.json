@@ -6,11 +6,8 @@
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/launch-watch/watch.test.ts",
-    "scripts/orca-runtime/adapter.ts",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
-    "scripts/pr2-foundation/scheduler.ts",
-    "scripts/runtime/caller-census.ts"
+    "scripts/pr2-foundation/scheduler.ts"
   ],
   "denylist": [
     "credentials/",
