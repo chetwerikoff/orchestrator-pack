@@ -668,7 +668,9 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
   it('recovers a frozen 2/3 quorum after a crash before aggregate persistence', async () => {
     const storeRoot = tempRoot();
     harness(storeRoot);
-    const startedAt = new Date(Date.now() - 3 * 60_000);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-24T00:03:00.000Z'));
+    const startedAt = new Date('2026-08-24T00:00:00.000Z');
     const { runId, publications } = recoverableRun(storeRoot, startedAt);
     const capture = { body: '', posts: 0 };
 
@@ -685,6 +687,7 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     expect(frozen?.reviewVerdict).toBeUndefined();
     expect(capture.posts).toBe(0);
 
+    vi.setSystemTime(new Date('2026-08-24T00:06:00.000Z'));
     const resumed = await reconcileStalePackReviewRuns(reconcileInput(storeRoot, publications, capture));
     expect(resumed.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
