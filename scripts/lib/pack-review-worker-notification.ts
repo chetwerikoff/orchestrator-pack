@@ -245,10 +245,8 @@ async function finalizeJournal(admission: JournalAdmission, outcome: string): Pr
   });
 }
 
-function submitCursorComposerOnceAfterDelivery(adapter: RuntimeAdapter, worker: RuntimeWorker): void {
-  void submitUnsentCursorComposerOnceForWorker(worker, createAdapterSubmitDeps(adapter)).catch(() => {
-    // Composer submission is an auxiliary bounded reaction; notification settlement remains authoritative.
-  });
+async function submitCursorComposerOnceAfterDelivery(adapter: RuntimeAdapter, worker: RuntimeWorker): Promise<void> {
+  await submitUnsentCursorComposerOnceForWorker(worker, createAdapterSubmitDeps(adapter));
 }
 
 async function finalizeBoth(input: {
@@ -527,7 +525,7 @@ export async function sendPackReviewWorkerNotification(
       journalOutcome: DISPATCH_OUTCOME_DISPATCHED,
       claimOutcome: 'SENT',
     });
-    if (completed.ok) submitCursorComposerOnceAfterDelivery(adapter, worker);
+    if (completed.ok) await submitCursorComposerOnceAfterDelivery(adapter, worker);
     return {
       state: 'submitted',
       reason: completed.ok ? 'runtime_dispatch_submitted' : `runtime_dispatch_submitted:${completed.reason}`,
@@ -541,7 +539,7 @@ export async function sendPackReviewWorkerNotification(
       claimOutcome: 'UNCERTAIN',
       extra: { reason: dispatch.reason },
     });
-    if (completed.ok) submitCursorComposerOnceAfterDelivery(adapter, worker);
+    if (completed.ok) await submitCursorComposerOnceAfterDelivery(adapter, worker);
     return { state: 'ambiguous', reason: completed.ok ? 'dispatch_unknown' : completed.reason };
   }
   const completed = await finalizeBoth({
