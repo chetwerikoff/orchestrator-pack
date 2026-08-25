@@ -19,7 +19,6 @@ import {
   findTypeScriptSupervisorIdentities,
   markImportBegun,
   processAlive,
-  processAliveStrict,
   readCordonState,
   readProcessIdentity,
   releaseLegacyStartBarrier,
@@ -49,7 +48,12 @@ import {
   observeRuntimePreflight,
   observeRuntimeAdapterPreflight,
 } from './foundation-observation.ts';
-import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
+import {
+  isLiveRunningSupervisorChild,
+  isLiveSupervisorStatus,
+  processIdentityMatches,
+  readSupervisorStatus,
+} from '../orchestrator-side-process-supervisor.ts';
 import { D928 as D928_PATHS, TARGET_LIBRARIES as TARGET_LIBRARY_PATHS } from '../../pr2a/contracts.ts';
 import { validateRuntimePreflight } from '../../pr2-foundation/binding.ts';
 import { parseFoundationConfig } from '../../pr2-foundation/config.ts';
@@ -310,16 +314,12 @@ function assertGreenfieldAbsence(
   try {
     const status = readSupervisorStatus({ stateDir: canonical.supervisorStateDir });
     if (status) {
-      if (status.schemaVersion !== 1 || status.childId !== 'pr2-scheduler' || typeof status.restartState !== 'string') {
+      if (status.schemaVersion !== 2 || status.childId !== 'pr2-scheduler' || typeof status.restartState !== 'string') {
         throw new Error('greenfield_registered_child_unknown');
       }
-      const supervisorAlive = Number.isInteger(status.supervisorPid)
-        && status.supervisorPid > 1
-        && processAliveStrict(status.supervisorPid);
-      const childAlive = Number.isInteger(status.childPid)
-        && status.childPid !== null
-        && status.childPid > 1
-        && processAliveStrict(status.childPid);
+      const supervisorAlive = processIdentityMatches(status.supervisorPid, status.supervisorStartTicks);
+      const childAlive = status.childPid !== null
+        && processIdentityMatches(status.childPid, status.childStartTicks);
       if (supervisorAlive || childAlive) throw new Error('greenfield_registered_child_alive');
     }
     const lease = readLiveSingleInstanceLease(path.join(canonical.supervisorStateDir, 'typescript-supervisor.lock'));
@@ -511,21 +511,21 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
   };
 }
 
-async function waitForStartedSupervisor(request: ActivationRequest, nonce: string, expectedPid: number): Promise<{ supervisorPid: number; childGeneration: number }> {
+export async function waitForStartedSupervisor(request: ActivationRequest, nonce: string, expectedPid: number): Promise<{ supervisorPid: number; childGeneration: number }> {
   const deadline = Date.now() + 10_000;
   do {
     const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
+    if (status?.schemaVersion === 1) throw new Error('typescript_supervisor_status_v1_unsupported');
     if (status?.restartState === 'refused') throw new Error(`typescript_supervisor_refused:${status.refusalReason ?? 'unknown'}`);
     if (
       status
+      && isLiveSupervisorStatus(status)
       && status.epochId === request.epochId
       && status.nonce === nonce
       && status.supervisorPid === expectedPid
       && status.restartState === 'running'
-      && processAlive(expectedPid)
       && status.registryHash
-      && status.childPid !== null
-      && processAlive(status.childPid)
+      && isLiveRunningSupervisorChild(status)
       && status.childGeneration >= 1
     ) {
       return { supervisorPid: expectedPid, childGeneration: status.childGeneration };
