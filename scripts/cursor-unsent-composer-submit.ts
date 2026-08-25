@@ -725,8 +725,8 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   if (written.status !== 'dispatched') {
     return deliveryNoEffect(written.reason ?? 'pointer_write_failed', worker, false);
   }
-  // Native Orca submits a newly written follow-up pointer; do not synthesize
-  // an Enter, even if the next observation still shows the queued pointer.
+  // The pointer write is the only reconcile effect; unread state does not
+  // prove that an additional Enter is required, so never synthesize one.
   return deliveryNoEffect('pointer_queued', worker);
 }
 
