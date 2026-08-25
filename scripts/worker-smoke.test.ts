@@ -1169,4 +1169,20 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
     expect(prompt).toMatch(/selectedArtifactPath/u);
     expect(prompt).toMatch(/Do not FAIL an exact-scope or allowed-path scenario solely because that file appears in git diff/u);
   });
+
+  it('advises bounded await handling for shell jobs', () => {
+    const prompt = buildSmokeAgentPrompt({
+      issueNumber: 1260,
+      issueBody: ['```smoke-test-plan', 'scenarios:', '  - action: scan paths | expected: only seven allowed paths', '```'].join('\n'),
+      prNumber: 1609,
+      headSha: 'a'.repeat(40),
+      plan: {
+        requirement: 'required',
+        scenarios: [{ action: 'scan paths', expected: 'only seven allowed paths' }],
+      },
+    });
+
+    expect(prompt).toContain('Never await a shell that has already ended: read ~/.cursor/projects/<slug>/terminals/<shell_id>.txt first — if its tail carries exit_code:, the job is over and await will burn the whole ceiling instead of returning.');
+    expect(prompt).toContain('Cap any single block_until_ms at 300000; re-check and re-await instead of one long block.');
+  });
 });

@@ -300,6 +300,8 @@ export function buildSmokeAgentPrompt(input: {
     'Execute only the smoke scenarios below against the current worktree.',
     `Selected CI scope artifact: docs/declarations/${input.issueNumber}.pr-scope.json is generated evidence. It is skipped from product changed-path accounting (same rule as scripts/pr-scope-check.ts selectedArtifactPath). Do not FAIL an exact-scope or allowed-path scenario solely because that file appears in git diff when every other changed path matches the Issue allowed-roots / declared implementation set.`,
     'Do not edit tracked implementation files, commit, push, merge, alter the Issue, or call pack-worker-report.',
+    'Never await a shell that has already ended: read ~/.cursor/projects/<slug>/terminals/<shell_id>.txt first — if its tail carries exit_code:, the job is over and await will burn the whole ceiling instead of returning.',
+    'Cap any single block_until_ms at 300000; re-check and re-await instead of one long block.',
     'Invoke pack review only when a listed smoke scenario explicitly requires one live pack-review manager turn; do not start any other review.',
     'When finished, emit exactly one fenced block:',
     '',
