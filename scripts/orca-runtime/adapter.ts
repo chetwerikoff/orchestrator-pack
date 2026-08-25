@@ -633,7 +633,29 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
   }
 
   readiness(options: RuntimeCallOptions = {}): RuntimeResult<RuntimeReadiness> {
-    const response = this.#run<OrcaWorktreeCurrent>(['worktree', 'current'], options);
+    const current = this.#run<OrcaWorktreeCurrent>(['worktree', 'current'], options);
+    const fromCurrent = this.#readinessFromWorktree(current);
+    if (fromCurrent.status === 'ok') return fromCurrent;
+
+    const cwd = (options.cwd ?? this.#options.cwd)?.trim();
+    if (cwd) {
+      const shown = this.#run<OrcaWorktreeShow>(
+        ['worktree', 'show', '--worktree', `path:${cwd}`],
+        options,
+      );
+      const fromShown = this.#readinessFromWorktree(shown);
+      if (fromShown.status === 'ok') return fromShown;
+    }
+
+    if (!current.ok) {
+      return runtimeFailure('readiness', neutralFailureReason(current));
+    }
+    return runtimeUnsupported('readiness', 'runtime_workspace_path_missing');
+  }
+
+  #readinessFromWorktree(
+    response: OrcaJsonResponse<OrcaWorktreeCurrent | OrcaWorktreeShow>,
+  ): RuntimeResult<RuntimeReadiness> {
     if (!response.ok) {
       return runtimeFailure('readiness', neutralFailureReason(response));
     }
