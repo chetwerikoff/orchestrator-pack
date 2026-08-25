@@ -8,9 +8,9 @@
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/launch-watch/watch.test.ts",
     "scripts/orca-runtime/adapter.ts",
-    "scripts/runtime/caller-census.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
-    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts"
+    "scripts/runtime/caller-census.ts"
   ],
   "denylist": [
     "credentials/",
@@ -24,8 +24,8 @@
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/pr2-foundation/scheduler.ts",
-    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts"
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
+    "scripts/pr2-foundation/scheduler.ts"
   ],
   "source_revision": "fa7302723789a1b97a6c1873417a8d9f8da84561"
 }
