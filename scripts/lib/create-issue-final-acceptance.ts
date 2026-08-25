@@ -150,6 +150,18 @@ function compareSourceRevisions(left: string, right: string): number {
   return leftDigits < rightDigits ? -1 : 1;
 }
 
+export function validateTerminalSourceRevision(
+  canonicalRevision: string,
+  terminalRevision: string,
+  liveRevision: string,
+): string[] {
+  const comparison = compareSourceRevisions(canonicalRevision, terminalRevision);
+  const canonicalIsLive = compareSourceRevisions(canonicalRevision, liveRevision) === 0;
+  return Number.isNaN(comparison) || (comparison > 0 && !canonicalIsLive)
+    ? [`terminal source revision ${terminalRevision} does not match original canonical cycle head ${canonicalRevision}`]
+    : [];
+}
+
 export function validateFinalAcceptanceReadbackHead(
   lineage: CanonicalLineage,
   cycleId: string,
@@ -225,12 +237,16 @@ export function runFinalAcceptance(
   if (headCycle['cycle-id'] !== input.cycleId) {
     return { ok: false, diagnostics, guardErrors: ['cycle head mismatch'] };
   }
-  const terminalRevisionComparison = compareSourceRevisions(headCycle['source-revision'], terminalRevision);
-  if (Number.isNaN(terminalRevisionComparison) || terminalRevisionComparison > 0) {
+  const terminalRevisionErrors = validateTerminalSourceRevision(
+    headCycle['source-revision'],
+    terminalRevision,
+    liveRevision,
+  );
+  if (terminalRevisionErrors.length > 0) {
     return {
       ok: false,
       diagnostics,
-      guardErrors: [`terminal source revision ${terminalRevision} does not match original canonical cycle head ${headCycle['source-revision']}`],
+      guardErrors: terminalRevisionErrors,
     };
   }
 
