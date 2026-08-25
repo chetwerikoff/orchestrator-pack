@@ -16,5 +16,5 @@
     "scripts/lib/worker-smoke-core-base.ts",
     "scripts/lib/worker-smoke-selected-artifact-prompt.test.ts"
   ],
-  "source_revision": "2ffbcfa93be2a7216ed396b41eff81d536b76cc8"
+  "source_revision": "3dc2bb9a32f2da3ffb3cc31f6cab9d3206992bed"
 }
