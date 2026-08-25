@@ -29,6 +29,9 @@ const movedClean = {
   'AGENTS.md': [
     '## Coworker CLI delegation',
     '## RTK read-exploration',
+    'Before `AwaitShell`, read `~/.cursor/projects/<slug>/terminals/<shell_id>.txt`; an `exit_code:` in its tail proves the job is over.',
+    'Cap each `block_until_ms` at `300000`; re-check and re-await instead of issuing one long block.',
+    'A `pattern` cannot rescue a dead job because it writes no further lines.',
     '[Worker lifecycle](docs/orchestration-runbook.md#worker-lifecycle)',
     '[Plan-first execution](docs/repository_policy.md#plan-first-execution)',
     '[Task and scope authority](docs/repository_policy.md#task-and-scope-authority)',

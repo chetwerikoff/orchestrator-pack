@@ -1,19 +1,12 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
 import { resolve } from 'node:path';
-import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { formatGateRunnerReport, main, runGateRunner } from './runner.ts';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
 
 describe('real gate runner dispatch', () => {
-  it('publishes bounded AwaitShell guidance for every agent role', () => {
-    const agents = readFileSync(resolve(repoRoot, 'AGENTS.md'), 'utf8');
-    expect(agents).toContain('Never await a shell that has already ended');
-    expect(agents).toContain('Cap any single `block_until_ms` at `300000`');
-  });
-
   it('runs the representative ports and census as one lane', () => {
     const report = runGateRunner(repoRoot);
     expect(report.aggregate.status, formatGateRunnerReport(report)).toBe('PASS');

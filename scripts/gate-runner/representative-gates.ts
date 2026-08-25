@@ -91,7 +91,13 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
             '## Script-owned review pipeline (documentation)',
             '## RCA spec discipline',
           ],
-          contains: ['## Coworker CLI delegation', '## RTK read-exploration'],
+          contains: [
+            '## Coworker CLI delegation',
+            '## RTK read-exploration',
+            'Before `AwaitShell`, read `~/.cursor/projects/<slug>/terminals/<shell_id>.txt`; an `exit_code:` in its tail proves the job is over.',
+            'Cap each `block_until_ms` at `300000`; re-check and re-await instead of issuing one long block.',
+            'A `pattern` cannot rescue a dead job because it writes no further lines.',
+          ],
           exactOccurrences: [
             { marker: '(docs/orchestration-runbook.md#worker-lifecycle)', count: 1 },
             { marker: '(docs/repository_policy.md#plan-first-execution)', count: 1 },
