@@ -347,6 +347,8 @@ interface DeliveryMessageSubmitDeps {
     pointer: string,
   ) => RuntimeDispatchResult;
   readonly submitDeps: UnsentComposerSubmitDeps;
+  readonly pointerWriteLedger?: Map<string, number>;
+  readonly reconcileClock?: () => number;
 }
 
 export interface OrchestrationMailReconcileResult {
@@ -441,8 +443,12 @@ function settleComposerObservation(
   }
   state.submittedFingerprint.set(key, fingerprint);
   const dispatches: RuntimeDispatchResult[] = [deps.submit(identity)];
-  for (let count = 1; count < submitCount && dispatches[0]?.status !== 'send_failed'; count += 1) {
-    dispatches.push(deps.submit(identity));
+  if (submitCount > 1 && dispatches[0]?.status !== 'send_failed') {
+    const reshown = deps.read(identity);
+    const stillBusy = deps.liveness?.(identity, DELIVERY_LIVENESS_WINDOW_MS) === 'busy';
+    if (stillBusy && reshown.ok && isExactOrchestrationPointer(reshown)) {
+      dispatches.push(deps.submit(identity));
+    }
   }
   const dispatched = dispatches.find((result) => result.status === 'send_failed')
     ?? dispatches.find((result) => result.status === 'dispatch_unknown')
@@ -544,6 +550,24 @@ function sleepAsync(milliseconds: number): Promise<void> {
 function isExactOrchestrationPointer(shown: ComposerReadResult): boolean {
   if (!shown.ok) return false;
   return exactOrchestrationPointerFingerprint(shown.lines.join('\n')) !== undefined;
+}
+
+function buildDeliveryPointer(message: DeliveryMessage): string {
+  const check = message.recipient.startsWith('dispatch:')
+    ? 'orca orchestration check'
+    : `orca orchestration check --run ${message.runId}`;
+  return `You have 1 orchestration message. Run \`${check}\`.`;
+}
+
+function deliveryPointerWriteKey(worker: RuntimeWorker, pointer: string): string {
+  return `${workerKey(worker.identity)}\u0000${pointer}`;
+}
+
+function composerShowsDeliveryPointer(shown: ComposerReadResult, pointer: string): boolean {
+  if (!shown.ok || !isExactOrchestrationPointer(shown)) return false;
+  const observed = exactOrchestrationPointerFingerprint(shown.lines.join('\n'));
+  const expected = exactOrchestrationPointerFingerprint(pointer);
+  return observed !== undefined && expected !== undefined && observed === expected;
 }
 
 /** Immediate delivery-scoped observation plus one bounded render-race retry. */
@@ -712,15 +736,16 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     : deps.submitDeps.read(worker.identity);
   if (!shown.ok) return deliveryNoEffect(shown.reason, worker, false);
   if (classifyCursorComposer(shown.lines.join('\n')) !== 'empty') {
-    // A native Orca pointer already in the follow-up queue is delivered;
-    // unread mail is not proof that another Enter is needed.
-    if (isExactOrchestrationPointer(shown)) return deliveryNoEffect('already_submitted', worker);
+    if (isExactOrchestrationPointer(shown)) {
+      return await submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps);
+    }
     return deliveryNoEffect('composer_not_empty_before_delivery', worker);
   }
-  const check = message.recipient.startsWith('dispatch:')
-    ? 'orca orchestration check'
-    : `orca orchestration check --run ${message.runId}`;
-  const pointer = `You have 1 orchestration message. Run \`${check}\`.`;
+  const pointer = buildDeliveryPointer(message);
+  const writeKey = deliveryPointerWriteKey(worker, pointer);
+  if (deps.pointerWriteLedger?.has(writeKey)) {
+    return await submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps);
+  }
   const written = deps.writePointer(worker.identity, pointer);
   const pointerWriteAccepted = written.status === 'dispatched'
     || (written.status === 'dispatch_unknown'
@@ -729,9 +754,46 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   if (!pointerWriteAccepted) {
     return deliveryNoEffect(written.reason ?? 'pointer_write_failed', worker, false);
   }
-  // The pointer write is the only reconcile effect; unread state does not
-  // prove that an additional Enter is required, so never synthesize one.
-  return deliveryNoEffect('pointer_queued', worker);
+  if (deps.pointerWriteLedger) {
+    deps.pointerWriteLedger.set(writeKey, deps.reconcileClock?.() ?? Date.now());
+  }
+  return await submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps);
+}
+
+function unreadTargetsSameWorkerPointer(
+  unread: readonly OrcaInboxMessageRow[],
+  worker: RuntimeWorker,
+  pointer: string,
+  resolveWorker: DeliveryMessageSubmitDeps['resolveWorker'],
+): boolean {
+  const workerKeyValue = workerKey(worker.identity);
+  for (const row of unread) {
+    const parsed = deliveryMessageFromInboxRow(row);
+    if (!parsed.ok) continue;
+    if (buildDeliveryPointer(parsed.message) !== pointer) continue;
+    const resolved = resolveWorker(parsed.message);
+    if (!resolved.ok || !resolved.worker) continue;
+    if (workerKey(resolved.worker.identity) === workerKeyValue) return true;
+  }
+  return false;
+}
+
+async function sweepStalePointerForConsumedMessage(
+  message: DeliveryMessage,
+  unread: readonly OrcaInboxMessageRow[],
+  deps: DeliveryMessageSubmitDeps,
+): Promise<void> {
+  if (!message.consumed) return;
+  const resolved = deps.resolveWorker(message);
+  if (!resolved.ok || !resolved.worker) return;
+  const worker = resolved.worker;
+  const pointer = buildDeliveryPointer(message);
+  if (unreadTargetsSameWorkerPointer(unread, worker, pointer, deps.resolveWorker)) return;
+  const shown = deps.submitDeps.readAsync
+    ? await deps.submitDeps.readAsync(worker.identity)
+    : deps.submitDeps.read(worker.identity);
+  if (!composerShowsDeliveryPointer(shown, pointer)) return;
+  await submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps);
 }
 
 export function createOrcaMessageSubmitDeps(
@@ -819,8 +881,24 @@ export async function runOrchestrationMailReconcileTick(
       rows.push(row);
       unreadRowsById.set(id, rows);
     }
+    const consumedLedgerIds: string[] = [];
     for (const id of Object.keys(ledger)) {
+      if (!unreadIds.has(id)) consumedLedgerIds.push(id);
       if (!unreadIds.has(id) || current - ledger[id]! >= ORCHESTRATION_RECONCILE_WINDOW_MS) delete ledger[id];
+    }
+    const pointerWriteLedger = new Map<string, number>();
+    const reconcileDeps: DeliveryMessageSubmitDeps = {
+      ...deps,
+      pointerWriteLedger,
+      reconcileClock: () => current,
+    };
+    const allMessages = response.result?.messages ?? [];
+    for (const id of consumedLedgerIds) {
+      const row = allMessages.find((message) => message.id?.trim() === id);
+      if (!row) continue;
+      const parsed = deliveryMessageFromInboxRow(row);
+      if (!parsed.ok) continue;
+      await sweepStalePointerForConsumedMessage(parsed.message, unread, reconcileDeps);
     }
     const reasons: string[] = [];
     let attempted = 0; let nudged = 0; let skipped = 0;
@@ -833,7 +911,7 @@ export async function runOrchestrationMailReconcileTick(
         ? deliveryMessageFromInboxRow(rows[0]!)
         : { ok: false as const, reason: 'orchestration_message_ambiguous' };
       const result = found.ok
-        ? await submitOrcaMessageDeliveryPointerForMessage(found.message, deps)
+        ? await submitOrcaMessageDeliveryPointerForMessage(found.message, reconcileDeps)
         : deliveryNoEffect(found.reason, undefined, false);
       if (result.terminals[0]?.enter || result.terminals[0]?.reason === 'dispatch_unknown' || result.terminals[0]?.reason === 'send_failed') nudged += 1;
       // Record every attempted delivery, including ambiguous outcomes, so a
