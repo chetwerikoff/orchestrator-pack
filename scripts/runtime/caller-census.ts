@@ -239,10 +239,10 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   },
   {
     surface: 'scripts/cursor-unsent-composer-submit.ts',
-    operations: ['runtime-composition', 'list', 'read', 'liveness', 'send'],
+    operations: ['runtime-composition', 'list', 'find', 'read', 'liveness', 'send'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
-    note: 'Lists and reads Cursor terminals through RuntimeAdapter rendered-screen observation, then uses bounded liveness to send the exact idle or busy submitOnly gesture.',
+    note: 'Lists or resolves one exact Cursor terminal through RuntimeAdapter, reads rendered screen output, then uses bounded liveness to send the exact idle or busy submitOnly gesture.',
   },
   {
     surface: 'scripts/json-producers/worker-status-report.ts',
