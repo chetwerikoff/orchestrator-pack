@@ -30,5 +30,5 @@
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts"
   ],
-  "source_revision": "24a1fdaca06df28ba63635e7beb2847b15ba8661"
+  "source_revision": "fa7302723789a1b97a6c1873417a8d9f8da84561"
 }
