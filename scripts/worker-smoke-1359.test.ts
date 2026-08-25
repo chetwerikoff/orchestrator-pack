@@ -26,7 +26,10 @@ import {
   quarantineUnsupportedHistoricalSmokeRuns,
 } from './lib/worker-smoke-bounded-create.ts';
 import {
+  createSmokeLifecycleReservation,
+  bindSmokeTerminalHandle,
   preflightSmokeLifecycle,
+  readSmokeLifecycleRegistry,
   releaseSmokeAdmission,
 } from './lib/worker-smoke-lifecycle.ts';
 import {
@@ -39,6 +42,7 @@ import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import {
   establishRuntimeSmokeDelivery,
   runtimeClose,
+  runtimeCloseBoundHandle,
   waitForRuntimeSmokeCompletion,
 } from './worker-smoke-run.ts';
 
@@ -323,6 +327,86 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       expect(outcome).toContain(`generation=${generation}`);
     } finally {
       restore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers a leftover bound run through the runtime adapter before admitting the next smoke', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-leftover-recovery-'));
+    const adapter = new DeterministicRuntimeAdapter();
+    const spawned = adapter.spawnWorker({ title: 'leftover', command: 'cursor-agent' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    const runId = 'leftover-bound';
+    const registryPath = join(root, '.orca-worker-smoke', 'runs', runId);
+
+    try {
+      const reservation = createSmokeLifecycleReservation({
+        runId,
+        artifactDir: registryPath,
+        issueNumber: 1359,
+        prNumber: 1365,
+        headSha: HEAD,
+        supervisorPid: 987654,
+        nowMs: 10,
+        scenarioCount: 1,
+      });
+      expect(reservation.spawnState).toBe('reserved');
+      bindSmokeTerminalHandle(registryPath, spawned.value.identity.id);
+      const admission = preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: 'next-run',
+        supervisorPid: 987655,
+        nowMs: 20,
+        isProcessAlive: () => false,
+        shutdownMs: 0,
+        closeBoundHandle: (handle) => runtimeCloseBoundHandle(adapter, handle, { cwd: '/test/workspace' }),
+      });
+      expect(admission.admitted).toBe(true);
+      const oldRegistry = readSmokeLifecycleRegistry(registryPath);
+      expect(oldRegistry?.spawnState).toBe('clean');
+      expect(adapter.findWorkerById(spawned.value.identity.id)).toEqual({ status: 'ok', value: null });
+      expect(releaseSmokeAdmission(root, 'next-run')).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a leftover bound run blocked when the close proof fails', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-leftover-blocked-'));
+    const runId = 'leftover-unproven';
+    const registryPath = join(root, '.orca-worker-smoke', 'runs', runId);
+
+    try {
+      const reservation = createSmokeLifecycleReservation({
+        runId,
+        artifactDir: registryPath,
+        issueNumber: 1359,
+        prNumber: 1365,
+        headSha: HEAD,
+        supervisorPid: 987654,
+        nowMs: 10,
+        scenarioCount: 1,
+      });
+      expect(reservation.spawnState).toBe('reserved');
+      bindSmokeTerminalHandle(registryPath, 'historical-terminal');
+      const admission = preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: 'next-run',
+        supervisorPid: 987655,
+        nowMs: 20,
+        isProcessAlive: () => false,
+        shutdownMs: 0,
+        closeBoundHandle: () => 'close_failed:cross_process_identity_not_adopted',
+      });
+      expect(admission.admitted).toBe(false);
+      if (admission.admitted === false) {
+        expect(admission.reason).toBe('blocking_lifecycle:leftover-unproven:cleanup_failed');
+      }
+      const registry = readSmokeLifecycleRegistry(registryPath);
+      expect(registry?.spawnState).toBe('cleanup_failed');
+      expect(registry?.cleanup?.closeOutcome).toBe('close_failed:cross_process_identity_not_adopted');
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
