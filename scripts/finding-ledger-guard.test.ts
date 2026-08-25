@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -1712,5 +1713,61 @@ describe('legacy finding-ledger behavior remains default', () => {
       }),
     );
     expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+});
+
+
+describe('published author-state M3 bridge', () => {
+  it('uses hash-pinned published author-state without mutating capture text', () => {
+    const capture = cap(
+      'pass-01-architectural.capture.txt',
+      1_300,
+      markedFinding('S1', {
+        type: 'scope-violation',
+        evidence: 'The proposed edit is out of scope under allowed_roots.',
+      }),
+    );
+    const captureIdentity = `sha256:${'a'.repeat(64)}:${capture.name}`;
+    const occurrenceId = `${captureIdentity}:1`;
+    const ledger = JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
+      findings: [{
+        ...row('S1', {
+          type: 'scope-violation',
+          defectDisposition: 'addressed',
+          remedyDisposition: 'accepted',
+          occurrences: [occurrenceId],
+          protectedOccurrences: [{
+            occurrenceId,
+            architectPending: false,
+            architectRequired: false,
+            protectedActivation: null,
+          }],
+        }),
+      }],
+    });
+    const options = {
+      reviewEconomics: true,
+      phase: 'final-acceptance',
+      issueRevision: 'r3',
+      stageTerminalConfirmed: true,
+      captureMetadata: [{ name: capture.name, timestampMs: capture.timestampMs, captureIdentity }],
+    };
+    const publishedAuthorState = currentLens(occurrenceId, { outcome: 'non-activate' });
+    const withoutPublishedState = checkFindingLedgerGuard(capture.text, ledger, options);
+    expect(withoutPublishedState.ok).toBe(false);
+    expect(withoutPublishedState.errors.join('\n')).toContain('unknown/stale architect contest state');
+
+    const withPublishedState = checkFindingLedgerGuard(capture.text, ledger, {
+      ...options,
+      publishedAuthorState: {
+        text: publishedAuthorState,
+        sha256: createHash('sha256').update(publishedAuthorState).digest('hex'),
+        byteLength: Buffer.byteLength(publishedAuthorState),
+      },
+    });
+    expect(withPublishedState.ok, withPublishedState.errors.join('\n')).toBe(true);
+    expect(capture.text).not.toContain(publishedAuthorState);
   });
 });

@@ -204,18 +204,44 @@ function isLockedT2ArchitecturalOccurrence(occurrence, metadata) {
 function hasExactToken(text, token) { return String(text ?? '').split(/\r?\n/).some((line) => line.trim() === token); }
 function protectedEvidenceMatches(type, text) { return (PROTECTED_PATTERNS[type] ?? []).some((pattern) => pattern.test(String(text ?? ''))); }
 
-function parseM3Lines(captures, metadata, errors) {
+function parseM3Lines(captures, metadata, errors, publishedAuthorState) {
   const result = new Map();
-  captures.forEach((capture, index) => {
-    const meta = metadata[index] ?? {}; const stage = parseCaptureName(meta.name).stage;
-    for (const line of String(capture).split(/\r?\n/)) {
-      if (!/^m3-protected:/i.test(line.trim())) continue;
-      const match = M3_LINE_RE.exec(line.trim());
-      if (!match) { const id = /^m3-protected:\s*id=([^|]+)/i.exec(line.trim())?.[1]?.trim() ?? '<unknown>'; errors.push(`review-economics: malformed m3-protected record for ${id}`); continue; }
-      const record = { id: match[1].trim(), revision: match[2].trim(), contest: match[3].toLowerCase(), outcome: match[4].toLowerCase(), evidence: (match[5] ?? '').trim(), whyNow: (match[6] ?? '').trim(), stage, captureIndex: index, timestampMs: Number(meta.timestampMs ?? 0) };
+  const append = (text, captureIndex, stageOverride, timestampMs) => {
+    for (const line of String(text).split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!/^m3-protected:/i.test(trimmed)) continue;
+      const match = M3_LINE_RE.exec(trimmed);
+      if (!match) { const id = /^m3-protected:\s*id=([^|]+)/i.exec(trimmed)?.[1]?.trim() ?? '<unknown>'; errors.push(`review-economics: malformed m3-protected record for ${id}`); continue; }
+      const id = match[1].trim();
+      const publishedCaptureName = /:([^:]+\.capture\.txt):\d+$/i.exec(id)?.[1];
+      const record = {
+        id,
+        revision: match[2].trim(),
+        contest: match[3].toLowerCase(),
+        outcome: match[4].toLowerCase(),
+        evidence: (match[5] ?? '').trim(),
+        whyNow: (match[6] ?? '').trim(),
+        stage: stageOverride ?? parseCaptureName(publishedCaptureName).stage,
+        captureIndex,
+        timestampMs,
+      };
       const list = result.get(record.id) ?? []; list.push(record); result.set(record.id, list);
     }
+  };
+  captures.forEach((capture, index) => {
+    const meta = metadata[index] ?? {};
+    append(capture, index, parseCaptureName(meta.name).stage, Number(meta.timestampMs ?? 0));
   });
+  if (publishedAuthorState !== undefined) {
+    const text = String(publishedAuthorState.text ?? '');
+    const expectedSha256 = String(publishedAuthorState.sha256 ?? '').trim().toLowerCase();
+    const expectedByteLength = Number(publishedAuthorState.byteLength);
+    if (!/^[0-9a-f]{64}$/.test(expectedSha256)) errors.push('review-economics: published author-state sha256 must be a 64-character hexadecimal digest');
+    else if (sha256(text) !== expectedSha256) errors.push('review-economics: published author-state sha256 does not match supplied bytes');
+    if (!Number.isSafeInteger(expectedByteLength) || expectedByteLength < 0) errors.push('review-economics: published author-state byteLength must be a non-negative integer');
+    else if (Buffer.byteLength(text) !== expectedByteLength) errors.push('review-economics: published author-state byteLength does not match supplied bytes');
+    append(text, captures.length, undefined, Number.MAX_SAFE_INTEGER);
+  }
   return result;
 }
 
@@ -449,8 +475,8 @@ function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, p
   }
   errors.push(`review-economics: protected finding ${occurrence.occurrenceId} has unknown/stale architect contest state`);
 }
-function validateOccurrenceM3(ledger, occurrenceMap, captures, metadata, phase, issueRevision, errors) {
-  const m3Records = parseM3Lines(captures, metadata, errors);
+function validateOccurrenceM3(ledger, occurrenceMap, captures, metadata, phase, issueRevision, errors, publishedAuthorState) {
+  const m3Records = parseM3Lines(captures, metadata, errors, publishedAuthorState);
   for (const row of ledger.findings) {
     const protectedOccurrences = row.occurrences.map((id) => occurrenceMap.get(id)).filter((item) => item && PROTECTED_TYPES.has(item.type));
     if (protectedOccurrences.length === 0) continue;
@@ -547,7 +573,9 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
   }
   const captures = Array.isArray(captureOrCaptures) ? captureOrCaptures.map(String) : [String(captureOrCaptures ?? '')];
   let metadata = Array.isArray(options.captureMetadata) ? options.captureMetadata : captures.map((_, index) => ({ name: `pass-${String(index + 1).padStart(2, '0')}-architectural.capture.txt`, timestampMs: index + 1 }));
-  const errors = []; let ledger;
+  const errors = [];
+  if (options.publishedAuthorState !== undefined && options.phase !== 'final-acceptance') errors.push('review-economics: published author-state is valid only for final-acceptance');
+  let ledger;
   try { ledger = parseLedger(ledgerText); }
   catch (error) { return { ok: false, errors: [error instanceof Error ? error.message : String(error)], ledger: { version: 1, draft: null, counts: null, findings: [] }, captureFindings: [], protectedSignals: [] }; }
   const reviewEconomics = options.reviewEconomics === true || options.adoptionTimestampMs !== undefined || options.stageReceipts !== undefined || ledger.version >= 2;
@@ -567,7 +595,7 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
   if (ledger.version >= 2 || options.stageReceipts !== undefined) {
     const occurrenceValidation = validateOccurrenceLedger(ledger, occurrences, errors); economicsCounts = occurrenceValidation.counts;
     validateTerminalDispositionMatrix(ledger, occurrences, metadata, options.phase ?? 'final-acceptance', errors);
-    validateOccurrenceM3(ledger, occurrenceValidation.occurrenceMap, captures, metadata, options.phase ?? 'final-acceptance', options.issueRevision ?? '', errors);
+    validateOccurrenceM3(ledger, occurrenceValidation.occurrenceMap, captures, metadata, options.phase ?? 'final-acceptance', options.issueRevision ?? '', errors, options.publishedAuthorState);
   } else {
     validateM2Legacy(ledger.findings, occurrences, metadata, Number(options.adoptionTimestampMs), errors);
     validateLegacyM3(ledger.findings, occurrences, captures, metadata, options.phase ?? 'final-acceptance', options.issueRevision ?? '', errors);
