@@ -18,5 +18,5 @@
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orca-runtime/task-adapter.ts"
   ],
-  "source_revision": "e16b8833f7ffb3345655f0778fe2c2af6976edab"
+  "source_revision": "062b53cc56953021bc5188f1057f6ec0b28615d6"
 }
