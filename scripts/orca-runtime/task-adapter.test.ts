@@ -558,6 +558,83 @@ describe('Orca assignment resolution', () => {
     });
   });
 
+  it('classifies an exact exited target as gone after its terminal is released', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      if (args[0] === 'terminal' && args[1] === 'show') {
+        return {
+          ok: true,
+          result: {
+            terminal: {
+              handle: 'term-owned',
+              incarnationId: 'generation-1',
+              worktreePath: '/tmp/worktree',
+            },
+          },
+        };
+      }
+      expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-1']);
+      return {
+        ok: true,
+        result: {
+          worker: { agent_terminal_handle: 'term-owned' },
+          terminal: null,
+          observation: { exactWorker: true, status: 'exited' },
+          terminalResource: {
+            terminalHandle: 'term-owned',
+            worktreeId: 'repo::worktree',
+            originDispatchId: 'dispatch-1',
+            ownerDispatchId: 'dispatch-1',
+            releaseState: 'released',
+          },
+        },
+      };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+      status: 'ok',
+      value: { kind: 'gone', workerId: 'term-owned' },
+    });
+  });
+
+  it('classifies an exact exited target as inactive while its terminal remains owned', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      if (args[0] === 'terminal' && args[1] === 'show') {
+        return {
+          ok: true,
+          result: {
+            terminal: {
+              handle: 'term-owned',
+              incarnationId: 'generation-1',
+              worktreePath: '/tmp/worktree',
+            },
+          },
+        };
+      }
+      expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-1']);
+      return {
+        ok: true,
+        result: {
+          worker: { agent_terminal_handle: 'term-owned' },
+          terminal: null,
+          observation: { exactWorker: true, status: 'exited' },
+          terminalResource: {
+            terminalHandle: 'term-owned',
+            worktreeId: 'repo::worktree',
+            originDispatchId: 'dispatch-1',
+            ownerDispatchId: 'dispatch-1',
+            releaseState: ' RELEASED ',
+          },
+        },
+      };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'assignment_target_inactive',
+    });
+  });
+
   it('does not reinterpret invented gone when exactWorker is not true', () => {
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
@@ -775,6 +852,64 @@ describe('Issue #1441 stale/reused runtime identity', () => {
     });
     expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'send')).toHaveLength(0);
     expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'read')).toHaveLength(0);
+  });
+});
+
+describe('Issue #1587 accepted terminal-send evidence', () => {
+  it('separates accepted write-only and submit-only witnesses from delivery success', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'terminal show') {
+        return {
+          ok: true,
+          result: {
+            terminal: {
+              handle: 'busy-agent',
+              incarnationId: 'generation-1587',
+              worktreePath: '/tmp/worktree-1587',
+              title: 'busy-agent',
+              status: 'running',
+            },
+          },
+        };
+      }
+      if (operation === 'terminal list') {
+        return {
+          ok: true,
+          result: {
+            terminals: [{
+              handle: 'busy-agent',
+              incarnationId: 'generation-1587',
+              worktreePath: '/tmp/worktree-1587',
+              title: 'busy-agent',
+              status: 'running',
+            }],
+            totalCount: 1,
+            truncated: false,
+          },
+        };
+      }
+      if (operation === 'terminal send') {
+        return { ok: true, result: { send: { accepted: true } } };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    const worker = { runtime: 'orca', id: 'busy-agent', generation: 'generation-1587' } as const;
+
+    expect(adapter.dispatchInput({ worker, text: 'exact pointer', writeOnly: true })).toEqual({
+      status: 'dispatch_unknown',
+      reason: 'submit_witness_unavailable',
+      witness: { operation: 'write', accepted: true, source: 'runtime-response' },
+    });
+    expect(adapter.dispatchInput({ worker, submitOnly: true })).toEqual({
+      status: 'dispatched',
+      witness: { operation: 'submit', accepted: true, source: 'runtime-response' },
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'send').map((call) => call[0])).toEqual([
+      ['terminal', 'send', '--terminal', 'busy-agent', '--text', 'exact pointer'],
+      ['terminal', 'send', '--terminal', 'busy-agent', '--enter'],
+    ]);
   });
 });
 
@@ -1022,5 +1157,55 @@ describe('Orca task adapter bounded tab-not-found close retry', () => {
       reason: expect.stringContaining('worker_generation_mismatch'),
     });
     expect(fixture.closeCalls()).toBe(1);
+  });
+});
+
+
+describe('Orca readiness path fallback', () => {
+  const registered = {
+    path: '/home/che/orca/workspaces/orchestrator-pack/wrk-ff-smoke-decl-path-skip',
+    head: 'a'.repeat(40),
+    linkedIssue: null,
+  };
+
+  it('does not call worktree show when worktree current succeeds', () => {
+    const runJson = vi.fn((args: readonly string[]) => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'worktree current') {
+        return { ok: true, result: { worktree: registered } };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.readiness({ cwd: registered.path })).toMatchObject({
+      status: 'ok',
+      value: { ready: true, workspacePath: registered.path, headSha: registered.head },
+    });
+    expect(runJson.mock.calls.map((call) => call[0])).toEqual([['worktree', 'current']]);
+  });
+
+  it('resolves a registered worktree via show path:cwd when current returns selector_not_found', () => {
+    const runJson = vi.fn((args: readonly string[]) => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'worktree current') {
+        return {
+          ok: false,
+          error: {
+            code: 'selector_not_found',
+            message: `No Orca-managed worktree contains the current directory: ${registered.path}`,
+          },
+        };
+      }
+      if (operation === 'worktree show') {
+        expect(args).toEqual(['worktree', 'show', '--worktree', `path:${registered.path}`]);
+        return { ok: true, result: { worktree: registered } };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.readiness({ cwd: registered.path })).toMatchObject({
+      status: 'ok',
+      value: { ready: true, workspacePath: registered.path, headSha: registered.head },
+    });
   });
 });

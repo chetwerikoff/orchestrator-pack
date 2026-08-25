@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import './toolchain/native-entrypoint-preflight.ts';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -8,6 +8,7 @@ import { runOrcaJson, type OrcaJsonResponse } from './orca-runtime/native.ts';
 import {
   type RuntimeAdapter,
   type RuntimeDispatchResult,
+  type RuntimeLiveness,
   type RuntimeWorker,
   type RuntimeWorkerIdentity,
 } from './runtime/contracts.ts';
@@ -23,14 +24,19 @@ const UNBOXED_CTRL_C = /^ctrl\+c to stop\b/iu;
 const UNBOXED_STATUS_FOOTER = /^(?:Cursor|GPT-\S+|Composer)\s.+(?:\d+(?:\.\d+)?%|Run Everything)/iu;
 const UNBOXED_CWD_FOOTER = /^(?:~[/\\]|[A-Za-z]:[\\/]|\/)/u;
 const EMPTY_COMPOSER = /^(?:→\s*)?Add a follow-up\b/iu;
-const ORCHESTRATION_NOTICE = /^You have \d+ orchestration messages?\. Run `orca orchestration check --run \S+`\.$/iu;
+const ORCHESTRATION_NOTICE = /^You have \d+ orchestration messages?\. Run `orca orchestration check(?: --run \S+)?`\.$/iu;
 const LONE_ARROW = /^→$/u;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
-const EMPTY_COMPOSER_RECHECK_MS = 1_000;
+const DELIVERY_RENDER_GRACE_MS = 250;
+const DELIVERY_LIVENESS_WINDOW_MS = 25;
 export const WATCH_LOCK_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.lock');
 export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit.sent.json');
+export const ORCHESTRATION_RECONCILE_LEDGER_PATH = join(tmpdir(), 'opk-orchestration-mail-reconcile.json');
+export const ORCHESTRATION_RECONCILE_LOCK_PATH = join(tmpdir(), 'opk-orchestration-mail-reconcile.lock');
+const ORCHESTRATION_RECONCILE_WINDOW_MS = 60_000;
+const RECONCILE_COMMAND_TIMEOUT_MS = 10_000;
 
 export type CursorComposerKind = 'empty' | 'non_empty';
 
@@ -52,7 +58,10 @@ function trimNonEmpty(lines: readonly string[]): string[] {
 }
 
 function composerContentLines(lines: readonly string[]): string[] {
-  const content = trimNonEmpty(lines).filter((line) => !LONE_ARROW.test(line));
+  const content = trimNonEmpty(lines)
+    .filter((line) => !LONE_ARROW.test(line) && !UNBOXED_CTRL_C.test(line))
+    .map((line) => line.replace(/^→\s*/u, '').trim())
+    .filter(Boolean);
   // A live orchestration notice can be rendered inside the box after the
   // user's text. Preserve a notice in the first line for compatibility with
   // a user-entered poke, but exclude trailing notices from the fingerprint.
@@ -103,6 +112,13 @@ export function composerPokeFingerprint(preview: string): string {
   const interior = composerInterior(preview);
   const source = interior ? composerContentLines(interior) : unboxedComposerLines(preview);
   return source.join('\n');
+}
+
+function exactOrchestrationPointerFingerprint(preview: string): string | undefined {
+  const interior = composerInterior(preview);
+  const source = interior ? composerContentLines(interior) : unboxedComposerLines(preview);
+  const candidate = source.join('');
+  return ORCHESTRATION_NOTICE.test(candidate) ? candidate : undefined;
 }
 
 export function workerKey(identity: RuntimeWorkerIdentity): string {
@@ -260,6 +276,7 @@ function persistSubmitted(state: UnsentComposerWatchState, path: string | undefi
 }
 
 export interface UnsentComposerSubmitDeps {
+  readonly [key: string]: unknown;
   readonly listWorkers: () => { ok: true; workers: readonly RuntimeWorker[] } | { ok: false; reason: string };
   readonly listWorkersAsync?: () => PromiseLike<
     { ok: true; workers: readonly RuntimeWorker[] } | { ok: false; reason: string }
@@ -272,6 +289,9 @@ export interface UnsentComposerSubmitDeps {
     | { ok: false; reason: string }
   >;
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
+  readonly liveness?: (worker: RuntimeWorkerIdentity, observationWindowMs: number) =>
+    RuntimeLiveness;
+  readonly sleepAsync?: (milliseconds: number) => PromiseLike<void>;
   readonly sleep?: (milliseconds: number) => void;
   readonly now?: () => number;
   readonly sentStorePath?: string;
@@ -284,15 +304,64 @@ export interface UnsentComposerSubmitInput {
   readonly intervalMs?: number;
 }
 
+interface DeliveryTerminalSubmitResolver {
+  findWorkerById(
+    id: string,
+  ): ReturnType<RuntimeAdapter['findWorkerById']>;
+}
+
+interface OrcaInboxMessageRow {
+  readonly id?: string;
+  readonly run_id?: string;
+  readonly to_handle?: string;
+  readonly read?: number | boolean;
+}
+
+interface OrcaInboxFullResult {
+  readonly messages?: readonly OrcaInboxMessageRow[];
+}
+
+interface OrcaRunShowResult {
+  readonly run?: {
+    readonly id?: string;
+    readonly coordinator_handle?: string;
+  };
+}
+
+interface DeliveryMessage {
+  readonly id: string;
+  readonly runId: string;
+  readonly recipient: string;
+  readonly consumed: boolean;
+}
+
+interface DeliveryMessageSubmitDeps {
+  readonly lookupMessage: (messageId: string) =>
+    | { readonly ok: true; readonly message: DeliveryMessage }
+    | { readonly ok: false; readonly reason: string };
+  readonly resolveWorker: (message: DeliveryMessage) =>
+    | { readonly ok: true; readonly worker: RuntimeWorker | null }
+    | { readonly ok: false; readonly reason: string };
+  readonly writePointer: (
+    worker: RuntimeWorkerIdentity,
+    pointer: string,
+  ) => RuntimeDispatchResult;
+  readonly submitDeps: UnsentComposerSubmitDeps;
+}
+
+export interface OrchestrationMailReconcileResult {
+  readonly ok: boolean;
+  readonly attempted: number;
+  readonly nudged: number;
+  readonly skipped: number;
+  readonly reasons: readonly string[];
+}
+
 export interface UnsentComposerWatchState {
   readonly lastFingerprint: Map<string, string>;
   readonly lastChangedAt: Map<string, number>;
   readonly submittedFingerprint: Map<string, string>;
   readonly ambiguousSubmittedFingerprints: Map<string, Set<string>>;
-}
-
-export interface UnsentComposerSupervisorLifecycle {
-  readonly fleetSettled?: PromiseLike<unknown>;
 }
 
 export interface UnsentComposerTerminalResult {
@@ -333,6 +402,8 @@ function settleComposerObservation(
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState,
   shown: ComposerReadResult,
+  allowAmbiguousRetry = false,
+  submitCount = 1,
 ): UnsentComposerTerminalResult {
   const identity = worker.identity;
   const key = workerKey(identity);
@@ -347,8 +418,8 @@ function settleComposerObservation(
     if (!state.ambiguousSubmittedFingerprints.has(key)) state.submittedFingerprint.delete(key);
     return { ...base, ok: true, unsent: false, enter: false, reason: 'composer_empty' };
   }
-  const fingerprint = composerPokeFingerprint(preview);
-  if (!ORCHESTRATION_NOTICE.test(fingerprint)) {
+  const fingerprint = exactOrchestrationPointerFingerprint(preview);
+  if (!fingerprint) {
     clearObservation(state, key);
     return {
       ...base,
@@ -358,9 +429,10 @@ function settleComposerObservation(
       reason: 'composer_not_orchestration_pointer',
     };
   }
+  const ambiguous = state.ambiguousSubmittedFingerprints.get(key)?.has(fingerprint) ?? false;
   if (
-    state.submittedFingerprint.get(key) === fingerprint
-    || state.ambiguousSubmittedFingerprints.get(key)?.has(fingerprint)
+    (state.submittedFingerprint.get(key) === fingerprint && !(allowAmbiguousRetry && ambiguous))
+    || (ambiguous && !allowAmbiguousRetry)
   ) {
     return { ...base, ok: true, unsent: true, enter: false, reason: 'already_submitted' };
   }
@@ -368,7 +440,13 @@ function settleComposerObservation(
     return { ...base, ok: true, unsent: true, enter: false, reason: 'dry_run' };
   }
   state.submittedFingerprint.set(key, fingerprint);
-  const dispatched = deps.submit(identity);
+  const dispatches: RuntimeDispatchResult[] = [deps.submit(identity)];
+  for (let count = 1; count < submitCount && dispatches[0]?.status !== 'send_failed'; count += 1) {
+    dispatches.push(deps.submit(identity));
+  }
+  const dispatched = dispatches.find((result) => result.status === 'send_failed')
+    ?? dispatches.find((result) => result.status === 'dispatch_unknown')
+    ?? dispatches.at(-1)!;
   if (dispatched.status === 'send_failed') {
     state.submittedFingerprint.delete(key);
     return { ...base, ok: false, unsent: true, enter: false, reason: dispatched.reason };
@@ -378,6 +456,11 @@ function settleComposerObservation(
     fingerprints.add(fingerprint);
     state.ambiguousSubmittedFingerprints.set(key, fingerprints);
     return { ...base, ok: true, unsent: true, enter: false, reason: dispatched.reason };
+  }
+  if (dispatched.status === 'dispatched') {
+    const fingerprints = state.ambiguousSubmittedFingerprints.get(key);
+    fingerprints?.delete(fingerprint);
+    if (fingerprints?.size === 0) state.ambiguousSubmittedFingerprints.delete(key);
   }
   return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent' };
 }
@@ -454,21 +537,320 @@ export function submitUnsentCursorComposerOnce(
   return { ...result, watch: false };
 }
 
-/** One bounded observation for the exact worker that just received a notification. */
-export function submitUnsentCursorComposerOnceForWorker(
+function sleepAsync(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function isExactOrchestrationPointer(shown: ComposerReadResult): boolean {
+  if (!shown.ok) return false;
+  return exactOrchestrationPointerFingerprint(shown.lines.join('\n')) !== undefined;
+}
+
+/** Immediate delivery-scoped observation plus one bounded render-race retry. */
+export async function submitUnsentCursorComposerOnceForWorker(
   worker: RuntimeWorker,
   deps: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
-): UnsentComposerSubmitResult {
-  hydrateSubmitted(state, deps.sentStorePath);
-  const terminal = submitOne(worker, { watch: true }, deps, state);
-  persistSubmitted(state, deps.sentStorePath);
+): Promise<UnsentComposerSubmitResult> {
+  let shown = deps.readAsync
+    ? await deps.readAsync(worker.identity)
+    : deps.read(worker.identity);
+  if (shown.ok && classifyCursorComposer(shown.lines.join('\n')) === 'empty') {
+    await (deps.sleepAsync ?? sleepAsync)(DELIVERY_RENDER_GRACE_MS);
+    shown = deps.readAsync
+      ? await deps.readAsync(worker.identity)
+      : deps.read(worker.identity);
+  }
+  const exactPointer = isExactOrchestrationPointer(shown);
+  const liveness = exactPointer
+    ? deps.liveness?.(worker.identity, DELIVERY_LIVENESS_WINDOW_MS) ?? 'unknown'
+    : 'unknown';
+  if (exactPointer && deps.liveness && (liveness === 'gone' || liveness === 'unknown')) {
+    return {
+      ok: true,
+      dryRun: false,
+      watch: false,
+      terminals: [{
+        terminal: worker.identity.id,
+        generation: worker.identity.generation,
+        ok: true,
+        unsent: true,
+        enter: false,
+        reason: `worker_${liveness}`,
+      }],
+    };
+  }
+  const terminal = settleComposerObservation(
+    worker,
+    { watch: true },
+    deps,
+    state,
+    shown,
+    true,
+    liveness === 'busy' ? 2 : 1,
+  );
   return {
     ok: terminal.ok,
     dryRun: false,
     watch: false,
     terminals: [terminal],
   };
+}
+
+/** Resolve one live terminal identity, then apply the bounded delivery reaction. */
+export async function submitUnsentCursorComposerDeliveryForTerminal(
+  terminal: string,
+  resolver: DeliveryTerminalSubmitResolver,
+  deps: UnsentComposerSubmitDeps,
+): Promise<UnsentComposerSubmitResult> {
+  const handle = terminal.trim();
+  if (!handle) {
+    return {
+      ok: false,
+      dryRun: false,
+      watch: false,
+      terminals: [{
+        terminal: '',
+        generation: '',
+        ok: false,
+        unsent: false,
+        enter: false,
+        reason: 'runtime_worker_id_missing',
+      }],
+    };
+  }
+  const resolved = resolver.findWorkerById(handle);
+  if (resolved.status !== 'ok') {
+    return {
+      ok: false,
+      dryRun: false,
+      watch: false,
+      terminals: [{
+        terminal: handle,
+        generation: '',
+        ok: false,
+        unsent: false,
+        enter: false,
+        reason: resolved.reason,
+      }],
+    };
+  }
+  if (resolved.value === null) {
+    return {
+      ok: true,
+      dryRun: false,
+      watch: false,
+      terminals: [{
+        terminal: handle,
+        generation: '',
+        ok: true,
+        unsent: false,
+        enter: false,
+        reason: 'worker_gone',
+      }],
+    };
+  }
+  return submitUnsentCursorComposerOnceForWorker(resolved.value, deps);
+}
+
+function deliveryNoEffect(
+  reason: string,
+  worker?: RuntimeWorker,
+  ok = true,
+): UnsentComposerSubmitResult {
+  return {
+    ok,
+    dryRun: false,
+    watch: false,
+    terminals: [{
+      terminal: worker?.identity.id ?? '',
+      generation: worker?.identity.generation ?? '',
+      ok,
+      unsent: false,
+      enter: false,
+      reason,
+    }],
+  };
+}
+
+function deliveryMessageFromInboxRow(row: OrcaInboxMessageRow):
+  | { readonly ok: true; readonly message: DeliveryMessage }
+  | { readonly ok: false; readonly reason: string } {
+  const id = row.id?.trim() ?? '';
+  const runId = row.run_id?.trim() ?? '';
+  const recipient = row.to_handle?.trim() ?? '';
+  if (!id || !runId || !recipient) return { ok: false, reason: 'orchestration_message_binding_incomplete' };
+  return {
+    ok: true,
+    message: { id, runId, recipient, consumed: row.read === 1 || row.read === true },
+  };
+}
+
+/** Bind one Orca message to one exact recipient, write its pointer, then submit it. */
+export async function submitOrcaMessageDeliveryPointer(
+  messageId: string,
+  deps: DeliveryMessageSubmitDeps,
+): Promise<UnsentComposerSubmitResult> {
+  const id = messageId.trim();
+  if (!id) return deliveryNoEffect('orchestration_message_id_missing', undefined, false);
+  const found = deps.lookupMessage(id);
+  if (!found.ok) return deliveryNoEffect(found.reason, undefined, false);
+  return submitOrcaMessageDeliveryPointerForMessage(found.message, deps);
+}
+
+async function submitOrcaMessageDeliveryPointerForMessage(
+  message: DeliveryMessage,
+  deps: DeliveryMessageSubmitDeps,
+): Promise<UnsentComposerSubmitResult> {
+  if (message.consumed) return deliveryNoEffect('delivery_already_consumed');
+  const resolved = deps.resolveWorker(message);
+  if (!resolved.ok) return deliveryNoEffect(resolved.reason, undefined, false);
+  if (resolved.worker === null) return deliveryNoEffect('worker_gone');
+  const worker = resolved.worker;
+  const shown = deps.submitDeps.readAsync
+    ? await deps.submitDeps.readAsync(worker.identity)
+    : deps.submitDeps.read(worker.identity);
+  if (!shown.ok) return deliveryNoEffect(shown.reason, worker, false);
+  if (classifyCursorComposer(shown.lines.join('\n')) !== 'empty') {
+    // A native Orca pointer already in the follow-up queue is delivered;
+    // unread mail is not proof that another Enter is needed.
+    if (isExactOrchestrationPointer(shown)) return deliveryNoEffect('already_submitted', worker);
+    return deliveryNoEffect('composer_not_empty_before_delivery', worker);
+  }
+  const check = message.recipient.startsWith('dispatch:')
+    ? 'orca orchestration check'
+    : `orca orchestration check --run ${message.runId}`;
+  const pointer = `You have 1 orchestration message. Run \`${check}\`.`;
+  const written = deps.writePointer(worker.identity, pointer);
+  const pointerWriteAccepted = written.status === 'dispatched'
+    || (written.status === 'dispatch_unknown'
+      && written.witness?.operation === 'write'
+      && written.witness.accepted === true);
+  if (!pointerWriteAccepted) {
+    return deliveryNoEffect(written.reason ?? 'pointer_write_failed', worker, false);
+  }
+  // The pointer write is the only reconcile effect; unread state does not
+  // prove that an additional Enter is required, so never synthesize one.
+  return deliveryNoEffect('pointer_queued', worker);
+}
+
+export function createOrcaMessageSubmitDeps(
+  adapter: RuntimeAdapter,
+  submitDeps = createAdapterSubmitDeps(adapter),
+): DeliveryMessageSubmitDeps {
+  return {
+    lookupMessage: (messageId) => {
+      const response = runOrcaJson<OrcaInboxFullResult>(['orchestration', 'inbox', '--full'], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
+      if (!response.ok) return { ok: false, reason: response.error?.code ?? 'orchestration_inbox_unavailable' };
+      const matches = (response.result?.messages ?? []).filter((message) => message.id?.trim() === messageId);
+      if (matches.length !== 1) {
+        return { ok: false, reason: matches.length === 0 ? 'orchestration_message_missing' : 'orchestration_message_ambiguous' };
+      }
+      const row = matches[0];
+      const runId = row?.run_id?.trim() ?? '';
+      const recipient = row?.to_handle?.trim() ?? '';
+      if (!runId || !recipient) return { ok: false, reason: 'orchestration_message_binding_incomplete' };
+      return {
+        ok: true,
+        message: {
+          id: messageId,
+          runId,
+          recipient,
+          consumed: row?.read === 1 || row?.read === true,
+        },
+      };
+    },
+    resolveWorker: (message) => {
+      if (message.recipient.startsWith('dispatch:')) {
+        if (!adapter.resolveAssignmentWorker) return { ok: false, reason: 'runtime_assignment_resolution_unsupported' };
+        const bindingKey = message.recipient.slice('dispatch:'.length).trim();
+        const resolved = adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey });
+        if (resolved.status !== 'ok') return { ok: false, reason: resolved.reason };
+        return resolved.value.kind === 'resolved'
+          ? { ok: true, worker: resolved.value.worker }
+          : { ok: true, worker: null };
+      }
+      let handle = message.recipient;
+      if (message.recipient.startsWith('run:')) {
+        const runId = message.recipient.slice('run:'.length).trim();
+        if (runId !== message.runId) return { ok: false, reason: 'orchestration_message_run_mismatch' };
+        const response = runOrcaJson<OrcaRunShowResult>(['orchestration', 'run-show', '--id', runId], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
+        if (!response.ok) return { ok: false, reason: response.error?.code ?? 'orchestration_run_unavailable' };
+        handle = response.result?.run?.coordinator_handle?.trim() ?? '';
+      }
+      if (!handle.startsWith('term_')) return { ok: false, reason: 'orchestration_recipient_unresolved' };
+      const resolved = adapter.findWorkerById(handle);
+      if (resolved.status !== 'ok') return { ok: false, reason: resolved.reason };
+      return { ok: true, worker: resolved.value };
+    },
+    writePointer: (worker, pointer) => adapter.dispatchInput({ worker, text: pointer, writeOnly: true }),
+    submitDeps,
+  };
+}
+
+
+/** Reconcile unread Orca mail without inspecting composer screens globally. */
+export async function runOrchestrationMailReconcileTick(
+  deps: DeliveryMessageSubmitDeps,
+  options: { readonly ledgerPath?: string; readonly lockPath?: string; readonly now?: () => number } = {},
+): Promise<OrchestrationMailReconcileResult> {
+  const ledgerPath = options.ledgerPath ?? ORCHESTRATION_RECONCILE_LEDGER_PATH;
+  const lockPath = options.lockPath ?? ORCHESTRATION_RECONCILE_LOCK_PATH;
+  const held = tryAcquireHeldFileLock(lockPath);
+  if (!held.acquired) return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [`reconcile_lock_${held.reason}`] };
+  replaceLockedFileContents(held.descriptor, `${process.pid}\n`);
+  try {
+    const now = options.now ?? Date.now;
+    const current = now();
+    const ledger: Record<string, number> = (() => {
+      try { return JSON.parse(readFileSync(ledgerPath, 'utf8')) as Record<string, number>; } catch { return {}; }
+    })();
+    const response = runOrcaJson<OrcaInboxFullResult>(['orchestration', 'inbox', '--full'], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
+    if (!response.ok) return { ok: false, attempted: 0, nudged: 0, skipped: 0, reasons: [response.error?.code ?? 'orchestration_inbox_unavailable'] };
+    const unread = (response.result?.messages ?? []).filter((row) => {
+      const id = row.id?.trim() ?? '';
+      return id && !(row.read === 1 || row.read === true);
+    });
+    const unreadIds = new Set(unread.map((row) => row.id!.trim()));
+    const unreadRowsById = new Map<string, OrcaInboxMessageRow[]>();
+    for (const row of unread) {
+      const id = row.id!.trim();
+      const rows = unreadRowsById.get(id) ?? [];
+      rows.push(row);
+      unreadRowsById.set(id, rows);
+    }
+    for (const id of Object.keys(ledger)) {
+      if (!unreadIds.has(id) || current - ledger[id]! >= ORCHESTRATION_RECONCILE_WINDOW_MS) delete ledger[id];
+    }
+    const reasons: string[] = [];
+    let attempted = 0; let nudged = 0; let skipped = 0;
+    for (const row of unread) {
+      const id = row.id!.trim();
+      if (ledger[id] !== undefined) { skipped += 1; continue; }
+      attempted += 1;
+      const rows = unreadRowsById.get(id) ?? [];
+      const found = rows.length === 1
+        ? deliveryMessageFromInboxRow(rows[0]!)
+        : { ok: false as const, reason: 'orchestration_message_ambiguous' };
+      const result = found.ok
+        ? await submitOrcaMessageDeliveryPointerForMessage(found.message, deps)
+        : deliveryNoEffect(found.reason, undefined, false);
+      if (result.terminals[0]?.enter || result.terminals[0]?.reason === 'dispatch_unknown' || result.terminals[0]?.reason === 'send_failed') nudged += 1;
+      // Record every attempted delivery, including ambiguous outcomes, so a
+      // periodic tick cannot hammer one unread message.
+      ledger[id] = current;
+      if (result.terminals[0]?.reason) reasons.push(`${id}:${result.terminals[0].reason}`);
+    }
+    const ledgerDescriptor = openSync(ledgerPath, constants.O_CREAT | constants.O_RDWR, 0o600);
+    try {
+      replaceLockedFileContents(ledgerDescriptor, `${JSON.stringify(ledger)}\n`);
+    } finally {
+      closeSync(ledgerDescriptor);
+    }
+    return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$/u.test(reason)), attempted, nudged, skipped, reasons };
+  } finally {
+    releaseHeldFileLock(held.descriptor);
+  }
 }
 
 let heldLockFd: number | undefined;
@@ -562,6 +944,7 @@ export function createAdapterSubmitDeps(
       return { ok: true, lines: output.value.lines, source: 'screen' };
     },
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
+    liveness: (worker, observationWindowMs) => adapter.liveness({ worker, observationWindowMs }).status,
     sentStorePath: SENT_STORE_PATH,
   };
 }
@@ -569,7 +952,6 @@ export function createAdapterSubmitDeps(
 export async function runSupervisorUnsentComposerTick(
   providedDeps?: UnsentComposerSubmitDeps,
   state: UnsentComposerWatchState = createUnsentComposerWatchState(),
-  lifecycle: UnsentComposerSupervisorLifecycle = {},
 ): Promise<UnsentComposerSubmitResult> {
   const deps = providedDeps ?? createAdapterSubmitDeps(await selectRuntimeAdapter());
   hydrateSubmitted(state, deps.sentStorePath);
@@ -591,31 +973,15 @@ export async function runSupervisorUnsentComposerTick(
     });
     return persistTail;
   };
-  let fleetSettled = lifecycle.fleetSettled === undefined;
-  if (lifecycle.fleetSettled !== undefined) {
-    void Promise.resolve(lifecycle.fleetSettled).then(
-      () => { fleetSettled = true; },
-      () => { fleetSettled = true; },
-    );
-  }
   const runWorker = async (worker: RuntimeWorker): Promise<UnsentComposerTerminalResult> => {
     const workerDeps: UnsentComposerSubmitDeps = {
       ...deps,
       listWorkers: () => ({ ok: true, workers: [worker] }),
       sentStorePath: undefined,
     };
-    let result = deps.readAsync
+    const result = deps.readAsync
       ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
       : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
-    while (
-      (result.reason === 'composer_empty' || result.reason === 'composer_not_orchestration_pointer')
-      && !fleetSettled
-    ) {
-      await new Promise<void>((resolve) => setTimeout(resolve, EMPTY_COMPOSER_RECHECK_MS));
-      result = deps.readAsync
-        ? await submitOneAsync(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state)
-        : submitOne(worker, { terminals: [worker.identity.id], watch: true }, workerDeps, state);
-    }
     await persistAfterObservation();
     return result ?? {
       terminal: worker.identity.id,
@@ -636,10 +1002,18 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function parseArgs(argv: readonly string[]): UnsentComposerSubmitInput & { readonly once: boolean } {
+function parseArgs(argv: readonly string[]): UnsentComposerSubmitInput & {
+  readonly once: boolean;
+  readonly delivery: boolean;
+  readonly reconcile: boolean;
+  readonly messageId: string;
+} {
   const terminals: string[] = [];
   let dryRun = false;
   let once = false;
+  let delivery = false;
+  let reconcile = false;
+  let messageId = '';
   let intervalMs = DEFAULT_INTERVAL_MS;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -656,6 +1030,18 @@ function parseArgs(argv: readonly string[]): UnsentComposerSubmitInput & { reado
       once = true;
       continue;
     }
+    if (token === '--delivery') {
+      delivery = true;
+      continue;
+    }
+    if (token === '--reconcile') {
+      reconcile = true;
+      continue;
+    }
+    if (token === '--message-id') {
+      messageId = argv[++index]?.trim() ?? '';
+      continue;
+    }
     if (token === '--watch') {
       once = false;
       continue;
@@ -666,7 +1052,7 @@ function parseArgs(argv: readonly string[]): UnsentComposerSubmitInput & { reado
     }
     throw new Error(`unknown argument: ${token}`);
   }
-  return { terminals, dryRun, once, intervalMs };
+  return { terminals, dryRun, once, delivery, reconcile, messageId, intervalMs };
 }
 
 function shouldLogWatchTick(result: UnsentComposerSubmitResult): boolean {
@@ -681,10 +1067,29 @@ function isDirectCliExecution(): boolean {
 
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
-  acquireWatchLock();
-  installLockRelease();
   const adapter = await selectRuntimeAdapter();
   const deps = createAdapterSubmitDeps(adapter);
+  if (parsed.reconcile) {
+    const result = await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(adapter, deps));
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+  if (parsed.delivery) {
+    if (parsed.dryRun || parsed.once || (parsed.messageId && parsed.terminals?.length)) {
+      throw new Error('delivery mode requires one --message-id or one --terminal and cannot combine with --dry-run or --once');
+    }
+    const result = parsed.messageId
+      ? await submitOrcaMessageDeliveryPointer(parsed.messageId, createOrcaMessageSubmitDeps(adapter, deps))
+      : parsed.terminals?.length === 1
+        ? await submitUnsentCursorComposerDeliveryForTerminal(parsed.terminals[0] ?? '', adapter, deps)
+        : (() => { throw new Error('delivery mode requires one --message-id or one --terminal'); })();
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+  acquireWatchLock();
+  installLockRelease();
   if (parsed.once) {
     const result = submitUnsentCursorComposerOnce({ ...parsed }, deps);
     process.stdout.write(`${JSON.stringify(result)}\n`);

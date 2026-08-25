@@ -9,6 +9,7 @@ import {
   type RuntimeBoundedOutput,
   type RuntimeCallOptions,
   type RuntimeDispatchResult,
+  type RuntimeDispatchWitness,
   type RuntimeInboxCheckResult,
   type RuntimeInboxMessage,
   type RuntimeLivenessResult,
@@ -142,12 +143,19 @@ interface OrcaInboxCheckShape extends OrcaInboxDeliveryShape {
   readonly delivery?: unknown;
 }
 
+interface OrcaTerminalSendResult {
+  readonly send?: {
+    readonly accepted?: unknown;
+  };
+}
+
 const OBSERVATION_TOKEN_PREFIX = 'opk-orca-output-v3.';
 
 export const orcaWorkerTaskBindingStrategy = 'complete_ab_revalidation' as const;
 export const orcaWorkerTaskBindingMaxWorktrees = 6 as const;
 export const orcaWorkerTaskBindingNativeSliceMs = 250 as const;
 export const orcaWorkerTaskBindingMarginMs = 500 as const;
+export const orcaLivenessTransportMarginMs = 2_500 as const;
 export const orcaWorkerTaskBindingRequiredBudgetMs =
   (2 + (2 * orcaWorkerTaskBindingMaxWorktrees))
   * orcaWorkerTaskBindingNativeSliceMs
@@ -625,7 +633,29 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
   }
 
   readiness(options: RuntimeCallOptions = {}): RuntimeResult<RuntimeReadiness> {
-    const response = this.#run<OrcaWorktreeCurrent>(['worktree', 'current'], options);
+    const current = this.#run<OrcaWorktreeCurrent>(['worktree', 'current'], options);
+    const fromCurrent = this.#readinessFromWorktree(current);
+    if (fromCurrent.status === 'ok') return fromCurrent;
+
+    const cwd = (options.cwd ?? this.#options.cwd)?.trim();
+    if (cwd) {
+      const shown = this.#run<OrcaWorktreeShow>(
+        ['worktree', 'show', '--worktree', `path:${cwd}`],
+        options,
+      );
+      const fromShown = this.#readinessFromWorktree(shown);
+      if (fromShown.status === 'ok') return fromShown;
+    }
+
+    if (!current.ok) {
+      return runtimeFailure('readiness', neutralFailureReason(current));
+    }
+    return runtimeUnsupported('readiness', 'runtime_workspace_path_missing');
+  }
+
+  #readinessFromWorktree(
+    response: OrcaJsonResponse<OrcaWorktreeCurrent | OrcaWorktreeShow>,
+  ): RuntimeResult<RuntimeReadiness> {
     if (!response.ok) {
       return runtimeFailure('readiness', neutralFailureReason(response));
     }
@@ -941,10 +971,18 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');
     if (!input.writeOnly) args.push('--enter');
-    const response = this.#run(args, options);
-    if (response.ok) {
+    const response = this.#run<OrcaTerminalSendResult>(args, options);
+    if (response.ok && response.result?.send?.accepted === true) {
+      const witness: RuntimeDispatchWitness = {
+        operation: input.writeOnly ? 'write' : 'submit',
+        accepted: true,
+        source: 'runtime-response',
+      };
+      if (input.submitOnly) return { status: 'dispatched', witness };
+      if (input.writeOnly) return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable', witness };
       return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
     }
+    if (response.ok) return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
     const reason = neutralFailureReason(response);
     return response.outcomeCategory === 'process_launch_failed'
       ? { status: 'send_failed', reason }
@@ -1132,16 +1170,26 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (input.worker.runtime !== 'orca' || input.observationWindowMs <= 0) {
       return { status: 'unknown', worker: input.worker };
     }
-    const deadline = this.#now() + input.observationWindowMs;
-    const lookupOptions = this.#boundedOptions(deadline, options);
+    const requestedTimeout = options.timeoutMs;
+    const totalBudget = requestedTimeout !== undefined
+      && Number.isFinite(requestedTimeout)
+      && requestedTimeout > 0
+      ? Math.floor(requestedTimeout)
+      : input.observationWindowMs + orcaLivenessTransportMarginMs;
+    const deadline = this.#now() + totalBudget;
+    const boundedCallOptions = { ...options, timeoutMs: totalBudget };
+    const lookupOptions = this.#boundedOptions(deadline, boundedCallOptions);
     if (!lookupOptions) return { status: 'unknown', worker: input.worker };
     const current = this.findWorker(input.worker, lookupOptions);
     if (current.status !== 'ok') return { status: 'unknown', worker: input.worker };
     if (current.value === null) return { status: 'gone', worker: input.worker };
 
-    const waitOptions = this.#boundedOptions(deadline, options);
+    const waitOptions = this.#boundedOptions(deadline, boundedCallOptions);
     if (!waitOptions) return { status: 'unknown', worker: input.worker };
-    const waitBudget = waitOptions.timeoutMs ?? 1;
+    const waitBudget = Math.max(
+      1,
+      Math.min(Math.floor(input.observationWindowMs), waitOptions.timeoutMs ?? 1),
+    );
     const response = this.#run<OrcaTerminalWaitResult>(
       [
         'terminal', 'wait', '--terminal', input.worker.id,
@@ -1149,7 +1197,12 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       ],
       waitOptions,
     );
-    if (!response.ok) return { status: 'unknown', worker: input.worker };
+    if (!response.ok) {
+      return {
+        status: response.error?.code === 'timeout' ? 'busy' : 'unknown',
+        worker: input.worker,
+      };
+    }
     const wait = response.result?.wait;
     if (wait?.status === 'exited') return { status: 'gone', worker: input.worker };
     if (wait?.status !== 'running') return { status: 'unknown', worker: input.worker };

@@ -52,6 +52,7 @@ type OrcaWorkerShowResult = Readonly<{
     worktreeId?: string | null;
     originDispatchId?: string | null;
     ownerDispatchId?: string | null;
+    releaseState?: string | null;
   }> | null;
 }>;
 
@@ -430,6 +431,21 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     const exact = parsed.observation?.exactWorker === true;
     if (!exact) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
+    const observationStatus = parsed.observation?.status?.trim().toLowerCase() ?? '';
+    if (observationStatus === 'exited'
+      && parsed.terminalResource?.releaseState === 'released') {
+      const resource = parsed.terminalResource;
+      const resourceOwner = String(resource?.ownerDispatchId ?? '').trim();
+      const workerId = String(
+        resourceOwner === dispatchId
+          ? resource?.terminalHandle
+          : '',
+      ).trim();
+      const value = workerId
+        ? { kind: 'gone' as const, workerId }
+        : { kind: 'gone' as const };
+      return { status: 'ok', value };
     }
     // Exact terminal presence is deliberately weaker than active Dispatch
     // authority. The active predicate additionally requires Orca's current
