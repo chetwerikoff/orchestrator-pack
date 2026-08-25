@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1669,
+  "declared_paths": [
+    "AGENTS.md",
+    "scripts/gate-runner/runner.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "AGENTS.md",
+    "scripts/"
+  ],
+  "source_revision": "0633db58a387cb16e21d4396d5642ea887435fe5"
+}
