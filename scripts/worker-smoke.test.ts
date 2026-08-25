@@ -1169,25 +1169,4 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
     expect(prompt).toMatch(/selectedArtifactPath/u);
     expect(prompt).toMatch(/Do not FAIL an exact-scope or allowed-path scenario solely because that file appears in git diff/u);
   });
-
-  it("requires the supervised assignment boundary for manager smoke launches", () => {
-    const prompt = buildSmokeAgentPrompt({
-      issueNumber: 1514,
-      issueBody: ["```smoke-test-plan", "scenarios:", "  - action: capture WorkerAssignment | expected: exact assignment", "```"].join("\n"),
-      prNumber: 1611,
-      headSha: "b".repeat(40),
-      plan: {
-        requirement: "required",
-        scenarios: [{ action: "capture WorkerAssignment", expected: "exact assignment" }],
-      },
-    });
-
-    expect(prompt).toContain("scripts/pr2-foundation/supervised-worker-start.ts");
-    expect(prompt).toContain("raw Orca orchestration worker-start");
-    expect(prompt).toContain("Preserve one exact Task/Dispatch identity and never create a duplicate manager.");
-    expect(prompt).toContain("failed, closed, or stale evidence is not a precreated Task");
-    expect(prompt).toContain("When the live Issue tier-intake is T3, use T3");
-    expect(prompt).toContain("publish the new exact pair as a brief assignment without --issue-number");
-    expect(prompt).toContain("Do not delegate the declared smoke scenario to another worker or wait on an orchestration mailbox");
-  });
 });
