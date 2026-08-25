@@ -1185,5 +1185,7 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
     expect(prompt).toContain("scripts/pr2-foundation/supervised-worker-start.ts");
     expect(prompt).toContain("raw Orca orchestration worker-start");
     expect(prompt).toContain("Preserve one exact Task/Dispatch identity and never create a duplicate manager.");
+    expect(prompt).toContain("failed, closed, or stale evidence is not a precreated Task");
+    expect(prompt).toContain("When the live Issue tier-intake is T3, use T3");
   });
 });
