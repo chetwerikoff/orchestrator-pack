@@ -21,5 +21,5 @@
     "scripts/worker-smoke-cleanup-proof.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "b5a7eb8d4c64b6c83290d8dc284a2dd7f1198f0e"
+  "source_revision": "c78e24f714c1a0854fdbd274cff366516997bdec"
 }
