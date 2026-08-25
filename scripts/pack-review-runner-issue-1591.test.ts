@@ -566,6 +566,140 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     expect(readPackReviewAuthority(1591, { storeRoot })?.cycle?.consumedHeadShas).toEqual([HEAD_A]);
   });
 
+  it('settles 3/3 when source 03 persists before the degraded freeze commits', async () => {
+    const storeRoot = tempRoot();
+    harness(storeRoot);
+    process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/g-p-fixture/project';
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-24T00:00:00.000Z'));
+
+    const publications = new Map<string, PublishedSource>();
+    const capture = { body: '', posts: 0 };
+    const thirdAtCensus = deferred();
+    const releaseThird = deferred();
+    const firstTwoTerminal = deferred();
+    const thirdTerminal = deferred();
+    const freezeObserved = deferred();
+    const releaseFreeze = deferred();
+    const releaseStarterAggregate = deferred();
+    const terminalSlots = new Set<string>();
+    const transport = sourceTransport(publications);
+
+    const startPromise = startPackReview({
+      projectId: PROJECT,
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 1591,
+      headSha: HEAD_A,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixturePrState: 'OPEN',
+      fixturePrBody: 'Closes #1591',
+      fixturePostReviewHeadSha: HEAD_A,
+      fixturePostReviewPrBody: 'Closes #1591',
+      fixtureRepoSlug: REPO,
+      fixtureIssueBody: issueBody(),
+      fixtureIssueNumber: 1591,
+      fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
+      fixtureGptSourceCommentTransport: transport,
+      fixtureBeforeGptSourceCommentCensus: async ({ slotId, identity }) => {
+        if (slotId === 'source-03') {
+          thirdAtCensus.resolve();
+          await releaseThird.promise;
+        }
+        publications.set(slotId, { identity, payload: 'NO_FINDINGS' });
+      },
+      fixtureAfterGptSourceSlotTerminal: async ({ slotId }) => {
+        if (slotId === 'source-01' || slotId === 'source-02') terminalSlots.add(slotId);
+        if (terminalSlots.size === 2) firstTwoTerminal.resolve();
+        if (slotId === 'source-03') thirdTerminal.resolve();
+      },
+      fixtureBeforeGptAggregateSettlement: async () => {
+        await releaseStarterAggregate.promise;
+      },
+      fixtureGithubReviewTransport: finalReviewTransport(capture),
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+      fixtureBoundIssueSnapshotBytes: issueBody(),
+      claimMode: 'preacquired',
+    });
+
+    await Promise.all([thirdAtCensus.promise, firstTwoTerminal.promise]);
+    vi.setSystemTime(new Date('2026-08-24T00:03:00.000Z'));
+    const reconcilePromise = reconcileStalePackReviewRuns({
+      ...reconcileInput(storeRoot, publications, capture),
+      fixtureGptSourceCommentTransport: transport,
+      fixtureBeforeGptRoundFreeze: async ({ usableSourceCount }) => {
+        expect(usableSourceCount).toBe(2);
+        freezeObserved.resolve();
+        await releaseFreeze.promise;
+      },
+      immediate: true,
+    });
+
+    await freezeObserved.promise;
+    releaseThird.resolve();
+    await thirdTerminal.promise;
+    releaseFreeze.resolve();
+    const reconciliation = await reconcilePromise;
+    releaseStarterAggregate.resolve();
+    const started = await startPromise;
+
+    expect(reconciliation.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        recovered: true,
+        degraded: false,
+        settledSourceCount: 3,
+      }),
+    ]));
+    expect(started).toMatchObject({ ok: true, recovered: true });
+    const after = listPackReviewRuns({ projectId: PROJECT, storeRoot })[0]!;
+    expect(after.reviewRound?.settledSourceCount).toBe(3);
+    expect(after.reviewRound?.sourceSlots.filter((slot) => (
+      slot.lifecycle === 'terminal'
+      && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
+    ))).toHaveLength(3);
+    expect(capture.posts).toBe(1);
+    expect(capture.body).not.toContain('degraded after timeout');
+    expect(readPackReviewAuthority(1591, { storeRoot })?.cycle?.consumedHeadShas).toEqual([HEAD_A]);
+  });
+
+  it('recovers a frozen 2/3 quorum after a crash before aggregate persistence', async () => {
+    const storeRoot = tempRoot();
+    harness(storeRoot);
+    const startedAt = new Date(Date.now() - 3 * 60_000);
+    const { runId, publications } = recoverableRun(storeRoot, startedAt);
+    const capture = { body: '', posts: 0 };
+
+    await expect(reconcileStalePackReviewRuns({
+      ...reconcileInput(storeRoot, publications, capture),
+      fixtureAfterGptRoundFreeze: async ({ settledSourceCount }) => {
+        expect(settledSourceCount).toBe(2);
+        throw new Error('fixture_crash_after_gpt_round_freeze');
+      },
+    })).rejects.toThrow(/fixture_crash_after_gpt_round_freeze/);
+
+    const frozen = getPackReviewRun(runId, { projectId: PROJECT, storeRoot });
+    expect(frozen?.reviewRound?.settledSourceCount).toBe(2);
+    expect(frozen?.reviewVerdict).toBeUndefined();
+    expect(capture.posts).toBe(0);
+
+    const resumed = await reconcileStalePackReviewRuns(reconcileInput(storeRoot, publications, capture));
+    expect(resumed.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId,
+        recovered: true,
+        degraded: true,
+        settledSourceCount: 2,
+      }),
+    ]));
+    const after = getPackReviewRun(runId, { projectId: PROJECT, storeRoot });
+    expect(after?.reviewVerdict).toBe('clean');
+    expect(after?.reviewRound?.settledSourceCount).toBe(2);
+    expect(capture.posts).toBe(1);
+  });
+
   it('leaves <2/3 stale recovery incomplete with a concrete next action', async () => {
     const storeRoot = tempRoot();
     harness(storeRoot);
@@ -582,12 +716,27 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
   });
 });
 
+interface SeedFinding {
+  title?: string;
+  severity?: string;
+  filePath?: string;
+}
+
 function seedFinalCapContinuation(
   storeRoot: string,
   smoke: 'passed' | 'failed' = 'passed',
-  findingPath = 'scripts/pack-review-runner.ts',
+  findingPath: string | null = 'scripts/pack-review-runner.ts',
+  extraFindings: SeedFinding[] = [],
 ) {
   const opts = { storeRoot, now: new Date('2026-08-24T00:00:00.000Z') };
+  const findings: SeedFinding[] = [
+    {
+      title: 'blocking',
+      severity: 'blocking',
+      ...(findingPath ? { filePath: findingPath } : {}),
+    },
+    ...extraFindings,
+  ];
   const run = createPackReviewRun({
     projectId: PROJECT,
     storeRoot,
@@ -599,8 +748,8 @@ function seedFinalCapContinuation(
   }).run;
   setPackReviewRunTerminal(run.id, 'changes_requested', {
     reviewVerdict: 'findings',
-    findingCount: 1,
-    findings: [{ title: 'blocking', severity: 'blocking', filePath: findingPath }],
+    findingCount: findings.length,
+    findings,
   }, { projectId: PROJECT, storeRoot });
 
   let authority = initializePackReviewAuthority({
@@ -619,11 +768,11 @@ function seedFinalCapContinuation(
       runId: run.id,
       targetSha: HEAD_A,
       reviewVerdict: 'findings',
-      findingCount: 1,
+      findingCount: findings.length,
       findingsDigest: 'blocking-a',
     },
     status: 'changes_requested',
-    findingCount: 1,
+    findingCount: findings.length,
     options: opts,
   });
   authority = observePackReviewHead({
@@ -655,9 +804,17 @@ function seedFinalCapContinuation(
 function selectNoIntersectionEvidence(
   storeRoot: string,
   authority: NonNullable<ReturnType<typeof readPackReviewAuthority>>,
+  resolution: {
+    findingCount?: number;
+    blockingFindingCount?: number;
+    unresolvedBlockingFindingCount?: number;
+  } = {},
 ) {
   const expectedEvidenceKey = 'final-fix-current-head';
   const evidenceId = `mte-${expectedEvidenceKey}`;
+  const findingCount = resolution.findingCount ?? 1;
+  const blockingFindingCount = resolution.blockingFindingCount ?? 1;
+  const unresolvedBlockingFindingCount = resolution.unresolvedBlockingFindingCount ?? 0;
   const staged = stagePackReviewImmutableRecord({
     kind: 'evidence',
     key: evidenceId,
@@ -680,12 +837,12 @@ function selectNoIntersectionEvidence(
         findingSnapshotDigest: FINAL_FIX_DIGEST,
         priorReviewedHeadSha: HEAD_A,
         currentHeadSha: authority.currentHeadSha,
-        findingCount: 1,
-        findingPaths: ['scripts/pack-review-runner.ts'],
-        unboundFindingCount: 0,
-        finalFixChangedPaths: ['scripts/pack-review-runner.ts'],
-        unresolvedFindingPaths: [],
-        predicateResult: 'resolved',
+        findingCount,
+        blockingFindingCount,
+        nonBlockingFindingCount: findingCount - blockingFindingCount,
+        unresolvedBlockingFindingCount,
+        resolutionBasis: 'explicit_current_head_finding_selection',
+        predicateResult: unresolvedBlockingFindingCount === 0 ? 'resolved' : 'unresolved',
       },
       producedAtUtc: '2026-08-24T00:00:00.000Z',
     },
@@ -702,7 +859,7 @@ function selectNoIntersectionEvidence(
 }
 
 describe('Issue #1591 exact-head final-cap settlement', () => {
-  it('settles through scoped reconcile after exact-head worker smoke without cap+1 review', async () => {
+  it('does not infer semantic resolution merely because the blocking file was touched', async () => {
     const storeRoot = tempRoot();
     harness(storeRoot);
     const seeded = seedFinalCapContinuation(storeRoot);
@@ -727,15 +884,17 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
     expect(result.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
         finalCapSettlement: true,
-        settled: true,
+        settled: false,
         headSha: HEAD_B,
-        reason: 'final_cap_fix_settled',
+        reason: 'final_cap_settlement_incomplete',
+        nextAction: 'complete the current-head finding-resolution evidence, then rerun scoped reconcile',
       }),
     ]));
     expect(listPackReviewRuns({ projectId: PROJECT, storeRoot })).toHaveLength(runCount);
     const authority = readPackReviewAuthority(1591, { storeRoot });
-    expect(authority?.smokeOrdering?.reviewSettledHeadSha).toBe(HEAD_B);
-    expect(authority?.cycle?.reviewStageComplete).toBe(true);
+    expect(authority?.triage?.verdict).toBe('PENDING_ARCHITECT');
+    expect(authority?.smokeOrdering?.reviewSettledHeadSha).not.toBe(HEAD_B);
+    expect(authority?.cycle?.reviewStageComplete).not.toBe(true);
   });
 
   it('does not settle when worker smoke failed', async () => {
@@ -764,10 +923,10 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
     ]));
   });
 
-  it('does not settle when the final fix delta does not cover the blocking finding path', async () => {
+  it('keeps a valid pathless blocker incomplete until semantic resolution evidence exists', async () => {
     const storeRoot = tempRoot();
     harness(storeRoot);
-    seedFinalCapContinuation(storeRoot, 'passed', 'scripts/pack-review-state.ts');
+    seedFinalCapContinuation(storeRoot, 'passed', null);
 
     const result = await reconcileStalePackReviewRuns({
       repoSlug: REPO,
@@ -798,7 +957,7 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
     expect(authority?.cycle?.reviewStageComplete).not.toBe(true);
   });
 
-  it('binds automatic final settlement to the exact head and does not cover a later commit', () => {
+  it('binds explicit automatic final settlement to the exact head and does not cover a later commit', () => {
     const storeRoot = tempRoot();
     const seeded = seedFinalCapContinuation(storeRoot);
     let authority = selectNoIntersectionEvidence(storeRoot, seeded.authority);
@@ -826,6 +985,57 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
     expect(authority.smokeOrdering?.reviewSettledHeadSha).not.toBe(HEAD_C);
   });
 
+  it('accepts explicit current-head resolution for a pathless blocking finding', () => {
+    const storeRoot = tempRoot();
+    const seeded = seedFinalCapContinuation(storeRoot, 'passed', null);
+    let authority = selectNoIntersectionEvidence(storeRoot, seeded.authority, {
+      findingCount: 1,
+      blockingFindingCount: 1,
+      unresolvedBlockingFindingCount: 0,
+    });
+    authority = commitPackReviewTriage({
+      prNumber: 1591,
+      expectedTransitionSeq: authority.transitionSeq,
+      triage: {
+        verdict: 'DEFER',
+        source: 'automatic',
+        findingSnapshotDigest: FINAL_FIX_DIGEST,
+        committedAtUtc: '2026-08-24T00:01:00.000Z',
+      },
+      options: seeded.opts,
+    });
+    expect(authority.smokeOrdering?.reviewSettledHeadSha).toBe(HEAD_B);
+    expect(authority.cycle?.reviewStageComplete).toBe(true);
+  });
+
+  it('does not make an untouched warning part of the blocking settlement obligation', () => {
+    const storeRoot = tempRoot();
+    const seeded = seedFinalCapContinuation(
+      storeRoot,
+      'passed',
+      'scripts/pack-review-runner.ts',
+      [{ title: 'informational note', severity: 'warning', filePath: 'docs/orchestration-runbook.md' }],
+    );
+    let authority = selectNoIntersectionEvidence(storeRoot, seeded.authority, {
+      findingCount: 2,
+      blockingFindingCount: 1,
+      unresolvedBlockingFindingCount: 0,
+    });
+    authority = commitPackReviewTriage({
+      prNumber: 1591,
+      expectedTransitionSeq: authority.transitionSeq,
+      triage: {
+        verdict: 'DEFER',
+        source: 'automatic',
+        findingSnapshotDigest: FINAL_FIX_DIGEST,
+        committedAtUtc: '2026-08-24T00:01:00.000Z',
+      },
+      options: seeded.opts,
+    });
+    expect(authority.smokeOrdering?.reviewSettledHeadSha).toBe(HEAD_B);
+    expect(authority.cycle?.reviewStageComplete).toBe(true);
+  });
+
   it('rejects automatic DEFER when exact-head worker smoke failed', () => {
     const storeRoot = tempRoot();
     const seeded = seedFinalCapContinuation(storeRoot, 'failed');
@@ -841,6 +1051,27 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
       },
       options: seeded.opts,
     })).toThrow(/automatic DEFER requires final-cap continuation.*exact finding-resolution evidence/);
+  });
+
+  it('rejects automatic DEFER when explicit resolution still reports a blocking finding', () => {
+    const storeRoot = tempRoot();
+    const seeded = seedFinalCapContinuation(storeRoot);
+    const authority = selectNoIntersectionEvidence(storeRoot, seeded.authority, {
+      findingCount: 1,
+      blockingFindingCount: 1,
+      unresolvedBlockingFindingCount: 1,
+    });
+    expect(() => commitPackReviewTriage({
+      prNumber: 1591,
+      expectedTransitionSeq: authority.transitionSeq,
+      triage: {
+        verdict: 'DEFER',
+        source: 'automatic',
+        findingSnapshotDigest: FINAL_FIX_DIGEST,
+        committedAtUtc: '2026-08-24T00:01:00.000Z',
+      },
+      options: seeded.opts,
+    })).toThrow(/exact finding-resolution evidence/);
   });
 
   it('rejects automatic DEFER when the evidence is not bound to the finding snapshot', () => {
