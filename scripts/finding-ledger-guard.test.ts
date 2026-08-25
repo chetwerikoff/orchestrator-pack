@@ -1770,4 +1770,114 @@ describe('published author-state M3 bridge', () => {
     expect(withPublishedState.ok, withPublishedState.errors.join('\n')).toBe(true);
     expect(capture.text).not.toContain(publishedAuthorState);
   });
+  it('uses a current r07 author-state to supersede an immutable contested lens and anchor M5', () => {
+    const captureText = markedFinding('S1', {
+      type: 'scope-violation',
+      evidence: 'The proposed edit is out of scope under allowed_roots.',
+    });
+    const capture = cap('pass-01-architectural.capture.txt', 1_300, captureText);
+    const captureIdentity = `sha256:${'b'.repeat(64)}:${capture.name}`;
+    const occurrenceId = `${captureIdentity}:1`;
+    capture.text = `${capture.text}\n${currentLens(occurrenceId, { revision: 'r06', contest: 'none' })}`;
+    const lens = cap(
+      'pass-02-architectural-lens.capture.txt',
+      1_400,
+      currentLens(occurrenceId, { revision: 'r06', contest: 'contested' }),
+    );
+    const ledger = JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
+      findings: [{
+        ...row('S1', {
+          type: 'scope-violation',
+          defectDisposition: 'rejected-as-false',
+          rejectReason: 'the published author adjudication rejects the report',
+          remedyDisposition: 'accepted',
+          occurrences: [occurrenceId],
+          protectedOccurrences: [{
+            occurrenceId,
+            architectPending: false,
+            architectRequired: false,
+            protectedActivation: null,
+          }],
+        }),
+      }],
+    });
+    const publishedAuthorState = currentLens(occurrenceId, {
+      revision: 'r07',
+      outcome: 'non-activate',
+    });
+    const result = checkFindingLedgerGuard(
+      [capture.text, lens.text],
+      ledger,
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r07',
+        stageTerminalConfirmed: true,
+        captureMetadata: [
+          { name: capture.name, timestampMs: capture.timestampMs, captureIdentity },
+          { name: lens.name, timestampMs: lens.timestampMs },
+        ],
+        publishedAuthorState: {
+          text: publishedAuthorState,
+          sha256: createHash('sha256').update(publishedAuthorState).digest('hex'),
+          byteLength: Buffer.byteLength(publishedAuthorState),
+        },
+      } as never,
+    );
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(capture.text).not.toContain(publishedAuthorState);
+    expect(lens.text).not.toContain(publishedAuthorState);
+  });
+
+  it('uses the current occurrence author-state when a stale stable-id lens contest is also present', () => {
+    const lensName = 'pass-03-architectural-lens.capture.txt';
+    const captureIdentity = `sha256:523b8be7a22db5c5fe85b483d86f3dc1b079929c4a54b4cebd796d87925abc5a:${lensName}`;
+    const occurrenceId = `${captureIdentity}:1`;
+    const capture = `${markedFinding('SEC1', {
+      type: 'security',
+      evidence: 'A security issue is present in the proposed boundary.',
+    })}\n${currentLens('SEC1', { revision: 'r06', contest: 'contested' })}`;
+    const ledger = JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
+      findings: [{
+        ...row('SEC1', {
+          type: 'security',
+          defectDisposition: 'rejected-as-false',
+          rejectReason: 'the published author adjudication rejects the report',
+          remedyDisposition: 'accepted',
+          occurrences: [occurrenceId],
+          protectedOccurrences: [{
+            occurrenceId,
+            architectPending: false,
+            architectRequired: false,
+            protectedActivation: null,
+          }],
+        }),
+      }],
+    });
+    const publishedAuthorState = currentLens(occurrenceId, {
+      revision: 'r07',
+      outcome: 'non-activate',
+    });
+    const result = checkFindingLedgerGuard(
+      [capture],
+      ledger,
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r07',
+        stageTerminalConfirmed: true,
+        captureMetadata: [{ name: lensName, timestampMs: 1_400, captureIdentity }],
+        publishedAuthorState: {
+          text: publishedAuthorState,
+          sha256: createHash('sha256').update(publishedAuthorState).digest('hex'),
+          byteLength: Buffer.byteLength(publishedAuthorState),
+        },
+      } as never,
+    );
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
 });

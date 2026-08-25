@@ -450,7 +450,7 @@ function parseCanonicalTerminalVerdict(
   const lines = text.split(/\r?\n/).map((line) => line.trim());
   const exactCount = (token: string): number => lines.filter((line) => line === token).length;
   const verdicts = lines.flatMap((line) => {
-    const match = /^VERDICT: (CLEAN|FINDINGS)$/.exec(line);
+    const match = /^VERDICT: (CLEAN|FINDINGS|NO_FINDINGS)$/.exec(line);
     return match ? [match[1]!] : [];
   });
   const findingCountLines = lines.filter((line) => line.startsWith('FINDING_COUNT:'));
@@ -476,7 +476,9 @@ function parseCanonicalTerminalVerdict(
     || (cutCandidates === 0 ? simplificationClean !== 1 : simplificationClean !== 0)
   ) return null;
   if (revision.findingCount === 0) {
-    if (verdicts[0] !== 'CLEAN' || exactCount('NO_FINDINGS') !== 1) return null;
+    const cleanVerdict = verdicts[0] === 'CLEAN' && exactCount('NO_FINDINGS') === 1;
+    const noFindingsVerdict = verdicts[0] === 'NO_FINDINGS' && exactCount('NO_FINDINGS') <= 1;
+    if (!cleanVerdict && !noFindingsVerdict) return null;
   } else if (verdicts[0] !== 'FINDINGS' || exactCount('NO_FINDINGS') !== 0) {
     return null;
   }
@@ -771,6 +773,27 @@ function expectedCaptureName(
   return stage === 'competitive' || stage === 'architectural-review'
     ? `pass-${pass}-${stage}-${reviewerSlot}.capture.txt`
     : `pass-${pass}-architectural.capture.txt`;
+}
+
+function authoritativeCaptureName(
+  reviewDir: string,
+  stage: Exclude<ReviewStage, 'architectural-lens'>,
+  stageSequence: number,
+  reviewerSlot: string,
+  assertedCapturePath: unknown,
+): string {
+  const expected = expectedCaptureName(stage, stageSequence, reviewerSlot);
+  const publishedArchitecturalPath = resolve(reviewDir, 'pass-01-architectural.capture.txt');
+  if (
+    stage === 'architectural'
+    && stageSequence === 2
+    && typeof assertedCapturePath === 'string'
+    && resolve(reviewDir, assertedCapturePath) === publishedArchitecturalPath
+    && existsSync(publishedArchitecturalPath)
+  ) {
+    return 'pass-01-architectural.capture.txt';
+  }
+  return expected;
 }
 
 function materializeAuthoritativeCapture(
@@ -1098,7 +1121,7 @@ function resolveAuthoritativeArtifact(
     errors,
   );
   if (!comment) return null;
-  const name = expectedCaptureName(stage, stageSequence, reviewerSlot);
+  const name = authoritativeCaptureName(reviewDir, stage, stageSequence, reviewerSlot, invocation.capturePath);
   const materialized = materializeAuthoritativeCapture(
     reviewDir,
     name,
