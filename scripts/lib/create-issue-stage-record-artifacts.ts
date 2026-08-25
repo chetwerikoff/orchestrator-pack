@@ -1770,27 +1770,36 @@ const DERIVED_STAGE_RECEIPT_FIELDS = new Set([
   'stageSequence',
 ]);
 
-function canonicalizeStageReceiptValue(value: unknown, topLevel = true): unknown {
-  if (Array.isArray(value)) return value.map((item) => canonicalizeStageReceiptValue(item, false));
-  if (!isRecord(value)) return value;
-  return Object.fromEntries(
-    Object.keys(value)
-      .filter((key) => !topLevel || !DERIVED_STAGE_RECEIPT_FIELDS.has(key))
-      .sort()
-      .map((key) => [key, canonicalizeStageReceiptValue(value[key], false)]),
-  );
-}
-
 function stageReceiptPayloadsMatchExceptDerivedChain(
   currentBytes: Buffer,
   candidateBytes: Buffer,
 ): boolean {
+  const matches = (current: unknown, candidate: unknown, topLevel = false): boolean => {
+    if (Array.isArray(current) || Array.isArray(candidate)) {
+      if (!Array.isArray(current) || !Array.isArray(candidate) || current.length !== candidate.length) return false;
+      return current.every((item, index) => matches(item, candidate[index], false));
+    }
+    if (isRecord(current) || isRecord(candidate)) {
+      if (!isRecord(current) || !isRecord(candidate)) return false;
+      const invocation = !topLevel && current.schema === 'reviewer-invocation-envelope/v1' && candidate.schema === 'reviewer-invocation-envelope/v1';
+      const keys = new Set([...Object.keys(current), ...Object.keys(candidate)]);
+      for (const key of keys) {
+        if (topLevel && DERIVED_STAGE_RECEIPT_FIELDS.has(key)) continue;
+        const currentHasKey = Object.prototype.hasOwnProperty.call(current, key);
+        const candidateHasKey = Object.prototype.hasOwnProperty.call(candidate, key);
+        if (invocation && key === 'reviewerSource' && (!currentHasKey || !candidateHasKey)) continue;
+        if (!currentHasKey || !candidateHasKey || !matches(current[key], candidate[key], false)) return false;
+      }
+      return true;
+    }
+    return Object.is(current, candidate);
+  };
+
   try {
     const current = JSON.parse(currentBytes.toString('utf8')) as unknown;
     const candidate = JSON.parse(candidateBytes.toString('utf8')) as unknown;
     if (!isRecord(current) || !isRecord(candidate)) return false;
-    return JSON.stringify(canonicalizeStageReceiptValue(current))
-      === JSON.stringify(canonicalizeStageReceiptValue(candidate));
+    return matches(current, candidate, true);
   } catch {
     return false;
   }
