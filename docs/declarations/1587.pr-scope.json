@@ -6,13 +6,9 @@
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/lib/pack-review-worker-notification.ts",
+    "scripts/launch-watch/watch.test.ts",
     "scripts/orca-runtime/adapter.ts",
-    "scripts/orca-runtime/task-adapter.test.ts",
-    "scripts/runtime/caller-census.ts",
-    "scripts/runtime/contracts.ts",
-    "scripts/worker-message-submit-reconcile.test.ts",
-    "scripts/worker-smoke-run.ts"
+    "scripts/runtime/caller-census.ts"
   ],
   "denylist": [
     "credentials/",
@@ -26,13 +22,9 @@
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/lib/pack-review-worker-notification.ts",
+    "scripts/launch-watch/watch.test.ts",
     "scripts/orca-runtime/adapter.ts",
-    "scripts/orca-runtime/task-adapter.test.ts",
-    "scripts/runtime/caller-census.ts",
-    "scripts/runtime/contracts.ts",
-    "scripts/worker-message-submit-reconcile.test.ts",
-    "scripts/worker-smoke-run.ts"
+    "scripts/runtime/caller-census.ts"
   ],
-  "source_revision": "f7f05b50cc689060408a3a62b031ead79f78bc4e"
+  "source_revision": "24a1fdaca06df28ba63635e7beb2847b15ba8661"
 }

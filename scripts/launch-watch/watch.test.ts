@@ -403,7 +403,7 @@ describe('Orca runtime adapter', () => {
     });
   });
 
-  it('uses one total deadline for lookup and tui-idle observation', () => {
+  it('keeps tui-idle observation separate from bounded CLI transport time', () => {
     let now = 0;
     const calls: Array<{ args: readonly string[]; timeoutMs?: number }> = [];
     const runJson = ((args: readonly string[], options: { readonly timeoutMs?: number } = {}) => {
@@ -420,11 +420,11 @@ describe('Orca runtime adapter', () => {
     const adapter = new OrcaRuntimeAdapter({ runJson, now: () => now });
 
     expect(adapter.liveness({ worker: orcaIdentity, observationWindowMs: 50 }).status).toBe('busy');
-    expect(calls[0]).toMatchObject({ timeoutMs: 50 });
+    expect(calls[0]).toMatchObject({ timeoutMs: 2_550 });
     expect(calls[1]?.args).toEqual([
-      'terminal', 'wait', '--terminal', 'term-1', '--for', 'tui-idle', '--timeout-ms', '30',
+      'terminal', 'wait', '--terminal', 'term-1', '--for', 'tui-idle', '--timeout-ms', '50',
     ]);
-    expect(calls[1]).toMatchObject({ timeoutMs: 30 });
+    expect(calls[1]).toMatchObject({ timeoutMs: 2_530 });
   });
 
   it('normalizes a non-positive liveness timeout override to a bounded positive call', () => {
@@ -444,22 +444,46 @@ describe('Orca runtime adapter', () => {
       { timeoutMs: 0 },
     ).status).toBe('busy');
     expect(timeouts).toHaveLength(2);
-    expect(timeouts.every((timeoutMs) => timeoutMs > 0 && timeoutMs <= 50)).toBe(true);
+    expect(timeouts.every((timeoutMs) => timeoutMs > 0 && timeoutMs <= 2_550)).toBe(true);
   });
 
-  it('returns unknown within the total bound when lookup exhausts the budget', () => {
+  it('treats a structured native tui-idle timeout as busy after identity proof', () => {
+    const runJson = ((args: readonly string[]) => {
+      if (args[1] === 'show') return terminalShow();
+      if (args[1] === 'wait') return { ok: false, error: { code: 'timeout' } };
+      return { ok: true, result: {} };
+    }) as typeof runOrcaJson;
+    const adapter = new OrcaRuntimeAdapter({ runJson });
+
+    expect(adapter.liveness({ worker: orcaIdentity, observationWindowMs: 25 }).status).toBe('busy');
+  });
+
+  it('keeps an outer tui-idle transport timeout unknown', () => {
+    const runJson = ((args: readonly string[]) => {
+      if (args[1] === 'show') return terminalShow();
+      if (args[1] === 'wait') {
+        return { ok: false, error: { code: 'orca_operation_timeout' } };
+      }
+      return { ok: true, result: {} };
+    }) as typeof runOrcaJson;
+    const adapter = new OrcaRuntimeAdapter({ runJson });
+
+    expect(adapter.liveness({ worker: orcaIdentity, observationWindowMs: 25 }).status).toBe('unknown');
+  });
+
+  it('returns unknown within the total transport bound when lookup exhausts the budget', () => {
     let now = 0;
     const calls: Array<{ args: readonly string[]; timeoutMs?: number }> = [];
     const runJson = ((args: readonly string[], options: { readonly timeoutMs?: number } = {}) => {
       calls.push({ args, timeoutMs: options.timeoutMs });
-      now += 50;
+      now += 2_550;
       return { ok: false, error: { code: 'orca_operation_timeout' } };
     }) as typeof runOrcaJson;
     const adapter = new OrcaRuntimeAdapter({ runJson, now: () => now });
 
     expect(adapter.liveness({ worker: orcaIdentity, observationWindowMs: 50 }).status).toBe('unknown');
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ timeoutMs: 50 });
+    expect(calls[0]).toMatchObject({ timeoutMs: 2_550 });
   });
 
   it('finds a worker in its explicitly selected non-active workspace', () => {
