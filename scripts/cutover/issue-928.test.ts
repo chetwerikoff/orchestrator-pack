@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 120
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -6,6 +8,7 @@ import { runProcessSync } from '../kernel/subprocess.ts';
 import { stableStringify } from '../lib/cutover/stable-stringify.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
 import { activateCutover, assertNoExternalLegacyReferences, recomputeClosure, type ActivationBoundary } from '../lib/cutover/activation-transaction.ts';
+import { waitForStartedSupervisor } from '../lib/cutover/activation-transaction.ts';
 import { abandonPreImportCordon } from '../lib/cutover/activation-transaction.ts';
 import { isExecutableLegacyReference } from '../lib/cutover/activation-transaction.ts';
 import { createCordon, findLegacySupervisorIdentities, markImportBegun, readCordonState } from '../lib/cutover/activation-cordon.ts';
@@ -46,6 +49,28 @@ const activationCordonTestState = vi.hoisted(() => ({
   disableGreenfieldProcessCensus: false,
 }));
 
+const activationSubprocessTestState = vi.hoisted(() => ({
+  result: null as null | {
+    outcome: 'exit';
+    ok: true;
+    exitCode: 0;
+    signal: null;
+    stdout: string;
+    stderr: string;
+    timedOut: false;
+    cancelled: false;
+  },
+}));
+
+vi.mock('../kernel/subprocess.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../kernel/subprocess.ts')>();
+  return {
+    ...actual,
+    runProcess: async (options: Parameters<typeof actual.runProcess>[0]) =>
+      activationSubprocessTestState.result ?? actual.runProcess(options),
+  };
+});
+
 vi.mock('../lib/cutover/activation-cordon.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/cutover/activation-cordon.ts')>();
   return {
@@ -85,6 +110,7 @@ function tempRoot(): string {
 }
 
 afterEach(() => {
+  activationSubprocessTestState.result = null;
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
@@ -675,7 +701,7 @@ describe('[pack-review-4] regression coverage', () => {
     ]);
   });
 
-  it('reuses a waiting supervisor and waits for delayed durable delivery', async () => {
+  it('reuses a waiting supervisor, validates running child identity, and fails closed on stale/v1 recovery status', async () => {
     const { readProcessIdentity } = await import('../lib/cutover/activation-cordon.ts');
     const { observeSchedulerHealthAndDelivery, productionRecoveryBoundary } = await import('../lib/cutover/activation-recovery.ts');
     const { createPackReviewRun } = await import('../lib/pack-review-run-store.ts');
@@ -716,8 +742,9 @@ describe('[pack-review-4] regression coverage', () => {
         foundationEvidencePath: path.join(root, 'foundation.json'),
       },
     } as ActivationRequest;
-    writeJson(path.join(root, 'typescript-supervisor-status.json'), {
-      schemaVersion: 1,
+    const statusPath = path.join(root, 'typescript-supervisor-status.json');
+    writeJson(statusPath, {
+      schemaVersion: 2,
       epochId: core.epochId,
       nonce: core.nonce,
       supervisorPid: process.pid,
@@ -726,6 +753,7 @@ describe('[pack-review-4] regression coverage', () => {
       registrySource: request.paths.targetRegistryPath,
       childId: 'pr2-scheduler',
       childPid: null,
+      childStartTicks: null,
       childGeneration: 3,
       childRestarts: 2,
       restartState: 'waiting-restart',
@@ -812,6 +840,135 @@ describe('[pack-review-4] regression coverage', () => {
     await delayedDelivery;
     expect(observation.supervisor.restartState).toBe('waiting-restart');
     expect(observation.delivery.headSha).toBe(headSha);
+
+    const runningStatus = {
+      schemaVersion: 2 as const,
+      epochId: core.epochId,
+      nonce: core.nonce,
+      supervisorPid: process.pid,
+      supervisorStartTicks: identity.startTicks,
+      registryHash: core.registryHash,
+      registrySource: request.paths.targetRegistryPath,
+      childId: 'pr2-scheduler',
+      childPid: process.pid,
+      childStartTicks: identity.startTicks,
+      childGeneration: 4,
+      childRestarts: 2,
+      restartState: 'running' as const,
+      startedAt: new Date().toISOString(),
+      lastChildStartAt: new Date().toISOString(),
+      cordonReason: 'post-cas-epoch-owner',
+      refusalReason: null,
+    };
+    writeJson(statusPath, runningStatus);
+    await expect(observeSchedulerHealthAndDelivery(
+      request,
+      core,
+      { supervisorPid: process.pid, childGeneration: 4 },
+      storeRoot,
+      { timeoutMs: 100, pollMs: 5 },
+    )).resolves.toMatchObject({ supervisor: { restartState: 'running', childPid: process.pid, childGeneration: 4 } });
+
+    writeJson(statusPath, { ...runningStatus, childStartTicks: `${identity.startTicks}-reused` });
+    await expect(observeSchedulerHealthAndDelivery(
+      request,
+      core,
+      { supervisorPid: process.pid, childGeneration: 4 },
+      storeRoot,
+      { timeoutMs: 30, pollMs: 5 },
+    )).rejects.toThrow(/scheduler_health_not_observed/);
+
+    const { childStartTicks: _childStartTicks, ...legacyStatus } = runningStatus;
+    writeJson(statusPath, { ...legacyStatus, schemaVersion: 1 });
+    await expect(observeSchedulerHealthAndDelivery(
+      request,
+      core,
+      { supervisorPid: process.pid, childGeneration: 4 },
+      storeRoot,
+      { timeoutMs: 30, pollMs: 5 },
+    )).rejects.toThrow(/recovery_supervisor_status_v1_unsupported/);
+  });
+
+  it('activation startup accepts only a live matching schema-v2 child identity and rejects stale/v1 status', async () => {
+    const { readProcessIdentity } = await import('../lib/cutover/activation-cordon.ts');
+    const root = tempRoot();
+    const identity = readProcessIdentity(process.pid);
+    const nonce = 'nonce-review4-activation';
+    const request = {
+      epochId: 'epoch-review4-activation',
+      expectedOldEpochId: null,
+      hostId: 'test-host',
+      repoRoot,
+      installedCommitSha: 'd'.repeat(40),
+      oldInstalledRevisionRoot: repoRoot,
+      legacySupervisorPid: process.pid,
+      knownMemberRoster: [{ hostId: 'test-host' }],
+      stores: [],
+      paths: {
+        stateDir: root,
+        cordonPath: path.join(root, 'cordon.json'),
+        phaseOnePath: path.join(root, 'phase-one.json'),
+        followupPath: path.join(root, 'followups.json'),
+        epochAuthorityPath: path.join(root, 'authority.json'),
+        targetRegistryPath: path.join(root, 'target-registry.json'),
+        projectedRegistryPath: path.join(root, 'projected-registry.json'),
+        snapshotDir: path.join(root, 'snapshots'),
+        supervisorStateDir: root,
+        foundationEvidencePath: path.join(root, 'foundation.json'),
+      },
+    } as ActivationRequest;
+    const statusPath = path.join(root, 'typescript-supervisor-status.json');
+    const runningStatus = {
+      schemaVersion: 2 as const,
+      epochId: request.epochId,
+      nonce,
+      supervisorPid: process.pid,
+      supervisorStartTicks: identity.startTicks,
+      registryHash: 'registry-review4-activation',
+      registrySource: request.paths.targetRegistryPath,
+      childId: 'pr2-scheduler',
+      childPid: process.pid,
+      childStartTicks: identity.startTicks,
+      childGeneration: 5,
+      childRestarts: 0,
+      restartState: 'running' as const,
+      startedAt: new Date().toISOString(),
+      lastChildStartAt: new Date().toISOString(),
+      cordonReason: 'post-cas-epoch-owner',
+      refusalReason: null,
+    };
+    activationSubprocessTestState.result = {
+      outcome: 'exit',
+      ok: true,
+      exitCode: 0,
+      signal: null,
+      stdout: JSON.stringify({ pid: process.pid }),
+      stderr: '',
+      timedOut: false,
+      cancelled: false,
+    };
+
+    writeJson(statusPath, runningStatus);
+    await expect(waitForStartedSupervisor(request, nonce, process.pid)).resolves.toEqual({
+      supervisorPid: process.pid,
+      childGeneration: 5,
+    });
+
+    const { childStartTicks: _childStartTicks, ...legacyStatus } = runningStatus;
+    writeJson(statusPath, { ...legacyStatus, schemaVersion: 1 });
+    await expect(waitForStartedSupervisor(request, nonce, process.pid))
+      .rejects.toThrow(/typescript_supervisor_status_v1_unsupported/);
+
+    writeJson(statusPath, { ...runningStatus, childStartTicks: `${identity.startTicks}-reused` });
+    vi.useFakeTimers();
+    try {
+      const rejected = expect(waitForStartedSupervisor(request, nonce, process.pid))
+        .rejects.toThrow(/typescript_supervisor_scheduler_not_ready/);
+      await vi.advanceTimersByTimeAsync(10_100);
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

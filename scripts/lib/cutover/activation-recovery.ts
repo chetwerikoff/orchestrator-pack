@@ -5,17 +5,20 @@ import { buildEpochCommitCore, FileEpochAuthority, mapCutoverStoreDigests } from
 import {
   assertCordonRequestBinding,
   fileDigestOrAbsent,
-  processAlive,
   readCordon,
   readCordonState,
-  readProcessIdentity,
 } from './activation-cordon.ts';
 import { appendFollowup, appendPhaseOne, finalizePhaseOne, readPhaseOneDetail, verifyPhaseOneDetails, verifyPhaseOneDigest } from './activation-evidence.ts';
 import { importSnapshot } from './activation-import.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
 import type { CordonRecord, FollowupRecord, ActivationRequest, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
-import { readSupervisorStatus, type SupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
+import {
+  isLiveRunningSupervisorChild,
+  isLiveSupervisorStatus,
+  readSupervisorStatus,
+  type SupervisorStatus,
+} from '../orchestrator-side-process-supervisor.ts';
 import { listPackReviewRuns, type PackReviewRunRecord } from '../pack-review-run-store.ts';
 import { packReviewDeliveryNeedsResume } from '../pack-review-delivery.ts';
 
@@ -101,13 +104,8 @@ function appendIfMissing(pathName: string, epochId: string, step: string, detail
 function liveSupervisorStatus(request: ActivationRequest, nonce: string): SupervisorStatus | null {
   const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
   if (!status) return null;
-  let identity;
-  try {
-    identity = readProcessIdentity(status.supervisorPid);
-  } catch {
-    return null;
-  }
-  if (identity.startTicks !== status.supervisorStartTicks) return null;
+  if (status.schemaVersion !== 2) throw new Error('recovery_supervisor_status_v1_unsupported');
+  if (!isLiveSupervisorStatus(status)) return null;
   if (status.epochId !== request.epochId || status.nonce !== nonce) throw new Error('recovery_supervisor_context_conflict');
   if (status.restartState === 'refused') throw new Error(`recovery_supervisor_refused:${status.refusalReason ?? 'unknown'}`);
   if (status.restartState === 'stopping') throw new Error('recovery_supervisor_stopping');
@@ -118,7 +116,7 @@ function readySupervisorStatus(request: ActivationRequest, nonce: string): { sup
   const status = liveSupervisorStatus(request, nonce);
   if (!status || !status.registryHash || status.childGeneration < 1) return null;
   if (status.restartState === 'running') {
-    if (status.childPid === null || !processAlive(status.childPid)) return null;
+    if (!isLiveRunningSupervisorChild(status)) return null;
   } else if (status.restartState !== 'waiting-restart') {
     return null;
   }
@@ -167,7 +165,7 @@ function observedSupervisorStatus(
     || status.registryHash !== core.registryHash
   ) return null;
   if (status.restartState === 'running') {
-    if (status.childPid === null || !processAlive(status.childPid)) return null;
+    if (!isLiveRunningSupervisorChild(status)) return null;
     return status;
   }
   return status.restartState === 'waiting-restart' ? status : null;
