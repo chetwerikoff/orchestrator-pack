@@ -110,6 +110,7 @@ export interface PackReviewGptRoundRecord {
   issueNumber: number;
   boundIssueSnapshotDigest: string;
   sourceSlots: PackReviewSourceSlotRecord[];
+  settledSourceCount?: number;
 }
 
 export interface PackReviewRunRecord {
@@ -348,6 +349,14 @@ function normalizeAutomaticBudgetDisposition(
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid automaticBudgetDisposition`);
   }
   return disposition;
+}
+
+function normalizeNewAutomaticBudgetDisposition(value: unknown): 'consume' {
+  const disposition = normalizeAutomaticBudgetDisposition(value);
+  if (disposition !== 'consume') {
+    throw new Error('non_consuming_explicit is legacy-read-only and cannot be produced by new pack-review runs');
+  }
+  return 'consume';
 }
 
 function validateCompleteGptPayload(payload: unknown, terminalClass: string, path: string): void {
@@ -645,6 +654,28 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
     }
   }
 
+  let settledSourceCount: number | undefined;
+  if (raw.settledSourceCount !== undefined) {
+    settledSourceCount = requiredJsonPositiveInteger(
+      raw.settledSourceCount,
+      'reviewRound settledSourceCount',
+      path,
+    );
+    if (cardinality < 3 || settledSourceCount < 2 || settledSourceCount > cardinality) {
+      throw new Error(
+        `corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound settledSourceCount`,
+      );
+    }
+    const usableSourceCount = sourceSlots.filter((slot) => (
+      slot.lifecycle === 'terminal' && COMPLETE_GPT_TERMINAL_CLASSES.has(slot.terminalClass ?? '')
+    )).length;
+    if (usableSourceCount !== settledSourceCount) {
+      throw new Error(
+        `corrupt pack review run record${path ? ` at ${path}` : ''}: settledSourceCount does not match usable source census`,
+      );
+    }
+  }
+
   return {
     ...(raw as unknown as PackReviewGptRoundRecord),
     schema: 'pack-review-gpt-round/v1',
@@ -655,6 +686,7 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
     issueNumber,
     boundIssueSnapshotDigest,
     sourceSlots,
+    ...(settledSourceCount === undefined ? {} : { settledSourceCount }),
   };
 }
 
@@ -784,8 +816,15 @@ function mergeFrozenGptRound(
   path: string,
 ): PackReviewGptRoundRecord {
   assertFrozenGptRoundIdentity(existing, incoming, path);
+  if (existing.settledSourceCount !== undefined
+      && incoming.settledSourceCount !== undefined
+      && existing.settledSourceCount !== incoming.settledSourceCount) {
+    throw new Error(`corrupt pack review run record at ${path}: settledSourceCount cannot change once settled`);
+  }
+  const settledSourceCount = existing.settledSourceCount ?? incoming.settledSourceCount;
   return {
     ...existing,
+    ...(settledSourceCount === undefined ? {} : { settledSourceCount }),
     sourceSlots: existing.sourceSlots.map((existingSlot) => {
       const incomingSlot = incoming.sourceSlots.find((slot) => slot.ordinal === existingSlot.ordinal)!;
       return mergeFrozenGptSlot(
@@ -798,8 +837,11 @@ function mergeFrozenGptRound(
 }
 
 function assertCompleteGptRound(round: PackReviewGptRoundRecord, path: string): void {
+  const settledSourceCount = round.settledSourceCount;
+  let usableSourceCount = 0;
   for (const slot of round.sourceSlots) {
     if (slot.lifecycle !== 'terminal') {
+      if (settledSourceCount !== undefined) continue;
       throw new Error(
         `corrupt pack review run record at ${path}: mandatory source slot ${slot.slotId} is not terminal`,
       );
@@ -807,6 +849,12 @@ function assertCompleteGptRound(round: PackReviewGptRoundRecord, path: string): 
     validateGptTerminalEvidence(
       slot,
       `${path}.reviewRound.sourceSlots[${slot.ordinal - 1}]`,
+    );
+    if (COMPLETE_GPT_TERMINAL_CLASSES.has(slot.terminalClass ?? '')) usableSourceCount += 1;
+  }
+  if (settledSourceCount !== undefined && usableSourceCount !== settledSourceCount) {
+    throw new Error(
+      `corrupt pack review run record at ${path}: settledSourceCount does not match usable source census`,
     );
   }
 }
@@ -839,6 +887,7 @@ function deriveCompleteGptRoundAggregate(
 }
 
 function hasNonHarvestIncompleteGptSource(round: PackReviewGptRoundRecord): boolean {
+  if (round.settledSourceCount !== undefined) return false;
   return round.sourceSlots.some((slot) => {
     const terminalClass = slot.terminalClass ?? '';
     return slot.lifecycle === 'terminal'
@@ -1205,12 +1254,15 @@ function readRecordsUnlocked(storeRoot: string): PackReviewRunRecord[] {
   return records;
 }
 
-export function isPackReviewRunStale(record: PackReviewRunRecord, now = new Date()): boolean {
-  if (!PACK_REVIEW_ACTIVE_STATUSES.has(record.status)) return false;
+export function packReviewRunGraceElapsed(record: PackReviewRunRecord, now = new Date()): boolean {
   const heartbeatMs = Date.parse(record.heartbeatAtUtc || record.updatedAt);
   if (!Number.isFinite(heartbeatMs)) return true;
-  const ageMs = now.getTime() - heartbeatMs;
-  if (ageMs < packReviewRunStaleMinutes() * 60_000) return false;
+  return now.getTime() - heartbeatMs >= packReviewRunStaleMinutes() * 60_000;
+}
+
+export function isPackReviewRunStale(record: PackReviewRunRecord, now = new Date()): boolean {
+  if (!PACK_REVIEW_ACTIVE_STATUSES.has(record.status)) return false;
+  if (!packReviewRunGraceElapsed(record, now)) return false;
   return !processAlive(Number(record.runnerPid));
 }
 
@@ -1497,15 +1549,13 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       return { created: false, reused: true, reason: 'active_run_exists', run: consumerRow(active[0]!), storeRoot };
     }
 
-    if (!input.allowCompletedSameHeadReplay) {
-      const completed = boundRecords
-        .filter((record) => matchesInput(record)
-          && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
-          && hasPersistedPackReviewVerdict(record));
-      const latestCompleted = selectLatestSameKeyRun(boundRecords, completed);
-      if (latestCompleted) {
-        return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(latestCompleted), storeRoot };
-      }
+    const completed = boundRecords
+      .filter((record) => matchesInput(record)
+        && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
+        && hasPersistedPackReviewVerdict(record));
+    const latestCompleted = selectLatestSameKeyRun(boundRecords, completed);
+    if (latestCompleted) {
+      return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(latestCompleted), storeRoot };
     }
 
     const uncertain = boundRecords.filter((record) => matchesInput(record)
@@ -1522,8 +1572,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
     }
 
     const persistedGptRounds = boundRecords.filter((record) => matchesInput(record)
-      && hasRecordedGptRoundLifecycleOrEvidence(record)
-      && (!input.allowCompletedSameHeadReplay || !hasPersistedPackReviewVerdict(record)));
+      && hasRecordedGptRoundLifecycleOrEvidence(record));
     const latestPersistedGptRound = selectLatestSameKeyRun(boundRecords, persistedGptRounds);
     if (latestPersistedGptRound) {
       return {
@@ -1557,7 +1606,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       surface: input.surface?.trim() || 'pack-review-runner',
       trustedPackRoot: resolve(input.trustedPackRoot),
       sourceRepoRoot: resolve(input.sourceRepoRoot),
-      automaticBudgetDisposition: normalizeAutomaticBudgetDisposition(input.automaticBudgetDisposition),
+      automaticBudgetDisposition: normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition),
       canonicalRepository,
       ...(input.reviewRound ? { reviewRound: input.reviewRound } : {}),
       runnerPid: process.pid,

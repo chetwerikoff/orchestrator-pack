@@ -337,8 +337,8 @@ describe('Issue #898 authority and cap state', () => {
   });
 });
 
-describe('Issue #1417 explicit extra-review reopen', () => {
-  it('rewinds a published same-head authority without consuming or resetting automatic budget', () => {
+describe('Issue #1417 explicit extra-review legacy helper', () => {
+  it('cannot supersede same-head findings with non-consuming clean evidence', () => {
     const storeOptions = options();
     const head = sha('a');
     let state = initializePackReviewAuthority({
@@ -388,7 +388,7 @@ describe('Issue #1417 explicit extra-review reopen', () => {
     expect(state.cycle).toEqual(cycleBefore);
     expect(state.triage).toEqual(triageBefore);
 
-    state = commitPackReviewTerminal({
+    expect(() => commitPackReviewTerminal({
       prNumber: 1417,
       expectedTransitionSeq: state.transitionSeq,
       terminal: {
@@ -405,21 +405,23 @@ describe('Issue #1417 explicit extra-review reopen', () => {
       status: 'clean',
       findingCount: 0,
       options: storeOptions,
-    });
-    expect(state.phase).toBe('terminal_and_cap_committed');
-    expect(state.cycle).toEqual(cycleBefore);
-    expect(state.terminal?.runId).toBe('explicit-run');
-    expect(state.terminal?.automaticBudgetDisposition).toBe('non_consuming_explicit');
+    })).toThrow(/terminal_precedence_conflict/);
+
+    const persisted = readPackReviewAuthority(1417, storeOptions);
+    expect(persisted?.phase).toBe('head_observed');
+    expect(persisted?.cycle).toEqual(cycleBefore);
+    expect(persisted?.triage).toEqual(triageBefore);
+    expect(persisted?.terminal?.runId).toBe('auto-run');
 
     expect(() => reopenPackReviewAuthorityForExplicitExtraReview({
       prNumber: 1417,
-      expectedTransitionSeq: state.transitionSeq,
+      expectedTransitionSeq: persisted!.transitionSeq,
       headSha: sha('b'),
       options: storeOptions,
     })).toThrow(PackReviewAuthorityError);
     expect(() => reopenPackReviewAuthorityForExplicitExtraReview({
       prNumber: 1417,
-      expectedTransitionSeq: state.transitionSeq,
+      expectedTransitionSeq: persisted!.transitionSeq,
       headSha: sha('b'),
       options: storeOptions,
     })).toThrow(/exact current head/);

@@ -393,62 +393,6 @@ describe('Issue #1417 direct-CLI operator-only pack-review start', () => {
     expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([]);
   });
 
-  it('admits a direct-CLI extra review after cap on the completed same head without consuming or resetting budget', async () => {
-    const storeRoot = tempRoot('opk-1417-explicit-replay-');
-    const capture = path.join(storeRoot, 'github-review.json');
-    harnessEnv(storeRoot, capture);
-    process.env.PACK_REVIEWER = 'codex';
-
-    const seed = await startPackReview({
-      projectId: 'orchestrator-pack',
-      storeRoot,
-      sourceRepoRoot: repoRoot,
-      prNumber: 1341,
-      headSha: HEAD_A,
-      claimMode: 'preacquired',
-      fixtureCurrentPrHeadSha: HEAD_A,
-      fixturePrState: 'OPEN',
-      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
-      fixturePostReviewHeadSha: HEAD_A,
-      fixtureIssueBody: issueBody,
-      fixtureIssueNumber: 1341,
-      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
-      fixtureBoundIssueSnapshotBytes: issueBody,
-      fixtureReviewStdout: JSON.stringify({
-        verdict: 'findings',
-        findingCount: 1,
-        findings: [{ title: 'seed automatic finding', severity: 'blocking' }],
-      }),
-      fixtureRequiredStatusWriter: async () => {},
-      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
-    });
-    expect(seed.ok, JSON.stringify(seed)).toBe(true);
-    const before = readPackReviewAuthority(1341, { storeRoot });
-    expect(before?.cycle?.state).toMatch(/at_cap/);
-    expect(before?.cycle?.consumedHeadShas).toEqual([HEAD_A]);
-
-    const explicit = directOperatorStart(storeRoot);
-    expect(explicit.exitCode, explicit.stderr || explicit.stdout).toBe(0);
-    const result = JSON.parse(explicit.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1)!) as Record<string, unknown>;
-    expect(result).toMatchObject({ ok: true, created: true, reused: false });
-
-    const after = readPackReviewAuthority(1341, { storeRoot });
-    expect(after?.cycle).toEqual(before?.cycle);
-    expect(after?.triage).toEqual(before?.triage);
-    const runs = listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot });
-    expect(runs).toHaveLength(2);
-    const explicitRun = runs.find((run) => run.id === result.runId);
-    expect(explicitRun).toMatchObject({
-      targetSha: HEAD_A,
-      automaticBudgetDisposition: 'non_consuming_explicit',
-      startReason: 'direct operator recovery for the exact blocked review',
-    });
-    expect(explicitRun?.surface).toContain('operator_adjudicated');
-    expect(explicitRun?.surface).toContain('session-binding=advisory');
-    expect(explicitRun?.surface).toContain('issue=1341');
-    expect(explicitRun?.surface).toContain(snapshot);
-  });
-
   it('keeps an active same-head run deduped even for direct-CLI explicit review', () => {
     const storeRoot = tempRoot('opk-1417-explicit-active-');
     const capture = path.join(storeRoot, 'github-review.json');
