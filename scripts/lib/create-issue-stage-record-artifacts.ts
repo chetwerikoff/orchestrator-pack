@@ -1770,7 +1770,7 @@ const DERIVED_STAGE_RECEIPT_FIELDS = new Set([
   'stageSequence',
 ]);
 
-function stageReceiptPayloadsMatchExceptDerivedChain(
+export function stageReceiptPayloadsMatchExceptDerivedChain(
   currentBytes: Buffer,
   candidateBytes: Buffer,
 ): boolean {
@@ -1787,6 +1787,10 @@ function stageReceiptPayloadsMatchExceptDerivedChain(
         if (topLevel && DERIVED_STAGE_RECEIPT_FIELDS.has(key)) continue;
         const currentHasKey = Object.prototype.hasOwnProperty.call(current, key);
         const candidateHasKey = Object.prototype.hasOwnProperty.call(candidate, key);
+        if (topLevel && key === 'invocations' && (!currentHasKey || !candidateHasKey)) {
+          const present = currentHasKey ? current[key] : candidate[key];
+          if (Array.isArray(present) && present.length === 0) continue;
+        }
         if (invocation && key === 'reviewerSource' && (!currentHasKey || !candidateHasKey)) continue;
         if (!currentHasKey || !candidateHasKey || !matches(current[key], candidate[key], false)) return false;
       }

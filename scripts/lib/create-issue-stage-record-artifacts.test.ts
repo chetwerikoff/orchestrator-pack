@@ -12,6 +12,7 @@ import {
   STAGE_EVIDENCE_SCHEMA,
   inspectAcceptanceArtifacts,
   produceAcceptanceArtifacts,
+  stageReceiptPayloadsMatchExceptDerivedChain,
 } from './create-issue-stage-record-artifacts.ts';
 import {
   deriveReviewEpisodeId,
@@ -341,6 +342,37 @@ function inspect(input: ReturnType<typeof fixture>) {
 }
 
 describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
+  it('accepts an omitted invocations field when the persisted value is empty', () => {
+    const receipt = (invocations?: unknown) => ({
+      schema: 'stage-completeness-receipt/v1',
+      stable: 'same',
+      ...(invocations === undefined ? {} : { invocations }),
+    });
+    const bytes = (value: unknown) => Buffer.from(JSON.stringify(value));
+    expect(stageReceiptPayloadsMatchExceptDerivedChain(
+      bytes(receipt([])),
+      bytes(receipt()),
+    )).toBe(true);
+  });
+
+  it('continues rejecting non-empty invocation payload differences and tampered reviewerSource', () => {
+    const invocation = {
+      schema: 'reviewer-invocation-envelope/v1',
+      terminal: true,
+      reviewerSource: 'original-source',
+    };
+    const receipt = (invocations: unknown) => ({ schema: 'stage-completeness-receipt/v1', invocations });
+    const bytes = (value: unknown) => Buffer.from(JSON.stringify(value));
+    expect(stageReceiptPayloadsMatchExceptDerivedChain(
+      bytes(receipt([invocation])),
+      bytes(receipt([{ ...invocation, terminal: false }])),
+    )).toBe(false);
+    expect(stageReceiptPayloadsMatchExceptDerivedChain(
+      bytes(receipt([invocation])),
+      bytes(receipt([{ ...invocation, reviewerSource: 'tampered-source' }])),
+    )).toBe(false);
+  });
+
   it('accepts receipt-ok/artifact-ok only after census, principal proof, and reread', () => {
     const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
     const source = transport({ census: [...input.reviewComments, comment(input.body)] });
