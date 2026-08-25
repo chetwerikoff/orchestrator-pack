@@ -45,8 +45,14 @@ import { createProductionFleetNudgeEffects } from './fleet-nudge-production.ts';
 import {
   publishFleetReconciliationHandoff,
   resolveFleetReconciliationHandoffPath,
+  type FleetReconciliationHandoff,
   type FleetReconciliationReason,
 } from './fleet-reconciliation-handoff.ts';
+import {
+  runFleetEscalationDelivery,
+  type FleetEscalationInvocationInput,
+  type FleetEscalationInvocationResultV1,
+} from './fleet-escalation-delivery.ts';
 
 export interface DormantSchedulerState {
   component: 'pr2-foundation-scheduler';
@@ -64,10 +70,23 @@ export interface SchedulerCurrentPr { number: number; headRefOid: string; state:
 
 type SchedulerFleetObserver = Pick<FleetObserver, 'tick'> & Partial<Pick<FleetObserver, 'getEffectiveBudgetMs' | 'cancel' | 'schedulerGeneration' | 'snapshotPath'>>;
 type SchedulerFleetNudgeActuator = { tick(input: FleetNudgeTickInput): Promise<FleetNudgeResult> };
+type SchedulerFleetEscalation = (
+  input: Pick<FleetEscalationInvocationInput, 'evidence' | 'committedReadBack' | 'expected'>,
+) => Promise<FleetEscalationInvocationResultV1>;
 interface SchedulerAssignmentReconciliation {
   readonly reason: FleetReconciliationReason;
   readonly assignment?: WorkerAssignment;
 }
+interface SchedulerPublishedHandoff {
+  readonly required: boolean;
+  readonly record?: FleetReconciliationHandoff;
+}
+interface SchedulerFleetIdentity {
+  readonly schedulerGeneration: string;
+  readonly tickSequence: number;
+}
+
+type SchedulerObserverFailure = 'observer_timeout' | 'observer_threw';
 
 export interface SchedulerBoundary {
   listCandidates(): ActivatedSchedulerCandidate[];
@@ -80,6 +99,8 @@ export interface SchedulerBoundary {
   schedulerIntervalMs?: number;
   fleetObserver?: SchedulerFleetObserver;
   fleetNudgeActuator?: SchedulerFleetNudgeActuator;
+  fleetEscalation?: SchedulerFleetEscalation;
+  projectId?: string;
   activationLineage?: string;
   repository?: string;
   unresolvedReason?: FleetReconciliationReason;
@@ -90,7 +111,7 @@ export interface SchedulerBoundary {
     schedulerGeneration: string;
     tickSequence: number;
     unitRef?: string;
-  }) => { ok: boolean; reason?: string };
+  }) => { ok: boolean; reason?: string; record?: FleetReconciliationHandoff };
 }
 
 // Assignment lookup is a per-call budget; the resolver processes every persisted
@@ -214,7 +235,8 @@ async function ghJson(repoRoot: string, args: string[]): Promise<unknown> {
 
 export function productionSchedulerBoundary(input: {
   repoRoot: string; projectId?: string; env?: NodeJS.ProcessEnv; fleetObserver?: SchedulerFleetObserver;
-  fleetNudgeActuator?: SchedulerFleetNudgeActuator; schedulerIntervalMs?: number; activationLineage?: string;
+  fleetNudgeActuator?: SchedulerFleetNudgeActuator; fleetEscalation?: SchedulerFleetEscalation;
+  schedulerIntervalMs?: number; activationLineage?: string;
   repository?: string; unresolvedReason?: FleetReconciliationReason; assignmentReconciliation?: SchedulerAssignmentReconciliation;
   fleetBindings?: readonly FleetAssignmentBinding[];
   reconcilePostReviewSmoke?: SchedulerBoundary['reconcilePostReviewSmoke'];
@@ -228,7 +250,9 @@ export function productionSchedulerBoundary(input: {
     readChecks: async (candidate) => ghJson(input.repoRoot, ['pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'name,state,conclusion,status']) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
     listReviewRuns: () => listPackReviewRuns({ projectId }),
     fleetNudgeActuator: input.fleetNudgeActuator ?? createTargetUnresolvedFleetNudgeActuator(),
+    projectId,
     ...(input.fleetObserver ? { fleetObserver: input.fleetObserver } : {}),
+    ...(input.fleetEscalation ? { fleetEscalation: input.fleetEscalation } : {}),
     ...(input.schedulerIntervalMs === undefined ? {} : { schedulerIntervalMs: input.schedulerIntervalMs }),
     ...(input.activationLineage ? { activationLineage: input.activationLineage } : {}),
     ...(input.repository ? { repository: input.repository } : {}),
@@ -255,7 +279,11 @@ function reconciliationReason(boundary: SchedulerBoundary, outcome: string): Fle
   return null;
 }
 
-function publishRequiredHandoff(boundary: SchedulerBoundary, observer: FleetObserverResult, fleetNudge: FleetNudgeResult): boolean {
+function publishRequiredHandoff(
+  boundary: SchedulerBoundary,
+  observer: FleetObserverResult,
+  fleetNudge: FleetNudgeResult,
+): SchedulerPublishedHandoff {
   const candidate = fleetNudge.outcomes.find((row) => reconciliationReason(boundary, row.outcome) !== null);
   let reason: FleetReconciliationReason | null = null;
   let unitRef: string | undefined;
@@ -269,7 +297,7 @@ function publishRequiredHandoff(boundary: SchedulerBoundary, observer: FleetObse
   } else if (boundary.assignmentReconciliation) {
     reason = boundary.assignmentReconciliation.reason;
   }
-  if (!reason) return false;
+  if (!reason) return { required: false };
   if (!boundary.publishHandoff) throw new Error(`scheduler_reconciliation_handoff_unavailable:${reason}`);
   const result = boundary.publishHandoff({
     reason,
@@ -278,32 +306,66 @@ function publishRequiredHandoff(boundary: SchedulerBoundary, observer: FleetObse
     ...(unitRef ? { unitRef } : {}),
   });
   if (!result.ok) throw new Error(`scheduler_reconciliation_handoff_failed:${result.reason ?? reason}`);
-  return true;
+  return { required: true, ...(result.record ? { record: result.record } : {}) };
 }
 
-function failObserverTickWithHandoff(
+async function evaluateFleetEscalation(
+  boundary: SchedulerBoundary,
+  handoff: SchedulerPublishedHandoff,
+  identity: SchedulerFleetIdentity,
+): Promise<FleetEscalationInvocationResultV1 | undefined> {
+  if (!handoff.required || !boundary.fleetEscalation) return undefined;
+  return boundary.fleetEscalation({
+    evidence: handoff.record ?? null,
+    committedReadBack: handoff.record !== undefined,
+    expected: {
+      projectId: String(boundary.projectId ?? ''),
+      repository: String(boundary.repository ?? ''),
+      activationLineage: String(boundary.activationLineage ?? ''),
+      schedulerGeneration: identity.schedulerGeneration,
+      tickSequence: identity.tickSequence,
+    },
+  });
+}
+
+function publishObserverFailureHandoff(
   boundary: SchedulerBoundary,
   observer: SchedulerFleetObserver,
   tickSequence: number,
-  reason: 'observer_timeout' | 'observer_threw',
-): never {
+  reason: SchedulerObserverFailure,
+): { readonly handoff: SchedulerPublishedHandoff; readonly identity: SchedulerFleetIdentity } {
   const schedulerGeneration = String(observer.schedulerGeneration ?? '').trim();
   if (!schedulerGeneration) throw new Error(`scheduler_observer_identity_unavailable:${reason}`);
   if (!boundary.publishHandoff) throw new Error('scheduler_reconciliation_handoff_unavailable:observer_untrusted');
-  const handoff = boundary.publishHandoff({
+  const published = boundary.publishHandoff({
     reason: 'observer_untrusted',
     schedulerGeneration,
     tickSequence,
   });
-  if (!handoff.ok) throw new Error(`scheduler_reconciliation_handoff_failed:${handoff.reason ?? 'observer_untrusted'}`);
-  throw new Error(`scheduler_observer_untrusted:${reason}`);
+  if (!published.ok) throw new Error(`scheduler_reconciliation_handoff_failed:${published.reason ?? 'observer_untrusted'}`);
+  return {
+    handoff: { required: true, ...(published.record ? { record: published.record } : {}) },
+    identity: { schedulerGeneration, tickSequence },
+  };
 }
 
 export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.ProcessEnv = process.env): Promise<{
-  attempted: number; started: number; skipped: number; observer?: FleetObserverResult; fleetNudge?: FleetNudgeResult; orchestrationMailReconcile?: import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult; orchestratorRequired?: boolean;
+  attempted: number;
+  started: number;
+  skipped: number;
+  observer?: FleetObserverResult;
+  observerFailure?: SchedulerObserverFailure;
+  fleetNudge?: FleetNudgeResult;
+  orchestratorRequired?: boolean;
+  fleetEscalation?: FleetEscalationInvocationResultV1;
+  orchestrationMailReconcile?: import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult;
 }> {
   assertSchedulerEpoch(env);
-  let observer: FleetObserverResult | undefined; let fleetNudge: FleetNudgeResult | undefined; let orchestrationMailReconcile: import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult | undefined; let orchestratorRequired = false;
+  let observer: FleetObserverResult | undefined;
+  let fleetNudge: FleetNudgeResult | undefined;
+  let fleetEscalation: FleetEscalationInvocationResultV1 | undefined;
+  let orchestrationMailReconcile: import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult | undefined;
+  let orchestratorRequired = false;
   const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000; const requestedTickSequence = nextSchedulerTickSequence(boundary);
   if (boundary.fleetObserver) {
     const observerBoundary = boundary.fleetObserver; const observerStartMs = Date.now();
@@ -318,13 +380,30 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
       .catch(() => ({ status: 'failed' as const }));
     const completed = await Promise.race([attempt, timeout]);
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-    if (completed.status === 'timeout') {
+    if (completed.status !== 'complete') {
       observerBoundary.cancel?.();
-      failObserverTickWithHandoff(boundary, observerBoundary, requestedTickSequence, 'observer_timeout');
-    }
-    if (completed.status === 'failed') {
-      observerBoundary.cancel?.();
-      failObserverTickWithHandoff(boundary, observerBoundary, requestedTickSequence, 'observer_threw');
+      const observerFailureReason: SchedulerObserverFailure = completed.status === 'timeout' ? 'observer_timeout' : 'observer_threw';
+      const observerFailure = publishObserverFailureHandoff(
+        boundary,
+        observerBoundary,
+        requestedTickSequence,
+        observerFailureReason,
+      );
+      orchestratorRequired = observerFailure.handoff.required;
+      fleetEscalation = await evaluateFleetEscalation(
+        boundary,
+        observerFailure.handoff,
+        observerFailure.identity,
+      );
+      if (!fleetEscalation) throw new Error(`scheduler_observer_untrusted:${observerFailureReason}`);
+      return {
+        attempted: 0,
+        started: 0,
+        skipped: 0,
+        observerFailure: observerFailureReason,
+        ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
+        fleetEscalation,
+      };
     }
     observer = completed.value;
   }
@@ -341,9 +420,19 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         claimStarts: 0, sendAttempts: 0, dispatched: 0, returnedWithinBudget: true, targetBindingAvailable: false,
       };
     }
-    orchestratorRequired = publishRequiredHandoff(boundary, observer, fleetNudge);
+    const handoff = publishRequiredHandoff(boundary, observer, fleetNudge);
+    orchestratorRequired = handoff.required;
+    fleetEscalation = await evaluateFleetEscalation(boundary, handoff, observer);
     if (fleetNudge.status === 'failed') {
-      throw new Error(`scheduler_fleet_phase_failed:${fleetNudge.result}`);
+      return {
+        attempted: 0,
+        started: 0,
+        skipped: 0,
+        observer,
+        fleetNudge,
+        ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
+        ...(fleetEscalation ? { fleetEscalation } : {}),
+      };
     }
   }
   if (boundary.orchestrationMailReconcile) orchestrationMailReconcile = await boundary.orchestrationMailReconcile();
@@ -362,7 +451,16 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     if (!decision.eligible) { skipped += 1; continue; }
     assertSchedulerEpoch(env); const result = await boundary.start(candidate, freshHead); if (result.ok) started += 1; else skipped += 1;
   }
-  return { attempted, started, skipped, ...(observer ? { observer } : {}), ...(fleetNudge ? { fleetNudge } : {}), ...(orchestrationMailReconcile ? { orchestrationMailReconcile } : {}), ...(orchestratorRequired ? { orchestratorRequired: true } : {}) };
+  return {
+    attempted,
+    started,
+    skipped,
+    ...(observer ? { observer } : {}),
+    ...(fleetNudge ? { fleetNudge } : {}),
+    ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
+    ...(fleetEscalation ? { fleetEscalation } : {}),
+    ...(orchestrationMailReconcile ? { orchestrationMailReconcile } : {}),
+  };
 }
 
 function productionObserverBoundary(observer: FleetObserver): SchedulerFleetObserver {
@@ -567,8 +665,13 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       reason,
       ...assignmentMetadata,
     });
-    return result.ok ? { ok: true } : { ok: false, reason: result.reason };
+    return result.ok ? { ok: true, record: result.record } : { ok: false, reason: result.reason };
   };
+  const fleetEscalation: SchedulerFleetEscalation = (invocation) => runFleetEscalationDelivery({
+    ...invocation,
+    assignmentStorePath,
+    selectAdapter: () => selectRuntimeAdapter({ env }),
+  });
   const orchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () => {
     const preloaded = preloadedOrchestrationMailReconcile;
     preloadedOrchestrationMailReconcile = undefined;
@@ -587,6 +690,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       env,
       fleetObserver: productionObserverBoundary(fleetObserver),
       fleetNudgeActuator,
+      fleetEscalation,
       schedulerIntervalMs: cadence,
       activationLineage,
       repository,
@@ -612,17 +716,34 @@ export function formatSchedulerError(error: unknown): string {
   return errorText(error);
 }
 
+export function schedulerFleetPhaseFailure(result: Awaited<ReturnType<typeof runSchedulerTick>>): string | null {
+  if (result.observerFailure) return `scheduler_observer_untrusted:${result.observerFailure}`;
+  if (result.fleetNudge?.status !== 'failed') return null;
+  return `scheduler_fleet_phase_failed:${result.fleetNudge.result}`;
+}
+
+export function writeSchedulerTickResult(
+  result: Awaited<ReturnType<typeof runSchedulerTick>>,
+  write: (value: string) => void = (value) => { process.stdout.write(value); },
+): void {
+  write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
+}
+
 async function runSingleTick(): Promise<void> {
   const { boundary } = await loadProductionBoundary();
   const result = await runSchedulerTick(boundary);
-  process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
+  writeSchedulerTickResult(result);
+  const failure = schedulerFleetPhaseFailure(result);
+  if (failure) throw new Error(failure);
 }
 async function runLoop(): Promise<void> {
   const { boundary, cadence } = await loadProductionBoundary();
   for (;;) {
     try {
       const result = await runSchedulerTick(boundary);
-      process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
+      writeSchedulerTickResult(result);
+      const failure = schedulerFleetPhaseFailure(result);
+      if (failure) throw new Error(failure);
     }
     catch (error) { process.stderr.write(`${formatSchedulerError(error)}\n`); }
     await new Promise((resolve) => setTimeout(resolve, cadence));
