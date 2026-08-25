@@ -28,5 +28,5 @@
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/runtime/caller-census.ts"
   ],
-  "source_revision": "3a1e610596cd3fae04d1632b3057317d592c1a69"
+  "source_revision": "b3486eecf12f20d9524e12b4b8c99f33c7d19690"
 }
