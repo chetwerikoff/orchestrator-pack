@@ -100,6 +100,7 @@
     "scripts/orchestrator-wake-supervisor.test.ts": "parked",
     "scripts/pack-gpt-browser-path.test.ts": "light",
     "scripts/pack-gpt-reviewer.test.ts": "light",
+    "scripts/pack-gpt-review-timeout.test.ts": "light",
     "scripts/pack-reviewer-preference.test.ts": "light",
     "scripts/pack-pr-review-contract.test.ts": "light",
     "scripts/pack-review-carryover.test.ts": "light",
