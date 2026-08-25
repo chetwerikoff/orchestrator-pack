@@ -441,7 +441,9 @@ function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, p
     errors.push(`review-economics: protected finding ${occurrence.occurrenceId} has ambiguous capture finding id ${occurrence.id}`);
     return;
   }
-  const history = resolveOccurrenceM3History(occurrence.occurrenceId, m3Records.get(occurrence.id) ?? m3Records.get(occurrence.occurrenceId) ?? [], issueRevision, errors);
+  const stableIdRecords = occurrence.id === occurrence.occurrenceId ? [] : (m3Records.get(occurrence.id) ?? []);
+  const occurrenceIdRecords = m3Records.get(occurrence.occurrenceId) ?? [];
+  const history = resolveOccurrenceM3History(occurrence.occurrenceId, [...stableIdRecords, ...occurrenceIdRecords], issueRevision, errors);
   if (history.invalid) return;
   const current = history.current; const record = history.latest; const activation = state.protectedActivation;
   const activationValid = Boolean(activation?.authority && activation?.signal && activation?.whyNow && protectedEvidenceMatches(occurrence.type, activation.signal));
