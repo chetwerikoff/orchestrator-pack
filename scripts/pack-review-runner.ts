@@ -18,7 +18,6 @@ import {
 } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import {
-  buildMergeTriageFindingResolutionEvidence,
   deriveMergeTriageEvidenceTuple,
   produceMergeTriageEvidence,
   selectMergeTriageEvidence,
@@ -76,6 +75,7 @@ import {
   setPackReviewRunTerminal,
   terminalizePackReviewStaleRun,
   updatePackReviewRun,
+  updatePackReviewRunIf,
   validatePersistedPackReviewGptAggregate,
   type PackReviewGptRoundRecord,
   type PackReviewRunRecord,
@@ -237,6 +237,15 @@ export interface ReconcileStalePackReviewRunsInput {
   baseRef?: string;
   fixtureCurrentPrHeadSha?: string;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
+  fixtureBeforeGptRoundFreeze?: (event: {
+    runId: string;
+    usableSourceCount: number;
+    requiredSourceCount: number;
+  }) => void | Promise<void>;
+  fixtureAfterGptRoundFreeze?: (event: {
+    runId: string;
+    settledSourceCount: number;
+  }) => void | Promise<void>;
   fixtureGithubReviewId?: number;
   fixtureGithubReviewTransport?: GithubReviewTransport;
   fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
@@ -949,6 +958,39 @@ function gptUsableSourceCount(round: PackReviewGptRoundRecord | undefined): numb
     slot.lifecycle === 'terminal'
     && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
   )).length ?? 0;
+}
+
+function freezeGptRoundSourceCount(
+  runId: string,
+  requiredSourceCount: number,
+  options: { projectId: string; storeRoot: string },
+): PackReviewGptRoundRecord | null {
+  const updated = updatePackReviewRunIf(
+    runId,
+    (records) => {
+      const current = records.find((record) => record.id === runId);
+      const round = current?.reviewRound;
+      return Boolean(round
+        && round.reviewer === 'gpt'
+        && round.settledSourceCount === undefined
+        && gptUsableSourceCount(round) >= requiredSourceCount);
+    },
+    (existing) => {
+      const round = existing.reviewRound;
+      if (!round || round.reviewer !== 'gpt') return {};
+      return {
+        reviewRound: {
+          ...round,
+          settledSourceCount: gptUsableSourceCount(round),
+        },
+      };
+    },
+    options,
+  );
+  const latest = updated ?? getPackReviewRun(runId, options);
+  return latest?.reviewRound?.settledSourceCount !== undefined
+    ? latest.reviewRound
+    : null;
 }
 
 function gptRoundGraceExpired(run: PackReviewRunRecord, now = Date.now()): boolean {
@@ -1971,7 +2013,7 @@ async function recoverStaleGptSourceComments(options: {
       graceExpired: true,
     };
   }
-  if (initialRound.settledSourceCount !== undefined || hasPersistedPackReviewVerdict(options.run)) {
+  if (hasPersistedPackReviewVerdict(options.run)) {
     return {
       recovered: false,
       reason: 'gpt_round_already_settled',
@@ -1980,7 +2022,10 @@ async function recoverStaleGptSourceComments(options: {
       graceExpired: true,
     };
   }
-  if (process.env.OPK_VITEST_HARNESS === '1' && !options.input.fixtureGptSourceCommentTransport) {
+  const resumeFrozenRound = initialRound.settledSourceCount !== undefined;
+  if (process.env.OPK_VITEST_HARNESS === '1'
+      && !resumeFrozenRound
+      && !options.input.fixtureGptSourceCommentTransport) {
     return {
       recovered: false,
       reason: 'fixture_source_transport_missing',
@@ -2014,52 +2059,55 @@ async function recoverStaleGptSourceComments(options: {
       nextAction: 'run review for the current PR head',
     };
   }
-  const transport = options.input.fixtureGptSourceCommentTransport
-    ?? createPackGptSourceCommentTransport({
-      repoRoot: options.input.sourceRepoRoot,
-      repoSlug: options.repoSlug,
-      prNumber: options.run.prNumber,
-    });
+
   let round = initialRound;
   let hydratedSourceCount = 0;
   const unresolved: string[] = [];
-  for (const snapshotSlot of round.sourceSlots) {
-    const currentSlot = round.sourceSlots.find((slot) => slot.slotId === snapshotSlot.slotId)!;
-    if (currentSlot.lifecycle === 'terminal') continue;
-    const invocationId = trim(currentSlot.invocationId);
-    if (currentSlot.lifecycle !== 'invocation_started' || !invocationId) {
-      unresolved.push(`${currentSlot.slotId}:not_started`);
-      continue;
+  if (!resumeFrozenRound) {
+    const transport = options.input.fixtureGptSourceCommentTransport
+      ?? createPackGptSourceCommentTransport({
+        repoRoot: options.input.sourceRepoRoot,
+        repoSlug: options.repoSlug,
+        prNumber: options.run.prNumber,
+      });
+    for (const snapshotSlot of round.sourceSlots) {
+      const currentSlot = round.sourceSlots.find((slot) => slot.slotId === snapshotSlot.slotId)!;
+      if (currentSlot.lifecycle === 'terminal') continue;
+      const invocationId = trim(currentSlot.invocationId);
+      if (currentSlot.lifecycle !== 'invocation_started' || !invocationId) {
+        unresolved.push(`${currentSlot.slotId}:not_started`);
+        continue;
+      }
+      const identity = gptSourceIdentity({
+        repoSlug: options.repoSlug,
+        prNumber: options.run.prNumber,
+        headSha: options.run.targetSha,
+        runId: options.run.id,
+        slotId: currentSlot.slotId,
+        invocationId,
+      });
+      let resolution: PackGptSourceCommentResolution;
+      try {
+        resolution = await resolvePackGptSourceComment({ identity, transport });
+      } catch (error) {
+        unresolved.push(`${currentSlot.slotId}:${describeError(error)}`);
+        continue;
+      }
+      if (resolution.kind !== 'credentialed') {
+        unresolved.push(`${currentSlot.slotId}:${resolution.reason}`);
+        continue;
+      }
+      const payload = resolution.payload as unknown as ReviewPayload;
+      round = updateGptRoundSlot(options.run.id, round, currentSlot.slotId, {
+        lifecycle: 'terminal',
+        terminalClass: payload.verdict === 'clean' && payload.findingCount === 0
+          ? 'complete_clean'
+          : 'complete_findings',
+        terminalResult: credentialedSourceTerminal({ identity, resolution }),
+        payload,
+      }, { projectId: options.projectId, storeRoot: options.storeRoot });
+      hydratedSourceCount += 1;
     }
-    const identity = gptSourceIdentity({
-      repoSlug: options.repoSlug,
-      prNumber: options.run.prNumber,
-      headSha: options.run.targetSha,
-      runId: options.run.id,
-      slotId: currentSlot.slotId,
-      invocationId,
-    });
-    let resolution: PackGptSourceCommentResolution;
-    try {
-      resolution = await resolvePackGptSourceComment({ identity, transport });
-    } catch (error) {
-      unresolved.push(`${currentSlot.slotId}:${describeError(error)}`);
-      continue;
-    }
-    if (resolution.kind !== 'credentialed') {
-      unresolved.push(`${currentSlot.slotId}:${resolution.reason}`);
-      continue;
-    }
-    const payload = resolution.payload as unknown as ReviewPayload;
-    round = updateGptRoundSlot(options.run.id, round, currentSlot.slotId, {
-      lifecycle: 'terminal',
-      terminalClass: payload.verdict === 'clean' && payload.findingCount === 0
-        ? 'complete_clean'
-        : 'complete_findings',
-      terminalResult: credentialedSourceTerminal({ identity, resolution }),
-      payload,
-    }, { projectId: options.projectId, storeRoot: options.storeRoot });
-    hydratedSourceCount += 1;
   }
 
   let finalHead: string;
@@ -2087,16 +2135,17 @@ async function recoverStaleGptSourceComments(options: {
     };
   }
 
-  const persisted = getPackReviewRun(options.run.id, {
+  let persisted = getPackReviewRun(options.run.id, {
     projectId: options.projectId,
     storeRoot: options.storeRoot,
   }) ?? { ...options.run, reviewRound: round };
   round = persisted.reviewRound ?? round;
-  const usableSourceCount = gptUsableSourceCount(round);
+  let usableSourceCount = gptUsableSourceCount(round);
   const graceExpired = gptRoundGraceExpired(persisted);
-  const requiredSourceCount = round.cardinality >= 3
-    ? (graceExpired ? 2 : round.cardinality)
-    : round.cardinality;
+  const requiredSourceCount = round.settledSourceCount
+    ?? (round.cardinality >= 3
+      ? (graceExpired ? 2 : round.cardinality)
+      : round.cardinality);
   if (usableSourceCount < requiredSourceCount) {
     const reason = round.cardinality >= 3 && !graceExpired
       ? `gpt_sources_waiting_for_grace:${usableSourceCount}/${round.cardinality}`
@@ -2113,21 +2162,45 @@ async function recoverStaleGptSourceComments(options: {
     };
   }
 
-  if (round.cardinality >= 3) {
-    round = {
-      ...round,
-      settledSourceCount: usableSourceCount,
-    };
-    updatePackReviewRun(options.run.id, { reviewRound: round }, {
-      projectId: options.projectId,
-      storeRoot: options.storeRoot,
-    });
-    round = getPackReviewRun(options.run.id, {
-      projectId: options.projectId,
-      storeRoot: options.storeRoot,
-    })?.reviewRound ?? round;
+  if (round.cardinality >= 3 && round.settledSourceCount === undefined) {
+    if (options.input.fixtureBeforeGptRoundFreeze) {
+      await options.input.fixtureBeforeGptRoundFreeze({
+        runId: options.run.id,
+        usableSourceCount,
+        requiredSourceCount,
+      });
+    }
+    const frozen = freezeGptRoundSourceCount(
+      options.run.id,
+      requiredSourceCount,
+      { projectId: options.projectId, storeRoot: options.storeRoot },
+    );
+    if (!frozen) {
+      return {
+        recovered: false,
+        reason: 'gpt_source_quorum_changed_before_freeze',
+        hydratedSourceCount,
+        usableSourceCount,
+        graceExpired,
+        nextAction: 'rerun scoped reconcile against the latest persisted GPT source census',
+      };
+    }
+    round = frozen;
+    usableSourceCount = gptUsableSourceCount(round);
+    if (options.input.fixtureAfterGptRoundFreeze) {
+      await options.input.fixtureAfterGptRoundFreeze({
+        runId: options.run.id,
+        settledSourceCount: round.settledSourceCount!,
+      });
+    }
   }
 
+  persisted = getPackReviewRun(options.run.id, {
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
+  }) ?? persisted;
+  round = persisted.reviewRound ?? round;
+  usableSourceCount = gptUsableSourceCount(round);
   const findings: ReviewPayloadFinding[] = [];
   for (const slot of round.sourceSlots) {
     if (slot.lifecycle !== 'terminal'
@@ -2525,7 +2598,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     ...(settled ? {} : {
       nextAction: authority.triage?.verdict === 'BLOCK'
         ? 'resolve the blocking current-head evidence, rerun worker-owned smoke, then rerun scoped reconcile'
-        : 'complete the current-head evidence requirements, then rerun scoped reconcile',
+        : 'complete the current-head finding-resolution evidence, then rerun scoped reconcile',
     }),
   };
 }
@@ -3076,26 +3149,6 @@ async function commitAtCapTriage(input: {
       ['diff', '--name-only', `${input.baseRef}...${input.target.headSha}`],
       'changed path capture',
     )).split(/\r?\n/).map((path) => path.trim()).filter(Boolean);
-    let findingResolution: ReturnType<typeof buildMergeTriageFindingResolutionEvidence> | undefined;
-    if (input.allowFinalSettlement) {
-      const priorReviewedHeadSha = input.authority.terminal?.targetSha;
-      if (!priorReviewedHeadSha || priorReviewedHeadSha === input.authority.currentHeadSha) {
-        throw new Error('final-cap finding resolution requires the prior reviewed findings head');
-      }
-      const finalFixChangedPaths = input.start.fixtureChangedPaths ?? (await runGit(
-        input.target.sourceRepoRoot,
-        ['diff', '--name-only', `${priorReviewedHeadSha}..${input.authority.currentHeadSha}`],
-        'final-cap fix changed path capture',
-      )).split(/\r?\n/).map((path) => path.trim()).filter(Boolean);
-      findingResolution = buildMergeTriageFindingResolutionEvidence({
-        findingSnapshotDigest,
-        priorReviewedHeadSha,
-        currentHeadSha: input.authority.currentHeadSha,
-        findingCount: input.payload.findingCount,
-        findingPaths: input.payload.findings.map((finding) => trim(finding.filePath)).filter(Boolean),
-        finalFixChangedPaths,
-      });
-    }
     tuple = deriveMergeTriageEvidenceTuple({
       repository: input.target.repoSlug,
       prNumber: input.target.prNumber,
@@ -3108,17 +3161,18 @@ async function commitAtCapTriage(input: {
       input: {
         baseRef: input.baseRef,
         issueNumber: input.target.issueNumber ?? null,
-        ...(findingResolution ? { findingResolution } : {}),
       },
     });
-    produceMergeTriageEvidence({
-      tuple,
-      changedPaths,
-      issueBody,
-      options: { storeRoot: input.storeRoot },
-      findingResolution,
-    });
     selection = selectMergeTriageEvidence({ tuple, options: { storeRoot: input.storeRoot } });
+    if (selection.kind === 'missing' && selection.reason === 'evidence_missing') {
+      produceMergeTriageEvidence({
+        tuple,
+        changedPaths,
+        issueBody,
+        options: { storeRoot: input.storeRoot },
+      });
+      selection = selectMergeTriageEvidence({ tuple, options: { storeRoot: input.storeRoot } });
+    }
   } catch {
     // Missing or malformed trusted inputs remain an audited pending-operator result.
   }
@@ -3983,9 +4037,12 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       if (persistedRound.cardinality >= 3
           && usableSourceCount === persistedRound.cardinality
           && persistedRound.settledSourceCount === undefined) {
-        updatePackReviewRun(run.id, {
-          reviewRound: { ...persistedRound, settledSourceCount: usableSourceCount },
-        }, { projectId, storeRoot });
+        const frozen = freezeGptRoundSourceCount(
+          run.id,
+          persistedRound.cardinality,
+          { projectId, storeRoot },
+        );
+        if (!frozen) throw new Error(`pack review run ${run.id} could not freeze its complete GPT source census`);
         persistedRun = getPackReviewRun(run.id, { projectId, storeRoot });
         if (!persistedRun) throw new Error(`pack review run ${run.id} disappeared while freezing GPT source count`);
       }
