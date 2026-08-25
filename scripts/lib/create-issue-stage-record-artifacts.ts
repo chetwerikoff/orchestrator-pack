@@ -1089,17 +1089,6 @@ function resolveAuthoritativeArtifact(
     errors.push(`authoritative GitHub artifact was edited: ${censusComment.htmlUrl}`);
     return null;
   }
-  const hint = context.operatorHint;
-  if (hint && stage === 'architectural') {
-    if (
-      hint.sourceRevision !== sourceRevision
-      || hint.commentId !== censusComment.id
-      || hint.commentUrl !== censusComment.htmlUrl
-    ) {
-      errors.push('operator verdict URL hint does not identify the uniquely resolved canonical invocation artifact');
-      return null;
-    }
-  }
   const comment = rereadAuthoritativeIssueComment(
     context,
     censusComment,
@@ -2049,6 +2038,14 @@ export function produceAcceptanceArtifacts(
     reviewEpisodeId: episodeId,
     acceptanceBasis: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
     files,
+    ...(artifactContext?.publishedAuthorState
+      ? {
+        publishedAuthorState: {
+          sha256: artifactContext.publishedAuthorState.sha256,
+          byteLength: artifactContext.publishedAuthorState.byteLength,
+        },
+      }
+      : {}),
     derivedFrom: {
       tierIntake: resolve(options.tierIntakePath),
       stageEvidence: canonicalStageEvidencePaths.map((path) => resolve(path)),
