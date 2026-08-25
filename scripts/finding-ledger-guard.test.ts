@@ -1830,4 +1830,54 @@ describe('published author-state M3 bridge', () => {
     expect(capture.text).not.toContain(publishedAuthorState);
     expect(lens.text).not.toContain(publishedAuthorState);
   });
+
+  it('uses the current occurrence author-state when a stale stable-id lens contest is also present', () => {
+    const lensName = 'pass-03-architectural-lens.capture.txt';
+    const captureIdentity = `sha256:523b8be7a22db5c5fe85b483d86f3dc1b079929c4a54b4cebd796d87925abc5a:${lensName}`;
+    const occurrenceId = `${captureIdentity}:1`;
+    const capture = `${markedFinding('SEC1', {
+      type: 'security',
+      evidence: 'A security issue is present in the proposed boundary.',
+    })}\n${currentLens('SEC1', { revision: 'r06', contest: 'contested' })}`;
+    const ledger = JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
+      findings: [{
+        ...row('SEC1', {
+          type: 'security',
+          defectDisposition: 'rejected-as-false',
+          rejectReason: 'the published author adjudication rejects the report',
+          remedyDisposition: 'accepted',
+          occurrences: [occurrenceId],
+          protectedOccurrences: [{
+            occurrenceId,
+            architectPending: false,
+            architectRequired: false,
+            protectedActivation: null,
+          }],
+        }),
+      }],
+    });
+    const publishedAuthorState = currentLens(occurrenceId, {
+      revision: 'r07',
+      outcome: 'non-activate',
+    });
+    const result = checkFindingLedgerGuard(
+      [capture],
+      ledger,
+      {
+        reviewEconomics: true,
+        phase: 'final-acceptance',
+        issueRevision: 'r07',
+        stageTerminalConfirmed: true,
+        captureMetadata: [{ name: lensName, timestampMs: 1_400, captureIdentity }],
+        publishedAuthorState: {
+          text: publishedAuthorState,
+          sha256: createHash('sha256').update(publishedAuthorState).digest('hex'),
+          byteLength: Buffer.byteLength(publishedAuthorState),
+        },
+      } as never,
+    );
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
 });
