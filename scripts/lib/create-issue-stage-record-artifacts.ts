@@ -1763,6 +1763,39 @@ function isSafeFileComponent(value: string): boolean {
     && !value.includes('..');
 }
 
+const DERIVED_STAGE_RECEIPT_FIELDS = new Set([
+  'stageReceiptId',
+  'previousStageReceiptId',
+  'receiptCensus',
+  'stageSequence',
+]);
+
+function canonicalizeStageReceiptValue(value: unknown, topLevel = true): unknown {
+  if (Array.isArray(value)) return value.map((item) => canonicalizeStageReceiptValue(item, false));
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .filter((key) => !topLevel || !DERIVED_STAGE_RECEIPT_FIELDS.has(key))
+      .sort()
+      .map((key) => [key, canonicalizeStageReceiptValue(value[key], false)]),
+  );
+}
+
+function stageReceiptPayloadsMatchExceptDerivedChain(
+  currentBytes: Buffer,
+  candidateBytes: Buffer,
+): boolean {
+  try {
+    const current = JSON.parse(currentBytes.toString('utf8')) as unknown;
+    const candidate = JSON.parse(candidateBytes.toString('utf8')) as unknown;
+    if (!isRecord(current) || !isRecord(candidate)) return false;
+    return JSON.stringify(canonicalizeStageReceiptValue(current))
+      === JSON.stringify(canonicalizeStageReceiptValue(candidate));
+  } catch {
+    return false;
+  }
+}
+
 function publishArtifactSet(
   outputDir: string,
   files: readonly string[],
@@ -1789,7 +1822,11 @@ function publishArtifactSet(
       if (!targetStat.isFile()) throw new Error(`cannot replace non-file artifact target: ${target}`);
       const currentBytes = readFileSync(target);
       const candidateBytes = readFileSync(staged);
-      if (file.startsWith('stage-completeness-receipt-') && !currentBytes.equals(candidateBytes)) {
+      if (
+        file.startsWith('stage-completeness-receipt-')
+        && !currentBytes.equals(candidateBytes)
+        && !stageReceiptPayloadsMatchExceptDerivedChain(currentBytes, candidateBytes)
+      ) {
         throw new Error(`conflicting immutable stage receipt target: ${target}`);
       }
       if (currentBytes.equals(candidateBytes)) continue;
