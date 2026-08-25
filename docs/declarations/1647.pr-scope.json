@@ -19,5 +19,5 @@
     "scripts/pack-review-runner.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "0477c9ea1575c2a0b14fdd5f59b8f1c027ca1c27"
+  "source_revision": "7c824d720d8e3391fac7b4c5cf35285f93f632dc"
 }
