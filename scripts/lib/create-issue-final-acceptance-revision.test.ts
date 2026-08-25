@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   parseCanonicalSourceRevisionMarker,
+  validateTerminalSourceRevision,
   validateFinalAcceptanceReadbackHead,
   validateCanonicalReceiptPathSet,
 } from './create-issue-final-acceptance.ts';
@@ -272,6 +273,18 @@ describe('revision-aware final acceptance', () => {
     );
 
     expect(errors).toEqual([]);
+  });
+
+  it('accepts a residual terminal marker when the canonical cycle has advanced', () => {
+    const canonicalBody = '<!-- source-revision: r07 -->\ncanonical published author state';
+    const terminalBody = '<!-- source-revision: r01 -->\nresidual terminal source';
+    const canonicalRevision = parseCanonicalSourceRevisionMarker(canonicalBody).revision!;
+    const terminalRevision = parseCanonicalSourceRevisionMarker(terminalBody).revision!;
+
+    expect(validateTerminalSourceRevision(canonicalRevision, terminalRevision, canonicalRevision)).toEqual([]);
+    expect(validateTerminalSourceRevision('r06', terminalRevision, canonicalRevision)).toEqual([
+      'terminal source revision r01 does not match original canonical cycle head r06',
+    ]);
   });
 
   it('requires the requested receipt set to equal canonical real paths', () => {
