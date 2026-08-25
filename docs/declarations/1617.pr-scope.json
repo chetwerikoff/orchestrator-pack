@@ -15,8 +15,9 @@
     "vendor/"
   ],
   "allowed_roots": [
+    "docs/declarations/1617.pr-scope.json",
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orca-runtime/task-adapter.ts"
   ],
-  "source_revision": "062b53cc56953021bc5188f1057f6ec0b28615d6"
+  "source_revision": "0812d02038f1b9c1acc3fa655243a9d8acf293f8"
 }
