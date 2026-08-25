@@ -123,6 +123,8 @@ interface OperatorNarrowingHint {
   sourceRevision: string;
   commentId: number;
   commentUrl: string;
+  verdictSha256: string;
+  verdictByteLength: number;
   reason: string;
 }
 
@@ -151,6 +153,11 @@ interface ArtifactAuthorityContext {
   transport: GhTransport;
   census: AuthoritativeIssueCensus;
   operatorHint?: OperatorNarrowingHint;
+  publishedAuthorState?: {
+    text: string;
+    sha256: string;
+    byteLength: number;
+  };
 }
 
 interface AuthoritativeArtifactResolution {
@@ -562,12 +569,16 @@ function normalizeOperatorNarrowingHint(
   }
   const sourceRevision = String(value.sourceRevision ?? '').trim();
   const verdictUrl = String(value.verdictUrl ?? '').trim();
+  const verdictSha256 = String(value.verdictSha256 ?? '').trim().toLowerCase();
+  const verdictByteLength = Number(value.verdictByteLength);
   const reason = String(value.reason ?? '').trim();
   const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)$/.exec(verdictUrl);
   const errorCountBefore = errors.length;
   if (!match) errors.push('operator verdict URL hint must be a canonical published Issue comment URL');
   if (Number(value.issueNumber) !== issueNumber) errors.push('operator verdict URL hint Issue does not match tier-intake Issue');
   if (!/^r[0-9]+$/.test(sourceRevision)) errors.push('operator verdict URL hint sourceRevision must be rNN');
+  if (!/^[0-9a-f]{64}$/.test(verdictSha256)) errors.push('operator verdict URL hint verdictSha256 must be a 64-character hexadecimal digest');
+  if (!Number.isSafeInteger(verdictByteLength) || verdictByteLength < 0) errors.push('operator verdict URL hint verdictByteLength must be a non-negative integer');
   if (!reason) errors.push('operator verdict URL hint reason must be non-empty');
   if (match && match[1]!.toLowerCase() !== repositoryFullName.toLowerCase()) errors.push('operator verdict URL hint repository mismatch');
   if (match && Number(match[2]) !== issueNumber) errors.push('operator verdict URL hint Issue mismatch');
@@ -578,6 +589,8 @@ function normalizeOperatorNarrowingHint(
     sourceRevision,
     commentId: Number(match[3]),
     commentUrl: verdictUrl,
+    verdictSha256,
+    verdictByteLength,
     reason,
   };
 }
@@ -873,6 +886,44 @@ function commentTargetsExpectedIssue(
 ): boolean {
   return comment.htmlUrl === expectedCommentUrl(repositoryFullName, issueNumber, comment.id)
     && comment.issueUrl === expectedIssueApiUrl(repositoryFullName, issueNumber);
+}
+
+function resolvePublishedAuthorState(
+  context: ArtifactAuthorityContext,
+  errors: string[],
+): { text: string; sha256: string; byteLength: number } | undefined {
+  const hint = context.operatorHint;
+  if (!hint) return undefined;
+  const comment = context.census.comments.find((candidate) => (
+    candidate.id === hint.commentId
+      && candidate.htmlUrl === hint.commentUrl
+      && commentTargetsExpectedIssue(candidate, context.census.repositoryFullName, context.census.issueNumber)
+  ));
+  if (!comment) {
+    errors.push('operator verdict URL hint does not identify a published Issue comment in authoritative census');
+    return undefined;
+  }
+  if (comment.createdAt !== comment.updatedAt) {
+    errors.push(`authoritative GitHub artifact was edited: ${comment.htmlUrl}`);
+    return undefined;
+  }
+  if (!/^m3-protected:/im.test(comment.body)) return undefined;
+  const publishedRevision = /^revision:\s*(r[0-9]+)\s*$/m.exec(comment.body)?.[1];
+  if (!/^author-state:\s*\S+/m.test(comment.body) || publishedRevision !== hint.sourceRevision) {
+    errors.push(`operator verdict URL hint does not identify published author-state for revision ${hint.sourceRevision}: ${comment.htmlUrl}`);
+    return undefined;
+  }
+  const actualSha256 = sha256(comment.body);
+  const actualByteLength = Buffer.byteLength(comment.body);
+  if (actualSha256 !== hint.verdictSha256) {
+    errors.push(`operator verdict URL hint sha256 does not match published Issue comment: ${comment.htmlUrl}`);
+    return undefined;
+  }
+  if (actualByteLength !== hint.verdictByteLength) {
+    errors.push(`operator verdict URL hint byteLength does not match published Issue comment: ${comment.htmlUrl}`);
+    return undefined;
+  }
+  return { text: comment.body, sha256: actualSha256, byteLength: actualByteLength };
 }
 
 function rereadAuthoritativeIssueComment(
@@ -1861,7 +1912,15 @@ export function produceAcceptanceArtifacts(
       const census = errors.length === 0
         ? authoritativeIssueCommentCensus(artifactSourceTransport, repositoryFullName, issueNumber, errors)
         : null;
-      if (census) artifactContext = { transport: artifactSourceTransport, census, ...(operatorHint ? { operatorHint } : {}) };
+      if (census) {
+        const publishedAuthorState = resolvePublishedAuthorState({ transport: artifactSourceTransport, census, ...(operatorHint ? { operatorHint } : {}) }, errors);
+        artifactContext = {
+          transport: artifactSourceTransport,
+          census,
+          ...(operatorHint ? { operatorHint } : {}),
+          ...(publishedAuthorState ? { publishedAuthorState } : {}),
+        };
+      }
     }
   } else if (options.operatorAdjudication) {
     errors.push('operator verdict URL hint cannot create an acceptance path when no invocation requires authoritative artifact resolution');
@@ -1949,7 +2008,7 @@ export function produceAcceptanceArtifacts(
         ledger,
         {
           reviewEconomics: true,
-          phase: options.phase as 'pre-lens' | 'final-acceptance',
+          phase: (options.phase ?? 'final-acceptance') as 'pre-lens' | 'final-acceptance',
           issueRevision: receipts.at(-1)?.sourceRevision ?? episodeFirstRevision,
           stageTerminalConfirmed,
           stageReceipts: receipts,
@@ -1960,6 +2019,9 @@ export function produceAcceptanceArtifacts(
             timestampMs: captureTimestamps.get(capture.captureIdentity) ?? 0,
             captureIdentity: capture.captureIdentity,
           })),
+          ...((options.phase ?? 'final-acceptance') === 'final-acceptance' && artifactContext?.publishedAuthorState
+            ? { publishedAuthorState: artifactContext.publishedAuthorState }
+            : {}),
         },
       );
       if (!ledgerResult.ok) errors.push(...ledgerResult.errors);
