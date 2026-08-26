@@ -325,9 +325,10 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       const fakeOpenCode = join(bin, 'opencode');
       writeFileSync(fakeOpenCode, `#!/usr/bin/env node
 const args = process.argv.slice(2);
-if (args[0] === 'models') process.stdout.write('fixture-opencode-model\\n');
-else if (args.length === 1 && args[0] === '--help') process.stdout.write('Usage: opencode --model MODEL\\n');
-else if (args.at(-1) === '--help') process.stdout.write('supported debug help\\n');
+if (args[0] === 'models' && args.includes('--verbose')) process.stdout.write('fixture-opencode-model\\n{"variants":{"fixture-opencode-effort":{}}}\\n');
+else if (args[0] === 'models') process.stdout.write('fixture-opencode-model\\n');
+else if (args[0] === 'debug' && args[1] === 'agent') process.stdout.write(JSON.stringify({ model: { providerID: 'opencode', modelID: 'fixture-opencode-model' } }));
+else if (args.includes('--help')) process.stderr.write('Usage: opencode --agent AGENT\\n');
 else process.exitCode = 2;
 `, 'utf8');
       chmodSync(fakeOpenCode, 0o755);

@@ -69,11 +69,15 @@ export type SpawnApplicabilityVerdict =
   | { readonly ok: true }
   | { readonly ok: false; readonly refusal: 'executor_route_unavailable' | 'executor_effort_channel_unavailable' };
 
+export const OPENCODE_PACK_AGENT = 'pack' as const;
+
 export interface ExecutorInvocationShape {
   readonly executable: string;
   readonly command: string;
-  readonly modelArgument: string;
+  readonly modelArgument?: string;
   readonly effortArgument?: string;
+  readonly agentName?: string;
+  readonly inlineConfigJson?: string;
 }
 
 export interface ProviderInvocationShape {
@@ -113,9 +117,12 @@ export const EXECUTOR_FAMILY_DESCRIPTORS: Readonly<Record<ExecutorFamily, Execut
     capabilityProbeCommands: [
       ['opencode', '--help'],
       ['opencode', 'models', '--verbose'],
+      ['opencode', 'debug', 'agent', OPENCODE_PACK_AGENT],
     ],
     smokeCapabilityProbeCommands: [
       ['opencode', '--help'],
+      ['opencode', 'models', '--verbose'],
+      ['opencode', 'debug', 'agent', OPENCODE_PACK_AGENT],
     ],
   },
 };
@@ -262,21 +269,54 @@ export function openCodeVariantCatalog(output: string): Readonly<Record<string, 
 }
 
 export function openCodeTuiCapability(tuiHelp: string): RouteCapability {
-  const tuiHasModel = /(^|\s)--model(?:[=\s,]|$)/mu.test(tuiHelp);
-  const tuiHasVariant = /(^|\s)--variant(?:[=\s,]|$)/mu.test(tuiHelp);
+  const hasAgent = /(^|\s)--agent(?:[=\s,]|$)/mu.test(tuiHelp);
   return {
-    available: tuiHasModel,
-    supportsModel: tuiHasModel,
-    supportsEffort: tuiHasVariant,
+    available: hasAgent,
+    supportsModel: hasAgent,
+    supportsEffort: false,
   };
 }
 
-export function openCodeEdgeCapabilities(probeOutputs: readonly string[]): ExecutorEdgeCapabilities {
-  // capabilityProbeCommands fixes the TUI help observation at index 0 and the
-  // fresh verbose model/variant catalog as the final observation.
-  const exactTerminal = {
-    ...openCodeTuiCapability(probeOutputs[0] ?? ''),
-    supportedEffortsByModel: openCodeVariantCatalog(probeOutputs.at(-1) ?? ''),
+export function parseOpenCodeResolvedAgent(output: string): { providerID: string; modelID: string; variant: string } | null {
+  try {
+    const parsed: unknown = JSON.parse(output);
+    if (!record(parsed)) return null;
+    const model = record(parsed.model) ? parsed.model : null;
+    const providerID = typeof model?.providerID === 'string' ? model.providerID.trim() : '';
+    const modelID = typeof model?.modelID === 'string' ? model.modelID.trim() : '';
+    const variant = typeof parsed.variant === 'string' ? parsed.variant.trim() : '';
+    if (!providerID || !modelID) return null;
+    return { providerID, modelID, variant };
+  } catch {
+    return null;
+  }
+}
+
+export function openCodeEdgeCapabilities(
+  probeOutputs: readonly string[],
+  profile?: SemanticExecutorProfile,
+): ExecutorEdgeCapabilities {
+  const tui = openCodeTuiCapability(probeOutputs[0] ?? '');
+  const catalog = openCodeVariantCatalog(probeOutputs[1] ?? '');
+  const debugOutput = probeOutputs[2] ?? '';
+  let effortViaAgent = false;
+  if (profile && profile.family === 'opencode') {
+    const resolved = parseOpenCodeResolvedAgent(debugOutput);
+    if (resolved) {
+      const profileModelID = profile.model.includes('/') ? profile.model.split('/').pop()! : profile.model;
+      const profileProvider = profile.model.includes('/') ? profile.model.split('/')[0]! : 'opencode';
+      const variantMatches = resolved.variant === profile.effort;
+      const modelMatches = resolved.modelID === profileModelID && resolved.providerID === profileProvider;
+      const catalogEfforts = catalog[profile.model] ?? [];
+      const catalogMatches = catalogEfforts.includes(profile.effort);
+      effortViaAgent = Boolean(variantMatches && modelMatches && catalogMatches);
+    }
+  }
+  const exactTerminal: RouteCapability = {
+    available: tui.available,
+    supportsModel: tui.supportsModel,
+    supportsEffort: effortViaAgent,
+    supportedEffortsByModel: catalog,
   };
 
   // The provider path stays closed in this package revision unless the downstream
@@ -360,11 +400,13 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile): Executor
   }
 
   const executable = profile.surface === 'task' ? descriptor.taskExecutable : descriptor.smokeExecutable;
+  const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort } } });
+  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)} ${executable} --agent ${quote(OPENCODE_PACK_AGENT)}`;
   return {
     executable,
-    modelArgument: profile.model,
-    effortArgument: profile.effort,
-    command: `${executable} --model ${quote(profile.model)} --variant ${quote(profile.effort)}`,
+    command,
+    agentName: OPENCODE_PACK_AGENT,
+    inlineConfigJson: inlineConfig,
   };
 }
 
