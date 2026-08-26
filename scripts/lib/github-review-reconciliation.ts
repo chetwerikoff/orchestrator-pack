@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
+import { resolveTrackedGhWrapper } from './gh-resolve-real-binary.mjs';
 import {
   describePackReviewError as describeError,
   getPackReviewRun,
@@ -633,10 +634,11 @@ export function createGithubReviewTransport(options: CreateGithubReviewTransport
     };
   }
 
+  const trackedGh = resolveTrackedGhWrapper();
   return {
     async resolveActorLogin() {
       const result = await runProcess({
-        command: 'gh',
+        command: trackedGh,
         args: ['api', 'user', '--jq', '.login'],
         cwd: options.repoRoot,
         inheritParentEnv: true,
@@ -649,7 +651,7 @@ export function createGithubReviewTransport(options: CreateGithubReviewTransport
     },
     async listReviews() {
       const result = await runProcess({
-        command: 'gh',
+        command: trackedGh,
         args: ['api', '--paginate', '--slurp', `repos/${options.repoSlug}/pulls/${options.prNumber}/reviews`],
         cwd: options.repoRoot,
         inheritParentEnv: true,
@@ -666,7 +668,7 @@ export function createGithubReviewTransport(options: CreateGithubReviewTransport
     async postReview(input) {
       const request = `${JSON.stringify({ commit_id: input.commitId, event: input.event, body: input.body })}\n`;
       const result = await runProcess({
-        command: 'gh',
+        command: trackedGh,
         args: ['api', '--method', 'POST', `repos/${options.repoSlug}/pulls/${options.prNumber}/reviews`, '--input', '-'],
         input: request,
         cwd: options.repoRoot,
@@ -702,7 +704,7 @@ export function createGithubReviewTransport(options: CreateGithubReviewTransport
         event: 'DISMISS',
       })}\n`;
       const result = await runProcess({
-        command: 'gh',
+        command: trackedGh,
         args: [
           'api',
           '--method', 'PUT',
