@@ -1,5 +1,84 @@
 # Migration notes
 
+## Multi-agent live executor profiles (Issue #1610)
+
+### What changed
+
+The six existing `PACK_EXECUTOR_*_{AGENT,MODEL,EFFORT}` triples remain the only
+live executor-profile inputs, but their tracked interpretation is now owned once by
+`scripts/executor-profile-policy.ts`. That pure policy has a closed two-family
+mapping: task-launch profiles recognize Cursor through the task token
+`cursor-agent` and OpenCode through `opencode`; smoke profiles recognize Cursor
+through `cursor` and OpenCode through `opencode`. Cursor smoke still enters the
+existing `agent` executable surface. Concrete model and effort values remain
+operator-local and are not tracked here.
+
+Task route admission now happens inside the production `resolveProfile` edge of
+`supervised-task-launch-assistant.ts`, before manager Task creation, worktree
+creation, terminal spawn, or supervised start. Cursor route applicability remains a
+static code-owned fact; it does not gain a fresh route-capability probe. OpenCode is
+recognized semantically, but a live route is admitted only after the selected model
+is present in `opencode models` and fresh non-mutating installed help/capability
+surfaces prove a route that can carry both the selected model and effort. A machine
+that cannot prove that channel returns the shared external gate rather than silently
+falling back, dropping effort, or changing executor family.
+
+Model-catalog applicability and route admission remain separate. Cursor's historical
+opaque model/effort composition is confined to the Cursor translator in the shared
+policy; OpenCode keeps model and effort as separate request fields. The shared
+pre-effect refusal vocabulary is `executor_route_unavailable`,
+`executor_effort_channel_unavailable`, and task-only `executor_route_mismatch`.
+Routine and complex smoke use the same policy and the same first two refusal causes
+before child spawn. Firefighter execution continues to select the existing routine
+or complex smoke profile and gains no `PACK_EXECUTOR_FIREFIGHTER_*` namespace.
+
+Worker-start recovery is attempt-bound. The assistant retains provider receipts only
+as internal post-effect integrity evidence, projects only safe PACK-owned result
+fields, drops provider-authored recovery commands and free-form provider payloads,
+and composes the sole outward retry command from the attempted route/profile plus
+the exact provider request id. A retry never re-reads mutable profile state.
+
+No OpenCode provider-form or RuntimeAdapter environment seam was added by #1610.
+Those surfaces are conditional on fresh installed capability evidence proving an
+exact supported provider request or structured spawn environment requirement; absent
+that evidence, the current provider/runtime contracts remain byte-for-byte outside
+this cutover.
+
+### Operator adoption
+
+1. Adopt the merged #1610 revision through the normal supported PACK
+   deployment/recycle path. Do not copy concrete executor values into tracked files.
+2. Export only the selected work-class or smoke-complexity triple into the launching
+   process before the task assistant or smoke launcher runs. The package does not
+   source an operator-local profile file or add a dotenv fallback.
+3. For Cursor, confirm the selected opaque catalog identity is present in
+   `cursor-agent --list-models`. For OpenCode, confirm the selected model appears in
+   `opencode models` and let the launcher inspect the installed non-mutating help
+   surfaces before any effect. Do not infer route support from package installation
+   alone.
+4. Treat `executor_route_unavailable` and
+   `executor_effort_channel_unavailable` as external pre-effect gates. An explicit
+   caller `startMode` that conflicts with the only proven route returns
+   `executor_route_mismatch`; the caller cannot override it into a mutation.
+5. On an outcome-unknown worker-start, execute only the PACK-produced
+   `nextAction.command` with the same request id. Never replay a provider-authored
+   recovery string, re-read a changed profile, create a replacement terminal, or
+   silently switch executor family while the original attempt is unresolved.
+6. Check one controlled task launch and one routine/complex smoke launch for each
+   family that is actually admitted on the installed machine. If OpenCode remains
+   externally gated, record that gate as the truthful adoption result rather than
+   inventing an unsupported provider/TUI form.
+7. Keep firefighter routing on the selected routine/complex smoke profile; do not
+   create a firefighter-specific profile triple.
+
+### Rollback
+
+Rollback is a source-control revert followed by the normal supported PACK
+adoption/recycle path. Do not preserve #1610 by adding a second profile registry,
+provider fallback, compatibility agent token, alternate retry channel, or runtime
+environment shim. Provider receipts, WorkerAssignments, and current runtime state
+remain subject to the revision that owns them.
+
 ## S3 fleet escalation delivery (Issue #1260)
 
 ### What changed
@@ -191,7 +270,7 @@ hook.
 
 ### What changed
 
-New Cursor/Orca manager and T1/T2/T3 starts use the pack-owned
+New supervised manager and T1/T2/T3 starts use the pack-owned
 `scripts/pr2-foundation/supervised-task-launch-assistant.ts` composition. The
 launcher is an **assistant**, not a lifecycle blocker, scheduler, retry service,
 or second start authority. It performs only the shared mechanical preparation
@@ -207,16 +286,14 @@ A manager brief is one caller-serialized Orca Task-create mutation; provider
 unknown outcomes are recovered only by replaying that same mutation with its
 exact provider request id.
 
-The v1 TUI/profile blocking contract deliberately changes. PACK no longer claims
-that every launch has a machine-readable proof of the visible Cursor model,
-effort, and empty composer because the production RuntimeAdapter/Orca contracts
-do not expose such a structured witness. The machine-enforced boundary is now:
-exact `cursor-agent`; selected model/effort applicability checked before spawn;
-selected stable profile variables inherited by a child; one RuntimeAdapter-created
-internal terminal with exact `{runtime,id,generation}` identity in the exact
-workspace; and `idle` RuntimeAdapter liveness before delivery. PACK does not
-scrape raw screen/title/preview/composer text to recreate the retired witness.
-A known contrary observation still fails closed.
+Issue #1610 supersedes the original single-Cursor profile restriction in this
+assistant. The machine-enforced profile boundary is now the shared
+`scripts/executor-profile-policy.ts` contract: one selected stable triple, one of
+the two closed executor families, executor-specific catalog applicability, a proven
+route carrying both model and effort, and child inheritance before effects. Cursor
+route admissibility is static; OpenCode route admissibility requires fresh installed
+non-mutating capability evidence and otherwise remains externally gated. PACK still
+does not scrape raw screen/title/preview/composer text to create a route witness.
 
 ### Operator adoption
 
@@ -237,13 +314,13 @@ A known contrary observation still fails closed.
    Task blocked, completed, or done merely because launch did not reach ready.
 5. For provider outcome-unknown Task-create or worker-start, reuse the exact
    returned provider request id and replay the same mutation with
-   `--retry-request`. Never substitute a fresh brief, terminal, or worker-start
-   while the original mutation remains unresolved.
-6. After adoption, perform one controlled legal Cursor/Orca launch and visually
-   confirm the expected selected profile and clean first-turn state. This is a
-   one-time adoption smoke for provider drift, not a per-launch PACK parser or
-   durable authority. If the provider visibly ignores the validated profile,
-   stop adoption and fix the provider/launch contract.
+   `--retry-request`. Never substitute a fresh brief, terminal, worker-start, or
+   re-resolved executor profile while the original mutation remains unresolved.
+6. After adoption, perform one controlled legal launch for every executor family
+   actually admitted by the installed machine. Treat an OpenCode external gate as
+   a truthful adoption result when no route proves both model and effort; do not
+   work around it by dropping effort, changing family, or inventing a provider
+   form.
 
 ### Rollback
 

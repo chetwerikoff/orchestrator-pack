@@ -34,8 +34,10 @@ import {
   findVerifiedSmokeReceiptWitness,
   parsePaginatedSmokeComments,
   publishPrComment,
+  resolveLiveSmokeExecutorProfile,
   resolveSmokeTarget,
   runGateCheck,
+  runSmokeAttempt,
   resolveSmokeExecutorProfile,
   smokeCommentSnapshotDigest,
   stabilizeSmokeCommentCensus,
@@ -167,10 +169,11 @@ describe('smoke executor profiles', () => {
   it.each([
     ['routine', 'fixture-routine-model', 'fixture-routine-effort'],
     ['complex', 'fixture-complex-model', 'fixture-complex-effort'],
-  ] as const)('applies only the %s profile before spawn', (complexity, model, effort) => {
+  ] as const)('applies only the %s Cursor profile before spawn', (complexity, model, effort) => {
     const profile = resolveSmokeExecutorProfile(complexity, env);
     expect(profile.command).toBe(`agent --model '${model}-${effort}'`);
     expect(profile.complexity).toBe(complexity);
+    expect(profile.family).toBe('cursor');
   });
 
   it('maps the configured Cursor agent name onto the existing launch surface', () => {
@@ -191,7 +194,7 @@ describe('smoke executor profiles', () => {
     expect(() => resolveSmokeExecutorProfile(complexity, invalid)).toThrow('smoke_profile_missing');
   });
 
-  it('rejects unsupported and malformed profile data', () => {
+  it('rejects cross-path aliases, unsupported tokens, and malformed profile data', () => {
     expect(() => resolveSmokeExecutorProfile('routine', {
       ...env, PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor-agent',
     })).toThrow('smoke_profile_unsupported_agent');
@@ -202,6 +205,153 @@ describe('smoke executor profiles', () => {
       ...env, PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'model with spaces',
     })).toThrow('smoke_profile_malformed');
     expect(() => resolveSmokeExecutorProfile('routine', env)).not.toThrow();
+  });
+
+  it('recognizes OpenCode through the shared smoke mapping but pure resolution stays externally gated', () => {
+    expect(() => resolveSmokeExecutorProfile('routine', {
+      ...env,
+      PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'opencode',
+      PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-opencode-model',
+      PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-opencode-effort',
+    })).toThrow('executor_route_unavailable');
+  });
+
+  it('smoke admits the proven OpenCode model+effort spawn shape', () => {
+    const calls: string[][] = [];
+    const profile = resolveLiveSmokeExecutorProfile('routine', {
+      ...env,
+      PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'opencode',
+      PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-opencode-model',
+      PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-opencode-effort',
+    }, (args) => {
+      calls.push([...args]);
+      if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) {
+        return {
+          ok: true,
+          stdout: [
+            'fixture-opencode-model',
+            '{',
+            '  "variants": {',
+            '    "fixture-opencode-effort": {}',
+            '  }',
+            '}',
+            '',
+          ].join('\n'),
+        };
+      }
+      if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n' };
+      if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
+        return { ok: true, stdout: 'Usage: opencode --model MODEL --variant NAME\n' };
+      }
+      if (args[0] === process.execPath) return { ok: true, stdout: '' };
+      return { ok: false, stdout: '' };
+    });
+    expect(profile).toMatchObject({
+      complexity: 'routine',
+      family: 'opencode',
+      agent: 'opencode',
+      command: "opencode --model 'fixture-opencode-model' --variant 'fixture-opencode-effort'",
+    });
+    expect(calls[0]).toEqual(['opencode', 'models']);
+    expect(calls).toContainEqual(['opencode', '--help']);
+    expect(calls).toContainEqual(['opencode', 'models', '--verbose']);
+    expect(calls.some((args) => args[0] === process.execPath)).toBe(true);
+  });
+
+  it('blocks an unsupported OpenCode effort before runtime spawn', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-opencode-effort-'));
+    const issueBodyFile = join(root, 'issue.md');
+    writeFileSync(issueBodyFile, issueBody, 'utf8');
+    const adapter = new DeterministicRuntimeAdapter();
+    const spawn = vi.spyOn(adapter, 'spawnWorker');
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const opencodeEnv = {
+      ...env,
+      PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'opencode',
+      PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-opencode-model',
+      PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-opencode-effort',
+    };
+    try {
+      const code = await runSmokeAttempt({
+        command: 'run',
+        issueNumber: 1610,
+        prNumber: 1699,
+        headSha: HEAD_ONE,
+        issueBodyFile,
+        smokeComplexity: 'routine',
+        repoRoot: root,
+        cwd: root,
+        dryRun: true,
+        json: true,
+      }, {
+        adapter,
+        resolveProfile: (complexity) => resolveLiveSmokeExecutorProfile(complexity, opencodeEnv, (args) => {
+          if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) {
+            return {
+              ok: true,
+              stdout: [
+                'fixture-opencode-model',
+                '{',
+                '  "variants": {',
+                '    "fixture-other-effort": {}',
+                '  }',
+                '}',
+                '',
+              ].join('\n'),
+            };
+          }
+          if (args[0] === 'opencode' && args[1] === 'models') {
+            return { ok: true, stdout: 'fixture-opencode-model\n' };
+          }
+          if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
+            return { ok: true, stdout: 'Usage: opencode --model MODEL --variant NAME\n' };
+          }
+          if (args[0] === process.execPath) return { ok: true, stdout: '' };
+          return { ok: false, stdout: '' };
+        }),
+      });
+      expect(code).toBe(1);
+      expect(spawn).not.toHaveBeenCalled();
+      expect(output.mock.calls.map((entry) => String(entry[0])).join(''))
+        .toContain('executor_effort_channel_unavailable');
+    } finally {
+      output.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses shared pre-spawn effort and route refusals for OpenCode smoke', () => {
+    const opencodeEnv = {
+      ...env,
+      PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'opencode',
+      PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-opencode-model',
+      PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-opencode-effort',
+    };
+    expect(() => resolveLiveSmokeExecutorProfile('routine', opencodeEnv, (args) => {
+      if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) {
+        return {
+          ok: true,
+          stdout: [
+            'fixture-opencode-model',
+            '{',
+            '  "variants": {',
+            '    "fixture-opencode-effort": {}',
+            '  }',
+            '}',
+            '',
+          ].join('\n'),
+        };
+      }
+      if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n' };
+      if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') return { ok: true, stdout: '--model MODEL\n' };
+      return { ok: true, stdout: 'supported help surface\n' };
+    })).toThrow('executor_effort_channel_unavailable');
+
+    expect(() => resolveLiveSmokeExecutorProfile('routine', opencodeEnv, (args) =>
+      args[0] === 'opencode' && args[1] === 'models'
+        ? { ok: false, stdout: '' }
+        : { ok: true, stdout: '' },
+    )).toThrow('executor_profile_applicability_unproven');
   });
 });
 
@@ -1148,7 +1298,6 @@ if (endpoint === 'user') {
     expect(coverage(comments, body).accepting).toBe(true);
   });
 });
-
 
 
 describe('buildSmokeAgentPrompt selected declaration artifact', () => {

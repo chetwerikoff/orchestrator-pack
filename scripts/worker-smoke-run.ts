@@ -10,6 +10,19 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
+  buildExecutorCommand,
+  CURSOR_SMOKE_CAPABILITY,
+  evaluateExecutorRouteAdmission,
+  evaluateExecutorSpawnApplicability,
+  EXECUTOR_FAMILY_DESCRIPTORS,
+  executorCatalogContains,
+  openCodeEdgeCapabilities,
+  profileNamesForSmoke,
+  resolveSemanticExecutorProfile,
+  type ExecutorFamily,
+  type SemanticExecutorProfile,
+} from './executor-profile-policy.ts';
+import {
   buildSmokeAgentPrompt,
   buildSmokeGhChildEnv,
   checkSmokeTestPlan,
@@ -102,10 +115,10 @@ export type SmokeComplexity = 'routine' | 'complex';
 
 export interface SmokeExecutorProfile {
   readonly complexity: SmokeComplexity;
+  readonly family: ExecutorFamily;
   readonly agent: string;
-  readonly model: string;
-  readonly effort: string;
   readonly command: string;
+  readonly names: readonly [string, string, string];
 }
 
 export type SmokeStartFenceResult<T> =
@@ -115,59 +128,114 @@ export type SmokeStartFenceResult<T> =
 export interface SmokeAttemptDependencies {
   readonly adapter?: RuntimeAdapter;
   readonly startFence?: <T>(action: () => T | Promise<T>) => Promise<SmokeStartFenceResult<T>>;
+  readonly resolveProfile?: (
+    complexity: SmokeComplexity | string,
+    env: Readonly<NodeJS.ProcessEnv>,
+  ) => SmokeExecutorProfile;
 }
 
-const SMOKE_PROFILE_FIELDS = {
-  routine: {
-    agent: 'PACK_EXECUTOR_SMOKE_ROUTINE_AGENT',
-    model: 'PACK_EXECUTOR_SMOKE_ROUTINE_MODEL',
-    effort: 'PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT',
-  },
-  complex: {
-    agent: 'PACK_EXECUTOR_SMOKE_COMPLEX_AGENT',
-    model: 'PACK_EXECUTOR_SMOKE_COMPLEX_MODEL',
-    effort: 'PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT',
-  },
-} as const;
-
-const SUPPORTED_SMOKE_AGENTS = new Map([
-  ['cursor', 'agent'],
-]);
-const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
-
-function shellQuoteProfileValue(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+interface SmokeChildResult {
+  readonly ok: boolean;
+  readonly stdout: string;
 }
 
-function profileValue(env: Readonly<NodeJS.ProcessEnv>, name: string): string {
-  const value = env[name]?.trim() ?? '';
-  if (!value) throw new Error(`smoke_profile_missing:${name}`);
-  if (!PROFILE_VALUE_PATTERN.test(value)) throw new Error(`smoke_profile_malformed:${name}`);
-  return value;
+type SmokeChildExecutor = (args: readonly string[]) => SmokeChildResult;
+
+function smokeSemanticProfile(
+  complexity: SmokeComplexity | string,
+  env: Readonly<NodeJS.ProcessEnv>,
+): SemanticExecutorProfile {
+  if (complexity !== 'routine' && complexity !== 'complex') throw new Error('smoke_complexity_unsupported');
+  const names = profileNamesForSmoke(complexity);
+  const resolved = resolveSemanticExecutorProfile({ surface: 'smoke', names, env });
+  if (resolved.ok) return resolved.profile;
+  if (resolved.code === 'executor_profile_missing') throw new Error(`smoke_profile_missing:${resolved.variables.join(',')}`);
+  if (resolved.code === 'executor_profile_malformed') throw new Error(`smoke_profile_malformed:${resolved.variables.join(',')}`);
+  throw new Error(`smoke_profile_unsupported_agent:${resolved.variables[0]}`);
+}
+
+function smokeProfileFromSemantic(
+  complexity: SmokeComplexity,
+  profile: SemanticExecutorProfile,
+): SmokeExecutorProfile {
+  const invocation = buildExecutorCommand(profile);
+  return {
+    complexity,
+    family: profile.family,
+    agent: invocation.executable,
+    command: invocation.command,
+    names: profile.names,
+  };
 }
 
 export function resolveSmokeExecutorProfile(
   complexity: SmokeComplexity | string,
   env: Readonly<NodeJS.ProcessEnv> = process.env,
 ): SmokeExecutorProfile {
-  if (complexity !== 'routine' && complexity !== 'complex') {
-    throw new Error('smoke_complexity_unsupported');
+  const profile = smokeSemanticProfile(complexity, env);
+  const capability = profile.family === 'cursor'
+    ? CURSOR_SMOKE_CAPABILITY
+    : { available: false, supportsModel: false, supportsEffort: false };
+  const verdict = evaluateExecutorSpawnApplicability(capability);
+  if (!verdict.ok) throw new Error(verdict.refusal);
+  return smokeProfileFromSemantic(complexity as SmokeComplexity, profile);
+}
+
+export function resolveLiveSmokeExecutorProfile(
+  complexity: SmokeComplexity | string,
+  env: Readonly<NodeJS.ProcessEnv>,
+  execute: SmokeChildExecutor,
+): SmokeExecutorProfile {
+  const profile = smokeSemanticProfile(complexity, env);
+  const descriptor = EXECUTOR_FAMILY_DESCRIPTORS[profile.family];
+  const catalog = execute(descriptor.catalogCommand);
+  if (!catalog.ok) throw new Error('executor_profile_applicability_unproven');
+  if (!executorCatalogContains(profile, catalog.stdout)) throw new Error('executor_profile_model_unavailable');
+
+  let capability = CURSOR_SMOKE_CAPABILITY;
+  if (profile.family === 'opencode') {
+    const observations: string[] = [];
+    for (const probe of descriptor.capabilityProbeCommands) {
+      const result = execute(probe);
+      if (!result.ok) throw new Error('executor_route_unavailable');
+      observations.push(result.stdout);
+    }
+    const edgeCapabilities = openCodeEdgeCapabilities(observations);
+    const routeVerdict = evaluateExecutorRouteAdmission({
+      profile,
+      startMode: 'exact_terminal_worktree',
+      edgeCapabilities,
+    });
+    if (!routeVerdict.ok) throw new Error(routeVerdict.refusal);
+    capability = edgeCapabilities.exactTerminal;
   }
-  const fields = SMOKE_PROFILE_FIELDS[complexity];
-  const agent = profileValue(env, fields.agent);
-  const model = profileValue(env, fields.model);
-  const effort = profileValue(env, fields.effort);
-  const launchAgent = SUPPORTED_SMOKE_AGENTS.get(agent);
-  if (!launchAgent) {
-    throw new Error(`smoke_profile_unsupported_agent:${fields.agent}`);
-  }
-  return {
-    complexity,
-    agent: launchAgent,
-    model,
-    effort,
-    command: `${launchAgent} --model ${shellQuoteProfileValue(`${model}-${effort}`)}`,
-  };
+  const verdict = evaluateExecutorSpawnApplicability(capability);
+  if (!verdict.ok) throw new Error(verdict.refusal);
+
+  const inherited = execute([
+    process.execPath,
+    '--input-type=module',
+    '-e',
+    'const n=process.argv.slice(1);process.exit(n.every((k)=>typeof process.env[k]==="string"&&process.env[k].trim())?0:1)',
+    ...profile.names,
+  ]);
+  if (!inherited.ok) throw new Error('executor_profile_child_inheritance_unproven');
+  return smokeProfileFromSemantic(complexity as SmokeComplexity, profile);
+}
+
+function runSmokeProfileChild(
+  args: readonly string[],
+  cwd: string,
+  env: Readonly<NodeJS.ProcessEnv>,
+): SmokeChildResult {
+  const result = runProcessSync({
+    command: args[0]!,
+    args: args.slice(1),
+    cwd,
+    env: { ...env },
+    inheritParentEnv: true,
+  });
+  return { ok: result.ok, stdout: result.stdout };
 }
 
 export interface ResolvedSmokeTarget {
@@ -708,8 +776,6 @@ export function establishRuntimeSmokeDelivery(input: {
       return { ok: true, observationToken: token, submitCount };
     }
 
-    // Pane output is not delivery evidence for an ambiguous dispatch. Preserve
-    // output observation only for an evidence-backed dispatched result.
     if (dispatched.status === 'dispatched') {
       const read = input.adapter.readBoundedOutput({
         worker: input.worker,
@@ -1259,7 +1325,16 @@ export async function runSmokeAttempt(
 
   let smokeProfile: SmokeExecutorProfile;
   try {
-    smokeProfile = resolveSmokeExecutorProfile(options.smokeComplexity);
+    const injectedDryRunHarness = options.dryRun && dependencies.adapter !== undefined;
+    smokeProfile = dependencies.resolveProfile
+      ? dependencies.resolveProfile(options.smokeComplexity, process.env)
+      : injectedDryRunHarness
+        ? resolveSmokeExecutorProfile(options.smokeComplexity, process.env)
+        : resolveLiveSmokeExecutorProfile(
+          options.smokeComplexity,
+          process.env,
+          (args) => runSmokeProfileChild(args, options.cwd, process.env),
+        );
   } catch (error) {
     const report = operationalReport('BLOCKED', options, {
       action: 'resolve smoke executor profile',

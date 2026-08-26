@@ -121,7 +121,7 @@ routine smoke work   -> routine-smoke executor profile
 complex smoke work   -> complex-smoke executor profile
 ```
 
-Each profile has operator-local `agent`, `model`, and `effort` values under stable names:
+Each profile keeps the existing operator-local `agent`, `model`, and `effort` values under these stable tracked names:
 
 ```text
 PACK_EXECUTOR_MANAGER_AGENT
@@ -149,50 +149,96 @@ PACK_EXECUTOR_SMOKE_COMPLEX_MODEL
 PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT
 ```
 
-The variable names and work-class-to-profile mapping are tracked policy. Concrete `agent`, `model`, and `effort` values are machine/operator-local configuration and must stay out of tracked documentation. Keep those values only in the existing gitignored local configuration/environment surface, resolve them immediately before starting new work, and treat a local value change as applying to subsequent work without a repository Issue or PR. Changing the stable mapping or variable contract remains a repository policy change.
+`scripts/executor-profile-policy.ts` is the single tracked semantic owner for those
+six triples. Do not duplicate its descriptor table, validation rules, translation,
+or refusal semantics in another launcher. The policy has exactly two logical
+executor families for these live profiles:
 
-The gitignored local configuration file is a store, not the live process environment. The orchestrator or launching shell must export the matching `PACK_EXECUTOR_*` values into the live process environment before smoke or a new manager/worker spawn. The smoke launcher and supervised Task launch assistant read only that live environment; neither opens the gitignored local configuration file. The lower-level `supervised-worker-start` boundary still does not read `PACK_EXECUTOR_*`. A missing, empty, malformed, unsupported, or non-applicable live launch profile fails closed before Task/runtime effects, so the presence of a file on disk is not a substitute. Do not add a pack dotenv loader, second selector, or compatibility fallback to close this gap.
+```text
+task agent token   cursor-agent -> Cursor
+smoke agent token  cursor       -> Cursor
+smoke executable                -> existing agent surface
 
-`agent` selects an already-supported invocation/lifecycle path:
+task agent token   opencode     -> OpenCode
+smoke agent token  opencode     -> OpenCode
+```
 
-- Cursor/Orca implementation work uses the existing local Cursor/Orca launch path. New manager/T1/T2/T3 starts use the supervised Task launch assistant below; initial delivery still ends at the existing PACK supervised-start boundary and publishes the current local WorkerAssignment only after Orca returns a proven ready receipt.
-- GPT/Browser-GPT implementation work uses the existing standalone chat-implementer contract in `docs/chat-executor-rules.md` and the Browser-GPT turn mechanics in `docs/browser-gpt-turn-runbook.md`. That path does not use the Orca-managed supervised worker lifecycle and does not synthesize or publish an Orca WorkerAssignment.
-- Changing a profile between those already-supported executor paths changes only which existing path subsequent work uses; it does not create a new selector or lifecycle authority.
-- Smoke complexity selects only between the routine-smoke and complex-smoke executor profiles; it does not create a task tier or change smoke admission, evidence, ownership, or lifecycle rules.
+Concrete model and effort values remain machine/operator-local and must stay out of
+tracked documentation, Task metadata, launch output, and PR metadata. The launching
+process exports the selected triple; the task assistant and smoke launcher read the
+live environment and never source a gitignored profile file. The lower-level
+`supervised-worker-start` boundary remains profile-neutral. Missing, empty,
+malformed, unsupported, unavailable, or non-admissible profile state fails closed
+before the first governed effect. Do not add a dotenv loader, second registry,
+compatibility token, fallback family, or heuristic selector.
 
-The smoke launcher receives exactly one producer-owned `--smoke-complexity`
-value (`routine` or `complex`). It resolves that profile immediately before
-child creation, validates all three local values and the supported agent, and
-fails closed before spawn when the profile is missing, malformed, unsupported,
-mixed, or cannot be applied through the existing launch command.
+Model applicability and route admission are separate checks. Cursor catalog
+applicability comes from `cursor-agent --list-models`; Cursor's existing
+model/effort opacity is composed only inside the Cursor translator in the shared
+policy. OpenCode catalog applicability comes from `opencode models`; its selected
+model and effort remain separate request fields and are never generically collapsed
+into a synthetic model id.
 
-This profile rule does not add a runtime selector, WorkerAssignment type, provider registry, scheduler, service, store, queue, daemon, fallback transport, or retry mechanism.
+Cursor route admissibility is a static code-owned compatibility fact and therefore
+must not gain a fresh route-capability probe. OpenCode is semantically recognized,
+but a task or smoke child is admitted only after fresh non-mutating installed
+OpenCode/Orca help or effective-capability evidence proves a route that carries both
+the selected model and effort. Package installation alone is not route evidence.
+When no such route is proven, the selected OpenCode profile remains a truthful
+external gate rather than falling back to Cursor, dropping effort, or inventing an
+unsupported TUI/provider form.
 
-For example, changing the local T3 `agent` between the already-supported GPT/Browser-GPT and Cursor/Orca paths changes the path used by subsequent T3 work without a tracked policy edit. Routine versus complex smoke works the same way: it selects the corresponding local smoke profile, whose concrete values remain local-only.
+The shared pre-effect route vocabulary is closed:
+
+```text
+executor_route_unavailable
+executor_effort_channel_unavailable
+executor_route_mismatch        # task caller selected a conflicting startMode
+```
+
+`executor_route_mismatch` is task-only. Task route admission is owned by the
+production `LaunchDependencies.resolveProfile` edge inside the assistant's
+`executor_profile` checkpoint. That edge receives caller `startMode`, validates the
+catalog/capability route, and returns one admitted route before manager Task
+creation, worktree creation, terminal spawn, or supervised start. The outer
+assistant consumes that decision and does not re-decide it. Caller intent is never
+a bypass.
+
+Smoke uses the same semantic policy and the first two refusal codes for both
+routine and complex profiles before child spawn. Firefighter work keeps the
+existing mapping to a routine or complex smoke profile; there is no
+`PACK_EXECUTOR_FIREFIGHTER_*` namespace.
+
+A structured child environment may be added to the RuntimeAdapter spawn contract
+only when fresh installed evidence proves an admitted executor route actually needs
+it. Likewise, an OpenCode provider form may be added to the lower-level supervised
+start only when fresh installed Orca/OpenCode evidence proves the exact request.
+Without that evidence those conditional surfaces remain unchanged; docs do not
+invent capability for them.
 
 ### Supervised Task launch assistant
 
-For new Cursor/Orca **manager, T1, T2, and T3** work, the canonical composition
-point is:
+For new **manager, T1, T2, and T3** work that uses the supervised local lifecycle,
+the canonical composition point is:
 
 ```text
 scripts/pr2-foundation/supervised-task-launch-assistant.ts
 ```
 
 It is a continuation-safe launch assistant, not a lifecycle authority. It owns
-only the shared mechanical sequence: Node/repository preflight; exact live
-executor-profile validation; manager Run/Task admission; supported worktree
-setup/reuse proof; one fresh RuntimeAdapter-created internal terminal; two
-fresh-start Dispatch absence witnesses; launch timing/diagnostics; and the call
-to the existing supervised-start boundary. It creates no durable retry state,
-queue, lease, WorkerReport/WorkerStatus, scheduler, or second assignment store.
+only the shared mechanical sequence: Node/repository preflight; the production
+profile/route admission edge; manager Run/Task admission; supported worktree
+setup/reuse proof; at most one fresh RuntimeAdapter-created internal terminal;
+two fresh-start Dispatch absence witnesses; launch timing/diagnostics; and the
+call to the existing supervised-start boundary. It creates no durable retry
+state, queue, lease, WorkerReport/WorkerStatus, scheduler, or second assignment
+store.
 
-The calling shell first exports the matching stable profile names. Concrete
-values remain local and must not appear in tracked docs, Task metadata, launch
-output, or PR metadata. For this assistant v1, the supported executable is
-exactly `cursor-agent`; literal `cursor` and any other agent value fail closed
-before Task/runtime effects. Model/effort applicability and child inheritance
-are validated before spawn.
+The calling shell first exports the matching stable profile names. The profile
+checkpoint validates the closed executor family, executor-specific model catalog,
+model/effort request channel, caller `startMode` when present, and child inheritance
+before any manager Task or runtime effect. The returned admitted route is attempt
+state: later recovery reuses it and never re-reads mutable live profile values.
 
 Invoke through the canonical Node 22 wrapper. Exactly one of `--worktree` (a
 supported proven-reuse target) or `--worktree-name` (a fresh setup path) is
@@ -251,17 +297,18 @@ For `--task`, it also requires exactly one membership witness for that Task in
 that exact Run. For `--manager-brief`, exactly one Orca Task-create mutation is
 allowed and success requires a non-empty authoritative Task id/status. A
 provider outcome-unknown Task-create carrying a request id returns
-`outcome=continue` with the legal same-mutation `--retry-request` action; it does
-not authorize a second fresh brief.
+`outcome=continue` with the legal same-mutation replay identity; it does not
+authorize a second fresh brief.
 
 For every genuinely fresh known Task, `dispatch-show --task <task-id> --json`
 must prove exact `dispatch === null` **twice**: once before worktree/terminal
 effects and again immediately before supervised-start. Any present, malformed,
 unknown, or competing Dispatch is a continuation/reconciliation result, never
-permission for another start. Provider-identified recovery of an already
-attempted worker-start is different from a fresh start: execute only the exact
-recovery action returned by the assistant, using the same Task/worktree/terminal
-/options and provider request id. Do not create a new terminal or re-run the
+permission for another start. Provider-identified recovery of an already attempted
+worker-start is different from a fresh start: execute only the PACK-composed
+`nextAction.command`, using the same attempt-bound route/profile resources and exact
+provider request id. The assistant drops provider-authored recovery commands and
+does not re-read mutable profile state. Do not create a new terminal or re-run the
 fresh double-null admission while that mutation remains unresolved.
 
 Worktree path/head existence is not setup readiness. A fresh worktree proceeds
@@ -269,45 +316,47 @@ only from the supported same-invocation setup-complete witness; reuse proceeds
 only from a supported proven-reuse witness. Missing or unknown setup evidence is
 `outcome=continue`.
 
-The terminal boundary is machine-enforced through structured contracts: one
-RuntimeAdapter-created worker with provenance `internal`, exact
+The exact-terminal boundary remains machine-enforced through structured contracts:
+one RuntimeAdapter-created worker with provenance `internal`, exact
 `{runtime,id,generation}`, exact target workspace, and `idle` RuntimeAdapter
 liveness. The assistant does **not** scrape raw screen/title/preview/composer text.
-The old per-launch claim that PACK can prove visible model/effort and empty
-composer from the production API is retired because those structured witnesses
-are not exposed. A known contrary observation is still blocking. After rollout,
-perform one controlled visual profile/clean-first-turn smoke as provider-adoption
-evidence; it is not a per-launch parser or durable authority.
+OpenCode admission must therefore come from the fresh installed non-mutating
+capability surfaces named by the policy, not a guessed screen/TUI state. A known
+contrary observation is still blocking.
 
 The assistant emits one structured result. `outcome=ready` means only that the
-existing `runSupervisedWorkerStart` returned `ready_and_assignment_bound`.
-`outcome=continue` is handled non-success with the first failed/absent checkpoint,
-observed cause, known resources, responsible actor, evidence, exact legal
-`nextAction`, and assistant-entry/per-stage timings. Both ready and handled
-continue exit zero; malformed invocation or an internal failure that cannot emit
-the structured envelope exits non-zero. The helper never claims to measure time
-before its own entry.
+existing `runSupervisedWorkerStart` returned `ready_and_assignment_bound`; the
+assistant projects a small PACK-owned success summary rather than returning the raw
+provider receipt. `outcome=continue` reports the first failed/absent checkpoint,
+known safe resource identities, responsible actor, bounded evidence, exact legal
+`nextAction`, and assistant-entry/per-stage timings. Raw provider receipts,
+residual-resource payloads, free-form provider messages/next steps, and provider
+recovery commands are internal-only and are not serialized outward. Concrete
+model/effort values may appear only where they are required inside the sole
+attempt-bound retry command. Both ready and handled continue exit zero; malformed
+invocation or an internal failure that cannot emit the structured envelope exits
+non-zero. The helper never claims to measure time before its own entry.
 
 ## Supervised initial delivery and WorkerAssignment
 
 This section applies only to executor paths that use the existing Orca-managed supervised worker lifecycle. Standalone GPT/Browser-GPT implementation work follows `docs/chat-executor-rules.md` and `docs/browser-gpt-turn-runbook.md` instead and does not create an Orca WorkerAssignment.
 
-For new manager/T1/T2/T3 Cursor/Orca starts, operators invoke the supervised Task
-launch assistant above rather than hand-compose the terminal/start sequence. The
+For new manager/T1/T2/T3 supervised starts, operators invoke the supervised Task
+launch assistant above rather than hand-compose terminal/start sequencing. The
 assistant's successful final edge is still the existing PACK boundary:
 
 ```text
 scripts/pr2-foundation/supervised-worker-start.ts::runSupervisedWorkerStart
 ```
 
-That lower-level boundary calls supported Orca `orchestration worker-start` with structured JSON output. It publishes a current local WorkerAssignment only after Orca returns a proven `ready` receipt with both `taskId` and `dispatchId`. Failed, malformed, or outcome-unknown startup does not create a successful assignment. A structurally valid Orca error envelope with a non-empty `error.code` remains non-success and exposes that exact code. When Orca also supplies structured mutation-recovery fields in `error.data`, the boundary preserves the exact request id and optional accepted Dispatch/recovery command so the assistant can return the one legal recovery action without inventing retry state.
+That lower-level boundary calls supported Orca `orchestration worker-start` with structured JSON output. It publishes a current local WorkerAssignment only after Orca returns a proven `ready` receipt with both `taskId` and `dispatchId`. Failed, malformed, or outcome-unknown startup does not create a successful assignment. A structurally valid Orca error envelope with a non-empty `error.code` remains non-success. Structured provider mutation-recovery data may be retained internally by this lower-level boundary, but the launch assistant exports only safe request/Dispatch identity and its own attempt-bound retry command; provider-authored recovery commands and raw receipts do not become caller authority.
 
 `--issue-number` may be omitted when the GitHub Issue is not yet available for manager authoring. The assignment is then stored under the one canonical deliverable key derived from `(taskId, dispatchId)` with no Issue metadata. After publication, attach the positive Issue number to that same record; the canonical key, assignment id, and generation do not change. Local supervised start and remote registration require exactly one explicit `--role worker|orchestrator` before any Orca or store mutation. Recognized pre-cutover `issue-<N>` stores are migrated once through the existing assignment lock and atomic replace path after an exact sibling backup; unknown keys remain untrusted. Do not invent an `issue-<N>` alias, dual lookup, or second writer.
 
-The assistant consumes `PACK_EXECUTOR_*` only during pre-spawn launch validation.
-`supervised-worker-start` itself remains executor-profile neutral and does not read
-those variables; it owns successful Orca receipt/placement/assignment publication
-semantics only.
+The assistant consumes `PACK_EXECUTOR_*` only during pre-effect profile/route validation.
+`supervised-worker-start` itself remains executor-profile neutral unless a later
+freshly evidenced conditional provider extension explicitly changes that boundary;
+it owns successful Orca receipt/placement/assignment publication semantics only.
 
 The minimum current assignment authority is:
 
@@ -612,10 +661,10 @@ After landing the production implementation:
 1. adopt the merged PACK revision through the existing supported operator deployment path;
 2. preserve the registered side-process supervisor and `pr2-scheduler` child shape;
 3. let the first mutating WorkerAssignment path migrate a recognized pre-#1441 `issue-<N>` store (exact `*.pre-task-dispatch-migration` backup, then one canonical rewrite); do not hand-convert, alias, or dual-resolve records; pass explicit `--role worker|orchestrator` on registration;
-4. start new Cursor/Orca manager/T1/T2/T3 work through the supervised Task launch assistant; treat only `outcome=ready`/`ready_and_assignment_bound` as started, and execute only the exact `nextAction` for handled continuations or provider recovery;
+4. start new supervised manager/T1/T2/T3 work through the supervised Task launch assistant; treat only `outcome=ready`/`ready_and_assignment_bound` as started, and execute only the exact `nextAction` for handled continuations or provider recovery;
 5. for one manager authoring launch without an Issue, confirm the assignment is task/Dispatch-keyed with absent Issue metadata, then attach the Issue only after publication without changing the deliverable key/id/generation;
-6. verify one stale/remapped runtime identity fences without a stale-handle effect and one Orca error envelope preserves its exact non-empty `error.code` and any structured mutation-recovery request id while remaining non-success;
-7. perform one controlled visual Cursor profile/clean-first-turn smoke; treat it as adoption evidence only, not a per-launch PACK parser or durable witness;
+6. verify one stale/remapped runtime identity fences without a stale-handle effect and one Orca error envelope preserves its exact non-empty `error.code` while any provider mutation recovery remains attempt-bound and safely projected by the assistant;
+7. perform one controlled selected-profile adoption smoke for every executor family actually admitted on the installed machine; an OpenCode external gate is a valid fail-closed result, not permission to invent a provider/TUI form;
 8. verify a supervisor-owned `scheduler.ts tick` under the current activation epoch;
 9. verify later bounded children retain the same trusted S1 lineage and advancing tick sequence;
 10. verify one exact REST-visible author/reviewer artifact settles its manager turn even when the helper child is silent/gone, and one published sibling makes a silent concurrent slot possible-or-actual/no-resend without claiming that its payload was proven delivered;

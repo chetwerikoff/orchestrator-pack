@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -85,6 +86,17 @@ describe('Issue #1359 real worker-smoke entrypoint', () => {
         '```',
         '',
       ].join('\n'), 'utf8');
+
+      const fakeCursorAgent = join(bin, 'cursor-agent');
+      writeFileSync(fakeCursorAgent, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.length === 1 && args[0] === '--list-models') {
+  process.stdout.write('fixture-routine-model-fixture-routine-effort\\n');
+} else {
+  process.exitCode = 2;
+}
+`, 'utf8');
+      chmodSync(fakeCursorAgent, 0o755);
 
       const fakeOrca = join(bin, 'orca');
       writeFileSync(fakeOrca, `#!/usr/bin/env node
@@ -196,6 +208,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       ], {
         cwd: root,
         env: {
+          PATH: `${bin}:${process.env.PATH ?? ''}`,
           OPK_RUNTIME_CLI_COMMAND: fakeOrca,
           FAKE_ORCA_CALLS: callsPath,
           FAKE_ORCA_ROOT: root,
@@ -284,6 +297,78 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(operations.filter((value) => value === 'terminal close')).toHaveLength(1);
       expect(operations.filter((value) => value === 'terminal list')).toHaveLength(0);
       expect(createHash('sha256').update(readFileSync(wrapper), 'utf8').digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('gates OpenCode smoke without an effort channel before any runtime spawn', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-opencode-gate-'));
+    const bin = join(root, 'bin');
+    const issueBodyPath = join(root, 'issue.md');
+    const runtimeCallsPath = join(root, 'runtime-called');
+    mkdirSync(bin, { recursive: true });
+
+    try {
+      writeFileSync(issueBodyPath, [
+        '```behavior-kind',
+        'action-producing',
+        '```',
+        '',
+        '```smoke-test-plan',
+        'scenarios:',
+        '  - action: run selected executor | expected: profile is applied before spawn',
+        '```',
+        '',
+      ].join('\n'), 'utf8');
+
+      const fakeOpenCode = join(bin, 'opencode');
+      writeFileSync(fakeOpenCode, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'models') process.stdout.write('fixture-opencode-model\\n');
+else if (args.length === 1 && args[0] === '--help') process.stdout.write('Usage: opencode --model MODEL\\n');
+else if (args.at(-1) === '--help') process.stdout.write('supported debug help\\n');
+else process.exitCode = 2;
+`, 'utf8');
+      chmodSync(fakeOpenCode, 0o755);
+
+      const fakeOrca = join(bin, 'orca');
+      writeFileSync(fakeOrca, `#!/usr/bin/env node
+require('node:fs').writeFileSync(${JSON.stringify(runtimeCallsPath)}, process.argv.slice(2).join(' '), 'utf8');
+process.exitCode = 2;
+`, 'utf8');
+      chmodSync(fakeOrca, 0o755);
+
+      const wrapper = resolve('scripts/worker-smoke-run');
+      const result = run(wrapper, [
+        'run',
+        '--issue', '1359',
+        '--pr', '1365',
+        '--head-sha', '1'.repeat(40),
+        '--issue-body-file', issueBodyPath,
+        '--smoke-complexity', 'routine',
+        '--repo-root', root,
+        '--cwd', root,
+        '--dry-run',
+        '--json',
+      ], {
+        cwd: root,
+        env: {
+          PATH: `${bin}:${process.env.PATH ?? ''}`,
+          OPK_RUNTIME_CLI_COMMAND: fakeOrca,
+          PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'opencode',
+          PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-opencode-model',
+          PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-opencode-effort',
+        },
+      });
+
+      expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(1);
+      const lines = String(result.stdout).split(/\r?\n/u).filter((line) => line.trim());
+      expect(lines).toHaveLength(1);
+      const emitted = JSON.parse(lines[0]!) as { ok?: boolean; report?: { result?: string; scenarios?: Array<{ observed?: string }> } };
+      expect(emitted).toMatchObject({ ok: false, report: { result: 'BLOCKED' } });
+      expect(emitted.report?.scenarios?.[0]?.observed).toContain('executor_effort_channel_unavailable');
+      expect(existsSync(runtimeCallsPath)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
