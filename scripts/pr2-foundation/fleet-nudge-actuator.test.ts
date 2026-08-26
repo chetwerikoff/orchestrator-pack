@@ -52,6 +52,7 @@ import type { RuntimeDispatchResult } from '../runtime/contracts.ts';
 import {
   productionSchedulerBoundary,
   runSchedulerTick,
+  schedulerFleetPhaseFailure,
   type SchedulerBoundary,
 } from './scheduler.ts';
 
@@ -1120,8 +1121,21 @@ describe('S2 fleet nudge actuator', () => {
       },
     };
 
-    await expect(runSchedulerTick(boundary, env))
-      .rejects.toThrow('scheduler_fleet_phase_failed:observer-untrusted');
+    const result = await runSchedulerTick(boundary, env);
+    expect(result).toMatchObject({
+      attempted: 0,
+      started: 0,
+      skipped: 0,
+      orchestratorRequired: true,
+      fleetNudge: {
+        status: 'failed',
+        result: 'observer-untrusted',
+        claimStarts: 0,
+        sendAttempts: 0,
+        dispatched: 0,
+      },
+    });
+    expect(schedulerFleetPhaseFailure(result)).toBe('scheduler_fleet_phase_failed:observer-untrusted');
     expect(handoffs).toEqual(['observer_untrusted']);
     expect({ starts, prReads, checkReads }).toEqual({ starts: 0, prReads: 0, checkReads: 0 });
   });
