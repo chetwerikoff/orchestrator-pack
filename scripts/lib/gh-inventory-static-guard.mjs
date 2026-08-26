@@ -41,6 +41,16 @@ const RECONCILE_API_PATTERNS = [
   /\bgh\s+api\s+[^\r\n#|]+/gi,
 ];
 
+/** @type {RegExp[]} */
+const AMBIENT_GH_EXECUTABLE_PATTERNS = [
+  /\bcommand\s*:\s*['"]gh['"]/g,
+  /\bexecFileSync\s*\(\s*['"]gh['"]/g,
+  /\bexecFile\s*\(\s*['"]gh['"]/g,
+  /\bspawnSync\s*\(\s*['"]gh['"]/g,
+  /\bspawn\s*\(\s*['"]gh['"]/g,
+  /\bghApiJson\s*\(\s*['"]gh['"]/g,
+];
+
 /**
  * @param {string} fragment
  */
@@ -102,10 +112,10 @@ function isIncompleteRuleSurfaceCommand(command) {
   if (/^gh\s+pr\s+list(?:[, ]|$)/i.test(trimmed) && !/--json/.test(trimmed)) {
     return true;
   }
-  if (/^gh\s+pr\s+view/i.test(trimmed) && !/--json/.test(trimmed) && !/^gh\s+pr\s+view\s+#?\d+/i.test(trimmed)) {
+  if (/^gh\s+pr\s+view\b/i.test(trimmed) && !/--json/.test(trimmed) && !/^gh\s+pr\s+view\s+#?\d+/i.test(trimmed)) {
     return true;
   }
-  if (/^gh\s+pr\s+checks/i.test(trimmed) && !/--json/.test(trimmed) && !/^gh\s+pr\s+checks\s+#?\d+/i.test(trimmed)) {
+  if (/^gh\s+pr\s+checks\b/i.test(trimmed) && !/--json/.test(trimmed) && !/^gh\s+pr\s+checks\s+#?\d+/i.test(trimmed)) {
     return true;
   }
   if (/^gh\s+issue\s+view(?:[, ]|$)/i.test(trimmed) && !/--json/.test(trimmed)) {
@@ -257,7 +267,6 @@ export function isClassifiedGhReadCommand(command) {
   if (!argv) {
     return true;
   }
-
   if (isGraphqlPassthroughArgv(argv)) {
     return false;
   }
@@ -313,11 +322,6 @@ function $lineMatchesSkip(line) {
   }
   return false;
 }
-
-/**
- * @param {string} line
- * @returns {string[]}
- */
 
 /**
  * @param {string} line
@@ -412,14 +416,44 @@ export function extractGhCommandsFromRuleSurface(text) {
 }
 
 /**
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function extractAmbientGhExecutableSelections(text) {
+  /** @type {string[]} */
+  const found = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    for (const pattern of AMBIENT_GH_EXECUTABLE_PATTERNS) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(line)) !== null) {
+        found.push(match[0]);
+      }
+    }
+  }
+  return found;
+}
+
+/**
  * @param {string} filePath
- * @param {'reconcile' | 'rules'} mode
+ * @param {'reconcile' | 'rules' | 'transport'} mode
  * @returns {{ file: string, command: string, line?: string }[]}
  */
 export function scanFileForViolations(filePath, mode) {
   const text = readFileSync(filePath, 'utf8');
   /** @type {{ file: string, command: string, line?: string }[]} */
   const violations = [];
+
+  if (mode === 'transport') {
+    const lines = text.split(/\r?\n/);
+    for (const line of lines) {
+      const selections = extractAmbientGhExecutableSelections(line);
+      for (const command of selections) {
+        violations.push({ file: filePath, command, line: line.trim() });
+      }
+    }
+    return violations;
+  }
 
   if (mode === 'rules') {
     const lines = text.split(/\r?\n/);
@@ -461,13 +495,14 @@ export function scanFileForViolations(filePath, mode) {
 function main() {
   const args = process.argv.slice(2);
   if (args.length === 0) {
-    process.stderr.write('usage: gh-inventory-static-guard.mjs <file> [--mode reconcile|rules]\n');
+    process.stderr.write('usage: gh-inventory-static-guard.mjs <file> [--mode reconcile|rules|transport]\n');
     process.exit(2);
   }
 
   const file = args[0];
   const modeFlag = args.indexOf('--mode');
-  const mode = modeFlag >= 0 && args[modeFlag + 1] === 'rules' ? 'rules' : 'reconcile';
+  const requestedMode = modeFlag >= 0 ? args[modeFlag + 1] : '';
+  const mode = requestedMode === 'rules' || requestedMode === 'transport' ? requestedMode : 'reconcile';
   const violations = scanFileForViolations(file, mode);
   if (violations.length > 0) {
     process.stdout.write(`${JSON.stringify(violations, null, 2)}\n`);
