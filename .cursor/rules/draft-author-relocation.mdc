@@ -6,6 +6,6 @@ alwaysApply: false
 # Draft-author relocation
 
 For relocated draft-author work, read and follow
-[`.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation`](../../.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).
+[`../skills/discuss-with-gpt/SKILL.md#draft-author-relocation`](../skills/discuss-with-gpt/SKILL.md#draft-author-relocation).
 The owning `create-issue-draft` workflow remains authoritative for tiering, stage
 order, review-loop acceptance, and publication gates.
