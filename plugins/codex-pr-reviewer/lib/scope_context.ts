@@ -10,6 +10,7 @@ import {
   extractLinkedIssueNumber,
   resolveLatestCommittedSnapshot,
 } from '../../../scripts/pr-scope-check.ts';
+import { resolveTrackedGhWrapper } from '../../../scripts/lib/gh-resolve-real-binary.mjs';
 
 export interface ResolvedScopeContext {
   issueNumber: number | null;
@@ -29,13 +30,13 @@ function shouldSkipGh(): boolean {
 
 function readGhJsonBody(
   repoRoot: string,
-  command: string,
   args: string[],
 ): Record<string, unknown> | null {
   if (shouldSkipGh()) {
     return null;
   }
 
+  const command = resolveTrackedGhWrapper();
   try {
     const output = execFileSync(command, args, {
       encoding: 'utf8',
@@ -55,7 +56,7 @@ function bodyFromGhJson(parsed: Record<string, unknown> | null): string | null {
 }
 
 function fetchIssueBody(repoRoot: string, issueNumber: number): string | null {
-  const parsed = readGhJsonBody(repoRoot, 'gh', [
+  const parsed = readGhJsonBody(repoRoot, [
     'issue',
     'view',
     String(issueNumber),
@@ -66,7 +67,7 @@ function fetchIssueBody(repoRoot: string, issueNumber: number): string | null {
 }
 
 function fetchPrBody(repoRoot: string, prNumber: number): string | null {
-  const parsed = readGhJsonBody(repoRoot, 'gh', [
+  const parsed = readGhJsonBody(repoRoot, [
     'pr',
     'view',
     String(prNumber),
