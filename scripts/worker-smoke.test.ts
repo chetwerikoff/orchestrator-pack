@@ -37,6 +37,7 @@ import {
   resolveLiveSmokeExecutorProfile,
   resolveSmokeTarget,
   runGateCheck,
+  runSmokeAttempt,
   resolveSmokeExecutorProfile,
   smokeCommentSnapshotDigest,
   stabilizeSmokeCommentCensus,
@@ -224,6 +225,20 @@ describe('smoke executor profiles', () => {
       PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-opencode-effort',
     }, (args) => {
       calls.push([...args]);
+      if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) {
+        return {
+          ok: true,
+          stdout: [
+            'fixture-opencode-model',
+            '{',
+            '  "variants": {',
+            '    "fixture-opencode-effort": {}',
+            '  }',
+            '}',
+            '',
+          ].join('\n'),
+        };
+      }
       if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n' };
       if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
         return { ok: true, stdout: 'Usage: opencode --model MODEL --variant NAME\n' };
@@ -239,7 +254,70 @@ describe('smoke executor profiles', () => {
     });
     expect(calls[0]).toEqual(['opencode', 'models']);
     expect(calls).toContainEqual(['opencode', '--help']);
+    expect(calls).toContainEqual(['opencode', 'models', '--verbose']);
     expect(calls.some((args) => args[0] === process.execPath)).toBe(true);
+  });
+
+  it('blocks an unsupported OpenCode effort before runtime spawn', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-opencode-effort-'));
+    const issueBodyFile = join(root, 'issue.md');
+    writeFileSync(issueBodyFile, issueBody, 'utf8');
+    const adapter = new DeterministicRuntimeAdapter();
+    const spawn = vi.spyOn(adapter, 'spawnWorker');
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const opencodeEnv = {
+      ...env,
+      PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'opencode',
+      PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-opencode-model',
+      PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-opencode-effort',
+    };
+    try {
+      const code = await runSmokeAttempt({
+        command: 'run',
+        issueNumber: 1610,
+        prNumber: 1699,
+        headSha: HEAD_ONE,
+        issueBodyFile,
+        smokeComplexity: 'routine',
+        repoRoot: root,
+        cwd: root,
+        dryRun: true,
+        json: true,
+      }, {
+        adapter,
+        resolveProfile: (complexity) => resolveLiveSmokeExecutorProfile(complexity, opencodeEnv, (args) => {
+          if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) {
+            return {
+              ok: true,
+              stdout: [
+                'fixture-opencode-model',
+                '{',
+                '  "variants": {',
+                '    "fixture-other-effort": {}',
+                '  }',
+                '}',
+                '',
+              ].join('\n'),
+            };
+          }
+          if (args[0] === 'opencode' && args[1] === 'models') {
+            return { ok: true, stdout: 'fixture-opencode-model\n' };
+          }
+          if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
+            return { ok: true, stdout: 'Usage: opencode --model MODEL --variant NAME\n' };
+          }
+          if (args[0] === process.execPath) return { ok: true, stdout: '' };
+          return { ok: false, stdout: '' };
+        }),
+      });
+      expect(code).toBe(1);
+      expect(spawn).not.toHaveBeenCalled();
+      expect(output.mock.calls.map((entry) => String(entry[0])).join(''))
+        .toContain('executor_effort_channel_unavailable');
+    } finally {
+      output.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('reuses shared pre-spawn effort and route refusals for OpenCode smoke', () => {
@@ -250,6 +328,20 @@ describe('smoke executor profiles', () => {
       PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-opencode-effort',
     };
     expect(() => resolveLiveSmokeExecutorProfile('routine', opencodeEnv, (args) => {
+      if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) {
+        return {
+          ok: true,
+          stdout: [
+            'fixture-opencode-model',
+            '{',
+            '  "variants": {',
+            '    "fixture-opencode-effort": {}',
+            '  }',
+            '}',
+            '',
+          ].join('\n'),
+        };
+      }
       if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n' };
       if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') return { ok: true, stdout: '--model MODEL\n' };
       return { ok: true, stdout: 'supported help surface\n' };

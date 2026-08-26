@@ -12,10 +12,11 @@ import { join, resolve } from 'node:path';
 import {
   buildExecutorCommand,
   CURSOR_SMOKE_CAPABILITY,
+  evaluateExecutorRouteAdmission,
   evaluateExecutorSpawnApplicability,
   EXECUTOR_FAMILY_DESCRIPTORS,
   executorCatalogContains,
-  openCodeTuiCapability,
+  openCodeEdgeCapabilities,
   profileNamesForSmoke,
   resolveSemanticExecutorProfile,
   type ExecutorFamily,
@@ -194,12 +195,19 @@ export function resolveLiveSmokeExecutorProfile(
   let capability = CURSOR_SMOKE_CAPABILITY;
   if (profile.family === 'opencode') {
     const observations: string[] = [];
-    for (const probe of descriptor.smokeCapabilityProbeCommands) {
+    for (const probe of descriptor.capabilityProbeCommands) {
       const result = execute(probe);
       if (!result.ok) throw new Error('executor_route_unavailable');
       observations.push(result.stdout);
     }
-    capability = openCodeTuiCapability(observations[0] ?? '');
+    const edgeCapabilities = openCodeEdgeCapabilities(observations);
+    const routeVerdict = evaluateExecutorRouteAdmission({
+      profile,
+      startMode: 'exact_terminal_worktree',
+      edgeCapabilities,
+    });
+    if (!routeVerdict.ok) throw new Error(routeVerdict.refusal);
+    capability = edgeCapabilities.exactTerminal;
   }
   const verdict = evaluateExecutorSpawnApplicability(capability);
   if (!verdict.ok) throw new Error(verdict.refusal);
