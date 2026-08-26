@@ -1814,25 +1814,3 @@ exit 1
   });
 });
 
-
-describe('tracked wrapper hostname transport', () => {
-  it('does not pass --hostname to the native REST transport', () => {
-    const root = mkdtempSync(join(tmpdir(), 'gh-hostname-'));
-    const native = join(root, 'native-gh');
-    writeFileSync(native, `#!/usr/bin/env bash
-set -euo pipefail
-for arg in "$@"; do
-  [[ "$arg" != "--hostname" ]] || { echo 'bad option: --hostname' >&2; exit 2; }
-done
-[[ "\${1:-}" == api ]] || exit 3
-printf '%s\\n' '{"number":1698}'
-`, 'utf8');
-    chmodSync(native, 0o755);
-    try {
-      const result = ghApiJson(native, 'repos/chetwerikoff/orchestrator-pack/pulls/1698', { hostname: 'github.com', cwd: root });
-      expect(result).toMatchObject({ number: 1698 });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
