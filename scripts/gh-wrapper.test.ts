@@ -2026,6 +2026,17 @@ describe('Issue #1623 ambient gh static recurrence guard', () => {
     expect(extractAmbientGhExecutableSelections(source)).toEqual([]);
   });
 
+  it('rejects an aliased ambient gh executable selection', () => {
+    const source = [
+      "const ghCommand = 'gh';",
+      'runProcess({',
+      '  command: ghCommand,',
+      "  args: ['pr', 'view', '1'],",
+      '});',
+    ].join('\n');
+    expect(extractAmbientGhExecutableSelections(source)).toEqual(['command: ghCommand']);
+  });
+
   it('scans the full source while retaining useful source location evidence', () => {
     const root = tempRoot('opk-1623-static-guard-');
     const fixture = join(root, 'multiline.ts');

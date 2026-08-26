@@ -51,6 +51,27 @@ const AMBIENT_GH_EXECUTABLE_PATTERNS = [
   /\bghApiJson\s*\(\s*['"]gh['"]/g,
 ];
 
+const GH_EXECUTABLE_ALIAS_DECLARATION_PATTERN =
+  /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*['"]gh['"]/g;
+
+/**
+ * @param {string} source
+ * @returns {RegExp[]}
+ */
+function ambientGhAliasPatterns(source) {
+  /** @type {string[]} */
+  const aliases = [];
+  GH_EXECUTABLE_ALIAS_DECLARATION_PATTERN.lastIndex = 0;
+  let declaration;
+  while ((declaration = GH_EXECUTABLE_ALIAS_DECLARATION_PATTERN.exec(source)) !== null) {
+    aliases.push(declaration[1]);
+  }
+  return [...new Set(aliases)].flatMap((alias) => [
+    new RegExp(`\\bcommand\\s*:\\s*${alias}\\b`, 'g'),
+    new RegExp(`\\b(?:execFileSync|execFile|spawnSync|spawn|ghApiJson)\\s*\\(\\s*${alias}\\b`, 'g'),
+  ]);
+}
+
 /**
  * @param {string} fragment
  */
@@ -423,7 +444,7 @@ function extractAmbientGhExecutableSelectionMatches(text) {
   const source = String(text);
   /** @type {{ command: string, index: number }[]} */
   const found = [];
-  for (const pattern of AMBIENT_GH_EXECUTABLE_PATTERNS) {
+  for (const pattern of [...AMBIENT_GH_EXECUTABLE_PATTERNS, ...ambientGhAliasPatterns(source)]) {
     pattern.lastIndex = 0;
     let match;
     while ((match = pattern.exec(source)) !== null) {
