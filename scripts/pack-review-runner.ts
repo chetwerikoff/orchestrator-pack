@@ -17,6 +17,7 @@ import {
   type ReviewerBudgetLedger,
 } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
+import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import {
   deriveMergeTriageEvidenceTuple,
   produceMergeTriageEvidence,
@@ -561,7 +562,7 @@ export async function resolveCurrentPrHead(
   runner: typeof runProcess = runProcess,
 ): Promise<string> {
   const result = await runner({
-    command: 'gh',
+    command: resolveTrackedGhWrapper(),
     args: ['pr', 'view', String(prNumber), '--repo', repoSlug, '--json', 'headRefOid,state'],
     cwd: repoRoot,
     inheritParentEnv: true,
@@ -593,7 +594,7 @@ export async function resolveCurrentPrTarget(
   runner: typeof runProcess = runProcess,
 ): Promise<{ headSha: string; body: string }> {
   const result = await runner({
-    command: 'gh',
+    command: resolveTrackedGhWrapper(),
     args: ['pr', 'view', String(prNumber), '--repo', repoSlug, '--json', 'headRefOid,state,body'],
     cwd: repoRoot,
     inheritParentEnv: true,
@@ -626,7 +627,7 @@ async function resolveCurrentIssueBody(
   runner: typeof runProcess = runProcess,
 ): Promise<string> {
   const result = await runner({
-    command: 'gh',
+    command: resolveTrackedGhWrapper(),
     args: ['issue', 'view', String(issueNumber), '--repo', repoSlug, '--json', 'body'],
     cwd: repoRoot,
     inheritParentEnv: true,
