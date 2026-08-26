@@ -118,7 +118,8 @@ appendFileSync(${JSON.stringify(nativeCallsFile)}, JSON.stringify({
   wrapperActive: process.env.GH_WRAPPER_ACTIVE ?? '',
 }) + '\\n', 'utf8');
 if (endpoint === 'user') {
-  process.stdout.write(JSON.stringify({ login: 'pack-reviewer' }));
+  if (args.includes('--jq')) process.stdout.write('pack-reviewer\\n');
+  else process.stdout.write(JSON.stringify({ login: 'pack-reviewer' }));
 } else if (endpoint === 'repos/${REPOSITORY}/pulls/${PR_NUMBER}') {
   process.stdout.write(JSON.stringify({
     number: ${PR_NUMBER},
@@ -236,7 +237,9 @@ describe('Issue #1623 focused tracked-wrapper runtime harness', () => {
     process.env.PATH = fixture.pathValue;
     process.env.GH_REAL_BINARY = fixture.nativeGh;
     process.env.GH_HOST = 'github.com';
+    delete process.env.GH_REPO;
     delete process.env.OPK_VITEST_HARNESS;
+    delete process.env.OPK_CODEX_REVIEW_SKIP_GH;
 
     const slug = await resolveRepositorySlug(fixture.checkout);
     expect(slug).toBe(REPOSITORY);
