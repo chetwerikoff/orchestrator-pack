@@ -135,6 +135,15 @@ export const CURSOR_SMOKE_CAPABILITY: RouteCapability = {
   supportsEffort: true,
 };
 
+// The current smoke runtime lifecycle has a Cursor-specific startup witness. Until
+// an allowed, freshly evidenced runtime change proves an OpenCode startup shape,
+// OpenCode smoke remains externally gated even when its CLI exposes model+effort.
+export const OPENCODE_SMOKE_RUNTIME_CAPABILITY: RouteCapability = {
+  available: false,
+  supportsModel: false,
+  supportsEffort: false,
+};
+
 const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
 const MODEL_TOKEN_CLASS = 'A-Za-z0-9._:/+-';
 
@@ -232,6 +241,14 @@ export function evaluateExecutorSpawnApplicability(capability: RouteCapability):
     return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.effortChannelUnavailable };
   }
   return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.routeUnavailable };
+}
+
+export function evaluateOpenCodeSmokeApplicability(
+  observedTuiCapability: RouteCapability,
+): SpawnApplicabilityVerdict {
+  const tui = evaluateExecutorSpawnApplicability(observedTuiCapability);
+  if (!tui.ok) return tui;
+  return evaluateExecutorSpawnApplicability(OPENCODE_SMOKE_RUNTIME_CAPABILITY);
 }
 
 function routeCapability(capabilities: ExecutorEdgeCapabilities, route: ExecutorRoute): RouteCapability {
