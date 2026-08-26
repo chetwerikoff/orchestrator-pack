@@ -4,6 +4,7 @@
   "declared_paths": [
     "plugins/codex-pr-reviewer/lib/scope_context.ts",
     "scripts/check-gh-inventory-static.ps1",
+    "scripts/gh-inventory-static-guard.test.ts",
     "scripts/invoke-reviewer-contract-mapping.ts",
     "scripts/lib/command-runtime-bootstrap.mjs",
     "scripts/lib/gh-inventory-static-guard.mjs",
