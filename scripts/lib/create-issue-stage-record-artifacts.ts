@@ -40,6 +40,7 @@ import { buildCanonicalLineage, deriveCanonicalCycleLineage } from './create-iss
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import { defaultGhTransport, fetchRepositoryOwnerLogin, parseJournalEvents } from './create-issue-stage-record-gh.ts';
 import type { CanonicalLineage, GhTransport, PartialMissingSourceWitness, ProducerEvidence, TrustedComment } from './create-issue-stage-record-types.ts';
+import { resolvePublishedAuthorState } from './resolve-published-author-state.ts';
 
 export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
 export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
@@ -909,44 +910,6 @@ function commentTargetsExpectedIssue(
 ): boolean {
   return comment.htmlUrl === expectedCommentUrl(repositoryFullName, issueNumber, comment.id)
     && comment.issueUrl === expectedIssueApiUrl(repositoryFullName, issueNumber);
-}
-
-function resolvePublishedAuthorState(
-  context: ArtifactAuthorityContext,
-  errors: string[],
-): { text: string; sha256: string; byteLength: number } | undefined {
-  const hint = context.operatorHint;
-  if (!hint) return undefined;
-  const comment = context.census.comments.find((candidate) => (
-    candidate.id === hint.commentId
-      && candidate.htmlUrl === hint.commentUrl
-      && commentTargetsExpectedIssue(candidate, context.census.repositoryFullName, context.census.issueNumber)
-  ));
-  if (!comment) {
-    errors.push('operator verdict URL hint does not identify a published Issue comment in authoritative census');
-    return undefined;
-  }
-  if (comment.createdAt !== comment.updatedAt) {
-    errors.push(`authoritative GitHub artifact was edited: ${comment.htmlUrl}`);
-    return undefined;
-  }
-  if (!/^m3-protected:/im.test(comment.body)) return undefined;
-  const publishedRevision = /^revision:\s*(r[0-9]+)\s*$/m.exec(comment.body)?.[1];
-  if (!/^author-state:\s*\S+/m.test(comment.body) || publishedRevision !== hint.sourceRevision) {
-    errors.push(`operator verdict URL hint does not identify published author-state for revision ${hint.sourceRevision}: ${comment.htmlUrl}`);
-    return undefined;
-  }
-  const actualSha256 = sha256(comment.body);
-  const actualByteLength = Buffer.byteLength(comment.body);
-  if (actualSha256 !== hint.verdictSha256) {
-    errors.push(`operator verdict URL hint sha256 does not match published Issue comment: ${comment.htmlUrl}`);
-    return undefined;
-  }
-  if (actualByteLength !== hint.verdictByteLength) {
-    errors.push(`operator verdict URL hint byteLength does not match published Issue comment: ${comment.htmlUrl}`);
-    return undefined;
-  }
-  return { text: comment.body, sha256: actualSha256, byteLength: actualByteLength };
 }
 
 function rereadAuthoritativeIssueComment(
@@ -1975,7 +1938,25 @@ export function produceAcceptanceArtifacts(
         ? authoritativeIssueCommentCensus(artifactSourceTransport, repositoryFullName, issueNumber, errors)
         : null;
       if (census) {
-        const publishedAuthorState = resolvePublishedAuthorState({ transport: artifactSourceTransport, census, ...(operatorHint ? { operatorHint } : {}) }, errors);
+        const publishedAuthorStateResult = resolvePublishedAuthorState({
+          adjudication: operatorHint
+            ? {
+                issueNumber: operatorHint.issueNumber,
+                sourceRevision: operatorHint.sourceRevision,
+                verdictUrl: operatorHint.commentUrl,
+                verdictSha256: operatorHint.verdictSha256,
+                verdictByteLength: operatorHint.verdictByteLength,
+              }
+            : undefined,
+          repo: census.repositoryFullName,
+          issueNumber: census.issueNumber,
+          comments: census.comments,
+          requireCanonicalIdentity: true,
+          requireUnedited: true,
+          errorStyle: 'artifacts',
+        });
+        errors.push(...publishedAuthorStateResult.errors);
+        const publishedAuthorState = publishedAuthorStateResult.state;
         artifactContext = {
           transport: artifactSourceTransport,
           census,
