@@ -417,21 +417,45 @@ export function extractGhCommandsFromRuleSurface(text) {
 
 /**
  * @param {string} text
+ * @returns {{ command: string, index: number }[]}
+ */
+function extractAmbientGhExecutableSelectionMatches(text) {
+  const source = String(text);
+  /** @type {{ command: string, index: number }[]} */
+  const found = [];
+  for (const pattern of AMBIENT_GH_EXECUTABLE_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(source)) !== null) {
+      found.push({
+        command: match[0].replace(/\s+/g, ' ').trim(),
+        index: match.index,
+      });
+    }
+  }
+  found.sort((left, right) => left.index - right.index || left.command.localeCompare(right.command));
+  return found;
+}
+
+/**
+ * @param {string} text
  * @returns {string[]}
  */
 export function extractAmbientGhExecutableSelections(text) {
-  /** @type {string[]} */
-  const found = [];
-  for (const line of String(text).split(/\r?\n/)) {
-    for (const pattern of AMBIENT_GH_EXECUTABLE_PATTERNS) {
-      pattern.lastIndex = 0;
-      let match;
-      while ((match = pattern.exec(line)) !== null) {
-        found.push(match[0]);
-      }
-    }
-  }
-  return found;
+  return extractAmbientGhExecutableSelectionMatches(text).map((entry) => entry.command);
+}
+
+/**
+ * @param {string} text
+ * @param {number} index
+ */
+function sourceLineAt(text, index) {
+  const lineNumber = text.slice(0, index).split(/\r?\n/).length;
+  const lineStart = Math.max(text.lastIndexOf('\n', Math.max(0, index - 1)) + 1, 0);
+  const rawLineEnd = text.indexOf('\n', index);
+  const lineEnd = rawLineEnd < 0 ? text.length : rawLineEnd;
+  const line = text.slice(lineStart, lineEnd).trim();
+  return line ? `line ${lineNumber}: ${line}` : `line ${lineNumber}`;
 }
 
 /**
@@ -445,12 +469,12 @@ export function scanFileForViolations(filePath, mode) {
   const violations = [];
 
   if (mode === 'transport') {
-    const lines = text.split(/\r?\n/);
-    for (const line of lines) {
-      const selections = extractAmbientGhExecutableSelections(line);
-      for (const command of selections) {
-        violations.push({ file: filePath, command, line: line.trim() });
-      }
+    for (const selection of extractAmbientGhExecutableSelectionMatches(text)) {
+      violations.push({
+        file: filePath,
+        command: selection.command,
+        line: sourceLineAt(text, selection.index),
+      });
     }
     return violations;
   }
