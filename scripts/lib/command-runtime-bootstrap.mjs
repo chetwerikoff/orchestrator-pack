@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { classifyArgv } from './gh-inventory-match.mjs';
 import {
   PACK_SCRIPTS_DIR,
+  TRACKED_GH_UNAVAILABLE_DIAGNOSTIC,
+  TRACKED_GH_UNAVAILABLE_REASON,
   resolveRealGhBinary,
   resolveTrackedGhWrapper,
 } from './gh-resolve-real-binary.mjs';
@@ -187,7 +189,13 @@ export function evaluateCommandRuntimePreflight(input = {}) {
     return failPreflight('missing_node', 'node', pathClass);
   }
   if (!tools.packGh) {
-    return failPreflight('missing_pack_gh', 'scripts/gh', pathClass);
+    return {
+      ok: false,
+      reason: TRACKED_GH_UNAVAILABLE_REASON,
+      diagnostic: `${TRACKED_GH_UNAVAILABLE_DIAGNOSTIC} (path-class=${pathClass})`,
+      pathClass,
+      missingTool: 'scripts/gh',
+    };
   }
   if (!tools.firstGh || resolve(tools.firstGh) !== resolve(tools.packGh)) {
     return {
