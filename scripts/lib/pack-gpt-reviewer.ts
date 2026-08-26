@@ -14,6 +14,8 @@ import { parseCodexOutput } from '../../plugins/codex-pr-reviewer/lib/parse_outp
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { buildGptReviewPrompt, resolvePackRepoRoot } from './pack-pr-review-contract.ts';
 import { packReviewLogsDir, resolvePackReviewRunStoreRoot } from './pack-review-run-store.ts';
+import { resolveNameWithOwner } from './gh-repo-resolve.mjs';
+import { resolveTrackedGhWrapper } from './gh-resolve-real-binary.mjs';
 import {
   normalizePackGptSourceIdentity,
   type PackGptSourceIdentity,
@@ -487,27 +489,20 @@ export async function runGptPackReview(
 }
 
 export async function resolveRepositorySlug(repoRoot: string): Promise<string> {
-  const result = await runProcess({
-    command: 'gh',
-    args: ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'],
+  const slug = trim(resolveNameWithOwner({
     cwd: repoRoot,
-    inheritParentEnv: true,
-    allowEmptyStdout: false,
-    timeoutMs: 30_000,
-  });
-  if (!result.ok) {
-    throw new Error(`gh repo view failed: ${trim(result.stderr || result.error)}`);
-  }
-  const slug = trim(result.stdout);
+    realGh: resolveTrackedGhWrapper(),
+    hostname: trim(process.env.GH_HOST) || 'github.com',
+  }));
   if (!/^[^/\s]+\/[^/\s]+$/.test(slug)) {
-    throw new Error(`gh repo view returned invalid repository slug '${slug}'`);
+    throw new Error(`local repository context returned invalid repository slug '${slug}'`);
   }
   return slug;
 }
 
 export async function resolveHeadSha(repoRoot: string, prNumber: number, repoSlug: string): Promise<string> {
   const result = await runProcess({
-    command: 'gh',
+    command: resolveTrackedGhWrapper(),
     args: ['pr', 'view', String(prNumber), '--repo', repoSlug, '--json', 'headRefOid', '--jq', '.headRefOid'],
     cwd: repoRoot,
     inheritParentEnv: true,
