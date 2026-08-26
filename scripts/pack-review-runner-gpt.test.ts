@@ -250,11 +250,8 @@ describe('pack-review current-head REST read', () => {
 
     expect(head).toBe(HEAD_A);
     expect(invocations).toEqual([{
-      command: 'gh',
-      args: [
-        'pr', 'view', '1517', '--repo', 'chetwerikoff/orchestrator-pack',
-        '--json', 'headRefOid,state',
-      ],
+      command: path.join(repoRoot, 'scripts', 'gh'),
+      args: ['api', 'repos/chetwerikoff/orchestrator-pack/pulls/1517'],
     }]);
   });
 

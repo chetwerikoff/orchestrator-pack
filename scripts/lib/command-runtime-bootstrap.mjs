@@ -7,7 +7,13 @@ import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { classifyArgv } from './gh-inventory-match.mjs';
-import { PACK_SCRIPTS_DIR, resolveRealGhBinary } from './gh-resolve-real-binary.mjs';
+import {
+  PACK_SCRIPTS_DIR,
+  TRACKED_GH_UNAVAILABLE_DIAGNOSTIC,
+  TRACKED_GH_UNAVAILABLE_REASON,
+  resolveRealGhBinary,
+  resolveTrackedGhWrapper,
+} from './gh-resolve-real-binary.mjs';
 
 export const COMMAND_RUNTIME_BOOTSTRAP_VERSION = 'command-runtime-bootstrap/v1';
 
@@ -130,12 +136,13 @@ function resolveNode(pathValue = '') {
  * @param {string} packScriptsDir
  */
 function resolvePackGh(effectivePath, packScriptsDir) {
-  const packGh = join(packScriptsDir, 'gh');
-  if (!existsSync(packGh)) {
-    return { packGh: null, firstGh: resolveExecutableOnPath(effectivePath, 'gh') };
-  }
   const firstGh = resolveExecutableOnPath(effectivePath, 'gh');
-  return { packGh, firstGh };
+  try {
+    const packGh = resolveTrackedGhWrapper(join(packScriptsDir, 'gh'));
+    return { packGh, firstGh };
+  } catch {
+    return { packGh: null, firstGh };
+  }
 }
 
 /**
@@ -182,7 +189,13 @@ export function evaluateCommandRuntimePreflight(input = {}) {
     return failPreflight('missing_node', 'node', pathClass);
   }
   if (!tools.packGh) {
-    return failPreflight('missing_pack_gh', 'scripts/gh', pathClass);
+    return {
+      ok: false,
+      reason: TRACKED_GH_UNAVAILABLE_REASON,
+      diagnostic: `${TRACKED_GH_UNAVAILABLE_DIAGNOSTIC} (path-class=${pathClass})`,
+      pathClass,
+      missingTool: 'scripts/gh',
+    };
   }
   if (!tools.firstGh || resolve(tools.firstGh) !== resolve(tools.packGh)) {
     return {
