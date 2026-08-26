@@ -3,7 +3,6 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcessSync } from './kernel/subprocess.ts';
-import { ghApiJson } from './lib/gh-repo-resolve.mjs';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { createHash } from 'node:crypto';
@@ -384,8 +383,18 @@ function repositoryFromGithubUrl(value: unknown): string {
   return match ? `${match[1]}/${match[2]}` : '';
 }
 
+function smokeGhApiJson(label: string, endpoint: string, cwd: string): unknown {
+  const output = requireProcessOutput(label, runSmokeGhSync(['api', endpoint], cwd));
+  try {
+    return JSON.parse(output) as unknown;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label}: tracked gh returned invalid JSON: ${detail}`);
+  }
+}
+
 function githubApiObject(label: string, endpoint: string, cwd: string): Record<string, unknown> {
-  const value = ghApiJson(resolveTrackedGhWrapper(), endpoint, { cwd }) as unknown;
+  const value = smokeGhApiJson(label, endpoint, cwd);
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${label}: expected one JSON object`);
   }
@@ -504,11 +513,11 @@ export function fetchPrComments(
   const pages: unknown[][] = [];
   const perPage = 100;
   for (let page = 1; page <= 100; page += 1) {
-    const batch = ghApiJson(
-      resolveTrackedGhWrapper(),
+    const batch = smokeGhApiJson(
+      'comment-census',
       `repos/${repositorySlug}/issues/${prNumber}/comments?per_page=${perPage}&page=${page}`,
-      { cwd: repoRoot },
-    ) as unknown;
+      repoRoot,
+    );
     if (!Array.isArray(batch)) {
       throw new Error('comment_census: comment page was not an array');
     }

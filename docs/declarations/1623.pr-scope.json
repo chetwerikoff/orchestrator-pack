@@ -15,7 +15,8 @@
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/toolchain/raw-child-process-baseline.json",
-    "scripts/worker-smoke-run.ts"
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
   ],
   "denylist": [
     "AGENTS.md",
