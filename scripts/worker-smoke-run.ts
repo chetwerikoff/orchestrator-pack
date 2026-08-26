@@ -16,6 +16,7 @@ import {
   evaluateExecutorSpawnApplicability,
   EXECUTOR_FAMILY_DESCRIPTORS,
   executorCatalogContains,
+  OPENCODE_PACK_AGENT,
   openCodeEdgeCapabilities,
   profileNamesForSmoke,
   resolveSemanticExecutorProfile,
@@ -142,9 +143,10 @@ export interface SmokeAttemptDependencies {
 interface SmokeChildResult {
   readonly ok: boolean;
   readonly stdout: string;
+  readonly stderr?: string;
 }
 
-type SmokeChildExecutor = (args: readonly string[]) => SmokeChildResult;
+type SmokeChildExecutor = (args: readonly string[], env?: Readonly<NodeJS.ProcessEnv>) => SmokeChildResult;
 
 function smokeSemanticProfile(
   complexity: SmokeComplexity | string,
@@ -200,12 +202,14 @@ export function resolveLiveSmokeExecutorProfile(
   let capability = CURSOR_SMOKE_CAPABILITY;
   if (profile.family === 'opencode') {
     const observations: string[] = [];
+    const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort } } });
     for (const probe of descriptor.capabilityProbeCommands) {
-      const result = execute(probe);
+      const isDebugProbe = probe[0] === 'opencode' && probe[1] === 'debug';
+      const result = isDebugProbe ? execute(probe, { OPENCODE_CONFIG_CONTENT: inlineConfig }) : execute(probe);
       if (!result.ok) throw new Error('executor_route_unavailable');
-      observations.push(result.stdout);
+      observations.push(`${result.stdout}\n${result.stderr ?? ''}`);
     }
-    const edgeCapabilities = openCodeEdgeCapabilities(observations);
+    const edgeCapabilities = openCodeEdgeCapabilities(observations, profile);
     const routeVerdict = evaluateExecutorRouteAdmission({
       profile,
       startMode: 'exact_terminal_worktree',
@@ -232,15 +236,16 @@ function runSmokeProfileChild(
   args: readonly string[],
   cwd: string,
   env: Readonly<NodeJS.ProcessEnv>,
+  extraEnv?: Readonly<NodeJS.ProcessEnv>,
 ): SmokeChildResult {
   const result = runProcessSync({
     command: args[0]!,
     args: args.slice(1),
     cwd,
-    env: { ...env },
+    env: extraEnv ? { ...env, ...extraEnv } : { ...env },
     inheritParentEnv: true,
   });
-  return { ok: result.ok, stdout: result.stdout };
+  return { ok: result.ok, stdout: result.stdout, stderr: result.stderr ?? '' };
 }
 
 export interface ResolvedSmokeTarget {
@@ -1384,7 +1389,7 @@ export async function runSmokeAttempt(
         : resolveLiveSmokeExecutorProfile(
           options.smokeComplexity,
           process.env,
-          (args) => runSmokeProfileChild(args, options.cwd, process.env),
+          (args, env) => runSmokeProfileChild(args, options.cwd, process.env, env),
         );
   } catch (error) {
     const report = operationalReport('BLOCKED', options, {

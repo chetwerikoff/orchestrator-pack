@@ -240,22 +240,26 @@ describe('smoke executor profiles', () => {
           ].join('\n'),
         };
       }
-      if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n' };
-      if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
-        return { ok: true, stdout: 'Usage: opencode --model MODEL --variant NAME\n' };
+      if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n', stderr: '' };
+      if (args[0] === 'opencode' && args[1] === 'debug' && args[2] === 'agent') {
+        return { ok: true, stdout: JSON.stringify({ model: { providerID: 'opencode', modelID: 'fixture-opencode-model' }, variant: 'fixture-opencode-effort' }), stderr: '' };
       }
-      if (args[0] === process.execPath) return { ok: true, stdout: '' };
-      return { ok: false, stdout: '' };
+      if (args[0] === 'opencode' && args.includes('--help')) {
+        return { ok: true, stdout: '', stderr: 'Usage: opencode --agent AGENT\n' };
+      }
+      if (args[0] === process.execPath) return { ok: true, stdout: '', stderr: '' };
+      return { ok: false, stdout: '', stderr: '' };
     });
     expect(profile).toMatchObject({
       complexity: 'routine',
       family: 'opencode',
       agent: 'opencode',
-      command: "opencode --model 'fixture-opencode-model' --variant 'fixture-opencode-effort'",
+      command: `OPENCODE_CONFIG_CONTENT='{\"agent\":{\"pack\":{\"model\":\"fixture-opencode-model\",\"variant\":\"fixture-opencode-effort\"}}}' opencode --agent 'pack'`,
     });
     expect(calls[0]).toEqual(['opencode', 'models']);
     expect(calls).toContainEqual(['opencode', '--help']);
     expect(calls).toContainEqual(['opencode', 'models', '--verbose']);
+    expect(calls).toContainEqual(['opencode', 'debug', 'agent', 'pack']);
     expect(calls.some((args) => args[0] === process.execPath)).toBe(true);
   });
 
@@ -299,16 +303,20 @@ describe('smoke executor profiles', () => {
                 '}',
                 '',
               ].join('\n'),
+              stderr: '',
             };
           }
           if (args[0] === 'opencode' && args[1] === 'models') {
-            return { ok: true, stdout: 'fixture-opencode-model\n' };
+            return { ok: true, stdout: 'fixture-opencode-model\n', stderr: '' };
           }
-          if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
-            return { ok: true, stdout: 'Usage: opencode --model MODEL --variant NAME\n' };
+          if (args[0] === 'opencode' && args[1] === 'debug' && args[2] === 'agent') {
+            return { ok: true, stdout: JSON.stringify({ model: { providerID: 'opencode', modelID: 'fixture-opencode-model' }, variant: 'fixture-opencode-effort' }), stderr: '' };
           }
-          if (args[0] === process.execPath) return { ok: true, stdout: '' };
-          return { ok: false, stdout: '' };
+          if (args[0] === 'opencode' && args.includes('--help')) {
+            return { ok: true, stdout: '', stderr: 'Usage: opencode --agent AGENT\n' };
+          }
+          if (args[0] === process.execPath) return { ok: true, stdout: '', stderr: '' };
+          return { ok: false, stdout: '', stderr: '' };
         }),
       });
       expect(code).toBe(1);
@@ -341,11 +349,13 @@ describe('smoke executor profiles', () => {
             '}',
             '',
           ].join('\n'),
+          stderr: '',
         };
       }
-      if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n' };
-      if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') return { ok: true, stdout: '--model MODEL\n' };
-      return { ok: true, stdout: 'supported help surface\n' };
+      if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n', stderr: '' };
+      if (args[0] === 'opencode' && args[1] === 'debug' && args[2] === 'agent') return { ok: true, stdout: JSON.stringify({ model: { providerID: 'opencode', modelID: 'fixture-opencode-model' } }), stderr: '' };
+      if (args[0] === 'opencode' && args.includes('--help')) return { ok: true, stdout: '', stderr: 'Usage: opencode --agent AGENT\n' };
+      return { ok: true, stdout: 'supported help surface\n', stderr: '' };
     })).toThrow('executor_effort_channel_unavailable');
 
     expect(() => resolveLiveSmokeExecutorProfile('routine', opencodeEnv, (args) =>

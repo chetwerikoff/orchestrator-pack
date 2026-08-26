@@ -35,24 +35,14 @@ reimplement them.
 The existing smoke profile triples stay unchanged. On the smoke surface the closed
 agent-token set is `cursor` and `opencode`. Cursor continues through the existing
 `agent` executable surface and keeps its historical opaque model/effort translation
-inside the shared Cursor translator. OpenCode keeps model and effort separate in its
-command shape. Model catalog checks are executor-specific: Cursor uses the Cursor
-model catalog; OpenCode uses `opencode models`.
+inside the shared Cursor translator. OpenCode carries model and effort together through a pack-composed inline agent definition supplied via `OPENCODE_CONFIG_CONTENT` as `{"agent":{"<pack-agent-name>":{"model":"<model>","variant":"<effort>"}}}` and spawned as `opencode --agent <pack-agent-name>` on the top-level surface, with no `--model` or `--variant` flag. Model catalog checks are executor-specific: Cursor uses the Cursor model catalog; OpenCode uses `opencode models`.
 
 A semantically valid OpenCode profile is not automatically spawnable. Before child
-creation, `worker-smoke-run` obtains fresh non-mutating installed OpenCode help or
-effective-capability evidence and admits the spawn only if the observed route can
-carry both the selected model and selected effort. Missing route support fails with
-`executor_route_unavailable`; a model-capable route without an effort channel fails
-with `executor_effort_channel_unavailable`. The launcher does not fall back to
-Cursor, drop effort, infer support from package presence, or invent an unsupported
-TUI/provider flag.
+creation, `worker-smoke-run` obtains fresh non-mutating evidence from the spawned top-level surface — `opencode --help` (stdout+stderr, proving `--agent`), `opencode models --verbose` (proving effort is an available variant), and `opencode debug agent <pack-agent-name>` run with the inline definition (proving the resolved agent carries both) — and admits the spawn only if the observed route can carry both values. Probe surface must equal spawn surface; both edges capture stdout and stderr for every capability probe (catalog read stays stdout-only). Missing route support fails with `executor_route_unavailable`; a model-capable route without an effort channel fails with `executor_effort_channel_unavailable`. The launcher does not fall back to Cursor, drop effort, infer support from package presence, or invent an unsupported flag.
 
 Cursor smoke route compatibility remains code-owned and does not gain a fresh route
 probe. Both executor families still require the selected profile to be inherited by
-a child before spawn. If a future admitted route needs a structured environment on
-RuntimeAdapter spawn, that contract may be extended only from fresh installed
-evidence; #1610 does not invent the seam pre-emptively.
+a child before spawn. The inline definition is carried as an `OPENCODE_CONFIG_CONTENT` prefix in the composed command string, so the conditional RuntimeAdapter env seam remains unchanged.
 
 Firefighter execution still chooses the existing routine or complex smoke profile.
 There is no separate `PACK_EXECUTOR_FIREFIGHTER_*` profile or bypass around this

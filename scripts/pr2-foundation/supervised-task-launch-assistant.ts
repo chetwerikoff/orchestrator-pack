@@ -12,6 +12,7 @@ import {
   evaluateExecutorRouteAdmission,
   EXECUTOR_FAMILY_DESCRIPTORS,
   executorCatalogContains,
+  OPENCODE_PACK_AGENT,
   openCodeEdgeCapabilities,
   profileNamesForTask,
   resolveSemanticExecutorProfile,
@@ -587,19 +588,20 @@ export async function runSupervisedTaskLaunchAssistant(
 }
 
 interface ChildResult { readonly ok: boolean; readonly stdout: string; readonly stderr?: string }
-type ChildExecutor = (args: readonly string[], timeoutMs?: number) => Promise<ChildResult>;
+type ChildExecutor = (args: readonly string[], timeoutMs?: number, env?: Readonly<NodeJS.ProcessEnv>) => Promise<ChildResult>;
 
 async function child(
   args: readonly string[],
   cwd: string,
   env: Readonly<NodeJS.ProcessEnv>,
   timeoutMs = 15_000,
+  extraEnv?: Readonly<NodeJS.ProcessEnv>,
 ): Promise<ChildResult> {
   const result = await runProcess({
-    command: args[0]!, args: args.slice(1), cwd, env, inheritParentEnv: true,
+    command: args[0]!, args: args.slice(1), cwd, env: extraEnv ? { ...env, ...extraEnv } : env, inheritParentEnv: true,
     allowEmptyStdout: true, timeoutMs,
   });
-  return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error };
+  return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error || '' };
 }
 
 function routeRefusalEdge(
@@ -640,12 +642,16 @@ export async function resolveLiveExecutorProfile(
   let capabilities = CURSOR_TASK_ROUTE_CAPABILITIES;
   if (profile.family === 'opencode') {
     const probeOutputs: string[] = [];
+    const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort } } });
     for (const probe of descriptor.capabilityProbeCommands) {
-      const observation = await execute(probe);
+      const isDebugProbe = probe[0] === 'opencode' && probe[1] === 'debug';
+      const observation = isDebugProbe
+        ? await execute(probe, undefined, { OPENCODE_CONFIG_CONTENT: inlineConfig })
+        : await execute(probe);
       if (!observation.ok) return routeRefusalEdge(profile, 'executor_route_unavailable');
-      probeOutputs.push(observation.stdout);
+      probeOutputs.push(`${observation.stdout}\n${observation.stderr}`);
     }
-    capabilities = openCodeEdgeCapabilities(probeOutputs);
+    capabilities = openCodeEdgeCapabilities(probeOutputs, profile);
   }
 
   const verdict = evaluateExecutorRouteAdmission({
@@ -910,7 +916,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       workClass,
       inheritedEnv,
       startMode,
-      (args, timeoutMs) => child(args, cwd, inheritedEnv, timeoutMs),
+      (args, timeoutMs, envOverride) => child(args, cwd, inheritedEnv, timeoutMs, envOverride),
     ),
     observeManagerRun: async (runId) => {
       const result = resultRecord(envelope(await child(['orca', 'orchestration', 'run-current', '--json'], cwd, env)));
