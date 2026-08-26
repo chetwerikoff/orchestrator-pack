@@ -4,6 +4,7 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { ghApiJson } from './lib/gh-repo-resolve.mjs';
+import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -314,7 +315,7 @@ export function runSmokeGhSync(
   extraEnv: Readonly<NodeJS.ProcessEnv> = {},
 ): ReturnType<typeof runProcessSync> {
   return runProcessSync({
-    command: 'gh',
+    command: resolveTrackedGhWrapper(),
     args: [...args],
     cwd,
     env: { ...buildSmokeGhChildEnv(), ...extraEnv },
@@ -371,7 +372,7 @@ function repositoryFromGithubUrl(value: unknown): string {
 }
 
 function githubApiObject(label: string, endpoint: string, cwd: string): Record<string, unknown> {
-  const value = ghApiJson('gh', endpoint, { cwd }) as unknown;
+  const value = ghApiJson(resolveTrackedGhWrapper(), endpoint, { cwd }) as unknown;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${label}: expected one JSON object`);
   }
@@ -491,7 +492,7 @@ export function fetchPrComments(
   const perPage = 100;
   for (let page = 1; page <= 100; page += 1) {
     const batch = ghApiJson(
-      'gh',
+      resolveTrackedGhWrapper(),
       `repos/${repositorySlug}/issues/${prNumber}/comments?per_page=${perPage}&page=${page}`,
       { cwd: repoRoot },
     ) as unknown;
