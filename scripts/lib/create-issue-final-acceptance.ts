@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { logicalFingerprint } from './create-issue-stage-record-marker.ts';
@@ -15,11 +14,11 @@ import { appendPublishedLogicalJournalEvent } from './create-issue-stage-record-
 import {
   executeFinalAcceptanceGuards,
   FINAL_ACCEPTANCE_CONTRACT_VERSION,
-  type PublishedAuthorState,
   validateExactTerminalBodyBinding,
   type FinalAcceptanceGuardInput,
 } from './create-issue-final-acceptance-contract.ts';
 import type { OperatorAcceptanceAdjudication } from './create-issue-stage-record-artifacts.ts';
+import { resolvePublishedAuthorState } from './resolve-published-author-state.ts';
 import { loadCanonicalReceiptInventory } from '../stage-completeness-guard.ts';
 import type {
   CanonicalLineage,
@@ -29,7 +28,6 @@ import type {
   GhTransport,
   LineageDiagnostic,
   PublicActor,
-  TrustedComment,
 } from './create-issue-stage-record-types.ts';
 import {
   CYCLE_SCHEMA,
@@ -58,47 +56,6 @@ export function validatePublishBodyBinding(reviewedBody: string, currentBody: st
   const errors: string[] = [];
   validateExactTerminalBodyBinding(reviewedBody, currentBody, errors);
   return errors;
-}
-
-export function resolvePublishedAuthorState(
-  adjudication: OperatorAcceptanceAdjudication | undefined,
-  repo: string,
-  issueNumber: number,
-  comments: readonly TrustedComment[],
-): { state?: PublishedAuthorState; errors: string[] } {
-  if (!adjudication) return { errors: [] };
-  const errors: string[] = [];
-  const sourceRevision = String(adjudication.sourceRevision ?? '').trim();
-  const verdictUrl = String(adjudication.verdictUrl ?? '').trim();
-  const verdictSha256 = String(adjudication.verdictSha256 ?? '').trim().toLowerCase();
-  const verdictByteLength = Number(adjudication.verdictByteLength);
-  const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)$/.exec(verdictUrl);
-  if (!match || match[1]!.toLowerCase() !== repo.toLowerCase() || Number(match[2]) !== issueNumber || Number(adjudication.issueNumber) !== issueNumber) {
-    errors.push('operator verdict URL hint does not identify a published Issue comment in authoritative census');
-    return { errors };
-  }
-  const comment = comments.find((candidate) => candidate.id === Number(match[3]));
-  if (!comment) {
-    errors.push('operator verdict URL hint does not identify a published Issue comment in authoritative census');
-    return { errors };
-  }
-  if (!/^m3-protected:/im.test(comment.body)) return { errors };
-  const publishedRevision = /^revision:\s*(r[0-9]+)\s*$/m.exec(comment.body)?.[1];
-  if (!/^author-state:\s*\S+/m.test(comment.body) || publishedRevision !== sourceRevision) {
-    errors.push(`operator verdict URL hint does not identify published author-state for revision ${sourceRevision}: ${verdictUrl}`);
-    return { errors };
-  }
-  const actualSha256 = createHash('sha256').update(comment.body, 'utf8').digest('hex');
-  const actualByteLength = Buffer.byteLength(comment.body);
-  if (!/^[0-9a-f]{64}$/.test(verdictSha256) || actualSha256 !== verdictSha256) {
-    errors.push(`operator verdict URL hint sha256 does not match published Issue comment: ${verdictUrl}`);
-  }
-  if (!Number.isSafeInteger(verdictByteLength) || verdictByteLength < 0 || actualByteLength !== verdictByteLength) {
-    errors.push(`operator verdict URL hint byteLength does not match published Issue comment: ${verdictUrl}`);
-  }
-  return errors.length > 0
-    ? { errors }
-    : { state: { text: comment.body, sha256: actualSha256, byteLength: actualByteLength }, errors };
 }
 
 export function parseCanonicalSourceRevisionMarker(body: string): {
@@ -249,12 +206,12 @@ export function runFinalAcceptance(
   if (censusState.diagnostics.some((item) => item.code === 'malformed-marker')) {
     return { ok: false, diagnostics, guardErrors: ['journal contains a malformed hidden marker'] };
   }
-  const publishedAuthorStateResult = resolvePublishedAuthorState(
-    input.operatorAdjudication,
-    input.repo,
-    input.issueNumber,
-    censusState.fetched.comments,
-  );
+  const publishedAuthorStateResult = resolvePublishedAuthorState({
+    adjudication: input.operatorAdjudication,
+    repo: input.repo,
+    issueNumber: input.issueNumber,
+    comments: censusState.fetched.comments,
+  });
   if (publishedAuthorStateResult.errors.length > 0) {
     return { ok: false, diagnostics, guardErrors: publishedAuthorStateResult.errors };
   }
