@@ -5,7 +5,21 @@ import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
-import { runSupervisedWorkerStart, type SupervisedWorkerStartReceipt, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
+import {
+  buildExecutorCommand,
+  buildProviderInvocation,
+  CURSOR_TASK_ROUTE_CAPABILITIES,
+  evaluateExecutorRouteAdmission,
+  EXECUTOR_FAMILY_DESCRIPTORS,
+  executorCatalogContains,
+  openCodeEdgeCapabilities,
+  profileNamesForTask,
+  resolveSemanticExecutorProfile,
+  type ExecutorFamily,
+  type ExecutorRoute,
+  type SemanticExecutorProfile,
+} from '../executor-profile-policy.ts';
+import { runSupervisedWorkerStart, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
 
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
 export const LAUNCH_WORK_CLASSES = ['manager', 't1', 't2', 't3'] as const;
@@ -34,8 +48,6 @@ export interface LaunchResources {
   readonly terminal?: RuntimeWorkerIdentity;
   readonly providerAgentTerminalId?: string;
   readonly dispatchId?: string;
-  readonly receipt?: SupervisedWorkerStartReceipt;
-  readonly residualResources?: readonly unknown[];
 }
 
 export interface NextAction {
@@ -45,7 +57,6 @@ export interface NextAction {
     | 'reconcile_supervised_start';
   readonly requestId?: string;
   readonly command?: string;
-  readonly recoveryCommand?: string;
   readonly replay?: {
     readonly operation: 'orca_orchestration_task_create';
     readonly runId: string;
@@ -85,7 +96,11 @@ export interface ReadyResult {
     readonly providerAgentTerminalId?: string;
     readonly dispatchId: string;
   };
-  readonly supervisedStart: SupervisedWorkerStartResult & { readonly ok: true };
+  readonly supervisedStart: {
+    readonly ok: true;
+    readonly reason: 'ready_and_assignment_bound';
+    readonly assignmentBound: true;
+  };
   readonly startedAtMs: number;
   readonly finishedAtMs: number;
   readonly elapsedMs: number;
@@ -99,11 +114,10 @@ export type EdgeResult<T> =
       readonly evidence?: Readonly<Record<string, unknown>>; readonly nextAction: NextAction };
 
 export interface ExecutorProfile {
+  readonly family: ExecutorFamily;
+  readonly route: ExecutorRoute;
   readonly launchCommand: string;
-  readonly modelId: string;
-  readonly orcaAgent: 'cursor';
-  readonly model: string;
-  readonly effort: string;
+  readonly providerArgs?: readonly string[];
   readonly names: readonly [string, string, string];
 }
 
@@ -146,7 +160,11 @@ export interface LaunchInput {
 export interface LaunchDependencies {
   readonly commandPreflight: () => Promise<EdgeResult<true>> | EdgeResult<true>;
   readonly repositoryPreflight: (repository: string) => Promise<EdgeResult<true>>;
-  readonly resolveProfile: (workClass: LaunchWorkClass, env: Readonly<NodeJS.ProcessEnv>) => Promise<EdgeResult<ExecutorProfile>> | EdgeResult<ExecutorProfile>;
+  readonly resolveProfile: (
+    workClass: LaunchWorkClass,
+    env: Readonly<NodeJS.ProcessEnv>,
+    startMode?: WorkerStartMode,
+  ) => Promise<EdgeResult<ExecutorProfile>> | EdgeResult<ExecutorProfile>;
   readonly observeManagerRun: (runId: string) => Promise<EdgeResult<{ readonly runId: string }>>;
   readonly proveManagerTaskMembership: (runId: string, taskId: string) => Promise<EdgeResult<{ readonly taskId: string }>>;
   readonly createManagerTask: (runId: string, brief: string) => Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>>;
@@ -157,54 +175,88 @@ export interface LaunchDependencies {
   readonly now: () => number;
 }
 
-const PROFILE_NAMES: Record<LaunchWorkClass, readonly [string, string, string]> = {
-  manager: ['PACK_EXECUTOR_MANAGER_AGENT', 'PACK_EXECUTOR_MANAGER_MODEL', 'PACK_EXECUTOR_MANAGER_EFFORT'],
-  t1: ['PACK_EXECUTOR_T1_AGENT', 'PACK_EXECUTOR_T1_MODEL', 'PACK_EXECUTOR_T1_EFFORT'],
-  t2: ['PACK_EXECUTOR_T2_AGENT', 'PACK_EXECUTOR_T2_MODEL', 'PACK_EXECUTOR_T2_EFFORT'],
-  t3: ['PACK_EXECUTOR_T3_AGENT', 'PACK_EXECUTOR_T3_MODEL', 'PACK_EXECUTOR_T3_EFFORT'],
-};
-const PROFILE_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
-const MODEL_TOKEN = '[A-Za-z0-9._:/+-]';
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const text = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
 const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 const sameIdentity = (a: RuntimeWorkerIdentity, b: RuntimeWorkerIdentity): boolean =>
   a.runtime === b.runtime && a.id === b.id && a.generation === b.generation;
-const regexEscape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-export function cursorModelListContains(output: string, modelId: string): boolean {
-  if (!modelId || !PROFILE_VALUE.test(modelId)) return false;
-  const pattern = new RegExp(`(^|[^${MODEL_TOKEN.slice(1, -1)}])${regexEscape(modelId)}(?=$|[^${MODEL_TOKEN.slice(1, -1)}])`, 'mu');
-  return pattern.test(output);
+function supportedStartMode(value: WorkerStartMode | undefined): value is ExecutorRoute | undefined {
+  return value === undefined || value === 'provider_new_top_level' || value === 'exact_terminal_worktree';
+}
+
+function profileResolutionEdge(
+  workClass: LaunchWorkClass,
+  env: Readonly<NodeJS.ProcessEnv>,
+): EdgeResult<SemanticExecutorProfile> {
+  const names = profileNamesForTask(workClass);
+  const resolved = resolveSemanticExecutorProfile({ surface: 'task', names, env });
+  if (resolved.ok) return { status: 'ok', value: resolved.profile };
+  const variableKey = resolved.code === 'executor_profile_missing' ? 'missingVariables'
+    : resolved.code === 'executor_profile_malformed' ? 'malformedVariables' : 'agentVariable';
+  const evidence = resolved.code === 'executor_profile_agent_unsupported'
+    ? { [variableKey]: resolved.variables[0] }
+    : { [variableKey]: resolved.variables };
+  const note = resolved.code === 'executor_profile_missing'
+    ? `export the required stable profile variables: ${resolved.variables.join(',')}`
+    : resolved.code === 'executor_profile_malformed'
+      ? `repair malformed stable profile variables: ${resolved.variables.join(',')}`
+      : `select a supported executor family through ${resolved.variables[0]}`;
+  return {
+    status: 'continue', cause: resolved.code, actor: 'operator', evidence,
+    nextAction: { kind: 'repair_executor_profile', note },
+  };
+}
+
+function admittedProfile(
+  semantic: SemanticExecutorProfile,
+  route: ExecutorRoute,
+): EdgeResult<ExecutorProfile> {
+  const invocation = buildExecutorCommand(semantic);
+  const provider = buildProviderInvocation(semantic);
+  if (route === 'provider_new_top_level' && !provider) return {
+    status: 'continue', cause: 'executor_route_unavailable', actor: 'operator',
+    evidence: { executorFamily: semantic.family, route },
+    nextAction: { kind: 'repair_executor_profile', note: 'select an executor route whose model and effort channels are proven' },
+  };
+  return {
+    status: 'ok',
+    value: {
+      family: semantic.family,
+      route,
+      launchCommand: invocation.command,
+      ...(provider ? { providerArgs: provider.argv } : {}),
+      names: semantic.names,
+    },
+    evidence: { executorFamily: semantic.family, route, profileVariables: semantic.names },
+  };
 }
 
 export function resolveExecutorProfile(
   workClass: LaunchWorkClass,
   env: Readonly<NodeJS.ProcessEnv> = process.env,
+  startMode?: WorkerStartMode,
 ): EdgeResult<ExecutorProfile> {
-  const names = PROFILE_NAMES[workClass];
-  const values = names.map((name) => env[name]?.trim() ?? '') as [string, string, string];
-  const missing = names.filter((_name, index) => !values[index]);
-  if (missing.length) return {
-    status: 'continue', cause: 'executor_profile_missing', actor: 'operator', evidence: { missingVariables: missing },
-    nextAction: { kind: 'repair_executor_profile', note: `export the required stable profile variables: ${missing.join(',')}` },
+  const semanticEdge = profileResolutionEdge(workClass, env);
+  if (semanticEdge.status !== 'ok') return semanticEdge;
+  if (!supportedStartMode(startMode)) return {
+    status: 'continue', cause: 'executor_route_mismatch', actor: 'orchestrator', evidence: { executorFamily: semanticEdge.value.family },
+    nextAction: { kind: 'repair_executor_profile', note: 'select a supported worker-start composition route' },
   };
-  const malformed = names.filter((_name, index) => !PROFILE_VALUE.test(values[index]!));
-  if (malformed.length) return {
-    status: 'continue', cause: 'executor_profile_malformed', actor: 'operator', evidence: { malformedVariables: malformed },
-    nextAction: { kind: 'repair_executor_profile', note: `repair malformed stable profile variables: ${malformed.join(',')}` },
+  const capabilities = semanticEdge.value.family === 'cursor'
+    ? CURSOR_TASK_ROUTE_CAPABILITIES
+    : openCodeEdgeCapabilities([]);
+  const verdict = evaluateExecutorRouteAdmission({
+    profile: semanticEdge.value,
+    ...(startMode ? { startMode } : {}),
+    edgeCapabilities: capabilities,
+  });
+  if (!verdict.ok) return {
+    status: 'continue', cause: verdict.refusal, actor: 'operator',
+    evidence: { executorFamily: semanticEdge.value.family, profileVariables: semanticEdge.value.names },
+    nextAction: { kind: 'repair_executor_profile', note: 'select an executor route whose model and effort channels are proven' },
   };
-  if (values[0] !== 'cursor-agent') return {
-    status: 'continue', cause: values[0] === 'cursor' ? 'executor_profile_literal_cursor_unsupported' : 'executor_profile_agent_unsupported',
-    actor: 'operator', evidence: { agentVariable: names[0] },
-    nextAction: { kind: 'repair_executor_profile', note: `${names[0]} must select cursor-agent for this helper` },
-  };
-  const modelId = `${values[1]}-${values[2]}`;
-  return {
-    status: 'ok',
-    value: { names, modelId, model: values[1], effort: values[2], launchCommand: `cursor-agent --model ${quote(modelId)}`, orcaAgent: 'cursor' },
-    evidence: { profileVariables: names, executable: 'cursor-agent' },
-  };
+  return admittedProfile(semanticEdge.value, verdict.route);
 }
 
 function initialResources(input: LaunchInput): LaunchResources {
@@ -278,6 +330,10 @@ async function checkpoint<T>(
   return result;
 }
 
+function retryProviderArgs(profile: ExecutorProfile): string[] {
+  return (profile.providerArgs ?? []).map((arg) => arg.startsWith('--') ? arg : quote(arg));
+}
+
 export async function runSupervisedTaskLaunchAssistant(
   input: LaunchInput,
   deps: LaunchDependencies,
@@ -292,15 +348,10 @@ export async function runSupervisedTaskLaunchAssistant(
   const repository = await checkpoint('repository_preflight', timings, deps.now, () => deps.repositoryPreflight(resources.repository));
   if (repository.status !== 'ok') return continued(input, 'repository_preflight', repository, resources, startedAtMs, timings, deps.now);
 
-  const profileEdge = await checkpoint('executor_profile', timings, deps.now, () => deps.resolveProfile(input.workClass, input.env ?? process.env));
+  const profileEdge = await checkpoint('executor_profile', timings, deps.now, () =>
+    deps.resolveProfile(input.workClass, input.env ?? process.env, input.startMode));
   if (profileEdge.status !== 'ok') return continued(input, 'executor_profile', profileEdge, resources, startedAtMs, timings, deps.now);
   const profile = profileEdge.value;
-  if (input.startMode && input.startMode !== 'exact_terminal_worktree' && input.startMode !== 'provider_new_top_level') {
-    return continued(input, 'executor_profile', {
-      cause: 'supervised_start_mode_invalid', actor: 'orchestrator', evidence: {},
-      nextAction: { kind: 'repair_executor_profile', note: 'select a supported worker-start composition mode' },
-    }, resources, startedAtMs, timings, deps.now);
-  }
 
   let taskId = input.taskId?.trim() ?? '';
   if (input.workClass === 'manager') {
@@ -356,7 +407,7 @@ export async function runSupervisedTaskLaunchAssistant(
     nextAction: { kind: 'reconcile_dispatch', note: 'reconcile the existing Dispatch; create no new worktree terminal/start' },
   }, { ...resources, ...(early.value.dispatchId ? { dispatchId: early.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
 
-  const providerMode = input.startMode !== 'exact_terminal_worktree';
+  const providerMode = profile.route === 'provider_new_top_level';
   const prepared = await checkpoint('worktree_prepare', timings, deps.now, () => deps.prepareWorktree({
     repository: resources.repository,
     ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
@@ -430,12 +481,12 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.env ? { env: { ...input.env } } : {}),
     cwd: input.cwd,
     ...(providerMode ? {} : { adapter: deps.adapter }),
-    mode: providerMode ? 'provider_new_top_level' : 'exact_terminal_worktree',
+    mode: profile.route,
     role: input.workClass === 'manager' ? 'orchestrator' : 'worker',
     orcaArgs: providerMode
       ? ['--task', taskId, '--worktree', 'new-top-level', '--repo', prepared.value.repositorySelector ?? '',
         '--name', input.worktreeName ?? '', ...(input.baseBranch ? ['--base-branch', input.baseBranch] : []),
-        '--agent', profile.orcaAgent, '--model', profile.modelId, '--setup', 'run', '--json']
+        ...(profile.providerArgs ?? []), '--setup', 'run', '--json']
       : ['--task', taskId, '--terminal', terminal!.identity.id, '--worktree', prepared.value.selector],
   });
   const startDone = deps.now();
@@ -449,12 +500,8 @@ export async function runSupervisedTaskLaunchAssistant(
 
   if (!supervised.ok || supervised.reason !== 'ready_and_assignment_bound' || !supervised.assignment) {
     const requestId = supervised.recovery?.requestId;
-    const recoveryCommand = supervised.recovery?.recoveryCommand;
     const receiptDispatchId = text(supervised.receipt?.dispatchId);
-    const providerEvidence = {
-      ...(supervised.receipt ? { receipt: supervised.receipt } : {}),
-      ...(supervised.residualResources ? { residualResources: supervised.residualResources } : {}),
-    };
+    const safeDispatchId = receiptDispatchId || supervised.recovery?.dispatchId;
     const retry = requestId ? [
       'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2-foundation/supervised-worker-start.ts --',
       ...(input.issueNumber ? ['--issue-number', String(input.issueNumber)] : []),
@@ -463,7 +510,7 @@ export async function runSupervisedTaskLaunchAssistant(
       ...(providerMode
         ? ['--worktree', 'new-top-level', '--repo', quote(prepared.value.repositorySelector ?? ''), '--name', quote(input.worktreeName ?? ''),
           ...(input.baseBranch ? ['--base-branch', quote(input.baseBranch)] : []),
-          '--agent', 'cursor', '--model', quote(profile.modelId), '--setup', 'run']
+          ...retryProviderArgs(profile), '--setup', 'run']
         : ['--terminal', quote(terminal!.identity.id), '--worktree', quote(prepared.value.selector)]),
       '--retry-request', quote(requestId),
     ].join(' ') : undefined;
@@ -473,26 +520,17 @@ export async function runSupervisedTaskLaunchAssistant(
       evidence: {
         ...(supervised.errorCode ? { errorCode: supervised.errorCode } : {}),
         ...(requestId ? { requestId } : {}),
-        ...(receiptDispatchId || supervised.recovery?.dispatchId
-          ? { dispatchId: receiptDispatchId || supervised.recovery?.dispatchId } : {}),
-        ...(recoveryCommand ? { recoveryCommand } : {}),
-        ...(supervised.errorMessage ? { errorMessage: supervised.errorMessage } : {}),
-        ...(supervised.nextSteps ? { nextSteps: supervised.nextSteps } : {}),
-        ...providerEvidence,
+        ...(safeDispatchId ? { dispatchId: safeDispatchId } : {}),
       },
       nextAction: requestId ? {
         kind: 'retry_supervised_start', requestId, command: retry,
-        ...(recoveryCommand ? { recoveryCommand } : {}),
       } : {
         kind: 'reconcile_supervised_start',
-        ...(recoveryCommand ? { recoveryCommand } : {}),
         note: 'reconcile the non-ready start; never fall through to a fresh mutation',
       },
     }, {
       ...resources,
-      ...(receiptDispatchId || supervised.recovery?.dispatchId
-        ? { dispatchId: receiptDispatchId || supervised.recovery?.dispatchId } : {}),
-      ...providerEvidence,
+      ...(safeDispatchId ? { dispatchId: safeDispatchId } : {}),
     }, startedAtMs, timings, deps.now);
   }
 
@@ -540,7 +578,7 @@ export async function runSupervisedTaskLaunchAssistant(
     outcome: 'ready',
     workClass: input.workClass,
     resources: readyResources,
-    supervisedStart: supervised as ReadyResult['supervisedStart'],
+    supervisedStart: { ok: true, reason: 'ready_and_assignment_bound', assignmentBound: true },
     startedAtMs,
     finishedAtMs,
     elapsedMs: Math.max(0, finishedAtMs - startedAtMs),
@@ -564,33 +602,72 @@ async function child(
   return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error };
 }
 
+function routeRefusalEdge(
+  profile: SemanticExecutorProfile,
+  cause: string,
+): EdgeResult<ExecutorProfile> {
+  return {
+    status: 'continue', cause, actor: 'operator',
+    evidence: { executorFamily: profile.family, profileVariables: profile.names },
+    nextAction: { kind: 'repair_executor_profile', note: 'select an executor route whose model and effort channels are proven' },
+  };
+}
+
 export async function resolveLiveExecutorProfile(
   workClass: LaunchWorkClass,
   inheritedEnv: Readonly<NodeJS.ProcessEnv>,
+  startMode: WorkerStartMode | undefined,
   execute: ChildExecutor,
 ): Promise<EdgeResult<ExecutorProfile>> {
-  const resolved = resolveExecutorProfile(workClass, inheritedEnv);
-  if (resolved.status !== 'ok') return resolved;
-  const listed = await execute(['cursor-agent', '--list-models']);
-  if (!listed.ok || !cursorModelListContains(listed.stdout, resolved.value.modelId)) return {
-    status: 'continue',
-    cause: listed.ok ? 'executor_profile_model_unavailable' : 'executor_profile_applicability_unproven',
-    actor: 'operator',
-    evidence: { profileVariables: resolved.value.names },
-    nextAction: { kind: 'repair_executor_profile', note: 'select a model/effort combination present in cursor-agent --list-models' },
+  const semanticEdge = profileResolutionEdge(workClass, inheritedEnv);
+  if (semanticEdge.status !== 'ok') return semanticEdge;
+  const profile = semanticEdge.value;
+  if (!supportedStartMode(startMode)) return routeRefusalEdge(profile, 'executor_route_mismatch');
+
+  const descriptor = EXECUTOR_FAMILY_DESCRIPTORS[profile.family];
+  const listed = await execute(descriptor.catalogCommand);
+  if (!listed.ok) return {
+    status: 'continue', cause: 'executor_profile_applicability_unproven', actor: 'operator',
+    evidence: { executorFamily: profile.family, profileVariables: profile.names },
+    nextAction: { kind: 'repair_executor_profile', note: 'make the selected executor model catalog observable and select an available model' },
   };
+  if (!executorCatalogContains(profile, listed.stdout)) return {
+    status: 'continue', cause: 'executor_profile_model_unavailable', actor: 'operator',
+    evidence: { executorFamily: profile.family, profileVariables: profile.names },
+    nextAction: { kind: 'repair_executor_profile', note: 'select a model present in the selected executor model catalog' },
+  };
+
+  let capabilities = CURSOR_TASK_ROUTE_CAPABILITIES;
+  if (profile.family === 'opencode') {
+    const probeOutputs: string[] = [];
+    for (const probe of descriptor.capabilityProbeCommands) {
+      const observation = await execute(probe);
+      if (!observation.ok) return routeRefusalEdge(profile, 'executor_route_unavailable');
+      probeOutputs.push(observation.stdout);
+    }
+    capabilities = openCodeEdgeCapabilities(probeOutputs);
+  }
+
+  const verdict = evaluateExecutorRouteAdmission({
+    profile,
+    ...(startMode ? { startMode } : {}),
+    edgeCapabilities: capabilities,
+  });
+  if (!verdict.ok) return routeRefusalEdge(profile, verdict.refusal);
+
   const inherited = await execute([
     process.execPath,
     '--input-type=module',
     '-e',
     'const n=process.argv.slice(1);process.exit(n.every((k)=>typeof process.env[k]==="string"&&process.env[k].trim())?0:1)',
-    ...resolved.value.names,
+    ...profile.names,
   ]);
-  return inherited.ok ? resolved : {
+  if (!inherited.ok) return {
     status: 'continue', cause: 'executor_profile_child_inheritance_unproven', actor: 'operator',
-    evidence: { profileVariables: resolved.value.names },
+    evidence: { executorFamily: profile.family, profileVariables: profile.names },
     nextAction: { kind: 'repair_executor_profile', note: 'export the selected stable profile variables into the launching process' },
   };
+  return admittedProfile(profile, verdict.route);
 }
 
 function envelope(execution: ChildResult): Record<string, unknown> | null {
@@ -829,9 +906,10 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       };
       return { status: 'ok', value: true };
     },
-    resolveProfile: (workClass, inheritedEnv) => resolveLiveExecutorProfile(
+    resolveProfile: (workClass, inheritedEnv, startMode) => resolveLiveExecutorProfile(
       workClass,
       inheritedEnv,
+      startMode,
       (args, timeoutMs) => child(args, cwd, inheritedEnv, timeoutMs),
     ),
     observeManagerRun: async (runId) => {
