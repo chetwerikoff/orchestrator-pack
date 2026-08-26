@@ -1,8 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseRemoteSlug, RESOLVER_GIT_ARGV } from './git-origin-slug.mjs';
-import { WRAPPER_PATH } from './gh-resolve-real-binary.mjs';
 
 export { RESOLVER_GIT_ARGV };
 
@@ -217,9 +216,7 @@ export function ghApiJson(realGh, endpoint, options = {}) {
   const result = spawnSync(realGh, args, {
     cwd: options.cwd ?? process.cwd(),
     encoding: 'utf8',
-    env: resolve(realGh) === resolve(WRAPPER_PATH)
-      ? { ...process.env, ...(options.hostname ? { GH_HOST: options.hostname } : {}) }
-      : { ...process.env, ...(options.hostname ? { GH_HOST: options.hostname } : {}), GH_WRAPPER_ACTIVE: '1' },
+    env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
     maxBuffer: 50 * 1024 * 1024,
   });
   const parsed = splitGhApiIncludeOutput(result.stdout);

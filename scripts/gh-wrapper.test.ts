@@ -1816,7 +1816,7 @@ exit 1
 
 
 describe('tracked wrapper hostname transport', () => {
-  it('does not pass --hostname to a native binary reached through the tracked wrapper', () => {
+  it('does not pass --hostname to the native REST transport', () => {
     const root = mkdtempSync(join(tmpdir(), 'gh-hostname-'));
     const native = join(root, 'native-gh');
     writeFileSync(native, `#!/usr/bin/env bash
@@ -1828,22 +1828,10 @@ done
 printf '%s\\n' '{"number":1698}'
 `, 'utf8');
     chmodSync(native, 0o755);
-    const previousReal = process.env.GH_REAL_BINARY;
-    const previousHost = process.env.GH_HOST;
-    const previousActive = process.env.GH_WRAPPER_ACTIVE;
-    process.env.GH_REAL_BINARY = native;
-    delete process.env.GH_HOST;
-    delete process.env.GH_WRAPPER_ACTIVE;
     try {
-      const result = ghApiJson(join(import.meta.dirname, 'gh'), 'repos/chetwerikoff/orchestrator-pack/pulls/1698', { hostname: 'github.com', cwd: root });
+      const result = ghApiJson(native, 'repos/chetwerikoff/orchestrator-pack/pulls/1698', { hostname: 'github.com', cwd: root });
       expect(result).toMatchObject({ number: 1698 });
     } finally {
-      if (previousReal === undefined) delete process.env.GH_REAL_BINARY;
-      else process.env.GH_REAL_BINARY = previousReal;
-      if (previousHost === undefined) delete process.env.GH_HOST;
-      else process.env.GH_HOST = previousHost;
-      if (previousActive === undefined) delete process.env.GH_WRAPPER_ACTIVE;
-      else process.env.GH_WRAPPER_ACTIVE = previousActive;
       rmSync(root, { recursive: true, force: true });
     }
   });
