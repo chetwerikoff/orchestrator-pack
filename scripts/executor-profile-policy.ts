@@ -53,6 +53,7 @@ export interface RouteCapability {
   readonly supportsModel: boolean;
   readonly supportsEffort: boolean;
   readonly smokeRuntimeAvailable?: boolean;
+  readonly supportedEffortsByModel?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface ExecutorEdgeCapabilities {
@@ -116,6 +117,7 @@ export const EXECUTOR_FAMILY_DESCRIPTORS: Readonly<Record<ExecutorFamily, Execut
       ['opencode', 'debug', '--help'],
       ['opencode', 'debug', 'agent', '--help'],
       ['opencode', 'debug', 'config', '--help'],
+      ['opencode', 'models', '--verbose'],
     ],
     smokeCapabilityProbeCommands: [
       ['opencode', '--help'],
@@ -145,6 +147,10 @@ function quote(value: string): string {
 
 function regexEscape(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function descriptorForToken(surface: ExecutorProfileSurface, token: string): ExecutorFamilyDescriptor | undefined {
@@ -204,6 +210,64 @@ export function executorCatalogContains(profile: SemanticExecutorProfile, output
   return pattern.test(output);
 }
 
+function jsonObjectAt(output: string, start: number): Record<string, unknown> | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < output.length; index += 1) {
+    const char = output[index]!;
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') depth += 1;
+    if (char !== '}') continue;
+    depth -= 1;
+    if (depth !== 0) continue;
+    try {
+      const parsed: unknown = JSON.parse(output.slice(start, index + 1));
+      return record(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function variantNames(metadata: Record<string, unknown>): readonly string[] {
+  const variants = metadata.variants;
+  if (record(variants)) return Object.keys(variants).filter((name) => PROFILE_VALUE_PATTERN.test(name));
+  if (Array.isArray(variants)) return variants
+    .map((value) => record(value) && typeof value.id === 'string' ? value.id.trim() : '')
+    .filter((name) => PROFILE_VALUE_PATTERN.test(name));
+  return [];
+}
+
+export function openCodeVariantCatalog(output: string): Readonly<Record<string, readonly string[]>> {
+  const result: Record<string, readonly string[]> = {};
+  const identityLines = /^([A-Za-z0-9][A-Za-z0-9._:/+-]*)\r?$/gmu;
+  for (const match of output.matchAll(identityLines)) {
+    const identity = match[1]!;
+    let cursor = (match.index ?? 0) + match[0].length;
+    while (cursor < output.length && /\s/u.test(output[cursor]!)) cursor += 1;
+    if (output[cursor] !== '{') continue;
+    const metadata = jsonObjectAt(output, cursor);
+    if (!metadata) continue;
+    result[identity] = variantNames(metadata);
+  }
+  return result;
+}
+
 export function openCodeTuiCapability(tuiHelp: string): RouteCapability {
   const tuiHasModel = /(^|\s)--model(?:[=\s,]|$)/mu.test(tuiHelp);
   const tuiHasVariant = /(^|\s)--variant(?:[=\s,]|$)/mu.test(tuiHelp);
@@ -219,8 +283,12 @@ export function openCodeTuiCapability(tuiHelp: string): RouteCapability {
 }
 
 export function openCodeEdgeCapabilities(probeOutputs: readonly string[]): ExecutorEdgeCapabilities {
-  // capabilityProbeCommands fixes the TUI help observation at index 1.
-  const exactTerminal = openCodeTuiCapability(probeOutputs[1] ?? '');
+  // capabilityProbeCommands fixes the TUI help observation at index 1 and the
+  // fresh verbose model/variant catalog as the final observation.
+  const exactTerminal = {
+    ...openCodeTuiCapability(probeOutputs[1] ?? ''),
+    supportedEffortsByModel: openCodeVariantCatalog(probeOutputs.at(-1) ?? ''),
+  };
 
   // The provider path stays closed in this package revision unless the downstream
   // supervised-start validator is changed from fresh implementation-time evidence.
@@ -246,8 +314,15 @@ function routeCapability(capabilities: ExecutorEdgeCapabilities, route: Executor
   return route === 'provider_new_top_level' ? capabilities.provider : capabilities.exactTerminal;
 }
 
-function routeAdmitted(capability: RouteCapability): boolean {
-  return capability.available && capability.supportsModel && capability.supportsEffort;
+function routeSupportsSelectedEffort(capability: RouteCapability, profile: SemanticExecutorProfile): boolean {
+  if (!capability.supportsEffort) return false;
+  if (profile.family !== 'opencode') return true;
+  const supported = capability.supportedEffortsByModel?.[profile.model] ?? [];
+  return supported.includes(profile.effort);
+}
+
+function routeAdmitted(capability: RouteCapability, profile: SemanticExecutorProfile): boolean {
+  return capability.available && capability.supportsModel && routeSupportsSelectedEffort(capability, profile);
 }
 
 export function evaluateExecutorRouteAdmission(input: {
@@ -255,14 +330,14 @@ export function evaluateExecutorRouteAdmission(input: {
   readonly startMode?: ExecutorRoute;
   readonly edgeCapabilities: ExecutorEdgeCapabilities;
 }): RouteAdmissionVerdict {
-  const providerAdmitted = routeAdmitted(input.edgeCapabilities.provider);
-  const exactAdmitted = routeAdmitted(input.edgeCapabilities.exactTerminal);
+  const providerAdmitted = routeAdmitted(input.edgeCapabilities.provider, input.profile);
+  const exactAdmitted = routeAdmitted(input.edgeCapabilities.exactTerminal, input.profile);
 
   if (input.startMode) {
     const requested = routeCapability(input.edgeCapabilities, input.startMode);
-    if (routeAdmitted(requested)) return { ok: true, route: input.startMode };
+    if (routeAdmitted(requested, input.profile)) return { ok: true, route: input.startMode };
     if (providerAdmitted || exactAdmitted) return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.routeMismatch };
-    if (requested.available && requested.supportsModel && !requested.supportsEffort) {
+    if (requested.available && requested.supportsModel && !routeSupportsSelectedEffort(requested, input.profile)) {
       return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.effortChannelUnavailable };
     }
     return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.routeUnavailable };
@@ -277,7 +352,7 @@ export function evaluateExecutorRouteAdmission(input: {
   if (exactAdmitted) return { ok: true, route: 'exact_terminal_worktree' };
 
   const effortMissing = [input.edgeCapabilities.provider, input.edgeCapabilities.exactTerminal]
-    .some((capability) => capability.available && capability.supportsModel && !capability.supportsEffort);
+    .some((capability) => capability.available && capability.supportsModel && !routeSupportsSelectedEffort(capability, input.profile));
   return effortMissing
     ? { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.effortChannelUnavailable }
     : { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.routeUnavailable };
