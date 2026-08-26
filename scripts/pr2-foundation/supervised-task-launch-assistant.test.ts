@@ -180,7 +180,7 @@ function opencodeProbeResult(args: readonly string[], variant = true): { ok: boo
     };
   }
   if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n' };
-  if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
+  if (args[0] === 'opencode' && args.includes('--help')) {
     return { ok: true, stdout: variant ? 'Usage: opencode --model MODEL --variant NAME\n' : 'Usage: opencode --model MODEL\n' };
   }
   if (args[0] === 'orca' || args[0] === 'opencode') return { ok: true, stdout: 'supported help surface\n' };
@@ -307,7 +307,7 @@ describe('supervised Task launch assistant', () => {
     const admittedCalls: string[][] = [];
     const admitted = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => {
       admittedCalls.push([...args]);
-      if (args[0] === 'orca' || args[1] === 'run' || args[1] === 'debug') return { ok: false, stdout: '' };
+      if (args[0] === 'orca') return { ok: false, stdout: '' };
       return opencodeProbeResult(args, true);
     });
     expect(admitted).toMatchObject({
@@ -319,9 +319,9 @@ describe('supervised Task launch assistant', () => {
       },
     });
     expect(admittedCalls[0]).toEqual(['opencode', 'models']);
-    expect(admittedCalls).toContainEqual(['opencode', '--help']);
+    expect(admittedCalls).toContainEqual(['opencode', 'run', '--help']);
     expect(admittedCalls).toContainEqual(['opencode', 'models', '--verbose']);
-    expect(admittedCalls.some((args) => args[0] === 'orca' || args[1] === 'run' || args[1] === 'debug')).toBe(false);
+    expect(admittedCalls.some((args) => args[0] === 'orca')).toBe(false);
 
     const unsupportedEffort = await resolveLiveExecutorProfile('t2', {
       ...env,
@@ -357,7 +357,7 @@ describe('supervised Task launch assistant', () => {
         env,
         startMode,
         async (args) => {
-          if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
+          if (args[0] === 'opencode' && args.includes('--help')) {
             return { ok: true, stdout: 'Usage: opencode --variant NAME\n' };
           }
           return opencodeProbeResult(args, true);

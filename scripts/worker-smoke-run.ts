@@ -198,7 +198,7 @@ export function resolveLiveSmokeExecutorProfile(
     for (const probe of descriptor.capabilityProbeCommands) {
       const result = execute(probe);
       if (!result.ok) throw new Error('executor_route_unavailable');
-      observations.push(result.stdout);
+      observations.push(`${result.stdout}\n${(result as { stderr?: string }).stderr ?? ''}`);
     }
     const edgeCapabilities = openCodeEdgeCapabilities(observations);
     const routeVerdict = evaluateExecutorRouteAdmission({

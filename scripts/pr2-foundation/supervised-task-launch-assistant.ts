@@ -643,7 +643,7 @@ export async function resolveLiveExecutorProfile(
     for (const probe of descriptor.capabilityProbeCommands) {
       const observation = await execute(probe);
       if (!observation.ok) return routeRefusalEdge(profile, 'executor_route_unavailable');
-      probeOutputs.push(observation.stdout);
+      probeOutputs.push(`${observation.stdout}\n${(observation as { stderr?: string }).stderr ?? ''}`);
     }
     capabilities = openCodeEdgeCapabilities(probeOutputs);
   }

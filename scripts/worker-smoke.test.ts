@@ -240,7 +240,7 @@ describe('smoke executor profiles', () => {
         };
       }
       if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n' };
-      if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
+      if (args[0] === 'opencode' && args.includes('--help')) {
         return { ok: true, stdout: 'Usage: opencode --model MODEL --variant NAME\n' };
       }
       if (args[0] === process.execPath) return { ok: true, stdout: '' };
@@ -253,7 +253,7 @@ describe('smoke executor profiles', () => {
       command: "opencode --model 'fixture-opencode-model' --variant 'fixture-opencode-effort'",
     });
     expect(calls[0]).toEqual(['opencode', 'models']);
-    expect(calls).toContainEqual(['opencode', '--help']);
+    expect(calls).toContainEqual(['opencode', 'run', '--help']);
     expect(calls).toContainEqual(['opencode', 'models', '--verbose']);
     expect(calls.some((args) => args[0] === process.execPath)).toBe(true);
   });
@@ -303,7 +303,7 @@ describe('smoke executor profiles', () => {
           if (args[0] === 'opencode' && args[1] === 'models') {
             return { ok: true, stdout: 'fixture-opencode-model\n' };
           }
-          if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
+          if (args[0] === 'opencode' && args.includes('--help')) {
             return { ok: true, stdout: 'Usage: opencode --model MODEL --variant NAME\n' };
           }
           if (args[0] === process.execPath) return { ok: true, stdout: '' };
@@ -343,7 +343,7 @@ describe('smoke executor profiles', () => {
         };
       }
       if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n' };
-      if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') return { ok: true, stdout: '--model MODEL\n' };
+      if (args[0] === 'opencode' && args.includes('--help')) return { ok: true, stdout: '--model MODEL\n' };
       return { ok: true, stdout: 'supported help surface\n' };
     })).toThrow('executor_effort_channel_unavailable');
 

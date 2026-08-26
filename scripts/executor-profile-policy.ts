@@ -111,11 +111,11 @@ export const EXECUTOR_FAMILY_DESCRIPTORS: Readonly<Record<ExecutorFamily, Execut
     orcaAgent: 'opencode',
     catalogCommand: ['opencode', 'models'],
     capabilityProbeCommands: [
-      ['opencode', '--help'],
+      ['opencode', 'run', '--help'],
       ['opencode', 'models', '--verbose'],
     ],
     smokeCapabilityProbeCommands: [
-      ['opencode', '--help'],
+      ['opencode', 'run', '--help'],
     ],
   },
 };
