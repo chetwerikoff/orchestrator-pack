@@ -23,8 +23,6 @@ export interface ResolvePublishedAuthorStateOptions {
   repo: string;
   issueNumber: number;
   comments: readonly PublishedAuthorStateComment[];
-  requireCanonicalIdentity?: boolean;
-  requireUnedited?: boolean;
   errorStyle?: 'final-acceptance' | 'artifacts';
 }
 
@@ -49,18 +47,6 @@ export function resolvePublishedAuthorState(
   const commentUrl = comment?.htmlUrl ?? verdictUrl;
   if (!comment) {
     errors.push('operator verdict URL hint does not identify a published Issue comment in authoritative census');
-    return { errors };
-  }
-  if (options.requireCanonicalIdentity) {
-    const expectedCommentUrl = `https://github.com/${repo}/issues/${issueNumber}#issuecomment-${comment.id}`;
-    const expectedIssueUrl = `https://api.github.com/repos/${repo}/issues/${issueNumber}`;
-    if (comment.htmlUrl !== expectedCommentUrl || comment.issueUrl !== expectedIssueUrl) {
-      errors.push('operator verdict URL hint does not identify a published Issue comment in authoritative census');
-      return { errors };
-    }
-  }
-  if (options.requireUnedited && comment.createdAt !== comment.updatedAt) {
-    errors.push(`authoritative GitHub artifact was edited: ${commentUrl}`);
     return { errors };
   }
   if (!/^m3-protected:/im.test(comment.body)) return { errors };

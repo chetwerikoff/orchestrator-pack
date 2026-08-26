@@ -1938,8 +1938,21 @@ export function produceAcceptanceArtifacts(
         ? authoritativeIssueCommentCensus(artifactSourceTransport, repositoryFullName, issueNumber, errors)
         : null;
       if (census) {
+        const publishedComment = operatorHint
+          ? census.comments.find((candidate) => (
+              candidate.id === operatorHint.commentId
+              && candidate.htmlUrl === operatorHint.commentUrl
+              && commentTargetsExpectedIssue(candidate, census.repositoryFullName, census.issueNumber)
+            ))
+          : undefined;
+        if (operatorHint && !publishedComment) {
+          errors.push('operator verdict URL hint does not identify a published Issue comment in authoritative census');
+        }
+        if (publishedComment && publishedComment.createdAt !== publishedComment.updatedAt) {
+          errors.push(`authoritative GitHub artifact was edited: ${publishedComment.htmlUrl}`);
+        }
         const publishedAuthorStateResult = resolvePublishedAuthorState({
-          adjudication: operatorHint
+          adjudication: operatorHint && publishedComment
             ? {
                 issueNumber: operatorHint.issueNumber,
                 sourceRevision: operatorHint.sourceRevision,
@@ -1950,9 +1963,7 @@ export function produceAcceptanceArtifacts(
             : undefined,
           repo: census.repositoryFullName,
           issueNumber: census.issueNumber,
-          comments: census.comments,
-          requireCanonicalIdentity: true,
-          requireUnedited: true,
+          comments: publishedComment ? [publishedComment] : [],
           errorStyle: 'artifacts',
         });
         errors.push(...publishedAuthorStateResult.errors);
