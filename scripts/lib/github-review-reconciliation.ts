@@ -668,7 +668,7 @@ export function createGithubReviewTransport(options: CreateGithubReviewTransport
     async postReview(input) {
       const request = `${JSON.stringify({ commit_id: input.commitId, event: input.event, body: input.body })}\n`;
       const result = await runProcess({
-        command: trackedGh,
+        command: 'gh',
         args: ['api', '--method', 'POST', `repos/${options.repoSlug}/pulls/${options.prNumber}/reviews`, '--input', '-'],
         input: request,
         cwd: options.repoRoot,
@@ -704,7 +704,7 @@ export function createGithubReviewTransport(options: CreateGithubReviewTransport
         event: 'DISMISS',
       })}\n`;
       const result = await runProcess({
-        command: trackedGh,
+        command: 'gh',
         args: [
           'api',
           '--method', 'PUT',

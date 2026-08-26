@@ -71,7 +71,6 @@ $transportRoots = @(
     (Join-Path $Root 'scripts/lib/pack-gpt-reviewer.ts'),
     (Join-Path $Root 'scripts/pack-review-runner.ts'),
     (Join-Path $Root 'scripts/lib/pack-gpt-source-comment.ts'),
-    (Join-Path $Root 'scripts/lib/github-review-reconciliation.ts'),
     (Join-Path $Root 'scripts/lib/worker-smoke-core-base.ts'),
     (Join-Path $Root 'scripts/invoke-reviewer-contract-mapping.ts'),
     (Join-Path $Root 'plugins/codex-pr-reviewer/lib/scope_context.ts')
@@ -86,6 +85,27 @@ foreach ($file in $ruleSurfaceRoots) {
 }
 foreach ($file in $transportRoots) {
     $violations += Invoke-GhInventoryGuard -FilePath $file -Mode 'transport'
+}
+
+# github-review-reconciliation is a mixed surface: Issue #1623 binds its actor/review
+# reads to tracked scripts/gh but explicitly leaves the existing POST/PUT write
+# semantics unchanged. Any additional ambient selector therefore fails the guard.
+$reconciliationPath = Join-Path $Root 'scripts/lib/github-review-reconciliation.ts'
+if (Test-Path -LiteralPath $reconciliationPath -PathType Leaf) {
+    $reconciliationText = Get-Content -LiteralPath $reconciliationPath -Raw
+    $ambientPattern = '(?m)\b(?:command\s*:\s*[''\"]gh[''\"]|execFileSync\s*\(\s*[''\"]gh[''\"]|execFile\s*\(\s*[''\"]gh[''\"]|spawnSync\s*\(\s*[''\"]gh[''\"]|spawn\s*\(\s*[''\"]gh[''\"]|ghApiJson\s*\(\s*[''\"]gh[''\"])'
+    $postWritePattern = '(?s)command\s*:\s*[''\"]gh[''\"].{0,240}?args\s*:\s*\[\s*[''\"]api[''\"]\s*,\s*[''\"]--method[''\"]\s*,\s*[''\"]POST[''\"].{0,240}?repos/\$\{options\.repoSlug\}/pulls/\$\{options\.prNumber\}/reviews'
+    $dismissWritePattern = '(?s)command\s*:\s*[''\"]gh[''\"].{0,320}?[''\"]--method[''\"]\s*,\s*[''\"]PUT[''\"].{0,320}?repos/\$\{options\.repoSlug\}/pulls/\$\{options\.prNumber\}/reviews/\$\{reviewId\}/dismissals'
+    $ambientCount = [regex]::Matches($reconciliationText, $ambientPattern).Count
+    $postWriteCount = [regex]::Matches($reconciliationText, $postWritePattern).Count
+    $dismissWriteCount = [regex]::Matches($reconciliationText, $dismissWritePattern).Count
+    if ($ambientCount -ne 2 -or $postWriteCount -ne 1 -or $dismissWriteCount -ne 1) {
+        $violations += [pscustomobject]@{
+            file = $reconciliationPath
+            command = 'ambient gh executable selection outside the existing review POST/PUT write paths'
+            line = "ambient=$ambientCount post=$postWriteCount dismiss=$dismissWriteCount"
+        }
+    }
 }
 
 # worker-smoke-run is a mixed surface: Issue #1623 binds reads to tracked scripts/gh
