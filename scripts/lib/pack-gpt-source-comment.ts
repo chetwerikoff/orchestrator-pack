@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { runProcess } from '../kernel/subprocess.ts';
 import { createGithubReviewTransport, requireProcess } from './github-review-reconciliation.ts';
+import { resolveTrackedGhWrapper } from './gh-resolve-real-binary.mjs';
 import { mapGptReplyToReviewPayload, type GptMappedReviewPayload } from './pack-gpt-reviewer.ts';
 import {
   parsePackGptSourceCommentEnvelope,
@@ -81,46 +82,40 @@ export function createPackGptSourceCommentTransport(options: {
   repoSlug: string;
   prNumber: number;
 }): PackGptSourceCommentTransport {
+  const trackedGh = resolveTrackedGhWrapper();
   const actorTransport = createGithubReviewTransport({
     repoRoot: options.repoRoot,
     repoSlug: options.repoSlug,
     prNumber: options.prNumber,
   });
+  const listComments = async (): Promise<PackGptSourceGithubComment[]> => {
+    const result = await runProcess({
+      command: trackedGh,
+      args: [
+        'api',
+        '--paginate',
+        '--slurp',
+        `repos/${options.repoSlug}/issues/${options.prNumber}/comments`,
+        '-H', 'Accept: application/vnd.github+json',
+      ],
+      cwd: options.repoRoot,
+      inheritParentEnv: true,
+      allowEmptyStdout: false,
+      timeoutMs: 30_000,
+    });
+    const stdout = await requireProcess(result, `gh source-comment census PR #${options.prNumber}`);
+    return flattenPaginatedComments(JSON.parse(stdout)).map(normalizeComment);
+  };
   return {
     resolveActorLogin: () => actorTransport.resolveActorLogin(),
-    listComments: async () => {
-      const result = await runProcess({
-        command: 'gh',
-        args: [
-          'api',
-          '--paginate',
-          '--slurp',
-          `repos/${options.repoSlug}/issues/${options.prNumber}/comments`,
-          '-H', 'Accept: application/vnd.github+json',
-        ],
-        cwd: options.repoRoot,
-        inheritParentEnv: true,
-        allowEmptyStdout: false,
-        timeoutMs: 30_000,
-      });
-      const stdout = await requireProcess(result, `gh source-comment census PR #${options.prNumber}`);
-      return flattenPaginatedComments(JSON.parse(stdout)).map(normalizeComment);
-    },
+    listComments,
     getComment: async (id) => {
-      const result = await runProcess({
-        command: 'gh',
-        args: [
-          'api',
-          `repos/${options.repoSlug}/issues/comments/${String(id)}`,
-          '-H', 'Accept: application/vnd.github+json',
-        ],
-        cwd: options.repoRoot,
-        inheritParentEnv: true,
-        allowEmptyStdout: false,
-        timeoutMs: 30_000,
-      });
-      const stdout = await requireProcess(result, `gh source-comment reread ${String(id)}`);
-      return normalizeComment(JSON.parse(stdout));
+      const census = await listComments();
+      const matches = census.filter((comment) => comment.id === id);
+      if (matches.length !== 1) {
+        throw new Error(`gh source-comment reread ${String(id)} returned ${matches.length} exact id matches`);
+      }
+      return matches[0]!;
     },
   };
 }
