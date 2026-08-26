@@ -1,7 +1,8 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseRemoteSlug, RESOLVER_GIT_ARGV } from './git-origin-slug.mjs';
+import { WRAPPER_PATH } from './gh-resolve-real-binary.mjs';
 
 export { RESOLVER_GIT_ARGV };
 
@@ -213,13 +214,12 @@ export function consumeGhApiRateLimitHeaders() {
  */
 export function ghApiJson(realGh, endpoint, options = {}) {
   const args = ['api', endpoint, '--include'];
-  if (options.hostname) {
-    args.unshift('--hostname', options.hostname);
-  }
   const result = spawnSync(realGh, args, {
     cwd: options.cwd ?? process.cwd(),
     encoding: 'utf8',
-    env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
+    env: resolve(realGh) === resolve(WRAPPER_PATH)
+      ? { ...process.env, ...(options.hostname ? { GH_HOST: options.hostname } : {}) }
+      : { ...process.env, ...(options.hostname ? { GH_HOST: options.hostname } : {}), GH_WRAPPER_ACTIVE: '1' },
     maxBuffer: 50 * 1024 * 1024,
   });
   const parsed = splitGhApiIncludeOutput(result.stdout);
