@@ -35,13 +35,25 @@ function Test-TransportGuardFixtures {
     New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
     try {
         $ambientFixture = Join-Path $fixtureRoot 'ambient.ts'
+        $multilineAmbientFixture = Join-Path $fixtureRoot 'ambient-multiline.ts'
         $boundFixture = Join-Path $fixtureRoot 'bound.ts'
         Set-Content -LiteralPath $ambientFixture -Encoding UTF8 -NoNewline -Value "runProcess({ command: 'gh', args: ['pr', 'view', '1'] });"
+        Set-Content -LiteralPath $multilineAmbientFixture -Encoding UTF8 -NoNewline -Value @"
+runProcess({
+  command:
+    'gh',
+  args: ['pr', 'view', '1'],
+});
+"@
         Set-Content -LiteralPath $boundFixture -Encoding UTF8 -NoNewline -Value "const argv = ['gh', 'pr', 'view', '1']; runProcess({ command: resolveTrackedGhWrapper(), args: argv.slice(1) });"
 
         $ambient = @(Invoke-GhInventoryGuard -FilePath $ambientFixture -Mode 'transport')
         if ($ambient.Count -ne 1 -or $ambient[0].command -ne "command: 'gh'") {
             throw "transport guard negative fixture did not reject ambient gh exactly once"
+        }
+        $multilineAmbient = @(Invoke-GhInventoryGuard -FilePath $multilineAmbientFixture -Mode 'transport')
+        if ($multilineAmbient.Count -ne 1 -or $multilineAmbient[0].command -ne "command: 'gh'") {
+            throw "transport guard multiline negative fixture did not reject ambient gh exactly once"
         }
         $bound = @(Invoke-GhInventoryGuard -FilePath $boundFixture -Mode 'transport')
         if ($bound.Count -ne 0) {
@@ -73,7 +85,10 @@ $transportRoots = @(
     (Join-Path $Root 'scripts/lib/pack-gpt-source-comment.ts'),
     (Join-Path $Root 'scripts/lib/worker-smoke-core-base.ts'),
     (Join-Path $Root 'scripts/invoke-reviewer-contract-mapping.ts'),
-    (Join-Path $Root 'plugins/codex-pr-reviewer/lib/scope_context.ts')
+    (Join-Path $Root 'plugins/codex-pr-reviewer/lib/scope_context.ts'),
+    (Join-Path $Root 'scripts/lib/create-issue-stage-record-gh.ts'),
+    (Join-Path $Root 'scripts/publish-issue-body-sync.ts'),
+    (Join-Path $Root 'scripts/pr2-foundation/post-review-smoke.ts')
 )
 
 $violations = @()
@@ -115,7 +130,7 @@ if (Test-Path -LiteralPath $reconciliationPath -PathType Leaf) {
 $workerSmokePath = Join-Path $Root 'scripts/worker-smoke-run.ts'
 if (Test-Path -LiteralPath $workerSmokePath -PathType Leaf) {
     $workerSmokeText = Get-Content -LiteralPath $workerSmokePath -Raw
-    $ambientPattern = '(?m)\b(?:command\s*:\s*[''\"]gh[''\"]|execFileSync\s*\(\s*[''\"]gh[''\"]|execFile\s*\(\s*[''\"]gh[''\"]|spawnSync\s*\(\s*[''\"]gh[''\"]|spawn\s*\(\s*[''\"]gh[''\"]|ghApiJson\s*\(\s*[''\"]gh[''\"])'
+    $ambientPattern = '(?m)\b(?:command\s*:\s*[''\"]gh[''\"]|execFileSync\s*\(\s*[''\"]gh[''\"]|execFile\s*\(\s*[''\"]gh[''\"]|spawnSync\s*\(\s*[''\"]gh[''\"]|spawn\s*\s*\(\s*[''\"]gh[''\"]|ghApiJson\s*\(\s*[''\"]gh[''\"])'
     $knownWritePattern = '(?s)function\s+runSmokeGhWriteSync\s*\([^)]*\).*?command\s*:\s*[''\"]gh[''\"].*?\n\}'
     $knownPublishPattern = '(?s)export\s+function\s+publishPrComment\s*\([^)]*\).*?runSmokeGhWriteSync\s*\(\s*\[\s*[''\"]api[''\"].*?repos/\$\{TRUSTED_REPOSITORY_SLUG\}/issues/\$\{String\(prNumber\)\}/comments.*?--method[''\"]\s*,\s*[''\"]POST[''\"]'
     $ambientCount = [regex]::Matches($workerSmokeText, $ambientPattern).Count
