@@ -130,7 +130,7 @@ if (Test-Path -LiteralPath $reconciliationPath -PathType Leaf) {
 $workerSmokePath = Join-Path $Root 'scripts/worker-smoke-run.ts'
 if (Test-Path -LiteralPath $workerSmokePath -PathType Leaf) {
     $workerSmokeText = Get-Content -LiteralPath $workerSmokePath -Raw
-    $ambientPattern = '(?m)\b(?:command\s*:\s*[''\"]gh[''\"]|execFileSync\s*\(\s*[''\"]gh[''\"]|execFile\s*\(\s*[''\"]gh[''\"]|spawnSync\s*\(\s*[''\"]gh[''\"]|spawn\s*\s*\(\s*[''\"]gh[''\"]|ghApiJson\s*\(\s*[''\"]gh[''\"])'
+    $ambientPattern = '(?m)\b(?:command\s*:\s*[''\"]gh[''\"]|execFileSync\s*\(\s*[''\"]gh[''\"]|execFile\s*\(\s*[''\"]gh[''\"]|spawnSync\s*\(\s*[''\"]gh[''\"]|spawn\s*\(\s*[''\"]gh[''\"]|ghApiJson\s*\(\s*[''\"]gh[''\"])'
     $knownWritePattern = '(?s)function\s+runSmokeGhWriteSync\s*\([^)]*\).*?command\s*:\s*[''\"]gh[''\"].*?\n\}'
     $knownPublishPattern = '(?s)export\s+function\s+publishPrComment\s*\([^)]*\).*?runSmokeGhWriteSync\s*\(\s*\[\s*[''\"]api[''\"].*?repos/\$\{TRUSTED_REPOSITORY_SLUG\}/issues/\$\{String\(prNumber\)\}/comments.*?--method[''\"]\s*,\s*[''\"]POST[''\"]'
     $ambientCount = [regex]::Matches($workerSmokeText, $ambientPattern).Count
