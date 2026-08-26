@@ -30,6 +30,29 @@ function Invoke-GhInventoryGuard {
     }
 }
 
+function Test-TransportGuardFixtures {
+    $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("opk-gh-transport-guard-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
+    try {
+        $ambientFixture = Join-Path $fixtureRoot 'ambient.ts'
+        $boundFixture = Join-Path $fixtureRoot 'bound.ts'
+        Set-Content -LiteralPath $ambientFixture -Encoding UTF8 -NoNewline -Value "runProcess({ command: 'gh', args: ['pr', 'view', '1'] });"
+        Set-Content -LiteralPath $boundFixture -Encoding UTF8 -NoNewline -Value "const argv = ['gh', 'pr', 'view', '1']; runProcess({ command: resolveTrackedGhWrapper(), args: argv.slice(1) });"
+
+        $ambient = @(Invoke-GhInventoryGuard -FilePath $ambientFixture -Mode 'transport')
+        if ($ambient.Count -ne 1 -or $ambient[0].command -ne "command: 'gh'") {
+            throw "transport guard negative fixture did not reject ambient gh exactly once"
+        }
+        $bound = @(Invoke-GhInventoryGuard -FilePath $boundFixture -Mode 'transport')
+        if ($bound.Count -ne 0) {
+            throw "transport guard positive fixture rejected already-bound semantic gh argv"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $reconcileRoots = @(
     (Join-Path $Root 'scripts/lib/Gh-PrChecks.ps1'),
     (Join-Path $Root 'scripts/pr-scope-check.ps1'),
@@ -98,6 +121,8 @@ if ($violations.Count -gt 0) {
     }
     exit 1
 }
+
+Test-TransportGuardFixtures
 
 $inventoryOutput = & node $InventoryScript validate $Root 2>&1
 if ($LASTEXITCODE -ne 0) {
