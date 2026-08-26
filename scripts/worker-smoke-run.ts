@@ -322,6 +322,19 @@ export function runSmokeGhSync(
   });
 }
 
+function runSmokeGhWriteSync(
+  args: readonly string[],
+  cwd: string,
+  extraEnv: Readonly<NodeJS.ProcessEnv> = {},
+): ReturnType<typeof runProcessSync> {
+  return runProcessSync({
+    command: 'gh',
+    args: [...args],
+    cwd,
+    env: { ...buildSmokeGhChildEnv(), ...extraEnv },
+  });
+}
+
 function gitPorcelain(cwd: string): string[] {
   return requireProcessOutput('git status --porcelain', runProcessSync({
     command: 'git', args: ['status', '--porcelain'], cwd,
@@ -558,7 +571,7 @@ export function publishPrComment(prNumber: number, body: string, repoRoot: strin
   const bodyFile = join(tempDir, 'body.md');
   try {
     writeFileSync(bodyFile, JSON.stringify({ body }), 'utf8');
-    requireProcessOutput('gh api issue comment', runSmokeGhSync(
+    requireProcessOutput('gh api issue comment', runSmokeGhWriteSync(
       ['api', `repos/${TRUSTED_REPOSITORY_SLUG}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot,
     ));
   } finally {
