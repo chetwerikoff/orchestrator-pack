@@ -87,6 +87,17 @@ describe('Issue #1359 real worker-smoke entrypoint', () => {
         '',
       ].join('\n'), 'utf8');
 
+      const fakeCursorAgent = join(bin, 'cursor-agent');
+      writeFileSync(fakeCursorAgent, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.length === 1 && args[0] === '--list-models') {
+  process.stdout.write('fixture-routine-model-fixture-routine-effort\\n');
+} else {
+  process.exitCode = 2;
+}
+`, 'utf8');
+      chmodSync(fakeCursorAgent, 0o755);
+
       const fakeOrca = join(bin, 'orca');
       writeFileSync(fakeOrca, `#!/usr/bin/env node
 const { createHash } = require('node:crypto');
@@ -197,6 +208,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       ], {
         cwd: root,
         env: {
+          PATH: `${bin}:${process.env.PATH ?? ''}`,
           OPK_RUNTIME_CLI_COMMAND: fakeOrca,
           FAKE_ORCA_CALLS: callsPath,
           FAKE_ORCA_ROOT: root,
