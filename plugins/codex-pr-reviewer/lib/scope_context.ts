@@ -28,6 +28,14 @@ function shouldSkipGh(): boolean {
   return process.env.VITEST === 'true' || process.env.OPK_CODEX_REVIEW_SKIP_GH === '1';
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function reportTrackedGhTransportFailure(error: unknown): void {
+  process.stderr.write(`[codex-pr-reviewer] tracked GitHub transport unavailable: ${errorMessage(error)}\n`);
+}
+
 function readGhJsonBody(
   repoRoot: string,
   args: string[],
@@ -36,7 +44,14 @@ function readGhJsonBody(
     return null;
   }
 
-  const command = resolveTrackedGhWrapper();
+  let command: string;
+  try {
+    command = resolveTrackedGhWrapper();
+  } catch (error) {
+    reportTrackedGhTransportFailure(error);
+    return null;
+  }
+
   try {
     const output = execFileSync(command, args, {
       encoding: 'utf8',
@@ -45,7 +60,8 @@ function readGhJsonBody(
       timeout: GH_TIMEOUT_MS,
     });
     return JSON.parse(output) as Record<string, unknown>;
-  } catch {
+  } catch (error) {
+    reportTrackedGhTransportFailure(error);
     return null;
   }
 }
