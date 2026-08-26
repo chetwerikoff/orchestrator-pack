@@ -132,6 +132,7 @@ export interface SmokeAttemptDependencies {
     complexity: SmokeComplexity | string,
     env: Readonly<NodeJS.ProcessEnv>,
   ) => SmokeExecutorProfile;
+  readonly resolveIssueBody?: (options: CliOptions, suppliedIssueBody: string) => string;
 }
 
 interface SmokeChildResult {
@@ -1320,7 +1321,12 @@ export async function runSmokeAttempt(
   const suppliedTier = parseComplexityTierFence(suppliedIssueBody);
   if (smokeOrderingRequired(suppliedIssueBody) && suppliedTier.kind === 'tier-fence') {
     try {
-      issueBody = resolveSmokeTarget(options, suppliedIssueBody).issueBody;
+      const resolveIssueBody = dependencies.resolveIssueBody
+        ?? ((targetOptions: CliOptions, body: string) => resolveSmokeTarget(targetOptions, body).issueBody);
+      issueBody = resolveIssueBody(options, suppliedIssueBody);
+      if (typeof issueBody !== 'string') {
+        throw new Error('trusted_target: Issue body resolver returned a non-string value');
+      }
     } catch (error) {
       const report = operationalReport('BLOCKED', options, {
         action: 'bind smoke to trusted live Issue and PR',
