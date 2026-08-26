@@ -2,8 +2,8 @@
 <#
 .SYNOPSIS
   Static guard: GitHub read forms in pack scripts and agent-facing rule surfaces
-  are covered by the tracked REST inventory, and bounded production surfaces do
-  not select ambient gh as their executable.
+  are covered by the tracked REST inventory, and bounded production read surfaces
+  do not select ambient gh as their executable.
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -49,7 +49,6 @@ $transportRoots = @(
     (Join-Path $Root 'scripts/pack-review-runner.ts'),
     (Join-Path $Root 'scripts/lib/pack-gpt-source-comment.ts'),
     (Join-Path $Root 'scripts/lib/github-review-reconciliation.ts'),
-    (Join-Path $Root 'scripts/lib/pack-review-delivery.ts'),
     (Join-Path $Root 'scripts/worker-smoke-run.ts'),
     (Join-Path $Root 'scripts/lib/worker-smoke-core-base.ts'),
     (Join-Path $Root 'scripts/invoke-reviewer-contract-mapping.ts'),
@@ -65,6 +64,26 @@ foreach ($file in $ruleSurfaceRoots) {
 }
 foreach ($file in $transportRoots) {
     $violations += Invoke-GhInventoryGuard -FilePath $file -Mode 'transport'
+}
+
+# pack-review-delivery owns an existing explicit GitHub status POST. Issue #1623
+# does not authorize changing write-path behavior. Keep that one write selectable
+# through native gh, but fail if this mixed surface ever gains another ambient gh
+# executable selection (which would include a newly introduced read bypass).
+$deliveryPath = Join-Path $Root 'scripts/lib/pack-review-delivery.ts'
+if (Test-Path -LiteralPath $deliveryPath -PathType Leaf) {
+    $deliveryText = Get-Content -LiteralPath $deliveryPath -Raw
+    $ambientPattern = '(?m)\b(?:command\s*:\s*[''\"]gh[''\"]|execFileSync\s*\(\s*[''\"]gh[''\"]|execFile\s*\(\s*[''\"]gh[''\"]|spawnSync\s*\(\s*[''\"]gh[''\"]|spawn\s*\(\s*[''\"]gh[''\"]|ghApiJson\s*\(\s*[''\"]gh[''\"])'
+    $knownWritePattern = '(?s)command\s*:\s*[''\"]gh[''\"].{0,240}?args\s*:\s*\[\s*[''\"]api[''\"]\s*,\s*[''\"]--method[''\"]\s*,\s*[''\"]POST[''\"].{0,240}?repos/\$\{options\.repoSlug\}/statuses/\$\{options\.headSha\}'
+    $ambientCount = [regex]::Matches($deliveryText, $ambientPattern).Count
+    $knownWriteCount = [regex]::Matches($deliveryText, $knownWritePattern).Count
+    if ($ambientCount -gt 0 -and ($ambientCount -ne 1 -or $knownWriteCount -ne 1)) {
+        $violations += [pscustomobject]@{
+            file = $deliveryPath
+            command = 'ambient gh executable selection outside the one explicit required-status POST write'
+            line = "ambient=$ambientCount knownWrite=$knownWriteCount"
+        }
+    }
 }
 
 if ($violations.Count -gt 0) {
