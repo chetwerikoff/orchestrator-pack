@@ -62,6 +62,15 @@ function profileEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
+function opencodeProfileEnv(workClass: LaunchInput['workClass'] = 't2'): NodeJS.ProcessEnv {
+  const prefix = workClass === 'manager' ? 'MANAGER' : workClass.toUpperCase();
+  return profileEnv({
+    [`PACK_EXECUTOR_${prefix}_AGENT`]: 'opencode',
+    [`PACK_EXECUTOR_${prefix}_MODEL`]: 'fixture-opencode-model',
+    [`PACK_EXECUTOR_${prefix}_EFFORT`]: 'fixture-opencode-effort',
+  });
+}
+
 function readyStart(taskId: string): SupervisedWorkerStartResult {
   return {
     ok: true,
@@ -97,6 +106,7 @@ function providerReadyStart(taskId: string): SupervisedWorkerStartResult {
         requested: { agent: 'cursor', model: 'model-medium' },
         effective: { agent: 'cursor', model: 'model-medium' },
       },
+      providerSentinel: 'RAW_RECEIPT_SENTINEL',
       effects: [
         { kind: 'worktree', action: 'created_top_level', id: 'orca-repo-1::/tmp/created-worktree' },
         { kind: 'setup', action: 'running', state: 'running' },
@@ -126,7 +136,7 @@ function deps(input: {
     adapter: input.adapter ?? runtimeAdapter(),
     commandPreflight: () => ({ status: 'ok', value: true }),
     repositoryPreflight: async () => ({ status: 'ok', value: true }),
-    resolveProfile: (workClass, env) => resolveExecutorProfile(workClass, env),
+    resolveProfile: (workClass, env, startMode) => resolveExecutorProfile(workClass, env, startMode),
     observeManagerRun: async () => input.managerRun ?? ({ status: 'ok', value: { runId: 'run-1' } }),
     proveManagerTaskMembership: async () => input.managerMembership ?? ({ status: 'ok', value: { taskId: 'task-1' } }),
     createManagerTask: async () => input.managerCreate ?? ({ status: 'ok', value: { taskId: 'task-created', status: 'ready' } }),
@@ -154,6 +164,16 @@ function repoListEnvelope(repos: readonly Record<string, unknown>[]): string {
   return okEnvelope({ repos });
 }
 
+function opencodeProbeResult(args: readonly string[], variant = true): { ok: boolean; stdout: string } {
+  if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n' };
+  if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
+    return { ok: true, stdout: variant ? 'Usage: opencode --model MODEL --variant NAME\n' : 'Usage: opencode --model MODEL\n' };
+  }
+  if (args[0] === 'orca' || args[0] === 'opencode') return { ok: true, stdout: 'supported help surface\n' };
+  if (args[0] === process.execPath) return { ok: true, stdout: '' };
+  return { ok: false, stdout: '' };
+}
+
 describe('supervised Task launch assistant', () => {
   it('uses exactly one provider worker-start composition without low-level worktree or RuntimeAdapter spawn', async () => {
     const calls: string[][] = [];
@@ -179,6 +199,10 @@ describe('supervised Task launch assistant', () => {
     if (result.outcome === 'ready') {
       expect(result.resources.providerAgentTerminalId).toBe('term-provider');
       expect(result.resources.terminal).toBeUndefined();
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain('RAW_RECEIPT_SENTINEL');
+      expect(serialized).not.toContain('model-medium');
+      expect(result.supervisedStart).toEqual({ ok: true, reason: 'ready_and_assignment_bound', assignmentBound: true });
     }
   });
 
@@ -224,7 +248,7 @@ describe('supervised Task launch assistant', () => {
     ['executor_profile_missing', { PACK_EXECUTOR_T2_MODEL: '' }],
     ['executor_profile_malformed', { PACK_EXECUTOR_T2_MODEL: 'model with spaces' }],
     ['executor_profile_agent_unsupported', { PACK_EXECUTOR_T2_AGENT: 'codex' }],
-    ['executor_profile_literal_cursor_unsupported', { PACK_EXECUTOR_T2_AGENT: 'cursor' }],
+    ['executor_profile_agent_unsupported', { PACK_EXECUTOR_T2_AGENT: 'cursor' }],
   ] as const)('rejects invalid executor profile before effects: %s', async (cause, overrides) => {
     let worktrees = 0; let spawns = 0;
     const input: LaunchInput = { ...launchInput('t2'), env: profileEnv(overrides) };
@@ -235,14 +259,84 @@ describe('supervised Task launch assistant', () => {
     expect(worktrees).toBe(0); expect(spawns).toBe(0);
   });
 
+  it.each(['manager', 't1', 't2', 't3'] as const)('closed two-family mapping recognizes OpenCode for %s without inventing a route', (workClass) => {
+    const result = resolveExecutorProfile(workClass, opencodeProfileEnv(workClass));
+    expect(result).toMatchObject({
+      status: 'continue', cause: 'executor_route_unavailable', evidence: { executorFamily: 'opencode' },
+    });
+  });
+
   it('checks live cursor model applicability before any follow-up child action', async () => {
     const calls: string[][] = [];
-    const result = await resolveLiveExecutorProfile('t2', profileEnv(), async (args) => {
+    const result = await resolveLiveExecutorProfile('t2', profileEnv(), undefined, async (args) => {
       calls.push([...args]);
       return { ok: true, stdout: 'other-model-low\n' };
     });
     expect(result).toMatchObject({ status: 'continue', cause: 'executor_profile_model_unavailable' });
     expect(calls).toEqual([['cursor-agent', '--list-models']]);
+  });
+
+  it('keeps Cursor route admission static and separate from catalog applicability', async () => {
+    const calls: string[][] = [];
+    const result = await resolveLiveExecutorProfile('t2', profileEnv(), undefined, async (args) => {
+      calls.push([...args]);
+      if (args[0] === 'cursor-agent') return { ok: true, stdout: 'model-medium\n' };
+      return { ok: true, stdout: '' };
+    });
+    expect(result).toMatchObject({ status: 'ok', value: { family: 'cursor', route: 'provider_new_top_level' } });
+    expect(calls[0]).toEqual(['cursor-agent', '--list-models']);
+    expect(calls.some((args) => args[0] === 'orca' && args.includes('--help'))).toBe(false);
+  });
+
+  it('OpenCode route is capability proven or externally gated', async () => {
+    const env = opencodeProfileEnv('t2');
+    const admittedCalls: string[][] = [];
+    const admitted = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => {
+      admittedCalls.push([...args]);
+      return opencodeProbeResult(args, true);
+    });
+    expect(admitted).toMatchObject({
+      status: 'ok',
+      value: {
+        family: 'opencode',
+        route: 'exact_terminal_worktree',
+        launchCommand: "opencode --model 'fixture-opencode-model' --variant 'fixture-opencode-effort'",
+      },
+    });
+    expect(admittedCalls[0]).toEqual(['opencode', 'models']);
+    expect(admittedCalls).toContainEqual(['orca', 'orchestration', 'worker-start', '--help']);
+    expect(admittedCalls).toContainEqual(['opencode', '--help']);
+
+    const gated = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => opencodeProbeResult(args, false));
+    expect(gated).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
+
+    const mismatch = await resolveLiveExecutorProfile('t2', env, 'provider_new_top_level', async (args) => opencodeProbeResult(args, true));
+    expect(mismatch).toMatchObject({ status: 'continue', cause: 'executor_route_mismatch' });
+  });
+
+  it('real resolveProfile edge blocks manager Task creation until OpenCode route admission succeeds', async () => {
+    let managerTaskCreates = 0;
+    let worktrees = 0;
+    const input: LaunchInput = {
+      repository: 'chetwerikoff/orchestrator-pack', workClass: 'manager', runId: 'run-1', managerBrief: 'abstract brief',
+      worktreeName: 'manager-worktree', env: opencodeProfileEnv('manager'),
+    };
+    const base = deps({ onWorktree: () => { worktrees += 1; } });
+    const result = await runSupervisedTaskLaunchAssistant(input, {
+      ...base,
+      resolveProfile: (workClass, env, startMode) => resolveLiveExecutorProfile(
+        workClass, env, startMode, async (args) => opencodeProbeResult(args, false),
+      ),
+      createManagerTask: async () => {
+        managerTaskCreates += 1;
+        return { status: 'ok', value: { taskId: 'task-created', status: 'ready' } };
+      },
+    });
+    expect(result).toMatchObject({
+      outcome: 'continue', stage: 'executor_profile', observedCause: 'executor_effort_channel_unavailable',
+    });
+    expect(managerTaskCreates).toBe(0);
+    expect(worktrees).toBe(0);
   });
 
   it('manager proves exact current Run before Task membership/effects', async () => {
@@ -370,20 +464,33 @@ describe('supervised Task launch assistant', () => {
     });
   });
 
-  it('preserves provider receipt and residual resources on handled worker-start failure', async () => {
+  it('drops raw provider receipt, residual resources, provider strings, and recovery command from handled failure', async () => {
     const receipt = {
       taskId: 'task-1', dispatchId: 'dispatch-provider', state: 'unknown', stage: 'launching',
-      setup: { requested: 'run', state: 'running' }, effects: [{ kind: 'worktree', action: 'created_top_level', id: 'repo::wt' }],
+      sentinel: 'RAW_RECEIPT_SENTINEL',
     };
-    const residualResources = [{ kind: 'terminal', action: 'reused_agent_terminal', id: 'term-provider' }];
+    const residualResources = [{ sentinel: 'RAW_RESIDUAL_SENTINEL' }];
+    const recoveryCommand = 'PROVIDER_RECOVERY_SENTINEL';
     const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ supervised: {
-      ok: false, reason: 'supervised_start_envelope_error', errorMessage: 'provider message', nextSteps: ['inspect logs'], receipt, residualResources,
+      ok: false,
+      reason: 'supervised_start_envelope_error',
+      errorCode: 'runtime_timeout',
+      errorMessage: 'PROVIDER_ERROR_MESSAGE_SENTINEL',
+      nextSteps: ['PROVIDER_NEXT_STEPS_SENTINEL'],
+      receipt,
+      residualResources,
+      recovery: { requestId: 'request-redaction', dispatchId: 'dispatch-provider', recoveryCommand },
     } }));
     expect(result).toMatchObject({
-      outcome: 'continue', stage: 'supervised_start',
-      resources: { dispatchId: 'dispatch-provider', receipt, residualResources },
-      evidence: { dispatchId: 'dispatch-provider', receipt, residualResources, errorMessage: 'provider message', nextSteps: ['inspect logs'] },
+      outcome: 'continue', stage: 'supervised_start', resources: { dispatchId: 'dispatch-provider' },
+      evidence: { errorCode: 'runtime_timeout', requestId: 'request-redaction', dispatchId: 'dispatch-provider' },
+      nextAction: { kind: 'retry_supervised_start', requestId: 'request-redaction' },
     });
+    const serialized = JSON.stringify(result);
+    for (const sentinel of [
+      'RAW_RECEIPT_SENTINEL', 'RAW_RESIDUAL_SENTINEL', 'PROVIDER_RECOVERY_SENTINEL',
+      'PROVIDER_ERROR_MESSAGE_SENTINEL', 'PROVIDER_NEXT_STEPS_SENTINEL',
+    ]) expect(serialized).not.toContain(sentinel);
   });
 
   it('preserves provider base branch on retry action', async () => {
@@ -396,14 +503,17 @@ describe('supervised Task launch assistant', () => {
     if (result.outcome === 'continue') {
       expect(result.nextAction.command).toContain('--base-branch');
       expect(result.nextAction.command).toContain("'feature/base'");
+      expect(result.nextAction.command).toContain("--agent 'cursor'");
       expect(result.nextAction.command).toContain("--model 'model-medium'");
       expect(result.nextAction.command).not.toContain('--effort');
     }
   });
 
-  it('preserves worker-start provider mutation recovery as one exact replay action', async () => {
-    const recoveryCommand = 'orca orchestration worker-show --dispatch dispatch-accepted --json';
-    const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ supervised: {
+  it('builds worker-start provider recovery only from attempt-bound profile and request identity', async () => {
+    const recoveryCommand = 'PROVIDER_RECOVERY_SENTINEL';
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput(), startMode: 'provider_new_top_level',
+    }, deps({ supervised: {
       ok: false, reason: 'supervised_start_envelope_error', errorCode: 'runtime_timeout',
       recovery: { requestId: 'request-7', dispatchId: 'dispatch-accepted', recoveryCommand },
     } }));
@@ -411,13 +521,15 @@ describe('supervised Task launch assistant', () => {
       outcome: 'continue',
       stage: 'supervised_start',
       resources: { dispatchId: 'dispatch-accepted' },
-      evidence: { requestId: 'request-7', dispatchId: 'dispatch-accepted', recoveryCommand },
-      nextAction: { kind: 'retry_supervised_start', requestId: 'request-7', recoveryCommand },
+      evidence: { requestId: 'request-7', dispatchId: 'dispatch-accepted' },
+      nextAction: { kind: 'retry_supervised_start', requestId: 'request-7' },
     });
     if (result.outcome === 'continue') {
       expect(result.nextAction.command).toContain('--retry-request');
       expect(result.nextAction.command).toContain('request-7');
-      expect(result.nextAction.command).not.toContain('--agent');
+      expect(result.nextAction.command).toContain("--agent 'cursor'");
+      expect(result.nextAction.command).toContain("--model 'model-medium'");
+      expect(JSON.stringify(result)).not.toContain(recoveryCommand);
       expect(result.timings.at(-1)).toMatchObject({ stage: 'supervised_start', outcome: 'continued' });
     }
   });
