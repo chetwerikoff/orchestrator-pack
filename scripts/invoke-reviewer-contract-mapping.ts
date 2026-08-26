@@ -2,6 +2,7 @@
 
 import './toolchain/native-entrypoint-preflight.ts';
 import { execFileSync } from 'node:child_process';
+import { runProcessSync } from './kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { readLines, readText } from './lib/reviewer-cli-io.ts';
 import {
@@ -204,8 +205,19 @@ export function fetchIssueBodyFromGitHub(
   repoRoot: string = process.cwd(),
 ): string {
   const ghArgs = ['issue', 'view', String(issueNumber), '--json', 'body'];
-  const raw = execFileSync(resolveTrackedGhWrapper(), ghArgs, { encoding: 'utf8', cwd: repoRoot });
-  const payload = JSON.parse(raw) as { body?: string };
+  const result = runProcessSync({
+    command: resolveTrackedGhWrapper(),
+    args: ghArgs,
+    cwd: repoRoot,
+    encoding: 'utf8',
+    inheritParentEnv: true,
+  });
+  if (!result.ok) {
+    throw new Error(
+      `Freshness re-fetch: issue #${issueNumber} GitHub read failed: ${result.stderr || result.error || result.outcome}`,
+    );
+  }
+  const payload = JSON.parse(result.stdout) as { body?: string };
   const body = payload.body;
   if (typeof body !== 'string') {
     throw new Error(`Freshness re-fetch: issue #${issueNumber} body unavailable from GitHub`);
@@ -337,7 +349,6 @@ export function loadSpecBodiesFromOptions(opts: CliOptions): Array<{ issueNumber
   return specBodies;
 }
 
-
 export function resolveCoworkerLedgerInput(input: {
   invokeCoworker: boolean;
   coworkerArgv: string[] | null | undefined;
@@ -345,7 +356,6 @@ export function resolveCoworkerLedgerInput(input: {
   invokeCoworkerArgvFn?: typeof invokeCoworkerArgv;
 }): { ledgerPayload: unknown; coworkerInvocationFailed: boolean } {
   const invoke = input.invokeCoworkerArgvFn ?? invokeCoworkerArgv;
-  let coworkerInvocationFailed = false;
   let ledgerPayload: unknown = null;
 
   if (input.invokeCoworker) {
@@ -383,7 +393,6 @@ export function invokeCoworkerArgv(argv: string[]): string {
   }
   return execFileSync(command, args, { encoding: 'utf8' });
 }
-
 
 export function shouldInvokeCoworkerForStatus(status: ContractMappingStatus): boolean {
   return status === 'mapping_pending';
@@ -471,8 +480,6 @@ export function applyMappedOutputFinalUsability(input: {
   };
 }
 
-
-
 export function serializeBoundIssueSnapshotCapture(
   captures: BoundIssueSnapshotCaptureResult[],
 ): Array<{
@@ -490,7 +497,6 @@ export function serializeBoundIssueSnapshotCapture(
     created: capture.created,
   }));
 }
-
 
 export function shouldPersistBoundIssueSnapshots(status: ContractMappingStatus): boolean {
   const excluded = new Set<ContractMappingStatus>([
