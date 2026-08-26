@@ -111,18 +111,11 @@ export const EXECUTOR_FAMILY_DESCRIPTORS: Readonly<Record<ExecutorFamily, Execut
     orcaAgent: 'opencode',
     catalogCommand: ['opencode', 'models'],
     capabilityProbeCommands: [
-      ['orca', 'orchestration', 'worker-start', '--help'],
       ['opencode', '--help'],
-      ['opencode', 'run', '--help'],
-      ['opencode', 'debug', '--help'],
-      ['opencode', 'debug', 'agent', '--help'],
-      ['opencode', 'debug', 'config', '--help'],
       ['opencode', 'models', '--verbose'],
     ],
     smokeCapabilityProbeCommands: [
       ['opencode', '--help'],
-      ['opencode', 'debug', 'agent', '--help'],
-      ['opencode', 'debug', 'config', '--help'],
     ],
   },
 };
@@ -275,18 +268,14 @@ export function openCodeTuiCapability(tuiHelp: string): RouteCapability {
     available: tuiHasModel,
     supportsModel: tuiHasModel,
     supportsEffort: tuiHasVariant,
-    // The current smoke runtime lifecycle owns a Cursor-specific startup witness.
-    // Task exact-terminal admission ignores this smoke-only fact; smoke admission
-    // consumes it and remains externally gated until an allowed runtime change is proven.
-    smokeRuntimeAvailable: false,
   };
 }
 
 export function openCodeEdgeCapabilities(probeOutputs: readonly string[]): ExecutorEdgeCapabilities {
-  // capabilityProbeCommands fixes the TUI help observation at index 1 and the
+  // capabilityProbeCommands fixes the TUI help observation at index 0 and the
   // fresh verbose model/variant catalog as the final observation.
   const exactTerminal = {
-    ...openCodeTuiCapability(probeOutputs[1] ?? ''),
+    ...openCodeTuiCapability(probeOutputs[0] ?? ''),
     supportedEffortsByModel: openCodeVariantCatalog(probeOutputs.at(-1) ?? ''),
   };
 

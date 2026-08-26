@@ -215,9 +215,9 @@ describe('smoke executor profiles', () => {
     })).toThrow('executor_route_unavailable');
   });
 
-  it('smoke uses the same logical executor contract and externally gates an unproven OpenCode spawn shape', () => {
+  it('smoke admits the proven OpenCode model+effort spawn shape', () => {
     const calls: string[][] = [];
-    expect(() => resolveLiveSmokeExecutorProfile('routine', {
+    const profile = resolveLiveSmokeExecutorProfile('routine', {
       ...env,
       PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'opencode',
       PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-opencode-model',
@@ -228,13 +228,18 @@ describe('smoke executor profiles', () => {
       if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
         return { ok: true, stdout: 'Usage: opencode --model MODEL --variant NAME\n' };
       }
-      if (args[0] === 'opencode') return { ok: true, stdout: 'supported help surface\n' };
       if (args[0] === process.execPath) return { ok: true, stdout: '' };
       return { ok: false, stdout: '' };
-    })).toThrow('executor_route_unavailable');
+    });
+    expect(profile).toMatchObject({
+      complexity: 'routine',
+      family: 'opencode',
+      agent: 'opencode',
+      command: "opencode --model 'fixture-opencode-model' --variant 'fixture-opencode-effort'",
+    });
     expect(calls[0]).toEqual(['opencode', 'models']);
     expect(calls).toContainEqual(['opencode', '--help']);
-    expect(calls.some((args) => args[0] === process.execPath)).toBe(false);
+    expect(calls.some((args) => args[0] === process.execPath)).toBe(true);
   });
 
   it('reuses shared pre-spawn effort and route refusals for OpenCode smoke', () => {

@@ -302,11 +302,12 @@ describe('supervised Task launch assistant', () => {
     expect(calls.some((args) => args[0] === 'orca' && args.includes('--help'))).toBe(false);
   });
 
-  it('OpenCode route is capability proven or externally gated', async () => {
+  it('OpenCode exact-terminal admission depends only on route-specific evidence', async () => {
     const env = opencodeProfileEnv('t2');
     const admittedCalls: string[][] = [];
     const admitted = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => {
       admittedCalls.push([...args]);
+      if (args[0] === 'orca' || args[1] === 'run' || args[1] === 'debug') return { ok: false, stdout: '' };
       return opencodeProbeResult(args, true);
     });
     expect(admitted).toMatchObject({
@@ -318,9 +319,9 @@ describe('supervised Task launch assistant', () => {
       },
     });
     expect(admittedCalls[0]).toEqual(['opencode', 'models']);
-    expect(admittedCalls).toContainEqual(['orca', 'orchestration', 'worker-start', '--help']);
     expect(admittedCalls).toContainEqual(['opencode', '--help']);
     expect(admittedCalls).toContainEqual(['opencode', 'models', '--verbose']);
+    expect(admittedCalls.some((args) => args[0] === 'orca' || args[1] === 'run' || args[1] === 'debug')).toBe(false);
 
     const unsupportedEffort = await resolveLiveExecutorProfile('t2', {
       ...env,
@@ -335,18 +336,32 @@ describe('supervised Task launch assistant', () => {
     expect(mismatch).toMatchObject({ status: 'continue', cause: 'executor_route_mismatch' });
   });
 
-  it('real resolveProfile edge blocks manager Task creation until OpenCode route admission succeeds', async () => {
+  it('production resolveProfile route-unavailable blocks manager Task and all later effects', async () => {
     let managerTaskCreates = 0;
     let worktrees = 0;
+    let spawns = 0;
+    let supervisedStarts = 0;
     const input: LaunchInput = {
       repository: 'chetwerikoff/orchestrator-pack', workClass: 'manager', runId: 'run-1', managerBrief: 'abstract brief',
       worktreeName: 'manager-worktree', env: opencodeProfileEnv('manager'),
     };
-    const base = deps({ onWorktree: () => { worktrees += 1; } });
+    const base = deps({
+      onWorktree: () => { worktrees += 1; },
+      onSupervised: () => { supervisedStarts += 1; },
+      adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+    });
     const result = await runSupervisedTaskLaunchAssistant(input, {
       ...base,
       resolveProfile: (workClass, env, startMode) => resolveLiveExecutorProfile(
-        workClass, env, startMode, async (args) => opencodeProbeResult(args, false),
+        workClass,
+        env,
+        startMode,
+        async (args) => {
+          if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
+            return { ok: true, stdout: 'Usage: opencode --variant NAME\n' };
+          }
+          return opencodeProbeResult(args, true);
+        },
       ),
       createManagerTask: async () => {
         managerTaskCreates += 1;
@@ -354,10 +369,12 @@ describe('supervised Task launch assistant', () => {
       },
     });
     expect(result).toMatchObject({
-      outcome: 'continue', stage: 'executor_profile', observedCause: 'executor_effort_channel_unavailable',
+      outcome: 'continue', stage: 'executor_profile', observedCause: 'executor_route_unavailable',
     });
     expect(managerTaskCreates).toBe(0);
     expect(worktrees).toBe(0);
+    expect(spawns).toBe(0);
+    expect(supervisedStarts).toBe(0);
   });
 
   it('manager proves exact current Run before Task membership/effects', async () => {
