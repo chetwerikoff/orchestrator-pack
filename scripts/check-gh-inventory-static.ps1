@@ -72,7 +72,6 @@ $transportRoots = @(
     (Join-Path $Root 'scripts/pack-review-runner.ts'),
     (Join-Path $Root 'scripts/lib/pack-gpt-source-comment.ts'),
     (Join-Path $Root 'scripts/lib/github-review-reconciliation.ts'),
-    (Join-Path $Root 'scripts/worker-smoke-run.ts'),
     (Join-Path $Root 'scripts/lib/worker-smoke-core-base.ts'),
     (Join-Path $Root 'scripts/invoke-reviewer-contract-mapping.ts'),
     (Join-Path $Root 'plugins/codex-pr-reviewer/lib/scope_context.ts')
@@ -87,6 +86,29 @@ foreach ($file in $ruleSurfaceRoots) {
 }
 foreach ($file in $transportRoots) {
     $violations += Invoke-GhInventoryGuard -FilePath $file -Mode 'transport'
+}
+
+# worker-smoke-run is a mixed surface: Issue #1623 binds reads to tracked scripts/gh
+# but explicitly leaves the existing PR-comment POST write semantics unchanged. The
+# only ambient selection may therefore live in the dedicated write helper, and that
+# helper may be referenced only by publishPrComment's existing POST path.
+$workerSmokePath = Join-Path $Root 'scripts/worker-smoke-run.ts'
+if (Test-Path -LiteralPath $workerSmokePath -PathType Leaf) {
+    $workerSmokeText = Get-Content -LiteralPath $workerSmokePath -Raw
+    $ambientPattern = '(?m)\b(?:command\s*:\s*[''\"]gh[''\"]|execFileSync\s*\(\s*[''\"]gh[''\"]|execFile\s*\(\s*[''\"]gh[''\"]|spawnSync\s*\(\s*[''\"]gh[''\"]|spawn\s*\(\s*[''\"]gh[''\"]|ghApiJson\s*\(\s*[''\"]gh[''\"])'
+    $knownWritePattern = '(?s)function\s+runSmokeGhWriteSync\s*\([^)]*\).*?command\s*:\s*[''\"]gh[''\"].*?\n\}'
+    $knownPublishPattern = '(?s)export\s+function\s+publishPrComment\s*\([^)]*\).*?runSmokeGhWriteSync\s*\(\s*\[\s*[''\"]api[''\"].*?repos/\$\{TRUSTED_REPOSITORY_SLUG\}/issues/\$\{String\(prNumber\)\}/comments.*?--method[''\"]\s*,\s*[''\"]POST[''\"]'
+    $ambientCount = [regex]::Matches($workerSmokeText, $ambientPattern).Count
+    $knownWriteCount = [regex]::Matches($workerSmokeText, $knownWritePattern).Count
+    $knownPublishCount = [regex]::Matches($workerSmokeText, $knownPublishPattern).Count
+    $writeHelperReferences = [regex]::Matches($workerSmokeText, '\brunSmokeGhWriteSync\s*\(').Count
+    if ($ambientCount -ne 1 -or $knownWriteCount -ne 1 -or $knownPublishCount -ne 1 -or $writeHelperReferences -ne 2) {
+        $violations += [pscustomobject]@{
+            file = $workerSmokePath
+            command = 'ambient gh executable selection outside the one existing PR-comment POST write helper'
+            line = "ambient=$ambientCount knownWrite=$knownWriteCount publish=$knownPublishCount helperRefs=$writeHelperReferences"
+        }
+    }
 }
 
 # pack-review-delivery owns an existing explicit GitHub status POST. Issue #1623
