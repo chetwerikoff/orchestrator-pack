@@ -165,6 +165,20 @@ function repoListEnvelope(repos: readonly Record<string, unknown>[]): string {
 }
 
 function opencodeProbeResult(args: readonly string[], variant = true): { ok: boolean; stdout: string } {
+  if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) {
+    return {
+      ok: true,
+      stdout: [
+        'fixture-opencode-model',
+        '{',
+        '  "variants": {',
+        '    "fixture-opencode-effort": { "reasoningEffort": "fixture" }',
+        '  }',
+        '}',
+        '',
+      ].join('\n'),
+    };
+  }
   if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n' };
   if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
     return { ok: true, stdout: variant ? 'Usage: opencode --model MODEL --variant NAME\n' : 'Usage: opencode --model MODEL\n' };
@@ -306,6 +320,13 @@ describe('supervised Task launch assistant', () => {
     expect(admittedCalls[0]).toEqual(['opencode', 'models']);
     expect(admittedCalls).toContainEqual(['orca', 'orchestration', 'worker-start', '--help']);
     expect(admittedCalls).toContainEqual(['opencode', '--help']);
+    expect(admittedCalls).toContainEqual(['opencode', 'models', '--verbose']);
+
+    const unsupportedEffort = await resolveLiveExecutorProfile('t2', {
+      ...env,
+      PACK_EXECUTOR_T2_EFFORT: 'fixture-opencode-unsupported-effort',
+    }, undefined, async (args) => opencodeProbeResult(args, true));
+    expect(unsupportedEffort).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
 
     const gated = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => opencodeProbeResult(args, false));
     expect(gated).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
