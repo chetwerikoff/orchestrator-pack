@@ -213,6 +213,9 @@ export function consumeGhApiRateLimitHeaders() {
  */
 export function ghApiJson(realGh, endpoint, options = {}) {
   const args = ['api', endpoint, '--include'];
+  if (options.hostname) {
+    args.unshift('--hostname', options.hostname);
+  }
   const result = spawnSync(realGh, args, {
     cwd: options.cwd ?? process.cwd(),
     encoding: 'utf8',
