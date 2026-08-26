@@ -174,6 +174,7 @@ afterEach(() => {
   process.env = { ...originalEnv };
   vi.doUnmock('./lib/gh-resolve-real-binary.mjs');
   vi.resetModules();
+  vi.restoreAllMocks();
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -325,5 +326,44 @@ describe('Issue #1623 focused tracked-wrapper runtime harness', () => {
       },
     )).toThrow('command-runtime-bootstrap: missing or unusable tracked GitHub transport scripts/gh');
     expect(parseNativeCalls(fixture.nativeCallsFile)).toEqual([]);
+  });
+
+  it('keeps Codex scope unverified and reports the canonical transport diagnosis when wrapper resolution fails', async () => {
+    if (process.platform === 'win32') return;
+    const fixture = createTrackedGhRuntimeFixture();
+    const missingWrapper = join(fixture.checkout, 'missing-pack-scripts', 'gh');
+    process.env.PATH = fixture.pathValue;
+    process.env.GH_REAL_BINARY = fixture.nativeGh;
+    process.env.GH_HOST = 'github.com';
+    delete process.env.OPK_CODEX_REVIEW_SKIP_GH;
+    const priorVitest = process.env.VITEST;
+    delete process.env.VITEST;
+
+    vi.resetModules();
+    vi.doMock('./lib/gh-resolve-real-binary.mjs', async () => {
+      const actual = await vi.importActual<typeof import('./lib/gh-resolve-real-binary.mjs')>(
+        './lib/gh-resolve-real-binary.mjs',
+      );
+      return {
+        ...actual,
+        resolveTrackedGhWrapper: () => actual.resolveTrackedGhWrapper(missingWrapper),
+      };
+    });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const isolatedScope = await import('../plugins/codex-pr-reviewer/lib/scope_context.ts');
+      expect(isolatedScope.resolveIssueNumber({
+        repoRoot: fixture.checkout,
+        prNumber: PR_NUMBER,
+      })).toBeNull();
+      expect(stderr.mock.calls.map((call) => String(call[0])).join('')).toContain(
+        'command-runtime-bootstrap: missing or unusable tracked GitHub transport scripts/gh',
+      );
+      expect(parseNativeCalls(fixture.nativeCallsFile)).toEqual([]);
+    } finally {
+      stderr.mockRestore();
+      if (priorVitest === undefined) delete process.env.VITEST;
+      else process.env.VITEST = priorVitest;
+    }
   });
 });
