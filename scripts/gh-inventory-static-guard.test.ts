@@ -9,7 +9,10 @@ import {
   TRACKED_GH_UNAVAILABLE_DIAGNOSTIC,
   resolveTrackedGhWrapper,
 } from './lib/gh-resolve-real-binary.mjs';
-import { evaluateUncoveredGhArgv } from './lib/command-runtime-bootstrap.mjs';
+import {
+  evaluateCommandRuntimePreflight,
+  evaluateUncoveredGhArgv,
+} from './lib/command-runtime-bootstrap.mjs';
 
 const tempRoots: string[] = [];
 
@@ -62,6 +65,25 @@ describe('tracked gh transport selection guard', () => {
   it('fails closed with the canonical tracked-wrapper diagnostic', () => {
     const missing = join(tempRoot(), 'missing-gh');
     expect(() => resolveTrackedGhWrapper(missing)).toThrow(TRACKED_GH_UNAVAILABLE_DIAGNOSTIC);
+  });
+
+  it('uses the same canonical diagnostic at the bootstrap boundary', () => {
+    expect(evaluateCommandRuntimePreflight({
+      effectivePath: '/usr/bin',
+      tools: {
+        pwsh: '/usr/bin/pwsh',
+        node: '/usr/bin/node',
+        packGh: null,
+        firstGh: null,
+        nativeGh: null,
+        nativeGhError: null,
+      },
+    })).toMatchObject({
+      ok: false,
+      reason: 'missing_pack_gh',
+      diagnostic: expect.stringContaining(TRACKED_GH_UNAVAILABLE_DIAGNOSTIC),
+      missingTool: 'scripts/gh',
+    });
   });
 
   it('keeps uncovered reads on the existing inventory-gap path', () => {
