@@ -4,6 +4,7 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { execFileSync } from 'node:child_process';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
+import { resolveNameWithOwner } from './lib/gh-repo-resolve.mjs';
 import { readLines, readText } from './lib/reviewer-cli-io.ts';
 import {
   buildStructuredStatusRecord,
@@ -204,7 +205,8 @@ export function fetchIssueBodyFromGitHub(
   issueNumber: number,
   repoRoot: string = process.cwd(),
 ): string {
-  const ghArgs = ['api', `repos/chetwerikoff/orchestrator-pack/issues/${issueNumber}`];
+  const repoSlug = resolveNameWithOwner({ cwd: repoRoot, realGh: resolveTrackedGhWrapper() });
+  const ghArgs = ['api', `repos/${repoSlug}/issues/${issueNumber}`];
   const result = runProcessSync({
     command: resolveTrackedGhWrapper(),
     args: ghArgs,

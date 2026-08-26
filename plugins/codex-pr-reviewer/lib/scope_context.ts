@@ -11,6 +11,7 @@ import {
   resolveLatestCommittedSnapshot,
 } from '../../../scripts/pr-scope-check.ts';
 import { resolveTrackedGhWrapper } from '../../../scripts/lib/gh-resolve-real-binary.mjs';
+import { resolveNameWithOwner } from '../../../scripts/lib/gh-repo-resolve.mjs';
 
 export interface ResolvedScopeContext {
   issueNumber: number | null;
@@ -71,18 +72,31 @@ function bodyFromGhJson(parsed: Record<string, unknown> | null): string | null {
   return typeof body === 'string' ? body : null;
 }
 
+function localRepoSlug(repoRoot: string): string | null {
+  try {
+    return resolveNameWithOwner({ cwd: repoRoot, realGh: resolveTrackedGhWrapper() });
+  } catch (error) {
+    reportTrackedGhTransportFailure(error);
+    return null;
+  }
+}
+
 function fetchIssueBody(repoRoot: string, issueNumber: number): string | null {
+  const repoSlug = localRepoSlug(repoRoot);
+  if (!repoSlug) return null;
   const parsed = readGhJsonBody(repoRoot, [
     'api',
-    `repos/chetwerikoff/orchestrator-pack/issues/${issueNumber}`,
+    `repos/${repoSlug}/issues/${issueNumber}`,
   ]);
   return bodyFromGhJson(parsed);
 }
 
 function fetchPrBody(repoRoot: string, prNumber: number): string | null {
+  const repoSlug = localRepoSlug(repoRoot);
+  if (!repoSlug) return null;
   const parsed = readGhJsonBody(repoRoot, [
     'api',
-    `repos/chetwerikoff/orchestrator-pack/pulls/${prNumber}`,
+    `repos/${repoSlug}/pulls/${prNumber}`,
   ]);
   return bodyFromGhJson(parsed);
 }
