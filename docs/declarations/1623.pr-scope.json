@@ -4,7 +4,7 @@
   "declared_paths": [
     "plugins/codex-pr-reviewer/lib/scope_context.ts",
     "scripts/check-gh-inventory-static.ps1",
-    "scripts/gh-inventory-static-guard.test.ts",
+    "scripts/gh-wrapper.test.ts",
     "scripts/invoke-reviewer-contract-mapping.ts",
     "scripts/lib/command-runtime-bootstrap.mjs",
     "scripts/lib/gh-inventory-static-guard.mjs",
@@ -53,5 +53,5 @@
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "08462c7b34f3d503195c8e430dbe25d55515ca67"
+  "source_revision": "fe795064be2308d08e6640cbbea5d8eb0ef257e0"
 }
