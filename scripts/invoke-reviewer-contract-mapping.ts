@@ -204,7 +204,7 @@ export function fetchIssueBodyFromGitHub(
   issueNumber: number,
   repoRoot: string = process.cwd(),
 ): string {
-  const ghArgs = ['issue', 'view', String(issueNumber), '--json', 'body'];
+  const ghArgs = ['api', `repos/chetwerikoff/orchestrator-pack/issues/${issueNumber}`];
   const result = runProcessSync({
     command: resolveTrackedGhWrapper(),
     args: ghArgs,

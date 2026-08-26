@@ -73,22 +73,16 @@ function bodyFromGhJson(parsed: Record<string, unknown> | null): string | null {
 
 function fetchIssueBody(repoRoot: string, issueNumber: number): string | null {
   const parsed = readGhJsonBody(repoRoot, [
-    'issue',
-    'view',
-    String(issueNumber),
-    '--json',
-    'body',
+    'api',
+    `repos/chetwerikoff/orchestrator-pack/issues/${issueNumber}`,
   ]);
   return bodyFromGhJson(parsed);
 }
 
 function fetchPrBody(repoRoot: string, prNumber: number): string | null {
   const parsed = readGhJsonBody(repoRoot, [
-    'pr',
-    'view',
-    String(prNumber),
-    '--json',
-    'body',
+    'api',
+    `repos/chetwerikoff/orchestrator-pack/pulls/${prNumber}`,
   ]);
   return bodyFromGhJson(parsed);
 }

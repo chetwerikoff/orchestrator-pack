@@ -492,7 +492,6 @@ export async function resolveRepositorySlug(repoRoot: string): Promise<string> {
   const slug = trim(resolveNameWithOwner({
     cwd: repoRoot,
     realGh: resolveTrackedGhWrapper(),
-    hostname: trim(process.env.GH_HOST) || 'github.com',
   }));
   if (!/^[^/\s]+\/[^/\s]+$/.test(slug)) {
     throw new Error(`local repository context returned invalid repository slug '${slug}'`);
@@ -503,16 +502,25 @@ export async function resolveRepositorySlug(repoRoot: string): Promise<string> {
 export async function resolveHeadSha(repoRoot: string, prNumber: number, repoSlug: string): Promise<string> {
   const result = await runProcess({
     command: resolveTrackedGhWrapper(),
-    args: ['pr', 'view', String(prNumber), '--repo', repoSlug, '--json', 'headRefOid', '--jq', '.headRefOid'],
+    args: ['api', `repos/${repoSlug}/pulls/${prNumber}`],
     cwd: repoRoot,
     inheritParentEnv: true,
     allowEmptyStdout: false,
     timeoutMs: 30_000,
   });
   if (!result.ok) {
-    throw new Error(`gh pr view failed: ${trim(result.stderr || result.error)}`);
+    throw new Error(`gh api PR read failed: ${trim(result.stderr || result.error)}`);
   }
-  const headSha = trim(result.stdout).toLowerCase();
+  const rawHead = trim(result.stdout);
+  let headSha = rawHead.toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(headSha)) {
+    try {
+      const payload = JSON.parse(rawHead) as { head?: { sha?: unknown } };
+      headSha = trim(payload.head?.sha).toLowerCase();
+    } catch {
+      headSha = '';
+    }
+  }
   if (!/^[0-9a-f]{40}$/.test(headSha)) {
     throw new Error(`PR #${prNumber} returned invalid head SHA`);
   }

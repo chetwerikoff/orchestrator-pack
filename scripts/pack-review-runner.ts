@@ -563,13 +563,13 @@ export async function resolveCurrentPrHead(
 ): Promise<string> {
   const result = await runner({
     command: resolveTrackedGhWrapper(),
-    args: ['pr', 'view', String(prNumber), '--repo', repoSlug, '--json', 'headRefOid,state'],
+    args: ['api', `repos/${repoSlug}/pulls/${prNumber}`],
     cwd: repoRoot,
     inheritParentEnv: true,
     allowEmptyStdout: false,
     timeoutMs: 30_000,
   });
-  const output = await requireProcess(result, `gh pr view ${prNumber}`);
+  const output = await requireProcess(result, `gh api PR read ${prNumber}`);
   let parsed: unknown;
   try {
     parsed = JSON.parse(output);
@@ -580,7 +580,10 @@ export async function resolveCurrentPrHead(
     throw new Error(`PR #${prNumber} returned invalid JSON`);
   }
   const row = parsed as Record<string, unknown>;
-  const headSha = trim(row.headRefOid);
+  const head = row.head && typeof row.head === 'object' && !Array.isArray(row.head)
+    ? row.head as Record<string, unknown>
+    : {};
+  const headSha = trim(head.sha);
   const state = trim(row.state);
   if (!/^[0-9a-f]{40}$/i.test(headSha ?? '')) throw new Error(`PR #${prNumber} returned invalid head SHA`);
   if (String(state ?? '').toUpperCase() !== 'OPEN') throw new Error(`PR #${prNumber} is not open`);
@@ -595,13 +598,13 @@ export async function resolveCurrentPrTarget(
 ): Promise<{ headSha: string; body: string }> {
   const result = await runner({
     command: resolveTrackedGhWrapper(),
-    args: ['pr', 'view', String(prNumber), '--repo', repoSlug, '--json', 'headRefOid,state,body'],
+    args: ['api', `repos/${repoSlug}/pulls/${prNumber}`],
     cwd: repoRoot,
     inheritParentEnv: true,
     allowEmptyStdout: false,
     timeoutMs: 30_000,
   });
-  const output = await requireProcess(result, `gh pr view ${prNumber}`);
+  const output = await requireProcess(result, `gh api PR read ${prNumber}`);
   let parsed: unknown;
   try {
     parsed = JSON.parse(output);
@@ -612,7 +615,10 @@ export async function resolveCurrentPrTarget(
     throw new Error(`PR #${prNumber} returned invalid JSON`);
   }
   const row = parsed as Record<string, unknown>;
-  const headSha = trim(row.headRefOid);
+  const head = row.head && typeof row.head === 'object' && !Array.isArray(row.head)
+    ? row.head as Record<string, unknown>
+    : {};
+  const headSha = trim(head.sha);
   const state = trim(row.state);
   if (!/^[0-9a-f]{40}$/i.test(headSha)) throw new Error(`PR #${prNumber} returned invalid head SHA`);
   if (state.toUpperCase() !== 'OPEN') throw new Error(`PR #${prNumber} is not open`);
@@ -628,7 +634,7 @@ async function resolveCurrentIssueBody(
 ): Promise<string> {
   const result = await runner({
     command: resolveTrackedGhWrapper(),
-    args: ['issue', 'view', String(issueNumber), '--repo', repoSlug, '--json', 'body'],
+    args: ['api', `repos/${repoSlug}/issues/${issueNumber}`],
     cwd: repoRoot,
     inheritParentEnv: true,
     allowEmptyStdout: false,
