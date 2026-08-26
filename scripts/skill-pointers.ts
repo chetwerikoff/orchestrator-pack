@@ -9,6 +9,7 @@ export interface SkillPointerTarget {
 export interface SkillPointerConfig {
   readonly canonicalRoot: string;
   readonly targets: readonly SkillPointerTarget[];
+  readonly implementationSupport: readonly string[];
 }
 
 export const DEFAULT_SKILL_POINTER_CONFIG = 'scripts/skill-pointer-targets.json';
@@ -26,6 +27,27 @@ function requireRelativeRoot(value: unknown, label: string): string {
   return normalized;
 }
 
+function requireImplementationSupport(
+  value: unknown,
+  targets: readonly SkillPointerTarget[],
+  canonicalRoot: string,
+): readonly string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error('implementationSupport must be an array');
+  const support = value.map((candidate, index) => requireRelativeRoot(candidate, `implementationSupport[${index}]`));
+  if (new Set(support).size !== support.length) throw new Error('implementationSupport paths must be unique');
+  for (const path of support) {
+    if (path.endsWith('/SKILL.md')) throw new Error(`implementation support cannot be a procedure: ${path}`);
+    if (path === canonicalRoot || path.startsWith(`${canonicalRoot}/`)) {
+      throw new Error(`implementation support cannot live under canonicalRoot: ${path}`);
+    }
+    if (!targets.some((target) => path.startsWith(`${target.root}/`))) {
+      throw new Error(`implementation support must live under a pointer target root: ${path}`);
+    }
+  }
+  return support.sort();
+}
+
 export function readSkillPointerConfig(repoRoot: string, configPath = DEFAULT_SKILL_POINTER_CONFIG): SkillPointerConfig {
   const parsed = JSON.parse(readFileSync(resolve(repoRoot, configPath), 'utf8')) as Record<string, unknown>;
   const canonicalRoot = requireRelativeRoot(parsed.canonicalRoot, 'canonicalRoot');
@@ -39,7 +61,8 @@ export function readSkillPointerConfig(repoRoot: string, configPath = DEFAULT_SK
     if (root === canonicalRoot) throw new Error('canonicalRoot cannot also be a pointer target');
     return { root, canonicalLinkPrefix };
   });
-  return { canonicalRoot, targets };
+  const implementationSupport = requireImplementationSupport(parsed.implementationSupport, targets, canonicalRoot);
+  return { canonicalRoot, targets, implementationSupport };
 }
 
 interface SkillFrontmatter {
@@ -101,6 +124,14 @@ function listFiles(root: string): string[] {
   return files.sort();
 }
 
+function supportForSkill(config: SkillPointerConfig, target: SkillPointerTarget, skillName: string): string[] {
+  const prefix = `${target.root}/${skillName}/`;
+  return config.implementationSupport
+    .filter((path) => path.startsWith(prefix))
+    .map((path) => path.slice(prefix.length))
+    .sort();
+}
+
 export function evaluateSkillPointerDrift(repoRoot: string, configPath = DEFAULT_SKILL_POINTER_CONFIG): readonly string[] {
   const config = readSkillPointerConfig(repoRoot, configPath);
   const failures: string[] = [];
@@ -117,6 +148,16 @@ export function evaluateSkillPointerDrift(repoRoot: string, configPath = DEFAULT
     }
   }
 
+  for (const supportPath of config.implementationSupport) {
+    if (!existsSync(resolve(repoRoot, supportPath))) failures.push(`missing implementation support: ${supportPath}`);
+    for (const target of config.targets) {
+      const prefix = `${target.root}/`;
+      if (!supportPath.startsWith(prefix)) continue;
+      const canonicalTwin = `${config.canonicalRoot}/${supportPath.slice(prefix.length)}`;
+      if (existsSync(resolve(repoRoot, canonicalTwin))) failures.push(`implementation support duplicated under canonical root: ${canonicalTwin}`);
+    }
+  }
+
   for (const target of config.targets) {
     const targetRoot = resolve(repoRoot, target.root);
     if (!existsSync(targetRoot)) {
@@ -126,7 +167,8 @@ export function evaluateSkillPointerDrift(repoRoot: string, configPath = DEFAULT
     const targetNames = readdirSync(targetRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
     if (targetNames.includes(RETIRED_OPENCODE_SKILL)) failures.push(`retired skill reappeared: ${target.root}/${RETIRED_OPENCODE_SKILL}`);
     for (const name of targetNames) {
-      if (!canonicalNames.includes(name)) failures.push(`orphan pointer without canonical skill: ${target.root}/${name}/SKILL.md`);
+      const skillFile = resolve(repoRoot, target.root, name, 'SKILL.md');
+      if (existsSync(skillFile) && !canonicalNames.includes(name)) failures.push(`orphan pointer without canonical skill: ${target.root}/${name}/SKILL.md`);
     }
     for (const skillName of canonicalNames) {
       const relativeSkill = `${target.root}/${skillName}/SKILL.md`;
@@ -139,7 +181,11 @@ export function evaluateSkillPointerDrift(repoRoot: string, configPath = DEFAULT
       const actual = readFileSync(full, 'utf8');
       if (actual !== expectedContent) failures.push(`pointer drift: ${relativeSkill}`);
       const files = listFiles(resolve(repoRoot, target.root, skillName));
-      if (files.length !== 1 || files[0] !== 'SKILL.md') failures.push(`pointer skill contains independent files: ${target.root}/${skillName}`);
+      const allowedFiles = ['SKILL.md', ...supportForSkill(config, target, skillName)].sort();
+      const unexpected = files.filter((file) => !allowedFiles.includes(file));
+      const missingSupport = allowedFiles.filter((file) => file !== 'SKILL.md' && !files.includes(file));
+      if (unexpected.length > 0) failures.push(`pointer skill contains unclassified files: ${target.root}/${skillName}: ${unexpected.join(', ')}`);
+      if (missingSupport.length > 0) failures.push(`pointer skill missing classified implementation support: ${target.root}/${skillName}: ${missingSupport.join(', ')}`);
     }
   }
   return failures.sort();
@@ -148,10 +194,14 @@ export function evaluateSkillPointerDrift(repoRoot: string, configPath = DEFAULT
 export function writeSkillPointers(repoRoot: string, configPath = DEFAULT_SKILL_POINTER_CONFIG): number {
   const config = readSkillPointerConfig(repoRoot, configPath);
   const expected = expectedSkillPointerMap(repoRoot, config);
+  const canonicalNames = new Set(canonicalSkillNames(repoRoot, config.canonicalRoot));
   for (const target of config.targets) {
     const root = resolve(repoRoot, target.root);
-    rmSync(root, { recursive: true, force: true });
     mkdirSync(root, { recursive: true });
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || canonicalNames.has(entry.name)) continue;
+      rmSync(join(root, entry.name, 'SKILL.md'), { force: true });
+    }
   }
   for (const [path, content] of expected) {
     const full = resolve(repoRoot, path);
