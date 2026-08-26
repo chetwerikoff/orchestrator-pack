@@ -52,6 +52,7 @@ export interface RouteCapability {
   readonly available: boolean;
   readonly supportsModel: boolean;
   readonly supportsEffort: boolean;
+  readonly smokeRuntimeAvailable?: boolean;
 }
 
 export interface ExecutorEdgeCapabilities {
@@ -135,15 +136,6 @@ export const CURSOR_SMOKE_CAPABILITY: RouteCapability = {
   supportsEffort: true,
 };
 
-// The current smoke runtime lifecycle has a Cursor-specific startup witness. Until
-// an allowed, freshly evidenced runtime change proves an OpenCode startup shape,
-// OpenCode smoke remains externally gated even when its CLI exposes model+effort.
-export const OPENCODE_SMOKE_RUNTIME_CAPABILITY: RouteCapability = {
-  available: false,
-  supportsModel: false,
-  supportsEffort: false,
-};
-
 const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
 const MODEL_TOKEN_CLASS = 'A-Za-z0-9._:/+-';
 
@@ -219,6 +211,10 @@ export function openCodeTuiCapability(tuiHelp: string): RouteCapability {
     available: tuiHasModel,
     supportsModel: tuiHasModel,
     supportsEffort: tuiHasVariant,
+    // The current smoke runtime lifecycle owns a Cursor-specific startup witness.
+    // Task exact-terminal admission ignores this smoke-only fact; smoke admission
+    // consumes it and remains externally gated until an allowed runtime change is proven.
+    smokeRuntimeAvailable: false,
   };
 }
 
@@ -236,19 +232,14 @@ export function openCodeEdgeCapabilities(probeOutputs: readonly string[]): Execu
 }
 
 export function evaluateExecutorSpawnApplicability(capability: RouteCapability): SpawnApplicabilityVerdict {
-  if (capability.available && capability.supportsModel && capability.supportsEffort) return { ok: true };
   if (capability.available && capability.supportsModel && !capability.supportsEffort) {
     return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.effortChannelUnavailable };
   }
+  if (capability.smokeRuntimeAvailable === false) {
+    return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.routeUnavailable };
+  }
+  if (capability.available && capability.supportsModel && capability.supportsEffort) return { ok: true };
   return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.routeUnavailable };
-}
-
-export function evaluateOpenCodeSmokeApplicability(
-  observedTuiCapability: RouteCapability,
-): SpawnApplicabilityVerdict {
-  const tui = evaluateExecutorSpawnApplicability(observedTuiCapability);
-  if (!tui.ok) return tui;
-  return evaluateExecutorSpawnApplicability(OPENCODE_SMOKE_RUNTIME_CAPABILITY);
 }
 
 function routeCapability(capabilities: ExecutorEdgeCapabilities, route: ExecutorRoute): RouteCapability {
