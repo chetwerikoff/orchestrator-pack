@@ -14,6 +14,7 @@
     "scripts/lib/pack-gpt-source-comment.ts",
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts",
+    "scripts/toolchain/raw-child-process-baseline.json",
     "scripts/worker-smoke-run.ts"
   ],
   "denylist": [
@@ -45,6 +46,7 @@
     "scripts/pack-review-runner.ts",
     "scripts/pr2-foundation/post-review-smoke.ts",
     "scripts/publish-issue-body-sync.ts",
+    "scripts/toolchain/raw-child-process-baseline.json",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
