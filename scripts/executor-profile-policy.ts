@@ -4,6 +4,12 @@ export const EXECUTOR_PROFILE_REFUSALS = [
   'executor_route_mismatch',
 ] as const;
 
+export const EXECUTOR_PROFILE_REFUSAL = {
+  routeUnavailable: EXECUTOR_PROFILE_REFUSALS[0],
+  effortChannelUnavailable: EXECUTOR_PROFILE_REFUSALS[1],
+  routeMismatch: EXECUTOR_PROFILE_REFUSALS[2],
+} as const;
+
 export type ExecutorProfileRefusal = (typeof EXECUTOR_PROFILE_REFUSALS)[number];
 export type ExecutorFamily = 'cursor' | 'opencode';
 export type ExecutorProfileSurface = 'task' | 'smoke';
@@ -23,6 +29,7 @@ export interface ExecutorFamilyDescriptor {
   readonly orcaAgent: string;
   readonly catalogCommand: readonly string[];
   readonly capabilityProbeCommands: readonly (readonly string[])[];
+  readonly smokeCapabilityProbeCommands: readonly (readonly string[])[];
 }
 
 export interface SemanticExecutorProfile {
@@ -56,6 +63,10 @@ export type RouteAdmissionVerdict =
   | { readonly ok: true; readonly route: ExecutorRoute }
   | { readonly ok: false; readonly refusal: ExecutorProfileRefusal };
 
+export type SpawnApplicabilityVerdict =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly refusal: 'executor_route_unavailable' | 'executor_effort_channel_unavailable' };
+
 export interface ExecutorInvocationShape {
   readonly executable: string;
   readonly command: string;
@@ -87,6 +98,7 @@ export const EXECUTOR_FAMILY_DESCRIPTORS: Readonly<Record<ExecutorFamily, Execut
     orcaAgent: 'cursor',
     catalogCommand: ['cursor-agent', '--list-models'],
     capabilityProbeCommands: [],
+    smokeCapabilityProbeCommands: [],
   },
   opencode: {
     family: 'opencode',
@@ -104,12 +116,23 @@ export const EXECUTOR_FAMILY_DESCRIPTORS: Readonly<Record<ExecutorFamily, Execut
       ['opencode', 'debug', 'agent', '--help'],
       ['opencode', 'debug', 'config', '--help'],
     ],
+    smokeCapabilityProbeCommands: [
+      ['opencode', '--help'],
+      ['opencode', 'debug', 'agent', '--help'],
+      ['opencode', 'debug', 'config', '--help'],
+    ],
   },
 };
 
 export const CURSOR_TASK_ROUTE_CAPABILITIES: ExecutorEdgeCapabilities = {
   provider: { available: true, supportsModel: true, supportsEffort: true },
   exactTerminal: { available: true, supportsModel: true, supportsEffort: true },
+};
+
+export const CURSOR_SMOKE_CAPABILITY: RouteCapability = {
+  available: true,
+  supportsModel: true,
+  supportsEffort: true,
 };
 
 const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
@@ -180,22 +203,35 @@ export function executorCatalogContains(profile: SemanticExecutorProfile, output
   return pattern.test(output);
 }
 
-export function openCodeEdgeCapabilities(probeOutputs: readonly string[]): ExecutorEdgeCapabilities {
-  const tuiHelp = probeOutputs[1] ?? '';
+export function openCodeTuiCapability(tuiHelp: string): RouteCapability {
   const tuiHasModel = /(^|\s)--model(?:[=\s,]|$)/mu.test(tuiHelp);
   const tuiHasVariant = /(^|\s)--variant(?:[=\s,]|$)/mu.test(tuiHelp);
+  return {
+    available: tuiHasModel,
+    supportsModel: tuiHasModel,
+    supportsEffort: tuiHasVariant,
+  };
+}
+
+export function openCodeEdgeCapabilities(probeOutputs: readonly string[]): ExecutorEdgeCapabilities {
+  // capabilityProbeCommands fixes the TUI help observation at index 1.
+  const exactTerminal = openCodeTuiCapability(probeOutputs[1] ?? '');
 
   // The provider path stays closed in this package revision unless the downstream
   // supervised-start validator is changed from fresh implementation-time evidence.
   // Merely observing provider help is intentionally not enough to authorize it.
   return {
     provider: { available: false, supportsModel: false, supportsEffort: false },
-    exactTerminal: {
-      available: tuiHasModel,
-      supportsModel: tuiHasModel,
-      supportsEffort: tuiHasVariant,
-    },
+    exactTerminal,
   };
+}
+
+export function evaluateExecutorSpawnApplicability(capability: RouteCapability): SpawnApplicabilityVerdict {
+  if (capability.available && capability.supportsModel && capability.supportsEffort) return { ok: true };
+  if (capability.available && capability.supportsModel && !capability.supportsEffort) {
+    return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.effortChannelUnavailable };
+  }
+  return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.routeUnavailable };
 }
 
 function routeCapability(capabilities: ExecutorEdgeCapabilities, route: ExecutorRoute): RouteCapability {
@@ -217,11 +253,11 @@ export function evaluateExecutorRouteAdmission(input: {
   if (input.startMode) {
     const requested = routeCapability(input.edgeCapabilities, input.startMode);
     if (routeAdmitted(requested)) return { ok: true, route: input.startMode };
-    if (providerAdmitted || exactAdmitted) return { ok: false, refusal: 'executor_route_mismatch' };
+    if (providerAdmitted || exactAdmitted) return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.routeMismatch };
     if (requested.available && requested.supportsModel && !requested.supportsEffort) {
-      return { ok: false, refusal: 'executor_effort_channel_unavailable' };
+      return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.effortChannelUnavailable };
     }
-    return { ok: false, refusal: 'executor_route_unavailable' };
+    return { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.routeUnavailable };
   }
 
   if (input.profile.family === 'cursor' && providerAdmitted) {
@@ -235,8 +271,8 @@ export function evaluateExecutorRouteAdmission(input: {
   const effortMissing = [input.edgeCapabilities.provider, input.edgeCapabilities.exactTerminal]
     .some((capability) => capability.available && capability.supportsModel && !capability.supportsEffort);
   return effortMissing
-    ? { ok: false, refusal: 'executor_effort_channel_unavailable' }
-    : { ok: false, refusal: 'executor_route_unavailable' };
+    ? { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.effortChannelUnavailable }
+    : { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.routeUnavailable };
 }
 
 export function buildExecutorCommand(profile: SemanticExecutorProfile): ExecutorInvocationShape {
