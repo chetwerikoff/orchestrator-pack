@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1702,
+  "declared_paths": [
+    "scripts/pr2-foundation/fleet-nudge-actuator.test.ts"
+  ],
+  "denylist": [
+    ".env",
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
+    "scripts/pr2-foundation/fleet-escalation-delivery.ts",
+    "scripts/pr2-foundation/fleet-nudge-actuator.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/vitest-runtime-history.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/pr2-foundation/fleet-nudge-actuator.test.ts"
+  ],
+  "source_revision": "78e06cee8150f1797a4b7130b2108639d2364f66"
+}
