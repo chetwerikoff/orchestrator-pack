@@ -250,7 +250,7 @@ describe('pack-review current-head REST read', () => {
 
     expect(head).toBe(HEAD_A);
     expect(invocations).toEqual([{
-      command: 'gh',
+      command: path.join(repoRoot, 'scripts', 'gh'),
       args: [
         'pr', 'view', '1517', '--repo', 'chetwerikoff/orchestrator-pack',
         '--json', 'headRefOid,state',
