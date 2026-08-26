@@ -2,6 +2,7 @@
 
 import './toolchain/native-entrypoint-preflight.ts';
 import { execFileSync } from 'node:child_process';
+import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { readLines, readText } from './lib/reviewer-cli-io.ts';
 import {
   buildStructuredStatusRecord,
@@ -203,7 +204,7 @@ export function fetchIssueBodyFromGitHub(
   repoRoot: string = process.cwd(),
 ): string {
   const ghArgs = ['issue', 'view', String(issueNumber), '--json', 'body'];
-  const raw = execFileSync('gh', ghArgs, { encoding: 'utf8', cwd: repoRoot });
+  const raw = execFileSync(resolveTrackedGhWrapper(), ghArgs, { encoding: 'utf8', cwd: repoRoot });
   const payload = JSON.parse(raw) as { body?: string };
   const body = payload.body;
   if (typeof body !== 'string') {
