@@ -306,6 +306,19 @@ export async function reconcilePostReviewSmoke(
   const tempRoot = mkdtempSync(path.join(tmpdir(), 'opk-post-review-smoke-'));
   const issueBodyFile = path.join(tempRoot, 'issue.md');
   writeFileSync(issueBodyFile, issueBody, 'utf8');
+  const injectedIssueBodyResolver = dependencies.readIssueBody
+    ? (smokeOptions: CliOptions, suppliedBody: string): string => {
+      if (smokeOptions.issueNumber !== issueNumber
+          || smokeOptions.prNumber !== candidate.prNumber
+          || smokeOptions.headSha.trim().toLowerCase() !== headSha
+          || smokeOptions.repoRoot !== initial.binding.worker.workspacePath
+          || smokeOptions.cwd !== initial.binding.worker.workspacePath
+          || suppliedBody !== issueBody) {
+        throw new Error('post_review_smoke_injected_target_mismatch');
+      }
+      return issueBody;
+    }
+    : undefined;
   let smokeActionEntered = false;
   let remoteAssignmentObserved: WorkerAssignment | undefined;
   const startFence = async <T>(action: () => T | Promise<T>): Promise<SmokeStartFenceResult<T>> => {
@@ -393,6 +406,7 @@ export async function reconcilePostReviewSmoke(
     const exitCode = await runAttempt(options, {
       adapter: dependencies.adapter,
       startFence,
+      ...(injectedIssueBodyResolver ? { resolveIssueBody: injectedIssueBodyResolver } : {}),
     });
     if (!smokeActionEntered) {
       return {

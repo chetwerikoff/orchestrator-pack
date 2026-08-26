@@ -3,7 +3,7 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcessSync } from './kernel/subprocess.ts';
-import { ghApiJson } from './lib/gh-repo-resolve.mjs';
+import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -132,6 +132,7 @@ export interface SmokeAttemptDependencies {
     complexity: SmokeComplexity | string,
     env: Readonly<NodeJS.ProcessEnv>,
   ) => SmokeExecutorProfile;
+  readonly resolveIssueBody?: (options: CliOptions, suppliedIssueBody: string) => string;
 }
 
 interface SmokeChildResult {
@@ -314,6 +315,19 @@ export function runSmokeGhSync(
   extraEnv: Readonly<NodeJS.ProcessEnv> = {},
 ): ReturnType<typeof runProcessSync> {
   return runProcessSync({
+    command: resolveTrackedGhWrapper(),
+    args: [...args],
+    cwd,
+    env: { ...buildSmokeGhChildEnv(), ...extraEnv },
+  });
+}
+
+function runSmokeGhWriteSync(
+  args: readonly string[],
+  cwd: string,
+  extraEnv: Readonly<NodeJS.ProcessEnv> = {},
+): ReturnType<typeof runProcessSync> {
+  return runProcessSync({
     command: 'gh',
     args: [...args],
     cwd,
@@ -370,8 +384,18 @@ function repositoryFromGithubUrl(value: unknown): string {
   return match ? `${match[1]}/${match[2]}` : '';
 }
 
+function smokeGhApiJson(label: string, endpoint: string, cwd: string): unknown {
+  const output = requireProcessOutput(label, runSmokeGhSync(['api', endpoint], cwd));
+  try {
+    return JSON.parse(output) as unknown;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label}: tracked gh returned invalid JSON: ${detail}`);
+  }
+}
+
 function githubApiObject(label: string, endpoint: string, cwd: string): Record<string, unknown> {
-  const value = ghApiJson('gh', endpoint, { cwd }) as unknown;
+  const value = smokeGhApiJson(label, endpoint, cwd);
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${label}: expected one JSON object`);
   }
@@ -490,11 +514,11 @@ export function fetchPrComments(
   const pages: unknown[][] = [];
   const perPage = 100;
   for (let page = 1; page <= 100; page += 1) {
-    const batch = ghApiJson(
-      'gh',
+    const batch = smokeGhApiJson(
+      'comment-census',
       `repos/${repositorySlug}/issues/${prNumber}/comments?per_page=${perPage}&page=${page}`,
-      { cwd: repoRoot },
-    ) as unknown;
+      repoRoot,
+    );
     if (!Array.isArray(batch)) {
       throw new Error('comment_census: comment page was not an array');
     }
@@ -557,7 +581,7 @@ export function publishPrComment(prNumber: number, body: string, repoRoot: strin
   const bodyFile = join(tempDir, 'body.md');
   try {
     writeFileSync(bodyFile, JSON.stringify({ body }), 'utf8');
-    requireProcessOutput('gh api issue comment', runSmokeGhSync(
+    requireProcessOutput('gh api issue comment', runSmokeGhWriteSync(
       ['api', `repos/${TRUSTED_REPOSITORY_SLUG}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot,
     ));
   } finally {
@@ -1297,7 +1321,12 @@ export async function runSmokeAttempt(
   const suppliedTier = parseComplexityTierFence(suppliedIssueBody);
   if (smokeOrderingRequired(suppliedIssueBody) && suppliedTier.kind === 'tier-fence') {
     try {
-      issueBody = resolveSmokeTarget(options, suppliedIssueBody).issueBody;
+      const resolveIssueBody = dependencies.resolveIssueBody
+        ?? ((targetOptions: CliOptions, body: string) => resolveSmokeTarget(targetOptions, body).issueBody);
+      issueBody = resolveIssueBody(options, suppliedIssueBody);
+      if (typeof issueBody !== 'string') {
+        throw new Error('trusted_target: Issue body resolver returned a non-string value');
+      }
     } catch (error) {
       const report = operationalReport('BLOCKED', options, {
         action: 'bind smoke to trusted live Issue and PR',

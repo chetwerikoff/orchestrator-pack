@@ -10,6 +10,8 @@ import {
   extractLinkedIssueNumber,
   resolveLatestCommittedSnapshot,
 } from '../../../scripts/pr-scope-check.ts';
+import { resolveTrackedGhWrapper } from '../../../scripts/lib/gh-resolve-real-binary.mjs';
+import { resolveNameWithOwner } from '../../../scripts/lib/gh-repo-resolve.mjs';
 
 export interface ResolvedScopeContext {
   issueNumber: number | null;
@@ -27,12 +29,27 @@ function shouldSkipGh(): boolean {
   return process.env.VITEST === 'true' || process.env.OPK_CODEX_REVIEW_SKIP_GH === '1';
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function reportTrackedGhTransportFailure(error: unknown): void {
+  process.stderr.write(`[codex-pr-reviewer] tracked GitHub transport unavailable: ${errorMessage(error)}\n`);
+}
+
 function readGhJsonBody(
   repoRoot: string,
-  command: string,
   args: string[],
 ): Record<string, unknown> | null {
   if (shouldSkipGh()) {
+    return null;
+  }
+
+  let command: string;
+  try {
+    command = resolveTrackedGhWrapper();
+  } catch (error) {
+    reportTrackedGhTransportFailure(error);
     return null;
   }
 
@@ -44,7 +61,8 @@ function readGhJsonBody(
       timeout: GH_TIMEOUT_MS,
     });
     return JSON.parse(output) as Record<string, unknown>;
-  } catch {
+  } catch (error) {
+    reportTrackedGhTransportFailure(error);
     return null;
   }
 }
@@ -54,24 +72,31 @@ function bodyFromGhJson(parsed: Record<string, unknown> | null): string | null {
   return typeof body === 'string' ? body : null;
 }
 
+function localRepoSlug(repoRoot: string): string | null {
+  try {
+    return resolveNameWithOwner({ cwd: repoRoot, realGh: resolveTrackedGhWrapper() });
+  } catch (error) {
+    reportTrackedGhTransportFailure(error);
+    return null;
+  }
+}
+
 function fetchIssueBody(repoRoot: string, issueNumber: number): string | null {
-  const parsed = readGhJsonBody(repoRoot, 'gh', [
-    'issue',
-    'view',
-    String(issueNumber),
-    '--json',
-    'body',
+  const repoSlug = localRepoSlug(repoRoot);
+  if (!repoSlug) return null;
+  const parsed = readGhJsonBody(repoRoot, [
+    'api',
+    `repos/${repoSlug}/issues/${issueNumber}`,
   ]);
   return bodyFromGhJson(parsed);
 }
 
 function fetchPrBody(repoRoot: string, prNumber: number): string | null {
-  const parsed = readGhJsonBody(repoRoot, 'gh', [
-    'pr',
-    'view',
-    String(prNumber),
-    '--json',
-    'body',
+  const repoSlug = localRepoSlug(repoRoot);
+  if (!repoSlug) return null;
+  const parsed = readGhJsonBody(repoRoot, [
+    'api',
+    `repos/${repoSlug}/pulls/${prNumber}`,
   ]);
   return bodyFromGhJson(parsed);
 }

@@ -3,7 +3,7 @@
  * Resolve the real gh binary — identity-based terminality (Issue #442).
  * Delegates only to native gh executables, never shell/node wrapper shims.
  */
-import { closeSync, existsSync, openSync, readSync } from 'node:fs';
+import { accessSync, closeSync, constants, existsSync, openSync, readSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -11,6 +11,31 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const PACK_SCRIPTS_DIR = resolve(__dirname, '..');
 export const PACK_ROOT = resolve(PACK_SCRIPTS_DIR, '..');
 export const WRAPPER_PATH = join(PACK_SCRIPTS_DIR, 'gh');
+export const TRACKED_GH_UNAVAILABLE_REASON = 'missing_pack_gh';
+export const TRACKED_GH_UNAVAILABLE_DIAGNOSTIC =
+  'command-runtime-bootstrap: missing or unusable tracked GitHub transport scripts/gh';
+
+/**
+ * Resolve one already-identified tracked wrapper path without consulting PATH or
+ * falling back to a different executable. Production callers use the default
+ * WRAPPER_PATH; the explicit argument exists for command-runtime/test roots.
+ * @param {string} [wrapperPath]
+ * @returns {string}
+ */
+export function resolveTrackedGhWrapper(wrapperPath = WRAPPER_PATH) {
+  const candidate = resolve(wrapperPath);
+  try {
+    if (!statSync(candidate).isFile()) {
+      throw new Error('not a regular file');
+    }
+    const mode = process.platform === 'win32' ? constants.R_OK : constants.R_OK | constants.X_OK;
+    accessSync(candidate, mode);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${TRACKED_GH_UNAVAILABLE_DIAGNOSTIC} at ${candidate}: ${detail}`, { cause: error });
+  }
+  return candidate;
+}
 
 /** Max non-native gh candidates on PATH before fail-closed (defense-in-depth). */
 export const MAX_NON_NATIVE_GH_CANDIDATES = 64;

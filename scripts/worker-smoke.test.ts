@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { parseSmokeTestPlan } from './draft-discipline.mjs';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runProcessSync } from './kernel/subprocess.ts';
@@ -1052,18 +1052,22 @@ describe('worker-smoke consolidated gate regressions', () => {
     mkdirSync(bin, { recursive: true });
     const body = planBody([{ action: 'caller writes Issue body', expected: 'gate evaluates fetched bytes' }]);
     const issueBodyFile = join(root, 'caller-issue.md');
+    const nativeCallsFile = join(root, 'native-calls.jsonl');
     writeFileSync(issueBodyFile, `${body}\n`, 'utf8');
     const suppliedBody = readFileSync(issueBodyFile, 'utf8');
     expect(suppliedBody).toBe(`${body}\n`);
 
-    executable(join(bin, 'gh'), `#!/usr/bin/env node
-const endpoint = process.argv[3] ?? '';
+    symlinkSync(process.execPath, join(bin, 'gh'));
+    writeFileSync(join(root, 'api'), `
+const { appendFileSync } = require('node:fs');
+const endpoint = process.argv[2] ?? '';
+appendFileSync(${JSON.stringify(nativeCallsFile)}, JSON.stringify({ endpoint, wrapperActive: process.env.GH_WRAPPER_ACTIVE ?? '' }) + '\\n', 'utf8');
 if (endpoint === 'user') {
   process.stdout.write(JSON.stringify({ login: '${TRUSTED_ACTOR}' }));
 } else if (endpoint.endsWith('/issues/1343')) {
   process.stdout.write(JSON.stringify({
     number: 1343,
-    body: process.env.FAKE_ISSUE_BODY,
+    body: ${JSON.stringify(body)},
     html_url: 'https://github.com/${REPOSITORY}/issues/1343',
     state: 'open',
   }));
@@ -1080,7 +1084,7 @@ if (endpoint === 'user') {
   process.stderr.write('unexpected endpoint: ' + endpoint);
   process.exitCode = 2;
 }
-`);
+`, 'utf8');
     expect(runChild('git', ['init', '--quiet', root], { encoding: 'utf8' }).status).toBe(0);
     expect(runChild(
       'git',
@@ -1089,10 +1093,8 @@ if (endpoint === 'user') {
     ).status).toBe(0);
 
     const previousPath = process.env.PATH;
-    const previousBody = process.env.FAKE_ISSUE_BODY;
     const previousReceiptRoot = process.env.WORKER_SMOKE_RECEIPT_ROOT;
     process.env.PATH = `${bin}:${previousPath ?? ''}`;
-    process.env.FAKE_ISSUE_BODY = body;
     process.env.WORKER_SMOKE_RECEIPT_ROOT = root;
     try {
       const smoke = report('PASS', [scenario(
@@ -1109,11 +1111,15 @@ if (endpoint === 'user') {
         options,
         gateDependencies(body, [comments, comments, comments], root, resolveSmokeTarget),
       )).toBe(0);
+      const nativeCalls = readFileSync(nativeCallsFile, 'utf8')
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { endpoint: string; wrapperActive: string });
+      expect(nativeCalls.length).toBeGreaterThan(0);
+      expect(nativeCalls.every((call) => call.wrapperActive === '1')).toBe(true);
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
-      if (previousBody === undefined) delete process.env.FAKE_ISSUE_BODY;
-      else process.env.FAKE_ISSUE_BODY = previousBody;
       if (previousReceiptRoot === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
       else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceiptRoot;
       rmSync(root, { recursive: true, force: true });
