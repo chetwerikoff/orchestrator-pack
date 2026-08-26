@@ -768,8 +768,6 @@ export function establishRuntimeSmokeDelivery(input: {
       return { ok: true, observationToken: token, submitCount };
     }
 
-    // Pane output is not delivery evidence for an ambiguous dispatch. Preserve
-    // output observation only for an evidence-backed dispatched result.
     if (dispatched.status === 'dispatched') {
       const read = input.adapter.readBoundedOutput({
         worker: input.worker,
@@ -1319,13 +1317,16 @@ export async function runSmokeAttempt(
 
   let smokeProfile: SmokeExecutorProfile;
   try {
+    const injectedDryRunHarness = options.dryRun && dependencies.adapter !== undefined;
     smokeProfile = dependencies.resolveProfile
       ? dependencies.resolveProfile(options.smokeComplexity, process.env)
-      : resolveLiveSmokeExecutorProfile(
-        options.smokeComplexity,
-        process.env,
-        (args) => runSmokeProfileChild(args, options.cwd, process.env),
-      );
+      : injectedDryRunHarness
+        ? resolveSmokeExecutorProfile(options.smokeComplexity, process.env)
+        : resolveLiveSmokeExecutorProfile(
+          options.smokeComplexity,
+          process.env,
+          (args) => runSmokeProfileChild(args, options.cwd, process.env),
+        );
   } catch (error) {
     const report = operationalReport('BLOCKED', options, {
       action: 'resolve smoke executor profile',
