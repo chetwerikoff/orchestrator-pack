@@ -460,7 +460,10 @@ function configPermissionFromRuleset(value: unknown): Record<string, unknown> | 
 export function openCodeConfigPaths(
   cwd: string,
   configHome: string,
-  env: Pick<NodeJS.ProcessEnv, 'OPENCODE_CONFIG' | 'OPENCODE_CONFIG_DIR'>,
+  env: {
+    readonly OPENCODE_CONFIG?: string;
+    readonly OPENCODE_CONFIG_DIR?: string;
+  },
 ): readonly string[] {
   return [...new Set([
     env.OPENCODE_CONFIG_DIR?.trim() || `${configHome}/opencode`,
