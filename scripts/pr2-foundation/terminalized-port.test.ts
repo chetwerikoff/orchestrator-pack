@@ -168,6 +168,9 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     const deliverySource = readFileSync(path.resolve('scripts/lib/pack-review-delivery.ts'), 'utf8');
     expect(deliverySource).toContain("description === 'pack review completed with no findings.'");
     expect(deliverySource).toContain('projectRunnerPackReviewStatusFromCombined');
+    expect(source).toContain("['api', '--paginate', '--slurp', endpoint]");
+    expect(source).toContain('/statuses?per_page=100');
+    expect(source).not.toContain('/commits/${headSha}/status`');
     expect(source).toContain('open: target.prOpen');
     expect(source).toContain('expectedTarget: target.expectedTarget');
     expect(source).toContain('evaluateReadiness({');
