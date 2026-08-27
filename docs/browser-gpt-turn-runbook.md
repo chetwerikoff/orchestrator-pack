@@ -153,6 +153,64 @@ not infer non-delivery. Re-resolve the current target from `${CHAT_URL}`,
 continue sanctioned observation, and harvest the answer with the same
 `${INVOCATION_ID}`. The saved target id may be stale.
 
+### Non-success observation gate
+
+The sole bypass is `lifecycle_outcome: success` with `turn-result/v1
+state: ok`. Every other outcome—including `driver_error`, `input_invalid`,
+refusal, ambiguous harvest, missing result or envelope, timeout, and incident—
+must complete the applicable observation branch before any resend, replacement
+invocation identity, stage progression, or blocker exit.
+
+First classify the outcome from authoritative transport evidence:
+
+- **no-page-by-construction** applies only when the result proves
+  `send_count: 0` and proves failure before profile verification, CDP
+  connection, page/tab creation, and send. Canonical-input `input_invalid` is
+  an existing example. Do not infer this class from an incident envelope, an
+  absent URL, or generic “pre-send” wording.
+- **page-capable-or-uncertain** is every other non-success outcome.
+
+For page-capable-or-uncertain outcomes, before any next workflow action:
+
+1. Run `npm run browser-gpt-page-probe -- inspect --cdp "<endpoint>" --url
+   "<chat-url>"`. “Owned prompt present” is true only when exactly one current
+   user node carries the retained transport-owned `OPKTURNV1...` invocation
+   marker. URL presence, prompt text, product ids, message counts, and older
+   turns do not prove ownership.
+2. Check observable Issue-side publication evidence using the canonical Issue
+   root review evidence already recorded for the current admitted work. Select
+   only `reviewer-invocation-envelope/v1` records matching the current
+   `stageAttemptId`, `stage`, `reviewerSlot`, and `sourceRevision`, then use
+   only their recorded `invocationId` values with the existing complete,
+   authenticated Issue-comment census owned by `produce-artifacts`.
+
+There is no invented Issue-lifetime stage/slot-to-invocation index. If envelope
+correlation or the authenticated census is unavailable or incomplete, comment
+absence is unknown, not proven.
+
+For no-page-by-construction, record the exact transport result/cause proving
+zero send and no browser/page side effect; the page probe is not applicable
+because no owned conversation page exists. Still perform the available
+Issue-side check for the recorded invocation. This branch creates no generic
+retry authority: correction, retry, or reinvocation remains legal only under
+the existing owning contract, including the existing manager-owned
+pre-consumption correction seam.
+
+Until the applicable observation completes, do not relaunch or resend, mint a
+replacement invocation identity, advance or settle the stage on an assumption
+of non-delivery, or declare a blocker/stop. An incident or launcher envelope
+is never proof of non-delivery.
+
+The observation determines the next action: an exact owned marker with a reply
+is harvested under the original invocation id; an owned marker without a reply
+gets bounded wait and re-probe; proven no-page uses only existing correction or
+retry authority; and marker absence permits resend/relaunch only when complete
+known-invocation publication absence is proven and the existing invocation/retry
+contract independently authorizes it. Ambiguous ownership or incomplete
+evidence permits no resend. If the required observation surface is unavailable
+and no other legal manager action exists, a blocker must name that exact
+unavailable observation and its observed failure.
+
 ## Publication and tab lifecycle
 
 Canonical reviewer admission compares **unmarked** input bytes. Only after a
