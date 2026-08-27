@@ -194,26 +194,33 @@ export function runFinalAcceptance(
   const workdir = input.workdir ?? defaultWorkdir(input.issueNumber);
   const bootstrapDiagnostics = ensureProjectionLabels(transport, input.repo);
   diagnostics.push(...bootstrapDiagnostics);
-  if (bootstrapDiagnostics.length > 0) {
-    return { ok: false, diagnostics, guardErrors: ['projection label bootstrap failed'], projectionPendingRepair: true };
-  }
+  let projectionPendingRepair = bootstrapDiagnostics.length > 0;
 
   const censusState = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
   diagnostics.push(...censusState.diagnostics);
-  if (!censusState.fetched.commentsComplete) {
-    return { ok: false, diagnostics, guardErrors: ['comment census incomplete'] };
+  const censusUsable = censusState.fetched.commentsComplete
+    && !censusState.diagnostics.some((item) => item.code === 'malformed-marker');
+  if (!censusUsable) {
+    projectionPendingRepair = true;
+    diagnostics.push({
+      code: 'public-journal-gap',
+      message: 'public journal state is unavailable for audit/projection; content acceptance will use live Issue bytes and substantive result data',
+    });
   }
-  if (censusState.diagnostics.some((item) => item.code === 'malformed-marker')) {
-    return { ok: false, diagnostics, guardErrors: ['journal contains a malformed hidden marker'] };
-  }
-  const publishedAuthorStateResult = resolvePublishedAuthorState({
-    adjudication: input.operatorAdjudication,
-    repo: input.repo,
-    issueNumber: input.issueNumber,
-    comments: censusState.fetched.comments,
-  });
+  const publishedAuthorStateResult = censusUsable
+    ? resolvePublishedAuthorState({
+        adjudication: input.operatorAdjudication,
+        repo: input.repo,
+        issueNumber: input.issueNumber,
+        comments: censusState.fetched.comments,
+      })
+    : { errors: [], state: undefined };
   if (publishedAuthorStateResult.errors.length > 0) {
-    return { ok: false, diagnostics, guardErrors: publishedAuthorStateResult.errors };
+    projectionPendingRepair = true;
+    diagnostics.push(...publishedAuthorStateResult.errors.map((message) => ({
+      code: 'public-journal-gap' as const,
+      message: `author-state audit unavailable: ${message}`,
+    })));
   }
   let liveIssue: ReturnType<typeof fetchIssueRevision>;
   try {
@@ -240,26 +247,33 @@ export function runFinalAcceptance(
   }
   const terminalRevision = terminalRevisionResult.revision;
 
-  const head = censusState.lineage.head;
-  if (!head || head.logical.schema !== CYCLE_SCHEMA) {
-    diagnostics.push({ code: 'orphan-cycle', message: 'no canonical cycle head for final acceptance' });
-    return { ok: false, diagnostics, guardErrors: ['missing canonical cycle head'] };
-  }
-  const headCycle = head.logical as CycleEventLogical;
-  if (headCycle['cycle-id'] !== input.cycleId) {
-    return { ok: false, diagnostics, guardErrors: ['cycle head mismatch'] };
-  }
-  const terminalRevisionErrors = validateTerminalSourceRevision(
-    headCycle['source-revision'],
-    terminalRevision,
-    liveRevision,
-  );
-  if (terminalRevisionErrors.length > 0) {
-    return {
-      ok: false,
-      diagnostics,
-      guardErrors: terminalRevisionErrors,
-    };
+  const head = censusUsable ? censusState.lineage.head : null;
+  const headCycle = head?.logical.schema === CYCLE_SCHEMA
+    ? head.logical as CycleEventLogical
+    : null;
+  if (!headCycle) {
+    projectionPendingRepair = true;
+    diagnostics.push({ code: 'orphan-cycle', message: 'no canonical cycle head for audit/projection' });
+  } else {
+    if (headCycle['cycle-id'] !== input.cycleId) {
+      projectionPendingRepair = true;
+      diagnostics.push({
+        code: 'public-journal-gap',
+        message: `audit cycle differs from caller metadata: caller=${input.cycleId || '<missing>'} canonical=${headCycle['cycle-id']}`,
+      });
+    }
+    const terminalRevisionErrors = validateTerminalSourceRevision(
+      headCycle['source-revision'],
+      terminalRevision,
+      liveRevision,
+    );
+    if (terminalRevisionErrors.length > 0) {
+      projectionPendingRepair = true;
+      diagnostics.push(...terminalRevisionErrors.map((message) => ({
+        code: 'public-journal-gap' as const,
+        message: `audit revision mismatch: ${message}`,
+      })));
+    }
   }
 
   let canonicalInventory: ReturnType<typeof loadCanonicalReceiptInventory>;
@@ -294,9 +308,9 @@ export function runFinalAcceptance(
     stageReceiptPaths: canonicalInventory.receiptPaths,
     episodeAuthority: canonicalInventory.authority,
     tierIntakePath: canonicalInventory.intakePath,
-    cycleId: headCycle['cycle-id'],
+    cycleId: input.cycleId,
     issueRevision: liveRevision,
-    canonicalLineage: censusState.lineage,
+    ...(censusUsable ? { canonicalLineage: censusState.lineage } : {}),
     ...(publishedAuthorStateResult.state ? { publishedAuthorState: publishedAuthorStateResult.state } : {}),
   });
   if (!guard.ok) {
@@ -311,7 +325,7 @@ export function runFinalAcceptance(
       ok: false,
       diagnostics,
       guardErrors: ['unable to re-read current Issue body before final event publication'],
-      eventKey: `${headCycle['cycle-id']}:final-acceptance:${liveRevision}`,
+      eventKey: headCycle ? `${headCycle['cycle-id']}:final-acceptance:${liveRevision}` : undefined,
       projectionPendingRepair: true,
     };
   }
@@ -328,7 +342,16 @@ export function runFinalAcceptance(
       ok: false,
       diagnostics,
       guardErrors: publishBodyErrors,
-      eventKey: `${headCycle['cycle-id']}:final-acceptance:${liveRevision}`,
+      eventKey: headCycle ? `${headCycle['cycle-id']}:final-acceptance:${liveRevision}` : undefined,
+      projectionPendingRepair: true,
+    };
+  }
+
+  if (!headCycle) {
+    return {
+      ok: true,
+      diagnostics,
+      guardErrors: [],
       projectionPendingRepair: true,
     };
   }
@@ -388,9 +411,9 @@ export function runFinalAcceptance(
   );
   if (!published.ok) {
     return {
-      ok: false,
-      diagnostics,
-      guardErrors: published.diagnostics.map((item) => item.message),
+      ok: true,
+      diagnostics: [...diagnostics, ...published.diagnostics],
+      guardErrors: [],
       eventKey,
       projectionPendingRepair: true,
     };
@@ -404,40 +427,6 @@ export function runFinalAcceptance(
       ok: false,
       diagnostics,
       guardErrors: ['unable to confirm issue revision after final event confirmation'],
-      eventKey,
-      projectionPendingRepair: true,
-    };
-  }
-  const refreshed = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
-  if (!refreshed.fetched.commentsComplete) {
-    return {
-      ok: false,
-      diagnostics: [...diagnostics, ...refreshed.diagnostics],
-      guardErrors: ['comment census incomplete after final event confirmation'],
-      eventKey,
-      projectionPendingRepair: true,
-    };
-  }
-  const readbackHeadErrors = validateFinalAcceptanceReadbackHead(
-    refreshed.lineage,
-    headCycle['cycle-id'],
-    headCycle['source-revision'],
-  );
-  if (readbackHeadErrors.length > 0) {
-    return {
-      ok: false,
-      diagnostics: [...diagnostics, ...refreshed.diagnostics],
-      guardErrors: readbackHeadErrors,
-      eventKey,
-      projectionPendingRepair: true,
-    };
-  }
-  const confirmed = refreshed.lineage.eventsByKey.get(eventKey);
-  if (!confirmed || confirmed.fingerprint !== fingerprint) {
-    return {
-      ok: false,
-      diagnostics,
-      guardErrors: [],
       eventKey,
       projectionPendingRepair: true,
     };
@@ -460,6 +449,52 @@ export function runFinalAcceptance(
     };
   }
 
+  const refreshed = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
+  if (!refreshed.fetched.commentsComplete) {
+    return {
+      ok: true,
+      diagnostics: [
+        ...diagnostics,
+        ...refreshed.diagnostics,
+        { code: 'public-journal-gap', message: 'comment census incomplete after content acceptance' },
+      ],
+      guardErrors: [],
+      eventKey,
+      projectionPendingRepair: true,
+    };
+  }
+  const readbackHeadErrors = validateFinalAcceptanceReadbackHead(
+    refreshed.lineage,
+    headCycle['cycle-id'],
+    headCycle['source-revision'],
+  );
+  if (readbackHeadErrors.length > 0) {
+    return {
+      ok: true,
+      diagnostics: [
+        ...diagnostics,
+        ...refreshed.diagnostics,
+        ...readbackHeadErrors.map((message) => ({ code: 'public-journal-gap' as const, message })),
+      ],
+      guardErrors: [],
+      eventKey,
+      projectionPendingRepair: true,
+    };
+  }
+  const confirmed = refreshed.lineage.eventsByKey.get(eventKey);
+  if (!confirmed || confirmed.fingerprint !== fingerprint) {
+    return {
+      ok: true,
+      diagnostics: [
+        ...diagnostics,
+        { code: 'public-journal-gap', message: 'final content acceptance could not be confirmed in the public journal', eventKey },
+      ],
+      guardErrors: [],
+      eventKey,
+      projectionPendingRepair: true,
+    };
+  }
+
   clearPendingEvent(workdir, eventKey);
   const projection = syncIssueProjectionLabels(
     transport,
@@ -471,11 +506,11 @@ export function runFinalAcceptance(
   diagnostics.push(...projection.diagnostics);
   if (projection.ok) clearPersistedCycleId(workdir);
   return {
-    ok: projection.ok,
+    ok: true,
     diagnostics,
     guardErrors: [],
     eventKey,
-    projectionPendingRepair: projection.pendingRepair,
+    projectionPendingRepair: projection.pendingRepair || projectionPendingRepair,
   };
 }
 
