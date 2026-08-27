@@ -238,10 +238,14 @@ export interface TierIntakeAuthorityV1 {
   competitiveDecision?: 'required' | 'skipped';
   competitiveRationale?: string;
 }
+export type ReviewEpisodeValidationPurpose = 'stage-time' | 'final-acceptance';
+
 export interface ReviewEpisodeDerivationAuthorityV1 {
   tierIntake: TierIntakeAuthorityV1;
   receiptInventory: StageReceiptInventoryAuthorityV1;
   claudeProducerEvidence?: readonly unknown[];
+  /** Transient validation purpose; never persisted as review evidence. */
+  validationPurpose?: ReviewEpisodeValidationPurpose;
 }
 
 export interface CanonicalReviewDirectoryV1 {
@@ -462,6 +466,7 @@ function parseInvocation(
   receipt: Pick<StageCompletenessReceiptV1, 'taskIdentity' | 'reviewEpisodeId' | 'stageAttemptId' | 'policyVersion' | 'reviewerCardinality' | 'cardinalityConfigIdentity' | 'stage' | 'sourceRevision' | 'reviewLane'>,
   index: number,
   errors: string[],
+  purpose: ReviewEpisodeValidationPurpose,
 ): ReviewerInvocationEnvelopeV1 | null {
   const label = `stage ${receipt.stage} invocation[${index}]`;
   if (!isRecord(value)) { errors.push(`${label} must be an object`); return null; }
@@ -563,7 +568,11 @@ function parseInvocation(
     ...(receipt.reviewLane ? { reviewLaneRouting: receipt.reviewLane.routing } : {}),
   };
 }
-function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: string[]): void {
+function validateBrowserReceipt(
+  receipt: StageCompletenessReceiptV1,
+  errors: string[],
+  purpose: ReviewEpisodeValidationPurpose,
+): void {
   const requiredSlots = receipt.reviewLane?.finalRequiredSlots ?? expectedSlots(receipt.reviewerCardinality);
   const waivedMissingSlots = reviewLaneWaivedMissingSlots(
     receipt.stage,
@@ -572,14 +581,14 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
     receipt.partialMissingSources,
   );
   if (!Array.isArray(receipt.invocations)) { errors.push(`stage ${receipt.stage} requires invocation envelopes`); return; }
-  const invocations = receipt.invocations.map((value, index) => parseInvocation(value, receipt, index, errors)).filter((value): value is ReviewerInvocationEnvelopeV1 => Boolean(value));
+  const invocations = receipt.invocations.map((value, index) => parseInvocation(value, receipt, index, errors, purpose)).filter((value): value is ReviewerInvocationEnvelopeV1 => Boolean(value));
   const bySlot = new Map<ReviewerSlot, ReviewerInvocationEnvelopeV1[]>();
   const invocationIds = new Set<string>(); const terminalResultIds = new Set<string>(); const artifactCommentIds = new Set<string>();
   for (const invocation of invocations) {
-    if (invocationIds.has(invocation.invocationId)) errors.push(`stage ${receipt.stage} repeats invocationId ${invocation.invocationId}`);
+    if (purpose === 'stage-time' && invocationIds.has(invocation.invocationId)) errors.push(`stage ${receipt.stage} repeats invocationId ${invocation.invocationId}`);
     invocationIds.add(invocation.invocationId);
     if (invocation.terminalResultIdentity) {
-      if (terminalResultIds.has(invocation.terminalResultIdentity)) errors.push(`stage ${receipt.stage} repeats terminalResultIdentity ${invocation.terminalResultIdentity}`);
+      if (purpose === 'stage-time' && terminalResultIds.has(invocation.terminalResultIdentity)) errors.push(`stage ${receipt.stage} repeats terminalResultIdentity ${invocation.terminalResultIdentity}`);
       terminalResultIds.add(invocation.terminalResultIdentity);
     }
     if (invocation.artifactAuthority) {
@@ -613,7 +622,7 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
       const first = attempts[0]!; const retry = attempts[1]!;
       if (retry.attemptOrdinal !== 2 || !retry.retryAttempt) errors.push(`stage ${receipt.stage} slot ${slot} retry envelope is malformed`);
       if (first.sendCount !== 0 || first.retryClass !== 'eligible-zero-send' || !ZERO_SEND_RETRYABLE.has(first.terminalClassification)) errors.push(`stage ${receipt.stage} slot ${slot} retry requires a proven retryable zero-send first result`);
-      if (retry.reviewerSource !== first.reviewerSource) errors.push(`stage ${receipt.stage} slot ${slot} retry must preserve reviewerSource identity`);
+      if (purpose === 'stage-time' && retry.reviewerSource !== first.reviewerSource) errors.push(`stage ${receipt.stage} slot ${slot} retry must preserve reviewerSource identity`);
       if (retry.retryClass === 'eligible-zero-send') errors.push(`stage ${receipt.stage} slot ${slot} retry cannot remain retry-eligible`);
     }
     const final = attempts.at(-1)!;
@@ -629,7 +638,7 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
       ? `github:${invocation.artifactAuthority.repositoryFullName}#${invocation.artifactAuthority.issueNumber}:${invocation.artifactAuthority.commentId}`
       : undefined))
     .filter((source): source is string => Boolean(source));
-  if (new Set(finalSources).size !== finalSources.length) errors.push(`stage ${receipt.stage} reviewer sources must be independent across slots`);
+  if (purpose === 'stage-time' && new Set(finalSources).size !== finalSources.length) errors.push(`stage ${receipt.stage} reviewer sources must be independent across slots`);
   const retryWasUsed = [...bySlot.values()].some((attempts) => attempts.length === 2);
   if (receipt.settlement.retryState === 'eligible' || (hasEligibleRetry && receipt.settlement.retryState !== 'abandoned')) errors.push(`stage ${receipt.stage} remains unsettled while a zero-send retry is eligible`);
   if (retryWasUsed && receipt.settlement.retryState !== 'exhausted') errors.push(`stage ${receipt.stage} used its retry but settlement.retryState is not exhausted`);
@@ -651,7 +660,7 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
   }
   if (!exactIdentitySet(allInvocationCaptures, receipt.relayEligibleCaptures)) errors.push(`stage ${receipt.stage} relayEligibleCaptures do not equal invocation capture evidence`);
   if (receipt.outcome === 'complete' || receipt.outcome === 'partial') {
-    const credentialing = evaluateStageCredentialingSettlement(receipt, receipt.reviewerCardinality, receipt.stage);
+    const credentialing = evaluateStageCredentialingSettlement(receipt, receipt.reviewerCardinality, receipt.stage, purpose);
     errors.push(...credentialing.errors);
     const expectedCredentialing = credentialing.credentialingCaptures as CaptureIdentityV1[];
     if (credentialing.credentialed && !exactIdentitySet(expectedCredentialing, receipt.credentialingCaptures)) {
@@ -697,7 +706,12 @@ function parseClaudeProducerEvidence(input: readonly unknown[], errors: string[]
   }
   return result;
 }
-function validateClaudeReceipt(receipt: StageCompletenessReceiptV1, producerEvidence: Map<string, ClaudeProducerEvidenceV1>, errors: string[]): void {
+function validateClaudeReceipt(
+  receipt: StageCompletenessReceiptV1,
+  producerEvidence: Map<string, ClaudeProducerEvidenceV1>,
+  errors: string[],
+  purpose: ReviewEpisodeValidationPurpose,
+): void {
   if (receipt.policyVersion !== SINGLE_SOURCE_POLICY_VERSION) errors.push('architectural-lens must use single-source/v1');
   if (receipt.policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION) errors.push('architectural-lens cannot use review-lane-routing/v1');
   if (receipt.reviewerCardinality !== 1) errors.push('architectural-lens must remain singular');
@@ -707,10 +721,12 @@ function validateClaudeReceipt(receipt: StageCompletenessReceiptV1, producerEvid
     const branch = receipt.claude;
     const capture = validateCaptureIdentity(branch.capture, 'architectural-lens capture', errors);
     if (!capture || !expectedCaptureName('architectural-lens', capture)) errors.push('architectural-lens capture filename mismatch');
-    if (branch.provider !== 'claude-cli' || !nonEmpty(branch.invocationId) || !nonEmpty(branch.producingRunIdentity) || !nonEmpty(branch.terminalResultIdentity) || !nonEmpty(branch.producerEvidenceIdentity) || branch.terminal !== true || branch.terminalClassification !== 'complete' || branch.exitCode !== 0 || branch.m3Status !== 'recorded') errors.push('architectural-lens capture branch requires immutable producing-run, invocation, terminal CLI result, and M3 evidence');
-    const evidence = producerEvidence.get(branch.producerEvidenceIdentity);
-    if (!evidence) errors.push(`architectural-lens producer evidence ${branch.producerEvidenceIdentity || '<missing>'} is not independently supplied`);
-    else if (evidence.reviewEpisodeId !== receipt.reviewEpisodeId || evidence.stageAttemptId !== receipt.stageAttemptId || evidence.sourceRevision !== receipt.sourceRevision || evidence.invocationId !== branch.invocationId || evidence.producingRunIdentity !== branch.producingRunIdentity || evidence.terminalResultIdentity !== branch.terminalResultIdentity || !capture || !sameCapture(evidence.capture, capture)) errors.push('architectural-lens receipt does not match independently supplied Claude producer evidence');
+    if (purpose === 'stage-time') {
+      if (branch.provider !== 'claude-cli' || !nonEmpty(branch.invocationId) || !nonEmpty(branch.producingRunIdentity) || !nonEmpty(branch.terminalResultIdentity) || !nonEmpty(branch.producerEvidenceIdentity) || branch.terminal !== true || branch.terminalClassification !== 'complete' || branch.exitCode !== 0 || branch.m3Status !== 'recorded') errors.push('architectural-lens capture branch requires immutable producing-run, invocation, terminal CLI result, and M3 evidence');
+      const evidence = producerEvidence.get(branch.producerEvidenceIdentity);
+      if (!evidence) errors.push(`architectural-lens producer evidence ${branch.producerEvidenceIdentity || '<missing>'} is not independently supplied`);
+      else if (evidence.reviewEpisodeId !== receipt.reviewEpisodeId || evidence.stageAttemptId !== receipt.stageAttemptId || evidence.sourceRevision !== receipt.sourceRevision || evidence.invocationId !== branch.invocationId || evidence.producingRunIdentity !== branch.producingRunIdentity || evidence.terminalResultIdentity !== branch.terminalResultIdentity || !capture || !sameCapture(evidence.capture, capture)) errors.push('architectural-lens receipt does not match independently supplied Claude producer evidence');
+    }
     if (capture && !exactIdentitySet([capture], receipt.relayEligibleCaptures)) errors.push('architectural-lens relayEligibleCaptures must contain exactly the Claude capture');
     if (receipt.outcome === 'complete' && capture && !exactIdentitySet([capture], receipt.credentialingCaptures)) errors.push('architectural-lens credentialingCaptures must contain exactly the Claude capture');
   } else if (receipt.claude.kind === 'waiver') {
@@ -721,7 +737,12 @@ function validateClaudeReceipt(receipt: StageCompletenessReceiptV1, producerEvid
   if (!receipt.settlement.allLaunchedTerminal || !receipt.settlement.finalRevisionMatched) errors.push('architectural-lens settlement is incomplete');
   if (receipt.settlement.retryState === 'eligible') errors.push('architectural-lens cannot remain retry-eligible');
 }
-function parseStageReceipt(value: unknown, index: number, errors: string[]): StageCompletenessReceiptV1 | null {
+function parseStageReceipt(
+  value: unknown,
+  index: number,
+  errors: string[],
+  purpose: ReviewEpisodeValidationPurpose,
+): StageCompletenessReceiptV1 | null {
   const label = `stage receipt[${index}]`;
   if (!isRecord(value)) { errors.push(`${label} must be an object`); return null; }
   if (value.schema !== STAGE_COMPLETENESS_RECEIPT_SCHEMA) errors.push(`${label} has unknown schema`);
@@ -744,9 +765,9 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
     ? value.partialMissingSources as PartialMissingSourceWitness[]
     : [];
   const waivedMissingSlots = reviewLaneWaivedMissingSlots(stage, policyVersion, producerEvidence, partialMissingSources);
-  if (reviewLane !== undefined && !isReviewLaneEvidence(reviewLane, waivedMissingSlots)) errors.push(`${label} reviewLane must be complete immutable evidence`);
+  if (reviewLane !== undefined && !isReviewLaneEvidence(reviewLane, waivedMissingSlots, purpose)) errors.push(`${label} reviewLane must be complete immutable evidence`);
   if (!routedPolicy && reviewLane !== undefined) errors.push(`${label} legacy policy cannot carry routed reviewLane evidence`);
-  if (routedPolicy && !isReviewLaneEvidence(reviewLane, waivedMissingSlots)) errors.push(`${label} review-lane-routing/v1 requires full reviewLane evidence`);
+  if (routedPolicy && !isReviewLaneEvidence(reviewLane, waivedMissingSlots, purpose)) errors.push(`${label} review-lane-routing/v1 requires full reviewLane evidence`);
   if (tier !== 'T1' && tier !== 'T2' && tier !== 'T3') errors.push(`${label} has unknown tier`);
   if (!COUNTED_STAGE_TOKENS.has(stage as ReviewStage)) errors.push(`${label} has unknown stage`);
   if (policyVersion !== TRIPLE_SOURCE_POLICY_VERSION && policyVersion !== SINGLE_SOURCE_POLICY_VERSION && policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) errors.push(`${label} has unknown policyVersion`);
@@ -919,7 +940,8 @@ function canonicalStagesFromAuthority(
 }
 export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[], verifiedRelayEvidenceInput: readonly unknown[], authority?: ReviewEpisodeDerivationAuthorityV1): ReviewEpisodeStateV1 {
   const errors: string[] = [];
-  const receipts = stageReceiptsInput.map((value, index) => parseStageReceipt(value, index, errors)).filter((value): value is StageCompletenessReceiptV1 => Boolean(value)).sort((a, b) => a.stageSequence - b.stageSequence || a.stageAttemptId.localeCompare(b.stageAttemptId));
+  const purpose = authority?.validationPurpose ?? 'stage-time';
+  const receipts = stageReceiptsInput.map((value, index) => parseStageReceipt(value, index, errors, purpose)).filter((value): value is StageCompletenessReceiptV1 => Boolean(value)).sort((a, b) => a.stageSequence - b.stageSequence || a.stageAttemptId.localeCompare(b.stageAttemptId));
   const episodeIds = new Set(receipts.map((receipt) => receipt.reviewEpisodeId));
   const taskIdentities = new Set(receipts.map((receipt) => receipt.taskIdentity));
   const firstRevisions = new Set(receipts.map((receipt) => receipt.episodeFirstRevision));
@@ -932,26 +954,30 @@ export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[],
   validateInventoryAuthority(receipts, authority, errors);
   const tier = tiers.size === 1 ? [...tiers][0]! : null;
   const canonicalStages = canonicalStagesFromAuthority(tier, authority, errors);
-  const producerEvidence = parseClaudeProducerEvidence(authority?.claudeProducerEvidence ?? [], errors);
+  const producerEvidenceErrors: string[] = [];
+  const producerEvidence = parseClaudeProducerEvidence(
+    authority?.claudeProducerEvidence ?? [],
+    purpose === 'stage-time' ? errors : producerEvidenceErrors,
+  );
   const attemptIds = new Set<string>(); const stageSequences = new Set<number>(); const receiptIds = new Set<string>();
   const episodeInvocationIds = new Set<string>(); const episodeTerminalResultIds = new Set<string>(); const producingRunIds = new Set<string>();
   for (const receipt of receipts) {
     if (attemptIds.has(receipt.stageAttemptId)) errors.push(`duplicate stageAttemptId ${receipt.stageAttemptId}`); attemptIds.add(receipt.stageAttemptId);
     if (stageSequences.has(receipt.stageSequence)) errors.push(`duplicate stageSequence ${receipt.stageSequence}`); stageSequences.add(receipt.stageSequence);
     if (receiptIds.has(receipt.stageReceiptId)) errors.push(`duplicate stageReceiptId ${receipt.stageReceiptId}`); receiptIds.add(receipt.stageReceiptId);
-    if (receipt.stage === 'architectural-lens') validateClaudeReceipt(receipt, producerEvidence, errors); else validateBrowserReceipt(receipt, errors);
+    if (receipt.stage === 'architectural-lens') validateClaudeReceipt(receipt, producerEvidence, errors, purpose); else validateBrowserReceipt(receipt, errors, purpose);
     for (const invocation of receipt.invocations ?? []) {
       if (!isRecord(invocation)) continue;
       const invocationId = nonEmpty(invocation.invocationId) ? invocation.invocationId.trim() : '';
       const terminalResultIdentity = nonEmpty(invocation.terminalResultIdentity) ? invocation.terminalResultIdentity.trim() : '';
-      if (invocationId) { if (episodeInvocationIds.has(invocationId)) errors.push(`review episode repeats invocationId ${invocationId}`); episodeInvocationIds.add(invocationId); }
-      if (terminalResultIdentity) { if (episodeTerminalResultIds.has(terminalResultIdentity)) errors.push(`review episode repeats terminalResultIdentity ${terminalResultIdentity}`); episodeTerminalResultIds.add(terminalResultIdentity); }
+      if (invocationId) { if (purpose === 'stage-time' && episodeInvocationIds.has(invocationId)) errors.push(`review episode repeats invocationId ${invocationId}`); episodeInvocationIds.add(invocationId); }
+      if (terminalResultIdentity) { if (purpose === 'stage-time' && episodeTerminalResultIds.has(terminalResultIdentity)) errors.push(`review episode repeats terminalResultIdentity ${terminalResultIdentity}`); episodeTerminalResultIds.add(terminalResultIdentity); }
     }
     if (receipt.claude?.kind === 'capture') {
       const branch = receipt.claude;
-      if (episodeInvocationIds.has(branch.invocationId)) errors.push(`review episode repeats invocationId ${branch.invocationId}`); episodeInvocationIds.add(branch.invocationId);
-      if (episodeTerminalResultIds.has(branch.terminalResultIdentity)) errors.push(`review episode repeats terminalResultIdentity ${branch.terminalResultIdentity}`); episodeTerminalResultIds.add(branch.terminalResultIdentity);
-      if (producingRunIds.has(branch.producingRunIdentity)) errors.push(`review episode repeats Claude producingRunIdentity ${branch.producingRunIdentity}`); producingRunIds.add(branch.producingRunIdentity);
+      if (purpose === 'stage-time' && episodeInvocationIds.has(branch.invocationId)) errors.push(`review episode repeats invocationId ${branch.invocationId}`); episodeInvocationIds.add(branch.invocationId);
+      if (purpose === 'stage-time' && episodeTerminalResultIds.has(branch.terminalResultIdentity)) errors.push(`review episode repeats terminalResultIdentity ${branch.terminalResultIdentity}`); episodeTerminalResultIds.add(branch.terminalResultIdentity);
+      if (purpose === 'stage-time' && producingRunIds.has(branch.producingRunIdentity)) errors.push(`review episode repeats Claude producingRunIdentity ${branch.producingRunIdentity}`); producingRunIds.add(branch.producingRunIdentity);
     }
   }
   if (receipts.length > 0) {
