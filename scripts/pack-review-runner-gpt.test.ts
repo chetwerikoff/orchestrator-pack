@@ -16,11 +16,12 @@ import {
 } from './pack-gpt-review.js';
 import {
   isRetryablePackReviewZeroSendCollision,
+  reconcileStalePackReviewRuns,
   resolveCurrentPrHead,
   startPackReview,
 } from './pack-review-runner.js';
 import type { CarryoverReplayResult } from './pack-review-carryover.js';
-import { readPackReviewAuthority } from './pack-review-state.js';
+import { initializePackReviewAuthority, readPackReviewAuthority } from './pack-review-state.js';
 import {
   createPackReviewRun,
   getPackReviewRun,
@@ -33,6 +34,18 @@ import {
 import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
 import { computeBoundIssueSnapshotHash } from './lib/reverify-bound-issue-snapshot.js';
+import {
+  formatPackGptSourceCommentEnvelope,
+  type PackGptSourceIdentity,
+} from './lib/pack-gpt-source-comment-contract.js';
+import type {
+  PackGptSourceCommentTransport,
+  PackGptSourceGithubComment,
+} from './lib/pack-gpt-source-comment.js';
+import type {
+  GithubReviewSummary,
+  GithubReviewTransport,
+} from './lib/github-review-reconciliation.js';
 
 const repoRoot = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
 const HEAD_A = 'a'.repeat(40);
@@ -2089,5 +2102,181 @@ describe('Issue #1393 legacy aggregate compatibility and runner harvest matrix',
     expect(posted).not.toContain('GPT source source-01 did not complete');
     expect(posted).not.toContain('GPT source source-02 did not complete');
     expect(posted).not.toContain('GPT source source-03 did not complete');
+  });
+});
+
+describe('Issue #1741 failed GPT round source-comment settlement', () => {
+  it('hydrates complete GitHub sources after stale terminalization without replacing the run', async () => {
+    const storeRoot = tempRoot('opk-gpt-1741-settlement-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    initializePackReviewAuthority({
+      prNumber: 1740,
+      headSha: HEAD_A,
+      tier: 'T1',
+      options: { storeRoot },
+    });
+    const invocationIds = [
+      '11111111-1111-4111-8111-000000000001',
+      '11111111-1111-4111-8111-000000000002',
+      '11111111-1111-4111-8111-000000000003',
+    ];
+    const sourceSlots = invocationIds.map((invocationId, index) => ({
+      slotId: `source-${String(index + 1).padStart(2, '0')}`,
+      ordinal: index + 1,
+      lifecycle: 'terminal' as const,
+      invocationId,
+      attemptOrdinal: 1,
+      admissionStartedAtUtc: '2026-08-27T09:00:00.000Z',
+      terminalClass: 'reviewer_output_malformed',
+      terminalResult: {
+        ...storedTerminalTurnResult(invocationId),
+        source_comment_reconciliation: 'conflict',
+      },
+    }));
+    const created = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1740,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: path.join(storeRoot, 'fm-pointer-notification-episodes'),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      reviewRound: {
+        schema: 'pack-review-gpt-round/v1',
+        reviewer: 'gpt',
+        tier: 'T1',
+        roundOrdinal: 1,
+        cardinality: 3,
+        issueNumber: 1741,
+        boundIssueSnapshotDigest: computeBoundIssueSnapshotHash('```complexity-tier\ntier: T1\n```'),
+        sourceSlots,
+      },
+    }).run;
+    const failed = setPackReviewRunTerminal(created.id, 'failed', {
+      exitCode: 1,
+      failureReason: 'stale_head_before_terminal',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    expect(failed).toMatchObject({ status: 'failed', failureReason: 'stale_head_before_terminal' });
+    expect(failed.reviewVerdict).toBeUndefined();
+
+    const identities = new Map<string, PackGptSourceIdentity>();
+    const sourceCommentIds = [5437227435, 5437250730, 5437258834];
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async (): Promise<PackGptSourceGithubComment[]> => sourceCommentIds.map((id, index) => {
+        const identity = identities.get(`source-${String(index + 1).padStart(2, '0')}`)!;
+        const timestamp = '2026-08-27T09:00:00.000Z';
+        return {
+          id,
+          body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+          actorLogin: 'browser-gpt-bot',
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          url: `https://github.com/chetwerikoff/orchestrator-pack/pull/1740#issuecomment-${id}`,
+          issueUrl: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/1740',
+        };
+      }),
+      getComment: async (id): Promise<PackGptSourceGithubComment> => {
+        const comment = (await sourceTransport.listComments()).find((candidate) => candidate.id === id);
+        if (!comment) throw new Error(`fixture source comment ${String(id)} missing`);
+        return comment;
+      },
+    };
+    for (const slot of failed.reviewRound!.sourceSlots) {
+      identities.set(slot.slotId, {
+        repository: 'chetwerikoff/orchestrator-pack',
+        prNumber: 1740,
+        headSha: HEAD_A,
+        runId: failed.id,
+        slotId: slot.slotId,
+        invocationId: slot.invocationId!,
+      });
+    }
+
+    const replacement = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1740,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      reviewRound: {
+        schema: 'pack-review-gpt-round/v1',
+        reviewer: 'gpt',
+        tier: 'T1',
+        roundOrdinal: 1,
+        cardinality: 3,
+        issueNumber: 1741,
+        boundIssueSnapshotDigest: computeBoundIssueSnapshotHash('```complexity-tier\ntier: T1\n```'),
+        sourceSlots: invocationIds.map((invocationId, index) => ({
+          slotId: `source-${String(index + 1).padStart(2, '0')}`,
+          ordinal: index + 1,
+          lifecycle: 'planned' as const,
+        })),
+      },
+    });
+    expect(replacement.created).toBe(false);
+    expect(replacement.reused).toBe(true);
+    expect(replacement.reason).toBe('gpt_round_requires_settlement');
+    expect(replacement.run.id).toBe(failed.id);
+
+    const reviews: GithubReviewSummary[] = [];
+    let finalReviewPosts = 0;
+    const finalReviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'pack-review-bot',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        finalReviewPosts += 1;
+        const id = 174100 + finalReviewPosts;
+        const review: GithubReviewSummary = {
+          id,
+          body,
+          commitId,
+          url: `https://github.com/chetwerikoff/orchestrator-pack/pull/1740#pullrequestreview-${id}`,
+          state: 'COMMENTED',
+          userLogin: 'pack-review-bot',
+          submittedAt: '2026-08-27T10:00:00.000Z',
+        };
+        reviews.push(review);
+        return { id, url: review.url };
+      },
+      dismissReview: async () => {},
+    };
+
+    const reconciliation = await reconcileStalePackReviewRuns({
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      sourceRepoRoot: path.join(storeRoot, 'fm-pointer-notification-episodes'),
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1740,
+      immediate: true,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: finalReviewTransport,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueNumber: 1741,
+      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+      fixtureBoundIssueSnapshotBytes: '```complexity-tier\ntier: T1\n```',
+    });
+
+    expect(reconciliation.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: failed.id, recovered: true, statusReconciled: true }),
+    ]));
+    const settled = getPackReviewRun(failed.id, { projectId: 'orchestrator-pack', storeRoot });
+    expect(settled).toMatchObject({
+      status: 'up_to_date',
+      reviewVerdict: 'clean',
+      journalOutcome: { state: 'persisted' },
+    });
+    expect(settled?.reviewRound?.sourceSlots.every((slot) => slot.terminalClass === 'complete_clean')).toBe(true);
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
+    expect(finalReviewPosts).toBe(1);
   });
 });
