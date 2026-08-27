@@ -1,5 +1,5 @@
 {
-  "measuredHead": "80abf40e73417ee4dcdf1268fd21aca511e11968",
+  "measuredHead": "d63c1cd72cf9a7f44c44f9e84f2069daad47bac2",
   "broaderStatusClosed": false,
   "dormantRetainedCoverageComplete": false,
   "unresolvedCurrentPrescriptiveScriptTargets": [
@@ -72,104 +72,6 @@
       "column": 23,
       "tokenKind": "script",
       "matchedBytes": "scripts/check-side-process-launch-contract.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 52,
-      "column": 100,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/verify.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 53,
-      "column": 102,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/check-reusable.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 54,
-      "column": 104,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/check-ci-cheap-wins.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 55,
-      "column": 108,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/check-verify-runtime.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 57,
-      "column": 105,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/run-vitest-light-lane.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 58,
-      "column": 96,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/test-all.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 63,
-      "column": 89,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/check-ci-pipeline-split.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 64,
-      "column": 97,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/check-review-start-claim-guard.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 65,
-      "column": 77,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/install-pester-ci.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 67,
-      "column": 83,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/run-vitest-heavy-shard.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 68,
-      "column": 97,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/run-vitest-heavy-shard.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 70,
-      "column": 70,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/pr-scope-check.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 75,
-      "column": 51,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/lint-self-architect.ps1"
-    },
-    {
-      "sourcePath": "scripts/ci-preflight/contract.ts",
-      "line": 76,
-      "column": 46,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/ci-test-aggregate.ps1"
     },
     {
       "sourcePath": "scripts/lib/contract-evidence-reverify.ts",
@@ -266,12 +168,8 @@
   "retainedDispositions": [],
   "trackedPowerShell": [
     {
-      "path": "scripts/bootstrap.ps1",
-      "currentPrescriptive": true
-    },
-    {
       "path": "scripts/check-ci-cheap-wins.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/check-ci-pipeline-split.ps1",
@@ -378,30 +276,6 @@
       "currentPrescriptive": false
     },
     {
-      "path": "scripts/graphify/bootstrap.ps1",
-      "currentPrescriptive": true
-    },
-    {
-      "path": "scripts/graphify/build-graph.ps1",
-      "currentPrescriptive": true
-    },
-    {
-      "path": "scripts/graphify/lib/Resolve-GraphifyEnv.ps1",
-      "currentPrescriptive": true
-    },
-    {
-      "path": "scripts/graphify/query-graph.ps1",
-      "currentPrescriptive": true
-    },
-    {
-      "path": "scripts/graphify/refresh-graph.ps1",
-      "currentPrescriptive": true
-    },
-    {
-      "path": "scripts/install-cursor-agent-tui-shim.ps1",
-      "currentPrescriptive": true
-    },
-    {
       "path": "scripts/install-git-hooks.ps1",
       "currentPrescriptive": true
     },
@@ -479,10 +353,6 @@
     },
     {
       "path": "scripts/lib/Contract-EvidenceReverify-Core.ps1",
-      "currentPrescriptive": false
-    },
-    {
-      "path": "scripts/lib/Cursor-Agent-TuiShim.ps1",
       "currentPrescriptive": false
     },
     {
@@ -615,10 +485,6 @@
     },
     {
       "path": "scripts/lib/Orchestrator-Escalation.ps1",
-      "currentPrescriptive": false
-    },
-    {
-      "path": "scripts/lib/Orchestrator-FleetHygiene.ps1",
       "currentPrescriptive": false
     },
     {
@@ -782,10 +648,6 @@
       "currentPrescriptive": false
     },
     {
-      "path": "scripts/orchestrator-fleet-hygiene-sentinel.ps1",
-      "currentPrescriptive": true
-    },
-    {
       "path": "scripts/orchestrator-review-start-preflight.ps1",
       "currentPrescriptive": false
     },
@@ -835,7 +697,7 @@
     },
     {
       "path": "scripts/run-vitest-light-lane.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/run-vitest-wallclock-stage.ps1",
@@ -847,10 +709,6 @@
     },
     {
       "path": "scripts/test-all.ps1",
-      "currentPrescriptive": true
-    },
-    {
-      "path": "scripts/verify-cursor-agent-tui-shim.ps1",
       "currentPrescriptive": true
     },
     {
@@ -1043,117 +901,6 @@
           "matchedBytes": "scripts/check-reusable.ps1",
           "sourceKind": "instruction-command",
           "resolvedScriptPath": "scripts/check-reusable.ps1"
-        }
-      ]
-    },
-    {
-      "path": "docs/cursor-agent-tui-shim-runbook.md",
-      "sourceKinds": [
-        "instruction-command"
-      ],
-      "runtimeTokens": 3,
-      "scriptTokens": 3,
-      "resolvedTargets": [
-        "scripts/install-cursor-agent-tui-shim.ps1",
-        "scripts/verify-cursor-agent-tui-shim.ps1"
-      ],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 12,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 12,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/install-cursor-agent-tui-shim.ps1",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": "scripts/install-cursor-agent-tui-shim.ps1"
-        },
-        {
-          "line": 22,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 22,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify-cursor-agent-tui-shim.ps1",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": "scripts/verify-cursor-agent-tui-shim.ps1"
-        },
-        {
-          "line": 51,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 51,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify-cursor-agent-tui-shim.ps1",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": "scripts/verify-cursor-agent-tui-shim.ps1"
-        }
-      ]
-    },
-    {
-      "path": "docs/examples/fleet-hygiene-sentinel.cron.example",
-      "sourceKinds": [
-        "instruction-command"
-      ],
-      "runtimeTokens": 1,
-      "scriptTokens": 0,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 6,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "docs/fleet-hygiene-sentinel-runbook.md",
-      "sourceKinds": [
-        "instruction-command"
-      ],
-      "runtimeTokens": 2,
-      "scriptTokens": 1,
-      "resolvedTargets": [
-        "scripts/orchestrator-fleet-hygiene-sentinel.ps1"
-      ],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 54,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 67,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 67,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/orchestrator-fleet-hygiene-sentinel.ps1",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": "scripts/orchestrator-fleet-hygiene-sentinel.ps1"
         }
       ]
     },
@@ -1494,13 +1241,9 @@
         "instruction-command",
         "instruction-directive"
       ],
-      "runtimeTokens": 5,
-      "scriptTokens": 4,
-      "resolvedTargets": [
-        "scripts/bootstrap.ps1",
-        "scripts/check-reusable.ps1",
-        "scripts/verify.ps1"
-      ],
+      "runtimeTokens": 2,
+      "scriptTokens": 0,
+      "resolvedTargets": [],
       "unresolvedScriptTokens": 0,
       "samples": [
         {
@@ -1512,48 +1255,6 @@
         },
         {
           "line": 40,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 93,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 93,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify.ps1",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": "scripts/verify.ps1"
-        },
-        {
-          "line": 94,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 94,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-reusable.ps1",
-          "sourceKind": "instruction-command",
-          "resolvedScriptPath": "scripts/check-reusable.ps1"
-        },
-        {
-          "line": 100,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/bootstrap.ps1",
-          "sourceKind": "instruction-directive",
-          "resolvedScriptPath": "scripts/bootstrap.ps1"
-        },
-        {
-          "line": 135,
           "tokenKind": "runtime",
           "matchedBytes": "pwsh",
           "sourceKind": "instruction-command",
@@ -1926,107 +1627,6 @@
       ]
     },
     {
-      "path": "scripts/ci-preflight/cli.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 2,
-      "scriptTokens": 0,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 60,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 103,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/ci-preflight/contract.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 14,
-      "scriptTokens": 20,
-      "resolvedTargets": [
-        "scripts/check-ci-cheap-wins.ps1",
-        "scripts/check-reusable.ps1",
-        "scripts/check-verify-runtime.ps1",
-        "scripts/run-vitest-light-lane.ps1",
-        "scripts/test-all.ps1",
-        "scripts/verify.ps1"
-      ],
-      "unresolvedScriptTokens": 14,
-      "samples": [
-        {
-          "line": 52,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 52,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/verify.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 52,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/verify.ps1"
-        },
-        {
-          "line": 53,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 53,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/check-reusable.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 53,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-reusable.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/check-reusable.ps1"
-        },
-        {
-          "line": 54,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 54,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/check-ci-cheap-wins.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
       "path": "scripts/estate-cut/task-311-tests/task-311-scope.test-support.ts",
       "sourceKinds": [
         "script-token-reference"
@@ -2049,146 +1649,6 @@
           "matchedBytes": "pwsh",
           "sourceKind": "script-token-reference",
           "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/graphify/check-graphify-no-installer.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 4,
-      "resolvedTargets": [
-        "scripts/graphify/build-graph.ps1",
-        "scripts/graphify/lib/Resolve-GraphifyEnv.ps1",
-        "scripts/graphify/query-graph.ps1",
-        "scripts/graphify/refresh-graph.ps1"
-      ],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 6,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/graphify/build-graph.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/graphify/build-graph.ps1"
-        },
-        {
-          "line": 7,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/graphify/refresh-graph.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/graphify/refresh-graph.ps1"
-        },
-        {
-          "line": 8,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/graphify/query-graph.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/graphify/query-graph.ps1"
-        },
-        {
-          "line": 12,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/graphify/lib/Resolve-GraphifyEnv.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/graphify/lib/Resolve-GraphifyEnv.ps1"
-        }
-      ]
-    },
-    {
-      "path": "scripts/graphify/README.md",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 7,
-      "scriptTokens": 11,
-      "resolvedTargets": [
-        "scripts/graphify/bootstrap.ps1",
-        "scripts/graphify/build-graph.ps1",
-        "scripts/graphify/lib/Resolve-GraphifyEnv.ps1",
-        "scripts/graphify/query-graph.ps1",
-        "scripts/graphify/refresh-graph.ps1"
-      ],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 17,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/graphify/lib/Resolve-GraphifyEnv.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/graphify/lib/Resolve-GraphifyEnv.ps1"
-        },
-        {
-          "line": 30,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 30,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/graphify/bootstrap.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/graphify/bootstrap.ps1"
-        },
-        {
-          "line": 49,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 49,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/graphify/build-graph.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/graphify/build-graph.ps1"
-        },
-        {
-          "line": 50,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 50,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/graphify/build-graph.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/graphify/build-graph.ps1"
-        },
-        {
-          "line": 51,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/graphify/requirements.lock.txt",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 1,
-      "resolvedTargets": [
-        "scripts/graphify/bootstrap.ps1"
-      ],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 12,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/graphify/bootstrap.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/graphify/bootstrap.ps1"
         }
       ]
     },
