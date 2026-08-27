@@ -1,5 +1,5 @@
 {
-  "measuredHead": "fcedf8e2e4a8a74d5ac083ac64bc5b4b48942c3b",
+  "measuredHead": "01aa5f2817bbfbc3ff6aa711845cc66786af2e8f",
   "sources": [
     {
       "path": ".cursor/skills/direct-fix-checklist/SKILL.md",
@@ -140,90 +140,64 @@
       "sourceKinds": [
         "workflow-token-reference"
       ],
-      "runtimeTokens": 11,
-      "scriptTokens": 10,
+      "runtimeTokens": 5,
+      "scriptTokens": 5,
       "resolvedTargets": [],
-      "unresolvedScriptTokens": 10,
+      "unresolvedScriptTokens": 5,
       "samples": [
         {
-          "line": 98,
+          "line": 104,
           "tokenKind": "runtime",
           "matchedBytes": "pwsh",
           "sourceKind": "workflow-token-reference",
           "resolvedTrackedPath": null
         },
         {
-          "line": 99,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/verify.ps1",
-          "sourceKind": "workflow-token-reference",
-          "resolvedTrackedPath": null
-        },
-        {
-          "line": 102,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "workflow-token-reference",
-          "resolvedTrackedPath": null
-        },
-        {
-          "line": 103,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/check-reusable.ps1",
-          "sourceKind": "workflow-token-reference",
-          "resolvedTrackedPath": null
-        },
-        {
-          "line": 106,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "workflow-token-reference",
-          "resolvedTrackedPath": null
-        },
-        {
-          "line": 107,
+          "line": 105,
           "tokenKind": "script",
           "matchedBytes": "./scripts/check-ci-cheap-wins.ps1",
           "sourceKind": "workflow-token-reference",
           "resolvedTrackedPath": null
         },
         {
-          "line": 110,
+          "line": 108,
           "tokenKind": "runtime",
           "matchedBytes": "pwsh",
           "sourceKind": "workflow-token-reference",
           "resolvedTrackedPath": null
         },
         {
-          "line": 111,
+          "line": 109,
           "tokenKind": "script",
           "matchedBytes": "./scripts/check-verify-runtime.ps1",
           "sourceKind": "workflow-token-reference",
           "resolvedTrackedPath": null
-        }
-      ]
-    },
-    {
-      "path": ".github/workflows/typescript-foundation.yml",
-      "sourceKinds": [
-        "workflow-token-reference"
-      ],
-      "runtimeTokens": 2,
-      "scriptTokens": 0,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 0,
-      "samples": [
+        },
         {
-          "line": 86,
+          "line": 126,
           "tokenKind": "runtime",
-          "matchedBytes": "PowerShell",
+          "matchedBytes": "pwsh",
           "sourceKind": "workflow-token-reference",
           "resolvedTrackedPath": null
         },
         {
-          "line": 101,
+          "line": 129,
+          "tokenKind": "script",
+          "matchedBytes": "./scripts/check-ci-pipeline-split.ps1",
+          "sourceKind": "workflow-token-reference",
+          "resolvedTrackedPath": null
+        },
+        {
+          "line": 217,
           "tokenKind": "runtime",
-          "matchedBytes": "PowerShell",
+          "matchedBytes": "pwsh",
+          "sourceKind": "workflow-token-reference",
+          "resolvedTrackedPath": null
+        },
+        {
+          "line": 218,
+          "tokenKind": "script",
+          "matchedBytes": "./scripts/check-review-start-claim-guard.ps1",
           "sourceKind": "workflow-token-reference",
           "resolvedTrackedPath": null
         }
@@ -234,48 +208,34 @@
       "sourceKinds": [
         "workflow-token-reference"
       ],
-      "runtimeTokens": 4,
-      "scriptTokens": 2,
+      "runtimeTokens": 3,
+      "scriptTokens": 1,
       "resolvedTargets": [],
-      "unresolvedScriptTokens": 2,
+      "unresolvedScriptTokens": 1,
       "samples": [
         {
-          "line": 105,
+          "line": 300,
           "tokenKind": "runtime",
           "matchedBytes": "pwsh",
           "sourceKind": "workflow-token-reference",
           "resolvedTrackedPath": null
         },
         {
-          "line": 108,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/run-vitest-heavy-shard.ps1",
-          "sourceKind": "workflow-token-reference",
-          "resolvedTrackedPath": null
-        },
-        {
-          "line": 301,
+          "line": 322,
           "tokenKind": "runtime",
           "matchedBytes": "pwsh",
           "sourceKind": "workflow-token-reference",
           "resolvedTrackedPath": null
         },
         {
-          "line": 323,
+          "line": 336,
           "tokenKind": "runtime",
           "matchedBytes": "pwsh",
           "sourceKind": "workflow-token-reference",
           "resolvedTrackedPath": null
         },
         {
-          "line": 337,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "workflow-token-reference",
-          "resolvedTrackedPath": null
-        },
-        {
-          "line": 389,
+          "line": 388,
           "tokenKind": "script",
           "matchedBytes": "./scripts/refresh-vitest-runtime-history.ps1",
           "sourceKind": "workflow-token-reference",
@@ -288,48 +248,20 @@
       "sourceKinds": [
         "workflow-token-reference"
       ],
-      "runtimeTokens": 3,
-      "scriptTokens": 3,
+      "runtimeTokens": 1,
+      "scriptTokens": 1,
       "resolvedTargets": [],
-      "unresolvedScriptTokens": 3,
+      "unresolvedScriptTokens": 1,
       "samples": [
         {
-          "line": 40,
+          "line": 123,
           "tokenKind": "runtime",
           "matchedBytes": "pwsh",
           "sourceKind": "workflow-token-reference",
           "resolvedTrackedPath": null
         },
         {
-          "line": 41,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/run-vitest-wallclock-stage.ps1",
-          "sourceKind": "workflow-token-reference",
-          "resolvedTrackedPath": null
-        },
-        {
-          "line": 55,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "workflow-token-reference",
-          "resolvedTrackedPath": null
-        },
-        {
-          "line": 60,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/ci-wallclock-e2e-aggregate.ps1",
-          "sourceKind": "workflow-token-reference",
-          "resolvedTrackedPath": null
-        },
-        {
-          "line": 119,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "workflow-token-reference",
-          "resolvedTrackedPath": null
-        },
-        {
-          "line": 125,
+          "line": 129,
           "tokenKind": "script",
           "matchedBytes": "./scripts/ci-wallclock-e2e-notify.ps1",
           "sourceKind": "workflow-token-reference",
@@ -7500,25 +7432,6 @@
       ]
     },
     {
-      "path": "scripts/verify.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 1,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 1,
-      "samples": [
-        {
-          "line": 30,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-reusable.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedTrackedPath": null
-        }
-      ]
-    },
-    {
       "path": "scripts/vitest-ci-runner-control-flow.test.ts",
       "sourceKinds": [
         "script-token-reference"
@@ -7530,25 +7443,6 @@
       "samples": [
         {
           "line": 274,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedTrackedPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/vitest-ci-runner.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 1,
-      "scriptTokens": 0,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 390,
           "tokenKind": "runtime",
           "matchedBytes": "pwsh",
           "sourceKind": "script-token-reference",
@@ -7622,23 +7516,6 @@
     }
   ],
   "outerSources": [
-    {
-      "path": ".cursor/rules/ts-first-script-authoring.mdc",
-      "runtimeTokens": 2,
-      "scriptTokens": 0,
-      "samples": [
-        {
-          "line": 2,
-          "tokenKind": "runtime",
-          "matchedBytes": "PowerShell"
-        },
-        {
-          "line": 13,
-          "tokenKind": "runtime",
-          "matchedBytes": "PowerShell"
-        }
-      ]
-    },
     {
       "path": "plugins/_shared/tests/normalize.test.ts",
       "runtimeTokens": 0,
