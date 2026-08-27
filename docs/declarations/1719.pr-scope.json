@@ -1,0 +1,29 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1719,
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md"
+  ],
+  "denylist": [
+    ".cursor/",
+    ".github/",
+    "AGENTS.md",
+    "briefs/",
+    "CLAUDE.md",
+    "credentials/",
+    "docs/flow-manager-long-running-child-runbook.md",
+    "packages/core/",
+    "plugins/",
+    "prompts/",
+    "README.md",
+    "scripts/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md"
+  ],
+  "source_revision": "ee1064ff54ffafc29bf738fd68b12d27309cb50f"
+}
