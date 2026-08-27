@@ -166,6 +166,7 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(terminalPass).toBeGreaterThanOrEqual(0);
     expect(postSmokeCall).toBeGreaterThan(terminalPass);
 
+    expect(existsSync(path.resolve('scripts/direct-pack-review-status.ts'))).toBe(true);
     const workflow = readFileSync(path.resolve('.github/workflows/direct-pack-review-status.yml'), 'utf8');
     expect(workflow).toContain('pull_request_review:');
     expect(workflow).toContain('types: [submitted]');
