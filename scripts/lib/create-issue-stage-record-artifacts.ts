@@ -1187,11 +1187,20 @@ function readTurnResultForInvocation(
     if (transportClassification === 'complete') errors.push(`turn-result/v1 artifact for ${label} has an invalid state: ${resolved}`);
     return null;
   }
+  const terminalFieldsValid = typeof value.scope === 'string'
+    && typeof value.cause === 'string'
+    && typeof value.configured_profile_key === 'string';
+  if (transportClassification === 'complete' && !terminalFieldsValid) {
+    errors.push(`turn-result/v1 artifact for ${label} is missing required terminal fields: ${resolved}`);
+  }
   const frozenPolicy = parseReviewerSourcePolicy(optionalString(invocation.reviewerSource) ?? '')?.capturePolicy;
   const recoveryRequired = artifactBacked
     && invocation.sendCount === 1
     && frozenPolicy === 'direct-publication/v1'
-    && value.state === 'recovery_required';
+    && value.state === 'recovery_required'
+    && value.cause === 'direct_publication_no_owned_publication'
+    && value.send_count === 1
+    && terminalFieldsValid;
   if (transportClassification === 'complete' && value.state !== 'ok' && !recoveryRequired) {
     errors.push(`turn-result/v1 artifact for ${label} is not a successful terminal result: ${resolved}`);
   }
@@ -1208,10 +1217,6 @@ function readTurnResultForInvocation(
   }
   if (transportClassification !== 'complete' || recoveryRequired) return identity;
 
-  const terminalFieldsValid = typeof value.scope === 'string'
-    && typeof value.cause === 'string'
-    && typeof value.configured_profile_key === 'string';
-  if (!terminalFieldsValid) errors.push(`turn-result/v1 artifact for ${label} is missing required terminal fields: ${resolved}`);
   const output = isRecord(value.output) ? value.output : null;
   if (
     !output
