@@ -116,9 +116,11 @@ Therefore:
 - one three-capture `stageAttemptId` is one full stage and one logical round,
   never three rounds;
 - flow-manager consolidation is forbidden;
-- live T3 final acceptance accepts the fixed three-source rounds once #1171
-  validates canonical history, topology, relay, ledger, and terminal binding;
-  `triple-source/v1` alone is not a blocker.
+- live T3 final acceptance accepts the fixed three-source rounds once the
+  substantive topology, relay, ledger/disposition, body, and terminal binding
+  are valid. Historical producer/cycle/receipt/source-revision equality is
+  audit metadata at final completion, not a second authority; `triple-source/v1`
+  alone is not a blocker.
 
 ### Per-tier pipeline (ceilings, not quotas)
 
@@ -380,15 +382,43 @@ three-source pre-lens aggregation is a progression gate only:
 - **`pre-lens`** — T3 only, after the selected three-source `competitive`
   stage (if journaled as needed) and three-source `architectural-review` stage
   are settled, fully relayed, and occurrence-accounted.
-- **`final-acceptance`** — all tiers, requiring terminal GPT M5 and all applicable
-  M2/M3/relay/count evidence. T3 plural-source activation is governed by #1171's
-  canonical logical-round and terminal acceptance checks.
+- **`final-acceptance`** — all tiers, requiring terminal GPT M5 and all
+  applicable substantive M2/M3/relay/count evidence. Required stage slots and
+  one-shot terminal content remain authoritative; producer/reviewer-source/run/
+  terminal-result identity and historical cycle/receipt lineage are audit-only
+  at this boundary.
 
 The production CLI reads `--receipt-directory`, immutable `--tier-intake`, all
-`--stage-receipt` files, optional independent `--claude-producer-evidence`, and
+`--stage-receipt` files, optional `--claude-producer-evidence`, and
 `--verified-relay-evidence`; it never derives authority from filenames alone or
-from a caller-selected receipt subset.
+from a caller-selected receipt subset. Independent Claude producer evidence is
+mandatory for live stage-time credentialing of a counted capture; at final
+acceptance the substantive Claude capture/result remains required while its
+producer/run identity is audit-only.
 
+### Final completion identity boundary
+
+Stage-time launch and settlement keep their existing terminal/send/retry/
+no-resend, revision, stage-order, slot-consumption, and repository-trust checks.
+Final completion is narrower: it decides from the stable current Issue plus the
+required substantive stage results, slot cardinality, governed/relayed captures,
+finding dispositions, and one-shot terminal contract. Producer, publisher,
+reviewer-source, invocation/run/terminal-result, receipt-writer, historical
+cycle/source-revision, and journal/projection identities remain auditable but
+cannot independently veto or credential completion.
+
+Multiple trusted materializations for the same semantic stage/source slot are
+duplicate observations only when their canonical UTF-8 substantive result bytes
+are identical; conflicting bytes fail. One recorded artifact cannot satisfy two
+required slots. Public reviewer artifacts continue to require an unedited target
+Issue comment with GitHub `author_association` OWNER/MEMBER/COLLABORATOR and the
+artifact's own `Read revision` equal to its frozen invocation revision.
+
+The terminal non-equal body exception is exactly `rN -> rN+1`; later drift fails.
+Journal/projection publication after successful content acceptance is truthful
+audit/projection work: failure is surfaced without manufacturing replacement
+history and without reversing the already-established content result. A failed
+or unstable final Issue read-back remains blocking.
 ### Claude lens and unavailable skip
 
 Claude remains exactly one pre-terminal source. A counted capture requires a
