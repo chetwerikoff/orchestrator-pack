@@ -474,6 +474,24 @@ function githubApiObject(label: string, endpoint: string, cwd: string): Record<s
   return value as Record<string, unknown>;
 }
 
+function githubApiPaginatedArray(label: string, endpoint: string, cwd: string): readonly unknown[] {
+  const output = requireProcessOutput(
+    label,
+    runSmokeGhSync(['api', '--paginate', '--slurp', endpoint], cwd),
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output) as unknown;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label}: tracked gh returned invalid paginated JSON: ${detail}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${label}: expected one slurped page array`);
+  }
+  return parsed.flatMap((page) => Array.isArray(page) ? page : [page]);
+}
+
 export function exactClosingIssue(body: string): number | undefined {
   const scannable = prBodyScannableForIssueLinks(body);
   const pattern = new RegExp(ISSUE_LINK_PATTERN.source, ISSUE_LINK_PATTERN.flags);
@@ -744,9 +762,9 @@ export function currentPackReviewStatusFact(
   headSha: string,
   repoRoot: string,
 ): PackReviewSemanticSourceState {
-  return projectRunnerPackReviewStatusFromCombined(githubApiObject(
-    'pack-review-status',
-    `repos/${repositorySlug}/commits/${headSha}/status`,
+  return projectRunnerPackReviewStatusFromCombined(githubApiPaginatedArray(
+    'pack-review-status-history',
+    `repos/${repositorySlug}/commits/${headSha}/statuses?per_page=100`,
     repoRoot,
   ));
 }
