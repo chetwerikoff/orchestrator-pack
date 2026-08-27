@@ -1,4 +1,4 @@
-name: issue-1419-post-port-evidence
+name: issue-1419-post-port-source-summary
 
 on:
   push:
@@ -9,23 +9,20 @@ permissions:
   contents: write
 
 jobs:
-  diagnose:
+  summarize:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout exact PR candidate
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: fcedf8e2e4a8a74d5ac083ac64bc5b4b48942c3b
           fetch-depth: 0
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - name: Install from frozen lockfile
-        run: npm ci --include=dev
-      - name: Produce exact-head blocker census
+      - run: npm ci --include=dev
+      - name: Build producer-native source summary
         env:
           MEASURED_HEAD: fcedf8e2e4a8a74d5ac083ac64bc5b4b48942c3b
         run: |
@@ -39,29 +36,52 @@ jobs:
             producerRevision: process.env.MEASURED_HEAD,
           });
           verifyEvidenceIntegrity(evidence);
-          const currentEntries = evidence.entries.filter((entry) => entry.currentPrescriptive);
-          const payload = {
+          const bySource = new Map();
+          for (const entry of evidence.entries.filter((entry) => entry.currentPrescriptive)) {
+            const path = entry.occurrence.sourcePath;
+            if (entry.sourceKind === 'tracked-ps1-file') continue;
+            const row = bySource.get(path) ?? { path, sourceKinds: new Set(), runtimeTokens: 0, scriptTokens: 0, resolvedTargets: new Set(), unresolvedScriptTokens: 0, samples: [] };
+            row.sourceKinds.add(entry.sourceKind);
+            if (entry.occurrence.tokenKind === 'runtime') row.runtimeTokens += 1;
+            if (entry.occurrence.tokenKind === 'script') row.scriptTokens += 1;
+            if (entry.resolvedTrackedPath) row.resolvedTargets.add(entry.resolvedTrackedPath);
+            else if (entry.occurrence.tokenKind === 'script') row.unresolvedScriptTokens += 1;
+            if (row.samples.length < 8) row.samples.push({
+              line: entry.occurrence.line,
+              tokenKind: entry.occurrence.tokenKind,
+              matchedBytes: entry.occurrence.matchedBytes,
+              sourceKind: entry.sourceKind,
+              resolvedTrackedPath: entry.resolvedTrackedPath ?? null,
+            });
+            bySource.set(path, row);
+          }
+          const sources = [...bySource.values()].map((row) => ({
+            ...row,
+            sourceKinds: [...row.sourceKinds].sort(),
+            resolvedTargets: [...row.resolvedTargets].sort(),
+          })).sort((a,b) => a.path.localeCompare(b.path));
+          const outer = new Map();
+          for (const entry of evidence.unclassifiedPowerShellSurfaces) {
+            const row = outer.get(entry.sourcePath) ?? { path: entry.sourcePath, runtimeTokens: 0, scriptTokens: 0, samples: [] };
+            if (entry.tokenKind === 'runtime') row.runtimeTokens += 1;
+            else row.scriptTokens += 1;
+            if (row.samples.length < 8) row.samples.push({line:entry.line,tokenKind:entry.tokenKind,matchedBytes:entry.matchedBytes});
+            outer.set(entry.sourcePath,row);
+          }
+          fs.writeFileSync('/tmp/post-port-source-summary.json', JSON.stringify({
             measuredHead: evidence.measuredHead,
-            broaderStatusClosed: evidence.broaderStatusClosed,
-            dormantRetainedCoverageComplete: evidence.dormantRetainedCoverageComplete,
-            currentSources: [...new Set(currentEntries.filter((entry) => entry.sourceKind !== 'tracked-ps1-file').map((entry) => entry.occurrence.sourcePath))].sort(),
-            currentTargets: [...new Set(currentEntries.filter((entry) => entry.sourceKind === 'tracked-ps1-file').map((entry) => entry.occurrence.sourcePath))].sort(),
-            dormantTargets: [...new Set(evidence.entries.filter((entry) => entry.sourceKind === 'tracked-ps1-file' && !entry.currentPrescriptive && !entry.historicalDisposition).map((entry) => entry.occurrence.sourcePath))].sort(),
-            unclassifiedPowerShellSurfaces: evidence.unclassifiedPowerShellSurfaces,
-            unresolvedCurrentPrescriptiveScriptTargets: evidence.unresolvedCurrentPrescriptiveScriptTargets,
-          };
-          fs.writeFileSync('/tmp/post-port-blockers.json', JSON.stringify(payload, null, 2) + '\n');
+            sources,
+            outerSources: [...outer.values()].sort((a,b)=>a.path.localeCompare(b.path)),
+          }, null, 2) + '\n');
           NODE
-      - name: Publish census on diagnostic branch
-        env:
-          TARGET_BRANCH: ci/issue-1419-post-port-evidence
+      - name: Publish summary
         run: |
           set -euo pipefail
-          git fetch origin "$TARGET_BRANCH"
-          git checkout -B "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
-          cp /tmp/post-port-blockers.json post-port-blockers.json
+          git fetch origin ci/issue-1419-post-port-evidence
+          git checkout -B ci/issue-1419-post-port-evidence origin/ci/issue-1419-post-port-evidence
+          cp /tmp/post-port-source-summary.json post-port-source-summary.json
           git config user.name "orchestrator-pack diagnostics"
           git config user.email "85295154+chetwerikoff@users.noreply.github.com"
-          git add post-port-blockers.json
-          git commit --no-gpg-sign -m "ci: capture issue 1419 blocker census" || exit 0
-          git push origin "HEAD:$TARGET_BRANCH"
+          git add post-port-source-summary.json
+          git commit --no-gpg-sign -m "ci: capture issue 1419 source summary" || exit 0
+          git push origin HEAD:ci/issue-1419-post-port-evidence
