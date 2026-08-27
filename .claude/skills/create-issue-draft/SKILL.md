@@ -93,6 +93,48 @@ attempts the sanctioned **Stop generating** action before recording the incident
 exact-target tab close remains the separate Issue #1266 seam and is not granted
 to recovery by this alignment.
 
+### Manager admission after Browser-GPT non-success
+
+The sole bypass is `lifecycle_outcome: success` with `turn-result/v1
+state: ok`. Every other outcome enters the runbook’s non-success observation
+gate. Completion of that gate is required before the flow-manager may resend or
+relaunch, mint a replacement invocation identity, advance or settle the stage,
+or exit via a blocker.
+
+The manager must first classify authoritative transport evidence as
+**no-page-by-construction** only when it proves `send_count: 0` and failure
+before profile verification, CDP connection, page/tab creation, and send.
+Otherwise the outcome is **page-capable-or-uncertain**. An incident or launcher
+envelope, absent URL, or generic “pre-send” wording never proves
+non-delivery. The no-page branch records its exact zero-send/no-page cause,
+skips the impossible page probe, performs the available Issue-side check, and
+uses only existing correction/retry authority; it does not create generic
+zero-send retry authority.
+
+For page-capable-or-uncertain outcomes, the manager records the sanctioned
+page probe result before any next workflow action. For a governed create-
+Issue/direct-publication turn, it also records the observable Issue-side
+publication check: use only recorded `reviewer-invocation-envelope/v1`
+identities matching the current `stageAttemptId`, `stage`, `reviewerSlot`, and
+`sourceRevision`, resolved through the existing complete authenticated
+Issue-comment census already recorded by `produce-artifacts`. An ordinary
+tracked turn without that governed publication surface records the Issue-side
+check as not applicable and preserves its existing invocation/retry contract.
+Page ownership uses only the existing exact transport-owned `OPKTURNV1...`
+marker rule: exactly one current user node for the retained invocation. There
+is no invented Issue-lifetime stage/slot-to-invocation index; unavailable or
+incomplete governed correlation/census evidence is unknown, not publication
+absence.
+
+An exact owned marker with a reply is harvested under the original invocation
+id; a marker with no reply gets bounded wait and re-probe. For a governed turn,
+marker absence permits resend/relaunch only when complete known-invocation
+publication absence is proven and the existing invocation/retry contract
+independently authorizes it. Ambiguous ownership or incomplete applicable
+evidence permits no resend.
+The manager must not reopen a consumed semantic stage slot or broaden the
+existing pre-consumption correction seam.
+
 ## Manager review brief canon
 
 The following declaration is the sole ordered section list used to build a
