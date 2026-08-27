@@ -8,6 +8,7 @@
     ".github/workflows/",
     "AGENTS.md",
     "CLAUDE.md",
+    "README.md",
     "docs/",
     "prompts/",
     "scripts/"
@@ -26,9 +27,10 @@
     ".github/workflows/",
     "AGENTS.md",
     "CLAUDE.md",
+    "README.md",
     "docs/",
     "prompts/",
     "scripts/"
   ],
-  "source_revision": "4a767a39796db97b0a059c404b4d6efd40c2d981"
+  "source_revision": "387d9609093da7bd5952749439b55e7e8df2f3d4"
 }
