@@ -89,6 +89,7 @@ import {
 } from './pack-review-state.ts';
 import { resolvePackReviewRunStoreRoot } from './lib/pack-review-run-store.ts';
 import { parseComplexityTierFence } from './lib/tier-gate-core.ts';
+import { resolveTierAndCap } from '../docs/review-cycle-cap.mjs';
 import { selectRuntimeAdapter } from './runtime/registry.ts';
 import type {
   RuntimeAdapter,
@@ -1250,11 +1251,12 @@ function beginSmokeOrdering(
     throw new Error('smoke_actor_unsupported');
   }
   const required = smokeOrderingRequired(issueBody);
-  if (!required && actor === 'worker-owned') return null;
+  const plan = resolveSmokeRequirement(issueBody);
+  if (!required && (actor !== 'worker-owned' || plan.requirement !== 'not-applicable')) return null;
   const fence = parseComplexityTierFence(issueBody);
   if (fence.kind !== 'tier-fence') {
-    if (actor === 'worker-owned') return null;
-    throw new Error('smoke_ordering_tier_missing');
+    if (actor === 'worker-owned' && plan.requirement !== 'not-applicable') return null;
+    if (actor !== 'worker-owned') throw new Error('smoke_ordering_tier_missing');
   }
   const projectId = 'orchestrator-pack';
   const storeRoot = resolvePackReviewRunStoreRoot({
@@ -1265,7 +1267,9 @@ function beginSmokeOrdering(
   let authority = initializePackReviewAuthority({
     prNumber: options.prNumber,
     headSha: options.headSha,
-    tier: fence.tier as PackReviewTier,
+    tier: (fence.kind === 'tier-fence'
+      ? fence.tier
+      : resolveTierAndCap({ issueBody }).tier) as PackReviewTier,
     options: authorityOptions,
   });
   if (authority.currentHeadSha !== options.headSha.toLowerCase()) {
@@ -1319,7 +1323,14 @@ export async function runSmokeAttempt(
   const suppliedIssueBody = readIssueBody(options.issueBodyFile);
   let issueBody = suppliedIssueBody;
   const suppliedTier = parseComplexityTierFence(suppliedIssueBody);
-  if (smokeOrderingRequired(suppliedIssueBody) && suppliedTier.kind === 'tier-fence') {
+  const suppliedPlan = resolveSmokeRequirement(suppliedIssueBody);
+  const workerOwnedNotApplicable =
+    (options.smokeActor ?? 'worker-owned') === 'worker-owned'
+    && suppliedPlan.requirement === 'not-applicable';
+  if (
+    (smokeOrderingRequired(suppliedIssueBody) && suppliedTier.kind === 'tier-fence')
+    || workerOwnedNotApplicable
+  ) {
     try {
       const resolveIssueBody = dependencies.resolveIssueBody
         ?? ((targetOptions: CliOptions, body: string) => resolveSmokeTarget(targetOptions, body).issueBody);
@@ -1340,6 +1351,10 @@ export async function runSmokeAttempt(
   }
   const plan = resolveSmokeRequirement(issueBody);
   if (plan.requirement !== 'required') {
+    if (plan.requirement === 'not-applicable' && (options.smokeActor ?? 'worker-owned') === 'worker-owned') {
+      const orderingBinding = beginSmokeOrdering(options, issueBody);
+      finishSmokeOrdering(orderingBinding, 'passed');
+    }
     emit({ ok: true, skipped: true, reason: plan.requirement }, options.json);
     return 0;
   }
