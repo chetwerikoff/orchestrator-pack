@@ -1758,7 +1758,12 @@
       "gateIds": [
         "verify-required-files"
       ],
-      "portedInWave": "3.b"
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "scripts/bootstrap.ts"
+      }
     },
     {
       "id": "verify-inline:required-file:scripts/check-reusable.ps1",
