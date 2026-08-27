@@ -211,8 +211,7 @@ jobs:
         run: npx tsc --project tsconfig.base.json --noEmit
 
       - name: Enforce review-start claim drift guard
-        shell: pwsh
-        run: ./scripts/check-review-start-claim-guard.ps1
+        run: node --experimental-strip-types scripts/review-start-claim-guard.ts
 
   test-vitest-light:
     name: Vitest light lane ${{ matrix.shard }}/${{ needs.plan-vitest-ci-topology.outputs.light_shard_count }}
