@@ -6,7 +6,8 @@
     "scripts/direct-pack-review-status.test.ts",
     "scripts/direct-pack-review-status.ts",
     "scripts/lib/github-review-reconciliation.ts",
-    "scripts/lib/pack-review-delivery.ts"
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     ".orca/",
@@ -20,6 +21,7 @@
     "scripts/direct-pack-review-status.test.ts",
     "scripts/direct-pack-review-status.ts",
     "scripts/lib/github-review-reconciliation.ts",
-    "scripts/lib/pack-review-delivery.ts"
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ]
 }
