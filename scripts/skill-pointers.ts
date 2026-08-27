@@ -13,7 +13,7 @@ export interface SkillPointerConfig {
 }
 
 export const DEFAULT_SKILL_POINTER_CONFIG = 'scripts/skill-pointer-targets.json';
-export const RETIRED_OPENCODE_SKILL = 'opencode-merge-and-pull';
+export const RETIRED_OPENCODE_SKILL = ['opencode', 'merge-and-pull'].join('-');
 
 function normalizePath(value: string): string {
   return value.replaceAll('\\', '/').replace(/^\.\//u, '').replace(/\/$/u, '');

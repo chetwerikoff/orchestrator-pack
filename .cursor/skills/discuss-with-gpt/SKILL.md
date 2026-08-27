@@ -9,7 +9,8 @@ Runs GPT browser work against the custom ChatGPT project. There are two distinct
 roles and their contracts must not be mixed:
 
 - **Standalone adversarial review** — challenges an existing local artifact on
-  explicit user request. It continues to use `driver.mjs`, PASS_ID/SHA validation,
+  explicit user request. It continues to use
+  `../../.claude/skills/discuss-with-gpt/driver.mjs`, PASS_ID/SHA validation,
   and standalone durable pass states.
 - **Tracked create/review transport** — `create-issue-draft` author/reviewer turns
   follow the canonical carrier, runbook, and workflow-owned stage contracts. They
@@ -84,7 +85,7 @@ expected path, discipline checks pass, the review-loop outcome is recorded, and
 the completion record links the brief, draft path, engine, selection basis, tier,
 review outcome, disposition status, discipline results, and final status.
 
-Mechanical guard: `scripts/check-draft-author-relocation-contract.ps1`.
+Mechanical guard: `scripts/draft-author-relocation-contract.mjs`.
 
 ### Fallback and sync boundary
 
@@ -99,6 +100,13 @@ Both standalone and tracked paths require the already-running configured headed
 automation Chrome with a logged-in ChatGPT session. Never type credentials.
 Use the local launcher and gitignored configuration; do not place profile,
 project, conversation, CDP, input, or output values in tracked content.
+
+The standalone support assets are kept under the generated-pointer tree and are
+owned by this procedure: `../../.claude/skills/discuss-with-gpt/config.mjs`,
+`../../.claude/skills/discuss-with-gpt/driver.mjs`,
+`../../.claude/skills/discuss-with-gpt/launch-chrome.sh`,
+`../../.claude/skills/discuss-with-gpt/local.config.example.json`, and
+`../../.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs`.
 
 For tracked create/review turns, follow the canonical carrier
 [`.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc)
@@ -115,7 +123,8 @@ this routing skill does not restate them.
 
 ## Standalone adversarial driver
 
-Standalone `driver.mjs` remains separate from the tracked helper. It keeps prompt
+Standalone `../../.claude/skills/discuss-with-gpt/driver.mjs` remains separate
+from the tracked helper. It keeps prompt
 construction, PASS_ID/DRAFT_SHA256 echo validation, durable pass artifacts, and
 its own supported modes.
 

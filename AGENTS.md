@@ -182,6 +182,12 @@ section linked above before the first side effect. That runbook owns pre-flight,
 runtime identity, review/CI/handoff, required CI, `pack-worker-report`,
 PR-created handoff, review-cycle cap, and worker smoke.
 
+### Worker pre-flight
+
+Before implementation, apply the
+[`Worker pre-flight`](docs/orchestration-runbook.md#worker-pre-flight) contract
+and stop/escalate when the assigned tier cannot contain the work.
+
 If `pack-worker-report` cannot prove the current repository, worker, PR, and
 head binding, **skip silently** for the report write only and continue the
 required task.
