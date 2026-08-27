@@ -1305,6 +1305,7 @@ async function findJournaledDeliveryResumeCandidate(options: {
     );
     if (identity.ok
       && identity.slug === options.repoSlug
+      && packReviewJournaledPayload(candidate)
       && hasCredentialedGptSourceAuthority(candidate)) {
       repositoryBoundCandidates.push(candidate);
     }
@@ -2091,9 +2092,11 @@ async function recoverStaleGptSourceComments(options: {
       });
     for (const snapshotSlot of round.sourceSlots) {
       const currentSlot = round.sourceSlots.find((slot) => slot.slotId === snapshotSlot.slotId)!;
-      if (currentSlot.lifecycle === 'terminal') continue;
       const invocationId = trim(currentSlot.invocationId);
-      if (currentSlot.lifecycle !== 'invocation_started' || !invocationId) {
+      const complete = currentSlot.terminalClass === 'complete_clean'
+        || currentSlot.terminalClass === 'complete_findings';
+      if (complete || (currentSlot.lifecycle === 'terminal' && !invocationId)) continue;
+      if ((currentSlot.lifecycle !== 'invocation_started' && currentSlot.lifecycle !== 'terminal') || !invocationId) {
         unresolved.push(`${currentSlot.slotId}:not_started`);
         continue;
       }
@@ -2794,6 +2797,7 @@ export async function reconcileStalePackReviewRuns(
 
     if (unfinishedTerminal
         && run.reviewRound?.reviewer === 'gpt'
+        && packReviewJournaledPayload(run)
         && packReviewDeliveryNeedsResume(run)) {
       try {
         const resumed = await settleRecoveredGptDelivery({
@@ -2832,7 +2836,11 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
 
-    if (activeStale || immediateActive) {
+    const needsGptSourceRecovery = unfinishedTerminal
+      && run.reviewRound?.reviewer === 'gpt'
+      && !packReviewJournaledPayload(run)
+      && packReviewDeliveryNeedsResume(run);
+    if (activeStale || immediateActive || needsGptSourceRecovery) {
       const recovery = await recoverStaleGptSourceComments({
         run,
         input,
@@ -2878,6 +2886,19 @@ export async function reconcileStalePackReviewRuns(
             nextAction: 'rerun scoped reconcile to resume final delivery',
           });
         }
+        continue;
+      }
+      if (needsGptSourceRecovery) {
+        results.push({
+          runId: run.id,
+          terminalized: false,
+          statusReconciled: false,
+          hydratedSourceCount: recovery.hydratedSourceCount,
+          usableSourceCount: recovery.usableSourceCount,
+          graceExpired: recovery.graceExpired,
+          reason: recovery.reason,
+          nextAction: recovery.nextAction ?? 'rerun scoped reconcile after the source comments are available',
+        });
         continue;
       }
       if (immediateActive && !activeStale) {
@@ -3285,11 +3306,15 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
 
   const recoverableStaleGptFixture = process.env.OPK_VITEST_HARNESS === '1'
     && listPackReviewRunRecordsRaw({ projectId, storeRoot }).some((candidate) => (
-      isPackReviewRunStale(candidate)
-      && candidate.reviewRound?.reviewer === 'gpt'
-      && candidate.reviewRound.sourceSlots.some((slot) => (
-        slot.lifecycle === 'invocation_started' && Boolean(trim(slot.invocationId))
-      ))
+      (isPackReviewRunStale(candidate)
+        && candidate.reviewRound?.reviewer === 'gpt'
+        && candidate.reviewRound.sourceSlots.some((slot) => (
+          slot.lifecycle === 'invocation_started' && Boolean(trim(slot.invocationId))
+        )))
+      || (isPackReviewUnfinishedTerminalRun(candidate)
+        && candidate.reviewRound?.reviewer === 'gpt'
+        && !packReviewJournaledPayload(candidate)
+        && packReviewDeliveryNeedsResume(candidate))
     ));
   await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
