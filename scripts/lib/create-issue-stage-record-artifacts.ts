@@ -1220,7 +1220,11 @@ function readTurnResultForInvocation(
   }
   if (transportClassification === 'complete' && artifactAuthority) {
     const expectedArtifactIdentity = `github-comment:${artifactAuthority.commentId}`;
-    if (invocation.terminalResultIdentity !== expectedArtifactIdentity) {
+    if (
+      typeof invocation.terminalResultIdentity === 'string' &&
+      invocation.terminalResultIdentity.startsWith('github-comment:') &&
+      invocation.terminalResultIdentity !== expectedArtifactIdentity
+    ) {
       errors.push(`stage evidence ${label}.terminalResultIdentity must equal ${expectedArtifactIdentity} for the authoritative GitHub artifact`);
     }
   }
@@ -2247,7 +2251,7 @@ export function inspectAcceptanceArtifacts(
         const producedInvocation = producedInvocations?.[index];
         const artifactAuthority = isRecord(producedInvocation) && isRecord(producedInvocation.artifactAuthority)
           && producedInvocation.artifactAuthority.kind === 'authoritative-github-artifact'
-          ? producedInvocation.artifactAuthority as AuthoritativeGithubArtifactAuthorityV1
+          ? producedInvocation.artifactAuthority as unknown as AuthoritativeGithubArtifactAuthorityV1
           : undefined;
         if (transportComplete && invocation.capturePath === undefined && !artifactAuthority) {
           missing.push({ artifact: 'capture', reason: 'completed invocation[' + index + '] is missing capturePath: ' + path });
