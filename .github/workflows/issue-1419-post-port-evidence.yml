@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: e03155c61e5c0677ad0ad6c3ef1d263d0a73317d
+          ref: cbe5e13e85a34fcd517ca0fd1a7fd63f9747039c
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -24,7 +24,7 @@ jobs:
       - run: npm ci --include=dev
       - name: Build producer-native source summary
         env:
-          MEASURED_HEAD: e03155c61e5c0677ad0ad6c3ef1d263d0a73317d
+          MEASURED_HEAD: cbe5e13e85a34fcd517ca0fd1a7fd63f9747039c
         run: |
           node --experimental-strip-types --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -44,14 +44,14 @@ jobs:
             row.sourceKinds.add(entry.sourceKind);
             if (entry.occurrence.tokenKind === 'runtime') row.runtimeTokens += 1;
             if (entry.occurrence.tokenKind === 'script') row.scriptTokens += 1;
-            if (entry.resolvedTrackedPath) row.resolvedTargets.add(entry.resolvedTrackedPath);
+            if (entry.resolvedScriptPath) row.resolvedTargets.add(entry.resolvedScriptPath);
             else if (entry.occurrence.tokenKind === 'script') row.unresolvedScriptTokens += 1;
             if (row.samples.length < 8) row.samples.push({
               line: entry.occurrence.line,
               tokenKind: entry.occurrence.tokenKind,
               matchedBytes: entry.occurrence.matchedBytes,
               sourceKind: entry.sourceKind,
-              resolvedTrackedPath: entry.resolvedTrackedPath ?? null,
+              resolvedScriptPath: entry.resolvedScriptPath ?? null,
             });
             bySource.set(path, row);
           }
@@ -68,8 +68,17 @@ jobs:
             if (row.samples.length < 8) row.samples.push({line:entry.line,tokenKind:entry.tokenKind,matchedBytes:entry.matchedBytes});
             outer.set(entry.sourcePath,row);
           }
+          const tracked = evidence.entries
+            .filter((entry) => entry.sourceKind === 'tracked-ps1-file')
+            .map((entry) => ({ path: entry.occurrence.sourcePath, currentPrescriptive: entry.currentPrescriptive }))
+            .sort((a,b)=>a.path.localeCompare(b.path));
           fs.writeFileSync('/tmp/post-port-source-summary.json', JSON.stringify({
             measuredHead: evidence.measuredHead,
+            broaderStatusClosed: evidence.broaderStatusClosed,
+            dormantRetainedCoverageComplete: evidence.dormantRetainedCoverageComplete,
+            unresolvedCurrentPrescriptiveScriptTargets: evidence.unresolvedCurrentPrescriptiveScriptTargets,
+            retainedDispositions: evidence.retainedDispositions,
+            trackedPowerShell: tracked,
             sources,
             outerSources: [...outer.values()].sort((a,b)=>a.path.localeCompare(b.path)),
           }, null, 2) + '\n');
