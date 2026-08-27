@@ -338,6 +338,21 @@ function produce(
   });
 }
 
+function produceStageTime(
+  input: ReturnType<typeof fixture>,
+  source = transport({ census: [...input.reviewComments, comment(input.body)] }),
+) {
+  return produceAcceptanceArtifacts({
+    reviewDir: input.dir,
+    outputDir: input.outputDir,
+    tierIntakePath: input.intakePath,
+    stageEvidencePaths: [input.reviewEvidencePath, input.evidencePath],
+    authorDispositionsPath: input.authorPath,
+    phase: 'stage-time',
+    artifactSourceTransport: source,
+  });
+}
+
 function validOperatorHint(body: string, revision = REVISION, commentId = COMMENT_ID) {
   return {
     issueNumber: ISSUE,
@@ -358,6 +373,17 @@ function inspect(input: ReturnType<typeof fixture>) {
     stageEvidencePaths: [input.reviewEvidencePath, input.evidencePath],
     authorDispositionsPath: input.authorPath,
     phase: 'final-acceptance',
+  });
+}
+
+function inspectStageTime(input: ReturnType<typeof fixture>) {
+  return inspectAcceptanceArtifacts({
+    reviewDir: input.dir,
+    outputDir: input.outputDir,
+    tierIntakePath: input.intakePath,
+    stageEvidencePaths: [input.reviewEvidencePath, input.evidencePath],
+    authorDispositionsPath: input.authorPath,
+    phase: 'stage-time',
   });
 }
 
@@ -665,7 +691,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       withTurnResult: true,
       withCapture: false,
     });
-    const result = produce(input, transport({
+    const result = produceStageTime(input, transport({
       census: [...input.reviewComments, comment(input.body, { id: 5427396953 })],
     }));
 
@@ -687,7 +713,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       withTurnResult: true,
       withCapture: false,
     });
-    const result = produce(input, transport({
+    const result = produceStageTime(input, transport({
       census: [...input.reviewComments, comment(input.body, { id: 5427396953 })],
     }));
 
@@ -725,7 +751,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       withCapture: false,
     });
     const source = transport({ census: [...input.reviewComments, comment(input.body)] });
-    const result = produce(input, source);
+    const result = produceStageTime(input, source);
 
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('not a successful terminal result');
@@ -741,7 +767,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       withCapture: false,
     });
     const source = transport({ census: [...input.reviewComments, comment(input.body)] });
-    const result = produce(input, source);
+    const result = produceStageTime(input, source);
 
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('not a successful terminal result');
@@ -758,7 +784,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       withCapture: false,
     });
     const source = transport({ census: [...input.reviewComments, comment(input.body)] });
-    const result = produce(input, source);
+    const result = produceStageTime(input, source);
 
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('missing required terminal fields');
@@ -775,7 +801,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       withCapture: false,
     });
     const source = transport({ census: [...input.reviewComments, comment(input.body)] });
-    const result = produce(input, source);
+    const result = produceStageTime(input, source);
 
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('send_count does not match stage evidence');
@@ -792,7 +818,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       withCapture: false,
     });
     const source = transport({ census: [...input.reviewComments, comment(input.body)] });
-    const result = produce(input, source);
+    const result = produceStageTime(input, source);
 
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('not a successful terminal result');
@@ -1060,7 +1086,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
   ])('fails closed when a journal-marked comment lacks %s', (_label, overrides) => {
     const input = fixture({ transportClassification: 'incident' });
     const untrustedJournal = { ...cycleComment(), ...overrides };
-    const result = produce(input, transport({
+    const result = produceStageTime(input, transport({
       census: [...input.reviewComments, comment(input.body)],
       cycleComments: [untrustedJournal],
     }));
@@ -1098,7 +1124,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
 
   it('does not require the current authenticated GitHub principal to accept trusted result content', () => {
     const input = fixture({ transportClassification: 'incident' });
-    const result = produce(input, transport({ principal: null }));
+    const result = produce(input, transport({ principal: null, census: [...input.reviewComments, comment(input.body)] }));
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
@@ -1114,6 +1140,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
   it('treats duplicate canonical invocation artifacts with identical bytes as one observation', () => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport({ census: [
+      ...input.reviewComments,
       comment(input.body),
       comment(input.body, { id: COMMENT_ID + 1, html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}`, user: { login: 'other-member' }, author_association: 'MEMBER' }),
     ] }));
@@ -1315,15 +1342,17 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
   });
 
-  it('check-artifacts still requires capture and turn-result evidence for successful transport', () => {
+  it('check-artifacts makes turn-result transport evidence audit-only only at final acceptance', () => {
     const missingTurnResult = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
     const producedTurnResult = produce(missingTurnResult);
     expect(producedTurnResult.ok, producedTurnResult.errors.join('\n')).toBe(true);
     expect(inspect(missingTurnResult).ok).toBe(true);
     rmSync(missingTurnResult.turnResultPath);
-    const turnStatus = inspect(missingTurnResult);
-    expect(turnStatus.ok).toBe(false);
-    expect(turnStatus.missing.map((item) => item.reason).join('\n')).toContain('missing turn-result/v1 artifact');
+    const finalTurnStatus = inspect(missingTurnResult);
+    expect(finalTurnStatus.ok, finalTurnStatus.missing.map((item) => item.reason).join('\n')).toBe(true);
+    const stageTimeTurnStatus = inspectStageTime(missingTurnResult);
+    expect(stageTimeTurnStatus.ok).toBe(false);
+    expect(stageTimeTurnStatus.missing.map((item) => item.reason).join('\n')).toContain('missing turn-result/v1 artifact');
 
     const missingCapture = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
     const producedCapture = produce(missingCapture);
