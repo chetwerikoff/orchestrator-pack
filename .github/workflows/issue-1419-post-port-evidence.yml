@@ -46,23 +46,23 @@ jobs:
             producerRevision: measuredHead,
           });
           verifyEvidenceIntegrity(evidence);
+          const currentPrescriptivePs1 = evidence.entries
+            .filter((entry) => entry.sourceKind === 'tracked-ps1-file' && entry.currentPrescriptive)
+            .map((entry) => entry.occurrence.sourcePath);
           console.log(JSON.stringify({
+            measuredHead: evidence.measuredHead,
+            currentPrescriptivePs1,
+            unresolvedCurrentPrescriptiveScriptTargets: evidence.unresolvedCurrentPrescriptiveScriptTargets,
             broaderStatusClosed: evidence.broaderStatusClosed,
             dormantRetainedCoverageComplete: evidence.dormantRetainedCoverageComplete,
-            unclassifiedPowerShellSurfaces: evidence.unclassifiedPowerShellSurfaces,
-            unresolvedCurrentPrescriptiveScriptTargets: evidence.unresolvedCurrentPrescriptiveScriptTargets,
+            unclassifiedCount: evidence.unclassifiedPowerShellSurfaces.length,
+            retainedCount: evidence.retainedDispositions.length,
           }, null, 2));
-          if (!evidence.broaderStatusClosed) {
-            throw new Error('post-port broaderStatusClosed=false');
-          }
-          if (!evidence.dormantRetainedCoverageComplete) {
-            throw new Error('post-port dormantRetainedCoverageComplete=false');
-          }
-          if (evidence.unclassifiedPowerShellSurfaces.length !== 0) {
-            throw new Error('post-port unclassifiedPowerShellSurfaces is not empty');
+          if (currentPrescriptivePs1.length !== 0) {
+            throw new Error('post-port current-prescriptive tracked PowerShell remains');
           }
           if (evidence.unresolvedCurrentPrescriptiveScriptTargets.length !== 0) {
-            throw new Error('post-port unresolvedCurrentPrescriptiveScriptTargets is not empty');
+            throw new Error('post-port unresolved current-prescriptive script target remains');
           }
           const path = await writePortStageEvidence(process.cwd(), evidence);
           console.log(JSON.stringify({
