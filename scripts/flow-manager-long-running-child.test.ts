@@ -373,14 +373,83 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome).toBe('success');
   });
 
-  it('classifies retained stdout past no-candidate grace as child_stdout_eof_timeout', async () => {
+  it('keeps a heartbeating child alive until turn-result arrives', async () => {
     const root = tempDir();
-    const paths = launchPaths(root, 'eof-timeout');
-    const fixture = nodeFixture('setInterval(() => {}, 1000);');
-    process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
+    const paths = launchPaths(root, 'heartbeat-success');
+    const result = makeTurnResult();
+    const heartbeat = {
+      schema: 'observation-heartbeat/v1',
+      poll_count: 1,
+      observation_state: 'busy',
+      stable_reads: 0,
+      completion_ready: false,
+    };
+    const fixture = nodeFixture(`
+      const heartbeat = ${JSON.stringify(heartbeat)};
+      const result = ${JSON.stringify(result)};
+      const heartbeatTimer = setInterval(() => process.stdout.write(JSON.stringify(heartbeat) + '\\n'), 25);
+      setTimeout(() => {
+        clearInterval(heartbeatTimer);
+        process.stdout.write(JSON.stringify(result) + '\\n', () => process.exit(0));
+      }, 350);
+    `);
+    process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '100';
+    process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '100';
     const code = await runLaunch({
-      runIdentity: 'run-eof',
-      attemptIdentity: 'attempt-eof',
+      runIdentity: 'run-heartbeat-success',
+      attemptIdentity: 'attempt-heartbeat-success',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+    expect(code).toBe(0);
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope?.lifecycle_outcome).toBe('success');
+    expect(envelope).not.toHaveProperty('incident');
+  });
+
+  it('preserves child_stdout_eof_timeout when the child emits no stdout', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'silent-timeout');
+    const fixture = nodeFixture('setInterval(() => {}, 1000);');
+    process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '100';
+    process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '100';
+    const code = await runLaunch({
+      runIdentity: 'run-silent',
+      attemptIdentity: 'attempt-silent',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+    expect(code).toBe(1);
+    expect(readTerminalEnvelope(paths.envelope)?.incident).toBe('child_stdout_eof_timeout');
+  });
+
+  it('times out a child after heartbeats go silent past the idle window', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'heartbeat-idle-timeout');
+    const heartbeat = {
+      schema: 'observation-heartbeat/v1',
+      poll_count: 1,
+      observation_state: 'busy',
+      stable_reads: 0,
+      completion_ready: false,
+    };
+    const fixture = nodeFixture(`
+      process.stdout.write(JSON.stringify(${JSON.stringify(heartbeat)}) + '\\n');
+      setTimeout(() => {}, 1000);
+    `);
+    process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '100';
+    process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '100';
+    const code = await runLaunch({
+      runIdentity: 'run-heartbeat-idle',
+      attemptIdentity: 'attempt-heartbeat-idle',
       handoffReceiptPath: paths.receipt,
       terminalEnvelopePath: paths.envelope,
       browserOutputPath: paths.output,
