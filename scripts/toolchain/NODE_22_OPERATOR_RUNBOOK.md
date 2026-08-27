@@ -1,6 +1,6 @@
 # Node 22 TypeScript runtime adoption
 
-Issue #900 makes Node 22 the only supported runtime for live TypeScript entrypoints in CI, operator commands, PowerShell bridges, plugin CLIs, and supervised children. The Node-below-22 compatibility loader, direct `tsx` launchers, and direct workspace runtime dependencies are removed.
+Issue #900 makes Node 22 the only supported runtime for live TypeScript entrypoints in CI, operator commands, runtime adapters, plugin CLIs, and supervised children. The Node-below-22 compatibility loader, direct `tsx` launchers, and direct workspace runtime dependencies are removed.
 
 ## Canonical version contract
 
@@ -34,26 +34,26 @@ Representative failures are deterministic:
 - `OPK_NODE_RUNTIME_DECLARATION_DRIFT`
 - `OPK_NODE_RUNTIME_DECLARATION_UNSUPPORTED`
 - `OPK_NODE_RUNTIME_UNSUPPORTED`
-- `OPK_NODE_RUNTIME_MISSING` from a PowerShell bridge when `node` is absent
+- `OPK_NODE_RUNTIME_MISSING` when the required Node runtime is absent
 
-These failures occur before a TypeScript target or external effect runs. CI jobs and operator processes must inherit Node 22 through their configured environment; the bridge does not search a runner toolcache or rewrite `PATH` to hide an unsupported parent runtime.
+These failures occur before a TypeScript target or external effect runs. CI jobs and operator processes must inherit Node 22 through their configured environment; live entrypoints do not search a runner toolcache or rewrite `PATH` to hide an unsupported parent runtime.
 
-The former PowerShell launcher helper is deleted. PowerShell adapters resolve their inherited Node executable and invoke `scripts/lib/Invoke-TypeScriptCli.ts` with native type stripping. The TypeScript launcher validates the canonical declarations, rewrites the target argv contract, and imports the requested `.ts`/`.mts`/`.cts` entrypoint in-process so stdin, stdout, stderr, and exit semantics remain attached to the original bridge process.
+The former legacy launcher helper is deleted. Current operator and runtime entrypoints invoke native Node 22 TypeScript directly with type stripping and the canonical declaration preflight.
 
 Direct native TypeScript bins and supervised-child entrypoints must begin with a side-effect import of `scripts/toolchain/native-entrypoint-preflight.ts` before business modules. Type-only imports and other forms erased by Node type stripping do not satisfy the runtime policy. Root and workspace npm scripts that execute TypeScript must prove the canonical Node-major check succeeds before every target; reversed ordering, `||`, failure fallbacks, and plugin-local scripts without preflight fail closed. Workflow inspection parses the required YAML step structure with repository-owned code and no new install/runtime dependency, so quoted keys and flow-style `actions/setup-node` steps cannot hide Node 20 or a missing literal `with.node-version: 22/22.x`. The lockfile contains neither a direct nor stale `yaml` package entry. The tracked `AGENTS.md` worker rule applies the same Node 22-only contract to new or changed TypeScript entrypoints, npm scripts, tests, fixtures, and workflow jobs.
 
-## Production-shaped bridge proof
+## Production-shaped runtime proof
 
-Run the check and one real bridge from the exact shell, service account, or tmux environment used to start side processes:
+Run the check and one real native TypeScript command from the exact shell, service account, or tmux environment used to start side processes:
 
-```powershell
+```bash
 npm run check:node-major
-$proofPath = Join-Path ([System.IO.Path]::GetTempPath()) 'opk-node22-adoption-proof.json'
-pwsh -NoProfile -File ./scripts/record-sanctioned-worker-kill.ps1 `
-  -SessionId 'node22-adoption-proof' `
-  -Path $proofPath
-Get-Content -Raw -LiteralPath $proofPath
-Remove-Item -Force -LiteralPath $proofPath
+proof_path="${TMPDIR:-/tmp}/opk-node22-adoption-proof.json"
+node --experimental-strip-types scripts/json-producers/sanctioned-worker-kill-record.ts add \
+  --session-id node22-adoption-proof \
+  --path "$proof_path"
+cat "$proof_path"
+rm -f "$proof_path"
 ```
 
 Sanitize the captured evidence before attaching it to the PR. Retain the Node version, successful contract-check output, bridge exit status, and JSON shape. Remove usernames, home paths, remotes, tokens, and unrelated environment values. CI is not a substitute for this live-host proof.
@@ -88,7 +88,7 @@ node --experimental-strip-types scripts/pack-review-runner.ts help
 node --experimental-strip-types plugins/task-declaration/bin/declare.ts --help
 ```
 
-Then exercise the production-shaped PowerShell bridge above.
+Then exercise the production-shaped native TypeScript command above.
 
 ## Native module-resolution policy
 

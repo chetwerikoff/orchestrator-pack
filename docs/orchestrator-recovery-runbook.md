@@ -22,10 +22,8 @@ Record:
 
 Useful read-only checks:
 
-```powershell
-pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
-pwsh -NoProfile -File scripts/check-vestigial-fleet-children-retired.ps1 -Json
-pwsh -NoProfile -File scripts/check-side-process-launch-contract.ps1
+```bash
+node --experimental-strip-types scripts/orchestrator-wake-supervisor.ts status --state-dir <state-dir>
 node --experimental-strip-types scripts/pack-review-runner.ts list --pr-number <PR_NUMBER>
 node --experimental-strip-types scripts/pack-review-runner.ts status --pr-number <PR_NUMBER>
 ```
