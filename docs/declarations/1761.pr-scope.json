@@ -19,21 +19,21 @@
   ],
   "denylist": [
     ".cursor/skills/create-issue-draft/SKILL.md",
-    ".github/**",
+    ".github/",
     "AGENTS.md",
-    "credentials/**",
+    "credentials/",
     "docs/chat-executor-rules.md",
-    "packages/core/**",
-    "scripts/chatgpt-browser-turn/**",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/",
     "scripts/finding-ledger-guard.mjs",
     "scripts/lib/create-issue-stage-record-core.ts",
     "scripts/lib/create-issue-stage-record-gh.ts",
     "scripts/lib/create-issue-stage-topology.ts",
-    "scripts/orca-runtime/**",
-    "scripts/pr2-foundation/**",
-    "scripts/runtime/**",
-    "secrets/**",
-    "vendor/**"
+    "scripts/orca-runtime/",
+    "scripts/pr2-foundation/",
+    "scripts/runtime/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -52,5 +52,5 @@
     "scripts/lib/stage-completeness-core.ts",
     "scripts/stage-completeness-guard.test.ts"
   ],
-  "source_revision": "dffdba603f10c3650284992a689eef38530b1cf3"
+  "source_revision": "6f3cceebd8b99dacb6b52db7bda9ee20713e0270"
 }
