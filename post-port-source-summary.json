@@ -1,5 +1,5 @@
 {
-  "measuredHead": "9ed1783f94edaed4201fbb6f21d92525168c1767",
+  "measuredHead": "cc9ab65f8b39859f78b8ab90588026f215756be5",
   "broaderStatusClosed": false,
   "dormantRetainedCoverageComplete": false,
   "unresolvedCurrentPrescriptiveScriptTargets": [
@@ -109,62 +109,6 @@
       "matchedBytes": "scripts/check-side-process-launch-contract.ps1"
     },
     {
-      "sourcePath": "scripts/_test-review-start-preflight-shield-fixture.ts",
-      "line": 6,
-      "column": 47,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Review-StartPreflightShield.ps1"
-    },
-    {
-      "sourcePath": "scripts/_test-review-start-preflight-shield-fixture.ts",
-      "line": 8,
-      "column": 43,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Get-ClaimedReviewStartSnapshot.ps1"
-    },
-    {
-      "sourcePath": "scripts/_test-review-start-preflight-shield-fixture.ts",
-      "line": 9,
-      "column": 46,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Review-StartClaimLifecycle.ps1"
-    },
-    {
-      "sourcePath": "scripts/_test-review-start-preflight-shield-fixture.ts",
-      "line": 29,
-      "column": 34,
-      "tokenKind": "script",
-      "matchedBytes": "gh.ps1"
-    },
-    {
-      "sourcePath": "scripts/check-merge-blind-ci-gates.mjs",
-      "line": 176,
-      "column": 38,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/check-side-process-registry-709-711-sequencing.ps1"
-    },
-    {
-      "sourcePath": "scripts/check-merge-blind-ci-gates.mjs",
-      "line": 180,
-      "column": 26,
-      "tokenKind": "script",
-      "matchedBytes": "Orchestrator-WakeSupervisorLease.ps1"
-    },
-    {
-      "sourcePath": "scripts/check-merge-blind-ci-gates.mjs",
-      "line": 180,
-      "column": 66,
-      "tokenKind": "script",
-      "matchedBytes": "Orchestrator-FleetHygiene.ps1"
-    },
-    {
-      "sourcePath": "scripts/check-merge-blind-ci-gates.mjs",
-      "line": 184,
-      "column": 36,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/check-orchestrator-message-registry.ps1"
-    },
-    {
       "sourcePath": "scripts/ci-preflight/contract.ts",
       "line": 52,
       "column": 100,
@@ -263,314 +207,6 @@
       "matchedBytes": "./scripts/ci-test-aggregate.ps1"
     },
     {
-      "sourcePath": "scripts/generate-review-pipeline-spawn-captures.ts",
-      "line": 18,
-      "column": 14,
-      "tokenKind": "script",
-      "matchedBytes": "review-trigger-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/generate-review-pipeline-spawn-captures.ts",
-      "line": 19,
-      "column": 14,
-      "tokenKind": "script",
-      "matchedBytes": "review-trigger-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/generate-review-pipeline-spawn-captures.ts",
-      "line": 20,
-      "column": 14,
-      "tokenKind": "script",
-      "matchedBytes": "review-trigger-reeval.ps1"
-    },
-    {
-      "sourcePath": "scripts/generate-review-pipeline-spawn-captures.ts",
-      "line": 21,
-      "column": 14,
-      "tokenKind": "script",
-      "matchedBytes": "review-trigger-reeval.ps1"
-    },
-    {
-      "sourcePath": "scripts/generate-review-pipeline-spawn-captures.ts",
-      "line": 22,
-      "column": 14,
-      "tokenKind": "script",
-      "matchedBytes": "ci-green-wake-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/generate-review-pipeline-spawn-captures.ts",
-      "line": 23,
-      "column": 14,
-      "tokenKind": "script",
-      "matchedBytes": "review-send-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/generate-review-pipeline-spawn-captures.ts",
-      "line": 122,
-      "column": 6,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/invoke-orchestrator-claimed-review-run.ps1"
-    },
-    {
-      "sourcePath": "scripts/generate-review-pipeline-spawn-captures.ts",
-      "line": 125,
-      "column": 20,
-      "tokenKind": "script",
-      "matchedBytes": "invoke-orchestrator-claimed-review-run.ps1"
-    },
-    {
-      "sourcePath": "scripts/generate-review-pipeline-spawn-captures.ts",
-      "line": 147,
-      "column": 6,
-      "tokenKind": "script",
-      "matchedBytes": "review-trigger-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 19,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/check-ao-cli-argv-shape.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 32,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/check-ci-failure-notification-adoption.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 45,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/check-ci-pipeline-split-core.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 58,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/check-vestigial-fleet-children-retired.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 71,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/check-worker-message-submit-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 136,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/clear-dead-worker-reconcile-quarantine.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 149,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/fixtures/fleet-cache-audit-retention-matrix.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 162,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/fixtures/review-start-envelope-external-io/steal-claim-then-hang.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 188,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/invoke-gated-worker-nudge.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 201,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/invoke-read-delegation-audit-stop.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 220,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/invoke-rtk-discover-inventory.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 251,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/invoke-worker-recovery.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 394,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Harness-PnRetriggerState.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 407,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Invoke-PackReviewApi.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 485,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Orchestrator-SideEffectFence.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 511,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 524,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Orchestrator-WakeSupervisorLease.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 537,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 550,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Record-WorkerMessageDispatch.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 628,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Review-RunLiveness.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 641,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Review-StartClaim.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 654,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Review-StartClaimLifecycle.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 711,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Test-AutonomousCapabilityInventory.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 763,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Worker-Recovery.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 776,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Worker-RecoveryClaim.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 789,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/mechanical-json-state.Tests.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 828,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/orchestrator-wake-supervisor-test-child.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 841,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/pack-worker-report.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 857,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/pr-scope-check.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 901,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/review-trigger-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 914,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/run-review-ready-seed-liveness-fixture.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 958,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/terminal-flood-detect.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 971,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/trust-ao-worktree.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-inventory.json",
-      "line": 984,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/worker-message-submit-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/json-producers/wave-b-reconciliation.ts",
-      "line": 82,
-      "column": 76,
-      "tokenKind": "script",
-      "matchedBytes": ".Tests.ps1"
-    },
-    {
       "sourcePath": "scripts/lib/contract-evidence-reverify.ts",
       "line": 1151,
       "column": 8,
@@ -585,13 +221,6 @@
       "matchedBytes": "launch-contract-evidence-reverify.ps1"
     },
     {
-      "sourcePath": "scripts/lib/cutover/foundation-observation.ts",
-      "line": 498,
-      "column": 77,
-      "tokenKind": "script",
-      "matchedBytes": "orchestrator-wake-supervisor.ps1"
-    },
-    {
       "sourcePath": "scripts/lib/gh-signal-recon.ts",
       "line": 92,
       "column": 41,
@@ -599,123 +228,11 @@
       "matchedBytes": "scan.ps1"
     },
     {
-      "sourcePath": "scripts/lib/graphql-quota-github-read-inventory.json",
-      "line": 16,
-      "column": 8,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/pr-scope-check.ps1"
-    },
-    {
       "sourcePath": "scripts/lib/orchestrator-side-process-observer.ts",
       "line": 114,
       "column": 76,
       "tokenKind": "script",
       "matchedBytes": "orchestrator-wake-supervisor.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-escalation-emitter-inventory.json",
-      "line": 5,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/dead-worker-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-escalation-emitter-inventory.json",
-      "line": 9,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/invoke-worker-recovery.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-escalation-emitter-inventory.json",
-      "line": 13,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/ci-failure-notification-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-escalation-emitter-inventory.json",
-      "line": 17,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/ci-green-wake-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-escalation-emitter-inventory.json",
-      "line": 21,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/invoke-gated-worker-nudge.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-escalation-emitter-inventory.json",
-      "line": 29,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Worker-Recovery.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-escalation-emitter-inventory.json",
-      "line": 41,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/review-trigger-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-escalation-emitter-inventory.json",
-      "line": 45,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/worker-message-submit-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-escalation-emitter-inventory.json",
-      "line": 49,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Invoke-WorkerDegradedCiHandoff.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-message-catalog.json",
-      "line": 17,
-      "column": 18,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/ci-green-wake-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-message-catalog.json",
-      "line": 50,
-      "column": 18,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/ci-failure-notification-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-message-catalog.json",
-      "line": 83,
-      "column": 18,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/journaled-worker-send.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-message-catalog.json",
-      "line": 102,
-      "column": 18,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-message-catalog.json",
-      "line": 121,
-      "column": 18,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1"
-    },
-    {
-      "sourcePath": "scripts/orchestrator-wake-supervisor-orphan-integration.shared.ts",
-      "line": 7,
-      "column": 52,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Orchestrator-WakeSupervisor.ps1"
     },
     {
       "sourcePath": "scripts/pr-scope-declaration.ts",
@@ -760,165 +277,11 @@
       "matchedBytes": "scripts/orchestrator-wake-supervisor.ps1"
     },
     {
-      "sourcePath": "scripts/pr2-foundation/contracts.ts",
-      "line": 25,
-      "column": 4,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Get-ReactionMessagesFromYaml.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/contracts.ts",
-      "line": 28,
-      "column": 4,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/review-ready-report-state-seed.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/contracts.ts",
-      "line": 29,
-      "column": 4,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/review-trigger-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/contracts.ts",
-      "line": 30,
-      "column": 4,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/review-trigger-reeval.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/contracts.ts",
-      "line": 35,
-      "column": 4,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/orchestrator-wake-supervisor.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts",
-      "line": 331,
-      "column": 21,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/review-trigger-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts",
-      "line": 333,
-      "column": 15,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/review-trigger-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts",
-      "line": 348,
-      "column": 21,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/pr2-foundation/new.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts",
-      "line": 349,
-      "column": 19,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/pr2-foundation/new.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts",
-      "line": 350,
-      "column": 15,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/pr2-foundation/new.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/mutation-behavior-probes.ts",
-      "line": 18,
-      "column": 4,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/review-trigger-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/mutation-behavior-probes.ts",
-      "line": 20,
-      "column": 4,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/orchestrator-wake-supervisor.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/mutation-behavior-recipes.ts",
-      "line": 133,
-      "column": 47,
-      "tokenKind": "script",
-      "matchedBytes": "inline-notification.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/mutation-behavior-recipes.ts",
-      "line": 137,
-      "column": 125,
-      "tokenKind": "script",
-      "matchedBytes": "worker-notification.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/mutation-behavior-recipes.ts",
-      "line": 364,
-      "column": 24,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Get-ReactionMessagesFromYaml.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/mutation-semantic-gates.ts",
-      "line": 34,
-      "column": 4,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/review-trigger-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/mutation-semantic-gates.ts",
-      "line": 36,
-      "column": 4,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/orchestrator-wake-supervisor.ps1"
-    },
-    {
-      "sourcePath": "scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts",
-      "line": 523,
-      "column": 27,
-      "tokenKind": "script",
-      "matchedBytes": "worker-message-submit-reconcile.ps1"
-    },
-    {
       "sourcePath": "scripts/rca-spec-discipline-surfaces.json",
       "line": 2,
       "column": 97,
       "tokenKind": "script",
       "matchedBytes": "check-draft-discipline.ps1"
-    },
-    {
-      "sourcePath": "scripts/review-start-envelope-ledger-starter-surfaces.json",
-      "line": 11,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/review-trigger-reconcile.ps1"
-    },
-    {
-      "sourcePath": "scripts/review-start-envelope-ledger-starter-surfaces.json",
-      "line": 15,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Invoke-ReviewWakeTrigger.ps1"
-    },
-    {
-      "sourcePath": "scripts/review-start-envelope-ledger-starter-surfaces.json",
-      "line": 19,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Invoke-ReviewTriggerReeval.ps1"
-    },
-    {
-      "sourcePath": "scripts/review-start-envelope-ledger-starter-surfaces.json",
-      "line": 23,
-      "column": 16,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1"
     },
     {
       "sourcePath": "scripts/show-worker-status-report",
@@ -933,55 +296,6 @@
       "column": 23,
       "tokenKind": "script",
       "matchedBytes": "./scripts/record-sanctioned-worker-kill.ps1"
-    },
-    {
-      "sourcePath": "scripts/toolchain/node22-runtime-policy.spec.ts",
-      "line": 108,
-      "column": 21,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/wrapper.ps1"
-    },
-    {
-      "sourcePath": "scripts/toolchain/node22-runtime-policy.spec.ts",
-      "line": 230,
-      "column": 8,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/bad.ps1"
-    },
-    {
-      "sourcePath": "scripts/toolchain/node22-runtime-policy.spec.ts",
-      "line": 537,
-      "column": 27,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/check-example.ps1"
-    },
-    {
-      "sourcePath": "scripts/toolchain/node22-runtime-policy.spec.ts",
-      "line": 538,
-      "column": 27,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/example.ps1"
-    },
-    {
-      "sourcePath": "scripts/toolchain/node22-runtime-policy.spec.ts",
-      "line": 541,
-      "column": 30,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/example.ps1"
-    },
-    {
-      "sourcePath": "scripts/toolchain/node22-runtime-policy.spec.ts",
-      "line": 543,
-      "column": 28,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/example.ps1"
-    },
-    {
-      "sourcePath": "scripts/toolchain/node22-runtime-policy.spec.ts",
-      "line": 639,
-      "column": 39,
-      "tokenKind": "script",
-      "matchedBytes": "scripts/lib/Invoke-TypeScriptCli.ps1"
     }
   ],
   "retainedDispositions": [],
@@ -1032,19 +346,19 @@
     },
     {
       "path": "scripts/ci-failure-notification.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/ci-test-aggregate.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/ci-wallclock-e2e-aggregate.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/ci-wallclock-e2e-notify.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/fixtures/gate-runner/legacy-wave-3b/check-agents-report-contract.ps1",
@@ -1096,7 +410,7 @@
     },
     {
       "path": "scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/graphify/bootstrap.ps1",
@@ -1136,7 +450,7 @@
     },
     {
       "path": "scripts/invoke-testmode-fleet-reaper.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/invoke-verify-test-backed-smoke.ps1",
@@ -1152,7 +466,7 @@
     },
     {
       "path": "scripts/lib/Autonomous-ClaimPrResumeGate.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Autonomous-GateCommon.ps1",
@@ -1160,7 +474,7 @@
     },
     {
       "path": "scripts/lib/Autonomous-SpawnWorktreeGate.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Autonomous-WorkerRecoveryGate.ps1",
@@ -1184,7 +498,7 @@
     },
     {
       "path": "scripts/lib/Ci-Red-Watchdog-Tick.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Ci-Red-Watchdog-Worker.ps1",
@@ -1192,7 +506,7 @@
     },
     {
       "path": "scripts/lib/Ci-Red-Watchdog.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/ci-workflow-yaml.ps1",
@@ -1204,7 +518,7 @@
     },
     {
       "path": "scripts/lib/Cursor-Agent-TuiShim.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1",
@@ -1212,11 +526,11 @@
     },
     {
       "path": "scripts/lib/Get-AutoReviewPrContext.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Get-FloodActiveSessionMap.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Get-OrchestratorLaunchHealth.ps1",
@@ -1256,11 +570,11 @@
     },
     {
       "path": "scripts/lib/Get-WorkerStatusDecisionSessions.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Gh-FleetInventoryCache.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Gh-FleetRepoTickSnapshot.ps1",
@@ -1268,15 +582,15 @@
     },
     {
       "path": "scripts/lib/Gh-FleetSeedSnapshotReadEconomy.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Gh-PrChecks.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Gh-SignalDispatch.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Import-TrustedReverifyBootstrap.ps1",
@@ -1308,11 +622,11 @@
     },
     {
       "path": "scripts/lib/Journaled-WorkerSendInternalCapability.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/MechanicalReconcileNode.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/OpkVitestChildProcessEnv.ps1",
@@ -1336,11 +650,11 @@
     },
     {
       "path": "scripts/lib/Orchestrator-Escalation.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Orchestrator-FleetHygiene.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Orchestrator-ProcessAlive.ps1",
@@ -1348,7 +662,7 @@
     },
     {
       "path": "scripts/lib/Orchestrator-ReviewStartAudit.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Orchestrator-SideProcessHealth.ps1",
@@ -1356,7 +670,7 @@
     },
     {
       "path": "scripts/lib/Orchestrator-SideProcessProgress.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Orchestrator-SideProcessProgressEvidence.ps1",
@@ -1392,7 +706,7 @@
     },
     {
       "path": "scripts/lib/Review-CycleCap.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Review-DeliveryLifecycle.ps1",
@@ -1400,7 +714,7 @@
     },
     {
       "path": "scripts/lib/Review-FailureEvidence.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Review-MechanicalForbiddenCommand.ps1",
@@ -1408,15 +722,15 @@
     },
     {
       "path": "scripts/lib/Review-PostRunRetry.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Review-ReadyReportStateSeedProgress.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Review-ReadySeedFixturePayload.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Review-RecoveryPaths.ps1",
@@ -1432,11 +746,11 @@
     },
     {
       "path": "scripts/lib/Review-StartEnvelopeLedger.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Sanctioned-Worker-Kill-Record.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Set-OpkVitestHarnessEnv.ps1",
@@ -1444,7 +758,7 @@
     },
     {
       "path": "scripts/lib/Submit-WorkerInputDraft.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Test-WorkerLaunchFailure.ps1",
@@ -1452,7 +766,7 @@
     },
     {
       "path": "scripts/lib/TestMode-FleetLease.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/TrustedPackRoot-Common.ps1",
@@ -1464,11 +778,11 @@
     },
     {
       "path": "scripts/lib/Worker-NudgeAudit.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Worker-NudgeClaim.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/Worker-RecoveryBranchCleanup.ps1",
@@ -1476,7 +790,7 @@
     },
     {
       "path": "scripts/lib/WorkerReportStore.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/lib/WorkerStatusStore.ps1",
@@ -1496,7 +810,7 @@
     },
     {
       "path": "scripts/orchestrator-command-runtime-preflight.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/orchestrator-escalation-router.ps1",
@@ -1528,7 +842,7 @@
     },
     {
       "path": "scripts/record-sanctioned-worker-kill.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/refresh-vitest-runtime-history.ps1",
@@ -1540,7 +854,7 @@
     },
     {
       "path": "scripts/review-bulk-send-diagnose.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/reviewer-workspace-preflight.ps1",
@@ -1564,7 +878,7 @@
     },
     {
       "path": "scripts/show-worker-status-report.ps1",
-      "currentPrescriptive": true
+      "currentPrescriptive": false
     },
     {
       "path": "scripts/test-all.ps1",
@@ -2715,112 +2029,6 @@
       ]
     },
     {
-      "path": "scripts/_test-review-start-preflight-shield-fixture.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 6,
-      "resolvedTargets": [
-        "scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1",
-        "scripts/lib/Gh-PrChecks.ps1"
-      ],
-      "unresolvedScriptTokens": 4,
-      "samples": [
-        {
-          "line": 6,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Review-StartPreflightShield.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 7,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Gh-PrChecks.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Gh-PrChecks.ps1"
-        },
-        {
-          "line": 8,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Get-ClaimedReviewStartSnapshot.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 9,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Review-StartClaimLifecycle.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 12,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1"
-        },
-        {
-          "line": 29,
-          "tokenKind": "script",
-          "matchedBytes": "gh.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/check-merge-blind-ci-gates.mjs",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 5,
-      "resolvedTargets": [
-        "scripts/check-ci-pipeline-split.ps1"
-      ],
-      "unresolvedScriptTokens": 4,
-      "samples": [
-        {
-          "line": 176,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-side-process-registry-709-711-sequencing.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 180,
-          "tokenKind": "script",
-          "matchedBytes": "Orchestrator-WakeSupervisorLease.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 180,
-          "tokenKind": "script",
-          "matchedBytes": "Orchestrator-FleetHygiene.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 184,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-orchestrator-message-registry.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 204,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-ci-pipeline-split.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/check-ci-pipeline-split.ps1"
-        }
-      ]
-    },
-    {
       "path": "scripts/ci-preflight/cli.ts",
       "sourceKinds": [
         "script-token-reference"
@@ -2944,241 +2152,6 @@
           "matchedBytes": "pwsh",
           "sourceKind": "script-token-reference",
           "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/gate-runner/bulk-declarative-gates.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 6,
-      "resolvedTargets": [
-        "scripts/bootstrap.ps1",
-        "scripts/check-reusable.ps1",
-        "scripts/install-git-hooks.ps1",
-        "scripts/lint-self-architect.ps1",
-        "scripts/verify.ps1"
-      ],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 22,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/bootstrap.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/bootstrap.ps1"
-        },
-        {
-          "line": 23,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/verify.ps1"
-        },
-        {
-          "line": 24,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-reusable.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/check-reusable.ps1"
-        },
-        {
-          "line": 25,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/install-git-hooks.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/install-git-hooks.ps1"
-        },
-        {
-          "line": 26,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lint-self-architect.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lint-self-architect.ps1"
-        },
-        {
-          "line": 34,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/verify.ps1"
-        }
-      ]
-    },
-    {
-      "path": "scripts/gate-runner/census-generator.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 10,
-      "resolvedTargets": [
-        "scripts/check-reusable.ps1",
-        "scripts/verify.ps1"
-      ],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 76,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/verify.ps1"
-        },
-        {
-          "line": 81,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/verify.ps1"
-        },
-        {
-          "line": 86,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/verify.ps1"
-        },
-        {
-          "line": 92,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/verify.ps1"
-        },
-        {
-          "line": 120,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/verify.ps1"
-        },
-        {
-          "line": 124,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-reusable.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/check-reusable.ps1"
-        },
-        {
-          "line": 136,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/verify.ps1"
-        },
-        {
-          "line": 136,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-reusable.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/check-reusable.ps1"
-        }
-      ]
-    },
-    {
-      "path": "scripts/generate-review-pipeline-spawn-captures.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 4,
-      "scriptTokens": 9,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 9,
-      "samples": [
-        {
-          "line": 18,
-          "tokenKind": "script",
-          "matchedBytes": "review-trigger-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 19,
-          "tokenKind": "script",
-          "matchedBytes": "review-trigger-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 20,
-          "tokenKind": "script",
-          "matchedBytes": "review-trigger-reeval.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 21,
-          "tokenKind": "script",
-          "matchedBytes": "review-trigger-reeval.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 22,
-          "tokenKind": "script",
-          "matchedBytes": "ci-green-wake-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 23,
-          "tokenKind": "script",
-          "matchedBytes": "review-send-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 45,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 46,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/github-fleet-cache-test-harness.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 1,
-      "scriptTokens": 2,
-      "resolvedTargets": [
-        "scripts/lib/Gh-FleetSeedSnapshotReadEconomy.ps1",
-        "scripts/lib/Gh-PrChecks.ps1"
-      ],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 17,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 56,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Gh-PrChecks.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Gh-PrChecks.ps1"
-        },
-        {
-          "line": 124,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Gh-FleetSeedSnapshotReadEconomy.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Gh-FleetSeedSnapshotReadEconomy.ps1"
         }
       ]
     },
@@ -3342,140 +2315,6 @@
       ]
     },
     {
-      "path": "scripts/json-producers/wave-b-inventory.json",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 2,
-      "scriptTokens": 73,
-      "resolvedTargets": [
-        "scripts/ci-failure-notification.ps1",
-        "scripts/ci-test-aggregate.ps1",
-        "scripts/ci-wallclock-e2e-aggregate.ps1",
-        "scripts/ci-wallclock-e2e-notify.ps1",
-        "scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1",
-        "scripts/invoke-testmode-fleet-reaper.ps1",
-        "scripts/lib/Autonomous-ClaimPrResumeGate.ps1",
-        "scripts/lib/Autonomous-SpawnWorktreeGate.ps1",
-        "scripts/lib/Ci-Failure-Notification-Common.ps1",
-        "scripts/lib/Ci-Red-Watchdog.ps1",
-        "scripts/lib/Cursor-Agent-TuiShim.ps1",
-        "scripts/lib/Get-FloodActiveSessionMap.ps1",
-        "scripts/lib/Get-WorkerStatusDecisionSessions.ps1",
-        "scripts/lib/Gh-FleetInventoryCache.ps1",
-        "scripts/lib/Gh-PrChecks.ps1",
-        "scripts/lib/Gh-SignalDispatch.ps1",
-        "scripts/lib/Journaled-WorkerSendInternalCapability.ps1",
-        "scripts/lib/MechanicalReconcileNode.ps1",
-        "scripts/lib/Orchestrator-Escalation.ps1",
-        "scripts/lib/Orchestrator-FleetHygiene.ps1",
-        "scripts/lib/Orchestrator-ReviewStartAudit.ps1",
-        "scripts/lib/Orchestrator-SideProcessProgress.ps1",
-        "scripts/lib/Review-CycleCap.ps1",
-        "scripts/lib/Review-FailureEvidence.ps1",
-        "scripts/lib/Review-PostRunRetry.ps1",
-        "scripts/lib/Review-ReadyReportStateSeedProgress.ps1",
-        "scripts/lib/Review-ReadySeedFixturePayload.ps1",
-        "scripts/lib/Review-StartEnvelopeLedger.ps1",
-        "scripts/lib/Sanctioned-Worker-Kill-Record.ps1",
-        "scripts/lib/Submit-WorkerInputDraft.ps1",
-        "scripts/lib/TestMode-FleetLease.ps1",
-        "scripts/lib/Worker-NudgeAudit.ps1",
-        "scripts/lib/Worker-NudgeClaim.ps1",
-        "scripts/orchestrator-command-runtime-preflight.ps1",
-        "scripts/orchestrator-fleet-hygiene-sentinel.ps1",
-        "scripts/record-sanctioned-worker-kill.ps1",
-        "scripts/review-bulk-send-diagnose.ps1",
-        "scripts/run-vitest-heavy-shard.ps1",
-        "scripts/show-worker-status-report.ps1"
-      ],
-      "unresolvedScriptTokens": 34,
-      "samples": [
-        {
-          "line": 19,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-ao-cli-argv-shape.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 32,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-ci-failure-notification-adoption.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 45,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-ci-pipeline-split-core.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 58,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-vestigial-fleet-children-retired.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 71,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-worker-message-submit-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 84,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/ci-failure-notification.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/ci-failure-notification.ps1"
-        },
-        {
-          "line": 97,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/ci-test-aggregate.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/ci-test-aggregate.ps1"
-        },
-        {
-          "line": 110,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/ci-wallclock-e2e-aggregate.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/ci-wallclock-e2e-aggregate.ps1"
-        }
-      ]
-    },
-    {
-      "path": "scripts/json-producers/wave-b-reconciliation.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 1,
-      "scriptTokens": 1,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 1,
-      "samples": [
-        {
-          "line": 82,
-          "tokenKind": "script",
-          "matchedBytes": ".Tests.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 153,
-          "tokenKind": "runtime",
-          "matchedBytes": "PowerShell",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
       "path": "scripts/lib/ci-pipeline-split-pre-topology-wrapper.mjs",
       "sourceKinds": [
         "script-token-reference"
@@ -3512,42 +2351,6 @@
           "matchedBytes": "pwsh",
           "sourceKind": "script-token-reference",
           "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/lib/ci-red-watchdog-selftest.mjs",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 3,
-      "resolvedTargets": [
-        "scripts/lib/Ci-Red-Watchdog-Tick.ps1",
-        "scripts/lib/Ci-Red-Watchdog.ps1"
-      ],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 492,
-          "tokenKind": "script",
-          "matchedBytes": "Ci-Red-Watchdog.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Ci-Red-Watchdog.ps1"
-        },
-        {
-          "line": 493,
-          "tokenKind": "script",
-          "matchedBytes": "Ci-Red-Watchdog-Tick.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Ci-Red-Watchdog-Tick.ps1"
-        },
-        {
-          "line": 495,
-          "tokenKind": "script",
-          "matchedBytes": "Ci-Red-Watchdog-Tick.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Ci-Red-Watchdog-Tick.ps1"
         }
       ]
     },
@@ -3658,25 +2461,6 @@
       ]
     },
     {
-      "path": "scripts/lib/cutover/foundation-observation.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 1,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 1,
-      "samples": [
-        {
-          "line": 498,
-          "tokenKind": "script",
-          "matchedBytes": "orchestrator-wake-supervisor.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
       "path": "scripts/lib/gh-signal-recon.ts",
       "sourceKinds": [
         "script-token-reference"
@@ -3713,66 +2497,6 @@
           "line": 97,
           "tokenKind": "runtime",
           "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/lib/graphql-quota-github-read-inventory.json",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 6,
-      "resolvedTargets": [
-        "scripts/lib/Autonomous-SpawnWorktreeGate.ps1",
-        "scripts/lib/Ci-Failure-Notification-Common.ps1",
-        "scripts/lib/Get-AutoReviewPrContext.ps1",
-        "scripts/lib/Gh-FleetInventoryCache.ps1",
-        "scripts/lib/Gh-PrChecks.ps1"
-      ],
-      "unresolvedScriptTokens": 1,
-      "samples": [
-        {
-          "line": 11,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Gh-PrChecks.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Gh-PrChecks.ps1"
-        },
-        {
-          "line": 12,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Gh-FleetInventoryCache.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Gh-FleetInventoryCache.ps1"
-        },
-        {
-          "line": 13,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Get-AutoReviewPrContext.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Get-AutoReviewPrContext.ps1"
-        },
-        {
-          "line": 14,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Autonomous-SpawnWorktreeGate.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Autonomous-SpawnWorktreeGate.ps1"
-        },
-        {
-          "line": 15,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Ci-Failure-Notification-Common.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Ci-Failure-Notification-Common.ps1"
-        },
-        {
-          "line": 16,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/pr-scope-check.ps1",
           "sourceKind": "script-token-reference",
           "resolvedScriptPath": null
         }
@@ -3909,152 +2633,6 @@
           "matchedBytes": "scripts/run-vitest-heavy-shard.ps1",
           "sourceKind": "script-token-reference",
           "resolvedScriptPath": "scripts/run-vitest-heavy-shard.ps1"
-        }
-      ]
-    },
-    {
-      "path": "scripts/orchestrator-escalation-emitter-inventory.json",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 11,
-      "resolvedTargets": [
-        "scripts/lib/Review-StartEnvelopeLedger.ps1",
-        "scripts/lib/Worker-NudgeClaim.ps1"
-      ],
-      "unresolvedScriptTokens": 9,
-      "samples": [
-        {
-          "line": 5,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/dead-worker-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 9,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/invoke-worker-recovery.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 13,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/ci-failure-notification-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 17,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/ci-green-wake-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 21,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/invoke-gated-worker-nudge.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 25,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Worker-NudgeClaim.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Worker-NudgeClaim.ps1"
-        },
-        {
-          "line": 29,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Worker-Recovery.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 37,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Review-StartEnvelopeLedger.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Review-StartEnvelopeLedger.ps1"
-        }
-      ]
-    },
-    {
-      "path": "scripts/orchestrator-message-catalog.json",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 6,
-      "resolvedTargets": [
-        "scripts/lib/Submit-WorkerInputDraft.ps1"
-      ],
-      "unresolvedScriptTokens": 5,
-      "samples": [
-        {
-          "line": 17,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/ci-green-wake-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 50,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/ci-failure-notification-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 83,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/journaled-worker-send.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 102,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 121,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 140,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Submit-WorkerInputDraft.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/Submit-WorkerInputDraft.ps1"
-        }
-      ]
-    },
-    {
-      "path": "scripts/orchestrator-wake-supervisor-orphan-integration.shared.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 1,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 1,
-      "samples": [
-        {
-          "line": 7,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Orchestrator-WakeSupervisor.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
         }
       ]
     },
@@ -4203,248 +2781,6 @@
       ]
     },
     {
-      "path": "scripts/pr2-foundation/contracts.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 5,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 5,
-      "samples": [
-        {
-          "line": 25,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Get-ReactionMessagesFromYaml.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 28,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/review-ready-report-state-seed.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 29,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/review-trigger-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 30,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/review-trigger-reeval.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 35,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/orchestrator-wake-supervisor.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 5,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 5,
-      "samples": [
-        {
-          "line": 331,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/review-trigger-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 333,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/review-trigger-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 348,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/pr2-foundation/new.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 349,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/pr2-foundation/new.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 350,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/pr2-foundation/new.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/pr2-foundation/mutation-behavior-probes.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 2,
-      "scriptTokens": 2,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 2,
-      "samples": [
-        {
-          "line": 18,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/review-trigger-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 20,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/orchestrator-wake-supervisor.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 175,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 180,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/pr2-foundation/mutation-behavior-recipes.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 2,
-      "scriptTokens": 3,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 3,
-      "samples": [
-        {
-          "line": 133,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 133,
-          "tokenKind": "script",
-          "matchedBytes": "inline-notification.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 137,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 137,
-          "tokenKind": "script",
-          "matchedBytes": "worker-notification.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 364,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Get-ReactionMessagesFromYaml.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/pr2-foundation/mutation-semantic-gates.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 2,
-      "scriptTokens": 2,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 2,
-      "samples": [
-        {
-          "line": 34,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/review-trigger-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 36,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/orchestrator-wake-supervisor.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 231,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 232,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/pr2-foundation/real-scope-proof.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 1,
-      "resolvedTargets": [
-        "scripts/lib/WorkerReportStore.ps1"
-      ],
-      "unresolvedScriptTokens": 0,
-      "samples": [
-        {
-          "line": 130,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/WorkerReportStore.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/lib/WorkerReportStore.ps1"
-        }
-      ]
-    },
-    {
       "path": "scripts/pr2-foundation/runtime-catalog.ts",
       "sourceKinds": [
         "script-token-reference"
@@ -4464,25 +2800,6 @@
       ]
     },
     {
-      "path": "scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 1,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 1,
-      "samples": [
-        {
-          "line": 523,
-          "tokenKind": "script",
-          "matchedBytes": "worker-message-submit-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
       "path": "scripts/rca-spec-discipline-surfaces.json",
       "sourceKinds": [
         "script-token-reference"
@@ -4496,46 +2813,6 @@
           "line": 2,
           "tokenKind": "script",
           "matchedBytes": "check-draft-discipline.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/review-start-envelope-ledger-starter-surfaces.json",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 0,
-      "scriptTokens": 4,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 4,
-      "samples": [
-        {
-          "line": 11,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/review-trigger-reconcile.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 15,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 19,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Invoke-ReviewTriggerReeval.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 23,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
           "sourceKind": "script-token-reference",
           "resolvedScriptPath": null
         }
@@ -4663,78 +2940,6 @@
           "line": 91,
           "tokenKind": "runtime",
           "matchedBytes": "PowerShell",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": "scripts/toolchain/node22-runtime-policy.spec.ts",
-      "sourceKinds": [
-        "script-token-reference"
-      ],
-      "runtimeTokens": 4,
-      "scriptTokens": 10,
-      "resolvedTargets": [
-        "scripts/check-reusable.ps1",
-        "scripts/record-sanctioned-worker-kill.ps1",
-        "scripts/verify.ps1"
-      ],
-      "unresolvedScriptTokens": 7,
-      "samples": [
-        {
-          "line": 36,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 108,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/wrapper.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 230,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/bad.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 537,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/check-example.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 538,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/example.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 539,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/verify.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": "scripts/verify.ps1"
-        },
-        {
-          "line": 541,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/example.ps1",
-          "sourceKind": "script-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 543,
-          "tokenKind": "script",
-          "matchedBytes": "scripts/example.ps1",
           "sourceKind": "script-token-reference",
           "resolvedScriptPath": null
         }
