@@ -1237,7 +1237,7 @@ describe('delivery-triggered composer submission', () => {
       }),
     });
     expect(writes).toBe(1);
-    expect(submitted.length).toBeGreaterThanOrEqual(2);
+    expect(submitted).toHaveLength(1);
   });
 
   it('sends only one Enter when busy liveness clears after the first keystroke', async () => {
@@ -1358,6 +1358,44 @@ describe('orchestration mail reconciliation', () => {
 
     expect(deps.writes).toBe(1);
     expect(result.nudged).toBe(1);
+  });
+
+  it('shares the reconcile ledger with direct delivery to suppress a second pointer', async () => {
+    const target = worker('term_shared_ledger');
+    let writes = 0;
+    let wrote = false;
+    const message = {
+      id: 'msg_shared_ledger',
+      runId: 'run_shared_ledger',
+      recipient: target.identity.id,
+      consumed: false,
+    };
+    const pointer = `You have 1 orchestration message. Run \`orca orchestration check --terminal ${target.identity.id}\`.`;
+    const submitDeps = depsFor({}, {
+      read: () => ({
+        ok: true as const,
+        lines: wrote ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+      }),
+    });
+    const deps = () => ({
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => {
+        writes += 1;
+        wrote = true;
+        return { status: 'dispatched' as const };
+      },
+      submitDeps,
+    });
+    const suffix = `${process.pid}-${Date.now()}`;
+    const ledgerPath = join(tmpdir(), `opk-reconcile-shared-${suffix}.json`);
+    const lockPath = join(tmpdir(), `opk-reconcile-shared-${suffix}.lock`);
+    const options = { ledgerPath, lockPath, now: () => 1_000 };
+
+    await submitOrcaMessageDeliveryPointer(message.id, deps(), options);
+    await submitOrcaMessageDeliveryPointer(message.id, deps(), options);
+
+    expect(writes).toBe(1);
   });
 
   it('processes an unread message beyond Orca’s default page', async () => {

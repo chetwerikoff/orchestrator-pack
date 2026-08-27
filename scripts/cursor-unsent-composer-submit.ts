@@ -336,6 +336,12 @@ interface DeliveryMessage {
   readonly consumed: boolean;
 }
 
+interface DeliveryPointerSubmitOptions {
+  readonly reconcileLedgerPath?: string;
+  readonly reconcileLockPath?: string;
+  readonly now?: () => number;
+}
+
 interface DeliveryMessageSubmitDeps {
   readonly readInbox?: () => OrcaJsonResponse<OrcaInboxFullResult>;
   readonly lookupMessage: (messageId: string) =>
@@ -723,12 +729,39 @@ function deliveryMessageFromInboxRow(row: OrcaInboxMessageRow):
 export async function submitOrcaMessageDeliveryPointer(
   messageId: string,
   deps: DeliveryMessageSubmitDeps,
+  options: DeliveryPointerSubmitOptions = {},
 ): Promise<UnsentComposerSubmitResult> {
   const id = messageId.trim();
   if (!id) return deliveryNoEffect('orchestration_message_id_missing', undefined, false);
-  const found = deps.lookupMessage(id);
-  if (!found.ok) return deliveryNoEffect(found.reason, undefined, false);
-  return submitOrcaMessageDeliveryPointerForMessage(found.message, deps);
+  if (!options.reconcileLedgerPath) {
+    const found = deps.lookupMessage(id);
+    if (!found.ok) return deliveryNoEffect(found.reason, undefined, false);
+    return submitOrcaMessageDeliveryPointerForMessage(found.message, deps);
+  }
+  const held = tryAcquireHeldFileLock(options.reconcileLockPath ?? ORCHESTRATION_RECONCILE_LOCK_PATH);
+  if (!held.acquired) return deliveryNoEffect(`reconcile_lock_${held.reason}`, undefined, false);
+  replaceLockedFileContents(held.descriptor, `${process.pid}\n`);
+  try {
+    const current = options.now?.() ?? Date.now();
+    const ledger: Record<string, number> = (() => {
+      try { return JSON.parse(readFileSync(options.reconcileLedgerPath!, 'utf8')) as Record<string, number>; } catch { return {}; }
+    })();
+    if (ledger[id] !== undefined && current - ledger[id]! < ORCHESTRATION_RECONCILE_WINDOW_MS) {
+      return deliveryNoEffect('orchestration_message_recently_attempted', undefined, false);
+    }
+    const found = deps.lookupMessage(id);
+    if (!found.ok) return deliveryNoEffect(found.reason, undefined, false);
+    ledger[id] = current;
+    const ledgerDescriptor = openSync(options.reconcileLedgerPath, constants.O_CREAT | constants.O_RDWR, 0o600);
+    try {
+      replaceLockedFileContents(ledgerDescriptor, `${JSON.stringify(ledger)}\n`);
+    } finally {
+      closeSync(ledgerDescriptor);
+    }
+    return await submitOrcaMessageDeliveryPointerForMessage(found.message, deps);
+  } finally {
+    releaseHeldFileLock(held.descriptor);
+  }
 }
 
 async function submitOrcaMessageDeliveryPointerForMessage(
@@ -740,6 +773,11 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   if (!resolved.ok) return deliveryNoEffect(resolved.reason, undefined, false);
   if (resolved.worker === null) return deliveryNoEffect('worker_gone');
   const worker = resolved.worker;
+  const pointer = buildDeliveryPointer(message);
+  const writeKey = deliveryPointerWriteKey(worker, pointer);
+  if (deps.pointerWriteLedger?.has(writeKey)) {
+    return deliveryNoEffect('pointer_already_queued', worker, false);
+  }
   const shown = deps.submitDeps.readAsync
     ? await deps.submitDeps.readAsync(worker.identity)
     : deps.submitDeps.read(worker.identity);
@@ -749,11 +787,6 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       return await submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps);
     }
     return deliveryNoEffect('composer_not_empty_before_delivery', worker);
-  }
-  const pointer = buildDeliveryPointer(message);
-  const writeKey = deliveryPointerWriteKey(worker, pointer);
-  if (deps.pointerWriteLedger?.has(writeKey)) {
-    return await submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps);
   }
   const written = deps.writePointer(worker.identity, pointer);
   const pointerWriteAccepted = written.status === 'dispatched'
@@ -1203,7 +1236,11 @@ async function main(): Promise<void> {
       throw new Error('delivery mode requires one --message-id or one --terminal and cannot combine with --dry-run or --once');
     }
     const result = parsed.messageId
-      ? await submitOrcaMessageDeliveryPointer(parsed.messageId, createOrcaMessageSubmitDeps(adapter, deps))
+      ? await submitOrcaMessageDeliveryPointer(
+        parsed.messageId,
+        createOrcaMessageSubmitDeps(adapter, deps),
+        { reconcileLedgerPath: ORCHESTRATION_RECONCILE_LEDGER_PATH },
+      )
       : parsed.terminals?.length === 1
         ? await submitUnsentCursorComposerDeliveryForTerminal(parsed.terminals[0] ?? '', adapter, deps)
         : (() => { throw new Error('delivery mode requires one --message-id or one --terminal'); })();
