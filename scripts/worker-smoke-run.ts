@@ -100,6 +100,7 @@ import {
 } from './lib/worker-assignment-store.ts';
 import { resolveCurrentWorkerAssignmentBindings } from './lib/worker-assignment-runtime.ts';
 import {
+  evictWorkerReportRecords,
   listWorkerReportRecordsForAssignment,
   readWorkerReportStoreFile,
   resolveWorkerReportStorePath,
@@ -810,6 +811,19 @@ export async function evaluatePostSmokeReadiness(
   };
 
   const reportStore = readWorkerReportStoreFile(resolveWorkerReportStorePath(process.env));
+  const reportRepoKey = target.repositorySlug.trim().toLowerCase();
+  const reportPrKey = `${reportRepoKey}|${target.prNumber}`;
+  evictWorkerReportRecords({
+    store: reportStore,
+    openPrs: [{
+      number: target.prNumber,
+      state: target.prOpen ? 'open' : 'closed',
+      repoSlug: target.repositorySlug,
+    }],
+    currentHeadByPr: { [reportPrKey]: target.headSha },
+    nowMs: Date.now(),
+    repoSlug: target.repositorySlug,
+  });
   const workerReports = assignment
     ? listWorkerReportRecordsForAssignment(reportStore, target.repositorySlug, {
         assignmentId: assignment.assignmentId,
