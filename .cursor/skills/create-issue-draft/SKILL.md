@@ -103,9 +103,9 @@ only the declared bound invocation placeholders. Full-file blob identities and
 the rendered prompt SHA are diagnostics only.
 
 ```manager-review-brief-canon
-.claude/skills/create-issue-draft/SKILL.md :: ### Generated independent reviewer binding frame
-.claude/skills/create-issue-draft/SKILL.md :: ## Fixed per-tier pipeline
-.claude/skills/create-issue-draft/SKILL.md :: ### Direct GitHub publication and manager receipts — Issue #1225
+.cursor/skills/create-issue-draft/SKILL.md :: ### Generated independent reviewer binding frame
+.cursor/skills/create-issue-draft/SKILL.md :: ## Fixed per-tier pipeline
+.cursor/skills/create-issue-draft/SKILL.md :: ### Direct GitHub publication and manager receipts — Issue #1225
 .cursor/rules/flow-manager-browser-turn-monitoring.mdc :: ## Launch and observation
 .cursor/rules/flow-manager-browser-turn-monitoring.mdc :: ## Legacy state and diagnostic probe
 ```

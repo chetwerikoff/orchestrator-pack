@@ -399,6 +399,8 @@ export async function reconcilePostReviewSmoke(
     cwd: initial.binding.worker.workspacePath,
     dryRun: false,
     json: true,
+    reviewId: '',
+    reviewHeadSha: '',
   };
 
   try {
