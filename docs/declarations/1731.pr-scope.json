@@ -1,0 +1,31 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1731,
+  "declared_paths": [
+    "docs/orchestration-runbook.md",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
+    "scripts/worker-message-submit-reconcile.test.ts"
+  ],
+  "denylist": [
+    ".agent-orchestrator/",
+    ".ao/",
+    ".github/",
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "scripts/orca-runtime/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "docs/orchestration-runbook.md",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
+    "scripts/worker-message-submit-reconcile.test.ts"
+  ],
+  "source_revision": "20675f6b385445a2cebbb59f38ff222df965cfd5"
+}

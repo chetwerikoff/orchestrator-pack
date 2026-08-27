@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
-import { readFileSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -26,10 +26,10 @@ import {
 } from './cursor-unsent-composer-submit.ts';
 import type { RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 
-const POKE = 'You have 1 orchestration message. Run `orca orchestration check --run run_d613a86c140a`.';
-const DISPATCH_POKE = 'You have 1 orchestration message. Run `orca orchestration check`.';
+const POKE = 'You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_d613a86c140a`.';
+const DISPATCH_POKE = 'You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check`.';
 const TERMINAL_HANDLE = 'term_cc95818d-ce98-465a-a806-f1a73d7d33bf';
-const TERMINAL_POKE = `You have 1 orchestration message. Run \`orca orchestration check --terminal ${TERMINAL_HANDLE}\`.`;
+const TERMINAL_POKE = `You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${TERMINAL_HANDLE}\`.`;
 const CURSOR_FOOTER = [
   'Cursor Grok 4.6 High · 40.6% · 22 files edited                                                                                                    Run Everything',
   '~/projects/orchestrator-pack · main',
@@ -903,7 +903,7 @@ describe('delivery-triggered composer submission', () => {
         liveness: () => 'idle',
         read: () => ({
           ok: true as const,
-          lines: wrote ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          lines: wrote ? ['You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_dup`.', ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
@@ -1207,7 +1207,7 @@ describe('delivery-triggered composer submission', () => {
         liveness: () => 'idle',
         read: () => ({
           ok: true as const,
-          lines: wrote ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          lines: wrote ? ['You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_dup`.', ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
@@ -1237,7 +1237,7 @@ describe('delivery-triggered composer submission', () => {
       }),
     });
     expect(writes).toBe(1);
-    expect(submitted).toHaveLength(1);
+    expect(submitted).toHaveLength(2);
   });
 
   it('sends only one Enter when busy liveness clears after the first keystroke', async () => {
@@ -1358,6 +1358,106 @@ describe('orchestration mail reconciliation', () => {
 
     expect(deps.writes).toBe(1);
     expect(result.nudged).toBe(1);
+  });
+
+  it('claims one exact episode, persists growing backoff, and re-arms at the next deadline', async () => {
+    const target = worker('term_episode_backoff');
+    const root = mkdtempSync(join(tmpdir(), 'opk-episode-backoff-'));
+    const statePath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    let writes = 0;
+    let pointerVisible = false;
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const message = {
+      id: 'msg_episode_backoff',
+      runId: 'run_episode_backoff',
+      recipient: target.identity.id,
+      consumed: false,
+    };
+    try {
+      const makeDeps = () => ({
+        lookupMessage: () => ({ ok: true as const, message }),
+        resolveWorker: () => ({ ok: true as const, worker: target }),
+        writePointer: () => {
+          writes += 1;
+          pointerVisible = true;
+          return { status: 'dispatched' as const };
+        },
+        submitDeps: depsFor({}, {
+          submitted,
+          read: () => ({
+            ok: true as const,
+            lines: pointerVisible
+              ? [`You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER]
+              : ['→ Add a follow-up', ...CURSOR_FOOTER],
+            source: 'screen' as const,
+          }),
+          liveness: () => 'idle',
+        }),
+        episodeStatePath: statePath,
+        episodeLockPath: lockPath,
+      });
+      const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_000 });
+      expect(first.terminals[0]?.reason).toBe('enter_sent');
+      expect(writes).toBe(1);
+      expect(submitted).toHaveLength(1);
+      const suppressed = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_001 });
+      expect(suppressed.terminals[0]?.reason).toBe('orchestration_episode_backoff');
+      expect(submitted).toHaveLength(1);
+      const rearmed = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 61_001 });
+      expect(rearmed.terminals[0]?.reason).toBe('enter_sent');
+      expect(writes).toBe(1);
+      expect(submitted).toHaveLength(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('serializes empty-state companion races before pointer and Enter effects', async () => {
+    const target = worker('term_episode_race');
+    const root = mkdtempSync(join(tmpdir(), 'opk-episode-race-'));
+    const statePath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    let writes = 0;
+    let pointerVisible = false;
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const message = {
+      id: 'msg_episode_race',
+      runId: 'run_episode_race',
+      recipient: target.identity.id,
+      consumed: false,
+    };
+    try {
+      const makeDeps = () => ({
+        lookupMessage: () => ({ ok: true as const, message }),
+        resolveWorker: () => ({ ok: true as const, worker: target }),
+        writePointer: () => {
+          writes += 1;
+          pointerVisible = true;
+          return { status: 'dispatched' as const };
+        },
+        submitDeps: depsFor({}, {
+          submitted,
+          read: () => ({
+            ok: true as const,
+            lines: pointerVisible ? [`You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+            source: 'screen' as const,
+          }),
+          liveness: () => 'idle',
+        }),
+        episodeStatePath: statePath,
+        episodeLockPath: lockPath,
+      });
+      const results = await Promise.all([
+        submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 2_000 }),
+        submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 2_000 }),
+      ]);
+      expect(writes).toBe(1);
+      expect(submitted).toHaveLength(1);
+      expect(results.filter((result) => result.terminals[0]?.enter)).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('shares the reconcile ledger with direct delivery to suppress a second pointer', async () => {
