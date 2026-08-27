@@ -48,21 +48,21 @@ function workflowJobs(source: string): JobMap {
 }
 
 function pushMain(source: string): boolean {
-  return /(?ms)^on:\s*.*?^\s*push:\s*$.*?^\s*branches:\s*$.*?^\s*-\s*main\s*$/u.test(source)
-    || /(?ms)push:\s*[\r\n]+\s*branches:\s*\[[^\]]*\bmain\b/u.test(source)
-    || /(?ms)push:\s*[\r\n]+\s*branches:\s*\r?\n\s*-\s*main\b/u.test(source)
-    || /(?ms)push:\s*branches:\s*\[[^\]]*\bmain\b/u.test(source);
+  return /^on:\s*.*?^\s*push:\s*$.*?^\s*branches:\s*$.*?^\s*-\s*main\s*$/msu.test(source)
+    || /push:\s*[\r\n]+\s*branches:\s*\[[^\]]*\bmain\b/msu.test(source)
+    || /push:\s*[\r\n]+\s*branches:\s*\r?\n\s*-\s*main\b/msu.test(source)
+    || /push:\s*branches:\s*\[[^\]]*\bmain\b/msu.test(source);
 }
 function pullRequest(source: string): boolean {
-  return /(?m)^on:\s*pull_request(?:_target)?\s*$/u.test(source)
-    || /(?m)^on:\s*\[[^\]]*\bpull_request(?:_target)?\b[^\]]*\]/u.test(source)
-    || /(?m)^\s*pull_request(?:_target)?:\s*/u.test(source)
-    || /(?m)^\s*-\s*pull_request(?:_target)?\s*$/u.test(source);
+  return /^on:\s*pull_request(?:_target)?\s*$/mu.test(source)
+    || /^on:\s*\[[^\]]*\bpull_request(?:_target)?\b[^\]]*\]/mu.test(source)
+    || /^\s*pull_request(?:_target)?:\s*/mu.test(source)
+    || /^\s*-\s*pull_request(?:_target)?\s*$/mu.test(source);
 }
 function reusable(source: string): boolean {
-  return /(?m)^on:\s*workflow_call\s*$/u.test(source)
-    || /(?m)^on:\s*\[[^\]]*\bworkflow_call\b[^\]]*\]/u.test(source)
-    || (/(?m)^on:\s*$/u.test(source) && /(?m)^\s*workflow_call:\s*/u.test(source));
+  return /^on:\s*workflow_call\s*$/mu.test(source)
+    || /^on:\s*\[[^\]]*\bworkflow_call\b[^\]]*\]/mu.test(source)
+    || (/^on:\s*$/mu.test(source) && /^\s*workflow_call:\s*/mu.test(source));
 }
 function concurrencyBlock(source: string): string {
   const lines = source.split(/\r?\n/u);
@@ -96,7 +96,7 @@ function runCiCheapWins(root: string): string[] {
       if (!block) failures.push(rel + ' missing top-level concurrency block');
       else {
         if (hasMain) {
-          if (/(?m)^\s*cancel-in-progress:\s*true\s*$/u.test(block)) failures.push(rel + ' uses unconditional cancel-in-progress: true while also triggering push to main');
+          if (/^\s*cancel-in-progress:\s*true\s*$/mu.test(block)) failures.push(rel + ' uses unconditional cancel-in-progress: true while also triggering push to main');
           if (!/cancel-in-progress:\s*\$\{\{/u.test(block)) failures.push(rel + ' must gate cancel-in-progress with a pull_request expression when push-to-main is enabled');
         }
         if (hasPr) {
@@ -114,7 +114,7 @@ function runCiCheapWins(root: string): string[] {
   if (!existsSync(auditPath)) failures.push('missing .github/workflows/read-delegation-audit.yml');
   else {
     const audit = text(auditPath);
-    if (/(?m)(run:\s*npm test -- scripts\/read-delegation-audit\.test\.ts|vitest run.*read-delegation-audit\.test\.ts)/u.test(audit)) failures.push('read-delegation-audit.yml must not run the fixture suite');
+    if (/(run:\s*npm test -- scripts\/read-delegation-audit\.test\.ts|vitest run.*read-delegation-audit\.test\.ts)/mu.test(audit)) failures.push('read-delegation-audit.yml must not run the fixture suite');
   }
   const scopePath = join(root, '.github/workflows/scope-guard.yml');
   if (!existsSync(scopePath)) failures.push('missing .github/workflows/scope-guard.yml');
@@ -123,7 +123,7 @@ function runCiCheapWins(root: string): string[] {
     const sharded = /test-vitest-light/u.test(scope) && /test-vitest-heavy/u.test(scope)
       && /vitest-ci-runner\.ts light/u.test(scope) && /vitest-ci-runner\.ts heavy/u.test(scope)
       && /vitest-ci-runner\.ts aggregate/u.test(scope);
-    const contract = /(?m)^\s*test-vitest-contracts:\s*$/u.test(scope) && /vitest-ci-runner\.ts contract/u.test(scope);
+    const contract = /^\s*test-vitest-contracts:\s*$/mu.test(scope) && /vitest-ci-runner\.ts contract/u.test(scope);
     if (!sharded) failures.push('scope-guard.yml must run the Node sharded Vitest pipeline');
     if (sharded && !contract) failures.push('sharded pipeline must keep the Node Vitest contract lane');
     for (const command of ['ci-cheap-wins', 'verify-runtime', 'pipeline-split']) {
@@ -180,8 +180,8 @@ function runPipelineSplit(root: string): string[] {
     'needs: [plan-vitest-ci-topology, test-vitest-heavy]',
   ];
   for (const fragment of fragments) if (!source.includes(fragment)) failures.push("runtime-history refresh lost dynamic topology binding: missing '" + fragment + "'");
-  const heavy = /(?ms)^  test-vitest-heavy:\r?\n(?<body>.*?)(?=^  refresh-runtime-history:)/u.exec(source)?.groups?.body ?? '';
-  if (!/(?ms)^      - name: Checkout\r?\n        uses: actions\/checkout@v4\r?\n        with:\r?\n          fetch-depth: 0(?:\r?\n|$)/u.test(heavy)) failures.push('runtime-history heavy shards must use fetch-depth: 0');
+  const heavy = /^  test-vitest-heavy:\r?\n(?<body>.*?)(?=^  refresh-runtime-history:)/msu.exec(source)?.groups?.body ?? '';
+  if (!/^      - name: Checkout\r?\n        uses: actions\/checkout@v4\r?\n        with:\r?\n          fetch-depth: 0(?:\r?\n|$)/msu.test(heavy)) failures.push('runtime-history heavy shards must use fetch-depth: 0');
   if (/shard:\s*\[\s*1\s*,\s*2\s*,\s*3\s*,\s*4\s*,\s*5\s*,\s*6\s*,\s*7\s*\]/u.test(source)) failures.push('runtime-history refresh must not restore a fixed 1..7 heavy shard matrix');
   const dir=mkdtempSync(join(tmpdir(),'opk-topology-'));
   const output=join(dir,'gha-output.txt');
@@ -222,7 +222,7 @@ function runReadDelegationCiGate(root:string): string[] {
   const workflow=join(root,'.github/workflows/read-delegation-audit.yml');
   if(!existsSync(workflow)) return ['missing .github/workflows/read-delegation-audit.yml'];
   const source=text(workflow);
-  if(!/(?m)^on:\s*$/u.test(source)) failures.push('workflow missing on: trigger block');
+  if(!/^on:\s*$/mu.test(source)) failures.push('workflow missing on: trigger block');
   if(!source.includes('pull_request')) failures.push('workflow missing pull_request trigger');
   if(/continue-on-error:\s*true/u.test(source)) failures.push('audit job uses continue-on-error');
   if(/if:\s*false/u.test(source)) failures.push('audit job has unconditional skip (if: false)');
