@@ -4,8 +4,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
 
-export const WORKFLOW_BLOB_SHA = '7de8752a51faa6788f7196d79d14d0f05a970b2a';
-export const WORKFLOW_CONTENT_SHA256 = '58a0950b7d0873d7c65efa4cc8fa02e15538a1e88df02ceaacb1ac876ab4e8f2';
+export const WORKFLOW_BLOB_SHA = 'd9da550d07dcdbe726d7ac93e817be484df81023';
+export const WORKFLOW_CONTENT_SHA256 = 'eaf5568cd4746b5edcbc52a06f71d78c453f89e9a244bd1c07fa2211a96ff197';
 export const RUNTIME_OUTPUTS = ['.vitest-runtime-report.json', '.vitest-runtime-report.meta.json'];
 
 export type RowId =
