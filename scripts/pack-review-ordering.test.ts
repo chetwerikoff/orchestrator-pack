@@ -353,6 +353,51 @@ describe('Issue #1436 smoke/review ordering', () => {
     },
   );
 
+  it.each(['failed', 'error', 'changes_requested'] as const)(
+    'admits independent smoke after a consumed %s review across a head update',
+    (status) => {
+      const { options, authority } = authorityFixture();
+      const terminal = commitPackReviewTerminal({
+        prNumber: 1436,
+        expectedTransitionSeq: authority.transitionSeq,
+        terminal: {
+          schemaVersion: 1,
+          terminalContractVersion: 2,
+          terminalSource: 'normal',
+          runId: `consumed-${status}`,
+          targetSha: HEAD,
+          reviewVerdict: 'findings',
+          findingCount: status === 'changes_requested' ? 1 : 0,
+          findingsDigest: 'findings-digest',
+        },
+        status,
+        findingCount: status === 'changes_requested' ? 1 : 0,
+        options,
+      });
+      const settled = recordPackReviewPublication({
+        prNumber: 1436,
+        expectedTransitionSeq: terminal.transitionSeq,
+        publication: {
+          headSha: HEAD,
+          terminalRunId: `consumed-${status}`,
+          status: 'succeeded',
+          publicationDigest: 'publication-digest',
+          recordedAtUtc: new Date().toISOString(),
+        },
+        options,
+      });
+      const nextHead = observePackReviewHead({
+        prNumber: 1436,
+        expectedTransitionSeq: settled.transitionSeq,
+        headSha: NEXT_HEAD,
+        options,
+      });
+
+      expect(nextHead.cycle?.reviewStageComplete).toBe(true);
+      expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD })).not.toThrow();
+    },
+  );
+
   it('settles an authoritative architect DEFER at cap but not BLOCK or pending', () => {
     for (const [verdict, source] of [
       ['DEFER', 'architect'],
