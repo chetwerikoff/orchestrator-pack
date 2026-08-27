@@ -161,6 +161,14 @@ export function validateTerminalOneShotBodyBinding(
     errors.push(`terminal source body changed outside a bound post-terminal correction: reviewed=${sourceRevision} current=${currentRevision} acceptance=${issueRevision}`);
     return;
   }
+  const sourceOrdinal = Number(sourceRevision.slice(1));
+  const currentOrdinal = Number(currentRevision.slice(1));
+  if (!Number.isSafeInteger(sourceOrdinal)
+    || !Number.isSafeInteger(currentOrdinal)
+    || currentOrdinal !== sourceOrdinal + 1) {
+    errors.push(`post-terminal correction must advance exactly one source revision: reviewed=${sourceRevision} current=${currentRevision}`);
+    return;
+  }
   const terminal = stageReceipts.filter((value) => (
     record(value) && value.stage === 'architectural' && value.outcome === 'complete'
   ));
