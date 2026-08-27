@@ -1373,8 +1373,15 @@ function finalCredentialingCaptures(
   return captures;
 }
 
-function readOperatorWaiver(path: string | undefined): ProducerEvidence {
-  return readEvidenceWaiverProducerEvidence(path, (candidate) => JSON.parse(readFileSync(candidate, 'utf8')) as unknown);
+function readOperatorWaiver(
+  path: string | undefined,
+  expected?: { stage: string; sourceRevision: string; missingSlots: readonly string[] },
+): ProducerEvidence {
+  return readEvidenceWaiverProducerEvidence(
+    path,
+    (candidate) => JSON.parse(readFileSync(candidate, 'utf8')) as unknown,
+    expected,
+  );
 }
 
 function buildReceipt(
@@ -1386,7 +1393,7 @@ function buildReceipt(
   captureTexts: Map<string, string>,
   captureTimestamps: Map<string, number>,
   errors: string[],
-  operatorWaiverEvidence: ProducerEvidence,
+  operatorWaiverPath: string | undefined,
   artifactContext?: ArtifactAuthorityContext,
 ): ProducedStageReceipt | null {
   if (raw.schema !== STAGE_EVIDENCE_SCHEMA) {
@@ -1510,6 +1517,16 @@ function buildReceipt(
   const derivedOutcome: StageCompletenessReceiptV1['outcome'] = browserCredentialing
     ? 'complete'
     : raw.outcome as StageCompletenessReceiptV1['outcome'];
+  const partialMissingSources = Array.isArray(raw.partialMissingSources)
+    ? raw.partialMissingSources as PartialMissingSourceWitness[]
+    : [];
+  const operatorWaiverEvidence = readOperatorWaiver(operatorWaiverPath, {
+    stage,
+    sourceRevision,
+    missingSlots: partialMissingSources.flatMap((source) => (
+      isRecord(source) && typeof source.reviewerSlot === 'string' ? [source.reviewerSlot] : []
+    )),
+  });
   const assertedProducerEvidence: ProducerEvidence = raw.producerEvidence === 'verified' || raw.producerEvidence === 'waived'
     ? raw.producerEvidence
     : 'not-applicable';
@@ -1522,10 +1539,6 @@ function buildReceipt(
       producerEvidence = 'not-applicable';
     }
   }
-  const partialMissingSources = Array.isArray(raw.partialMissingSources)
-    ? raw.partialMissingSources as PartialMissingSourceWitness[]
-    : [];
-
   const receipt: ProducedStageReceipt = {
     schema: 'stage-completeness-receipt/v1',
     tier,
@@ -1908,7 +1921,6 @@ export function produceAcceptanceArtifacts(
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)] };
   }
   const episodeId = deriveReviewEpisodeId(taskIdentity, episodeFirstRevision);
-  const operatorWaiverEvidence = readOperatorWaiver(options.waiverPath);
   const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(options.reviewDir, options.stageEvidencePaths, errors, options.phase ?? 'final-acceptance');
   if (canonicalStageEvidencePaths === null) {
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)], reviewEpisodeId: episodeId };
@@ -2015,7 +2027,7 @@ export function produceAcceptanceArtifacts(
       captureTexts,
       captureTimestamps,
       errors,
-      operatorWaiverEvidence,
+      options.waiverPath,
       artifactContext,
     ))
     .filter((receipt): receipt is ProducedStageReceipt => receipt !== null)
@@ -2275,7 +2287,6 @@ export function inspectAcceptanceArtifacts(
     else if (present.includes(artifactPath)) addInvalid(artifact, artifactPath, artifact + ' is malformed JSON');
   }
   const credentialedStages = new Set<ReviewStage>();
-  const operatorWaiverEvidence = readOperatorWaiver(options.waiverPath);
   for (const name of stageReceiptNames) {
     const value = outputValues.get(name);
     if (value !== undefined && (!isRecord(value) || value.schema !== 'stage-completeness-receipt/v1')) {
@@ -2286,6 +2297,15 @@ export function inspectAcceptanceArtifacts(
     const stage = reviewStage(value.stage);
     const cardinality = Number(value.reviewerCardinality);
     if (!stage || !Number.isInteger(cardinality) || cardinality < 1) continue;
+    const operatorWaiverEvidence = readOperatorWaiver(options.waiverPath, {
+      stage,
+      sourceRevision: typeof value.sourceRevision === 'string' ? value.sourceRevision : '',
+      missingSlots: Array.isArray(value.partialMissingSources)
+        ? value.partialMissingSources.flatMap((source) => (
+          isRecord(source) && typeof source.reviewerSlot === 'string' ? [source.reviewerSlot] : []
+        ))
+        : [],
+    });
     if (stage === 'architectural-lens') {
       if (value.outcome === 'complete') credentialedStages.add(stage);
       continue;

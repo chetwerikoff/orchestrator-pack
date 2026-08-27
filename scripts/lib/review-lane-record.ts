@@ -16,8 +16,11 @@ export function isReviewLaneRouting(value: unknown): value is ReviewLaneRouting 
   return isRouting(value);
 }
 
-export function isReviewLaneEvidence(value: unknown): value is ReviewLaneEvidence {
-  return validateReviewLaneRecord(value).ok;
+export function isReviewLaneEvidence(
+  value: unknown,
+  waivedMissingSlots: readonly string[] = [],
+): value is ReviewLaneEvidence {
+  return validateReviewLaneRecord(value, waivedMissingSlots).ok;
 }
 
 export function sameReviewLaneRouting(left: ReviewLaneRouting, right: ReviewLaneRouting): boolean {
@@ -44,6 +47,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+export function reviewLaneWaivedMissingSlots(
+  stage: unknown,
+  policyVersion: unknown,
+  producerEvidence: unknown,
+  partialMissingSources: readonly unknown[],
+): string[] {
+  if (
+    stage !== 'architectural-review'
+    || policyVersion !== 'review-lane-routing/v1'
+    || producerEvidence !== 'waived'
+  ) return [];
+  const slots = partialMissingSources
+    .flatMap((value) => isRecord(value) && nonEmpty(value.reviewerSlot) ? [value.reviewerSlot.trim()] : [])
+    .sort();
+  return slots.length === 2 && slots[0] === '02' && slots[1] === '03' ? slots : [];
 }
 
 function sameSlots(left: readonly string[], right: readonly string[]): boolean {
@@ -137,7 +157,10 @@ function sourceVerdictEvidenceMap(value: unknown): Record<string, ReviewLaneSour
   return derived;
 }
 
-export function validateReviewLaneRecord(value: unknown): ReviewLaneRecordValidation {
+export function validateReviewLaneRecord(
+  value: unknown,
+  waivedMissingSlots: readonly string[] = [],
+): ReviewLaneRecordValidation {
   const errors: string[] = [];
   if (!isRecord(value)) return { ok: false, errors: ['routed review record must be an object'] };
   for (const field of ['routing', 'finalRequiredSlots', 'sourceVerdicts', 'sourceVerdictEvidence', 'conflictDecision', 'settlement']) {
@@ -147,6 +170,10 @@ export function validateReviewLaneRecord(value: unknown): ReviewLaneRecordValida
   if (!isRouting(routing)) {
     errors.push('routed review record is missing a complete immutable routing record');
   } else {
+    const waived = new Set(waivedMissingSlots);
+    if ([...waived].some((slot) => !routing.possibleSlots.includes(slot))) {
+      errors.push('routed review record waiver names a slot outside possibleSlots');
+    }
     const settlement = value.settlement;
     const finalRequiredSlots = value.finalRequiredSlots;
     const sourceVerdicts = value.sourceVerdicts;
@@ -181,8 +208,9 @@ export function validateReviewLaneRecord(value: unknown): ReviewLaneRecordValida
       || Object.values(sourceVerdicts).some((verdict) => !['accept', 'material-findings', 'blocked', 'refused', 'unparseable'].includes(String(verdict)))) {
       errors.push('routed review record has malformed sourceVerdicts');
     } else {
+      const waived = new Set(waivedMissingSlots);
       const expectedVerdictSlots = [
-        ...routing.initiallyActivatedSlots,
+        ...routing.initiallyActivatedSlots.filter((slot) => !waived.has(slot)),
         ...(conflictDecision === 'conflict-requires-slot-03' ? ['03'] : []),
       ];
       const actualVerdictSlots = Object.keys(sourceVerdicts).sort();
@@ -191,7 +219,11 @@ export function validateReviewLaneRecord(value: unknown): ReviewLaneRecordValida
       }
     }
     if (parsedSourceVerdicts && isSettlement(settlement, routing)) {
-      const expected = settleReviewLane(routing, parsedSourceVerdicts);
+      const expectedVerdicts = { ...parsedSourceVerdicts };
+      for (const slot of waivedMissingSlots) {
+        if (expectedVerdicts[slot] === undefined) expectedVerdicts[slot] = 'accept';
+      }
+      const expected = settleReviewLane(routing, expectedVerdicts);
       const actual = settlement;
       const sameCensus = actual.slotCensus.length === expected.slotCensus.length
         && actual.slotCensus.every((row, index) => row.slot === expected.slotCensus[index]?.slot && row.state === expected.slotCensus[index]?.state);

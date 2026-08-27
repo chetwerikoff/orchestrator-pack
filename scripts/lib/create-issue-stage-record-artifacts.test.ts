@@ -1561,6 +1561,92 @@ describe('Issue #1556 pre-lens architectural-review routing', () => {
 });
 
 
+describe('Issue #1744 two-missing AR waiver production', () => {
+  const prepare = (withWaiver: boolean) => {
+    const input = fixture({ transportClassification: 'complete' });
+    writeFileSync(input.intakePath, JSON.stringify({
+      schema: 'tier-intake/v1', producer: 'flow-manager', taskIdentity: TASK, kind: 'fresh', priorTier: 'T3',
+      firstRevision: REVISION, competitiveDecision: 'skipped', competitiveRationale: 'competitive review was skipped for pre-lens',
+    }));
+    rmSync(input.evidencePath);
+    const declaration: ReviewLaneAuthorDeclaration = {
+      schema: 'review-lane-change-set/v1', owner: 'issue-author', entries: [{
+        kind: 'exact', path: 'scripts/chatgpt-browser-turn/driver.ts', behaviors: ['pure-review-lane-selection'],
+      }],
+    };
+    const normalized = normalizeReviewLaneDeclaration(declaration);
+    if (normalized.status !== 'usable') throw new Error('waiver fixture input must be usable');
+    const routing = buildReviewLaneRouting(
+      { ...normalized, identity: `${REVISION}:${normalized.identity}` },
+      classifyReviewLaneDeclaration(declaration), REVISION, 'architectural-review-attempt', 'disputed',
+    );
+    const evidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, unknown>;
+    const invocations = (evidence.invocations as Array<Record<string, unknown>>).map((invocation) => {
+      const slot = String(invocation.reviewerSlot);
+      const { capturePath: _capturePath, ...withoutCapture } = invocation;
+      return {
+        ...withoutCapture,
+        policyVersion: 'review-lane-routing/v1', reviewerCardinality: 3,
+        cardinalityConfigIdentity: routing.cardinalityConfigIdentity, reviewLaneRouting: routing,
+        ...(slot === '01'
+          ? { capturePath: invocation.capturePath, retryClass: 'none' }
+          : { terminalClassification: 'incident', retryClass: 'retry-forbidden' }),
+      };
+    });
+    const sourceVerdicts = { '01': 'accept' as const };
+    const reviewCapturePath = String((invocations[0] as Record<string, unknown>).capturePath);
+    const captureName = basename(reviewCapturePath);
+    const captureDigest = createHash('sha256').update(readFileSync(reviewCapturePath)).digest('hex');
+    const reviewLane = {
+      routing, finalRequiredSlots: ['01', '02', '03'], sourceVerdicts,
+      sourceVerdictEvidence: { '01': {
+        producerEvidenceIdentity: 'architectural-review-producer-01',
+        captureIdentity: `sha256:${captureDigest}:${captureName}`, terminalClassification: 'complete',
+        captureVerified: true, digestMatches: true, verdictText: 'NO_FINDINGS', rawFindingCount: 0,
+      } },
+      conflictDecision: 'no-conflict' as const,
+      settlement: settleReviewLane(routing, { '01': 'accept', '02': 'accept', '03': 'accept' }),
+    };
+    Object.assign(evidence, {
+      tier: 'T3', policyVersion: 'review-lane-routing/v1', reviewerCardinality: 3,
+      cardinalityConfigIdentity: routing.cardinalityConfigIdentity, outcome: 'partial', producerEvidence: 'waived',
+      partialMissingSources: [
+        { reviewerSlot: '02', invocationId: 'invocation-002', evidenceIdentity: 'terminal-02', reason: 'possible-or-actual send with resend forbidden' },
+        { reviewerSlot: '03', invocationId: 'invocation-003', evidenceIdentity: 'terminal-03', reason: 'possible-or-actual send with resend forbidden' },
+      ], invocations, reviewLane,
+    });
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(evidence));
+    const waiverPath = join(input.dir, 'ar-successor-operator-waiver.json');
+    if (withWaiver) writeFileSync(waiverPath, JSON.stringify({
+      schema: 'operator-stage-waiver/v1', stage: 'architectural-review', cycleId: 'cycle-1385',
+      stageAttemptId: 'architectural-review-attempt', sourceRevision: REVISION,
+      missingSlots: ['02', '03'], reason: 'explicit operator authorization',
+    }));
+    const source = transport({ census: [...input.reviewComments, comment(input.body)] });
+    return { input, source, waiverPath };
+  };
+
+  it('admits the live pre-lens partial shape only with the explicit operator waiver', () => {
+    const withoutWaiver = prepare(false);
+    const rejected = produceAcceptanceArtifacts({
+      reviewDir: withoutWaiver.input.dir, outputDir: withoutWaiver.input.outputDir,
+      tierIntakePath: withoutWaiver.input.intakePath, stageEvidencePaths: [withoutWaiver.input.reviewEvidencePath],
+      authorDispositionsPath: withoutWaiver.input.authorPath, phase: 'pre-lens', artifactSourceTransport: withoutWaiver.source,
+    });
+    expect(rejected.ok).toBe(false);
+
+    const withWaiver = prepare(true);
+    const accepted = produceAcceptanceArtifacts({
+      reviewDir: withWaiver.input.dir, outputDir: withWaiver.input.outputDir,
+      tierIntakePath: withWaiver.input.intakePath, stageEvidencePaths: [withWaiver.input.reviewEvidencePath],
+      authorDispositionsPath: withWaiver.input.authorPath, phase: 'pre-lens', artifactSourceTransport: withWaiver.source,
+      waiverPath: withWaiver.waiverPath,
+    });
+    expect(accepted.ok, accepted.errors.join('\n')).toBe(true);
+  });
+});
+
+
 describe('Issue #1484 post-lens ledger production', () => {
   it('includes the settled Claude lens receipt in the ledger before terminal GPT', () => {
     const input = fixture({ transportClassification: 'incident' });
