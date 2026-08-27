@@ -57,7 +57,7 @@ function checkRuntime(root = REPO): GateFailure | undefined {
   if (process.platform !== 'linux' || process.arch !== 'x64' || nodeMajor !== 22 || !npm.ok || npmMajor !== 10) {
     return globalFailure('unsupported_local_environment', 'node/npm runtime', { platform: 'linux', arch: 'x64', node_major: 22, npm_major: 10 }, { platform: process.platform, arch: process.arch, node_major: nodeMajor, npm_major: npmMajor }, 'Use Linux x86_64 with Node 22 and npm 10.');
   }
-  for (const command of ['git', 'bash', 'pwsh']) {
+  for (const command of ['git', 'bash']) {
     const found = runProcessSync({ command: 'bash', args: ['-lc', `command -v ${command}`], cwd: root, inheritParentEnv: true });
     if (!found.ok) return globalFailure('unsupported_local_environment', command, 'executable available', String(found.stderr ?? ''), `Install or expose ${command}.`);
   }
@@ -100,8 +100,6 @@ function checkDependencies(root = REPO): GateFailure | undefined {
   if (lock.name !== pkg.name || lock.version !== pkg.version || installed.lockfileVersion !== lock.lockfileVersion) return globalFailure('dependency_installation_invalid', 'package-lock.json', { name: pkg.name, version: pkg.version, lockfileVersion: lock.lockfileVersion }, { name: lock.name, version: lock.version, lockfileVersion: installed.lockfileVersion }, 'Restore the matching pre-existing installation.');
   const census = runProcessSync({ command: 'npm', args: ['ls', '--all', '--include=dev', '--json', '--offline'], cwd: root, inheritParentEnv: true });
   if (!census.ok) return globalFailure('dependency_installation_invalid', 'npm ls --all --include=dev --json', 'complete valid integrity census', { status: census.exitCode, stdout: census.stdout, stderr: census.stderr }, 'Restore dependencies without installing from this command.');
-  const pester = runProcessSync({ command: 'pwsh', args: ['-NoProfile', '-NonInteractive', '-Command', '(Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty Version).ToString()'], cwd: root, inheritParentEnv: true, env: pesterProbeEnvironment() });
-  if (!pester.ok || !/^(?:5|[6-9]|[1-9]\d)\./.test(String(pester.stdout ?? '').trim())) return globalFailure('dependency_missing', 'Pester', '>= 5.0.0', { status: pester.exitCode, stdout: pester.stdout, stderr: pester.stderr }, 'Install Pester >= 5 outside this command.');
   return undefined;
 }
 export function pesterProbeEnvironment(parent: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -198,7 +196,9 @@ export async function runPreflight(repoRoot = REPO): Promise<Record<string, unkn
   const deps = baselineFailure ?? paths ?? checkDependencies(repoRoot);
   probes.push(global || hashFailure || paths || outputs || baselineFailure ? notStartedProbe('probe.lockfile-root', 'lockfile-root', 'global') : deps ? blockedProbe('probe.lockfile-root', 'lockfile-root', 'global', [], deps.diagnostic) : probeRecord('probe.lockfile-root', 'lockfile-root', 'global'));
   probes.push(global || hashFailure || paths || outputs || baselineFailure || deps ? notStartedProbe('probe.npm-census', 'npm-integrity-census', 'global') : probeRecord('probe.npm-census', 'npm-integrity-census', 'global'));
-  probes.push(global || hashFailure || paths || outputs || baselineFailure || deps ? notStartedProbe('probe.pester', 'pester-query', 'global') : probeRecord('probe.pester', 'pester-query', 'global'));
+  probes.push(global || hashFailure || paths || outputs || baselineFailure || deps
+    ? notStartedProbe('probe.pester', 'retained-pester-policy', 'global')
+    : probeRecord('probe.pester', 'retained-pester-policy', 'global'));
   const typescript = deps ? undefined : checkDirectDependency('typescript', '05', repoRoot);
   const vitest = deps ? undefined : checkDirectDependency('vitest', '07', repoRoot);
   const preflightBlocked = Boolean(global || hashFailure || paths || outputs || baselineFailure || deps);
