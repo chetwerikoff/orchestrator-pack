@@ -1148,9 +1148,10 @@ function readTurnResultForInvocation(
   capture: CaptureIdentityV1 | null,
   captureText: string | null,
   errors: string[],
-  artifactBacked: boolean,
+  artifactAuthority: AuthoritativeGithubArtifactAuthorityV1 | undefined,
 ): string | null {
   const transportClassification = invocation.terminalClassification;
+  const artifactBacked = Boolean(artifactAuthority);
   if (transportClassification !== 'complete' && !artifactBacked) return null;
   const label = `stage evidence invocation[${index}]`;
   const turnResultPath = optionalString(invocation.turnResultPath);
@@ -1205,17 +1206,27 @@ function readTurnResultForInvocation(
     errors.push(`turn-result/v1 artifact for ${label} is not a successful terminal result: ${resolved}`);
   }
   const invocationMatches = value.invocation_id === invocation.invocationId;
-  if (!invocationMatches) errors.push(`turn-result/v1 artifact for ${label} invocation_id does not match stage evidence: ${resolved}`);
+  if (!artifactBacked && !invocationMatches) {
+    errors.push(`turn-result/v1 artifact for ${label} invocation_id does not match stage evidence: ${resolved}`);
+  }
   if (value.send_count !== undefined) {
     if ((value.send_count !== 0 && value.send_count !== 1) || Number(value.send_count) !== Number(invocation.sendCount)) {
       errors.push(`turn-result/v1 artifact for ${label}.send_count does not match stage evidence: ${resolved}`);
     }
   }
   const identity = turnResultIdentity(basename(resolved), sha256(text));
-  if (invocation.terminalResultIdentity !== undefined && invocation.terminalResultIdentity !== identity) {
+  if (!artifactBacked && invocation.terminalResultIdentity !== undefined && invocation.terminalResultIdentity !== identity) {
     errors.push(`stage evidence ${label}.terminalResultIdentity is not derived from the referenced turn-result: ${resolved}`);
   }
-  if (transportClassification !== 'complete' || recoveryRequired) return identity;
+  if (transportClassification === 'complete' && artifactAuthority && recoveryRequired) {
+    const expectedArtifactIdentity = `github-comment:${artifactAuthority.commentId}`;
+    if (
+      invocation.terminalResultIdentity !== expectedArtifactIdentity
+    ) {
+      errors.push(`stage evidence ${label}.terminalResultIdentity must equal ${expectedArtifactIdentity} for the authoritative GitHub artifact`);
+    }
+  }
+  if (transportClassification !== 'complete' || recoveryRequired) return artifactBacked ? null : identity;
 
   const output = isRecord(value.output) ? value.output : null;
   if (
@@ -1277,7 +1288,7 @@ function readTurnResultForInvocation(
   } else if (!directSuccess && !directFailure && capture && output && (Number(output.byte_length) !== capture.byteLength || output.sha256 !== capture.sha256)) {
     errors.push(`turn-result/v1 artifact for ${label} output does not match capture bytes: ${resolved}`);
   }
-  return identity;
+  return artifactBacked ? null : identity;
 }
 
 function captureFromEvidence(
@@ -1461,7 +1472,7 @@ function buildReceipt(
         capture,
         capture ? captureTexts.get(capture.captureIdentity) ?? null : null,
         errors,
-        Boolean(artifactResolution),
+        artifactResolution?.authority,
       ) ?? undefined;
       assertDerived(value.reviewEpisodeId, episodeId, `invocation[${index}].reviewEpisodeId`, errors);
       if (receiptPolicyVersion !== null) {
@@ -2214,6 +2225,20 @@ export function inspectAcceptanceArtifacts(
     if (isSafeFileComponent(stageAttemptId)) stageReceiptNames.push(stageCompletenessReceiptFileName(stageAttemptId));
     else missing.push({ artifact: 'stage-completeness-receipt', reason: 'stage evidence has no safe stageAttemptId: ' + path });
 
+    let producedInvocations: unknown[] | undefined;
+    if (isSafeFileComponent(stageAttemptId)) {
+      const producedReceiptPath = join(outputDir, stageCompletenessReceiptFileName(stageAttemptId));
+      if (existsSync(producedReceiptPath)) {
+        try {
+          const producedReceipt = JSON.parse(readFileSync(producedReceiptPath, 'utf8')) as unknown;
+          if (isRecord(producedReceipt)
+            && producedReceipt.schema === 'stage-completeness-receipt/v1'
+            && Array.isArray(producedReceipt.invocations)) {
+            producedInvocations = producedReceipt.invocations;
+          }
+        } catch {}
+      }
+    }
     if (Array.isArray(value.invocations)) {
       for (const [index, invocation] of value.invocations.entries()) {
         if (!isRecord(invocation)) {
@@ -2221,17 +2246,24 @@ export function inspectAcceptanceArtifacts(
           continue;
         }
         const transportComplete = invocation.terminalClassification === 'complete';
-        if (transportComplete && invocation.capturePath === undefined) {
+        const producedInvocation = producedInvocations?.[index];
+        const artifactAuthority = isRecord(producedInvocation) && isRecord(producedInvocation.artifactAuthority)
+          && producedInvocation.artifactAuthority.kind === 'authoritative-github-artifact'
+          ? producedInvocation.artifactAuthority as unknown as AuthoritativeGithubArtifactAuthorityV1
+          : undefined;
+        if (transportComplete && invocation.capturePath === undefined && !artifactAuthority) {
           missing.push({ artifact: 'capture', reason: 'completed invocation[' + index + '] is missing capturePath: ' + path });
         }
-        if (transportComplete && invocation.capturePath !== undefined) {
+        if (transportComplete && (invocation.capturePath !== undefined || artifactAuthority)) {
           const captureErrors: string[] = [];
           const captureTexts = new Map<string, string>();
           const captureTimestamps = new Map<string, number>();
-          const capture = captureFromEvidence(path, invocation.capturePath, invocation.captureIdentity, captureTexts, captureTimestamps, captureErrors);
+          const capture = invocation.capturePath === undefined
+            ? null
+            : captureFromEvidence(path, invocation.capturePath, invocation.captureIdentity, captureTexts, captureTimestamps, captureErrors);
           for (const error of captureErrors) missing.push({ artifact: 'capture', reason: error });
           const turnResultErrors: string[] = [];
-          readTurnResultForInvocation(path, invocation, index, capture, capture ? captureTexts.get(capture.captureIdentity) ?? null : null, turnResultErrors, false);
+          readTurnResultForInvocation(path, invocation, index, capture, capture ? captureTexts.get(capture.captureIdentity) ?? null : null, turnResultErrors, artifactAuthority);
           for (const error of turnResultErrors) missing.push({ artifact: 'turn-result/v1', reason: error });
         }
       }

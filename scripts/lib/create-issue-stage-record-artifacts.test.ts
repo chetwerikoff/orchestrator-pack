@@ -195,6 +195,9 @@ function fixture(input: {
   withCapture?: boolean;
   captureText?: string;
   invocationEchoLabel?: 'INVOCATION_ID' | 'INVOCATION_ID_TO_ECHO';
+  stageInvocationId?: string;
+  turnResultInvocationId?: string;
+  terminalResultIdentity?: string;
 } = {}) {
   const intakeRevision = input.intakeRevision ?? REVISION;
   const sourceRevision = input.sourceRevision ?? intakeRevision;
@@ -212,6 +215,8 @@ function fixture(input: {
     ? 'browser-gpt#capture=final-node/v1'
     : input.reviewerSource;
   const invocationEchoLabel = input.invocationEchoLabel ?? 'INVOCATION_ID_TO_ECHO';
+  const stageInvocationId = input.stageInvocationId ?? 'invocation-001';
+  const turnResultInvocationId = input.turnResultInvocationId ?? 'invocation-001';
   const dir = mkdtempSync(join(tmpdir(), 'opk-1385-artifacts-'));
   tempDirs.push(dir);
   const intakePath = join(dir, 'tier-intake.json');
@@ -222,7 +227,7 @@ function fixture(input: {
   const turnResultPath = join(dir, 'turn-result-001.json');
   const outputDir = join(dir, 'output');
   const episode = deriveReviewEpisodeId(TASK, intakeRevision);
-  const body = input.captureText ?? canonicalVerdict(sourceRevision, 'invocation-001', ISSUE, invocationEchoLabel);
+  const body = input.captureText ?? canonicalVerdict(sourceRevision, stageInvocationId, ISSUE, invocationEchoLabel);
 
   writeFileSync(intakePath, JSON.stringify({
     schema: 'tier-intake/v1',
@@ -246,7 +251,7 @@ function fixture(input: {
     const turnResult = { schema: 'turn-result/v1', state: 'ok', scope: 'none', cause: 'ok', invocation_id: invocationId, configured_profile_key: 'fixture-profile', send_count: 1, output: { byte_length: Buffer.byteLength(String(reviewComment.body)), sha256: createHash('sha256').update(String(reviewComment.body)).digest('hex') } };
     const turnResultText = JSON.stringify(turnResult);
     writeFileSync(reviewTurnResultPath, turnResultText);
-    return { schema: 'reviewer-invocation-envelope/v1', reviewEpisodeId: episode, stageAttemptId: 'architectural-review-attempt', policyVersion: 'triple-source/v1', reviewerCardinality: 3, cardinalityConfigIdentity: CONFIG, stage: 'architectural-review', sourceRevision, invocationId, terminalResultIdentity: `sha256:${createHash('sha256').update(turnResultText).digest('hex')}:${basename(reviewTurnResultPath)}`, reviewerSource: `browser-gpt-${String(ordinal).padStart(2, '0')}#capture=final-node/v1`, reviewerSlot: String(ordinal).padStart(2, '0'), reviewerOrdinal: ordinal, attemptOrdinal: 1, retryAttempt: false, terminal: true, terminalClassification: 'complete', sendCount: 1, retryClass: 'none', revisionCheck: 'matched', capacityOutcome: 'admitted', capacityWaitMs: 0, capturePath: reviewCapturePath, turnResultPath: reviewTurnResultPath };
+    return { schema: 'reviewer-invocation-envelope/v1', reviewEpisodeId: episode, stageAttemptId: 'architectural-review-attempt', policyVersion: 'triple-source/v1', reviewerCardinality: 3, cardinalityConfigIdentity: CONFIG, stage: 'architectural-review', sourceRevision, invocationId, terminalResultIdentity: `github-comment:${reviewComment.id}`, reviewerSource: `browser-gpt-${String(ordinal).padStart(2, '0')}#capture=final-node/v1`, reviewerSlot: String(ordinal).padStart(2, '0'), reviewerOrdinal: ordinal, attemptOrdinal: 1, retryAttempt: false, terminal: true, terminalClassification: 'complete', sendCount: 1, retryClass: 'none', revisionCheck: 'matched', capacityOutcome: 'admitted', capacityWaitMs: 0, capturePath: reviewCapturePath, turnResultPath: reviewTurnResultPath };
   });
   writeFileSync(reviewEvidencePath, JSON.stringify({ schema: STAGE_EVIDENCE_SCHEMA, tier: 'T2', stage: 'architectural-review', stageAttemptId: 'architectural-review-attempt', stageSequence: 1, cycleId: 'cycle-1385', cycleBinding: { cycleId: 'cycle-1385', sourceRevision, boundBeforeLaunch: true }, policyVersion: 'triple-source/v1', reviewerCardinality: 3, cardinalityConfigIdentity: CONFIG, sourceRevision, outcome: 'complete', revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' }, settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true }, invocations: reviewInvocations }));
   if (input.withCapture) writeFileSync(capturePath, body);
@@ -260,7 +265,7 @@ function fixture(input: {
     cardinalityConfigIdentity: CONFIG,
     stage: 'architectural',
     sourceRevision,
-    invocationId: 'invocation-001',
+    invocationId: stageInvocationId,
     ...(reviewerSource === null ? {} : { reviewerSource }),
     reviewerSlot: '01',
     reviewerOrdinal: 1,
@@ -282,7 +287,7 @@ function fixture(input: {
       state: turnResultState,
       scope: turnResultScope,
       cause: turnResultCause,
-      invocation_id: 'invocation-001',
+      invocation_id: turnResultInvocationId,
       configured_profile_key: turnResultConfiguredProfileKey,
       ...(input.omitTurnResultSendCount ? {} : { send_count: turnResultSendCount }),
       ...(turnResultState === 'ok'
@@ -292,7 +297,7 @@ function fixture(input: {
     const turnResultText = JSON.stringify(turnResult);
     writeFileSync(turnResultPath, turnResultText);
     invocation.turnResultPath = turnResultPath;
-    invocation.terminalResultIdentity = `sha256:${createHash('sha256').update(turnResultText).digest('hex')}:${basename(turnResultPath)}`;
+    invocation.terminalResultIdentity = input.terminalResultIdentity ?? `github-comment:${COMMENT_ID}`;
   }
 
   const evidence = {
@@ -611,6 +616,106 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       terminalResultIdentity: input.invocation.terminalResultIdentity,
       artifactAuthority: { kind: 'authoritative-github-artifact' },
     });
+  });
+
+  it('accepts an observed direct-publication recovery mismatch with a canonical GitHub comment', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      reviewerSource: 'slot-01#capture=direct-publication/v1',
+      stageInvocationId: 'a28911b4-9f60-4a42-bd8e-edd6c896540c',
+      turnResultInvocationId: '73fe6971-c58f-4d45-bb35-00ca92bec25a',
+      turnResultState: 'recovery_required',
+      turnResultCause: 'direct_publication_no_owned_publication',
+      terminalResultIdentity: 'github-comment:5427396953',
+      withTurnResult: true,
+      withCapture: false,
+    });
+    const source = transport({
+      census: [...input.reviewComments, comment(input.body, { id: 5427396953 })],
+    });
+    const result = produce(input, source);
+
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const inspected = inspect(input);
+    expect(inspected.ok, inspected.missing.map((item) => item.reason).join('\n')).toBe(true);
+    expect(JSON.parse(readFileSync(input.turnResultPath, 'utf8'))).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'direct_publication_no_owned_publication',
+      invocation_id: '73fe6971-c58f-4d45-bb35-00ca92bec25a',
+      send_count: 1,
+    });
+    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+    expect(receipt.invocations[0]).toMatchObject({
+      invocationId: 'a28911b4-9f60-4a42-bd8e-edd6c896540c',
+      terminalClassification: 'complete',
+      sendCount: 1,
+      reviewerSource: 'slot-01#capture=direct-publication/v1',
+      terminalResultIdentity: 'github-comment:5427396953',
+      artifactAuthority: { kind: 'authoritative-github-artifact' },
+    });
+  });
+
+  it('rejects an observed mismatch when stage evidence asserts a different GitHub identity', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      reviewerSource: 'slot-01#capture=direct-publication/v1',
+      stageInvocationId: 'a28911b4-9f60-4a42-bd8e-edd6c896540c',
+      turnResultInvocationId: '73fe6971-c58f-4d45-bb35-00ca92bec25a',
+      turnResultState: 'recovery_required',
+      turnResultCause: 'direct_publication_no_owned_publication',
+      terminalResultIdentity: 'github-comment:9999999999',
+      withTurnResult: true,
+      withCapture: false,
+    });
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(input.body, { id: 5427396953 })],
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain(
+      'stage evidence stage evidence invocation[0].terminalResultIdentity must equal github-comment:5427396953 for the authoritative GitHub artifact',
+    );
+  });
+
+  it('rejects a stale non-GitHub terminal identity for the authoritative artifact', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      reviewerSource: 'slot-01#capture=direct-publication/v1',
+      stageInvocationId: 'a28911b4-9f60-4a42-bd8e-edd6c896540c',
+      turnResultInvocationId: '73fe6971-c58f-4d45-bb35-00ca92bec25a',
+      turnResultState: 'recovery_required',
+      turnResultCause: 'direct_publication_no_owned_publication',
+      terminalResultIdentity: 'sha256:stale-helper-identity',
+      withTurnResult: true,
+      withCapture: false,
+    });
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(input.body, { id: 5427396953 })],
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain(
+      'stage evidence stage evidence invocation[0].terminalResultIdentity must equal github-comment:5427396953 for the authoritative GitHub artifact',
+    );
+  });
+
+  it('rejects the observed mismatch when complete census omits the GitHub credential comment', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      reviewerSource: 'slot-01#capture=direct-publication/v1',
+      stageInvocationId: 'a28911b4-9f60-4a42-bd8e-edd6c896540c',
+      turnResultInvocationId: '73fe6971-c58f-4d45-bb35-00ca92bec25a',
+      turnResultState: 'recovery_required',
+      turnResultCause: 'direct_publication_no_owned_publication',
+      terminalResultIdentity: 'github-comment:5427396953',
+      withTurnResult: true,
+      withCapture: false,
+    });
+    const result = produce(input, transport({ census: input.reviewComments }));
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
   });
 
   it('rejects artifact-backed recovery_required under final-node policy', () => {
