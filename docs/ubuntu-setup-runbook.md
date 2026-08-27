@@ -90,14 +90,14 @@ cd ~/projects
 git clone https://github.com/chetwerikoff/orchestrator-pack.git
 cd orchestrator-pack
 npm ci --include=dev
-pwsh -NoProfile -File scripts/verify.ps1 -StrictPrereqs
-pwsh -NoProfile -File scripts/check-reusable.ps1
+node --experimental-strip-types scripts/verify.ts --strict-prereqs
+node --experimental-strip-types scripts/verify.ts --reusable-only
 npm run typecheck:foundation
 npm run lint:foundation
 npm run test:foundation
 ```
 
-Use `scripts/bootstrap.ps1 -InstallDependencies -StrictPrereqs` as a convenience
+Use `node --experimental-strip-types scripts/bootstrap.ts --install-dependencies --strict-prereqs` as a convenience
 wrapper. It never starts a runtime, creates target-side state, or mutates user
 configuration.
 
@@ -132,7 +132,7 @@ No target-side action is performed merely by cloning or verifying this pack.
 Run these from the pack root:
 
 ```bash
-pwsh -NoProfile -File scripts/verify.ps1 -StrictPrereqs
+node --experimental-strip-types scripts/verify.ts --strict-prereqs
 npm run gate-runner-selftest
 node --experimental-strip-types scripts/runtime-retirement/retired-surface-selftest.ts
 npm run typecheck:foundation
