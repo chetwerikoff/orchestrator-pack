@@ -26,6 +26,7 @@ import {
   type CaptureIdentityV1,
   type ReviewerInvocationEnvelopeV1,
   type ReviewEpisodeDerivationAuthorityV1,
+  type ReviewEpisodeValidationPurpose,
   type ReviewStage,
   type ReviewTier,
   type StageCompletenessReceiptV1,
@@ -146,9 +147,7 @@ interface IssueCommentCensus {
   comments: AuthoritativeIssueComment[];
 }
 
-interface AuthoritativeIssueCensus extends IssueCommentCensus {
-  publisherLogin: string;
-}
+type AuthoritativeIssueCensus = IssueCommentCensus;
 
 interface ArtifactAuthorityContext {
   transport: GhTransport;
@@ -274,6 +273,7 @@ function buildInvocation(
   artifactAuthority: AuthoritativeGithubArtifactAuthorityV1 | undefined,
   validatedTerminalResultIdentity: string | undefined,
   errors: string[],
+  purpose: ReviewEpisodeValidationPurpose,
 ): ReviewerInvocationEnvelopeV1 | null {
   const label = `stage ${context.stage} invocation[${index}]`;
   const schema = value.schema === 'reviewer-invocation-envelope/v1' ? value.schema : null;
@@ -321,8 +321,8 @@ function buildInvocation(
   if (stage === null) errors.push(`${label} has unknown stage`);
   if (!artifactAuthority && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing`);
   if (!artifactAuthority && !reviewerSource) errors.push(`${label}.reviewerSource is missing`);
-  if (invocationTerminalClassification === 'complete' && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing for successful transport`);
-  if (invocationTerminalClassification === 'complete' && !reviewerSource) errors.push(`${label}.reviewerSource is missing for successful transport`);
+  if (purpose === 'stage-time' && invocationTerminalClassification === 'complete' && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing for successful transport`);
+  if (purpose === 'stage-time' && invocationTerminalClassification === 'complete' && !reviewerSource) errors.push(`${label}.reviewerSource is missing for successful transport`);
   if (reviewerOrdinal === null) errors.push(`${label}.reviewerOrdinal must be a positive integer`);
   if (attemptOrdinal === null) errors.push(`${label}.attemptOrdinal must be 1 or 2`);
   if (retryAttempt === null) errors.push(`${label}.retryAttempt must be boolean`);
@@ -598,31 +598,6 @@ function normalizeOperatorNarrowingHint(
   };
 }
 
-function authenticatedGithubPrincipal(
-  transport: GhTransport,
-  errors: string[],
-): string | null {
-  const response = transport.runGh(['gh', 'api', 'user', '--jq', '.login']);
-  if (response.exitCode !== 0) {
-    errors.push(temporaryError('provenance-unresolved', 'current authenticated GitHub principal could not be resolved'));
-    return null;
-  }
-  let login = response.stdout.trim();
-  if (login.startsWith('"')) {
-    try {
-      const parsed = JSON.parse(login) as unknown;
-      login = typeof parsed === 'string' ? parsed.trim() : '';
-    } catch {
-      login = '';
-    }
-  }
-  if (!login) {
-    errors.push(temporaryError('provenance-unresolved', 'current authenticated GitHub principal is empty or malformed'));
-    return null;
-  }
-  return login;
-}
-
 function parseAuthoritativeIssueComment(
   raw: unknown,
   label: string,
@@ -702,10 +677,17 @@ function authoritativeIssueCommentCensus(
   issueNumber: number,
   errors: string[],
 ): AuthoritativeIssueCensus | null {
-  const publisherLogin = authenticatedGithubPrincipal(transport, errors);
-  if (!publisherLogin) return null;
-  const census = issueCommentCensus(transport, repositoryFullName, issueNumber, errors);
-  return census ? { ...census, publisherLogin } : null;
+  return issueCommentCensus(transport, repositoryFullName, issueNumber, errors);
+}
+
+const TRUSTED_REVIEW_ARTIFACT_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
+function isTrustedReviewArtifactComment(comment: AuthoritativeIssueComment): boolean {
+  return Boolean(
+    comment.userLogin
+    && comment.authorAssociation
+    && TRUSTED_REVIEW_ARTIFACT_ASSOCIATIONS.has(comment.authorAssociation.toUpperCase()),
+  );
 }
 
 function canonicalIssueCommentLineage(
@@ -944,16 +926,16 @@ function rereadAuthoritativeIssueComment(
     errors.push(`authoritative GitHub artifact target mismatch on reread: comment ${censusComment.id}`);
     return null;
   }
-  if (!reread.userLogin) {
-    errors.push(temporaryError('provenance-unresolved', `authoritative reread comment ${reread.id} has no comment-author login`));
+  if (!reread.userLogin || !reread.authorAssociation) {
+    errors.push(temporaryError('source-unavailable', `authoritative reread comment ${reread.id} has no repository-trust fields`));
     return null;
   }
-  if (!censusComment.userLogin) {
-    errors.push(temporaryError('provenance-unresolved', `authoritative census candidate ${censusComment.id} has no comment-author login`));
+  if (!censusComment.userLogin || !censusComment.authorAssociation) {
+    errors.push(temporaryError('source-unavailable', `authoritative census candidate ${censusComment.id} has no repository-trust fields`));
     return null;
   }
-  if (!sameGithubLogin(reread.userLogin, context.census.publisherLogin)) {
-    errors.push(`provenance-mismatch: authoritative comment ${reread.id} author ${reread.userLogin} does not equal authenticated principal ${context.census.publisherLogin}`);
+  if (!isTrustedReviewArtifactComment(reread) || !isTrustedReviewArtifactComment(censusComment)) {
+    errors.push(`authoritative GitHub artifact is not repository-trusted: ${reread.htmlUrl}`);
     return null;
   }
   if (reread.createdAt !== reread.updatedAt) {
@@ -986,6 +968,7 @@ function rereadAuthoritativeIssueComment(
     || reread.createdAt !== censusComment.createdAt
     || reread.updatedAt !== censusComment.updatedAt
     || !sameGithubLogin(reread.userLogin, censusComment.userLogin)
+    || reread.authorAssociation !== censusComment.authorAssociation
     || reread.htmlUrl !== censusComment.htmlUrl
     || reread.issueUrl !== censusComment.issueUrl
   ) {
@@ -1019,30 +1002,30 @@ function resolveAuthoritativeArtifact(
     );
     return observedRevision ? [{ comment, observedRevision }] : [];
   });
-  const principalCandidates = invocationCandidates.filter(({ comment }) => (
-    comment.userLogin !== null && sameGithubLogin(comment.userLogin, context.census.publisherLogin)
-  ));
   const sameRevisionCandidates = invocationCandidates.filter(({ observedRevision }) => observedRevision === sourceRevision);
-  const matches = principalCandidates.filter(({ observedRevision }) => observedRevision === sourceRevision);
+  const matches = sameRevisionCandidates.filter(({ comment }) => (
+    isTrustedReviewArtifactComment(comment) && comment.createdAt === comment.updatedAt
+  ));
   if (matches.length === 0) {
-    if (sameRevisionCandidates.some(({ comment }) => comment.userLogin === null)) {
+    if (sameRevisionCandidates.some(({ comment }) => !comment.userLogin || !comment.authorAssociation)) {
       errors.push(temporaryError(
-        'provenance-unresolved',
-        `invocation ${invocationId} canonical artifact candidate has no authoritative comment-author login`,
+        'source-unavailable',
+        `invocation ${invocationId} canonical artifact candidate has no repository-trust fields`,
       ));
       return null;
     }
-    if (principalCandidates.length > 0) {
-      const observedRevisions = [...new Set(principalCandidates.map(({ observedRevision }) => observedRevision))].sort();
-      errors.push(
-        `authoritative GitHub artifact revision mismatch: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} invocationId=${invocationId} expected=${sourceRevision} observed=${observedRevisions.join(',')}`,
-      );
+    if (sameRevisionCandidates.some(({ comment }) => !isTrustedReviewArtifactComment(comment))) {
+      errors.push(`authoritative GitHub artifact is not repository-trusted for invocation ${invocationId}`);
+      return null;
+    }
+    if (sameRevisionCandidates.some(({ comment }) => comment.createdAt !== comment.updatedAt)) {
+      errors.push(`authoritative GitHub artifact was edited for invocation ${invocationId}`);
       return null;
     }
     if (invocationCandidates.length > 0) {
-      const observedAuthors = [...new Set(invocationCandidates.map(({ comment }) => comment.userLogin ?? '<missing>'))].sort();
+      const observedRevisions = [...new Set(invocationCandidates.map(({ observedRevision }) => observedRevision))].sort();
       errors.push(
-        `provenance-mismatch: invocation ${invocationId} canonical artifact author(s) ${observedAuthors.join(',')} do not equal authenticated principal ${context.census.publisherLogin}`,
+        `authoritative GitHub artifact revision mismatch: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} invocationId=${invocationId} expected=${sourceRevision} observed=${observedRevisions.join(',')}`,
       );
       return null;
     }
@@ -1052,27 +1035,19 @@ function resolveAuthoritativeArtifact(
       && (invocation.terminalClassification === 'post-send-failure'
         || invocation.terminalClassification === 'output-conflict'
         || invocation.terminalClassification === 'incident');
-    if (journalableUnobservableSend) {
-      // A complete Issue-comment census with zero invocation candidates is the
-      // authoritative negative observation required by the partial-settlement
-      // path. The receipt/journal layer still has to bind this exact invocation
-      // through partialMissingSources before the stage can credential.
-      return null;
-    }
+    if (journalableUnobservableSend) return null;
     errors.push(
       `authoritative GitHub artifact absent after complete census: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} sourceRevision=${sourceRevision} invocationId=${invocationId} source=GitHub-Issue-comments`,
     );
     return null;
   }
-  if (matches.length !== 1) {
+  const distinctBodies = new Set(matches.map(({ comment }) => comment.body));
+  if (distinctBodies.size > 1) {
     const identities = matches.map(({ comment }) => `${comment.id}:${comment.htmlUrl}`).join(', ');
-    errors.push(temporaryError(
-      'identity-unresolved',
-      `invocation ${invocationId} resolved to ${matches.length} canonical principal-owned Issue comments: ${identities}`,
-    ));
+    errors.push(`authoritative GitHub artifact content conflict for invocation ${invocationId}: ${identities}`);
     return null;
   }
-  const censusComment = matches[0]!.comment;
+  const censusComment = [...matches].sort((left, right) => left.comment.id - right.comment.id)[0]!.comment;
   if (censusComment.createdAt !== censusComment.updatedAt) {
     errors.push(`authoritative GitHub artifact was edited: ${censusComment.htmlUrl}`);
     return null;
@@ -1149,9 +1124,11 @@ function readTurnResultForInvocation(
   captureText: string | null,
   errors: string[],
   artifactAuthority: AuthoritativeGithubArtifactAuthorityV1 | undefined,
+  purpose: ReviewEpisodeValidationPurpose,
 ): string | null {
   const transportClassification = invocation.terminalClassification;
   const artifactBacked = Boolean(artifactAuthority);
+  if (purpose === 'final-acceptance' && artifactBacked) return null;
   if (transportClassification !== 'complete' && !artifactBacked) return null;
   const label = `stage evidence invocation[${index}]`;
   const turnResultPath = optionalString(invocation.turnResultPath);
@@ -1406,6 +1383,7 @@ function buildReceipt(
   errors: string[],
   operatorWaiverPath: string | undefined,
   artifactContext?: ArtifactAuthorityContext,
+  purpose: ReviewEpisodeValidationPurpose = 'stage-time',
 ): ProducedStageReceipt | null {
   if (raw.schema !== STAGE_EVIDENCE_SCHEMA) {
     errors.push(`stage evidence has unknown schema: ${evidencePath}`);
@@ -1480,6 +1458,7 @@ function buildReceipt(
         capture ? captureTexts.get(capture.captureIdentity) ?? null : null,
         errors,
         artifactResolution?.authority,
+        purpose,
       ) ?? undefined;
       assertDerived(value.reviewEpisodeId, episodeId, `invocation[${index}].reviewEpisodeId`, errors);
       if (receiptPolicyVersion !== null) {
@@ -1499,6 +1478,7 @@ function buildReceipt(
           artifactResolution?.authority,
           validatedTerminalResultIdentity,
           errors,
+          purpose,
         );
         if (invocation) invocations.push(invocation);
       }
@@ -1582,7 +1562,7 @@ function buildReceipt(
     ...(isRecord(raw.reviewLane) ? { reviewLane: raw.reviewLane as unknown as StageCompletenessReceiptV1['reviewLane'] } : {}),
   };
   if (stage !== 'architectural-lens' && receipt.outcome === 'partial') {
-    const credentialing = evaluateStageCredentialingSettlement(receipt, receipt.reviewerCardinality, stage);
+    const credentialing = evaluateStageCredentialingSettlement(receipt, receipt.reviewerCardinality, stage, purpose);
     errors.push(...credentialing.errors);
     if (credentialing.credentialed) receipt.credentialingCaptures = credentialing.credentialingCaptures as CaptureIdentityV1[];
   }
@@ -1944,16 +1924,21 @@ export function produceAcceptanceArtifacts(
   const taskIssueMatch = /^issue:([1-9][0-9]*)$/.exec(taskIdentity);
   const repositoryFullName = options.repositoryFullName ?? 'chetwerikoff/orchestrator-pack';
   const artifactSourceTransport = options.artifactSourceTransport ?? options.operatorReferenceTransport ?? defaultGhTransport();
+  const purpose: ReviewEpisodeValidationPurpose = (options.phase ?? 'final-acceptance') === 'final-acceptance'
+    ? 'final-acceptance'
+    : 'stage-time';
   let canonicalLineage: CanonicalLineage | undefined;
-  if (!taskIssueMatch) {
-    errors.push('canonical cycle lineage requires tier-intake taskIdentity issue:<N>');
-  } else {
-    canonicalLineage = canonicalIssueCommentLineage(
-      artifactSourceTransport,
-      repositoryFullName,
-      Number(taskIssueMatch[1]),
-      errors,
-    ) ?? undefined;
+  if (purpose === 'stage-time') {
+    if (!taskIssueMatch) {
+      errors.push('canonical cycle lineage requires tier-intake taskIdentity issue:<N>');
+    } else {
+      canonicalLineage = canonicalIssueCommentLineage(
+        artifactSourceTransport,
+        repositoryFullName,
+        Number(taskIssueMatch[1]),
+        errors,
+      ) ?? undefined;
+    }
   }
   let artifactContext: ArtifactAuthorityContext | undefined;
   if (stageInputsRequireAuthoritativeCensus(validStageInputs.map((entry) => entry.value))) {
@@ -2040,11 +2025,12 @@ export function produceAcceptanceArtifacts(
       errors,
       options.waiverPath,
       artifactContext,
+      purpose,
     ))
     .filter((receipt): receipt is ProducedStageReceipt => receipt !== null)
     .sort((left, right) => left.stageSequence - right.stageSequence);
   const tier = receipts[0]?.tier;
-  if (canonicalLineage) validateReceiptCycleLineage(receipts, canonicalLineage, errors);
+  if (purpose === 'stage-time' && canonicalLineage) validateReceiptCycleLineage(receipts, canonicalLineage, errors);
   if (!tier) errors.push('no completed-stage evidence was supplied');
   for (let index = 0; index < receipts.length; index += 1) {
     const receipt = receipts[index]!;
@@ -2054,10 +2040,16 @@ export function produceAcceptanceArtifacts(
   const captures = receipts.flatMap((receipt) => receipt.relayEligibleCaptures);
   const relay = relayEvidence(episodeId, captures);
   const ledger = buildLedger(options.authorDispositionsPath, captures, errors);
-  const claudeProducerEvidence = (options.claudeProducerEvidencePaths ?? []).flatMap((path) => readClaudeProducerEvidence(path, errors));
-  const requiresClaudeProducerEvidence = tier === 'T3' && receipts.some((receipt) => (
-    receipt.stage === 'architectural-lens' && isRecord(receipt.claude) && receipt.claude.kind === 'capture'
+  const claudeProducerEvidenceAuditErrors: string[] = [];
+  const claudeProducerEvidence = (options.claudeProducerEvidencePaths ?? []).flatMap((path) => readClaudeProducerEvidence(
+    path,
+    purpose === 'stage-time' ? errors : claudeProducerEvidenceAuditErrors,
   ));
+  const requiresClaudeProducerEvidence = purpose === 'stage-time'
+    && tier === 'T3'
+    && receipts.some((receipt) => (
+      receipt.stage === 'architectural-lens' && isRecord(receipt.claude) && receipt.claude.kind === 'capture'
+    ));
   if (requiresClaudeProducerEvidence && (options.claudeProducerEvidencePaths ?? []).length === 0) {
     errors.push(`missing ${CLAUDE_PRODUCER_EVIDENCE_SCHEMA} input for T3 architectural-lens capture: --claude-producer-evidence <path>`);
   }
@@ -2072,6 +2064,7 @@ export function produceAcceptanceArtifacts(
           stageReceiptIds: receipts.map((receipt) => receipt.stageReceiptId),
         },
         claudeProducerEvidence,
+        validationPurpose: purpose,
       }
     : undefined;
   if (ledger && tier) {
