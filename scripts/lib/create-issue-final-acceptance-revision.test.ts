@@ -8,7 +8,10 @@ import {
   validateFinalAcceptanceReadbackHead,
   validateCanonicalReceiptPathSet,
 } from './create-issue-final-acceptance.ts';
-import { executeFinalAcceptanceGuards } from './create-issue-final-acceptance-contract.ts';
+import {
+  executeFinalAcceptanceGuards,
+  validateTerminalOneShotBodyBinding,
+} from './create-issue-final-acceptance-contract.ts';
 import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
 import { validateHistoricalReceiptsAgainstLineage } from './create-issue-stage-record-receipt.ts';
 import {
@@ -326,6 +329,65 @@ describe('revision-aware final acceptance', () => {
     ]);
   });
 
+  it('allows exactly one post-terminal source revision step and rejects rN+2 drift', () => {
+    const terminalBody = '<!-- source-revision: r07 -->\nterminal-reviewed bytes';
+    const r08Body = '<!-- source-revision: r08 -->\nbounded corrected bytes';
+    const r09Body = '<!-- source-revision: r09 -->\nunrelated later bytes';
+    const terminalReceipt = {
+      stage: 'architectural',
+      outcome: 'complete',
+      sourceRevision: 'r07',
+    };
+    const allowedErrors: string[] = [];
+    validateTerminalOneShotBodyBinding(
+      terminalBody,
+      r08Body,
+      'r08',
+      [terminalReceipt],
+      allowedErrors,
+    );
+    expect(allowedErrors).toEqual([]);
+
+    const driftErrors: string[] = [];
+    validateTerminalOneShotBodyBinding(
+      terminalBody,
+      r09Body,
+      'r09',
+      [terminalReceipt],
+      driftErrors,
+    );
+    expect(driftErrors).toContain(
+      'post-terminal correction must advance exactly one source revision: reviewed=r07 current=r09',
+    );
+  });
+
+  it('does not use historical cycle lineage or cycleId as a final completion credential', () => {
+    const input = validHistoricalInput();
+    const body = [
+      '<!-- source-revision: r100 -->',
+      '```behavior-kind',
+      'action-producing',
+      '```',
+      '```smoke-plan-floor',
+      'grandfathered: true',
+      '```',
+    ].join('\n');
+    const errors = executeFinalAcceptanceGuards({
+      issueBody: body,
+      terminalSourceBody: body,
+      currentIssueBody: body,
+      issueRevision: 'r100',
+      cycleId: '',
+      reviewDir: '/fixture/review',
+      stageReceiptPaths: input.receipts.map((_, index) => `/fixture/receipt-${index + 1}.json`),
+      stageReceiptValues: input.receipts,
+      capturePaths: [],
+      canonicalLineage: input.lineage,
+    }).errors;
+
+    expect(errors.some((error) => error.startsWith('cycle-binding:'))).toBe(false);
+    expect(errors).not.toContain('cycleId is required');
+  });
   it('requires the requested receipt set to equal canonical real paths', () => {
     const directory = mkdtempSync(join(tmpdir(), 'issue-1202-receipts-'));
     temporaryDirectories.push(directory);
