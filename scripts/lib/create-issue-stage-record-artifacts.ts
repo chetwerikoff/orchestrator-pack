@@ -1205,17 +1205,19 @@ function readTurnResultForInvocation(
     errors.push(`turn-result/v1 artifact for ${label} is not a successful terminal result: ${resolved}`);
   }
   const invocationMatches = value.invocation_id === invocation.invocationId;
-  if (!invocationMatches) errors.push(`turn-result/v1 artifact for ${label} invocation_id does not match stage evidence: ${resolved}`);
+  if (!artifactBacked && !invocationMatches) {
+    errors.push(`turn-result/v1 artifact for ${label} invocation_id does not match stage evidence: ${resolved}`);
+  }
   if (value.send_count !== undefined) {
     if ((value.send_count !== 0 && value.send_count !== 1) || Number(value.send_count) !== Number(invocation.sendCount)) {
       errors.push(`turn-result/v1 artifact for ${label}.send_count does not match stage evidence: ${resolved}`);
     }
   }
   const identity = turnResultIdentity(basename(resolved), sha256(text));
-  if (invocation.terminalResultIdentity !== undefined && invocation.terminalResultIdentity !== identity) {
+  if (!artifactBacked && invocation.terminalResultIdentity !== undefined && invocation.terminalResultIdentity !== identity) {
     errors.push(`stage evidence ${label}.terminalResultIdentity is not derived from the referenced turn-result: ${resolved}`);
   }
-  if (transportClassification !== 'complete' || recoveryRequired) return identity;
+  if (transportClassification !== 'complete' || recoveryRequired) return artifactBacked ? null : identity;
 
   const output = isRecord(value.output) ? value.output : null;
   if (
@@ -1277,7 +1279,7 @@ function readTurnResultForInvocation(
   } else if (!directSuccess && !directFailure && capture && output && (Number(output.byte_length) !== capture.byteLength || output.sha256 !== capture.sha256)) {
     errors.push(`turn-result/v1 artifact for ${label} output does not match capture bytes: ${resolved}`);
   }
-  return identity;
+  return artifactBacked ? null : identity;
 }
 
 function captureFromEvidence(
