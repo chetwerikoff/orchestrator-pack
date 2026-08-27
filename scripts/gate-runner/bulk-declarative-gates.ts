@@ -20,7 +20,8 @@ export const VERIFY_REQUIRED_FILES = [
   'plugins/token-chain-ledger/README.md',
   'plugins/codex-pr-reviewer/README.md',
   'scripts/bootstrap.ps1',
-  'scripts/verify.ts',
+  'scripts/verify.ps1',
+  'scripts/check-reusable.ps1',
   'scripts/install-git-hooks.ps1',
   'scripts/lint-self-architect.ps1',
   'scripts/lint-self-architect.config.json',
@@ -30,7 +31,7 @@ export const VERIFY_REQUIRED_FILES = [
 export const bulkDeclarativeGateDefinitions: readonly DeclarativeGateDefinition[] = [
   {
     gateId: 'verify-required-files',
-    legacyScript: 'scripts/verify.ts',
+    legacyScript: 'scripts/verify.ps1',
     summary: 'Pack required-file inventory',
     rules: [
       { kind: 'file-presence', paths: VERIFY_REQUIRED_FILES },
