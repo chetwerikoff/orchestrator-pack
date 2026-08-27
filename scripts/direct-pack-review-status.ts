@@ -1,5 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
+import './toolchain/native-entrypoint-preflight.ts';
 import { resolve } from 'node:path';
 import {
   createGithubReviewTransport,
