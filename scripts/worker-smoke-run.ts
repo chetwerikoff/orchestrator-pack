@@ -1250,7 +1250,8 @@ function beginSmokeOrdering(
     throw new Error('smoke_actor_unsupported');
   }
   const required = smokeOrderingRequired(issueBody);
-  if (!required && actor === 'worker-owned') return null;
+  const plan = resolveSmokeRequirement(issueBody);
+  if (!required && (actor !== 'worker-owned' || plan.requirement !== 'not-applicable')) return null;
   const fence = parseComplexityTierFence(issueBody);
   if (fence.kind !== 'tier-fence') {
     if (actor === 'worker-owned') return null;
@@ -1340,6 +1341,10 @@ export async function runSmokeAttempt(
   }
   const plan = resolveSmokeRequirement(issueBody);
   if (plan.requirement !== 'required') {
+    if (plan.requirement === 'not-applicable' && (options.smokeActor ?? 'worker-owned') === 'worker-owned') {
+      const orderingBinding = beginSmokeOrdering(options, issueBody);
+      finishSmokeOrdering(orderingBinding, 'passed');
+    }
     emit({ ok: true, skipped: true, reason: plan.requirement }, options.json);
     return 0;
   }
