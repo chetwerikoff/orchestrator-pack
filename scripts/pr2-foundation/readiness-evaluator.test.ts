@@ -97,6 +97,18 @@ describe('ReadinessEvaluator', () => {
     expect(evaluateReadiness(conflicting).failedPredicates).toContain('accepted_worker_lifecycle_missing_or_conflicting');
   });
 
+  it('does not let same-assignment WorkerStatus rescue a WorkerReport from another head', () => {
+    const base = readyInput();
+    const input: ReadinessInput = {
+      ...base,
+      workerReports: [{ ...base.workerReports[0], headSha: 'b'.repeat(40) }],
+      workerStatuses: [{ ...base.workerStatuses[0] }],
+    };
+    const result = evaluateReadiness(input);
+    expect(result.ready).toBe(false);
+    expect(result.failedPredicates).toContain('accepted_worker_lifecycle_missing_or_conflicting');
+  });
+
   it('uses WorkerReportStore lifecycle as authority rather than WorkerStatus runtime status', () => {
     const base = readyInput();
     const input: ReadinessInput = {

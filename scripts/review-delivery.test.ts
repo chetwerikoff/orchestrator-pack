@@ -25,6 +25,7 @@ import {
   deliverPackReviewVerdict,
   isNonBlockingPackReviewFinding,
   projectPackReviewSemanticStatus,
+  projectRunnerPackReviewStatusFromCombined,
   recordPackReviewPendingStatus,
   resumePackReviewVerdictDelivery,
   semanticPackReviewRequiredStatusRequest,
@@ -608,6 +609,33 @@ describe('Issue #1419 direct GitHub pack-review semantics', () => {
       prePublicationHeadSha: h1,
       postPublicationHeadSha: h2,
     })).toBe(false);
+  });
+
+  it('preserves a genuine runner blocker across newer semantic status projections', () => {
+    const runner = projectRunnerPackReviewStatusFromCombined({
+      statuses: [
+        {
+          context: 'orchestrator-pack/pack-review',
+          state: 'failure',
+          description: 'pack review has unresolved blocking findings',
+          updated_at: '2026-08-27T13:00:00.000Z',
+        },
+        {
+          context: 'orchestrator-pack/pack-review',
+          state: 'failure',
+          description: 'Pack review found blocking issues.',
+          updated_at: '2026-08-27T12:00:00.000Z',
+        },
+      ],
+    });
+    expect(runner).toMatchObject({
+      hasLegitimateReview: true,
+      unresolvedBlockingFinding: true,
+    });
+    expect(projectPackReviewSemanticStatus({
+      runner,
+      direct: { hasLegitimateReview: true, unresolvedBlockingFinding: false },
+    })).toMatchObject({ state: 'failure', reason: 'unresolved-blocker' });
   });
 
   it('projects one semantic status across runner and direct sources without direct-review quorum or pending', () => {

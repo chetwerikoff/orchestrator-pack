@@ -260,22 +260,25 @@ export function projectRunnerPackReviewStatusFact(
 export function projectRunnerPackReviewStatusFromCombined(
   combinedValue: unknown,
 ): PackReviewSemanticSourceState {
-  if (!combinedValue || typeof combinedValue !== 'object' || Array.isArray(combinedValue)) {
-    return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
-  }
-  const combined = combinedValue as Record<string, unknown>;
-  const statuses = Array.isArray(combined.statuses)
-    ? combined.statuses.filter((value): value is Record<string, unknown> =>
+  const statusesValue = Array.isArray(combinedValue)
+    ? combinedValue
+    : combinedValue && typeof combinedValue === 'object' && !Array.isArray(combinedValue)
+      ? (combinedValue as Record<string, unknown>).statuses
+      : undefined;
+  const statuses = Array.isArray(statusesValue)
+    ? statusesValue.filter((value): value is Record<string, unknown> =>
         Boolean(value && typeof value === 'object' && !Array.isArray(value)))
     : [];
-  const current = statuses
+  const ordered = statuses
     .filter((status) => String(status.context ?? '') === PACK_REVIEW_REQUIRED_STATUS_CONTEXT)
     .sort((left, right) =>
       Date.parse(String(right.updated_at ?? right.created_at ?? '')) -
-      Date.parse(String(left.updated_at ?? left.created_at ?? '')))[0];
-  return current
-    ? projectRunnerPackReviewStatusFact(current.state, current.description)
-    : { hasLegitimateReview: false, unresolvedBlockingFinding: false };
+      Date.parse(String(left.updated_at ?? left.created_at ?? '')));
+  for (const status of ordered) {
+    const source = projectRunnerPackReviewStatusFact(status.state, status.description);
+    if (source.hasLegitimateReview || source.activeAttempt === true) return source;
+  }
+  return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
 }
 
 export type PackReviewRequiredStatusWriter = (
