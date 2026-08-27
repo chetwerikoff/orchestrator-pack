@@ -46,6 +46,12 @@ jobs:
             producerRevision: measuredHead,
           });
           verifyEvidenceIntegrity(evidence);
+          console.log(JSON.stringify({
+            broaderStatusClosed: evidence.broaderStatusClosed,
+            dormantRetainedCoverageComplete: evidence.dormantRetainedCoverageComplete,
+            unclassifiedPowerShellSurfaces: evidence.unclassifiedPowerShellSurfaces,
+            unresolvedCurrentPrescriptiveScriptTargets: evidence.unresolvedCurrentPrescriptiveScriptTargets,
+          }, null, 2));
           if (!evidence.broaderStatusClosed) {
             throw new Error('post-port broaderStatusClosed=false');
           }
