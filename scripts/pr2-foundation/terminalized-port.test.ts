@@ -142,6 +142,24 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     ))).toBe(true);
   });
 
+  it('wires #1419 direct review reconciliation and readiness after an exact-head smoke PASS', () => {
+    const source = readFileSync(path.resolve('scripts/worker-smoke-run.ts'), 'utf8');
+    expect(source).toContain("case 'reconcile-direct-review': return runDirectReviewReconciliation(options);");
+    expect(source).toContain('projectDirectPackReviewState({');
+    expect(source).toContain('semanticPackReviewRequiredStatusRequest({');
+    expect(source).toContain('evaluateReadiness({');
+    const terminalPass = source.indexOf("if (!lifecycleCleanup.clean && report.result === 'PASS') report.result = 'FAIL';");
+    const postSmokeCall = source.indexOf('evaluatePostSmokeReadiness(options, target, adapter)', terminalPass);
+    expect(terminalPass).toBeGreaterThanOrEqual(0);
+    expect(postSmokeCall).toBeGreaterThan(terminalPass);
+
+    const workflow = readFileSync(path.resolve('.github/workflows/direct-pack-review-status.yml'), 'utf8');
+    expect(workflow).toContain('pull_request_review:');
+    expect(workflow).toContain('types: [submitted]');
+    expect(workflow).toContain('reconcile-direct-review');
+    expect(workflow).toContain('statuses: write');
+  });
+
   it('rewrites actual imports without rewriting string-based consumer inventories', () => {
     const source = readFileSync(path.resolve('scripts/session-pr-binding-resolver.test.ts'), 'utf8');
     expect(source).toContain(

@@ -154,6 +154,13 @@ An uncovered read is an inventory-extension finding, not permission to bypass
 the boundary. Connector-backed sessions use the connected GitHub capability
 directly.
 
+A direct top-level request to review or pack-review an `orchestrator-pack` PR
+uses the connected-GitHub direct-review procedure in
+[`docs/chat-executor-rules.md`](docs/chat-executor-rules.md#direct-connected-github-pack-review).
+That review may be performed and published without runner, CI, smoke, or
+source-cardinality admission; worker readiness remains a separate current-head
+gate.
+
 ## Command-runtime bootstrap
 
 Before an autonomous command turn performs side effects, pass the tracked
