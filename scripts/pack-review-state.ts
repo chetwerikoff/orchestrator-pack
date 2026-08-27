@@ -645,9 +645,9 @@ export function observePackReviewHead(input: {
     nextPhase: 'head_observed',
     mutate(current) {
       // Same-head observe rewinds the phase without resetting cycle, triage, or budget.
+      const consumedRunEvidence = reviewRunEvidence(current, input.reviewRuns);
       if (current.currentHeadSha === headSha) {
-        if (current.cycle && !current.cycle.reviewStageComplete
-            && reviewStartConsumedForIndependentSmoke(current, input.reviewRuns)) {
+        if (current.cycle && !current.cycle.reviewStageComplete && consumedRunEvidence) {
           markReviewStageComplete(current, nowIso(input.options));
           current.cycle.reviewStartConsumed = true;
         }
@@ -656,11 +656,11 @@ export function observePackReviewHead(input: {
       const completed = current.cycle?.reviewStageComplete === true
         || (current.cycle?.state === 'closed'
           && current.publication?.status === 'succeeded')
-        || reviewStartConsumedForIndependentSmoke(current, input.reviewRuns);
+        || consumedRunEvidence;
       if (completed && current.cycle && current.cycle.reviewStageComplete !== true) {
         current.cycle.reviewStageComplete = true;
         current.cycle.reviewStageCompletedAtUtc = current.publication?.recordedAtUtc ?? nowIso(input.options);
-        if (reviewStartConsumedForIndependentSmoke(current, input.reviewRuns)) {
+        if (consumedRunEvidence) {
           current.cycle.reviewStartConsumed = true;
         }
       }
@@ -1108,12 +1108,19 @@ export function reviewStartConsumedForIndependentSmoke(
       authority.cycle
       && authority.cycle.consumedHeadShas.length >= authority.cycle.frozenCap,
     )
-    || reviewRuns.some((run) => run.prNumber === authority.prNumber
-      && run.stale !== true
-      && run.automaticBudgetDisposition !== 'non_consuming_explicit'
-      && ['failed', 'error', 'parse_error', 'stale_head'].includes(
-        String(run.status ?? '').toLowerCase(),
-      ));
+    || reviewRunEvidence(authority, reviewRuns);
+}
+
+function reviewRunEvidence(
+  authority: PackReviewAuthorityDocument,
+  reviewRuns: readonly PackReviewStartConsumptionRecord[] = [],
+): boolean {
+  return reviewRuns.some((run) => run.prNumber === authority.prNumber
+    && run.stale !== true
+    && run.automaticBudgetDisposition !== 'non_consuming_explicit'
+    && ['failed', 'error', 'parse_error', 'stale_head'].includes(
+      String(run.status ?? '').toLowerCase(),
+    ));
 }
 
 function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boolean {
