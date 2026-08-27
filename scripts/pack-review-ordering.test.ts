@@ -316,6 +316,40 @@ describe('Issue #1436 smoke/review ordering', () => {
       .toThrow('smoke_ordering_review_unsettled');
   });
 
+  it('admits independent smoke when a consumed failed start survives only in the run store', () => {
+    const { options, authority } = authorityFixture('T2');
+    const consumedReviewStart = [{
+      prNumber: 1436,
+      status: 'failed',
+      automaticBudgetDisposition: 'consume',
+    }];
+
+    expect(() => assertIndependentSmokeAdmission({ authority, headSha: HEAD }))
+      .toThrow('smoke_ordering_review_unsettled');
+
+    const sameHead = observePackReviewHead({
+      prNumber: 1436,
+      expectedTransitionSeq: authority.transitionSeq,
+      headSha: HEAD,
+      options,
+      reviewRuns: consumedReviewStart,
+    });
+    expect(sameHead.cycle?.reviewStageComplete).toBe(true);
+    expect(() => assertIndependentSmokeAdmission({ authority: sameHead, headSha: HEAD }))
+      .not.toThrow();
+
+    const nextHead = observePackReviewHead({
+      prNumber: 1436,
+      expectedTransitionSeq: sameHead.transitionSeq,
+      headSha: NEXT_HEAD,
+      options,
+      reviewRuns: consumedReviewStart,
+    });
+    expect(nextHead.cycle?.reviewStageComplete).toBe(true);
+    expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD }))
+      .not.toThrow();
+  });
+
   it.each(['up_to_date', 'commented'] as const)(
     'settles a successful non-blocking %s review for independent smoke',
     (status) => {
