@@ -297,43 +297,40 @@ jobs:
           path: vitest-supplemental-reports
 
       - name: Stage heavy shard reports for refresh
-        shell: pwsh
+        shell: bash
         run: |
-          $shardCount = [int]'${{ needs.plan-vitest-ci-topology.outputs.heavy_shard_count }}'
-          if ($shardCount -lt 1) {
-            throw "invalid plan-derived heavy shard count: $shardCount"
+          set -euo pipefail
+          shard_count='${{ needs.plan-vitest-ci-topology.outputs.heavy_shard_count }}'
+          [[ "$shard_count" =~ ^[0-9]+$ ]] && [ "$shard_count" -ge 1 ] || {
+            echo "invalid plan-derived heavy shard count: $shard_count" >&2
+            exit 1
           }
-          $dest = Join-Path $env:GITHUB_WORKSPACE 'vitest-heavy-reports-staged'
-          New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          for ($shard = 1; $shard -le $shardCount; $shard++) {
-            $json = Join-Path $env:GITHUB_WORKSPACE "vitest-heavy-reports/.vitest-runtime-report-heavy-$shard.json"
-            $meta = Join-Path $env:GITHUB_WORKSPACE "vitest-heavy-reports/.vitest-runtime-report-heavy-$shard.json.meta.json"
-            if (-not (Test-Path -LiteralPath $json)) {
-              throw "missing downloaded heavy shard report for shard $shard"
-            }
-            Copy-Item -LiteralPath $json -Destination (Join-Path $dest "shard-$shard.json")
-            if (Test-Path -LiteralPath $meta) {
-              Copy-Item -LiteralPath $meta -Destination (Join-Path $dest "shard-$shard.meta.json")
-            }
-          }
+          dest="$GITHUB_WORKSPACE/vitest-heavy-reports-staged"
+          mkdir -p "$dest"
+          for ((shard=1; shard<=shard_count; shard++)); do
+            json="$GITHUB_WORKSPACE/vitest-heavy-reports/.vitest-runtime-report-heavy-$shard.json"
+            meta="$GITHUB_WORKSPACE/vitest-heavy-reports/.vitest-runtime-report-heavy-$shard.json.meta.json"
+            test -f "$json" || { echo "missing downloaded heavy shard report for shard $shard" >&2; exit 1; }
+            cp "$json" "$dest/shard-$shard.json"
+            if [ -f "$meta" ]; then cp "$meta" "$dest/shard-$shard.meta.json"; fi
+          done
 
       - name: Stage fixed supplemental report for refresh
         if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != ''
-        shell: pwsh
+        shell: bash
         run: |
-          $source = Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports'
-          $dest = Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports-staged'
-          New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          $report = Join-Path $source 'supplemental-source/.vitest-runtime-report-supplemental-pack-reviewer-preference.json'
-          $meta = Join-Path $source '.vitest-runtime-report-supplemental-pack-reviewer-preference.json.meta.json'
-          if (-not (Test-Path -LiteralPath $report) -or -not (Test-Path -LiteralPath $meta)) {
-            throw 'missing fixed supplemental report or companion metadata'
-          }
-          Copy-Item -LiteralPath $report -Destination (Join-Path $dest 'supplemental-pack-reviewer-preference.json')
-          Copy-Item -LiteralPath $meta -Destination (Join-Path $dest 'supplemental-pack-reviewer-preference.json.meta.json')
+          set -euo pipefail
+          source="$GITHUB_WORKSPACE/vitest-supplemental-reports"
+          dest="$GITHUB_WORKSPACE/vitest-supplemental-reports-staged"
+          mkdir -p "$dest"
+          report="$source/supplemental-source/.vitest-runtime-report-supplemental-pack-reviewer-preference.json"
+          meta="$source/.vitest-runtime-report-supplemental-pack-reviewer-preference.json.meta.json"
+          test -f "$report" && test -f "$meta" || { echo 'missing fixed supplemental report or companion metadata' >&2; exit 1; }
+          cp "$report" "$dest/supplemental-pack-reviewer-preference.json"
+          cp "$meta" "$dest/supplemental-pack-reviewer-preference.json.meta.json"
 
       - name: Refresh committed runtime-history
-        shell: pwsh
+        shell: bash
         env:
           REFRESH_EVENT_NAME: ${{ github.event_name }}
           REFRESH_REF: ${{ github.ref }}
@@ -344,48 +341,60 @@ jobs:
           SUPPLEMENTAL_RUN_ID: ${{ github.run_id }}
           SUPPLEMENTAL_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          $refreshArgs = @{
-            ReportsDir = (Join-Path $env:GITHUB_WORKSPACE 'vitest-heavy-reports-staged')
-            CommitSha = $env:TRUSTED_REFRESH_SHA
-            CommitBack = $true
-          }
-          if (-not [string]::IsNullOrWhiteSpace($env:SUPPLEMENTAL_SOURCE_SHA)) {
-            $refreshArgs['SupplementalReportsDir'] = (Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports-staged')
-            $refreshArgs['SupplementalSourceSha'] = $env:SUPPLEMENTAL_SOURCE_SHA
-            $refreshArgs['SupplementalRunId'] = $env:SUPPLEMENTAL_RUN_ID
-            $refreshArgs['SupplementalRunAttempt'] = $env:SUPPLEMENTAL_RUN_ATTEMPT
-          }
-
-          $resolvedArguments = [ordered]@{}
-          foreach ($name in @(
-            'ReportsDir',
-            'CommitSha',
-            'CommitBack',
-            'SupplementalReportsDir',
-            'SupplementalSourceSha',
-            'SupplementalRunId',
-            'SupplementalRunAttempt'
-          )) {
-            if ($refreshArgs.ContainsKey($name)) {
-              $resolvedArguments[$name] = $refreshArgs[$name]
-            }
-          }
-          $boundarySignal = [ordered]@{
-            event = $env:REFRESH_EVENT_NAME
-            ref = $env:REFRESH_REF
-            trustedSha = $env:TRUSTED_REFRESH_SHA
-            workflowRef = $env:REFRESH_WORKFLOW_REF
-            workflowSha = $env:REFRESH_WORKFLOW_SHA
-            supplementalTuple = [ordered]@{
-              SupplementalReportsDir = $refreshArgs.ContainsKey('SupplementalReportsDir')
-              SupplementalSourceSha = $refreshArgs.ContainsKey('SupplementalSourceSha')
-              SupplementalRunId = $refreshArgs.ContainsKey('SupplementalRunId')
-              SupplementalRunAttempt = $refreshArgs.ContainsKey('SupplementalRunAttempt')
-            }
-            arguments = $resolvedArguments
-          }
-          Write-Host ('runtime-history-refresh-boundary ' + ($boundarySignal | ConvertTo-Json -Compress -Depth 5))
-          ./scripts/refresh-vitest-runtime-history.ps1 @refreshArgs
+          set -euo pipefail
+          repo="$GITHUB_WORKSPACE"
+          history="$repo/scripts/vitest-runtime-history.json"
+          refresh_script="$repo/scripts/refresh-vitest-runtime-history.mjs"
+          reports="$repo/vitest-heavy-reports-staged"
+          args=(node "$refresh_script" --reports-dir "$reports" --commit-sha "$TRUSTED_REFRESH_SHA" --repo-root "$repo" --history-path "$history")
+          if [ -n "$SUPPLEMENTAL_SOURCE_SHA" ]; then
+            args+=(--supplemental-reports-dir "$repo/vitest-supplemental-reports-staged")
+            args+=(--supplemental-source-sha "$SUPPLEMENTAL_SOURCE_SHA")
+            args+=(--supplemental-run-id "$SUPPLEMENTAL_RUN_ID")
+            args+=(--supplemental-run-attempt "$SUPPLEMENTAL_RUN_ATTEMPT")
+          fi
+          node -e 'const e=process.env; console.log("runtime-history-refresh-boundary "+JSON.stringify({event:e.REFRESH_EVENT_NAME,ref:e.REFRESH_REF,trustedSha:e.TRUSTED_REFRESH_SHA,workflowRef:e.REFRESH_WORKFLOW_REF,workflowSha:e.REFRESH_WORKFLOW_SHA,supplementalTuple:{SupplementalReportsDir:Boolean(e.SUPPLEMENTAL_SOURCE_SHA),SupplementalSourceSha:Boolean(e.SUPPLEMENTAL_SOURCE_SHA),SupplementalRunId:Boolean(e.SUPPLEMENTAL_SOURCE_SHA),SupplementalRunAttempt:Boolean(e.SUPPLEMENTAL_SOURCE_SHA)}}))'
+          git -C "$repo" fetch origin main
+          git -C "$repo" show origin/main:scripts/vitest-runtime-history.json > "$history"
+          "${args[@]}"
+          proposed="$(mktemp)"
+          remote="$(mktemp)"
+          trap 'rm -f "$proposed" "$remote"' EXIT
+          cp "$history" "$proposed"
+          for attempt in 1 2 3; do
+            if ! git -C "$repo" fetch origin main; then
+              [ "$attempt" -eq 3 ] && { echo '[FAIL] runtime-history commit-back failed to fetch origin/main' >&2; exit 1; }
+              continue
+            fi
+            if ! git -C "$repo" reset --hard origin/main; then
+              [ "$attempt" -eq 3 ] && { echo '[FAIL] runtime-history commit-back failed to reset to origin/main' >&2; exit 1; }
+              continue
+            fi
+            remote_head="$(git -C "$repo" rev-parse origin/main)"
+            git -C "$repo" show origin/main:scripts/vitest-runtime-history.json > "$remote"
+            if [ "$remote_head" = "$TRUSTED_REFRESH_SHA" ]; then
+              cp "$proposed" "$history"
+              echo '[INFO] runtime-history commit-back source head unchanged; preserving proposed canonical inventory'
+            else
+              echo "[INFO] runtime-history commit-back detected advanced origin/main head $remote_head; requiring equal canonical inventory"
+              node "$refresh_script" reconcile --remote "$remote" --proposed "$proposed" --output "$history" --repo-root "$repo" --require-equal-inventory
+            fi
+            git -C "$repo" add -- scripts/vitest-runtime-history.json
+            mapfile -t staged < <(git -C "$repo" diff --cached --name-only --diff-filter=ACMR)
+            if [ "${#staged[@]}" -gt 0 ] && { [ "${#staged[@]}" -ne 1 ] || [ "${staged[0]}" != 'scripts/vitest-runtime-history.json' ]; }; then
+              printf '[FAIL] runtime-history delivery path must stage only scripts/vitest-runtime-history.json (saw: %s)\n' "${staged[*]}" >&2
+              exit 1
+            fi
+            if [ -z "$(git -C "$repo" status --porcelain -- scripts/vitest-runtime-history.json)" ]; then
+              echo '[PASS] runtime-history commit-back skipped (idempotent no-op after stale-base reconcile)'
+              exit 0
+            fi
+            git -C "$repo" -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'chore(ci): refresh vitest runtime-history from measured heavy-shard reports'
+            echo '[PASS] runtime-history commit-back prepared delivery commit for dedicated branch PR'
+            exit 0
+          done
+          echo '[FAIL] runtime-history delivery commit could not be prepared after stale-base reconcile retries' >&2
+          exit 1
 
       - name: Require delivery credential
         shell: bash

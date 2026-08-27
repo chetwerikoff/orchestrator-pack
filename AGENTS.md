@@ -164,8 +164,8 @@ gate.
 ## Command-runtime bootstrap
 
 Before an autonomous command turn performs side effects, pass the tracked
-command-runtime preflight. Missing required `pwsh`, Node 22, or GitHub
-transport must fail closed. Do not edit shell dotfiles or create temporary
+command-runtime preflight. Missing required Node 22 or GitHub transport must
+fail closed. Do not edit shell dotfiles or create temporary
 executable wrappers as recovery. Structured wrappers parse stdout JSON only.
 
 ## Operator-only merge and failed runs

@@ -414,12 +414,11 @@ jobs:
           fetch-depth: 0
 
       - name: Run self-architect lint (strict)
-        shell: pwsh
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          ./scripts/lint-self-architect.ps1 `
-            -Strict `
-            -BaseRef $env:PR_BASE_SHA `
-            -HeadRef $env:PR_HEAD_SHA
+          node --experimental-strip-types scripts/lint-self-architect.ts \
+            --strict \
+            --base-ref "$PR_BASE_SHA" \
+            --head-ref "$PR_HEAD_SHA"
