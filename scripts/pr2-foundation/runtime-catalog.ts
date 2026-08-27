@@ -13,7 +13,7 @@ export interface RuntimeSurface {
 export const RUNTIME_CATALOG_VERSION = 2 as const;
 
 /**
- * Canonical post-Orca-cut runtime surfaces. PowerShell supervisor/starters are
+ * Canonical post-Orca-cut runtime surfaces. Retired shell supervisor/starters are
  * intentionally absent: the only live scheduler graph is the epoch-gated Node
  * supervisor -> pr2-scheduler path.
  */

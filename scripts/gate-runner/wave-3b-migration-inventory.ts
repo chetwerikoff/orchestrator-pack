@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const WAVE_3B_MIGRATION_INVENTORY_PATH = 'scripts/gate-runner/census/wave-3b-migration-inventory.json';
-export const EXPECTED_WAVE_3B_MIGRATION_INVENTORY_DIGEST = 'fca2353a018dbf90ec2b0fc95a99a96bcf13b38f48d369e5343d888711e6e2a3';
+export const EXPECTED_WAVE_3B_MIGRATION_INVENTORY_DIGEST = 'a53b3e131f70b61acb8fefb1ac5c8b9315ac980ef8b3b67678965ee209a3edb7';
 
 export type Wave3bReplacement =
   | { readonly kind: 'registered-gate'; readonly gateIds: readonly string[] }

@@ -73,7 +73,7 @@ export const INVENTORY = [
   ['OPK_CHANGED_VITEST_FILES/PR changed-path manifest', 'not_applicable', 'OPK_CHANGED_VITEST_FILES produced from the PR changed-path manifest', 'PR changed paths are absent'],
   ['vitest.pr-scoped-topology', 'not_applicable', 'OPK_VITEST_PR_SCOPE_MODE plus PR-scoped topology invocation', 'PR-scoped selection is absent'],
   ['topology-producer.github-output', 'not_applicable', 'node scripts/emit-vitest-heavy-topology.mjs --gha-output --skip-oversized-guard', 'requires hosted GITHUB_OUTPUT; emits heavy_shard_count, heavy_shard_matrix, light_shard_count, light_shard_matrix, fallback_classification'],
-  ['self-architect-lint', 'not_applicable', 'pwsh -NoProfile -File scripts/lint-self-architect.ps1 -Strict -BaseRef $PR_BASE_SHA -HeadRef $PR_HEAD_SHA', 'PR refs are absent'],
+  ['self-architect-lint', 'not_applicable', 'node --experimental-strip-types scripts/lint-self-architect.ts --strict --base-ref $PR_BASE_SHA --head-ref $PR_HEAD_SHA', 'PR refs are absent'],
   ['test-aggregate', 'not_applicable', 'node --experimental-strip-types scripts/vitest-ci-runner.ts aggregate', 'consumes GitHub job-result outputs'],
   ['hosted-checkout-and-setup', 'not_applicable', 'actions/checkout@v4, actions/setup-node@v4', 'hosted-runner behavior is not local'],
   ['hosted-dependency-install', 'not_applicable', 'npm ci --include=dev in workflow jobs', 'CI installation is not repeated'],

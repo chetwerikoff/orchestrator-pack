@@ -1,6 +1,6 @@
 /**
  * Canonical PR scope-guard contracts for issue links and spec-only docs PRs.
- * TypeScript is the single source of truth; PowerShell delegates parsing to TS.
+ * TypeScript is the single source of truth; retired shell wrappers do not own parsing.
  * See docs/repository_policy.md § Spec-only docs PRs.
  */
 
