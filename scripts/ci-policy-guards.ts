@@ -229,7 +229,7 @@ function runReadDelegationCiGate(root:string): string[] {
   const negative=join(root,'scripts/read-delegation-audit-negative-selftest.ts');
   writeFileSync(negative,'import { describe,it,expect } from "vitest";\ndescribe("negative self-test",()=>{it("must fail",()=>{expect(true).toBe(false);});});\n','utf8');
   try {
-    const result=runProcessSync({command:'npx',args:['vitest','run',negative],cwd:root,inheritParentEnv:true,allowEmptyStdout:true});
+    const result=runProcessSync({command:'npx',args:['vitest','run',negative],cwd:root,inheritParentEnv:true});
     if(result.ok) failures.push('negative self-test unexpectedly passed — workflow cannot prove failure propagation');
   } finally { rmSync(negative,{force:true}); }
   return failures;

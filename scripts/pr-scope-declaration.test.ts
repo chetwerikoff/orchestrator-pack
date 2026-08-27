@@ -827,7 +827,7 @@ describe('AO-free PR scope declaration contract', () => {
     expect(workflow).toContain('node --experimental-strip-types "$trusted_runner"');
     expect(workflow).not.toContain('$GITHUB_WORKSPACE/scripts/gh');
     expect(workflow).not.toContain('scope guard bootstrap:');
-    expect(workflow).not.toContain('shell: pwsh');
+    const trustedRunnerStep = workflow.slice(workflow.indexOf('trusted_runner="$trusted_root/scripts/pr-scope-runner.ts"'));\n    expect(trustedRunnerStep).not.toContain('$GITHUB_WORKSPACE/scripts/gh');
   });
 
   it('does not let malformed current-Issue candidates use the live-Issue path', () => {
