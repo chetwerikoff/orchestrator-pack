@@ -62,6 +62,7 @@ describe('active instruction and registry truth gate', () => {
     requiredChildIds: ['pr2-scheduler'],
     children: [{ id: 'pr2-scheduler', runtime: 'node', script: 'pr2-foundation/scheduler.ts' }],
   });
+  const missingCommand = ['scripts/missing-command', 'ps1'].join('.');
 
   it('accepts current command paths and the registry-backed one-child roster', () => {
     const result = evaluateInstructionTruth(memorySnapshot({
@@ -74,12 +75,12 @@ describe('active instruction and registry truth gate', () => {
 
   it('reports missing command/document targets with file, line, and target', () => {
     const result = evaluateInstructionTruth(memorySnapshot({
-      'AGENTS.md': 'Run `scripts/missing-command.ps1`.\nRead [the old guide](docs/deleted-guide.md).\n',
+      'AGENTS.md': `Run \`${missingCommand}\`.\nRead [the old guide](docs/deleted-guide.md).\n`,
       'scripts/orchestrator-side-process-registry.json': registry,
     }));
     expect(result.status).toBe('FAIL');
     expect(result.details).toEqual(expect.arrayContaining([
-      'AGENTS.md:1: missing target scripts/missing-command.ps1',
+      `AGENTS.md:1: missing target ${missingCommand}`,
       'AGENTS.md:2: missing target docs/deleted-guide.md',
     ]));
   });

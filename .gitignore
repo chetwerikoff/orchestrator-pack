@@ -1,9 +1,3 @@
-# Local AO config generated from the reusable example.
-# Commit agent-orchestrator.yaml.example, not real target-repo configs.
-agent-orchestrator.yaml
-agent-orchestrator.*.yaml
-!agent-orchestrator.yaml.example
-
 # Secrets and credentials.
 .env
 .env.*

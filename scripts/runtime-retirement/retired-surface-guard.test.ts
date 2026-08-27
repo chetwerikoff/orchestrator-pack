@@ -58,6 +58,16 @@ describe('runtime retirement closed-world scanner', () => {
     expect(result.violations.some((entry) => entry.surfaceId === surfaceId)).toBe(true);
   });
 
+  it('rejects exact and suffixed legacy config filenames', () => {
+    for (const path of ['agent-orchestrator.yaml', 'agent-orchestrator.local.yaml']) {
+      const result = scanRetiredRuntimeSurfaces({
+        repoRoot: fixture('neutral', path),
+        paths: [path],
+      });
+      expect(result.violations.some((entry) => entry.surfaceId === 'legacy-config-state-root')).toBe(true);
+    }
+  });
+
   it('scans ordinary tests but excludes immutable external captures', () => {
     const root = fixture('neutral');
     const activeTest = join(root, 'tests/runtime/active.test.ts');
