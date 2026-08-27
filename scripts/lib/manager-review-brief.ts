@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcessSync } from '../kernel/subprocess.ts';
 
-const CANON_DECLARATION_PATH = '.claude/skills/create-issue-draft/SKILL.md';
+const CANON_DECLARATION_PATH = '.cursor/skills/create-issue-draft/SKILL.md';
 const CANON_FENCE = 'manager-review-brief-canon';
 const PLACEHOLDERS = {
   '<REPOSITORY>': (context: ManagerReviewBriefContext) => context.repositoryFullName,

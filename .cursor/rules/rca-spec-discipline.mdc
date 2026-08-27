@@ -10,8 +10,8 @@ policy. Universal project routing remains in [`AGENTS.md`](../../AGENTS.md);
 task-specific behavior lives in the owning skills.
 
 - Investigation and failure response:
-  [`investigate-root-cause`](../../.claude/skills/investigate-root-cause/SKILL.md).
+  [`investigate-root-cause`](../skills/investigate-root-cause/SKILL.md).
 - Issue/draft discipline for `behavior-kind`, `positive-outcome`, and
   `parked-root-cause`:
-  [`create-issue-draft`](../../.claude/skills/create-issue-draft/SKILL.md) and
-  [`publish-issue-draft`](../../.claude/skills/publish-issue-draft/SKILL.md).
+  [`create-issue-draft`](../skills/create-issue-draft/SKILL.md) and
+  [`publish-issue-draft`](../skills/publish-issue-draft/SKILL.md).

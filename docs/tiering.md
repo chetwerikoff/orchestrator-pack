@@ -98,7 +98,7 @@ For newly authored tasks, the GitHub Issue is the sole live task specification
 and queue entry. The mirrorless flow creates no tracked or in-repository draft or
 queue-index artifact. Its working anchor, immutable pulled revisions, reviewer
 captures, chat references, stage receipts, relay evidence, the finding ledger,
-and related audit state remain outside the repository. `.claude/skills/create-issue-draft/SKILL.md`
+and related audit state remain outside the repository. `.cursor/skills/create-issue-draft/SKILL.md`
 owns the exact procedure and layout.
 
 ### Guard-alignment and activation ordering

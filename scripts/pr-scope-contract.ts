@@ -44,10 +44,10 @@ export const SPEC_ONLY_SIGNAL_LINE_PATTERN = /^<!--\s*pr-type:\s*spec-only\s*-->
  * Enumerated in docs/repository_policy.md.
  */
 /** Canonical skill instruction surface (markdown only; see SPEC_SKILL_MARKDOWN_GLOBS). */
-export const SPEC_SKILL_CANONICAL_ROOT = '.claude/skills';
+export const SPEC_SKILL_CANONICAL_ROOT = '.cursor/skills';
 
 /** Generated pointer skill surfaces (markdown only; see SPEC_SKILL_MARKDOWN_GLOBS). */
-export const SPEC_SKILL_POINTER_ROOTS: readonly string[] = ['.cursor/skills'] as const;
+export const SPEC_SKILL_POINTER_ROOTS: readonly string[] = ['.claude/skills'] as const;
 
 /**
  * Markdown-only skill paths admitted on spec-only PRs (conjunctive with docs entries).
