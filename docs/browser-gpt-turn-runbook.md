@@ -153,6 +153,73 @@ not infer non-delivery. Re-resolve the current target from `${CHAT_URL}`,
 continue sanctioned observation, and harvest the answer with the same
 `${INVOCATION_ID}`. The saved target id may be stale.
 
+### Non-success observation gate
+
+The sole bypass is `lifecycle_outcome: success` with `turn-result/v1
+state: ok`. Every other outcome—including `driver_error`, `input_invalid`,
+refusal, ambiguous harvest, missing result or envelope, timeout, and incident—
+must complete the applicable observation branch before any resend, replacement
+invocation identity, stage progression, or blocker exit.
+
+First classify the outcome from authoritative transport evidence:
+
+- **no-page-by-construction** applies only when the result proves
+  `send_count: 0` and proves failure before profile verification, CDP
+  connection, page/tab creation, and send. Canonical-input `input_invalid` is
+  an existing example. Do not infer this class from an incident envelope, an
+  absent URL, or generic “pre-send” wording.
+- **page-capable-or-uncertain** is every other non-success outcome.
+
+For page-capable-or-uncertain outcomes, before any next workflow action,
+complete the applicable observations:
+
+1. Run `npm run browser-gpt-page-probe -- inspect --cdp "<endpoint>" --url
+   "<chat-url>"`. “Owned prompt present” is true only when exactly one current
+   user node carries the retained transport-owned `OPKTURNV1...` invocation
+   marker. URL presence, prompt text, product ids, message counts, and older
+   turns do not prove ownership.
+2. For a governed create-Issue/direct-publication turn, check observable
+   Issue-side publication evidence using the canonical Issue-root review
+   evidence already recorded for the current admitted work. Select only
+   `reviewer-invocation-envelope/v1` records matching the current
+   `stageAttemptId`, `stage`, `reviewerSlot`, and `sourceRevision`, then use
+   only their recorded `invocationId` values with the existing complete,
+   authenticated Issue-comment census owned by `produce-artifacts`; consume
+   that already-recorded census rather than invoking a settlement producer as
+   part of recovery. For an ordinary tracked turn without that governed
+   publication surface, record the Issue-side check as not applicable and
+   preserve its existing invocation/retry contract.
+
+There is no invented Issue-lifetime stage/slot-to-invocation index. For a
+governed turn, if envelope correlation or the already-recorded authenticated
+census is unavailable or incomplete, comment absence is unknown, not proven.
+
+For no-page-by-construction, record the exact transport result/cause proving
+zero send and no browser/page side effect; the page probe is not applicable
+because no owned conversation page exists. Still perform the available
+Issue-side check for the recorded invocation. This branch creates no generic
+retry authority: correction, retry, or reinvocation remains legal only under
+the existing owning contract, including the existing manager-owned
+pre-consumption correction seam.
+
+Until the applicable observation completes, do not relaunch or resend, mint a
+replacement invocation identity, advance or settle the stage on an assumption
+of non-delivery, or declare a blocker/stop. An incident or launcher envelope
+is never proof of non-delivery.
+
+The observation determines the next action: an exact owned marker with a reply
+is harvested under the original invocation id; an owned marker without a reply
+gets bounded wait and re-probe; proven no-page uses only existing correction or
+retry authority; and, for a governed turn, marker absence permits
+resend/relaunch only when complete known-invocation publication absence is
+proven and the existing invocation/retry contract independently authorizes it.
+For an ordinary tracked turn, page evidence is reconciled under its existing
+invocation/retry contract without inventing Issue publication artifacts.
+Ambiguous ownership or incomplete applicable evidence permits no resend. If a
+required observation surface is unavailable and no other legal manager action
+exists, a blocker must name that exact unavailable observation and its observed
+failure.
+
 ## Publication and tab lifecycle
 
 Canonical reviewer admission compares **unmarked** input bytes. Only after a
@@ -193,13 +260,17 @@ delivery, ambiguous post-send loss, output conflict, missing terminal result,
 observation uncertainty, or cleanup failure never permits resend. Missing
 `turn-result/v1`, post-send page/browser loss, landing mismatch, and
 owned-conversation identity mismatch are observation uncertainty, not proof of
-non-delivery. Escalation requires either a sanctioned observation showing no
-owned prompt or unavailable observation tooling. A blocker report names the
-exact probe and its observed result.
+non-delivery. A sanctioned observation showing no owned prompt alone is not
+escalation authority: escalation or blocker exit is legal only after all
+applicable page and (for governed turns) Issue-publication observations
+complete, or when a required observation surface is unavailable and no other
+legal manager action exists. A blocker report names the exact unavailable
+surface or probe and its observed result.
 
 ## One-shot diagnosis
 
-Use the sanctioned diagnostic utility once, with local values:
+Each invocation of the sanctioned diagnostic utility is one-shot and uses local
+values:
 
 ```bash
 npm run browser-gpt-page-probe -- inspect --cdp "${CDP_ENDPOINT}" --url "${CHAT_URL}"
@@ -209,8 +280,10 @@ npm run browser-gpt-page-probe -- inspect --cdp "${CDP_ENDPOINT}" --url "${CHAT_
 `workflow_authority: none`. `harvest` is the sole action-producing probe
 (`diagnostic_only: false`), and it also has `workflow_authority: none`; it may
 recover/publish only the exact owned turn for the caller-supplied invocation.
-The non-acquisition diagnostic probes are read-only and exit once. They cannot
-retry, resend, progress a stage, create, or close a tab. The explicit
+The non-acquisition diagnostic probes are read-only and exit once. The
+non-success gate may perform its bounded wait and re-probe; this is not a
+watcher or an indefinite diagnostic loop. The probes cannot retry, resend,
+progress a stage, create, or close a tab. The explicit
 `--open-if-missing true` acquisition path is the sole opt-in exception: it may
 create one owned page, wait for bounded readiness, and close exactly that
 owned page. Resolve the current target from the conversation URL instead of

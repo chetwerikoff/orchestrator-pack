@@ -860,6 +860,8 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
   let lastHeartbeatDiagnostics: Record<string, unknown> | undefined;
   let childExitCode: number | null = null;
   let childExitedBeforeCandidate = false;
+  const noCandidateDeadlineMs = noCandidateGraceMs() + candidateGraceMs();
+  let deadline = Date.now() + noCandidateDeadlineMs;
 
   const ingestStdoutLine = (line: string): void => {
     const cancellationReceipt = parseCancellationReceiptLine(line);
@@ -871,6 +873,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     const heartbeat = parseHeartbeat(line);
     if (heartbeat) {
       lastHeartbeatDiagnostics = boundedDiagnostics(heartbeat);
+      deadline = Date.now() + noCandidateDeadlineMs;
       return;
     }
     const candidate = parseTurnResult(line);
@@ -931,7 +934,6 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     return 1;
   }
 
-  const deadline = Date.now() + noCandidateGraceMs() + candidateGraceMs();
   while (!capture.firstCandidate && !childExitedBeforeCandidate && Date.now() < deadline) {
     await delay(20);
   }

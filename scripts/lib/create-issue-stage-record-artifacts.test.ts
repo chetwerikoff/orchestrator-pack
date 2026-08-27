@@ -185,6 +185,12 @@ function fixture(input: {
   sourceRevision?: string;
   transportClassification?: 'complete' | 'incident';
   reviewerSource?: string | null;
+  turnResultState?: 'ok' | 'recovery_required';
+  turnResultScope?: unknown;
+  turnResultCause?: string;
+  turnResultConfiguredProfileKey?: unknown;
+  turnResultSendCount?: unknown;
+  omitTurnResultSendCount?: boolean;
   withTurnResult?: boolean;
   withCapture?: boolean;
   captureText?: string;
@@ -193,6 +199,15 @@ function fixture(input: {
   const intakeRevision = input.intakeRevision ?? REVISION;
   const sourceRevision = input.sourceRevision ?? intakeRevision;
   const transportClassification = input.transportClassification ?? 'incident';
+  const turnResultState = input.turnResultState ?? (transportClassification === 'complete' ? 'ok' : 'recovery_required');
+  const turnResultScope = input.turnResultScope === undefined
+    ? (turnResultState === 'ok' ? 'none' : 'conversation')
+    : input.turnResultScope;
+  const turnResultCause = input.turnResultCause ?? (transportClassification === 'complete' ? 'ok' : 'direct_publication_owned_parent_missing');
+  const turnResultConfiguredProfileKey = input.turnResultConfiguredProfileKey === undefined
+    ? 'fixture-profile'
+    : input.turnResultConfiguredProfileKey;
+  const turnResultSendCount = input.turnResultSendCount === undefined ? 1 : input.turnResultSendCount;
   const reviewerSource = input.reviewerSource === undefined
     ? 'browser-gpt#capture=final-node/v1'
     : input.reviewerSource;
@@ -264,13 +279,13 @@ function fixture(input: {
   if (input.withTurnResult) {
     const turnResult = {
       schema: 'turn-result/v1',
-      state: transportClassification === 'complete' ? 'ok' : 'recovery_required',
-      scope: transportClassification === 'complete' ? 'none' : 'invocation',
-      cause: transportClassification === 'complete' ? 'ok' : 'direct_publication_owned_parent_missing',
+      state: turnResultState,
+      scope: turnResultScope,
+      cause: turnResultCause,
       invocation_id: 'invocation-001',
-      configured_profile_key: 'fixture-profile',
-      send_count: 1,
-      ...(transportClassification === 'complete'
+      configured_profile_key: turnResultConfiguredProfileKey,
+      ...(input.omitTurnResultSendCount ? {} : { send_count: turnResultSendCount }),
+      ...(turnResultState === 'ok'
         ? { output: { byte_length: Buffer.byteLength(body), sha256: createHash('sha256').update(body).digest('hex') } }
         : {}),
     };
@@ -568,6 +583,119 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(existsSync(join(input.outputDir, 'acceptance-artifacts.json'))).toBe(false);
   });
 
+  it('accepts a complete GitHub artifact with recovery_required local turn result', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      reviewerSource: 'slot-01#capture=direct-publication/v1',
+      turnResultState: 'recovery_required',
+      turnResultCause: 'direct_publication_no_owned_publication',
+      withTurnResult: true,
+      withCapture: false,
+    });
+    const source = transport({ census: [...input.reviewComments, comment(input.body)] });
+    const result = produce(input, source);
+
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(JSON.parse(readFileSync(input.turnResultPath, 'utf8'))).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'direct_publication_no_owned_publication',
+      invocation_id: 'invocation-001',
+      send_count: 1,
+    });
+    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+    expect(receipt.invocations[0]).toMatchObject({
+      terminalClassification: 'complete',
+      sendCount: 1,
+      reviewerSource: 'slot-01#capture=direct-publication/v1',
+      terminalResultIdentity: input.invocation.terminalResultIdentity,
+      artifactAuthority: { kind: 'authoritative-github-artifact' },
+    });
+  });
+
+  it('rejects artifact-backed recovery_required under final-node policy', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      reviewerSource: 'browser-gpt#capture=final-node/v1',
+      turnResultState: 'recovery_required',
+      turnResultCause: 'direct_publication_no_owned_publication',
+      withTurnResult: true,
+      withCapture: false,
+    });
+    const source = transport({ census: [...input.reviewComments, comment(input.body)] });
+    const result = produce(input, source);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('not a successful terminal result');
+  });
+
+  it('rejects direct-publication recovery with the wrong cause', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      reviewerSource: 'slot-01#capture=direct-publication/v1',
+      turnResultState: 'recovery_required',
+      turnResultCause: 'direct_publication_owned_parent_missing',
+      withTurnResult: true,
+      withCapture: false,
+    });
+    const source = transport({ census: [...input.reviewComments, comment(input.body)] });
+    const result = produce(input, source);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('not a successful terminal result');
+  });
+
+  it('rejects direct-publication recovery with malformed common terminal fields', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      reviewerSource: 'slot-01#capture=direct-publication/v1',
+      turnResultState: 'recovery_required',
+      turnResultCause: 'direct_publication_no_owned_publication',
+      turnResultScope: 7,
+      withTurnResult: true,
+      withCapture: false,
+    });
+    const source = transport({ census: [...input.reviewComments, comment(input.body)] });
+    const result = produce(input, source);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('missing required terminal fields');
+  });
+
+  it('rejects direct-publication recovery with non-one local send_count', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      reviewerSource: 'slot-01#capture=direct-publication/v1',
+      turnResultState: 'recovery_required',
+      turnResultCause: 'direct_publication_no_owned_publication',
+      turnResultSendCount: 0,
+      withTurnResult: true,
+      withCapture: false,
+    });
+    const source = transport({ census: [...input.reviewComments, comment(input.body)] });
+    const result = produce(input, source);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('send_count does not match stage evidence');
+  });
+
+  it('rejects direct-publication recovery with missing local send_count', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      reviewerSource: 'slot-01#capture=direct-publication/v1',
+      turnResultState: 'recovery_required',
+      turnResultCause: 'direct_publication_no_owned_publication',
+      omitTurnResultSendCount: true,
+      withTurnResult: true,
+      withCapture: false,
+    });
+    const source = transport({ census: [...input.reviewComments, comment(input.body)] });
+    const result = produce(input, source);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('not a successful terminal result');
+  });
+
   it('keeps the published pass-01 architectural capture for a later stage attempt', () => {
     const input = fixture({ transportClassification: 'incident', withCapture: true });
     const publishedPath = join(input.dir, 'pass-01-architectural.capture.txt');
@@ -807,6 +935,21 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.ok, result.errors.join('\n')).toBe(true);
     const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
     expect(receipt.invocations[0].artifactAuthority.commentId).toBe(COMMENT_ID);
+  });
+
+  it('produces receipts when the admitted canonical head has a non-current fork diagnostic', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const root = cycleComment(REVISION, 'cycle-1385', 'none', CYCLE_COMMENT_ID);
+    const admittedSuccessor = cycleComment(REVISION, 'cycle-successor', 'cycle-1385', CYCLE_COMMENT_ID + 1);
+    const nonCurrentFork = cycleComment(REVISION, 'cycle-fork', 'cycle-1385', CYCLE_COMMENT_ID + 2);
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(input.body)],
+      cycleComments: [root, admittedSuccessor, nonCurrentFork],
+    }));
+
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+    expect(receipt.cycleId).toBe('cycle-1385');
   });
 
   it.each([

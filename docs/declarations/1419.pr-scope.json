@@ -9,6 +9,7 @@
     "AGENTS.md",
     "CLAUDE.md",
     "docs/",
+    "plugins/",
     "prompts/",
     "scripts/"
   ],
@@ -27,6 +28,7 @@
     "AGENTS.md",
     "CLAUDE.md",
     "docs/",
+    "plugins/",
     "prompts/",
     "scripts/"
   ],

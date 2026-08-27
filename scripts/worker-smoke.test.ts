@@ -45,6 +45,7 @@ import {
   type GateCheckDependencies,
   type ResolvedSmokeTarget,
 } from './worker-smoke-run.ts';
+import { readPackReviewAuthority } from './pack-review-state.ts';
 
 const issueBody = `
 \`\`\`behavior-kind
@@ -375,6 +376,58 @@ describe('runtime-neutral worker smoke', () => {
     const result = checkSmokeTestPlan(issueBody);
     expect(result.ok).toBe(true);
     expect(result.plan?.scenarios).toHaveLength(1);
+  });
+
+  it('records lawful not-applicable worker smoke as passed ordering evidence', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-not-applicable-'));
+    const issueBodyFile = join(root, 'issue.md');
+    const reviewStoreRoot = join(root, 'review-store');
+    const body = [
+      '```smoke-test-plan',
+      'not-applicable: true',
+      'reason: contract-prose-only',
+      '```',
+    ].join('\n');
+    writeFileSync(issueBodyFile, body, 'utf8');
+    const previousStoreRoot = process.env.PACK_REVIEW_RUN_STORE_ROOT;
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = reviewStoreRoot;
+    let resolverCalls = 0;
+    try {
+      const code = await runSmokeAttempt({
+        command: 'run',
+        issueNumber: 1719,
+        prNumber: 1721,
+        headSha: HEAD_ONE,
+        issueBodyFile,
+        smokeComplexity: 'routine',
+        repoRoot: root,
+        cwd: root,
+        dryRun: false,
+        json: true,
+      }, {
+        resolveIssueBody: (_options, suppliedBody) => {
+          resolverCalls += 1;
+          return suppliedBody;
+        },
+      });
+      expect(code).toBe(0);
+      expect(resolverCalls).toBe(1);
+      expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toEqual({
+        ok: true,
+        skipped: true,
+        reason: 'not-applicable',
+      });
+      expect(readPackReviewAuthority(1721, { storeRoot: reviewStoreRoot })?.smokeOrdering?.workerOwned).toMatchObject({
+        headSha: HEAD_ONE,
+        status: 'passed',
+      });
+    } finally {
+      output.mockRestore();
+      if (previousStoreRoot === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
+      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStoreRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('parses dash bullets whose action and expected result are split by the first colon', () => {
