@@ -725,6 +725,24 @@ function assertFrozenGptRoundIdentity(
   }
 }
 
+function isCredentialedGptSourceRecovery(
+  existing: PackReviewSourceSlotRecord,
+  incoming: PackReviewSourceSlotRecord,
+): boolean {
+  if (existing.lifecycle !== 'terminal' || incoming.lifecycle !== 'terminal') return false;
+  if (COMPLETE_GPT_TERMINAL_CLASSES.has(existing.terminalClass ?? '')
+    || !COMPLETE_GPT_TERMINAL_CLASSES.has(incoming.terminalClass ?? '')) return false;
+  const result = incoming.terminalResult;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+  const raw = result as Record<string, unknown>;
+  return raw.schema === 'turn-result/v1'
+    && raw.source_comment_authority === 'credentialed_github'
+    && raw.source_comment_receipt !== undefined
+    && raw.source_comment_receipt !== null
+    && typeof raw.source_comment_receipt === 'object'
+    && !Array.isArray(raw.source_comment_receipt);
+}
+
 function mergeFrozenGptSlot(
   existing: PackReviewSourceSlotRecord,
   incoming: PackReviewSourceSlotRecord,
@@ -784,9 +802,16 @@ function mergeFrozenGptSlot(
     return existingValue ?? incomingValue;
   };
 
-  const terminalClass = mergeEvidence('terminalClass') as string | undefined;
-  const terminalResult = mergeEvidence('terminalResult');
-  const payload = mergeEvidence('payload');
+  const credentialedRecovery = isCredentialedGptSourceRecovery(existing, incoming);
+  const terminalClass = credentialedRecovery
+    ? incoming.terminalClass
+    : mergeEvidence('terminalClass') as string | undefined;
+  const terminalResult = credentialedRecovery
+    ? incoming.terminalResult
+    : mergeEvidence('terminalResult');
+  const payload = credentialedRecovery
+    ? incoming.payload
+    : mergeEvidence('payload');
   const lifecycle = PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK[existing.lifecycle]
     >= PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK[incoming.lifecycle]
     ? existing.lifecycle
