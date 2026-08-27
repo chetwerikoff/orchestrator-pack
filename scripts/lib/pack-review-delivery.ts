@@ -257,22 +257,32 @@ export function projectRunnerPackReviewStatusFact(
   return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
 }
 
+function isSemanticPackReviewStatusDescription(value: unknown): boolean {
+  const description = String(value ?? '').trim().toLowerCase();
+  return description === 'pack review has unresolved blocking findings'
+    || description === 'pack review evidence is complete for current facts'
+    || description === 'pack review runner is active'
+    || description === 'pack review evidence is missing';
+}
+
 export function projectRunnerPackReviewStatusFromCombined(
   combinedValue: unknown,
 ): PackReviewSemanticSourceState {
-  if (!combinedValue || typeof combinedValue !== 'object' || Array.isArray(combinedValue)) {
-    return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
-  }
-  const combined = combinedValue as Record<string, unknown>;
-  const statuses = Array.isArray(combined.statuses)
-    ? combined.statuses.filter((value): value is Record<string, unknown> =>
+  const statusesValue = Array.isArray(combinedValue)
+    ? combinedValue
+    : combinedValue && typeof combinedValue === 'object' && !Array.isArray(combinedValue)
+      ? (combinedValue as Record<string, unknown>).statuses
+      : undefined;
+  const statuses = Array.isArray(statusesValue)
+    ? statusesValue.filter((value): value is Record<string, unknown> =>
         Boolean(value && typeof value === 'object' && !Array.isArray(value)))
     : [];
   const current = statuses
     .filter((status) => String(status.context ?? '') === PACK_REVIEW_REQUIRED_STATUS_CONTEXT)
     .sort((left, right) =>
       Date.parse(String(right.updated_at ?? right.created_at ?? '')) -
-      Date.parse(String(left.updated_at ?? left.created_at ?? '')))[0];
+      Date.parse(String(left.updated_at ?? left.created_at ?? '')))
+    .find((status) => !isSemanticPackReviewStatusDescription(status.description));
   return current
     ? projectRunnerPackReviewStatusFact(current.state, current.description)
     : { hasLegitimateReview: false, unresolvedBlockingFinding: false };

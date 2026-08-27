@@ -123,24 +123,87 @@ describe('Issue #1749 trusted direct pack-review bootstrap', () => {
     expect(fixture.writes).toHaveLength(0);
   });
 
-  it('selects only runner-owned status descriptions from a combined-status payload', () => {
-    expect(projectRunnerPackReviewStatusFromCombined({
-      statuses: [
-        {
-          context: 'orchestrator-pack/pack-review',
-          state: 'success',
-          description: 'pack review evidence is complete for current facts',
-          updated_at: '2026-08-27T00:00:02Z',
-        },
-        {
-          context: 'orchestrator-pack/pack-review',
-          state: 'success',
-          description: 'Pack review completed with no findings.',
-          updated_at: '2026-08-27T00:00:01Z',
-        },
-      ],
-    })).toEqual({
-      hasLegitimateReview: false,
+  it('selects the latest runner-owned status while skipping semantic output rows', () => {
+    expect(projectRunnerPackReviewStatusFromCombined([
+      {
+        context: 'orchestrator-pack/pack-review',
+        state: 'success',
+        description: 'pack review evidence is complete for current facts',
+        updated_at: '2026-08-27T00:00:02Z',
+      },
+      {
+        context: 'orchestrator-pack/pack-review',
+        state: 'success',
+        description: 'Pack review completed with no findings.',
+        updated_at: '2026-08-27T00:00:01Z',
+      },
+    ])).toEqual({
+      hasLegitimateReview: true,
+      unresolvedBlockingFinding: false,
+    });
+  });
+
+  it('preserves a runner blocker across repeated clean direct-review reconciliation', async () => {
+    const statuses: Record<string, unknown>[] = [{
+      context: 'orchestrator-pack/pack-review',
+      state: 'failure',
+      description: 'Pack review found blocking issues.',
+      updated_at: '2026-08-27T00:00:01Z',
+    }];
+    let nextSecond = 2;
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    const liveDeps: DirectPackReviewStatusDependencies = {
+      currentHead: () => H2,
+      listReviews: async () => [review({ id: 2 })],
+      isAncestor: () => false,
+      runnerStatus: () => projectRunnerPackReviewStatusFromCombined(statuses),
+      writeStatus: async (request) => {
+        writes.push(request);
+        statuses.push({
+          context: request.context,
+          state: request.state,
+          description: request.description,
+          updated_at: `2026-08-27T00:00:0${nextSecond++}Z`,
+        });
+      },
+    };
+
+    const first = await reconcileDirectPackReviewStatus(options(), liveDeps);
+    const second = await reconcileDirectPackReviewStatus(options(), liveDeps);
+
+    expect(first).toMatchObject({ ok: true, skipped: false, projection: { state: 'failure' } });
+    expect(second).toMatchObject({ ok: true, skipped: false, projection: { state: 'failure' } });
+    expect(writes.map((request) => request.state)).toEqual(['failure', 'failure']);
+  });
+
+  it('lets a newer genuine runner clean verdict supersede an older runner blocker', () => {
+    expect(projectRunnerPackReviewStatusFromCombined([
+      {
+        context: 'orchestrator-pack/pack-review',
+        state: 'success',
+        description: 'pack review evidence is complete for current facts',
+        updated_at: '2026-08-27T00:00:04Z',
+      },
+      {
+        context: 'orchestrator-pack/pack-review',
+        state: 'success',
+        description: 'Pack review completed with no findings.',
+        updated_at: '2026-08-27T00:00:03Z',
+      },
+      {
+        context: 'orchestrator-pack/pack-review',
+        state: 'failure',
+        description: 'pack review has unresolved blocking findings',
+        updated_at: '2026-08-27T00:00:02Z',
+      },
+      {
+        context: 'orchestrator-pack/pack-review',
+        state: 'failure',
+        description: 'Pack review found blocking issues.',
+        updated_at: '2026-08-27T00:00:01Z',
+      },
+    ])).toEqual({
+      hasLegitimateReview: true,
       unresolvedBlockingFinding: false,
     });
   });

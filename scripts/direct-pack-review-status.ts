@@ -145,10 +145,32 @@ function liveCurrentHead(options: DirectPackReviewStatusOptions): string {
   return normalizedSha(head);
 }
 
+function githubApiArray(repoRoot: string, endpoint: string): readonly unknown[] {
+  const result = runProcessSync({
+    command: resolveTrackedGhWrapper(),
+    args: ['api', endpoint],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) {
+    throw new Error(`GitHub API read failed for ${endpoint}: ${result.stderr || result.error || result.outcome}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch (error) {
+    throw new Error(`GitHub API read returned invalid JSON for ${endpoint}`, { cause: error });
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`GitHub API read returned a non-array for ${endpoint}`);
+  }
+  return parsed;
+}
+
 function liveRunnerStatus(options: DirectPackReviewStatusOptions): PackReviewSemanticSourceState {
-  return projectRunnerPackReviewStatusFromCombined(githubApiObject(
+  return projectRunnerPackReviewStatusFromCombined(githubApiArray(
     options.repoRoot,
-    `repos/${options.repoSlug}/commits/${options.headSha}/status`,
+    `repos/${options.repoSlug}/commits/${options.headSha}/statuses?per_page=100`,
   ));
 }
 
