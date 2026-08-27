@@ -102,6 +102,7 @@ export interface PackReviewCycle {
   atCapHash?: string;
   reviewStageComplete?: boolean;
   reviewStageCompletedAtUtc?: string;
+  reviewStartConsumed?: boolean;
   resetProvenance?: PackReviewResetProvenance;
 }
 
@@ -172,6 +173,13 @@ export interface PackReviewAuthorityOptions {
   now?: Date;
   lockAttempts?: number;
   lockWaitMs?: number;
+}
+
+export interface PackReviewStartConsumptionRecord {
+  prNumber: number;
+  status?: unknown;
+  automaticBudgetDisposition?: unknown;
+  stale?: unknown;
 }
 
 export class PackReviewAuthorityError extends Error {
@@ -629,6 +637,7 @@ export function observePackReviewHead(input: {
   expectedTransitionSeq: number;
   headSha: string;
   options: PackReviewAuthorityOptions;
+  reviewRuns?: readonly PackReviewStartConsumptionRecord[];
 }): PackReviewAuthorityDocument {
   const headSha = normalizeSha(input.headSha);
   return commitPackReviewAuthorityTransition({
@@ -636,13 +645,24 @@ export function observePackReviewHead(input: {
     nextPhase: 'head_observed',
     mutate(current) {
       // Same-head observe rewinds the phase without resetting cycle, triage, or budget.
-      if (current.currentHeadSha === headSha) return current;
+      if (current.currentHeadSha === headSha) {
+        if (current.cycle && !current.cycle.reviewStageComplete
+            && reviewStartConsumedForIndependentSmoke(current, input.reviewRuns)) {
+          markReviewStageComplete(current, nowIso(input.options));
+          current.cycle.reviewStartConsumed = true;
+        }
+        return current;
+      }
       const completed = current.cycle?.reviewStageComplete === true
         || (current.cycle?.state === 'closed'
-          && current.publication?.status === 'succeeded');
+          && current.publication?.status === 'succeeded')
+        || reviewStartConsumedForIndependentSmoke(current, input.reviewRuns);
       if (completed && current.cycle && current.cycle.reviewStageComplete !== true) {
         current.cycle.reviewStageComplete = true;
         current.cycle.reviewStageCompletedAtUtc = current.publication?.recordedAtUtc ?? nowIso(input.options);
+        if (reviewStartConsumedForIndependentSmoke(current, input.reviewRuns)) {
+          current.cycle.reviewStartConsumed = true;
+        }
       }
       current.currentHeadSha = headSha;
       current.evidence = undefined;
@@ -911,6 +931,7 @@ export function assertPackReviewSmokeAdmission(input: {
 export function assertIndependentSmokeAdmission(input: {
   authority: PackReviewAuthorityDocument;
   headSha: string;
+  reviewRuns?: readonly PackReviewStartConsumptionRecord[];
 }): void {
   const headSha = normalizeSha(input.headSha, 'headSha');
   if (input.authority.currentHeadSha !== headSha) {
@@ -937,7 +958,8 @@ export function assertIndependentSmokeAdmission(input: {
   }
   if (ordering?.reviewSettledHeadSha !== headSha
       && !(input.authority.cycle?.reviewStageComplete === true
-        && reviewStartConsumedForIndependentSmoke(input.authority))) {
+        && (input.authority.cycle.reviewStartConsumed === true
+          || reviewStartConsumedForIndependentSmoke(input.authority, input.reviewRuns)))) {
     throw new PackReviewAuthorityError(
       'smoke_ordering_review_unsettled',
       'independent smoke requires settled pack-review obligations for the exact head',
@@ -1071,7 +1093,10 @@ function markReviewStageComplete(
   current.cycle.reviewStageCompletedAtUtc = completedAtUtc;
 }
 
-function reviewStartConsumedForIndependentSmoke(authority: PackReviewAuthorityDocument): boolean {
+export function reviewStartConsumedForIndependentSmoke(
+  authority: PackReviewAuthorityDocument,
+  reviewRuns: readonly PackReviewStartConsumptionRecord[] = [],
+): boolean {
   if (['BLOCK', 'PENDING_ARCHITECT', 'PENDING_OPERATOR'].includes(authority.triage?.verdict ?? '')) {
     return false;
   }
@@ -1082,7 +1107,13 @@ function reviewStartConsumedForIndependentSmoke(authority: PackReviewAuthorityDo
     || Boolean(
       authority.cycle
       && authority.cycle.consumedHeadShas.length >= authority.cycle.frozenCap,
-    );
+    )
+    || reviewRuns.some((run) => run.prNumber === authority.prNumber
+      && run.stale !== true
+      && run.automaticBudgetDisposition !== 'non_consuming_explicit'
+      && ['failed', 'error', 'parse_error', 'stale_head'].includes(
+        String(run.status ?? '').toLowerCase(),
+      ));
 }
 
 function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boolean {
