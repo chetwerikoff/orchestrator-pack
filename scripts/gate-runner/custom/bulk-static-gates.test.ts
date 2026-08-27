@@ -9,6 +9,7 @@ import { captureSourceSnapshot, memorySnapshot } from '../source-snapshot.ts';
 import {
   bulkStaticGateRegistrations,
   evaluateAgentsReportContract,
+  evaluateInstructionTruth,
   evaluateReview010Vocabulary,
   evaluateVerifyStructureContract,
 } from './bulk-static-gates.ts';
@@ -52,6 +53,47 @@ describe('Wave 3.b bulk static gate ports', () => {
     const missing = evaluateVerifyStructureContract(verifyFixture({ 'plugins/scope-guard/README.md': 'DD-024' }));
     expect(missing.status).toBe('FAIL');
     expect(missing.details?.join('\n')).toContain('runtime guard');
+  });
+});
+
+describe('active instruction and registry truth gate', () => {
+  const registry = JSON.stringify({
+    schemaVersion: 2,
+    requiredChildIds: ['pr2-scheduler'],
+    children: [{ id: 'pr2-scheduler', runtime: 'node', script: 'pr2-foundation/scheduler.ts' }],
+  });
+
+  it('accepts current command paths and the registry-backed one-child roster', () => {
+    const result = evaluateInstructionTruth(memorySnapshot({
+      'AGENTS.md': 'Run `scripts/worker-smoke-run.ts`.\nThe registry has one registered `pr2-scheduler` child.\n',
+      'scripts/worker-smoke-run.ts': 'export {};\n',
+      'scripts/orchestrator-side-process-registry.json': registry,
+    }));
+    expect(result.status).toBe('PASS');
+  });
+
+  it('reports missing command/document targets with file, line, and target', () => {
+    const result = evaluateInstructionTruth(memorySnapshot({
+      'AGENTS.md': 'Run `scripts/missing-command.ps1`.\nRead [the old guide](docs/deleted-guide.md).\n',
+      'scripts/orchestrator-side-process-registry.json': registry,
+    }));
+    expect(result.status).toBe('FAIL');
+    expect(result.details).toEqual(expect.arrayContaining([
+      'AGENTS.md:1: missing target scripts/missing-command.ps1',
+      'AGENTS.md:2: missing target docs/deleted-guide.md',
+    ]));
+  });
+
+  it('reports stale roster counts and unknown child ids', () => {
+    const result = evaluateInstructionTruth(memorySnapshot({
+      'AGENTS.md': 'The registry has three registered children: `unknown-child`.\n',
+      'scripts/orchestrator-side-process-registry.json': registry,
+    }));
+    expect(result.status).toBe('FAIL');
+    expect(result.details).toEqual(expect.arrayContaining([
+      'AGENTS.md:1: registry child count 3 does not match current count 1',
+      'AGENTS.md:1: unknown registry child unknown-child',
+    ]));
   });
 });
 

@@ -11,7 +11,7 @@ The target repository or trusted pack checkout must provide:
 - `plugins/scope-guard/**`;
 - `plugins/token-chain-ledger/**` when accounting is enabled;
 - `plugins/codex-pr-reviewer/**` when local Codex review is enabled;
-- `scripts/pr-scope-check.ps1` and its TypeScript authority;
+- `scripts/pr-scope-runner.ts` and its TypeScript authority;
 - `.github/workflows/scope-guard.yml`;
 - `AGENTS.md` and the relevant prompts;
 - Node 22 workspace configuration.
