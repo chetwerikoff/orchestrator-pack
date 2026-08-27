@@ -809,6 +809,21 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(receipt.invocations[0].artifactAuthority.commentId).toBe(COMMENT_ID);
   });
 
+  it('produces receipts when the admitted canonical head has a non-current fork diagnostic', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const root = cycleComment(REVISION, 'cycle-1385', 'none', CYCLE_COMMENT_ID);
+    const admittedSuccessor = cycleComment(REVISION, 'cycle-successor', 'cycle-1385', CYCLE_COMMENT_ID + 1);
+    const nonCurrentFork = cycleComment(REVISION, 'cycle-fork', 'cycle-1385', CYCLE_COMMENT_ID + 2);
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(input.body)],
+      cycleComments: [root, admittedSuccessor, nonCurrentFork],
+    }));
+
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+    expect(receipt.cycleId).toBe('cycle-1385');
+  });
+
   it.each([
     ['author login', { user: null }],
     ['author association', { author_association: null }],
