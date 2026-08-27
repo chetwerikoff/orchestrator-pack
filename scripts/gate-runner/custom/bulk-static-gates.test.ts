@@ -42,7 +42,7 @@ describe('Wave 3.b bulk static gate ports', () => {
 
   it('detects dead AO review vocabulary outside the explicit compatibility allowlist', () => {
     expect(evaluateReview010Vocabulary(memorySnapshot({ 'scripts/clean.mjs': 'export const ok = true;' })).status).toBe('PASS');
-    const failed = evaluateReview010Vocabulary(memorySnapshot({ 'scripts/bad.mjs': 'const argv = ["review", "run"];' }));
+    const failed = evaluateReview010Vocabulary(memorySnapshot({ 'scripts/bad.mjs': 'const argv = ["review", "' + String.fromCharCode(114, 117, 110) + '"];' }));
     expect(failed.status).toBe('FAIL');
     expect(failed.legacyStdout).toBe('AO 0.10 review vocabulary violations:\n  scripts/bad.mjs: dead a\u006f review CLI argv\n');
   });

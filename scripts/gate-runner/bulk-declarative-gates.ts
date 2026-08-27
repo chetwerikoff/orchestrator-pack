@@ -19,7 +19,7 @@ export const VERIFY_REQUIRED_FILES = [
   'plugins/scope-guard/README.md',
   'plugins/token-chain-ledger/README.md',
   'plugins/codex-pr-reviewer/README.md',
-  'scripts/bootstrap.ps1',
+  'scripts/bootstrap.ts',
   'scripts/verify.ps1',
   'scripts/check-reusable.ps1',
   'scripts/install-git-hooks.ps1',

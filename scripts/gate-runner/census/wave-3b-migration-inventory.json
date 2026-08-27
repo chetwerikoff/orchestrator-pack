@@ -452,7 +452,7 @@
       "replacement": {
         "kind": "required-file-rule",
         "gateId": "verify-required-files",
-        "path": "scripts/bootstrap.ps1"
+        "path": "scripts/bootstrap.ts"
       }
     },
     {

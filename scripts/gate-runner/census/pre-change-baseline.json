@@ -1094,8 +1094,12 @@
       "sourceKind": "check-script",
       "sourcePath": "scripts/check-review-start-claim-guard.ps1",
       "marker": "check-review-start-claim-guard.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "Issue #1419 removes the zero-business-logic PowerShell review-start-claim guard after current enforcement is cut over to the Node 22 review-start-claim authority and its live workflow consumers.",
+        "replacement": "scripts/review-start-claim-guard.ts is the Node 22 guard used by current TypeScript foundation checks and validates the TypeScript claim store plus pack-review runner binding."
+      }
     },
     {
       "id": "check-script:scripts/check-review-start-envelope-ledger-starter-surfaces.ps1",
