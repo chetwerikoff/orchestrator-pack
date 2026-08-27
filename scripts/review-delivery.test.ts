@@ -40,6 +40,7 @@ import {
 } from './lib/pack-review-run-store.ts';
 import {
   directPackReviewPublicationHeadIsStable,
+  directReviewReconciliationRequiresDescendantFixFacts,
   listCanonicalDirectPackReviews,
   projectDirectPackReviewState,
   type GithubReviewSummary,
@@ -514,6 +515,23 @@ describe('Issue #1419 direct GitHub pack-review semantics', () => {
     });
   });
 
+  it('does not carry a clean ancestor review across changed descendant code', () => {
+    const projection = projectDirectPackReviewState({
+      reviews: [directReview({ id: 8, head: h1, verdict: 'clean', blocking: false })],
+      repositoryOwnerLogin: owner,
+      currentHeadSha: h2,
+      workerLifecycle: 'completed',
+      requiredCiGreen: true,
+      exactHeadSmokePassed: true,
+      isAncestor: (ancestor, descendant) => ancestor === h1 && descendant === h2,
+    });
+    expect(projection).toMatchObject({
+      hasLegitimateReview: false,
+      legitimateReviewCount: 0,
+      state: 'missing-review',
+    });
+  });
+
   it('does not let a canonical review from an unrelated lineage satisfy the current head', () => {
     const unrelated = '3'.repeat(40);
     const projection = projectDirectPackReviewState({
@@ -544,6 +562,8 @@ describe('Issue #1419 direct GitHub pack-review semantics', () => {
       isAncestor: (ancestor, descendant) => ancestor === h1 && descendant === h2,
     });
     expect(incomplete.state).toBe('blocked');
+    expect(incomplete.unresolvedAncestorBlockingReviewIds).toEqual([10]);
+    expect(directReviewReconciliationRequiresDescendantFixFacts(incomplete)).toBe(true);
 
     const complete = projectDirectPackReviewState({
       reviews: [review],
@@ -558,7 +578,9 @@ describe('Issue #1419 direct GitHub pack-review semantics', () => {
       hasLegitimateReview: true,
       state: 'clear',
       unresolvedBlockingReviewIds: [],
+      unresolvedAncestorBlockingReviewIds: [],
     });
+    expect(directReviewReconciliationRequiresDescendantFixFacts(complete)).toBe(false);
   });
 
   it('never self-clears a blocking direct review on the unchanged head', () => {
