@@ -33,12 +33,6 @@ sudo apt update
 sudo apt install -y git curl build-essential
 ```
 
-Install PowerShell 7 using Microsoft's current Ubuntu package instructions, then
-verify:
-
-```bash
-pwsh --version
-```
 
 Install GitHub CLI from its official package source and authenticate using the
 normal device or browser flow:

@@ -410,8 +410,8 @@ drain wait, or rollback execution path was introduced.
    npm run test:foundation
    npm run gate-runner-selftest
    node --experimental-strip-types scripts/runtime-retirement/retired-surface-selftest.ts
-   pwsh -NoProfile -File scripts/verify.ps1
-   pwsh -NoProfile -File scripts/check-reusable.ps1
+   node --experimental-strip-types scripts/verify.ts
+   node --experimental-strip-types scripts/verify.ts --reusable-only
    ```
 
 6. Verify one current-head review through the pack review runner, one exact-composite

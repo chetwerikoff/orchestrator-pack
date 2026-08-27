@@ -8,9 +8,9 @@ Vitest/Pester regression ownership lives in `scripts/test-all.ps1` and the CI
 
 | Invocation | Node npm ci | Vitest | Purpose |
 | --- | ---: | ---: | --- |
-| `pwsh -NoProfile -File scripts/verify.ps1` | 0 | 0 | Structural/read-only pack verification (CI `verify-pack`) |
-| `pwsh -NoProfile -File scripts/verify.ps1 -TestBackedSmoke` | ≤1 | 1 batched run | Local smoke/debug only; not CI default |
-| `pwsh -NoProfile -File scripts/test-all.ps1` | ≤1 | 1 full suite + budget guard | Local full regression |
+| `node --experimental-strip-types scripts/verify.ts` | 0 | 0 | Structural/read-only pack verification (CI `verify-pack`) |
+| `node --experimental-strip-types scripts/verify.ts -TestBackedSmoke` | ≤1 | 1 batched run | Local smoke/debug only; not CI default |
+| `npm test` | ≤1 | 1 full suite + budget guard | Local full regression |
 | CI `test-vitest` matrix | 1 (cached) | sharded full suite | Required PR regression lane |
 
 ## Contract ownership mapping
@@ -57,11 +57,11 @@ silently raise budgets to greenwash regressions.
 
 ## Verification
 
-```powershell
-pwsh -NoProfile -File scripts/verify.ps1
-pwsh -NoProfile -File scripts/check-reusable.ps1
-pwsh -NoProfile -File scripts/check-verify-runtime.ps1
-pwsh -NoProfile -File scripts/test-all.ps1
+```bash
+node --experimental-strip-types scripts/verify.ts
+node --experimental-strip-types scripts/verify.ts --reusable-only
+node --experimental-strip-types scripts/ci-policy-guards.ts verify-runtime
+npm test
 ```
 
 Negative budget fixture: `scripts/test-runtime-budget.test.ts`.

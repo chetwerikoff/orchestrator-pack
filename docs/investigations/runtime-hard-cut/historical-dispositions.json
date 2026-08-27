@@ -1383,6 +1383,48 @@
       "class": "negative-history-fixture",
       "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/README.md",
+      "class": "fixture-documentation",
+      "reason": "Legacy test documentation describes retained shell regression fixtures and is read-only under Issue #1419 r19; it is not a current production or operator authority.",
+      "owningReference": "Issue #1419 r19; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/lib/gh-signal-recon.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration classifier parses retained legacy-shell samples only to detect historical signal-shape hazards; it does not own current runtime behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/lib/cutover/activation-transaction.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Cutover classifier names legacy-shell primitive classes only as migration evidence and does not launch or require that runtime.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/lib/testmode-fleet-lane.ts",
+      "class": "negative-history-fixture",
+      "reason": "TestMode fleet census recognizes retained legacy-shell regression children for bounded test cleanup only; it is not production scheduling authority.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/lib/vitest-live-store-parent-guard.mjs",
+      "class": "negative-history-fixture",
+      "reason": "Vitest harness guard inspects retained legacy-shell regression commands only to keep test stores isolated; it is not current production behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/run-vitest-with-harness.mjs",
+      "class": "negative-history-fixture",
+      "reason": "Vitest harness provides isolation for retained legacy-shell regression fixtures only; normal production/runtime authority remains Node-owned.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/vitest-surviving-store-isolation.ts",
+      "class": "negative-history-fixture",
+      "reason": "Vitest test-store isolation preserves compatibility only for retained regression children inside the test harness and is not production behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
     }
   ]
 }

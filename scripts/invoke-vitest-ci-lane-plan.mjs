@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Emit Vitest CI lane plan JSON for PowerShell runners (Issue #556).
+ * Emit Vitest CI lane plan JSON for CI runners (Issue #556).
  *
  * Usage:
  *   node scripts/invoke-vitest-ci-lane-plan.mjs light [--shard 1]

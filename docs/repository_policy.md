@@ -58,7 +58,7 @@ Cursor-canonical file and whose body only directs the agent to read it.
 
 After adding a skill or changing canonical frontmatter, run:
 
-```powershell
+```bash
 node --experimental-strip-types scripts/generate-skill-pointers.ts generate
 node --experimental-strip-types scripts/generate-skill-pointers.ts check
 ```
@@ -80,11 +80,11 @@ runtime-neutral public contract and scope.
 
 ## Local verification
 
-From the repository root with PowerShell 7 and Node 22:
+From the repository root with Node 22:
 
 ```powershell
-pwsh -NoProfile -File scripts/verify.ps1
-pwsh -NoProfile -File scripts/check-reusable.ps1
+node --experimental-strip-types scripts/verify.ts
+node --experimental-strip-types scripts/verify.ts --reusable-only
 npm run typecheck:foundation
 npm run lint:foundation
 npm run gate-runner-selftest
