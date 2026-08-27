@@ -456,6 +456,19 @@ function configPermissionFromRuleset(value: unknown): Record<string, unknown> | 
   return permission;
 }
 
+/** Resolve every OpenCode config location selected by the caller's environment. */
+export function openCodeConfigPaths(
+  cwd: string,
+  configHome: string,
+  env: Pick<NodeJS.ProcessEnv, 'OPENCODE_CONFIG' | 'OPENCODE_CONFIG_DIR'>,
+): readonly string[] {
+  return [...new Set([
+    env.OPENCODE_CONFIG_DIR?.trim() || `${configHome}/opencode`,
+    env.OPENCODE_CONFIG?.trim() || '',
+    `${cwd}/.opencode`, `${cwd}/opencode.json`, `${cwd}/opencode.jsonc`,
+  ].filter(Boolean))];
+}
+
 /**
  * Agent.Info is a resolved runtime shape, not a ConfigAgentV1.Info input.
  * Keep only fields accepted by the config schema and translate the resolved

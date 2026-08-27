@@ -19,6 +19,7 @@ import {
   OPENCODE_PACK_AGENT,
   buildOpenCodeAgentOverlay,
   openCodeAgentSemantics,
+  openCodeConfigPaths,
   openCodeEdgeCapabilities,
   profileNamesForTask,
   resolveSemanticExecutorProfile,
@@ -642,11 +643,7 @@ function hashFile(path: string): string {
 
 function configState(cwd: string, env: Readonly<NodeJS.ProcessEnv> = process.env): string {
   const configHome = env.XDG_CONFIG_HOME?.trim() || join(homedir(), '.config');
-  const roots = [...new Set([
-    env.OPENCODE_CONFIG_DIR?.trim() || join(configHome, 'opencode'),
-    env.OPENCODE_CONFIG?.trim() || '',
-    join(cwd, '.opencode'), join(cwd, 'opencode.json'), join(cwd, 'opencode.jsonc'),
-  ].filter(Boolean))];
+  const roots = openCodeConfigPaths(cwd, configHome, env);
   const rows: string[] = [];
   const visit = (path: string): void => {
     if (!existsSync(path)) { rows.push(`${path}:absent`); return; }
