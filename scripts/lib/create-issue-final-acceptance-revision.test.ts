@@ -433,9 +433,9 @@ describe('revision-aware final acceptance', () => {
       finalRequiredSlots: ['01', '02', '03'],
       sourceVerdicts: { '01': 'accept', '02': 'accept', '03': 'accept' },
       sourceVerdictEvidence: {
-        '01': { producerEvidenceIdentity: 'same-producer', terminalClassification: 'complete', captureVerified: true, digestMatches: true, captureIdentity: 'capture-01', rawFindingCount: 0, materialFindingBlocks: 0 },
-        '02': { producerEvidenceIdentity: 'same-producer', terminalClassification: 'complete', captureVerified: true, digestMatches: true, captureIdentity: 'capture-02', rawFindingCount: 0, materialFindingBlocks: 0 },
-        '03': { producerEvidenceIdentity: 'same-producer', terminalClassification: 'complete', captureVerified: true, digestMatches: true, captureIdentity: 'capture-03', rawFindingCount: 0, materialFindingBlocks: 0 },
+        '01': { producerEvidenceIdentity: 'same-producer', terminalClassification: 'complete', captureVerified: true, verdictText: 'NO_FINDINGS', digestMatches: true, captureIdentity: 'capture-01', rawFindingCount: 0, materialFindingBlocks: 0 },
+        '02': { producerEvidenceIdentity: 'same-producer', terminalClassification: 'complete', captureVerified: true, verdictText: 'NO_FINDINGS', digestMatches: true, captureIdentity: 'capture-02', rawFindingCount: 0, materialFindingBlocks: 0 },
+        '03': { producerEvidenceIdentity: 'same-producer', terminalClassification: 'complete', captureVerified: true, verdictText: 'NO_FINDINGS', digestMatches: true, captureIdentity: 'capture-03', rawFindingCount: 0, materialFindingBlocks: 0 },
       },
       conflictDecision: 'no-conflict',
       settlement: {
