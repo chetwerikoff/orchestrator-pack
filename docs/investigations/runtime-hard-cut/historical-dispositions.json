@@ -755,6 +755,12 @@
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
+      "path": "scripts/review-start-claim-guard.ts",
+      "class": "negative-runtime-guard",
+      "reason": "Current Node guard names retired PowerShell/AO markers only as negative detection evidence; it never invokes those legacy surfaces.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
       "path": "scripts/review-start-claim.test.ts",
       "class": "negative-history-fixture",
       "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
