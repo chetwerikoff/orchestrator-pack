@@ -10,7 +10,6 @@ function runGit(root: string, args: string[]): { ok: boolean; stdout: string; st
     args: ['-C', root, ...args],
     cwd: root,
     inheritParentEnv: true,
-    allowEmptyStdout: true,
   });
   return { ok: result.ok, stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? '') };
 }
@@ -96,8 +95,8 @@ function main(): number {
     '#!/usr/bin/env sh',
     'set -eu',
     'ROOT="$(git rev-parse --show-toplevel)"',
-    'node --experimental-strip-types "$ROOT/scripts/verify.ts"',
-    'node --experimental-strip-types "$ROOT/scripts/verify.ts" --reusable-only',
+    'node --experimental-strip-types "$ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$ROOT" --script "$ROOT/scripts/verify.ts" --',
+    'node --experimental-strip-types "$ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$ROOT" --script "$ROOT/scripts/verify.ts" -- --reusable-only',
     '',
   ].join('\n');
   writeFileSync(prePushPath, prePush, 'utf8');

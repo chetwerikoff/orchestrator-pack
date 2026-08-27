@@ -113,7 +113,6 @@ function git(root: string, args: string[]): { ok: boolean; stdout: string; stder
     args: ['-C', root, ...args],
     cwd: root,
     inheritParentEnv: true,
-    allowEmptyStdout: true,
   });
   return {
     ok: result.ok,
