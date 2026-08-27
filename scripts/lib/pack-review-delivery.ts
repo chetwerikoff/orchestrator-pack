@@ -396,7 +396,15 @@ function completedResumeChannelOutcome(
 
 export function packReviewDeliveryNeedsResume(run: PackReviewRunRecord): boolean {
   const payload = packReviewJournaledPayload(run);
-  if (!payload) return false;
+  if (!payload) {
+    const round = run.reviewRound;
+    return isPackReviewUnfinishedTerminalRun(run)
+      && round?.reviewer === 'gpt'
+      && round.sourceSlots.some((slot) => (
+        slot.lifecycle === 'terminal'
+        && Boolean(trim(slot.invocationId))
+      ));
+  }
   const classification = classifyPackReviewPayload(payload);
   if (run.status !== classification.terminalStatus) return true;
   return !completedResumeChannelOutcome(run, 'githubComment', githubCommentIdempotencyKey(run))
