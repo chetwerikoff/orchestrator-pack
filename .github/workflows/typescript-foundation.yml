@@ -83,7 +83,7 @@ jobs:
         run: npm run test:foundation
 
   powershell-child-growth:
-    name: PowerShell child-test growth guard
+    name: Legacy-shell child-test growth guard
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -98,7 +98,7 @@ jobs:
           cache: npm
       - name: Install from frozen lockfile
         run: npm ci --include=dev
-      - name: Enforce committed PowerShell child-test baseline
+      - name: Enforce committed legacy-shell child-test baseline
         run: npm run check:pwsh-test-growth
 
   contract-mutations:
