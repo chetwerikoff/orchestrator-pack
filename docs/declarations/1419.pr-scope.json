@@ -8,10 +8,10 @@
     ".github/workflows/",
     "AGENTS.md",
     "CLAUDE.md",
-    "README.md",
     "docs/",
     "plugins/",
     "prompts/",
+    "README.md",
     "scripts/"
   ],
   "denylist": [
@@ -28,11 +28,11 @@
     ".github/workflows/",
     "AGENTS.md",
     "CLAUDE.md",
-    "README.md",
     "docs/",
     "plugins/",
     "prompts/",
+    "README.md",
     "scripts/"
   ],
-  "source_revision": "387d9609093da7bd5952749439b55e7e8df2f3d4"
+  "source_revision": "23d12eb7ddc3f986ed96626fc59e37a1eda27eae"
 }
