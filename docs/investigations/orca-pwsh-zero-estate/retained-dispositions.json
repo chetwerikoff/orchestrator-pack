@@ -1,5 +1,768 @@
 {
   "version": 1,
   "owningIssue": 1415,
-  "dispositions": []
+  "dispositions": [
+    {
+      "path": "scripts/check-ci-cheap-wins.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/check-gh-inventory-static.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/check-operator-adoption-example.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/check-read-delegation-audit-ci-gate.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/check-read-delegation-policy-consistency.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/check-review-delivery-no-visibility-poll.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/ci-failure-notification.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/ci-test-aggregate.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/ci-wallclock-e2e-aggregate.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/ci-wallclock-e2e-notify.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/gate-runner/legacy-wave-3b/check-agents-report-contract.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/gate-runner/legacy-wave-3b/check-coworker-delegation-threshold-drift.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/gate-runner/legacy-wave-3b/check-external-output-shape-guard.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/gate-runner/legacy-wave-3b/check-launch-argv-inventory.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/gate-runner/legacy-wave-3b/check-review-010-vocabulary.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/gate-runner/legacy-wave-3b/check-review-command-not-ao.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/gate-runner/legacy-wave-3b/verify-behavior-replay.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/gate-runner/legacy-wave-3b/verify-frozen.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/launch-argv-inventory/side-process-mismatch/mismatch-child.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/review-failure-evidence/echo-args.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/review-failure-evidence/fill-stderr-then-stdout.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/invoke-pack-review-strict-gate.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/invoke-testmode-fleet-reaper.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/invoke-verify-test-backed-smoke.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Audit-JsonlRetention.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Autonomous-ClaimPrResumeGate.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Autonomous-GateCommon.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Autonomous-SpawnWorktreeGate.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Autonomous-WorkerRecoveryGate.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Ci-Green-Wake-MechanicalForbiddenCommand.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Ci-Red-Watchdog-Boundary.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Ci-Red-Watchdog-GitHub.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Ci-Red-Watchdog-Tick.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Ci-Red-Watchdog-Worker.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Ci-Red-Watchdog.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/ci-workflow-yaml.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Contract-EvidenceReverify-Core.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Get-AutoReviewPrContext.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Get-FloodActiveSessionMap.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Get-OrchestratorLaunchHealth.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Get-PackReviewCommand.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Get-PackReviewRuns.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Get-ProcessCommandLine.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Get-ReconcileChecksByPr.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Get-RuntimeWorkers.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Get-SupervisedRepoSlug.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Get-VersionFromText.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Get-WorkerOsLiveness.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Get-WorkerStatusDecisionSessions.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Gh-FleetInventoryCache.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Gh-FleetRepoTickSnapshot.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Gh-FleetSeedSnapshotReadEconomy.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Gh-PrChecks.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Gh-SignalDispatch.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Import-TrustedReverifyBootstrap.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Install-PackReviewDependencies.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Invoke-OrchestratorEscalationEmit.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Invoke-ReviewerWorkspacePreflight.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Invoke-ScriptedReviewDeliveryEscalation.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Invoke-TestModeFleetReaper.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Journaled-WorkerSendInternalCapability.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/MechanicalReconcileNode.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/OpkVitestChildProcessEnv.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/OpkVitestStoreIsolation.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Orchestrator-AutonomousBoundary.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Orchestrator-AutonomousSpawnGate.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Orchestrator-Escalation.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Orchestrator-ProcessAlive.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Orchestrator-ReviewStartAudit.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Orchestrator-SideProcessHealth.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Orchestrator-SideProcessProgress.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Orchestrator-SideProcessProgressEvidence.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Orchestrator-WakeSupervisorStateRoot.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Parse-PackReviewCliArgs.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/QuotedProcessArguments.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Read-DelegationCheck-Common.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Record-ReviewTriggerReevalWatch.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Resolve-PackReviewer.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Resolve-TrustedPackRoot.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Review-CycleCap.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Review-DeliveryLifecycle.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Review-FailureEvidence.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Review-MechanicalForbiddenCommand.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Review-PostRunRetry.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Review-ReadyReportStateSeedProgress.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Review-ReadySeedFixturePayload.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Review-RecoveryPaths.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Review-StartClaimRunBinding.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Review-StartEnvelopeExternalIo.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Review-StartEnvelopeLedger.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Sanctioned-Worker-Kill-Record.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Set-OpkVitestHarnessEnv.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Submit-WorkerInputDraft.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Test-WorkerLaunchFailure.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/TestMode-FleetLease.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/TrustedPackRoot-Common.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Worker-AutonomousNudgeGate.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Worker-NudgeAudit.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Worker-NudgeClaim.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Worker-RecoveryBranchCleanup.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/WorkerReportStore.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/WorkerStatusStore.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Write-PackCheckLine.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/lib/Write-ReconcileSignalSource.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/orchestrator-command-runtime-preflight.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/orchestrator-escalation-router.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/orchestrator-review-start-preflight.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/orchestrator-wake-common.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/orchestrator-wake-heartbeat.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/orchestrator-worktree-preflight.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/publish-issue-body-sync.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/record-sanctioned-worker-kill.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/refresh-vitest-runtime-history.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/resolve-bound-issue-snapshot.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/review-bulk-send-diagnose.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/reviewer-workspace-preflight.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/run-pack-review.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/run-vitest-light-lane.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/run-vitest-wallclock-stage.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/show-worker-status-report.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/wait-orchestrator-launch.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    },
+    {
+      "path": "scripts/worker-message-send-adoption-preflight.ps1",
+      "disposition": "retained-for-1251-zero-estate",
+      "reason": "Exact-head #1415 producer classifies this tracked PowerShell file as dormant with no current-prescriptive incoming reference; retain only for the #1251 final zero-estate deletion.",
+      "owningReference": "#1251"
+    }
+  ]
 }
