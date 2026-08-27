@@ -144,3 +144,22 @@ jobs:
       - name: Run external red-green mutation evidence
         if: steps.detect.outputs.run_evidence == 'true'
         run: npm run test:contract-mutations
+
+  post-port-proof:
+    name: Post-port PowerShell closure
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Produce and admit exact-head post-port evidence
+        run: node --experimental-strip-types scripts/post-port-admission.ts --measured-head "${{ github.event.pull_request.head.sha }}" --producer-revision "${{ github.event.pull_request.head.sha }}"
