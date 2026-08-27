@@ -169,7 +169,9 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     const workflow = readFileSync(path.resolve('.github/workflows/direct-pack-review-status.yml'), 'utf8');
     expect(workflow).toContain('pull_request_review:');
     expect(workflow).toContain('types: [submitted]');
-    expect(workflow).toContain('reconcile-direct-review');
+    expect(workflow).toContain('scripts/direct-pack-review-status.ts');
+    expect(workflow).toContain('--repo-slug "${{ github.repository }}"');
+    expect(workflow).not.toContain('worker-smoke-run.ts reconcile-direct-review');
     expect(workflow).toContain('statuses: write');
   });
 
