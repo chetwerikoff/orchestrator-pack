@@ -118,8 +118,8 @@ A single path outside it drops the whole PR to the implementation shape.
 From the repository root:
 
 ```bash
-.\scripts\verify.ps1
-.\scripts\test-all.ps1
+node --experimental-strip-types scripts/verify.ts --repo-root .
+npm test
 ```
 
 **Fix only failures your diff caused.** When a failure looks unrelated, re-run

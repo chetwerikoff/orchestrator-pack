@@ -338,9 +338,9 @@ issues untouched because nothing closes or references them:
 ## Test plan
 
 - [x] Docs-only under spec-docs allowlist (`docs/issues_drafts/**`, `docs/issue_queue_index.md`, …)
-- [x] `.\scripts\verify.ps1`
-- [x] `.\scripts\check-reusable.ps1`
-- [x] `.\scripts\lint-self-architect.ps1 -Strict` (CI)
+- [x] `node --experimental-strip-types scripts/verify.ts --repo-root .`
+- [x] `node --experimental-strip-types scripts/verify.ts --repo-root . --reusable-only`
+- [x] `npm run typecheck:foundation` (CI)
 - [ ] CI: scope guard + self-architect lint
 ```
 
