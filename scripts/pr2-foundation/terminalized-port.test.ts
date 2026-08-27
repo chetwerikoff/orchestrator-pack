@@ -2,6 +2,14 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_NONTERMINAL_MAX_AGE_MS,
+  WORKER_REPORT_STORE_SCHEMA_VERSION,
+  evictWorkerReportRecords,
+  listWorkerReportRecordsForAssignment,
+  normalizeWorkerReportStore,
+} from '../../docs/worker-report-store.mjs';
+import { evaluateReadiness, NOT_READY } from './readiness-evaluator.ts';
+import {
   FOUNDATION_DOC_ROWS,
   FOUNDATION_LINT_SUPPRESSION_CONFIG_PATH,
 } from './contracts.ts';
@@ -187,6 +195,83 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(workflow).toContain('--repo-slug "${{ github.repository }}"');
     expect(workflow).not.toContain('worker-smoke-run.ts reconcile-direct-review');
     expect(workflow).toContain('statuses: write');
+  });
+
+  it('fails readiness for an aged same-head WorkerReport using the WorkerReportStore freshness authority', () => {
+    const repository = 'chetwerikoff/orchestrator-pack';
+    const headSha = 'a'.repeat(40);
+    const prNumber = 1709;
+    const assignment = { assignmentId: 'assignment-1419', generation: 3, taskId: 'task-1419' } as const;
+    const store = normalizeWorkerReportStore({
+      schemaVersion: WORKER_REPORT_STORE_SCHEMA_VERSION,
+      sourceRecords: {
+        stale: {
+          accepted: true,
+          repoSlug: repository,
+          assignment,
+          prNumber,
+          headSha,
+          reportState: 'ready_for_review',
+          reportedAtMs: 1,
+          lastObservedMs: 1,
+        },
+      },
+    });
+    const eviction = evictWorkerReportRecords({
+      store,
+      openPrs: [{ number: prNumber, state: 'open', repoSlug: repository }],
+      currentHeadByPr: { [`${repository}|${prNumber}`]: headSha },
+      nowMs: DEFAULT_NONTERMINAL_MAX_AGE_MS + 2,
+      repoSlug: repository,
+    });
+    expect(eviction.removed).toBe(1);
+
+    const workerReports = listWorkerReportRecordsForAssignment(store, repository, assignment);
+    expect(workerReports).toEqual([]);
+    const result = evaluateReadiness({
+      target: {
+        repository,
+        issueNumber: 1419,
+        taskId: assignment.taskId,
+        assignmentId: assignment.assignmentId,
+        assignmentGeneration: assignment.generation,
+        prNumber,
+        headSha,
+      },
+      pr: { open: true, expectedTarget: true, prNumber, headSha },
+      workerReports,
+      workerStatuses: [{
+        assignmentId: assignment.assignmentId,
+        assignmentGeneration: assignment.generation,
+        taskId: assignment.taskId,
+        issueNumber: 1419,
+        repository,
+        kind: 'local',
+        localCapability: 'available',
+        derivedStatus: 'idle',
+        winningSource: 'runtime',
+        stale: false,
+        degradedReason: '',
+        killSwitchActive: false,
+        siblingReadinessOk: true,
+      }],
+      requiredCi: { headSha, state: 'success' },
+      review: {
+        obligation: 'complete',
+        unresolvedRequiredFinding: false,
+        atCapOpenFindings: false,
+        atCapContinuationRequired: false,
+      },
+      smoke: { headSha, state: 'pass' },
+    });
+    expect(result.state).toBe(NOT_READY);
+    expect(result.failedPredicates).toContain('accepted_worker_lifecycle_missing_or_conflicting');
+
+    const source = readFileSync(path.resolve('scripts/worker-smoke-run.ts'), 'utf8');
+    const evictionCall = source.indexOf('evictWorkerReportRecords({');
+    const reportListing = source.indexOf('listWorkerReportRecordsForAssignment(reportStore');
+    expect(evictionCall).toBeGreaterThanOrEqual(0);
+    expect(reportListing).toBeGreaterThan(evictionCall);
   });
 
   it('rewrites actual imports without rewriting string-based consumer inventories', () => {
