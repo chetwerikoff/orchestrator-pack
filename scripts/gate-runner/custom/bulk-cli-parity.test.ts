@@ -198,7 +198,7 @@ function evaluateNegativeCapture(capture: Capture): GateResult {
     case 'agents-removed-command':
       return evaluateAgentsReportContract(memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\na\u006f report\n' }));
     case 'review-dead-argv':
-      return evaluateReview010Vocabulary(memorySnapshot({ 'scripts/bad.mjs': 'const argv = ["review", "run"];\n' }));
+      return evaluateReview010Vocabulary(memorySnapshot({ 'scripts/bad.mjs': 'const argv = ["review", "' + String.fromCharCode(114, 117, 110) + '"];\n' }));
     case 'review-command-ao-path':
       return evaluateReviewCommandNotAo(memorySnapshot({
         'agent-\u006frchestrator.yaml.example': 'NAMED REVIEW_COMMAND\n  pwsh .orchestrator-pack/review.ps1\n  RUNTIME\n',
@@ -264,7 +264,7 @@ function createReplayRoot(capture: Capture): { root: string; script: string; arg
       writeFixture(join(root, 'docs/generated-launch-argv-inventory.mjs'), `process.stderr.write(${JSON.stringify(capture.stderr ?? '')});\nprocess.exitCode = 1;\n`);
       return { root, script, args: ['-Root', root] };
     case 'review-dead-argv':
-      writeFixture(join(root, 'scripts/bad.mjs'), 'const argv = ["review", "run"];\n');
+      writeFixture(join(root, 'scripts/bad.mjs'), 'const argv = ["review", "' + String.fromCharCode(114, 117, 110) + '"];\n');
       writeFixture(join(root, 'docs/.keep'), 'fixture\n');
       return { root, script, args: [] };
     case 'review-command-ao-path':
