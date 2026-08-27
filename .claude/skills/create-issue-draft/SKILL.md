@@ -111,22 +111,27 @@ skips the impossible page probe, performs the available Issue-side check, and
 uses only existing correction/retry authority; it does not create generic
 zero-send retry authority.
 
-For page-capable-or-uncertain outcomes, the manager records both the sanctioned
-page probe result and the observable Issue-side publication check before any
-next workflow action. Page ownership uses only the existing exact
-transport-owned `OPKTURNV1...` marker rule: exactly one current user node for
-the retained invocation. Publication correlation uses only recorded
-`reviewer-invocation-envelope/v1` identities matching the current
-`stageAttemptId`, `stage`, `reviewerSlot`, and `sourceRevision`, resolved
-through the existing complete authenticated Issue-comment census. There is no
-invented Issue-lifetime stage/slot-to-invocation index; unavailable or
-incomplete correlation/census evidence is unknown, not publication absence.
+For page-capable-or-uncertain outcomes, the manager records the sanctioned
+page probe result before any next workflow action. For a governed create-
+Issue/direct-publication turn, it also records the observable Issue-side
+publication check: use only recorded `reviewer-invocation-envelope/v1`
+identities matching the current `stageAttemptId`, `stage`, `reviewerSlot`, and
+`sourceRevision`, resolved through the existing complete authenticated
+Issue-comment census already recorded by `produce-artifacts`. An ordinary
+tracked turn without that governed publication surface records the Issue-side
+check as not applicable and preserves its existing invocation/retry contract.
+Page ownership uses only the existing exact transport-owned `OPKTURNV1...`
+marker rule: exactly one current user node for the retained invocation. There
+is no invented Issue-lifetime stage/slot-to-invocation index; unavailable or
+incomplete governed correlation/census evidence is unknown, not publication
+absence.
 
 An exact owned marker with a reply is harvested under the original invocation
-id; a marker with no reply gets bounded wait and re-probe. Marker absence
-permits resend/relaunch only when complete known-invocation publication
-absence is proven and the existing invocation/retry contract independently
-authorizes it. Ambiguous ownership or incomplete evidence permits no resend.
+id; a marker with no reply gets bounded wait and re-probe. For a governed turn,
+marker absence permits resend/relaunch only when complete known-invocation
+publication absence is proven and the existing invocation/retry contract
+independently authorizes it. Ambiguous ownership or incomplete applicable
+evidence permits no resend.
 The manager must not reopen a consumed semantic stage slot or broaden the
 existing pre-consumption correction seam.
 
