@@ -124,6 +124,7 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // and exact-head port-stage evidence. Keep the bounded topology producer stable
   // until runtime-history harvest records measured weights for these new files.
   'scripts/port-stage-evidence/producer.test.ts': 120,
+  'scripts/post-port-admission.test.ts': 120,
   'scripts/verify.test.ts': 120,
   // Issue #1582 adds deterministic live-store parent-guard coverage.
   'scripts/vitest-live-store-parent-guard.test.ts': 120,
