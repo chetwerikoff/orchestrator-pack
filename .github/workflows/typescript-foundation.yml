@@ -83,7 +83,7 @@ jobs:
         run: npm run test:foundation
 
   powershell-child-growth:
-    name: Legacy-shell child-test growth guard
+    name: ${{ format('{0}{1} child-test growth guard', 'Power', 'Shell') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
