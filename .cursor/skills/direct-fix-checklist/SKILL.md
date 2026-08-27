@@ -117,7 +117,7 @@ A single path outside it drops the whole PR to the implementation shape.
 
 From the repository root:
 
-```powershell
+```bash
 .\scripts\verify.ps1
 .\scripts\test-all.ps1
 ```

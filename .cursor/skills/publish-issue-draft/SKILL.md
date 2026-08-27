@@ -63,15 +63,15 @@ working artifact; the issue carries everything the worker needs.
 1. Run the contract-evidence mechanical guard (Issue #366) on the draft; refuse
    issue sync while it exits non-zero:
 
-   ```powershell
-   pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
+   ```bash
+   node scripts/draft-discipline.mjs contract-evidence --draft docs/issues_drafts/NN-<slug>.md
    ```
 
 2. Confirm live REST body parity with the local draft. Re-sync only through the
    mechanical helper (never raw `gh issue edit`):
 
-   ```powershell
-   pwsh -NoProfile -File scripts/publish-issue-body-sync.ps1 -Mode verify -DraftPath docs/issues_drafts/NN-<slug>.md -IssueNumber <N>
+   ```bash
+   node --experimental-strip-types scripts/publish-issue-body-sync.ts verify --draft-path docs/issues_drafts/NN-<slug>.md --issue-number <N>
    ```
 
    On mismatch or first sync, run `-Mode edit` (existing issue) or `-Mode create`
@@ -140,7 +140,7 @@ the full heavy flow. Run the Common steps end-to-end for the one draft.
 > `gh pr create` / `gh pr merge` / `gh issue create` is blocked by the publish
 > hook for the architect — use `opencode run` as the delegate so deepseek runs
 > those commands. The **direct `OPK_PUBLISH_FALLBACK=1`** path (manual
-> PowerShell/`gh` steps below) is the **fallback** — use it only when
+> GitHub CLI steps below) is the **fallback** — use it only when
 > `opencode run` is unavailable, errors, or leaves the publish half-done.
 
 **Delegation prompt** (fill the `<…>` placeholders; covers single draft and batch):
@@ -169,7 +169,7 @@ Steps:
 0. For each draft file listed above, run the contract-evidence guard (Issue #366;
    plus positive-outcome / parked-root when the draft declares those blocks). Exit
    non-zero => STOP; do not sync, commit, or publish:
-   pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath <draft path>
+   node scripts/draft-discipline.mjs contract-evidence --draft <draft path>
 1. In this isolated checkout only: git fetch origin; update the local main base
    (git checkout main && git pull origin main), then create the publish branch:
    git checkout -b architect/draft-<NN>-<slug>.
@@ -179,8 +179,8 @@ Steps:
    new-row hunk), or git apply --cached with a one-line patch. Other unpublished drafts'
    pending index rows MUST stay in the working tree and MUST NOT be committed. FORBIDDEN:
    git checkout HEAD -- docs/issue_queue_index.md (or any wholesale reset) — that destroys
-   other drafts' pending rows. Run scripts/verify.ps1, scripts/check-reusable.ps1, and
-   scripts/lint-self-architect.ps1 -Strict. Do not change draft content — if a gate fails
+   other drafts' pending rows. Run `node --experimental-strip-types scripts/verify.ts --repo-root .` and
+   `node --experimental-strip-types scripts/verify.ts --repo-root . --reusable-only`. Do not change draft content — if a gate fails
    on the drafts, STOP and report instead of editing.
 3. Commit ("docs: <short title> (spec)") and push -u origin HEAD. If push is refused on
    credentials, retry: git -c credential.helper='!/usr/bin/gh auth git-credential' push -u origin HEAD
@@ -232,7 +232,7 @@ re-syncs the body.
 
 ### Pre-flight
 
-```powershell
+```bash
 git status -sb
 git fetch origin
 ```
@@ -269,10 +269,10 @@ snapshot, no `Closes #N`, no reopen step). See
 
 ### Local checks
 
-```powershell
-pwsh -NoProfile -File scripts/lint-self-architect.ps1 -WithWorkingTree
-pwsh -NoProfile -File scripts/verify.ps1
-pwsh -NoProfile -File scripts/check-reusable.ps1
+```bash
+node --experimental-strip-types scripts/verify.ts --repo-root .
+node --experimental-strip-types scripts/verify.ts --repo-root . --reusable-only
+npm run typecheck:foundation
 ```
 
 **Contract-evidence gate (Issue #366).** Run on **every** draft in the publish
@@ -281,8 +281,8 @@ Issue-body create/edit/verify must go through `scripts/publish-issue-body-sync`
 — never raw `gh issue create` / `gh issue edit` or low-level `gh api` body
 mutation.
 
-```powershell
-pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
+```bash
+node scripts/draft-discipline.mjs contract-evidence --draft docs/issues_drafts/NN-<slug>.md
 ```
 
 Refuse sync or publish while this exits non-zero.
@@ -290,12 +290,12 @@ Refuse sync or publish while this exits non-zero.
 For each draft in the publish commit that declares `behavior-kind` or
 `parked-root-cause` (parked root tracking), run the mechanical guards (Issue #221) before push:
 
-```powershell
-pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outcome -DraftPath docs/issues_drafts/NN-<slug>.md
-pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath docs/issues_drafts/NN-<slug>.md
-pwsh -NoProfile -File scripts/check-finding-ledger-guard.ps1 `
-  -CapturesDir docs/issues_drafts/.review/NN-<slug> `
-  -LedgerPath docs/issues_drafts/.review/NN-<slug>/finding-disposition-ledger.json
+```bash
+node scripts/draft-discipline.mjs positive-outcome --draft docs/issues_drafts/NN-<slug>.md
+node scripts/draft-discipline.mjs parked-root --draft docs/issues_drafts/NN-<slug>.md
+node scripts/finding-ledger-guard.mjs \
+  --captures-dir docs/issues_drafts/.review/NN-<slug> \
+  --ledger-path docs/issues_drafts/.review/NN-<slug>/finding-disposition-ledger.json
 ```
 
 When a `parked-root-cause` block references `#N`, validate the live issue body
@@ -306,7 +306,7 @@ Fix `[STRICT]` findings before push.
 
 ### Commit and push
 
-```powershell
+```bash
 git add docs/issues_drafts/NN-<slug>.md
 # plus 00-architecture-decisions.md if applicable
 # Index row — selective staging ONLY (never wholesale git add on the index):
@@ -348,10 +348,10 @@ For a **batch** PR, summarise each draft in the bullet list — still **no** iss
 references in the body (the no-ceremony scope guard rejects them). If a CI run
 fails because a reference slipped in, strip it and `gh run rerun --failed`.
 
-```powershell
-gh pr create --repo chetwerikoff/orchestrator-pack `
-  --title "docs: draft NN — <short title> (#N spec)" `
-  --body-file $env:TEMP\publish-draft-pr-body.md
+```bash
+gh pr create --repo chetwerikoff/orchestrator-pack \
+  --title "docs: draft NN — <short title> (#N spec)" \
+  --body-file "${TMPDIR:-/tmp}/publish-draft-pr-body.md"
 ```
 
 ### Review and merge
