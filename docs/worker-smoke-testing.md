@@ -38,7 +38,14 @@ agent-token set is `cursor` and `opencode`. Cursor continues through the existin
 inside the shared Cursor translator. OpenCode carries model and effort together through a pack-composed inline agent definition supplied via `OPENCODE_CONFIG_CONTENT` as `{"agent":{"<pack-agent-name>":{"model":"<model>","variant":"<effort>"}}}` and spawned as `opencode --agent <pack-agent-name>` on the top-level surface, with no `--model` or `--variant` flag. Model catalog checks are executor-specific: Cursor uses the Cursor model catalog; OpenCode uses `opencode models`.
 
 A semantically valid OpenCode profile is not automatically spawnable. Before child
-creation, `worker-smoke-run` obtains fresh non-mutating evidence from the spawned top-level surface — `opencode --help` (stdout+stderr, proving `--agent`), `opencode models --verbose` (proving effort is an available variant), and `opencode debug agent <pack-agent-name>` run with the inline definition (proving the resolved agent carries both) — and admits the spawn only if the observed route can carry both values. Probe surface must equal spawn surface; both edges capture stdout and stderr for every capability probe (catalog read stays stdout-only). Missing route support fails with `executor_route_unavailable`; a model-capable route without an effort channel fails with `executor_effort_channel_unavailable`. The launcher does not fall back to Cursor, drop effort, infer support from package presence, or invent an unsupported flag.
+creation, `worker-smoke-run` obtains top-level syntax evidence from `opencode --help`
+(stdout+stderr, proving `--agent`) and catalog evidence from `opencode models --verbose`.
+In the exact smoke cwd it then requires no-write-qualified `debug config` and named
+`debug agent` observations, an explicit `default_agent`, preserved baseline semantics,
+and isolated child-local state-path evidence before applying the invocation-local
+model/effort overlay. Missing route support fails with `executor_route_unavailable`;
+missing exact-context effort proof fails with `executor_effort_channel_unavailable`.
+The launcher never infers an implicit default, falls back to Cursor, or drops effort.
 
 Cursor smoke route compatibility remains code-owned and does not gain a fresh route
 probe. Both executor families still require the selected profile to be inherited by

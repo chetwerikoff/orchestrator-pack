@@ -30,6 +30,7 @@ export interface ExecutorFamilyDescriptor {
   readonly catalogCommand: readonly string[];
   readonly capabilityProbeCommands: readonly (readonly string[])[];
   readonly smokeCapabilityProbeCommands: readonly (readonly string[])[];
+  readonly contextualProbeCommands: readonly (readonly string[])[];
 }
 
 export interface SemanticExecutorProfile {
@@ -70,6 +71,7 @@ export type SpawnApplicabilityVerdict =
   | { readonly ok: false; readonly refusal: 'executor_route_unavailable' | 'executor_effort_channel_unavailable' };
 
 export const OPENCODE_PACK_AGENT = 'pack' as const;
+export const OPENCODE_PACK_AGENT_PREFIX = 'pack-opk-' as const;
 
 export interface ExecutorInvocationShape {
   readonly executable: string;
@@ -105,6 +107,7 @@ export const EXECUTOR_FAMILY_DESCRIPTORS: Readonly<Record<ExecutorFamily, Execut
     catalogCommand: ['cursor-agent', '--list-models'],
     capabilityProbeCommands: [],
     smokeCapabilityProbeCommands: [],
+    contextualProbeCommands: [],
   },
   opencode: {
     family: 'opencode',
@@ -117,12 +120,16 @@ export const EXECUTOR_FAMILY_DESCRIPTORS: Readonly<Record<ExecutorFamily, Execut
     capabilityProbeCommands: [
       ['opencode', '--help'],
       ['opencode', 'models', '--verbose'],
-      ['opencode', 'debug', 'agent', OPENCODE_PACK_AGENT],
     ],
     smokeCapabilityProbeCommands: [
       ['opencode', '--help'],
       ['opencode', 'models', '--verbose'],
-      ['opencode', 'debug', 'agent', OPENCODE_PACK_AGENT],
+    ],
+    contextualProbeCommands: [
+      ['opencode', 'debug', 'config'],
+      ['opencode', 'debug', 'agent'],
+      ['opencode', 'debug', 'agent'],
+      ['opencode', 'debug', 'paths'],
     ],
   },
 };
@@ -300,7 +307,7 @@ export function openCodeEdgeCapabilities(
   const catalog = openCodeVariantCatalog(probeOutputs[1] ?? '');
   const debugOutput = probeOutputs[2] ?? '';
   let effortViaAgent = false;
-  if (profile && profile.family === 'opencode') {
+  if (profile && profile.family === 'opencode' && debugOutput.trim()) {
     const resolved = parseOpenCodeResolvedAgent(debugOutput);
     if (resolved) {
       const profileModelID = profile.model.includes('/') ? profile.model.split('/').pop()! : profile.model;
@@ -311,6 +318,8 @@ export function openCodeEdgeCapabilities(
       const catalogMatches = catalogEfforts.includes(profile.effort);
       effortViaAgent = Boolean(variantMatches && modelMatches && catalogMatches);
     }
+  } else if (profile?.family === 'opencode') {
+    effortViaAgent = (catalog[profile.model] ?? []).includes(profile.effort);
   }
   const exactTerminal: RouteCapability = {
     available: tui.available,
@@ -406,6 +415,31 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile): Executor
     executable,
     command,
     agentName: OPENCODE_PACK_AGENT,
+    inlineConfigJson: inlineConfig,
+  };
+}
+
+export interface OpenCodeAgentOverlay {
+  readonly agentName: string;
+  readonly baseline: Readonly<Record<string, unknown>>;
+  readonly model: string;
+  readonly effort: string;
+  readonly stateRoot?: string;
+}
+
+export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): ExecutorInvocationShape {
+  const agent = {
+    ...input.baseline,
+    model: input.model,
+    variant: input.effort,
+  };
+  const inlineConfig = JSON.stringify({ agent: { [input.agentName]: agent } });
+  const state = input.stateRoot ? ` XDG_STATE_HOME=${quote(input.stateRoot)}` : '';
+  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)}${state} opencode --agent ${quote(input.agentName)}`;
+  return {
+    executable: 'opencode',
+    command,
+    agentName: input.agentName,
     inlineConfigJson: inlineConfig,
   };
 }

@@ -5,12 +5,13 @@ import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
-import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   buildExecutorCommand,
+  buildOpenCodeAgentOverlay,
   CURSOR_SMOKE_CAPABILITY,
   evaluateExecutorRouteAdmission,
   evaluateExecutorSpawnApplicability,
@@ -75,6 +76,8 @@ import {
   smokeCancelRequestPath,
   smokeProgressPath,
 } from './lib/worker-smoke-lifecycle.ts';
+const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+
 import { markTrackedSmokeWorkerDeliveryConfirmed } from './lib/worker-smoke-bounded-create.ts';
 import { verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import {
@@ -192,6 +195,7 @@ export function resolveLiveSmokeExecutorProfile(
   complexity: SmokeComplexity | string,
   env: Readonly<NodeJS.ProcessEnv>,
   execute: SmokeChildExecutor,
+  cwd = process.cwd(),
 ): SmokeExecutorProfile {
   const profile = smokeSemanticProfile(complexity, env);
   const descriptor = EXECUTOR_FAMILY_DESCRIPTORS[profile.family];
@@ -221,6 +225,14 @@ export function resolveLiveSmokeExecutorProfile(
   const verdict = evaluateExecutorSpawnApplicability(capability);
   if (!verdict.ok) throw new Error(verdict.refusal);
 
+  let finalProfile = profile;
+  let finalCommand: string | undefined;
+  if (profile.family === 'opencode') {
+    const finalized = smokeFinalizeOpenCode(profile, cwd, execute);
+    finalProfile = finalized.profile;
+    finalCommand = finalized.command;
+  }
+
   const inherited = execute([
     process.execPath,
     '--input-type=module',
@@ -229,7 +241,54 @@ export function resolveLiveSmokeExecutorProfile(
     ...profile.names,
   ]);
   if (!inherited.ok) throw new Error('executor_profile_child_inheritance_unproven');
-  return smokeProfileFromSemantic(complexity as SmokeComplexity, profile);
+  const smokeProfile = smokeProfileFromSemantic(complexity as SmokeComplexity, finalProfile);
+  return finalCommand ? { ...smokeProfile, command: finalCommand } : smokeProfile;
+}
+
+
+function smokeConfigState(cwd: string): string {
+  const roots = [join(homedir(), '.config', 'opencode'), join(cwd, '.opencode'), join(cwd, 'opencode.json'), join(cwd, 'opencode.jsonc')];
+  const rows: string[] = [];
+  const visit = (path: string): void => {
+    if (!existsSync(path)) { rows.push(`${path}:absent`); return; }
+    const stat = statSync(path);
+    if (stat.isDirectory()) { rows.push(`${path}:directory`); for (const child of readdirSync(path).sort()) visit(join(path, child)); }
+    else rows.push(`${path}:${stat.size}:${createHash('sha256').update(readFileSync(path)).digest('hex')}`);
+  };
+  for (const root of roots) visit(root);
+  return rows.join('\n');
+}
+
+function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, execute: SmokeChildExecutor): { profile: SemanticExecutorProfile; command: string } {
+  const before = smokeConfigState(cwd);
+  const config = execute(['opencode', 'debug', 'config']);
+  if (!config.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
+  let parsed: Record<string, unknown>;
+  try { const value: unknown = JSON.parse(config.stdout); if (!record(value)) throw new Error(); parsed = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
+  const defaultAgent = typeof parsed.default_agent === 'string' ? parsed.default_agent.trim() : '';
+  if (!defaultAgent) throw new Error('executor_effort_channel_unavailable');
+  const baseline = execute(['opencode', 'debug', 'agent', defaultAgent]);
+  if (!baseline.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
+  let baselineValue: Record<string, unknown>;
+  try { const value: unknown = JSON.parse(baseline.stdout); if (!record(value)) throw new Error(); baselineValue = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
+  const model = profile.model;
+  const effort = profile.effort;
+  if (!model || !effort) throw new Error('executor_effort_channel_unavailable');
+  const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
+  const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
+  const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model, effort, stateRoot });
+  const resolved = execute(['opencode', 'debug', 'agent', agentName], { OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson!, XDG_STATE_HOME: stateRoot });
+  if (!resolved.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
+  let resolvedValue: Record<string, unknown>;
+  try { const value: unknown = JSON.parse(resolved.stdout); if (!record(value)) throw new Error(); resolvedValue = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
+  const resolvedModel = record(resolvedValue.model) ? resolvedValue.model : null;
+  const baselineSemantics = { ...baselineValue }; delete baselineSemantics.model; delete baselineSemantics.variant;
+  const overlaySemantics = { ...resolvedValue }; delete overlaySemantics.model; delete overlaySemantics.variant;
+  if (!resolvedModel || resolvedModel.modelID !== model.split('/').at(-1) || resolvedValue.variant !== effort
+    || JSON.stringify(baselineSemantics) !== JSON.stringify(overlaySemantics)) throw new Error('executor_effort_channel_unavailable');
+  const paths = execute(['opencode', 'debug', 'paths'], { XDG_STATE_HOME: stateRoot });
+  if (!paths.ok || !paths.stdout.includes(stateRoot)) throw new Error('executor_effort_channel_unavailable');
+  return { profile: { ...profile, model, effort }, command: overlay.command };
 }
 
 function runSmokeProfileChild(
@@ -1390,6 +1449,7 @@ export async function runSmokeAttempt(
           options.smokeComplexity,
           process.env,
           (args, env) => runSmokeProfileChild(args, options.cwd, process.env, env),
+          options.cwd,
         );
   } catch (error) {
     const report = operationalReport('BLOCKED', options, {

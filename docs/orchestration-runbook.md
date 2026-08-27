@@ -175,9 +175,19 @@ compatibility token, fallback family, or heuristic selector.
 Model applicability and route admission are separate checks. Cursor catalog
 applicability comes from `cursor-agent --list-models`; Cursor's existing
 model/effort opacity is composed only inside the Cursor translator in the shared
-policy. OpenCode catalog applicability comes from `opencode models`; its selected
-model and effort are carried together through a pack-composed inline agent definition
-supplied via `OPENCODE_CONFIG_CONTENT` as `{"agent":{"<pack-agent-name>":{"model":"<model>","variant":"<effort>"}}}` and never collapsed into a synthetic model id. The composed OpenCode invocation targets the top-level surface with `--agent <pack-agent-name>` and must not also pass `--model`, because the agent's `variant` applies only when the agent's configured model is used.
+policy. OpenCode catalog applicability comes from `opencode models`; the selected
+model and effort are carried together through an invocation-local agent definition
+in `OPENCODE_CONFIG_CONTENT`. The top-level spawned command uses `--agent` only,
+never `--model` or `--variant`.
+
+For OpenCode exact-terminal work, early `resolveProfile` proves only selector,
+top-level `--agent` syntax, and catalog route evidence. After worktree preparation,
+contextual finalization runs in that exact path before terminal/Dispatch/start effects.
+It requires a no-write-qualified `debug config`/`debug agent` observation, a
+non-empty explicit `default_agent`, preservation of baseline agent semantics under
+the selected model/variant overlay, and an isolated child-local XDG state root.
+Missing proof returns `executor_effort_channel_unavailable`; launcher-cwd evidence
+and implicit default ordering are never substitutes.
 
 Cursor route admissibility is a static code-owned compatibility fact and therefore
 must not gain a fresh route-capability probe. OpenCode is semantically recognized,
@@ -319,9 +329,11 @@ The exact-terminal boundary remains machine-enforced through structured contract
 one RuntimeAdapter-created worker with provenance `internal`, exact
 `{runtime,id,generation}`, exact target workspace, and `idle` RuntimeAdapter
 liveness. The assistant does **not** scrape raw screen/title/preview/composer text.
-OpenCode admission must therefore come from the fresh installed non-mutating
-capability surfaces named by the policy, not a guessed screen/TUI state. A known
-contrary observation is still blocking.
+OpenCode admission must therefore come from the fresh installed capability
+surfaces named by the policy, not a guessed screen/TUI state. Config/Agent loading
+is not presumed read-only: exact-worktree before/after no-write evidence is required
+before those observations can block or admit a route. A known contrary observation
+is still blocking.
 
 The assistant emits one structured result. `outcome=ready` means only that the
 existing `runSupervisedWorkerStart` returned `ready_and_assignment_bound`; the

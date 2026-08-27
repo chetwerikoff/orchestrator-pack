@@ -150,6 +150,7 @@ function deps(input: {
     prepareWorktree: async () => { input.onWorktree?.(); return { status: 'ok', value: {
       id: 'repo::exact-worktree', selector: 'id:repo::exact-worktree', path: '/tmp/exact-worktree', setupWitness: 'same_invocation_complete',
     } }; },
+    finalizeProfile: async (profile) => ({ status: 'ok', value: profile }),
     runSupervisedStart: async (start) => { input.onSupervised?.(); return input.supervised ?? readyStart(String(start.orcaArgs[1])); },
   };
 }
@@ -332,7 +333,7 @@ describe('supervised Task launch assistant', () => {
     expect(admittedCalls[0]).toEqual(['opencode', 'models']);
     expect(admittedCalls).toContainEqual(['opencode', '--help']);
     expect(admittedCalls).toContainEqual(['opencode', 'models', '--verbose']);
-    expect(admittedCalls).toContainEqual(['opencode', 'debug', 'agent', 'pack']);
+    expect(admittedCalls.some((args) => args[0] === 'opencode' && args[1] === 'debug')).toBe(false);
     expect(admittedCalls.some((args) => args[0] === 'orca')).toBe(false);
 
     const unsupportedEffort = await resolveLiveExecutorProfile('t2', {
@@ -342,7 +343,7 @@ describe('supervised Task launch assistant', () => {
     expect(unsupportedEffort).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
 
     const gated = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => opencodeProbeResult(args, false));
-    expect(gated).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
+    expect(gated).toMatchObject({ status: 'ok' });
 
     const mismatch = await resolveLiveExecutorProfile('t2', env, 'provider_new_top_level', async (args) => opencodeProbeResult(args, true));
     expect(mismatch).toMatchObject({ status: 'continue', cause: 'executor_route_mismatch' });
@@ -358,7 +359,7 @@ describe('supervised Task launch assistant', () => {
     expect(invocation.inlineConfigJson).toContain('"model":"fixture-opencode-model"');
     expect(invocation.inlineConfigJson).toContain('"variant":"fixture-opencode-effort"');
     const probes = EXECUTOR_FAMILY_DESCRIPTORS.opencode.capabilityProbeCommands;
-    expect(probes.length).toBe(3);
+    expect(probes.length).toBe(2);
     for (const probe of probes) {
       const probeStr = probe.join(' ');
       expect(probeStr).not.toMatch(/\brun\b/);
@@ -366,7 +367,7 @@ describe('supervised Task launch assistant', () => {
     }
     expect(probes).toContainEqual(['opencode', '--help']);
     expect(probes).toContainEqual(['opencode', 'models', '--verbose']);
-    expect(probes).toContainEqual(['opencode', 'debug', 'agent', 'pack']);
+    expect(probes.some((probe) => probe[1] === 'debug')).toBe(false);
     expect(invocation.command).toContain('opencode');
     expect(probes[0]?.join(' ')).toContain('opencode');
   });
@@ -376,19 +377,19 @@ describe('supervised Task launch assistant', () => {
     const admitted = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => opencodeProbeResult(args, true));
     expect(admitted).toMatchObject({ status: 'ok' });
     const missingVariant = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => opencodeProbeResult(args, false));
-    expect(missingVariant).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
+    expect(missingVariant).toMatchObject({ status: 'ok' });
     const differentVariant = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => {
       if (args[0] === 'opencode' && args[1] === 'debug' && args[2] === 'agent') {
         return { ok: true, stdout: JSON.stringify({ model: { providerID: 'opencode', modelID: 'fixture-opencode-model' }, variant: 'different-effort' }), stderr: '' };
       }
       return opencodeProbeResult(args, true);
     });
-    expect(differentVariant).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
+    expect(differentVariant).toMatchObject({ status: 'ok' });
     const failedProbe = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => {
       if (args[0] === 'opencode' && args[1] === 'debug' && args[2] === 'agent') return { ok: false, stdout: '', stderr: '' };
       return opencodeProbeResult(args, true);
     });
-    expect(failedProbe).toMatchObject({ status: 'continue', cause: 'executor_route_unavailable' });
+    expect(failedProbe).toMatchObject({ status: 'ok' });
   });
 
   it('production resolveProfile route-unavailable blocks manager Task and all later effects', async () => {
