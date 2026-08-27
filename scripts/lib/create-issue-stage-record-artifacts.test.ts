@@ -393,15 +393,12 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     )).toBe(false);
   });
 
-  it('accepts receipt-ok/artifact-ok only after census, principal proof, and reread', () => {
+  it('accepts receipt-ok/artifact-ok after census and reread without principal lookup', () => {
     const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
     const source = transport({ census: [...input.reviewComments, comment(input.body)] });
     const result = produce(input, source);
     expect(result.ok, result.errors.join('\n')).toBe(true);
     expect(source.runGh.mock.calls.map((call) => call[0][2])).toEqual([
-      `repos/${REPOSITORY}`,
-      `repos/${REPOSITORY}/issues/${ISSUE}/comments?per_page=100&page=1`,
-      'user',
       `repos/${REPOSITORY}/issues/${ISSUE}/comments?per_page=100&page=1`,
       ...input.reviewComments.map((item) => `repos/${REPOSITORY}/issues/comments/${String(item.id)}`),
       `repos/${REPOSITORY}/issues/comments/${COMMENT_ID}`,
