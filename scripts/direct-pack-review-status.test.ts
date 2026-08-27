@@ -7,6 +7,7 @@ import {
 } from './direct-pack-review-status.ts';
 import {
   projectRunnerPackReviewStatusFact,
+  projectRunnerPackReviewStatusFromCombined,
   type PackReviewRequiredStatusRequest,
   type PackReviewSemanticSourceState,
 } from './lib/pack-review-delivery.ts';
@@ -120,6 +121,28 @@ describe('Issue #1749 trusted direct pack-review bootstrap', () => {
     const result = await reconcileDirectPackReviewStatus(options(), fixture.deps);
     expect(result).toMatchObject({ ok: true, skipped: true, reason: 'ancestor_blocker_requires_descendant_fix_facts' });
     expect(fixture.writes).toHaveLength(0);
+  });
+
+  it('selects only runner-owned status descriptions from a combined-status payload', () => {
+    expect(projectRunnerPackReviewStatusFromCombined({
+      statuses: [
+        {
+          context: 'orchestrator-pack/pack-review',
+          state: 'success',
+          description: 'pack review evidence is complete for current facts',
+          updated_at: '2026-08-27T00:00:02Z',
+        },
+        {
+          context: 'orchestrator-pack/pack-review',
+          state: 'success',
+          description: 'Pack review completed with no findings.',
+          updated_at: '2026-08-27T00:00:01Z',
+        },
+      ],
+    })).toEqual({
+      hasLegitimateReview: false,
+      unresolvedBlockingFinding: false,
+    });
   });
 
   it('never re-admits semantic status output as runner-owned evidence', () => {
