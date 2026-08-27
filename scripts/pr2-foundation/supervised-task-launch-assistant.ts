@@ -433,9 +433,9 @@ export async function runSupervisedTaskLaunchAssistant(
   };
 
   if (profile.family === 'opencode') {
-    if (!prepared.value.path) return continued(input, 'worktree_prepare', contextualRefusal(profile, 'executor_effort_channel_unavailable'), resources, startedAtMs, timings, deps.now);
+    if (!prepared.value.path) return continued(input, 'worktree_prepare', contextualRefusalDetails(profile, 'executor_effort_channel_unavailable'), resources, startedAtMs, timings, deps.now);
     if (!deps.finalizeProfile) {
-      return continued(input, 'worktree_prepare', contextualRefusal(profile, 'executor_effort_channel_unavailable'), resources, startedAtMs, timings, deps.now);
+      return continued(input, 'worktree_prepare', contextualRefusalDetails(profile, 'executor_effort_channel_unavailable'), resources, startedAtMs, timings, deps.now);
     }
     const finalized = await checkpoint('worktree_prepare', timings, deps.now, () => deps.finalizeProfile!(profile, prepared.value.path!));
     if (finalized.status !== 'ok') return continued(input, 'worktree_prepare', finalized, resources, startedAtMs, timings, deps.now);
@@ -663,8 +663,12 @@ function agentSemantics(value: Record<string, unknown>): string {
   const copy = { ...value }; delete copy.model; delete copy.variant; return JSON.stringify(copy);
 }
 
+function contextualRefusalDetails(profile: ExecutorProfile, cause: 'executor_effort_channel_unavailable' | 'executor_route_unavailable') {
+  return { cause, actor: 'operator' as const, evidence: { executorFamily: profile.family, route: profile.route }, nextAction: { kind: 'repair_executor_profile' as const, note: 'prove the exact prepared-worktree OpenCode agent-config effort channel' } };
+}
+
 function contextualRefusal(profile: ExecutorProfile, cause: 'executor_effort_channel_unavailable' | 'executor_route_unavailable'): EdgeResult<ExecutorProfile> {
-  return { status: 'continue', cause, actor: 'operator', evidence: { executorFamily: profile.family, route: profile.route }, nextAction: { kind: 'repair_executor_profile', note: 'prove the exact prepared-worktree OpenCode agent-config effort channel' } };
+  return { status: 'continue', ...contextualRefusalDetails(profile, cause) };
 }
 
 export async function finalizeOpenCodeExecutorProfile(profile: ExecutorProfile, worktreePath: string, execute: ChildExecutor): Promise<EdgeResult<ExecutorProfile>> {

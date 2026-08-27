@@ -71,7 +71,6 @@ export type SpawnApplicabilityVerdict =
   | { readonly ok: false; readonly refusal: 'executor_route_unavailable' | 'executor_effort_channel_unavailable' };
 
 export const OPENCODE_PACK_AGENT = 'pack' as const;
-export const OPENCODE_PACK_AGENT_PREFIX = 'pack-opk-' as const;
 
 export interface ExecutorInvocationShape {
   readonly executable: string;
