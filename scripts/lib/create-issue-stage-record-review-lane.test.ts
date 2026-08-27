@@ -7,7 +7,7 @@ import {
   settleReviewLane,
   type ReviewLaneAuthorDeclaration,
 } from './review-lane-routing.ts';
-import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
+import { parseConsumableStageReceipt, readEvidenceWaiverProducerEvidence } from './create-issue-stage-record-receipt.ts';
 import { validateReviewLaneRecord } from './review-lane-record.ts';
 import { cleanupTempDirs, createMockGhState, createMockTransport, makeTempDir } from './create-issue-stage-record-test-helpers.ts';
 import { publishSettledStageRecord, startReviewCycle } from './create-issue-stage-record-core.ts';
@@ -361,6 +361,13 @@ describe('review-lane production activation', () => {
     };
     expect(parseConsumableStageReceipt({ ...receipt, producerEvidence: 'not-applicable' }).receipt).toBeNull();
     expect(parseConsumableStageReceipt({ ...receipt, producerEvidence: 'waived' })).toMatchObject({ receipt, errors: [] });
+    expect(readEvidenceWaiverProducerEvidence('/waiver.json', () => ({ schema: 'claude-unavailable-waiver/v1' }))).toBe('not-applicable');
+    expect(readEvidenceWaiverProducerEvidence('/waiver.json', () => ({
+      schema: 'operator-stage-waiver/v1', stage: 'architectural-review', sourceRevision: 'r03', missingSlots: ['02', '03'],
+    }), { stage: 'architectural-review', sourceRevision: 'r01', missingSlots: ['02', '03'] })).toBe('not-applicable');
+    expect(readEvidenceWaiverProducerEvidence('/waiver.json', () => ({
+      schema: 'operator-stage-waiver/v1', stage: 'architectural-review', sourceRevision: 'r01', missingSlots: ['02', '03'],
+    }), { stage: 'architectural-review', sourceRevision: 'r01', missingSlots: ['02', '03'] })).toBe('waived');
 
     const capture = {
       captureIdentity: 'capture-01', name: 'pass-01-architectural-review-01.capture.txt',

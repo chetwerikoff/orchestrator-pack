@@ -352,16 +352,42 @@ export function validateHistoricalReceiptsAgainstLineage(
   return [...new Set(errors)];
 }
 
+export interface EvidenceWaiverExpectation {
+  readonly stage: string;
+  readonly sourceRevision: string;
+  readonly missingSlots: readonly string[];
+}
+
 export function readEvidenceWaiverProducerEvidence(
   waiverPath: string | undefined,
   readJson: (path: string) => unknown,
+  expected?: EvidenceWaiverExpectation,
 ): ProducerEvidence {
   if (!waiverPath) return 'not-applicable';
   try {
     const value = readJson(waiverPath);
-    if (!isRecord(value) || !nonEmpty(value.schema) || !String(value.schema).includes('waiver')) {
+    if (!isRecord(value) || value.schema !== 'operator-stage-waiver/v1') {
       return 'not-applicable';
     }
+    const stage = typeof value.stage === 'string' ? value.stage.trim() : '';
+    const sourceRevision = typeof value.sourceRevision === 'string' ? value.sourceRevision.trim() : '';
+    const missingSlots = Array.isArray(value.missingSlots)
+      ? value.missingSlots.filter((slot): slot is string => typeof slot === 'string').map((slot) => slot.trim()).sort()
+      : [];
+    const expectedMissingSlots = expected?.missingSlots.map((slot) => slot.trim()).sort();
+    if (
+      stage !== 'architectural-review'
+      || sourceRevision.length === 0
+      || missingSlots.length !== 2
+      || missingSlots[0] !== '02'
+      || missingSlots[1] !== '03'
+      || (expected !== undefined && (
+        stage !== expected.stage
+        || sourceRevision !== expected.sourceRevision
+        || missingSlots.length !== expectedMissingSlots?.length
+        || missingSlots.some((slot, index) => slot !== expectedMissingSlots?.[index])
+      ))
+    ) return 'not-applicable';
     return 'waived';
   } catch {
     return 'not-applicable';
