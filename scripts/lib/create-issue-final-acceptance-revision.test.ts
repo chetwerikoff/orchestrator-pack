@@ -23,6 +23,8 @@ import {
   type StageEventLogical,
 } from './create-issue-stage-record-types.ts';
 import { logicalFingerprint } from './create-issue-stage-record-marker.ts';
+import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
+import { validateReviewLaneRecord } from './review-lane-record.ts';
 
 const temporaryDirectories: string[] = [];
 
@@ -387,6 +389,73 @@ describe('revision-aware final acceptance', () => {
 
     expect(errors.some((error) => error.startsWith('cycle-binding:'))).toBe(false);
     expect(errors).not.toContain('cycleId is required');
+  });
+  it('treats partial witness invocation/result identity as audit-only at final acceptance', () => {
+    const partialReceipt = {
+      outcome: 'partial',
+      producerEvidence: 'not-applicable',
+      invocations: [
+        { reviewerSlot: '01', attemptOrdinal: 1, terminal: true, terminalClassification: 'complete', sendCount: 1, retryClass: 'none', capture: { captureIdentity: 'capture-01' } },
+        { reviewerSlot: '02', attemptOrdinal: 1, terminal: true, terminalClassification: 'complete', sendCount: 1, retryClass: 'none', capture: { captureIdentity: 'capture-02' } },
+        { reviewerSlot: '03', attemptOrdinal: 1, invocationId: 'actual-invocation', terminalResultIdentity: 'actual-result', terminal: true, terminalClassification: 'incident', sendCount: 1, retryClass: 'retry-forbidden' },
+      ],
+      partialMissingSources: [
+        { reviewerSlot: '03', invocationId: 'historical-other-invocation', evidenceIdentity: 'historical-other-result', reason: 'post-send result unavailable' },
+      ],
+    };
+    const stageTime = evaluateStageCredentialingSettlement(partialReceipt, 3, 'architectural-review');
+    expect(stageTime.credentialed).toBe(false);
+    expect(stageTime.errors.join('\n')).toContain('lacks a journal witness naming invocation actual-invocation');
+
+    const finalAcceptance = evaluateStageCredentialingSettlement(partialReceipt, 3, 'architectural-review', 'final-acceptance');
+    expect(finalAcceptance.credentialed, finalAcceptance.errors.join('\n')).toBe(true);
+  });
+
+  it('ignores routed producer identity equality at final acceptance but still forbids one result satisfying multiple slots', () => {
+    const routed = {
+      routing: {
+        schema: 'review-lane-routing/v1',
+        routingPolicyIdentity: 'review-lane-routing/v1',
+        lane: 'disputed',
+        topology: 'fixed/v1',
+        policyVersion: 'review-lane-routing/v1',
+        reviewerCardinality: 3,
+        cardinalityConfigIdentity: 'fixture-cardinality',
+        sourceRevision: 'r08',
+        stageAttemptId: 'attempt-routed',
+        laneInputIdentity: 'fixture-input',
+        classifierIdentity: 'fixture-classifier',
+        permittedLaneOverride: null,
+        conditionalActivationRule: null,
+        possibleSlots: ['01', '02', '03'],
+        initiallyActivatedSlots: ['01', '02', '03'],
+      },
+      finalRequiredSlots: ['01', '02', '03'],
+      sourceVerdicts: { '01': 'accept', '02': 'accept', '03': 'accept' },
+      sourceVerdictEvidence: {
+        '01': { producerEvidenceIdentity: 'same-producer', terminalClassification: 'complete', captureVerified: true, digestMatches: true, captureIdentity: 'capture-01', rawFindingCount: 0, materialFindingBlocks: 0 },
+        '02': { producerEvidenceIdentity: 'same-producer', terminalClassification: 'complete', captureVerified: true, digestMatches: true, captureIdentity: 'capture-02', rawFindingCount: 0, materialFindingBlocks: 0 },
+        '03': { producerEvidenceIdentity: 'same-producer', terminalClassification: 'complete', captureVerified: true, digestMatches: true, captureIdentity: 'capture-03', rawFindingCount: 0, materialFindingBlocks: 0 },
+      },
+      conflictDecision: 'no-conflict',
+      settlement: {
+        ok: true,
+        finalRequiredSlots: ['01', '02', '03'],
+        slotCensus: [
+          { slot: '01', state: 'activated' },
+          { slot: '02', state: 'activated' },
+          { slot: '03', state: 'activated' },
+        ],
+        errors: [],
+        conflictDecision: 'no-conflict',
+      },
+    };
+    expect(validateReviewLaneRecord(routed).ok).toBe(false);
+    expect(validateReviewLaneRecord(routed, [], 'final-acceptance').ok).toBe(true);
+
+    const doubleCounted = structuredClone(routed);
+    doubleCounted.sourceVerdictEvidence['02'].captureIdentity = 'capture-01';
+    expect(validateReviewLaneRecord(doubleCounted, [], 'final-acceptance').ok).toBe(false);
   });
   it('requires the requested receipt set to equal canonical real paths', () => {
     const directory = mkdtempSync(join(tmpdir(), 'issue-1202-receipts-'));
