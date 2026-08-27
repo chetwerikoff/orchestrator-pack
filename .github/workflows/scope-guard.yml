@@ -101,12 +101,10 @@ jobs:
         run: node --experimental-strip-types scripts/verify.ts --repo-root "$GITHUB_WORKSPACE" --reusable-only
 
       - name: Enforce CI cheap wins policy
-        shell: pwsh
-        run: ./scripts/check-ci-cheap-wins.ps1
+        run: node --experimental-strip-types scripts/ci-policy-guards.ts ci-cheap-wins
 
       - name: Enforce verify runtime refactor policy
-        shell: pwsh
-        run: ./scripts/check-verify-runtime.ps1
+        run: node --experimental-strip-types scripts/ci-policy-guards.ts verify-runtime
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -123,10 +121,9 @@ jobs:
         run: npm run tiering:calibration
 
       - name: Enforce CI pipeline split policy
-        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/check-ci-pipeline-split.ps1
+        run: node --experimental-strip-types scripts/ci-policy-guards.ts pipeline-split
 
   pr-scope-guard:
     name: PR scope guard
