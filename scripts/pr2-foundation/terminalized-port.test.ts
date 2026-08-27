@@ -142,13 +142,21 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     ))).toBe(true);
   });
 
-  it('retains #1419 exact-head post-port evidence as a head-named CI artifact', () => {
+  it('binds #1419 exact-head post-port proof into the required TypeScript runtime context', () => {
     const workflow = readFileSync(path.resolve('.github/workflows/typescript-foundation.yml'), 'utf8');
-    expect(workflow).toContain('Produce and admit exact-head post-port evidence');
-    expect(workflow).toContain('Upload exact-head post-port evidence');
-    expect(workflow).toContain('name: post-port-${{ github.event.pull_request.head.sha }}');
-    expect(workflow).toContain('docs/investigations/orca-pwsh-zero-estate/post-port.json');
-    expect(workflow).toContain('if-no-files-found: error');
+    const runtimeStart = workflow.indexOf('  runtime:');
+    const typecheckStart = workflow.indexOf('  typecheck:', runtimeStart);
+    expect(runtimeStart).toBeGreaterThanOrEqual(0);
+    expect(typecheckStart).toBeGreaterThan(runtimeStart);
+    const runtimeJob = workflow.slice(runtimeStart, typecheckStart);
+    expect(runtimeJob).toContain('name: TypeScript runtime (Node 22)');
+    expect(runtimeJob).toContain('Produce and admit exact-head post-port evidence');
+    expect(runtimeJob).toContain('Upload exact-head post-port evidence');
+    expect(runtimeJob).toContain('working-directory: post-port-exact-head');
+    expect(runtimeJob).toContain('name: post-port-${{ github.event.pull_request.head.sha }}');
+    expect(runtimeJob).toContain('post-port-exact-head/docs/investigations/orca-pwsh-zero-estate/post-port.json');
+    expect(runtimeJob).toContain('if-no-files-found: error');
+    expect(workflow).not.toContain('\n  post-port-proof:\n');
   });
 
   it('wires #1419 direct review reconciliation and readiness after an exact-head smoke PASS', () => {

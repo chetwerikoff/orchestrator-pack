@@ -668,6 +668,15 @@ export function publishPrComment(prNumber: number, body: string, repoRoot: strin
   }
 }
 
+export function reviewIndependentRequiredCiContexts(
+  contexts: readonly unknown[],
+): string[] {
+  const reviewContext = PACK_REVIEW_REQUIRED_STATUS_CONTEXT.toLowerCase();
+  return contexts
+    .map((value) => String(value ?? '').trim())
+    .filter((value) => Boolean(value) && value.toLowerCase() !== reviewContext);
+}
+
 export function resolveCiGreen(
   prNumber: number,
   headSha: string,
@@ -700,9 +709,9 @@ export function resolveCiGreen(
       `repos/${repositorySlug}/branches/${baseRef}/protection/required_status_checks`,
       repoRoot,
     );
-    requiredCheckNames = Array.isArray(protection.contexts)
-      ? protection.contexts.map((value) => String(value))
-      : [];
+    requiredCheckNames = reviewIndependentRequiredCiContexts(
+      Array.isArray(protection.contexts) ? protection.contexts : [],
+    );
   } catch {
     requiredCheckLookupFailed = true;
   }
