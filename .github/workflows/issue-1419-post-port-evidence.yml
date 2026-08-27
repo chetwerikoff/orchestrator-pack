@@ -46,24 +46,29 @@ jobs:
             producerRevision: measuredHead,
           });
           verifyEvidenceIntegrity(evidence);
-          const currentPrescriptivePs1 = evidence.entries
+          const currentSources = [...new Set(evidence.entries
+            .filter((entry) => entry.currentPrescriptive && entry.sourceKind !== 'tracked-ps1-file')
+            .map((entry) => entry.occurrence.sourcePath))].sort();
+          const currentTargets = [...new Set(evidence.entries
             .filter((entry) => entry.sourceKind === 'tracked-ps1-file' && entry.currentPrescriptive)
-            .map((entry) => entry.occurrence.sourcePath);
+            .map((entry) => entry.occurrence.sourcePath))].sort();
+          const dormantTargets = [...new Set(evidence.entries
+            .filter((entry) => entry.sourceKind === 'tracked-ps1-file' && !entry.currentPrescriptive && !entry.historicalDisposition)
+            .map((entry) => entry.occurrence.sourcePath))].sort();
+          const unclassifiedSources = [...new Set(evidence.unclassifiedPowerShellSurfaces
+            .map((entry) => entry.sourcePath))].sort();
           console.log(JSON.stringify({
             measuredHead: evidence.measuredHead,
-            currentPrescriptivePs1,
+            currentSourcesCount: currentSources.length,
+            currentSources,
+            currentTargetsCount: currentTargets.length,
+            currentTargets,
+            dormantTargetsCount: dormantTargets.length,
+            unclassifiedSourcesCount: unclassifiedSources.length,
+            unclassifiedSources,
             unresolvedCurrentPrescriptiveScriptTargets: evidence.unresolvedCurrentPrescriptiveScriptTargets,
-            broaderStatusClosed: evidence.broaderStatusClosed,
-            dormantRetainedCoverageComplete: evidence.dormantRetainedCoverageComplete,
-            unclassifiedCount: evidence.unclassifiedPowerShellSurfaces.length,
-            retainedCount: evidence.retainedDispositions.length,
           }, null, 2));
-          if (currentPrescriptivePs1.length !== 0) {
-            throw new Error('post-port current-prescriptive tracked PowerShell remains');
-          }
-          if (evidence.unresolvedCurrentPrescriptiveScriptTargets.length !== 0) {
-            throw new Error('post-port unresolved current-prescriptive script target remains');
-          }
+          throw new Error('diagnostic_complete');
           const path = await writePortStageEvidence(process.cwd(), evidence);
           console.log(JSON.stringify({
             path,
