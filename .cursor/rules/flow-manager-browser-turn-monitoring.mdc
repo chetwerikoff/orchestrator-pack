@@ -34,7 +34,7 @@ never selects direct mode by itself; direct mode requires its direct-only
 arguments.
 
 For governed create-Issue `direct-publication/v1` reviewer turns, the reviewer
-input is not hand-written. `.claude/skills/create-issue-draft/SKILL.md` owns the
+input is not hand-written. `.cursor/skills/create-issue-draft/SKILL.md` owns the
 ordered manager-review canon declaration and `scripts/lib/manager-review-brief.ts`
 renders the exact **unmarked** transport input. Both ordinary and long-running
 launches carry the bound `--stage` and `--source-slot` in addition to the

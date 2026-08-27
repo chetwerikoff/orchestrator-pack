@@ -187,11 +187,11 @@ invocation detail.
 
 | Skill | Trigger |
 |---|---|
-| [`investigate-root-cause`](.claude/skills/investigate-root-cause/SKILL.md) | investigate, debug, why failed |
-| [`merge-with-local-adoption`](.claude/skills/merge-with-local-adoption/SKILL.md) | direct merge request |
-| [`adversarial-draft-review`](.claude/skills/adversarial-draft-review/SKILL.md) | challenge a draft with Codex |
-| [`discuss-with-gpt`](.claude/skills/discuss-with-gpt/SKILL.md) | discuss or challenge with GPT |
-| [`create-issue-draft`](.claude/skills/create-issue-draft/SKILL.md) | author a new task or handoff |
-| [`study-external-source`](.claude/skills/study-external-source/SKILL.md) | study an external repository or URL |
-| [`publish-issue-draft`](.claude/skills/publish-issue-draft/SKILL.md) | publish an existing tracked draft |
-| [`switch-pack-reviewer`](.claude/skills/switch-pack-reviewer/SKILL.md) | change the configured reviewer |
+| [`investigate-root-cause`](.cursor/skills/investigate-root-cause/SKILL.md) | investigate, debug, why failed |
+| [`merge-with-local-adoption`](.cursor/skills/merge-with-local-adoption/SKILL.md) | direct merge request |
+| [`adversarial-draft-review`](.cursor/skills/adversarial-draft-review/SKILL.md) | challenge a draft with Codex |
+| [`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md) | discuss or challenge with GPT |
+| [`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) | author a new task or handoff |
+| [`study-external-source`](.cursor/skills/study-external-source/SKILL.md) | study an external repository or URL |
+| [`publish-issue-draft`](.cursor/skills/publish-issue-draft/SKILL.md) | publish an existing tracked draft |
+| [`switch-pack-reviewer`](.cursor/skills/switch-pack-reviewer/SKILL.md) | change the configured reviewer |
