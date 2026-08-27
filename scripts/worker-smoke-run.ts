@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path';
 import {
   buildExecutorCommand,
   buildOpenCodeAgentOverlay,
+  openCodeAgentSemantics,
   CURSOR_SMOKE_CAPABILITY,
   evaluateExecutorRouteAdmission,
   evaluateExecutorSpawnApplicability,
@@ -196,6 +197,7 @@ export function resolveLiveSmokeExecutorProfile(
   env: Readonly<NodeJS.ProcessEnv>,
   execute: SmokeChildExecutor,
   cwd = process.cwd(),
+  proveNoWrite?: OpenCodeNoWriteProof,
 ): SmokeExecutorProfile {
   const profile = smokeSemanticProfile(complexity, env);
   const descriptor = EXECUTOR_FAMILY_DESCRIPTORS[profile.family];
@@ -228,7 +230,7 @@ export function resolveLiveSmokeExecutorProfile(
   let finalProfile = profile;
   let finalCommand: string | undefined;
   if (profile.family === 'opencode') {
-    const finalized = smokeFinalizeOpenCode(profile, cwd, execute);
+    const finalized = smokeFinalizeOpenCode(profile, cwd, execute, proveNoWrite);
     finalProfile = finalized.profile;
     finalCommand = finalized.command;
   }
@@ -246,8 +248,13 @@ export function resolveLiveSmokeExecutorProfile(
 }
 
 
-function smokeConfigState(cwd: string): string {
-  const roots = [join(homedir(), '.config', 'opencode'), join(cwd, '.opencode'), join(cwd, 'opencode.json'), join(cwd, 'opencode.jsonc')];
+function smokeConfigState(cwd: string, env: Readonly<NodeJS.ProcessEnv> = process.env): string {
+  const configHome = env.XDG_CONFIG_HOME?.trim() || join(homedir(), '.config');
+  const roots = [...new Set([
+    env.OPENCODE_CONFIG_DIR?.trim() || join(configHome, 'opencode'),
+    env.OPENCODE_CONFIG?.trim() || '',
+    join(cwd, '.opencode'), join(cwd, 'opencode.json'), join(cwd, 'opencode.jsonc'),
+  ].filter(Boolean))];
   const rows: string[] = [];
   const visit = (path: string): void => {
     if (!existsSync(path)) { rows.push(`${path}:absent`); return; }
@@ -259,7 +266,12 @@ function smokeConfigState(cwd: string): string {
   return rows.join('\n');
 }
 
-function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, execute: SmokeChildExecutor): { profile: SemanticExecutorProfile; command: string } {
+type OpenCodeNoWriteProof = (cwd: string) => boolean;
+
+function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, execute: SmokeChildExecutor, proveNoWrite?: OpenCodeNoWriteProof): { profile: SemanticExecutorProfile; command: string } {
+  // Config/Agent probes are not assumed read-only. Production supplies no
+  // proof until an installed-version exact-context mode is established.
+  if (!proveNoWrite || !proveNoWrite(cwd)) throw new Error('executor_effort_channel_unavailable');
   const before = smokeConfigState(cwd);
   const config = execute(['opencode', 'debug', 'config']);
   if (!config.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
@@ -282,10 +294,8 @@ function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, ex
   let resolvedValue: Record<string, unknown>;
   try { const value: unknown = JSON.parse(resolved.stdout); if (!record(value)) throw new Error(); resolvedValue = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
   const resolvedModel = record(resolvedValue.model) ? resolvedValue.model : null;
-  const baselineSemantics = { ...baselineValue }; delete baselineSemantics.model; delete baselineSemantics.variant;
-  const overlaySemantics = { ...resolvedValue }; delete overlaySemantics.model; delete overlaySemantics.variant;
   if (!resolvedModel || resolvedModel.modelID !== model.split('/').at(-1) || resolvedValue.variant !== effort
-    || JSON.stringify(baselineSemantics) !== JSON.stringify(overlaySemantics)) throw new Error('executor_effort_channel_unavailable');
+    || openCodeAgentSemantics(baselineValue) !== openCodeAgentSemantics(resolvedValue)) throw new Error('executor_effort_channel_unavailable');
   const paths = execute(['opencode', 'debug', 'paths'], { XDG_STATE_HOME: stateRoot });
   if (!paths.ok || !paths.stdout.includes(stateRoot)) throw new Error('executor_effort_channel_unavailable');
   return { profile: { ...profile, model, effort }, command: overlay.command };

@@ -18,6 +18,7 @@ import {
   executorCatalogContains,
   OPENCODE_PACK_AGENT,
   buildOpenCodeAgentOverlay,
+  openCodeAgentSemantics,
   openCodeEdgeCapabilities,
   profileNamesForTask,
   resolveSemanticExecutorProfile,
@@ -606,6 +607,7 @@ export async function runSupervisedTaskLaunchAssistant(
 
 interface ChildResult { readonly ok: boolean; readonly stdout: string; readonly stderr?: string }
 type ChildExecutor = (args: readonly string[], timeoutMs?: number, env?: Readonly<NodeJS.ProcessEnv>, cwd?: string) => Promise<ChildResult>;
+type OpenCodeNoWriteProof = (worktreePath: string) => Promise<boolean> | boolean;
 
 async function child(
   args: readonly string[],
@@ -638,8 +640,13 @@ function hashFile(path: string): string {
   try { return createHash('sha256').update(readFileSync(path)).digest('hex'); } catch { return 'absent'; }
 }
 
-function configState(cwd: string): string {
-  const roots = [join(homedir(), '.config', 'opencode'), join(cwd, '.opencode'), join(cwd, 'opencode.json'), join(cwd, 'opencode.jsonc')];
+function configState(cwd: string, env: Readonly<NodeJS.ProcessEnv> = process.env): string {
+  const configHome = env.XDG_CONFIG_HOME?.trim() || join(homedir(), '.config');
+  const roots = [...new Set([
+    env.OPENCODE_CONFIG_DIR?.trim() || join(configHome, 'opencode'),
+    env.OPENCODE_CONFIG?.trim() || '',
+    join(cwd, '.opencode'), join(cwd, 'opencode.json'), join(cwd, 'opencode.jsonc'),
+  ].filter(Boolean))];
   const rows: string[] = [];
   const visit = (path: string): void => {
     if (!existsSync(path)) { rows.push(`${path}:absent`); return; }
@@ -659,10 +666,6 @@ function resolvedAgent(output: string): Record<string, unknown> | null {
   try { const parsed: unknown = JSON.parse(output); return record(parsed) ? parsed : null; } catch { return null; }
 }
 
-function agentSemantics(value: Record<string, unknown>): string {
-  const copy = { ...value }; delete copy.model; delete copy.variant; return JSON.stringify(copy);
-}
-
 function contextualRefusalDetails(profile: ExecutorProfile, cause: 'executor_effort_channel_unavailable' | 'executor_route_unavailable') {
   return { cause, actor: 'operator' as const, evidence: { executorFamily: profile.family, route: profile.route }, nextAction: { kind: 'repair_executor_profile' as const, note: 'prove the exact prepared-worktree OpenCode agent-config effort channel' } };
 }
@@ -671,9 +674,17 @@ function contextualRefusal(profile: ExecutorProfile, cause: 'executor_effort_cha
   return { status: 'continue', ...contextualRefusalDetails(profile, cause) };
 }
 
-export async function finalizeOpenCodeExecutorProfile(profile: ExecutorProfile, worktreePath: string, execute: ChildExecutor): Promise<EdgeResult<ExecutorProfile>> {
+export async function finalizeOpenCodeExecutorProfile(
+  profile: ExecutorProfile,
+  worktreePath: string,
+  execute: ChildExecutor,
+  proveNoWrite?: OpenCodeNoWriteProof,
+): Promise<EdgeResult<ExecutorProfile>> {
   if (profile.family !== 'opencode' || profile.route === 'provider_new_top_level') return { status: 'ok', value: profile };
   if (!worktreePath.trim()) return contextualRefusal(profile, 'executor_route_unavailable');
+  // Config/Agent probes are not assumed read-only. Production supplies no
+  // proof until an installed-version exact-context mode is established.
+  if (!proveNoWrite || !(await proveNoWrite(worktreePath))) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const before = configState(worktreePath);
   const config = await execute(['opencode', 'debug', 'config'], 15_000, undefined, worktreePath);
   if (!config.ok || before !== configState(worktreePath)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
@@ -694,7 +705,7 @@ export async function finalizeOpenCodeExecutorProfile(profile: ExecutorProfile, 
   const model = resolvedValue && record(resolvedValue.model) ? resolvedValue.model : null;
   if (!resolved.ok || before !== configState(worktreePath) || !resolvedValue || !model
     || model.modelID !== modelMatch[1].split('/').at(-1) || resolvedValue.variant !== effortMatch[1]
-    || agentSemantics(resolvedValue) !== agentSemantics(baselineValue)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
+    || openCodeAgentSemantics(resolvedValue) !== openCodeAgentSemantics(baselineValue)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const paths = await execute(['opencode', 'debug', 'paths'], 15_000, { XDG_STATE_HOME: stateRoot }, worktreePath);
   if (!paths.ok || !paths.stdout.includes(stateRoot)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   return { status: 'ok', value: { ...profile, launchCommand: overlay.command }, evidence: { executorFamily: 'opencode', route: profile.route, exactContext: true } };

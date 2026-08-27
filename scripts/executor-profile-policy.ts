@@ -426,9 +426,94 @@ export interface OpenCodeAgentOverlay {
   readonly stateRoot?: string;
 }
 
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, stableValue(item)]));
+}
+
+function configPermissionFromRuleset(value: unknown): Record<string, unknown> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const permission: Record<string, unknown> = {};
+  for (const rule of value) {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) continue;
+    const item = rule as Record<string, unknown>;
+    const name = typeof item.permission === 'string' ? item.permission : '';
+    const pattern = typeof item.pattern === 'string' ? item.pattern : '';
+    const action = typeof item.action === 'string' ? item.action : '';
+    if (!name || !pattern || !action) continue;
+    const current = permission[name];
+    if (typeof current === 'string') {
+      permission[name] = { '*': current, [pattern]: action };
+    } else if (current && typeof current === 'object' && !Array.isArray(current)) {
+      (current as Record<string, unknown>)[pattern] = action;
+    } else if (pattern === '*') {
+      permission[name] = action;
+    } else {
+      permission[name] = { [pattern]: action };
+    }
+  }
+  return permission;
+}
+
+/**
+ * Agent.Info is a resolved runtime shape, not a ConfigAgentV1.Info input.
+ * Keep only fields accepted by the config schema and translate the resolved
+ * camel-case/model-object/permission-ruleset representations.
+ */
+export function openCodeAgentConfigFromInfo(baseline: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  for (const key of ['description', 'temperature', 'prompt', 'mode', 'hidden', 'color', 'options']) {
+    if (baseline[key] !== undefined) config[key] = baseline[key];
+  }
+  if (baseline.topP !== undefined) config.top_p = baseline.topP;
+  if (baseline.steps !== undefined) config.steps = baseline.steps;
+  else if (baseline.maxSteps !== undefined) config.steps = baseline.maxSteps;
+  const permission = configPermissionFromRuleset(baseline.permission);
+  if (permission) config.permission = permission;
+  else if (baseline.permission && typeof baseline.permission === 'object') config.permission = baseline.permission;
+  return config;
+}
+
+function canonicalPermission(value: unknown): unknown {
+  const rules = Array.isArray(value)
+    ? value
+    : value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.entries(value).flatMap(([permission, actionOrPatterns]) => typeof actionOrPatterns === 'string'
+        ? [{ permission, pattern: '*', action: actionOrPatterns }]
+        : actionOrPatterns && typeof actionOrPatterns === 'object' && !Array.isArray(actionOrPatterns)
+          ? Object.entries(actionOrPatterns).map(([pattern, action]) => ({ permission, pattern, action }))
+          : [])
+      : [];
+  const last = new Map<string, number>();
+  rules.forEach((rule, index) => {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return;
+    const item = rule as Record<string, unknown>;
+    if (typeof item.permission === 'string' && typeof item.pattern === 'string') last.set(`${item.permission}\u0000${item.pattern}`, index);
+  });
+  return rules.filter((rule, index) => {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return false;
+    const item = rule as Record<string, unknown>;
+    return last.get(`${item.permission}\u0000${item.pattern}`) === index;
+  });
+}
+
+/** Compare execution-relevant Agent.Info semantics, not resolved-only metadata. */
+export function openCodeAgentSemantics(value: Readonly<Record<string, unknown>>): string {
+  const copy: Record<string, unknown> = { ...value, permission: canonicalPermission(value.permission) };
+  if (copy.topP === undefined && copy.top_p !== undefined) copy.topP = copy.top_p;
+  delete copy.top_p;
+  delete copy.name;
+  delete copy.native;
+  delete copy.tools;
+  delete copy.model;
+  delete copy.variant;
+  return JSON.stringify(stableValue(copy));
+}
+
 export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): ExecutorInvocationShape {
   const agent = {
-    ...input.baseline,
+    ...openCodeAgentConfigFromInfo(input.baseline),
     model: input.model,
     variant: input.effort,
   };

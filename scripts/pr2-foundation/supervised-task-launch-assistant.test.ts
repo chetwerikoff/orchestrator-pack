@@ -9,6 +9,7 @@ import {
   prepareWorktreeWithOrca,
   resolveExecutorProfile,
   resolveLiveExecutorProfile,
+  finalizeOpenCodeExecutorProfile,
   runSupervisedTaskLaunchAssistant,
   type DispatchObservation,
   type EdgeResult,
@@ -17,6 +18,8 @@ import {
 } from './supervised-task-launch-assistant.ts';
 import {
   buildExecutorCommand,
+  buildOpenCodeAgentOverlay,
+  openCodeAgentSemantics,
   EXECUTOR_FAMILY_DESCRIPTORS,
   profileNamesForTask,
   resolveSemanticExecutorProfile,
@@ -349,6 +352,18 @@ describe('supervised Task launch assistant', () => {
     expect(mismatch).toMatchObject({ status: 'continue', cause: 'executor_route_mismatch' });
   });
 
+  it('refuses contextual Config/Agent probes before any no-write proof', async () => {
+    const resolved = await resolveLiveExecutorProfile('t2', opencodeProfileEnv('t2'), undefined, async (args) => opencodeProbeResult(args, true));
+    if (resolved.status !== 'ok') throw new Error('fixture profile should resolve');
+    const calls: string[][] = [];
+    const result = await finalizeOpenCodeExecutorProfile(resolved.value, '/tmp/exact-worktree', async (args) => {
+      calls.push([...args]);
+      return { ok: true, stdout: '{}', stderr: '' };
+    });
+    expect(result).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
+    expect(calls).toEqual([]);
+  });
+
   it('probe surface equals spawn surface', async () => {
     const profile = resolveSemanticExecutorProfile({ surface: 'task', names: profileNamesForTask('t2'), env: opencodeProfileEnv('t2') });
     if (!profile.ok) throw new Error('semantic profile should be ok');
@@ -370,6 +385,32 @@ describe('supervised Task launch assistant', () => {
     expect(probes.some((probe) => probe[1] === 'debug')).toBe(false);
     expect(invocation.command).toContain('opencode');
     expect(probes[0]?.join(' ')).toContain('opencode');
+  });
+
+  it('projects resolved Agent.Info into a config-valid baseline overlay', () => {
+    const invocation = buildOpenCodeAgentOverlay({
+      agentName: 'pack-opk-fixture',
+      baseline: {
+        name: 'build', native: true, mode: 'primary', topP: 0.8,
+        prompt: 'fixture prompt', options: { temperature: 0.2 },
+        permission: [
+          { permission: 'edit', pattern: '*', action: 'allow' },
+          { permission: 'bash', pattern: '*', action: 'ask' },
+        ],
+      },
+      model: 'fixture/provider-model', effort: 'high',
+    });
+    const config = JSON.parse(invocation.inlineConfigJson ?? '{}') as { agent?: Record<string, Record<string, unknown>> };
+    const agent = config.agent?.['pack-opk-fixture'];
+    expect(agent).toMatchObject({
+      model: 'fixture/provider-model', variant: 'high', mode: 'primary',
+      top_p: 0.8, prompt: 'fixture prompt',
+      permission: { edit: 'allow', bash: 'ask' },
+    });
+    expect(agent).not.toHaveProperty('native');
+    expect(agent).not.toHaveProperty('name');
+    expect(openCodeAgentSemantics({ ...agent, name: 'pack-opk-fixture', model: { providerID: 'fixture', modelID: 'provider-model' }, variant: 'high', native: false }))
+      .toBe(openCodeAgentSemantics({ name: 'build', native: true, mode: 'primary', topP: 0.8, prompt: 'fixture prompt', options: { temperature: 0.2 }, permission: agent?.permission }));
   });
 
   it('agent config effort channel', async () => {
