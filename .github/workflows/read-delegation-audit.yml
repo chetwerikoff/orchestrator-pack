@@ -22,13 +22,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Fixture suite (scripts/read-delegation-audit.test.ts) is owned by scope-guard
-      # "Run pack contract tests" via scripts/test-all.ps1 on ordinary non-markdown PRs
-      # and on push-to-main. This workflow retains unique policy/meta checks only.
+      # Fixture suite (scripts/read-delegation-audit.test.ts) is owned by the
+      # scope-guard Node contract lane. This workflow retains unique policy/meta checks only.
 
       - name: Enforce read-delegation policy pointer consistency
-        shell: pwsh
-        run: ./scripts/check-read-delegation-policy-consistency.ps1
+        run: node --experimental-strip-types scripts/ci-policy-guards.ts read-delegation-policy
 
       - name: Setup Node.js (audit meta-check deps)
         uses: actions/setup-node@v4
@@ -37,5 +35,4 @@ jobs:
           cache: npm
 
       - name: Verify read-delegation audit CI gate (meta-check)
-        shell: pwsh
-        run: ./scripts/check-read-delegation-audit-ci-gate.ps1
+        run: node --experimental-strip-types scripts/ci-policy-guards.ts read-delegation-ci-gate
