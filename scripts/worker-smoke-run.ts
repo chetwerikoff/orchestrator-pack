@@ -118,6 +118,7 @@ import {
 } from './pr2-foundation/readiness-evaluator.ts';
 import {
   createGithubReviewTransport,
+  directReviewReconciliationRequiresDescendantFixFacts,
   parseDirectPackReviewEvidence,
   projectDirectPackReviewState,
 } from './lib/github-review-reconciliation.ts';
@@ -288,6 +289,28 @@ export interface ResolvedSmokeTarget {
   issueBody: string;
   issueBodyMatchesTarget: boolean;
   trustedPublisherLogin: string;
+  prOpen: boolean;
+  baseRef: string;
+  expectedTargetRef: string;
+  expectedTarget: boolean;
+}
+
+export function projectExpectedPrTarget(
+  pr: Record<string, unknown>,
+  repository: Record<string, unknown>,
+): Pick<ResolvedSmokeTarget, 'prOpen' | 'baseRef' | 'expectedTargetRef' | 'expectedTarget'> {
+  const base = pr.base && typeof pr.base === 'object' && !Array.isArray(pr.base)
+    ? pr.base as Record<string, unknown>
+    : {};
+  const prOpen = String(pr.state ?? '').trim().toLowerCase() === 'open';
+  const baseRef = String(base.ref ?? '').trim();
+  const expectedTargetRef = String(repository.default_branch ?? '').trim();
+  return {
+    prOpen,
+    baseRef,
+    expectedTargetRef,
+    expectedTarget: Boolean(prOpen && baseRef && expectedTargetRef && baseRef === expectedTargetRef),
+  };
 }
 
 function parseArgs(argv: readonly string[]): CliOptions {
@@ -481,6 +504,12 @@ export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: strin
     `repos/${repositorySlug}/pulls/${options.prNumber}`,
     options.repoRoot,
   );
+  const repository = githubApiObject(
+    'repository-view-binding',
+    `repos/${repositorySlug}`,
+    options.repoRoot,
+  );
+  const targetFact = projectExpectedPrTarget(pr, repository);
 
   const issueNumber = positiveInteger(issue.number);
   const prNumber = positiveInteger(pr.number);
@@ -521,6 +550,7 @@ export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: strin
     issueBody,
     issueBodyMatchesTarget: true,
     trustedPublisherLogin,
+    ...targetFact,
   };
 }
 
@@ -696,6 +726,31 @@ function githubCommitIsAncestor(
   return String(comparison.status ?? '').trim().toLowerCase() === 'ahead';
 }
 
+export function projectRunnerPackReviewStatusFact(
+  stateValue: unknown,
+  descriptionValue: unknown,
+): PackReviewSemanticSourceState {
+  const state = String(stateValue ?? '').trim().toLowerCase();
+  const description = String(descriptionValue ?? '').trim().toLowerCase();
+
+  // Only runner-owned status descriptions are admitted back as runner facts.
+  // Semantic direct-review projections use the same context but are outputs,
+  // never evidence for a later projection.
+  if (state === 'success' && (
+    description === 'pack review completed with no findings.'
+    || description === 'pack review completed with non-blocking findings.'
+  )) {
+    return { hasLegitimateReview: true, unresolvedBlockingFinding: false };
+  }
+  if (state === 'failure' && description === 'pack review found blocking issues.') {
+    return { hasLegitimateReview: true, unresolvedBlockingFinding: true };
+  }
+  if (state === 'pending' && description === 'pack review is running for this exact head.') {
+    return { hasLegitimateReview: false, unresolvedBlockingFinding: false, activeAttempt: true };
+  }
+  return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
+}
+
 export function currentPackReviewStatusFact(
   repositorySlug: string,
   headSha: string,
@@ -716,22 +771,8 @@ export function currentPackReviewStatusFact(
       Date.parse(String(right.updated_at ?? right.created_at ?? '')) -
       Date.parse(String(left.updated_at ?? left.created_at ?? '')))[0];
   if (!current) return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
-  const state = String(current.state ?? '').trim().toLowerCase();
-  const description = String(current.description ?? '').trim().toLowerCase();
-  if (state === 'success') {
-    return { hasLegitimateReview: true, unresolvedBlockingFinding: false };
-  }
-  if (state === 'pending') {
-    return { hasLegitimateReview: false, unresolvedBlockingFinding: false, activeAttempt: true };
-  }
-  if (state === 'failure') {
-    const missing = description === 'pack review evidence is missing';
-    return {
-      hasLegitimateReview: !missing,
-      unresolvedBlockingFinding: !missing,
-    };
-  }
-  return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
+
+  return projectRunnerPackReviewStatusFact(current.state, current.description);
 }
 
 function currentAtCapFacts(
@@ -845,7 +886,11 @@ export async function evaluatePostSmokeReadiness(
       unresolvedBlockingFinding: direct.state === 'blocked',
     },
   });
-  if (!options.dryRun) {
+  const directOwnsSemanticProjection = direct.hasLegitimateReview || direct.state === 'blocked';
+  if (!options.dryRun && (
+    directOwnsSemanticProjection
+    || (!runner.hasLegitimateReview && runner.activeAttempt !== true)
+  )) {
     await publishPackReviewRequiredStatus({
       repoRoot: options.repoRoot,
       repoSlug: target.repositorySlug,
@@ -860,8 +905,8 @@ export async function evaluatePostSmokeReadiness(
   const readiness = evaluateReadiness({
     target: readinessTarget,
     pr: {
-      open: true,
-      expectedTarget: true,
+      open: target.prOpen,
+      expectedTarget: target.expectedTarget,
       prNumber: target.prNumber,
       headSha: target.headSha,
     },
@@ -942,6 +987,21 @@ export async function runDirectReviewReconciliation(options: CliOptions): Promis
       unresolvedBlockingFinding: direct.state === 'blocked',
     },
   });
+
+  // A review-event runner has no WorkerReport/CI/smoke facts. Do not resurrect
+  // an ancestor blocker that the normal post-smoke path may already have
+  // resolved on this descendant head. Same-head and unknown-lineage blockers
+  // still fail immediately; ancestor resolution is left to post-smoke facts.
+  if (directReviewReconciliationRequiresDescendantFixFacts(direct)) {
+    emit({
+      ok: true,
+      skipped: true,
+      reason: 'ancestor_blocker_requires_descendant_fix_facts',
+      direct,
+    }, options.json);
+    return 0;
+  }
+
   if (!options.dryRun) {
     await publishPackReviewRequiredStatus({
       repoRoot: options.repoRoot,

@@ -147,6 +147,10 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(source).toContain("case 'reconcile-direct-review': return runDirectReviewReconciliation(options);");
     expect(source).toContain('projectDirectPackReviewState({');
     expect(source).toContain('semanticPackReviewRequiredStatusRequest({');
+    expect(source).toContain("reason: 'ancestor_blocker_requires_descendant_fix_facts'");
+    expect(source).toContain("description === 'pack review completed with no findings.'");
+    expect(source).toContain('open: target.prOpen');
+    expect(source).toContain('expectedTarget: target.expectedTarget');
     expect(source).toContain('evaluateReadiness({');
     const terminalPass = source.indexOf("if (!lifecycleCleanup.clean && report.result === 'PASS') report.result = 'FAIL';");
     const postSmokeCall = source.indexOf('evaluatePostSmokeReadiness(options, target, adapter)', terminalPass);

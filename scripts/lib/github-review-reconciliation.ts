@@ -201,6 +201,8 @@ export interface DirectPackReviewProjection {
   readonly hasLegitimateReview: boolean;
   readonly legitimateReviewCount: number;
   readonly unresolvedBlockingReviewIds: readonly (number | string)[];
+  readonly unresolvedCurrentHeadBlockingReviewIds: readonly (number | string)[];
+  readonly unresolvedAncestorBlockingReviewIds: readonly (number | string)[];
   readonly state: 'missing-review' | 'blocked' | 'clear';
 }
 
@@ -277,6 +279,8 @@ export function projectDirectPackReviewState(input: {
       hasLegitimateReview: false,
       legitimateReviewCount: 0,
       unresolvedBlockingReviewIds: [],
+      unresolvedCurrentHeadBlockingReviewIds: [],
+      unresolvedAncestorBlockingReviewIds: [],
       state: 'missing-review',
     };
   }
@@ -288,11 +292,16 @@ export function projectDirectPackReviewState(input: {
     && input.exactHeadSmokePassed;
   const relevant: DirectPackReviewEvidence[] = [];
   const unresolved: Array<number | string> = [];
+  const unresolvedCurrentHead: Array<number | string> = [];
+  const unresolvedAncestor: Array<number | string> = [];
 
   for (const review of canonical) {
     if (review.headSha === currentHeadSha) {
       relevant.push(review);
-      if (review.blocking) unresolved.push(review.reviewId);
+      if (review.blocking) {
+        unresolved.push(review.reviewId);
+        unresolvedCurrentHead.push(review.reviewId);
+      }
       continue;
     }
     let ancestor = false;
@@ -305,8 +314,16 @@ export function projectDirectPackReviewState(input: {
       continue;
     }
     if (!ancestor) continue;
+
+    // Clean evidence is exact-commit only. r13 carry-over applies only to a
+    // known blocking ancestor after the complete descendant-fix cut.
+    if (!review.blocking) continue;
+
     relevant.push(review);
-    if (review.blocking && !descendantFixComplete) unresolved.push(review.reviewId);
+    if (!descendantFixComplete) {
+      unresolved.push(review.reviewId);
+      unresolvedAncestor.push(review.reviewId);
+    }
   }
 
   if (relevant.length === 0) {
@@ -314,6 +331,8 @@ export function projectDirectPackReviewState(input: {
       hasLegitimateReview: false,
       legitimateReviewCount: 0,
       unresolvedBlockingReviewIds: unresolved,
+      unresolvedCurrentHeadBlockingReviewIds: unresolvedCurrentHead,
+      unresolvedAncestorBlockingReviewIds: unresolvedAncestor,
       state: unresolved.length > 0 ? 'blocked' : 'missing-review',
     };
   }
@@ -321,8 +340,18 @@ export function projectDirectPackReviewState(input: {
     hasLegitimateReview: true,
     legitimateReviewCount: relevant.length,
     unresolvedBlockingReviewIds: unresolved,
+    unresolvedCurrentHeadBlockingReviewIds: unresolvedCurrentHead,
+    unresolvedAncestorBlockingReviewIds: unresolvedAncestor,
     state: unresolved.length > 0 ? 'blocked' : 'clear',
   };
+}
+
+export function directReviewReconciliationRequiresDescendantFixFacts(
+  projection: DirectPackReviewProjection,
+): boolean {
+  return projection.unresolvedAncestorBlockingReviewIds.length > 0
+    && projection.unresolvedCurrentHeadBlockingReviewIds.length === 0
+    && projection.unresolvedBlockingReviewIds.length === projection.unresolvedAncestorBlockingReviewIds.length;
 }
 
 /** Ordinary r13 publication read-back: stale review evidence never flips a newer head directly. */
