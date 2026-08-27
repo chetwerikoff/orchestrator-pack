@@ -2176,6 +2176,9 @@ export function inspectAcceptanceArtifacts(
   const present: string[] = [];
   const missing: AcceptanceArtifactMissingInput[] = [];
   const outputDir = options.outputDir ?? options.reviewDir;
+  const purpose: ReviewEpisodeValidationPurpose = (options.phase ?? 'final-acceptance') === 'final-acceptance'
+    ? 'final-acceptance'
+    : 'stage-time';
   const requireRegularFile = (path: string, artifact: string, reason: string): boolean => {
     let stat;
     try { stat = lstatSync(path); } catch {
@@ -2268,14 +2271,14 @@ export function inspectAcceptanceArtifacts(
             : captureFromEvidence(path, invocation.capturePath, invocation.captureIdentity, captureTexts, captureTimestamps, captureErrors);
           for (const error of captureErrors) missing.push({ artifact: 'capture', reason: error });
           const turnResultErrors: string[] = [];
-          readTurnResultForInvocation(path, invocation, index, capture, capture ? captureTexts.get(capture.captureIdentity) ?? null : null, turnResultErrors, artifactAuthority);
+          readTurnResultForInvocation(path, invocation, index, capture, capture ? captureTexts.get(capture.captureIdentity) ?? null : null, turnResultErrors, artifactAuthority, purpose);
           for (const error of turnResultErrors) missing.push({ artifact: 'turn-result/v1', reason: error });
         }
       }
     } else if (value.stage !== 'architectural-lens') {
       missing.push({ artifact: 'stage evidence', reason: 'stage evidence.invocations is missing: ' + path });
     }
-    if (value.tier === 'T3' && value.stage === 'architectural-lens' && isRecord(value.claude) && value.claude.kind === 'capture') {
+    if (purpose === 'stage-time' && value.tier === 'T3' && value.stage === 'architectural-lens' && isRecord(value.claude) && value.claude.kind === 'capture') {
       requiresClaudeProducerEvidence = true;
     }
     if (isRecord(value.claude)) {
@@ -2289,7 +2292,9 @@ export function inspectAcceptanceArtifacts(
   }
 
   const claudeProducerEvidencePaths = options.claudeProducerEvidencePaths ?? [];
-  for (const path of claudeProducerEvidencePaths) readArtifactJson(path, CLAUDE_PRODUCER_EVIDENCE_SCHEMA, 'Claude producer evidence is missing');
+  if (purpose === 'stage-time') {
+    for (const path of claudeProducerEvidencePaths) readArtifactJson(path, CLAUDE_PRODUCER_EVIDENCE_SCHEMA, 'Claude producer evidence is missing');
+  }
   if (requiresClaudeProducerEvidence && claudeProducerEvidencePaths.length === 0) {
     missing.push({ artifact: CLAUDE_PRODUCER_EVIDENCE_SCHEMA, reason: 'T3 architectural-lens capture requires --claude-producer-evidence <path>' });
   }
