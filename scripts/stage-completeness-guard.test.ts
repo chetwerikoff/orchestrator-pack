@@ -692,6 +692,15 @@ describe('Issue #1150 stage authority', () => {
     expect(deriveReviewEpisodeState(receipts, relays, authority(receipts)).errors.join('\n')).toMatch(/not independently supplied/);
     const producer = { schema: 'claude-producer-evidence/v1', evidenceIdentity: 'claude-evidence', reviewEpisodeId: EPISODE, stageAttemptId: 'claude-attempt', sourceRevision: REVISION, invocationId: 'claude-inv', producingRunIdentity: 'claude-run', terminalResultIdentity: 'claude-result', terminal: true, terminalClassification: 'complete', exitCode: 0, capture: item, m3Status: 'recorded' };
     expect(deriveReviewEpisodeState(receipts, relays, authority(receipts, [producer])).errors).toEqual([]);
+
+    const finalAuthority = { ...authority(receipts), validationPurpose: 'final-acceptance' as const };
+    expect(deriveReviewEpisodeState(receipts, relays, finalAuthority).errors).toEqual([]);
+    const conflictingAuditEvidence = { ...producer, producingRunIdentity: 'different-run', terminalResultIdentity: 'different-result' };
+    expect(deriveReviewEpisodeState(
+      receipts,
+      relays,
+      { ...authority(receipts, [conflictingAuditEvidence]), validationPurpose: 'final-acceptance' as const },
+    ).errors).toEqual([]);
   });
 
   it('accepts a failed bounded retry and a verified corrected relay head', () => {
