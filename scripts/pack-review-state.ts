@@ -935,7 +935,9 @@ export function assertIndependentSmokeAdmission(input: {
     }
     return;
   }
-  if (ordering?.reviewSettledHeadSha !== headSha) {
+  if (ordering?.reviewSettledHeadSha !== headSha
+      && !(input.authority.cycle?.reviewStageComplete === true
+        && reviewStartConsumedForIndependentSmoke(input.authority))) {
     throw new PackReviewAuthorityError(
       'smoke_ordering_review_unsettled',
       'independent smoke requires settled pack-review obligations for the exact head',
@@ -1069,11 +1071,26 @@ function markReviewStageComplete(
   current.cycle.reviewStageCompletedAtUtc = completedAtUtc;
 }
 
+function reviewStartConsumedForIndependentSmoke(authority: PackReviewAuthorityDocument): boolean {
+  if (['BLOCK', 'PENDING_ARCHITECT', 'PENDING_OPERATOR'].includes(authority.triage?.verdict ?? '')) {
+    return false;
+  }
+  const reviewStatus = String(authority.terminal?.reviewStatus ?? '').toLowerCase();
+  return reviewStatus === 'failed'
+    || reviewStatus === 'error'
+    || reviewStatus === 'changes_requested'
+    || Boolean(
+      authority.cycle
+      && authority.cycle.consumedHeadShas.length >= authority.cycle.frozenCap,
+    );
+}
+
 function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boolean {
   if (authority.cycle?.reviewStageComplete === true) return true;
   if (authority.cycle?.state === 'closed') return true;
   const reviewStatus = authority.terminal?.reviewStatus;
   if (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented') return true;
+  if (reviewStartConsumedForIndependentSmoke(authority)) return true;
   return (authority.cycle?.state === 'at_cap_open_findings'
       || authority.cycle?.state === 'at_cap_continuation_required')
     && authority.triage?.source === 'architect'
