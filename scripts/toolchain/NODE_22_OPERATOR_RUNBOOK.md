@@ -49,14 +49,14 @@ Run the check and one real native TypeScript command from the exact shell, servi
 ```bash
 npm run check:node-major
 proof_path="${TMPDIR:-/tmp}/opk-node22-adoption-proof.json"
-node --experimental-strip-types scripts/json-producers/sanctioned-worker-kill-record.ts add \
-  --session-id node22-adoption-proof \
-  --path "$proof_path"
+node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+  --script scripts/json-producers/sanctioned-worker-kill-record.ts -- \
+  add --session-id node22-adoption-proof --path "$proof_path"
 cat "$proof_path"
 rm -f "$proof_path"
 ```
 
-Sanitize the captured evidence before attaching it to the PR. Retain the Node version, successful contract-check output, bridge exit status, and JSON shape. Remove usernames, home paths, remotes, tokens, and unrelated environment values. CI is not a substitute for this live-host proof.
+Sanitize the captured evidence before attaching it to the PR. Retain the Node version, successful contract-check output, runtime command exit status, and JSON shape. Remove usernames, home paths, remotes, tokens, and unrelated environment values. CI is not a substitute for this live-host proof.
 
 ## Plugin CLI proof
 
