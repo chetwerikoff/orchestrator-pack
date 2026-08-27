@@ -22,6 +22,7 @@ import {
 } from './pack-review-runner.js';
 import type { CarryoverReplayResult } from './pack-review-carryover.js';
 import { initializePackReviewAuthority, readPackReviewAuthority } from './pack-review-state.js';
+import { packReviewDeliveryNeedsResume } from './lib/pack-review-delivery.js';
 import {
   createPackReviewRun,
   getPackReviewRun,
@@ -2278,5 +2279,125 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
     expect(settled?.reviewRound?.sourceSlots.every((slot) => slot.terminalClass === 'complete_clean')).toBe(true);
     expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
     expect(finalReviewPosts).toBe(1);
+  });
+
+  it('recovers all-complete unjournaled GPT rounds through the start path', async () => {
+    const storeRoot = tempRoot('opk-gpt-1741-all-complete-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const round: PackReviewGptRoundRecord = {
+      schema: 'pack-review-gpt-round/v1',
+      reviewer: 'gpt',
+      tier: 'T1',
+      roundOrdinal: 1,
+      cardinality: 3,
+      issueNumber: 1741,
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash('```complexity-tier\ntier: T1\n```'),
+      sourceSlots: Array.from({ length: 3 }, (_, index) => ({
+        slotId: `source-${String(index + 1).padStart(2, '0')}`,
+        ordinal: index + 1,
+        lifecycle: 'planned' as const,
+      })),
+    };
+    const created = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1741,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      reviewRound: round,
+    }).run;
+    const completeRound: PackReviewGptRoundRecord = {
+      ...round,
+      sourceSlots: round.sourceSlots.map((slot, index) => ({
+        ...slot,
+        lifecycle: 'terminal' as const,
+        invocationId: `inv-1741-${index + 1}`,
+        attemptOrdinal: 1,
+        admissionStartedAtUtc: new Date().toISOString(),
+        terminalClass: 'complete_clean',
+        terminalResult: storedTerminalTurnResult(`inv-1741-${index + 1}`, {
+          source_comment_authority: 'harness_fixture',
+          source_comment_receipt: {
+            commentId: 1741000 + index,
+            repository: 'chetwerikoff/orchestrator-pack',
+            prNumber: 1741,
+            headSha: HEAD_A,
+            runId: created.id,
+            slotId: slot.slotId,
+            invocationId: `inv-1741-${index + 1}`,
+            commentUrl: `https://github.com/chetwerikoff/orchestrator-pack/pull/1741#issuecomment-${1741000 + index}`,
+            actorLogin: 'browser-gpt-bot',
+            createdAt: '2026-08-27T09:00:00.000Z',
+            updatedAt: '2026-08-27T09:00:00.000Z',
+            bodySha256: '0'.repeat(64),
+          },
+        }),
+        payload: { verdict: 'clean', findingCount: 0, findings: [] },
+      })),
+    };
+    updatePackReviewRun(created.id, { reviewRound: completeRound }, { projectId: 'orchestrator-pack', storeRoot });
+    const failed = setPackReviewRunTerminal(created.id, 'failed', {
+      exitCode: 1,
+      failureReason: 'stale_head_before_terminal',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    expect(packReviewDeliveryNeedsResume(failed)).toBe(true);
+
+    const reviews: GithubReviewSummary[] = [];
+    const result = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 1741,
+      headSha: HEAD_A,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixturePrState: 'OPEN',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureGptSourceCommentTransport: {
+        resolveActorLogin: async () => 'browser-gpt-bot',
+        listComments: async () => [],
+        getComment: async () => { throw new Error('complete source should not need comment hydration'); },
+      },
+      fixtureGithubReviewTransport: {
+        resolveActorLogin: async () => 'pack-review-bot',
+        listReviews: async () => [...reviews],
+        postReview: async ({ body, commitId }) => {
+          const id = 1741100 + reviews.length;
+          const review: GithubReviewSummary = {
+            id,
+            body,
+            commitId,
+            url: `https://github.com/chetwerikoff/orchestrator-pack/pull/1741#pullrequestreview-${id}`,
+            state: 'COMMENTED',
+            userLogin: 'pack-review-bot',
+            submittedAt: '2026-08-27T10:00:00.000Z',
+          };
+          reviews.push(review);
+          return { id, url: review.url };
+        },
+        dismissReview: async () => {},
+      },
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueNumber: 1741,
+      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+      fixtureBoundIssueSnapshotBytes: '```complexity-tier\ntier: T1\n```',
+      fixtureReviewStdout: cleanTerminalPayload(),
+    });
+
+    expect(result).toMatchObject({ ok: true, created: false, reused: true });
+    expect(getPackReviewRun(failed.id, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+      status: 'up_to_date',
+      reviewVerdict: 'clean',
+      journalOutcome: { state: 'persisted' },
+    });
+    expect(reviews).toHaveLength(1);
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
   });
 });

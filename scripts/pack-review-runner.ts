@@ -1305,6 +1305,7 @@ async function findJournaledDeliveryResumeCandidate(options: {
     );
     if (identity.ok
       && identity.slug === options.repoSlug
+      && packReviewJournaledPayload(candidate)
       && hasCredentialedGptSourceAuthority(candidate)) {
       repositoryBoundCandidates.push(candidate);
     }

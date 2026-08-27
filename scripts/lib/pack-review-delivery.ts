@@ -402,8 +402,6 @@ export function packReviewDeliveryNeedsResume(run: PackReviewRunRecord): boolean
       && round?.reviewer === 'gpt'
       && round.sourceSlots.some((slot) => (
         slot.lifecycle === 'terminal'
-        && slot.terminalClass !== 'complete_clean'
-        && slot.terminalClass !== 'complete_findings'
         && Boolean(trim(slot.invocationId))
       ));
   }
