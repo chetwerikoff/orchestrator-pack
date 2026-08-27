@@ -719,7 +719,7 @@ function validateHeader(census: GateCensus, failures: string[]): void {
 function snapshotVerifyRequiredFiles(snapshot: SourceSnapshot): readonly string[] {
   const source = snapshot.files.get('scripts/gate-runner/bulk-declarative-gates.ts');
   if (source === undefined) return VERIFY_REQUIRED_FILES;
-  const block = /export const VERIFY_REQUIRED_FILES = \\[([\\s\\S]*?)\\] as const;/u.exec(source)?.[1];
+  const block = /export const VERIFY_REQUIRED_FILES = \[([\s\S]*?)\] as const;/u.exec(source)?.[1];
   if (block === undefined) return [];
   return [...block.matchAll(/'([^']+)'/gu)].map((match) => match[1]!).filter(Boolean);
 }
