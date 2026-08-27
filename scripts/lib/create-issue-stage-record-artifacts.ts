@@ -1187,7 +1187,21 @@ function readTurnResultForInvocation(
     if (transportClassification === 'complete') errors.push(`turn-result/v1 artifact for ${label} has an invalid state: ${resolved}`);
     return null;
   }
-  if (transportClassification === 'complete' && value.state !== 'ok') {
+  const terminalFieldsValid = typeof value.scope === 'string'
+    && typeof value.cause === 'string'
+    && typeof value.configured_profile_key === 'string';
+  if (transportClassification === 'complete' && !terminalFieldsValid) {
+    errors.push(`turn-result/v1 artifact for ${label} is missing required terminal fields: ${resolved}`);
+  }
+  const frozenPolicy = parseReviewerSourcePolicy(optionalString(invocation.reviewerSource) ?? '')?.capturePolicy;
+  const recoveryRequired = artifactBacked
+    && invocation.sendCount === 1
+    && frozenPolicy === 'direct-publication/v1'
+    && value.state === 'recovery_required'
+    && value.cause === 'direct_publication_no_owned_publication'
+    && value.send_count === 1
+    && terminalFieldsValid;
+  if (transportClassification === 'complete' && value.state !== 'ok' && !recoveryRequired) {
     errors.push(`turn-result/v1 artifact for ${label} is not a successful terminal result: ${resolved}`);
   }
   const invocationMatches = value.invocation_id === invocation.invocationId;
@@ -1201,12 +1215,8 @@ function readTurnResultForInvocation(
   if (invocation.terminalResultIdentity !== undefined && invocation.terminalResultIdentity !== identity) {
     errors.push(`stage evidence ${label}.terminalResultIdentity is not derived from the referenced turn-result: ${resolved}`);
   }
-  if (transportClassification !== 'complete') return identity;
+  if (transportClassification !== 'complete' || recoveryRequired) return identity;
 
-  const terminalFieldsValid = typeof value.scope === 'string'
-    && typeof value.cause === 'string'
-    && typeof value.configured_profile_key === 'string';
-  if (!terminalFieldsValid) errors.push(`turn-result/v1 artifact for ${label} is missing required terminal fields: ${resolved}`);
   const output = isRecord(value.output) ? value.output : null;
   if (
     !output
@@ -1221,7 +1231,6 @@ function readTurnResultForInvocation(
   const reviewerSourceKind = reviewerSource?.kind;
   const directSuccess = reviewerSourceKind === 'service-observed-issue-comment/v1';
   const directFailure = reviewerSourceKind === 'failed-write-final-assistant/v1';
-  const frozenPolicy = parseReviewerSourcePolicy(optionalString(invocation.reviewerSource) ?? '')?.capturePolicy;
   if (frozenPolicy === 'direct-publication/v1' && !directSuccess && !directFailure) {
     errors.push(`turn-result/v1 artifact for ${label} direct-publication policy requires terminal reviewer_source metadata: ${resolved}`);
   }
