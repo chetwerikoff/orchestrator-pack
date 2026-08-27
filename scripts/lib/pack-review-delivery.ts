@@ -169,6 +169,73 @@ export interface PackReviewRequiredStatusRequest {
   idempotencyKey: string;
 }
 
+export interface PackReviewSemanticSourceState {
+  readonly hasLegitimateReview: boolean;
+  readonly unresolvedBlockingFinding: boolean;
+  readonly activeAttempt?: boolean;
+}
+
+export interface PackReviewSemanticProjection {
+  readonly state: PackReviewRequiredStatusState;
+  readonly description: string;
+  readonly reason: 'clear' | 'unresolved-blocker' | 'active-runner' | 'missing-review';
+}
+
+/**
+ * r12 semantic projection shared by runner-owned and direct GitHub review
+ * evidence. Direct review cardinality never creates pending; pending is
+ * reserved for a genuinely active runner-owned attempt before any review exists.
+ */
+export function projectPackReviewSemanticStatus(input: {
+  readonly runner: PackReviewSemanticSourceState;
+  readonly direct: PackReviewSemanticSourceState;
+}): PackReviewSemanticProjection {
+  const hasReview = input.runner.hasLegitimateReview || input.direct.hasLegitimateReview;
+  const unresolved = input.runner.unresolvedBlockingFinding || input.direct.unresolvedBlockingFinding;
+  if (unresolved) {
+    return {
+      state: 'failure',
+      description: 'pack review has unresolved blocking findings',
+      reason: 'unresolved-blocker',
+    };
+  }
+  if (hasReview) {
+    return {
+      state: 'success',
+      description: 'pack review evidence is complete for current facts',
+      reason: 'clear',
+    };
+  }
+  if (input.runner.activeAttempt === true) {
+    return {
+      state: 'pending',
+      description: 'pack review runner is active',
+      reason: 'active-runner',
+    };
+  }
+  return {
+    state: 'failure',
+    description: 'pack review evidence is missing',
+    reason: 'missing-review',
+  };
+}
+
+export function semanticPackReviewRequiredStatusRequest(input: {
+  readonly headSha: string;
+  readonly projection: PackReviewSemanticProjection;
+}): PackReviewRequiredStatusRequest {
+  const headSha = trim(input.headSha).toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(headSha)) {
+    throw new Error('semantic pack-review status requires exact 40-hex head');
+  }
+  return {
+    state: input.projection.state,
+    context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+    description: input.projection.description,
+    idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${headSha}:semantic:${input.projection.reason}`,
+  };
+}
+
 export type PackReviewRequiredStatusWriter = (
   request: PackReviewRequiredStatusRequest,
 ) => Promise<void>;
