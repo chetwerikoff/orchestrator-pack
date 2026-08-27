@@ -1,7 +1,7 @@
 # Task complexity tiering (architect / draft-author)
 
 Worker **pre-flight** (blocking rubric reassessment before implementation) lives in
-[`AGENTS.md`](../AGENTS.md) (**Review / CI / Handoff worker contract**).
+[`AGENTS.md`](../AGENTS.md) (**Worker pre-flight**).
 This page holds the full tier rubric and per-tier draft-review flow for architects and task-spec authors.
 
 ## Task complexity tier rubric
