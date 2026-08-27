@@ -1672,20 +1672,12 @@ async function resolveHarvestTarget(
 
   const candidates: Array<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> = [];
   for (const target of targets) {
-    if (!target.web_socket_debugger_url) {
-      throw new ProbeError('surface_unknown', 'owned_turn_unbound_census_incomplete', undefined, {
-        target_id: target.target_id,
-        failure_reason: 'target_attach_unavailable',
-      });
-    }
+    if (!target.web_socket_debugger_url) continue;
     let snapshot: HarvestSnapshot;
     try {
       snapshot = await readHarvestSnapshot(target, deps);
-    } catch (error) {
-      throw new ProbeError('surface_unknown', 'owned_turn_unbound_census_incomplete', undefined, {
-        target_id: target.target_id,
-        failure_reason: error instanceof ProbeError ? error.reason : boundedDetail(error),
-      });
+    } catch {
+      continue;
     }
     if (ownedHarvestWindow(snapshot, marker)) candidates.push({ target, snapshot });
   }
