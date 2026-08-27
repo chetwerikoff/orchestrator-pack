@@ -383,11 +383,6 @@ describe('runtime-neutral worker smoke', () => {
     const issueBodyFile = join(root, 'issue.md');
     const reviewStoreRoot = join(root, 'review-store');
     const body = [
-      '```complexity-tier',
-      'tier: T1',
-      'advisory-prior: T1',
-      '```',
-      '',
       '```smoke-test-plan',
       'not-applicable: true',
       'reason: contract-prose-only',
@@ -397,6 +392,7 @@ describe('runtime-neutral worker smoke', () => {
     const previousStoreRoot = process.env.PACK_REVIEW_RUN_STORE_ROOT;
     const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     process.env.PACK_REVIEW_RUN_STORE_ROOT = reviewStoreRoot;
+    let resolverCalls = 0;
     try {
       const code = await runSmokeAttempt({
         command: 'run',
@@ -409,8 +405,14 @@ describe('runtime-neutral worker smoke', () => {
         cwd: root,
         dryRun: false,
         json: true,
+      }, {
+        resolveIssueBody: (_options, suppliedBody) => {
+          resolverCalls += 1;
+          return suppliedBody;
+        },
       });
       expect(code).toBe(0);
+      expect(resolverCalls).toBe(1);
       expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toEqual({
         ok: true,
         skipped: true,
