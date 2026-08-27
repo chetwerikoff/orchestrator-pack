@@ -37,8 +37,7 @@ jobs:
         run: npm ci --include=dev
 
       - name: Run wall-clock Vitest acceptance stage
-        shell: pwsh
-        run: ./scripts/run-vitest-wallclock-stage.ps1
+        run: node --experimental-strip-types scripts/vitest-ci-runner.ts wallclock
 
   test-wallclock-aggregate:
     name: Wall-clock acceptance gate
@@ -52,12 +51,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Fail-closed wall-clock aggregate
-        shell: pwsh
+        shell: bash
         env:
           WALLCLOCK_RESULT: ${{ needs.test-vitest-wallclock.result }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
-        run: ./scripts/ci-wallclock-e2e-aggregate.ps1 -WallclockResult $env:WALLCLOCK_RESULT
+        run: |
+          set -euo pipefail
+          test "$WALLCLOCK_RESULT" = success || { echo "[FAIL] wall-clock acceptance stage result=$WALLCLOCK_RESULT" >&2; exit 1; }
+          test -n "$GITHUB_SHA" || { echo '[FAIL] wall-clock aggregate missing GITHUB_SHA head binding' >&2; exit 1; }
+          test -n "$GITHUB_RUN_ID" || { echo '[FAIL] wall-clock aggregate missing GITHUB_RUN_ID binding' >&2; exit 1; }
+          echo "[PASS] wall-clock acceptance aggregate head=$GITHUB_SHA run=$GITHUB_RUN_ID"
 
   emit-containment:
     name: wall-clock-e2e-containment

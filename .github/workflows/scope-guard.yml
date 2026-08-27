@@ -95,12 +95,10 @@ jobs:
           fetch-depth: 0
 
       - name: Run read-only pack verifier
-        shell: pwsh
-        run: ./scripts/verify.ps1
+        run: node --experimental-strip-types scripts/verify.ts --repo-root "$GITHUB_WORKSPACE"
 
       - name: Enforce reusable repository content policy
-        shell: pwsh
-        run: ./scripts/check-reusable.ps1
+        run: node --experimental-strip-types scripts/verify.ts --repo-root "$GITHUB_WORKSPACE" --reusable-only
 
       - name: Enforce CI cheap wins policy
         shell: pwsh
@@ -159,7 +157,7 @@ jobs:
           cache-dependency-path: trusted-scope-guard/package-lock.json
 
       - name: Run trusted TypeScript scope guard
-        shell: pwsh
+        shell: bash
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -171,34 +169,22 @@ jobs:
           PR_HEAD_REPO_SAME: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-            throw 'GitHub CLI (gh) is required for PR scope guard'
-          }
-          if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-            throw 'Node.js is required for PR scope guard'
-          }
-
-          $trustedRoot = Join-Path $env:GITHUB_WORKSPACE 'trusted-scope-guard'
-          $trustedRunner = Join-Path $trustedRoot 'scripts/pr-scope-runner.ts'
-          if (-not (Test-Path -LiteralPath $trustedRunner)) {
-            throw "Trusted TypeScript scope runner is missing: $trustedRunner"
-          }
-
-          Push-Location $trustedRoot
-          try {
+          set -euo pipefail
+          command -v gh >/dev/null || { echo 'GitHub CLI (gh) is required for PR scope guard' >&2; exit 1; }
+          command -v node >/dev/null || { echo 'Node.js is required for PR scope guard' >&2; exit 1; }
+          trusted_root="$GITHUB_WORKSPACE/trusted-scope-guard"
+          trusted_runner="$trusted_root/scripts/pr-scope-runner.ts"
+          test -f "$trusted_runner" || { echo "Trusted TypeScript scope runner is missing: $trusted_runner" >&2; exit 1; }
+          (
+            cd "$trusted_root"
             npm ci --include=dev
-            $trustedNodeModules = Join-Path $trustedRoot 'node_modules'
-            $prNodeModules = Join-Path $env:GITHUB_WORKSPACE 'node_modules'
-            if (Test-Path -LiteralPath $prNodeModules) {
-              Remove-Item -LiteralPath $prNodeModules -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            New-Item -ItemType SymbolicLink -Path $prNodeModules -Target $trustedNodeModules -Force | Out-Null
-            & node --experimental-strip-types $trustedRunner
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          finally {
-            Pop-Location
-          }
+          )
+          rm -rf "$GITHUB_WORKSPACE/node_modules"
+          ln -s "$trusted_root/node_modules" "$GITHUB_WORKSPACE/node_modules"
+          (
+            cd "$trusted_root"
+            node --experimental-strip-types "$trusted_runner"
+          )
 
   test-typecheck:
     name: Type-check pack sources
@@ -262,8 +248,7 @@ jobs:
         run: npm ci --include=dev
 
       - name: Run Vitest light lane
-        shell: pwsh
-        run: ./scripts/run-vitest-light-lane.ps1 -Shard ${{ matrix.shard }}
+        run: node --experimental-strip-types scripts/vitest-ci-runner.ts light --shard "${{ matrix.shard }}"
 
   plan-vitest-ci-topology:
     name: Plan Vitest heavy topology
@@ -356,10 +341,9 @@ jobs:
           path: scripts
 
       - name: Run Vitest heavy shard
-        shell: pwsh
         env:
           OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
-        run: ./scripts/run-vitest-heavy-shard.ps1 -Shard ${{ matrix.shard }}
+        run: node --experimental-strip-types scripts/vitest-ci-runner.ts heavy --shard "${{ matrix.shard }}"
 
   test-vitest-contracts:
     name: Vitest contracts
@@ -406,7 +390,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Fail-closed full-regression aggregate
-        shell: pwsh
         env:
           TYPECHECK_RESULT: ${{ needs.test-typecheck.result }}
           VITEST_LIGHT_RESULT: ${{ needs.test-vitest-light.result }}
@@ -415,7 +398,7 @@ jobs:
           VITEST_TOPOLOGY_PLAN_RESULT: ${{ needs.plan-vitest-ci-topology.result }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
-        run: ./scripts/ci-test-aggregate.ps1
+        run: node --experimental-strip-types scripts/vitest-ci-runner.ts aggregate
 
   self-architect-lint:
     name: Self-architect lint

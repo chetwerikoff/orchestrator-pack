@@ -27,7 +27,6 @@ const REQUIRED_FILES = [
   'scripts/lib/operator-publication.ts', 'scripts/lib/worker-degraded-ci-handoff.ts', 'scripts/pack-review-runner.ts',
   'scripts/pack-worker-report.ts', 'scripts/runtime-retirement/retired-surface-guard.ts',
   'scripts/runtime-retirement/retired-surface-selftest.ts', 'scripts/json-producers/retired-runtime-surfaces.json',
-  'scripts/check-reusable.ps1',
 ] as const;
 const REQUIRED_DIRECTORIES = ['plugins/task-declaration', 'plugins/scope-guard', 'plugins/token-chain-ledger', 'plugins/codex-pr-reviewer', 'prompts', '.github/workflows'] as const;
 const PLUGINS = [

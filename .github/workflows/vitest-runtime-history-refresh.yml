@@ -102,10 +102,9 @@ jobs:
           path: scripts
 
       - name: Run Vitest heavy shard
-        shell: pwsh
         env:
           OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
-        run: ./scripts/run-vitest-heavy-shard.ps1 -Shard ${{ matrix.shard }}
+        run: node --experimental-strip-types scripts/vitest-ci-runner.ts heavy --shard "${{ matrix.shard }}"
 
       - name: Upload heavy shard runtime report
         if: success()
