@@ -1218,7 +1218,7 @@ function readTurnResultForInvocation(
   if (!artifactBacked && invocation.terminalResultIdentity !== undefined && invocation.terminalResultIdentity !== identity) {
     errors.push(`stage evidence ${label}.terminalResultIdentity is not derived from the referenced turn-result: ${resolved}`);
   }
-  if (transportClassification === 'complete' && artifactAuthority) {
+  if (transportClassification === 'complete' && artifactAuthority && recoveryRequired) {
     const expectedArtifactIdentity = `github-comment:${artifactAuthority.commentId}`;
     if (
       invocation.terminalResultIdentity !== expectedArtifactIdentity
