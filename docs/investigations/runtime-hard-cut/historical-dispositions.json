@@ -167,6 +167,42 @@
       "owningReference": "Issue #1352 r07; Issue #1036 census section 2.8"
     },
     {
+      "path": "plugins/_shared/tests/normalize.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "plugins/codex-pr-reviewer/tests/review.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "plugins/codex-pr-reviewer/tests/reviewer-budget.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/cutover/issue-928.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/cutover/mutation-runner.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/estate-cut/capture-base-anchor.mjs",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
       "path": "scripts/estate-cut/issue-906.base-anchor.json",
       "class": "byte-bound-migration-evidence",
       "reason": "Pinned migration/evidence artifact preserves historical path vocabulary and is not a current execution authority.",
@@ -176,6 +212,18 @@
       "path": "scripts/estate-cut/issue-906.manifest.json",
       "class": "byte-bound-migration-evidence",
       "reason": "Pinned migration/evidence artifact preserves historical path vocabulary and is not a current execution authority.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/estate-cut/manifest-generator.mjs",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/autonomous-review-retry/pr528-timeout-sidecar.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
@@ -197,6 +245,96 @@
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
+      "path": "scripts/fixtures/launch-argv-inventory/side-process-mismatch/registry-mismatch.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/merge-blind-ci-gates/parity.mjs",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/orchestrator-message-registry/README.md",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/read-delegation-audit/edit-other-file.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/read-delegation-audit/review-hook-capture-world-a.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/scripted-review-confirmed-delivery-gate/approved-dead-escalate.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/scripted-review-confirmed-delivery-gate/approved-drift-escalate.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/scripted-review-confirmed-delivery-gate/approved-live-send.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/scripted-review-confirmed-delivery-gate/cr-not-delivered-dead-escalate.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/scripted-review-confirmed-delivery-gate/cr-not-delivered-drift-escalate.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/scripted-review-confirmed-delivery-gate/cr-not-delivered-live-send.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/manifest.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/gate-runner/census.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/gate-runner/census.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
       "path": "scripts/gate-runner/census/generation.json",
       "class": "precut-behavioral-contract",
       "reason": "Frozen migration/census source preserves pre-cut command vocabulary as evidence and is not a current execution authority.",
@@ -215,6 +353,36 @@
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
+      "path": "scripts/gate-runner/current-census.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/gate-runner/custom/bulk-cli-parity.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/gate-runner/custom/bulk-static-gates.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/gate-runner/declarative.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/gate-runner/goldens.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
       "path": "scripts/gate-runner/goldens/pre-delete-captures.json",
       "class": "precut-behavioral-contract",
       "reason": "Frozen migration/census source preserves pre-cut command vocabulary as evidence and is not a current execution authority.",
@@ -227,15 +395,333 @@
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
+      "path": "scripts/gate-runner/node-verifier-ports.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/gate-runner/representative-gates.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/gh-signal-classification.cases.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/gh-wrapper.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/launch-argv-test-exclusions.manifest.json",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/launch-argv-validators.manifest.json",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/lib/vitest-runtime-history-merge.fixture.mjs",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/merge-blind-ci-gates.audit.json",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/orchestrator-escalation-router.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/orchestrator-escalation.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/orchestrator-message-audit-roots.manifest.json",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/orchestrator-message-owner-mechanisms.manifest.json",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/orchestrator-message-protected-runtime.manifest.json",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/orchestrator-wake-supervisor.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pack-review-delivery.cases.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pack-review-runner-gpt.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pester-retirement-disposition.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pester-retirement.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/port-stage-evidence/producer.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr-scope-declaration.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr-scope-runner.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr2-foundation/foundation.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr2-foundation/terminalized-port.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr2-foundation/worker-notification-compat.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr2a/closed-world-scanner.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr2a/closure-receipt.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr2a/contracts.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr2a/execution-root-registry.json",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr2a/final-conformance-precutover.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr2a/final-conformance.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr2a/final-conformance.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/pr2a/mutation-runner.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
       "path": "scripts/pr2a/planning-manifest.json",
       "class": "byte-bound-migration-evidence",
       "reason": "Pinned migration/evidence artifact preserves historical path vocabulary and is not a current execution authority.",
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
+      "path": "scripts/pr2a/planning.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/reachability-purge.config.json",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
       "path": "scripts/reachability-purge.manifest.json",
       "class": "byte-bound-migration-evidence",
       "reason": "Pinned migration/evidence artifact preserves historical path vocabulary and is not a current execution authority.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/reachability-purge.mjs",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/review-cycle-cap.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/review-start-claim-budget-semantics.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/review-start-claim.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/review-trigger-reconcile.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/review-wake-trigger.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/runtime/caller-census.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/runtime/caller-census.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/runtime/runtime-independence-two-lifecycle-proof.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/supervisor-recovery.test-helpers.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/toolchain/check-pwsh-test-growth.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/toolchain/check-typescript-runtime-policy.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/toolchain/powershell-child-policy.ts",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/toolchain/powershell-child-tests.json",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/toolchain/typescript-launch-inventory.json",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/verify.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/vitest-ci-runner-control-flow.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/vitest-wallclock-e2e-split.manifest.json",
+      "class": "precut-migration-classifier",
+      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/worker-message-submit-reconcile.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
@@ -515,10 +1001,82 @@
       "owningReference": "Issue #1352 AO-15"
     },
     {
+      "path": "tests/fixtures/lint-self-architect/negative/scripts/clean.ps1",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/fixtures/lint-self-architect/paired-edit/scripts/deploy.ps1",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/fixtures/orchestrator-launch-failure/healthy-pty.txt",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/fixtures/pack-review-strict-gate/cancelled-empty.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/fixtures/pack-review-strict-gate/clean-claude-pass.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/fixtures/pack-review-strict-gate/clean-codex-pass.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
       "path": "tests/fixtures/pack-review-strict-gate/drift-bare-review-ps1.json",
       "class": "negative-history-fixture",
       "reason": "Inert exact negative/history fixture preserving retired bytes for regression coverage.",
       "owningReference": "Issue #1352 AO-15"
+    },
+    {
+      "path": "tests/fixtures/pack-review-strict-gate/drift-claude-while-codex.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/fixtures/pack-review-strict-gate/drift-codex-while-claude.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/fixtures/pack-review-strict-gate/empty-failed.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/fixtures/pack-review-strict-gate/legacy-codex-blank-reason-pass.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/fixtures/pack-review-strict-gate/selector-missing.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/fixtures/pack-review-strict-gate/selector-set-empty-reason.json",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
       "path": "tests/fixtures/review-status-consumer/notifier-prefixed-report-full.txt",
@@ -557,10 +1115,64 @@
       "owningReference": "Issue #1352 AO-15"
     },
     {
+      "path": "tests/fixtures/worker-launch-failure/quote-dense-issue-body.md",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
       "path": "tests/fixtures/worker-nudge-gate/opk-rev-689.json",
       "class": "negative-history-fixture",
       "reason": "Inert exact negative/history fixture preserving retired bytes for regression coverage.",
       "owningReference": "Issue #1352 AO-15"
+    },
+    {
+      "path": "tests/powershell/Ci-Failure-Notification-Common.Tests.ps1",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/powershell/Gh-PrChecks.Tests.ps1",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/powershell/Issue748.RefreshConcurrency.Tests.ps1",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/powershell/Resolve-TrustedPackRoot.Tests.ps1",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "tests/powershell/Test-AllRunner.Tests.ps1",
+      "class": "negative-history-fixture",
+      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
     }
   ]
 }
