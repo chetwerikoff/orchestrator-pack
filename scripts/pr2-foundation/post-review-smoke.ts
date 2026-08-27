@@ -12,11 +12,15 @@ import {
   resolveCurrentWorkerAssignmentBindings,
   type ResolvedWorkerAssignment,
 } from '../lib/worker-assignment-runtime.ts';
-import { resolvePackReviewRunStoreRoot } from '../lib/pack-review-run-store.ts';
+import {
+  listPackReviewRuns,
+  resolvePackReviewRunStoreRoot,
+} from '../lib/pack-review-run-store.ts';
 import { parseComplexityTierFence } from '../lib/tier-gate-core.ts';
 import {
   assertIndependentSmokeAdmission,
   readPackReviewAuthority,
+  reviewStartConsumedForIndependentSmoke,
   stagePackReviewImmutableRecord,
 } from '../pack-review-state.ts';
 import { sameRuntimeWorker, type RuntimeAdapter } from '../runtime/contracts.ts';
@@ -160,7 +164,9 @@ function reviewStageDisposition(input: {
   if (!authority || authority.currentHeadSha !== input.headSha) {
     return { kind: 'review_pending', reason: 'review_authority_missing_or_stale' };
   }
-  if (authority.cycle?.reviewStageComplete !== true) {
+  const reviewRuns = listPackReviewRuns({ projectId: input.projectId, storeRoot });
+  const consumedReviewStart = reviewStartConsumedForIndependentSmoke(authority, reviewRuns);
+  if (authority.cycle?.reviewStageComplete !== true && !consumedReviewStart) {
     return { kind: 'review_pending', reason: 'review_stage_incomplete' };
   }
   const independent = authority.smokeOrdering?.independent;
@@ -178,7 +184,7 @@ function reviewStageDisposition(input: {
     }
   }
   try {
-    assertIndependentSmokeAdmission({ authority, headSha: input.headSha });
+    assertIndependentSmokeAdmission({ authority, headSha: input.headSha, reviewRuns });
   } catch (error) {
     return {
       kind: 'smoke_blocked',

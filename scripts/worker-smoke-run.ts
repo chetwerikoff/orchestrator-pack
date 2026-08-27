@@ -87,7 +87,10 @@ import {
   type PackReviewTier,
   type SmokeOrderingActor,
 } from './pack-review-state.ts';
-import { resolvePackReviewRunStoreRoot } from './lib/pack-review-run-store.ts';
+import {
+  listPackReviewRuns,
+  resolvePackReviewRunStoreRoot,
+} from './lib/pack-review-run-store.ts';
 import { parseComplexityTierFence } from './lib/tier-gate-core.ts';
 import { resolveTierAndCap } from '../docs/review-cycle-cap.mjs';
 import { selectRuntimeAdapter } from './runtime/registry.ts';
@@ -1264,6 +1267,7 @@ function beginSmokeOrdering(
     storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT,
   });
   const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
+  const reviewRuns = listPackReviewRuns({ projectId, storeRoot });
   let authority = initializePackReviewAuthority({
     prNumber: options.prNumber,
     headSha: options.headSha,
@@ -1278,9 +1282,12 @@ function beginSmokeOrdering(
       expectedTransitionSeq: authority.transitionSeq,
       headSha: options.headSha,
       options: authorityOptions,
+      reviewRuns,
     });
   }
-  if (actor === 'independent') assertIndependentSmokeAdmission({ authority, headSha: options.headSha });
+  if (actor === 'independent') {
+    assertIndependentSmokeAdmission({ authority, headSha: options.headSha, reviewRuns });
+  }
   const started = commitSmokeOrderingTransition({
     prNumber: options.prNumber,
     expectedTransitionSeq: authority.transitionSeq,
