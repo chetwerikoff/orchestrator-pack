@@ -163,3 +163,9 @@ jobs:
         run: npm ci --include=dev
       - name: Produce and admit exact-head post-port evidence
         run: node --experimental-strip-types scripts/post-port-admission.ts --measured-head "${{ github.event.pull_request.head.sha }}" --producer-revision "${{ github.event.pull_request.head.sha }}"
+      - name: Upload exact-head post-port evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-port-${{ github.event.pull_request.head.sha }}
+          path: docs/investigations/orca-pwsh-zero-estate/post-port.json
+          if-no-files-found: error

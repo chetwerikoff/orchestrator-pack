@@ -142,6 +142,15 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     ))).toBe(true);
   });
 
+  it('retains #1419 exact-head post-port evidence as a head-named CI artifact', () => {
+    const workflow = readFileSync(path.resolve('.github/workflows/typescript-foundation.yml'), 'utf8');
+    expect(workflow).toContain('Produce and admit exact-head post-port evidence');
+    expect(workflow).toContain('Upload exact-head post-port evidence');
+    expect(workflow).toContain('name: post-port-${{ github.event.pull_request.head.sha }}');
+    expect(workflow).toContain('docs/investigations/orca-pwsh-zero-estate/post-port.json');
+    expect(workflow).toContain('if-no-files-found: error');
+  });
+
   it('wires #1419 direct review reconciliation and readiness after an exact-head smoke PASS', () => {
     const source = readFileSync(path.resolve('scripts/worker-smoke-run.ts'), 'utf8');
     expect(source).toContain("case 'reconcile-direct-review': return runDirectReviewReconciliation(options);");
