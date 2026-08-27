@@ -36,6 +36,7 @@ export const SENT_STORE_PATH = join(tmpdir(), 'opk-cursor-unsent-composer-submit
 export const ORCHESTRATION_RECONCILE_LEDGER_PATH = join(tmpdir(), 'opk-orchestration-mail-reconcile.json');
 export const ORCHESTRATION_RECONCILE_LOCK_PATH = join(tmpdir(), 'opk-orchestration-mail-reconcile.lock');
 const ORCHESTRATION_RECONCILE_WINDOW_MS = 60_000;
+const ORCHESTRATION_INBOX_LIMIT = 5_000;
 const RECONCILE_COMMAND_TIMEOUT_MS = 10_000;
 
 export type CursorComposerKind = 'empty' | 'non_empty';
@@ -336,11 +337,15 @@ interface DeliveryMessage {
 }
 
 interface DeliveryMessageSubmitDeps {
+  readonly readInbox?: () => OrcaJsonResponse<OrcaInboxFullResult>;
   readonly lookupMessage: (messageId: string) =>
     | { readonly ok: true; readonly message: DeliveryMessage }
     | { readonly ok: false; readonly reason: string };
   readonly resolveWorker: (message: DeliveryMessage) =>
     | { readonly ok: true; readonly worker: RuntimeWorker | null }
+    | { readonly ok: false; readonly reason: string };
+  readonly isMessageRetrievable?: (message: DeliveryMessage, worker: RuntimeWorker) =>
+    | { readonly ok: true }
     | { readonly ok: false; readonly reason: string };
   readonly writePointer: (
     worker: RuntimeWorkerIdentity,
@@ -804,9 +809,14 @@ export function createOrcaMessageSubmitDeps(
   adapter: RuntimeAdapter,
   submitDeps = createAdapterSubmitDeps(adapter),
 ): DeliveryMessageSubmitDeps {
+  const readInbox = () => runOrcaJson<OrcaInboxFullResult>(
+    ['orchestration', 'inbox', '--full', '--limit', String(ORCHESTRATION_INBOX_LIMIT)],
+    { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS },
+  );
   return {
+    readInbox,
     lookupMessage: (messageId) => {
-      const response = runOrcaJson<OrcaInboxFullResult>(['orchestration', 'inbox', '--full'], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
+      const response = readInbox();
       if (!response.ok) return { ok: false, reason: response.error?.code ?? 'orchestration_inbox_unavailable' };
       const matches = (response.result?.messages ?? []).filter((message) => message.id?.trim() === messageId);
       if (matches.length !== 1) {
@@ -849,6 +859,15 @@ export function createOrcaMessageSubmitDeps(
       if (resolved.status !== 'ok') return { ok: false, reason: resolved.reason };
       return { ok: true, worker: resolved.value };
     },
+    isMessageRetrievable: (message, worker) => {
+      const response = runOrcaJson<OrcaInboxFullResult>([
+        'orchestration', 'check', '--terminal', worker.identity.id, '--peek',
+      ], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
+      if (!response.ok) return { ok: false, reason: response.error?.code ?? 'orchestration_check_unavailable' };
+      return (response.result?.messages ?? []).some((row) => row.id?.trim() === message.id)
+        ? { ok: true }
+        : { ok: false, reason: 'orchestration_message_unretrievable' };
+    },
     writePointer: (worker, pointer) => adapter.dispatchInput({ worker, text: pointer, writeOnly: true }),
     submitDeps,
   };
@@ -871,7 +890,12 @@ export async function runOrchestrationMailReconcileTick(
     const ledger: Record<string, number> = (() => {
       try { return JSON.parse(readFileSync(ledgerPath, 'utf8')) as Record<string, number>; } catch { return {}; }
     })();
-    const response = runOrcaJson<OrcaInboxFullResult>(['orchestration', 'inbox', '--full'], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
+    const response = deps.readInbox
+      ? deps.readInbox()
+      : runOrcaJson<OrcaInboxFullResult>(
+        ['orchestration', 'inbox', '--full', '--limit', String(ORCHESTRATION_INBOX_LIMIT)],
+        { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS },
+      );
     if (!response.ok) return { ok: false, attempted: 0, nudged: 0, skipped: 0, reasons: [response.error?.code ?? 'orchestration_inbox_unavailable'] };
     const unread = (response.result?.messages ?? []).filter((row) => {
       const id = row.id?.trim() ?? '';
@@ -914,9 +938,26 @@ export async function runOrchestrationMailReconcileTick(
       const found = rows.length === 1
         ? deliveryMessageFromInboxRow(rows[0]!)
         : { ok: false as const, reason: 'orchestration_message_ambiguous' };
-      const result = found.ok
-        ? await submitOrcaMessageDeliveryPointerForMessage(found.message, reconcileDeps)
-        : deliveryNoEffect(found.reason, undefined, false);
+      let result: UnsentComposerSubmitResult;
+      if (!found.ok) {
+        result = deliveryNoEffect(found.reason, undefined, false);
+      } else {
+        const resolved = reconcileDeps.resolveWorker(found.message);
+        if (!resolved.ok) {
+          result = deliveryNoEffect(resolved.reason, undefined, false);
+        } else if (!resolved.worker) {
+          result = deliveryNoEffect('worker_gone', undefined, false);
+        } else {
+          const retrievable = reconcileDeps.isMessageRetrievable?.(found.message, resolved.worker);
+          if (!retrievable) {
+            result = deliveryNoEffect('orchestration_retrievability_unavailable', resolved.worker, false);
+          } else if (!retrievable.ok) {
+            result = deliveryNoEffect(retrievable.reason, resolved.worker, false);
+          } else {
+            result = await submitOrcaMessageDeliveryPointerForMessage(found.message, reconcileDeps);
+          }
+        }
+      }
       if (result.terminals[0]?.enter || result.terminals[0]?.reason === 'dispatch_unknown' || result.terminals[0]?.reason === 'send_failed') nudged += 1;
       // Record every attempted delivery, including ambiguous outcomes, so a
       // periodic tick cannot hammer one unread message.

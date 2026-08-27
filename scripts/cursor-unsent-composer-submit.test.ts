@@ -1277,6 +1277,117 @@ describe('delivery-triggered composer submission', () => {
   });
 });
 
+describe('orchestration mail reconciliation', () => {
+  function reconciliationDeps(
+    rows: Array<{ id: string; run_id: string; to_handle: string; read: number }>,
+    target: RuntimeWorker,
+    options: {
+      readonly retrievable?: boolean;
+      readonly submitted?: RuntimeWorkerIdentity[];
+    } = {},
+  ) {
+    let writes = 0;
+    let wrote = false;
+    const submitted = options.submitted ?? [];
+    const targetId = target.identity.id;
+    const pointer = `You have 1 orchestration message. Run \`orca orchestration check --terminal ${targetId}\`.`;
+    return {
+      readInbox: () => ({ ok: true as const, result: { messages: rows } }),
+      lookupMessage: () => ({ ok: false as const, reason: 'unused' }),
+      resolveWorker: (message: { readonly recipient: string }) => message.recipient === targetId
+        ? { ok: true as const, worker: target }
+        : { ok: true as const, worker: null },
+      isMessageRetrievable: () => options.retrievable === false
+        ? { ok: false as const, reason: 'orchestration_message_unretrievable' }
+        : { ok: true as const },
+      writePointer: () => {
+        writes += 1;
+        wrote = true;
+        return { status: 'dispatched' as const };
+      },
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({
+          ok: true as const,
+          lines: wrote ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+        }),
+      }),
+      get writes() {
+        return writes;
+      },
+    };
+  }
+
+  it('does not emit a pointer for unread mail absent from terminal check --peek', async () => {
+    const target = worker('term_unretrievable');
+    const deps = reconciliationDeps([{
+      id: 'msg_revoked',
+      run_id: 'run_revoked',
+      to_handle: target.identity.id,
+      read: 0,
+    }], target, { retrievable: false });
+    const suffix = `${process.pid}-${Date.now()}`;
+
+    const result = await runOrchestrationMailReconcileTick(deps, {
+      ledgerPath: join(tmpdir(), `opk-reconcile-revoked-${suffix}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-revoked-${suffix}.lock`),
+      now: () => 1_000,
+    });
+
+    expect(deps.writes).toBe(0);
+    expect(result.attempted).toBe(1);
+    expect(result.reasons).toContain('msg_revoked:orchestration_message_unretrievable');
+  });
+
+  it('emits exactly one pointer when terminal check --peek retrieves the message', async () => {
+    const target = worker('term_retrievable');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const deps = reconciliationDeps([{
+      id: 'msg_live',
+      run_id: 'run_live',
+      to_handle: target.identity.id,
+      read: 0,
+    }], target, { submitted });
+    const suffix = `${process.pid}-${Date.now()}`;
+
+    const result = await runOrchestrationMailReconcileTick(deps, {
+      ledgerPath: join(tmpdir(), `opk-reconcile-live-${suffix}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-live-${suffix}.lock`),
+      now: () => 1_000,
+    });
+
+    expect(deps.writes).toBe(1);
+    expect(result.nudged).toBe(1);
+  });
+
+  it('processes an unread message beyond Orca’s default page', async () => {
+    const target = worker('term_page_21');
+    const rows = Array.from({ length: 20 }, (_, index) => ({
+      id: `msg_page_${index}`,
+      run_id: `run_page_${index}`,
+      to_handle: `term_other_${index}`,
+      read: 0,
+    }));
+    rows.push({
+      id: 'msg_page_21',
+      run_id: 'run_page_21',
+      to_handle: target.identity.id,
+      read: 0,
+    });
+    const deps = reconciliationDeps(rows, target);
+    const suffix = `${process.pid}-${Date.now()}`;
+
+    const result = await runOrchestrationMailReconcileTick(deps, {
+      ledgerPath: join(tmpdir(), `opk-reconcile-page-${suffix}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-page-${suffix}.lock`),
+      now: () => 1_000,
+    });
+
+    expect(result.attempted).toBe(21);
+    expect(deps.writes).toBe(1);
+  });
+});
+
 describe('acquireWatchLock', () => {
   it('fails closed when another live process holds the lock', () => {
     const lockPath = join(tmpdir(), `opk-unsent-lock-${process.pid}-${Date.now()}.lock`);
