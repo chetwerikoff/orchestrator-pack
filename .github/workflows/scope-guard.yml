@@ -337,6 +337,7 @@ jobs:
           path: scripts
 
       - name: Run Vitest heavy shard
+        shell: bash
         env:
           OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
         run: node --experimental-strip-types scripts/vitest-ci-runner.ts heavy --shard "${{ matrix.shard }}"
