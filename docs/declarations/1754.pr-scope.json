@@ -20,5 +20,5 @@
     "scripts/pr2-foundation/post-review-smoke.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "87a7266f1627c85f9a1fa3c0b12145479815fe6b"
+  "source_revision": "e6da0327e7df8659973bf29273c455206e28f9dd"
 }
