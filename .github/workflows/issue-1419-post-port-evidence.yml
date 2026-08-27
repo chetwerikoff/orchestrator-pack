@@ -1,0 +1,88 @@
+name: issue-1419-post-port-evidence
+
+on:
+  push:
+    branches:
+      - ci/issue-1419-post-port-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact PR candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 6fb96e6751857547f2af8adc8a17080bde78191d
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+
+      - name: Produce exact-head post-port evidence
+        env:
+          MEASURED_HEAD: 6fb96e6751857547f2af8adc8a17080bde78191d
+        run: |
+          node --experimental-strip-types --input-type=module <<'NODE'
+          import {
+            producePortStageEvidence,
+            verifyEvidenceIntegrity,
+            writePortStageEvidence,
+          } from './scripts/port-stage-evidence/producer.ts';
+          const measuredHead = process.env.MEASURED_HEAD;
+          const evidence = await producePortStageEvidence({
+            repoRoot: process.cwd(),
+            artifactRole: 'post-port',
+            measuredHead,
+            producerRevision: measuredHead,
+          });
+          verifyEvidenceIntegrity(evidence);
+          if (!evidence.broaderStatusClosed) {
+            throw new Error('post-port broaderStatusClosed=false');
+          }
+          if (!evidence.dormantRetainedCoverageComplete) {
+            throw new Error('post-port dormantRetainedCoverageComplete=false');
+          }
+          if (evidence.unclassifiedPowerShellSurfaces.length !== 0) {
+            throw new Error('post-port unclassifiedPowerShellSurfaces is not empty');
+          }
+          if (evidence.unresolvedCurrentPrescriptiveScriptTargets.length !== 0) {
+            throw new Error('post-port unresolvedCurrentPrescriptiveScriptTargets is not empty');
+          }
+          const path = await writePortStageEvidence(process.cwd(), evidence);
+          console.log(JSON.stringify({
+            path,
+            measuredHead: evidence.measuredHead,
+            producerRevision: evidence.producerRevision,
+            entries: evidence.entries.length,
+            retained: evidence.retainedDispositions.length,
+            integrityDigest: evidence.integrityDigest,
+          }));
+          NODE
+
+      - name: Publish artifact to PR branch
+        env:
+          EXPECTED_HEAD: 6fb96e6751857547f2af8adc8a17080bde78191d
+          TARGET_BRANCH: agent/1419-final-port-integration
+        run: |
+          set -euo pipefail
+          git fetch origin "$TARGET_BRANCH"
+          test "$(git rev-parse "origin/$TARGET_BRANCH")" = "$EXPECTED_HEAD"
+          git config user.name "orchestrator-pack evidence"
+          git config user.email "85295154+chetwerikoff@users.noreply.github.com"
+          git add -f docs/investigations/orca-pwsh-zero-estate/post-port.json
+          git commit --no-gpg-sign -m "chore: record #1419 post-port evidence"
+          git push origin "HEAD:$TARGET_BRANCH"
+
+      - name: Remove temporary evidence branch
+        if: success()
+        run: git push origin --delete ci/issue-1419-post-port-evidence
