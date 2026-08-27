@@ -1754,12 +1754,11 @@
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "scripts/bootstrap.ps1",
-      "classification": "retired-with-reason",
-      "retirementJustification": {
-        "reasonCode": "superseded-contract",
-        "behavior": "Issue #1419 retires the legacy required-file assertion for scripts/bootstrap.ps1 after the current bootstrap authority moves to native Node 22.",
-        "replacement": "scripts/bootstrap.ts is the required bootstrap entrypoint and scripts/gate-runner/bulk-declarative-gates.ts enforces that current file."
-      }
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b"
     },
     {
       "id": "verify-inline:required-file:scripts/check-reusable.ps1",
