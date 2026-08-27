@@ -497,6 +497,41 @@ describe('Issue #1419 direct GitHub pack-review semantics', () => {
     expect(admitted.map((review) => review.reviewId)).toEqual([1, 2]);
   });
 
+  it('admits a current-head clean direct review without CI, smoke, runner, or lifecycle admission', () => {
+    const projection = projectDirectPackReviewState({
+      reviews: [directReview({ id: 6, head: h2, verdict: 'clean', blocking: false })],
+      repositoryOwnerLogin: owner,
+      currentHeadSha: h2,
+      workerLifecycle: '',
+      requiredCiGreen: false,
+      exactHeadSmokePassed: false,
+      isAncestor: () => false,
+    });
+    expect(projection).toMatchObject({
+      hasLegitimateReview: true,
+      state: 'clear',
+      unresolvedBlockingReviewIds: [],
+    });
+  });
+
+  it('does not let a canonical review from an unrelated lineage satisfy the current head', () => {
+    const unrelated = '3'.repeat(40);
+    const projection = projectDirectPackReviewState({
+      reviews: [directReview({ id: 7, head: unrelated, verdict: 'clean', blocking: false })],
+      repositoryOwnerLogin: owner,
+      currentHeadSha: h2,
+      workerLifecycle: 'completed',
+      requiredCiGreen: true,
+      exactHeadSmokePassed: true,
+      isAncestor: () => false,
+    });
+    expect(projection).toMatchObject({
+      hasLegitimateReview: false,
+      legitimateReviewCount: 0,
+      state: 'missing-review',
+    });
+  });
+
   it('coarsely resolves an ancestor blocker only after the complete descendant-fix cut', () => {
     const review = directReview({ id: 10, head: h1, verdict: 'findings', blocking: true });
     const incomplete = projectDirectPackReviewState({

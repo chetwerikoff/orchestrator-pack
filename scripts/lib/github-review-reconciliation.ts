@@ -274,8 +274,8 @@ export function projectDirectPackReviewState(input: {
   const canonical = listCanonicalDirectPackReviews(input.reviews, input.repositoryOwnerLogin);
   if (!currentHeadSha || canonical.length === 0) {
     return {
-      hasLegitimateReview: canonical.length > 0,
-      legitimateReviewCount: canonical.length,
+      hasLegitimateReview: false,
+      legitimateReviewCount: 0,
       unresolvedBlockingReviewIds: [],
       state: 'missing-review',
     };
@@ -286,30 +286,40 @@ export function projectDirectPackReviewState(input: {
   const descendantFixComplete = lifecycleComplete
     && input.requiredCiGreen
     && input.exactHeadSmokePassed;
+  const relevant: DirectPackReviewEvidence[] = [];
   const unresolved: Array<number | string> = [];
 
   for (const review of canonical) {
-    if (!review.blocking) continue;
     if (review.headSha === currentHeadSha) {
-      unresolved.push(review.reviewId);
+      relevant.push(review);
+      if (review.blocking) unresolved.push(review.reviewId);
       continue;
     }
     let ancestor = false;
     try {
       ancestor = input.isAncestor(review.headSha, currentHeadSha);
     } catch {
-      // Relationship uncertainty is substantive uncertainty; fail closed.
-      unresolved.push(review.reviewId);
+      // Unknown lineage cannot establish review legitimacy. A blocking review
+      // stays conservatively blocking until ordinary current-fact reconciliation.
+      if (review.blocking) unresolved.push(review.reviewId);
       continue;
     }
-    if (ancestor && !descendantFixComplete) unresolved.push(review.reviewId);
-    // Non-ancestor blockers are irrelevant to the current lineage. Ancestor
-    // blockers with the complete descendant-fix cut are resolved as a group.
+    if (!ancestor) continue;
+    relevant.push(review);
+    if (review.blocking && !descendantFixComplete) unresolved.push(review.reviewId);
   }
 
+  if (relevant.length === 0) {
+    return {
+      hasLegitimateReview: false,
+      legitimateReviewCount: 0,
+      unresolvedBlockingReviewIds: unresolved,
+      state: unresolved.length > 0 ? 'blocked' : 'missing-review',
+    };
+  }
   return {
     hasLegitimateReview: true,
-    legitimateReviewCount: canonical.length,
+    legitimateReviewCount: relevant.length,
     unresolvedBlockingReviewIds: unresolved,
     state: unresolved.length > 0 ? 'blocked' : 'clear',
   };

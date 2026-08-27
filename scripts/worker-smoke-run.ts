@@ -90,6 +90,44 @@ import {
 import { resolvePackReviewRunStoreRoot } from './lib/pack-review-run-store.ts';
 import { parseComplexityTierFence } from './lib/tier-gate-core.ts';
 import { selectRuntimeAdapter } from './runtime/registry.ts';
+import {
+  currentWorkerAssignment,
+  resolveWorkerAssignmentStorePath,
+} from './lib/worker-assignment-store.ts';
+import { resolveCurrentWorkerAssignmentBindings } from './lib/worker-assignment-runtime.ts';
+import {
+  listWorkerReportRecordsForAssignment,
+  readWorkerReportStoreFile,
+  resolveWorkerReportStorePath,
+} from '../docs/worker-report-store.mjs';
+import {
+  evaluateWorkerStatusKillSwitch,
+  readWorkerStatusStoreFile,
+  resolveWorkerStatusStorePath,
+  testSiblingReadiness,
+} from './lib/worker-status-store.mjs';
+import {
+  assignmentsToStatusSessions,
+  buildWorkerStatusReport,
+} from './json-producers/worker-status-report.ts';
+import {
+  evaluateReadiness,
+  selectAcceptedCurrentWorkerReport,
+  type ReadinessResult,
+} from './pr2-foundation/readiness-evaluator.ts';
+import {
+  createGithubReviewTransport,
+  parseDirectPackReviewEvidence,
+  projectDirectPackReviewState,
+} from './lib/github-review-reconciliation.ts';
+import {
+  PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+  projectPackReviewSemanticStatus,
+  publishPackReviewRequiredStatus,
+  semanticPackReviewRequiredStatusRequest,
+  type PackReviewSemanticSourceState,
+  type PackReviewSemanticProjection,
+} from './lib/pack-review-delivery.ts';
 import type {
   RuntimeAdapter,
   RuntimeObservationToken,
@@ -109,6 +147,8 @@ export interface CliOptions {
   cwd: string;
   dryRun: boolean;
   json: boolean;
+  reviewId: string;
+  reviewHeadSha: string;
 }
 
 export type SmokeComplexity = 'routine' | 'complex';
@@ -262,6 +302,8 @@ function parseArgs(argv: readonly string[]): CliOptions {
     cwd: process.cwd(),
     dryRun: false,
     json: false,
+    reviewId: '',
+    reviewHeadSha: '',
   };
   const args = [...argv];
   if (args[0] && !args[0].startsWith('-')) options.command = args.shift() ?? '';
@@ -277,6 +319,8 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case '--cwd': options.cwd = args[++index] ?? options.cwd; break;
       case '--dry-run': options.dryRun = true; break;
       case '--json': options.json = true; break;
+      case '--review-id': options.reviewId = args[++index] ?? ''; break;
+      case '--review-head-sha': options.reviewHeadSha = args[++index] ?? ''; break;
       default: throw new Error(`unknown argument: ${args[index]}`);
     }
   }
@@ -628,6 +672,285 @@ export function resolveCiGreen(
     requiredCheckLookupFailed = true;
   }
   return classifyRequiredCiLevel(checks, { requiredCheckNames, requiredCheckLookupFailed }) === 'green';
+}
+
+
+function sameReviewIdentifier(left: unknown, right: unknown): boolean {
+  return String(left ?? '').trim() !== ''
+    && String(left ?? '').trim() === String(right ?? '').trim();
+}
+
+function githubCommitIsAncestor(
+  repositorySlug: string,
+  ancestorSha: string,
+  descendantSha: string,
+  repoRoot: string,
+): boolean {
+  if (ancestorSha === descendantSha) return true;
+  const comparison = githubApiObject(
+    'direct-review-lineage',
+    `repos/${repositorySlug}/compare/${ancestorSha}...${descendantSha}`,
+    repoRoot,
+  );
+  return String(comparison.status ?? '').trim().toLowerCase() === 'ahead';
+}
+
+export function currentPackReviewStatusFact(
+  repositorySlug: string,
+  headSha: string,
+  repoRoot: string,
+): PackReviewSemanticSourceState {
+  const combined = githubApiObject(
+    'pack-review-status',
+    `repos/${repositorySlug}/commits/${headSha}/status`,
+    repoRoot,
+  );
+  const statuses = Array.isArray(combined.statuses)
+    ? combined.statuses.filter((value): value is Record<string, unknown> =>
+        Boolean(value && typeof value === 'object' && !Array.isArray(value)))
+    : [];
+  const current = statuses
+    .filter((status) => String(status.context ?? '') === PACK_REVIEW_REQUIRED_STATUS_CONTEXT)
+    .sort((left, right) =>
+      Date.parse(String(right.updated_at ?? right.created_at ?? '')) -
+      Date.parse(String(left.updated_at ?? left.created_at ?? '')))[0];
+  if (!current) return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
+  const state = String(current.state ?? '').trim().toLowerCase();
+  const description = String(current.description ?? '').trim().toLowerCase();
+  if (state === 'success') {
+    return { hasLegitimateReview: true, unresolvedBlockingFinding: false };
+  }
+  if (state === 'pending') {
+    return { hasLegitimateReview: false, unresolvedBlockingFinding: false, activeAttempt: true };
+  }
+  if (state === 'failure') {
+    const missing = description === 'pack review evidence is missing';
+    return {
+      hasLegitimateReview: !missing,
+      unresolvedBlockingFinding: !missing,
+    };
+  }
+  return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
+}
+
+function currentAtCapFacts(
+  prNumber: number,
+): Pick<Parameters<typeof evaluateReadiness>[0]['review'], 'atCapOpenFindings' | 'atCapContinuationRequired'> {
+  try {
+    const storeRoot = resolvePackReviewRunStoreRoot({
+      projectId: 'orchestrator-pack',
+      storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT,
+    });
+    const authority = readPackReviewAuthority(prNumber, { storeRoot });
+    return {
+      atCapOpenFindings: authority?.cycle?.state === 'at_cap_open_findings',
+      atCapContinuationRequired: authority?.cycle?.state === 'at_cap_continuation_required',
+    };
+  } catch {
+    return { atCapOpenFindings: 'unknown', atCapContinuationRequired: 'unknown' };
+  }
+}
+
+export interface PostSmokeReadinessResult {
+  readonly readiness: ReadinessResult;
+  readonly reviewProjection: PackReviewSemanticProjection;
+}
+
+export async function evaluatePostSmokeReadiness(
+  options: CliOptions,
+  target: ResolvedSmokeTarget,
+  adapter: RuntimeAdapter,
+): Promise<PostSmokeReadinessResult> {
+  const assignmentFile = resolveWorkerAssignmentStorePath('orchestrator-pack', process.env);
+  const assignment = currentWorkerAssignment(assignmentFile, target.issueNumber);
+  const readinessTarget = {
+    repository: target.repositorySlug,
+    issueNumber: target.issueNumber,
+    taskId: assignment?.taskId ?? '',
+    assignmentId: assignment?.assignmentId ?? '',
+    assignmentGeneration: assignment?.generation ?? 0,
+    prNumber: target.prNumber,
+    headSha: target.headSha,
+  };
+
+  const reportStore = readWorkerReportStoreFile(resolveWorkerReportStorePath(process.env));
+  const workerReports = assignment
+    ? listWorkerReportRecordsForAssignment(reportStore, target.repositorySlug, {
+        assignmentId: assignment.assignmentId,
+        generation: assignment.generation,
+        taskId: assignment.taskId,
+      })
+    : [];
+
+  let workerStatuses: ReturnType<typeof buildWorkerStatusReport>['workers'] = [];
+  if (assignment) {
+    const resolved = resolveCurrentWorkerAssignmentBindings({
+      file: assignmentFile,
+      repository: target.repositorySlug,
+      adapter,
+    });
+    if (resolved.status === 'ok') {
+      const sessions = assignmentsToStatusSessions({
+        assignments: [assignment],
+        bindings: resolved.bindings.filter((binding) =>
+          binding.assignment.assignmentId === assignment.assignmentId),
+        reconciliations: resolved.reconciliations.filter((row) =>
+          row.assignment.assignmentId === assignment.assignmentId),
+        project: 'orchestrator-pack',
+      });
+      const killSwitch = evaluateWorkerStatusKillSwitch(process.env);
+      const sibling = testSiblingReadiness(process.env);
+      workerStatuses = buildWorkerStatusReport(
+        sessions,
+        readWorkerStatusStoreFile(resolveWorkerStatusStorePath(process.env)),
+        Date.now(),
+        { killSwitchActive: killSwitch.disabled, siblingReady: sibling.ready },
+      ).workers;
+    }
+  }
+
+  const ciGreen = resolveCiGreen(
+    target.prNumber,
+    target.headSha,
+    target.repositorySlug,
+    options.repoRoot,
+  );
+  const acceptedReport = selectAcceptedCurrentWorkerReport(workerReports, readinessTarget);
+  const lifecycle = String(acceptedReport?.reportState ?? '').trim().toLowerCase();
+  const transport = createGithubReviewTransport({
+    repoRoot: options.repoRoot,
+    repoSlug: target.repositorySlug,
+    prNumber: target.prNumber,
+  });
+  const direct = projectDirectPackReviewState({
+    reviews: await transport.listReviews(),
+    repositoryOwnerLogin: target.repositorySlug.split('/')[0] ?? '',
+    currentHeadSha: target.headSha,
+    workerLifecycle: lifecycle,
+    requiredCiGreen: ciGreen,
+    exactHeadSmokePassed: true,
+    isAncestor: (ancestorSha, descendantSha) =>
+      githubCommitIsAncestor(target.repositorySlug, ancestorSha, descendantSha, options.repoRoot),
+  });
+  const runner = currentPackReviewStatusFact(
+    target.repositorySlug,
+    target.headSha,
+    options.repoRoot,
+  );
+  const reviewProjection = projectPackReviewSemanticStatus({
+    runner,
+    direct: {
+      hasLegitimateReview: direct.hasLegitimateReview,
+      unresolvedBlockingFinding: direct.state === 'blocked',
+    },
+  });
+  if (!options.dryRun) {
+    await publishPackReviewRequiredStatus({
+      repoRoot: options.repoRoot,
+      repoSlug: target.repositorySlug,
+      headSha: target.headSha,
+      request: semanticPackReviewRequiredStatusRequest({
+        headSha: target.headSha,
+        projection: reviewProjection,
+      }),
+    });
+  }
+  const atCap = currentAtCapFacts(target.prNumber);
+  const readiness = evaluateReadiness({
+    target: readinessTarget,
+    pr: {
+      open: true,
+      expectedTarget: true,
+      prNumber: target.prNumber,
+      headSha: target.headSha,
+    },
+    workerReports,
+    workerStatuses,
+    requiredCi: {
+      headSha: target.headSha,
+      state: ciGreen ? 'success' : 'failure',
+    },
+    review: {
+      obligation: reviewProjection.state === 'success'
+        ? 'complete'
+        : reviewProjection.reason === 'unresolved-blocker'
+          ? 'blocked'
+          : 'missing',
+      unresolvedRequiredFinding: reviewProjection.reason === 'unresolved-blocker',
+      ...atCap,
+    },
+    smoke: { headSha: target.headSha, state: 'pass' },
+  });
+  return { readiness, reviewProjection };
+}
+
+export async function runDirectReviewReconciliation(options: CliOptions): Promise<number> {
+  if (!Number.isInteger(options.prNumber) || options.prNumber <= 0
+      || !/^[0-9a-f]{40}$/u.test(options.headSha.trim().toLowerCase())
+      || !options.reviewId
+      || !/^[0-9a-f]{40}$/u.test(options.reviewHeadSha.trim().toLowerCase())) {
+    emit({ ok: false, reason: 'direct_review_binding_invalid' }, options.json);
+    return 1;
+  }
+  const currentHead = fetchLivePrHead(
+    options.prNumber,
+    TRUSTED_REPOSITORY_SLUG,
+    options.repoRoot,
+  );
+  const eventHead = options.headSha.trim().toLowerCase();
+  const reviewHead = options.reviewHeadSha.trim().toLowerCase();
+  if (currentHead !== eventHead || reviewHead !== eventHead) {
+    emit({
+      ok: true,
+      skipped: true,
+      reason: 'direct_review_stale_publication_head',
+      reviewHead,
+      eventHead,
+      currentHead,
+    }, options.json);
+    return 0;
+  }
+
+  const transport = createGithubReviewTransport({
+    repoRoot: options.repoRoot,
+    repoSlug: TRUSTED_REPOSITORY_SLUG,
+    prNumber: options.prNumber,
+  });
+  const reviews = await transport.listReviews();
+  const submitted = reviews.find((review) => sameReviewIdentifier(review.id, options.reviewId));
+  const owner = TRUSTED_REPOSITORY_SLUG.split('/')[0] ?? '';
+  if (!submitted || !parseDirectPackReviewEvidence(submitted, owner)) {
+    emit({ ok: true, skipped: true, reason: 'review_not_canonical_direct_pack_review' }, options.json);
+    return 0;
+  }
+
+  const direct = projectDirectPackReviewState({
+    reviews,
+    repositoryOwnerLogin: owner,
+    currentHeadSha: currentHead,
+    workerLifecycle: '',
+    requiredCiGreen: false,
+    exactHeadSmokePassed: false,
+    isAncestor: (ancestorSha, descendantSha) =>
+      githubCommitIsAncestor(TRUSTED_REPOSITORY_SLUG, ancestorSha, descendantSha, options.repoRoot),
+  });
+  const projection = projectPackReviewSemanticStatus({
+    runner: currentPackReviewStatusFact(TRUSTED_REPOSITORY_SLUG, currentHead, options.repoRoot),
+    direct: {
+      hasLegitimateReview: direct.hasLegitimateReview,
+      unresolvedBlockingFinding: direct.state === 'blocked',
+    },
+  });
+  if (!options.dryRun) {
+    await publishPackReviewRequiredStatus({
+      repoRoot: options.repoRoot,
+      repoSlug: TRUSTED_REPOSITORY_SLUG,
+      headSha: currentHead,
+      request: semanticPackReviewRequiredStatusRequest({ headSha: currentHead, projection }),
+    });
+  }
+  emit({ ok: true, projection, direct }, options.json);
+  return 0;
 }
 
 function failureReason(failure: RuntimeOperationFailure): string {
@@ -1611,7 +1934,29 @@ export async function runSmokeAttempt(
     orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
     orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';
     publishSmokeReport(report, options);
-    emit({ ok: report.result === 'PASS', report, lifecycleCleanup }, options.json);
+    let postSmoke: PostSmokeReadinessResult | undefined;
+    if (report.result === 'PASS' && !options.dryRun) {
+      try {
+        const target = resolveSmokeTarget(options, issueBody);
+        postSmoke = await evaluatePostSmokeReadiness(options, target, adapter);
+      } catch (error) {
+        postSmoke = {
+          readiness: {
+            state: 'NOT_READY',
+            ready: false,
+            failedPredicates: [
+              `post_smoke_readiness_unavailable:${scrubSmokeOutput(error instanceof Error ? error.message : String(error))}`,
+            ],
+          },
+          reviewProjection: {
+            state: 'error',
+            description: 'post-smoke review reconciliation unavailable',
+            reason: 'missing-review',
+          },
+        };
+      }
+    }
+    emit({ ok: report.result === 'PASS', report, lifecycleCleanup, ...(postSmoke ? { postSmoke } : {}) }, options.json);
     return report.result === 'PASS' ? 0 : 1;
   } catch (error) {
     const observed = scrubSmokeOutput(error instanceof Error ? error.message : 'handled_exception');
@@ -1648,7 +1993,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     case 'validate-plan': return runValidatePlan(options);
     case 'gate-check': return runGateCheck(options);
     case 'run': return runSmokeAttempt(options);
-    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run> [options] (run accepts --smoke-actor worker-owned|independent)');
+    case 'reconcile-direct-review': return runDirectReviewReconciliation(options);
+    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run|reconcile-direct-review> [options] (run accepts --smoke-actor worker-owned|independent)');
   }
 }
 
