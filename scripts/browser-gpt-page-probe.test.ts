@@ -1249,24 +1249,49 @@ test('sent_unbound harvest fails closed when the exact marker appears on multipl
   });
 });
 
-test('sent_unbound harvest reports an incomplete census when any candidate is unreadable', async () => {
-  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, output }) => {
-    await assert.rejects(
-      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
-        listTargets: async () => [{
-          id: 'unbound-unreadable', type: 'page', url: 'https://chatgpt.com/c/unbound-unreadable', title: 'Unreadable',
+test('sent_unbound harvest skips unattachable and unreadable targets before settling one owned marker', async () => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, marker, output }) => {
+    const ownedUrl = 'https://chatgpt.com/c/66666666-6666-4666-8666-666666666666';
+    let evaluateCalls = 0;
+    let published = '';
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => [
+        { id: 'unbound-no-websocket', type: 'page', url: 'https://chatgpt.com/c/unbound-no-websocket', title: 'No websocket' },
+        {
+          id: 'unbound-unreadable',
+          type: 'page',
+          url: 'https://chatgpt.com/c/unbound-unreadable',
+          title: 'Unreadable',
           webSocketDebuggerUrl: 'ws://example/unbound-unreadable',
-        }],
-        evaluate: async () => { throw new Error('injected_unreadable_target'); },
-      })),
-      (error: any) => error.status === 'surface_unknown'
-        && error.reason === 'owned_turn_unbound_census_incomplete'
-        && error.details?.failure_reason === 'target_read_unavailable',
-    );
-    assert.equal(
-      readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase,
-      'sent_unbound',
-    );
+        },
+        {
+          id: 'unbound-owned-sibling',
+          type: 'page',
+          url: ownedUrl,
+          title: 'Owned sibling',
+          webSocketDebuggerUrl: 'ws://example/unbound-owned-sibling',
+        },
+      ],
+      evaluate: async (target, expression) => {
+        evaluateCalls += 1;
+        assert.equal(expression, HARVEST_EXPRESSION);
+        if (target.target_id === 'unbound-unreadable') throw new Error('injected_unreadable_target');
+        return evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-unbound-owned-sibling' }),
+          new FakeNode('assistant', 'UNBOUND SIBLING FINAL', 'UNBOUND SIBLING FINAL', { 'data-message-id': 'a-unbound-owned-sibling' }),
+        ], false, ownedUrl);
+      },
+      publish: async (_destination, bytes) => { published = Buffer.from(bytes).toString('utf8'); },
+    }));
+    assert.equal(result.status, 'ok');
+    assert.equal(result.harvested, true);
+    assert.equal(published, 'UNBOUND SIBLING FINAL');
+    assert.equal(evaluateCalls, 3);
+    const record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+    assert.equal(record.phase, 'harvested');
+    assert.equal(record.conversation_url, ownedUrl);
+    assert.equal(record.send_count, 1);
+    assert.equal(record.send_witness, 'numeric_send_count');
   });
 });
 

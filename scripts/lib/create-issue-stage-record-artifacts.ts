@@ -753,7 +753,9 @@ function canonicalIssueCommentLineage(
     return null;
   }
   const lineage = buildCanonicalLineage(parsed.events);
-  const blockingLineageDiagnostics = lineage.diagnostics.filter((diagnostic) => diagnostic.code !== 'duplicate-remote-event');
+  const blockingLineageDiagnostics = lineage.diagnostics.filter((diagnostic) => (
+    diagnostic.code !== 'duplicate-remote-event' && diagnostic.code !== 'non-current-cycle-fork'
+  ));
   if (blockingLineageDiagnostics.length > 0) {
     errors.push(...blockingLineageDiagnostics.map((diagnostic) => `canonical cycle lineage ${diagnostic.code}: ${diagnostic.message}`));
     return null;
