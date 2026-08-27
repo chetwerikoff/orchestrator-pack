@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 01aa5f2817bbfbc3ff6aa711845cc66786af2e8f
+          ref: e03155c61e5c0677ad0ad6c3ef1d263d0a73317d
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -24,7 +24,7 @@ jobs:
       - run: npm ci --include=dev
       - name: Build producer-native source summary
         env:
-          MEASURED_HEAD: 01aa5f2817bbfbc3ff6aa711845cc66786af2e8f
+          MEASURED_HEAD: e03155c61e5c0677ad0ad6c3ef1d263d0a73317d
         run: |
           node --experimental-strip-types --input-type=module <<'NODE'
           import fs from 'node:fs';
