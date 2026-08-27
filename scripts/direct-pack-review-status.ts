@@ -12,7 +12,7 @@ import {
 import {
   PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
   projectPackReviewSemanticStatus,
-  projectRunnerPackReviewStatusFact,
+  projectRunnerPackReviewStatusFromCombined,
   publishPackReviewRequiredStatus,
   semanticPackReviewRequiredStatusRequest,
   type PackReviewRequiredStatusRequest,
@@ -146,22 +146,10 @@ function liveCurrentHead(options: DirectPackReviewStatusOptions): string {
 }
 
 function liveRunnerStatus(options: DirectPackReviewStatusOptions): PackReviewSemanticSourceState {
-  const combined = githubApiObject(
+  return projectRunnerPackReviewStatusFromCombined(githubApiObject(
     options.repoRoot,
     `repos/${options.repoSlug}/commits/${options.headSha}/status`,
-  );
-  const statuses = Array.isArray(combined.statuses)
-    ? combined.statuses.filter((value): value is Record<string, unknown> =>
-        Boolean(value && typeof value === 'object' && !Array.isArray(value)))
-    : [];
-  const current = statuses
-    .filter((status) => String(status.context ?? '') === PACK_REVIEW_REQUIRED_STATUS_CONTEXT)
-    .sort((left, right) =>
-      Date.parse(String(right.updated_at ?? right.created_at ?? '')) -
-      Date.parse(String(left.updated_at ?? left.created_at ?? '')))[0];
-  return current
-    ? projectRunnerPackReviewStatusFact(current.state, current.description)
-    : { hasLegitimateReview: false, unresolvedBlockingFinding: false };
+  ));
 }
 
 function liveIsAncestor(options: DirectPackReviewStatusOptions, ancestorSha: string, descendantSha: string): boolean {

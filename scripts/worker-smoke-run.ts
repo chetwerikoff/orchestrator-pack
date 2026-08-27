@@ -125,6 +125,7 @@ import {
 import {
   PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
   projectPackReviewSemanticStatus,
+  projectRunnerPackReviewStatusFromCombined,
   publishPackReviewRequiredStatus,
   semanticPackReviewRequiredStatusRequest,
   type PackReviewSemanticSourceState,
@@ -726,53 +727,16 @@ function githubCommitIsAncestor(
   return String(comparison.status ?? '').trim().toLowerCase() === 'ahead';
 }
 
-export function projectRunnerPackReviewStatusFact(
-  stateValue: unknown,
-  descriptionValue: unknown,
-): PackReviewSemanticSourceState {
-  const state = String(stateValue ?? '').trim().toLowerCase();
-  const description = String(descriptionValue ?? '').trim().toLowerCase();
-
-  // Only runner-owned status descriptions are admitted back as runner facts.
-  // Semantic direct-review projections use the same context but are outputs,
-  // never evidence for a later projection.
-  if (state === 'success' && (
-    description === 'pack review completed with no findings.'
-    || description === 'pack review completed with non-blocking findings.'
-  )) {
-    return { hasLegitimateReview: true, unresolvedBlockingFinding: false };
-  }
-  if (state === 'failure' && description === 'pack review found blocking issues.') {
-    return { hasLegitimateReview: true, unresolvedBlockingFinding: true };
-  }
-  if (state === 'pending' && description === 'pack review is running for this exact head.') {
-    return { hasLegitimateReview: false, unresolvedBlockingFinding: false, activeAttempt: true };
-  }
-  return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
-}
-
 export function currentPackReviewStatusFact(
   repositorySlug: string,
   headSha: string,
   repoRoot: string,
 ): PackReviewSemanticSourceState {
-  const combined = githubApiObject(
+  return projectRunnerPackReviewStatusFromCombined(githubApiObject(
     'pack-review-status',
     `repos/${repositorySlug}/commits/${headSha}/status`,
     repoRoot,
-  );
-  const statuses = Array.isArray(combined.statuses)
-    ? combined.statuses.filter((value): value is Record<string, unknown> =>
-        Boolean(value && typeof value === 'object' && !Array.isArray(value)))
-    : [];
-  const current = statuses
-    .filter((status) => String(status.context ?? '') === PACK_REVIEW_REQUIRED_STATUS_CONTEXT)
-    .sort((left, right) =>
-      Date.parse(String(right.updated_at ?? right.created_at ?? '')) -
-      Date.parse(String(left.updated_at ?? left.created_at ?? '')))[0];
-  if (!current) return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
-
-  return projectRunnerPackReviewStatusFact(current.state, current.description);
+  ));
 }
 
 function currentAtCapFacts(

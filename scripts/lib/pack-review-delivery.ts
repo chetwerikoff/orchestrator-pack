@@ -257,6 +257,27 @@ export function projectRunnerPackReviewStatusFact(
   return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
 }
 
+export function projectRunnerPackReviewStatusFromCombined(
+  combinedValue: unknown,
+): PackReviewSemanticSourceState {
+  if (!combinedValue || typeof combinedValue !== 'object' || Array.isArray(combinedValue)) {
+    return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
+  }
+  const combined = combinedValue as Record<string, unknown>;
+  const statuses = Array.isArray(combined.statuses)
+    ? combined.statuses.filter((value): value is Record<string, unknown> =>
+        Boolean(value && typeof value === 'object' && !Array.isArray(value)))
+    : [];
+  const current = statuses
+    .filter((status) => String(status.context ?? '') === PACK_REVIEW_REQUIRED_STATUS_CONTEXT)
+    .sort((left, right) =>
+      Date.parse(String(right.updated_at ?? right.created_at ?? '')) -
+      Date.parse(String(left.updated_at ?? left.created_at ?? '')))[0];
+  return current
+    ? projectRunnerPackReviewStatusFact(current.state, current.description)
+    : { hasLegitimateReview: false, unresolvedBlockingFinding: false };
+}
+
 export type PackReviewRequiredStatusWriter = (
   request: PackReviewRequiredStatusRequest,
 ) => Promise<void>;
