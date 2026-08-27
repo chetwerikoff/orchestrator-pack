@@ -52,5 +52,5 @@
     "scripts/lib/stage-completeness-core.ts",
     "scripts/stage-completeness-guard.test.ts"
   ],
-  "source_revision": "4c5a0f11bc6f0cd6882e4516dd04ebed9b7b901e"
+  "source_revision": "dffdba603f10c3650284992a689eef38530b1cf3"
 }
