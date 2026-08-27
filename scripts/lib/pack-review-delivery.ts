@@ -257,14 +257,6 @@ export function projectRunnerPackReviewStatusFact(
   return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
 }
 
-function isSemanticPackReviewStatusDescription(value: unknown): boolean {
-  const description = String(value ?? '').trim().toLowerCase();
-  return description === 'pack review has unresolved blocking findings'
-    || description === 'pack review evidence is complete for current facts'
-    || description === 'pack review runner is active'
-    || description === 'pack review evidence is missing';
-}
-
 export function projectRunnerPackReviewStatusFromCombined(
   combinedValue: unknown,
 ): PackReviewSemanticSourceState {
@@ -277,15 +269,16 @@ export function projectRunnerPackReviewStatusFromCombined(
     ? statusesValue.filter((value): value is Record<string, unknown> =>
         Boolean(value && typeof value === 'object' && !Array.isArray(value)))
     : [];
-  const current = statuses
+  const ordered = statuses
     .filter((status) => String(status.context ?? '') === PACK_REVIEW_REQUIRED_STATUS_CONTEXT)
     .sort((left, right) =>
       Date.parse(String(right.updated_at ?? right.created_at ?? '')) -
-      Date.parse(String(left.updated_at ?? left.created_at ?? '')))
-    .find((status) => !isSemanticPackReviewStatusDescription(status.description));
-  return current
-    ? projectRunnerPackReviewStatusFact(current.state, current.description)
-    : { hasLegitimateReview: false, unresolvedBlockingFinding: false };
+      Date.parse(String(left.updated_at ?? left.created_at ?? '')));
+  for (const status of ordered) {
+    const source = projectRunnerPackReviewStatusFact(status.state, status.description);
+    if (source.hasLegitimateReview || source.activeAttempt === true) return source;
+  }
+  return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
 }
 
 export type PackReviewRequiredStatusWriter = (

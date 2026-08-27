@@ -143,6 +143,32 @@ describe('Issue #1749 trusted direct pack-review bootstrap', () => {
     });
   });
 
+  it('does not let a newer unrecognized runner status hide an older blocker', () => {
+    expect(projectRunnerPackReviewStatusFromCombined([
+      {
+        context: 'orchestrator-pack/pack-review',
+        state: 'error',
+        description: 'Pack review execution failed before a reviewer judgment was produced.',
+        updated_at: '2026-08-27T00:00:03Z',
+      },
+      {
+        context: 'orchestrator-pack/pack-review',
+        state: 'failure',
+        description: 'pack review has unresolved blocking findings',
+        updated_at: '2026-08-27T00:00:02Z',
+      },
+      {
+        context: 'orchestrator-pack/pack-review',
+        state: 'failure',
+        description: 'Pack review found blocking issues.',
+        updated_at: '2026-08-27T00:00:01Z',
+      },
+    ])).toEqual({
+      hasLegitimateReview: true,
+      unresolvedBlockingFinding: true,
+    });
+  });
+
   it('preserves a runner blocker across repeated clean direct-review reconciliation', async () => {
     const statuses: Record<string, unknown>[] = [{
       context: 'orchestrator-pack/pack-review',
