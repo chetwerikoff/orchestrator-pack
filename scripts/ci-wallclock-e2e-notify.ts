@@ -87,9 +87,13 @@ function main(): number {
   return 0;
 }
 
-try {
-  process.exitCode = main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 2;
+function run(): number {
+  try {
+    return main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
 }
+
+process.exitCode = run();
