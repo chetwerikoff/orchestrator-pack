@@ -1221,8 +1221,6 @@ function readTurnResultForInvocation(
   if (transportClassification === 'complete' && artifactAuthority) {
     const expectedArtifactIdentity = `github-comment:${artifactAuthority.commentId}`;
     if (
-      typeof invocation.terminalResultIdentity === 'string' &&
-      invocation.terminalResultIdentity.startsWith('github-comment:') &&
       invocation.terminalResultIdentity !== expectedArtifactIdentity
     ) {
       errors.push(`stage evidence ${label}.terminalResultIdentity must equal ${expectedArtifactIdentity} for the authoritative GitHub artifact`);

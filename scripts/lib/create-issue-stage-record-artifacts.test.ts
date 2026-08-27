@@ -678,6 +678,28 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     );
   });
 
+  it('rejects a stale non-GitHub terminal identity for the authoritative artifact', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      reviewerSource: 'slot-01#capture=direct-publication/v1',
+      stageInvocationId: 'a28911b4-9f60-4a42-bd8e-edd6c896540c',
+      turnResultInvocationId: '73fe6971-c58f-4d45-bb35-00ca92bec25a',
+      turnResultState: 'recovery_required',
+      turnResultCause: 'direct_publication_no_owned_publication',
+      terminalResultIdentity: 'sha256:stale-helper-identity',
+      withTurnResult: true,
+      withCapture: false,
+    });
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(input.body, { id: 5427396953 })],
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain(
+      'stage evidence stage evidence invocation[0].terminalResultIdentity must equal github-comment:5427396953 for the authoritative GitHub artifact',
+    );
+  });
+
   it('rejects the observed mismatch when complete census omits the GitHub credential comment', () => {
     const input = fixture({
       transportClassification: 'complete',
