@@ -236,6 +236,27 @@ export function semanticPackReviewRequiredStatusRequest(input: {
   };
 }
 
+export function projectRunnerPackReviewStatusFact(
+  stateValue: unknown,
+  descriptionValue: unknown,
+): PackReviewSemanticSourceState {
+  const state = String(stateValue ?? '').trim().toLowerCase();
+  const description = String(descriptionValue ?? '').trim().toLowerCase();
+  if (state === 'success' && (
+    description === 'pack review completed with no findings.'
+    || description === 'pack review completed with non-blocking findings.'
+  )) {
+    return { hasLegitimateReview: true, unresolvedBlockingFinding: false };
+  }
+  if (state === 'failure' && description === 'pack review found blocking issues.') {
+    return { hasLegitimateReview: true, unresolvedBlockingFinding: true };
+  }
+  if (state === 'pending' && description === 'pack review is running for this exact head.') {
+    return { hasLegitimateReview: false, unresolvedBlockingFinding: false, activeAttempt: true };
+  }
+  return { hasLegitimateReview: false, unresolvedBlockingFinding: false };
+}
+
 export type PackReviewRequiredStatusWriter = (
   request: PackReviewRequiredStatusRequest,
 ) => Promise<void>;
