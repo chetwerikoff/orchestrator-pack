@@ -1255,9 +1255,8 @@ function beginSmokeOrdering(
   if (!required && (actor !== 'worker-owned' || plan.requirement !== 'not-applicable')) return null;
   const fence = parseComplexityTierFence(issueBody);
   if (fence.kind !== 'tier-fence') {
-    if (actor !== 'worker-owned' || plan.requirement !== 'not-applicable') {
-      throw new Error('smoke_ordering_tier_missing');
-    }
+    if (actor === 'worker-owned' && plan.requirement !== 'not-applicable') return null;
+    if (actor !== 'worker-owned') throw new Error('smoke_ordering_tier_missing');
   }
   const projectId = 'orchestrator-pack';
   const storeRoot = resolvePackReviewRunStoreRoot({
