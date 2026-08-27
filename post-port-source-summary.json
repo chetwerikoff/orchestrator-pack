@@ -1,53 +1,18 @@
 {
-  "measuredHead": "cc9ab65f8b39859f78b8ab90588026f215756be5",
+  "measuredHead": "4a767a39796db97b0a059c404b4d6efd40c2d981",
   "broaderStatusClosed": false,
   "dormantRetainedCoverageComplete": false,
   "unresolvedCurrentPrescriptiveScriptTargets": [
     {
-      "sourcePath": ".github/workflows/read-delegation-audit.yml",
-      "line": 31,
-      "column": 14,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/check-read-delegation-policy-consistency.ps1"
-    },
-    {
-      "sourcePath": ".github/workflows/read-delegation-audit.yml",
-      "line": 41,
-      "column": 14,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/check-read-delegation-audit-ci-gate.ps1"
-    },
-    {
       "sourcePath": ".github/workflows/scope-guard.yml",
-      "line": 105,
-      "column": 14,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/check-ci-cheap-wins.ps1"
-    },
-    {
-      "sourcePath": ".github/workflows/scope-guard.yml",
-      "line": 109,
-      "column": 14,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/check-verify-runtime.ps1"
-    },
-    {
-      "sourcePath": ".github/workflows/scope-guard.yml",
-      "line": 129,
-      "column": 14,
-      "tokenKind": "script",
-      "matchedBytes": "./scripts/check-ci-pipeline-split.ps1"
-    },
-    {
-      "sourcePath": ".github/workflows/scope-guard.yml",
-      "line": 218,
+      "line": 215,
       "column": 14,
       "tokenKind": "script",
       "matchedBytes": "./scripts/check-review-start-claim-guard.ps1"
     },
     {
       "sourcePath": ".github/workflows/scope-guard.yml",
-      "line": 426,
+      "line": 423,
       "column": 11,
       "tokenKind": "script",
       "matchedBytes": "./scripts/lint-self-architect.ps1"
@@ -903,7 +868,7 @@
   ],
   "sources": [
     {
-      "path": ".github/workflows/read-delegation-audit.yml",
+      "path": ".github/workflows/scope-guard.yml",
       "sourceKinds": [
         "workflow-token-reference"
       ],
@@ -913,98 +878,30 @@
       "unresolvedScriptTokens": 2,
       "samples": [
         {
-          "line": 30,
+          "line": 214,
           "tokenKind": "runtime",
           "matchedBytes": "pwsh",
           "sourceKind": "workflow-token-reference",
           "resolvedScriptPath": null
         },
         {
-          "line": 31,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/check-read-delegation-policy-consistency.ps1",
-          "sourceKind": "workflow-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 40,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "workflow-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 41,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/check-read-delegation-audit-ci-gate.ps1",
-          "sourceKind": "workflow-token-reference",
-          "resolvedScriptPath": null
-        }
-      ]
-    },
-    {
-      "path": ".github/workflows/scope-guard.yml",
-      "sourceKinds": [
-        "workflow-token-reference"
-      ],
-      "runtimeTokens": 5,
-      "scriptTokens": 5,
-      "resolvedTargets": [],
-      "unresolvedScriptTokens": 5,
-      "samples": [
-        {
-          "line": 104,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "workflow-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 105,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/check-ci-cheap-wins.ps1",
-          "sourceKind": "workflow-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 108,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "workflow-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 109,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/check-verify-runtime.ps1",
-          "sourceKind": "workflow-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 126,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "workflow-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 129,
-          "tokenKind": "script",
-          "matchedBytes": "./scripts/check-ci-pipeline-split.ps1",
-          "sourceKind": "workflow-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 217,
-          "tokenKind": "runtime",
-          "matchedBytes": "pwsh",
-          "sourceKind": "workflow-token-reference",
-          "resolvedScriptPath": null
-        },
-        {
-          "line": 218,
+          "line": 215,
           "tokenKind": "script",
           "matchedBytes": "./scripts/check-review-start-claim-guard.ps1",
+          "sourceKind": "workflow-token-reference",
+          "resolvedScriptPath": null
+        },
+        {
+          "line": 418,
+          "tokenKind": "runtime",
+          "matchedBytes": "pwsh",
+          "sourceKind": "workflow-token-reference",
+          "resolvedScriptPath": null
+        },
+        {
+          "line": 423,
+          "tokenKind": "script",
+          "matchedBytes": "./scripts/lint-self-architect.ps1",
           "sourceKind": "workflow-token-reference",
           "resolvedScriptPath": null
         }
