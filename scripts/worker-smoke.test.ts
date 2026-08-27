@@ -1133,6 +1133,8 @@ if (endpoint === 'user') {
     head: { sha: '${HEAD_ONE}' },
     base: { ref: 'main' },
   }));
+} else if (endpoint === 'repos/${REPOSITORY}') {
+  process.stdout.write(JSON.stringify({ default_branch: 'main' }));
 } else {
   process.stderr.write('unexpected endpoint: ' + endpoint);
   process.exitCode = 2;

@@ -39,10 +39,10 @@ import {
 } from './orca-runtime/native.ts';
 import { OrcaTaskRuntimeAdapter } from './orca-runtime/task-adapter.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
+import { projectRunnerPackReviewStatusFact } from './lib/pack-review-delivery.ts';
 import {
   establishRuntimeSmokeDelivery,
   projectExpectedPrTarget,
-  projectRunnerPackReviewStatusFact,
   runtimeClose,
   runtimeCloseBoundHandle,
   waitForRuntimeSmokeCompletion,
