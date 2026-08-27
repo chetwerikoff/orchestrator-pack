@@ -34,11 +34,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
-          node --experimental-strip-types scripts/worker-smoke-run.ts reconcile-direct-review
+          node --experimental-strip-types scripts/direct-pack-review-status.ts
+          --repo-slug "${{ github.repository }}"
           --pr "${{ github.event.pull_request.number }}"
           --head-sha "${{ github.event.pull_request.head.sha }}"
           --review-id "${{ github.event.review.id }}"
           --review-head-sha "${{ github.event.review.commit_id }}"
           --repo-root "${{ github.workspace }}"
-          --cwd "${{ github.workspace }}"
           --json
