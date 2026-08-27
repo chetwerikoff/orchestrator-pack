@@ -1019,7 +1019,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
   it.each([
     ['foreign target', comment(canonicalVerdict(), { issue_url: `https://api.github.com/repos/${REPOSITORY}/issues/1193` }), /absent after complete census/],
     ['wrong revision', comment(canonicalVerdict('r02')), /revision mismatch:.*expected=r01.*observed=r02/],
-    ['wrong publisher', comment(canonicalVerdict(), { user: { login: 'someone-else' } }), /provenance-mismatch/],
+    ['untrusted author association', comment(canonicalVerdict(), { author_association: 'NONE', user: { login: 'someone-else' } }), /not repository-trusted/],
     ['edited artifact', comment(canonicalVerdict(), { updated_at: '2026-08-07T04:01:00Z' }), /was edited/],
   ])('rejects %s', (_name, liveComment, expected) => {
     const input = fixture({ transportClassification: 'incident' });
@@ -1072,25 +1072,26 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.errors.join('\n')).toContain('journal-marked comment');
   });
 
-  it('fails closed when the canonical invocation candidate itself has no author', () => {
+  it('fails closed when the canonical invocation candidate itself lacks repository-trust fields', () => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport({ census: [...input.reviewComments, comment(input.body, { user: null })] }));
     expect(result.ok).toBe(false);
-    expect(result.temporary).toBe('provenance-unresolved');
-    expect(result.errors.join('\n')).toContain('canonical artifact candidate has no authoritative comment-author login');
+    expect(result.temporary).toBe('source-unavailable');
+    expect(result.errors.join('\n')).toContain('no repository-trust fields');
   });
 
-  it('filters provenance before uniqueness and compares GitHub logins case-insensitively', () => {
+  it('deduplicates byte-identical trusted result materializations without ranking their publishers', () => {
     const input = fixture({ transportClassification: 'incident' });
-    const principalComment = comment(input.body);
-    const foreignComment = comment(input.body, {
+    const first = comment(input.body);
+    const second = comment(input.body, {
       id: COMMENT_ID + 1,
       html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}`,
       user: { login: 'someone-else' },
+      author_association: 'COLLABORATOR',
     });
     const result = produce(input, transport({
-      principal: PUBLISHER.toUpperCase(),
-      census: [...input.reviewComments, foreignComment, principalComment],
+      principal: null,
+      census: [...input.reviewComments, second, first],
     }));
     expect(result.ok, result.errors.join('\n')).toBe(true);
     const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
@@ -1098,12 +1099,10 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(receipt.invocations[0].artifactAuthority.publisherLogin).toBe(PUBLISHER);
   });
 
-  it('classifies unavailable authenticated principal as TEMPORARY provenance-unresolved', () => {
+  it('does not require the current authenticated GitHub principal to accept trusted result content', () => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport({ principal: null }));
-    expect(result.ok).toBe(false);
-    expect(result.temporary).toBe('provenance-unresolved');
-    expect(result.errors.join('\n')).toContain('TEMPORARY provenance-unresolved');
+    expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
   it('classifies an incomplete paginated census as TEMPORARY source-unavailable', () => {
@@ -1115,15 +1114,24 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.errors.join('\n')).toContain('TEMPORARY source-unavailable');
   });
 
-  it('classifies duplicate canonical invocation artifacts as TEMPORARY identity-unresolved', () => {
+  it('treats duplicate canonical invocation artifacts with identical bytes as one observation', () => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport({ census: [
       comment(input.body),
-      comment(input.body, { id: COMMENT_ID + 1, html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}` }),
+      comment(input.body, { id: COMMENT_ID + 1, html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}`, user: { login: 'other-member' }, author_association: 'MEMBER' }),
+    ] }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('rejects conflicting trusted result bytes for the same invocation and source revision', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const conflicting = `${input.body}material-conflict\n`;
+    const result = produce(input, transport({ census: [
+      comment(input.body),
+      comment(conflicting, { id: COMMENT_ID + 1, html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}`, user: { login: 'other-member' }, author_association: 'MEMBER' }),
     ] }));
     expect(result.ok).toBe(false);
-    expect(result.temporary).toBe('identity-unresolved');
-    expect(result.errors.join('\n')).toContain('TEMPORARY identity-unresolved');
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact content conflict');
   });
 
   it('classifies local observation loss after the authoritative reread but before capture materialization', () => {
@@ -1172,12 +1180,11 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
   it.each([
     ['complete absence', { census: [] }],
     ['duplicate identity', { census: [comment(), comment(canonicalVerdict(), { id: COMMENT_ID + 1, html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}` })] }],
-    ['wrong publisher', { census: [comment(canonicalVerdict(), { user: { login: 'someone-else' } })] }],
+    ['untrusted publisher', { census: [comment(canonicalVerdict(), { user: { login: 'someone-else' }, author_association: 'NONE' })] }],
     ['edited artifact', { census: [comment(canonicalVerdict(), { updated_at: '2026-08-07T04:01:00Z' })] }],
     ['wrong revision', { census: [comment(canonicalVerdict('r02'))] }],
     ['reread byte mismatch', { census: [comment()], reread: comment(`${canonicalVerdict()}changed\n`) }],
     ['source unavailable', { censusFailure: true }],
-    ['principal unavailable', { principal: null }],
   ])('does not let the operator URL override %s', (_name, transportOptions) => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport(transportOptions as TransportOptions), validOperatorHint(input.body));
