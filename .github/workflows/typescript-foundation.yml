@@ -146,7 +146,7 @@ jobs:
         run: npm run test:contract-mutations
 
   post-port-proof:
-    name: Post-port PowerShell closure
+    name: Post-port runtime closure
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15

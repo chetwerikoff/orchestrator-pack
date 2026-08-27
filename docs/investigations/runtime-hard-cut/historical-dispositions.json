@@ -173,6 +173,30 @@
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
+      "path": "plugins/codex-pr-reviewer/bin/command-guard/guard-lib.sh",
+      "class": "negative-safety-exclusion",
+      "reason": "The command guard names legacy PowerShell commands only to detect/restrict them; it is not a PowerShell runtime caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "plugins/codex-pr-reviewer/bin/command-guard/pwsh",
+      "class": "negative-safety-exclusion",
+      "reason": "Command-guard shim exists to intercept prohibited legacy shell invocation in reviewer sandboxes; it does not provide pack PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "plugins/codex-pr-reviewer/bin/command-guard/pwsh.cmd",
+      "class": "negative-safety-exclusion",
+      "reason": "Command-guard shim exists to intercept prohibited legacy shell invocation in reviewer sandboxes; it does not provide pack PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "plugins/codex-pr-reviewer/lib/command_budget.ts",
+      "class": "negative-safety-exclusion",
+      "reason": "Reviewer command-budget policy names legacy PowerShell commands only as restricted command classes; it does not execute them.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
       "path": "plugins/codex-pr-reviewer/tests/review.test.ts",
       "class": "negative-history-fixture",
       "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
@@ -182,6 +206,18 @@
       "path": "plugins/codex-pr-reviewer/tests/reviewer-budget.test.ts",
       "class": "negative-history-fixture",
       "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/_review-ready-seed-fixture-test-helpers.ts",
+      "class": "negative-history-fixture",
+      "reason": "Test-only helper preserves a legacy shell fixture command for regression coverage and is not a production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/_test-pwsh-helpers.ts",
+      "class": "negative-history-fixture",
+      "reason": "Test-only PowerShell harness support exists solely to execute retained legacy regression fixtures and is not production behavior.",
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
@@ -230,6 +266,12 @@
       "path": "scripts/estate-cut/manifest-generator.mjs",
       "class": "precut-migration-classifier",
       "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/estate-cut/task-311-tests/task-311-scope.test-support.ts",
+      "class": "negative-history-fixture",
+      "reason": "Estate-cut test support exposes a legacy shell executable only inside isolated regression fixtures.",
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
@@ -593,6 +635,24 @@
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
+      "path": "scripts/port-stage-evidence/producer.ts",
+      "class": "precut-migration-classifier",
+      "reason": "The #1415 evidence producer necessarily names PowerShell token/source kinds while classifying them; it is the measurement authority, not a PowerShell execution caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/port-stage-evidence/tokens.ts",
+      "class": "precut-migration-classifier",
+      "reason": "The #1415 tokenizer necessarily recognizes PowerShell runtime and script tokens as measurement vocabulary; it does not execute them.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/post-port-admission.test.ts",
+      "class": "negative-history-fixture",
+      "reason": "Focused #1419 admission fixtures use synthetic .ps1 names to prove fail-closed behavior and are not production callers.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
       "path": "scripts/pr-scope-declaration.test.ts",
       "class": "negative-history-fixture",
       "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
@@ -722,6 +782,12 @@
       "path": "scripts/pr2a/planning.test.ts",
       "class": "negative-history-fixture",
       "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
+      "owningReference": "Issue #1419 r17; Issue #1415 C5"
+    },
+    {
+      "path": "scripts/rca-spec-discipline-surfaces.json",
+      "class": "precut-migration-classifier",
+      "reason": "Migration surface metadata names a retired PowerShell checker for historical mapping and is not an execution root.",
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
