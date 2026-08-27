@@ -192,7 +192,8 @@
     "scripts/worktree-lifecycle/operations.test.ts": "light",
     "scripts/worktree-lifecycle/recovery-regression.test.ts": "light",
     "scripts/worktree-teardown.test.ts": "light",
-    "scripts/skill-pointers.test.ts": "light"
+    "scripts/skill-pointers.test.ts": "light",
+    "scripts/pr2-foundation/readiness-evaluator.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,
