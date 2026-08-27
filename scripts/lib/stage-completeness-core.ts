@@ -16,7 +16,7 @@ import {
   resolveCanonicalReviewDirectory as resolveCanonicalReviewDirectoryShared,
 } from './canonical-review-directory.ts';
 export { findLegacyReceiptPaths } from './canonical-review-directory.ts';
-import { isReviewLaneEvidence, isReviewLaneRouting, sameReviewLaneRouting } from './review-lane-record.ts';
+import { isReviewLaneEvidence, isReviewLaneRouting, reviewLaneWaivedMissingSlots, sameReviewLaneRouting } from './review-lane-record.ts';
 import type { PartialMissingSourceWitness, ProducerEvidence, ReviewLaneEvidence } from './create-issue-stage-record-types.ts';
 import { REVIEW_LANE_ROUTING_POLICY_VERSION, normalizeMaterialVerdict, type ReviewLaneRouting } from './review-lane-routing.ts';
 import { canonicalStagePlan } from './create-issue-stage-topology.ts';
@@ -565,6 +565,12 @@ function parseInvocation(
 }
 function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: string[]): void {
   const requiredSlots = receipt.reviewLane?.finalRequiredSlots ?? expectedSlots(receipt.reviewerCardinality);
+  const waivedMissingSlots = reviewLaneWaivedMissingSlots(
+    receipt.stage,
+    receipt.policyVersion,
+    receipt.producerEvidence,
+    receipt.partialMissingSources,
+  );
   if (!Array.isArray(receipt.invocations)) { errors.push(`stage ${receipt.stage} requires invocation envelopes`); return; }
   const invocations = receipt.invocations.map((value, index) => parseInvocation(value, receipt, index, errors)).filter((value): value is ReviewerInvocationEnvelopeV1 => Boolean(value));
   const bySlot = new Map<ReviewerSlot, ReviewerInvocationEnvelopeV1[]>();
@@ -634,7 +640,7 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
   const allInvocationCaptures = invocations.flatMap((invocation) => invocation.capture ? [invocation.capture] : []);
   if (receipt.reviewLane) {
     const evidenceSlots = Object.keys(receipt.reviewLane.sourceVerdicts).sort();
-    const requiredEvidenceSlots = [...requiredSlots].sort();
+    const requiredEvidenceSlots = requiredSlots.filter((slot) => !waivedMissingSlots.includes(slot)).sort();
     if (evidenceSlots.length !== requiredEvidenceSlots.length || evidenceSlots.some((slot, index) => slot !== requiredEvidenceSlots[index])) {
       errors.push(`stage ${receipt.stage} reviewLane source verdicts do not match final required slots`);
     }
@@ -737,9 +743,10 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
   const partialMissingSources = Array.isArray(value.partialMissingSources)
     ? value.partialMissingSources as PartialMissingSourceWitness[]
     : [];
-  if (reviewLane !== undefined && !isReviewLaneEvidence(reviewLane)) errors.push(`${label} reviewLane must be complete immutable evidence`);
+  const waivedMissingSlots = reviewLaneWaivedMissingSlots(stage, policyVersion, producerEvidence, partialMissingSources);
+  if (reviewLane !== undefined && !isReviewLaneEvidence(reviewLane, waivedMissingSlots)) errors.push(`${label} reviewLane must be complete immutable evidence`);
   if (!routedPolicy && reviewLane !== undefined) errors.push(`${label} legacy policy cannot carry routed reviewLane evidence`);
-  if (routedPolicy && !isReviewLaneEvidence(reviewLane)) errors.push(`${label} review-lane-routing/v1 requires full reviewLane evidence`);
+  if (routedPolicy && !isReviewLaneEvidence(reviewLane, waivedMissingSlots)) errors.push(`${label} review-lane-routing/v1 requires full reviewLane evidence`);
   if (tier !== 'T1' && tier !== 'T2' && tier !== 'T3') errors.push(`${label} has unknown tier`);
   if (!COUNTED_STAGE_TOKENS.has(stage as ReviewStage)) errors.push(`${label} has unknown stage`);
   if (policyVersion !== TRIPLE_SOURCE_POLICY_VERSION && policyVersion !== SINGLE_SOURCE_POLICY_VERSION && policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) errors.push(`${label} has unknown policyVersion`);
@@ -766,7 +773,7 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
   }
   const credentialingCaptures = validateCaptureArray(value.credentialingCaptures, `${label}.credentialingCaptures`, errors);
   const relayEligibleCaptures = validateCaptureArray(value.relayEligibleCaptures, `${label}.relayEligibleCaptures`, errors);
-  if (isReviewLaneEvidence(reviewLane)) {
+  if (isReviewLaneEvidence(reviewLane, waivedMissingSlots)) {
     const reviewLaneRouting = reviewLane.routing;
     if (reviewLaneRouting.stageAttemptId !== String(value.stageAttemptId).trim()) errors.push(`${label} reviewLane stageAttemptId mismatch`);
     if (reviewLaneRouting.sourceRevision !== String(value.sourceRevision).trim()) errors.push(`${label} reviewLane sourceRevision mismatch`);
@@ -799,7 +806,7 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
     claude: isRecord(value.claude) ? value.claude as unknown as StageCompletenessReceiptV1['claude'] : undefined,
     credentialingCaptures,
     relayEligibleCaptures,
-    ...(isReviewLaneEvidence(reviewLane) ? { reviewLane } : {}),
+    ...(isReviewLaneEvidence(reviewLane, waivedMissingSlots) ? { reviewLane } : {}),
   };
   if (receipt.stage === 'competitive') {
     if (receipt.tier !== 'T3') errors.push('competitive is valid only for T3');

@@ -16,6 +16,7 @@ import type {
 import {
   isReviewLaneEvidence,
   isReviewLaneRouting,
+  reviewLaneWaivedMissingSlots,
 } from './review-lane-record.ts';
 
 const MARKER_RE = new RegExp(
@@ -161,9 +162,10 @@ function buildJournalLogical(parsed: Record<string, unknown>): JournalLogical | 
       || (settledOutcome !== 'partial' && partialMissingSources.length > 0)) {
       return null;
     }
+    const waivedMissingSlots = reviewLaneWaivedMissingSlots(stage, policyVersion, producerEvidence, partialMissingSources);
     if (policyVersion === 'review-lane-routing/v1') {
-      if (!isReviewLaneEvidence(routedLane)) return null;
-    } else if (routedLane !== undefined && !isReviewLaneEvidence(routedLane)) {
+      if (!isReviewLaneEvidence(routedLane, waivedMissingSlots)) return null;
+    } else if (routedLane !== undefined && !isReviewLaneEvidence(routedLane, waivedMissingSlots)) {
       return null;
     }
     const logical: StageEventLogical = {

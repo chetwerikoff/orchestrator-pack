@@ -8,7 +8,7 @@ import type {
   StageEventLogical,
   StageReceiptCycleBinding,
 } from './create-issue-stage-record-types.ts';
-import { validateReviewLaneRecord } from './review-lane-record.ts';
+import { reviewLaneWaivedMissingSlots, validateReviewLaneRecord } from './review-lane-record.ts';
 import { STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
 import { deriveCanonicalCycleLineage } from './create-issue-stage-record-lineage.ts';
 import { REVIEW_LANE_ROUTING_POLICY_VERSION } from './review-lane-routing.ts';
@@ -130,8 +130,9 @@ export function parseConsumableStageReceipt(value: unknown): {
   if (routedPolicy && reviewLane === undefined) {
     errors.push('review-lane evidence is required for review-lane-routing/v1');
   }
+  const waivedMissingSlots = reviewLaneWaivedMissingSlots(stage, policyVersion, producerEvidence, partialMissingSources);
   if (reviewLane !== undefined) {
-    const routed = validateReviewLaneRecord(reviewLane);
+    const routed = validateReviewLaneRecord(reviewLane, waivedMissingSlots);
     errors.push(...routed.errors);
     const routedRecord = isRecord(reviewLane) ? reviewLane : null;
     if (routedPolicy && routed.ok && routedRecord && isRecord(routedRecord.routing) && isRecord(routedRecord.sourceVerdicts)) {

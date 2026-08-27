@@ -4,6 +4,7 @@ import {
   classifyReviewLaneDeclaration,
   normalizeReviewLaneDeclaration,
   reviewLaneClassifierPolicyIdentity,
+  settleReviewLane,
   type ReviewLaneAuthorDeclaration,
 } from './review-lane-routing.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
@@ -313,6 +314,96 @@ describe('review-lane production activation', () => {
       ...routed,
       sourceVerdicts: { '01': 'blocked' as const, '02': 'accept' as const },
     })).toMatchObject({ ok: false });
+  });
+
+  it('applies the explicit two-missing architectural-review waiver without changing final slots', () => {
+    const laneDeclaration = declaration([{
+      kind: 'exact', path: 'scripts/chatgpt-browser-turn/driver.ts', behaviors: ['pure-review-lane-selection'],
+    }]);
+    const laneInput = normalizeReviewLaneDeclaration(laneDeclaration);
+    const classification = classifyReviewLaneDeclaration(laneDeclaration);
+    if (laneInput.status !== 'usable') throw new Error('waiver fixture input must be usable');
+    const routing = buildReviewLaneRouting(laneInput, classification, 'r01', 'attempt-1');
+    const sourceVerdicts = { '01': 'accept' as const };
+    const settlement = settleReviewLane(routing, { '01': 'accept', '02': 'accept', '03': 'accept' });
+    const record = {
+      routing,
+      finalRequiredSlots: settlement.finalRequiredSlots,
+      sourceVerdicts,
+      sourceVerdictEvidence: {
+        '01': {
+          producerEvidenceIdentity: 'producer-01',
+          captureIdentity: 'capture-01',
+          terminalClassification: 'complete',
+          captureVerified: true,
+          digestMatches: true,
+          verdictText: 'NO_FINDINGS',
+          rawFindingCount: 0,
+        },
+      },
+      conflictDecision: settlement.conflictDecision,
+      settlement,
+    };
+    expect(settlement.finalRequiredSlots).toEqual(['01', '02', '03']);
+    expect(validateReviewLaneRecord(record).ok).toBe(false);
+    expect(validateReviewLaneRecord(record, ['02', '03'])).toEqual({ ok: true, errors: [] });
+    const receipt = {
+      tier: 'T3', stage: 'architectural-review', cycleId: 'cycle-1', stageAttemptId: 'attempt-1',
+      policyVersion: 'review-lane-routing/v1', sourceRevision: 'r01', outcome: 'partial',
+      reviewerCardinality: 3, completedSourceCount: 1,
+      cycleBinding: { cycleId: 'cycle-1', sourceRevision: 'r01', boundBeforeLaunch: true },
+      tierTransition: 'none',
+      partialMissingSources: [
+        { reviewerSlot: '02', invocationId: 'invocation-02', evidenceIdentity: 'terminal-02', reason: 'possible-or-actual send with resend forbidden' },
+        { reviewerSlot: '03', invocationId: 'invocation-03', evidenceIdentity: 'terminal-03', reason: 'possible-or-actual send with resend forbidden' },
+      ],
+      reviewLane: record,
+    };
+    expect(parseConsumableStageReceipt({ ...receipt, producerEvidence: 'not-applicable' }).receipt).toBeNull();
+    expect(parseConsumableStageReceipt({ ...receipt, producerEvidence: 'waived' })).toMatchObject({ receipt, errors: [] });
+
+    const capture = {
+      captureIdentity: 'capture-01', name: 'pass-01-architectural-review-01.capture.txt',
+      byteLength: 1, sha256: '0'.repeat(64), rawFindingCount: 0,
+    };
+    const invocations = ['01', '02', '03'].map((slot) => ({
+      schema: 'reviewer-invocation-envelope/v1', reviewEpisodeId: 'issue:1706@r01',
+      stageAttemptId: 'attempt-1', policyVersion: 'review-lane-routing/v1', reviewerCardinality: 3,
+      cardinalityConfigIdentity: routing.cardinalityConfigIdentity, stage: 'architectural-review', sourceRevision: 'r01',
+      invocationId: `invocation-${slot}`, terminalResultIdentity: `terminal-${slot}`,
+      reviewerSource: `source-${slot}`, reviewerSlot: slot, reviewerOrdinal: Number(slot),
+      attemptOrdinal: 1, retryAttempt: false, terminal: true,
+      terminalClassification: slot === '01' ? 'complete' : 'incident', sendCount: 1,
+      retryClass: 'retry-forbidden', revisionCheck: 'matched', capacityOutcome: 'admitted', capacityWaitMs: 0,
+      reviewLaneRouting: routing, ...(slot === '01' ? { capture } : {}),
+    }));
+    const stageReceipt = {
+      schema: 'stage-completeness-receipt/v1', tier: 'T3', taskIdentity: 'issue:1706', episodeFirstRevision: 'r01',
+      reviewEpisodeId: 'issue:1706@r01', stageReceiptId: 'issue:1706@r01:stage-receipt:0001',
+      previousStageReceiptId: null, receiptCensus: ['issue:1706@r01:stage-receipt:0001'], stageAttemptId: 'attempt-1',
+      stageSequence: 1, stage: 'architectural-review', policyVersion: 'review-lane-routing/v1', reviewerCardinality: 3,
+      cardinalityConfigIdentity: routing.cardinalityConfigIdentity, sourceRevision: 'r01', outcome: 'partial',
+      producerEvidence: 'waived', partialMissingSources: receipt.partialMissingSources,
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+      settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true }, invocations,
+      credentialingCaptures: [capture], relayEligibleCaptures: [capture], reviewLane: record,
+    };
+    const episode = deriveReviewEpisodeState([stageReceipt], [{
+      relayAttemptId: 'relay-01', captureIdentity: capture.captureIdentity,
+      sourceLabel: `${capture.name}|${capture.captureIdentity}`, name: capture.name,
+      byteLength: capture.byteLength, sha256: capture.sha256, verified: true,
+    }], {
+      tierIntake: {
+        schema: 'tier-intake/v1', producer: 'test', taskIdentity: 'issue:1706', kind: 'fresh', priorTier: 'T3',
+        firstRevision: 'r01', competitiveDecision: 'skipped', competitiveRationale: 'waived pre-lens fixture',
+      },
+      receiptInventory: {
+        source: 'canonical-review-directory', taskIdentity: 'issue:1706', episodeFirstRevision: 'r01',
+        reviewEpisodeId: 'issue:1706@r01', stageReceiptIds: ['issue:1706@r01:stage-receipt:0001'],
+      },
+    });
+    expect(episode.errors, episode.errors.join('\n')).toEqual([]);
+    expect(validateReviewEpisodeTopology(episode, 'pre-lens')).toEqual([]);
   });
 
   it('collapses identical declaration entries before blast-radius counting', () => {
