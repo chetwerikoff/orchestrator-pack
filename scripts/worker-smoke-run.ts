@@ -80,6 +80,13 @@ import {
 } from './lib/worker-smoke-lifecycle.ts';
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
+function smokeDefaultAgent(parsed: Readonly<Record<string, unknown>>): string {
+  if (typeof parsed.default_agent === 'string' && parsed.default_agent.trim()) return parsed.default_agent.trim();
+  if (!record(parsed.agent)) return '';
+  const agents = Object.entries(parsed.agent).filter(([, value]) => record(value)).map(([name]) => name);
+  return agents.length === 1 ? agents[0]! : '';
+}
+
 import { markTrackedSmokeWorkerDeliveryConfirmed } from './lib/worker-smoke-bounded-create.ts';
 import { verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import {
@@ -311,20 +318,14 @@ type OpenCodeNoWriteProof = (cwd: string) => boolean;
 function proveOpenCodeNoWrite(cwd: string, execute: SmokeChildExecutor): boolean {
   const before = smokeConfigState(cwd);
   const stateRoot = join(tmpdir(), `opk-opencode-proof-state-${randomUUID()}`);
-  const isolatedEnv = {
-    XDG_STATE_HOME: stateRoot,
-    XDG_CONFIG_HOME: join(stateRoot, 'config'),
-    XDG_DATA_HOME: join(stateRoot, 'data'),
-    XDG_CACHE_HOME: join(stateRoot, 'cache'),
-  };
+  const isolatedEnv = { XDG_STATE_HOME: stateRoot };
   const paths = execute(['opencode', 'debug', 'paths'], isolatedEnv);
   if (!paths.ok || !paths.stdout.includes(stateRoot) || before !== smokeConfigState(cwd)) return false;
   const config = execute(['opencode', 'debug', 'config'], isolatedEnv);
   if (!config.ok || before !== smokeConfigState(cwd)) return false;
   let parsed: Record<string, unknown>;
   try { const value: unknown = JSON.parse(config.stdout); if (!record(value)) throw new Error(); parsed = value; } catch { return false; }
-  const defaultAgent = typeof parsed.default_agent === 'string' ? parsed.default_agent.trim() : '';
-  if (!defaultAgent) return false;
+  const defaultAgent = smokeDefaultAgent(parsed);  if (!defaultAgent) return false;
   const baseline = execute(['opencode', 'debug', 'agent', defaultAgent], isolatedEnv);
   if (!baseline.ok || before !== smokeConfigState(cwd)) return false;
   try { const value: unknown = JSON.parse(baseline.stdout); return record(value) && before === smokeConfigState(cwd); } catch { return false; }
@@ -336,17 +337,12 @@ function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, ex
   if (!proveNoWrite || !proveNoWrite(cwd)) throw new Error('executor_effort_channel_unavailable');
   const before = smokeConfigState(cwd);
   const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
-  const isolatedEnv = {
-    XDG_STATE_HOME: stateRoot,
-    XDG_CONFIG_HOME: join(stateRoot, 'config'),
-    XDG_DATA_HOME: join(stateRoot, 'data'),
-    XDG_CACHE_HOME: join(stateRoot, 'cache'),
-  };
+  const isolatedEnv = { XDG_STATE_HOME: stateRoot };
   const config = execute(['opencode', 'debug', 'config'], isolatedEnv);
   if (!config.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
   let parsed: Record<string, unknown>;
   try { const value: unknown = JSON.parse(config.stdout); if (!record(value)) throw new Error(); parsed = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
-  const defaultAgent = typeof parsed.default_agent === 'string' ? parsed.default_agent.trim() : '';
+  const defaultAgent = smokeDefaultAgent(parsed);
   if (!defaultAgent) throw new Error('executor_effort_channel_unavailable');
   const baseline = execute(['opencode', 'debug', 'agent', defaultAgent], isolatedEnv);
   if (!baseline.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');

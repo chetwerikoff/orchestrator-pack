@@ -464,7 +464,7 @@ function configPermissionFromRuleset(value: unknown): Record<string, unknown> | 
     if (!name || !pattern || !action) continue;
     const current = permission[name];
     if (typeof current === 'string') {
-      permission[name] = { '*': current, [pattern]: action };
+      permission[name] = pattern === '*' ? action : { '*': current, [pattern]: action };
     } else if (current && typeof current === 'object' && !Array.isArray(current)) {
       (current as Record<string, unknown>)[pattern] = action;
     } else if (pattern === '*') {
@@ -531,7 +531,7 @@ function canonicalPermission(value: unknown): unknown {
     if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return false;
     const item = rule as Record<string, unknown>;
     return last.get(`${item.permission}\u0000${item.pattern}`) === index;
-  });
+  }).sort((left, right) => (JSON.stringify(left) ?? '').localeCompare(JSON.stringify(right) ?? ''));
 }
 
 /** Compare execution-relevant Agent.Info semantics, not resolved-only metadata. */
