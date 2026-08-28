@@ -1,12 +1,18 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startPackReview } from './pack-review-runner.ts';
-import { listPackReviewRuns } from './lib/pack-review-run-store.ts';
+import {
+  createPackReviewRun,
+  listPackReviewRuns,
+  setPackReviewRunTerminal,
+} from './lib/pack-review-run-store.ts';
+import { beginSmokeOrdering } from './worker-smoke-run.ts';
+import { reviewStageDisposition } from './pr2-foundation/post-review-smoke.ts';
 import {
   assertIndependentSmokeAdmission,
   assertPackReviewSmokeAdmission,
@@ -19,7 +25,9 @@ import {
   recordPackReviewPublication,
   reconcilePackReviewTier,
   smokeOrderingRequired,
+  type PackReviewAuthorityDocument,
   type PackReviewAuthorityOptions,
+  type PackReviewStartConsumptionRecord,
 } from './pack-review-state.ts';
 
 const HEAD = 'a'.repeat(40);
@@ -90,6 +98,7 @@ describe('Issue #1436 smoke/review ordering', () => {
       actor: 'independent',
       headSha: REGRESSION_HEAD,
       status: 'started',
+      reviewRuns: [],
       operatorSmokeOnly: true,
       options,
     })).not.toThrow();
@@ -147,7 +156,7 @@ describe('Issue #1436 smoke/review ordering', () => {
     const finalAuthority = readPackReviewAuthority(1436, options)!;
     expect(finalAuthority.cycle?.reviewStageComplete).toBe(true);
     expect(finalAuthority.smokeOrdering?.independent).toBeUndefined();
-    expect(() => assertIndependentSmokeAdmission({ authority: finalAuthority, headSha: HEAD })).not.toThrow();
+    expect(() => assertIndependentSmokeAdmission({ authority: finalAuthority, headSha: HEAD, reviewRuns: [] })).not.toThrow();
   });
 
   it('settles a production non-blocking review for independent-smoke admission', async () => {
@@ -204,7 +213,7 @@ describe('Issue #1436 smoke/review ordering', () => {
     expect(result.ok, JSON.stringify(result)).toBe(true);
     const finalAuthority = readPackReviewAuthority(1436, options)!;
     expect(finalAuthority.terminal?.reviewStatus).toBe('commented');
-    expect(() => assertIndependentSmokeAdmission({ authority: finalAuthority, headSha: HEAD })).not.toThrow();
+    expect(() => assertIndependentSmokeAdmission({ authority: finalAuthority, headSha: HEAD, reviewRuns: [] })).not.toThrow();
   });
 
   it('does not gate review admission on worker-owned smoke state', () => {
@@ -274,7 +283,7 @@ describe('Issue #1436 smoke/review ordering', () => {
       status: 'passed',
       options,
     });
-    expect(() => assertIndependentSmokeAdmission({ authority: workerPassed, headSha: HEAD }))
+    expect(() => assertIndependentSmokeAdmission({ authority: workerPassed, headSha: HEAD, reviewRuns: [] }))
       .toThrow('smoke_ordering_review_unsettled');
 
     const terminal = commitPackReviewTerminal({
@@ -306,7 +315,7 @@ describe('Issue #1436 smoke/review ordering', () => {
       },
       options,
     });
-    expect(() => assertIndependentSmokeAdmission({ authority: settled, headSha: HEAD })).not.toThrow();
+    expect(() => assertIndependentSmokeAdmission({ authority: settled, headSha: HEAD, reviewRuns: [] })).not.toThrow();
 
     const independentStarted = commitSmokeOrderingTransition({
       prNumber: 1436,
@@ -335,7 +344,7 @@ describe('Issue #1436 smoke/review ordering', () => {
       headSha: NEXT_HEAD,
       options,
     });
-    expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD })).not.toThrow();
+    expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD, reviewRuns: [] })).not.toThrow();
     expect(() => assertPackReviewSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD }))
       .toThrow('smoke_ordering_review_forbidden');
   });
@@ -379,19 +388,21 @@ describe('Issue #1436 smoke/review ordering', () => {
       options,
     });
     expect(nextHead.smokeOrdering?.reviewSettledHeadSha).toBeUndefined();
-    expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD }))
+    expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD, reviewRuns: [] }))
       .toThrow('smoke_ordering_review_unsettled');
   });
 
   it('admits independent smoke when a consumed failed start survives only in the run store', () => {
     const { options, authority } = authorityFixture('T2');
+    const openedAtUtc = authority.cycle!.openedAtUtc;
     const consumedReviewStart = [{
       prNumber: 1436,
       status: 'failed',
       automaticBudgetDisposition: 'consume',
+      createdAt: openedAtUtc,
     }];
 
-    expect(() => assertIndependentSmokeAdmission({ authority, headSha: HEAD }))
+    expect(() => assertIndependentSmokeAdmission({ authority, headSha: HEAD, reviewRuns: [] }))
       .toThrow('smoke_ordering_review_unsettled');
 
     const sameHead = observePackReviewHead({
@@ -402,8 +413,11 @@ describe('Issue #1436 smoke/review ordering', () => {
       reviewRuns: consumedReviewStart,
     });
     expect(sameHead.cycle?.reviewStageComplete).toBe(true);
-    expect(() => assertIndependentSmokeAdmission({ authority: sameHead, headSha: HEAD }))
-      .not.toThrow();
+    expect(() => assertIndependentSmokeAdmission({
+      authority: sameHead,
+      headSha: HEAD,
+      reviewRuns: consumedReviewStart,
+    })).not.toThrow();
 
     const nextHead = observePackReviewHead({
       prNumber: 1436,
@@ -413,8 +427,11 @@ describe('Issue #1436 smoke/review ordering', () => {
       reviewRuns: consumedReviewStart,
     });
     expect(nextHead.cycle?.reviewStageComplete).toBe(true);
-    expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD }))
-      .not.toThrow();
+    expect(() => assertIndependentSmokeAdmission({
+      authority: nextHead,
+      headSha: NEXT_HEAD,
+      reviewRuns: consumedReviewStart,
+    })).not.toThrow();
   });
 
   it.each(['up_to_date', 'commented'] as const)(
@@ -450,7 +467,7 @@ describe('Issue #1436 smoke/review ordering', () => {
         },
         options,
       });
-      expect(() => assertIndependentSmokeAdmission({ authority: settled, headSha: HEAD })).not.toThrow();
+      expect(() => assertIndependentSmokeAdmission({ authority: settled, headSha: HEAD, reviewRuns: [] })).not.toThrow();
     },
   );
 
@@ -494,8 +511,12 @@ describe('Issue #1436 smoke/review ordering', () => {
         options,
       });
 
-      expect(nextHead.cycle?.reviewStageComplete).toBe(true);
-      expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD })).not.toThrow();
+      expect(nextHead.cycle?.reviewStageComplete).toBeUndefined();
+      expect(() => assertIndependentSmokeAdmission({
+        authority: nextHead,
+        headSha: NEXT_HEAD,
+        reviewRuns: [],
+      })).not.toThrow();
     },
   );
 
@@ -547,9 +568,9 @@ describe('Issue #1436 smoke/review ordering', () => {
         options,
       });
       if (verdict === 'DEFER') {
-        expect(() => assertIndependentSmokeAdmission({ authority: published, headSha: HEAD })).not.toThrow();
+        expect(() => assertIndependentSmokeAdmission({ authority: published, headSha: HEAD, reviewRuns: [] })).not.toThrow();
       } else {
-        expect(() => assertIndependentSmokeAdmission({ authority: published, headSha: HEAD }))
+        expect(() => assertIndependentSmokeAdmission({ authority: published, headSha: HEAD, reviewRuns: [] }))
           .toThrow('smoke_ordering_review_unsettled');
       }
     }
@@ -652,7 +673,7 @@ describe('Issue #1436 smoke/review ordering', () => {
         headSha: NEXT_HEAD,
         options,
       });
-      expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD }))
+      expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD, reviewRuns: [] }))
         .toThrow('smoke_ordering_independent_head_forbidden');
     }
 
@@ -676,7 +697,7 @@ describe('Issue #1436 smoke/review ordering', () => {
         failureKind: 'finding',
         options,
       });
-      expect(() => assertIndependentSmokeAdmission({ authority: independentFailed, headSha: HEAD }))
+      expect(() => assertIndependentSmokeAdmission({ authority: independentFailed, headSha: HEAD, reviewRuns: [] }))
         .toThrow('smoke_ordering_independent_same_head_forbidden');
       const nextHead = observePackReviewHead({
         prNumber: 1436,
@@ -684,7 +705,529 @@ describe('Issue #1436 smoke/review ordering', () => {
         headSha: NEXT_HEAD,
         options,
       });
-      expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD })).not.toThrow();
+      expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD, reviewRuns: [] })).not.toThrow();
     }
   });
+
+  describe('Issue #1777 canonical independent-smoke admission matrix', () => {
+    const OBSERVED_PR = 1740;
+    const OBSERVED_HEAD = 'ce99d1e63aef156f8846483f77c426f7adeadcf0';
+    const EARLIER_REVIEW_HEAD = 'c2cb38bfc7108d3887788bb3b4563fcf90ab3c1f';
+    const OTHER_HEAD = 'e'.repeat(40);
+    const OPENED_AT = '2026-08-27T12:00:00.000Z';
+    const CURRENT_RUN_AT = '2026-08-27T12:00:01.000Z';
+    const PRIOR_RUN_AT = '2026-08-27T11:59:59.000Z';
+    const OBSERVED_RUN_ID = 'prr-acab5dadefd44b0da01061faa4f55ea3';
+    const ISSUE_BODY = [
+      '```complexity-tier',
+      'tier: T3',
+      'advisory-prior: T3',
+      '```',
+      '',
+      '```smoke-test-plan',
+      'scenarios:',
+      '  - action: hermetic admission check | expected: PASS',
+      '```',
+    ].join('\n');
+
+    type BlockingTriageVerdict = 'BLOCK' | 'PENDING_ARCHITECT' | 'PENDING_OPERATOR';
+    type IndependentState =
+      NonNullable<NonNullable<PackReviewAuthorityDocument['smokeOrdering']>['independent']>;
+
+    function makeAuthority(input: {
+      terminalStatus?: string;
+      consumedHeadShas?: string[];
+      reviewSettledHeadSha?: string;
+      independent?: IndependentState;
+      triageVerdict?: BlockingTriageVerdict;
+      reviewStageComplete?: boolean;
+      reviewStartConsumed?: boolean;
+    } = {}): PackReviewAuthorityDocument {
+      const terminal: PackReviewAuthorityDocument['terminal'] = input.terminalStatus
+        ? {
+          runId: `terminal-${input.terminalStatus}`,
+          digest: 'd'.repeat(64),
+          targetSha: OBSERVED_HEAD,
+          reviewVerdict: ['clean', 'up_to_date', 'commented'].includes(input.terminalStatus)
+            ? 'clean'
+            : 'findings',
+          terminalSource: 'normal',
+          automaticBudgetDisposition: 'consume',
+          reviewStatus: input.terminalStatus,
+        }
+        : undefined;
+      return {
+        schemaVersion: 1,
+        prNumber: OBSERVED_PR,
+        transitionSeq: 0,
+        phase: 'head_observed',
+        currentHeadSha: OBSERVED_HEAD,
+        updatedAtUtc: OPENED_AT,
+        cycle: {
+          cycleId: 'cycle-observed-1740',
+          state: 'open',
+          frozenTier: 'T3',
+          frozenCap: 2,
+          capMapVersion: 'legacy-frozen',
+          frozenMapOrigin: 'persisted-open-cycle',
+          openedAtUtc: OPENED_AT,
+          consumedHeadShas: input.consumedHeadShas ?? [],
+          ...(input.reviewStageComplete
+            ? { reviewStageComplete: true, reviewStageCompletedAtUtc: CURRENT_RUN_AT }
+            : {}),
+          ...(input.reviewStartConsumed ? { reviewStartConsumed: true } : {}),
+        },
+        ...(terminal ? { terminal } : {}),
+        smokeOrdering: {
+          workerOwned: {
+            headSha: OBSERVED_HEAD,
+            status: 'passed',
+            updatedAtUtc: CURRENT_RUN_AT,
+          },
+          ...(input.reviewSettledHeadSha
+            ? { reviewSettledHeadSha: input.reviewSettledHeadSha }
+            : {}),
+          ...(input.independent ? { independent: input.independent } : {}),
+        },
+        ...(input.triageVerdict
+          ? {
+            triage: {
+              verdict: input.triageVerdict,
+              source: input.triageVerdict === 'BLOCK' ? 'architect' : 'automatic',
+              findingSnapshotDigest: 'finding-snapshot',
+              committedAtUtc: CURRENT_RUN_AT,
+            },
+          }
+          : {}),
+      };
+    }
+
+    function observedRun(
+      overrides: Partial<PackReviewStartConsumptionRecord> = {},
+    ): PackReviewStartConsumptionRecord {
+      return {
+        id: OBSERVED_RUN_ID,
+        runId: OBSERVED_RUN_ID,
+        prNumber: OBSERVED_PR,
+        targetSha: EARLIER_REVIEW_HEAD,
+        headSha: EARLIER_REVIEW_HEAD,
+        status: 'failed',
+        automaticBudgetDisposition: 'consume',
+        stale: false,
+        createdAt: CURRENT_RUN_AT,
+        ...overrides,
+      };
+    }
+
+    function persistAuthority(authority: PackReviewAuthorityDocument): PackReviewAuthorityOptions {
+      const root = mkdtempSync(join(tmpdir(), 'pack-review-ordering-1777-'));
+      roots.push(root);
+      mkdirSync(join(root, 'authority'), { recursive: true });
+      writeFileSync(
+        join(root, 'authority', `pr-${authority.prNumber}.json`),
+        `${JSON.stringify(authority)}\n`,
+        'utf8',
+      );
+      return { storeRoot: root };
+    }
+
+    function resultOf(action: () => unknown): string {
+      try {
+        action();
+        return 'admit';
+      } catch (error) {
+        if (error && typeof error === 'object' && 'code' in error) {
+          return String((error as { code?: unknown }).code);
+        }
+        return error instanceof Error ? error.message : String(error);
+      }
+    }
+
+    function persistEntryPointFixture(
+      authority: PackReviewAuthorityDocument,
+      reviewRuns: readonly PackReviewStartConsumptionRecord[],
+    ): { root: string; options: PackReviewAuthorityOptions } {
+      const options = persistAuthority(authority);
+      const root = options.storeRoot;
+      for (const run of reviewRuns) {
+        const createdAt = new Date(typeof run.createdAt === 'string' ? run.createdAt : CURRENT_RUN_AT);
+        const headSha = typeof run.headSha === 'string' ? run.headSha : EARLIER_REVIEW_HEAD;
+        const created = createPackReviewRun({
+          projectId: 'orchestrator-pack',
+          storeRoot: root,
+          prNumber: run.prNumber,
+          headSha,
+          trustedPackRoot: root,
+          sourceRepoRoot: root,
+          automaticBudgetDisposition: 'consume',
+          now: createdAt,
+        });
+        setPackReviewRunTerminal(
+          created.run.id,
+          'failed',
+          {
+            failureReason: typeof run.failureReason === 'string'
+              ? run.failureReason
+              : 'reviewer_output_malformed:invalid_terminal_payload',
+            ...(run.stale === true ? { stale: true } : {}),
+          },
+          { projectId: 'orchestrator-pack', storeRoot: root, now: createdAt },
+        );
+        if (run.automaticBudgetDisposition === 'non_consuming_explicit') {
+          const runPath = join(root, 'runs', `${created.run.id}.json`);
+          const legacyRecord = JSON.parse(readFileSync(runPath, 'utf8')) as Record<string, unknown>;
+          legacyRecord.automaticBudgetDisposition = 'non_consuming_explicit';
+          writeFileSync(runPath, `${JSON.stringify(legacyRecord)}\n`, 'utf8');
+        }
+      }
+      return { root, options };
+    }
+
+    function internalTransitionResult(
+      authority: PackReviewAuthorityDocument,
+      headSha: string,
+      reviewRuns: readonly PackReviewStartConsumptionRecord[],
+    ): string {
+      const options = persistAuthority(authority);
+      return resultOf(() => commitSmokeOrderingTransition({
+        prNumber: OBSERVED_PR,
+        expectedTransitionSeq: authority.transitionSeq,
+        actor: 'independent',
+        headSha,
+        status: 'started',
+        reviewRuns,
+        options,
+      }));
+    }
+
+    function workerEntryPointResult(
+      authority: PackReviewAuthorityDocument,
+      headSha: string,
+      reviewRuns: readonly PackReviewStartConsumptionRecord[],
+    ): string {
+      const fixture = persistEntryPointFixture(authority, reviewRuns);
+      const beforeRunIds = listPackReviewRuns({
+        projectId: 'orchestrator-pack',
+        storeRoot: fixture.options.storeRoot,
+      }).map((run) => run.id);
+      const previousStoreRoot = process.env.PACK_REVIEW_RUN_STORE_ROOT;
+      process.env.PACK_REVIEW_RUN_STORE_ROOT = fixture.options.storeRoot;
+      try {
+        const result = resultOf(() => beginSmokeOrdering({
+          command: 'run',
+          issueNumber: 1777,
+          prNumber: OBSERVED_PR,
+          headSha,
+          issueBodyFile: join(fixture.root, 'issue.md'),
+          smokeComplexity: 'routine',
+          smokeActor: 'independent',
+          repoRoot: fixture.root,
+          cwd: fixture.root,
+          dryRun: true,
+          json: true,
+          reviewId: '',
+          reviewHeadSha: '',
+        }, ISSUE_BODY));
+        expect(listPackReviewRuns({
+          projectId: 'orchestrator-pack',
+          storeRoot: fixture.options.storeRoot,
+        }).map((run) => run.id)).toEqual(beforeRunIds);
+        return result;
+      } finally {
+        if (previousStoreRoot === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
+        else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStoreRoot;
+      }
+    }
+
+    function postReviewEntryPointResult(
+      authority: PackReviewAuthorityDocument,
+      headSha: string,
+      reviewRuns: readonly PackReviewStartConsumptionRecord[],
+    ): string {
+      const fixture = persistEntryPointFixture(authority, reviewRuns);
+      const result = reviewStageDisposition({
+        prNumber: OBSERVED_PR,
+        headSha,
+        projectId: 'orchestrator-pack',
+        env: { ...process.env, PACK_REVIEW_RUN_STORE_ROOT: fixture.options.storeRoot },
+      });
+      return result.kind === 'smoke_candidate' ? 'admit' : result.reason;
+    }
+
+    type MatrixCase = {
+      id: string;
+      expected: string;
+      authority: (derived: boolean, triageVerdict?: BlockingTriageVerdict) => PackReviewAuthorityDocument;
+      runVariants: readonly (readonly PackReviewStartConsumptionRecord[])[];
+      requestedHead?: string;
+      derivedVariants?: readonly boolean[];
+      triageVariants?: readonly BlockingTriageVerdict[];
+    };
+
+    const MATRIX: readonly MatrixCase[] = [
+      {
+        id: 'A1 full observed #1740 run-store-only consumed start',
+        expected: 'admit',
+        authority: (derived) => makeAuthority({
+          reviewStageComplete: derived,
+          reviewStartConsumed: derived,
+        }),
+        runVariants: [[observedRun()]],
+      },
+      {
+        id: 'A2 observed fixture without consuming run',
+        expected: 'smoke_ordering_review_unsettled',
+        authority: (derived) => makeAuthority({
+          reviewStageComplete: derived,
+          reviewStartConsumed: derived,
+        }),
+        runVariants: [[]],
+      },
+      {
+        id: 'A3 failed terminal consumes start',
+        expected: 'admit',
+        authority: (derived) => makeAuthority({
+          terminalStatus: 'failed',
+          reviewStageComplete: derived,
+          reviewStartConsumed: !derived,
+        }),
+        runVariants: [[]],
+      },
+      {
+        id: 'A4 error terminal consumes start',
+        expected: 'admit',
+        authority: (derived) => makeAuthority({
+          terminalStatus: 'error',
+          reviewStageComplete: derived,
+          reviewStartConsumed: !derived,
+        }),
+        runVariants: [[]],
+      },
+      {
+        id: 'A5 changes_requested terminal consumes start',
+        expected: 'admit',
+        authority: (derived) => makeAuthority({
+          terminalStatus: 'changes_requested',
+          reviewStageComplete: derived,
+          reviewStartConsumed: !derived,
+        }),
+        runVariants: [[]],
+      },
+      {
+        id: 'A6 cap itself proves consumption',
+        expected: 'admit',
+        authority: (derived) => makeAuthority({
+          consumedHeadShas: ['1'.repeat(40), '2'.repeat(40)],
+          reviewStageComplete: derived,
+          reviewStartConsumed: !derived,
+        }),
+        runVariants: [[]],
+      },
+      {
+        id: 'A7 below cap without terminal or run evidence',
+        expected: 'smoke_ordering_review_unsettled',
+        authority: (derived) => makeAuthority({
+          consumedHeadShas: ['1'.repeat(40)],
+          reviewStageComplete: derived,
+          reviewStartConsumed: derived,
+        }),
+        runVariants: [[]],
+      },
+      {
+        id: 'A8 production failed-run failure reasons consume start',
+        expected: 'admit',
+        authority: (derived) => makeAuthority({
+          reviewStageComplete: derived,
+          reviewStartConsumed: !derived,
+        }),
+        runVariants: [
+          [observedRun({ failureReason: 'reviewer_output_malformed:invalid_terminal_payload' })],
+          [observedRun({ failureReason: 'stale_head_before_terminal' })],
+        ],
+      },
+      {
+        id: 'A9 stale or explicit non-consuming run cannot admit',
+        expected: 'smoke_ordering_review_unsettled',
+        authority: (derived) => makeAuthority({
+          reviewStageComplete: derived,
+          reviewStartConsumed: derived,
+        }),
+        runVariants: [
+          [observedRun({ stale: true })],
+          [observedRun({ automaticBudgetDisposition: 'non_consuming_explicit' })],
+        ],
+      },
+      {
+        id: 'A10 exact-head successful settlement admits',
+        expected: 'admit',
+        authority: () => makeAuthority({
+          terminalStatus: 'up_to_date',
+          reviewSettledHeadSha: OBSERVED_HEAD,
+          reviewStageComplete: true,
+        }),
+        runVariants: [[]],
+        derivedVariants: [true],
+      },
+      {
+        id: 'A11 prior-head settlement does not settle current head',
+        expected: 'smoke_ordering_review_unsettled',
+        authority: (derived) => makeAuthority({
+          reviewSettledHeadSha: EARLIER_REVIEW_HEAD,
+          reviewStageComplete: derived,
+          reviewStartConsumed: derived,
+        }),
+        runVariants: [[]],
+      },
+      {
+        id: 'A12 requested head differs from authority current head',
+        expected: 'smoke_ordering_head_mismatch',
+        requestedHead: OTHER_HEAD,
+        authority: (derived) => makeAuthority({
+          reviewStageComplete: derived,
+          reviewStartConsumed: derived,
+        }),
+        runVariants: [[observedRun()]],
+      },
+      {
+        id: 'A13 same-head independent finding requires a new head',
+        expected: 'smoke_ordering_independent_same_head_forbidden',
+        authority: (derived) => makeAuthority({
+          reviewStageComplete: derived,
+          reviewStartConsumed: derived,
+          independent: {
+            startedEver: true,
+            headSha: OBSERVED_HEAD,
+            status: 'failed',
+            failureKind: 'finding',
+            failureHeadSha: OBSERVED_HEAD,
+            updatedAtUtc: CURRENT_RUN_AT,
+          },
+        }),
+        runVariants: [[observedRun()]],
+      },
+      {
+        id: 'A14 started or passed independent smoke cannot continue on another head',
+        expected: 'smoke_ordering_independent_head_forbidden',
+        authority: (derived) => makeAuthority({
+          reviewStageComplete: derived,
+          reviewStartConsumed: derived,
+          independent: {
+            startedEver: true,
+            headSha: EARLIER_REVIEW_HEAD,
+            status: 'passed',
+            updatedAtUtc: CURRENT_RUN_AT,
+          },
+        }),
+        runVariants: [[observedRun()]],
+      },
+      {
+        id: 'A15 unresolved blocking triage remains fail closed',
+        expected: 'smoke_ordering_review_unsettled',
+        authority: (derived, triageVerdict = 'BLOCK') => makeAuthority({
+          terminalStatus: 'failed',
+          triageVerdict,
+          reviewStageComplete: derived,
+          reviewStartConsumed: true,
+        }),
+        runVariants: [[observedRun()]],
+        triageVariants: ['BLOCK', 'PENDING_ARCHITECT', 'PENDING_OPERATOR'],
+      },
+      {
+        id: 'A16 prior-cycle same-PR run cannot admit',
+        expected: 'smoke_ordering_review_unsettled',
+        authority: (derived) => makeAuthority({
+          reviewStageComplete: derived,
+          reviewStartConsumed: derived,
+        }),
+        runVariants: [[observedRun({ createdAt: PRIOR_RUN_AT })]],
+      },
+    ];
+
+    it.each(MATRIX)('$id', ({
+      expected,
+      authority: buildAuthority,
+      runVariants,
+      requestedHead,
+      derivedVariants,
+      triageVariants,
+    }) => {
+      for (const derived of derivedVariants ?? [false, true]) {
+        for (const reviewRuns of runVariants) {
+          for (const triageVerdict of triageVariants ?? [undefined]) {
+            const authority = buildAuthority(derived, triageVerdict);
+            const headSha = requestedHead ?? OBSERVED_HEAD;
+
+            expect(resultOf(() => assertIndependentSmokeAdmission({
+              authority,
+              headSha,
+              reviewRuns,
+            }))).toBe(expected);
+            expect(internalTransitionResult(authority, headSha, reviewRuns)).toBe(expected);
+            expect(workerEntryPointResult(authority, headSha, reviewRuns)).toBe(expected);
+            expect(postReviewEntryPointResult(authority, headSha, reviewRuns)).toBe(expected);
+          }
+        }
+      }
+    });
+
+    it.each([
+      {
+        status: 'started',
+        expected: 'smoke_ordering_independent_in_progress',
+        postReviewExpected: 'independent_smoke_in_progress',
+      },
+      {
+        status: 'passed',
+        expected: 'smoke_ordering_independent_already_passed',
+        postReviewExpected: 'independent_smoke_already_passed',
+      },
+    ] as const)('does not restart same-head independent smoke in status $status', ({
+      status,
+      expected,
+      postReviewExpected,
+    }) => {
+      const authority = makeAuthority({
+        independent: {
+          startedEver: true,
+          headSha: OBSERVED_HEAD,
+          status,
+          updatedAtUtc: CURRENT_RUN_AT,
+        },
+      });
+      const reviewRuns = [observedRun()];
+
+      expect(resultOf(() => assertIndependentSmokeAdmission({
+        authority,
+        headSha: OBSERVED_HEAD,
+        reviewRuns,
+      }))).toBe(expected);
+      expect(internalTransitionResult(authority, OBSERVED_HEAD, reviewRuns)).toBe(expected);
+      expect(workerEntryPointResult(authority, OBSERVED_HEAD, reviewRuns)).toBe(expected);
+      expect(postReviewEntryPointResult(authority, OBSERVED_HEAD, reviewRuns)).toBe(postReviewExpected);
+    });
+
+    it('preserves the exact observed #1740/#1754 regression identity and ordering relation', () => {
+      expect(observedRun()).toMatchObject({
+        id: OBSERVED_RUN_ID,
+        runId: OBSERVED_RUN_ID,
+        prNumber: OBSERVED_PR,
+        targetSha: EARLIER_REVIEW_HEAD,
+        headSha: EARLIER_REVIEW_HEAD,
+        status: 'failed',
+        automaticBudgetDisposition: 'consume',
+        createdAt: CURRENT_RUN_AT,
+      });
+      expect(makeAuthority().cycle).toMatchObject({
+        state: 'open',
+        frozenCap: 2,
+        consumedHeadShas: [],
+        openedAtUtc: OPENED_AT,
+      });
+      expect(makeAuthority().smokeOrdering?.workerOwned).toMatchObject({
+        headSha: OBSERVED_HEAD,
+        status: 'passed',
+      });
+    });
+  });
+
 });
