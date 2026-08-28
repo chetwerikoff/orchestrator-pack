@@ -83,7 +83,6 @@ const record = (value: unknown): value is Record<string, unknown> => typeof valu
 import { markTrackedSmokeWorkerDeliveryConfirmed } from './lib/worker-smoke-bounded-create.ts';
 import { verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import {
-  assertIndependentSmokeAdmission,
   commitSmokeOrderingTransition,
   initializePackReviewAuthority,
   observePackReviewHead,
@@ -1744,15 +1743,13 @@ function beginSmokeOrdering(
       reviewRuns,
     });
   }
-  if (actor === 'independent') {
-    assertIndependentSmokeAdmission({ authority, headSha: options.headSha, reviewRuns });
-  }
   const started = commitSmokeOrderingTransition({
     prNumber: options.prNumber,
     expectedTransitionSeq: authority.transitionSeq,
     actor,
     headSha: options.headSha,
     status: 'started',
+    ...(actor === 'independent' ? { reviewRuns } : {}),
     options: authorityOptions,
   });
   void started;
