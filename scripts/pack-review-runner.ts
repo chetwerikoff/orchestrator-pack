@@ -1112,8 +1112,24 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
     `Head: \`${run.targetSha}\``,
     '',
   ];
+  const coverage = derivePackReviewGptCoverage(run.reviewRound);
   if (run.reviewRound?.cardinality === 3 && run.reviewRound.settledSourceCount === 2) {
     lines.push('Sources: 2/3 (degraded after timeout)', '');
+  } else if (coverage?.kind === 'partial') {
+    lines.push(`Sources: ${coverage.completedSourceCount}/${coverage.cardinality} (partial)`, '');
+    if (!hasHarvestIncident && coverage.incompleteSources.length > 0) {
+      lines.push('Incomplete sources:', '');
+      for (const source of coverage.incompleteSources) {
+        const details = [
+          source.terminalClass,
+          source.timedOut ? 'timed_out' : '',
+          source.cancelled ? 'cancelled' : '',
+          source.reason,
+        ].filter(Boolean);
+        lines.push(`- ${source.sourceSlotId}: ${details.join('; ') || source.lifecycle}`);
+      }
+      lines.push('');
+    }
   }
   if (payload.findings.length === 0) {
     lines.push(hasHarvestIncident ? 'No accepted review findings.' : 'No findings.', '');
@@ -4376,6 +4392,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     terminal = true;
     const runs = listPackReviewRuns({ projectId, storeRoot });
     if (claimLease) await claimLease.release('run_started', runs);
+    const terminalCoverage = derivePackReviewGptCoverage(
+      (getPackReviewRun(run.id, { projectId, storeRoot }) ?? run).reviewRound,
+    );
     return {
       ok: true,
       created: true,
@@ -4383,6 +4402,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       reason: delivered.reason,
       runId: run.id,
       status: delivered.status,
+      ...(terminalCoverage ? { coverage: terminalCoverage } : {}),
       httpStatus: 201,
       ...(delivered.githubReviewId !== undefined ? { githubReviewId: delivered.githubReviewId } : {}),
       ...(delivered.githubReviewUrl ? { githubReviewUrl: delivered.githubReviewUrl } : {}),
