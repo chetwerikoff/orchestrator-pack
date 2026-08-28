@@ -105,7 +105,7 @@ function run(reviewRound: PackReviewGptRoundRecord): PackReviewRunRecord {
     findings: [],
     deliveryOutcomes: {},
     reviewRound,
-  };
+  } as PackReviewRunRecord;
 }
 
 function deps(overrides: Partial<NoReviewReconciliationDependencies> = {}): Partial<NoReviewReconciliationDependencies> {
@@ -363,7 +363,7 @@ describe('pack-review no-review reconciliation', () => {
         },
         transitioned_at: NOW.toISOString(),
         transition_reason: 'fixture',
-      }),
+      } as any),
       probe,
     }));
 
