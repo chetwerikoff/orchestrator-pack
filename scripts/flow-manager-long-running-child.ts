@@ -633,7 +633,7 @@ function terminalNoResultEvidence(
   incident: 'child_startup_timeout' | 'child_liveness_timeout' | 'child_terminal_result_missing',
   spawnFailed: boolean,
   heartbeatDiagnostics: Record<string, unknown> | undefined,
-): Partial<TerminalEnvelope> {
+): Partial<TerminalEnvelope> & Pick<TerminalEnvelope, 'delivery'> {
   const receiptEvidence = receiptEvidenceForTerminalIncident(config, capture, incident);
   if (!receiptEvidence) {
     return {
