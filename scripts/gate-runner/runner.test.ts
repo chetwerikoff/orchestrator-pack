@@ -21,6 +21,7 @@ describe('real gate runner dispatch', () => {
       'review-010-vocabulary',
       'review-command-not-ao',
       'verify-structure-contract',
+      'instruction-truth',
       'external-output-shape-guard',
       'launch-argv-inventory',
       'gate-census',
