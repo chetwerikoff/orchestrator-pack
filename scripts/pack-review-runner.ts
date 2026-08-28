@@ -980,7 +980,7 @@ function gptUsableSourceCount(round: PackReviewGptRoundRecord | undefined): numb
   )).length ?? 0;
 }
 
-function packReviewRunOutputProjection(run: PackReviewRunRecord | null): Record<string, unknown> | null {
+function packReviewRunOutputProjection(run: PackReviewRunRecord | null): (PackReviewRunRecord & { coverage?: NonNullable<ReturnType<typeof derivePackReviewGptCoverage>> }) | null {
   if (!run) return null;
   const coverage = derivePackReviewGptCoverage(run.reviewRound);
   return coverage ? { ...run, coverage } : run;
