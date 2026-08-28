@@ -261,6 +261,10 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       const firstProgress = JSON.parse(progressLines[0]!) as Record<string, unknown>;
       expect(firstProgress).toEqual({ runId, scenarioOrdinal: 1, phase: 'started' });
       expect(Object.keys(firstProgress)).toEqual(['runId', 'scenarioOrdinal', 'phase']);
+      expect(prompt.match(/Canonical progress serialization \(mandatory\):/gu)).toHaveLength(1);
+      expect(prompt).not.toContain('Before each scenario append one JSON line:');
+      expect(prompt).not.toContain('After each scenario append one JSON line:');
+      expect(prompt).toContain('Emit each declared progress event exactly once; never repeat a started or terminal event.');
       expect(prompt).toContain(
         `The first non-empty progress line must parse exactly as: ${JSON.stringify(firstProgress)}`,
       );

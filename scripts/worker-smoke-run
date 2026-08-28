@@ -75,6 +75,9 @@ function installCanonicalProgressProtocol(adapter) {
         const runId = input.text.match(/^run-id:\s*(\S+)\s*$/mu)?.[1]?.trim() ?? '';
         const progressPath = input.text.match(/^- Progress file:\s*(.+?)\s*$/mu)?.[1]?.trim() ?? '';
         if (runId && progressPath && !input.text.includes('Canonical progress serialization (mandatory):')) {
+          const genericProtocol = input.text
+            .replace(/^- Before each scenario append one JSON line:.*$\r?\n?/gmu, '')
+            .replace(/^- After each scenario append one JSON line:.*$\r?\n?/gmu, '');
           const pathToken = Buffer.from(progressPath, 'utf8').toString('base64');
           const runToken = Buffer.from(runId, 'utf8').toString('base64');
           const writer = [
@@ -90,9 +93,10 @@ function installCanonicalProgressProtocol(adapter) {
             '- Never hand-assemble progress JSON; the command above appends JSON.stringify(event) plus one newline.',
             '- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.',
             '- For terminal events, reuse it with the same ordinal, phase terminal, and one outcome: pass|fail|blocked|skipped.',
+            '- Emit each declared progress event exactly once; never repeat a started or terminal event.',
             '- Never append a terminal event before its matching started event.',
           ].join('\n');
-          nextInput = { ...input, text: `${input.text}${protocol}\n` };
+          nextInput = { ...input, text: `${genericProtocol}${protocol}\n` };
         }
       }
       return originalDispatch.call(this, nextInput, callOptions);
