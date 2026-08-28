@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkFindingLedgerGuard, runCli } from './finding-ledger-guard.mjs';
+import { validateTerminalOneShotBodyBinding } from './lib/create-issue-final-acceptance-contract.ts';
 
 type Capture = { name: string; timestampMs: number; text: string };
 type Row = Record<string, unknown> & {
@@ -992,20 +993,50 @@ ${currentLens('S1', { contest: 'none', outcome: 'non-activate' })}`),
   });
 
 describe('Issue #1171 terminal disposition matrix', () => {
-  function terminalLedger(rowValue: Row) {
-    const capture = cap('pass-03-architectural.capture.txt', 1_300, markedFinding('F1'));
+  function terminalLedger(rowValue: Row, options: Record<string, unknown> = {}) {
+    const findingId = rowValue.id;
+    const capture = cap('pass-03-architectural.capture.txt', 1_300, markedFinding(findingId, {
+      type: typeof rowValue.type === 'string' ? rowValue.type : 'quality',
+    }));
     return checkFindingLedgerGuard(capture.text, JSON.stringify({
       version: 2,
       counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
-      findings: [{ ...rowValue, occurrences: ['F1@0:1'] }],
+      findings: [{ ...rowValue, occurrences: [`${findingId}@0:1`] }],
     }), {
       reviewEconomics: true,
       phase: 'final-acceptance',
       issueRevision: 'r3',
       stageTerminalConfirmed: true,
       captureMetadata: [{ name: capture.name, timestampMs: capture.timestampMs }],
+      ...options,
     } as never);
   }
+
+  it('accepts an addressed non-protected terminal defect after one certified correction', () => {
+    const findingId = 'no-local-run-store-root-not-exhaustive';
+    const reviewedBody = `<!-- source-revision: r09 -->\n${markedFinding(findingId, { type: 'spec' })}`;
+    const correctedBody = `<!-- source-revision: r10 -->\n${markedFinding(findingId, {
+      type: 'spec',
+      evidence: 'The corrected live Issue bytes close the terminal specification finding.',
+    })}`;
+    const certificationErrors: string[] = [];
+    const certified = validateTerminalOneShotBodyBinding(
+      reviewedBody,
+      correctedBody,
+      'r10',
+      [{ stage: 'architectural', outcome: 'complete', sourceRevision: 'r09' }],
+      certificationErrors,
+    );
+    expect(certificationErrors).toEqual([]);
+    expect(certified).toBe(true);
+
+    const result = terminalLedger(row(findingId, {
+      type: 'spec',
+      defectDisposition: 'addressed',
+      remedyDisposition: 'accepted',
+    }), { terminalCorrectionCertified: certified });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
 
   it('accepts an exact terminal capture when every defect is validly rejected-as-false', () => {
     const result = terminalLedger(row('F1', {

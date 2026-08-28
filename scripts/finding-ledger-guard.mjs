@@ -373,7 +373,7 @@ function validateOccurrenceLedger(ledger, occurrences, errors) {
 }
 
 function sortM3(records) { return [...records].sort((a, b) => a.timestampMs - b.timestampMs || a.captureIndex - b.captureIndex); }
-function validateTerminalDispositionMatrix(ledger, occurrences, metadata, phase, errors) {
+function validateTerminalDispositionMatrix(ledger, occurrences, metadata, phase, errors, terminalCorrectionCertified = false) {
   if (phase !== 'final-acceptance') return;
   const terminalOccurrences = occurrences.filter((occurrence) => parseCaptureName(metadata[occurrence.captureIndex]?.name).stage === 'architectural');
   if (terminalOccurrences.length === 0) return;
@@ -385,7 +385,7 @@ function validateTerminalDispositionMatrix(ledger, occurrences, metadata, phase,
     if (mappedTerminal.length === 0) continue;
     for (const occurrenceId of mappedTerminal) assigned.add(occurrenceId);
     const protectedTerminal = mappedTerminal.some((occurrenceId) => PROTECTED_TYPES.has(occurrenceById.get(occurrenceId)?.type));
-    if ((row.defectDisposition === 'addressed' && !protectedTerminal) || row.defectDisposition === 'unresolved') {
+    if ((row.defectDisposition === 'addressed' && !protectedTerminal && !terminalCorrectionCertified) || row.defectDisposition === 'unresolved') {
       errors.push(`blocked_terminal_findings: terminal defect ${row.id} has disposition ${row.defectDisposition}`);
     } else if (row.defectDisposition === 'rejected-as-false' && !row.rejectReason) {
       errors.push(`blocked_terminal_findings: rejected-as-false terminal defect ${row.id} requires defect-side reason/evidence`);
@@ -611,7 +611,14 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
   const occurrences = buildOccurrences(captures, metadata); validateGlobalProtectedFloor(captures, ledger.findings, errors, metadata); let economicsCounts;
   if (ledger.version >= 2 || options.stageReceipts !== undefined) {
     const occurrenceValidation = validateOccurrenceLedger(ledger, occurrences, errors); economicsCounts = occurrenceValidation.counts;
-    validateTerminalDispositionMatrix(ledger, occurrences, metadata, options.phase ?? 'final-acceptance', errors);
+    validateTerminalDispositionMatrix(
+      ledger,
+      occurrences,
+      metadata,
+      options.phase ?? 'final-acceptance',
+      errors,
+      options.terminalCorrectionCertified === true,
+    );
     validateOccurrenceM3(ledger, occurrenceValidation.occurrenceMap, captures, metadata, options.phase ?? 'final-acceptance', options.issueRevision ?? '', errors, options.publishedAuthorState);
   } else {
     validateM2Legacy(ledger.findings, occurrences, metadata, Number(options.adoptionTimestampMs), errors);
