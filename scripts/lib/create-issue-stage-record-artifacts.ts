@@ -319,8 +319,8 @@ function buildInvocation(
   if (schema === null) errors.push(`${label} has unknown schema`);
   if (invocationPolicyVersion === null) errors.push(`${label} has unknown policyVersion`);
   if (stage === null) errors.push(`${label} has unknown stage`);
-  if (!artifactAuthority && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing`);
-  if (!artifactAuthority && !reviewerSource) errors.push(`${label}.reviewerSource is missing`);
+  if (purpose === 'stage-time' && !artifactAuthority && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing`);
+  if (purpose === 'stage-time' && !artifactAuthority && !reviewerSource) errors.push(`${label}.reviewerSource is missing`);
   if (purpose === 'stage-time' && invocationTerminalClassification === 'complete' && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing for successful transport`);
   if (purpose === 'stage-time' && invocationTerminalClassification === 'complete' && !reviewerSource) errors.push(`${label}.reviewerSource is missing for successful transport`);
   if (reviewerOrdinal === null) errors.push(`${label}.reviewerOrdinal must be a positive integer`);
