@@ -322,11 +322,24 @@ export async function resolvePackGptSourceCommentForHead(options: {
 
   if (conflictReason) return { kind: 'conflict', reason: conflictReason };
   if (valid.length === 0) return { kind: 'missing', reason: 'source_comment_missing' };
-  if (valid.length !== 1) {
-    return { kind: 'ambiguous', reason: 'source_comment_duplicate_exact_head' };
-  }
 
-  const selected = valid[0]!;
+  const identityKeys = new Set<string>();
+  for (const candidate of valid) {
+    const identityKey = [
+      candidate.identity.repository,
+      candidate.identity.prNumber,
+      candidate.identity.headSha.toLowerCase(),
+      candidate.identity.runId,
+      candidate.identity.slotId,
+      candidate.identity.invocationId,
+    ].join('|');
+    if (identityKeys.has(identityKey)) {
+      return { kind: 'ambiguous', reason: 'source_comment_duplicate_identity_exact_head' };
+    }
+    identityKeys.add(identityKey);
+  }
+  const selected = [...valid].sort((left, right) =>
+    String(left.comment.id).localeCompare(String(right.comment.id)))[0]!;
   let reread: PackGptSourceGithubComment;
   try {
     reread = await options.transport.getComment(selected.comment.id);
