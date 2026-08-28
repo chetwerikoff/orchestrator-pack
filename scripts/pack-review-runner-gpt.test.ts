@@ -1475,6 +1475,35 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(posted).not.toContain('GPT source source-02 did not complete');
   });
 
+  it('accepts ordinary partial blockers under the same severity semantics as delivery classification', async () => {
+    const storeRoot = tempRoot('opk-gpt-critical-blocking-partial-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: findingsPayload('critical-blocker', 'critical') }],
+        'source-02': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+        ],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'changes_requested',
+      coverage: { kind: 'partial', completedSourceCount: 2, cardinality: 3 },
+    });
+    expect(getPackReviewRun(String(result.runId), {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+    })?.reviewVerdict).toBe('findings');
+  });
+
   it.each([
     'harvest_failed',
     'no_reply',
