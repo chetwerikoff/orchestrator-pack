@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -852,9 +852,6 @@ describe('Issue #1436 smoke/review ordering', () => {
       for (const run of reviewRuns) {
         const createdAt = new Date(typeof run.createdAt === 'string' ? run.createdAt : CURRENT_RUN_AT);
         const headSha = typeof run.headSha === 'string' ? run.headSha : EARLIER_REVIEW_HEAD;
-        const automaticBudgetDisposition = run.automaticBudgetDisposition === 'non_consuming_explicit'
-          ? 'non_consuming_explicit'
-          : 'consume';
         const created = createPackReviewRun({
           projectId: 'orchestrator-pack',
           storeRoot: root,
@@ -862,7 +859,7 @@ describe('Issue #1436 smoke/review ordering', () => {
           headSha,
           trustedPackRoot: root,
           sourceRepoRoot: root,
-          automaticBudgetDisposition,
+          automaticBudgetDisposition: 'consume',
           now: createdAt,
         });
         setPackReviewRunTerminal(
@@ -876,6 +873,12 @@ describe('Issue #1436 smoke/review ordering', () => {
           },
           { projectId: 'orchestrator-pack', storeRoot: root, now: createdAt },
         );
+        if (run.automaticBudgetDisposition === 'non_consuming_explicit') {
+          const runPath = join(root, 'runs', `${created.run.id}.json`);
+          const legacyRecord = JSON.parse(readFileSync(runPath, 'utf8')) as Record<string, unknown>;
+          legacyRecord.automaticBudgetDisposition = 'non_consuming_explicit';
+          writeFileSync(runPath, `${JSON.stringify(legacyRecord)}\n`, 'utf8');
+        }
       }
       return { root, options };
     }
