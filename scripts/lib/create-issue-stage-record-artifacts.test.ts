@@ -15,6 +15,7 @@ import {
   stageReceiptPayloadsMatchExceptDerivedChain,
 } from './create-issue-stage-record-artifacts.ts';
 import { runFinalAcceptance } from './create-issue-final-acceptance.ts';
+import { validateTerminalOneShotBodyBinding } from './create-issue-final-acceptance-contract.ts';
 import {
   deriveReviewEpisodeId,
   deriveReviewEpisodeState,
@@ -1658,9 +1659,9 @@ describe('Issue #1385 round-two receipt regressions', () => {
     expect(stageState.errors.join('\n')).toContain('complete result requires reviewerSource');
   });
 
-  it('accepts the full r03 preterminal to r04 terminal chain and rejects terminal revision drift', () => {
+  it('accepts the #1706 r04/r06/r07 history at live r08 without rewriting it and rejects r09 drift', () => {
     const taskIdentity = `issue:${ISSUE}`;
-    const episodeFirstRevision = 'r03';
+    const episodeFirstRevision = 'r04';
     const reviewEpisodeId = `${taskIdentity}@${episodeFirstRevision}`;
     const receiptId = (sequence: number) => `${reviewEpisodeId}:stage-receipt:${String(sequence).padStart(4, '0')}`;
     const makeCapture = (name: string, seed: string): CaptureIdentityV1 => {
@@ -1733,8 +1734,9 @@ describe('Issue #1385 round-two receipt regressions', () => {
       };
     };
 
-    const competitive = makeBrowserReceipt('competitive', 1, 'r03');
-    const preterminal = makeBrowserReceipt('architectural-review', 2, 'r03');
+    const competitive = makeBrowserReceipt('competitive', 1, 'r04');
+    const preterminal = makeBrowserReceipt('architectural-review', 2, 'r04');
+    const lensCapture = makeCapture('pass-03-architectural-lens.capture.txt', 'architectural-lens:r06');
     const lens: StageCompletenessReceiptV1 = {
       schema: 'stage-completeness-receipt/v1',
       tier: 'T3',
@@ -1750,22 +1752,32 @@ describe('Issue #1385 round-two receipt regressions', () => {
       policyVersion: 'single-source/v1',
       reviewerCardinality: 1,
       cardinalityConfigIdentity: CONFIG,
-      sourceRevision: 'r04',
+      sourceRevision: 'r06',
       outcome: 'complete',
       revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
       settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
       claude: {
-        kind: 'waiver',
-        waiver: { reason: 'claude-unavailable', unavailability: 'provider-unavailable', evidenceIdentity: 'r04-lens-waiver' },
+        kind: 'capture',
+        provider: 'claude-cli',
+        invocationId: 'claude-r06-invocation',
+        producingRunIdentity: 'claude-r06-run',
+        terminalResultIdentity: 'claude-r06-terminal',
+        producerEvidenceIdentity: 'claude-r06-evidence',
+        terminal: true,
+        terminalClassification: 'complete',
+        exitCode: 0,
+        capture: lensCapture,
+        m3Status: 'recorded',
       },
-      credentialingCaptures: [],
-      relayEligibleCaptures: [],
+      credentialingCaptures: [lensCapture],
+      relayEligibleCaptures: [lensCapture],
     };
-    const terminal = makeBrowserReceipt('architectural', 4, 'r04');
+    const terminal = makeBrowserReceipt('architectural', 4, 'r07');
     const receipts = [competitive, preterminal, lens, terminal];
+    const preservedHistory = structuredClone(receipts);
     const captures = receipts.flatMap((item) => item.relayEligibleCaptures);
     const relays: VerifiedRelayEvidenceV1[] = captures.map((item, index) => ({
-      relayAttemptId: `r03-r04-relay-${index + 1}`,
+      relayAttemptId: `1706-relay-${index + 1}`,
       captureIdentity: item.captureIdentity,
       sourceLabel: `${item.name}|${item.captureIdentity}`,
       name: item.name,
@@ -1776,13 +1788,13 @@ describe('Issue #1385 round-two receipt regressions', () => {
     const episodeAuthority = {
       tierIntake: {
         schema: 'tier-intake/v1' as const,
-        producer: 'flow-manager',
+        producer: 'historical-flow-manager',
         taskIdentity,
         kind: 'fresh' as const,
         priorTier: 'T3' as const,
         firstRevision: episodeFirstRevision,
         competitiveDecision: 'required' as const,
-        competitiveRationale: 'fixture includes the required competitive predecessor',
+        competitiveRationale: 'historical #1706 cycle began at r04',
       },
       receiptInventory: {
         source: 'canonical-review-directory' as const,
@@ -1792,17 +1804,43 @@ describe('Issue #1385 round-two receipt regressions', () => {
         stageReceiptIds: receipts.map((item) => item.stageReceiptId),
       },
       claudeProducerEvidence: [],
+      validationPurpose: 'final-acceptance' as const,
     };
 
     const state = deriveReviewEpisodeState(receipts, relays, episodeAuthority);
     expect(state.errors, state.errors.join('\n')).toEqual([]);
     expect(validateReviewEpisodeTopology(state, 'final-acceptance')).toEqual([]);
-    expect(state.receipts.map((item) => item.sourceRevision)).toEqual(['r03', 'r03', 'r04', 'r04']);
+    expect(state.receipts.map((item) => item.sourceRevision)).toEqual(['r04', 'r04', 'r06', 'r07']);
+    expect(state.receipts[2]?.claude).toMatchObject({
+      invocationId: 'claude-r06-invocation',
+      producingRunIdentity: 'claude-r06-run',
+      terminalResultIdentity: 'claude-r06-terminal',
+      producerEvidenceIdentity: 'claude-r06-evidence',
+    });
 
-    const drifted = structuredClone(receipts);
-    drifted[3]!.invocations![0]!.sourceRevision = 'r05';
-    const driftedState = deriveReviewEpisodeState(drifted, relays, episodeAuthority);
-    expect(driftedState.errors.join('\n')).toContain('sourceRevision mismatch');
+    const terminalBody = '<!-- source-revision: r07 -->\n# #1706 terminal-reviewed bytes';
+    const liveR08Body = '<!-- source-revision: r08 -->\n# #1706 bounded corrected bytes';
+    const acceptedBodyErrors: string[] = [];
+    validateTerminalOneShotBodyBinding(terminalBody, liveR08Body, 'r08', receipts, acceptedBodyErrors);
+    expect(acceptedBodyErrors).toEqual([]);
+
+    const r09Errors: string[] = [];
+    validateTerminalOneShotBodyBinding(
+      terminalBody,
+      liveR08Body.replace('source-revision: r08', 'source-revision: r09'),
+      'r09',
+      receipts,
+      r09Errors,
+    );
+    expect(r09Errors).toContain('post-terminal correction must advance exactly one source revision: reviewed=r07 current=r09');
+    expect(receipts).toEqual(preservedHistory);
+
+    const stageTimeState = deriveReviewEpisodeState(receipts, relays, {
+      ...episodeAuthority,
+      validationPurpose: 'stage-time',
+    });
+    expect(stageTimeState.errors.join('\n')).toContain('is not independently supplied');
+  });
   });
 });
 
