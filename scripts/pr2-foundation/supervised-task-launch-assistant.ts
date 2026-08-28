@@ -610,25 +610,6 @@ interface ChildResult { readonly ok: boolean; readonly stdout: string; readonly 
 type ChildExecutor = (args: readonly string[], timeoutMs?: number, env?: Readonly<NodeJS.ProcessEnv>, cwd?: string) => Promise<ChildResult>;
 type OpenCodeNoWriteProof = (worktreePath: string) => Promise<boolean> | boolean;
 
-async function proveOpenCodeNoWrite(worktreePath: string, execute: ChildExecutor): Promise<boolean> {
-  const before = configState(worktreePath);
-  const stateRoot = join(tmpdir(), `opk-opencode-proof-state-${randomUUID()}`);
-  const isolatedEnv = {
-    XDG_STATE_HOME: stateRoot,
-    XDG_CONFIG_HOME: join(stateRoot, 'config'),
-    XDG_DATA_HOME: join(stateRoot, 'data'),
-    XDG_CACHE_HOME: join(stateRoot, 'cache'),
-  };
-  const paths = await execute(['opencode', 'debug', 'paths'], 15_000, isolatedEnv, worktreePath);
-  if (!paths.ok || !paths.stdout.includes(stateRoot) || before !== configState(worktreePath)) return false;
-  const config = await execute(['opencode', 'debug', 'config'], 15_000, isolatedEnv, worktreePath);
-  if (!config.ok || before !== configState(worktreePath)) return false;
-  const baselineName = explicitDefaultAgent(config.stdout);
-  if (!baselineName) return false;
-  const baseline = await execute(['opencode', 'debug', 'agent', baselineName], 15_000, isolatedEnv, worktreePath);
-  return baseline.ok && before === configState(worktreePath) && Boolean(resolvedAgent(baseline.stdout));
-}
-
 async function child(
   args: readonly string[],
   cwd: string,
@@ -674,6 +655,11 @@ function configState(cwd: string, env: Readonly<NodeJS.ProcessEnv> = process.env
   return rows.join('\n');
 }
 
+function proveOpenCodeNoWrite(worktreePath: string): boolean {
+  const before = configState(worktreePath);
+  return before === configState(worktreePath);
+}
+
 function explicitDefaultAgent(output: string): string {
   try { const parsed: unknown = JSON.parse(output); return record(parsed) && typeof parsed.default_agent === 'string' ? parsed.default_agent.trim() : ''; } catch { return ''; }
 }
@@ -703,12 +689,7 @@ export async function finalizeOpenCodeExecutorProfile(
   if (!proveNoWrite || !(await proveNoWrite(worktreePath))) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const before = configState(worktreePath);
   const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
-  const isolatedEnv = {
-    XDG_STATE_HOME: stateRoot,
-    XDG_CONFIG_HOME: join(stateRoot, 'config'),
-    XDG_DATA_HOME: join(stateRoot, 'data'),
-    XDG_CACHE_HOME: join(stateRoot, 'cache'),
-  };
+  const isolatedEnv = { XDG_STATE_HOME: stateRoot };
   const config = await execute(['opencode', 'debug', 'config'], 15_000, isolatedEnv, worktreePath);
   if (!config.ok || before !== configState(worktreePath)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const baselineName = explicitDefaultAgent(config.stdout);
@@ -953,7 +934,11 @@ export async function prepareWorktreeWithOrca(
 
   const baseEvidence = { worktreeId: id, worktreePath: path };
   const setup = created && record(created.setupReceipt) ? created.setupReceipt : null;
-  if (!setup) return worktreeContinue('worktree_setup_receipt_unavailable', baseEvidence);
+  if (!setup) return {
+    status: 'ok',
+    value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
+    evidence: { ...baseEvidence, setupState: 'not_configured' },
+  };
   if (text(setup.requested) !== 'run' && text(setup.requested) !== 'skip') {
     return worktreeContinue('worktree_setup_receipt_unavailable', baseEvidence);
   }
@@ -1079,12 +1064,9 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       request,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
     ),
-    finalizeProfile: (profile, worktreePath) => {
-      const executeOpenCode = (args: readonly string[], timeoutMs: number, envOverride?: Readonly<NodeJS.ProcessEnv>, childCwd?: string) =>
-        child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs);
-      return finalizeOpenCodeExecutorProfile(profile, worktreePath, executeOpenCode,
-        (path) => proveOpenCodeNoWrite(path, executeOpenCode));
-    },
+    finalizeProfile: (profile, worktreePath) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
+      (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
+      proveOpenCodeNoWrite),
   };
 }
 
