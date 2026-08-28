@@ -332,7 +332,7 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
 function finalAcceptanceUsage(): string {
   return [
     'Usage:',
-    '  create-issue-final-acceptance.ts --repo <owner/name> --issue-number <n> --cycle-id <id> --issue-body <path> --issue-revision <rNN> --review-dir <path> --stage-receipt <path>... [--capture <path>...] [--ledger <path>] [--relay-evidence <path>...] [--claude-producer-evidence <path>...] [--external-pass-receipt <path>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--public-actor <actor>] [--workdir <path>] [--json]',
+    '  create-issue-final-acceptance.ts --repo <owner/name> --issue-number <n> [--cycle-id <id>] --issue-body <path> --issue-revision <rNN> --review-dir <path> --stage-receipt <path>... [--capture <path>...] [--ledger <path>] [--relay-evidence <path>...] [--claude-producer-evidence <path>...] [--external-pass-receipt <path>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--public-actor <actor>] [--workdir <path>] [--json]',
   ].join('\n');
 }
 
@@ -498,7 +498,7 @@ export function runStageFinalizeCli(argv: string[]): number {
 export function runFinalAcceptanceCli(argv: string[]): number {
   return runParsedCli(argv, 'create-issue-final-acceptance', parseFinalAcceptanceArgs, (opts) => {
     const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
-    const cycleId = parseRequiredNonEmptyString(opts.cycleId, '--cycle-id');
+    const cycleId = opts.cycleId.trim();
     const issueBodyPath = parseRequiredNonEmptyString(opts.issueBodyPath, '--issue-body');
     const issueRevision = parseRequiredNonEmptyString(opts.issueRevision, '--issue-revision');
     const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
