@@ -140,26 +140,26 @@ export function validateTerminalOneShotBodyBinding(
   issueRevision: string,
   stageReceipts: readonly unknown[],
   errors: string[],
-): void {
+): boolean {
   if (currentBody === undefined) {
     errors.push('terminal current Issue body is required for exact binding');
-    return;
+    return false;
   }
   const sourceBytes = Buffer.from(sourceBody, 'utf8');
   const currentBytes = Buffer.from(currentBody, 'utf8');
   const sourceSha = createHash('sha256').update(sourceBytes).digest('hex');
   const currentSha = createHash('sha256').update(currentBytes).digest('hex');
-  if (sourceBytes.byteLength === currentBytes.byteLength && sourceSha === currentSha) return;
+  if (sourceBytes.byteLength === currentBytes.byteLength && sourceSha === currentSha) return false;
 
   const sourceRevision = SOURCE_REVISION_MARKER_RE.exec(sourceBody)?.[1];
   const currentRevision = SOURCE_REVISION_MARKER_RE.exec(currentBody)?.[1];
   if (!sourceRevision || !currentRevision || sourceRevision === currentRevision) {
     validateExactTerminalBodyBinding(sourceBody, currentBody, errors);
-    return;
+    return false;
   }
   if (currentRevision !== issueRevision) {
     errors.push(`terminal source body changed outside a bound post-terminal correction: reviewed=${sourceRevision} current=${currentRevision} acceptance=${issueRevision}`);
-    return;
+    return false;
   }
   const sourceOrdinal = Number(sourceRevision.slice(1));
   const currentOrdinal = Number(currentRevision.slice(1));
@@ -167,14 +167,15 @@ export function validateTerminalOneShotBodyBinding(
     || !Number.isSafeInteger(currentOrdinal)
     || currentOrdinal !== sourceOrdinal + 1) {
     errors.push(`post-terminal correction must advance exactly one source revision: reviewed=${sourceRevision} current=${currentRevision}`);
-    return;
+    return false;
   }
+  const correctionErrorCount = errors.length;
   const terminal = stageReceipts.filter((value) => (
     record(value) && value.stage === 'architectural' && value.outcome === 'complete'
   ));
   if (terminal.length !== 1) {
     errors.push(`post-terminal correction requires exactly one original terminal receipt; observed ${terminal.length}`);
-    return;
+    return false;
   }
   const terminalReceipt = terminal[0]! as Record<string, unknown>;
   if (terminalReceipt.sourceRevision !== sourceRevision) {
@@ -183,6 +184,7 @@ export function validateTerminalOneShotBodyBinding(
   if (stageReceipts.some((value) => record(value) && value.stage === 'architectural' && value.sourceRevision === currentRevision)) {
     errors.push('post-terminal correction must not re-arm or publish a second terminal stage receipt');
   }
+  return errors.length === correctionErrorCount;
 }
 
 export function executeFinalAcceptanceGuards(
@@ -290,7 +292,7 @@ export function executeFinalAcceptanceGuards(
   );
   if (!lifecycleTopology.ok) errors.push(...lifecycleTopology.errors.map((item) => `stage-completeness: ${item}`));
 
-  validateTerminalOneShotBodyBinding(
+  const terminalCorrectionCertified = validateTerminalOneShotBodyBinding(
     input.terminalSourceBody ?? input.issueBody,
     input.currentIssueBody,
     input.issueRevision,
@@ -309,7 +311,7 @@ export function executeFinalAcceptanceGuards(
     if (ledgerText === null) {
       return { ok: false, contractVersion: FINAL_ACCEPTANCE_CONTRACT_VERSION, errors: [...new Set(errors)] };
     }
-    const ledgerResult = checkFindingLedgerGuard(captures.length === 1 ? captures[0]! : captures, ledgerText, {
+    const ledgerOptions = {
       phase: 'final-acceptance',
       issueRevision: input.issueRevision,
       stageReceipts: ledgerEpisodeState.receipts,
@@ -320,8 +322,14 @@ export function executeFinalAcceptanceGuards(
         timestampMs: index + 1,
       })),
       repoRoot: process.cwd(),
+      terminalCorrectionCertified,
       ...(input.publishedAuthorState ? { publishedAuthorState: input.publishedAuthorState } : {}),
-    });
+    } as Parameters<typeof checkFindingLedgerGuard>[2] & { terminalCorrectionCertified: boolean };
+    const ledgerResult = checkFindingLedgerGuard(
+      captures.length === 1 ? captures[0]! : captures,
+      ledgerText,
+      ledgerOptions,
+    );
     if (!ledgerResult.ok) errors.push(...ledgerResult.errors.map((item) => `finding-ledger: ${item}`));
   }
 

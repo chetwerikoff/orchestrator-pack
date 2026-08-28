@@ -39,6 +39,7 @@ import { readEvidenceWaiverProducerEvidence } from './create-issue-stage-record-
 import { extractMarker } from './create-issue-stage-record-marker.ts';
 import { buildCanonicalLineage, deriveCanonicalCycleLineage } from './create-issue-stage-record-lineage.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
+import { validateTerminalOneShotBodyBinding } from './create-issue-final-acceptance-contract.ts';
 import { defaultGhTransport, fetchRepositoryOwnerLogin, parseJournalEvents } from './create-issue-stage-record-gh.ts';
 import type { CanonicalLineage, GhTransport, PartialMissingSourceWitness, ProducerEvidence, TrustedComment } from './create-issue-stage-record-types.ts';
 import { resolvePublishedAuthorState } from './resolve-published-author-state.ts';
@@ -1614,6 +1615,42 @@ function buildLedger(
   return JSON.stringify(ledger, null, 2) + '\n';
 }
 
+function certifyTerminalCorrection(
+  ledgerText: string,
+  reviewDir: string,
+  receipts: readonly ProducedStageReceipt[],
+  issueRevision: string,
+  phase: ProduceAcceptanceArtifactsOptions['phase'],
+): boolean {
+  if (phase !== 'final-acceptance') return false;
+  let ledger: unknown;
+  try {
+    ledger = JSON.parse(ledgerText) as unknown;
+  } catch {
+    return false;
+  }
+  if (!isRecord(ledger) || typeof ledger.draft !== 'string' || typeof ledger.sourceRevision !== 'string') return false;
+  const terminal = receipts.find((receipt) => receipt.stage === 'architectural' && receipt.outcome === 'complete');
+  if (!terminal) return false;
+  const sourcePath = join(reviewDir, `issue-${terminal.sourceRevision}-body.json`);
+  if (!existsSync(sourcePath)) return false;
+  let sourceSnapshot: unknown;
+  try {
+    sourceSnapshot = JSON.parse(readFileSync(sourcePath, 'utf8')) as unknown;
+  } catch {
+    return false;
+  }
+  if (!isRecord(sourceSnapshot) || typeof sourceSnapshot.body !== 'string') return false;
+  const errors: string[] = [];
+  return validateTerminalOneShotBodyBinding(
+    sourceSnapshot.body,
+    ledger.draft,
+    issueRevision,
+    receipts,
+    errors,
+  ) && errors.length === 0;
+}
+
 function relayEvidence(
   episodeId: string,
   captures: readonly CaptureIdentityV1[],
@@ -2071,26 +2108,40 @@ export function produceAcceptanceArtifacts(
     ));
     if (!stageTerminalConfirmed) errors.push('stage evidence does not prove terminal settlement for every launched invocation');
     if (settlementsValid) {
+      let issueRevision = receipts.at(-1)?.sourceRevision ?? episodeFirstRevision;
+      try {
+        const parsedLedger = JSON.parse(ledger) as unknown;
+        if (isRecord(parsedLedger) && typeof parsedLedger.sourceRevision === 'string') issueRevision = parsedLedger.sourceRevision;
+      } catch {}
+      const terminalCorrectionCertified = certifyTerminalCorrection(
+        ledger,
+        options.reviewDir,
+        receipts,
+        issueRevision,
+        options.phase,
+      );
+      const ledgerOptions = {
+        reviewEconomics: true,
+        phase: (options.phase ?? 'final-acceptance') as 'pre-lens' | 'final-acceptance',
+        issueRevision,
+        stageTerminalConfirmed,
+        stageReceipts: receipts,
+        verifiedRelayEvidence: relay,
+        episodeAuthority: authority,
+        captureMetadata: captures.map((capture) => ({
+          name: capture.name,
+          timestampMs: captureTimestamps.get(capture.captureIdentity) ?? 0,
+          captureIdentity: capture.captureIdentity,
+        })),
+        terminalCorrectionCertified,
+        ...((options.phase ?? 'final-acceptance') === 'final-acceptance' && artifactContext?.publishedAuthorState
+          ? { publishedAuthorState: artifactContext.publishedAuthorState }
+          : {}),
+      } as Parameters<typeof checkFindingLedgerGuard>[2] & { terminalCorrectionCertified: boolean };
       const ledgerResult = checkFindingLedgerGuard(
         captures.map((capture) => captureTexts.get(capture.captureIdentity) ?? ''),
         ledger,
-        {
-          reviewEconomics: true,
-          phase: (options.phase ?? 'final-acceptance') as 'pre-lens' | 'final-acceptance',
-          issueRevision: receipts.at(-1)?.sourceRevision ?? episodeFirstRevision,
-          stageTerminalConfirmed,
-          stageReceipts: receipts,
-          verifiedRelayEvidence: relay,
-          episodeAuthority: authority,
-          captureMetadata: captures.map((capture) => ({
-            name: capture.name,
-            timestampMs: captureTimestamps.get(capture.captureIdentity) ?? 0,
-            captureIdentity: capture.captureIdentity,
-          })),
-          ...((options.phase ?? 'final-acceptance') === 'final-acceptance' && artifactContext?.publishedAuthorState
-            ? { publishedAuthorState: artifactContext.publishedAuthorState }
-            : {}),
-        },
+        ledgerOptions,
       );
       if (!ledgerResult.ok) errors.push(...ledgerResult.errors);
     }
