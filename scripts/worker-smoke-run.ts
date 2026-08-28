@@ -156,6 +156,7 @@ export interface CliOptions {
   issueBodyFile: string;
   smokeComplexity: SmokeComplexity | '';
   smokeActor?: SmokeOrderingActor;
+  operatorSmokeOnly?: boolean;
   repoRoot: string;
   cwd: string;
   dryRun: boolean;
@@ -398,6 +399,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
     issueBodyFile: '',
     smokeComplexity: '',
     smokeActor: 'worker-owned',
+    operatorSmokeOnly: false,
     repoRoot: process.cwd(),
     cwd: process.cwd(),
     dryRun: false,
@@ -415,6 +417,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case '--issue-body-file': options.issueBodyFile = args[++index] ?? ''; break;
       case '--smoke-complexity': options.smokeComplexity = (args[++index] ?? '') as SmokeComplexity; break;
       case '--smoke-actor': options.smokeActor = (args[++index] ?? '') as SmokeOrderingActor; break;
+      case '--operator-smoke-only': options.operatorSmokeOnly = true; break;
       case '--repo-root': options.repoRoot = args[++index] ?? options.repoRoot; break;
       case '--cwd': options.cwd = args[++index] ?? options.cwd; break;
       case '--dry-run': options.dryRun = true; break;
@@ -1745,7 +1748,12 @@ function beginSmokeOrdering(
     });
   }
   if (actor === 'independent') {
-    assertIndependentSmokeAdmission({ authority, headSha: options.headSha, reviewRuns });
+    assertIndependentSmokeAdmission({
+      authority,
+      headSha: options.headSha,
+      reviewRuns,
+      operatorSmokeOnly: options.operatorSmokeOnly,
+    });
   }
   const started = commitSmokeOrderingTransition({
     prNumber: options.prNumber,
@@ -1753,6 +1761,7 @@ function beginSmokeOrdering(
     actor,
     headSha: options.headSha,
     status: 'started',
+    operatorSmokeOnly: options.operatorSmokeOnly,
     options: authorityOptions,
   });
   void started;
