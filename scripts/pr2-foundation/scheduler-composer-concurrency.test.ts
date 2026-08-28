@@ -74,5 +74,6 @@ describe('event-driven composer submission', () => {
       source.indexOf('const repository = await resolveRepositoryFromRepoRoot'),
     );
     expect(source).toContain('preloadedOrchestrationMailReconcile');
+    expect(source).toContain('...(orchestrationMailReconcile ? { orchestrationMailReconcile } : {})');
   });
 });
