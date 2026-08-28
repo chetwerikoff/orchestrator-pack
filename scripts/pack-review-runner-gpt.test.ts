@@ -1391,6 +1391,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       projectId: 'orchestrator-pack',
       storeRoot,
       prNumber: 1276,
+      settlePartialAfterGrace: false,
       fixtureCurrentPrHeadSha: HEAD_A,
       fixtureGptSourceCommentTransport: emptySourceTransport([]),
       fixtureRequiredStatusWriter: async () => {},

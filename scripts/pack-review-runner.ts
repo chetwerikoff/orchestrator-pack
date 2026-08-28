@@ -240,6 +240,13 @@ export interface ReconcileStalePackReviewRunsInput {
   storeRoot?: string;
   prNumber?: number;
   immediate?: boolean;
+  /**
+   * Controls whether this reconciliation invocation may create a new degraded
+   * partial settlement after grace. Production entrypoints set this explicitly:
+   * automatic pre-start reconciliation is false; scoped CLI reconcile is true
+   * only with --immediate. Undefined preserves legacy direct-call recovery.
+   */
+  settlePartialAfterGrace?: boolean;
   baseRef?: string;
   fixtureCurrentPrHeadSha?: string;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
@@ -2203,10 +2210,19 @@ async function recoverStaleGptSourceComments(options: {
   round = persisted.reviewRound ?? round;
   let usableSourceCount = gptUsableSourceCount(round);
   const graceExpired = gptRoundGraceExpired(persisted);
+  const hasBlockingCompletedSource = round.sourceSlots.some((slot) => (
+    slot.lifecycle === 'terminal'
+    && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
+    && slot.payload
+    && classifyPackReviewPayload(slot.payload as ReviewPayload).blocking
+  ));
+  const settlePartialAfterGrace = options.input.settlePartialAfterGrace ?? true;
   const requiredSourceCount = round.settledSourceCount
-    ?? (round.cardinality >= 3
-      ? (graceExpired ? 2 : round.cardinality)
-      : round.cardinality);
+    ?? (hasBlockingCompletedSource
+      ? Math.max(1, usableSourceCount)
+      : round.cardinality >= 3
+        ? (graceExpired && settlePartialAfterGrace ? 2 : round.cardinality)
+        : round.cardinality);
   if (usableSourceCount < requiredSourceCount) {
     const reason = round.cardinality >= 3 && !graceExpired
       ? `gpt_sources_waiting_for_grace:${usableSourceCount}/${round.cardinality}`
@@ -2876,21 +2892,6 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
 
-    const stalePartialCoverage = derivePackReviewGptCoverage(run.reviewRound);
-    if (activeStale
-        && input.immediate !== true
-        && stalePartialCoverage?.kind === 'partial') {
-      results.push({
-        runId: run.id,
-        terminalized: false,
-        statusReconciled: false,
-        reason: 'gpt_partial_requires_explicit_immediate_reconcile',
-        coverage: stalePartialCoverage,
-        nextAction: 'run the explicit scoped reconcile --immediate path after grace or when source evidence changes',
-      });
-      continue;
-    }
-
     const needsGptSourceRecovery = unfinishedTerminal
       && run.reviewRound?.reviewer === 'gpt'
       && !packReviewJournaledPayload(run)
@@ -2945,9 +2946,24 @@ export async function reconcileStalePackReviewRuns(
         continue;
       }
 
-      const recoveryCoverage = derivePackReviewGptCoverage(
-        getPackReviewRun(run.id, { projectId, storeRoot })?.reviewRound ?? run.reviewRound,
-      );
+      const recoveredSnapshot = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+      const recoveryCoverage = derivePackReviewGptCoverage(recoveredSnapshot.reviewRound);
+      if (input.settlePartialAfterGrace === false
+          && recoveryCoverage?.kind === 'partial'
+          && recoveredSnapshot.reviewRound?.settledSourceCount === undefined) {
+        results.push({
+          runId: run.id,
+          terminalized: false,
+          statusReconciled: false,
+          hydratedSourceCount: recovery.hydratedSourceCount,
+          usableSourceCount: recovery.usableSourceCount,
+          graceExpired: recovery.graceExpired,
+          reason: 'gpt_partial_requires_explicit_immediate_reconcile',
+          coverage: recoveryCoverage,
+          nextAction: 'run the explicit scoped reconcile --immediate path after grace or when source evidence changes',
+        });
+        continue;
+      }
       if (immediateActive
           && recoveryCoverage?.kind === 'partial'
           && recovery.graceExpired
@@ -3420,6 +3436,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       fixtureWorkerNotifier: input.fixtureWorkerNotifier,
     } : {}),
     resolveRepositorySlug: resolveSlug,
+    settlePartialAfterGrace: false,
     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
   });
   const claimMode = input.claimMode ?? 'acquire';
@@ -4659,6 +4676,7 @@ async function main(): Promise<void> {
       storeRoot: trim(input.storeRoot) || undefined,
       prNumber: positiveInteger(input.prNumber, 'prNumber'),
       immediate: input.immediate === true,
+      settlePartialAfterGrace: input.immediate === true,
       baseRef: trim(input.baseRef) || DEFAULT_BASE_REF,
       fixtureCurrentPrHeadSha: (input as StartInput).fixtureCurrentPrHeadSha,
       fixtureGptSourceCommentTransport: (input as StartInput).fixtureGptSourceCommentTransport,
