@@ -351,6 +351,31 @@ describe('Issue #1150 stage authority', () => {
     }
   });
 
+  it('keeps missing non-artifact transport identities audit-only only at final acceptance', () => {
+    const source = sourceStage('architectural-review', 1, 1);
+    const historical = structuredClone(source.receipt);
+    delete historical.invocations![0]!.terminalResultIdentity;
+    delete historical.invocations![0]!.reviewerSource;
+    expect(historical.invocations![0]!.artifactAuthority).toBeUndefined();
+
+    const relays = relay(source.captures);
+    const finalState = deriveReviewEpisodeState(
+      [historical],
+      relays,
+      { ...authority([historical], [], 'skipped'), validationPurpose: 'final-acceptance' },
+    );
+    expect(finalState.errors, finalState.errors.join('\n')).toEqual([]);
+    expect(finalState.credentialingCapturesByStage['architectural-review']).toEqual(source.captures);
+
+    const stageState = deriveReviewEpisodeState(
+      [historical],
+      relays,
+      { ...authority([historical], [], 'skipped'), validationPurpose: 'stage-time' },
+    );
+    expect(stageState.errors.join('\n')).toContain('missing terminalResultIdentity');
+    expect(stageState.errors.join('\n')).toContain('missing reviewerSource');
+  });
+
   it('accepts T2 architectural-review and rejects T2 competitive', () => {
     const architectural = sourceStage('architectural-review', 1, 3);
     architectural.receipt.tier = 'T2';
@@ -362,6 +387,30 @@ describe('Issue #1150 stage authority', () => {
     competitive.receipt.tier = 'T2';
     const rejected = deriveReviewEpisodeState([competitive.receipt], relay(competitive.captures), authority([competitive.receipt]));
     expect(rejected.errors.join('\n')).toContain('competitive is valid only for T3');
+  });
+
+  it('accepts T3 pre-lens competitive-only evidence without requiring architectural review', () => {
+    const competitive = sourceStage('competitive', 1, 3);
+    const state = deriveReviewEpisodeState(
+      [competitive.receipt],
+      relay(competitive.captures),
+      authority([competitive.receipt], [], 'required'),
+    );
+    expect(state.errors, state.errors.join('\n')).toEqual([]);
+    expect(validateReviewEpisodeTopology(state, 'pre-lens')).toEqual([]);
+  });
+
+  it('does not let T3 pre-lens architectural-review evidence skip required competitive', () => {
+    const architectural = sourceStage('architectural-review', 1, 3);
+    const state = deriveReviewEpisodeState(
+      [architectural.receipt],
+      relay(architectural.captures),
+      authority([architectural.receipt], [], 'required'),
+    );
+    expect(state.errors, state.errors.join('\n')).toEqual([]);
+    expect(validateReviewEpisodeTopology(state, 'pre-lens').join('\n')).toContain(
+      'competitive requires exactly one credentialing complete-or-proven-partial stageAttemptId',
+    );
   });
 
   it('honors a frozen T3 competitive skip in core topology validation', () => {
@@ -692,6 +741,15 @@ describe('Issue #1150 stage authority', () => {
     expect(deriveReviewEpisodeState(receipts, relays, authority(receipts)).errors.join('\n')).toMatch(/not independently supplied/);
     const producer = { schema: 'claude-producer-evidence/v1', evidenceIdentity: 'claude-evidence', reviewEpisodeId: EPISODE, stageAttemptId: 'claude-attempt', sourceRevision: REVISION, invocationId: 'claude-inv', producingRunIdentity: 'claude-run', terminalResultIdentity: 'claude-result', terminal: true, terminalClassification: 'complete', exitCode: 0, capture: item, m3Status: 'recorded' };
     expect(deriveReviewEpisodeState(receipts, relays, authority(receipts, [producer])).errors).toEqual([]);
+
+    const finalAuthority = { ...authority(receipts), validationPurpose: 'final-acceptance' as const };
+    expect(deriveReviewEpisodeState(receipts, relays, finalAuthority).errors).toEqual([]);
+    const conflictingAuditEvidence = { ...producer, producingRunIdentity: 'different-run', terminalResultIdentity: 'different-result' };
+    expect(deriveReviewEpisodeState(
+      receipts,
+      relays,
+      { ...authority(receipts, [conflictingAuditEvidence]), validationPurpose: 'final-acceptance' as const },
+    ).errors).toEqual([]);
   });
 
   it('accepts a failed bounded retry and a verified corrected relay head', () => {

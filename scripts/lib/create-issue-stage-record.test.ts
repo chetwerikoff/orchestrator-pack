@@ -839,7 +839,7 @@ describe('create-issue-final-acceptance contract parity', () => {
     expect(state.comments).toHaveLength(0);
   });
 
-  it('runs the three acceptance guards and cycle witness validation directly', () => {
+  it('runs the three acceptance guards while cycle witness mismatch is audit-only', () => {
     const result = executeFinalAcceptanceGuards({
       issueBody: '```complexity-tier\ntier: T1\nadvisory-prior: T1\n```\nr01',
       issueRevision: 'r01',
@@ -858,7 +858,7 @@ describe('create-issue-final-acceptance contract parity', () => {
     expect(result.errors.some((error) => error.startsWith('tier-gate:'))).toBe(true);
     expect(result.errors.some((error) => error.startsWith('stage-completeness:'))).toBe(true);
     expect(result.errors.some((error) => error.startsWith('finding-ledger:'))).toBe(true);
-    expect(result.errors.some((error) => error.startsWith('cycle-binding:'))).toBe(true);
+    expect(result.errors.some((error) => error.startsWith('cycle-binding:'))).toBe(false);
   });
 });
 

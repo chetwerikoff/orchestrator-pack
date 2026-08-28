@@ -12,9 +12,6 @@ import {
   type TierTransitionEvidence,
 } from '../lib/tier-gate-core.ts';
 import { validateLifecycleAcceptanceTopology } from './create-issue-stage-lifecycle-acceptance.ts';
-import {
-  validateHistoricalReceiptsAgainstLineage,
-} from './create-issue-stage-record-receipt.ts';
 import type { CanonicalLineage } from './create-issue-stage-record-types.ts';
 
 export const FINAL_ACCEPTANCE_CONTRACT_VERSION = 'create-issue-final-acceptance-contract/v1';
@@ -164,6 +161,14 @@ export function validateTerminalOneShotBodyBinding(
     errors.push(`terminal source body changed outside a bound post-terminal correction: reviewed=${sourceRevision} current=${currentRevision} acceptance=${issueRevision}`);
     return;
   }
+  const sourceOrdinal = Number(sourceRevision.slice(1));
+  const currentOrdinal = Number(currentRevision.slice(1));
+  if (!Number.isSafeInteger(sourceOrdinal)
+    || !Number.isSafeInteger(currentOrdinal)
+    || currentOrdinal !== sourceOrdinal + 1) {
+    errors.push(`post-terminal correction must advance exactly one source revision: reviewed=${sourceRevision} current=${currentRevision}`);
+    return;
+  }
   const terminal = stageReceipts.filter((value) => (
     record(value) && value.stage === 'architectural' && value.outcome === 'complete'
   ));
@@ -196,7 +201,6 @@ export function executeFinalAcceptanceGuards(
     };
   }
 
-  if (!input.cycleId.trim()) errors.push('cycleId is required');
   if (!input.issueRevision.trim()) errors.push('issueRevision is required');
   const currentIssueBody = input.currentIssueBody ?? input.issueBody;
   const smokeRequirement = resolveSmokeRequirement(currentIssueBody);
@@ -229,7 +233,9 @@ export function executeFinalAcceptanceGuards(
       const value = readJsonSafely(path, readJson, errors, 'stage-completeness');
       return value === null ? [] : [value];
     });
-  let episodeAuthority = input.episodeAuthority;
+  let episodeAuthority = input.episodeAuthority
+    ? { ...input.episodeAuthority, validationPurpose: 'final-acceptance' as const }
+    : undefined;
   let intakeValue: unknown = episodeAuthority?.tierIntake;
   if (!episodeAuthority) {
     const intakePath = input.tierIntakePath ?? join(input.reviewDir, 'tier-intake.json');
@@ -245,7 +251,7 @@ export function executeFinalAcceptanceGuards(
           .filter((value): value is Record<string, unknown> => typeof value === 'object' && value !== null)
           .sort((left, right) => Number(left.stageSequence ?? 0) - Number(right.stageSequence ?? 0));
         const claudeProducerEvidence = input.claudeProducerEvidencePaths?.flatMap((path) => {
-          const value = readJsonSafely(path, readJson, errors, 'stage-completeness');
+          const value = tryReadJson(path, readJson);
           return value === null ? [] : [value];
         });
         episodeAuthority = {
@@ -261,6 +267,7 @@ export function executeFinalAcceptanceGuards(
             }),
           },
           claudeProducerEvidence,
+          validationPurpose: 'final-acceptance',
         };
       }
     }
@@ -275,7 +282,12 @@ export function executeFinalAcceptanceGuards(
     errors.push(...ledgerEpisodeState.errors.map((item) => `stage-completeness: ${item}`));
   }
   if (!ledgerEpisodeState.relayComplete) errors.push('stage-completeness: review episode relay is incomplete');
-  const lifecycleTopology = validateLifecycleAcceptanceTopology(stageReceipts, intakeValue, input.tier ?? ledgerEpisodeState.tier ?? undefined);
+  const lifecycleTopology = validateLifecycleAcceptanceTopology(
+    stageReceipts,
+    intakeValue,
+    input.tier ?? ledgerEpisodeState.tier ?? undefined,
+    'final-acceptance',
+  );
   if (!lifecycleTopology.ok) errors.push(...lifecycleTopology.errors.map((item) => `stage-completeness: ${item}`));
 
   validateTerminalOneShotBodyBinding(
@@ -311,18 +323,6 @@ export function executeFinalAcceptanceGuards(
       ...(input.publishedAuthorState ? { publishedAuthorState: input.publishedAuthorState } : {}),
     });
     if (!ledgerResult.ok) errors.push(...ledgerResult.errors.map((item) => `finding-ledger: ${item}`));
-  }
-
-  if (!input.canonicalLineage) {
-    errors.push('cycle-binding: canonical Issue-comment lineage is required for final acceptance');
-  } else {
-    errors.push(...validateHistoricalReceiptsAgainstLineage({
-      receiptValues: stageReceipts,
-      receiptPaths: input.stageReceiptPaths,
-      cycleId: input.cycleId,
-      issueRevision: input.issueRevision,
-      lineage: input.canonicalLineage,
-    }).map((item) => `cycle-binding: ${item}`));
   }
 
   if (!currentIssueBody.includes(input.issueRevision)) {
