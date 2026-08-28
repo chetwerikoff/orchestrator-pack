@@ -14,6 +14,7 @@ import {
   produceAcceptanceArtifacts,
   stageReceiptPayloadsMatchExceptDerivedChain,
 } from './create-issue-stage-record-artifacts.ts';
+import { runFinalAcceptance } from './create-issue-final-acceptance.ts';
 import {
   deriveReviewEpisodeId,
   deriveReviewEpisodeState,
@@ -131,6 +132,40 @@ function cycleComment(
   ].join('\n'), { id });
 }
 
+function finalAcceptanceIssueBody(revision = REVISION): string {
+  return [
+    `<!-- source-revision: ${revision} -->`,
+    '# Fixture',
+    '',
+    '## Goal',
+    'Final acceptance fixture.',
+    '',
+    '```behavior-kind',
+    'record-only',
+    '```',
+    '',
+    '```denylist',
+    'vendor/**',
+    'packages/core/**',
+    '```',
+    '',
+    '```allowed-roots',
+    'scripts/lib/create-issue-final-acceptance.ts',
+    '```',
+    '',
+    '## Acceptance criteria',
+    '1. Final acceptance remains deterministic.',
+    '',
+    '## Verification',
+    'Run the focused regression.',
+    '',
+    '```contract-evidence',
+    'none',
+    '```',
+    '',
+  ].join('\n');
+}
+
 interface TransportOptions {
   principal?: string | null;
   census?: Array<Record<string, unknown>>;
@@ -140,6 +175,7 @@ interface TransportOptions {
   secondPageFailure?: boolean;
   beforeReread?: () => void;
   cycleComments?: Array<Record<string, unknown>>;
+  issueBodies?: string[];
 }
 
 function transport(options: TransportOptions = {}) {
@@ -151,12 +187,27 @@ function transport(options: TransportOptions = {}) {
   })[0] ?? REVISION;
   const journalComments = options.cycleComments ?? [cycleComment(observedRevision)];
   const census = [...suppliedCensus, ...journalComments];
+  let issueReadCount = 0;
+  const createdIssueComments: string[] = [];
   const runGh = vi.fn((argv: string[]) => {
     if (argv[2] === 'user') {
       if (principal === null) return { exitCode: 1, stdout: '', stderr: 'principal unavailable' };
       return { exitCode: 0, stdout: `${principal}\n`, stderr: '' };
     }
     const target = argv[2] ?? '';
+    if (target.startsWith(`repos/${REPOSITORY}/labels/`)) {
+      return { exitCode: 0, stdout: '{}', stderr: '' };
+    }
+    if (options.issueBodies && target === `repos/${REPOSITORY}/issues/${ISSUE}` && argv.includes('--jq')) {
+      const body = options.issueBodies[Math.min(issueReadCount, options.issueBodies.length - 1)] ?? '';
+      issueReadCount += 1;
+      return { exitCode: 0, stdout: JSON.stringify({ title: 'fixture issue', body, labels: [] }), stderr: '' };
+    }
+    if (target === `repos/${REPOSITORY}/issues/${ISSUE}/comments` && argv.includes('-f')) {
+      const body = argv.find((value) => value.startsWith('body='))?.slice('body='.length) ?? '';
+      createdIssueComments.push(body);
+      return { exitCode: 0, stdout: JSON.stringify({ id: COMMENT_ID + 2000 + createdIssueComments.length }), stderr: '' };
+    }
     if (target === `repos/${REPOSITORY}`) {
       return { exitCode: 0, stdout: `${PUBLISHER}\n`, stderr: '' };
     }
@@ -177,7 +228,7 @@ function transport(options: TransportOptions = {}) {
     }
     throw new Error(`unexpected gh call: ${argv.join(' ')}`);
   });
-  return { runGh };
+  return { runGh, createdIssueComments };
 }
 
 function fixture(input: {
@@ -385,6 +436,30 @@ function inspectStageTime(input: ReturnType<typeof fixture>) {
     authorDispositionsPath: input.authorPath,
     phase: 'stage-time',
   });
+}
+
+function historicalWitnessPartial(receipt: StageCompletenessReceiptV1): {
+  receipt: StageCompletenessReceiptV1;
+  droppedCaptureIdentity: string;
+} {
+  const partial = structuredClone(receipt);
+  const missingInvocation = partial.invocations?.[2];
+  if (!missingInvocation?.capture) throw new Error('fixture requires a third credentialed invocation capture');
+  const droppedCaptureIdentity = missingInvocation.capture.captureIdentity;
+  missingInvocation.terminalClassification = 'incident';
+  missingInvocation.retryClass = 'retry-forbidden';
+  delete missingInvocation.capture;
+  delete missingInvocation.artifactAuthority;
+  partial.outcome = 'partial';
+  partial.partialMissingSources = [{
+    reviewerSlot: '03',
+    invocationId: 'historical-other-invocation',
+    evidenceIdentity: 'historical-other-result',
+    reason: 'post-send result unavailable',
+  }];
+  partial.credentialingCaptures = partial.credentialingCaptures.filter((capture) => capture.captureIdentity !== droppedCaptureIdentity);
+  partial.relayEligibleCaptures = partial.relayEligibleCaptures.filter((capture) => capture.captureIdentity !== droppedCaptureIdentity);
+  return { receipt: partial, droppedCaptureIdentity };
 }
 
 describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
@@ -1316,6 +1391,68 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(status.ok, status.missing.map((item) => item.reason).join('\n')).toBe(true);
   });
 
+  it('check-artifacts uses final-acceptance semantics for historical partial-witness identity', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const produced = produce(input);
+    expect(produced.ok, produced.errors.join('\n')).toBe(true);
+    const receiptPath = join(input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json');
+    const original = JSON.parse(readFileSync(receiptPath, 'utf8')) as StageCompletenessReceiptV1;
+    const partial = historicalWitnessPartial(original).receipt;
+    writeFileSync(receiptPath, JSON.stringify(partial, null, 2) + '\n');
+
+    const finalStatus = inspect(input);
+    expect(finalStatus.ok, finalStatus.missing.map((item) => item.reason).join('\n')).toBe(true);
+    const stageStatus = inspectStageTime(input);
+    expect(stageStatus.ok).toBe(false);
+    expect(stageStatus.missing.map((item) => item.reason).join('\n'))
+      .toContain(`lacks a journal witness naming invocation ${String(partial.invocations?.[2]?.invocationId)}`);
+  });
+
+  it('blocks final acceptance when the live Issue body drifts at the journal write boundary', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const produced = produce(input);
+    expect(produced.ok, produced.errors.join('\n')).toBe(true);
+    const body = finalAcceptanceIssueBody();
+    const driftedBody = body.replace('Final acceptance fixture.', 'Drifted final acceptance fixture.');
+    const stateRoot = join(input.dir, 'canonical-state');
+    const canonicalDir = join(stateRoot, '.review', String(ISSUE));
+    mkdirSync(canonicalDir, { recursive: true });
+    writeFileSync(join(canonicalDir, 'tier-intake.json'), readFileSync(input.intakePath));
+    const receiptNames = produced.files.filter((name) => name.startsWith('stage-completeness-receipt-'));
+    for (const name of receiptNames) writeFileSync(join(canonicalDir, name), readFileSync(join(input.outputDir, name)));
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    try {
+      const source = transport({
+        census: [],
+        cycleComments: [cycleComment()],
+        issueBodies: [body, body, driftedBody],
+      });
+      const result = runFinalAcceptance(source, {
+        repo: REPOSITORY,
+        issueNumber: ISSUE,
+        publicActor: 'cursor-flow-manager',
+        workdir: join(input.dir, 'journal'),
+        issueBody: body,
+        issueRevision: REVISION,
+        cycleId: 'cycle-1385',
+        reviewDir: canonicalDir,
+        tierIntakePath: join(canonicalDir, 'tier-intake.json'),
+        stageReceiptPaths: receiptNames.map((name) => join(canonicalDir, name)),
+        capturePaths: [],
+        ledgerPath: join(input.outputDir, 'finding-disposition-ledger.json'),
+        relayEvidencePaths: [join(input.outputDir, 'verified-relay-evidence.json')],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.guardErrors.join('\n')).toContain('terminal source body');
+      expect(source.createdIssueComments).toHaveLength(0);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+    }
+  });
+
   it('credentials a TO_ECHO-only comment with no INVOCATION_ID line', () => {
     const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
     expect(input.body).toMatch(/^INVOCATION_ID_TO_ECHO: invocation-001$/m);
@@ -1402,6 +1539,58 @@ describe('Issue #1385 round-two receipt regressions', () => {
     delete captureless.invocations![0]!.capture;
     expect(deriveReviewEpisodeState([captureless], relayEvidence, episodeAuthority).errors.join('\n'))
       .toContain('artifactAuthority requires capture');
+  });
+
+  it('threads final-acceptance semantics through derived partial-stage credentialing', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const produced = produce(input);
+    expect(produced.ok, produced.errors.join('\n')).toBe(true);
+    const reviewReceipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json'), 'utf8')) as StageCompletenessReceiptV1;
+    const terminalReceipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8')) as StageCompletenessReceiptV1;
+    const partial = historicalWitnessPartial(reviewReceipt);
+    const relays = (JSON.parse(readFileSync(join(input.outputDir, 'verified-relay-evidence.json'), 'utf8')) as VerifiedRelayEvidenceV1[])
+      .filter((relay) => relay.captureIdentity !== partial.droppedCaptureIdentity);
+    const finalAuthority: ReviewEpisodeDerivationAuthorityV1 = {
+      ...outputAuthority(input),
+      validationPurpose: 'final-acceptance',
+    };
+    const finalState = deriveReviewEpisodeState([partial.receipt, terminalReceipt], relays, finalAuthority);
+    expect(finalState.errors, finalState.errors.join('\n')).toEqual([]);
+    expect(validateReviewEpisodeTopology(finalState, 'final-acceptance')).toEqual([]);
+
+    const stageState = deriveReviewEpisodeState([partial.receipt, terminalReceipt], relays, {
+      ...outputAuthority(input),
+      validationPurpose: 'stage-time',
+    });
+    expect(stageState.errors.join('\n'))
+      .toContain(`lacks a journal witness naming invocation ${String(partial.receipt.invocations?.[2]?.invocationId)}`);
+  });
+
+  it('keeps artifact-backed complete transport identities audit-only at final acceptance', () => {
+    const input = fixture({ transportClassification: 'incident', reviewerSource: null, withTurnResult: false });
+    const produced = produce(input);
+    expect(produced.ok, produced.errors.join('\n')).toBe(true);
+    const reviewReceipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json'), 'utf8')) as StageCompletenessReceiptV1;
+    const terminalReceipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8')) as StageCompletenessReceiptV1;
+    const invocation = terminalReceipt.invocations?.[0];
+    if (!invocation?.artifactAuthority || !invocation.capture) throw new Error('fixture requires artifact-backed terminal evidence');
+    expect(invocation.terminalResultIdentity).toBeUndefined();
+    expect(invocation.reviewerSource).toBeUndefined();
+    invocation.terminalClassification = 'complete';
+    invocation.retryClass = 'none';
+    const relays = JSON.parse(readFileSync(join(input.outputDir, 'verified-relay-evidence.json'), 'utf8')) as VerifiedRelayEvidenceV1[];
+    const finalState = deriveReviewEpisodeState([reviewReceipt, terminalReceipt], relays, {
+      ...outputAuthority(input),
+      validationPurpose: 'final-acceptance',
+    });
+    expect(finalState.errors, finalState.errors.join('\n')).toEqual([]);
+
+    const stageState = deriveReviewEpisodeState([reviewReceipt, terminalReceipt], relays, {
+      ...outputAuthority(input),
+      validationPurpose: 'stage-time',
+    });
+    expect(stageState.errors.join('\n')).toContain('complete result requires terminalResultIdentity');
+    expect(stageState.errors.join('\n')).toContain('complete result requires reviewerSource');
   });
 
   it('accepts the full r03 preterminal to r04 terminal chain and rejects terminal revision drift', () => {

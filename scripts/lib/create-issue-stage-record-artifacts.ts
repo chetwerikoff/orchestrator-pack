@@ -2344,7 +2344,7 @@ export function inspectAcceptanceArtifacts(
       missing.push({ artifact: 'operator waiver', reason: `${stage} partial receipt asserts an operator waiver but --waiver does not resolve to the existing waiver seam` });
       continue;
     }
-    const settlement = evaluateStageCredentialingSettlement(value, cardinality, stage);
+    const settlement = evaluateStageCredentialingSettlement(value, cardinality, stage, purpose);
     if (settlement.credentialed) credentialedStages.add(stage);
     else if (value.outcome === 'complete' || value.outcome === 'partial') {
       for (const error of settlement.errors) missing.push({ artifact: 'stage-completeness-receipt', reason: error + ': ' + join(outputDir, name) });

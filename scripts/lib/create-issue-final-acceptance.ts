@@ -368,6 +368,7 @@ export function runFinalAcceptance(
     'public-actor': input.publicActor,
   };
   const fingerprint = logicalFingerprint(logical);
+  let publicationReadbackErrors: string[] = [];
   const published = appendPublishedLogicalJournalEvent(
     diagnostics,
     transport,
@@ -387,28 +388,38 @@ export function runFinalAcceptance(
             : []),
           ...validatePublishBodyBinding(liveIssue.body, latest.body),
         ];
-        return errors.length === 0
-          ? { ok: true }
-          : {
-            ok: false,
-            diagnostics: [{
-              code: 'public-journal-gap',
-              message: errors.join('; '),
-              eventKey,
-            }],
-          };
-      } catch {
+        if (errors.length === 0) return { ok: true };
+        publicationReadbackErrors = errors;
         return {
           ok: false,
           diagnostics: [{
             code: 'public-journal-gap',
-            message: 'unable to re-read current Issue body before final event publication',
+            message: errors.join('; '),
+            eventKey,
+          }],
+        };
+      } catch {
+        publicationReadbackErrors = ['unable to re-read current Issue body before final event publication'];
+        return {
+          ok: false,
+          diagnostics: [{
+            code: 'public-journal-gap',
+            message: publicationReadbackErrors[0]!,
             eventKey,
           }],
         };
       }
     },
   );
+  if (!published.ok && publicationReadbackErrors.length > 0) {
+    return {
+      ok: false,
+      diagnostics,
+      guardErrors: [...new Set(publicationReadbackErrors)],
+      eventKey,
+      projectionPendingRepair: true,
+    };
+  }
   if (!published.ok) {
     return {
       ok: true,
