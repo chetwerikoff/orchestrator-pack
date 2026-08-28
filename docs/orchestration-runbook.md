@@ -173,12 +173,16 @@ before the first governed effect. Do not add a dotenv loader, second registry,
 compatibility token, fallback family, or heuristic selector.
 
 Model applicability and route admission are separate checks. Cursor catalog
-applicability comes from `cursor-agent --list-models`; Cursor's existing
-model/effort opacity is composed only inside the Cursor translator in the shared
-policy. OpenCode catalog applicability comes from `opencode models`; the selected
-model and effort are carried together through an invocation-local agent definition
-in `OPENCODE_CONFIG_CONTENT`. The top-level spawned command uses `--agent` only,
-never `--model` or `--variant`.
+applicability comes from `cursor-agent --list-models`; Cursor catalog identity and
+spawn `--model` are different strings: admission continues to use the opaque
+`model-effort` identity, while the translator emits a parameterized model with
+`context`, `reasoning`, and `fast=false` when the operator sets
+`PACK_EXECUTOR_CURSOR_CONTEXT`, and preserves the legacy spawn composition when it
+is unset. The context window is operator-selected and never inherited from host
+CLI state. OpenCode catalog applicability comes from `opencode models`; the
+selected model and effort are carried together through an invocation-local agent
+definition in `OPENCODE_CONFIG_CONTENT`. The top-level spawned command uses
+`--agent` only, never `--model` or `--variant`.
 
 For OpenCode exact-terminal work, early `resolveProfile` proves only selector,
 top-level `--agent` syntax, and catalog route evidence. After worktree preparation,

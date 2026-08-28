@@ -19,6 +19,8 @@ import {
 import {
   buildExecutorCommand,
   buildOpenCodeAgentOverlay,
+  buildProviderInvocation,
+  catalogIdentityForProfile,
   openCodeAgentSemantics,
   EXECUTOR_FAMILY_DESCRIPTORS,
   profileNamesForTask,
@@ -276,6 +278,7 @@ describe('supervised Task launch assistant', () => {
   it.each([
     ['executor_profile_missing', { PACK_EXECUTOR_T2_MODEL: '' }],
     ['executor_profile_malformed', { PACK_EXECUTOR_T2_MODEL: 'model with spaces' }],
+    ['executor_profile_malformed', { PACK_EXECUTOR_CURSOR_CONTEXT: '272k with spaces' }],
     ['executor_profile_agent_unsupported', { PACK_EXECUTOR_T2_AGENT: 'codex' }],
     ['executor_profile_agent_unsupported', { PACK_EXECUTOR_T2_AGENT: 'cursor' }],
   ] as const)('rejects invalid executor profile before effects: %s', async (cause, overrides) => {
@@ -286,6 +289,51 @@ describe('supervised Task launch assistant', () => {
     }));
     expect(result).toMatchObject({ outcome: 'continue', stage: 'executor_profile', observedCause: cause });
     expect(worktrees).toBe(0); expect(spawns).toBe(0);
+  });
+
+  it('pins Cursor spawn context without changing catalog identity', () => {
+    const resolved = resolveSemanticExecutorProfile({
+      surface: 'task',
+      names: profileNamesForTask('t2'),
+      env: profileEnv({ PACK_EXECUTOR_CURSOR_CONTEXT: '272k' }),
+    });
+    if (!resolved.ok) throw new Error('Cursor profile should resolve');
+    expect(catalogIdentityForProfile(resolved.profile)).toBe('model-medium');
+    expect(buildExecutorCommand(resolved.profile)).toMatchObject({
+      executable: 'cursor-agent',
+      modelArgument: 'model[context=272k,reasoning=medium,fast=false]',
+      command: "cursor-agent --model 'model[context=272k,reasoning=medium,fast=false]'",
+    });
+    expect(buildProviderInvocation(resolved.profile)).toEqual({
+      orcaAgent: 'cursor',
+      argv: ['--agent', 'cursor', '--model', 'model[context=272k,reasoning=medium,fast=false]'],
+    });
+  });
+
+  it('keeps the legacy Cursor spawn identity when context is unset', () => {
+    const resolved = resolveSemanticExecutorProfile({
+      surface: 'task',
+      names: profileNamesForTask('t2'),
+      env: profileEnv(),
+    });
+    if (!resolved.ok) throw new Error('Cursor profile should resolve');
+    expect(buildExecutorCommand(resolved.profile).modelArgument).toBe('model-medium');
+    expect(buildProviderInvocation(resolved.profile)?.argv).toEqual(['--agent', 'cursor', '--model', 'model-medium']);
+  });
+
+  it('ignores Cursor context settings for OpenCode profiles', () => {
+    const withoutContext = resolveSemanticExecutorProfile({
+      surface: 'task',
+      names: profileNamesForTask('t2'),
+      env: opencodeProfileEnv('t2'),
+    });
+    const withContext = resolveSemanticExecutorProfile({
+      surface: 'task',
+      names: profileNamesForTask('t2'),
+      env: { ...opencodeProfileEnv('t2'), PACK_EXECUTOR_CURSOR_CONTEXT: '272k' },
+    });
+    if (!withoutContext.ok || !withContext.ok) throw new Error('OpenCode profile should resolve');
+    expect(buildExecutorCommand(withContext.profile)).toEqual(buildExecutorCommand(withoutContext.profile));
   });
 
   it.each(['manager', 't1', 't2', 't3'] as const)('closed two-family mapping recognizes OpenCode for %s without inventing a route', (workClass) => {
