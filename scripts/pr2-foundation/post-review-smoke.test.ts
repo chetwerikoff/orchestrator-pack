@@ -573,16 +573,7 @@ describe('Issue #1777 post-review admission parity', () => {
     createdAt?: string;
     failureReason?: string;
   };
-  type MatrixCase = {
-    id: string;
-    expected: string;
-    authority: (derived: boolean) => PackReviewAuthorityDocument;
-    runVariants: readonly (RunShape | null)[];
-    requestedHead?: string;
-    derivedVariants?: readonly boolean[];
-  };
-
-  function makeAuthority(input: {
+  type AuthorityShape = {
     terminalStatus?: string;
     consumedHeadShas?: string[];
     reviewSettledHeadSha?: string;
@@ -590,118 +581,181 @@ describe('Issue #1777 post-review admission parity', () => {
     triageVerdict?: 'BLOCK';
     reviewStageComplete?: boolean;
     reviewStartConsumed?: boolean;
-  } = {}): PackReviewAuthorityDocument {
-    const terminal: PackReviewAuthorityDocument['terminal'] = input.terminalStatus
-      ? {
-        runId: 'terminal-' + input.terminalStatus,
-        digest: 'd'.repeat(64),
-        targetSha: OBSERVED_HEAD,
-        reviewVerdict: ['clean', 'up_to_date', 'commented'].includes(input.terminalStatus) ? 'clean' : 'findings',
-        terminalSource: 'normal',
-        automaticBudgetDisposition: 'consume',
-        reviewStatus: input.terminalStatus,
-      }
-      : undefined;
-    return {
+  };
+  type MatrixCase = {
+    id: string;
+    expected: string;
+    build: (derived: boolean) => PackReviewAuthorityDocument;
+    runs: readonly (RunShape | null)[];
+    requestedHead?: string;
+    derived?: readonly boolean[];
+  };
+
+  function authorityFor(shape: AuthorityShape = {}): PackReviewAuthorityDocument {
+    const cycle: NonNullable<PackReviewAuthorityDocument['cycle']> = {
+      cycleId: 'cycle-observed-1740',
+      state: 'open',
+      frozenTier: 'T3',
+      frozenCap: 2,
+      capMapVersion: 'legacy-frozen',
+      frozenMapOrigin: 'persisted-open-cycle',
+      openedAtUtc: OPENED_AT,
+      consumedHeadShas: shape.consumedHeadShas ?? [],
+    };
+    if (shape.reviewStageComplete) {
+      cycle.reviewStageComplete = true;
+      cycle.reviewStageCompletedAtUtc = RUN_AT;
+    }
+    if (shape.reviewStartConsumed) cycle.reviewStartConsumed = true;
+
+    const authority: PackReviewAuthorityDocument = {
       schemaVersion: 1,
       prNumber: OBSERVED_PR,
       transitionSeq: 0,
       phase: 'head_observed',
       currentHeadSha: OBSERVED_HEAD,
       updatedAtUtc: OPENED_AT,
-      cycle: {
-        cycleId: 'cycle-observed-1740',
-        state: 'open',
-        frozenTier: 'T3',
-        frozenCap: 2,
-        capMapVersion: 'legacy-frozen',
-        frozenMapOrigin: 'persisted-open-cycle',
-        openedAtUtc: OPENED_AT,
-        consumedHeadShas: input.consumedHeadShas ?? [],
-        ...(input.reviewStageComplete ? { reviewStageComplete: true, reviewStageCompletedAtUtc: RUN_AT } : {}),
-        ...(input.reviewStartConsumed ? { reviewStartConsumed: true } : {}),
-      },
-      ...(terminal ? { terminal } : {}),
+      cycle,
       smokeOrdering: {
-        workerOwned: { headSha: OBSERVED_HEAD, status: 'passed', updatedAtUtc: RUN_AT },
-        ...(input.reviewSettledHeadSha ? { reviewSettledHeadSha: input.reviewSettledHeadSha } : {}),
-        ...(input.independent ? { independent: input.independent } : {}),
-      },
-      ...(input.triageVerdict ? {
-        triage: {
-          verdict: input.triageVerdict,
-          source: 'architect',
-          findingSnapshotDigest: 'finding-snapshot',
-          committedAtUtc: RUN_AT,
+        workerOwned: {
+          headSha: OBSERVED_HEAD,
+          status: 'passed',
+          updatedAtUtc: RUN_AT,
         },
-      } : {}),
+      },
     };
+    if (shape.reviewSettledHeadSha) {
+      authority.smokeOrdering!.reviewSettledHeadSha = shape.reviewSettledHeadSha;
+    }
+    if (shape.independent) authority.smokeOrdering!.independent = shape.independent;
+    if (shape.terminalStatus) {
+      authority.terminal = {
+        runId: 'terminal-' + shape.terminalStatus,
+        digest: 'd'.repeat(64),
+        targetSha: OBSERVED_HEAD,
+        reviewVerdict: ['clean', 'up_to_date', 'commented'].includes(shape.terminalStatus) ? 'clean' : 'findings',
+        terminalSource: 'normal',
+        automaticBudgetDisposition: 'consume',
+        reviewStatus: shape.terminalStatus,
+      };
+    }
+    if (shape.triageVerdict) {
+      authority.triage = {
+        verdict: shape.triageVerdict,
+        source: 'architect',
+        findingSnapshotDigest: 'finding-snapshot',
+        committedAtUtc: RUN_AT,
+      };
+    }
+    return authority;
   }
 
-  function persistAuthority(storeRoot: string, authority: PackReviewAuthorityDocument): void {
-    const authorityRoot = path.join(storeRoot, 'authority');
+  function matrixCase(
+    id: string,
+    expected: string,
+    build: MatrixCase['build'],
+    runs: MatrixCase['runs'],
+    requestedHead?: string,
+    derived?: readonly boolean[],
+  ): MatrixCase {
+    return { id, expected, build, runs, requestedHead, derived };
+  }
+
+  const MATRIX: readonly MatrixCase[] = [
+    matrixCase('A1 full observed #1740 run-store-only consumed start', 'admit',
+      (flag) => authorityFor({ reviewStageComplete: flag, reviewStartConsumed: flag }), [{}]),
+    matrixCase('A2 observed fixture without consuming run', 'smoke_ordering_review_unsettled',
+      (flag) => authorityFor({ reviewStageComplete: flag, reviewStartConsumed: flag }), [null]),
+    matrixCase('A3 failed terminal consumes start', 'admit',
+      (flag) => authorityFor({ terminalStatus: 'failed', reviewStageComplete: flag, reviewStartConsumed: !flag }), [null]),
+    matrixCase('A4 error terminal consumes start', 'admit',
+      (flag) => authorityFor({ terminalStatus: 'error', reviewStageComplete: flag, reviewStartConsumed: !flag }), [null]),
+    matrixCase('A5 changes_requested terminal consumes start', 'admit',
+      (flag) => authorityFor({ terminalStatus: 'changes_requested', reviewStageComplete: flag, reviewStartConsumed: !flag }), [null]),
+    matrixCase('A6 cap itself proves consumption', 'admit',
+      (flag) => authorityFor({ consumedHeadShas: ['1'.repeat(40), '2'.repeat(40)], reviewStageComplete: flag, reviewStartConsumed: !flag }), [null]),
+    matrixCase('A7 below cap without terminal or run evidence', 'smoke_ordering_review_unsettled',
+      (flag) => authorityFor({ consumedHeadShas: ['1'.repeat(40)], reviewStageComplete: flag, reviewStartConsumed: flag }), [null]),
+    matrixCase('A8 production failed-run failure reasons consume start', 'admit',
+      (flag) => authorityFor({ reviewStageComplete: flag, reviewStartConsumed: !flag }),
+      [{ failureReason: 'reviewer_output_malformed:invalid_terminal_payload' }, { failureReason: 'stale_head_before_terminal' }]),
+    matrixCase('A9 stale or explicit non-consuming run cannot admit', 'smoke_ordering_review_unsettled',
+      (flag) => authorityFor({ reviewStageComplete: flag, reviewStartConsumed: flag }),
+      [{ stale: true }, { automaticBudgetDisposition: 'non_consuming_explicit' }]),
+    matrixCase('A10 exact-head successful settlement admits', 'admit',
+      () => authorityFor({ terminalStatus: 'up_to_date', reviewSettledHeadSha: OBSERVED_HEAD, reviewStageComplete: true }), [null], undefined, [true]),
+    matrixCase('A11 prior-head settlement does not settle current head', 'smoke_ordering_review_unsettled',
+      (flag) => authorityFor({ reviewSettledHeadSha: EARLIER_HEAD, reviewStageComplete: flag, reviewStartConsumed: flag }), [null]),
+    matrixCase('A12 requested head differs from authority current head', 'smoke_ordering_head_mismatch',
+      (flag) => authorityFor({ reviewStageComplete: flag, reviewStartConsumed: flag }), [{}], OTHER_HEAD),
+    matrixCase('A13 same-head independent finding requires a new head', 'smoke_ordering_independent_same_head_forbidden',
+      (flag) => authorityFor({
+        reviewStageComplete: flag,
+        reviewStartConsumed: flag,
+        independent: {
+          startedEver: true,
+          headSha: OBSERVED_HEAD,
+          status: 'failed',
+          failureKind: 'finding',
+          failureHeadSha: OBSERVED_HEAD,
+          updatedAtUtc: RUN_AT,
+        },
+      }), [{}]),
+    matrixCase('A14 started or passed independent smoke cannot continue on another head', 'smoke_ordering_independent_head_forbidden',
+      (flag) => authorityFor({
+        reviewStageComplete: flag,
+        reviewStartConsumed: flag,
+        independent: {
+          startedEver: true,
+          headSha: EARLIER_HEAD,
+          status: 'passed',
+          updatedAtUtc: RUN_AT,
+        },
+      }), [{}]),
+    matrixCase('A15 unresolved blocking triage remains fail closed', 'smoke_ordering_review_unsettled',
+      (flag) => authorityFor({ terminalStatus: 'failed', triageVerdict: 'BLOCK', reviewStageComplete: flag, reviewStartConsumed: true }), [{}]),
+    matrixCase('A16 prior-cycle same-PR run cannot admit', 'smoke_ordering_review_unsettled',
+      (flag) => authorityFor({ reviewStageComplete: flag, reviewStartConsumed: flag }), [{ createdAt: PRIOR_RUN_AT }]),
+  ];
+
+  function persistFixture(authority: PackReviewAuthorityDocument, run: RunShape | null) {
+    const fixture = rootFixture();
+    const authorityRoot = path.join(fixture.reviewStoreRoot, 'authority');
     mkdirSync(authorityRoot, { recursive: true });
     writeFileSync(
       path.join(authorityRoot, 'pr-' + authority.prNumber + '.json'),
       JSON.stringify(authority) + '\n',
       'utf8',
     );
-  }
-
-  function materializeRun(fixture: ReturnType<typeof rootFixture>, shape: RunShape | null): void {
-    if (!shape) return;
-    const now = new Date(shape.createdAt ?? RUN_AT);
-    const created = createPackReviewRun({
-      projectId: 'orchestrator-pack',
-      storeRoot: fixture.reviewStoreRoot,
-      prNumber: OBSERVED_PR,
-      headSha: EARLIER_HEAD,
-      trustedPackRoot: fixture.root,
-      sourceRepoRoot: fixture.root,
-      automaticBudgetDisposition: shape.automaticBudgetDisposition ?? 'consume',
-      now,
-    });
-    setPackReviewRunTerminal(
-      created.run.id,
-      'failed',
-      {
-        failureReason: shape.failureReason ?? 'stale_head_before_terminal',
-        ...(shape.stale ? { stale: true } : {}),
-      },
-      { projectId: 'orchestrator-pack', storeRoot: fixture.reviewStoreRoot, now },
-    );
-  }
-
-  function setup(authority: PackReviewAuthorityDocument, runShape: RunShape | null) {
-    const fixture = rootFixture();
-    persistAuthority(fixture.reviewStoreRoot, authority);
-    materializeRun(fixture, runShape);
+    if (run) {
+      const now = new Date(run.createdAt ?? RUN_AT);
+      const created = createPackReviewRun({
+        projectId: 'orchestrator-pack',
+        storeRoot: fixture.reviewStoreRoot,
+        prNumber: OBSERVED_PR,
+        headSha: EARLIER_HEAD,
+        trustedPackRoot: fixture.root,
+        sourceRepoRoot: fixture.root,
+        automaticBudgetDisposition: run.automaticBudgetDisposition ?? 'consume',
+        now,
+      });
+      setPackReviewRunTerminal(
+        created.run.id,
+        'failed',
+        {
+          failureReason: run.failureReason ?? 'stale_head_before_terminal',
+          ...(run.stale ? { stale: true } : {}),
+        },
+        { projectId: 'orchestrator-pack', storeRoot: fixture.reviewStoreRoot, now },
+      );
+    }
     return fixture;
   }
 
-  const MATRIX: readonly MatrixCase[] = [
-    { id: 'A1 full observed #1740 run-store-only consumed start', expected: 'admit', authority: (derived) => makeAuthority({ reviewStageComplete: derived, reviewStartConsumed: derived }), runVariants: [{}] },
-    { id: 'A2 observed fixture without consuming run', expected: 'smoke_ordering_review_unsettled', authority: (derived) => makeAuthority({ reviewStageComplete: derived, reviewStartConsumed: derived }), runVariants: [null] },
-    { id: 'A3 failed terminal consumes start', expected: 'admit', authority: (derived) => makeAuthority({ terminalStatus: 'failed', reviewStageComplete: derived, reviewStartConsumed: !derived }), runVariants: [null] },
-    { id: 'A4 error terminal consumes start', expected: 'admit', authority: (derived) => makeAuthority({ terminalStatus: 'error', reviewStageComplete: derived, reviewStartConsumed: !derived }), runVariants: [null] },
-    { id: 'A5 changes_requested terminal consumes start', expected: 'admit', authority: (derived) => makeAuthority({ terminalStatus: 'changes_requested', reviewStageComplete: derived, reviewStartConsumed: !derived }), runVariants: [null] },
-    { id: 'A6 cap itself proves consumption', expected: 'admit', authority: (derived) => makeAuthority({ consumedHeadShas: ['1'.repeat(40), '2'.repeat(40)], reviewStageComplete: derived, reviewStartConsumed: !derived }), runVariants: [null] },
-    { id: 'A7 below cap without terminal or run evidence', expected: 'smoke_ordering_review_unsettled', authority: (derived) => makeAuthority({ consumedHeadShas: ['1'.repeat(40)], reviewStageComplete: derived, reviewStartConsumed: derived }), runVariants: [null] },
-    { id: 'A8 production failed-run failure reasons consume start', expected: 'admit', authority: (derived) => makeAuthority({ reviewStageComplete: derived, reviewStartConsumed: !derived }), runVariants: [{ failureReason: 'reviewer_output_malformed:invalid_terminal_payload' }, { failureReason: 'stale_head_before_terminal' }] },
-    { id: 'A9 stale or explicit non-consuming run cannot admit', expected: 'smoke_ordering_review_unsettled', authority: (derived) => makeAuthority({ reviewStageComplete: derived, reviewStartConsumed: derived }), runVariants: [{ stale: true }, { automaticBudgetDisposition: 'non_consuming_explicit' }] },
-    { id: 'A10 exact-head successful settlement admits', expected: 'admit', authority: () => makeAuthority({ terminalStatus: 'up_to_date', reviewSettledHeadSha: OBSERVED_HEAD, reviewStageComplete: true }), runVariants: [null], derivedVariants: [true] },
-    { id: 'A11 prior-head settlement does not settle current head', expected: 'smoke_ordering_review_unsettled', authority: (derived) => makeAuthority({ reviewSettledHeadSha: EARLIER_HEAD, reviewStageComplete: derived, reviewStartConsumed: derived }), runVariants: [null] },
-    { id: 'A12 requested head differs from authority current head', expected: 'smoke_ordering_head_mismatch', requestedHead: OTHER_HEAD, authority: (derived) => makeAuthority({ reviewStageComplete: derived, reviewStartConsumed: derived }), runVariants: [{}] },
-    { id: 'A13 same-head independent finding requires a new head', expected: 'smoke_ordering_independent_same_head_forbidden', authority: (derived) => makeAuthority({ reviewStageComplete: derived, reviewStartConsumed: derived, independent: { startedEver: true, headSha: OBSERVED_HEAD, status: 'failed', failureKind: 'finding', failureHeadSha: OBSERVED_HEAD, updatedAtUtc: RUN_AT } }), runVariants: [{}] },
-    { id: 'A14 started or passed independent smoke cannot continue on another head', expected: 'smoke_ordering_independent_head_forbidden', authority: (derived) => makeAuthority({ reviewStageComplete: derived, reviewStartConsumed: derived, independent: { startedEver: true, headSha: EARLIER_HEAD, status: 'passed', updatedAtUtc: RUN_AT } }), runVariants: [{}] },
-    { id: 'A15 unresolved blocking triage remains fail closed', expected: 'smoke_ordering_review_unsettled', authority: (derived) => makeAuthority({ terminalStatus: 'failed', triageVerdict: 'BLOCK', reviewStageComplete: derived, reviewStartConsumed: true }), runVariants: [{}] },
-    { id: 'A16 prior-cycle same-PR run cannot admit', expected: 'smoke_ordering_review_unsettled', authority: (derived) => makeAuthority({ reviewStageComplete: derived, reviewStartConsumed: derived }), runVariants: [{ createdAt: PRIOR_RUN_AT }] },
-  ];
-
-  it.each(MATRIX)('$id', ({ expected, authority: buildAuthority, runVariants, requestedHead, derivedVariants }) => {
-    for (const derived of derivedVariants ?? [false, true]) {
-      for (const runShape of runVariants) {
-        const fixture = setup(buildAuthority(derived), runShape);
+  it.each(MATRIX)('$id', ({ expected, build, runs, requestedHead, derived }) => {
+    for (const flag of derived ?? [false, true]) {
+      for (const run of runs) {
+        const fixture = persistFixture(build(flag), run);
         const result = reviewStageDisposition({
           prNumber: OBSERVED_PR,
           headSha: requestedHead ?? OBSERVED_HEAD,
@@ -709,28 +763,38 @@ describe('Issue #1777 post-review admission parity', () => {
           env: { ...process.env, PACK_REVIEW_RUN_STORE_ROOT: fixture.reviewStoreRoot },
         });
         if (expected === 'admit') {
-          expect(result).toEqual({ kind: 'smoke_candidate', reason: 'review_stage_complete_smoke_admitted' });
-        } else {
-          expect(result.reason).toBe(expected);
-          expect(result.kind).toBe(expected === 'smoke_ordering_review_unsettled' ? 'review_pending' : 'smoke_blocked');
+          expect(result).toEqual({
+            kind: 'smoke_candidate',
+            reason: 'review_stage_complete_smoke_admitted',
+          });
+          continue;
         }
+        expect(result.reason).toBe(expected);
+        expect(result.kind).toBe(
+          expected === 'smoke_ordering_review_unsettled' ? 'review_pending' : 'smoke_blocked',
+        );
       }
     }
   });
 
   it.each([
-    { status: 'started', expected: { kind: 'smoke_blocked', reason: 'independent_smoke_in_progress' } },
-    { status: 'passed', expected: { kind: 'smoke_blocked', reason: 'independent_smoke_already_passed' } },
-  ] as const)('maps canonical same-head $status refusal only after owner decision', ({ status, expected }) => {
-    const fixture = setup(makeAuthority({
-      independent: { startedEver: true, headSha: OBSERVED_HEAD, status, updatedAtUtc: RUN_AT },
+    ['started', 'independent_smoke_in_progress'],
+    ['passed', 'independent_smoke_already_passed'],
+  ] as const)('maps canonical same-head %s refusal after owner decision', (status, reason) => {
+    const fixture = persistFixture(authorityFor({
+      independent: {
+        startedEver: true,
+        headSha: OBSERVED_HEAD,
+        status,
+        updatedAtUtc: RUN_AT,
+      },
     }), null);
     expect(reviewStageDisposition({
       prNumber: OBSERVED_PR,
       headSha: OBSERVED_HEAD,
       projectId: 'orchestrator-pack',
       env: { ...process.env, PACK_REVIEW_RUN_STORE_ROOT: fixture.reviewStoreRoot },
-    })).toEqual(expected);
+    })).toEqual({ kind: 'smoke_blocked', reason });
   });
 });
 
