@@ -22,7 +22,7 @@ import {
   type ParsedJournalEvent,
   type StageEventLogical,
 } from './create-issue-stage-record-types.ts';
-import { logicalFingerprint } from './create-issue-stage-record-marker.ts';
+import { logicalFingerprint, parseLogicalFromCommentBody } from './create-issue-stage-record-marker.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
 import { validateReviewLaneRecord } from './review-lane-record.ts';
 
@@ -139,6 +139,127 @@ function validHistoricalInput(): {
   return { receipts, lineage: buildCanonicalLineage(events) };
 }
 
+const LIVE_PUBLISHED_ARCHITECTURAL_EVENT = `<!-- opk-create-issue-journal:create-issue-stage-record/v1:c71851ff-741c-469f-b8de-d7fcc52fa568:architectural:d471e32c-b221-4086-a082-2c3daa48b985 -->
+\`\`\`json
+{
+  "cycle-id": "c71851ff-741c-469f-b8de-d7fcc52fa568",
+  "event-key": "c71851ff-741c-469f-b8de-d7fcc52fa568:architectural:d471e32c-b221-4086-a082-2c3daa48b985",
+  "policy-version": "single-source/v1",
+  "producer-evidence": "not-applicable",
+  "required-source-count": 1,
+  "schema": "create-issue-stage-record/v1",
+  "settled-outcome": "complete",
+  "source-count": 0,
+  "source-revision": "r03",
+  "stage": "architectural",
+  "stage-attempt-id": "d471e32c-b221-4086-a082-2c3daa48b985",
+  "tier": "T3",
+  "tier-transition": "none"
+}
+\`\`\``;
+
+const LIVE_STAGE_RECEIPT = JSON.parse(`{
+  "schema": "stage-completeness-receipt/v1",
+  "tier": "T3",
+  "taskIdentity": "issue:1777",
+  "episodeFirstRevision": "r02",
+  "reviewEpisodeId": "issue:1777@r02",
+  "stageReceiptId": "issue:1777@r02:stage-receipt:0003",
+  "previousStageReceiptId": "issue:1777@r02:stage-receipt:0002",
+  "receiptCensus": [
+    "issue:1777@r02:stage-receipt:0001",
+    "issue:1777@r02:stage-receipt:0002",
+    "issue:1777@r02:stage-receipt:0003"
+  ],
+  "stageAttemptId": "d471e32c-b221-4086-a082-2c3daa48b985",
+  "stageSequence": 3,
+  "stage": "architectural",
+  "policyVersion": "single-source/v1",
+  "reviewerCardinality": 1,
+  "cardinalityConfigIdentity": "single-source/v1",
+  "sourceRevision": "r03",
+  "cycleId": "c71851ff-741c-469f-b8de-d7fcc52fa568",
+  "cycleBinding": {
+    "cycleId": "c71851ff-741c-469f-b8de-d7fcc52fa568",
+    "sourceRevision": "r03",
+    "boundBeforeLaunch": true
+  },
+  "outcome": "complete",
+  "producerEvidence": "not-applicable",
+  "partialMissingSources": [],
+  "revisionChecks": {
+    "attemptCreation": "matched",
+    "beforeLaunch": "matched",
+    "settlement": "matched"
+  },
+  "settlement": {
+    "allLaunchedTerminal": true,
+    "retryState": "none",
+    "finalRevisionMatched": true
+  },
+  "invocations": [
+    {
+      "schema": "reviewer-invocation-envelope/v1",
+      "reviewEpisodeId": "issue:1777@r02",
+      "stageAttemptId": "d471e32c-b221-4086-a082-2c3daa48b985",
+      "policyVersion": "single-source/v1",
+      "reviewerCardinality": 1,
+      "cardinalityConfigIdentity": "single-source/v1",
+      "stage": "architectural",
+      "sourceRevision": "r03",
+      "invocationId": "d471e32c-b221-4086-a082-2c3daa48b985",
+      "terminalResultIdentity": "github-comment:5443395503",
+      "reviewerSource": "terminal#capture=direct-publication/v1",
+      "reviewerSlot": "01",
+      "reviewerOrdinal": 1,
+      "attemptOrdinal": 1,
+      "retryAttempt": false,
+      "terminal": true,
+      "terminalClassification": "incident",
+      "sendCount": 1,
+      "retryClass": "retry-forbidden",
+      "revisionCheck": "matched",
+      "capacityOutcome": "admitted",
+      "capacityWaitMs": 0,
+      "capture": {
+        "captureIdentity": "sha256:430151bef6227ed88b3adeb9de44aae620c2311414b266cdc3cdc2c506134425:pass-03-architectural.capture.txt",
+        "name": "pass-03-architectural.capture.txt",
+        "byteLength": 1630,
+        "sha256": "430151bef6227ed88b3adeb9de44aae620c2311414b266cdc3cdc2c506134425",
+        "rawFindingCount": 1
+      },
+      "artifactAuthority": {
+        "kind": "authoritative-github-artifact",
+        "repositoryFullName": "chetwerikoff/orchestrator-pack",
+        "issueNumber": 1777,
+        "commentId": 5443395503,
+        "commentUrl": "https://github.com/chetwerikoff/orchestrator-pack/issues/1777#issuecomment-5443395503",
+        "publisherLogin": "chetwerikoff",
+        "createdAt": "2026-08-27T18:19:05Z",
+        "updatedAt": "2026-08-27T18:19:05Z"
+      }
+    }
+  ],
+  "credentialingCaptures": [
+    {
+      "captureIdentity": "sha256:430151bef6227ed88b3adeb9de44aae620c2311414b266cdc3cdc2c506134425:pass-03-architectural.capture.txt",
+      "name": "pass-03-architectural.capture.txt",
+      "byteLength": 1630,
+      "sha256": "430151bef6227ed88b3adeb9de44aae620c2311414b266cdc3cdc2c506134425",
+      "rawFindingCount": 1
+    }
+  ],
+  "relayEligibleCaptures": [
+    {
+      "captureIdentity": "sha256:430151bef6227ed88b3adeb9de44aae620c2311414b266cdc3cdc2c506134425:pass-03-architectural.capture.txt",
+      "name": "pass-03-architectural.capture.txt",
+      "byteLength": 1630,
+      "sha256": "430151bef6227ed88b3adeb9de44aae620c2311414b266cdc3cdc2c506134425",
+      "rawFindingCount": 1
+    }
+  ]
+}`);
+
 describe('revision-aware final acceptance', () => {
   it('preserves the existing grandfathered smoke-plan exemption at final acceptance', () => {
     const grandfatheredBody = [
@@ -182,6 +303,26 @@ describe('revision-aware final acceptance', () => {
       cycleId: 'cycle-r100',
       issueRevision: 'r100',
       lineage: input.lineage,
+    });
+
+    expect(errors).toEqual([]);
+  });
+
+  it('accepts the live complete event published before credentialing completed', () => {
+    const eventLogical = parseLogicalFromCommentBody(LIVE_PUBLISHED_ARCHITECTURAL_EVENT);
+    expect(eventLogical).not.toBeNull();
+    const event = journalEvent(eventLogical!, 5443604958, '2026-08-27T18:36:36Z');
+    const lineage = buildCanonicalLineage([
+      cycle('c71851ff-741c-469f-b8de-d7fcc52fa568', 'none', 'r03', 5443604957),
+      event,
+    ]);
+
+    const errors = validateHistoricalReceiptsAgainstLineage({
+      receiptValues: [LIVE_STAGE_RECEIPT],
+      receiptPaths: ['/live/stage-completeness-receipt-d471e32c-b221-4086-a082-2c3daa48b985.json'],
+      cycleId: 'c71851ff-741c-469f-b8de-d7fcc52fa568',
+      issueRevision: 'r03',
+      lineage,
     });
 
     expect(errors).toEqual([]);
