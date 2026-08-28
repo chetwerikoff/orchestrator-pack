@@ -519,7 +519,7 @@ describe('flow-manager long-running child (#1164)', () => {
     const envelope = readTerminalEnvelope(paths.envelope);
     expect(envelope?.incident).toBe('child_startup_timeout');
     expect(envelope?.child_exit_code).toBeNull();
-    expect(envelope?.diagnostics).not.toHaveProperty('last_heartbeat');
+    expect(envelope?.diagnostics ?? {}).not.toHaveProperty('last_heartbeat');
   });
 
   it('does not refresh an expired recurring deadline from a late heartbeat', async () => {

@@ -1344,8 +1344,11 @@ async function readMessageNodeText(locator: any): Promise<{ text: string; readFa
   return { text: '', readFailed: true };
 }
 
-async function readPageMessages(page: any): Promise<PageMessage[]> {
-  return (await readPageObservation(page)).messages;
+async function readPageMessages(
+  page: any,
+  deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
+): Promise<PageMessage[]> {
+  return (await readPageObservation(page, undefined, undefined, false, deadlineMs)).messages;
 }
 
 export async function readPageObservation(
@@ -1353,6 +1356,7 @@ export async function readPageObservation(
   expectedMarker?: string,
   baselineCount?: number,
   strictTranscriptCount = false,
+  deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
 ): Promise<PageObservationResult> {
   const nodes = page.locator(MESSAGE_NODE_SELECTOR);
   const incomplete = (): PageObservationResult => ({
@@ -1368,6 +1372,8 @@ export async function readPageObservation(
   const evaluateAll = nodes?.evaluateAll;
   if (typeof evaluateAll === 'function') {
     try {
+      const snapshotWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+      if (snapshotWaitMs <= 0) return incomplete();
       const observed = await boundedBrowserRead(
         evaluateAll.call(nodes, (elements: Element[], args: {
           roleAttribute: string;
@@ -1418,7 +1424,7 @@ export async function readPageObservation(
           roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
           generationSelector: BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR,
         }),
-        MAX_LOCAL_READ_WAIT_MS,
+        snapshotWaitMs,
         'atomic_transcript_snapshot_timeout',
       ) as {
         rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }>;
@@ -1450,9 +1456,11 @@ export async function readPageObservation(
     // locators always take the single in-page fixed-set branch above.
     let count: number;
     try {
+      const countWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+      if (countWaitMs <= 0) return incomplete();
       count = Number(await boundedBrowserRead(
         Promise.resolve(nodes.count()),
-        MAX_LOCAL_READ_WAIT_MS,
+        countWaitMs,
         'legacy_transcript_count_timeout',
       ));
       if (!Number.isSafeInteger(count) || count < 0) return incomplete();
@@ -1519,13 +1527,19 @@ export async function classifySendLandingEvidence(
   if (conversationUrl && conversationUuidFromUrl(conversationUrl)) return 'landed';
   const pageUrl = pageConversationUrl(page);
   if (pageUrl && conversationUuidFromUrl(pageUrl)) return 'landed';
-  const messages = await readPageMessages(page);
+  const messages = await readPageMessages(page, deadlineMs);
   if (messages.some((message) => message.role === 'user' && normalizeVisibleText(message.text) === normalizedPrompt)) {
     return 'landed';
   }
+  let remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) return 'ambiguous';
   const composer = page.locator(COMPOSER_SELECTOR);
   if (await locatorCount(composer, deadlineMs) > 0) {
-    const composerText = normalizeVisibleText(await locatorText(composer));
+    remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) return 'ambiguous';
+    const composerText = normalizeVisibleText(
+      await locatorText(composer, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs)),
+    );
     if (composerText === normalizedPrompt) return 'not_landed';
   }
   return 'ambiguous';
@@ -1546,6 +1560,7 @@ async function readPostSendObservation(
   page: any,
   expectedMarker: string,
   baselineCount: number,
+  deadlineMs: number,
 ): Promise<{
   readonly messages: PageMessage[];
   readonly wall: ReturnType<typeof classifyProductWall>;
@@ -1564,10 +1579,15 @@ async function readPostSendObservation(
     page,
     expectedMarker,
     baselineCount,
+    false,
+    deadlineMs,
   );
   let wall: ReturnType<typeof classifyProductWall> = {};
   try {
-    wall = classifyProductWall(await productStatusText(page, POST_SEND_PRODUCT_WALL_PROBE_MS));
+    const wallProbeMs = Math.min(POST_SEND_PRODUCT_WALL_PROBE_MS, deadlineMs - Date.now());
+    if (wallProbeMs > 0) {
+      wall = classifyProductWall(await productStatusText(page, wallProbeMs));
+    }
   } catch {
     // Product-status probes must not block or invalidate transcript reads.
   }
@@ -2122,7 +2142,13 @@ async function runTurn(
     };
 
     const captureBaseline = async (): Promise<TurnRunOutcome | null> => {
-      const baseline = await readPageObservation(page, undefined, undefined, true);
+      const baseline = await readPageObservation(
+        page,
+        undefined,
+        undefined,
+        true,
+        invocationDeadlineMs,
+      );
       if (baseline.transcriptIncomplete || !baseline.snapshot?.complete) {
         incident('pre_send_observation_error', 'baseline_transcript_incomplete', 'return_local_error');
         return {
@@ -2409,7 +2435,11 @@ async function runTurn(
             sendAuthorized = false;
           }
 
-          const urlDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
+          const urlWaitStartedAt = Date.now();
+          const urlDeadline = Math.min(
+            urlWaitStartedAt + Math.min(30_000, config.timeoutMs),
+            Math.max(urlWaitStartedAt, invocationDeadlineMs - INITIAL_POLL_MS),
+          );
           let conversationUrl: string | undefined;
           try {
             conversationUrl = await waitForConversationUrlAfterSend(
@@ -2974,7 +3004,12 @@ async function runTurn(
       }
       let observation: Awaited<ReturnType<typeof readPostSendObservation>>;
       try {
-        observation = await readPostSendObservation(page, marker, baselineCount);
+        observation = await readPostSendObservation(
+          page,
+          marker,
+          baselineCount,
+          hardExhaustionDeadline,
+        );
       } catch (error) {
         if (browserOrPageDefinitelyLost(page, browser)) {
           const terminal = await recoverCurrentObservation();
