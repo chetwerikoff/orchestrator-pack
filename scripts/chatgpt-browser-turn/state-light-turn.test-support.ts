@@ -45,7 +45,13 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
-vi.mock('./browser-session.ts', () => createBrowserSessionModuleMock(mocks));
+vi.mock('./browser-session.ts', () => ({
+  ...createBrowserSessionModuleMock(mocks),
+  abandonLatePageHandle: vi.fn(async (page: { close: () => Promise<void> }) => {
+    if (mocks.cleanupOutcome === 'confirmed') await page.close();
+    return mocks.cleanupOutcome;
+  }),
+}));
 vi.mock('./coordination.ts', () => createCoordinationModuleMock());
 
 vi.mock('./input.ts', () => ({
