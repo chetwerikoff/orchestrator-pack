@@ -466,12 +466,15 @@ function parseCanonicalTerminalVerdict(
   const explicitFindingCountOk = findingCountLines.length === 1
     && declaredFindingCounts.length === 1
     && declaredFindingCounts[0] === revision.findingCount;
+  const findingsWithoutVerdictOk = explicitFindingCountOk
+    && verdicts.length === 0
+    && lines.every((line) => !line.startsWith('VERDICT:'))
+    && revision.findingCount > 0;
   const invocationIds = lines.filter((line) => INVOCATION_ECHO_RE.test(line));
   const cutCandidates = exactCount('simplification-cut-candidate: yes');
   const simplificationClean = exactCount('SIMPLIFICATION_CLEAN');
   if (
     exactCount('review-economics-contract: v1') !== 1
-    || verdicts.length !== 1
     || !(omittedFindingCountOk || explicitFindingCountOk)
     || invocationIds.length !== 1
     || (cutCandidates === 0 ? simplificationClean !== 1 : simplificationClean !== 0)
@@ -480,7 +483,8 @@ function parseCanonicalTerminalVerdict(
     const cleanVerdict = verdicts[0] === 'CLEAN' && exactCount('NO_FINDINGS') === 1;
     const noFindingsVerdict = verdicts[0] === 'NO_FINDINGS' && exactCount('NO_FINDINGS') <= 1;
     if (!cleanVerdict && !noFindingsVerdict) return null;
-  } else if (verdicts[0] !== 'FINDINGS' || exactCount('NO_FINDINGS') !== 0) {
+  } else if (!findingsWithoutVerdictOk
+    && (verdicts.length !== 1 || verdicts[0] !== 'FINDINGS' || exactCount('NO_FINDINGS') !== 0)) {
     return null;
   }
   return revision;

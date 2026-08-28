@@ -90,15 +90,35 @@ function canonicalFindingsVerdict(options: {
   return lines.join('\n');
 }
 
+const PUBLISHED_FINDINGS_WITHOUT_VERDICT = [
+  'Read revision: #1777 r03',
+  'INVOCATION_ID_TO_ECHO: d471e32c-b221-4086-a082-2c3daa48b985',
+  'review-economics-contract: v1',
+  '',
+  'Architectural verdicts: single admission owner — keep; complete existing run-store input — keep; same-PR run as sufficient evidence by itself — cut; derived fields as diagnostics only — keep; A1-A15 executable matrix and full #1740 fixture — keep, with the missing prior-cycle negative; new registry/reconciliation/migration machinery — cut.',
+  '',
+  'id: arch-current-start-correlation',
+  'type: spec',
+  'severity: P1',
+  'title: Run evidence is not bound to the current legal review start',
+  'evidence: r03 requires a genuinely unconsumed current legal pack-review start to refuse, but A1-A15 has no case for a qualifying failed run from a prior review cycle. Current main creates a new cycleId on reset while retaining run-store history. PackReviewRunRecord has no cycleId/review-episode identity, and the current consumption projection/reviewRunEvidence accepts by prNumber plus status/disposition/stale. Full records expose head/timestamps, but r03 defines no authoritative existing relation that distinguishes the required #1740 earlier-head positive from an unrelated prior-cycle same-PR failure.',
+  'recommendation: Add a production-shaped prior-cycle same-PR negative and specify the already-observable relation, if one is authoritative, that binds accepted run evidence to the current cycle/start. If no existing production field proves that relation, weaken the invariant or permit the minimum scoped evidence needed instead of admitting by PR number alone.',
+  'persistent-machinery: no',
+  '',
+  'FINDING_COUNT: 1',
+  'SIMPLIFICATION_CLEAN',
+].join('\n');
+
 function comment(
   body = canonicalVerdict(),
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   const id = Number(overrides.id ?? COMMENT_ID);
+  const issueNumber = Number(overrides.issueNumber ?? ISSUE);
   return {
     id,
-    html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${id}`,
-    issue_url: `https://api.github.com/repos/${REPOSITORY}/issues/${ISSUE}`,
+    html_url: `https://github.com/${REPOSITORY}/issues/${issueNumber}#issuecomment-${id}`,
+    issue_url: `https://api.github.com/repos/${REPOSITORY}/issues/${issueNumber}`,
     body,
     created_at: CREATED_AT,
     updated_at: CREATED_AT,
@@ -176,9 +196,11 @@ interface TransportOptions {
   beforeReread?: () => void;
   cycleComments?: Array<Record<string, unknown>>;
   issueBodies?: string[];
+  issueNumber?: number;
 }
 
 function transport(options: TransportOptions = {}) {
+  const issueNumber = options.issueNumber ?? ISSUE;
   const principal = options.principal === undefined ? PUBLISHER : options.principal;
   const suppliedCensus = options.census ?? [comment()];
   const observedRevision = suppliedCensus.flatMap((item) => {
@@ -198,12 +220,12 @@ function transport(options: TransportOptions = {}) {
     if (target.startsWith(`repos/${REPOSITORY}/labels/`)) {
       return { exitCode: 0, stdout: '{}', stderr: '' };
     }
-    if (options.issueBodies && target === `repos/${REPOSITORY}/issues/${ISSUE}` && argv.includes('--jq')) {
+    if (options.issueBodies && target === `repos/${REPOSITORY}/issues/${issueNumber}` && argv.includes('--jq')) {
       const body = options.issueBodies[Math.min(issueReadCount, options.issueBodies.length - 1)] ?? '';
       issueReadCount += 1;
       return { exitCode: 0, stdout: JSON.stringify({ title: 'fixture issue', body, labels: [] }), stderr: '' };
     }
-    if (target === `repos/${REPOSITORY}/issues/${ISSUE}/comments` && argv.includes('-f')) {
+    if (target === `repos/${REPOSITORY}/issues/${issueNumber}/comments` && argv.includes('-f')) {
       const body = argv.find((value) => value.startsWith('body='))?.slice('body='.length) ?? '';
       createdIssueComments.push(body);
       return { exitCode: 0, stdout: JSON.stringify({ id: COMMENT_ID + 2000 + createdIssueComments.length }), stderr: '' };
@@ -211,11 +233,11 @@ function transport(options: TransportOptions = {}) {
     if (target === `repos/${REPOSITORY}`) {
       return { exitCode: 0, stdout: `${PUBLISHER}\n`, stderr: '' };
     }
-    if (target.includes(`/issues/${ISSUE}/comments?per_page=100&page=1`)) {
+    if (target.includes(`/issues/${issueNumber}/comments?per_page=100&page=1`)) {
       if (options.censusFailure) return { exitCode: 1, stdout: '', stderr: 'census unavailable' };
       return { exitCode: 0, stdout: JSON.stringify(census), stderr: '' };
     }
-    if (target.includes(`/issues/${ISSUE}/comments?per_page=100&page=2`)) {
+    if (target.includes(`/issues/${issueNumber}/comments?per_page=100&page=2`)) {
       if (options.secondPageFailure) return { exitCode: 1, stdout: '', stderr: 'page 2 unavailable' };
       return { exitCode: 0, stdout: '[]', stderr: '' };
     }
@@ -249,7 +271,10 @@ function fixture(input: {
   stageInvocationId?: string;
   turnResultInvocationId?: string;
   terminalResultIdentity?: string;
+  issueNumber?: number;
 } = {}) {
+  const issueNumber = input.issueNumber ?? ISSUE;
+  const taskIdentity = `issue:${issueNumber}`;
   const intakeRevision = input.intakeRevision ?? REVISION;
   const sourceRevision = input.sourceRevision ?? intakeRevision;
   const transportClassification = input.transportClassification ?? 'incident';
@@ -277,13 +302,13 @@ function fixture(input: {
   const reviewEvidencePath = join(dir, 'attempt-000.json');
   const turnResultPath = join(dir, 'turn-result-001.json');
   const outputDir = join(dir, 'output');
-  const episode = deriveReviewEpisodeId(TASK, intakeRevision);
-  const body = input.captureText ?? canonicalVerdict(sourceRevision, stageInvocationId, ISSUE, invocationEchoLabel);
+  const episode = deriveReviewEpisodeId(taskIdentity, intakeRevision);
+  const body = input.captureText ?? canonicalVerdict(sourceRevision, stageInvocationId, issueNumber, invocationEchoLabel);
 
   writeFileSync(intakePath, JSON.stringify({
     schema: 'tier-intake/v1',
     producer: 'flow-manager',
-    taskIdentity: TASK,
+    taskIdentity,
     kind: 'fresh',
     priorTier: 'T2',
     firstRevision: intakeRevision,
@@ -291,7 +316,7 @@ function fixture(input: {
   writeFileSync(authorPath, JSON.stringify({ schema: AUTHOR_DISPOSITIONS_SCHEMA, findings: [] }));
   const reviewComments = Array.from({ length: 3 }, (_, index) => {
     const invocationId = `architectural-review-invocation-${String(index + 1).padStart(2, '0')}`;
-    return comment(canonicalVerdict(sourceRevision, invocationId, ISSUE, invocationEchoLabel), { id: COMMENT_ID + 100 + index });
+    return comment(canonicalVerdict(sourceRevision, invocationId, issueNumber, invocationEchoLabel), { id: COMMENT_ID + 100 + index, issueNumber });
   });
   const reviewInvocations = reviewComments.map((reviewComment, index) => {
     const ordinal = index + 1;
@@ -369,12 +394,12 @@ function fixture(input: {
     invocations: [invocation],
   };
   writeFileSync(evidencePath, JSON.stringify(evidence));
-  return { dir, intakePath, evidencePath, reviewEvidencePath, authorPath, capturePath, turnResultPath, outputDir, evidence, invocation, body, episode, reviewComments };
+  return { dir, intakePath, evidencePath, reviewEvidencePath, authorPath, capturePath, turnResultPath, outputDir, evidence, invocation, body, episode, reviewComments, issueNumber };
 }
 
 function produce(
   input: ReturnType<typeof fixture>,
-  source = transport({ census: [...input.reviewComments, comment(input.body)] }),
+  source = transport({ census: [...input.reviewComments, comment(input.body, { issueNumber: input.issueNumber })], issueNumber: input.issueNumber }),
   operatorAdjudication?: Record<string, unknown>,
 ) {
   return produceAcceptanceArtifacts({
@@ -931,6 +956,30 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       artifactAuthority: { kind: 'authoritative-github-artifact' },
     });
     expect(readFileSync(input.capturePath, 'utf8')).toBe(input.body);
+  });
+
+  it('credentials the published FINDINGS capture without a VERDICT line', () => {
+    const input = fixture({
+      transportClassification: 'incident',
+      withTurnResult: true,
+      withCapture: true,
+      issueNumber: 1777,
+      intakeRevision: 'r03',
+      sourceRevision: 'r03',
+      captureText: PUBLISHED_FINDINGS_WITHOUT_VERDICT,
+      stageInvocationId: 'd471e32c-b221-4086-a082-2c3daa48b985',
+      turnResultInvocationId: 'd471e32c-b221-4086-a082-2c3daa48b985',
+    });
+    const result = produce(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
+    expect(receipt.invocations[0]).toMatchObject({
+      terminalClassification: 'incident',
+      sendCount: 1,
+      artifactAuthority: { kind: 'authoritative-github-artifact' },
+    });
+    expect(receipt.invocations[0].capture.rawFindingCount).toBe(1);
+    expect(readFileSync(input.capturePath, 'utf8')).toBe(PUBLISHED_FINDINGS_WITHOUT_VERDICT);
   });
 
   describe('omitted FINDING_COUNT architectural FINDINGS', () => {
