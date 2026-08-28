@@ -164,6 +164,10 @@ function finalAcceptanceIssueBody(revision = REVISION): string {
     'record-only',
     '```',
     '',
+    '```complexity-tier',
+    'tier: T2',
+    '```',
+    '',
     '```denylist',
     'vendor/**',
     'packages/core/**',
@@ -1448,6 +1452,18 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const original = JSON.parse(readFileSync(receiptPath, 'utf8')) as StageCompletenessReceiptV1;
     const partial = historicalWitnessPartial(original).receipt;
     writeFileSync(receiptPath, JSON.stringify(partial, null, 2) + '\n');
+    const rawStageEvidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, unknown>;
+    const rawInvocations = rawStageEvidence.invocations as Array<Record<string, unknown>>;
+    rawStageEvidence.outcome = 'partial';
+    rawInvocations[2]!.terminalClassification = 'incident';
+    rawInvocations[2]!.retryClass = 'retry-forbidden';
+    rawStageEvidence.partialMissingSources = [{
+      reviewerSlot: '03',
+      invocationId: 'historical-other-invocation',
+      evidenceIdentity: 'historical-other-result',
+      reason: 'post-send result unavailable',
+    }];
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(rawStageEvidence));
 
     const finalStatus = inspect(input);
     expect(finalStatus.ok, finalStatus.missing.map((item) => item.reason).join('\n')).toBe(true);
