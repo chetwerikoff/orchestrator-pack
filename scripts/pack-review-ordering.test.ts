@@ -970,6 +970,37 @@ describe('Issue #1436 smoke/review ordering', () => {
       }
     });
 
+    it.each([
+      { status: 'started', expected: 'smoke_ordering_independent_in_progress' },
+      { status: 'passed', expected: 'smoke_ordering_independent_already_passed' },
+    ] as const)('does not restart same-head independent smoke in status $status', ({ status, expected }) => {
+      const authority = makeAuthority({
+        independent: {
+          startedEver: true,
+          headSha: OBSERVED_HEAD,
+          status,
+          updatedAtUtc: CURRENT_RUN_AT,
+        },
+      });
+      expect(resultOf(() => assertIndependentSmokeAdmission({
+        authority,
+        headSha: OBSERVED_HEAD,
+        reviewRuns: [observedRun()],
+      }))).toBe(expected);
+
+      const options = persistAuthority(authority);
+      expect(resultOf(() => commitSmokeOrderingTransition({
+        prNumber: OBSERVED_PR,
+        expectedTransitionSeq: authority.transitionSeq,
+        actor: 'independent',
+        headSha: OBSERVED_HEAD,
+        status: 'started',
+        reviewRuns: [observedRun()],
+        options,
+      }))).toBe(expected);
+      expect(readPackReviewAuthority(OBSERVED_PR, options)?.smokeOrdering?.independent?.status).toBe(status);
+    });
+
     it('preserves the exact observed #1740/#1754 regression identity and ordering relation', () => {
       expect(observedRun()).toMatchObject({
         id: OBSERVED_RUN_ID,

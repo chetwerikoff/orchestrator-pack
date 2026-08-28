@@ -1734,7 +1734,7 @@ export function beginSmokeOrdering(
       : resolveTierAndCap({ issueBody }).tier) as PackReviewTier,
     options: authorityOptions,
   });
-  if (authority.currentHeadSha !== options.headSha.toLowerCase()) {
+  if (actor === 'worker-owned' && authority.currentHeadSha !== options.headSha.toLowerCase()) {
     authority = observePackReviewHead({
       prNumber: options.prNumber,
       expectedTransitionSeq: authority.transitionSeq,

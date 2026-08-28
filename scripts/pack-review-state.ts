@@ -962,6 +962,18 @@ export function assertIndependentSmokeAdmission(input: {
         'a started or passed independent smoke cannot continue on a new head',
       );
     }
+    if (independent.headSha === headSha && independent.status === 'started') {
+      throw new PackReviewAuthorityError(
+        'smoke_ordering_independent_in_progress',
+        'independent smoke is already started for the exact head',
+      );
+    }
+    if (independent.headSha === headSha && independent.status === 'passed') {
+      throw new PackReviewAuthorityError(
+        'smoke_ordering_independent_already_passed',
+        'independent smoke already passed for the exact head',
+      );
+    }
     return;
   }
   if (['BLOCK', 'PENDING_ARCHITECT', 'PENDING_OPERATOR'].includes(input.authority.triage?.verdict ?? '')) {
