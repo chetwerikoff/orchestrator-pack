@@ -173,12 +173,16 @@ before the first governed effect. Do not add a dotenv loader, second registry,
 compatibility token, fallback family, or heuristic selector.
 
 Model applicability and route admission are separate checks. Cursor catalog
-applicability comes from `cursor-agent --list-models`; Cursor's existing
-model/effort opacity is composed only inside the Cursor translator in the shared
-policy. OpenCode catalog applicability comes from `opencode models`; the selected
-model and effort are carried together through an invocation-local agent definition
-in `OPENCODE_CONFIG_CONTENT`. The top-level spawned command uses `--agent` only,
-never `--model` or `--variant`.
+applicability comes from `cursor-agent --list-models`; Cursor catalog identity and
+spawn `--model` are different strings: admission continues to use the opaque
+`model-effort` identity, while the translator emits a parameterized model with
+`context`, `reasoning`, and `fast=false` when the operator sets
+`PACK_EXECUTOR_CURSOR_CONTEXT`, and preserves the legacy spawn composition when it
+is unset. The context window is operator-selected and never inherited from host
+CLI state. OpenCode catalog applicability comes from `opencode models`; the
+selected model and effort are carried together through an invocation-local agent
+definition in `OPENCODE_CONFIG_CONTENT`. The top-level spawned command uses
+`--agent` only, never `--model` or `--variant`.
 
 For OpenCode exact-terminal work, early `resolveProfile` proves only selector,
 top-level `--agent` syntax, and catalog route evidence. After worktree preparation,
@@ -538,7 +542,7 @@ Do not add a second observer, completion store, delivery-status store, reconcili
 
 ## Scheduler inbox reconciliation
 
-The existing scheduler tick performs an inbox-gated orchestration-mail reconcile after fleet supervision and before review processing. It reads unread Orca messages by exact `message_id`, resolves only each message's exact recipient, and reuses the delivery pointer behavior; an exact pointer-only composer receives submit-only Enter while idle or two while busy whether the pointer was just written or already present. Each resolved worker-generation/run/message identity owns one atomically claimed notification episode; continuous unread episodes re-arm at 1, 2, 4, ... minutes capped at 30 minutes, while consumed or no-longer-qualifying episodes are released without a stale Enter. It never performs global composer polling or groups a terminal-peek result into a Delivery. The existing local-state ledger persists episode claims, schedule, message stamping, and ambiguous outcomes; Orca read state remains authoritative across process restarts. Manual smoke may invoke `node --experimental-strip-types scripts/cursor-unsent-composer-submit.ts --reconcile`.
+The existing scheduler tick performs an inbox-gated orchestration-mail reconcile after fleet supervision and before review processing. It reads unread Orca messages by exact `message_id`, resolves only each message's exact recipient, and reuses the delivery pointer behavior; an exact pointer-only composer receives submit-only Enter while idle or two while busy whether the pointer was just written or already present. Each resolved worker-generation/run/message identity owns one atomically claimed notification episode; continuous unread episodes re-arm at 1, 2, 4, ... minutes capped at 30 minutes, while consumed or no-longer-qualifying episodes are released without a stale Enter. It never performs global composer polling or groups a terminal-peek result into a Delivery. The existing local-state ledger persists episode claims, schedule, message stamping, and ambiguous outcomes; Orca read state remains authoritative across process restarts. A successful exact-message pointer/Enter is reported only as per-message `delivery: delivered-looking` with `terminalReceipt: unproven`, bound to current worker generation plus exact `runId` and `messageId`. Local dispatch acceptance, Enter success, wrapper exit, pointer/composer state, liveness, `read`, `delivered_at`, terminal title, or timing never upgrades that record to terminal receipt; positive recipient receipt remains outside this path until a separate task binds a real recipient-side producer and observation surface. Manual smoke may invoke `node --experimental-strip-types scripts/cursor-unsent-composer-submit.ts --reconcile`.
 
 ## Scheduler phases
 

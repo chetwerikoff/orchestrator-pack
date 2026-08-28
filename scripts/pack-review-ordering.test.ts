@@ -24,6 +24,8 @@ import {
 
 const HEAD = 'a'.repeat(40);
 const NEXT_HEAD = 'b'.repeat(40);
+const REGRESSION_PR = 1799;
+const REGRESSION_HEAD = '61f8745a0f5d8cdf7c9e79591ffa7e50e60bf13d';
 
 describe('Issue #1436 smoke/review ordering', () => {
   const roots: string[] = [];
@@ -43,6 +45,71 @@ describe('Issue #1436 smoke/review ordering', () => {
     });
     return { options, authority };
   }
+
+  it('requires the operator-only signal for independent smoke after worker-owned pass', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-ordering-regression-'));
+    roots.push(root);
+    const options: PackReviewAuthorityOptions = { storeRoot: root };
+    const authority = initializePackReviewAuthority({
+      prNumber: REGRESSION_PR,
+      headSha: REGRESSION_HEAD,
+      tier: 'T3',
+      options,
+    });
+    const started = commitSmokeOrderingTransition({
+      prNumber: REGRESSION_PR,
+      expectedTransitionSeq: authority.transitionSeq,
+      actor: 'worker-owned',
+      headSha: REGRESSION_HEAD,
+      status: 'started',
+      options,
+    });
+    const workerPassed = commitSmokeOrderingTransition({
+      prNumber: REGRESSION_PR,
+      expectedTransitionSeq: started.transitionSeq,
+      actor: 'worker-owned',
+      headSha: REGRESSION_HEAD,
+      status: 'passed',
+      options,
+    });
+
+    expect(() => assertIndependentSmokeAdmission({
+      authority: workerPassed,
+      headSha: REGRESSION_HEAD,
+      reviewRuns: [],
+    })).toThrow('smoke_ordering_review_unsettled');
+    expect(() => assertIndependentSmokeAdmission({
+      authority: workerPassed,
+      headSha: REGRESSION_HEAD,
+      reviewRuns: [],
+      operatorSmokeOnly: true,
+    })).not.toThrow();
+    expect(() => commitSmokeOrderingTransition({
+      prNumber: REGRESSION_PR,
+      expectedTransitionSeq: workerPassed.transitionSeq,
+      actor: 'independent',
+      headSha: REGRESSION_HEAD,
+      status: 'started',
+      operatorSmokeOnly: true,
+      options,
+    })).not.toThrow();
+
+    const separateRoot = mkdtempSync(join(tmpdir(), 'pack-review-ordering-regression-'));
+    roots.push(separateRoot);
+    const separateOptions: PackReviewAuthorityOptions = { storeRoot: separateRoot };
+    const separateAuthority = initializePackReviewAuthority({
+      prNumber: REGRESSION_PR,
+      headSha: REGRESSION_HEAD,
+      tier: 'T3',
+      options: separateOptions,
+    });
+    expect(() => assertIndependentSmokeAdmission({
+      authority: separateAuthority,
+      headSha: REGRESSION_HEAD,
+      reviewRuns: [],
+      operatorSmokeOnly: true,
+    })).toThrow('smoke_ordering_review_unsettled');
+  });
 
   it('runs the real pack-review before any worker-owned smoke and settles independent-smoke admission', async () => {
     const { options } = authorityFixture();
