@@ -1606,7 +1606,7 @@ describe('Issue #1752 production liveness regressions', () => {
     vi.restoreAllMocks();
   });
 
-  function livenessArgv(outputPath: string, timeoutMs = '120') {
+  function livenessArgv(outputPath: string, timeoutMs = '5000') {
     return [
       ...STATE_LIGHT_TURN_BASE_ARGV,
       '--invocation-id', randomUUID(),
