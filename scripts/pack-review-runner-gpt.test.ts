@@ -1393,7 +1393,11 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       prNumber: 1276,
       settlePartialAfterGrace: false,
       fixtureCurrentPrHeadSha: HEAD_A,
-      fixtureGptSourceCommentTransport: emptySourceTransport([]),
+      fixtureGptSourceCommentTransport: {
+        resolveActorLogin: async () => 'browser-gpt-bot',
+        listComments: async () => [],
+        getComment: async () => { throw new Error('unexpected source comment reread'); },
+      },
       fixtureRequiredStatusWriter: async () => {},
     });
 
