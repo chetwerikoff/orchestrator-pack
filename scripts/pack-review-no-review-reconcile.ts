@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   derivePackReviewGptCoverage,
-  listPackReviewRunRecordsRaw,
+  listPackReviewRunRecordsReadonly,
   resolvePackReviewRunOrder,
   resolvePackReviewRunStoreRoot,
   type PackReviewRunRecord,
@@ -425,7 +425,7 @@ function defaultDependencies(): NoReviewReconciliationDependencies {
   return {
     now: () => new Date(),
     readCurrentHead: resolveHeadSha,
-    listRuns: (options) => listPackReviewRunRecordsRaw(options),
+    listRuns: (options) => listPackReviewRunRecordsReadonly(options),
     resolveRunRepository: async (run) => {
       if (trim(run.canonicalRepository)) return { ok: true, slug: trim(run.canonicalRepository) };
       if (!trim(run.sourceRepoRoot)) return { ok: false, reason: 'legacy_repository_unresolved' };
