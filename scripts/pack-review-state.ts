@@ -176,7 +176,11 @@ export interface PackReviewAuthorityOptions {
 }
 
 export interface PackReviewStartConsumptionRecord {
+  id?: unknown;
+  runId?: unknown;
   prNumber: number;
+  targetSha?: unknown;
+  headSha?: unknown;
   status?: unknown;
   automaticBudgetDisposition?: unknown;
   stale?: unknown;
