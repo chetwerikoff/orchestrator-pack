@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
   reconcilePackReviewNoReview,
@@ -125,6 +125,22 @@ function deps(overrides: Partial<NoReviewReconciliationDependencies> = {}): Part
 }
 
 describe('pack-review no-review reconciliation', () => {
+  it('does not create a missing run-store root while proving the no-local-run path inconclusive', async () => {
+    const storeRoot = join('/tmp', `opk-no-review-missing-${process.pid}-${Date.now()}`);
+    expect(existsSync(storeRoot)).toBe(false);
+    const result = await reconcilePackReviewNoReview({
+      ...INPUT,
+      storeRoot,
+    }, {
+      ...deps(),
+      listRuns: undefined,
+    });
+
+    expect(result.disposition).toBe('unavailable/inconclusive');
+    expect(result.reason).toBe('run_store_census_not_exhaustive');
+    expect(existsSync(storeRoot)).toBe(false);
+  });
+
   it('fails closed when the inspected root has no matching local run', async () => {
     const result = await reconcilePackReviewNoReview(INPUT, deps());
 
