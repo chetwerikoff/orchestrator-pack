@@ -7,6 +7,7 @@
     "scripts/chatgpt-browser-turn/liveness-contract.ts",
     "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-session.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
@@ -38,5 +39,5 @@
     "scripts/flow-manager-long-running-child.test.ts",
     "scripts/flow-manager-long-running-child.ts"
   ],
-  "source_revision": "1e073839d7849350a388cacce05a27fa83f0f54c"
+  "source_revision": "d9167d72c70e25433ac77021f1f589c49f3fe869"
 }

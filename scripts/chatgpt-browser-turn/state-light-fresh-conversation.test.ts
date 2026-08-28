@@ -64,13 +64,16 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
-vi.mock('./browser-session.ts', () => ({
-  ...createBrowserSessionModuleMock(mocks),
-  abandonLatePageHandle: vi.fn(async (page: { close: () => Promise<void> }) => {
-    if (mocks.cleanupOutcome === 'confirmed') await page.close();
-    return mocks.cleanupOutcome;
-  }),
-}));
+vi.mock('./browser-session.ts', () => {
+  const session = createBrowserSessionModuleMock(mocks);
+  return Object.assign(session, {
+    abandonLatePageHandle: vi.fn(async (page: { close: () => Promise<void> }) => {
+      if (mocks.cleanupOutcome !== 'confirmed') return 'unconfirmed' as const;
+      await page.close();
+      return 'confirmed' as const;
+    }),
+  });
+});
 vi.mock('./coordination.ts', () => createCoordinationModuleMock());
 
 vi.mock('./input.ts', () => ({
