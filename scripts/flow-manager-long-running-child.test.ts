@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   COMPLETION_MODE,
   HANDOFF_SCHEMA,
@@ -38,6 +38,10 @@ import {
 import type { TurnResultV1 } from './chatgpt-browser-turn/contracts.ts';
 import { buildBrowserTurnCancellationReceipt } from './chatgpt-browser-turn/state-light-cancellation.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import {
+  resolveBrowserTurnLivenessTiming,
+  validateBrowserTurnLivenessTiming,
+} from './chatgpt-browser-turn/liveness-contract.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
@@ -49,6 +53,12 @@ const browserReadmePath = join(repoRoot, 'scripts/chatgpt-browser-turn/README.md
 const packageJsonPath = join(repoRoot, 'package.json');
 
 const cleanupDirs: string[] = [];
+
+beforeEach(() => {
+  process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS = '500';
+  process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '50';
+  process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '150';
+});
 
 function tempDir(prefix = 'opk-fm-long-child-'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -66,6 +76,9 @@ afterEach(() => {
   delete process.env.OPK_FM_LONG_CHILD_DISABLE_DETACH;
   delete process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS;
   delete process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS;
+  delete process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS;
+  delete process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS;
+  delete process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS;
 });
 
 function makeTurnResult(overrides: Partial<TurnResultV1> = {}): TurnResultV1 {
@@ -171,6 +184,17 @@ async function launchReceiptScenario(input: {
 }
 
 describe('flow-manager long-running child (#1164)', () => {
+  it('validates the shared startup/heartbeat/idle relation fail-closed (#1752)', () => {
+    const timing = resolveBrowserTurnLivenessTiming();
+    expect(timing.maxHealthyHeartbeatGapMs).toBeLessThan(timing.liveChildIdleWindowMs);
+    expect(timing.schedulerIntervalMs).toBeLessThanOrEqual(timing.maxHealthyHeartbeatGapMs);
+    expect(() => validateBrowserTurnLivenessTiming({
+      startupAllowanceMs: 100,
+      maxHealthyHeartbeatGapMs: 100,
+      liveChildIdleWindowMs: 100,
+    })).toThrow(/heartbeat_gap_not_inside_idle_window/);
+  });
+
   it('static adoption references package commands and policy surfaces', () => {
     const packageJson = readFileSync(packageJsonPath, 'utf8');
     expect(packageJson).toContain('flow-manager-long-running-child');
@@ -379,6 +403,7 @@ describe('flow-manager long-running child (#1164)', () => {
     const result = makeTurnResult();
     const heartbeat = {
       schema: 'observation-heartbeat/v1',
+      phase: 'post_send_observation',
       poll_count: 1,
       observation_state: 'busy',
       stable_reads: 0,
@@ -411,7 +436,7 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(envelope).not.toHaveProperty('incident');
   });
 
-  it('preserves child_stdout_eof_timeout when the child emits no stdout', async () => {
+  it('classifies a live child with no first heartbeat as child_startup_timeout', async () => {
     const root = tempDir();
     const paths = launchPaths(root, 'silent-timeout');
     const fixture = nodeFixture('setInterval(() => {}, 1000);');
@@ -428,7 +453,10 @@ describe('flow-manager long-running child (#1164)', () => {
       childArgs: fixture.args,
     });
     expect(code).toBe(1);
-    expect(readTerminalEnvelope(paths.envelope)?.incident).toBe('child_stdout_eof_timeout');
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope?.incident).toBe('child_startup_timeout');
+    expect(envelope?.child_exit_code).toBeNull();
+    expect(JSON.stringify(envelope)).not.toContain('child_stdout_eof_timeout');
   });
 
   it('times out a child after heartbeats go silent past the idle window', async () => {
@@ -436,6 +464,7 @@ describe('flow-manager long-running child (#1164)', () => {
     const paths = launchPaths(root, 'heartbeat-idle-timeout');
     const heartbeat = {
       schema: 'observation-heartbeat/v1',
+      phase: 'post_send_observation',
       poll_count: 1,
       observation_state: 'busy',
       stable_reads: 0,
@@ -458,7 +487,45 @@ describe('flow-manager long-running child (#1164)', () => {
       childArgs: fixture.args,
     });
     expect(code).toBe(1);
-    expect(readTerminalEnvelope(paths.envelope)?.incident).toBe('child_stdout_eof_timeout');
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope?.incident).toBe('child_liveness_timeout');
+    expect(envelope?.child_exit_code).toBeNull();
+    expect(envelope?.diagnostics).toHaveProperty('last_heartbeat');
+    expect(JSON.stringify(envelope)).not.toContain('child_stdout_eof_timeout');
+  });
+
+  it('does not refresh recurring liveness from malformed heartbeat stdout', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'malformed-heartbeat');
+    const valid = {
+      schema: 'observation-heartbeat/v1',
+      phase: 'post_send_observation',
+      poll_count: 1,
+      observation_state: 'busy',
+      stable_reads: 0,
+      completion_ready: false,
+    };
+    const malformed = { ...valid, phase: 'not-a-phase' };
+    const fixture = nodeFixture(`
+      process.stdout.write(JSON.stringify(${JSON.stringify(valid)}) + '\\n');
+      setInterval(() => process.stdout.write(JSON.stringify(${JSON.stringify(malformed)}) + '\\n'), 25);
+    `);
+    const code = await runLaunch({
+      runIdentity: 'run-malformed-heartbeat',
+      attemptIdentity: 'attempt-malformed-heartbeat',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+    expect(code).toBe(1);
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope?.incident).toBe('child_liveness_timeout');
+    expect(envelope?.diagnostics).toMatchObject({
+      last_heartbeat: { phase: 'post_send_observation' },
+    });
   });
 
   it('preserves POSSIBLY_DELIVERED when a started new-chat child times out before its cancellation receipt', async () => {
@@ -486,7 +553,7 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(code).toBe(1);
     const envelope = readTerminalEnvelope(paths.envelope);
     expect(envelope).toMatchObject({
-      incident: 'child_stdout_eof_timeout',
+      incident: 'child_startup_timeout',
       delivery: 'POSSIBLY_DELIVERED',
       recovery_available: false,
     });
@@ -930,10 +997,10 @@ describe('Issue #1377 long-running child abandonment proof', () => {
     expect(sibling.close).toHaveBeenCalledTimes(0);
     const envelope = readTerminalEnvelope(paths.envelope);
     expect(envelope).toMatchObject({
-      incident: 'child_stdout_eof_timeout',
+      incident: 'child_startup_timeout',
       delivery: 'POSSIBLY_DELIVERED',
       turn_result_state: 'driver_error',
-      turn_result_cause: 'child_stdout_eof_timeout_cancellation_authority_absent',
+      turn_result_cause: 'child_startup_timeout_cancellation_authority_absent',
       send_count: 1,
       recovery_available: true,
       conversation_locator: conversationUrl,
@@ -967,12 +1034,13 @@ describe('Issue #1377 long-running child abandonment proof', () => {
       invocation,
     });
     expect(envelope).toMatchObject({
-      incident: 'child_stdout_eof_timeout',
+      incident: 'child_terminal_result_missing',
       delivery: 'POSSIBLY_DELIVERED',
-      turn_result_cause: 'child_stdout_eof_timeout_cancellation_authority_absent',
+      turn_result_cause: 'child_terminal_result_missing_cancellation_authority_absent',
       send_count: 1,
       recovery_available: true,
       conversation_locator: conversationUrl,
+      child_exit_code: 0,
     });
     expect(envelope?.diagnostics).toMatchObject({
       cancellation: { stop_outcome: 'not_attempted_authority_absent' },
@@ -1003,7 +1071,7 @@ describe('Issue #1377 long-running child abandonment proof', () => {
     expect(envelope).toMatchObject({
       delivery: 'POSSIBLY_DELIVERED',
       recovery_available: false,
-      turn_result_cause: 'child_stdout_eof_timeout_cancellation_receipt_identity_unproven',
+      turn_result_cause: 'child_terminal_result_missing_cancellation_receipt_identity_unproven',
     });
     expect(envelope).not.toHaveProperty('send_count');
     expect(envelope).not.toHaveProperty('conversation_locator');
@@ -1039,7 +1107,7 @@ describe('Issue #1377 long-running child abandonment proof', () => {
     expect(envelope).toMatchObject({
       delivery: 'POSSIBLY_DELIVERED',
       recovery_available: false,
-      turn_result_cause: 'child_stdout_eof_timeout_cancellation_receipt_identity_unproven',
+      turn_result_cause: 'child_terminal_result_missing_cancellation_receipt_identity_unproven',
     });
     expect(envelope).not.toHaveProperty('send_count');
     expect(envelope).not.toHaveProperty('conversation_locator');
