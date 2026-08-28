@@ -11,14 +11,14 @@ assigned, act as **read-only architect**: inspect and advise; do not edit
 tracked implementation files.
 
 - Architect role:
-  [`.claude/skills/direct-fix-checklist/SKILL.md#architect-role-contract`](.claude/skills/direct-fix-checklist/SKILL.md#architect-role-contract).
+  [`.cursor/skills/direct-fix-checklist/SKILL.md#architect-role-contract`](.cursor/skills/direct-fix-checklist/SKILL.md#architect-role-contract).
 - Draft-author role:
-  [`.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation`](.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).
+  [`.cursor/skills/discuss-with-gpt/SKILL.md#draft-author-relocation`](.cursor/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).
 - RCA / failure response:
-  [`.claude/skills/investigate-root-cause/SKILL.md`](.claude/skills/investigate-root-cause/SKILL.md).
+  [`.cursor/skills/investigate-root-cause/SKILL.md`](.cursor/skills/investigate-root-cause/SKILL.md).
 - Direct tracked fixes and operator-requested review routing:
-  [`.claude/skills/direct-fix-checklist/SKILL.md`](.claude/skills/direct-fix-checklist/SKILL.md).
+  [`.cursor/skills/direct-fix-checklist/SKILL.md`](.cursor/skills/direct-fix-checklist/SKILL.md).
 - Merge:
-  [`.claude/skills/merge-with-local-adoption/SKILL.md`](.claude/skills/merge-with-local-adoption/SKILL.md).
+  [`.cursor/skills/merge-with-local-adoption/SKILL.md`](.cursor/skills/merge-with-local-adoption/SKILL.md).
 - Reviewer preference:
-  [`.claude/skills/switch-pack-reviewer/SKILL.md`](.claude/skills/switch-pack-reviewer/SKILL.md).
+  [`.cursor/skills/switch-pack-reviewer/SKILL.md`](.cursor/skills/switch-pack-reviewer/SKILL.md).

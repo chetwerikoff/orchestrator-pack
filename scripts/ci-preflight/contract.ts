@@ -1,10 +1,11 @@
+import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
 
-export const WORKFLOW_BLOB_SHA = '5336d53800327a00e35999d2d3c7b7080dbbbec1';
-export const WORKFLOW_CONTENT_SHA256 = '54f39c2b8795b8dba776a19d87961ee22c516740807bc9a8c65741fc081c3ee6';
+export const WORKFLOW_BLOB_SHA = 'd9da550d07dcdbe726d7ac93e817be484df81023';
+export const WORKFLOW_CONTENT_SHA256 = 'eaf5568cd4746b5edcbc52a06f71d78c453f89e9a244bd1c07fa2211a96ff197';
 export const RUNTIME_OUTPUTS = ['.vitest-runtime-report.json', '.vitest-runtime-report.meta.json'];
 
 export type RowId =
@@ -49,31 +50,31 @@ export type Row = {
 };
 
 export const TABLE = [
-  { row_id: 'structure.verify', command: 'pwsh', args: ['-NoProfile', '-NonInteractive', '-File', './scripts/verify.ps1'], paths: ['scripts/verify.ps1'], timeout: 120_000, grace: 500 },
-  { row_id: 'structure.reusable', command: 'pwsh', args: ['-NoProfile', '-NonInteractive', '-File', './scripts/check-reusable.ps1'], paths: ['scripts/check-reusable.ps1'], timeout: 120_000, grace: 500 },
-  { row_id: 'structure.cheap-wins', command: 'pwsh', args: ['-NoProfile', '-NonInteractive', '-File', './scripts/check-ci-cheap-wins.ps1'], paths: ['scripts/check-ci-cheap-wins.ps1'], timeout: 120_000, grace: 500 },
-  { row_id: 'structure.verify-runtime', command: 'pwsh', args: ['-NoProfile', '-NonInteractive', '-File', './scripts/check-verify-runtime.ps1'], paths: ['scripts/check-verify-runtime.ps1'], timeout: 120_000, grace: 500 },
+  { row_id: 'structure.verify', command: process.execPath, args: ['--experimental-strip-types', './scripts/verify.ts'], paths: ['scripts/verify.ts'], timeout: 120_000, grace: 500 },
+  { row_id: 'structure.reusable', command: process.execPath, args: ['--experimental-strip-types', './scripts/verify.ts', '--reusable-only'], paths: ['scripts/verify.ts'], timeout: 120_000, grace: 500 },
+  { row_id: 'structure.cheap-wins', command: process.execPath, args: ['--experimental-strip-types', './scripts/ci-policy-guards.ts', 'ci-cheap-wins'], paths: ['scripts/ci-policy-guards.ts'], timeout: 120_000, grace: 500 },
+  { row_id: 'structure.verify-runtime', command: process.execPath, args: ['--experimental-strip-types', './scripts/ci-policy-guards.ts', 'verify-runtime'], paths: ['scripts/ci-policy-guards.ts'], timeout: 120_000, grace: 500 },
   { row_id: 'typescript.typecheck', command: 'npx', args: ['--no-install', 'tsc', '--project', 'tsconfig.base.json', '--noEmit'], paths: ['package.json', 'package-lock.json', 'node_modules/.package-lock.json', 'tsconfig.base.json'], timeout: 180_000, grace: 500 },
-  { row_id: 'vitest.light-lane-all', command: 'pwsh', args: ['-NoProfile', '-NonInteractive', '-File', './scripts/run-vitest-light-lane.ps1'], paths: ['scripts/vitest-ci-lanes.config.json', 'vitest.config.ts', 'scripts/run-vitest-light-lane.ps1'], timeout: 1_200_000, grace: 1_000 },
-  { row_id: 'pester.track', command: 'pwsh', args: ['-NoProfile', '-NonInteractive', '-File', './scripts/test-all.ps1', '-SkipNpm'], paths: ['scripts/test-all.ps1', 'tests/powershell', 'scripts'], timeout: 1_200_000, grace: 1_000 },
+  { row_id: 'vitest.light-lane-all', command: process.execPath, args: ['--experimental-strip-types', './scripts/vitest-ci-runner.ts', 'light'], paths: ['scripts/vitest-ci-lanes.config.json', 'vitest.config.ts', 'scripts/vitest-ci-runner.ts'], timeout: 1_200_000, grace: 1_000 },
+  { row_id: 'pester.track', command: 'npm', args: ['run', 'check:pwsh-test-growth', '--silent'], paths: ['package.json', 'scripts/toolchain/check-pwsh-test-growth.ts', 'scripts/toolchain/powershell-child-tests.json'], timeout: 120_000, grace: 500 },
 ] as const;
 
 export const INVENTORY = [
   ['verify-pack.tiering-calibration', 'not_selected', 'npm run tiering:calibration', 'callable local check, intentionally omitted from the bounded v1 table'],
-  ['verify-pack.pipeline-split', 'not_selected', 'pwsh -NoProfile -NonInteractive -File ./scripts/check-ci-pipeline-split.ps1', 'callable local topology-policy check, intentionally omitted'],
-  ['typecheck.review-start-claim-guard', 'not_selected', 'pwsh -NoProfile -NonInteractive -File ./scripts/check-review-start-claim-guard.ps1', 'callable local check, intentionally omitted from v1'],
-  ['pester.install', 'not_selected', 'pwsh -NoProfile -NonInteractive -File ./scripts/install-pester-ci.ps1', 'callable installer path, deliberately not run'],
+  ['verify-pack.pipeline-split', 'not_selected', 'node --experimental-strip-types scripts/ci-policy-guards.ts pipeline-split', 'callable local topology-policy check, intentionally omitted'],
+  ['typecheck.review-start-claim-guard', 'not_selected', 'node --experimental-strip-types scripts/review-start-claim-guard.ts', 'callable local check, intentionally omitted from v1'],
+  ['pester.install', 'not_selected', 'retired Pester installer (not executed by Node preflight)', 'callable installer path, deliberately not run'],
   ['vitest.topology-producer', 'not_selected', 'node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard', 'callable topology producer omitted from v1; workflow coverage is uncovered'],
-  ['vitest.heavy-shard-1', 'not_selected', 'pwsh -NoProfile -NonInteractive -File ./scripts/run-vitest-heavy-shard.ps1 -Shard 1', 'callable heavy consumer omitted from v1'],
-  ['vitest.heavy-shard-matrix-except-1', 'not_selected', 'pwsh -NoProfile -NonInteractive -File ./scripts/run-vitest-heavy-shard.ps1 -Shard <each plan shard other than 1>', 'dynamic matrix members outside the fixed consumer row'],
+  ['vitest.heavy-shard-1', 'not_selected', 'node --experimental-strip-types scripts/vitest-ci-runner.ts heavy --shard 1', 'callable heavy consumer omitted from v1'],
+  ['vitest.heavy-shard-matrix-except-1', 'not_selected', 'node --experimental-strip-types scripts/vitest-ci-runner.ts heavy --shard <each plan shard other than 1>', 'dynamic matrix members outside the fixed consumer row'],
   ['classify-pr-changes', 'not_applicable', 'workflow inline Bash step classify-pr-changes', 'requires PR base/head and GitHub event context'],
-  ['pr-scope-guard', 'not_applicable', 'workflow job pr-scope-guard, scripts/pr-scope-check.ps1', 'requires PR and GitHub context'],
+  ['pr-scope-guard', 'not_applicable', 'workflow job pr-scope-guard, trusted scripts/pr-scope-runner.ts', 'requires PR and GitHub context'],
   ['pr-scope-declaration-path-producer', 'not_applicable', 'PR scope declaration/path evaluation inside pr-scope-guard', 'PR/GitHub inputs are absent'],
   ['OPK_CHANGED_VITEST_FILES/PR changed-path manifest', 'not_applicable', 'OPK_CHANGED_VITEST_FILES produced from the PR changed-path manifest', 'PR changed paths are absent'],
   ['vitest.pr-scoped-topology', 'not_applicable', 'OPK_VITEST_PR_SCOPE_MODE plus PR-scoped topology invocation', 'PR-scoped selection is absent'],
   ['topology-producer.github-output', 'not_applicable', 'node scripts/emit-vitest-heavy-topology.mjs --gha-output --skip-oversized-guard', 'requires hosted GITHUB_OUTPUT; emits heavy_shard_count, heavy_shard_matrix, light_shard_count, light_shard_matrix, fallback_classification'],
-  ['self-architect-lint', 'not_applicable', 'pwsh ./scripts/lint-self-architect.ps1 -Strict -BaseRef $env:PR_BASE_SHA -HeadRef $env:PR_HEAD_SHA', 'PR refs are absent'],
-  ['test-aggregate', 'not_applicable', 'pwsh ./scripts/ci-test-aggregate.ps1', 'consumes GitHub job-result outputs'],
+  ['self-architect-lint', 'not_applicable', 'node --experimental-strip-types scripts/lint-self-architect.ts --strict --base-ref $PR_BASE_SHA --head-ref $PR_HEAD_SHA', 'PR refs are absent'],
+  ['test-aggregate', 'not_applicable', 'node --experimental-strip-types scripts/vitest-ci-runner.ts aggregate', 'consumes GitHub job-result outputs'],
   ['hosted-checkout-and-setup', 'not_applicable', 'actions/checkout@v4, actions/setup-node@v4', 'hosted-runner behavior is not local'],
   ['hosted-dependency-install', 'not_applicable', 'npm ci --include=dev in workflow jobs', 'CI installation is not repeated'],
   ['hosted-pester-cache', 'not_applicable', 'actions/cache@v4 for Pester', 'hosted cache transport is not local'],

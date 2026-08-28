@@ -45,7 +45,7 @@ verdict/findings as the governed top-level Issue comment. The manager consumes
 the reviewer receipt and owns later workflow/disposition actions; it does not
 normally relay or summarize a review into a replacement comment. The canonical
 reviewer publication and prompt policy remains in
-`.claude/skills/create-issue-draft/SKILL.md`; this runbook does not copy that
+`.cursor/skills/create-issue-draft/SKILL.md`; this runbook does not copy that
 prompt. Any genuine-write-failure exception remains limited to the fallback
 already defined by that owning skill.
 

@@ -2,11 +2,11 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const skill = readFileSync(
-  new URL('../../.claude/skills/create-issue-draft/SKILL.md', import.meta.url),
+  new URL('../../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url),
   'utf8',
 );
 const standaloneSkill = readFileSync(
-  new URL('../../.claude/skills/discuss-with-gpt/SKILL.md', import.meta.url),
+  new URL('../../.cursor/skills/discuss-with-gpt/SKILL.md', import.meta.url),
   'utf8',
 );
 const normalizedStandaloneSkill = standaloneSkill.replace(/\s+/g, ' ');

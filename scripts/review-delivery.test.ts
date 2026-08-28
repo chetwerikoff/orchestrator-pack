@@ -24,8 +24,11 @@ import {
   classifyPackReviewPayload,
   deliverPackReviewVerdict,
   isNonBlockingPackReviewFinding,
+  projectPackReviewSemanticStatus,
+  projectRunnerPackReviewStatusFromCombined,
   recordPackReviewPendingStatus,
   resumePackReviewVerdictDelivery,
+  semanticPackReviewRequiredStatusRequest,
   sendPackReviewWorkerNotification,
   type PackReviewWorkerNotificationRequest,
 } from './lib/pack-review-delivery.ts';
@@ -36,6 +39,13 @@ import {
   type PackReviewDeliveryOutcome,
   type PackReviewRunRecord,
 } from './lib/pack-review-run-store.ts';
+import {
+  directPackReviewPublicationHeadIsStable,
+  directReviewReconciliationRequiresDescendantFixFacts,
+  listCanonicalDirectPackReviews,
+  projectDirectPackReviewState,
+  type GithubReviewSummary,
+} from './lib/github-review-reconciliation.ts';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 
@@ -439,6 +449,220 @@ describe('runtime-neutral review delivery contract', () => {
     })?.deliveryOutcomes.workerNotification).toMatchObject({
       state: 'escalated',
       reason: 'worker_generation_mismatch',
+    });
+  });
+});
+
+
+describe('Issue #1419 direct GitHub pack-review semantics', () => {
+  const h1 = '1'.repeat(40);
+  const h2 = '2'.repeat(40);
+  const owner = 'chetwerikoff';
+
+  function directReview(input: {
+    id: number;
+    head?: string;
+    verdict?: 'clean' | 'findings';
+    blocking?: boolean;
+    actor?: string;
+    extra?: string;
+  }): GithubReviewSummary {
+    const reviewHead = input.head ?? h1;
+    const verdict = input.verdict ?? 'clean';
+    const blocking = input.blocking ?? false;
+    return {
+      id: input.id,
+      state: 'COMMENTED',
+      userLogin: input.actor ?? owner,
+      submittedAt: `2026-08-27T00:00:0${input.id}.000Z`,
+      body: [
+        `<!-- opk-pack-review:v1 head=${reviewHead} verdict=${verdict} blocking=${String(blocking)} -->`,
+        input.extra ?? 'review result',
+      ].join('\n'),
+      commitId: reviewHead,
+      url: `https://github.com/chetwerikoff/orchestrator-pack/pull/1709#pullrequestreview-${input.id}`,
+    };
+  }
+
+  it('admits unlimited owner-authored exact-commit COMMENT reviews without optional correlation metadata', () => {
+    const reviews = [
+      directReview({ id: 1 }),
+      directReview({ id: 2, verdict: 'findings', blocking: false, extra: 'free-form finding without ids or run metadata' }),
+      directReview({ id: 3, actor: 'someone-else' }),
+      { ...directReview({ id: 4 }), body: [
+        directReview({ id: 4 }).body,
+        `<!-- opk-pack-review:v1 head=${h1} verdict=clean blocking=false -->`,
+      ].join('\n') },
+      directReview({ id: 5, verdict: 'clean', blocking: true }),
+    ];
+    const admitted = listCanonicalDirectPackReviews(reviews, owner);
+    expect(admitted.map((review) => review.reviewId)).toEqual([1, 2]);
+  });
+
+  it('admits a current-head clean direct review without CI, smoke, runner, or lifecycle admission', () => {
+    const projection = projectDirectPackReviewState({
+      reviews: [directReview({ id: 6, head: h2, verdict: 'clean', blocking: false })],
+      repositoryOwnerLogin: owner,
+      currentHeadSha: h2,
+      workerLifecycle: '',
+      requiredCiGreen: false,
+      exactHeadSmokePassed: false,
+      isAncestor: () => false,
+    });
+    expect(projection).toMatchObject({
+      hasLegitimateReview: true,
+      state: 'clear',
+      unresolvedBlockingReviewIds: [],
+    });
+  });
+
+  it('does not carry a clean ancestor review across changed descendant code', () => {
+    const projection = projectDirectPackReviewState({
+      reviews: [directReview({ id: 8, head: h1, verdict: 'clean', blocking: false })],
+      repositoryOwnerLogin: owner,
+      currentHeadSha: h2,
+      workerLifecycle: 'completed',
+      requiredCiGreen: true,
+      exactHeadSmokePassed: true,
+      isAncestor: (ancestor, descendant) => ancestor === h1 && descendant === h2,
+    });
+    expect(projection).toMatchObject({
+      hasLegitimateReview: false,
+      legitimateReviewCount: 0,
+      state: 'missing-review',
+    });
+  });
+
+  it('does not let a canonical review from an unrelated lineage satisfy the current head', () => {
+    const unrelated = '3'.repeat(40);
+    const projection = projectDirectPackReviewState({
+      reviews: [directReview({ id: 7, head: unrelated, verdict: 'clean', blocking: false })],
+      repositoryOwnerLogin: owner,
+      currentHeadSha: h2,
+      workerLifecycle: 'completed',
+      requiredCiGreen: true,
+      exactHeadSmokePassed: true,
+      isAncestor: () => false,
+    });
+    expect(projection).toMatchObject({
+      hasLegitimateReview: false,
+      legitimateReviewCount: 0,
+      state: 'missing-review',
+    });
+  });
+
+  it('coarsely resolves an ancestor blocker only after the complete descendant-fix cut', () => {
+    const review = directReview({ id: 10, head: h1, verdict: 'findings', blocking: true });
+    const incomplete = projectDirectPackReviewState({
+      reviews: [review],
+      repositoryOwnerLogin: owner,
+      currentHeadSha: h2,
+      workerLifecycle: 'ready_for_review',
+      requiredCiGreen: true,
+      exactHeadSmokePassed: false,
+      isAncestor: (ancestor, descendant) => ancestor === h1 && descendant === h2,
+    });
+    expect(incomplete.state).toBe('blocked');
+    expect(incomplete.unresolvedAncestorBlockingReviewIds).toEqual([10]);
+    expect(directReviewReconciliationRequiresDescendantFixFacts(incomplete)).toBe(true);
+
+    const complete = projectDirectPackReviewState({
+      reviews: [review],
+      repositoryOwnerLogin: owner,
+      currentHeadSha: h2,
+      workerLifecycle: 'completed',
+      requiredCiGreen: true,
+      exactHeadSmokePassed: true,
+      isAncestor: (ancestor, descendant) => ancestor === h1 && descendant === h2,
+    });
+    expect(complete).toMatchObject({
+      hasLegitimateReview: true,
+      state: 'clear',
+      unresolvedBlockingReviewIds: [],
+      unresolvedAncestorBlockingReviewIds: [],
+    });
+    expect(directReviewReconciliationRequiresDescendantFixFacts(complete)).toBe(false);
+  });
+
+  it('never self-clears a blocking direct review on the unchanged head', () => {
+    const projection = projectDirectPackReviewState({
+      reviews: [directReview({ id: 11, head: h2, verdict: 'findings', blocking: true })],
+      repositoryOwnerLogin: owner,
+      currentHeadSha: h2,
+      workerLifecycle: 'completed',
+      requiredCiGreen: true,
+      exactHeadSmokePassed: true,
+      isAncestor: () => true,
+    });
+    expect(projection.state).toBe('blocked');
+    expect(projection.unresolvedBlockingReviewIds).toEqual([11]);
+  });
+
+  it('uses ordinary pre/post publication head read-back and does not project a stale review onto H2', () => {
+    expect(directPackReviewPublicationHeadIsStable({
+      reviewHeadSha: h1,
+      prePublicationHeadSha: h1,
+      postPublicationHeadSha: h1,
+    })).toBe(true);
+    expect(directPackReviewPublicationHeadIsStable({
+      reviewHeadSha: h1,
+      prePublicationHeadSha: h1,
+      postPublicationHeadSha: h2,
+    })).toBe(false);
+  });
+
+  it('preserves a genuine runner blocker across newer semantic status projections', () => {
+    const runner = projectRunnerPackReviewStatusFromCombined({
+      statuses: [
+        {
+          context: 'orchestrator-pack/pack-review',
+          state: 'failure',
+          description: 'pack review has unresolved blocking findings',
+          updated_at: '2026-08-27T13:00:00.000Z',
+        },
+        {
+          context: 'orchestrator-pack/pack-review',
+          state: 'failure',
+          description: 'Pack review found blocking issues.',
+          updated_at: '2026-08-27T12:00:00.000Z',
+        },
+      ],
+    });
+    expect(runner).toMatchObject({
+      hasLegitimateReview: true,
+      unresolvedBlockingFinding: true,
+    });
+    expect(projectPackReviewSemanticStatus({
+      runner,
+      direct: { hasLegitimateReview: true, unresolvedBlockingFinding: false },
+    })).toMatchObject({ state: 'failure', reason: 'unresolved-blocker' });
+  });
+
+  it('projects one semantic status across runner and direct sources without direct-review quorum or pending', () => {
+    const directClear = projectPackReviewSemanticStatus({
+      runner: { hasLegitimateReview: false, unresolvedBlockingFinding: false, activeAttempt: true },
+      direct: { hasLegitimateReview: true, unresolvedBlockingFinding: false },
+    });
+    expect(directClear).toMatchObject({ state: 'success', reason: 'clear' });
+
+    const siblingBlocker = projectPackReviewSemanticStatus({
+      runner: { hasLegitimateReview: true, unresolvedBlockingFinding: true },
+      direct: { hasLegitimateReview: true, unresolvedBlockingFinding: false },
+    });
+    expect(siblingBlocker).toMatchObject({ state: 'failure', reason: 'unresolved-blocker' });
+
+    const runnerPending = projectPackReviewSemanticStatus({
+      runner: { hasLegitimateReview: false, unresolvedBlockingFinding: false, activeAttempt: true },
+      direct: { hasLegitimateReview: false, unresolvedBlockingFinding: false },
+    });
+    expect(runnerPending).toMatchObject({ state: 'pending', reason: 'active-runner' });
+
+    expect(semanticPackReviewRequiredStatusRequest({
+      headSha: h2,
+      projection: directClear,
+    })).toMatchObject({
+      state: 'success',
+      context: 'orchestrator-pack/pack-review',
     });
   });
 });

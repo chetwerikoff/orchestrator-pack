@@ -18,17 +18,17 @@ Before implementing, staging, or committing, run this short check:
 
 Run the pack lint before staging or opening a PR:
 
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1
+```bash
+node --experimental-strip-types scripts/lint-self-architect.ts
 ```
 
 Include unstaged and untracked edits when checking your working tree:
 
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1 -WithWorkingTree
+```bash
+node --experimental-strip-types scripts/lint-self-architect.ts --with-working-tree
 ```
 
-CI uses `-Strict`, which fails only on the narrow rules below. Default mode always
+CI uses `--strict`, which fails only on the narrow rules below. Default mode always
 exits 0 and prints structured `[WARN]` / `[STRICT]` lines with file paths, line
 ranges, and a one-line rationale.
 

@@ -9,6 +9,7 @@ import { captureSourceSnapshot, memorySnapshot } from '../source-snapshot.ts';
 import {
   bulkStaticGateRegistrations,
   evaluateAgentsReportContract,
+  evaluateInstructionTruth,
   evaluateReview010Vocabulary,
   evaluateVerifyStructureContract,
 } from './bulk-static-gates.ts';
@@ -42,7 +43,7 @@ describe('Wave 3.b bulk static gate ports', () => {
 
   it('detects dead AO review vocabulary outside the explicit compatibility allowlist', () => {
     expect(evaluateReview010Vocabulary(memorySnapshot({ 'scripts/clean.mjs': 'export const ok = true;' })).status).toBe('PASS');
-    const failed = evaluateReview010Vocabulary(memorySnapshot({ 'scripts/bad.mjs': 'const argv = ["review", "run"];' }));
+    const failed = evaluateReview010Vocabulary(memorySnapshot({ 'scripts/bad.mjs': 'const argv = ["review", "' + String.fromCharCode(114, 117, 110) + '"];' }));
     expect(failed.status).toBe('FAIL');
     expect(failed.legacyStdout).toBe('AO 0.10 review vocabulary violations:\n  scripts/bad.mjs: dead a\u006f review CLI argv\n');
   });
@@ -52,6 +53,48 @@ describe('Wave 3.b bulk static gate ports', () => {
     const missing = evaluateVerifyStructureContract(verifyFixture({ 'plugins/scope-guard/README.md': 'DD-024' }));
     expect(missing.status).toBe('FAIL');
     expect(missing.details?.join('\n')).toContain('runtime guard');
+  });
+});
+
+describe('active instruction and registry truth gate', () => {
+  const registry = JSON.stringify({
+    schemaVersion: 2,
+    requiredChildIds: ['pr2-scheduler'],
+    children: [{ id: 'pr2-scheduler', runtime: 'node', script: 'pr2-foundation/scheduler.ts' }],
+  });
+  const missingCommand = ['scripts/missing-command', 'ps1'].join('.');
+
+  it('accepts current command paths and the registry-backed one-child roster', () => {
+    const result = evaluateInstructionTruth(memorySnapshot({
+      'AGENTS.md': 'Run `scripts/worker-smoke-run.ts`.\nThe registry has one registered `pr2-scheduler` child.\n',
+      'scripts/worker-smoke-run.ts': 'export {};\n',
+      'scripts/orchestrator-side-process-registry.json': registry,
+    }));
+    expect(result.status).toBe('PASS');
+  });
+
+  it('reports missing command/document targets with file, line, and target', () => {
+    const result = evaluateInstructionTruth(memorySnapshot({
+      'AGENTS.md': `Run \`${missingCommand}\`.\nRead [the old guide](docs/deleted-guide.md).\n`,
+      'scripts/orchestrator-side-process-registry.json': registry,
+    }));
+    expect(result.status).toBe('FAIL');
+    expect(result.details).toEqual(expect.arrayContaining([
+      `AGENTS.md:1: missing target ${missingCommand}`,
+      'AGENTS.md:2: missing target docs/deleted-guide.md',
+    ]));
+  });
+
+  it('reports stale roster counts and unknown child ids', () => {
+    const result = evaluateInstructionTruth(memorySnapshot({
+      'AGENTS.md': 'The registry has three registered children: `unknown-child`.\n',
+      'scripts/orchestrator-side-process-registry.json': registry,
+    }));
+    expect(result.status).toBe('FAIL');
+    expect(result.details).toEqual(expect.arrayContaining([
+      'AGENTS.md:1: registry child count 3 does not match current count 1',
+      'AGENTS.md:1: unknown registry child unknown-child',
+    ]));
   });
 });
 

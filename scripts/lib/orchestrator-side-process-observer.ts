@@ -103,7 +103,8 @@ export function commandLineScriptPath(tokensValue: unknown): string {
   for (let index = 0; index < tokens.length; index += 1) {
     if ((tokens[index] === '-File' || tokens[index] === '-f') && tokens[index + 1]) return tokens[index + 1] ?? '';
   }
-  return '';
+  const nodeScript = tokens.find((token) => /(?:^|[/\\])orchestrator-wake-supervisor\.ts$/u.test(token));
+  return nodeScript ?? '';
 }
 
 export function supervisorCommandIdentity(payload: ObserverRecord): boolean {
@@ -111,7 +112,7 @@ export function supervisorCommandIdentity(payload: ObserverRecord): boolean {
   const commandLine = text(payload.commandLine ?? payload.CommandLine);
   const actualTokens = tokens.length ? tokens : commandLine.split(/\s+/).filter(Boolean);
   const scriptPath = normalizeObservedPath(commandLineScriptPath(actualTokens));
-  const expectedScript = normalizeObservedPath(join(REPO_ROOT, 'scripts', 'orchestrator-wake-supervisor.ps1'));
+  const expectedScript = normalizeObservedPath(join(REPO_ROOT, 'scripts', 'orchestrator-wake-supervisor.ts'));
   if (!scriptPath || scriptPath !== expectedScript) return false;
   const expectedProject = text(payload.projectId ?? payload.ProjectId) || 'orchestrator-pack';
   const project = switchValue(actualTokens, '-ProjectId');

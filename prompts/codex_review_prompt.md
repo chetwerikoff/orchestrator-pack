@@ -43,21 +43,21 @@ When **all** of the following hold:
   explicit review context, a unique closing-keyword PR reference, or a unique
   declaration/scope issue (PR title, branch name, commit text, and non-closing
   prose mentions are **not** authoritative);
-- preflight via `scripts/invoke-reviewer-contract-mapping.ps1` proves the complete
+- preflight via `scripts/invoke-reviewer-contract-mapping.ts` proves the complete
   scrubbed diff and required contract sections fit the provider/input boundary;
 
 run the **second**, reviewer-only contract-mapping ask **after** the bulk-diff
 summary. The executable helper owns artifact finalization, hashing, and status
 preflight — do not hand-roll artifact paths or skip preflight.
 
-```powershell
-pwsh -NoProfile -File scripts/invoke-reviewer-contract-mapping.ps1 `
-  -DiffFile <scrubbed-or-raw-diff> `
-  -IssueFile <issue-body> `
-  -PrBodyFile <pr-body> `
-  -ExplicitIssue <n> `
-  -PrNumber <n> `
-  -PrHeadSha <sha> `
+```bash
+node --experimental-strip-types scripts/invoke-reviewer-contract-mapping.ts \
+  --diff-file <scrubbed-or-raw-diff> \
+  --issue-file <issue-body> \
+  --pr-body-file <pr-body> \
+  --explicit-issue <n> \
+  --pr-number <n> \
+  --pr-head-sha <sha> \
   -ChangedPathsFile <changed-paths>
 ```
 
@@ -68,15 +68,15 @@ Do not stop at `mapping_pending` or treat raw coworker JSON as final status.
 
 **Option A — helper invokes coworker:**
 
-```powershell
-pwsh -NoProfile -File scripts/invoke-reviewer-contract-mapping.ps1 `
-  -DiffFile <scrubbed-or-raw-diff> `
-  -IssueFile <issue-body> `
-  -PrBodyFile <pr-body> `
-  -ExplicitIssue <n> `
-  -PrNumber <n> `
-  -PrHeadSha <sha> `
-  -ChangedPathsFile <changed-paths> `
+```bash
+node --experimental-strip-types scripts/invoke-reviewer-contract-mapping.ts \
+  --diff-file <scrubbed-or-raw-diff> \
+  --issue-file <issue-body> \
+  --pr-body-file <pr-body> \
+  --explicit-issue <n> \
+  --pr-number <n> \
+  --pr-head-sha <sha> \
+  -ChangedPathsFile <changed-paths> \
   -InvokeCoworker
 ```
 
@@ -89,15 +89,15 @@ coworker ask --profile code --allow-code \
   > /tmp/mapping-ledger.json
 ```
 
-```powershell
-pwsh -NoProfile -File scripts/invoke-reviewer-contract-mapping.ps1 `
-  -DiffFile <scrubbed-or-raw-diff> `
-  -IssueFile <issue-body> `
-  -PrBodyFile <pr-body> `
-  -ExplicitIssue <n> `
-  -PrNumber <n> `
-  -PrHeadSha <sha> `
-  -ChangedPathsFile <changed-paths> `
+```bash
+node --experimental-strip-types scripts/invoke-reviewer-contract-mapping.ts \
+  --diff-file <scrubbed-or-raw-diff> \
+  --issue-file <issue-body> \
+  --pr-body-file <pr-body> \
+  --explicit-issue <n> \
+  --pr-number <n> \
+  --pr-head-sha <sha> \
+  -ChangedPathsFile <changed-paths> \
   -LedgerFile /tmp/mapping-ledger.json
 ```
 
@@ -128,31 +128,31 @@ IDs/snapshot hashes when resolved, and current usability.
 
 For every PR with a linked issue, run checkpoint-2 re-verification against the
 **immutable bound issue snapshot** (content-addressed; not a live re-fetch). The
-snapshot is captured during contract-mapping preflight (`-PrNumber` + `-PrHeadSha`)
+snapshot is captured during contract-mapping preflight (`--pr-number` + `--pr-head-sha`)
 into the pack project `code-reviews/bound-issue-snapshots/` store. Resolve the
-persisted artifact with `scripts/resolve-bound-issue-snapshot.ps1` — never pass a
-live re-fetch as `-SnapshotFile`. Use `scripts/launch-contract-evidence-reverify.ps1`
+persisted artifact with `scripts/bound-issue-snapshot-cli.ts` — never pass a
+live re-fetch as `-SnapshotFile`. Use `scripts/invoke-contract-evidence-reverify.ts`
 from **trusted pack root** (origin/main worktree, `OPK_TRUSTED_PACK_ROOT`, or
 origin/main archive — never the PR checkout) — the helper owns row evaluation,
 `verification-mode` / `reason` vocabulary, and reviewer summary formatting.
 
-```powershell
-$SnapshotFile = pwsh -NoProfile -File <trusted-pack-root>/scripts/resolve-bound-issue-snapshot.ps1 `
-  -ProjectId <project-id> `
-  -PrNumber <n> `
-  -PrHeadSha <sha> `
-  -IssueNumber <n> `
-  -Require
+```bash
+SnapshotFile="$(node --experimental-strip-types <trusted-pack-root>/scripts/bound-issue-snapshot-cli.ts resolve \
+  --project-id <project-id> \
+  --pr-number <n> \
+  --pr-head-sha <sha> \
+  --issue-number <n> \
+  --require)"
 
-pwsh -NoProfile -File <trusted-pack-root>/scripts/launch-contract-evidence-reverify.ps1 `
-  -ReviewTargetRoot <pr-worktree-path> `
-  -PrNumber <n> `
-  -SnapshotFile $SnapshotFile `
-  -CurrentIssueFile <issue-body> `
-  -PrBodyFile <pr-body> `
-  -ExplicitIssue <n> `
-  -ChangedPathsFile <changed-paths> `
-  -Summary
+node --experimental-strip-types <trusted-pack-root>/scripts/invoke-contract-evidence-reverify.ts \
+  --review-target-root <pr-worktree-path> \
+  --pr-number <n> \
+  --snapshot-file "$SnapshotFile" \
+  --current-issue-file <issue-body> \
+  --pr-body-file <pr-body> \
+  --explicit-issue <n> \
+  --changed-paths-file <changed-paths> \
+  --summary
 ```
 
 Output is **candidate evidence only** — do not assign severity, approve, or reject
@@ -171,7 +171,7 @@ finding. Checkpoint-2 must **never auto-blocks** review availability.
 CI owns exhaustive test execution. During local review, only **cheap, targeted**
 checks are allowed when they fit the remaining review budget.
 
-- Do **not** run full-suite commands (`npm test`, `vitest run`, `scripts/verify.ps1`,
+- Do **not** run full-suite commands (`npm test`, `vitest run`, `scripts/verify.ts`,
   supervisor integration tests, or other slow suites) from the reviewer workspace.
 - Prefer narrow, file-scoped checks only when they are likely to finish quickly.
 - The pack wrapper enforces this with exec-level command guards outside your turn.

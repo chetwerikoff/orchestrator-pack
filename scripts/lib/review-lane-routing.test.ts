@@ -185,10 +185,10 @@ describe('review-lane classifier v1', () => {
   it('keeps access-control security precedence across every broad safe family', () => {
     const fixtures = [
       ['docs/declarations/access-control.ts', ['scope-declaration-only']],
-      ['.claude/skills/create-issue-draft/access-control.ts', ['author-declaration-validation', 'review-source-cardinality-only']],
-      ['.claude/skills/discuss-with-gpt/access-control.ts', ['review-source-cardinality-only']],
-      ['.cursor/skills/create-issue-draft/access-control.ts', ['generated-parity-only', 'review-source-cardinality-only']],
-      ['.cursor/skills/discuss-with-gpt/access-control.ts', ['generated-parity-only', 'review-source-cardinality-only']],
+      ['.claude/skills/create-issue-draft/access-control.ts', ['generated-parity-only', 'review-source-cardinality-only']],
+      ['.claude/skills/discuss-with-gpt/access-control.ts', ['generated-parity-only', 'review-source-cardinality-only']],
+      ['.cursor/skills/create-issue-draft/access-control.ts', ['author-declaration-validation', 'review-source-cardinality-only']],
+      ['.cursor/skills/discuss-with-gpt/access-control.ts', ['review-source-cardinality-only']],
       ['scripts/lib/create-issue-stage-record-access-control.ts', ['additive-existing-receipt-evidence', 'routing-policy-epoch']],
       ['scripts/lib/review-lane-access-control.ts', ['pure-review-lane-selection']],
       ['scripts/lib/review-lane-access-control.test.ts', ['test-only']],
