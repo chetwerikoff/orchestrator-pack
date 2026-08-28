@@ -8,7 +8,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.js';
 import {
   parsePackGptReviewArgs,
@@ -237,6 +237,7 @@ function writeSuccessfulGhFixture(binRoot: string): void {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   process.env = { ...originalEnv };
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -1302,16 +1303,12 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const runId = String(result.runId);
     const current = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
     expect(current?.reviewRound).toBeDefined();
-    const expiredAt = new Date(Date.now() - 3 * 60_000).toISOString();
-    updatePackReviewRun(runId, {
-      reviewRound: {
-        ...current!.reviewRound!,
-        sourceSlots: current!.reviewRound!.sourceSlots.map((slot) => ({
-          ...slot,
-          admissionStartedAtUtc: expiredAt,
-        })),
-      },
-    }, { projectId: 'orchestrator-pack', storeRoot });
+    const admissions = current!.reviewRound!.sourceSlots
+      .map((slot) => Date.parse(slot.admissionStartedAtUtc ?? ''))
+      .filter((value) => Number.isFinite(value));
+    expect(admissions.length).toBeGreaterThan(0);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Math.min(...admissions) + 3 * 60_000));
 
     const emptySourceTransport: PackGptSourceCommentTransport = {
       resolveActorLogin: async () => 'browser-gpt-bot',
