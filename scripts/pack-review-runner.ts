@@ -2895,6 +2895,37 @@ export async function reconcileStalePackReviewRuns(
         }
         continue;
       }
+
+      const recoveryCoverage = derivePackReviewGptCoverage(
+        getPackReviewRun(run.id, { projectId, storeRoot })?.reviewRound ?? run.reviewRound,
+      );
+      if ((immediateActive || activeStale)
+          && recoveryCoverage?.kind === 'partial'
+          && recovery.graceExpired
+          && recovery.reason.startsWith('gpt_sources_incomplete_after_grace:')) {
+        await recordPackReviewUnfinishedTerminalStatus({
+          run: getPackReviewRun(run.id, { projectId, storeRoot }) ?? run,
+          status: 'failed',
+          failureReason: recovery.reason,
+          projectId,
+          storeRoot,
+          writeRequiredStatus: statusWriter,
+        });
+        const failed = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+        results.push({
+          runId: run.id,
+          terminalized: true,
+          statusReconciled: true,
+          hydratedSourceCount: recovery.hydratedSourceCount,
+          usableSourceCount: recovery.usableSourceCount,
+          graceExpired: recovery.graceExpired,
+          reason: recovery.reason,
+          status: failed.status,
+          coverage: derivePackReviewGptCoverage(failed.reviewRound),
+        });
+        continue;
+      }
+
       if (needsGptSourceRecovery) {
         results.push({
           runId: run.id,
@@ -2909,34 +2940,6 @@ export async function reconcileStalePackReviewRuns(
         continue;
       }
       if (immediateActive && !activeStale) {
-        const coverage = derivePackReviewGptCoverage(
-          getPackReviewRun(run.id, { projectId, storeRoot })?.reviewRound ?? run.reviewRound,
-        );
-        if (coverage?.kind === 'partial'
-            && recovery.graceExpired
-            && recovery.reason.startsWith('gpt_sources_incomplete_after_grace:')) {
-          await recordPackReviewUnfinishedTerminalStatus({
-            run: getPackReviewRun(run.id, { projectId, storeRoot }) ?? run,
-            status: 'failed',
-            failureReason: recovery.reason,
-            projectId,
-            storeRoot,
-            writeRequiredStatus: statusWriter,
-          });
-          const failed = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
-          results.push({
-            runId: run.id,
-            terminalized: true,
-            statusReconciled: true,
-            hydratedSourceCount: recovery.hydratedSourceCount,
-            usableSourceCount: recovery.usableSourceCount,
-            graceExpired: recovery.graceExpired,
-            reason: recovery.reason,
-            status: failed.status,
-            coverage: derivePackReviewGptCoverage(failed.reviewRound),
-          });
-          continue;
-        }
         results.push({
           runId: run.id,
           terminalized: false,
@@ -2945,7 +2948,7 @@ export async function reconcileStalePackReviewRuns(
           usableSourceCount: recovery.usableSourceCount,
           graceExpired: recovery.graceExpired,
           reason: recovery.reason,
-          coverage,
+          coverage: recoveryCoverage,
           nextAction: recovery.nextAction ?? 'let the current review continue and rerun scoped reconcile if needed',
         });
         continue;
