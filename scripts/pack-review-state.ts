@@ -651,7 +651,9 @@ export function observePackReviewHead(input: {
     nextPhase: 'head_observed',
     mutate(current) {
       // Same-head observe rewinds the phase without resetting cycle, triage, or budget.
-      const consumedRunEvidence = reviewRunEvidence(current, input.reviewRuns);
+      const consumedRunEvidence = input.reviewRuns
+        ? reviewRunEvidence(current, input.reviewRuns)
+        : false;
       if (current.currentHeadSha === headSha) {
         if (current.cycle && !current.cycle.reviewStageComplete && consumedRunEvidence) {
           markReviewStageComplete(current, nowIso(input.options));
