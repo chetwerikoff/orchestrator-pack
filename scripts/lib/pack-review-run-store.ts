@@ -1385,6 +1385,13 @@ export function listPackReviewRunRecordsRaw(options: PackReviewStoreOptions = {}
     .filter((record) => !options.projectId || record.projectId === options.projectId));
 }
 
+export function listPackReviewRunRecordsReadonly(options: PackReviewStoreOptions = {}): PackReviewRunRecord[] {
+  const storeRoot = resolvePackReviewRunStoreRoot(options);
+  if (!existsSync(recordsDir(storeRoot))) return [];
+  return readRecordsUnlocked(storeRoot)
+    .filter((record) => !options.projectId || record.projectId === options.projectId);
+}
+
 export function terminalizePackReviewStaleRun(
   runId: string,
   options: PackReviewStoreOptions = {},
