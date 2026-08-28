@@ -1226,7 +1226,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(readFileSync(capture, 'utf8')).toContain('finding-03');
   });
 
-  it('exhausts one zero-send collision retry without publishing a verdict', async () => {
+  it('preserves a 2/3 partial after one zero-send source exhausts its retry', async () => {
     const storeRoot = tempRoot('opk-gpt-zero-send-exhausted-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1252,15 +1252,23 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
     });
     expect(result).toMatchObject({
-      ok: false,
-      status: 'failed',
-      reason: 'gpt_source_non_complete:source-02:explicit_refusal:zero_send_collision_exhausted',
+      ok: true,
+      status: 'reviewing',
+      reason: 'gpt_sources_partial_pending_reconcile:2/3',
+      coverage: {
+        kind: 'partial',
+        completedSourceCount: 2,
+        cardinality: 3,
+      },
     });
+    expect(run?.status).toBe('reviewing');
+    expect(run?.failureReason).toBeUndefined();
+    expect(run?.reviewRound?.settledSourceCount).toBeUndefined();
     expect(run?.reviewVerdict).toBeUndefined();
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
-  it('keeps a possible-delivery source non-retryable and outside normal verdict publication', async () => {
+  it('keeps a possible-delivery source non-retryable while preserving 2/3 partial evidence', async () => {
     const storeRoot = tempRoot('opk-gpt-possible-delivery-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1280,10 +1288,18 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(uncertain?.terminalClass).toBe('possible_delivery');
     expect(uncertain?.attemptOrdinal).toBe(1);
     expect(result).toMatchObject({
-      ok: false,
-      status: 'failed',
-      reason: 'gpt_source_non_complete:source-02:possible_delivery',
+      ok: true,
+      status: 'reviewing',
+      reason: 'gpt_sources_partial_pending_reconcile:2/3',
+      coverage: {
+        kind: 'partial',
+        completedSourceCount: 2,
+        cardinality: 3,
+      },
     });
+    expect(run?.status).toBe('reviewing');
+    expect(run?.failureReason).toBeUndefined();
+    expect(run?.reviewRound?.settledSourceCount).toBeUndefined();
     expect(run?.reviewVerdict).toBeUndefined();
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
