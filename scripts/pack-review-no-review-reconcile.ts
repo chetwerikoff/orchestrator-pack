@@ -136,7 +136,6 @@ function slotFact(slot: PackReviewSourceSlotRecord): Record<string, unknown> {
 }
 
 function authoritativePreSend(slot: PackReviewSourceSlotRecord): boolean {
-  if (slot.lifecycle === 'planned' && !slot.invocationId) return true;
   const terminal = terminalRecord(slot);
   if (terminal.send_count === 0) return true;
   if (terminal.state === 'not_sent') return true;
@@ -145,16 +144,21 @@ function authoritativePreSend(slot: PackReviewSourceSlotRecord): boolean {
   return false;
 }
 
-function profileAndCdp(slot: PackReviewSourceSlotRecord): { profileKey: string; cdp: string } | null {
+function profileAndCdp(slot: PackReviewSourceSlotRecord):
+  | { kind: 'bound'; profileKey: string; cdp: string }
+  | { kind: 'contradiction'; reason: string }
+  | { kind: 'unproven' } {
   const terminal = terminalRecord(slot);
-  const profileKey = trim(terminal.configured_profile_key ?? terminal.profile_key);
-  const cdp = trim(
-    terminal.configured_cdp_url
-      ?? terminal.configured_cdp
-      ?? terminal.cdp_url
-      ?? terminal.cdp,
-  );
-  return profileKey && cdp ? { profileKey, cdp } : null;
+  const terminalProfileKey = trim(terminal.configured_profile_key ?? terminal.profile_key);
+  const retainedProfileKey = trim(slot.launchProfileKey);
+  const cdp = trim(slot.launchCdpUrl);
+  if (terminalProfileKey && retainedProfileKey && terminalProfileKey !== retainedProfileKey) {
+    return { kind: 'contradiction', reason: 'possible_delivery_profile_binding_mismatch' };
+  }
+  const profileKey = terminalProfileKey || retainedProfileKey;
+  return profileKey && cdp
+    ? { kind: 'bound', profileKey, cdp }
+    : { kind: 'unproven' };
 }
 
 function exactOwnedUser(snapshot: InspectionSnapshot, marker: string) {
@@ -202,7 +206,14 @@ async function reconcilePossibleDelivery(
     };
   }
   const binding = profileAndCdp(slot);
-  if (!binding) {
+  if (binding.kind === 'contradiction') {
+    return {
+      disposition: 'contradiction',
+      reason: binding.reason,
+      evidence: slotFact(slot),
+    };
+  }
+  if (binding.kind !== 'bound') {
     return {
       disposition: 'unavailable/inconclusive',
       reason: 'possible_delivery_profile_or_cdp_unproven',
@@ -225,6 +236,17 @@ async function reconcilePossibleDelivery(
       disposition: 'contradiction',
       reason: 'owned_turn_observation_identity_mismatch',
       evidence: slotFact(slot),
+    };
+  }
+  if (observation.phase === 'harvested') {
+    return {
+      disposition: 'contradiction',
+      reason: 'owned_turn_harvested_contradicts_zero_completed_run',
+      evidence: {
+        ...slotFact(slot),
+        observationPhase: observation.phase,
+        primaryBound: Boolean(observation.primary),
+      },
     };
   }
   if (observation.phase === 'not_sent' || observation.send_count === 0) {
@@ -520,6 +542,21 @@ export async function reconcilePackReviewNoReview(
     if (identity.slug === input.repoSlug) targetRows.push(row);
   }
 
+  for (const candidate of targetRows) {
+    const candidateCoverage = derivePackReviewGptCoverage(candidate.reviewRound);
+    if (candidateCoverage?.completedSourceCount) {
+      evidence.push({
+        kind: 'coverage',
+        runId: candidate.id,
+        coverage: candidateCoverage.kind,
+        completedSourceCount: candidateCoverage.completedSourceCount,
+        cardinality: candidateCoverage.cardinality,
+        completedSourceSlotIds: candidateCoverage.completedSourceSlotIds,
+      });
+      return finish('review-present', 'matching_run_has_completed_source');
+    }
+  }
+
   const selected = latestRun(targetRows);
   if (selected.reason) {
     evidence.push({ kind: 'run-selection', state: 'ambiguous', reason: selected.reason });
@@ -605,41 +642,68 @@ export async function reconcilePackReviewNoReview(
     return finish('unavailable/inconclusive', 'source_comment_transport_unavailable');
   }
 
-  for (const slot of run.reviewRound.sourceSlots) {
-    const invocationId = trim(slot.invocationId);
-    if (!invocationId) continue;
-    const identity = {
-      repository: input.repoSlug,
-      prNumber: input.prNumber,
-      headSha: input.headSha,
-      runId: run.id,
-      slotId: slot.slotId,
-      invocationId,
-    };
-    let sourceResolution;
-    try {
-      sourceResolution = await resolvePackGptSourceComment({ identity, transport });
-    } catch (error) {
-      evidence.push({ kind: 'source-comment', sourceSlotId: slot.slotId, state: 'unavailable', detail: bounded(error) });
-      return finish('unavailable/inconclusive', 'source_comment_census_unavailable');
+  const censusMatchingRunSourceComments = async (census: 'initial' | 'final') => {
+    for (const candidateRun of targetRows) {
+      if (!candidateRun.reviewRound) continue;
+      for (const slot of candidateRun.reviewRound.sourceSlots) {
+        const invocationId = trim(slot.invocationId);
+        if (!invocationId) continue;
+        const identity = {
+          repository: input.repoSlug,
+          prNumber: input.prNumber,
+          headSha: input.headSha,
+          runId: candidateRun.id,
+          slotId: slot.slotId,
+          invocationId,
+        };
+        let sourceResolution;
+        try {
+          sourceResolution = await resolvePackGptSourceComment({ identity, transport });
+        } catch (error) {
+          evidence.push({
+            kind: 'source-comment',
+            census,
+            runId: candidateRun.id,
+            sourceSlotId: slot.slotId,
+            state: 'unavailable',
+            detail: bounded(error),
+          });
+          return { kind: 'inconclusive' as const, reason: 'source_comment_census_unavailable' };
+        }
+        evidence.push({
+          kind: 'source-comment',
+          census,
+          runId: candidateRun.id,
+          sourceSlotId: slot.slotId,
+          state: sourceResolution.kind,
+          ...('reason' in sourceResolution ? { reason: sourceResolution.reason } : {}),
+          ...(sourceResolution.kind === 'credentialed' ? { commentId: sourceResolution.receipt.commentId } : {}),
+        });
+        if (sourceResolution.kind === 'credentialed') {
+          return { kind: 'present' as const, reason: 'matching_run_source_comment_present' };
+        }
+        if (sourceResolution.kind !== 'missing') {
+          return { kind: 'inconclusive' as const, reason: sourceResolution.reason };
+        }
+      }
     }
-    evidence.push({
-      kind: 'source-comment',
-      sourceSlotId: slot.slotId,
-      state: sourceResolution.kind,
-      ...('reason' in sourceResolution ? { reason: sourceResolution.reason } : {}),
-      ...(sourceResolution.kind === 'credentialed' ? { commentId: sourceResolution.receipt.commentId } : {}),
-    });
-    if (sourceResolution.kind === 'credentialed') {
-      return finish('review-present', 'matching_run_source_comment_present');
-    }
-    if (sourceResolution.kind !== 'missing') {
-      return finish('unavailable/inconclusive', sourceResolution.reason);
-    }
+    return { kind: 'absent' as const, reason: 'matching_run_source_comments_absent' };
+  };
+
+  const initialSourceComments = await censusMatchingRunSourceComments('initial');
+  if (initialSourceComments.kind === 'present') return finish('review-present', initialSourceComments.reason);
+  if (initialSourceComments.kind === 'inconclusive') {
+    return finish('unavailable/inconclusive', initialSourceComments.reason);
   }
 
   const github = await githubReviewEvidence(input, deps);
-  evidence.push({ kind: 'github-review-census', state: github.kind, reason: github.reason, ...github.evidence });
+  evidence.push({
+    kind: 'github-review-census',
+    census: 'initial',
+    state: github.kind,
+    reason: github.reason,
+    ...github.evidence,
+  });
   if (github.kind === 'present') return finish('review-present', github.reason);
   if (github.kind === 'inconclusive') return finish('unavailable/inconclusive', github.reason);
 
@@ -655,6 +719,23 @@ export async function reconcilePackReviewNoReview(
     if (possible.disposition === 'contradiction') return finish('contradiction', possible.reason);
     return finish('unavailable/inconclusive', possible.reason);
   }
+
+  const finalSourceComments = await censusMatchingRunSourceComments('final');
+  if (finalSourceComments.kind === 'present') return finish('review-present', finalSourceComments.reason);
+  if (finalSourceComments.kind === 'inconclusive') {
+    return finish('unavailable/inconclusive', finalSourceComments.reason);
+  }
+
+  const finalGithub = await githubReviewEvidence(input, deps);
+  evidence.push({
+    kind: 'github-review-census',
+    census: 'final',
+    state: finalGithub.kind,
+    reason: finalGithub.reason,
+    ...finalGithub.evidence,
+  });
+  if (finalGithub.kind === 'present') return finish('review-present', finalGithub.reason);
+  if (finalGithub.kind === 'inconclusive') return finish('unavailable/inconclusive', finalGithub.reason);
 
   return finish('no-completed-review', 'matching_run_all_incomplete_slots_closed_negative');
 }

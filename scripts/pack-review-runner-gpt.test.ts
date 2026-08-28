@@ -1351,12 +1351,78 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(statuses.at(-1)?.description).toContain('partial source evidence (1/3)');
   });
 
+  it.each([1, 2])('does not let non-immediate stale reconciliation settle an ordinary %i/3 partial after grace', async (completedCount) => {
+    const storeRoot = tempRoot(`opk-gpt-non-immediate-partial-${completedCount}-`);
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureReviewBySourceSlot: {
+        'source-01': completedCount >= 1
+          ? [{ stdout: successfulCleanReviewPayload('inv-source-01') }]
+          : [{ stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 }],
+        'source-02': completedCount >= 2
+          ? [{ stdout: successfulCleanReviewPayload('inv-source-02') }]
+          : [
+              { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-02-a' }), exitCode: 13 },
+              { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-02-b' }), exitCode: 13 },
+            ],
+        'source-03': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-03-a' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-03-b' }), exitCode: 13 },
+        ],
+      },
+    }));
+
+    const runId = String(result.runId);
+    const current = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    const admissions = current!.reviewRound!.sourceSlots
+      .map((slot) => Date.parse(slot.admissionStartedAtUtc ?? ''))
+      .filter((value) => Number.isFinite(value));
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Math.min(...admissions) + 3 * 60_000));
+
+    const reconciliation = await reconcileStalePackReviewRuns({
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1276,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureGptSourceCommentTransport: emptySourceTransport([]),
+      fixtureRequiredStatusWriter: async () => {},
+    });
+
+    expect(reconciliation.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId,
+        terminalized: false,
+        statusReconciled: false,
+        reason: 'gpt_partial_requires_explicit_immediate_reconcile',
+        coverage: expect.objectContaining({
+          kind: 'partial',
+          completedSourceCount: completedCount,
+          cardinality: 3,
+        }),
+      }),
+    ]));
+    expect(getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+      status: 'reviewing',
+      reviewRound: { settledSourceCount: undefined },
+    });
+  });
+
   it('keeps a possible-delivery source non-retryable while preserving 2/3 partial evidence', async () => {
     const storeRoot = tempRoot('opk-gpt-possible-delivery-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    process.env.PACK_GPT_BROWSER_PROFILE = path.join(storeRoot, 'browser-profile');
+    process.env.PACK_GPT_BROWSER_CDP = 'http://127.0.0.1:9222';
 
     const result = await startPackReview(pluralStart(storeRoot, capture, {
       fixtureReviewBySourceSlot: {
@@ -1370,6 +1436,8 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const uncertain = run?.reviewRound?.sourceSlots.find((slot) => slot.slotId === 'source-02');
     expect(uncertain?.terminalClass).toBe('possible_delivery');
     expect(uncertain?.attemptOrdinal).toBe(1);
+    expect(uncertain?.launchProfileKey).toMatch(/^profile-[0-9a-f]{32}$/);
+    expect(uncertain?.launchCdpUrl).toBe('http://127.0.0.1:9222');
     expect(result).toMatchObject({
       ok: true,
       status: 'reviewing',

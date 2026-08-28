@@ -119,7 +119,7 @@ import {
   type PackReviewer,
   type PackReviewerLayerOverrides,
 } from './lib/resolve-pack-reviewer.ts';
-import { resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
+import { resolveGptBrowserConfig, resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
 import {
   createPackGptSourceCommentTransport,
   resolvePackGptSourceComment,
@@ -127,6 +127,7 @@ import {
   type PackGptSourceCommentTransport,
 } from './lib/pack-gpt-source-comment.ts';
 import type { PackGptSourceIdentity } from './lib/pack-gpt-source-comment-contract.ts';
+import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
   captureBoundIssueSnapshot,
   computeBoundIssueSnapshotHash,
@@ -1779,17 +1780,32 @@ async function runGptSourceBatch(options: {
           prNumber: options.target.prNumber,
         }));
 
+  const resolveLaunchBinding = (): Pick<PackReviewSourceSlotRecord, 'launchProfileKey' | 'launchCdpUrl'> | null => {
+    try {
+      const config = resolveGptBrowserConfig(process.env);
+      return {
+        launchProfileKey: configuredProfileKey(config.profile, config.cdpUrl),
+        launchCdpUrl: config.cdpUrl,
+      };
+    } catch (error) {
+      if (process.env.OPK_VITEST_HARNESS === '1') return null;
+      throw error;
+    }
+  };
+
   const outcomes = await Promise.all(options.round.sourceSlots.map(async (planned) => {
     const slotId = planned.slotId;
     let round = options.round;
     let attemptOrdinal = 1;
     let invocationId = randomUUID();
     const markInvocationStarted = async (admissionStartedAt: number): Promise<void> => {
+      const launchBinding = resolveLaunchBinding();
       round = updateGptRoundSlot(options.run.id, round, slotId, {
         lifecycle: 'invocation_started',
         admissionStartedAtUtc: new Date(admissionStartedAt).toISOString(),
         attemptOrdinal,
         invocationId,
+        ...(launchBinding ?? {}),
       }, { projectId: options.projectId, storeRoot: options.storeRoot });
       if (options.input.fixtureAfterGptInvocationBound) {
         await options.input.fixtureAfterGptInvocationBound({ slotId, attemptOrdinal, invocationId, round });
@@ -2860,6 +2876,21 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
 
+    const stalePartialCoverage = derivePackReviewGptCoverage(run.reviewRound);
+    if (activeStale
+        && input.immediate !== true
+        && stalePartialCoverage?.kind === 'partial') {
+      results.push({
+        runId: run.id,
+        terminalized: false,
+        statusReconciled: false,
+        reason: 'gpt_partial_requires_explicit_immediate_reconcile',
+        coverage: stalePartialCoverage,
+        nextAction: 'run the explicit scoped reconcile --immediate path after grace or when source evidence changes',
+      });
+      continue;
+    }
+
     const needsGptSourceRecovery = unfinishedTerminal
       && run.reviewRound?.reviewer === 'gpt'
       && !packReviewJournaledPayload(run)
@@ -2917,7 +2948,7 @@ export async function reconcileStalePackReviewRuns(
       const recoveryCoverage = derivePackReviewGptCoverage(
         getPackReviewRun(run.id, { projectId, storeRoot })?.reviewRound ?? run.reviewRound,
       );
-      if ((immediateActive || activeStale)
+      if (immediateActive
           && recoveryCoverage?.kind === 'partial'
           && recovery.graceExpired
           && recovery.reason.startsWith('gpt_sources_incomplete_after_grace:')) {

@@ -197,17 +197,50 @@ describe('pack-review no-review reconciliation', () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
-  it('can prove no completed review for a matching run when every slot is authoritatively pre-send', async () => {
-    const started = run(round([
+  it('checks every same-head matching run before selecting the latest zero-completed run', async () => {
+    const older = run(round([
       slot(1, {
         lifecycle: 'terminal',
-        invocationId: '11111111-1111-4111-8111-111111111111',
-        terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
-        terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+        terminalClass: 'complete_clean',
+        invocationId: 'aaaaaaaa-1111-4111-8111-111111111111',
+        terminalResult: { state: 'ok', send_count: 1 },
+        payload: { verdict: 'clean', findingCount: 0, findings: [] },
       }),
-      slot(2, { lifecycle: 'planned' }),
-      slot(3, { lifecycle: 'planned' }),
+      slot(2),
+      slot(3),
     ]));
+    older.id = 'prr-older-completed';
+    older.runId = older.id;
+    older.sameKeyOrder = 1;
+
+    const newer = run(round([1, 2, 3].map((ordinal) => slot(ordinal, {
+      lifecycle: 'terminal',
+      invocationId: `bbbbbbbb-${String(ordinal).padStart(4, '0')}-4111-8111-111111111111`,
+      terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+      terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+    }))));
+    newer.id = 'prr-newer-empty';
+    newer.runId = newer.id;
+    newer.sameKeyOrder = 2;
+
+    const result = await reconcilePackReviewNoReview(INPUT, deps({
+      listRuns: () => [older, newer],
+    }));
+
+    expect(result.disposition).toBe('review-present');
+    expect(result.reason).toBe('matching_run_has_completed_source');
+    expect(result.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'coverage', runId: older.id, completedSourceCount: 1 }),
+    ]));
+  });
+
+  it('can prove no completed review for a matching run when every slot has immutable zero-send evidence', async () => {
+    const started = run(round([1, 2, 3].map((ordinal) => slot(ordinal, {
+      lifecycle: 'terminal',
+      invocationId: `${ordinal}${ordinal}${ordinal}${ordinal}${ordinal}${ordinal}${ordinal}${ordinal}-1111-4111-8111-111111111111`,
+      terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+      terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+    }))));
 
     const result = await reconcilePackReviewNoReview(INPUT, deps({
       listRuns: () => [started],
@@ -216,6 +249,29 @@ describe('pack-review no-review reconciliation', () => {
     expect(result.disposition).toBe('no-completed-review');
     expect(result.reason).toBe('matching_run_all_incomplete_slots_closed_negative');
     expect(result.evidence.filter((entry) => entry.kind === 'slot-closure')).toHaveLength(3);
+    expect(result.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'github-review-census', census: 'final', state: 'absent' }),
+    ]));
+  });
+
+  it('does not treat a bare planned slot as authoritative proof that no send occurred', async () => {
+    const started = run(round([
+      slot(1, {
+        lifecycle: 'terminal',
+        invocationId: '11111111-1111-4111-8111-111111111111',
+        terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+        terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+      }),
+      slot(2),
+      slot(3),
+    ]));
+
+    const result = await reconcilePackReviewNoReview(INPUT, deps({
+      listRuns: () => [started],
+    }));
+
+    expect(result.disposition).toBe('unavailable/inconclusive');
+    expect(result.reason).toBe('possible_delivery_invocation_unbound');
   });
 
   it('treats an exact-head marker-first source comment as review-present with no local run', async () => {
@@ -279,6 +335,88 @@ describe('pack-review no-review reconciliation', () => {
     expect(result.reason).toBe('exact_head_source_comment_present');
   });
 
+  it('re-censuses source comments after slot closure before emitting a negative receipt', async () => {
+    const started = run(round([1, 2, 3].map((ordinal) => slot(ordinal, {
+      lifecycle: 'terminal',
+      invocationId: `cccccccc-${String(ordinal).padStart(4, '0')}-4111-8111-111111111111`,
+      terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+      terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+    }))));
+    const identity = {
+      repository: REPOSITORY,
+      prNumber: PR,
+      headSha: HEAD,
+      runId: started.id,
+      slotId: 'source-01',
+      invocationId: started.reviewRound!.sourceSlots[0]!.invocationId!,
+    };
+    const body = formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS');
+    const comment: PackGptSourceGithubComment = {
+      id: 901,
+      body,
+      url: `https://github.com/${REPOSITORY}/issues/${PR}#issuecomment-901`,
+      issueUrl: `https://api.github.com/repos/${REPOSITORY}/issues/${PR}`,
+      actorLogin: OWNER,
+      createdAt: NOW.toISOString(),
+      updatedAt: NOW.toISOString(),
+    };
+    let listCalls = 0;
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => OWNER,
+      listComments: async () => (++listCalls >= 4 ? [comment] : []),
+      getComment: async () => comment,
+    };
+
+    const result = await reconcilePackReviewNoReview(INPUT, deps({
+      listRuns: () => [started],
+      sourceCommentTransport: () => sourceTransport,
+    }));
+
+    expect(result.disposition).toBe('review-present');
+    expect(result.reason).toBe('matching_run_source_comment_present');
+    expect(listCalls).toBeGreaterThanOrEqual(4);
+    expect(result.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'source-comment', census: 'final', state: 'credentialed' }),
+    ]));
+  });
+
+  it('re-censuses direct GitHub reviews after slot closure before emitting a negative receipt', async () => {
+    const started = run(round([1, 2, 3].map((ordinal) => slot(ordinal, {
+      lifecycle: 'terminal',
+      invocationId: `dddddddd-${String(ordinal).padStart(4, '0')}-4111-8111-111111111111`,
+      terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+      terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+    }))));
+    let reviewCalls = 0;
+    const lateReview = {
+      id: 902,
+      body: `<!-- opk-pack-review:v1 head=${HEAD} verdict=clean blocking=false -->`,
+      commitId: HEAD,
+      url: `https://github.com/${REPOSITORY}/pull/${PR}#pullrequestreview-902`,
+      state: 'COMMENTED' as const,
+      userLogin: OWNER,
+      submittedAt: NOW.toISOString(),
+    };
+    const githubTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => OWNER,
+      listReviews: async () => (++reviewCalls >= 2 ? [lateReview] : []),
+      postReview: async () => { throw new Error('write_forbidden'); },
+      dismissReview: async () => { throw new Error('write_forbidden'); },
+    };
+
+    const result = await reconcilePackReviewNoReview(INPUT, deps({
+      listRuns: () => [started],
+      githubReviewTransport: () => githubTransport,
+    }));
+
+    expect(result.disposition).toBe('review-present');
+    expect(result.reason).toBe('canonical_exact_head_github_review_present');
+    expect(reviewCalls).toBe(2);
+    expect(result.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'github-review-census', census: 'final', state: 'present' }),
+    ]));
+  });
+
   it('fails closed when live PR head no longer equals the receipt binding', async () => {
     const listRuns = vi.fn(() => []);
     const result = await reconcilePackReviewNoReview(INPUT, deps({
@@ -307,8 +445,9 @@ describe('pack-review no-review reconciliation', () => {
           cause: 'browser_lost',
           send_count: 1,
           configured_profile_key: 'profile-fixture',
-          configured_cdp_url: 'http://127.0.0.1:9222',
         },
+        launchProfileKey: 'profile-fixture',
+        launchCdpUrl: 'http://127.0.0.1:9222',
       }),
       slot(2),
       slot(3),
@@ -419,8 +558,9 @@ describe('pack-review no-review reconciliation', () => {
           cause: 'completed_page_only',
           send_count: 1,
           configured_profile_key: 'profile-fixture',
-          configured_cdp_url: 'http://127.0.0.1:9222',
         },
+        launchProfileKey: 'profile-fixture',
+        launchCdpUrl: 'http://127.0.0.1:9222',
       }),
       slot(2),
       slot(3),
@@ -534,8 +674,8 @@ describe('pack-review no-review reconciliation', () => {
       probe,
     }));
 
-    expect(result.disposition).toBe('review-present');
-    expect(result.reason).toBe('owned_turn_assistant_result_present');
-    expect(probe).toHaveBeenCalledTimes(2);
+    expect(result.disposition).toBe('contradiction');
+    expect(result.reason).toBe('owned_turn_harvested_contradicts_zero_completed_run');
+    expect(probe).not.toHaveBeenCalled();
   });
 });

@@ -96,6 +96,8 @@ export interface PackReviewSourceSlotRecord {
   invocationId?: string;
   attemptOrdinal?: number;
   admissionStartedAtUtc?: string;
+  launchProfileKey?: string;
+  launchCdpUrl?: string;
   terminalClass?: string;
   terminalResult?: unknown;
   payload?: unknown;
@@ -689,6 +691,16 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
       admissionStartedAtUtc = requiredJsonString(slot.admissionStartedAtUtc, 'admissionStartedAtUtc', slotPath);
     }
 
+    let launchProfileKey: string | undefined;
+    if (slot.launchProfileKey !== undefined) {
+      launchProfileKey = requiredJsonString(slot.launchProfileKey, 'launchProfileKey', slotPath);
+    }
+
+    let launchCdpUrl: string | undefined;
+    if (slot.launchCdpUrl !== undefined) {
+      launchCdpUrl = requiredJsonString(slot.launchCdpUrl, 'launchCdpUrl', slotPath);
+    }
+
     let terminalClass: string | undefined;
     if (slot.terminalClass !== undefined) {
       terminalClass = requiredJsonString(slot.terminalClass, 'terminalClass', slotPath);
@@ -702,6 +714,8 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
       ...(invocationId === undefined ? {} : { invocationId }),
       ...(attemptOrdinal === undefined ? {} : { attemptOrdinal }),
       ...(admissionStartedAtUtc === undefined ? {} : { admissionStartedAtUtc }),
+      ...(launchProfileKey === undefined ? {} : { launchProfileKey }),
+      ...(launchCdpUrl === undefined ? {} : { launchCdpUrl }),
       ...(terminalClass === undefined ? {} : { terminalClass }),
     };
     validateGptTerminalEvidence(normalizedSlot, slotPath);
@@ -853,6 +867,31 @@ function mergeFrozenGptSlot(
     }
   }
 
+  const mergeAttemptBoundString = (
+    name: 'launchProfileKey' | 'launchCdpUrl',
+    existingValue: string | undefined,
+    incomingValue: string | undefined,
+  ): string | undefined => {
+    if (existingValue !== undefined
+        && incomingValue !== undefined
+        && existingValue !== incomingValue) {
+      if ((incomingAttempt ?? 0) > (existingAttempt ?? 0)) return incomingValue;
+      if ((incomingAttempt ?? 0) < (existingAttempt ?? 0)) return existingValue;
+      throw new Error(`corrupt pack review run record at ${path}: ${name} changed without a new attempt`);
+    }
+    return existingValue ?? incomingValue;
+  };
+  const launchProfileKey = mergeAttemptBoundString(
+    'launchProfileKey',
+    existing.launchProfileKey,
+    incoming.launchProfileKey,
+  );
+  const launchCdpUrl = mergeAttemptBoundString(
+    'launchCdpUrl',
+    existing.launchCdpUrl,
+    incoming.launchCdpUrl,
+  );
+
   const mergeEvidence = (name: 'terminalClass' | 'terminalResult' | 'payload'): unknown => {
     const existingValue = existing[name];
     const incomingValue = incoming[name];
@@ -891,6 +930,8 @@ function mergeFrozenGptSlot(
     ...(admissionStartedAtUtc === undefined
       ? { admissionStartedAtUtc: undefined }
       : { admissionStartedAtUtc }),
+    ...(launchProfileKey === undefined ? { launchProfileKey: undefined } : { launchProfileKey }),
+    ...(launchCdpUrl === undefined ? { launchCdpUrl: undefined } : { launchCdpUrl }),
     ...(terminalClass === undefined ? { terminalClass: undefined } : { terminalClass }),
     ...(terminalResult === undefined ? { terminalResult: undefined } : { terminalResult }),
     ...(payload === undefined ? { payload: undefined } : { payload }),

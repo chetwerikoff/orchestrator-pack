@@ -157,9 +157,10 @@ Evidence is enumerated in this order and remains fail-closed:
    authority. Enumerate every row in that root for the same project/PR/head
    **before** repository filtering. An unresolved or ambiguous legacy repository
    identity makes the receipt inconclusive.
-3. For a matching GPT run, derive coverage from its existing `sourceSlots`.
-   Any `complete_clean` or `complete_findings` source immediately proves
-   `review-present`.
+3. For **every** matching same-repository/PR/head GPT run, derive coverage from
+   its existing `sourceSlots` before choosing the latest zero-completed run.
+   Any `complete_clean` or `complete_findings` source in any matching run
+   immediately proves `review-present`.
 4. Before any negative browser conclusion, census credentialed exact-head GPT
    source comments with the existing source-comment principal, target, edit,
    uniqueness, and exact-ID reread rules. Any valid source comment proves
@@ -169,14 +170,22 @@ Evidence is enumerated in this order and remains fail-closed:
    the existing GitHub review authority. Any valid exact-head artifact proves
    `review-present`; an unavailable census is inconclusive.
 6. Only for a matching run with zero completed sources, close each incomplete
-   slot. Persisted planned/pre-send/zero-send facts may close directly. A
-   possible-delivery slot requires the exact retained profile/invocation/CDP
-   binding, the same invocation's state-light observation, exactly one owned
-   marker user carrier, and sanctioned browser `inspect`/`export` evidence.
-   A matching assistant result proves `review-present`; mismatched retained and
-   live bytes are `contradiction`; missing/ambiguous/unstable evidence is
-   inconclusive.
-7. If the inspected root has **no matching local run**, first run the marker-first
+   slot. A bare `planned` lifecycle is not proof that admission never occurred;
+   only immutable terminal/pre-launch or explicit zero-send evidence may close
+   directly. A possible-delivery slot requires the exact retained
+   profile/invocation/CDP launch binding, the same invocation's state-light
+   observation, exactly one owned marker user carrier, and sanctioned browser
+   `inspect`/`export` evidence. A matching assistant result proves
+   `review-present`; mismatched retained and live bytes are `contradiction`;
+   missing/ambiguous/unstable evidence is inconclusive. A bound
+   `phase=harvested` observation is itself blocking evidence against the
+   zero-completed premise and can never be converted into a negative result by
+   later page absence.
+7. Immediately before emitting `no-completed-review`, repeat the authoritative
+   exact-head GPT source-comment census and direct GitHub-review census. A newly
+   appeared artifact becomes `review-present`; an unavailable or ambiguous
+   recensus is inconclusive.
+8. If the inspected root has **no matching local run**, first run the marker-first
    exact-head source-comment census and the exact-head GitHub-review census. If
    both are complete and empty, the result is still
    `unavailable/inconclusive` with
@@ -188,10 +197,12 @@ or use browser absence to strengthen the no-local-run case.
 
 ### Receipt use and staleness
 
-The receipt has no age-based TTL. Its freshness condition is the PR head only.
-**Immediately before using the receipt** for waiver reasoning, re-read the live PR
-head and require byte-for-byte equality with the receipt's lowercase 40-hex
-`headSha`:
+The receipt has no age-based TTL, but unchanged-head equality alone is not enough
+to reuse a held negative receipt: exact-head source comments or direct GitHub
+reviews can appear without changing the PR head. **Immediately before using a
+`no-completed-review` result for waiver reasoning, run the producer again and use
+that freshly produced receipt**, then re-read the live PR head and require
+byte-for-byte equality with the receipt's lowercase 40-hex `headSha`:
 
 ```bash
 LIVE_HEAD="$(./scripts/gh pr view "$P" --repo "$REPO" --json headRefOid -q .headRefOid)"
@@ -199,9 +210,11 @@ test "$LIVE_HEAD" = "$HEAD_SHA"
 ```
 
 If the head differs, the receipt is stale: discard it and regenerate against the
-new head. Do not reuse a prior-head `no-completed-review` result. A
-`review-present`, `contradiction`, or `unavailable/inconclusive` receipt also
-must not be relabeled as `no-completed-review`.
+new head. Even when the head is unchanged, do not reuse an earlier held
+`no-completed-review` receipt in place of the fresh-at-consumption run above.
+This is an event-freshness requirement, not an age TTL. A `review-present`,
+`contradiction`, or `unavailable/inconclusive` receipt also must not be
+relabeled as `no-completed-review`.
 
 This evidence step is separate from operator authorization. Even a valid
 `no-completed-review` receipt does not publish the waiver status and does not
