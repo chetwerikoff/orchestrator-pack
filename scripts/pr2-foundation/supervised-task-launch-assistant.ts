@@ -613,7 +613,12 @@ type OpenCodeNoWriteProof = (worktreePath: string) => Promise<boolean> | boolean
 async function proveOpenCodeNoWrite(worktreePath: string, execute: ChildExecutor): Promise<boolean> {
   const before = configState(worktreePath);
   const stateRoot = join(tmpdir(), `opk-opencode-proof-state-${randomUUID()}`);
-  const isolatedEnv = { XDG_STATE_HOME: stateRoot };
+  const isolatedEnv = {
+    XDG_STATE_HOME: stateRoot,
+    XDG_CONFIG_HOME: join(stateRoot, 'config'),
+    XDG_DATA_HOME: join(stateRoot, 'data'),
+    XDG_CACHE_HOME: join(stateRoot, 'cache'),
+  };
   const paths = await execute(['opencode', 'debug', 'paths'], 15_000, isolatedEnv, worktreePath);
   if (!paths.ok || !paths.stdout.includes(stateRoot) || before !== configState(worktreePath)) return false;
   const config = await execute(['opencode', 'debug', 'config'], 15_000, isolatedEnv, worktreePath);
@@ -670,15 +675,7 @@ function configState(cwd: string, env: Readonly<NodeJS.ProcessEnv> = process.env
 }
 
 function explicitDefaultAgent(output: string): string {
-  try {
-    const parsed: unknown = JSON.parse(output);
-    if (!record(parsed)) return '';
-    if (typeof parsed.default_agent === 'string' && parsed.default_agent.trim()) return parsed.default_agent.trim();
-    const agents = record(parsed.agent)
-      ? Object.entries(parsed.agent).filter(([, value]) => record(value)).map(([name]) => name)
-      : [];
-    return agents.length === 1 ? agents[0]! : '';
-  } catch { return ''; }
+  try { const parsed: unknown = JSON.parse(output); return record(parsed) && typeof parsed.default_agent === 'string' ? parsed.default_agent.trim() : ''; } catch { return ''; }
 }
 
 function resolvedAgent(output: string): Record<string, unknown> | null {
@@ -706,7 +703,12 @@ export async function finalizeOpenCodeExecutorProfile(
   if (!proveNoWrite || !(await proveNoWrite(worktreePath))) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const before = configState(worktreePath);
   const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
-  const isolatedEnv = { XDG_STATE_HOME: stateRoot };
+  const isolatedEnv = {
+    XDG_STATE_HOME: stateRoot,
+    XDG_CONFIG_HOME: join(stateRoot, 'config'),
+    XDG_DATA_HOME: join(stateRoot, 'data'),
+    XDG_CACHE_HOME: join(stateRoot, 'cache'),
+  };
   const config = await execute(['opencode', 'debug', 'config'], 15_000, isolatedEnv, worktreePath);
   if (!config.ok || before !== configState(worktreePath)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const baselineName = explicitDefaultAgent(config.stdout);
