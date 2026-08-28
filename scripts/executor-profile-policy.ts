@@ -30,6 +30,7 @@ export interface ExecutorFamilyDescriptor {
   readonly catalogCommand: readonly string[];
   readonly capabilityProbeCommands: readonly (readonly string[])[];
   readonly smokeCapabilityProbeCommands: readonly (readonly string[])[];
+  readonly contextualProbeCommands: readonly (readonly string[])[];
 }
 
 export interface SemanticExecutorProfile {
@@ -69,11 +70,15 @@ export type SpawnApplicabilityVerdict =
   | { readonly ok: true }
   | { readonly ok: false; readonly refusal: 'executor_route_unavailable' | 'executor_effort_channel_unavailable' };
 
+export const OPENCODE_PACK_AGENT = 'pack' as const;
+
 export interface ExecutorInvocationShape {
   readonly executable: string;
   readonly command: string;
-  readonly modelArgument: string;
+  readonly modelArgument?: string;
   readonly effortArgument?: string;
+  readonly agentName?: string;
+  readonly inlineConfigJson?: string;
 }
 
 export interface ProviderInvocationShape {
@@ -101,6 +106,7 @@ export const EXECUTOR_FAMILY_DESCRIPTORS: Readonly<Record<ExecutorFamily, Execut
     catalogCommand: ['cursor-agent', '--list-models'],
     capabilityProbeCommands: [],
     smokeCapabilityProbeCommands: [],
+    contextualProbeCommands: [],
   },
   opencode: {
     family: 'opencode',
@@ -116,6 +122,13 @@ export const EXECUTOR_FAMILY_DESCRIPTORS: Readonly<Record<ExecutorFamily, Execut
     ],
     smokeCapabilityProbeCommands: [
       ['opencode', '--help'],
+      ['opencode', 'models', '--verbose'],
+    ],
+    contextualProbeCommands: [
+      ['opencode', 'debug', 'config'],
+      ['opencode', 'debug', 'agent'],
+      ['opencode', 'debug', 'agent'],
+      ['opencode', 'debug', 'paths'],
     ],
   },
 };
@@ -262,21 +275,56 @@ export function openCodeVariantCatalog(output: string): Readonly<Record<string, 
 }
 
 export function openCodeTuiCapability(tuiHelp: string): RouteCapability {
-  const tuiHasModel = /(^|\s)--model(?:[=\s,]|$)/mu.test(tuiHelp);
-  const tuiHasVariant = /(^|\s)--variant(?:[=\s,]|$)/mu.test(tuiHelp);
+  const hasAgent = /(^|\s)--agent(?:[=\s,]|$)/mu.test(tuiHelp);
   return {
-    available: tuiHasModel,
-    supportsModel: tuiHasModel,
-    supportsEffort: tuiHasVariant,
+    available: hasAgent,
+    supportsModel: hasAgent,
+    supportsEffort: false,
   };
 }
 
-export function openCodeEdgeCapabilities(probeOutputs: readonly string[]): ExecutorEdgeCapabilities {
-  // capabilityProbeCommands fixes the TUI help observation at index 0 and the
-  // fresh verbose model/variant catalog as the final observation.
-  const exactTerminal = {
-    ...openCodeTuiCapability(probeOutputs[0] ?? ''),
-    supportedEffortsByModel: openCodeVariantCatalog(probeOutputs.at(-1) ?? ''),
+export function parseOpenCodeResolvedAgent(output: string): { providerID: string; modelID: string; variant: string } | null {
+  try {
+    const parsed: unknown = JSON.parse(output);
+    if (!record(parsed)) return null;
+    const model = record(parsed.model) ? parsed.model : null;
+    const providerID = typeof model?.providerID === 'string' ? model.providerID.trim() : '';
+    const modelID = typeof model?.modelID === 'string' ? model.modelID.trim() : '';
+    const variant = typeof parsed.variant === 'string' ? parsed.variant.trim() : '';
+    if (!providerID || !modelID) return null;
+    return { providerID, modelID, variant };
+  } catch {
+    return null;
+  }
+}
+
+export function openCodeEdgeCapabilities(
+  probeOutputs: readonly string[],
+  profile?: SemanticExecutorProfile,
+): ExecutorEdgeCapabilities {
+  const tui = openCodeTuiCapability(probeOutputs[0] ?? '');
+  const catalog = openCodeVariantCatalog(probeOutputs[1] ?? '');
+  const debugOutput = probeOutputs[2] ?? '';
+  let effortViaAgent = false;
+  if (profile && profile.family === 'opencode' && debugOutput.trim()) {
+    const resolved = parseOpenCodeResolvedAgent(debugOutput);
+    if (resolved) {
+      const profileModelID = profile.model.includes('/') ? profile.model.split('/').pop()! : profile.model;
+      const profileProvider = profile.model.includes('/') ? profile.model.split('/')[0]! : 'opencode';
+      const variantMatches = resolved.variant === profile.effort;
+      const modelMatches = resolved.modelID === profileModelID && resolved.providerID === profileProvider;
+      const catalogEfforts = catalog[profile.model] ?? [];
+      const catalogMatches = catalogEfforts.includes(profile.effort);
+      effortViaAgent = Boolean(variantMatches && modelMatches && catalogMatches);
+    }
+  } else if (profile?.family === 'opencode') {
+    effortViaAgent = (catalog[profile.model] ?? []).includes(profile.effort);
+  }
+  const exactTerminal: RouteCapability = {
+    available: tui.available,
+    supportsModel: tui.supportsModel,
+    supportsEffort: effortViaAgent,
+    supportedEffortsByModel: catalog,
   };
 
   // The provider path stays closed in this package revision unless the downstream
@@ -360,11 +408,139 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile): Executor
   }
 
   const executable = profile.surface === 'task' ? descriptor.taskExecutable : descriptor.smokeExecutable;
+  const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort } } });
+  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)} ${executable} --agent ${quote(OPENCODE_PACK_AGENT)}`;
   return {
     executable,
-    modelArgument: profile.model,
-    effortArgument: profile.effort,
-    command: `${executable} --model ${quote(profile.model)} --variant ${quote(profile.effort)}`,
+    command,
+    agentName: OPENCODE_PACK_AGENT,
+    inlineConfigJson: inlineConfig,
+  };
+}
+
+export interface OpenCodeAgentOverlay {
+  readonly agentName: string;
+  readonly baseline: Readonly<Record<string, unknown>>;
+  readonly model: string;
+  readonly effort: string;
+  readonly stateRoot?: string;
+}
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, stableValue(item)]));
+}
+
+function configPermissionFromRuleset(value: unknown): Record<string, unknown> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const permission: Record<string, unknown> = {};
+  for (const rule of value) {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) continue;
+    const item = rule as Record<string, unknown>;
+    const name = typeof item.permission === 'string' ? item.permission : '';
+    const pattern = typeof item.pattern === 'string' ? item.pattern : '';
+    const action = typeof item.action === 'string' ? item.action : '';
+    if (!name || !pattern || !action) continue;
+    const current = permission[name];
+    if (typeof current === 'string') {
+      permission[name] = { '*': current, [pattern]: action };
+    } else if (current && typeof current === 'object' && !Array.isArray(current)) {
+      (current as Record<string, unknown>)[pattern] = action;
+    } else if (pattern === '*') {
+      permission[name] = action;
+    } else {
+      permission[name] = { [pattern]: action };
+    }
+  }
+  return permission;
+}
+
+/** Resolve every OpenCode config location selected by the caller's environment. */
+export function openCodeConfigPaths(
+  cwd: string,
+  configHome: string,
+  env: {
+    readonly OPENCODE_CONFIG?: string;
+    readonly OPENCODE_CONFIG_DIR?: string;
+  },
+): readonly string[] {
+  return [...new Set([
+    env.OPENCODE_CONFIG_DIR?.trim() || `${configHome}/opencode`,
+    env.OPENCODE_CONFIG?.trim() || '',
+    `${cwd}/.opencode`, `${cwd}/opencode.json`, `${cwd}/opencode.jsonc`,
+  ].filter(Boolean))];
+}
+
+/**
+ * Agent.Info is a resolved runtime shape, not a ConfigAgentV1.Info input.
+ * Keep only fields accepted by the config schema and translate the resolved
+ * camel-case/model-object/permission-ruleset representations.
+ */
+export function openCodeAgentConfigFromInfo(baseline: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  for (const key of ['description', 'temperature', 'prompt', 'mode', 'hidden', 'color', 'options']) {
+    if (baseline[key] !== undefined) config[key] = baseline[key];
+  }
+  if (baseline.topP !== undefined) config.top_p = baseline.topP;
+  if (baseline.steps !== undefined) config.steps = baseline.steps;
+  else if (baseline.maxSteps !== undefined) config.steps = baseline.maxSteps;
+  const permission = configPermissionFromRuleset(baseline.permission);
+  if (permission) config.permission = permission;
+  else if (baseline.permission && typeof baseline.permission === 'object') config.permission = baseline.permission;
+  return config;
+}
+
+function canonicalPermission(value: unknown): unknown {
+  const rules = Array.isArray(value)
+    ? value
+    : value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.entries(value).flatMap(([permission, actionOrPatterns]) => typeof actionOrPatterns === 'string'
+        ? [{ permission, pattern: '*', action: actionOrPatterns }]
+        : actionOrPatterns && typeof actionOrPatterns === 'object' && !Array.isArray(actionOrPatterns)
+          ? Object.entries(actionOrPatterns).map(([pattern, action]) => ({ permission, pattern, action }))
+          : [])
+      : [];
+  const last = new Map<string, number>();
+  rules.forEach((rule, index) => {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return;
+    const item = rule as Record<string, unknown>;
+    if (typeof item.permission === 'string' && typeof item.pattern === 'string') last.set(`${item.permission}\u0000${item.pattern}`, index);
+  });
+  return rules.filter((rule, index) => {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return false;
+    const item = rule as Record<string, unknown>;
+    return last.get(`${item.permission}\u0000${item.pattern}`) === index;
+  });
+}
+
+/** Compare execution-relevant Agent.Info semantics, not resolved-only metadata. */
+export function openCodeAgentSemantics(value: Readonly<Record<string, unknown>>): string {
+  const copy: Record<string, unknown> = { ...value, permission: canonicalPermission(value.permission) };
+  if (copy.topP === undefined && copy.top_p !== undefined) copy.topP = copy.top_p;
+  delete copy.top_p;
+  delete copy.name;
+  delete copy.native;
+  delete copy.tools;
+  delete copy.model;
+  delete copy.variant;
+  return JSON.stringify(stableValue(copy));
+}
+
+export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): ExecutorInvocationShape {
+  const agent = {
+    ...openCodeAgentConfigFromInfo(input.baseline),
+    model: input.model,
+    variant: input.effort,
+  };
+  const inlineConfig = JSON.stringify({ agent: { [input.agentName]: agent } });
+  const state = input.stateRoot ? ` XDG_STATE_HOME=${quote(input.stateRoot)}` : '';
+  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)}${state} opencode --agent ${quote(input.agentName)}`;
+  return {
+    executable: 'opencode',
+    command,
+    agentName: input.agentName,
+    inlineConfigJson: inlineConfig,
   };
 }
 

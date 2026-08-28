@@ -22,6 +22,14 @@ import {
   type OrcaWorktreeShow,
 } from './native.ts';
 
+function usesNativePtyFallback(generation: string): boolean {
+  // Orca's terminal-create response currently exposes ptyId while the
+  // exact incarnationId is available only from terminal-show. The ptyId
+  // shape is deliberately recognized here so a spawned RuntimeWorker never
+  // carries that fallback into later exact-identity reads.
+  return generation.includes('@@');
+}
+
 type RuntimeFailureWithNativeError = RuntimeOperationFailure & {
   readonly nativeError?: Readonly<{
     code: string;
@@ -497,9 +505,21 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   ): RuntimeResult<RuntimeWorker> {
     const result = super.spawnWorker(input, options);
     if (result.status === 'ok') {
-      this.#unprovenOwnedPresence.delete(result.value.identity.id);
-      this.#ownedForStop.set(result.value.identity.id, result.value.identity);
-      this.#stopWorkspace.set(result.value.identity.id, input.workspace ?? 'active');
+      let worker = result.value;
+      if (usesNativePtyFallback(worker.identity.generation)) {
+        const exact = super.findWorkerById(worker.identity.id, options);
+        if (exact.status !== 'ok') {
+          return runtimeFailure('spawn_worker', `runtime_worker_identity_readback_failed:${exact.reason}`);
+        }
+        if (!exact.value) {
+          return runtimeUnsupported('spawn_worker', 'runtime_worker_identity_missing');
+        }
+        worker = { ...exact.value, provenance: 'internal' };
+      }
+      this.#unprovenOwnedPresence.delete(worker.identity.id);
+      this.#ownedForStop.set(worker.identity.id, worker.identity);
+      this.#stopWorkspace.set(worker.identity.id, input.workspace ?? 'active');
+      return { status: 'ok', value: worker };
     }
     return result;
   }

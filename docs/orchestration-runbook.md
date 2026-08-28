@@ -175,18 +175,27 @@ compatibility token, fallback family, or heuristic selector.
 Model applicability and route admission are separate checks. Cursor catalog
 applicability comes from `cursor-agent --list-models`; Cursor's existing
 model/effort opacity is composed only inside the Cursor translator in the shared
-policy. OpenCode catalog applicability comes from `opencode models`; its selected
-model and effort remain separate request fields and are never generically collapsed
-into a synthetic model id.
+policy. OpenCode catalog applicability comes from `opencode models`; the selected
+model and effort are carried together through an invocation-local agent definition
+in `OPENCODE_CONFIG_CONTENT`. The top-level spawned command uses `--agent` only,
+never `--model` or `--variant`.
+
+For OpenCode exact-terminal work, early `resolveProfile` proves only selector,
+top-level `--agent` syntax, and catalog route evidence. After worktree preparation,
+contextual finalization runs in that exact path before terminal/Dispatch/start effects.
+It requires a no-write-qualified `debug config`/`debug agent` observation, a
+non-empty explicit `default_agent`, preservation of baseline agent semantics under
+the selected model/variant overlay, and an isolated child-local XDG state root.
+Missing proof returns `executor_effort_channel_unavailable`; launcher-cwd evidence
+and implicit default ordering are never substitutes.
 
 Cursor route admissibility is a static code-owned compatibility fact and therefore
 must not gain a fresh route-capability probe. OpenCode is semantically recognized,
-but a task or smoke child is admitted only after fresh non-mutating installed
-OpenCode/Orca help or effective-capability evidence proves a route that carries both
-the selected model and effort. Package installation alone is not route evidence.
-When no such route is proven, the selected OpenCode profile remains a truthful
-external gate rather than falling back to Cursor, dropping effort, or inventing an
-unsupported TUI/provider form.
+but a task or smoke child is admitted only after fresh non-mutating evidence from the
+spawned top-level surface proves the route carries both values: top-level `opencode --help`
+(proving `--agent` support on stdout+stderr), `opencode models --verbose` (proving the effort is an available variant), and `opencode debug agent <pack-agent-name>` run with the inline definition (proving the resolved agent carries both). Probe surface must equal spawn surface; probing a subcommand the pack does not spawn is never route evidence. Package installation alone is not route evidence. When no such route is proven, the selected OpenCode profile remains a truthful external gate rather than falling back to Cursor, dropping effort, or inventing an unsupported form.
+
+Both edges capture stdout and stderr for every capability probe; a tool that prints capability output to stderr is not read as absent capability. The model-catalog read continues to consume stdout only, matching the observed `opencode models` stream split.
 
 The shared pre-effect route vocabulary is closed:
 
@@ -214,7 +223,7 @@ only when fresh installed evidence proves an admitted executor route actually ne
 it. Likewise, an OpenCode provider form may be added to the lower-level supervised
 start only when fresh installed Orca/OpenCode evidence proves the exact request.
 Without that evidence those conditional surfaces remain unchanged; docs do not
-invent capability for them.
+invent capability for them. The current OpenCode inline agent definition is carried as an `OPENCODE_CONFIG_CONTENT` prefix in the composed `opencode --agent <pack-agent-name>` command string on the governed spawn path, so the four conditional runtime files (`scripts/runtime/contracts.ts`, `scripts/orca-runtime/adapter.ts`, `scripts/orca-runtime/task-adapter.ts`, `scripts/orca-runtime/task-adapter.test.ts`) remain byte-for-byte unchanged.
 
 ### Supervised Task launch assistant
 
@@ -320,9 +329,11 @@ The exact-terminal boundary remains machine-enforced through structured contract
 one RuntimeAdapter-created worker with provenance `internal`, exact
 `{runtime,id,generation}`, exact target workspace, and `idle` RuntimeAdapter
 liveness. The assistant does **not** scrape raw screen/title/preview/composer text.
-OpenCode admission must therefore come from the fresh installed non-mutating
-capability surfaces named by the policy, not a guessed screen/TUI state. A known
-contrary observation is still blocking.
+OpenCode admission must therefore come from the fresh installed capability
+surfaces named by the policy, not a guessed screen/TUI state. Config/Agent loading
+is not presumed read-only: exact-worktree before/after no-write evidence is required
+before those observations can block or admit a route. A known contrary observation
+is still blocking.
 
 The assistant emits one structured result. `outcome=ready` means only that the
 existing `runSupervisedWorkerStart` returned `ready_and_assignment_bound`; the

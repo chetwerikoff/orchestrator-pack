@@ -90,6 +90,60 @@ function workspaceRunner() {
   });
 }
 
+describe('Orca task adapter exact spawn identity', () => {
+  it('reads back the exact incarnation before task-edge child output observation', () => {
+    const handle = 'term-carriage-witness';
+    const ptyGeneration = '/tmp/opk-1706-carriage@@pty-generation';
+    const exactGeneration = 'incarnation-carriage-generation';
+    const workspacePath = '/tmp/opk-1706-carriage';
+    const terminal = {
+      handle,
+      incarnationId: exactGeneration,
+      worktreePath: workspacePath,
+      title: 'carriage-witness',
+      status: 'running' as const,
+    };
+    const operations: string[] = [];
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = String(args[0] ?? '') + ' ' + String(args[1] ?? '');
+      operations.push(operation);
+      switch (operation) {
+        case 'terminal create':
+          return { ok: true, result: { terminal: { handle, ptyId: ptyGeneration, title: terminal.title } } };
+        case 'terminal show':
+          return { ok: true, result: { terminal } };
+        case 'terminal list':
+          return { ok: true, result: { totalCount: 1, truncated: false, terminals: [terminal] } };
+        case 'terminal read':
+          return { ok: true, result: { terminal: { handle, status: 'running', tail: ['TASK_EDGE_SENTINEL'], nextCursor: '1' } } };
+        case 'terminal close':
+          return { ok: true, result: { closed: true } };
+        default:
+          return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+      }
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    const spawned = adapter.spawnWorker({ title: 'carriage-witness', command: 'node witness', workspace: 'active' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    expect(spawned.value.identity.generation).toBe(exactGeneration);
+    expect(spawned.value.provenance).toBe('internal');
+
+    const read = adapter.readBoundedOutput({ worker: spawned.value.identity, limit: 200 });
+    expect(read.status).toBe('ok');
+    if (read.status !== 'ok') return;
+    expect(read.value.lines.join('\n')).toContain('TASK_EDGE_SENTINEL');
+
+    expect(adapter.stopWorker(spawned.value.identity).status).toBe('ok');
+    const createIndex = operations.indexOf('terminal create');
+    expect(createIndex).toBeGreaterThanOrEqual(0);
+    const showIndex = operations.indexOf('terminal show');
+    expect(showIndex).toBeGreaterThan(createIndex);
+    expect(operations.slice(createIndex + 1, showIndex)).not.toContain('terminal read');
+  });
+});
+
 describe('Orca task adapter destructive operations', () => {
   it('prevalidates exact path and head before one remove', () => {
     const runner = workspaceRunner();

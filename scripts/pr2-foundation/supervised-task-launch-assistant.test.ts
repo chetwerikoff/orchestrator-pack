@@ -9,12 +9,21 @@ import {
   prepareWorktreeWithOrca,
   resolveExecutorProfile,
   resolveLiveExecutorProfile,
+  finalizeOpenCodeExecutorProfile,
   runSupervisedTaskLaunchAssistant,
   type DispatchObservation,
   type EdgeResult,
   type LaunchDependencies,
   type LaunchInput,
 } from './supervised-task-launch-assistant.ts';
+import {
+  buildExecutorCommand,
+  buildOpenCodeAgentOverlay,
+  openCodeAgentSemantics,
+  EXECUTOR_FAMILY_DESCRIPTORS,
+  profileNamesForTask,
+  resolveSemanticExecutorProfile,
+} from '../executor-profile-policy.ts';
 
 const worker: RuntimeWorker = {
   identity: { runtime: 'orca', id: 'terminal-fresh', generation: 'pty-1' },
@@ -144,6 +153,7 @@ function deps(input: {
     prepareWorktree: async () => { input.onWorktree?.(); return { status: 'ok', value: {
       id: 'repo::exact-worktree', selector: 'id:repo::exact-worktree', path: '/tmp/exact-worktree', setupWitness: 'same_invocation_complete',
     } }; },
+    finalizeProfile: async (profile) => ({ status: 'ok', value: profile }),
     runSupervisedStart: async (start) => { input.onSupervised?.(); return input.supervised ?? readyStart(String(start.orcaArgs[1])); },
   };
 }
@@ -164,7 +174,7 @@ function repoListEnvelope(repos: readonly Record<string, unknown>[]): string {
   return okEnvelope({ repos });
 }
 
-function opencodeProbeResult(args: readonly string[], variant = true): { ok: boolean; stdout: string } {
+function opencodeProbeResult(args: readonly string[], variant = true): { ok: boolean; stdout: string; stderr: string } {
   if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) {
     return {
       ok: true,
@@ -177,15 +187,20 @@ function opencodeProbeResult(args: readonly string[], variant = true): { ok: boo
         '}',
         '',
       ].join('\n'),
+      stderr: '',
     };
   }
-  if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n' };
-  if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
-    return { ok: true, stdout: variant ? 'Usage: opencode --model MODEL --variant NAME\n' : 'Usage: opencode --model MODEL\n' };
+  if (args[0] === 'opencode' && args[1] === 'models') return { ok: true, stdout: 'fixture-opencode-model\n', stderr: '' };
+  if (args[0] === 'opencode' && args[1] === 'debug' && args[2] === 'agent') {
+    if (!variant) return { ok: true, stdout: JSON.stringify({ model: { providerID: 'opencode', modelID: 'fixture-opencode-model' } }), stderr: '' };
+    return { ok: true, stdout: JSON.stringify({ model: { providerID: 'opencode', modelID: 'fixture-opencode-model' }, variant: 'fixture-opencode-effort' }), stderr: '' };
   }
-  if (args[0] === 'orca' || args[0] === 'opencode') return { ok: true, stdout: 'supported help surface\n' };
-  if (args[0] === process.execPath) return { ok: true, stdout: '' };
-  return { ok: false, stdout: '' };
+  if (args[0] === 'opencode' && args.includes('--help')) {
+    return { ok: true, stdout: '', stderr: 'Usage: opencode --agent AGENT\n' };
+  }
+  if (args[0] === 'orca' || args[0] === 'opencode') return { ok: true, stdout: 'supported help surface\n', stderr: '' };
+  if (args[0] === process.execPath) return { ok: true, stdout: '', stderr: '' };
+  return { ok: false, stdout: '', stderr: '' };
 }
 
 describe('supervised Task launch assistant', () => {
@@ -307,7 +322,7 @@ describe('supervised Task launch assistant', () => {
     const admittedCalls: string[][] = [];
     const admitted = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => {
       admittedCalls.push([...args]);
-      if (args[0] === 'orca' || args[1] === 'run' || args[1] === 'debug') return { ok: false, stdout: '' };
+      if (args[0] === 'orca') return { ok: false, stdout: '' };
       return opencodeProbeResult(args, true);
     });
     expect(admitted).toMatchObject({
@@ -315,13 +330,14 @@ describe('supervised Task launch assistant', () => {
       value: {
         family: 'opencode',
         route: 'exact_terminal_worktree',
-        launchCommand: "opencode --model 'fixture-opencode-model' --variant 'fixture-opencode-effort'",
+        launchCommand: `OPENCODE_CONFIG_CONTENT='{\"agent\":{\"pack\":{\"model\":\"fixture-opencode-model\",\"variant\":\"fixture-opencode-effort\"}}}' opencode --agent 'pack'`,
       },
     });
     expect(admittedCalls[0]).toEqual(['opencode', 'models']);
     expect(admittedCalls).toContainEqual(['opencode', '--help']);
     expect(admittedCalls).toContainEqual(['opencode', 'models', '--verbose']);
-    expect(admittedCalls.some((args) => args[0] === 'orca' || args[1] === 'run' || args[1] === 'debug')).toBe(false);
+    expect(admittedCalls.some((args) => args[0] === 'opencode' && args[1] === 'debug')).toBe(false);
+    expect(admittedCalls.some((args) => args[0] === 'orca')).toBe(false);
 
     const unsupportedEffort = await resolveLiveExecutorProfile('t2', {
       ...env,
@@ -330,10 +346,91 @@ describe('supervised Task launch assistant', () => {
     expect(unsupportedEffort).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
 
     const gated = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => opencodeProbeResult(args, false));
-    expect(gated).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
+    expect(gated).toMatchObject({ status: 'ok' });
 
     const mismatch = await resolveLiveExecutorProfile('t2', env, 'provider_new_top_level', async (args) => opencodeProbeResult(args, true));
     expect(mismatch).toMatchObject({ status: 'continue', cause: 'executor_route_mismatch' });
+  });
+
+  it('refuses contextual Config/Agent probes before any no-write proof', async () => {
+    const resolved = await resolveLiveExecutorProfile('t2', opencodeProfileEnv('t2'), undefined, async (args) => opencodeProbeResult(args, true));
+    if (resolved.status !== 'ok') throw new Error('fixture profile should resolve');
+    const calls: string[][] = [];
+    const result = await finalizeOpenCodeExecutorProfile(resolved.value, '/tmp/exact-worktree', async (args) => {
+      calls.push([...args]);
+      return { ok: true, stdout: '{}', stderr: '' };
+    });
+    expect(result).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
+    expect(calls).toEqual([]);
+  });
+
+  it('probe surface equals spawn surface', async () => {
+    const profile = resolveSemanticExecutorProfile({ surface: 'task', names: profileNamesForTask('t2'), env: opencodeProfileEnv('t2') });
+    if (!profile.ok) throw new Error('semantic profile should be ok');
+    const invocation = buildExecutorCommand(profile.profile);
+    expect(invocation.command).toContain("--agent 'pack'");
+    expect(invocation.command).not.toContain('--model');
+    expect(invocation.command).not.toContain('--variant');
+    expect(invocation.inlineConfigJson).toContain('"model":"fixture-opencode-model"');
+    expect(invocation.inlineConfigJson).toContain('"variant":"fixture-opencode-effort"');
+    const probes = EXECUTOR_FAMILY_DESCRIPTORS.opencode.capabilityProbeCommands;
+    expect(probes.length).toBe(2);
+    for (const probe of probes) {
+      const probeStr = probe.join(' ');
+      expect(probeStr).not.toMatch(/\brun\b/);
+      expect(['--help', 'models', 'debug'].some((k) => probeStr.includes(k))).toBe(true);
+    }
+    expect(probes).toContainEqual(['opencode', '--help']);
+    expect(probes).toContainEqual(['opencode', 'models', '--verbose']);
+    expect(probes.some((probe) => probe[1] === 'debug')).toBe(false);
+    expect(invocation.command).toContain('opencode');
+    expect(probes[0]?.join(' ')).toContain('opencode');
+  });
+
+  it('projects resolved Agent.Info into a config-valid baseline overlay', () => {
+    const invocation = buildOpenCodeAgentOverlay({
+      agentName: 'pack-opk-fixture',
+      baseline: {
+        name: 'build', native: true, mode: 'primary', topP: 0.8,
+        prompt: 'fixture prompt', options: { temperature: 0.2 },
+        permission: [
+          { permission: 'edit', pattern: '*', action: 'allow' },
+          { permission: 'bash', pattern: '*', action: 'ask' },
+        ],
+      },
+      model: 'fixture/provider-model', effort: 'high',
+    });
+    const config = JSON.parse(invocation.inlineConfigJson ?? '{}') as { agent?: Record<string, Record<string, unknown>> };
+    const agent = config.agent?.['pack-opk-fixture'];
+    expect(agent).toMatchObject({
+      model: 'fixture/provider-model', variant: 'high', mode: 'primary',
+      top_p: 0.8, prompt: 'fixture prompt',
+      permission: { edit: 'allow', bash: 'ask' },
+    });
+    expect(agent).not.toHaveProperty('native');
+    expect(agent).not.toHaveProperty('name');
+    expect(openCodeAgentSemantics({ ...agent, name: 'pack-opk-fixture', model: { providerID: 'fixture', modelID: 'provider-model' }, variant: 'high', native: false }))
+      .toBe(openCodeAgentSemantics({ name: 'build', native: true, mode: 'primary', topP: 0.8, prompt: 'fixture prompt', options: { temperature: 0.2 }, permission: agent?.permission }));
+  });
+
+  it('agent config effort channel', async () => {
+    const env = opencodeProfileEnv('t2');
+    const admitted = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => opencodeProbeResult(args, true));
+    expect(admitted).toMatchObject({ status: 'ok' });
+    const missingVariant = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => opencodeProbeResult(args, false));
+    expect(missingVariant).toMatchObject({ status: 'ok' });
+    const differentVariant = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => {
+      if (args[0] === 'opencode' && args[1] === 'debug' && args[2] === 'agent') {
+        return { ok: true, stdout: JSON.stringify({ model: { providerID: 'opencode', modelID: 'fixture-opencode-model' }, variant: 'different-effort' }), stderr: '' };
+      }
+      return opencodeProbeResult(args, true);
+    });
+    expect(differentVariant).toMatchObject({ status: 'ok' });
+    const failedProbe = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => {
+      if (args[0] === 'opencode' && args[1] === 'debug' && args[2] === 'agent') return { ok: false, stdout: '', stderr: '' };
+      return opencodeProbeResult(args, true);
+    });
+    expect(failedProbe).toMatchObject({ status: 'ok' });
   });
 
   it('production resolveProfile route-unavailable blocks manager Task and all later effects', async () => {
