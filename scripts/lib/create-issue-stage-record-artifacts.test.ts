@@ -1841,7 +1841,6 @@ describe('Issue #1385 round-two receipt regressions', () => {
     });
     expect(stageTimeState.errors.join('\n')).toContain('is not independently supplied');
   });
-  });
 });
 
 
