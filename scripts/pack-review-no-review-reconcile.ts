@@ -527,15 +527,15 @@ export async function reconcilePackReviewNoReview(
     return finish('unavailable/inconclusive', selected.reason);
   }
   const run = selected.run;
-  let transport: PackGptSourceCommentTransport;
-  try {
-    transport = deps.sourceCommentTransport(input);
-  } catch (error) {
-    evidence.push({ kind: 'source-comment-transport', state: 'unavailable', detail: bounded(error) });
-    return finish('unavailable/inconclusive', 'source_comment_transport_unavailable');
-  }
 
   if (!run) {
+    let transport: PackGptSourceCommentTransport;
+    try {
+      transport = deps.sourceCommentTransport(input);
+    } catch (error) {
+      evidence.push({ kind: 'source-comment-transport', state: 'unavailable', detail: bounded(error) });
+      return finish('unavailable/inconclusive', 'source_comment_transport_unavailable');
+    }
     operationalFacts.push({ kind: 'run-selection', state: 'no-matching-local-run-in-inspected-root' });
     let sourceResolution;
     try {
@@ -597,6 +597,15 @@ export async function reconcilePackReviewNoReview(
   }
 
   if (!run.reviewRound) return finish('unavailable/inconclusive', 'matching_run_has_no_gpt_round');
+
+  let transport: PackGptSourceCommentTransport;
+  try {
+    transport = deps.sourceCommentTransport(input);
+  } catch (error) {
+    evidence.push({ kind: 'source-comment-transport', state: 'unavailable', detail: bounded(error) });
+    return finish('unavailable/inconclusive', 'source_comment_transport_unavailable');
+  }
+
   for (const slot of run.reviewRound.sourceSlots) {
     const invocationId = trim(slot.invocationId);
     if (!invocationId) continue;
