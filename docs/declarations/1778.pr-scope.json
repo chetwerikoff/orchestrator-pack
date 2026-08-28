@@ -6,11 +6,11 @@
   ],
   "denylist": [
     ".claude/skills/create-issue-draft/SKILL.md",
-    ".github/**",
-    "credentials/**",
+    ".github/",
+    "credentials/",
     "docs/create-issue-draft-acceptance-artifacts.md",
     "docs/tiering.md",
-    "packages/core/**",
+    "packages/core/",
     "scripts/finding-ledger-guard.mjs",
     "scripts/lib/create-issue-final-acceptance-contract.ts",
     "scripts/lib/create-issue-final-acceptance-revision.test.ts",
@@ -23,11 +23,11 @@
     "scripts/lib/review-lane-record.ts",
     "scripts/lib/stage-completeness-core.ts",
     "scripts/stage-completeness-guard.test.ts",
-    "secrets/**",
-    "vendor/**"
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     "scripts/finding-ledger-guard.test.ts"
   ],
-  "source_revision": "cde6786b99a70faf6f272bb00d2e1bcd162aba25"
+  "source_revision": "29b48e10f35d1f0f477f956bb2e8ae7f869cf44b"
 }
