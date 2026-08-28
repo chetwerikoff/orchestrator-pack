@@ -6,7 +6,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startPackReview } from './pack-review-runner.ts';
-import { listPackReviewRuns } from './lib/pack-review-run-store.ts';
+import {
+  createPackReviewRun,
+  listPackReviewRuns,
+  setPackReviewRunTerminal,
+} from './lib/pack-review-run-store.ts';
+import { beginSmokeOrdering } from './worker-smoke-run.ts';
+import { reviewStageDisposition } from './pr2-foundation/post-review-smoke.ts';
 import {
   assertIndependentSmokeAdmission,
   assertPackReviewSmokeAdmission,
@@ -712,7 +718,19 @@ describe('Issue #1436 smoke/review ordering', () => {
     const CURRENT_RUN_AT = '2026-08-27T12:00:01.000Z';
     const PRIOR_RUN_AT = '2026-08-27T11:59:59.000Z';
     const OBSERVED_RUN_ID = 'prr-acab5dadefd44b0da01061faa4f55ea3';
+    const ISSUE_BODY = [
+      '```complexity-tier',
+      'tier: T3',
+      'advisory-prior: T3',
+      '```',
+      '',
+      '```smoke-test-plan',
+      'scenarios:',
+      '  - action: hermetic admission check | expected: PASS',
+      '```',
+    ].join('\n');
 
+    type BlockingTriageVerdict = 'BLOCK' | 'PENDING_ARCHITECT' | 'PENDING_OPERATOR';
     type IndependentState =
       NonNullable<NonNullable<PackReviewAuthorityDocument['smokeOrdering']>['independent']>;
 
@@ -721,7 +739,7 @@ describe('Issue #1436 smoke/review ordering', () => {
       consumedHeadShas?: string[];
       reviewSettledHeadSha?: string;
       independent?: IndependentState;
-      triageVerdict?: 'BLOCK';
+      triageVerdict?: BlockingTriageVerdict;
       reviewStageComplete?: boolean;
       reviewStartConsumed?: boolean;
     } = {}): PackReviewAuthorityDocument {
@@ -775,7 +793,7 @@ describe('Issue #1436 smoke/review ordering', () => {
           ? {
             triage: {
               verdict: input.triageVerdict,
-              source: 'architect',
+              source: input.triageVerdict === 'BLOCK' ? 'architect' : 'automatic',
               findingSnapshotDigest: 'finding-snapshot',
               committedAtUtc: CURRENT_RUN_AT,
             },
@@ -825,13 +843,122 @@ describe('Issue #1436 smoke/review ordering', () => {
       }
     }
 
+    function persistEntryPointFixture(
+      authority: PackReviewAuthorityDocument,
+      reviewRuns: readonly PackReviewStartConsumptionRecord[],
+    ): { root: string; options: PackReviewAuthorityOptions } {
+      const options = persistAuthority(authority);
+      const root = options.storeRoot;
+      for (const run of reviewRuns) {
+        const createdAt = new Date(typeof run.createdAt === 'string' ? run.createdAt : CURRENT_RUN_AT);
+        const headSha = typeof run.headSha === 'string' ? run.headSha : EARLIER_REVIEW_HEAD;
+        const automaticBudgetDisposition = run.automaticBudgetDisposition === 'non_consuming_explicit'
+          ? 'non_consuming_explicit'
+          : 'consume';
+        const created = createPackReviewRun({
+          projectId: 'orchestrator-pack',
+          storeRoot: root,
+          prNumber: run.prNumber,
+          headSha,
+          trustedPackRoot: root,
+          sourceRepoRoot: root,
+          automaticBudgetDisposition,
+          now: createdAt,
+        });
+        setPackReviewRunTerminal(
+          created.run.id,
+          'failed',
+          {
+            failureReason: typeof run.failureReason === 'string'
+              ? run.failureReason
+              : 'reviewer_output_malformed:invalid_terminal_payload',
+            ...(run.stale === true ? { stale: true } : {}),
+          },
+          { projectId: 'orchestrator-pack', storeRoot: root, now: createdAt },
+        );
+      }
+      return { root, options };
+    }
+
+    function internalTransitionResult(
+      authority: PackReviewAuthorityDocument,
+      headSha: string,
+      reviewRuns: readonly PackReviewStartConsumptionRecord[],
+    ): string {
+      const options = persistAuthority(authority);
+      return resultOf(() => commitSmokeOrderingTransition({
+        prNumber: OBSERVED_PR,
+        expectedTransitionSeq: authority.transitionSeq,
+        actor: 'independent',
+        headSha,
+        status: 'started',
+        reviewRuns,
+        options,
+      }));
+    }
+
+    function workerEntryPointResult(
+      authority: PackReviewAuthorityDocument,
+      headSha: string,
+      reviewRuns: readonly PackReviewStartConsumptionRecord[],
+    ): string {
+      const fixture = persistEntryPointFixture(authority, reviewRuns);
+      const beforeRunIds = listPackReviewRuns({
+        projectId: 'orchestrator-pack',
+        storeRoot: fixture.options.storeRoot,
+      }).map((run) => run.id);
+      const previousStoreRoot = process.env.PACK_REVIEW_RUN_STORE_ROOT;
+      process.env.PACK_REVIEW_RUN_STORE_ROOT = fixture.options.storeRoot;
+      try {
+        const result = resultOf(() => beginSmokeOrdering({
+          command: 'run',
+          issueNumber: 1777,
+          prNumber: OBSERVED_PR,
+          headSha,
+          issueBodyFile: join(fixture.root, 'issue.md'),
+          smokeComplexity: 'routine',
+          smokeActor: 'independent',
+          repoRoot: fixture.root,
+          cwd: fixture.root,
+          dryRun: true,
+          json: true,
+          reviewId: '',
+          reviewHeadSha: '',
+        }, ISSUE_BODY));
+        expect(listPackReviewRuns({
+          projectId: 'orchestrator-pack',
+          storeRoot: fixture.options.storeRoot,
+        }).map((run) => run.id)).toEqual(beforeRunIds);
+        return result;
+      } finally {
+        if (previousStoreRoot === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
+        else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStoreRoot;
+      }
+    }
+
+    function postReviewEntryPointResult(
+      authority: PackReviewAuthorityDocument,
+      headSha: string,
+      reviewRuns: readonly PackReviewStartConsumptionRecord[],
+    ): string {
+      const fixture = persistEntryPointFixture(authority, reviewRuns);
+      const result = reviewStageDisposition({
+        prNumber: OBSERVED_PR,
+        headSha,
+        projectId: 'orchestrator-pack',
+        env: { ...process.env, PACK_REVIEW_RUN_STORE_ROOT: fixture.options.storeRoot },
+      });
+      return result.kind === 'smoke_candidate' ? 'admit' : result.reason;
+    }
+
     type MatrixCase = {
       id: string;
       expected: string;
-      authority: (derived: boolean) => PackReviewAuthorityDocument;
+      authority: (derived: boolean, triageVerdict?: BlockingTriageVerdict) => PackReviewAuthorityDocument;
       runVariants: readonly (readonly PackReviewStartConsumptionRecord[])[];
       requestedHead?: string;
       derivedVariants?: readonly boolean[];
+      triageVariants?: readonly BlockingTriageVerdict[];
     };
 
     const MATRIX: readonly MatrixCase[] = [
@@ -993,13 +1120,14 @@ describe('Issue #1436 smoke/review ordering', () => {
       {
         id: 'A15 unresolved blocking triage remains fail closed',
         expected: 'smoke_ordering_review_unsettled',
-        authority: (derived) => makeAuthority({
+        authority: (derived, triageVerdict = 'BLOCK') => makeAuthority({
           terminalStatus: 'failed',
-          triageVerdict: 'BLOCK',
+          triageVerdict,
           reviewStageComplete: derived,
           reviewStartConsumed: true,
         }),
         runVariants: [[observedRun()]],
+        triageVariants: ['BLOCK', 'PENDING_ARCHITECT', 'PENDING_OPERATOR'],
       },
       {
         id: 'A16 prior-cycle same-PR run cannot admit',
@@ -1012,36 +1140,49 @@ describe('Issue #1436 smoke/review ordering', () => {
       },
     ];
 
-    it.each(MATRIX)('$id', ({ expected, authority: buildAuthority, runVariants, requestedHead, derivedVariants }) => {
+    it.each(MATRIX)('$id', ({
+      expected,
+      authority: buildAuthority,
+      runVariants,
+      requestedHead,
+      derivedVariants,
+      triageVariants,
+    }) => {
       for (const derived of derivedVariants ?? [false, true]) {
         for (const reviewRuns of runVariants) {
-          const authority = buildAuthority(derived);
-          const headSha = requestedHead ?? OBSERVED_HEAD;
+          for (const triageVerdict of triageVariants ?? [undefined]) {
+            const authority = buildAuthority(derived, triageVerdict);
+            const headSha = requestedHead ?? OBSERVED_HEAD;
 
-          expect(resultOf(() => assertIndependentSmokeAdmission({
-            authority,
-            headSha,
-            reviewRuns,
-          }))).toBe(expected);
-
-          const options = persistAuthority(authority);
-          expect(resultOf(() => commitSmokeOrderingTransition({
-            prNumber: OBSERVED_PR,
-            expectedTransitionSeq: authority.transitionSeq,
-            actor: 'independent',
-            headSha,
-            status: 'started',
-            reviewRuns,
-            options,
-          }))).toBe(expected);
+            expect(resultOf(() => assertIndependentSmokeAdmission({
+              authority,
+              headSha,
+              reviewRuns,
+            }))).toBe(expected);
+            expect(internalTransitionResult(authority, headSha, reviewRuns)).toBe(expected);
+            expect(workerEntryPointResult(authority, headSha, reviewRuns)).toBe(expected);
+            expect(postReviewEntryPointResult(authority, headSha, reviewRuns)).toBe(expected);
+          }
         }
       }
     });
 
     it.each([
-      { status: 'started', expected: 'smoke_ordering_independent_in_progress' },
-      { status: 'passed', expected: 'smoke_ordering_independent_already_passed' },
-    ] as const)('does not restart same-head independent smoke in status $status', ({ status, expected }) => {
+      {
+        status: 'started',
+        expected: 'smoke_ordering_independent_in_progress',
+        postReviewExpected: 'independent_smoke_in_progress',
+      },
+      {
+        status: 'passed',
+        expected: 'smoke_ordering_independent_already_passed',
+        postReviewExpected: 'independent_smoke_already_passed',
+      },
+    ] as const)('does not restart same-head independent smoke in status $status', ({
+      status,
+      expected,
+      postReviewExpected,
+    }) => {
       const authority = makeAuthority({
         independent: {
           startedEver: true,
@@ -1050,23 +1191,16 @@ describe('Issue #1436 smoke/review ordering', () => {
           updatedAtUtc: CURRENT_RUN_AT,
         },
       });
+      const reviewRuns = [observedRun()];
+
       expect(resultOf(() => assertIndependentSmokeAdmission({
         authority,
         headSha: OBSERVED_HEAD,
-        reviewRuns: [observedRun()],
+        reviewRuns,
       }))).toBe(expected);
-
-      const options = persistAuthority(authority);
-      expect(resultOf(() => commitSmokeOrderingTransition({
-        prNumber: OBSERVED_PR,
-        expectedTransitionSeq: authority.transitionSeq,
-        actor: 'independent',
-        headSha: OBSERVED_HEAD,
-        status: 'started',
-        reviewRuns: [observedRun()],
-        options,
-      }))).toBe(expected);
-      expect(readPackReviewAuthority(OBSERVED_PR, options)?.smokeOrdering?.independent?.status).toBe(status);
+      expect(internalTransitionResult(authority, OBSERVED_HEAD, reviewRuns)).toBe(expected);
+      expect(workerEntryPointResult(authority, OBSERVED_HEAD, reviewRuns)).toBe(expected);
+      expect(postReviewEntryPointResult(authority, OBSERVED_HEAD, reviewRuns)).toBe(postReviewExpected);
     });
 
     it('preserves the exact observed #1740/#1754 regression identity and ordering relation', () => {
