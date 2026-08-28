@@ -145,11 +145,6 @@ function authoritativePreSend(slot: PackReviewSourceSlotRecord): boolean {
   return false;
 }
 
-function terminalKnownNoCompletedVerdict(slot: PackReviewSourceSlotRecord): boolean {
-  return slot.lifecycle === 'terminal'
-    && new Set(['harvest_failed', 'no_reply', 'forbidden_verdict_envelope']).has(slot.terminalClass ?? '');
-}
-
 function profileAndCdp(slot: PackReviewSourceSlotRecord): { profileKey: string; cdp: string } | null {
   const terminal = terminalRecord(slot);
   const profileKey = trim(terminal.configured_profile_key ?? terminal.profile_key);
@@ -650,11 +645,6 @@ export async function reconcilePackReviewNoReview(
       evidence.push({ kind: 'slot-closure', state: 'closed-pre-send', ...slotFact(slot) });
       continue;
     }
-    if (terminalKnownNoCompletedVerdict(slot)) {
-      evidence.push({ kind: 'slot-closure', state: 'closed-terminal-no-completed-verdict', ...slotFact(slot) });
-      continue;
-    }
-
     const possible = await reconcilePossibleDelivery(slot, deps);
     evidence.push({ kind: 'slot-closure', state: possible.disposition, reason: possible.reason, ...possible.evidence });
     if (possible.disposition === 'slot-closed') continue;
