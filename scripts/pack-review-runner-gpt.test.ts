@@ -1390,10 +1390,55 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
+  it('keeps an ordinary blocking finding authoritative while exposing partial coverage', async () => {
+    const storeRoot = tempRoot('opk-gpt-blocking-partial-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const statusRequests: Array<{ state: string; description: string }> = [];
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureRequiredStatusWriter: async (request) => {
+        statusRequests.push({ state: request.state, description: request.description });
+      },
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: findingsPayload('real-blocker') }],
+        'source-02': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+        ],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'changes_requested',
+      coverage: {
+        kind: 'partial',
+        completedSourceCount: 2,
+        cardinality: 3,
+      },
+    });
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(run?.reviewVerdict).toBe('findings');
+    expect(run?.findingCount).toBe(1);
+    expect(statusRequests.map((request) => request.state)).toEqual(['pending', 'failure']);
+    const posted = readFileSync(capture, 'utf8');
+    expect(posted).toContain('Sources: 2/3 (partial)');
+    expect(posted).toContain('Incomplete sources:');
+    expect(posted).toContain('source-02');
+    expect(posted).toContain('explicit_refusal:zero_send_collision_exhausted');
+    expect(posted).toContain('real-blocker');
+  });
+
   it.each([
-    ['harvest_failed', successfulCleanReviewPayload('inv-source-01')],
-    ['harvest_failed with non-blocking finding', findingsPayload('non-blocking-real', 'non-blocking')],
-  ])('publishes diagnostic COMMENT and terminal error for %s without synthetic code findings', async (_name, sourceOne) => {
+    ['harvest_failed', 'harvest_failed', successfulCleanReviewPayload('inv-source-01')],
+    ['no_reply', 'no_reply', successfulCleanReviewPayload('inv-source-01')],
+    ['forbidden_verdict_envelope', 'forbidden_verdict_envelope', successfulCleanReviewPayload('inv-source-01')],
+    ['harvest_failed with non-blocking finding', 'harvest_failed', findingsPayload('non-blocking-real', 'non-blocking')],
+  ] as const)('publishes diagnostic COMMENT and terminal error for %s without synthetic code findings', async (_name, harvestClass, sourceOne) => {
     const storeRoot = tempRoot('opk-gpt-harvest-incident-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1407,7 +1452,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       },
       fixtureReviewBySourceSlot: {
         'source-01': [{ stdout: sourceOne }],
-        'source-02': [{ stdout: harvestTerminalPayload('inv-source-02'), exitCode: 1 }],
+        'source-02': [{ stdout: harvestTerminalPayload('inv-source-02', harvestClass), exitCode: 1 }],
         'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
       },
     }));
@@ -1419,12 +1464,22 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const posted = readFileSync(capture, 'utf8');
     expect(posted).toContain('Review harvest incidents');
     expect(posted).toContain('source-02');
-    expect(posted).toContain('harvest_failed');
+    expect(run?.reviewRound?.sourceSlots[1]?.terminalClass).toBe(harvestClass);
+    expect(run?.reviewRound?.sourceSlots[1]?.terminalResult).toMatchObject({
+      review_evidence: expect.objectContaining({
+        adapterPromptPath: '/fixture/gpt-evidence/inv-source-02/adapter-prompt.txt',
+      }),
+    });
+    expect(posted).toContain(harvestClass);
     expect(posted).toContain('/fixture/gpt-evidence/inv-source-02/adapter-prompt.txt');
     expect(posted).not.toContain('GPT source source-02 did not complete');
   });
 
-  it('keeps real blocking findings authoritative while reporting harvest incidents separately', async () => {
+  it.each([
+    'harvest_failed',
+    'no_reply',
+    'forbidden_verdict_envelope',
+  ] as const)('keeps real blocking findings authoritative while reporting %s separately', async (harvestClass) => {
     const storeRoot = tempRoot('opk-gpt-harvest-blocking-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1434,7 +1489,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const result = await startPackReview(pluralStart(storeRoot, capture, {
       fixtureReviewBySourceSlot: {
         'source-01': [{ stdout: findingsPayload('real-blocker') }],
-        'source-02': [{ stdout: harvestTerminalPayload('inv-source-02'), exitCode: 1 }],
+        'source-02': [{ stdout: harvestTerminalPayload('inv-source-02', harvestClass), exitCode: 1 }],
         'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
       },
     }));
@@ -1447,7 +1502,8 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const posted = readFileSync(capture, 'utf8');
     expect(posted).toContain('real-blocker');
     expect(posted).toContain('Review harvest incidents');
-    expect(posted).toContain('harvest_failed');
+    expect(run?.reviewRound?.sourceSlots[1]?.terminalClass).toBe(harvestClass);
+    expect(posted).toContain(harvestClass);
     expect(posted).not.toContain('GPT source source-02 did not complete');
   });
 
