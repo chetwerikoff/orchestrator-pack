@@ -61,6 +61,7 @@ import {
 import {
   PACK_REVIEW_ACTIVE_STATUSES,
   createPackReviewRun,
+  derivePackReviewGptCoverage,
   getPackReviewRun,
   hasPersistedPackReviewVerdict,
   heartbeatPackReviewRun,
@@ -977,6 +978,12 @@ function gptUsableSourceCount(round: PackReviewGptRoundRecord | undefined): numb
     slot.lifecycle === 'terminal'
     && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
   )).length ?? 0;
+}
+
+function packReviewRunOutputProjection(run: PackReviewRunRecord | null): Record<string, unknown> | null {
+  if (!run) return null;
+  const coverage = derivePackReviewGptCoverage(run.reviewRound);
+  return coverage ? { ...run, coverage } : run;
 }
 
 function freezeGptRoundSourceCount(
@@ -2902,6 +2909,34 @@ export async function reconcileStalePackReviewRuns(
         continue;
       }
       if (immediateActive && !activeStale) {
+        const coverage = derivePackReviewGptCoverage(
+          getPackReviewRun(run.id, { projectId, storeRoot })?.reviewRound ?? run.reviewRound,
+        );
+        if (coverage?.kind === 'partial'
+            && recovery.graceExpired
+            && recovery.reason.startsWith('gpt_sources_incomplete_after_grace:')) {
+          await recordPackReviewUnfinishedTerminalStatus({
+            run: getPackReviewRun(run.id, { projectId, storeRoot }) ?? run,
+            status: 'failed',
+            failureReason: recovery.reason,
+            projectId,
+            storeRoot,
+            writeRequiredStatus: statusWriter,
+          });
+          const failed = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+          results.push({
+            runId: run.id,
+            terminalized: true,
+            statusReconciled: true,
+            hydratedSourceCount: recovery.hydratedSourceCount,
+            usableSourceCount: recovery.usableSourceCount,
+            graceExpired: recovery.graceExpired,
+            reason: recovery.reason,
+            status: failed.status,
+            coverage: derivePackReviewGptCoverage(failed.reviewRound),
+          });
+          continue;
+        }
         results.push({
           runId: run.id,
           terminalized: false,
@@ -2910,6 +2945,7 @@ export async function reconcileStalePackReviewRuns(
           usableSourceCount: recovery.usableSourceCount,
           graceExpired: recovery.graceExpired,
           reason: recovery.reason,
+          coverage,
           nextAction: recovery.nextAction ?? 'let the current review continue and rerun scoped reconcile if needed',
         });
         continue;
@@ -4121,36 +4157,11 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         headSha: target.headSha,
         request,
       }));
-      if (diagnostics.nonHarvestIncompleteSources.length > 0) {
-        const first = diagnostics.nonHarvestIncompleteSources[0]!;
-        const status: Extract<PackReviewRunStatus, 'failed' | 'timed_out' | 'cancelled'> = diagnostics.nonHarvestIncompleteSources.some((item) => item.cancelled)
-          ? 'cancelled'
-          : diagnostics.nonHarvestIncompleteSources.some((item) => item.timedOut)
-            ? 'timed_out'
-            : 'failed';
-        const failureReason = `gpt_source_non_complete:${first.sourceSlotId}:${first.classification}`;
-        await recordUnfinishedTerminal({
-          run,
-          status,
-          failureReason,
-          projectId,
-          storeRoot,
-          writeRequiredStatus,
-        });
-        terminal = true;
-        const runs = listPackReviewRuns({ projectId, storeRoot });
-        if (claimLease) await claimLease.release('run_started', runs);
-        return {
-          ok: false,
-          created: true,
-          reused: false,
-          reason: failureReason,
-          runId: run.id,
-          status,
-          httpStatus: status === 'timed_out' ? 504 : 422,
-        };
-      }
+      const coverage = derivePackReviewGptCoverage(run.reviewRound);
 
+      // Harvest failures are an immediate terminal overlay. They are deliberately
+      // evaluated before ordinary incompleteness so partial evidence is retained
+      // without waiting for the shared source grace.
       if (diagnostics.harvestIncidents.length > 0 && !classifyPackReviewPayload(payload).blocking) {
         payload = { ...payload, harvestIncidents: diagnostics.harvestIncidents };
         const posted = await postGithubReview({
@@ -4187,6 +4198,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           reason: 'harvest_failed',
           runId: run.id,
           status: 'failed',
+          coverage,
           httpStatus: 422,
           githubReviewId: posted.id,
           githubReviewUrl: posted.url,
@@ -4194,6 +4206,65 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       }
       if (diagnostics.harvestIncidents.length > 0) {
         payload = { ...payload, harvestIncidents: diagnostics.harvestIncidents };
+      }
+
+      if (diagnostics.nonHarvestIncompleteSources.length > 0
+          && !classifyPackReviewPayload(payload).blocking) {
+        if (coverage?.kind === 'partial') {
+          // Ordinary partial evidence is not a terminal failure and does not gain
+          // quorum merely because every slot is already terminal. Keep the run
+          // active until the existing scoped reconcile path is explicitly invoked.
+          run = updatePackReviewRun(run.id, {
+            status: 'reviewing',
+            latestRunStatus: 'reviewing',
+            failureReason: undefined,
+            completedAtUtc: undefined,
+          }, { projectId, storeRoot });
+          const runs = listPackReviewRuns({ projectId, storeRoot });
+          if (claimLease) await claimLease.release('run_started', runs);
+          return {
+            ok: true,
+            created: true,
+            reused: false,
+            reason: `gpt_sources_partial_pending_reconcile:${coverage.completedSourceCount}/${coverage.cardinality}`,
+            runId: run.id,
+            status: 'reviewing',
+            coverage,
+            httpStatus: 202,
+          };
+        }
+
+        // Only an empty completed-source census may fall back to the generic
+        // whole-round no-verdict terminal solely because ordinary source work did
+        // not complete.
+        const first = diagnostics.nonHarvestIncompleteSources[0]!;
+        const status: Extract<PackReviewRunStatus, 'failed' | 'timed_out' | 'cancelled'> = diagnostics.nonHarvestIncompleteSources.some((item) => item.cancelled)
+          ? 'cancelled'
+          : diagnostics.nonHarvestIncompleteSources.some((item) => item.timedOut)
+            ? 'timed_out'
+            : 'failed';
+        const failureReason = `gpt_source_non_complete:${first.sourceSlotId}:${first.classification}`;
+        await recordUnfinishedTerminal({
+          run,
+          status,
+          failureReason,
+          projectId,
+          storeRoot,
+          writeRequiredStatus,
+        });
+        terminal = true;
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: false,
+          created: true,
+          reused: false,
+          reason: failureReason,
+          runId: run.id,
+          status,
+          coverage,
+          httpStatus: status === 'timed_out' ? 504 : 422,
+        };
       }
     }
 
@@ -4495,13 +4566,18 @@ async function main(): Promise<void> {
   const input = { ...stdinPayload, ...cliArgs };
   if (subcommand === 'list') {
     const options = input as ListInput;
-    process.stdout.write(`${JSON.stringify({ runs: listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot }) })}\n`);
+    process.stdout.write(`${JSON.stringify({
+      runs: listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot })
+        .map((run) => packReviewRunOutputProjection(run)),
+    })}\n`);
     return;
   }
   if (subcommand === 'status') {
     const runId = trim(input.runId);
     if (!runId) throw new Error('status requires runId in JSON payload');
-    process.stdout.write(`${JSON.stringify({ run: getPackReviewRun(runId, input as ListInput) })}\n`);
+    process.stdout.write(`${JSON.stringify({
+      run: packReviewRunOutputProjection(getPackReviewRun(runId, input as ListInput)),
+    })}\n`);
     return;
   }
   if (subcommand === 'reset') {
