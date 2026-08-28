@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   reconcilePackReviewNoReview,
@@ -126,14 +128,21 @@ function deps(overrides: Partial<NoReviewReconciliationDependencies> = {}): Part
 
 describe('pack-review no-review reconciliation', () => {
   it('does not create a missing run-store root while proving the no-local-run path inconclusive', async () => {
-    const storeRoot = join('/tmp', `opk-no-review-missing-${process.pid}-${Date.now()}`);
+    const storeRoot = join(tmpdir(), `opk-no-review-missing-${process.pid}-${Date.now()}`);
     expect(existsSync(storeRoot)).toBe(false);
     const result = await reconcilePackReviewNoReview({
       ...INPUT,
       storeRoot,
     }, {
-      ...deps(),
-      listRuns: undefined,
+      now: () => NOW,
+      readCurrentHead: async () => HEAD,
+      resolveRunRepository: async (record) => ({
+        ok: true as const,
+        slug: record.canonicalRepository ?? REPOSITORY,
+      }),
+      sourceCommentTransport: () => emptySourceTransport(),
+      githubReviewTransport: () => emptyGithubTransport(),
+      probe: vi.fn(async () => { throw new Error('probe_should_not_run'); }),
     });
 
     expect(result.disposition).toBe('unavailable/inconclusive');
