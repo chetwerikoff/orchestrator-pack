@@ -119,10 +119,13 @@ export interface StageCredentialingResult {
   missingSlots: string[];
 }
 
+export type LifecycleAcceptancePurpose = 'stage-time' | 'final-acceptance';
+
 export function evaluateStageCredentialingSettlement(
   receiptValue: unknown,
   reviewerCardinality: number,
   stage: LifecycleReviewStage,
+  purpose: LifecycleAcceptancePurpose = 'stage-time',
 ): StageCredentialingResult {
   const errors: string[] = [];
   if (!record(receiptValue)) {
@@ -180,11 +183,13 @@ export function evaluateStageCredentialingSettlement(
     }
     const invocationId = stringValue(invocation.invocationId);
     const terminalResultIdentity = stringValue(invocation.terminalResultIdentity);
-    if (!witness || stringValue(witness.invocationId) !== invocationId) {
-      errors.push(`${stage} partial missing slot ${missingSlot} lacks a journal witness naming invocation ${invocationId ?? '<missing>'}`);
-    }
-    if (!terminalResultIdentity || stringValue(witness?.evidenceIdentity) !== terminalResultIdentity) {
-      errors.push(`${stage} partial missing slot ${missingSlot} journal witness does not bind terminal evidence ${terminalResultIdentity ?? '<missing>'}`);
+    if (purpose === 'stage-time') {
+      if (!witness || stringValue(witness.invocationId) !== invocationId) {
+        errors.push(`${stage} partial missing slot ${missingSlot} lacks a journal witness naming invocation ${invocationId ?? '<missing>'}`);
+      }
+      if (!terminalResultIdentity || stringValue(witness?.evidenceIdentity) !== terminalResultIdentity) {
+        errors.push(`${stage} partial missing slot ${missingSlot} journal witness does not bind terminal evidence ${terminalResultIdentity ?? '<missing>'}`);
+      }
     }
   }
   if (missing.length >= 2 && receipt.producerEvidence !== 'waived') {
@@ -212,6 +217,7 @@ export function validateLifecycleAcceptanceTopology(
   receiptValues: readonly unknown[],
   intakeValue: unknown,
   tierValue?: string,
+  purpose: LifecycleAcceptancePurpose = 'stage-time',
 ): LifecycleAcceptanceResult {
   const errors: string[] = [];
   const intake = parseLifecycleTierIntake(intakeValue);
@@ -224,7 +230,7 @@ export function validateLifecycleAcceptanceTopology(
       const stage = lifecycleStage(raw.stage);
       const reviewerCardinality = Number(raw.reviewerCardinality);
       if (stage && Number.isInteger(reviewerCardinality) && reviewerCardinality > 0) {
-        errors.push(...evaluateStageCredentialingSettlement(raw, reviewerCardinality, stage).errors);
+        errors.push(...evaluateStageCredentialingSettlement(raw, reviewerCardinality, stage, purpose).errors);
       }
     }
     return { raw, slot };
@@ -278,7 +284,7 @@ export function validateLifecycleAcceptanceTopology(
 
     const credentialing = stage === 'architectural-lens'
       ? { credentialed: receipt.outcome === 'complete', errors: receipt.outcome === 'complete' ? [] : [`${stage} must complete`] }
-      : evaluateStageCredentialingSettlement(receipt, topologyEntry.reviewerCardinality, stage);
+      : evaluateStageCredentialingSettlement(receipt, topologyEntry.reviewerCardinality, stage, purpose);
     errors.push(...credentialing.errors);
     if (credentialing.credentialed) progressed.add(stage);
   }

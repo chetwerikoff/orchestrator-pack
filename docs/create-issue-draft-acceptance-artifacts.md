@@ -8,9 +8,10 @@ The acceptance inventory has four roles: `tier-intake.json`, each
 `attempt-NNN.json` stage-evidence input (`create-issue-stage-evidence/v1`), and
 `author-dispositions.json` (`create-issue-author-dispositions/v1`) are
 flow-manager-authored inputs; the files in Produced files are producer outputs;
-reviewer captures, `turn-result/v1` artifacts, and Claude producer evidence/waivers
-are conditional evidence; chats, author replies, and tier-gate receipts are
-audit-only records.
+reviewer captures, `turn-result/v1` artifacts, and Claude producer
+evidence/waivers are conditional stage-time evidence; at final acceptance
+producer/source/transport identities carried by those artifacts are audit-only.
+Chats, author replies, and tier-gate receipts are audit-only records.
 The flow-manager records the two manual input schemas; this component has no
 writer for them and no writer for `remote-authority.json`.
 
@@ -81,23 +82,25 @@ authority path: the live GitHub Issue artifact. A `turn-result/v1` receipt is
 transport diagnostics only; its presence or state does not create a second
 acceptance path and is not required to prove that the stage artifact exists.
 
-Immediately before the Issue-comment census, the producer resolves the current
-authenticated GitHub login through the same existing GitHub transport. It then
-exhausts the complete paginated top-level comment census for the exact target
-Issue once for the production attempt. For each expected invocation, exactly
-one unedited comment must satisfy the canonical reviewer grammar and bind the
-exact Issue, that invocation's own `sourceRevision`, invocation id, stage/slot
-facts exposed by the grammar, and the authenticated publisher login. The
-producer never accepts caller-supplied comment bytes, publisher identity,
-hashes, lengths, finding counts, or a partial census as authority.
+The producer exhausts the complete paginated top-level comment census for the
+exact target Issue once for the production attempt. For each expected invocation,
+a credentialable comment must satisfy the canonical reviewer grammar, bind the
+exact Issue and that invocation's own frozen `sourceRevision`, remain unedited,
+and carry GitHub repository trust via
+`author_association ∈ {OWNER, MEMBER, COLLABORATOR}`. Exact comment-author login
+is retained as audit metadata and is not compared with the current authenticated
+principal. The producer never accepts caller-supplied comment bytes, author
+identity, hashes, lengths, finding counts, or a partial census as authority.
 
 A proven-complete census with zero canonical matches proves absence. An
-incomplete/unavailable census is TEMPORARY `source-unavailable`; multiple
-canonical matches are TEMPORARY `identity-unresolved`; unavailable authenticated
-principal or comment-author evidence is TEMPORARY `provenance-unresolved`; local
-observer loss before the authoritative reread finishes is TEMPORARY
-`observation-lost`. An observed publisher mismatch is `provenance-mismatch`.
-Unknown is never rewritten into absence.
+incomplete/unavailable census is TEMPORARY `source-unavailable`; missing
+repository-trust fields are source-unavailable and an explicitly untrusted
+association fails closed. Byte-identical trusted matches for the same semantic
+invocation/source slot are duplicate observations and collapse deterministically;
+conflicting trusted bytes fail as a substantive conflict. Local observer loss
+before the authoritative reread finishes is TEMPORARY `observation-lost`.
+Unavailable current-principal resolution and publisher mismatch are not final
+completion vetoes. Unknown is never rewritten into absence.
 
 The exact decoded GitHub comment body becomes the stage source bytes. The
 producer derives the existing canonical capture name from stage evidence:
@@ -133,7 +136,7 @@ artifactAuthority:
   issueNumber: <positive integer>
   commentId: <canonical comment id>
   commentUrl: <canonical Issue-comment URL>
-  publisherLogin: <authenticated principal>
+  publisherLogin: <observed comment author; audit metadata>
   createdAt: <immutable timestamp>
   updatedAt: <same timestamp>
 ```
@@ -141,8 +144,10 @@ artifactAuthority:
 That branch requires the ordinary existing capture. It may credential a capture
 when the transport classification is non-`complete`, while the original
 transport classification remains unchanged. `terminalResultIdentity` and
-`reviewerSource` are present only when actually observed. The pre-existing
-successful transport branch retains its existing invariants.
+`reviewerSource` are present only when actually observed. Live stage-time keeps
+the pre-existing transport/terminal/send/retry invariants. Final acceptance does
+not turn those provenance/transport identities into completion credentials when
+the trusted substantive artifact is already present.
 
 Each stage is bound to its own recorded `sourceRevision`;
 `tier-intake.firstRevision` remains the immutable episode root, not the required
@@ -231,6 +236,27 @@ states why that capture may credential the invocation; it does not repair or
 replace transport truth. The resulting receipt, inventory, relay evidence, and
 ledger are checked by the existing guards.
 
+## Final completion authority
+
+Final acceptance consumes the current readable live Issue bytes and the required
+substantive review/result artifacts. Historical cycle IDs, `cycleBinding`,
+cross-record `sourceRevision` equality, stage-event publication, producer/run/
+reviewer-source identity, receipt writer, and journal/projection state remain
+truthful audit metadata but do not independently credential or veto completion.
+The strict current-cycle validator remains the stage publication contract; this
+cut applies only after the required work/results already exist.
+
+The terminal GPT remains Issue-lifetime one-shot. Exact reviewed/current bytes
+are the ordinary path. The only non-equal path is a bounded post-terminal
+correction from `rN` to exactly `rN+1`, with one original terminal substantive
+result and all findings/dispositions processed. `rN+2` or unrelated body drift
+fails. Final acceptance also performs a fresh stable Issue read-back; failure to
+read it or mutation across that read-back remains blocking.
+
+Public journal append and projection-label synchronization are attempted after
+content acceptance when possible. Failure is reported as audit/projection
+diagnostic state and must not rewrite successful content acceptance into failure
+or synthesize replacement journal/cycle/receipt success.
 ## Operator URL compatibility
 
 The existing direct-operator URL input remains parse-compatible only as a
@@ -239,9 +265,10 @@ supply comment bytes, hashes, counts, publisher identity, uniqueness, or a
 second acceptance route. Any supplied URL must identify the same unique
 canonical comment already proven by the census.
 
-The URL cannot convert `source-unavailable`, `identity-unresolved`,
-`provenance-unresolved`, `observation-lost`, a proven zero-match, publisher
-mismatch, edited/malformed source, byte mismatch, or capture conflict into
-acceptance. Browser-GPT artifact acceptance never writes an
+The URL cannot convert `source-unavailable`, `observation-lost`, an
+untrusted/edited/malformed source, a proven zero-match, byte mismatch, or capture
+conflict into acceptance. Publisher/current-principal identity itself is not a
+completion gate, so the URL has no authority to prefer one trusted publisher
+over another. Browser-GPT artifact acceptance never writes an
 `operator_adjudicated` readiness fact and never upgrades absent/non-`ok`
 transport evidence.

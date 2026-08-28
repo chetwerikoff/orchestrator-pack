@@ -16,11 +16,14 @@ export function isReviewLaneRouting(value: unknown): value is ReviewLaneRouting 
   return isRouting(value);
 }
 
+export type ReviewLaneValidationPurpose = 'stage-time' | 'final-acceptance';
+
 export function isReviewLaneEvidence(
   value: unknown,
   waivedMissingSlots: readonly string[] = [],
+  purpose: ReviewLaneValidationPurpose = 'stage-time',
 ): value is ReviewLaneEvidence {
-  return validateReviewLaneRecord(value, waivedMissingSlots).ok;
+  return validateReviewLaneRecord(value, waivedMissingSlots, purpose).ok;
 }
 
 export function sameReviewLaneRouting(left: ReviewLaneRouting, right: ReviewLaneRouting): boolean {
@@ -128,8 +131,12 @@ function isSettlement(value: unknown, routing: ReviewLaneRouting): value is Revi
     && (row.state === 'activated' || row.state === 'not-activated'));
 }
 
-function isSourceVerdictEvidence(value: unknown): value is ReviewLaneSourceVerdictEvidence {
-  if (!isRecord(value) || !nonEmpty(value.producerEvidenceIdentity) || !nonEmpty(value.terminalClassification)) return false;
+function isSourceVerdictEvidence(
+  value: unknown,
+  requireProducerIdentity: boolean,
+): value is ReviewLaneSourceVerdictEvidence {
+  if (!isRecord(value) || !nonEmpty(value.terminalClassification)) return false;
+  if (requireProducerIdentity && !nonEmpty(value.producerEvidenceIdentity)) return false;
   if (value.captureVerified !== undefined && typeof value.captureVerified !== 'boolean') return false;
   if (value.digestMatches !== undefined && typeof value.digestMatches !== 'boolean') return false;
   if (value.captureIdentity !== undefined && !nonEmpty(value.captureIdentity)) return false;
@@ -145,14 +152,28 @@ function isSourceVerdictEvidence(value: unknown): value is ReviewLaneSourceVerdi
   return true;
 }
 
-function sourceVerdictEvidenceMap(value: unknown): Record<string, ReviewLaneSourceVerdict> | null {
+function sourceVerdictEvidenceMap(
+  value: unknown,
+  purpose: ReviewLaneValidationPurpose,
+): Record<string, ReviewLaneSourceVerdict> | null {
   if (!isRecord(value)) return null;
   const derived: Record<string, ReviewLaneSourceVerdict> = {};
   const producerIdentities = new Set<string>();
+  const substantiveCaptureIdentities = new Set<string>();
   for (const [slot, evidence] of Object.entries(value)) {
-    if (!isSourceVerdictEvidence(evidence) || producerIdentities.has(evidence.producerEvidenceIdentity)) return null;
-    producerIdentities.add(evidence.producerEvidenceIdentity);
-    derived[slot] = normalizeMaterialVerdict(evidence);
+    if (!isSourceVerdictEvidence(evidence, purpose === 'stage-time')) return null;
+    const producerIdentity = nonEmpty(evidence.producerEvidenceIdentity)
+      ? evidence.producerEvidenceIdentity.trim()
+      : '';
+    if (purpose === 'stage-time' && producerIdentities.has(producerIdentity)) return null;
+    if (producerIdentity) producerIdentities.add(producerIdentity);
+    const verdict = normalizeMaterialVerdict(evidence);
+    if ((verdict === 'accept' || verdict === 'material-findings') && nonEmpty(evidence.captureIdentity)) {
+      const captureIdentity = evidence.captureIdentity.trim();
+      if (substantiveCaptureIdentities.has(captureIdentity)) return null;
+      substantiveCaptureIdentities.add(captureIdentity);
+    }
+    derived[slot] = verdict;
   }
   return derived;
 }
@@ -160,6 +181,7 @@ function sourceVerdictEvidenceMap(value: unknown): Record<string, ReviewLaneSour
 export function validateReviewLaneRecord(
   value: unknown,
   waivedMissingSlots: readonly string[] = [],
+  purpose: ReviewLaneValidationPurpose = 'stage-time',
 ): ReviewLaneRecordValidation {
   const errors: string[] = [];
   if (!isRecord(value)) return { ok: false, errors: ['routed review record must be an object'] };
@@ -188,7 +210,7 @@ export function validateReviewLaneRecord(
         }
       }
     }
-    const derivedSourceVerdicts = sourceVerdictEvidenceMap(value.sourceVerdictEvidence);
+    const derivedSourceVerdicts = sourceVerdictEvidenceMap(value.sourceVerdictEvidence, purpose);
     if (!derivedSourceVerdicts) {
       errors.push('routed review record has malformed source verdict producer evidence');
     } else if (parsedSourceVerdicts) {
