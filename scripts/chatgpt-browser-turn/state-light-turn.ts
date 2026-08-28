@@ -1372,8 +1372,13 @@ export async function readPageObservation(
   const evaluateAll = nodes?.evaluateAll;
   if (typeof evaluateAll === 'function') {
     try {
-      const snapshotWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
-      if (snapshotWaitMs <= 0) return incomplete();
+      // At the hard boundary, consume only an already-settled snapshot. A zero-ms
+      // race preserves the deadline while still letting an immediately available
+      // DOM snapshot carry the final ownership/completion evidence.
+      const snapshotWaitMs = Math.min(
+        MAX_LOCAL_READ_WAIT_MS,
+        Math.max(0, deadlineMs - Date.now()),
+      );
       const observed = await boundedBrowserRead(
         evaluateAll.call(nodes, (elements: Element[], args: {
           roleAttribute: string;
@@ -1456,8 +1461,10 @@ export async function readPageObservation(
     // locators always take the single in-page fixed-set branch above.
     let count: number;
     try {
-      const countWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
-      if (countWaitMs <= 0) return incomplete();
+      const countWaitMs = Math.min(
+        MAX_LOCAL_READ_WAIT_MS,
+        Math.max(0, deadlineMs - Date.now()),
+      );
       count = Number(await boundedBrowserRead(
         Promise.resolve(nodes.count()),
         countWaitMs,
