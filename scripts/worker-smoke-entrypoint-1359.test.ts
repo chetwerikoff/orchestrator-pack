@@ -265,6 +265,8 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(prompt).not.toContain('Before each scenario append one JSON line:');
       expect(prompt).not.toContain('After each scenario append one JSON line:');
       expect(prompt).toContain('Emit each declared progress event exactly once; never repeat a started or terminal event.');
+      expect(prompt).toContain('git diff "$(git merge-base HEAD origin/main)" HEAD');
+      expect(prompt).not.toContain('git diff main HEAD');
       expect(prompt).toContain(
         `The first non-empty progress line must parse exactly as: ${JSON.stringify(firstProgress)}`,
       );
