@@ -249,6 +249,36 @@ describe('pack-review no-review reconciliation', () => {
     expect(githubFactory).not.toHaveBeenCalled();
   });
 
+  it('treats multiple distinct exact-head source identities as review-present rather than duplicate ambiguity', async () => {
+    const comments: PackGptSourceGithubComment[] = [1, 2].map((ordinal) => {
+      const identity = {
+        repository: REPOSITORY,
+        prNumber: PR,
+        headSha: HEAD,
+        runId: `prr-discovered-${ordinal}`,
+        slotId: `source-0${ordinal}`,
+        invocationId: `${ordinal}${ordinal}${ordinal}${ordinal}${ordinal}${ordinal}${ordinal}${ordinal}-1111-4111-8111-111111111111`,
+      };
+      const body = formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS');
+      return {
+        id: 80 + ordinal,
+        body,
+        url: `https://github.com/${REPOSITORY}/issues/${PR}#issuecomment-${80 + ordinal}`,
+        issueUrl: `https://api.github.com/repos/${REPOSITORY}/issues/${PR}`,
+        actorLogin: OWNER,
+        createdAt: NOW.toISOString(),
+        updatedAt: NOW.toISOString(),
+      };
+    });
+
+    const result = await reconcilePackReviewNoReview(INPUT, deps({
+      sourceCommentTransport: () => emptySourceTransport(comments),
+    }));
+
+    expect(result.disposition).toBe('review-present');
+    expect(result.reason).toBe('exact_head_source_comment_present');
+  });
+
   it('fails closed when live PR head no longer equals the receipt binding', async () => {
     const listRuns = vi.fn(() => []);
     const result = await reconcilePackReviewNoReview(INPUT, deps({
@@ -271,10 +301,10 @@ describe('pack-review no-review reconciliation', () => {
       slot(1, {
         lifecycle: 'terminal',
         invocationId,
-        terminalClass: 'possible_delivery',
+        terminalClass: 'harvest_failed',
         terminalResult: {
-          state: 'driver_error',
-          cause: 'browser_lost',
+          state: 'ok',
+          cause: 'completed_page_only',
           send_count: 1,
           configured_profile_key: 'profile-fixture',
           configured_cdp_url: 'http://127.0.0.1:9222',
