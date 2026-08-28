@@ -1220,8 +1220,7 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
     `- Cancel request: ${smokeCancelRequestPath(binding.artifactDir)}`,
     `- Cancel acknowledgement: ${smokeCancelAcknowledgementPath(binding.artifactDir)}`,
     `- Declared scenario count: ${scenarioCount}`,
-    '- Before each scenario append one JSON line: {"runId":"<run-id>","scenarioOrdinal":N,"phase":"started"}.',
-    '- After each scenario append one JSON line: {"runId":"<run-id>","scenarioOrdinal":N,"phase":"terminal","outcome":"pass|fail|blocked|skipped"}.',
+    '- Emit each declared progress event exactly once; never repeat a started or terminal event.',
     '- Use declared order only and check cancel-request.json before each new scenario.',
   ].join('\n');
 }
