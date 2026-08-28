@@ -291,6 +291,118 @@ describe('pack-review no-review reconciliation', () => {
     expect(listRuns).not.toHaveBeenCalled();
   });
 
+  it('accepts an exact owned-turn assistant export even before a retained primary exists', async () => {
+    const invocationId = '55555555-5555-4555-8555-555555555555';
+    const marker = 'OPKTURNV1-owned-unharvested';
+    const assistantText = 'NO_FINDINGS';
+    const assistantBytes = Buffer.from(assistantText, 'utf8');
+    const assistantSha = createHash('sha256').update(assistantBytes).digest('hex');
+    const possible = run(round([
+      slot(1, {
+        lifecycle: 'terminal',
+        invocationId,
+        terminalClass: 'possible_delivery',
+        terminalResult: {
+          state: 'driver_error',
+          cause: 'browser_lost',
+          send_count: 1,
+          configured_profile_key: 'profile-fixture',
+          configured_cdp_url: 'http://127.0.0.1:9222',
+        },
+      }),
+      slot(2),
+      slot(3),
+    ]));
+    const probe = vi.fn(async (args: any) => {
+      if (args.operation === 'inspect') {
+        return {
+          status: 'ok',
+          target_id: 'target-2',
+          snapshot: {
+            generation_in_progress: false,
+            nodes_truncated: false,
+            nodes: [
+              {
+                role: 'user',
+                ordinal: 0,
+                document_ordinal: 0,
+                message_id: 'user-2',
+                message_id_unique: true,
+                attributes: {},
+                innerText: {
+                  byte_length: Buffer.byteLength(marker),
+                  code_point_length: marker.length,
+                  sha256: createHash('sha256').update(marker).digest('hex'),
+                  head: marker,
+                  tail: marker,
+                },
+                textContent: {
+                  byte_length: Buffer.byteLength(marker),
+                  code_point_length: marker.length,
+                  sha256: createHash('sha256').update(marker).digest('hex'),
+                  head: marker,
+                  tail: marker,
+                },
+              },
+              {
+                role: 'assistant',
+                ordinal: 0,
+                document_ordinal: 1,
+                message_id: 'assistant-2',
+                message_id_unique: true,
+                attributes: {},
+                innerText: {
+                  byte_length: assistantBytes.byteLength,
+                  code_point_length: assistantText.length,
+                  sha256: assistantSha,
+                  head: assistantText,
+                  tail: assistantText,
+                },
+                textContent: {
+                  byte_length: assistantBytes.byteLength,
+                  code_point_length: assistantText.length,
+                  sha256: assistantSha,
+                  head: assistantText,
+                  tail: assistantText,
+                },
+              },
+            ],
+          },
+        };
+      }
+      if (args.operation === 'export') {
+        writeFileSync(args.output, assistantBytes);
+        return { status: 'ok' };
+      }
+      throw new Error('unexpected_probe_operation');
+    });
+
+    const result = await reconcilePackReviewNoReview(INPUT, deps({
+      listRuns: () => [possible],
+      readObservation: () => ({
+        schema: 'state-light-turn-observation/v1',
+        version: 1,
+        invocation_id: invocationId,
+        profile_key: 'profile-fixture',
+        marker,
+        phase: 'sent_unharvested',
+        send_count: 1,
+        send_witness: 'numeric_send_count',
+        conversation_url: 'https://chatgpt.com/c/fixture-unharvested',
+        primary: null,
+        transitioned_at: NOW.toISOString(),
+        transition_reason: 'fixture',
+      } as any),
+      probe,
+    }));
+
+    expect(result.disposition).toBe('review-present');
+    expect(result.reason).toBe('owned_turn_assistant_result_present');
+    expect(result.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ primaryBound: false, assistantSha256: assistantSha }),
+    ]));
+  });
+
   it('turns an exact owned-turn assistant byte witness into review-present', async () => {
     const invocationId = '33333333-3333-4333-8333-333333333333';
     const marker = 'OPKTURNV1-owned-marker';
