@@ -3,7 +3,6 @@
 import '../../../scripts/toolchain/native-entrypoint-preflight.ts';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { isDirectCliExecution } from '@orchestrator-pack/shared/lib/cli_direct_execution.js';
-import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
 import { formatViolationReport } from '../lib/check.ts';
 import { loadLatestActiveDeclaration } from '../lib/declaration_loader.ts';
 import { parseScopeCheckArgs, runScopeCheck } from './scope-check.ts';
@@ -27,11 +26,11 @@ function resolveRepoHead(repoRoot: string): string {
 export function resolveWrapScopeBaseline(
   options: WrapOptions,
   preRunBaseline: string,
-  declaration: DeclarationSnapshot | null,
+  declaration: { baseline?: { commit_sha?: string } } | null,
 ): string {
   return (
     options.baselineCommitSha ??
-    declaration?.baseline.commit_sha ??
+    declaration?.baseline?.commit_sha ??
     preRunBaseline
   );
 }

@@ -1,6 +1,4 @@
 import { execFileSync } from 'node:child_process';
-import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
-
 function runGit(repoRoot: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd: repoRoot,
@@ -16,7 +14,7 @@ function runGit(repoRoot: string, args: string[]): string {
 export function resolveWorktreeBaseline(
   repoRoot: string,
   explicitBaseline?: string,
-  declaration?: DeclarationSnapshot | null,
+  declaration?: { baseline?: { commit_sha?: string } } | null,
 ): string {
   if (explicitBaseline?.trim()) {
     return explicitBaseline.trim();

@@ -186,7 +186,9 @@ export function resolveScopeContext(options: {
 
   if (declaration) {
     declaredPaths = [...declaration.declared_paths];
-    declaredGlobs = [...declaration.declared_globs];
+    declaredGlobs = [
+      ...('declared_globs' in declaration ? declaration.declared_globs : []),
+    ];
   }
 
   const hasScope =
