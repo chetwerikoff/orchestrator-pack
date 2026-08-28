@@ -422,7 +422,11 @@ or unstable final Issue read-back remains blocking.
 ### Claude lens and unavailable skip
 
 Claude remains exactly one pre-terminal source. A counted capture requires a
-separate Claude invocation and independently supplied producing-result evidence.
+separate Claude invocation and its substantive Claude result/capture. Independently
+supplied producing-result evidence remains mandatory for live stage-time
+credentialing when that running path requires it; at final acceptance it is
+audit-only, so absence or identity disagreement cannot disqualify an otherwise
+valid substantive Claude result.
 Only observable `quota`, `rate-limit`, `provider-unavailable`, or
 `cli-unavailable` may produce a `claude-unavailable` waiver. The waiver is
 topology evidence only and creates no capture, finding, M3 authority, or tier
