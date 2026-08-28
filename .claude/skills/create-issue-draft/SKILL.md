@@ -337,6 +337,7 @@ stage.
   guards directly, then alone writes `create-issue-final-acceptance/v1` and
   synchronizes `spec-review:accepted` after event confirmation. An external PASS
   receipt cannot substitute for these guards.
+  `--cycle-id` is optional audit metadata for final acceptance; absence must remain absent rather than being synthesized. Live cycle/stage start and publication keep their strict cycle binding.
 
 All three hidden journal markers carry a schema and event-key. Remote admission
 uses only complete, unedited owner comments and a fully exhausted bounded REST
@@ -1151,7 +1152,7 @@ node scripts/create-issue-stage-finalize.ts publish-stage \
   --repo <owner/name> --issue-number <N> --receipt "$REVIEW_DIR/<stage-receipt>.json"
 
 node scripts/create-issue-final-acceptance.ts \
-  --repo <owner/name> --issue-number <N> --cycle-id <cycle-id> \
+  --repo <owner/name> --issue-number <N> [--cycle-id <cycle-id>] \
   --issue-body <path> --issue-revision <rNN> --review-dir "$REVIEW_DIR" \
   --stage-receipt "$REVIEW_DIR/<receipt>.json" ...
 ```
