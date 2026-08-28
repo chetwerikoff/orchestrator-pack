@@ -1570,7 +1570,7 @@ describe('Issue #1777 worker independent-smoke admission parity', () => {
       headSha: EARLIER_HEAD,
       trustedPackRoot: root,
       sourceRepoRoot: root,
-      automaticBudgetDisposition: shape.automaticBudgetDisposition ?? 'consume',
+      automaticBudgetDisposition: 'consume',
       now,
     });
     setPackReviewRunTerminal(
@@ -1582,6 +1582,12 @@ describe('Issue #1777 worker independent-smoke admission parity', () => {
       },
       { projectId: 'orchestrator-pack', storeRoot, now },
     );
+    if (shape.automaticBudgetDisposition === 'non_consuming_explicit') {
+      const runPath = join(storeRoot, 'runs', `${created.run.id}.json`);
+      const legacy = JSON.parse(readFileSync(runPath, 'utf8')) as Record<string, unknown>;
+      legacy.automaticBudgetDisposition = 'non_consuming_explicit';
+      writeFileSync(runPath, `${JSON.stringify(legacy)}\n`, 'utf8');
+    }
   }
 
   function setup(authority: PackReviewAuthorityDocument, runShape: RunShape | null) {

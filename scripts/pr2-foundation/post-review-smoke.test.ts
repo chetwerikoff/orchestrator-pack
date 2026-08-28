@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -736,7 +736,7 @@ describe('Issue #1777 post-review admission parity', () => {
         headSha: EARLIER_HEAD,
         trustedPackRoot: fixture.root,
         sourceRepoRoot: fixture.root,
-        automaticBudgetDisposition: run.automaticBudgetDisposition ?? 'consume',
+        automaticBudgetDisposition: 'consume',
         now,
       });
       setPackReviewRunTerminal(
@@ -748,6 +748,12 @@ describe('Issue #1777 post-review admission parity', () => {
         },
         { projectId: 'orchestrator-pack', storeRoot: fixture.reviewStoreRoot, now },
       );
+      if (run.automaticBudgetDisposition === 'non_consuming_explicit') {
+        const legacyPath = path.join(fixture.reviewStoreRoot, 'runs', created.run.id + '.json');
+        const legacyRecord = JSON.parse(readFileSync(legacyPath, 'utf8')) as Record<string, unknown>;
+        legacyRecord.automaticBudgetDisposition = 'non_consuming_explicit';
+        writeFileSync(legacyPath, JSON.stringify(legacyRecord) + '\n', 'utf8');
+      }
     }
     return fixture;
   }
