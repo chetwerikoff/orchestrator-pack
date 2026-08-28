@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -220,6 +221,110 @@ describe('GPT pack reviewer adapter', () => {
       expect(readFileSync(expectedOutput, 'utf8')).toBe('NO_FINDINGS');
       const terminal = extractLastGptTurnResult(result.stdout);
       expect(terminal?.review_evidence).toBeUndefined();
+      expect(result.stdout).toContain(expectedOutput);
+    } finally {
+      rmSync(evidenceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps durable reply bytes when execution stops immediately after Browser-GPT publication', async () => {
+    const evidenceRoot = mkdtempSync(join(tmpdir(), 'opk-gpt-durable-abrupt-'));
+    const invocationId = '66666666-6666-4666-8666-666666666666';
+    const expectedOutput = join(evidenceRoot, 'prr-abrupt', 'source-01', 'terminal-reply.txt');
+    const bytes = Buffer.from('NO_FINDINGS', 'utf8');
+    const expectedSha = createHash('sha256').update(bytes).digest('hex');
+    const adapterEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      PACK_GPT_BROWSER_PROFILE: '/tmp/profile',
+      PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
+      PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/test',
+      PACK_GPT_BROWSER_EVIDENCE_DIR: evidenceRoot,
+      PACK_REVIEW_RUN_ID: 'prr-abrupt',
+      PACK_REVIEW_GPT_SOURCE_SLOT: 'source-01',
+      PACK_REVIEW_GPT_INVOCATION_ID: invocationId,
+    };
+    try {
+      await expect(runGptPackReview({
+        repoRoot: process.cwd(),
+        repoSlug: 'example/repo',
+        prNumber: 42,
+        headSha: 'b'.repeat(40),
+      }, {
+        resolveBrowserConfig: () => ({
+          profile: '/tmp/profile',
+          cdpUrl: 'http://127.0.0.1:9222',
+          chatUrl: 'https://chatgpt.com/c/test',
+        }),
+        runBrowserTurn: async (options) => {
+          writeFileSync(options.outputPath, bytes);
+          throw new Error('fixture_stop_after_primary_publication');
+        },
+        resolvePrUrl: () => 'https://github.com/example/repo/pull/42',
+      }, adapterEnv)).rejects.toThrow('fixture_stop_after_primary_publication');
+
+      const retained = readFileSync(expectedOutput);
+      expect(retained.equals(bytes)).toBe(true);
+      expect(createHash('sha256').update(retained).digest('hex')).toBe(expectedSha);
+    } finally {
+      rmSync(evidenceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not rewrite the durable reply when adapter mapping fails after publication', async () => {
+    const evidenceRoot = mkdtempSync(join(tmpdir(), 'opk-gpt-durable-mapping-'));
+    const invocationId = '77777777-7777-4777-8777-777777777777';
+    const expectedOutput = join(evidenceRoot, 'prr-mapping', 'source-01', 'terminal-reply.txt');
+    const bytes = Buffer.from('Thanks, looks good!', 'utf8');
+    const expectedSha = createHash('sha256').update(bytes).digest('hex');
+    const adapterEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      PACK_GPT_BROWSER_PROFILE: '/tmp/profile',
+      PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
+      PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/test',
+      PACK_GPT_BROWSER_EVIDENCE_DIR: evidenceRoot,
+      PACK_REVIEW_RUN_ID: 'prr-mapping',
+      PACK_REVIEW_GPT_SOURCE_SLOT: 'source-01',
+      PACK_REVIEW_GPT_INVOCATION_ID: invocationId,
+    };
+    try {
+      const result = await runGptPackReview({
+        repoRoot: process.cwd(),
+        repoSlug: 'example/repo',
+        prNumber: 42,
+        headSha: 'b'.repeat(40),
+      }, {
+        resolveBrowserConfig: () => ({
+          profile: '/tmp/profile',
+          cdpUrl: 'http://127.0.0.1:9222',
+          chatUrl: 'https://chatgpt.com/c/test',
+        }),
+        runBrowserTurn: async (options) => {
+          writeFileSync(options.outputPath, bytes);
+          return {
+            outcome: 'exit' as const,
+            ok: true,
+            exitCode: 0,
+            signal: null,
+            stdout: `${JSON.stringify({
+              schema: 'turn-result/v1',
+              state: 'ok',
+              scope: 'invocation',
+              cause: 'completed_page_only',
+              invocation_id: invocationId,
+              send_count: 1,
+            })}\n`,
+            stderr: '',
+            timedOut: false,
+            cancelled: false,
+          };
+        },
+        resolvePrUrl: () => 'https://github.com/example/repo/pull/42',
+      }, adapterEnv);
+
+      expect(result.exitCode).toBe(1);
+      const retained = readFileSync(expectedOutput);
+      expect(retained.equals(bytes)).toBe(true);
+      expect(createHash('sha256').update(retained).digest('hex')).toBe(expectedSha);
       expect(result.stdout).toContain(expectedOutput);
     } finally {
       rmSync(evidenceRoot, { recursive: true, force: true });
