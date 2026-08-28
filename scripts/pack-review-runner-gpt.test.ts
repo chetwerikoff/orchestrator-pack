@@ -1268,6 +1268,92 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
+  it('fails an explicitly reconciled 1/3 partial after grace with the recovery reason', async () => {
+    const storeRoot = tempRoot('opk-gpt-one-of-three-after-grace-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+    const statuses: Array<{ state: string; description?: string }> = [];
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureRequiredStatusWriter: async (request) => {
+        statuses.push({ state: request.state, description: request.description });
+      },
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
+        'source-02': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-02-a' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-02-b' }), exitCode: 13 },
+        ],
+        'source-03': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-03-a' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-03-b' }), exitCode: 13 },
+        ],
+      },
+    }));
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'reviewing',
+      coverage: { kind: 'partial', completedSourceCount: 1, cardinality: 3 },
+    });
+
+    const runId = String(result.runId);
+    const current = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(current?.reviewRound).toBeDefined();
+    const expiredAt = new Date(Date.now() - 3 * 60_000).toISOString();
+    updatePackReviewRun(runId, {
+      reviewRound: {
+        ...current!.reviewRound!,
+        sourceSlots: current!.reviewRound!.sourceSlots.map((slot) => ({
+          ...slot,
+          admissionStartedAtUtc: expiredAt,
+        })),
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+
+    const emptySourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [],
+      getComment: async () => { throw new Error('unexpected source comment reread'); },
+    };
+    const reconciliation = await reconcileStalePackReviewRuns({
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1276,
+      immediate: true,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureGptSourceCommentTransport: emptySourceTransport,
+      fixtureRequiredStatusWriter: async (request) => {
+        statuses.push({ state: request.state, description: request.description });
+      },
+    });
+
+    expect(reconciliation.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId,
+        terminalized: true,
+        statusReconciled: true,
+        reason: 'gpt_sources_incomplete_after_grace:1/3',
+        status: 'failed',
+        coverage: expect.objectContaining({
+          kind: 'partial',
+          completedSourceCount: 1,
+          cardinality: 3,
+        }),
+      }),
+    ]));
+    expect(getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+      status: 'failed',
+      failureReason: 'gpt_sources_incomplete_after_grace:1/3',
+    });
+    expect(statuses.map((request) => request.state)).toEqual(['pending', 'error']);
+    expect(statuses.at(-1)?.description).toContain('partial source evidence (1/3)');
+  });
+
   it('keeps a possible-delivery source non-retryable while preserving 2/3 partial evidence', async () => {
     const storeRoot = tempRoot('opk-gpt-possible-delivery-');
     const capture = path.join(storeRoot, 'github-review.json');
