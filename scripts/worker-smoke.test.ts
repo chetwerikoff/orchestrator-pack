@@ -1473,7 +1473,7 @@ describe('Issue #1777 worker independent-smoke admission parity', () => {
     'scenarios:',
     '  - action: hermetic admission check | expected: PASS',
     '```',
-  ].join('\\n');
+  ].join('\n');
 
   function setup(withConsumingRun: boolean) {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-1777-'));
