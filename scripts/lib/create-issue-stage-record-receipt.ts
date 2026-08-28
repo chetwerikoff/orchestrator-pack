@@ -215,6 +215,19 @@ function samePartialMissingSources(
   });
 }
 
+function sourceCountsMatch(receipt: ConsumableStageReceipt, event: StageEventLogical): boolean {
+  if (event['source-count'] === receipt.completedSourceCount) return true;
+  return event['source-count'] === 0
+    && event['required-source-count'] === 1
+    && event['settled-outcome'] === 'complete'
+    && event['policy-version'] === 'single-source/v1'
+    && event['producer-evidence'] === 'not-applicable'
+    && receipt.completedSourceCount === 1
+    && receipt.reviewerCardinality === 1
+    && receipt.policyVersion === 'single-source/v1'
+    && receipt.producerEvidence === 'not-applicable';
+}
+
 function stageEventMismatches(
   receipt: ConsumableStageReceipt,
   event: StageEventLogical,
@@ -227,7 +240,7 @@ function stageEventMismatches(
   if (event['stage-attempt-id'] !== receipt.stageAttemptId) mismatches.push('stageAttemptId');
   if (event['policy-version'] !== receipt.policyVersion) mismatches.push('policyVersion');
   if (event['settled-outcome'] !== receipt.outcome) mismatches.push('settledOutcome');
-  if (event['source-count'] !== receipt.completedSourceCount) mismatches.push('sourceCount');
+  if (!sourceCountsMatch(receipt, event)) mismatches.push('sourceCount');
   if (event['required-source-count'] !== receipt.reviewerCardinality) mismatches.push('requiredSourceCount');
   if (event['producer-evidence'] !== receipt.producerEvidence) mismatches.push('producerEvidence');
   if (event['tier-transition'] !== receipt.tierTransition) mismatches.push('tierTransition');
