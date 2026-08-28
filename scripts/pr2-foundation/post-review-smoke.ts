@@ -19,8 +19,8 @@ import {
 import { parseComplexityTierFence } from '../lib/tier-gate-core.ts';
 import {
   assertIndependentSmokeAdmission,
+  PackReviewAuthorityError,
   readPackReviewAuthority,
-  reviewStartConsumedForIndependentSmoke,
   stagePackReviewImmutableRecord,
 } from '../pack-review-state.ts';
 import { sameRuntimeWorker, type RuntimeAdapter } from '../runtime/contracts.ts';
@@ -165,10 +165,6 @@ function reviewStageDisposition(input: {
     return { kind: 'review_pending', reason: 'review_authority_missing_or_stale' };
   }
   const reviewRuns = listPackReviewRuns({ projectId: input.projectId, storeRoot });
-  const consumedReviewStart = reviewStartConsumedForIndependentSmoke(authority, reviewRuns);
-  if (authority.cycle?.reviewStageComplete !== true && !consumedReviewStart) {
-    return { kind: 'review_pending', reason: 'review_stage_incomplete' };
-  }
   const independent = authority.smokeOrdering?.independent;
   if (independent?.headSha === input.headSha) {
     if (independent.status === 'started') {
@@ -186,6 +182,9 @@ function reviewStageDisposition(input: {
   try {
     assertIndependentSmokeAdmission({ authority, headSha: input.headSha, reviewRuns });
   } catch (error) {
+    if (error instanceof PackReviewAuthorityError && error.code === 'smoke_ordering_review_unsettled') {
+      return { kind: 'review_pending', reason: 'review_stage_incomplete' };
+    }
     return {
       kind: 'smoke_blocked',
       reason: `independent_smoke_admission_blocked:${error instanceof Error ? error.message : String(error)}`,
