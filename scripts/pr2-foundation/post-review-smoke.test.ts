@@ -569,18 +569,19 @@ describe('Issue #1777 post-review admission parity', () => {
       storeRoot: fixture.reviewStoreRoot,
       now: new Date(OPENED_AT),
     };
+    const retainedOpenCycle = {
+      cycleId: 'cycle-observed-1740',
+      state: 'open' as const,
+      frozenTier: 'T3' as const,
+      frozenCap: 2,
+      openedAtUtc: OPENED_AT,
+      consumedHeadShas: [],
+    };
     let authority = initializePackReviewAuthority({
       prNumber: OBSERVED_PR,
       headSha: OBSERVED_HEAD,
       tier: 'T3',
-      retainedOpenCycle: {
-        cycleId: 'cycle-observed-1740',
-        state: 'open',
-        frozenTier: 'T3',
-        frozenCap: 2,
-        openedAtUtc: OPENED_AT,
-        consumedHeadShas: [],
-      },
+      retainedOpenCycle,
       options,
     });
     authority = commitSmokeOrderingTransition({
