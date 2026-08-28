@@ -113,6 +113,68 @@ export interface PackReviewGptRoundRecord {
   settledSourceCount?: number;
 }
 
+export type PackReviewGptCoverageKind = 'complete' | 'partial' | 'empty';
+
+export interface PackReviewGptCoverage {
+  kind: PackReviewGptCoverageKind;
+  completedSourceCount: number;
+  cardinality: number;
+  completedSourceSlotIds: string[];
+  incompleteSources: Array<{
+    sourceSlotId: string;
+    lifecycle: PackReviewSourceSlotLifecycle;
+    terminalClass?: string;
+    invocationId?: string;
+    timedOut: boolean;
+    cancelled: boolean;
+    reason?: string;
+  }>;
+}
+
+export function derivePackReviewGptCoverage(round: PackReviewGptRoundRecord | undefined): PackReviewGptCoverage | undefined {
+  if (!round || round.reviewer !== 'gpt') return undefined;
+  const completed = round.sourceSlots.filter((slot) => (
+    slot.lifecycle === 'terminal'
+    && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
+  ));
+  const completedIds = new Set(completed.map((slot) => slot.slotId));
+  const incompleteSources = round.sourceSlots
+    .filter((slot) => !completedIds.has(slot.slotId))
+    .map((slot) => {
+      const terminal = slot.terminalResult
+        && typeof slot.terminalResult === 'object'
+        && !Array.isArray(slot.terminalResult)
+        ? slot.terminalResult as Record<string, unknown>
+        : {};
+      const reason = String(
+        terminal.cause
+        ?? terminal.source_comment_reason
+        ?? terminal.error
+        ?? '',
+      ).trim();
+      return {
+        sourceSlotId: slot.slotId,
+        lifecycle: slot.lifecycle,
+        ...(slot.terminalClass ? { terminalClass: slot.terminalClass } : {}),
+        ...(slot.invocationId ? { invocationId: slot.invocationId } : {}),
+        timedOut: terminal.process_timed_out === true || terminal.process_exit_code === 124,
+        cancelled: terminal.process_cancelled === true,
+        ...(reason ? { reason: reason.slice(0, 240) } : {}),
+      };
+    });
+  return {
+    kind: completed.length === 0
+      ? 'empty'
+      : completed.length === round.cardinality
+        ? 'complete'
+        : 'partial',
+    completedSourceCount: completed.length,
+    cardinality: round.cardinality,
+    completedSourceSlotIds: completed.map((slot) => slot.slotId),
+    incompleteSources,
+  };
+}
+
 export interface PackReviewRunRecord {
   schemaVersion: 1;
   id: string;
