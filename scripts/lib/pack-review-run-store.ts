@@ -1270,12 +1270,11 @@ function parseRecord(
       findingCount: raw.findingCount,
       findings: raw.findings,
     };
-    const completedBlockingFinding = findings.some((finding) => (
-      finding
-      && typeof finding === 'object'
-      && !Array.isArray(finding)
-      && String((finding as Record<string, unknown>).severity ?? '').toLowerCase() === 'blocking'
-    ));
+    const completedBlockingFinding = findings.some((finding) => {
+      if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return true;
+      const severity = String((finding as Record<string, unknown>).severity ?? '').trim().toLowerCase();
+      return !new Set(['warning', 'info', 'non-blocking']).has(severity);
+    });
     if (hasNonHarvestIncompleteGptSource(reviewRound) && !completedBlockingFinding) {
       throw new Error(
         `corrupt pack review run record at ${path || '<record>'}: reviewVerdict does not match terminal source census`,
