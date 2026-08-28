@@ -251,7 +251,7 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
     }),
   };
 
-  return { page, getSends: () => sends };
+  return { page, composer, sendButton, getSends: () => sends };
 }
 
 async function runNewChatTurn(
@@ -1624,6 +1624,76 @@ describe('Issue #1752 production liveness regressions', () => {
       .filter(Boolean)
       .map((line) => JSON.parse(line) as Record<string, unknown>);
   }
+
+  it('keeps healthy heartbeats flowing while a stalled profile verification is terminated by its invocation budget', async () => {
+    const prompt = 'PROMPT-LIVENESS-PROFILE-STALL';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    let observedBudgetMs = 0;
+    mocks.verifyProfile.mockImplementationOnce((...args: any[]) => {
+      const operationBudget = args[1] as { clampOperationWaitMs?: () => number } | undefined;
+      observedBudgetMs = operationBudget?.clampOperationWaitMs?.() ?? 0;
+      return new Promise<any>(() => {});
+    });
+
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const code = await runStateLightTurn(
+        livenessArgv(join(livenessStateDir, 'profile-stall.txt'), '45'),
+        { entryLivenessHeartbeat: true },
+      );
+      expect(code).not.toBe(0);
+      expect(observedBudgetMs).toBeGreaterThan(0);
+      expect(observedBudgetMs).toBeLessThanOrEqual(45);
+      const records = parseRecords(writes);
+      const heartbeats = records.filter((record) => record.schema === 'observation-heartbeat/v1');
+      expect(heartbeats.length).toBeGreaterThan(2);
+      expect(heartbeats.some((record) => record.phase === 'admitted_pre_send')).toBe(true);
+      expect(records.at(-1)).toMatchObject({
+        schema: 'turn-result/v1',
+        state: 'driver_error',
+        cause: 'browser_operation_timeout:profile_verification',
+        send_count: 0,
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('terminates a never-resolving locator count under the invocation budget while heartbeats stay healthy', async () => {
+    const prompt = 'PROMPT-LIVENESS-LOCATOR-STALL';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const fake = makeLoserPage(prompt, 'UNREACHABLE');
+    fake.sendButton.count.mockImplementationOnce(() => new Promise<number>(() => {}));
+    enqueueBrowserForTurn(mocks, fake.page);
+
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const code = await runStateLightTurn(
+        livenessArgv(join(livenessStateDir, 'locator-stall.txt'), '45'),
+        { entryLivenessHeartbeat: true },
+      );
+      expect(code).not.toBe(0);
+      const records = parseRecords(writes);
+      const heartbeats = records.filter((record) => record.schema === 'observation-heartbeat/v1');
+      expect(heartbeats.length).toBeGreaterThan(2);
+      expect(records.at(-1)).toMatchObject({
+        schema: 'turn-result/v1',
+        state: 'driver_error',
+        cause: 'browser_operation_timeout:locator_count',
+        send_count: 0,
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
 
   it('emits healthy heartbeats while profile verification exceeds the recurring idle window', async () => {
     const prompt = 'PROMPT-LIVENESS-PROFILE';

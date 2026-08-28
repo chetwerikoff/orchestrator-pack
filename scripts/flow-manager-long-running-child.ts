@@ -879,9 +879,17 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
   let acceptedHeartbeat = false;
   let childExitCode: number | null = null;
   let childExitedBeforeCandidate = false;
+  let watchdogExpiredAt: number | null = null;
+  let lastStdoutObservedAt: number | null = null;
   let deadline = Date.now() + livenessTiming.startupAllowanceMs;
 
-  const ingestStdoutLine = (line: string): void => {
+  const observeDeadline = (observedAt: number): boolean => {
+    if (observedAt < deadline) return false;
+    if (watchdogExpiredAt === null) watchdogExpiredAt = deadline;
+    return true;
+  };
+
+  const ingestStdoutLine = (line: string, observedAt = Date.now()): void => {
     const cancellationReceipt = parseCancellationReceiptLine(line);
     if (cancellationReceipt) {
       if (!capture.cancellationReceipt) capture.cancellationReceipt = cancellationReceipt;
@@ -890,31 +898,43 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     }
     const heartbeat = parseObservationHeartbeatLine(line);
     if (heartbeat) {
-      const acceptedHeartbeatAt = Date.now();
+      if (capture.firstCandidate || observeDeadline(observedAt)) return;
       acceptedHeartbeat = true;
       lastHeartbeatDiagnostics = boundedDiagnostics({
         ...heartbeat,
-        accepted_at: new Date(acceptedHeartbeatAt).toISOString(),
+        accepted_at: new Date(observedAt).toISOString(),
       });
-      deadline = acceptedHeartbeatAt + livenessTiming.liveChildIdleWindowMs;
+      deadline = observedAt + livenessTiming.liveChildIdleWindowMs;
       return;
     }
     const candidate = parseTurnResult(line);
     if (!candidate) return;
-    if (!capture.firstCandidate) capture.firstCandidate = candidate;
-    else capture.duplicateCandidate = true;
+    if (capture.firstCandidate) {
+      capture.duplicateCandidate = true;
+      return;
+    }
+    if (observeDeadline(observedAt)) return;
+    capture.firstCandidate = candidate;
   };
 
-  const drainStdoutBuffer = (): void => {
+  const drainStdoutBuffer = (observedAt = Date.now()): void => {
     let newlineIndex = capture.stdoutBuffer.indexOf('\n');
     while (newlineIndex >= 0) {
       const line = capture.stdoutBuffer.slice(0, newlineIndex);
       capture.stdoutBuffer = capture.stdoutBuffer.slice(newlineIndex + 1);
       newlineIndex = capture.stdoutBuffer.indexOf('\n');
-      ingestStdoutLine(line);
+      ingestStdoutLine(line, observedAt);
     }
   };
-  capture.drainStdoutBuffer = drainStdoutBuffer;
+  const ingestTrailingCandidate = (): void => {
+    if (!capture.stdoutBuffer.trim() || capture.firstCandidate) return;
+    const candidate = parseTurnResult(capture.stdoutBuffer);
+    if (!candidate) return;
+    const observedAt = lastStdoutObservedAt ?? Date.now();
+    if (observeDeadline(observedAt)) return;
+    capture.firstCandidate = candidate;
+  };
+  capture.drainStdoutBuffer = () => drainStdoutBuffer();
 
   const runPromise = runProcess({
     command: config.childCommand,
@@ -924,19 +944,23 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     allowEmptyStdout: true,
     signal: controller.signal,
     onStdoutChunk: (chunk) => {
+      const observedAt = Date.now();
+      lastStdoutObservedAt = observedAt;
       capture.stdoutBuffer += chunk;
-      capture.drainStdoutBuffer();
+      drainStdoutBuffer(observedAt);
     },
   }).then((result) => {
+    const observedAt = Date.now();
     childExitCode = result.exitCode;
-    capture.drainStdoutBuffer();
-    if (!capture.firstCandidate) childExitedBeforeCandidate = true;
+    drainStdoutBuffer(observedAt);
+    if (!capture.firstCandidate && !observeDeadline(observedAt)) childExitedBeforeCandidate = true;
     return result;
   });
 
+  const spawnProbeWaitMs = Math.max(1, Math.min(100, deadline - Date.now()));
   const spawnProbe = await Promise.race([
     runPromise.then((result) => ({ kind: 'done' as const, result })),
-    delay(100).then(() => ({ kind: 'pending' as const })),
+    delay(spawnProbeWaitMs).then(() => ({ kind: 'pending' as const })),
   ]);
   if (spawnProbe.kind === 'done' && spawnProbe.result.outcome === 'spawn-failure') {
     await publishEnvelope(config, {
@@ -957,14 +981,16 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     return 1;
   }
 
-  while (!capture.firstCandidate && !childExitedBeforeCandidate && Date.now() < deadline) {
-    await delay(20);
+  while (!capture.firstCandidate && !childExitedBeforeCandidate) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      observeDeadline(Date.now());
+      break;
+    }
+    await delay(Math.min(20, remainingMs));
   }
 
-  if (capture.stdoutBuffer.trim() && !capture.firstCandidate) {
-    const trailing = parseTurnResult(capture.stdoutBuffer);
-    if (trailing) capture.firstCandidate = trailing;
-  }
+  ingestTrailingCandidate();
 
   if (capture.firstCandidate) {
     return await finalizeCandidatePath(
@@ -979,14 +1005,41 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     );
   }
 
+  const timeoutIncident = acceptedHeartbeat ? 'child_liveness_timeout' : 'child_startup_timeout';
+  const publishWatchdogTimeout = async (): Promise<number> => {
+    await publishEnvelope(config, {
+      schema: TERMINAL_SCHEMA,
+      run_identity: config.runIdentity,
+      attempt_identity: config.attemptIdentity,
+      completion_mode: COMPLETION_MODE,
+      handoff_receipt_path: config.handoffReceiptPath,
+      launcher_started_at: launcherStartedAt,
+      handoff_committed_at: receipt.handoff_committed_at,
+      terminal_at: nowIso(),
+      lifecycle_outcome: 'incident',
+      incident: timeoutIncident,
+      child_exit_code: null,
+      ...terminalNoResultEvidence(
+        config,
+        capture,
+        timeoutIncident,
+        false,
+        lastHeartbeatDiagnostics,
+      ),
+    });
+    await abortManagedProcess(controller, runPromise);
+    return 1;
+  };
+
+  if (watchdogExpiredAt !== null) {
+    return await publishWatchdogTimeout();
+  }
+
   if (childExitedBeforeCandidate || childExitCode !== null) {
     const grace = noCandidateGraceMs();
     const completion = await waitForProcessCompletion(runPromise, grace);
     capture.drainStdoutBuffer();
-    if (capture.stdoutBuffer.trim() && !capture.firstCandidate) {
-      const trailing = parseTurnResult(capture.stdoutBuffer);
-      if (trailing) capture.firstCandidate = trailing;
-    }
+    ingestTrailingCandidate();
     if (capture.firstCandidate) {
       return await finalizeCandidatePath(
         config,
@@ -1030,29 +1083,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     return 1;
   }
 
-  const incident = acceptedHeartbeat ? 'child_liveness_timeout' : 'child_startup_timeout';
-  await publishEnvelope(config, {
-    schema: TERMINAL_SCHEMA,
-    run_identity: config.runIdentity,
-    attempt_identity: config.attemptIdentity,
-    completion_mode: COMPLETION_MODE,
-    handoff_receipt_path: config.handoffReceiptPath,
-    launcher_started_at: launcherStartedAt,
-    handoff_committed_at: receipt.handoff_committed_at,
-    terminal_at: nowIso(),
-    lifecycle_outcome: 'incident',
-    incident,
-    child_exit_code: null,
-    ...terminalNoResultEvidence(
-      config,
-      capture,
-      incident,
-      false,
-      lastHeartbeatDiagnostics,
-    ),
-  });
-  await abortManagedProcess(controller, runPromise);
-  return 1;
+  return await publishWatchdogTimeout();
 }
 
 export function readTerminalEnvelope(

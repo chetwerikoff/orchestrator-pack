@@ -483,6 +483,127 @@ describe('flow-manager long-running child (#1164)', () => {
     });
   });
 
+  it('does not admit a first heartbeat that arrives after the startup deadline', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'late-startup-heartbeat');
+    const heartbeat = {
+      schema: 'observation-heartbeat/v1',
+      phase: 'admitted_pre_send',
+      poll_count: 0,
+      observation_state: 'admitted',
+      stable_reads: 0,
+      completion_ready: false,
+    };
+    const fixture = nodeFixture(`
+      setTimeout(() => {
+        process.stdout.write(JSON.stringify(${JSON.stringify(heartbeat)}) + '\\n');
+      }, 35);
+      setInterval(() => {}, 1000);
+    `);
+    process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS = '20';
+    process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
+    process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
+
+    const code = await runLaunch({
+      runIdentity: 'run-late-startup-heartbeat',
+      attemptIdentity: 'attempt-late-startup-heartbeat',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+
+    expect(code).toBe(1);
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope?.incident).toBe('child_startup_timeout');
+    expect(envelope?.child_exit_code).toBeNull();
+    expect(envelope?.diagnostics).not.toHaveProperty('last_heartbeat');
+  });
+
+  it('does not refresh an expired recurring deadline from a late heartbeat', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'late-recurring-heartbeat');
+    const heartbeat = {
+      schema: 'observation-heartbeat/v1',
+      phase: 'post_send_observation',
+      poll_count: 1,
+      observation_state: 'busy',
+      stable_reads: 0,
+      completion_ready: false,
+    };
+    const fixture = nodeFixture(`
+      const heartbeat = ${JSON.stringify(heartbeat)};
+      process.stdout.write(JSON.stringify(heartbeat) + '\\n');
+      setTimeout(() => {
+        process.stdout.write(JSON.stringify({ ...heartbeat, poll_count: 2 }) + '\\n');
+      }, 45);
+      setInterval(() => {}, 1000);
+    `);
+    process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
+    process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
+
+    const code = await runLaunch({
+      runIdentity: 'run-late-recurring-heartbeat',
+      attemptIdentity: 'attempt-late-recurring-heartbeat',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+
+    expect(code).toBe(1);
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope?.incident).toBe('child_liveness_timeout');
+    expect(envelope?.diagnostics).toMatchObject({
+      last_heartbeat: { poll_count: 1 },
+    });
+  });
+
+  it('does not accept a terminal result that arrives after the recurring deadline', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'late-recurring-result');
+    const result = makeTurnResult();
+    const heartbeat = {
+      schema: 'observation-heartbeat/v1',
+      phase: 'post_send_observation',
+      poll_count: 1,
+      observation_state: 'busy',
+      stable_reads: 0,
+      completion_ready: false,
+    };
+    const fixture = nodeFixture(`
+      process.stdout.write(JSON.stringify(${JSON.stringify(heartbeat)}) + '\\n');
+      setTimeout(() => {
+        process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');
+      }, 45);
+      setInterval(() => {}, 1000);
+    `);
+    process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
+    process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
+
+    const code = await runLaunch({
+      runIdentity: 'run-late-recurring-result',
+      attemptIdentity: 'attempt-late-recurring-result',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+
+    expect(code).toBe(1);
+    expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
+      lifecycle_outcome: 'incident',
+      incident: 'child_liveness_timeout',
+      child_exit_code: null,
+    });
+  });
+
   it('classifies a live child with no first heartbeat as child_startup_timeout', async () => {
     const root = tempDir();
     const paths = launchPaths(root, 'silent-timeout');

@@ -1288,10 +1288,21 @@ async function sleep(page: any, ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-async function locatorCount(locator: any): Promise<number> {
+async function locatorCount(
+  locator: any,
+  deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
+): Promise<number> {
+  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  if (waitMs <= 0) throw new BrowserOperationTimeoutError('locator_count');
+  const timeoutCause = 'browser_operation_timeout:locator_count';
   try {
-    return Number(await locator.count());
-  } catch {
+    return Number(await boundedBrowserRead(
+      Promise.resolve(locator.count()),
+      waitMs,
+      timeoutCause,
+    ));
+  } catch (error) {
+    if (error instanceof Error && error.message === timeoutCause) throw error;
     return 0;
   }
 }
@@ -1439,7 +1450,11 @@ export async function readPageObservation(
     // locators always take the single in-page fixed-set branch above.
     let count: number;
     try {
-      count = Number(await nodes.count());
+      count = Number(await boundedBrowserRead(
+        Promise.resolve(nodes.count()),
+        MAX_LOCAL_READ_WAIT_MS,
+        'legacy_transcript_count_timeout',
+      ));
       if (!Number.isSafeInteger(count) || count < 0) return incomplete();
     } catch {
       return incomplete();
@@ -1498,6 +1513,7 @@ export async function classifySendLandingEvidence(
   page: any,
   promptText: string,
   conversationUrl?: string,
+  deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
 ): Promise<SendLandingEvidence> {
   const normalizedPrompt = normalizeVisibleText(promptText);
   if (conversationUrl && conversationUuidFromUrl(conversationUrl)) return 'landed';
@@ -1508,7 +1524,7 @@ export async function classifySendLandingEvidence(
     return 'landed';
   }
   const composer = page.locator(COMPOSER_SELECTOR);
-  if (await locatorCount(composer) > 0) {
+  if (await locatorCount(composer, deadlineMs) > 0) {
     const composerText = normalizeVisibleText(await locatorText(composer));
     if (composerText === normalizedPrompt) return 'not_landed';
   }
@@ -1565,11 +1581,13 @@ async function readPostSendObservation(
   };
 }
 
-async function maybeContinueGeneration(page: any): Promise<boolean> {
+async function maybeContinueGeneration(page: any, deadlineMs: number): Promise<boolean> {
   try {
     const continuation = locateContinueGeneratingControl(page);
-    if (await locatorCount(continuation) === 0) return false;
-    await continuation.first().click({ timeout: MAX_LOCAL_READ_WAIT_MS });
+    if (await locatorCount(continuation, deadlineMs) === 0) return false;
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) return false;
+    await continuation.first().click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs) });
     return true;
   } catch {
     return false;
@@ -1581,7 +1599,7 @@ async function readComposerReadiness(page: any, deadline: number): Promise<boole
     const composer = page.locator(COMPOSER_SELECTOR);
     let remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
-    if (await locatorCount(composer) <= 0 || Date.now() >= deadline) return false;
+    if (await locatorCount(composer, deadline) <= 0 || Date.now() >= deadline) return false;
 
     remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
@@ -1650,11 +1668,16 @@ function isPlaywrightTimeoutError(error: unknown): boolean {
   return error.name === 'TimeoutError' || /timeout/i.test(error.message);
 }
 
-async function hasBlockingPageOverlay(page: any): Promise<boolean> {
+async function hasBlockingPageOverlay(page: any, deadlineMs: number): Promise<boolean> {
   const overlay = page.locator(BLOCKING_PAGE_OVERLAY_SELECTOR);
-  if (await locatorCount(overlay) === 0) return false;
+  if (await locatorCount(overlay, deadlineMs) === 0) return false;
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) return false;
   const wall = classifyProductWall(
-    await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, POST_SEND_PRODUCT_WALL_PROBE_MS)),
+    await productStatusText(
+      page,
+      Math.min(MAX_LOCAL_READ_WAIT_MS, POST_SEND_PRODUCT_WALL_PROBE_MS, remainingMs),
+    ),
   );
   return !wall.state;
 }
@@ -1698,7 +1721,10 @@ async function mutateComposerOrCause(
     if (Date.now() >= insertionDeadlineMs) return 'composer_mutation_budget_exhausted';
     return null;
   } catch (error) {
-    if (isPlaywrightTimeoutError(error) && await hasBlockingPageOverlay(page)) {
+    if (
+      isPlaywrightTimeoutError(error)
+      && await hasBlockingPageOverlay(page, Math.min(insertionDeadlineMs, invocationDeadlineMs))
+    ) {
       return 'blocking_page_overlay';
     }
     return 'composer_mutation_budget_exhausted';
@@ -2036,7 +2062,13 @@ async function runTurn(
       });
     }
 
-    const profile = await verifyProfile(config, invocationBudget);
+    const profileWaitMs = invocationBudget.clampOperationWaitMs();
+    if (profileWaitMs <= 0) throw new BrowserOperationTimeoutError('profile_verification');
+    const profile = await boundedBrowserRead(
+      verifyProfile(config, invocationBudget),
+      profileWaitMs,
+      'browser_operation_timeout:profile_verification',
+    );
     if (profile.state !== 'verified') {
       const state: TurnState = profile.state === 'unavailable' ? 'chrome_not_running' : 'profile_mismatch';
       incident('invocation_blocker', profile.cause, 'return_local_error');
@@ -2152,7 +2184,10 @@ async function runTurn(
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       const composer = page.locator(COMPOSER_SELECTOR);
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
-      const hasSendButton = await locatorCount(sendButton) > 0;
+      const hasSendButton = await locatorCount(
+        sendButton,
+        Math.min(insertionDeadlineMs, invocationDeadlineMs),
+      ) > 0;
       remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
@@ -2167,9 +2202,13 @@ async function runTurn(
         reason: 'dispatch_boundary_entered',
       });
       if (hasSendButton) {
-        await sendButton.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
+        const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+        if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+        await sendButton.click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, sendWaitMs) });
       } else {
-        await composer.press('Enter', { timeout: MAX_LOCAL_READ_WAIT_MS });
+        const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+        if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+        await composer.press('Enter', { timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, sendWaitMs) });
       }
       sendCount += 1;
       afterSend = true;
@@ -2289,6 +2328,7 @@ async function runTurn(
               page,
               markedPayload,
               lastAttemptConversationUrl,
+              invocationDeadlineMs,
             );
             if (landingEvidence === 'landed') {
               incident('fresh_conversation_collision', 'send_landed_no_resend', 'return_local_error');
@@ -2395,6 +2435,7 @@ async function runTurn(
                 page,
                 markedPayload,
                 lastAttemptConversationUrl,
+                invocationDeadlineMs,
               );
               if (landingEvidence === 'not_landed' && !pageConversationUrl(page)) {
                 return returnFreshConversationLandingMismatch(
@@ -2487,6 +2528,7 @@ async function runTurn(
               page,
               markedPayload,
               conversationUrl,
+              invocationDeadlineMs,
             );
             if (landingEvidence === 'landed') {
               incident('fresh_conversation_collision', 'send_landed_no_resend', 'return_local_error');
@@ -2548,6 +2590,7 @@ async function runTurn(
             page,
             markedPayload,
             lastAttemptConversationUrl,
+            invocationDeadlineMs,
           );
           if (landingEvidence === 'landed') {
             incident('fresh_conversation_collision', 'send_landed_no_resend', 'return_local_error');
@@ -2765,7 +2808,19 @@ async function runTurn(
           pageUrl: (candidate) => String((candidate as any).url()),
           normalizeConversationUrl,
           isSupportedConversationUrl: isSupportedChatGptConversationUrl,
-          readAuthoritativeMessages: readRecoveryAuthoritativeUserMessages,
+          readAuthoritativeMessages: async (candidatePage) => {
+            const remainingMs = hardExhaustionDeadline - Date.now();
+            if (remainingMs <= 0) return { messages: [], incomplete: true };
+            try {
+              return await boundedBrowserRead(
+                readRecoveryAuthoritativeUserMessages(candidatePage),
+                Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs),
+                'recovery_authoritative_read_timeout',
+              );
+            } catch {
+              return { messages: [], incomplete: true };
+            }
+          },
           browserDefinitelyDisconnected: (candidateBrowser) => {
             try {
               return typeof (candidateBrowser as any)?.isConnected === 'function'
@@ -3622,7 +3677,7 @@ async function runTurn(
         && (!config.newChat
           || !ownedConversationUrl
           || freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs))
-        && await maybeContinueGeneration(page)
+        && await maybeContinueGeneration(page, hardExhaustionDeadline)
       ) {
         updateHeartbeatForPoll(decision);
         await sleep(page, INITIAL_POLL_MS);
