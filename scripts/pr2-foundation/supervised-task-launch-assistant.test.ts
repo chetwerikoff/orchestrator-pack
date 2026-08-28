@@ -412,6 +412,34 @@ describe('supervised Task launch assistant', () => {
     expect(calls).toEqual([]);
   });
 
+  it('accepts contextual OpenCode probes after a no-write proof', async () => {
+    const resolved = await resolveLiveExecutorProfile('t2', opencodeProfileEnv('t2'), undefined, async (args) => opencodeProbeResult(args, true));
+    if (resolved.status !== 'ok') throw new Error('fixture profile should resolve');
+    const calls: string[][] = [];
+    const result = await finalizeOpenCodeExecutorProfile(resolved.value, '/tmp/exact-worktree', async (args, _timeoutMs, envOverride) => {
+      calls.push([...args]);
+      if (args[1] === 'debug' && args[2] === 'config') {
+        return { ok: true, stdout: JSON.stringify({ default_agent: 'build' }), stderr: '' };
+      }
+      if (args[1] === 'debug' && args[2] === 'agent') {
+        const name = args[3] ?? '';
+        return {
+          ok: true,
+          stdout: JSON.stringify({ name, prompt: 'fixture', model: { providerID: 'opencode', modelID: 'fixture-opencode-model' }, variant: 'fixture-opencode-effort' }),
+          stderr: '',
+        };
+      }
+      if (args[1] === 'debug' && args[2] === 'paths') {
+        return { ok: true, stdout: envOverride?.XDG_STATE_HOME ?? '', stderr: '' };
+      }
+      return { ok: false, stdout: '', stderr: '' };
+    }, () => true);
+    expect(result).toMatchObject({ status: 'ok', evidence: { exactContext: true } });
+    expect(calls).toContainEqual(['opencode', 'debug', 'config']);
+    expect(calls.filter((args) => args[1] === 'debug' && args[2] === 'agent')).toHaveLength(2);
+    expect(calls).toContainEqual(['opencode', 'debug', 'paths']);
+  });
+
   it('probe surface equals spawn surface', async () => {
     const profile = resolveSemanticExecutorProfile({ surface: 'task', names: profileNamesForTask('t2'), env: opencodeProfileEnv('t2') });
     if (!profile.ok) throw new Error('semantic profile should be ok');
@@ -740,7 +768,7 @@ describe('supervised Task launch assistant', () => {
     expect(calls[0]).toEqual(['orca', 'repo', 'list', '--json']);
     expect(calls[1]).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
-      '--issue', '1479', '--setup', 'run', '--json',
+      '--issue', '1479', '--setup', 'skip', '--json',
     ]);
   });
 
@@ -803,6 +831,27 @@ describe('supervised Task launch assistant', () => {
     });
     expect(result).toMatchObject({ status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' } });
     expect(mutableCalls).toHaveLength(2);
+  });
+
+  it('accepts a fresh worktree when skip setup returns no setup receipt', async () => {
+    const calls: string[][] = [];
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
+    }, async (args) => {
+      calls.push([...args]);
+      if (args[1] === 'repo') return { ok: true, stdout: repoListEnvelope([{
+        id: 'orca-repo-1', gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' },
+      }]) };
+      return { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::wt', path: '/tmp/wt' } }) };
+    });
+    expect(result).toMatchObject({
+      status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' },
+      evidence: { setupState: 'not_configured' },
+    });
+    expect(calls[1]).toEqual([
+      'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
+      '--issue', '1479', '--setup', 'skip', '--json',
+    ]);
   });
 
   it('waits for the exact fresh setup terminal to exit successfully', async () => {

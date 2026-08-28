@@ -306,6 +306,11 @@ function smokeConfigState(cwd: string, env: Readonly<NodeJS.ProcessEnv> = proces
   return rows.join('\n');
 }
 
+function proveOpenCodeNoWrite(cwd: string): boolean {
+  const before = smokeConfigState(cwd);
+  return before === smokeConfigState(cwd);
+}
+
 type OpenCodeNoWriteProof = (cwd: string) => boolean;
 
 function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, execute: SmokeChildExecutor, proveNoWrite?: OpenCodeNoWriteProof): { profile: SemanticExecutorProfile; command: string } {
@@ -313,13 +318,15 @@ function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, ex
   // proof until an installed-version exact-context mode is established.
   if (!proveNoWrite || !proveNoWrite(cwd)) throw new Error('executor_effort_channel_unavailable');
   const before = smokeConfigState(cwd);
-  const config = execute(['opencode', 'debug', 'config']);
+  const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
+  const isolatedEnv = { XDG_STATE_HOME: stateRoot };
+  const config = execute(['opencode', 'debug', 'config'], isolatedEnv);
   if (!config.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
   let parsed: Record<string, unknown>;
   try { const value: unknown = JSON.parse(config.stdout); if (!record(value)) throw new Error(); parsed = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
   const defaultAgent = typeof parsed.default_agent === 'string' ? parsed.default_agent.trim() : '';
   if (!defaultAgent) throw new Error('executor_effort_channel_unavailable');
-  const baseline = execute(['opencode', 'debug', 'agent', defaultAgent]);
+  const baseline = execute(['opencode', 'debug', 'agent', defaultAgent], isolatedEnv);
   if (!baseline.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
   let baselineValue: Record<string, unknown>;
   try { const value: unknown = JSON.parse(baseline.stdout); if (!record(value)) throw new Error(); baselineValue = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
@@ -327,16 +334,15 @@ function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, ex
   const effort = profile.effort;
   if (!model || !effort) throw new Error('executor_effort_channel_unavailable');
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
-  const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
   const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model, effort, stateRoot });
-  const resolved = execute(['opencode', 'debug', 'agent', agentName], { OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson!, XDG_STATE_HOME: stateRoot });
+  const resolved = execute(['opencode', 'debug', 'agent', agentName], { ...isolatedEnv, OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson! });
   if (!resolved.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
   let resolvedValue: Record<string, unknown>;
   try { const value: unknown = JSON.parse(resolved.stdout); if (!record(value)) throw new Error(); resolvedValue = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
   const resolvedModel = record(resolvedValue.model) ? resolvedValue.model : null;
   if (!resolvedModel || resolvedModel.modelID !== model.split('/').at(-1) || resolvedValue.variant !== effort
     || openCodeAgentSemantics(baselineValue) !== openCodeAgentSemantics(resolvedValue)) throw new Error('executor_effort_channel_unavailable');
-  const paths = execute(['opencode', 'debug', 'paths'], { XDG_STATE_HOME: stateRoot });
+  const paths = execute(['opencode', 'debug', 'paths'], isolatedEnv);
   if (!paths.ok || !paths.stdout.includes(stateRoot)) throw new Error('executor_effort_channel_unavailable');
   return { profile: { ...profile, model, effort }, command: overlay.command };
 }
@@ -1847,6 +1853,7 @@ export async function runSmokeAttempt(
           process.env,
           (args, env) => runSmokeProfileChild(args, options.cwd, process.env, env),
           options.cwd,
+          proveOpenCodeNoWrite,
         );
   } catch (error) {
     const report = operationalReport('BLOCKED', options, {
