@@ -945,10 +945,8 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   // The episode claim, rather than the rendered pointer fingerprint, owns Enter.
   const result = await submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps, createUnsentComposerWatchState());
   const terminal = result.terminals[0];
-  const retryable = terminal?.reason === 'composer_not_empty_before_delivery'
-    || terminal?.dispatchStatus === 'send_failed'
-    || terminal?.dispatchStatus === 'dispatch_unknown';
-  if (state && !retryable) {
+  const delivered = terminal?.enter === true && terminal.dispatchStatus === 'dispatched';
+  if (state && delivered) {
     state.episodes[key] = { ...state.episodes[key]!, sealed: true };
     if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
   }

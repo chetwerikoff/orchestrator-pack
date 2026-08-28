@@ -1522,6 +1522,59 @@ describe('orchestration mail reconciliation', () => {
     }
   });
 
+  it('keeps an unproven post-write delivery retryable', async () => {
+    const target = worker('term_episode_unproven');
+    const root = mkdtempSync(join(tmpdir(), 'opk-episode-unproven-'));
+    const statePath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    let writes = 0;
+    let pointerVisible = false;
+    let liveness: 'unknown' | 'idle' = 'unknown';
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const message = {
+      id: 'msg_episode_unproven',
+      runId: 'run_episode_unproven',
+      recipient: target.identity.id,
+      consumed: false,
+    };
+    try {
+      const makeDeps = () => ({
+        lookupMessage: () => ({ ok: true as const, message }),
+        resolveWorker: () => ({ ok: true as const, worker: target }),
+        writePointer: () => {
+          writes += 1;
+          pointerVisible = true;
+          return { status: 'dispatched' as const };
+        },
+        submitDeps: depsFor({}, {
+          submitted,
+          read: () => ({
+            ok: true as const,
+            lines: pointerVisible
+              ? [`You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER]
+              : ['→ Add a follow-up', ...CURSOR_FOOTER],
+            source: 'screen' as const,
+          }),
+          liveness: () => liveness,
+        }),
+        episodeStatePath: statePath,
+        episodeLockPath: lockPath,
+      });
+
+      const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_000 });
+      expect(first.terminals[0]).toMatchObject({ enter: false, reason: 'worker_unknown' });
+      expect(submitted).toHaveLength(0);
+
+      liveness = 'idle';
+      const retry = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 61_001 });
+      expect(retry.terminals[0]).toMatchObject({ enter: true, reason: 'enter_sent' });
+      expect(writes).toBe(1);
+      expect(submitted).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('serializes empty-state companion races before pointer and Enter effects', async () => {
     const target = worker('term_episode_race');
     const root = mkdtempSync(join(tmpdir(), 'opk-episode-race-'));
