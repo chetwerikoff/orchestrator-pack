@@ -1080,7 +1080,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
     ),
     finalizeProfile: (profile, worktreePath) => {
-      const executeOpenCode = (args: readonly string[], timeoutMs: number, envOverride?: Readonly<NodeJS.ProcessEnv>, childCwd?: string) =>
+      const executeOpenCode = (args: readonly string[], timeoutMs = 15_000, envOverride?: Readonly<NodeJS.ProcessEnv>, childCwd?: string) =>
         child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs);
       return finalizeOpenCodeExecutorProfile(profile, worktreePath, executeOpenCode,
         (path) => proveOpenCodeNoWrite(path, executeOpenCode));
