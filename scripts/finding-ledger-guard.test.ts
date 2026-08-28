@@ -2228,7 +2228,7 @@ describe('receipt-backed finding ledger operator-stage waiver regression #1778',
       noWaiverOptions as never,
     );
     expect(noWaiverResult.ok).toBe(false);
-    expect(noWaiverResult.errors.join('\n')).toContain('reviewLane source verdicts do not match final required slots');
+    expect(noWaiverResult.errors.join('\n')).toContain('stage receipt[0] reviewLane must be complete immutable evidence');
 
     const wrongMissingOptions = {
       ...fixture.options,
@@ -2243,7 +2243,7 @@ describe('receipt-backed finding ledger operator-stage waiver regression #1778',
       wrongMissingOptions as never,
     );
     expect(wrongMissingResult.ok).toBe(false);
-    expect(wrongMissingResult.errors.join('\n')).toContain('reviewLane source verdicts do not match final required slots');
+    expect(wrongMissingResult.errors.join('\n')).toContain('stage receipt[0] reviewLane must be complete immutable evidence');
 
     const missingSlotOneReceipt = {
       ...fixture.stageReceipt,
@@ -2266,7 +2266,7 @@ describe('receipt-backed finding ledger operator-stage waiver regression #1778',
     };
     const missingSlotOneResult = checkFindingLedgerGuard([], fixture.emptyLedger, missingSlotOneOptions as never);
     expect(missingSlotOneResult.ok).toBe(false);
-    expect(missingSlotOneResult.errors.join('\n')).toContain('reviewLane source verdicts do not match final required slots');
+    expect(missingSlotOneResult.errors.join('\n')).toContain('stage receipt[0] reviewLane must be complete immutable evidence');
 
     const missingRequiredStageOptions = {
       ...fixture.options,
@@ -2349,15 +2349,6 @@ describe('receipt-backed finding ledger operator-stage waiver regression #1778',
         : invocation),
       credentialingCaptures: [badCountCapture],
       relayEligibleCaptures: [badCountCapture],
-      reviewLane: {
-        ...fixture.reviewLane,
-        sourceVerdictEvidence: {
-          '01': {
-            ...fixture.reviewLane.sourceVerdictEvidence['01'],
-            rawFindingCount: 1,
-          },
-        },
-      },
     };
     const badCountOptions = {
       ...fixture.options,
