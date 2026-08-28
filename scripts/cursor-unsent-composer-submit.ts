@@ -365,6 +365,7 @@ interface EpisodeRecord {
   readonly workerKey: string;
   readonly nextEligibleAt: number;
   readonly backoffMs: number;
+  readonly sealed: boolean;
 }
 
 interface PersistedReconcileState {
@@ -405,6 +406,7 @@ function loadReconcileState(path: string): PersistedReconcileState {
           workerKey: row.workerKey,
           nextEligibleAt: row.nextEligibleAt,
           backoffMs: row.backoffMs,
+          sealed: row.sealed === true,
         };
       }
     }
@@ -476,6 +478,7 @@ export interface UnsentComposerTerminalResult {
   readonly unsent: boolean;
   readonly enter: boolean;
   readonly reason: string;
+  readonly dispatchStatus?: RuntimeDispatchResult['status'];
 }
 
 export interface UnsentComposerSubmitResult {
@@ -558,20 +561,20 @@ function settleComposerObservation(
     ?? dispatches.at(-1)!;
   if (dispatched.status === 'send_failed') {
     state.submittedFingerprint.delete(key);
-    return { ...base, ok: false, unsent: true, enter: false, reason: dispatched.reason };
+    return { ...base, ok: false, unsent: true, enter: false, reason: dispatched.reason, dispatchStatus: dispatched.status };
   }
   if (dispatched.status === 'dispatch_unknown') {
     const fingerprints = state.ambiguousSubmittedFingerprints.get(key) ?? new Set<string>();
     fingerprints.add(fingerprint);
     state.ambiguousSubmittedFingerprints.set(key, fingerprints);
-    return { ...base, ok: true, unsent: true, enter: false, reason: dispatched.reason };
+    return { ...base, ok: true, unsent: true, enter: false, reason: dispatched.reason, dispatchStatus: dispatched.status };
   }
   if (dispatched.status === 'dispatched') {
     const fingerprints = state.ambiguousSubmittedFingerprints.get(key);
     fingerprints?.delete(fingerprint);
     if (fingerprints?.size === 0) state.ambiguousSubmittedFingerprints.delete(key);
   }
-  return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent' };
+  return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent', dispatchStatus: dispatched.status };
 }
 
 function submitOne(
@@ -663,7 +666,10 @@ export function buildDeliveryPointer(message: DeliveryMessage): string {
       : message.recipient.startsWith('term_')
         ? `orca orchestration check --terminal ${message.recipient}`
         : `orca orchestration check --run ${message.runId}`;
-  return `You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run \`${check}\`.`;
+  const prose = message.recipient.startsWith('run:')
+    ? 'Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle.'
+    : 'Read and act on your orchestration message.';
+  return `You have 1 orchestration message. ${prose} Run \`${check}\`.`;
 }
 
 function composerShowsDeliveryPointer(shown: ComposerReadResult, pointer: string): boolean {
@@ -899,6 +905,14 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   const pointer = buildDeliveryPointer(message);
   const key = episodeKey(message, worker);
   if (deps.pointerWriteLedger?.has(key)) return deliveryNoEffect('orchestration_episode_already_claimed', worker, false);
+  const now = deps.reconcileClock?.() ?? Date.now();
+  let state = deps.episodeState;
+  if (!state && deps.episodeStatePath) state = loadReconcileState(deps.episodeStatePath);
+  const existing = state?.episodes[key];
+  if (existing?.sealed) return deliveryNoEffect('orchestration_episode_already_delivered', worker, false);
+  if (existing && now < existing.nextEligibleAt) {
+    return deliveryNoEffect('orchestration_episode_backoff', worker, false);
+  }
   const shown = deps.submitDeps.readAsync
     ? await deps.submitDeps.readAsync(worker.identity)
     : deps.submitDeps.read(worker.identity);
@@ -907,13 +921,6 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   const alreadyShown = composerKind !== 'empty' && composerShowsDeliveryPointer(shown, pointer);
   if (composerKind !== 'empty' && !alreadyShown) {
     return deliveryNoEffect('composer_not_empty_before_delivery', worker);
-  }
-  const now = deps.reconcileClock?.() ?? Date.now();
-  let state = deps.episodeState;
-  if (!state && deps.episodeStatePath) state = loadReconcileState(deps.episodeStatePath);
-  const existing = state?.episodes[key];
-  if (existing && now < existing.nextEligibleAt) {
-    return deliveryNoEffect('orchestration_episode_backoff', worker, false);
   }
   const priorBackoff = existing?.backoffMs ?? ORCHESTRATION_RECONCILE_WINDOW_MS;
   const nextBackoff = Math.min(priorBackoff * 2, ORCHESTRATION_RECONCILE_MAX_BACKOFF_MS);
@@ -924,6 +931,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       workerKey: workerKey(worker.identity),
       nextEligibleAt: now + priorBackoff,
       backoffMs: nextBackoff,
+      sealed: false,
     };
     if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
   }
@@ -935,7 +943,16 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     if (!accepted) return deliveryNoEffect(written.reason ?? 'pointer_write_failed', worker, false);
   }
   // The episode claim, rather than the rendered pointer fingerprint, owns Enter.
-  return await submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps, createUnsentComposerWatchState());
+  const result = await submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps, createUnsentComposerWatchState());
+  const terminal = result.terminals[0];
+  const retryable = terminal?.reason === 'composer_not_empty_before_delivery'
+    || terminal?.dispatchStatus === 'send_failed'
+    || terminal?.dispatchStatus === 'dispatch_unknown';
+  if (state && !retryable) {
+    state.episodes[key] = { ...state.episodes[key]!, sealed: true };
+    if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
+  }
+  return result;
 }
 
 function deliveryLookingEvidence(
@@ -1149,7 +1166,9 @@ export async function runOrchestrationMailReconcileTick(
           }
         }
       }
-      if (result.terminals[0]?.reason === 'orchestration_episode_backoff' || result.terminals[0]?.reason === 'orchestration_episode_already_claimed') skipped += 1;
+      if (result.terminals[0]?.reason === 'orchestration_episode_backoff'
+        || result.terminals[0]?.reason === 'orchestration_episode_already_claimed'
+        || result.terminals[0]?.reason === 'orchestration_episode_already_delivered') skipped += 1;
       if (result.terminals[0]?.enter || result.terminals[0]?.reason === 'dispatch_unknown' || result.terminals[0]?.reason === 'send_failed') nudged += 1;
       state.messages[id] = current;
       if (result.terminals[0]?.reason) reasons.push(`${id}:${result.terminals[0].reason}`);
