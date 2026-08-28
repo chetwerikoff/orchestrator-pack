@@ -439,7 +439,12 @@ describe('DOM observation boundary', () => {
 describe('unchanged observation diagnostics', () => {
   it('retains heartbeat and stability contracts', () => {
     const heartbeat = buildObservationHeartbeat({ state: 'ready', reply: 'FINAL' }, 1, 4, true, 'FINAL');
-    expect(heartbeat).toMatchObject({ schema: 'observation-heartbeat/v1', poll_count: 4, stable_reads: 1 });
+    expect(heartbeat).toMatchObject({
+      schema: 'observation-heartbeat/v1',
+      phase: 'post_send_observation',
+      poll_count: 4,
+      stable_reads: 1,
+    });
     expect(replyStabilityMatches('same', 'same')).toBe(true);
     expect(replyStabilityFingerprint('same')).toContain('same');
   });

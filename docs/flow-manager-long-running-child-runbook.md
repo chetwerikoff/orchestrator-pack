@@ -55,10 +55,15 @@ npm run --silent flow-manager-browser-gpt-long-run -- \
    (`completion_mode: browser-turn-result-v1` fixed constant).
 4. Start the Browser-GPT child with stdin closed, stdout parsed in-process, stderr
    to a null sink.
-5. Accept the first valid child-produced `turn-result/v1` from stdout; tolerate
-   `observation-heartbeat/v1` heartbeats.
-6. Finalize with bounded candidate or no-candidate stdout/exit graces.
-7. Atomically publish one `flow-manager-long-running-child-terminal/v1` envelope.
+5. Start with the shared bounded startup allowance. Accept the first valid
+   phase-bearing `observation-heartbeat/v1` as event-loop liveness and then reset
+   the recurring live-child deadline from each accepted heartbeat.
+6. Accept the first valid child-produced `turn-result/v1` from stdout as the sole
+   completion authority, then use only the existing candidate exit grace.
+7. Classify startup silence as `child_startup_timeout`, recurring live-child silence
+   as `child_liveness_timeout`, and actual exit without a result as
+   `child_terminal_result_missing`; none implies browser Stop-generating or resend.
+8. Atomically publish one `flow-manager-long-running-child-terminal/v1` envelope.
 
 There is no completion-mode selector. Authority is fixed to `browser-turn-result-v1`.
 
@@ -95,7 +100,11 @@ explicitly unproven and out of scope for this version.
   `turn-result/v1`.
 
 Ambiguous post-send loss never authorizes blind re-send. Locator-backed recovery
-stays in the same conversation and does not rewrite the envelope.
+stays in the same conversation and does not rewrite the envelope. A heartbeat proves
+only Node event-loop liveness; browser/CDP/composer progress remains governed by its
+existing operation budgets. The heartbeat scheduler is turn-scoped, non-keepalive,
+and disposed at settlement. Cancellation receipts remain evidence only on startup,
+liveness-timeout, and actual-exit branches and do not create Stop-generating authority.
 
 ### Environment overrides (operator / test)
 
@@ -103,6 +112,9 @@ stays in the same conversation and does not rewrite the envelope.
 |----------|---------|
 | `OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS` | Post-result exit/EOF grace |
 | `OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS` | Post-exit stdout drain grace |
+| `OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS` | Bounded pre-first-heartbeat process/bootstrap + canonical-admission allowance |
+| `OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS` | Maximum healthy recurring event-loop heartbeat gap |
+| `OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS` | Recurring live-child idle window; must be strictly larger than the maximum healthy gap |
 | `OPK_FM_LONG_CHILD_DISABLE_DETACH` | Run launcher synchronously (tests) |
 
 ## Rollback

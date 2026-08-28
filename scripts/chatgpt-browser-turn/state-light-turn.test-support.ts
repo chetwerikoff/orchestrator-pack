@@ -45,7 +45,13 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
-vi.mock('./browser-session.ts', () => createBrowserSessionModuleMock(mocks));
+vi.mock('./browser-session.ts', () => ({
+  ...createBrowserSessionModuleMock(mocks),
+  abandonLatePageHandle: vi.fn(async (page: { close: () => Promise<void> }) => {
+    if (mocks.cleanupOutcome === 'confirmed') await page.close();
+    return mocks.cleanupOutcome;
+  }),
+}));
 vi.mock('./coordination.ts', () => createCoordinationModuleMock());
 
 vi.mock('./input.ts', () => ({
@@ -356,6 +362,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS;
+  delete process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS;
+  delete process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS;
   vi.restoreAllMocks();
 });
 
