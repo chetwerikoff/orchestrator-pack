@@ -38,5 +38,5 @@
     "scripts/flow-manager-long-running-child.test.ts",
     "scripts/flow-manager-long-running-child.ts"
   ],
-  "source_revision": "80b69843f2650d2026f20d93bb2a4a3ef72787f3"
+  "source_revision": "c3e4520b6aef49b411961f6d2e3f75645212bfaf"
 }
