@@ -183,7 +183,7 @@ export async function runStateLightEntry(
 ): Promise<number> {
   const [command, ...turnArgs] = argv;
   const runTurn = dependencies.runTurn ?? ((turnArgv: readonly string[]) =>
-    runStateLightTurn([...turnArgv, '--entry-liveness-heartbeat']));
+    runStateLightTurn(turnArgv, { entryLivenessHeartbeat: true }));
 
   if (command === 'turn') {
     return await runCanonicalTurn(turnArgs, runTurn);
